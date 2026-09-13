@@ -1,5 +1,6 @@
 """Tests for artifact review-UI injection in the file server (src/api/files.py)."""
 
+import gzip
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -7,6 +8,7 @@ import pytest
 from conftest import stub_credentials
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.middleware.gzip import GZipMiddleware
 
 from src.api import files as files_api
 from src.api import pages as pages_api
@@ -238,6 +240,97 @@ def test_serve_file_clean_reinjects_when_page_is_rewritten(sessions_root: Path) 
   assert after.text != before.text
   assert "<p>rewritten plan</p>" in after.text
   assert SCRIPT in after.text
+
+
+# --- clean views: the gzip form ships pre-compressed so the server's gzip
+# middleware skips its own whole-body deflate ---
+
+
+def _build_gzip_client(access_key: str | None) -> TestClient:
+  """The files router behind the gzip middleware every production request
+  passes through, so the test sees the skip the pre-compressed response buys."""
+  app = FastAPI()
+  app.include_router(files_api.router, prefix="/files")
+  app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1)
+  cookies = {"charliebot_access_key": access_key} if access_key is not None else None
+  return TestClient(app, cookies=cookies)
+
+
+def test_serve_file_gzip_view_ships_precompressed_injected_page(sessions_root: Path) -> None:
+  page = _write(sessions_root / "S" / "artifacts" / "x.html")
+
+  resp = _build_gzip_client("secret").get("/files" + str(page), headers={"Accept-Encoding": "gzip"})
+  assert resp.status_code == 200
+  # The route set the encoding upstream — that header is what makes the
+  # middleware skip its own deflate — and carries the negotiation vary.
+  assert resp.headers["content-encoding"] == "gzip"
+  assert resp.headers["vary"] == "Accept-Encoding"
+  assert resp.headers["content-type"].startswith("text/html")
+  # What ships is the injected page, compressed: the decoded body is byte-exact
+  # against the plain form, comment layer and session id included.
+  assert resp.text == files_api._inject_artifact_ui(page.read_text(encoding="utf-8"), "S")
+  assert SCRIPT in resp.text
+
+
+def test_serve_file_without_gzip_accept_gets_plain_body(sessions_root: Path) -> None:
+  """The compressed form is memoized per encoding negotiation: a client whose
+  Accept-Encoding names no gzip reads the plain injected page, no encoding set."""
+  page = _write(sessions_root / "S" / "artifacts" / "x.html")
+
+  resp = _build_client("secret").get("/files" + str(page), headers={"Accept-Encoding": "br"})
+  assert resp.status_code == 200
+  assert "content-encoding" not in resp.headers
+  assert resp.text == files_api._inject_artifact_ui(page.read_text(encoding="utf-8"), "S")
+
+
+def test_serve_file_gzip_repeat_view_recompresses_nothing(sessions_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A repeat gzip view of an unchanged page must serve the stored compressed
+  body with zero injection and zero deflate calls."""
+  page = _write(sessions_root / "S" / "artifacts" / "x.html")
+  client = _build_client("secret")
+  url = "/files" + str(page)
+  first = client.get(url, headers={"Accept-Encoding": "gzip"})
+  assert first.status_code == 200
+
+  def explode_inject(html_text: str, session_id: str) -> str:
+    raise AssertionError("repeat gzip view re-ran the artifact injection")
+
+  def explode_compress(*args: object, **kwargs: object) -> bytes:
+    raise AssertionError("repeat gzip view re-ran the deflate")
+
+  monkeypatch.setattr(files_api, "_inject_artifact_ui", explode_inject)
+  monkeypatch.setattr(files_api.gzip, "compress", explode_compress)
+  resp = client.get(url, headers={"Accept-Encoding": "gzip"})
+  assert resp.status_code == 200
+  assert resp.headers["content-encoding"] == "gzip"
+  assert resp.text == first.text
+
+
+def test_serve_file_gzip_recompresses_when_page_is_rewritten(sessions_root: Path) -> None:
+  """A rewrite moves the signature both memos key on — the compressed form must
+  never serve bytes of the page it was not built from."""
+  page = _write(sessions_root / "S" / "artifacts" / "x.html")
+  client = _build_client("secret")
+  url = "/files" + str(page)
+  before = client.get(url, headers={"Accept-Encoding": "gzip"})
+  assert before.status_code == 200
+
+  page.write_text("<html><body><p>rewritten plan</p></body></html>", encoding="utf-8")
+  after = client.get(url, headers={"Accept-Encoding": "gzip"})
+  assert after.status_code == 200
+  assert after.text != before.text
+  assert "<p>rewritten plan</p>" in after.text
+  assert after.headers["vary"] == "Accept-Encoding"
+
+
+def test_injected_artifact_page_gzip_is_deterministic_and_round_trips(sessions_root: Path) -> None:
+  """mtime=0 keeps the compressed bytes identical across processes, and the form
+  decompresses to exactly the plain body the plain memo serves."""
+  page = _write(sessions_root / "S" / "artifacts" / "x.html")
+  first = files_api._injected_artifact_page_gzip(page, "S")
+  second = files_api._injected_artifact_page_gzip(page, "S")
+  assert first == second
+  assert gzip.decompress(first) == files_api._injected_artifact_page(page, "S")
 
 
 # --- diff requests: ?diff=<base artifact path> serves the annotated page ---

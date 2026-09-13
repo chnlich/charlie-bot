@@ -4104,9 +4104,13 @@ sampled 2026-09-06 were repeats of an already-viewed file), so each repeat paid 
 (~4.8 ms on the 1.08 MB worst artifact) plus the injection for identical bytes. The collector
 copies the largest on-disk artifact page into a scratch `CHARLIEBOT_HOME` under /tmp (live home
 read once for the copy, never written) and drives the files router through TestClient in each
-checkout's process: one cold pass, as at first artifact view, then nine timed requests, with the
-snapshot's empty access key credentialing every reader (the injection gate reads the process
-home's credentials, so the run points ``CHARLIEBOT_HOME`` at the snapshot). Snapshot once:
+checkout's process with the production gzip middleware mounted and the browser's
+`Accept-Encoding: gzip` header set — the whole-body deflate the server adds to every artifact
+response is part of the served path, and a bare-app client times a shape production never runs
+(the pre-gzip-middleware reading, 0.0026 s, is the vacuous-read class the M68 repair called out):
+one cold pass, as at first artifact view, then nine timed requests, with the snapshot's empty
+access key credentialing every reader (the injection gate reads the process home's credentials,
+so the run points ``CHARLIEBOT_HOME`` at the snapshot). Snapshot once:
 
 ```bash
 /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
@@ -4144,6 +4148,7 @@ from fastapi.testclient import TestClient
 from src.api.files import router as files_router
 from src.core.config import CharlieBotConfig
 import src.api.files as files_mod
+from server import _CharlieBotGZipMiddleware
 
 home = Path(os.environ["M70_HOME"])
 SID = os.environ["M70_SID"]
@@ -4160,27 +4165,32 @@ cfg = CharlieBotConfig(charliebot_home=home)
 files_mod.get_config = lambda: cfg
 app = FastAPI()
 app.include_router(files_router, prefix="/files")
+# The production middleware chain: every served response passes the whole-body
+# gzip whose deflate is part of the view's cost.
+app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
 client = TestClient(app)
 url = f"/files/{home}/sessions/{SID}/artifacts/{NAME}"
+HEADERS = {"Accept-Encoding": "gzip"}  # the browser shape
 
 t0 = time.perf_counter()
-r = client.get(url)  # cold pass, as at first artifact view; not timed
+r = client.get(url, headers=HEADERS)  # cold pass, as at first artifact view; not timed
 cold = time.perf_counter() - t0
 assert r.status_code == 200, (r.status_code, r.text[:200])
 assert "comment_post.js" in r.text, "artifact-comments injection missing"
+assert r.headers.get("content-encoding") == "gzip", "browser shape served without gzip"
 times = []
 bodies = set()
 digest = ""
 for _ in range(9):
     t0 = time.perf_counter()
-    r = client.get(url)
+    r = client.get(url, headers=HEADERS)
     times.append(time.perf_counter() - t0)
     bodies.add(len(r.content))
     digest = hashlib.sha256(r.content).hexdigest()[:12]
 times.sort()
 assert len(bodies) == 1, f"repeat bodies differ: {bodies}"
 print(f"{NAME} ({os.environ['M70_SIZE']} B); first view {cold:.4f} s; repeat-view median {times[4]:.4f} s, "
-      f"max {times[-1]:.4f} s over 9, body {bodies.pop()} B, digest {digest}")
+      f"max {times[-1]:.4f} s over 9, gzip body {bodies.pop()} B, digest {digest}")
 EOF
 ```
 
@@ -6223,6 +6233,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-13 | this PR | M70 repeat-view under the production gzip shape, repaired collector: 0.0343/0.0345/0.0344 → 0.0086/0.0074/0.0073 s, −76 % to −79 %, maxima 0.0355-0.0370 → 0.0085-0.0089 s, every paired round faster (three interleaved rounds of the repaired collector — main checkout before vs branch worktree after back-to-back, 1.08 MB worst on-disk artifact report_frame_anchored_displacement_distribution_v1.html, scratch snapshot home, live home read-only, load 0.66-0.95 one-minute; first views 0.0540-0.0564 → 0.0524-0.0534 s — the cold pass still reads, injects, and deflates once, the shape a first view must pay; decoded bodies 1084806 B both arms, the gzip form decompresses byte-identical to the plain injected body, the cross-checkout digest gap the ?v= cache-bust string the M55 row documents; the standing collector had read this metric 0.0026-0.0028 s since its landing because its bare FastAPI app mounted no gzip middleware — the served-path deflate was invisible to it, the vacuous-read class the M68 and M89/M90 repairs called out); the healthy range stays < 0.010 s — the repaired collector's before reading sat 3.4x above it | every credentialed artifact view paid the server's whole-body gzip middleware a level-1 deflate of the injected page on each response — 27.3 ms standalone on the 1.08 MB worst page, inside a 34 ms repeat view — although the served page is memoized and immutable between writes: the view now ships the memoized gzip form with Content-Encoding: gzip set upstream (the header is what makes the middleware skip its own deflate, content_encoding_set in starlette's responder) and Vary: Accept-Encoding, the compressed form memoized beside the plain one on the same (path, mtime_ns, size) key so a rewrite re-compresses, and a client sending no Accept-Encoding: gzip still reads the plain body |
 | 2026-09-13 | this PR | M92 CLI invocation wall, `charliebot schedule-trigger --help` median 0.044/0.043/0.042 → 0.039/0.043/0.039 s across three interleaved verbatim-collector rounds (main checkout before vs branch worktree after back-to-back, load 1.45-1.51 one-minute) and 0.0415-0.0424 → 0.0386-0.0408 s across a five-round sweep at load 1.43-1.68 — never slower in eight paired rounds, −2 to −4 ms typical (−5 to −9 %); component attribution (`-X importtime`, `-m src.cli.main schedule-trigger --help`): src.core.buildinfo cum 3.6-3.9 ms (subprocess 2.8 ms + datetime + importlib machinery) riding src.cli.common on the before arm, absent on the after arm with `sys.modules` confirming neither buildinfo nor subprocess at import; no-regression witnesses: the import-weight contract's buildinfo-deferral case (red on the eager import), the version-skew suite (the call-site import still binds monkeypatched `buildinfo.read_repo_head_sha`), and the 5515-passed suite | every `charliebot` invocation — the master's and workers' several per turn — paid buildinfo's subprocess chain at import although only the version-skew failure path reads the local SHA; the import now rides that call site, the same slice comes off every verb wall that imports src.cli.common (M97/M98 read it as noise at their scales), and the import-weight contract pins the absence |
 | 2026-09-12 | this PR | M100 broadcast frames per signal 51 → 0; cold read+transform of the 51-signal scratch log: raw rows 51 → 0, wall 3.92/4.02/3.14 → 0.15/0.11/0.15 ms, −96 %, maxima 4.02-4.02 → 0.15-0.15 ms; worker append median 6.1/6.7/7.8 → 4.8/4.2/4.1 us (the broadcast hop gone); chat marker lines 6 → 6 both arms with captured session id 'oc-attach-probe' identical across all six arms — the master funnel's durable append is the stable-history projection's run-start marker, load-bearing and unchanged by design (three interleaved rounds of the new collector — main checkout before vs branch worktree after back-to-back, scratch CHARLIEBOT_HOME per arm, live home read-only, load 1.62 one-minute); M100 definition, healthy range, and collector introduced with this PR; the corpus's standing residue, read-only counts: 11,910 type-less lines across the sessions' chat files and 4,071 across the worker events logs (one per opencode/codex/gemini/charlie-code/antigravity run since inception), each still failing WorkerEvent validation on every cold read+transform of its log until the log ages out | every covered backend opened its run with a bare `{"session_id": …}` adopt signal — the chat history's run-start marker (the stable-history projection's interval key, load-bearing since the ordering repair) and the worker log's session-id record (the token tally's codex reconciliation reads the id from the raw line) — whose missing type failed WorkerEvent validation on every cold read+transform of the log (~61 us of pydantic error construction + debug emit per line) and rendered a `type='raw'` row in the workers panel, beside a broadcast frame no subscriber reads; the signal now carries `ET.SESSION_ATTACHED`, the worker projection skips it before row construction, the worker funnel drops its broadcast, and the readers' interval/id keys accept both shapes so old corpora keep ordering and reconciling |
 | 2026-09-12 | this PR | M99 server import floor, `import server` (fresh process) median 0.779/0.800/0.799 → 0.737/0.712/0.717 s, −5 % to −11 %, maxima 0.824-0.864 → 0.738-0.771 s, every paired round faster (three interleaved rounds of the new collector — main checkout before vs branch worktree after back-to-back, five timed imports per arm per round, load 0.98-1.51 one-minute; component attribution (`-X importtime`): numpy cum 71.4 ms + src.agents.transcriber cum 139.9 ms on the before arm, both absent on the after arm, src.core.ndjson 249 → 218 µs — the lazy import line is free; the wall delta (~60-85 ms) reads under the transcriber subtree's 140 ms because its src.core.config child is shared with the deps chain the server still pays); M99 definition, healthy range, and collector introduced with this PR; the speech stack's absence pinned by the import-weight contract's new server case | every server start imported the speech stack at module scope — `server.py` imported `src.agents.transcriber` for one background provisioning call and the voice router imported its four names for handlers — paying numpy (~90 ms with its transcriber host) plus the module's ndjson SIMD import on the event loop's startup path, although provisioning runs on a worker thread and transcription only runs when a voice socket opens; the provisioning machinery is now a sync `provision_models` on the thread, the voice handlers import transcriber at their use sites, and the two numpy SIMD scanners (ndjson's line count, sessions' parent-reference frames) import numpy inside their functions |

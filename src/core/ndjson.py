@@ -64,7 +64,8 @@ def _count_lines(f: BinaryIO) -> int:
 PARSE_SKIP_LOG_EVENT = "ndjson_parse_skip"
 
 
-def parse_ndjson_line(line: str | bytes, *, log_event: str, log_fields: dict[str, Any]) -> dict | None:
+def parse_ndjson_line(
+    line: str | bytes | bytearray | memoryview, *, log_event: str, log_fields: dict[str, Any]) -> dict | None:
   """Parse one line under the NDJSON reader skip contract, or None when the line skips.
 
   The one definition of the NDJSON reader skip contract: an empty or
@@ -74,17 +75,32 @@ def parse_ndjson_line(line: str | bytes, *, log_event: str, log_fields: dict[str
   rides the raw line — orjson ignores surrounding whitespace, so no strip copy
   runs — and a bytes line the strict parse rejects gets one errors="replace"
   decode before the verdict: a torn multibyte char parses as U+FFFD, hard
-  corruption skips as malformed. The parser is orjson, ~2x stdlib json.loads
-  per line measured on the live corpora; orjson rejects the stdlib json
-  NaN/Infinity extensions and float literals that overflow a double (those
-  lines skip as malformed), and ints at or beyond 2**64 parse as float where
-  stdlib keeps exact precision.
+  corruption skips as malformed. A memoryview line parses zero-copy (the raw
+  bytes stay shared with the caller's read buffer); its replace fallback
+  copies once, on the parse-failed path only. The parser is orjson, ~2x
+  stdlib json.loads per line measured on the live corpora; orjson rejects the
+  stdlib json NaN/Infinity extensions and float literals that overflow a
+  double (those lines skip as malformed), and ints at or beyond 2**64 parse
+  as float where stdlib keeps exact precision.
   """
-  if not line or line.isspace():
+  if not line:
+    return None
+  if isinstance(line, str):
+    if line.isspace():
+      return None
+  elif isinstance(line, memoryview):
+    # bytes.isspace() answers from the first byte on a real line; mirror that
+    # without a full copy and pay the probe copy only on a line that starts
+    # with whitespace.
+    if line[0] in b" \t\n\r\v\f" and bytes(line).isspace():
+      return None
+  elif line.isspace():
     return None
   try:
     return orjson.loads(line)
   except ValueError as e:
+    if isinstance(line, memoryview):
+      line = line.tobytes()
     if not isinstance(line, bytes):
       log.debug(log_event, error=str(e), **log_fields)
       return None

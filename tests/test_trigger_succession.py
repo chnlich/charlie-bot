@@ -26,9 +26,33 @@ from src.core.models import (
     ScheduleTriggerRequest,
     SessionStatus,
     TriggerStatus,
+    WatchTarget,
 )
 from src.core.sessions import SessionManager
 from src.core.triggers import ArchivedSessionError, TriggerManager
+
+
+async def assert_archive_mid_wait_cancels(
+    trigger_mgr: TriggerManager,
+    mgr: SessionManager,
+    session_id: str,
+    *,
+    delay_seconds: int,
+    message: str,
+    watch_targets: list[WatchTarget] | None = None,
+) -> None:
+  """Create one trigger, archive its session mid-wait, and assert the dormancy
+  check (watchdog or fire-time backstop) cancelled the record without waking
+  the master."""
+  with patch_trigger_mocks() as mock_master:
+    trigger = await trigger_mgr.create_trigger(session_id, delay_seconds, message, watch_targets)
+    task = trigger_mgr._tasks[trigger.id]
+    await mgr.archive_session(session_id)
+    await asyncio.wait_for(task, timeout=5)
+
+  stored = await trigger_mgr._load_trigger(session_id, trigger.id)
+  assert stored.status == TriggerStatus.CANCELLED
+  mock_master.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -160,22 +184,16 @@ async def test_watch_trigger_cancelled_when_session_archived_mid_wait(
   # Drive the clock: poll the dormancy predicate every 50ms instead of 60s.
   monkeypatch.setattr("src.core.triggers._DORMANCY_CHECK_SECONDS", 0.05)
 
-  with patch_trigger_mocks() as mock_master:
-    # A pid that stays alive for the whole test: the wait would otherwise run to
-    # its 3600s deadline, so only the watchdog can end this trigger.
-    trigger = await trigger_mgr.create_trigger(
-        session.id,
-        delay_seconds=3600,
-        message="watch a live pid",
-        watch_targets=[LocalPid(pid=os.getpid())],
-    )
-    task = trigger_mgr._tasks[trigger.id]
-    await mgr.archive_session(session.id)
-    await asyncio.wait_for(task, timeout=5)
-
-  stored = await trigger_mgr._load_trigger(session.id, trigger.id)
-  assert stored.status == TriggerStatus.CANCELLED
-  mock_master.assert_not_awaited()
+  # A pid that stays alive for the whole test: the wait would otherwise run to
+  # its 3600s deadline, so only the watchdog can end this trigger.
+  await assert_archive_mid_wait_cancels(
+      trigger_mgr,
+      mgr,
+      session.id,
+      delay_seconds=3600,
+      message="watch a live pid",
+      watch_targets=[LocalPid(pid=os.getpid())],
+  )
   assert mgr.load_chat_events_sync(session.id) == []
 
 
@@ -190,15 +208,7 @@ async def test_pure_delay_trigger_cancelled_when_session_archived_mid_wait(
   trigger_mgr = TriggerManager(cfg, mgr)
   monkeypatch.setattr("src.core.triggers._DORMANCY_CHECK_SECONDS", 0.05)
 
-  with patch_trigger_mocks() as mock_master:
-    trigger = await trigger_mgr.create_trigger(session.id, delay_seconds=3600, message="pure delay")
-    task = trigger_mgr._tasks[trigger.id]
-    await mgr.archive_session(session.id)
-    await asyncio.wait_for(task, timeout=5)
-
-  stored = await trigger_mgr._load_trigger(session.id, trigger.id)
-  assert stored.status == TriggerStatus.CANCELLED
-  mock_master.assert_not_awaited()
+  await assert_archive_mid_wait_cancels(trigger_mgr, mgr, session.id, delay_seconds=3600, message="pure delay")
 
 
 @pytest.mark.asyncio
@@ -209,15 +219,7 @@ async def test_fire_time_backstop_cancels_when_archive_lands_before_fire(tmp_pat
   cfg, mgr, session = await make_home_session(tmp_path, name="Late archive", backend=OPUS_BACKEND_ID)
   trigger_mgr = TriggerManager(cfg, mgr)
 
-  with patch_trigger_mocks() as mock_master:
-    trigger = await trigger_mgr.create_trigger(session.id, delay_seconds=1, message="backstop")
-    task = trigger_mgr._tasks[trigger.id]
-    await mgr.archive_session(session.id)
-    await asyncio.wait_for(task, timeout=5)
-
-  stored = await trigger_mgr._load_trigger(session.id, trigger.id)
-  assert stored.status == TriggerStatus.CANCELLED
-  mock_master.assert_not_awaited()
+  await assert_archive_mid_wait_cancels(trigger_mgr, mgr, session.id, delay_seconds=1, message="backstop")
   # The opted-out wake never ran, so the session stays archived with no event.
   fresh = await mgr.get_session(session.id)
   assert fresh is not None

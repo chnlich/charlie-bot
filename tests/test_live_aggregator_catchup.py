@@ -14,7 +14,7 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET, fake_backends
+from conftest import BROADCAST_PATCH_TARGET, assistant_text_event, fake_backends
 
 from src.core import event_types as ET
 from src.core import sessions as sessions_module
@@ -36,17 +36,7 @@ async def _seed_session(mgr: SessionManager) -> str:
           },
           "timestamp": "2026-09-07T00:00:00Z",
       })
-  await mgr.save_chat_event(
-      session.id, {
-          "type": ET.ASSISTANT,
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "seed answer"
-              }]
-          },
-          "timestamp": "2026-09-07T00:00:01Z",
-      })
+  await mgr.save_chat_event(session.id, {**assistant_text_event("seed answer"), "timestamp": "2026-09-07T00:00:01Z"})
   return session.id
 
 
@@ -61,17 +51,7 @@ async def test_catchup_restores_stream_deltas_and_live_feed_broadcasts(tmp_path)
   assert mgr._aggregators[sid] is aggregator
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as broadcast:
-    await mgr.persist_and_broadcast(
-        sid, {
-            "type": ET.ASSISTANT,
-            "message": {
-                "content": [{
-                    "type": "text",
-                    "text": "live tail"
-                }]
-            },
-            "timestamp": "2026-09-07T00:00:02Z",
-        })
+    await mgr.persist_and_broadcast(sid, {**assistant_text_event("live tail"), "timestamp": "2026-09-07T00:00:02Z"})
 
   delta_types = [call.args[1]["type"] for call in broadcast.await_args_list]
   assert "stream" in delta_types

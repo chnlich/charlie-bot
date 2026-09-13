@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from conftest import append_events
+from conftest import append_events, assistant_text_event
 
 from src.core import event_types as ET
 from src.core.review import extract_review_context
@@ -32,22 +32,7 @@ async def test_codex_style_falls_back_to_assistant_text(tmp_path: Path) -> None:
   session_id, thread_id = "sess-1", "thr-1"
   chat_log, worker_log = _setup_paths(tmp_path, session_id, thread_id)
   append_events(chat_log, [{"type": ET.TASK_DELEGATED, "thread_id": thread_id, "description": "Do X"}])
-  append_events(
-      worker_log, [
-          {
-              "type": ET.ASSISTANT,
-              "message": {
-                  "content": [{
-                      "type": "text",
-                      "text": "Done. Commit abcdef."
-                  }]
-              },
-          },
-          {
-              "type": ET.RESULT,
-              "result": ""
-          },
-      ])
+  append_events(worker_log, [assistant_text_event("Done. Commit abcdef."), {"type": ET.RESULT, "result": ""}])
 
   user_request, worker_summary = await extract_review_context(session_id, thread_id, tmp_path)
   assert user_request == "Do X"
@@ -112,15 +97,7 @@ async def test_worker_summary_prefers_newest_assistant_over_older_result(tmp_pat
               "type": ET.RESULT,
               "result": "older result text"
           },
-          {
-              "type": ET.ASSISTANT,
-              "message": {
-                  "content": [{
-                      "type": "text",
-                      "text": "newest words",
-                  }]
-              },
-          },
+          assistant_text_event("newest words"),
       ])
 
   _, worker_summary = await extract_review_context(session_id, thread_id, tmp_path)
@@ -173,15 +150,7 @@ async def test_delegation_scan_skips_malformed_and_blank_lines(tmp_path: Path) -
   chat_log, worker_log = _setup_paths(tmp_path, session_id, thread_id)
   append_events(
       chat_log, [
-          {
-              "type": ET.ASSISTANT,
-              "message": {
-                  "content": [{
-                      "type": "text",
-                      "text": "hi"
-                  }]
-              }
-          },
+          assistant_text_event("hi"),
           {
               "type": ET.TASK_DELEGATED,
               "thread_id": thread_id,

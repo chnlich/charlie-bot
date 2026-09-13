@@ -7,6 +7,7 @@ from conftest import (
     CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
     FLAG_LIKE_PROMPT,
     RUNS_READ_PID_STAT_PATCH_TARGET,
+    assistant_text_event,
     backend_option,
     build_cli_backend,
     stub_credentials,
@@ -121,15 +122,7 @@ def test_translate_thought_and_unknown(monkeypatch) -> None:
       "type": "thought",
       "step": 1,
       "text": "I will inspect the files.",
-  }) == [{
-      "type": ET.ASSISTANT,
-      "message": {
-          "content": [{
-              "type": "text",
-              "text": "I will inspect the files.",
-          }]
-      },
-  }]
+  }) == [assistant_text_event("I will inspect the files.")]
   assert not backend.translate_event({"type": "future-event"})
 
 

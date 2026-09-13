@@ -337,3 +337,39 @@ def test_cjk_payload_parses_identically(tmp_path: Path) -> None:
   merged = json.loads(payload)["traceEvents"]
   by_name = {event.get("name"): event for event in merged if event.get("name")}
   assert by_name["标注"] == {"ph": "X", "pid": "trace", "tid": 1, "name": "标注", "args": {"text": "中文负载"}}
+
+
+def test_walk_failure_raises_and_reaps_the_compressor(tmp_path: Path, monkeypatch) -> None:
+  # The compressor is a child process reading the walk's stdin: a walk failure
+  # (unparseable trace) must raise out of merge_traces without blocking on the
+  # pipe, and the child must be killed and reaped, not left running.
+  import subprocess
+
+  import src.core.trace_merge as trace_merge
+
+  calls = []
+
+  class _RecordingPopen(subprocess.Popen):
+
+    def kill(self) -> None:
+      calls.append("kill")
+      super().kill()
+
+    def wait(self, timeout: float | None = None) -> int:
+      calls.append("wait")
+      return super().wait(timeout)
+
+  monkeypatch.setattr(trace_merge.subprocess, "Popen", _RecordingPopen)
+
+  broken = tmp_path / "broken.json"
+  broken.write_text("{not json", encoding="utf-8")
+  output = tmp_path / "merged.json.gz"
+
+  try:
+    trace_merge.merge_traces([broken], output, slim=False)
+  except ValueError:  # orjson.JSONDecodeError subclasses ValueError
+    pass
+  else:
+    raise AssertionError("unparseable trace must fail the build")
+
+  assert calls[0] == "kill" and "wait" in calls

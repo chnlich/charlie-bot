@@ -479,6 +479,28 @@ def _patch_git(monkeypatch: pytest.MonkeyPatch, *, count: str = "0", tip: str = 
   return calls
 
 
+def _description_rig(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    iterations: int,
+    *,
+    results: dict[int, str] | None = None,
+    on_spawn: Callable[[SpawnRequest], None] | None = None,
+) -> tuple[Any, _FakeImproveSessionManager, _FakeImproveThreadManager, list[str]]:
+  """Wire the description-capture loop rig; returns (cfg, session_mgr, thread_mgr, descriptions).
+
+  ``descriptions`` holds each spawned worker's full description in iteration order; ``on_spawn``
+  runs after the description is recorded (see ``_capture_descriptions``), ``results`` pins the
+  per-iteration result payloads (see ``_completed_thread_mgr``).
+  """
+  cfg = _make_cfg(tmp_path)
+  session_mgr = _FakeImproveSessionManager()
+  thread_mgr = _completed_thread_mgr(tmp_path, iterations, results=results)
+  _patch_improve_loop_io(monkeypatch)
+  descriptions = _capture_descriptions(monkeypatch, on_spawn=on_spawn)
+  return cfg, session_mgr, thread_mgr, descriptions
+
+
 async def _run_loop(
     *,
     session_id: str,
@@ -799,17 +821,14 @@ async def test_read_loop_plan_returns_none_when_missing(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_run_improve_loop_rereads_edited_goal_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Editing goal.md mid-loop steers iteration N>1's worker prompt."""
-  cfg = _make_cfg(tmp_path)
-  session_mgr = _FakeImproveSessionManager()
-  thread_mgr = _completed_thread_mgr(tmp_path, 2)
-  _patch_improve_loop_io(monkeypatch)
 
   def edit_goal_after_iter1(request: SpawnRequest) -> None:
     # Simulate the user editing the live goal between iterations.
     if request.iteration_number == 1:
       (Path(request.loop_dir) / "goal.md").write_text("edited goal")
 
-  descriptions = _capture_descriptions(monkeypatch, on_spawn=edit_goal_after_iter1)
+  cfg, session_mgr, thread_mgr, descriptions = _description_rig(
+      tmp_path, monkeypatch, 2, on_spawn=edit_goal_after_iter1)
 
   await _run_loop(
       session_id="edit-session",
@@ -833,12 +852,6 @@ async def test_run_improve_loop_rereads_edited_goal_file(tmp_path: Path, monkeyp
 async def test_run_improve_loop_injects_previous_summaries_in_next_description(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Iteration N>1 sees summaries sourced from earlier iteration report files."""
-  cfg = _make_cfg(tmp_path)
-  session_mgr = _FakeImproveSessionManager()
-  thread_mgr = _completed_thread_mgr(tmp_path, 2, results={1: "iter1 event text that must NOT be the summary"})
-  _patch_improve_loop_io(monkeypatch)
-  _patch_git(monkeypatch, count="1")
-
   iter1_report = (
       "## Iter 1 — completed\n"
       "### What Changed\n- did the work\n"
@@ -848,7 +861,14 @@ async def test_run_improve_loop_injects_previous_summaries_in_next_description(
     if request.iteration_number == 1:
       (Path(request.loop_dir) / f'iter_{request.iteration_number:04d}.md').write_text(iter1_report)
 
-  descriptions = _capture_descriptions(monkeypatch, on_spawn=write_iter1_report)
+  cfg, session_mgr, thread_mgr, descriptions = _description_rig(
+      tmp_path,
+      monkeypatch,
+      2,
+      results={1: "iter1 event text that must NOT be the summary"},
+      on_spawn=write_iter1_report,
+  )
+  _patch_git(monkeypatch, count="1")
 
   await _run_loop(
       session_id="summary-session",
@@ -868,11 +888,7 @@ async def test_run_improve_loop_injects_previous_summaries_in_next_description(
 @pytest.mark.asyncio
 async def test_run_improve_loop_injects_plan_when_provided(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Workers see plan.md content when the loop was launched with a plan."""
-  cfg = _make_cfg(tmp_path)
-  session_mgr = _FakeImproveSessionManager()
-  thread_mgr = _completed_thread_mgr(tmp_path, 1)
-  _patch_improve_loop_io(monkeypatch)
-  descriptions = _capture_descriptions(monkeypatch)
+  cfg, session_mgr, thread_mgr, descriptions = _description_rig(tmp_path, monkeypatch, 1)
 
   await _run_loop(
       session_id="plan-injection-session",
@@ -891,11 +907,7 @@ async def test_run_improve_loop_injects_plan_when_provided(tmp_path: Path, monke
 @pytest.mark.asyncio
 async def test_run_improve_loop_works_without_plan_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Omitting plan.md preserves the original thin-goal loop behavior."""
-  cfg = _make_cfg(tmp_path)
-  session_mgr = _FakeImproveSessionManager()
-  thread_mgr = _completed_thread_mgr(tmp_path, 1)
-  _patch_improve_loop_io(monkeypatch)
-  descriptions = _capture_descriptions(monkeypatch)
+  cfg, session_mgr, thread_mgr, descriptions = _description_rig(tmp_path, monkeypatch, 1)
 
   await _run_loop(
       session_id="no-plan-session",
@@ -915,16 +927,13 @@ async def test_run_improve_loop_works_without_plan_file(tmp_path: Path, monkeypa
 @pytest.mark.asyncio
 async def test_run_improve_loop_rereads_edited_plan_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Editing plan.md mid-loop steers iteration N>1's worker prompt."""
-  cfg = _make_cfg(tmp_path)
-  session_mgr = _FakeImproveSessionManager()
-  thread_mgr = _completed_thread_mgr(tmp_path, 2)
-  _patch_improve_loop_io(monkeypatch)
 
   def edit_plan_after_iter1(request: SpawnRequest) -> None:
     if request.iteration_number == 1:
       (Path(request.loop_dir) / "plan.md").write_text("2. edited lever")
 
-  descriptions = _capture_descriptions(monkeypatch, on_spawn=edit_plan_after_iter1)
+  cfg, session_mgr, thread_mgr, descriptions = _description_rig(
+      tmp_path, monkeypatch, 2, on_spawn=edit_plan_after_iter1)
 
   await _run_loop(
       session_id="edit-plan-session",
@@ -945,16 +954,12 @@ async def test_run_improve_loop_rereads_edited_plan_file(tmp_path: Path, monkeyp
 async def test_run_improve_loop_fails_when_goal_file_missing_mid_loop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A goal.md removed mid-loop fails the loop loudly instead of falling back."""
-  cfg = _make_cfg(tmp_path)
-  session_mgr = _FakeImproveSessionManager()
-  thread_mgr = _completed_thread_mgr(tmp_path, 1)
-  _patch_improve_loop_io(monkeypatch)
 
   def delete_goal_after_iter1(request: SpawnRequest) -> None:
     if request.iteration_number == 1:
       (Path(request.loop_dir) / "goal.md").unlink()
 
-  _capture_descriptions(monkeypatch, on_spawn=delete_goal_after_iter1)
+  cfg, session_mgr, thread_mgr, _ = _description_rig(tmp_path, monkeypatch, 1, on_spawn=delete_goal_after_iter1)
 
   await _run_loop(
       session_id="missing-goal-session",

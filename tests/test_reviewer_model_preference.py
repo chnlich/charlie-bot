@@ -453,27 +453,31 @@ async def _run_notify_rig(
   return spawn_calls, trigger_calls
 
 
-@pytest.mark.asyncio
-async def test_notify_reviewer_failure_triggers_retry(monkeypatch: pytest.MonkeyPatch) -> None:
-  """When a reviewer fails, _notify_completion retries with next backend."""
-  review_thread = _make_review_thread(tried_backends=["kimi-k2.5"])
-
-  spawn_calls, trigger_calls = await _run_notify_rig(monkeypatch, review_thread, exit_code=1, spawn_result=True)
-
-  assert len(spawn_calls) == 1
-  assert spawn_calls[0]["tried_backends"] == ["kimi-k2.5"]
-  assert not trigger_calls
+# One reviewer-exit routing rule per case. Row shape: (reviewer exit code, expected spawn
+# calls, expected master triggers).
+_REVIEWER_EXIT_CASES = [
+    pytest.param(1, 1, 0, id="failure-retries-next-backend"),
+    pytest.param(0, 0, 1, id="success-triggers-master"),
+]
 
 
 @pytest.mark.asyncio
-async def test_notify_reviewer_success_no_retry(monkeypatch: pytest.MonkeyPatch) -> None:
-  """When a reviewer succeeds, no retry; trigger master directly."""
+@pytest.mark.parametrize(("exit_code", "expected_spawn_calls", "expected_trigger_calls"), _REVIEWER_EXIT_CASES)
+async def test_notify_reviewer_exit_routes_retry_or_master(
+    monkeypatch: pytest.MonkeyPatch,
+    exit_code: int,
+    expected_spawn_calls: int,
+    expected_trigger_calls: int,
+) -> None:
+  """A failed reviewer retries with the next backend; a successful one triggers master."""
   review_thread = _make_review_thread(tried_backends=["kimi-k2.5"])
 
-  spawn_calls, trigger_calls = await _run_notify_rig(monkeypatch, review_thread, exit_code=0, spawn_result=True)
+  spawn_calls, trigger_calls = await _run_notify_rig(monkeypatch, review_thread, exit_code=exit_code, spawn_result=True)
 
-  assert not spawn_calls
-  assert len(trigger_calls) == 1
+  assert len(spawn_calls) == expected_spawn_calls
+  if expected_spawn_calls:
+    assert spawn_calls[0]["tried_backends"] == ["kimi-k2.5"]
+  assert len(trigger_calls) == expected_trigger_calls
 
 
 @pytest.mark.asyncio
@@ -487,17 +491,28 @@ async def test_notify_retries_exhausted_triggers_master(monkeypatch: pytest.Monk
   assert len(trigger_calls) == 1
 
 
-# --- require_review gating tests ---
+# One require_review gate rule per case. Row shape: (require_review, expected spawn calls,
+# expected master triggers).
+_REQUIRE_REVIEW_CASES = [
+    pytest.param(False, 0, 1, id="review-skipped-triggers-master"),
+    pytest.param(True, 1, 0, id="reviewer-spawned"),
+]
 
 
 @pytest.mark.asyncio
-async def test_require_review_false_skips_reviewer_triggers_master(monkeypatch: pytest.MonkeyPatch) -> None:
-  """When require_review=False, no reviewer is spawned and master is triggered directly."""
+@pytest.mark.parametrize(("require_review", "expected_spawn_calls", "expected_trigger_calls"), _REQUIRE_REVIEW_CASES)
+async def test_require_review_gate_routes_the_notify_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    require_review: bool,
+    expected_spawn_calls: int,
+    expected_trigger_calls: int,
+) -> None:
+  """A review-less worker triggers master directly; a reviewing worker's reviewer owns the trigger."""
   worker_thread = ThreadMetadata(
       id="worker-thread-id",
       session_id="session-id",
       description="Prompt task",
-      require_review=False,
+      require_review=require_review,
       backend=OPUS_BACKEND_ID,
       model=OPUS_BACKEND_OPTION.model,
       branch_name="charliebot/task-1",
@@ -507,30 +522,5 @@ async def test_require_review_false_skips_reviewer_triggers_master(monkeypatch: 
 
   spawn_calls, trigger_calls = await _run_notify_rig(monkeypatch, worker_thread, exit_code=0, spawn_result=True)
 
-  # No reviewer spawned
-  assert not spawn_calls
-  # Master triggered directly
-  assert len(trigger_calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_require_review_true_spawns_reviewer(monkeypatch: pytest.MonkeyPatch) -> None:
-  """When require_review=True (default), reviewer is spawned as usual."""
-  worker_thread = ThreadMetadata(
-      id="worker-thread-id",
-      session_id="session-id",
-      description="Implement task",
-      require_review=True,
-      backend=OPUS_BACKEND_ID,
-      model=OPUS_BACKEND_OPTION.model,
-      branch_name="charliebot/task-1",
-      repo_path="/tmp/repo",
-      worktree_path=_WORKTREE_PATH,
-  )
-
-  spawn_calls, trigger_calls = await _run_notify_rig(monkeypatch, worker_thread, exit_code=0, spawn_result=True)
-
-  # Reviewer spawned
-  assert len(spawn_calls) == 1
-  # Master NOT triggered directly (reviewer handles that)
-  assert not trigger_calls
+  assert len(spawn_calls) == expected_spawn_calls
+  assert len(trigger_calls) == expected_trigger_calls

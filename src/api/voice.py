@@ -10,15 +10,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-import structlog
 from fastapi import WebSocket, WebSocketDisconnect
 
 from src.core.config import CharlieBotConfig, get_config
+from src.core.log_once import LazyStructlogLogger
 
 if TYPE_CHECKING:
   from src.agents.transcriber import SimulatedStreamingTranscriptionSession
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 _active_voice_sockets: dict[str, WebSocket] = {}
 _active_voice_lock = asyncio.Lock()

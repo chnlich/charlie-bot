@@ -10,8 +10,6 @@ images is refused with one error event and nothing is sent.
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-import structlog
-
 from src.agents.backends.base import (
     IMAGE_MIME_BY_EXT,
     USER_LOCAL_BIN,
@@ -28,8 +26,9 @@ from src.agents.backends.base import (
     resolve_binary,
 )
 from src.core import event_types as ET
+from src.core.log_once import LazyStructlogLogger
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 
 def _context_reading_int(field: str, value: object) -> int | None:

@@ -16,7 +16,6 @@ from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
 import orjson
-import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -27,6 +26,7 @@ from src.api.deps import SESSION_NOT_FOUND_DETAIL, get_session_manager
 from src.api.message_utils import build_session_bootstrap_data
 from src.api.sessions import _bootstrap_payload, _default_backend_id
 from src.core.config import CharlieBotConfig, get_config, get_credentials
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus
 from src.core.ncu_parsing import NcuParseError, parse_ncu_report
 from src.core.sessions import SessionManager
@@ -34,7 +34,7 @@ from src.core.timeouts import SUBPROCESS_GIT_VERSION_TIMEOUT
 from src.core.token_tally import TokenTally, collect_token_usage
 from src.core.trace_merge import _MERGE_COMPRESSLEVEL, merge_traces
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _PERFETTO_MERGE_CACHE_LIMIT = 24

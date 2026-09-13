@@ -4,12 +4,11 @@ import asyncio
 import signal
 from pathlib import Path
 
-import structlog
-
+from src.core.log_once import LazyStructlogLogger
 from src.core.process import kill_process_group
 from src.core.timeouts import LATEX_COMPILE_TIMEOUT, SUBPROCESS_GIT_READ_TIMEOUT_ASYNC
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # Single source of truth — change here when adding more projects.
 LATEX_PROJECT = {

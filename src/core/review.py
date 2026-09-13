@@ -4,8 +4,6 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
-import structlog
-
 from src.core import event_types as ET
 from src.core import finalize_effects
 from src.core.chat_events import chat_events_path
@@ -14,6 +12,7 @@ from src.core.git import (
     git_current_branch,
     git_worktree_remove_reporting,
 )
+from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
 from src.core.message_aggregator import extract_text_from_message
 from src.core.models import (
@@ -27,7 +26,7 @@ from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager, thread_events_log_path
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 
 async def _trigger_master_judged(

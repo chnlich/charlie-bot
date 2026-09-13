@@ -7,10 +7,10 @@ from datetime import datetime
 from pathlib import Path
 
 import aiofiles
-import structlog
 
 from src.core.config import CharlieBotConfig
 from src.core.json_utils import write_model_json_atomically
+from src.core.log_once import LazyStructlogLogger
 from src.core.memo import StatSignatureMemo
 from src.core.models import (
     TERMINAL_THREAD_STATUSES,
@@ -22,7 +22,7 @@ from src.core.models import (
 )
 from src.core.sidebar_state import mark_sidebar_dirty
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # The JSON metadata file every session directory and each of its thread
 # directories carries. Readers stat it by name and writers publish it through

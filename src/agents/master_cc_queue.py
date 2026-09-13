@@ -5,14 +5,13 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-import structlog
-
 from src.agents import master_cc_run, master_cc_state
 from src.agents.backends.base import make_error_event, make_master_done_event
 from src.core import event_types as ET
 from src.core import runs, sidebar_state
 from src.core.config import CharlieBotConfig
 from src.core.latex import get_tex_path, snapshot_tex
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import (
     BackendOption,
     BackendType,
@@ -27,7 +26,7 @@ from src.core.thinking_state import busy_since, clear_busy, mark_busy
 if TYPE_CHECKING:
   from src.core.sessions import SessionManager
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 
 def _enqueue_work_item(session_id: str, work_item: master_cc_state._WorkItem) -> tuple[datetime, bool]:

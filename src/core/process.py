@@ -12,15 +12,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
-import structlog
-
-from src.core.log_once import WarnOnceRegistry
+from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.timeouts import (
     KILL_ESCALATION_GRACE_SECONDS,
     KILL_ESCALATION_POLL_SECONDS,
 )
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # Named TypeVar instead of PEP 695 ``wait_or_kill_group[T]``: yapf's pinned
 # lib2to3 parser rejects PEP 695 type-parameter lists, and the inline form

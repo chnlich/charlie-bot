@@ -2,7 +2,6 @@
 
 import asyncio
 
-import structlog
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -12,12 +11,13 @@ from src.api.deps import get_session_manager, require_session
 from src.api.message_utils import build_user_event
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
+from src.core.log_once import LazyStructlogLogger
 from src.core.message_events import serialize_uploaded_files
 from src.core.models import SessionMetadata, UploadedFileRef
 from src.core.sessions import SessionManager
 from src.core.slash_commands import SlashDispatchKind, dispatch_slash_command, load_slash_commands
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 router = APIRouter()
 

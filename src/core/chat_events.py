@@ -7,10 +7,10 @@ from datetime import datetime
 from pathlib import Path
 
 import orjson
-import structlog
 
 from src.core.finalize_effects import _MASTER_OUTPUT_TYPES, _is_terminal_worker_summary
 from src.core.json_utils import atomic_write_text
+from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.models import SessionMetadata, parse_utc_datetime, utc_now
 from src.core.ndjson import (
@@ -24,7 +24,7 @@ from src.core.ndjson import (
     parse_ndjson_tail,
 )
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # Bound on _archive_events_memo in files, not sessions: one scroll spans a
 # session's few weekly archive files, so the cap bounds parsed-archive memory

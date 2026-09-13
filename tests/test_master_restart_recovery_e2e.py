@@ -64,7 +64,14 @@ from src.core import init as init_module
 from src.core import runs
 from src.core.config import CharlieBotConfig
 from src.core.message_aggregator import MessageAggregator
-from src.core.models import CcClaudeBackend, CreateSessionRequest, MasterRunRecord, OpencodeBackend
+from src.core.models import (
+    CcClaudeBackend,
+    CreateSessionRequest,
+    MasterRunRecord,
+    OpencodeBackend,
+    SessionCallbacks,
+    SessionMetadata,
+)
 from src.core.process import kill_process_group
 from src.core.sessions import SessionManager
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
@@ -408,7 +415,9 @@ def _capture_replays(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
   """
   replays: list[dict] = []
 
-  async def _capture_run_message(cfg, session_meta, user_content, callbacks, **kwargs) -> None:
+  async def _capture_run_message(
+      cfg: CharlieBotConfig, session_meta: SessionMetadata, user_content: str, callbacks: SessionCallbacks,
+      **kwargs: object) -> None:
     replays.append({"content": user_content, "user_event_id": kwargs.get("user_event_id")})
 
   monkeypatch.setattr(master_cc_queue, "run_message", _capture_run_message)
@@ -1030,7 +1039,7 @@ async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(
     ids=["legacy-raw-missing", "never-started"],
 )
 async def test_undrainable_dead_turn_replayed_with_marker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pid, pid_start) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pid: int | None, pid_start: str | None) -> None:
   """Raw log missing (pre-transport record) or turn never spawned: nothing is
   drainable, the record clears, and the user message is replayed with the
   marker — exactly one answer, by replay and only by replay."""

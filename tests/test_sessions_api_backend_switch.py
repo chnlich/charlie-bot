@@ -171,7 +171,7 @@ async def test_switch_to_effective_current_is_idempotent_noop(tmp_path: Path, mo
   captured: list[dict] = []
   real_persist = session_mgr.persist_and_broadcast
 
-  async def recording_persist(_sid, event) -> None:
+  async def recording_persist(_sid: str, event: dict) -> None:
     captured.append(event)
     await real_persist(_sid, event)
 

@@ -68,7 +68,7 @@ def _counting_scan(monkeypatch: pytest.MonkeyPatch) -> Callable[[], int]:
   calls = 0
   real_scan = sessions_mod._scan_content_for_hit
 
-  def _wrapped(path, session_id, query_lower, start):
+  def _wrapped(path: Path, session_id: str, query_lower: str, start: int) -> bool | None:
     nonlocal calls
     calls += 1
     return real_scan(path, session_id, query_lower, start)
@@ -82,7 +82,7 @@ def _recording_starts(monkeypatch: pytest.MonkeyPatch) -> list[int]:
   starts: list[int] = []
   real_scan = sessions_mod._scan_content_for_hit
 
-  def _wrapped(path, session_id, query_lower, start):
+  def _wrapped(path: Path, session_id: str, query_lower: str, start: int) -> bool | None:
     starts.append(start)
     return real_scan(path, session_id, query_lower, start)
 
@@ -176,7 +176,7 @@ async def test_content_search_memoize_landing_mid_round_does_not_disturb_it(
   await _session_with_chat_content(mgr, '{"type":"user","content":"nothing relevant"}\n', "sess")
   real_scan = sessions_mod._scan_content_for_hit
 
-  def _concurrent_memorizing_scan(path, session_id, query_lower, start):
+  def _concurrent_memorizing_scan(path: Path, session_id: str, query_lower: str, start: int) -> bool | None:
     # A concurrent search's memoize lands on the same file while this round's
     # worker is inside its scan (the per-keystroke sidebar's overlapping
     # requests); the in-flight round reads its snapshot and completes.
@@ -198,7 +198,7 @@ async def test_content_search_errored_scan_is_not_memoized(tmp_path: Path, monke
   real_scan = sessions_mod._scan_content_for_hit
   calls = 0
 
-  def _flaky(path, session_id, query_lower, start):
+  def _flaky(path: Path, session_id: str, query_lower: str, start: int) -> bool | None:
     nonlocal calls
     calls += 1
     if calls == 1:

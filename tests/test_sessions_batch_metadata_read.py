@@ -7,7 +7,7 @@ import json
 import os
 import shutil
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -38,7 +38,7 @@ def _count_root_scans(mgr: SessionManager, monkeypatch: pytest.MonkeyPatch) -> l
   real_scandir = os.scandir
   root_scans: list[str] = []
 
-  def counting_scandir(path):
+  def counting_scandir(path: str | os.PathLike[str]) -> Iterator[os.DirEntry[str]]:
     # shutil.rmtree scans by fd; only the sessions-root path counts.
     if isinstance(path, (str, os.PathLike)) and os.fspath(path) == os.fspath(mgr._cfg.sessions_dir):
       root_scans.append(os.fspath(path))
@@ -162,7 +162,8 @@ async def test_batch_install_uses_setdefault_for_cache_entry_added_during_read(
   real_to_thread = asyncio.to_thread
   to_thread_calls = 0
 
-  async def install_between_diff_and_install(func, *args, **kwargs):
+  async def install_between_diff_and_install(
+      func: Callable[..., object], *args: object, **kwargs: object) -> object:
     nonlocal to_thread_calls
     to_thread_calls += 1
     result = await real_to_thread(func, *args, **kwargs)

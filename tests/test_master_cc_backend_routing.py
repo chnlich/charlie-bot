@@ -1,4 +1,5 @@
 import os
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -76,7 +77,8 @@ async def test_run_cc_routes_antigravity_native_resume_id(
   backend_option = cfg.backends.options[0]
   captures: dict[str, object] = {}
 
-  def fake_build_backend(option: models.BackendOption, cfg: core_config.CharlieBotConfig, **kwargs):
+  def fake_build_backend(
+      option: models.BackendOption, cfg: core_config.CharlieBotConfig, **kwargs: object) -> FakeBackend:
     captures["option"] = option
     captures["kwargs"] = kwargs
     return FakeBackend()
@@ -104,14 +106,16 @@ class _SessionIdBackend(FakeBackend):
   def __init__(self, session_id: str) -> None:
     self._session_id = session_id
 
-  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
+  async def run(
+      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     yield {"session_id": self._session_id}
     yield backend_base.make_result_event()
 
 
 class _AnchorMismatchBackend(FakeBackend):
 
-  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
+  async def run(
+      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     yield backend_base.make_error_event("agy resume envelope id fresh-id does not match anchor anchor-id")
     raise ValueError("antigravity envelope guard: resume envelope id fresh-id does not match anchor anchor-id")
 
@@ -129,7 +133,8 @@ async def test_run_cc_chain_adopts_session_id_and_resumes_with_it(
   captures: dict[str, object] = {}
   backend_instances: list[object] = []
 
-  def fake_build_backend(option, cfg, **kwargs):
+  def fake_build_backend(
+      option: models.BackendOption, cfg: core_config.CharlieBotConfig, **kwargs: object) -> _SessionIdBackend:
     captures["kwargs"] = kwargs
     instance = _SessionIdBackend("conv-abc")
     backend_instances.append(instance)
@@ -186,7 +191,8 @@ async def test_run_cc_adds_exclude_dynamic_flag_for_cc_claude(
   option = cfg.backends.options[0]
   captures: dict[str, object] = {}
 
-  def fake_build_backend(option, cfg, **kwargs):
+  def fake_build_backend(
+      option: models.BackendOption, cfg: core_config.CharlieBotConfig, **kwargs: object) -> FakeBackend:
     captures["kwargs"] = kwargs
     return FakeBackend()
 

@@ -13,7 +13,7 @@ from conftest import make_home_config, make_page_request, stub_credentials
 
 from src.api import pages
 from src.core.config import CharlieBotConfig
-from src.core.models import SessionMetadata
+from src.core.models import SessionMetadata, SessionStatus
 from src.core.token_tally import AccountRow, ModelRow, TokenTally
 
 
@@ -38,10 +38,10 @@ class FakeSessionManager:
 
   async def list_sessions(
       self,
-      status=None,
-      scheduled=False,
-      include_running_status=True,
-      include_pending_trigger_status=False,
+      status: SessionStatus | None = None,
+      scheduled: bool | None = False,
+      include_running_status: bool = True,
+      include_pending_trigger_status: bool = False,
   ) -> list[object]:
     return []
 
@@ -105,7 +105,7 @@ async def test_token_usage_route_returns_rows(monkeypatch: pytest.MonkeyPatch, p
               accounts=[AccountRow(name="work (default)", calls=2, output=15, total=55)]),
       ])
 
-  def fake_collect(**_kwargs) -> TokenTally:
+  def fake_collect(**_kwargs: object) -> TokenTally:
     return tally
 
   monkeypatch.setattr(pages, "collect_token_usage", fake_collect)
@@ -128,7 +128,7 @@ async def test_token_usage_route_is_single_flight(
     monkeypatch: pytest.MonkeyPatch, pages_config: CharlieBotConfig) -> None:
   calls = 0
 
-  def fake_collect(**_kwargs) -> TokenTally:
+  def fake_collect(**_kwargs: object) -> TokenTally:
     nonlocal calls
     calls += 1
     time.sleep(0.2)  # keep the collection genuinely in flight so both requests share it
@@ -151,7 +151,7 @@ async def test_token_usage_viewer_clears_inflight_task_after_render(
   """A finished collection is cleared, so the next request re-scans afresh."""
   calls = 0
 
-  def fake_collect(**_kwargs) -> TokenTally:
+  def fake_collect(**_kwargs: object) -> TokenTally:
     nonlocal calls
     calls += 1
     return TokenTally(rows=[], notes=[], elapsed_s=0.01, scanned_bytes=0)
@@ -332,10 +332,10 @@ class PendingTriggerSessionManager(FakeSessionManager):
 
   async def list_sessions(
       self,
-      status=None,
-      scheduled=False,
-      include_running_status=True,
-      include_pending_trigger_status=False,
+      status: SessionStatus | None = None,
+      scheduled: bool | None = False,
+      include_running_status: bool = True,
+      include_pending_trigger_status: bool = False,
   ) -> list[object]:
     return [self._session.model_copy()]
 
@@ -348,7 +348,7 @@ class PendingTriggerSessionManager(FakeSessionManager):
 def _bootstrap_stub(session: SessionMetadata) -> Callable[..., Awaitable[SimpleNamespace]]:
   """Stand-in for build_session_bootstrap_data serving one fixed session, no messages."""
 
-  async def fake_build_session_bootstrap_data(*args, **kwargs) -> SimpleNamespace:
+  async def fake_build_session_bootstrap_data(*args: object, **kwargs: object) -> SimpleNamespace:
     return SimpleNamespace(
         session=session,
         messages=[],

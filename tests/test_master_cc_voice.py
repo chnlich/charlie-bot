@@ -17,12 +17,13 @@ from conftest import (
 from src.agents import master_cc, master_cc_run
 from src.core import event_types as ET
 from src.core import models
+from src.core.config import CharlieBotConfig
 from src.core.models import SendMessageRequest
 
 DISCLAIMER = master_cc_run._VOICE_DISCLAIMER
 
 
-def _user_events(callbacks) -> list[dict]:
+def _user_events(callbacks: models.SessionCallbacks) -> list[dict]:
   """The USER events the round persisted, in order, from the mocked callbacks."""
   return [
       call.args[1]
@@ -75,7 +76,7 @@ async def test_run_message_prompt_and_user_event_follow_is_voice(
   text = "transcribed hello" if is_voice else "plain hello"
   backend = CapturingBackend()
 
-  async def drive(cfg, meta, callbacks):
+  async def drive(cfg: CharlieBotConfig, meta: models.SessionMetadata, callbacks: models.SessionCallbacks) -> None:
     await master_cc.run_message(cfg, meta, text, callbacks, is_voice=is_voice)
 
   callbacks = await run_captured_round(

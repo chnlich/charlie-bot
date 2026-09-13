@@ -9,6 +9,8 @@ import pytest
 from conftest import CapturingBackend, run_captured_round
 
 from src.agents import master_cc, master_cc_queue
+from src.core.config import CharlieBotConfig
+from src.core.models import SessionCallbacks, SessionMetadata
 
 _FILES = [{"filename": "pic.png", "path": "/uploads/pic.png", "size": 3}]
 
@@ -18,7 +20,7 @@ async def test_run_message_passes_uploaded_files_to_backend(tmp_path: Path, monk
   """A message with attachments enqueues them on the work item, and _run_cc's
   backend.run call receives them."""
 
-  async def drive(cfg, meta, callbacks):
+  async def drive(cfg: CharlieBotConfig, meta: SessionMetadata, callbacks: SessionCallbacks) -> None:
     await master_cc.run_message(cfg, meta, "what is in this picture", callbacks, uploaded_files=_FILES)
 
   backend = CapturingBackend()
@@ -33,7 +35,7 @@ async def test_run_message_passes_uploaded_files_to_backend(tmp_path: Path, monk
 async def test_run_message_without_attachments_passes_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """No attachments: backend.run sees uploaded_files=None, exactly as before."""
 
-  async def drive(cfg, meta, callbacks):
+  async def drive(cfg: CharlieBotConfig, meta: SessionMetadata, callbacks: SessionCallbacks) -> None:
     await master_cc.run_message(cfg, meta, "plain", callbacks)
 
   backend = CapturingBackend()
@@ -50,7 +52,7 @@ async def test_replay_passes_uploaded_files_from_persisted_event_to_backend(
   reads the persisted refs and run_message forwards them to backend.run. The replayed
   content text stays as-is apart from the replay-marker prefix."""
 
-  async def drive(cfg, meta, callbacks):
+  async def drive(cfg: CharlieBotConfig, meta: SessionMetadata, callbacks: SessionCallbacks) -> None:
     user_event = {"id": "u1", "type": "user", "content": "what is in this picture", "uploaded_files": _FILES}
     await master_cc.replay_user_message(cfg, meta, user_event, callbacks)
 
@@ -66,7 +68,7 @@ async def test_replay_passes_uploaded_files_from_persisted_event_to_backend(
 @pytest.mark.asyncio
 async def test_replay_without_attachments_passes_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
-  async def drive(cfg, meta, callbacks):
+  async def drive(cfg: CharlieBotConfig, meta: SessionMetadata, callbacks: SessionCallbacks) -> None:
     await master_cc.replay_user_message(cfg, meta, {"id": "u1", "type": "user", "content": "plain"}, callbacks)
 
   backend = CapturingBackend()

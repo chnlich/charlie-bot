@@ -7,6 +7,7 @@ body opener) to cover the dual-read path.
 """
 
 import io
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -163,45 +164,47 @@ def test_parse_legacy_created_source_parseable(tmp_path: Path) -> None:
 # --- load_store semantic validation ------------------------------------------
 
 
-def test_load_unknown_topic_raises(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "nonexistent", "x")
-  with pytest.raises(MemoryFormatError, match="not in topics vocabulary"):
-    load_store(tmp_path)
-
-
-def test_load_dir_topic_mismatch_raises(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
+def _mismatched_dir_entry(tmp_path: Path) -> None:
   d = tmp_path / "entries" / "wrongdir"
   d.mkdir(parents=True)
-  p = d / "slug.md"
-  p.write_text(_entry_text("profile", "slug"), encoding="utf-8")
-  with pytest.raises(MemoryFormatError, match="directory name 'wrongdir' != topic 'profile'"):
-    load_store(tmp_path)
+  (d / "slug.md").write_text(_entry_text("profile", "slug"), encoding="utf-8")
 
 
-def test_load_bad_filename_raises(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
+def _bad_filename_entry(tmp_path: Path) -> None:
   d = tmp_path / "entries" / "profile"
   d.mkdir(parents=True)
-  p = d / "bad slug.md"  # space is outside the slug charset
-  p.write_text(_entry_text("profile", "bad slug"), encoding="utf-8")
-  with pytest.raises(MemoryFormatError, match="does not match slug charset"):
-    load_store(tmp_path)
+  # space is outside the slug charset
+  (d / "bad slug.md").write_text(_entry_text("profile", "bad slug"), encoding="utf-8")
 
 
-def test_load_revises_in_entries_rejected(tmp_path: Path) -> None:
+_LOAD_REJECTION_CASES = [
+    # (entry placement against the written topics vocabulary, the MemoryFormatError fragment
+    # naming the broken field).
+    pytest.param(lambda p: _write_entry(p, "nonexistent", "x"), "not in topics vocabulary", id="unknown-topic"),
+    pytest.param(_mismatched_dir_entry, "directory name 'wrongdir' != topic 'profile'", id="dir-topic-mismatch"),
+    pytest.param(_bad_filename_entry, "does not match slug charset", id="bad-filename"),
+    pytest.param(
+        lambda p: _write_entry(p, "profile", "rev", revises="old-entry"),
+        "'revises' is forbidden in entries",
+        id="revises-in-entries",
+    ),
+    pytest.param(
+        lambda p: _write_entry(p, "profile", "a", audience="master,all"),
+        "audience element 'all' not in {master, worker}",
+        id="bad-audience-element",
+    ),
+]
+
+
+@pytest.mark.parametrize(("place_entry", "expected_fragment"), _LOAD_REJECTION_CASES)
+def test_load_store_rejects_invalid_entry(
+    tmp_path: Path, place_entry: Callable[[Path], None], expected_fragment: str) -> None:
+  """An entries/ store holding one invalid entry fails the load, and the error names the broken field."""
   _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "rev", revises="old-entry")
-  with pytest.raises(MemoryFormatError, match="'revises' is forbidden in entries"):
+  place_entry(tmp_path)
+  with pytest.raises(MemoryFormatError) as exc_info:
     load_store(tmp_path)
-
-
-def test_load_bad_audience_element_raises(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "a", audience="master,all")
-  with pytest.raises(MemoryFormatError, match="audience element 'all' not in \\{master, worker\\}"):
-    load_store(tmp_path)
+  assert expected_fragment in str(exc_info.value)
 
 
 def test_load_missing_topics_raises(tmp_path: Path) -> None:

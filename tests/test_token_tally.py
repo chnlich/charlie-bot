@@ -2033,3 +2033,115 @@ def test_charliebot_walk_errors_become_notes(tmp_path: Path, monkeypatch: pytest
   assert any("unreadable" in n and "t1" in n for n in tally.notes)
   row = _row(tally, "charlie-bot", "gemini-3.8-flash")
   assert row.calls == 1 and row.total == 11  # only t2 counted
+
+
+def test_charliebot_walk_sees_a_late_candidate_file(tmp_path: Path) -> None:
+  """The walk's candidate stat is what discovers a corpus file: an events.jsonl that appears
+  under a thread dir the walk already knows moves no listed directory (only the thread dir
+  and its new data/ move), so a walk that saw the thread before the log must still find it."""
+  cb = Charliebot(tmp_path)
+  (cb.root / "s1" / "threads" / "t1").mkdir(parents=True)
+  (cb.root / "s1" / "threads" / "t1" / "metadata.json").write_text(
+      json.dumps({
+          "id": "t1",
+          "session_id": "s1",
+          "description": "d",
+          "status": "completed"
+      }))
+  t = tt._Tally()
+  assert not any(kind == "thread" for kind, _, _, _ in tt._iter_charliebot_logs(cb.root, t))
+  assert not t.notes
+
+  (cb.root / "s1" / "threads" / "t1" / "data").mkdir()
+  (cb.root / "s1" / "threads" / "t1" / "data" / "events.jsonl").write_text("{}\n")
+  rows = list(tt._iter_charliebot_logs(cb.root, tt._Tally()))
+  assert [(kind, path) for kind, path, _, _ in rows] == [
+      ("thread", str(cb.root / "s1" / "threads" / "t1" / "data" / "events.jsonl"))
+  ]
+
+  (cb.root / "s1" / "threads" / "t1" / "data" / "events.jsonl").unlink()
+  assert not any(kind == "thread" for kind, _, _, _ in tt._iter_charliebot_logs(cb.root, tt._Tally()))
+
+
+def test_charliebot_walk_absent_candidates_are_silent(tmp_path: Path) -> None:
+  """A thread dir with no data/ and a run dir with no capture are the corpus's normal empty
+  shape: no rows, no notes, no error rows — a missing candidate is an empty corpus, not an
+  error, the same contract the missing session subtrees run under."""
+  cb = Charliebot(tmp_path)
+  (cb.root / "s1" / "threads" / "t1").mkdir(parents=True)  # thread dir, no data/
+  (cb.root / "s1" / "data" / "master_runs" / "r1").mkdir(parents=True)  # run dir, no capture
+  (cb.root / "s2").mkdir()  # session with neither subtree
+
+  t = tt._Tally()
+  assert list(tt._iter_charliebot_logs(cb.root, t)) == []
+  assert t.notes == []
+
+
+def test_charliebot_walk_never_lists_or_stats_the_deep_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The walk's stat floor: every statted path is a corpus file or one of the three listed
+  levels — the thread dirs, their data/ dirs and the run dirs are never listed or statted,
+  so the per-collect stat count scales with candidates, not with corpus directories."""
+  cb = Charliebot(tmp_path)
+  cb.thread(
+      "s1",
+      "t1",
+      backend="charlie-code-gemini-3.8-flash",
+      model="openai/gemini-3.8-flash",
+      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  cb.master("s1", "2026-09-11T21:00:00+00:00", [_master_context(1, "openai/gemini-3.8-flash"), _master_result(1, 1)])
+  (cb.root / "s1" / "threads" / "t2").mkdir()  # a second thread with no events.jsonl yet
+  (cb.root / "s1" / "data" / "master_runs" / "r2").mkdir()
+
+  listed: list[str] = []
+  real_scandir = os.scandir
+
+  def spy_scandir(path):
+    listed.append(os.fspath(path))
+    return real_scandir(path)
+
+  statted: list[str] = []
+  real_stat = os.stat
+
+  def spy_stat(path, *args, **kwargs):
+    statted.append(os.fspath(path))
+    return real_stat(path, *args, **kwargs)
+
+  monkeypatch.setattr(os, "scandir", spy_scandir)
+  monkeypatch.setattr(os, "stat", spy_stat)
+  rows = list(tt._iter_charliebot_logs(cb.root, tt._Tally()))
+
+  assert len(rows) == 2  # the thread log and the capture; the two empty candidates stay silent
+  containers = {str(cb.root), str(cb.root / "s1" / "threads"), str(cb.root / "s1" / "data" / "master_runs")}
+  assert set(listed) == containers  # exactly the three discovery levels, nothing deeper
+  assert set(statted) == containers | {
+      str(cb.root / "s1" / "threads" / "t1" / "data" / "events.jsonl"),
+      str(cb.root / "s1" / "threads" / "t2" / "data" / "events.jsonl"),
+      str(cb.root / "s1" / "data" / "master_runs" / "2026-09-11T21:00:00+00:00" / "agent.raw.ndjson"),
+      str(cb.root / "s1" / "data" / "master_runs" / "r2" / "agent.raw.ndjson"),
+  }
+
+
+def test_charliebot_walk_skips_symlinked_entries(tmp_path: Path) -> None:
+  """A symlinked thread dir, run dir or session dir stays out of the corpus, the same rule
+  the recursive walk ran under: only real directories are descended."""
+  cb = Charliebot(tmp_path)
+  cb.thread(
+      "s1",
+      "t1",
+      backend="charlie-code-gemini-3.8-flash",
+      model="openai/gemini-3.8-flash",
+      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  outside = tmp_path / "outside"
+  (outside / "data").mkdir(parents=True)
+  (outside / "data" / "events.jsonl").write_text("{}\n")
+  (cb.root / "s1" / "data" / "master_runs").mkdir(parents=True, exist_ok=True)
+  (cb.root / "s1" / "data" / "master_runs" / "rreal").mkdir()
+  (cb.root / "s1" / "data" / "master_runs" / "rreal" / "agent.raw.ndjson").write_text("{}\n")
+  os.symlink(outside, cb.root / "s1" / "threads" / "tlink")
+  os.symlink(cb.root / "s1", cb.root / "slink")
+
+  rows = list(tt._iter_charliebot_logs(cb.root, tt._Tally()))
+  assert sorted(path for _, path, _, _ in rows) == [
+      str(cb.root / "s1" / "data" / "master_runs" / "rreal" / "agent.raw.ndjson"),
+      str(cb.root / "s1" / "threads" / "t1" / "data" / "events.jsonl"),
+  ]

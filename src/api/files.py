@@ -1,6 +1,7 @@
 """File server router — serves files and directory listings from the filesystem."""
 
 import asyncio
+import gzip
 import html
 import json
 import math
@@ -53,6 +54,10 @@ _annotate_memo: BoundedMemo[_AnnotateKey, str] = BoundedMemo(_DIFF_ANNOTATE_MEMO
 _CleanViewKey = tuple[str, int, int]
 
 _clean_view_memo: BoundedMemo[_CleanViewKey, bytes] = BoundedMemo(_CLEAN_VIEW_MEMO_LIMIT)
+
+# The gzip form of the same body, keyed and bounded alike. It lives in its own
+# memo so a client that sends no Accept-Encoding: gzip never pays the deflate.
+_clean_view_gzip_memo: BoundedMemo[_CleanViewKey, bytes] = BoundedMemo(_CLEAN_VIEW_MEMO_LIMIT)
 
 # Client-visible error details of the files route's diff and read arms. The
 # "not a session artifact page" sentence is a wire contract the tests pin, so
@@ -113,6 +118,23 @@ def _injected_artifact_page(fs_path: Path, session_id: str) -> bytes:
   body = page.encode("utf-8")
   _clean_view_memo.store(key, body)
   return body
+
+
+def _injected_artifact_page_gzip(fs_path: Path, session_id: str) -> bytes:
+  """The credentialed artifact view's gzip form, memoized beside the plain body.
+
+  The route ships these bytes with Content-Encoding: gzip set upstream, which
+  is what makes the server's gzip middleware skip its own whole-body deflate —
+  level 1 over the ~1 MB worst page measures ~27 ms per view. mtime=0 keeps
+  the compressed bytes deterministic across processes.
+  """
+  key: _CleanViewKey = (str(fs_path), *_file_signature(fs_path))
+  hit = _clean_view_gzip_memo.get(key)
+  if hit is not None:
+    return hit
+  compressed = gzip.compress(_injected_artifact_page(fs_path, session_id), compresslevel=1, mtime=0)
+  _clean_view_gzip_memo.store(key, compressed)
+  return compressed
 
 
 def _artifact_session_id(fs_path: Path) -> str | None:
@@ -397,6 +419,15 @@ async def serve_file(path: str, request: Request) -> Response:
 
   if session_id is not None and request_has_access_key(request, str(get_credentials().get("charliebot", "access_key") or
                                                                     "")):
+    if "gzip" in request.headers.get("accept-encoding", ""):
+      # The same check the gzip middleware makes on the way in; answering with
+      # the pre-compressed body and the header set is what skips its deflate.
+      body = await asyncio.to_thread(_injected_artifact_page_gzip, fs_path, session_id)
+      return Response(
+          content=body, media_type="text/html", headers={
+              "Content-Encoding": "gzip",
+              "Vary": "Accept-Encoding"
+          })
     # One executor hop: signature, memo hit, and on a miss the read+inject+store.
     body = await asyncio.to_thread(_injected_artifact_page, fs_path, session_id)
     return HTMLResponse(body, media_type="text/html")

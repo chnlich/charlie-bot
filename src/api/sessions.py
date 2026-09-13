@@ -590,7 +590,7 @@ async def search_sessions(
       include_pending_trigger_status=True,
   )
   # Each row's bytes splice the memoized static segments with the five derived
-  # values rendered per request. json.dumps renders a dict context-free, so the
+  # values rendered per request. orjson renders a dict context-free, so the
   # spliced body is byte-identical to the FastJsonResponse render of the merged
   # dicts: the segments follow the model's own key order, which is the order the
   # in-place overlay leaves the merged dicts in. Key prefixes ride the prebuilt

@@ -55,8 +55,9 @@ _store_memo: BoundedMemo[Path, tuple[tuple[tuple[str, int, int], ...], "Store"]]
 _HEADER_RE = re.compile(r"^([a-z_]+): (.+)$")
 # Topic vocabulary line: ``name`` or ``name resident``.
 _TOPIC_LINE_RE = re.compile(r"^([a-z0-9][a-z0-9-]*)( resident)?$")
-# Topic directory name (no resident suffix).
-_TOPIC_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# Topic name: the store's namespace charset for entry header fields; the
+# replay manifest's topic list validates declared names against it too.
+TOPIC_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # Slug charset (entry filename stem / header value charset).
 _SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 # Created date (legacy field): YYYY-MM-DD.
@@ -264,7 +265,7 @@ def _validate_entry(entry: Entry, topics: dict[str, Topic], *, relaxed: bool, st
     violations.append(v(f"filename slug {entry.slug!r} does not match slug charset [A-Za-z0-9._-]"))
   if not entry.topic:
     violations.append(v("missing required header field 'topic'"))
-  elif not _TOPIC_NAME_RE.match(entry.topic):
+  elif not TOPIC_NAME_RE.match(entry.topic):
     violations.append(v(f"topic {entry.topic!r} is not a valid topic name"))
   if relaxed:
     if entry.scope is not None and entry.scope not in _SCOPES:

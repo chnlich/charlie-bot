@@ -144,6 +144,14 @@ def _sources_section(sources: list[Source]) -> list[str]:
   return lines
 
 
+def _selection_row(selection: FeedbackSelection) -> str:
+  """One audit row: the comment's provenance id, its score, and matched principles/terms."""
+  return (
+      f"<p><code>{_e(selection.example.comment_event)}</code> · score {selection.score} · "
+      f"principles {_e(', '.join(selection.matched_principles)) or '-'} · "
+      f"terms {_e(', '.join(selection.matched_terms)) or '-'}</p>")
+
+
 def _feedback_section(data: ReportData) -> list[str]:
   """The feedback view the stages actually read, per the run's declared feedback view."""
   if data.feedback_view == RAW_HISTORY_VIEW:
@@ -170,10 +178,7 @@ def _selected_feedback_section(data: ReportData) -> list[str]:
     for selection in selections[theme]:
       example = selection.example
       change = example.approved_change
-      lines.append(
-          f"<p><code>{_e(example.comment_event)}</code> · score {selection.score} · "
-          f"principles {_e(', '.join(selection.matched_principles)) or '-'} · "
-          f"terms {_e(', '.join(selection.matched_terms)) or '-'}</p>")
+      lines.append(_selection_row(selection))
       lines.append(f"<pre>comment:\n{_e(example.comment_text)}</pre>")
       if change is not None:
         lines.append(
@@ -213,10 +218,7 @@ def _raw_history_feedback_section(data: ReportData) -> list[str]:
     if not data.selections[theme]:
       lines.append('<p class="muted">No prior comment matched this theme.</p>')
     for selection in data.selections[theme]:
-      lines.append(
-          f"<p><code>{_e(selection.example.comment_event)}</code> · score {selection.score} · "
-          f"principles {_e(', '.join(selection.matched_principles)) or '-'} · "
-          f"terms {_e(', '.join(selection.matched_terms)) or '-'}</p>")
+      lines.append(_selection_row(selection))
   lines.append("</details>")
   lines.append("</details>")
   return lines

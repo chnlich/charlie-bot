@@ -372,7 +372,7 @@ class _HaltAtSpawn(Exception):
 class _OrderRecordingBackend(AgentBackend):
   """Minimal backend recording the hook order base.run() drives."""
 
-  def __init__(self, records: list, **kwargs) -> None:
+  def __init__(self, records: list, **kwargs: Any) -> None:
     super().__init__(**kwargs)
     self._records = records
 

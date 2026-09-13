@@ -74,6 +74,16 @@ def _modules_loaded_after_import(module_expr: str, heavy: tuple[str, ...]) -> li
   return json.loads(proc.stdout)
 
 
+def test_cli_common_defers_buildinfo() -> None:
+  # buildinfo drags subprocess (~4 ms of the M92 floor) and serves only the
+  # version-skew failure path; the parser-build path never reads a SHA.
+  loaded = _modules_loaded_after_import("import src.cli.common", ("src.core.buildinfo",))
+  assert loaded == [], (
+      "src.cli.common pulled buildinfo into the CLI process: "
+      f"{loaded}; the M92 floor (docs/perf_baseline.md) depends on this "
+      "staying out — import it lazily at the use site that needs it")
+
+
 def test_cli_common_imports_without_the_heavy_chains() -> None:
   loaded = _modules_loaded_after_import("import src.cli.common", HEAVY_MODULES)
   assert loaded == [], (

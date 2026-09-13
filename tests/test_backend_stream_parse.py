@@ -11,7 +11,10 @@ their existing raise-on-malformed contract, only the parser moves.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +82,45 @@ async def _collect_tail_events(raw_bytes: bytes, **kwargs: Any) -> list[dict]:
     ]
 
 
+async def _collect_staged_tail(partial: bytes, completion: bytes) -> list[dict]:
+  """Write *partial*, let the follow consume it, then append *completion.
+
+  The follow runs until the completed line lands, so the test drives the
+  real multi-round read shape: the first round carries the trailing partial,
+  the second round's read completes it. A completed line in *partial* would
+  defeat the staging, so the caller passes a byte string with no newline.
+  """
+  with tempfile.TemporaryDirectory() as work:
+    raw = Path(work) / "agent.raw.ndjson"
+    assert b"\n" not in partial
+    raw.write_bytes(partial)
+    events: list[dict] = []
+
+    async def consume() -> None:
+      async for event in tail_follow_events(
+          raw,
+          translate=lambda event: [event],
+          is_alive=lambda: True,
+          post_result_timeout=9999.0,
+      ):
+        events.append(event)
+
+    task = asyncio.create_task(consume())
+    try:
+      await asyncio.sleep(0.1)  # the follow's first read rounds over the partial
+      assert events == []
+      with raw.open("ab") as f:
+        f.write(completion)
+      deadline = time.monotonic() + 2.0
+      while not events and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    finally:
+      task.cancel()
+      with contextlib.suppress(asyncio.CancelledError):
+        await task
+    return events
+
+
 @pytest.mark.asyncio
 async def test_tail_follow_events_parses_and_skips() -> None:
   events = await _collect_tail_events(b"".join(_LINES), post_result_timeout=60.0)
@@ -96,21 +138,21 @@ async def test_tail_follow_events_replays_from_offset() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tail_follow_events_carries_partial_line_across_chunks() -> None:
-  """A line straddling the 64 KB read boundary yields exactly once: the
-  trailing partial is carried into the next chunk, never processed half."""
-  payload = b'{"type": "assistant", "seq": 9, "pad": "' + b"x" * 2000 + b'"}\n'
-  events = await _collect_tail_events(b"\n" * 65530 + payload, post_result_timeout=60.0)
+async def test_tail_follow_events_carries_partial_line_across_read_rounds() -> None:
+  """A line written in two appends yields exactly once: the first round's
+  trailing partial rides the carry into the next round's read, never
+  processed half."""
+  events = await _collect_staged_tail(b'{"type": "assistant", "seq": 9, "pad": "', b'xx"}\n')
   assert [event["seq"] for event in events] == [9]
 
 
 @pytest.mark.asyncio
-async def test_tail_follow_events_carries_multimegabyte_line_across_chunks() -> None:
-  """A line spanning many 64 KB read boundaries yields exactly once: the carry
-  accumulates the read chunks and completes from one scan, so the cost stays
-  linear in the line's bytes (the live raw log carries multi-MB events)."""
-  payload = b'{"type": "assistant", "seq": 9, "pad": "' + b"x" * (1024 * 1024) + b'"}\n'
-  events = await _collect_tail_events(payload, post_result_timeout=60.0)
+async def test_tail_follow_events_carries_multimegabyte_line_across_read_rounds() -> None:
+  """A multi-MB line written in two appends yields exactly once: the carry
+  joins the next round's read in one pass, so the cost stays linear in the
+  line's bytes (the live raw log carries multi-MB events)."""
+  partial = b'{"type": "assistant", "seq": 9, "pad": "' + b"x" * (1024 * 1024)
+  events = await _collect_staged_tail(partial, b'"}\n')
   assert [event["seq"] for event in events] == [9]
 
 

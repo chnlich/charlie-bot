@@ -155,6 +155,22 @@ def test_parse_ndjson_line_bytes_whitespace_only_skips_without_strip_copy() -> N
   assert parse_ndjson_line(b'  {"i": 1}  ', log_event="t", log_fields={}) == {"i": 1}
 
 
+def test_parse_ndjson_line_memoryview_lines_ride_the_same_contract() -> None:
+  # The tail-follow funnel slices lines from its read buffer as zero-copy
+  # views: the same skip contract applies, and the replace fallback still
+  # decides a torn multibyte char (one copy, on the parse-failed path only).
+  line = json.dumps({"text": "引数"}).encode("utf-8")
+  buf = bytearray(line)
+  assert parse_ndjson_line(memoryview(buf), log_event="t", log_fields={}) == {"text": "引数"}
+  assert parse_ndjson_line(memoryview(b"   \n"), log_event="t", log_fields={}) is None
+  assert parse_ndjson_line(memoryview(b""), log_event="t", log_fields={}) is None
+  assert parse_ndjson_line(memoryview(b'{"a": NaN}'), log_event="t", log_fields={}) is None
+  torn = bytearray(b'{"text": "ok\xff"}')
+  assert parse_ndjson_line(memoryview(torn), log_event="t", log_fields={}) == {"text": "ok\ufffd"}
+  hard = bytearray(b'{"text": "ok\xff')
+  assert parse_ndjson_line(memoryview(hard), log_event="t", log_fields={}) is None
+
+
 def test_parse_ndjson_line_logs_skip_event_with_fields() -> None:
   # A rejected parse logs log_event at debug level carrying the pass-through
   # fields and the parse error, so the log still says which reader skipped.

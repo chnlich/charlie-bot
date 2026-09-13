@@ -100,6 +100,11 @@ def _text_part(message_id: str, part_id: str, part_type: str, text: str) -> dict
   return {"messageID": message_id, "id": part_id, "type": part_type, "text": text}
 
 
+def _session_attached(session_id: str) -> dict:
+  """The translated run-start adopt signal: run() opens every stream with it."""
+  return {"type": ET.SESSION_ATTACHED, "session_id": session_id}
+
+
 @pytest.mark.asyncio
 async def test_iter_sse_events_ignores_comments_and_metadata(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
@@ -194,7 +199,7 @@ async def test_run_opens_with_the_typed_session_attach_signal(monkeypatch, tmp_p
 
   events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
 
-  assert events[0] == {"type": ET.SESSION_ATTACHED, "session_id": "session-1"}
+  assert events[0] == _session_attached("session-1")
   assert backend.exit_code == 0
 
 
@@ -1351,6 +1356,16 @@ def _prompt_bodies(script: _StubServeScript) -> list[str]:
   return [json.dumps(body, sort_keys=True) for _, body in script.prompt_posts]
 
 
+def _assert_resumed_same_session(script: _StubServeScript, sid: str, prompt: str) -> None:
+  """Attempt 2 resumed the SAME opencode session: no second POST /session, and the
+  prompt re-sent to the recorded session id is byte-identical to attempt 1's."""
+  assert script.create_session_calls == 1
+  assert [path for path, _ in script.prompt_posts] == [f"/session/{sid}/prompt_async"] * 2
+  bodies = _prompt_bodies(script)
+  assert bodies[0] == bodies[1]
+  assert json.loads(bodies[0])["parts"] == [{"type": "text", "text": prompt}]
+
+
 @pytest.mark.asyncio
 async def test_run_lock_failure_retries_same_session_mid_stream(monkeypatch, tmp_path: Path, capsys) -> None:
   """Lock retry 1: an attempt dying on session.error with the lock stderr signature
@@ -1381,22 +1396,11 @@ async def test_run_lock_failure_retries_same_session_mid_stream(monkeypatch, tmp
 
   assert create_process.await_count == 2
   assert sleep_calls == [10.0]
-  # Attempt 2 resumed: no second POST /session, prompt re-sent to the same id.
-  assert script.create_session_calls == 1
-  assert [path for path, _ in script.prompt_posts] == [f"/session/{sid}/prompt_async"] * 2
-  bodies = _prompt_bodies(script)
-  assert bodies[0] == bodies[1]
-  assert json.loads(bodies[0])["parts"] == [{"type": "text", "text": prompt}]
+  _assert_resumed_same_session(script, sid, prompt)
   assert events == [
-      {
-          "type": ET.SESSION_ATTACHED,
-          "session_id": sid
-      },
+      _session_attached(sid),
       make_text_event("hello "),
-      {
-          "type": ET.SESSION_ATTACHED,
-          "session_id": sid
-      },
+      _session_attached(sid),
       make_text_event("world"),
       backend._make_accumulated_result(),
   ]
@@ -1428,14 +1432,8 @@ async def test_run_lock_failure_retries_after_event_connect_500(monkeypatch, tmp
   assert script.create_session_calls == 1
   assert [path for path, _ in script.prompt_posts] == [f"/session/{sid}/prompt_async"]
   assert events == [
-      {
-          "type": ET.SESSION_ATTACHED,
-          "session_id": sid
-      },
-      {
-          "type": ET.SESSION_ATTACHED,
-          "session_id": sid
-      },
+      _session_attached(sid),
+      _session_attached(sid),
       backend._make_accumulated_result(),
   ]
   assert backend.exit_code == 0
@@ -1467,20 +1465,10 @@ async def test_run_lock_failure_retries_after_prompt_async_500(monkeypatch, tmp_
 
   assert create_process.await_count == 2
   assert sleep_calls == [10.0]
-  assert script.create_session_calls == 1
-  assert [path for path, _ in script.prompt_posts] == [f"/session/{sid}/prompt_async"] * 2
-  bodies = _prompt_bodies(script)
-  assert bodies[0] == bodies[1]
-  assert json.loads(bodies[0])["parts"] == [{"type": "text", "text": prompt}]
+  _assert_resumed_same_session(script, sid, prompt)
   assert events == [
-      {
-          "type": ET.SESSION_ATTACHED,
-          "session_id": sid
-      },
-      {
-          "type": ET.SESSION_ATTACHED,
-          "session_id": sid
-      },
+      _session_attached(sid),
+      _session_attached(sid),
       make_text_event("recovered"),
       backend._make_accumulated_result(),
   ]
@@ -1509,14 +1497,8 @@ async def test_run_lock_failure_exhausts_budget_with_single_error_event(monkeypa
   assert sleep_calls == [10.0]
   assert script.create_session_calls == 1
   assert events == [
-      {
-          "type": ET.SESSION_ATTACHED,
-          "session_id": sid
-      },
-      {
-          "type": ET.SESSION_ATTACHED,
-          "session_id": sid
-      },
+      _session_attached(sid),
+      _session_attached(sid),
       make_error_event("lock boom 2"),
   ]
   assert backend.exit_code == 1
@@ -1591,10 +1573,7 @@ async def test_run_failure_without_lock_signature_never_retries(
   assert create_process.await_count == 1
   assert sleep_calls == []
   assert events == [
-      {
-          "type": ET.SESSION_ATTACHED,
-          "session_id": sid
-      },
+      _session_attached(sid),
       build_error(sid, backend),
   ]
   assert backend.exit_code == 1
@@ -1619,10 +1598,7 @@ async def test_run_lock_failure_never_retries_after_terminate(monkeypatch, tmp_p
   assert create_process.await_count == 1
   assert sleep_calls == []
   assert events == [
-      {
-          "type": ET.SESSION_ATTACHED,
-          "session_id": sid
-      },
+      _session_attached(sid),
       make_error_event("lock boom"),
   ]
   assert "opencode_lock_retry" not in capsys.readouterr().out
@@ -1691,7 +1667,7 @@ async def test_per_call_clients_carry_shared_ssl_context(monkeypatch, tmp_path: 
 
   events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
 
-  assert events[0] == {"type": ET.SESSION_ATTACHED, "session_id": "session-1"}
+  assert events[0] == _session_attached("session-1")
   assert backend.exit_code == 0
   assert captured == [
       {

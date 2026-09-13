@@ -611,10 +611,19 @@ def test_cli_replay_verb_lazy_imports_resolve(
   the other CLI tests patch in.
   """
   _patch_cli_cfg(monkeypatch, tmp_path)
-  monkeypatch.setattr("sys.argv", [
-      "charliebot memory", "replay", "--input", str(tmp_path / "manifest.yaml"),
-      "--output-dir", str(tmp_path / "out"), "--backend", "x", "--mode", "editor-only",
-  ])
+  monkeypatch.setattr(
+      "sys.argv", [
+          "charliebot memory",
+          "replay",
+          "--input",
+          str(tmp_path / "manifest.yaml"),
+          "--output-dir",
+          str(tmp_path / "out"),
+          "--backend",
+          "x",
+          "--mode",
+          "editor-only",
+      ])
   import src.cli.memory as cli
   with pytest.raises(SystemExit) as exc:
     cli.main()

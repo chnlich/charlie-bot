@@ -195,7 +195,7 @@ class CodexBackend(AgentBackend):
 
     # --- thread.started ---
     if ev_type == "thread.started":
-      return [{"session_id": ev.get("thread_id", "")}]
+      return [{"type": ET.SESSION_ATTACHED, "session_id": ev.get("thread_id", "")}]
 
     # --- turn.started ---
     if ev_type == "turn.started":

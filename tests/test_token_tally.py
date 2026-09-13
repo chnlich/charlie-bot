@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 from conftest import codex_token_count_event, fresh_state_fixture
 
+from src.core import event_types as ET
 from src.core import token_tally as tt
 from src.core.token_tally import collect_token_usage
 
@@ -1802,6 +1803,47 @@ def test_charliebot_metadata_classification(tmp_path: Path, monkeypatch: pytest.
   assert not any(r.model in ("model-x", "weird-backend-x") for r in tally.rows if r.source == "charlie-bot")
   assert any("weird-backend-x" in n and "1 results not counted" in n for n in tally.notes)
   assert any("thread t2 (no backend id)" in n and "1 results not counted" in n for n in tally.notes)
+
+
+def test_charliebot_codex_reconciliation_reads_the_typed_attach_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The typed session-adopt line (the shape every backend emits since the M100
+  typing) carries the session id the rollout reconciliation reads; the bare
+  pre-typed spelling keeps working beside it in older logs."""
+  _stub_registry(monkeypatch, _Option("codex-gpt-5.6-luna", "codex", "gpt-5.6-luna"))
+  codex = Codex(tmp_path)
+  cb = Charliebot(tmp_path)
+  sid_typed = "01a09201-0000-7000-8000-000000000010"
+  sid_bare = "01a09201-0000-7000-8000-000000000011"
+  cb.thread(
+      "s1",
+      "t1",
+      backend="codex-gpt-5.6-luna",
+      model="gpt-5.6-luna",
+      session_ids=[sid_typed],
+      results=[("2026-08-01T00:00:00+00:00", _result_usage(1000, 10))])
+  log = cb.root / "s1" / "threads" / "t1" / "data" / "events.jsonl"
+  lines = log.read_text().splitlines()
+  first = json.loads(lines[0])
+  first["type"] = ET.SESSION_ATTACHED
+  lines[0] = json.dumps(first)
+  log.write_text("\n".join(lines) + "\n")
+  _write_rollout(codex.home, sid_typed)
+  cb.thread(
+      "s1",
+      "t2",
+      backend="codex-gpt-5.6-luna",
+      model="gpt-5.6-luna",
+      session_ids=[sid_bare],
+      results=[("2026-08-02T00:00:00+00:00", _result_usage(2000, 20))])
+
+  tally = _collect(None, codex, tmp_path / "db.sqlite", sessions=cb.root)
+
+  models = {r.model: r for r in tally.rows if r.source == "charlie-bot"}
+  assert models["gpt-5.6-luna"].calls == 1  # t2 only; t1's typed id has a rollout on disk
+  assert models["gpt-5.6-luna"].total == 2020
+  skips = [n for n in tally.notes if n.startswith("charlie-bot: skipped codex thread")]
+  assert any("t1" in n and sid_typed in n for n in skips)
 
 
 def test_charliebot_codex_reconciliation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

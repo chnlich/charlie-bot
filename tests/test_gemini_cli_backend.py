@@ -1,6 +1,7 @@
 from conftest import GEMINI_RESOLVE_BINARY_PATCH_TARGET, assistant_text_event, build_cli_backend
 
 from src.agents.backends.gemini_cli import GeminiCliBackend
+from src.core import event_types as ET
 
 
 def _build_backend(monkeypatch, **kwargs) -> GeminiCliBackend:
@@ -78,7 +79,10 @@ def test_prepare_env_strips_api_keys(monkeypatch) -> None:
 def test_translate_event_mappings(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  assert backend.translate_event({"type": "init", "session_id": "sid"}) == [{"session_id": "sid"}]
+  assert backend.translate_event({
+      "type": "init",
+      "session_id": "sid"
+  }) == [{"type": ET.SESSION_ATTACHED, "session_id": "sid"}]
   assert not backend.translate_event({"type": "message", "role": "user", "content": "ignored"})
   assert backend.translate_event({
       "type": "message",

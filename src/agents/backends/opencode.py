@@ -227,7 +227,7 @@ class OpenCodeBackend(AgentBackend):
           await self._check_health(client)
           self._model_limit = await self._fetch_model_limit(client)
           self._session_id = self._resume_session_id or await self._create_session(client)
-          yield {"session_id": self._session_id}
+          yield {"type": ET.SESSION_ATTACHED, "session_id": self._session_id}
 
           async with client.stream("GET", "/event", timeout=None) as response:
             response.raise_for_status()
@@ -798,7 +798,7 @@ class OpenCodeBackend(AgentBackend):
 
     session_id = ev.get("sessionID")
     if session_id:
-      results.append({"session_id": session_id})
+      results.append({"type": ET.SESSION_ATTACHED, "session_id": session_id})
 
     ev_type = ev.get("type", "")
 

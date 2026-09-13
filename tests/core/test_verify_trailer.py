@@ -142,28 +142,8 @@ def test_resolve_final_report_reads_only_the_tail_window_on_the_fallback_path(
   target = tmp_path / "events.jsonl"
   with target.open("wb") as f:
     for i in range(2000):  # ~14 KB per event: the early corpus spans several windows
-      f.write(
-          (json.dumps({
-              "type": "assistant",
-              "message": {
-                  "content": [{
-                      "type": "text",
-                      "text": f"early {i}"
-                  }]
-              }
-          }) + "\n").encode())
-    f.write(
-        (
-            json.dumps(
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [{
-                            "type": "text",
-                            "text": "the report\nRESULT: clean"
-                        }]
-                    }
-                }) + "\n").encode())
+      f.write((json.dumps(assistant_text_event(f"early {i}")) + "\n").encode())
+    f.write((json.dumps(assistant_text_event("the report\nRESULT: clean")) + "\n").encode())
     f.write((json.dumps({"type": "result", "result": ""}) + "\n").encode())
 
   read_bytes = byte_count_open.install_byte_counting_open(monkeypatch)

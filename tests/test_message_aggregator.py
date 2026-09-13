@@ -41,18 +41,7 @@ def test_user_event_emits_a_user_message_delta() -> None:
 
 def test_assistant_text_event_emits_a_stream_delta() -> None:
   agg = MessageAggregator()
-  deltas = list(
-      agg.feed(
-          {
-              "type": "assistant",
-              "message": {
-                  "content": [{
-                      "type": "text",
-                      "text": "Hello "
-                  }]
-              },
-              "timestamp": "2026-04-29T00:00:00Z",
-          }))
+  deltas = list(agg.feed({**_assistant_text_event("Hello "), "timestamp": "2026-04-29T00:00:00Z"}))
   assert deltas == [
       {
           "type": "stream",
@@ -340,17 +329,7 @@ def test_consecutive_assistant_text_events_split_into_separate_bubbles() -> None
 
 def test_handler_result_flushes_draft_and_emits_system_message() -> None:
   agg = MessageAggregator()
-  list(
-      agg.feed({
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "Working"
-              }]
-          },
-          "timestamp": "t1"
-      }))
+  list(agg.feed({**_assistant_text_event("Working"), "timestamp": "t1"}))
   deltas = list(
       agg.feed({
           "type": "handler_result",

@@ -86,34 +86,20 @@ function makeChatRenderContext(elements = new Map()) {
 }
 
 // loadToggleHarness covers the toggle suites (show_more_toggle,
-// thinking_toggle): a FakeElement-backed document and the marked/fence/math
-// stubs the toggle render paths touch, then the module-load sequence above,
-// then one extra module (workers.js or usage.js) whose own deps arrive via
-// extraStubs. extraStubs spread onto the context before createContext, so a
-// stub is a context global when the extra module's render path reads it
-// (usage.js reads the bare identifier showScrollToBottom).
+// thinking_toggle): the makeChatRenderContext sandbox, then the module-load
+// sequence above, then one extra module (workers.js or usage.js) whose own
+// deps arrive via extraStubs. extraStubs spread onto the context before
+// createContext, so a stub is a context global when the extra module's render
+// path reads it (usage.js reads the bare identifier showScrollToBottom).
 function loadToggleHarness(extraModule, extraStubs = {}) {
   const elements = new Map();
+  // The toggle context drops confirm on purpose: these suites exercise render
+  // paths that must never reach confirm, so a stray call throws instead of
+  // passing against the base's () => true.
+  const { confirm: _unused, ...sandbox } = makeChatRenderContext(elements);
   const context = {
-    document: {
-      getElementById(id) { return elements.get(id) || null; },
-      createElement(tag) { return new FakeElement(tag); },
-      querySelector() { return null; },
-      querySelectorAll() { return []; },
-    },
-    console: { error: () => {}, log: () => {}, warn: () => {} },
-    marked: { parse: (v) => '<p>' + String(v || '') + '</p>' },
-    fixNestedFences: (v) => String(v || ''),
-    parseStreamDraft: (v) => '<p>' + String(v || '') + '</p>',
-    renderProseMarkdown: (v) => '<p>' + String(v || '') + '</p>',
-    renderChatMath: () => {},
-    scheduleCodeHighlightFlush: () => {},
-    // Identity stand-in for markdown-renderer.js's wrapWideChars — see
-    // makeChatRenderContext above.
-    wrapWideChars: (html) => html,
-    CSS: { escape: (v) => String(v) },
-    SESSION_ID: 'sess-1',
-    fetch: () => Promise.resolve({ ok: true }),
+    ...sandbox,
+    console: { ...sandbox.console, warn: () => {} },
     _elements: elements,
     ...extraStubs,
   };

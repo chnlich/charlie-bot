@@ -9,6 +9,7 @@ as the successful path keys its cache.
 """
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -41,7 +42,7 @@ def _seed_good_config() -> None:
 _UTIME_TICK = [0]
 
 
-def _write_broken(home, key: str) -> None:
+def _write_broken(home: Path, key: str) -> None:
   """config.yaml declaring a key the model does not declare — the observed
   burst's error shape (unknown config key(s) ...). Each write takes a distinct
   forced mtime: same-size rewrites land inside one float-mtime tick otherwise,
@@ -53,7 +54,8 @@ def _write_broken(home, key: str) -> None:
   os.utime(path, (_UTIME_TICK[0], _UTIME_TICK[0]))
 
 
-def test_broken_steady_state_parses_once_and_warns_once(profile_home, reload_log, counted_loads) -> None:
+def test_broken_steady_state_parses_once_and_warns_once(
+    profile_home: Path, reload_log: list[dict], counted_loads: list[int]) -> None:
   """With the corpus broken and unchanged, 60 calls pay one parse and one line."""
   _seed_good_config()
   _write_broken(profile_home, "unknown_m53_key")
@@ -66,7 +68,8 @@ def test_broken_steady_state_parses_once_and_warns_once(profile_home, reload_log
   assert [r["event"] for r in reload_log] == ["config_reload_failed"]
 
 
-def test_same_error_across_a_fingerprint_move_stays_one_line(profile_home, reload_log, counted_loads) -> None:
+def test_same_error_across_a_fingerprint_move_stays_one_line(
+    profile_home: Path, reload_log: list[dict], counted_loads: list[int]) -> None:
   """A rewritten config.yaml with the same unknown key moves the fingerprint —
   the reload must re-run (freshness) while the alarm it re-fires stays one
   line: the burst's exact shape."""
@@ -85,7 +88,7 @@ def test_same_error_across_a_fingerprint_move_stays_one_line(profile_home, reloa
   assert len(counted_loads) == 3 and len(reload_log) == 1
 
 
-def test_changed_error_earns_a_new_line(profile_home, reload_log, counted_loads) -> None:
+def test_changed_error_earns_a_new_line(profile_home: Path, reload_log: list[dict], counted_loads: list[int]) -> None:
   """A reload that fails differently reports the new failure."""
   _seed_good_config()
   _write_broken(profile_home, "unknown_m53_key")
@@ -103,7 +106,7 @@ def test_changed_error_earns_a_new_line(profile_home, reload_log, counted_loads)
   assert len(counted_loads) == 3 and len(reload_log) == 2
 
 
-def _touch_config(home) -> None:
+def _touch_config(home: Path) -> None:
   """Give the home a config.yaml with a fresh forced mtime so the next
   fingerprint differs from the cached one; an empty file loads clean on
   defaults."""
@@ -113,7 +116,7 @@ def _touch_config(home) -> None:
   os.utime(path, (_UTIME_TICK[0], _UTIME_TICK[0]))
 
 
-def test_recovery_rearms_the_warning(profile_home, reload_log) -> None:
+def test_recovery_rearms_the_warning(profile_home: Path, reload_log: list[dict]) -> None:
   """A load that succeeds clears the registry: a later relapse is a new onset
   and earns one new line."""
   _seed_good_config()
@@ -131,7 +134,7 @@ def test_recovery_rearms_the_warning(profile_home, reload_log) -> None:
   assert len(reload_log) == 2
 
 
-def test_startup_with_broken_config_still_raises(profile_home, reload_log) -> None:
+def test_startup_with_broken_config_still_raises(profile_home: Path, reload_log: list[dict]) -> None:
   """No cached config means nothing to fall back to: the raise survives."""
   _write_broken(profile_home, "unknown_m53_key")
   core_config._config_cache.reset()
@@ -139,7 +142,7 @@ def test_startup_with_broken_config_still_raises(profile_home, reload_log) -> No
     core_config.get_config()
 
 
-def test_reset_config_caches_clears_the_failed_state(profile_home, reload_log) -> None:
+def test_reset_config_caches_clears_the_failed_state(profile_home: Path, reload_log: list[dict]) -> None:
   """The conftest reset covers both new module states."""
   from tests import conftest as conftest_mod
 

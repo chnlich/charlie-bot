@@ -5,8 +5,10 @@ import asyncio
 import contextlib
 import json
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -51,7 +53,7 @@ def _mk_subprocess_mock(scripted: dict[tuple[str, int], list[str]]) -> AsyncMock
   call pops the next entry; the last entry is repeated indefinitely.
   """
 
-  async def _factory(*args, **kwargs):
+  async def _factory(*args: Any, **kwargs: Any) -> FakeAsyncProcess:
     # Extract host and `kill -0 PID 2>&1 ...` payload from cmd.
     # Layout: ssh -o BatchMode=yes -o ConnectTimeout=10 HOST "kill -0 PID ..."
     host = args[5]
@@ -381,7 +383,7 @@ def test_cli_parse_rejects_bad_pid() -> None:
       cli_module._parse_watch_target(bad)
 
 
-def _fake_200_post(captured: dict):
+def _fake_200_post(captured: dict) -> Callable[..., Any]:
 
   class _FakeResp:
     status_code = 200
@@ -392,7 +394,13 @@ def _fake_200_post(captured: dict):
     def json(self) -> dict:
       return {"trigger_id": "t1", "fire_at": "2030-01-01T00:00:00+00:00"}
 
-  def _fake_post(url, json=None, params=None, headers=None, timeout=None, verify=None):
+  def _fake_post(
+      url: str,
+      json: dict | None = None,
+      params: dict | None = None,
+      headers: dict | None = None,
+      timeout: float | None = None,
+      verify: bool | None = None) -> _FakeResp:
     captured["url"] = url
     captured["payload"] = json
     return _FakeResp()
@@ -400,7 +408,7 @@ def _fake_200_post(captured: dict):
   return _fake_post
 
 
-def test_cli_accepts_mixed_kinds(monkeypatch) -> None:
+def test_cli_accepts_mixed_kinds(monkeypatch: pytest.MonkeyPatch) -> None:
   argv = schedule_trigger_argv("m", "--watch", "1234", "neptune:5678", "slurm:99")
   captured: dict = {}
   fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
@@ -446,7 +454,7 @@ def test_cli_renamed_flag_delay_no_longer_accepted() -> None:
     cli_module.main()
 
 
-def test_cli_max_wait_accepted(monkeypatch) -> None:
+def test_cli_max_wait_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
   argv = schedule_trigger_argv("hello")
   captured: dict = {}
   fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
@@ -462,7 +470,7 @@ def test_cli_max_wait_accepted(monkeypatch) -> None:
   }
 
 
-def test_cli_remote_dead_exits_with_code_2(monkeypatch) -> None:
+def test_cli_remote_dead_exits_with_code_2(monkeypatch: pytest.MonkeyPatch) -> None:
   argv = schedule_trigger_argv("hello", "--watch", "neptune:5678")
   fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
 
@@ -476,10 +484,16 @@ def test_cli_remote_dead_exits_with_code_2(monkeypatch) -> None:
     def json(self) -> dict:
       return {"detail": "verify-on-create failed for remote watch target(s): neptune:5678 -> DEAD ('DEAD\\n')"}
 
-  def _fake_post(url, json=None, params=None, headers=None, timeout=None, verify=None):
+  def _fake_post(
+      url: str,
+      json: dict | None = None,
+      params: dict | None = None,
+      headers: dict | None = None,
+      timeout: float | None = None,
+      verify: bool | None = None) -> _FakeResp:
     return _FakeResp()
 
-  def _offline_get(url, **kwargs) -> None:  # best-effort version hint must not reach a real server
+  def _offline_get(url: str, **kwargs: Any) -> None:  # best-effort version hint must not reach a real server
     raise requests.ConnectionError("offline")
 
   monkeypatch.setattr(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, _fake_post)

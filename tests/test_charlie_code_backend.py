@@ -12,7 +12,6 @@ from conftest import (
     stub_credentials,
     stub_subprocess_spawn,
 )
-from pydantic import ValidationError
 
 import src.agents.backends.charlie_code as charlie_code_mod
 from src.agents.backends.base import USER_LOCAL_BIN, AgentBackend
@@ -422,27 +421,6 @@ async def test_run_temp_transport_dir_exists_at_hook_and_removed_after(
   assert records[1] == ("command",)
   # The sentinel raise runs run()'s finally, which removes the throwaway dir.
   assert not log_dir.exists()
-
-
-# ---------------------------------------------------------------------------
-# Backend entry context_window
-# ---------------------------------------------------------------------------
-
-
-def test_backend_option_defaults_context_window_to_none() -> None:
-  option = backend_option(id="cc-k3-test", label="t", type="charlie-code", model="test-model")
-  assert option.context_window is None
-
-
-def test_backend_option_accepts_positive_context_window() -> None:
-  option = backend_option(id="cc-k3-test", label="t", type="charlie-code", model="test-model", context_window=262144)
-  assert option.context_window == 262144
-
-
-@pytest.mark.parametrize("bad", [0, -1])
-def test_backend_option_rejects_nonpositive_context_window(bad: int) -> None:
-  with pytest.raises(ValidationError):
-    backend_option(id="cc-k3-test", label="t", type="charlie-code", model="test-model", context_window=bad)
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -38,7 +39,7 @@ def _mk_sacct_mock(outputs: list[str]) -> AsyncMock:
   """
   queue = list(outputs)
 
-  async def _factory(*args, **kwargs):
+  async def _factory(*args: Any, **kwargs: Any) -> FakeAsyncProcess:
     out = queue[0] if len(queue) == 1 else queue.pop(0)
     return FakeAsyncProcess(stdout=out.encode())
 

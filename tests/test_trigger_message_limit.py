@@ -33,7 +33,8 @@ from src.core.triggers import TriggerManager
 # ---------------------------------------------------------------------------
 
 
-def test_cli_rejects_201_char_message(monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_rejects_201_char_message(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   triggers_dir = tmp_path / "s1" / "triggers"
   triggers_dir.mkdir(parents=True)
   argv = schedule_trigger_argv("x" * 201)

@@ -19,11 +19,12 @@ from fastapi.testclient import TestClient
 from src.api.cron import router as cron_router
 from src.api.deps import get_config, get_session_manager
 from src.api.sessions import router as sessions_router
-from src.core.models import CreateSessionRequest, SessionStatus
+from src.core.config import CharlieBotConfig
+from src.core.models import CreateSessionRequest, SessionMetadata, SessionStatus
 from src.core.sessions import SessionManager
 
 
-def make_cron_sessions_client(cfg, session_mgr: SessionManager) -> TestClient:
+def make_cron_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
   """TestClient mounting the cron router plus the sessions router (the scheduled listing and
   unarchive endpoints) with cfg/session_mgr as dependency overrides."""
   app = FastAPI()
@@ -53,7 +54,7 @@ def write_nightly_task(home: Path) -> Path:
   )
 
 
-async def make_scheduled_session(session_mgr: SessionManager, task_name: str):
+async def make_scheduled_session(session_mgr: SessionManager, task_name: str) -> SessionMetadata:
   """One active session dedicated to task_name, created through the real manager."""
   return await session_mgr.create_session(
       CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name), backend=OPUS_BACKEND_ID)

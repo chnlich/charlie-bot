@@ -63,7 +63,7 @@ def _reachable_models(root: type[BaseModel]) -> set[type[BaseModel]]:
   return seen
 
 
-def test_every_reachable_model_forbids_extra_fields():
+def test_every_reachable_model_forbids_extra_fields() -> None:
   models = _reachable_models(CharlieBotConfig) | set(BACKEND_CLASSES)
   assert SECTION_NAMES <= {model.__name__ for model in models}  # the walk reached the sections
   assert {model.__name__ for model in BACKEND_CLASSES} <= {model.__name__ for model in models}
@@ -71,7 +71,7 @@ def test_every_reachable_model_forbids_extra_fields():
     assert model.model_config.get("extra") == "forbid", model.__name__
 
 
-def test_load_config_names_every_legacy_key_in_the_file(tmp_path, monkeypatch):
+def test_load_config_names_every_legacy_key_in_the_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   home = tmp_path / "home"
   home.mkdir()
   (home / "config.yaml").write_bytes(FIXTURE_PATH.read_bytes())
@@ -91,7 +91,7 @@ def test_load_config_names_every_legacy_key_in_the_file(tmp_path, monkeypatch):
       assert location == "credentials.yaml " + LEGACY_KEYS[CREDENTIALS_PREFIX + key]
 
 
-def test_legacy_table_matches_the_model_tree():
+def test_legacy_table_matches_the_model_tree() -> None:
   for old_key, location in LEGACY_KEYS.items():
     assert old_key not in CharlieBotConfig.model_fields, old_key
     # credentials-prefixed items move to credentials.yaml (not this model tree);
@@ -109,7 +109,7 @@ def test_legacy_table_matches_the_model_tree():
 
 
 @pytest.mark.parametrize("fragment_name", ["x.yaml", "cron.yaml"])
-def test_config_d_fragments_are_rejected(tmp_path, monkeypatch, fragment_name):
+def test_config_d_fragments_are_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fragment_name: str) -> None:
   home = tmp_path / "home"
   (home / "config.d").mkdir(parents=True)
   (home / "config.yaml").write_text("server:\n  host: 127.0.0.1\n", encoding="utf-8")
@@ -120,7 +120,7 @@ def test_config_d_fragments_are_rejected(tmp_path, monkeypatch, fragment_name):
   assert f"config.d/{fragment_name}" in str(excinfo.value)
 
 
-def test_config_d_cron_d_files_are_not_fragments(tmp_path, monkeypatch):
+def test_config_d_cron_d_files_are_not_fragments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   home = tmp_path / "home"
   (home / "config.d" / "cron.d").mkdir(parents=True)
   (home / "config.d" / "cron.d" / "nightly.yaml").write_text("name: nightly\n", encoding="utf-8")
@@ -129,7 +129,7 @@ def test_config_d_cron_d_files_are_not_fragments(tmp_path, monkeypatch):
   assert config_module.load_config().server.port == 2001
 
 
-def test_backend_entry_unknown_field_names_id_type_and_field(tmp_path, monkeypatch):
+def test_backend_entry_unknown_field_names_id_type_and_field(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   home = tmp_path / "home"
   home.mkdir()
   (home / "config.yaml").write_text(
@@ -147,7 +147,7 @@ def test_backend_entry_unknown_field_names_id_type_and_field(tmp_path, monkeypat
   assert str(excinfo.value) == "backend entry 'test-backend' (type cc-claude) has unknown field 'bogus_field'"
 
 
-def _credentials_home(tmp_path, monkeypatch) -> Path:
+def _credentials_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   """A temp CHARLIEBOT_HOME with a minimal valid sectioned config.yaml; returns the home path."""
   home = tmp_path / "home"
   home.mkdir()
@@ -156,7 +156,7 @@ def _credentials_home(tmp_path, monkeypatch) -> Path:
   return home
 
 
-def test_load_without_credentials_file_gives_empty_sections(tmp_path, monkeypatch):
+def test_load_without_credentials_file_gives_empty_sections(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   home = _credentials_home(tmp_path, monkeypatch)
   assert config_module.load_config().server.port == 2001
   credentials = config_module.load_credentials()
@@ -164,7 +164,8 @@ def test_load_without_credentials_file_gives_empty_sections(tmp_path, monkeypatc
   assert credentials.path == home / "credentials.yaml"
 
 
-def test_credentials_stay_out_of_config_and_get_returns_each_sentinel(tmp_path, monkeypatch):
+def test_credentials_stay_out_of_config_and_get_returns_each_sentinel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   home = _credentials_home(tmp_path, monkeypatch)
   sections = {
       "alpha": {
@@ -196,7 +197,8 @@ def test_credentials_stay_out_of_config_and_get_returns_each_sentinel(tmp_path, 
         ("alpha:\n  key: [1, 2]\n", "credentials.alpha.key"),
     ],
 )
-def test_credentials_shape_errors_name_the_offending_depth(tmp_path, monkeypatch, body, fragment):
+def test_credentials_shape_errors_name_the_offending_depth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str, fragment: str) -> None:
   home = _credentials_home(tmp_path, monkeypatch)
   (home / "credentials.yaml").write_text(body, encoding="utf-8")
   with pytest.raises(ValueError) as excinfo:
@@ -204,7 +206,7 @@ def test_credentials_shape_errors_name_the_offending_depth(tmp_path, monkeypatch
   assert fragment in str(excinfo.value)
 
 
-def test_get_credentials_caches_until_the_file_changes(tmp_path, monkeypatch):
+def test_get_credentials_caches_until_the_file_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   home = _credentials_home(tmp_path, monkeypatch)
   cred_path = home / "credentials.yaml"
   cred_path.write_text("alpha:\n  key: one\n", encoding="utf-8")
@@ -219,7 +221,7 @@ def test_get_credentials_caches_until_the_file_changes(tmp_path, monkeypatch):
   assert second.get("alpha", "key") == "two"
 
 
-def test_credentials_example_covers_every_credentials_legacy_key():
+def test_credentials_example_covers_every_credentials_legacy_key() -> None:
   example_path = Path(__file__).resolve().parents[1] / "configs" / "credentials.example.yaml"
   raw_lines = example_path.read_text(encoding="utf-8").splitlines()
   stripped = "\n".join(line[2:] if line.startswith("# ") else line for line in raw_lines)
@@ -238,7 +240,7 @@ EXAMPLE_PATH = Path(__file__).resolve().parents[1] / "configs" / "config.example
 STARTER_BACKEND_IDS = ["claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-tui"]
 
 
-def test_example_config_loads_to_the_model_default(tmp_path, monkeypatch):
+def test_example_config_loads_to_the_model_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The shipped example is the default config: loading it equals constructing
   CharlieBotConfig, modulo backends.options (the example ships the four starter
   entries where the model default is empty)."""
@@ -255,7 +257,7 @@ def test_example_config_loads_to_the_model_default(tmp_path, monkeypatch):
   assert [option.id for option in loaded.backends.options] == STARTER_BACKEND_IDS
 
 
-def test_example_config_is_block_style():
+def test_example_config_is_block_style() -> None:
   """No inline mappings and no non-empty inline lists outside comment lines."""
   for line in EXAMPLE_PATH.read_text(encoding="utf-8").splitlines():
     if line.strip().startswith("#"):
@@ -263,7 +265,7 @@ def test_example_config_is_block_style():
     assert not re.search(r"\{|\[[^\]]", line), line
 
 
-def test_init_charliebot_home_seeds_config_and_credentials(tmp_path, monkeypatch):
+def test_init_charliebot_home_seeds_config_and_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A fresh home gets config.yaml byte-equal to the example and credentials.yaml
   from the repo template, owner-readable only, loading as empty sections."""
   home = tmp_path / "home"
@@ -279,7 +281,7 @@ def test_init_charliebot_home_seeds_config_and_credentials(tmp_path, monkeypatch
   assert (home / "config.yaml").read_bytes() == EXAMPLE_PATH.read_bytes()
 
 
-def test_require_backends_rejects_empty_list():
+def test_require_backends_rejects_empty_list() -> None:
   """An empty backends.options raises ValueError naming the key and the example file."""
   with pytest.raises(ValueError) as exc_info:
     require_backends(CharlieBotConfig())
@@ -288,7 +290,7 @@ def test_require_backends_rejects_empty_list():
   assert "config.example.yaml" in message
 
 
-def test_require_backends_accepts_one_entry():
+def test_require_backends_accepts_one_entry() -> None:
   """A config listing one backend option passes the startup gate."""
   cfg = CharlieBotConfig(backends={"options": [backend_option(id="a", label="A", type="cc-claude", model="m")]})
   assert require_backends(cfg) is None

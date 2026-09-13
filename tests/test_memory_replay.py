@@ -13,6 +13,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -20,6 +21,7 @@ from conftest import backend_option
 
 from src.core.config import CharlieBotConfig
 from src.core.memory_replay import ReplayError, ReplayOptions, run_replay
+from src.core.memory_replay.compare import CompareOutcome
 from src.core.memory_replay.errors import (
     ReplayBackendError,
     ReplayIsolationError,
@@ -31,8 +33,10 @@ from src.core.memory_replay.exchange import parse_model_output
 from src.core.memory_replay.identity import approval_digest
 from src.core.memory_replay.manifest import load_manifest
 from src.core.memory_replay.retrieval import FeedbackSelection
-from src.core.memory_replay.transport import TransportResult, request_model_for
+from src.core.memory_replay.runner import ReplayOutcome
+from src.core.memory_replay.transport import ReplayTransport, TransportResult, request_model_for
 from src.core.memory_replay.validate import apply_unified_patch, build_patch, canonical_text
+from src.core.models import BackendOption
 
 # --- synthetic frozen corpus ---------------------------------------------------
 
@@ -134,7 +138,7 @@ def write_manifest(tmp_path: Path, data: dict | None = None, name: str = "manife
 
 class FakeTransport:
 
-  def __init__(self, responses: list[str]):
+  def __init__(self, responses: list[str]) -> None:
     self.responses = list(responses)
     self.calls: list[dict] = []
 
@@ -178,7 +182,7 @@ def run_replay_with(
     manifest_path: Path | None = None,
     cfg: CharlieBotConfig | None = None,
     output_dir: Path | None = None,
-):
+) -> tuple[ReplayOutcome, FakeTransport]:
   cfg = cfg or replay_cfg(tmp_path)
   transport = FakeTransport(responses)
   outcome = run_replay(
@@ -1274,12 +1278,12 @@ def test_parse_model_output_rejects_garbage() -> None:
 
 class _StubResponse:
 
-  def __init__(self, status_code=200, payload=None, text=""):
+  def __init__(self, status_code: int = 200, payload: dict | None = None, text: str = "") -> None:
     self.status_code = status_code
     self._payload = payload
     self.text = text
 
-  def json(self):
+  def json(self) -> dict:
     if self._payload is None:
       raise ValueError("no body")
     return self._payload
@@ -1301,16 +1305,16 @@ class _StubClient:
       })
   requests: list[dict] = []
 
-  def __init__(self, **kwargs):
+  def __init__(self, **kwargs: Any) -> None:
     self.kwargs = kwargs
 
-  def __enter__(self):
+  def __enter__(self) -> "_StubClient":
     return self
 
-  def __exit__(self, *exc):
+  def __exit__(self, *exc: object) -> bool:
     return False
 
-  def post(self, url, json=None, headers=None):
+  def post(self, url: str, json: dict | None = None, headers: dict[str, str] | None = None) -> _StubResponse:
     _StubClient.requests.append({"url": url, "json": json, "headers": headers})
     return type(self).response
 
@@ -1324,7 +1328,7 @@ def test_transport_sends_content_only_request_and_reads_usage(monkeypatch: pytes
 
   class RecordingClient(_StubClient):
 
-    def post(self, url, json=None, headers=None):
+    def post(self, url: str, json: dict | None = None, headers: dict[str, str] | None = None) -> _StubResponse:
       sent.update({"url": url, "json": json, "headers": headers})
       return _StubClient.response
 
@@ -1392,16 +1396,16 @@ class _StubTransportClass:
 
   instances: list[FakeTransport] = []
 
-  def __init__(self, transport: FakeTransport):
+  def __init__(self, transport: FakeTransport) -> None:
     self._transport = transport
 
   @classmethod
-  def from_config(cls, option, cfg=None):
+  def from_config(cls, option: BackendOption, cfg: CharlieBotConfig | None = None) -> FakeTransport:
     instance = FakeTransport([MERGE_RESPONSE])
     _StubTransportClass.instances.append(instance)
     return instance
 
-  def complete(self, **kwargs):
+  def complete(self, **kwargs: Any) -> TransportResult:
     return self._transport.complete(**kwargs)
 
 
@@ -1437,7 +1441,7 @@ def test_cli_replay_rejects_missing_args_without_model_call(
   from src.cli import memory as memory_cli
   from src.core.memory_replay import runner as runner_module
 
-  def explode(**kwargs):
+  def explode(**kwargs: Any) -> None:
     raise AssertionError("no model call may start on missing arguments")
 
   monkeypatch.setattr(runner_module, "OpenAICompatibleTransport", explode)
@@ -1479,7 +1483,7 @@ def test_cli_replay_reports_errors_without_traceback(
 # fixed denominators, and the unjudged-quality contract.
 
 
-def run_compare(tmp_path: Path, run_dir: Path, output_dir: Path | None = None):
+def run_compare(tmp_path: Path, run_dir: Path, output_dir: Path | None = None) -> CompareOutcome:
   from src.core.memory_replay import CompareOptions, run_comparison
 
   return run_comparison(CompareOptions(run_dir=run_dir, output_dir=output_dir or tmp_path / "cmp"))
@@ -1517,7 +1521,7 @@ def sha256_of(path: Path) -> str:
 class UsageTransport:
   """Fake transport carrying per-call usage values, so comparison totals are checkable."""
 
-  def __init__(self, responses: list[tuple[str, int | None, int | None, int]]):
+  def __init__(self, responses: list[tuple[str, int | None, int | None, int]]) -> None:
     self.responses = list(responses)
     self.calls: list[dict] = []
 
@@ -1531,7 +1535,11 @@ class UsageTransport:
 
 
 def run_review_with_transport(
-    tmp_path: Path, transport, *, mode: str = "editor-review", manifest_dict: dict | None = None):
+    tmp_path: Path,
+    transport: ReplayTransport,
+    *,
+    mode: str = "editor-review",
+    manifest_dict: dict | None = None) -> ReplayOutcome:
   manifest_path = write_manifest(
       tmp_path,
       manifest_dict if manifest_dict is not None else base_manifest_dict(),
@@ -1924,7 +1932,7 @@ def test_compare_reports_a_reviewer_transport_failure_with_the_editor_arm_intact
 
   class DyingTransport:
 
-    def __init__(self):
+    def __init__(self) -> None:
       self.calls = 0
 
     def complete(self, *, system: str, user: str) -> TransportResult:

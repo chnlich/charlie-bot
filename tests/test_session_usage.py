@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import OPUS_BACKEND_ID, SYNTHETIC_MODEL, backend_option
@@ -24,7 +25,7 @@ from src.core.models import SessionMetadata
 from src.core.sessions import SessionManager
 
 
-def _build_cfg(tmp_path: Path, **codex_kwargs) -> CharlieBotConfig:
+def _build_cfg(tmp_path: Path, **codex_kwargs: Any) -> CharlieBotConfig:
   codex_opt = backend_option(id="codex-test", label="Codex", type="codex", model="codex-test-model", **codex_kwargs)
   return CharlieBotConfig(
       charliebot_home=tmp_path,
@@ -160,7 +161,7 @@ def _assistant_event(
 
 
 def _result_event(
-    total_cost_usd,
+    total_cost_usd: float,
     model_usage: dict | None = None,
     input_tokens: int = 0,
     cache_creation: int = 0,
@@ -504,14 +505,14 @@ def _clean_ceiling_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.usefixtures("_clean_ceiling_env")
-def test_declared_window_subtracts_reserves_from_declared_window(monkeypatch) -> None:
+def test_declared_window_subtracts_reserves_from_declared_window(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
   expected_point = 500_000 - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
   assert headless_claude_declared_window() == (500_000, expected_point)
 
 
 @pytest.mark.usefixtures("_clean_ceiling_env")
-def test_declared_window_follows_host_export_of_different_window(monkeypatch) -> None:
+def test_declared_window_follows_host_export_of_different_window(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "1000000")
   expected_point = 1_000_000 - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
   assert headless_claude_declared_window() == (1_000_000, expected_point)
@@ -524,7 +525,7 @@ def test_declared_window_follows_host_export_of_different_window(monkeypatch) ->
 ])
 @pytest.mark.usefixtures("_clean_ceiling_env")
 def test_declared_window_returns_none_compact_point_when_override_present_and_warns(
-    monkeypatch, capsys, override_var) -> None:
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], override_var: str) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
   monkeypatch.setenv(override_var, "1")
   result = headless_claude_declared_window()
@@ -535,7 +536,8 @@ def test_declared_window_returns_none_compact_point_when_override_present_and_wa
 
 
 @pytest.mark.usefixtures("_clean_ceiling_env")
-def test_declared_window_returns_default_when_window_unparseable_and_warns(monkeypatch, capsys) -> None:
+def test_declared_window_returns_default_when_window_unparseable_and_warns(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "not-a-number")
   default_window = int(HEADLESS_CLAUDE_DEFAULT_ENV["CLAUDE_CODE_AUTO_COMPACT_WINDOW"])
   expected_point = default_window - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
@@ -547,7 +549,8 @@ def test_declared_window_returns_default_when_window_unparseable_and_warns(monke
 
 
 @pytest.mark.usefixtures("_clean_ceiling_env")
-def test_declared_window_degraded_warning_fires_once_per_process(monkeypatch, capsys) -> None:
+def test_declared_window_degraded_warning_fires_once_per_process(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   monkeypatch.setenv("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "400000")
   assert headless_claude_declared_window()[1] is None
   assert "claude_declared_window_degraded" in capsys.readouterr().out
@@ -556,7 +559,8 @@ def test_declared_window_degraded_warning_fires_once_per_process(monkeypatch, ca
 
 
 @pytest.mark.usefixtures("_clean_ceiling_env")
-def test_declared_window_unparseable_warning_refires_for_a_new_bad_value(monkeypatch, capsys) -> None:
+def test_declared_window_unparseable_warning_refires_for_a_new_bad_value(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "not-a-number")
   headless_claude_declared_window()
   assert "claude_declared_window_unparseable_window" in capsys.readouterr().out
@@ -602,7 +606,8 @@ async def test_claude_tier_full_and_point_for_window_model(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clean_ceiling_env")
-async def test_claude_tier_point_none_under_forwarded_unmodelled_override(tmp_path: Path, monkeypatch) -> None:
+async def test_claude_tier_point_none_under_forwarded_unmodelled_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "433000")
   monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "1")
   session_mgr, meta = _session_rig(tmp_path, "session-override", "Override", OPUS_BACKEND_ID)
@@ -713,7 +718,7 @@ async def test_snapshot_tier_uses_newest_result_event_carrying_snapshot(tmp_path
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clean_ceiling_env")
 async def test_snapshot_tier_compact_at_ignores_claude_constants_but_claude_tier_follows_them(
-    tmp_path: Path, monkeypatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # Move Claude Code's reserves to a value clearly different from their defaults
   # (20000 / 13000); the snapshot tier must not move, the claude tier must.
   monkeypatch.setattr("src.core.session_usage.CLAUDE_COMPACT_OUTPUT_RESERVE", 50_000)
@@ -976,7 +981,7 @@ async def test_codex_tier_not_consulted_for_non_codex_backend(tmp_path: Path, mo
     seen_backends.append(backend_id)
     return False
 
-  async def _fail_resolve(*args, **kwargs) -> None:
+  async def _fail_resolve(*args: Any, **kwargs: Any) -> None:
     raise AssertionError("codex resolver must not run for a non-codex backend")
 
   monkeypatch.setattr(resolver, "is_codex_backend", _record_is_codex)
@@ -1039,7 +1044,8 @@ async def test_codex_rollout_resolves_via_other_backend_when_session_backend_abs
 
 
 @pytest.mark.asyncio
-async def test_codex_unconfigured_compaction_logs_no_warning(tmp_path: Path, capsys) -> None:
+async def test_codex_unconfigured_compaction_logs_no_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   # _build_cfg creates the codex backend WITHOUT model_auto_compact_token_limit.
   session_mgr = SessionManager(_build_cfg(tmp_path))
   meta = _seed_codex_session(
@@ -1198,7 +1204,7 @@ async def test_facts_memo_rescans_only_after_new_events(tmp_path: Path, monkeypa
   fed = 0
   real_feed = session_usage._UsageFold.feed
 
-  def counting_feed(fold: session_usage._UsageFold, events: list[dict]):
+  def counting_feed(fold: session_usage._UsageFold, events: list[dict]) -> None:
     nonlocal fed
     fed += len(events)
     return real_feed(fold, events)
@@ -1347,7 +1353,7 @@ def _record_scan_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
   calls: list[str] = []
   real_scan = session_usage.SessionUsageResolver._load_and_scan
 
-  def recording_scan(self, session_id: str):
+  def recording_scan(self, session_id: str) -> tuple[list[dict], session_usage._UsageFacts]:
     calls.append(session_id)
     return real_scan(self, session_id)
 
@@ -1356,7 +1362,8 @@ def _record_scan_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_usage_hit_and_suffix_advance_answer_on_event_loop(tmp_path: Path, monkeypatch) -> None:
+async def test_usage_hit_and_suffix_advance_answer_on_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   session_mgr, meta = _session_rig(tmp_path, "session-hit-on-loop", "Hit On Loop", OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, _cumulative_result_with_assistant_reading())
 
@@ -1376,7 +1383,8 @@ async def test_usage_hit_and_suffix_advance_answer_on_event_loop(tmp_path: Path,
 
 
 @pytest.mark.asyncio
-async def test_usage_cold_cache_and_replaced_list_take_threaded_scan(tmp_path: Path, monkeypatch) -> None:
+async def test_usage_cold_cache_and_replaced_list_take_threaded_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   session_mgr, meta = _session_rig(tmp_path, "session-hit-miss", "Hit Miss", OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, _cumulative_result_with_assistant_reading())
 
@@ -1397,7 +1405,7 @@ async def test_usage_cold_cache_and_replaced_list_take_threaded_scan(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_usage_suffix_past_cap_takes_threaded_scan(tmp_path: Path, monkeypatch) -> None:
+async def test_usage_suffix_past_cap_takes_threaded_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   session_mgr, meta = _session_rig(tmp_path, "session-hit-cap", "Hit Cap", OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, _cumulative_result_with_assistant_reading())
   await session_mgr.resolve_session_usage(meta.id, meta)

@@ -45,7 +45,7 @@ from src.core.config import CharlieBotConfig, get_config
 from src.core.memory_replay import variants
 from src.core.memory_replay.compare import CompareOptions, _denominators, _usage, run_comparison
 from src.core.memory_replay.errors import ReplayError
-from src.core.memory_replay.identity import sha256_hex
+from src.core.memory_replay.identity import sha256_hex, system_prompt_fingerprints
 from src.core.memory_replay.manifest import REF_RE, Manifest, load_manifest
 from src.core.memory_replay.report import _e, _page, _row
 from src.core.memory_replay.runner import (
@@ -632,6 +632,23 @@ def _rel_path(path: Path, root: Path) -> str:
   return path.resolve().relative_to(root.resolve()).as_posix()
 
 
+def _variant_record(contract: variants.ExperimentContract) -> dict:
+  """One variant's summary payload: the declared variant plus its stage labels and prompt digests."""
+  fingerprints = system_prompt_fingerprints(contract.editor_system, contract.reviewer_system)
+  return {
+      **contract.record_payload()["variant"],
+      # The descriptive stage labels sit beside the declared dimensions for the report.
+      "editor_stage":
+          contract.editor_stage,
+      "reviewer_stage":
+          contract.reviewer_stage,
+      "editor_system_sha256":
+          fingerprints["editor"],
+      "reviewer_system_sha256":
+          fingerprints["reviewer"],
+  }
+
+
 def _build_summary(
     *,
     cases: list[tuple[str, Path, Manifest]],
@@ -663,21 +680,7 @@ def _build_summary(
           },
       "adaptations":
           list(COMMON_ADAPTATIONS),
-      "variants":
-          [
-              {
-                  **contract.record_payload()["variant"],
-                  # The descriptive stage labels sit beside the declared dimensions for the report.
-                  "editor_stage":
-                      contract.editor_stage,
-                  "reviewer_stage":
-                      contract.reviewer_stage,
-                  "editor_system_sha256":
-                      sha256_hex(contract.editor_system.encode("utf-8")),
-                  "reviewer_system_sha256":
-                      sha256_hex(contract.reviewer_system.encode("utf-8")),
-              } for contract in contracts
-          ],
+      "variants": [_variant_record(contract) for contract in contracts],
       "cases":
           [
               {

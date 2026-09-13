@@ -61,7 +61,12 @@ from src.core.memory_replay.exchange import (
     build_reviewer_request,
     parse_model_output,
 )
-from src.core.memory_replay.identity import approval_digest, input_identity, sha256_hex
+from src.core.memory_replay.identity import (
+    approval_digest,
+    input_identity,
+    sha256_hex,
+    system_prompt_fingerprints,
+)
 from src.core.memory_replay.manifest import Manifest, Theme, dump_manifest, load_manifest
 from src.core.memory_replay.report import ReportData, render_report
 from src.core.memory_replay.retrieval import FeedbackSelection, select_feedback
@@ -245,11 +250,7 @@ def run_replay(
       },
       # Fingerprints of the exact system prompts sent to each stage, so a later comparison can
       # verify the recorded responses follow the contract it validates against.
-      "system_prompts":
-          {
-              "editor": sha256_hex(contract.editor_system.encode("utf-8")),
-              "reviewer": sha256_hex(contract.reviewer_system.encode("utf-8")),
-          },
+      "system_prompts": system_prompt_fingerprints(contract.editor_system, contract.reviewer_system),
       "model": model_identity,
       "manifest": str(options.manifest),
       # Filled by _write_frozen_inputs before the first model call; None only if that failed.

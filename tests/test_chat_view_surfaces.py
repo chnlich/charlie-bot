@@ -34,47 +34,29 @@ def _assistant(text: str, event_id: str, extra_blocks: tuple = ()) -> dict:
   return {"id": event_id, "type": ET.ASSISTANT, "message": {"content": blocks}}
 
 
+def _user(event_id: str, content: str) -> dict:
+  return {"id": event_id, "type": ET.USER, "content": content}
+
+
+def _done(event_id: str, **extra: object) -> dict:
+  return {"id": event_id, "type": ET.MASTER_DONE, **extra}
+
+
 def _plain_turn() -> list[dict]:
-  return [
-      {
-          "id": "u1",
-          "type": ET.USER,
-          "content": "q1"
-      },
-      _assistant("reply1", "a1"),
-      {
-          "id": "d1",
-          "type": ET.MASTER_DONE
-      },
-  ]
+  return [_user("u1", "q1"), _assistant("reply1", "a1"), _done("d1")]
 
 
 def _second_turn_in_flight() -> list[dict]:
-  return [
-      *_plain_turn(),
-      {
-          "id": "u2",
-          "type": ET.USER,
-          "content": "q2"
-      },
-      _assistant("IN PROGRESS", "a2"),
-  ]
+  return [*_plain_turn(), _user("u2", "q2"), _assistant("IN PROGRESS", "a2")]
 
 
 def _multi_block_turn() -> list[dict]:
   return [
-      {
-          "id": "u1",
-          "type": ET.USER,
-          "content": "q1"
-      },
+      _user("u1", "q1"),
       _assistant("part one", "a1"),
       _assistant("part two", "a2"),
       _assistant("part three", "a3"),
-      {
-          "id": "d1",
-          "type": ET.MASTER_DONE
-      },
+      _done("d1"),
   ]
 
 
@@ -83,32 +65,17 @@ def _queued_user_inside_completed_run() -> list[dict]:
       {
           "session_id": "oc-1"
       },
-      {
-          "id": "u1",
-          "type": ET.USER,
-          "content": "q1"
-      },
+      _user("u1", "q1"),
       _assistant("working", "a1"),
-      {
-          "id": "u2",
-          "type": ET.USER,
-          "content": "q2 queued"
-      },
+      _user("u2", "q2 queued"),
       _assistant("more", "a2"),
-      {
-          "id": "d1",
-          "type": ET.MASTER_DONE
-      },
+      _done("d1"),
   ]
 
 
 def _delegation_and_worker_summary() -> list[dict]:
   return [
-      {
-          "id": "u1",
-          "type": ET.USER,
-          "content": "q1"
-      },
+      _user("u1", "q1"),
       _assistant("analysis", "a1"),
       {
           "id": "t1",
@@ -122,26 +89,15 @@ def _delegation_and_worker_summary() -> list[dict]:
           "type": ET.WORKER_SUMMARY,
           "content": "merged"
       },
-      {
-          "id": "d1",
-          "type": ET.MASTER_DONE,
-          "still_thinking": True
-      },
+      _done("d1", still_thinking=True),
       _assistant("second run", "a3"),
-      {
-          "id": "d2",
-          "type": ET.MASTER_DONE
-      },
+      _done("d2"),
   ]
 
 
 def _exit_plan_mode() -> list[dict]:
   return [
-      {
-          "id": "u1",
-          "type": ET.USER,
-          "content": "q1"
-      },
+      _user("u1", "q1"),
       _assistant("preamble", "a1"),
       _assistant("", "a2", ({
           "type": "tool_use",
@@ -150,20 +106,13 @@ def _exit_plan_mode() -> list[dict]:
               "plan": "the plan"
           }
       },)),
-      {
-          "id": "d1",
-          "type": ET.MASTER_DONE
-      },
+      _done("d1"),
   ]
 
 
 def _tool_result_only_user_event() -> list[dict]:
   return [
-      {
-          "id": "u1",
-          "type": ET.USER,
-          "content": "q1"
-      },
+      _user("u1", "q1"),
       _assistant("", "a1", ({
           "type": "tool_use",
           "name": "Read",
@@ -180,20 +129,17 @@ def _tool_result_only_user_event() -> list[dict]:
           }
       },
       _assistant("done", "a2"),
-      {
-          "id": "d1",
-          "type": ET.MASTER_DONE
-      },
+      _done("d1"),
   ]
 
 
 def _many_turns(turns: int = 25) -> list[dict]:
   events: list[dict] = []
   for i in range(turns):
-    events.append({"id": f"u{i}", "type": ET.USER, "content": f"q{i}"})
+    events.append(_user(f"u{i}", f"q{i}"))
     events.append(_assistant(f"reply {i} first", f"a{i}x"))
     events.append(_assistant(f"reply {i} second", f"a{i}y"))
-    events.append({"id": f"d{i}", "type": ET.MASTER_DONE, "thinking_seconds": i})
+    events.append(_done(f"d{i}", thinking_seconds=i))
   return events
 
 

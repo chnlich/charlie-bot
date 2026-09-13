@@ -485,14 +485,26 @@ async def stop_tui(
 
 
 _SEARCH_ROW_FRAGMENT_CAP = 512
-_SEARCH_DERIVED_KEYS = frozenset(
-    {
-        "thinking_since",
-        sidebar_state.HAS_RUNNING_TASKS,
-        sidebar_state.HAS_PENDING_TRIGGER,
-        sidebar_state.PENDING_TRIGGER_COUNT,
-        sidebar_state.NEXT_TRIGGER_AT,
-    })
+# The five derived keys' wire prefixes, prebuilt once: the splice below joins
+# them per row per request, so the prefix render is a dict hit instead of an
+# encode plus two concats per key.
+_SEARCH_DERIVED_PREFIXES: dict[str, bytes] = {
+    "thinking_since": b'"thinking_since":',
+    sidebar_state.HAS_RUNNING_TASKS: b'"has_running_tasks":',
+    sidebar_state.HAS_PENDING_TRIGGER: b'"has_pending_trigger":',
+    sidebar_state.PENDING_TRIGGER_COUNT: b'"pending_trigger_count":',
+    sidebar_state.NEXT_TRIGGER_AT: b'"next_trigger_at":',
+}
+_SEARCH_DERIVED_KEYS = frozenset(_SEARCH_DERIVED_PREFIXES)
+# The two datetime fields are None for the common idle session; their whole
+# ``"key":null`` piece is prebuilt so neither the pydantic dump_python call
+# nor the scalar render ever runs for them. The other three fields' types
+# (bool, int) never hold None.
+_SEARCH_NULL_PIECES: dict[str, bytes] = {
+    key: prefix + b"null"
+    for key, prefix in _SEARCH_DERIVED_PREFIXES.items()
+    if key in ("thinking_since", sidebar_state.NEXT_TRIGGER_AT)
+}
 _search_row_fragments: BoundedMemo[int, tuple[SessionMetadata, tuple[bytes | str,
                                                                      ...]]] = BoundedMemo(_SEARCH_ROW_FRAGMENT_CAP)
 
@@ -581,24 +593,38 @@ async def search_sessions(
   # values rendered per request. json.dumps renders a dict context-free, so the
   # spliced body is byte-identical to the FastJsonResponse render of the merged
   # dicts: the segments follow the model's own key order, which is the order the
-  # in-place overlay leaves the merged dicts in.
+  # in-place overlay leaves the merged dicts in. Key prefixes ride the prebuilt
+  # bytes in _SEARCH_DERIVED_PREFIXES, and a None datetime field rides its whole
+  # prebuilt null piece (both fields are None on the common idle row), so the
+  # pydantic dump_python call under it never runs.
   parts: list[bytes] = []
   for meta in rows:
     entry = derived[meta.id]
-    next_trigger_at = _UTC_DATETIME_JSON.dump_python(entry[sidebar_state.NEXT_TRIGGER_AT], mode="json")
+    thinking_since = thinking_state.busy_since(meta.id)
+    next_trigger_at = entry[sidebar_state.NEXT_TRIGGER_AT]
     values = {
-        "thinking_since": _UTC_DATETIME_JSON.dump_python(thinking_state.busy_since(meta.id), mode="json"),
-        sidebar_state.HAS_RUNNING_TASKS: entry[sidebar_state.HAS_RUNNING_TASKS],
-        sidebar_state.HAS_PENDING_TRIGGER: entry[sidebar_state.HAS_PENDING_TRIGGER],
-        sidebar_state.PENDING_TRIGGER_COUNT: entry[sidebar_state.PENDING_TRIGGER_COUNT],
-        sidebar_state.NEXT_TRIGGER_AT: next_trigger_at,
+        "thinking_since":
+            (_UTC_DATETIME_JSON.dump_python(thinking_since, mode="json") if thinking_since is not None else None),
+        sidebar_state.HAS_RUNNING_TASKS:
+            entry[sidebar_state.HAS_RUNNING_TASKS],
+        sidebar_state.HAS_PENDING_TRIGGER:
+            entry[sidebar_state.HAS_PENDING_TRIGGER],
+        sidebar_state.PENDING_TRIGGER_COUNT:
+            entry[sidebar_state.PENDING_TRIGGER_COUNT],
+        sidebar_state.NEXT_TRIGGER_AT:
+            (_UTC_DATETIME_JSON.dump_python(next_trigger_at, mode="json") if next_trigger_at is not None else None),
     }
     rendered: list[bytes] = []
     for segment in _search_row_static_segments(meta):
       if isinstance(segment, bytes):
         rendered.append(segment)
+        continue
+      value = values[segment]
+      null_piece = _SEARCH_NULL_PIECES.get(segment)
+      if null_piece is not None and value is None:
+        rendered.append(null_piece)
       else:
-        rendered.append(b'"' + segment.encode() + b'":' + _json_scalar_bytes(values[segment]))
+        rendered.append(_SEARCH_DERIVED_PREFIXES[segment] + _json_scalar_bytes(value))
     parts.append(b"{" + b",".join(rendered) + b"}")
   return PreencodedJSONResponse(b"[" + b",".join(parts) + b"]")
 

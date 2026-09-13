@@ -21,6 +21,7 @@ from conftest import (
     fresh_state_fixture,
     make_home_session,
     plan_doc,
+    user_event,
     write_plans,
     write_thread_meta,
     write_trigger,
@@ -176,7 +177,7 @@ def test_thinking_clear_busy_marks_session_dirty() -> None:
 @pytest.mark.asyncio
 async def test_fork_marks_child_session_dirty(tmp_path: Path) -> None:
   _cfg, mgr, parent = await make_home_session(tmp_path, name="Parent")
-  append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
+  append_events(mgr.get_chat_events_path(parent.id), [user_event("e0")])
   sidebar_state.reset_for_tests()
 
   child = await mgr.fork_session(parent.id)

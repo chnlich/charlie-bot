@@ -7,6 +7,7 @@ from conftest import (
     TUI_KILL_TMUX_SESSION_PATCH_TARGET,
     TUI_TMUX_SESSION_EXISTS_PATCH_TARGET,
     build_tui_sessions_cfg,
+    user_event,
 )
 from conftest import make_sessions_client as _build_client
 
@@ -67,7 +68,7 @@ async def test_archive_tui_session_does_not_kill_tmux(
   meta = SessionMetadata(name="TUI", backend="claude-tui")
   await session_mgr.save_metadata(meta)
   killed = _install_kill_tmux_double(monkeypatch)
-  await session_mgr.save_chat_event(meta.id, {"type": "user", "content": "hello"})
+  await session_mgr.save_chat_event(meta.id, user_event("hello"))
 
   with _build_client(cfg, session_mgr) as client:
     response = client.delete(f"/api/sessions/{meta.id}")

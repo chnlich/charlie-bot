@@ -11,6 +11,7 @@ import pytest
 from conftest import (
     OPUS_BACKEND_ID,
     SPAWNER_SPAWN_WORKER_PATCH_TARGET,
+    assistant_text_event,
     patch_improve_git_ops,
 )
 
@@ -333,15 +334,7 @@ def test_extract_iteration_summary_prefers_newest_result_or_assistant() -> None:
           "type": "result",
           "result": "older result text"
       },
-      {
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "newest words",
-              }]
-          },
-      },
+      assistant_text_event("newest words"),
   ]
   assert _extract_iteration_summary(iter(reversed(events)), 3, "failed") == "newest words"
 

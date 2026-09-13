@@ -18,6 +18,7 @@ from conftest import (
     build_sessions_cfg,
     count_path_read_text,
     make_session_mgr,
+    user_event,
 )
 from conftest import make_sessions_client as _build_client
 
@@ -175,7 +176,7 @@ async def test_archive_unarchive_delete_visible_immediately(tmp_path: Path) -> N
   cfg = build_sessions_cfg(tmp_path)
   mgr = SessionManager(cfg)
   meta = await mgr.create_session(CreateSessionRequest(name="Journey"), backend=OPUS_BACKEND_ID)
-  await mgr.save_chat_event(meta.id, {"type": "user", "content": "hi"})  # non-empty: archive keeps it
+  await mgr.save_chat_event(meta.id, user_event("hi"))  # non-empty: archive keeps it
 
   assert await mgr.archive_session(meta.id) is not None
   assert meta.id in {s.id for s in (await mgr.list_archived_page())["sessions"]}
@@ -281,7 +282,7 @@ async def test_search_names_cover_archived_and_cap_at_200(tmp_path: Path) -> Non
     await _add_session(mgr, f"needle-{i:03d}", minutes=i)
   await _add_session(mgr, "needle-live", status=SessionStatus.ACTIVE, minutes=999)
   content_only = await _add_session(mgr, "unrelated-name", minutes=998)
-  await mgr.save_chat_event(content_only.id, {"type": "user", "content": "needle in the events"})
+  await mgr.save_chat_event(content_only.id, user_event("needle in the events"))
 
   results = await mgr.search_sessions("needle")
   assert len(results) == 200
@@ -300,8 +301,8 @@ async def test_search_cap_keeps_content_hits_above_the_cap_line(tmp_path: Path) 
     await _add_session(mgr, f"needle-{i:03d}", minutes=i)
   above = await _add_session(mgr, "unrelated-a", status=SessionStatus.ACTIVE, minutes=1000)
   below = await _add_session(mgr, "unrelated-b", status=SessionStatus.ACTIVE, minutes=-1)
-  await mgr.save_chat_event(above.id, {"type": "user", "content": "needle in the events"})
-  await mgr.save_chat_event(below.id, {"type": "user", "content": "needle in the events"})
+  await mgr.save_chat_event(above.id, user_event("needle in the events"))
+  await mgr.save_chat_event(below.id, user_event("needle in the events"))
 
   rows, derived = await mgr.search_sessions_readonly(
       "needle", include_running_status=True, include_pending_trigger_status=True)

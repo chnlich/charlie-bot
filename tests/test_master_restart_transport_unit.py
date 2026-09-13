@@ -36,6 +36,7 @@ from conftest import (
     mocked_callback_fields,
     patch_instructions_content,
     run_session_consumer,
+    user_event,
 )
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
@@ -441,8 +442,8 @@ async def test_identity_unresolved_option_keeps_live_record_clears_dead_one(
   session_mgr = SessionManager(cfg)
   live_meta = await session_mgr.create_session(CreateSessionRequest(name="live"), backend="gone")
   dead_meta = await session_mgr.create_session(CreateSessionRequest(name="dead"), backend="gone")
-  live_user = {"type": "user", "content": "live msg"}
-  dead_user = {"type": "user", "content": "dead msg"}
+  live_user = user_event("live msg")
+  dead_user = user_event("dead msg")
   await session_mgr.save_chat_event(live_meta.id, live_user)
   await session_mgr.save_chat_event(dead_meta.id, dead_user)
   started_at = datetime.now(UTC) - timedelta(seconds=60)

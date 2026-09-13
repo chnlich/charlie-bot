@@ -10,6 +10,7 @@ from conftest import (
     dump_yaml,
     make_scheduler_setup,
     read_chat_events,
+    user_event,
     write_cron_task,
 )
 from fastapi import FastAPI
@@ -100,14 +101,14 @@ async def test_delete_keeps_session_dir_and_history_and_unarchive_restores(tmp_p
   write_nightly_task(temp_home)
   session = await make_scheduled_session(session_mgr, "nightly")
   events_path = session_mgr.get_chat_events_path(session.id)
-  append_events(events_path, [{"type": "user", "content": "e0"}])
+  append_events(events_path, [user_event("e0")])
 
   with make_cron_sessions_client(cfg, session_mgr) as client:
     client.delete("/api/cron/tasks/nightly")
     restore = client.post(f"/api/sessions/{session.id}/unarchive")
 
   assert cfg.sessions_dir.joinpath(session.id).is_dir()
-  assert read_chat_events(tmp_path / "charliebot-home", session.id) == [{"type": "user", "content": "e0"}]
+  assert read_chat_events(tmp_path / "charliebot-home", session.id) == [user_event("e0")]
   assert restore.status_code == 200
   assert restore.json()["status"] == SessionStatus.ACTIVE
 

@@ -19,6 +19,7 @@ from conftest import (
     build_two_backend_cfg,
     make_home_session,
     patch_trigger_mocks,
+    user_event,
 )
 from conftest import append_events as _append_events
 from conftest import make_parent as _make_parent
@@ -105,10 +106,7 @@ async def _make_scheduled_parent(
     await mgr.save_metadata(parent)
   _append_events(
       mgr.get_chat_events_path(parent.id),
-      [{
-          "type": "user",
-          "content": f"e{i}"
-      } for i in range(events)],
+      [user_event(f"e{i}") for i in range(events)],
   )
   return parent
 
@@ -164,7 +162,7 @@ async def test_second_elone_of_ordinary_parent_overwrites_successor_and_leaves_f
   assert resolved is not None
   assert resolved.id == second_child.id
 
-  event = {"type": "user", "content": "delivered to newest"}
+  event = user_event("delivered to newest")
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     delivered = await mgr.deliver_to_successor(parent_id, event)
 
@@ -423,7 +421,7 @@ async def test_deliver_to_successor_writes_into_chain_end_and_stamps_origin(tmp_
   gen1 = await mgr.elone_session(gen0, event_index=0)
   gen2 = await mgr.elone_session(gen1.id, event_index=0)
 
-  event = {"type": "user", "content": "delivered"}
+  event = user_event("delivered")
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     delivered = await mgr.deliver_to_successor(gen0, event)
 
@@ -437,7 +435,7 @@ async def test_deliver_to_successor_leaves_origin_absent_for_no_successor(tmp_pa
   mgr = SessionManager(CharlieBotConfig(charliebot_home=tmp_path / "home"))
   gen0 = await _make_parent(mgr)
 
-  event = {"type": "user", "content": "no redirect"}
+  event = user_event("no redirect")
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     delivered = await mgr.deliver_to_successor(gen0, event)
 
@@ -455,7 +453,7 @@ async def test_deliver_to_successor_returns_none_and_writes_nothing_when_chain_e
   await mgr.delete_session_permanently(session.id)
   assert not mgr._session_dir(session.id).exists()
 
-  event = {"type": "user", "content": "must not land"}
+  event = user_event("must not land")
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     delivered = await mgr.deliver_to_successor(session.id, event)
 
@@ -484,7 +482,7 @@ async def test_deliver_to_successor_reresolves_when_successor_appears_between_re
       return meta
     return await real_read(session_id)
 
-  event = {"type": "user", "content": "lands in newest tail"}
+  event = user_event("lands in newest tail")
   with (
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
       patch.object(mgr, "read_metadata_fresh", side_effect=flaky_read),

@@ -8,9 +8,11 @@ from pathlib import Path
 import pytest
 from conftest import (
     OPUS_BACKEND_ID,
+    assistant_text_event,
     make_home_session,
     make_parent,
     recycle_archive_cutoff_events,
+    user_event,
 )
 from conftest import append_events as _append_events
 from conftest import archive_cutoff_events as _archive_cutoff_events
@@ -36,7 +38,7 @@ async def test_fork_session_writes_truncated_reference_and_live_banner(tmp_path:
   mgr = SessionManager(cfg)
   parent = await make_parent(mgr)
   # A third event past the fork point proves the reference truncates there.
-  _append_events(mgr.get_chat_events_path(parent), [{"type": "user", "content": "e2"}])
+  _append_events(mgr.get_chat_events_path(parent), [user_event("e2")])
 
   child = await mgr.fork_session(parent, event_index=1)
 
@@ -57,7 +59,7 @@ async def test_partial_reference_from_warm_cache_strips_in_memory_event_index(tm
   mgr = SessionManager(cfg)
   parent = await make_parent(mgr)
   for content in ["w0", "w1"]:
-    await mgr.persist_and_broadcast(parent, {"type": "user", "content": content})
+    await mgr.persist_and_broadcast(parent, user_event(content))
 
   child = await mgr.fork_session(parent, event_index=2)
 
@@ -132,7 +134,7 @@ async def test_fork_session_full_reference_rejects_corrupt_line(tmp_path: Path) 
   mgr = SessionManager(cfg)
   parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend=OPUS_BACKEND_ID)
   events_path = mgr.get_chat_events_path(parent.id)
-  _append_events(events_path, [{"type": "user", "content": "ok"}])
+  _append_events(events_path, [user_event("ok")])
   with open(events_path, "a", encoding="utf-8") as f:
     f.write("{truncated\n")
 
@@ -148,21 +150,21 @@ async def test_fork_reference_keeps_utf8_parity_on_non_ascii_and_undecodable_byt
   mgr = SessionManager(cfg)
   parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend=OPUS_BACKEND_ID)
   events_path = mgr.get_chat_events_path(parent.id)
-  _append_events(events_path, [{"type": "user", "content": "ok"}])
+  _append_events(events_path, [user_event("ok")])
   # A non-ASCII but valid line rides the decode branch (the isascii() proof
   # answers only for ASCII corpora); the reference copies its raw bytes.
-  non_ascii = json.dumps({"type": "user", "content": "中文"}, ensure_ascii=False)
+  non_ascii = json.dumps(user_event("中文"), ensure_ascii=False)
   with open(events_path, "a", encoding="utf-8") as f:
     f.write(non_ascii + "\n")
 
   child = await mgr.fork_session(parent.id)
-  expected = json.dumps({"type": "user", "content": "ok"}) + "\n" + non_ascii + "\n"
+  expected = json.dumps(user_event("ok")) + "\n" + non_ascii + "\n"
   assert _reference_path(mgr, child.id).read_text(encoding="utf-8") == expected
 
   # Undecodable bytes raise at fork time, as the text-mode read did, and the
   # failed fork writes no reference.
   other = await mgr.create_session(CreateSessionRequest(name="Other"), backend=OPUS_BACKEND_ID)
-  _append_events(mgr.get_chat_events_path(other.id), [{"type": "user", "content": "ok"}])
+  _append_events(mgr.get_chat_events_path(other.id), [user_event("ok")])
   with open(mgr.get_chat_events_path(other.id), "ab") as f:
     f.write(b"\xff\xfe\n")
   references_before = set(cfg.sessions_dir.glob("*/data/parent_reference.jsonl"))
@@ -183,7 +185,7 @@ async def test_reference_handoff_errors_write_no_reference(tmp_path: Path) -> No
   assert not list(cfg.sessions_dir.glob("*/data/parent_reference.jsonl"))
 
   parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend=OPUS_BACKEND_ID)
-  _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "only"}])
+  _append_events(mgr.get_chat_events_path(parent.id), [user_event("only")])
 
   with pytest.raises(ValueError, match="out of range"):
     await mgr.elone_session(parent.id, event_index=1)
@@ -201,27 +203,10 @@ async def test_reference_bootstraps_are_not_divider_recap_asks(tmp_path: Path) -
   _append_events(
       mgr.get_chat_events_path(session.id),
       [
-          {
-              "type": "user",
-              "content": "This session continues a prior conversation.\n\nbootstrap",
-          },
-          {
-              "type": "user",
-              "content": "You're taking over because the user wasn't satisfied with the previous session. bootstrap",
-          },
-          {
-              "type": "user",
-              "content": "real ask",
-          },
-          {
-              "type": "assistant",
-              "message": {
-                  "content": [{
-                      "type": "text",
-                      "text": "real answer",
-                  }]
-              },
-          },
+          user_event("This session continues a prior conversation.\n\nbootstrap"),
+          user_event("You're taking over because the user wasn't satisfied with the previous session. bootstrap"),
+          user_event("real ask"),
+          assistant_text_event("real answer"),
       ],
   )
 

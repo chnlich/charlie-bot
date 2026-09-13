@@ -69,31 +69,18 @@ def test_model_optional_only_for_routing_types(cls: type[BackendBase]) -> None:
       BACKEND_OPTION_ADAPTER.validate_python(payload)
 
 
-def test_charlie_code_image_input_accepted_and_defaults_false() -> None:
-  """image_input is a charlie-code-only option: accepted on its entries, defaulting to false."""
+@pytest.mark.parametrize(
+    ("field", "default", "explicit"),
+    [("image_input", False, True), ("stream", True, False), ("timeout_seconds", None, 600)],
+    ids=["image_input", "stream", "timeout_seconds"],
+)
+def test_charlie_code_only_option_defaults_then_accepts_explicit(field: str, default: object, explicit: object) -> None:
+  """A charlie-code-only option defaults on a minimal entry and keeps one explicitly set value."""
   payload = minimal_payload(CharlieCodeBackend)
-  assert BACKEND_OPTION_ADAPTER.validate_python(payload).image_input is False
-  accepted = BACKEND_OPTION_ADAPTER.validate_python({**payload, "image_input": True})
-  assert accepted.image_input is True
+  assert getattr(BACKEND_OPTION_ADAPTER.validate_python(payload), field) is default
+  accepted = BACKEND_OPTION_ADAPTER.validate_python({**payload, field: explicit})
   assert type(accepted) is CharlieCodeBackend
-
-
-def test_charlie_code_stream_defaults_true_and_accepts_false() -> None:
-  """stream is a charlie-code-only option: accepted on its entries, defaulting to true."""
-  payload = minimal_payload(CharlieCodeBackend)
-  assert BACKEND_OPTION_ADAPTER.validate_python(payload).stream is True
-  opted_out = BACKEND_OPTION_ADAPTER.validate_python({**payload, "stream": False})
-  assert opted_out.stream is False
-  assert type(opted_out) is CharlieCodeBackend
-
-
-def test_charlie_code_timeout_seconds_defaults_none_and_accepts_positive() -> None:
-  """timeout_seconds follows context_window's shape: None by default, positive ints accepted."""
-  payload = minimal_payload(CharlieCodeBackend)
-  assert BACKEND_OPTION_ADAPTER.validate_python(payload).timeout_seconds is None
-  accepted = BACKEND_OPTION_ADAPTER.validate_python({**payload, "timeout_seconds": 600})
-  assert accepted.timeout_seconds == 600
-  assert type(accepted) is CharlieCodeBackend
+  assert getattr(accepted, field) == explicit
 
 
 @pytest.mark.parametrize("bad", [0, -1])

@@ -929,3 +929,21 @@ function copyCode(btn) {
     setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
   });
 }
+
+// highlight.js compiles each grammar on first use — ~100 ms across the pinned
+// 36-language common build — and the cost lands inside the first paint that
+// highlights code (a streamed turn's paint, or a committed render's highlight
+// flush). One idle auto-highlight over a prose-plus-fence snippet makes the
+// scorer compile the grammars chat content exercises (prose, fenced code) in
+// one pass, off the render path; a real block then pays only its own scoring.
+// Idle-callback scheduling only: a setTimeout fallback would land this warm in
+// the same timer queue the deferred highlight flush drives, and environments
+// without requestIdleCallback (the render-test vm harnesses) keep today's
+// compile-on-first-block behavior.
+(function warmHighlighterAtIdle() {
+  if (typeof hljs === 'undefined' || typeof hljs.highlightAuto !== 'function') return;
+  if (typeof requestIdleCallback !== 'function') return;
+  requestIdleCallback(function() {
+    hljs.highlightAuto('Some prose line here.\n\n```\nconst x = 1;\n```\n\nMore prose follows.\n');
+  }, { timeout: 2000 });
+})();

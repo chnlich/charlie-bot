@@ -29,6 +29,19 @@ def sha256_hex(data: bytes) -> str:
   return hashlib.sha256(data).hexdigest()
 
 
+def system_prompt_fingerprints(editor_system: str, reviewer_system: str) -> dict[str, str]:
+  """Each stage's system prompt as a sha256 over its UTF-8 bytes, under the record's role keys.
+
+  One recipe for every site that writes or recomputes these digests (the run record, the
+  comparison's verification, the experiment record): the recorded and recomputed dicts must
+  stay byte-identical, or archived bundles verify as mismatched.
+  """
+  return {
+      "editor": sha256_hex(editor_system.encode("utf-8")),
+      "reviewer": sha256_hex(reviewer_system.encode("utf-8")),
+  }
+
+
 def input_identity(
     *,
     manifest: Manifest,

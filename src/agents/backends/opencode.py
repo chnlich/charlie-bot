@@ -14,6 +14,7 @@ import orjson
 import structlog
 
 from src.agents.backends.base import (
+    IMAGE_MIME_BY_EXT,
     SKIP_PERMISSIONS_FLAG,
     AgentBackend,
     _write_chunk,
@@ -91,30 +92,20 @@ _UNHANDLED_PART_TYPES = WarnOnceRegistry()
 # type re-fires once per unhandled frame.
 _UNHANDLED_SSE_EVENT_TYPES = WarnOnceRegistry()
 
-# Filename-extension → MIME map for prompt file parts. Image-only: other
-# attachment kinds never produce file parts and keep riding the message's
-# path text.
-_IMAGE_MIME_BY_EXT = {
-    "png": "image/png",
-    "jpg": "image/jpeg",
-    "jpeg": "image/jpeg",
-    "gif": "image/gif",
-    "webp": "image/webp",
-}
-
 
 def _image_file_parts(uploaded_files: list[dict] | None) -> list[dict]:
   """One OpenCode file part per readable image attachment, in reference order.
 
-  The mime comes from the filename extension via ``_IMAGE_MIME_BY_EXT``; the
+  The mime comes from the filename extension via ``IMAGE_MIME_BY_EXT``; the
   payload is the file's bytes as a ``data:`` URL. A non-image reference is
-  skipped silently, and a missing or unreadable image file is skipped with one
+  skipped silently and keeps riding the task text's [Attached files] path
+  list, and a missing or unreadable image file is skipped with one
   ``log.warning`` — a broken attachment never fails the turn.
   """
   parts: list[dict] = []
   for ref in uploaded_files or []:
     filename = str(ref.get("filename", ""))
-    mime = _IMAGE_MIME_BY_EXT.get(filename.rsplit(".", 1)[-1].lower())
+    mime = IMAGE_MIME_BY_EXT.get(filename.rsplit(".", 1)[-1].lower())
     if mime is None:
       continue
     path = str(ref.get("path", ""))

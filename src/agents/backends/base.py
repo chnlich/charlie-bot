@@ -98,6 +98,18 @@ async def _capture_proc_diagnostics(pid: int) -> dict:
 # finds there must also be on the spawned CLI's PATH.
 USER_LOCAL_BIN = str(Path.home() / ".local" / "bin")
 
+# The attachment extensions the CLI backends accept as image attachments:
+# opencode turns each mapped ref into a file part, charlie-code passes a
+# --image flag. One shared map so the two backends cannot disagree about
+# which uploaded refs reach the model.
+IMAGE_MIME_BY_EXT = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+}
+
 
 def resolve_binary(name: str, fallback_dir: str) -> str:
   """Resolve a CLI binary by name, falling back to a directory path.

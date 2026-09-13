@@ -33,10 +33,10 @@ from src.core.improve_command import (
     save_loop_state,
     stop_improve_loop,
 )
-from src.core.models import SpawnRequest, ThreadStatus
+from src.core.models import SessionMetadata, SpawnRequest, ThreadStatus
 
 
-def _make_cfg(tmp_path: Path):
+def _make_cfg(tmp_path: Path) -> MagicMock:
   """Create a minimal config-like object with session and worktree directories."""
   cfg = MagicMock()
   cfg.sessions_dir = tmp_path / "sessions"
@@ -344,7 +344,7 @@ class _FakeImproveSessionManager:
   def __init__(self) -> None:
     self.persisted_events: list[dict] = []
 
-  async def get_session(self, session: str):
+  async def get_session(self, session: str) -> MagicMock:
     return MagicMock(id=session, name="Improve", backend="codex-o3")
 
   async def persist_and_broadcast(self, session: str, event: dict) -> None:
@@ -365,7 +365,7 @@ class _FakeImproveThreadManager:
     self._statuses = statuses
     self._threads: dict[str, Any] = {}
 
-  async def create_thread(self, meta, description: str, require_review: bool = False):
+  async def create_thread(self, meta: SessionMetadata, description: str, require_review: bool = False) -> MagicMock:
     del meta, require_review
     thread_id = f"thread-{len(self._threads) + 1}"
     events_path = self._tmp_path / f"{thread_id}.jsonl"
@@ -375,7 +375,7 @@ class _FakeImproveThreadManager:
     self._threads[thread_id] = thread
     return thread
 
-  async def get_thread(self, session: str, thread_id: str):
+  async def get_thread(self, session: str, thread_id: str) -> MagicMock:
     del session
     thread = self._threads[thread_id]
     thread.status = self._statuses[thread_id]
@@ -415,7 +415,7 @@ def _capture_descriptions(
   """
   descriptions: list[str] = []
 
-  async def capturing_spawn_worker(*args, **kwargs) -> None:
+  async def capturing_spawn_worker(*args: Any, **kwargs: Any) -> None:
     request = kwargs["request"]
     assert isinstance(request, SpawnRequest)
     descriptions.append(args[1])
@@ -430,12 +430,12 @@ def _patch_improve_loop_io(monkeypatch: pytest.MonkeyPatch) -> tuple[list[SpawnR
   spawn_requests: list[SpawnRequest] = []
   triggered_payloads: list[dict] = []
 
-  async def fake_spawn_worker(*args, **kwargs) -> None:
+  async def fake_spawn_worker(*args: Any, **kwargs: Any) -> None:
     request = kwargs["request"]
     assert isinstance(request, SpawnRequest)
     spawn_requests.append(request)
 
-  async def fake_trigger_master(session: str, summary: str, _cfg, _session_mgr) -> None:
+  async def fake_trigger_master(session: str, summary: str, _cfg: Any, _session_mgr: Any) -> None:
     del session, _cfg, _session_mgr
     triggered_payloads.append(json.loads(summary))
 
@@ -585,7 +585,7 @@ async def test_run_improve_loop_fails_when_session_missing(tmp_path: Path, monke
 
   class MissingOnSecondIteration(_FakeImproveSessionManager):
 
-    async def get_session(self, session: str):
+    async def get_session(self, session: str) -> MagicMock | None:
       get_session_count["n"] += 1
       if get_session_count["n"] >= 2:
         return None
@@ -683,7 +683,7 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
 
   class FakeSessionManager:
 
-    async def get_session(self, session: str):
+    async def get_session(self, session: str) -> MagicMock:
       return MagicMock(id=session, name="Pinned", backend=OPUS_BACKEND_ID)
 
     async def persist_and_broadcast(self, session: str, event: dict) -> None:
@@ -696,14 +696,14 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
 
   class FakeThreadManager:
 
-    async def create_thread(self, meta, description: str, require_review: bool = False):
+    async def create_thread(self, meta: SessionMetadata, description: str, require_review: bool = False) -> MagicMock:
       del meta, require_review
       thread_id = f"thread-{len(thread_store) + 1}"
       thread = MagicMock(id=thread_id, description=description, branch_name=None, status=None)
       thread_store[thread_id] = thread
       return thread
 
-    async def get_thread(self, session: str, thread_id: str):
+    async def get_thread(self, session: str, thread_id: str) -> MagicMock:
       del session
       thread = thread_store[thread_id]
       thread.status = MagicMock(value="completed")
@@ -713,14 +713,14 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
       del session, thread_id
       return tmp_path / "events.jsonl"
 
-  async def fake_spawn_worker(*args, **kwargs) -> None:
+  async def fake_spawn_worker(*args: Any, **kwargs: Any) -> None:
     request = kwargs["request"]
     assert isinstance(request, SpawnRequest)
     spawn_requests.append(request)
     thread_id = kwargs["thread_id"] if "thread_id" in kwargs else args[2]
     thread_store[thread_id].branch_name = f"branch-{len(spawn_requests)}"
 
-  async def fake_trigger_master(session: str, summary: str, _cfg, _session_mgr) -> None:
+  async def fake_trigger_master(session: str, summary: str, _cfg: Any, _session_mgr: Any) -> None:
     del session, summary, _cfg, _session_mgr
 
   monkeypatch.setattr(SPAWNER_SPAWN_WORKER_PATCH_TARGET, fake_spawn_worker)

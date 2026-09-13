@@ -3,6 +3,7 @@
 import dataclasses
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -30,7 +31,7 @@ from src.core import claude_accounts, claude_relay
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.message_aggregator import MessageAggregator
-from src.core.models import SessionMetadata
+from src.core.models import BackendOption, SessionCallbacks, SessionMetadata
 
 NOW = datetime(2026, 9, 6, 20, 0, tzinfo=UTC)
 UUID = "uuid-relay-1"
@@ -46,7 +47,7 @@ def _assistant(text: str) -> dict:
   return {"type": ET.ASSISTANT, "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
 
 
-def _install_backends(monkeypatch, backends: list[ScriptedRelayBackend]) -> list[dict]:
+def _install_backends(monkeypatch: pytest.MonkeyPatch, backends: list[ScriptedRelayBackend]) -> list[dict]:
   # The master-cc run path re-imports build_backend through the registry on
   # every call, so the patch lands there; the instructions builder is stubbed
   # with it because _run_cc builds instructions before the first backend build.
@@ -59,7 +60,7 @@ def _session_on(label: str | None, cc_session_id: str | None = UUID) -> SessionM
   return SessionMetadata(id="s1", name="t", backend=POOLED_FABLE_ID, cc_session_id=cc_session_id, claude_account=label)
 
 
-def _events_of(callbacks, event_type: str) -> list[dict]:
+def _events_of(callbacks: SessionCallbacks, event_type: str) -> list[dict]:
   return [
       call.args[1] for call in callbacks.persist_and_broadcast.await_args_list if call.args[1].get("type") == event_type
   ]
@@ -208,7 +209,8 @@ def test_relay_watch_reports_a_login_failure_from_text_or_stderr() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_cc_relays_a_rejected_turn_onto_another_account(tmp_path: Path, monkeypatch) -> None:
+async def test_run_cc_relays_a_rejected_turn_onto_another_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
@@ -234,7 +236,8 @@ async def test_run_cc_relays_a_rejected_turn_onto_another_account(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_run_cc_terminates_at_the_safe_point_after_a_warning_and_relays(tmp_path: Path, monkeypatch) -> None:
+async def test_run_cc_terminates_at_the_safe_point_after_a_warning_and_relays(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
@@ -258,7 +261,7 @@ async def test_run_cc_terminates_at_the_safe_point_after_a_warning_and_relays(tm
 
 
 @pytest.mark.asyncio
-async def test_run_cc_reports_loudly_when_no_account_is_left(tmp_path: Path, monkeypatch) -> None:
+async def test_run_cc_reports_loudly_when_no_account_is_left(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path)
   write_pool_credentials(tmp_path / "claude-ext-1", access_token="")
   write_pool_credentials(tmp_path / "claude-ext-2", access_token="")
@@ -282,7 +285,7 @@ async def test_run_cc_reports_loudly_when_no_account_is_left(tmp_path: Path, mon
 
 
 @pytest.mark.asyncio
-async def test_run_cc_stops_after_the_relay_limit(tmp_path: Path, monkeypatch) -> None:
+async def test_run_cc_stops_after_the_relay_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path, labels=("main", "a", "b", "c", "d"))
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
@@ -302,7 +305,7 @@ async def test_run_cc_stops_after_the_relay_limit(tmp_path: Path, monkeypatch) -
 
 
 @pytest.mark.asyncio
-async def test_run_cc_marks_a_login_failure_and_relays(tmp_path: Path, monkeypatch) -> None:
+async def test_run_cc_marks_a_login_failure_and_relays(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
@@ -338,13 +341,13 @@ async def test_run_cc_marks_a_login_failure_and_relays(tmp_path: Path, monkeypat
 )
 @pytest.mark.asyncio
 async def test_run_cc_compacts_with_sonnet_before_spawning_on_an_expired_cache(
-    tmp_path: Path, monkeypatch, context_tokens: int, minutes_since: int, compacted: bool) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, context_tokens: int, minutes_since: int, compacted: bool) -> None:
   cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   order: list[str] = []
 
-  async def fake_compact(**kwargs):
+  async def fake_compact(**kwargs: Any) -> bool:
     order.append(f"compact:{Path(kwargs['config_dir']).name}:{kwargs['pre_tokens']}")
     return True
 
@@ -352,7 +355,7 @@ async def test_run_cc_compacts_with_sonnet_before_spawning_on_an_expired_cache(
   backend = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   builds: list[dict] = []
 
-  def fake_build_backend(option, cfg_, **kwargs):
+  def fake_build_backend(option: BackendOption, cfg_: CharlieBotConfig, **kwargs: Any) -> ScriptedRelayBackend:
     order.append("spawn")
     builds.append({"claude_account": kwargs["claude_account"]})
     return backend
@@ -375,13 +378,14 @@ async def test_run_cc_compacts_with_sonnet_before_spawning_on_an_expired_cache(
 
 
 @pytest.mark.asyncio
-async def test_run_cc_relay_compacts_a_large_fable_context_on_the_new_account(tmp_path: Path, monkeypatch) -> None:
+async def test_run_cc_relay_compacts_a_large_fable_context_on_the_new_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   compactions: list[tuple[str, int | None]] = []
 
-  async def fake_compact(**kwargs):
+  async def fake_compact(**kwargs: Any) -> bool:
     compactions.append((Path(kwargs["config_dir"]).name, kwargs["pre_tokens"]))
     return True
 
@@ -401,7 +405,8 @@ async def test_run_cc_relay_compacts_a_large_fable_context_on_the_new_account(tm
 
 
 @pytest.mark.asyncio
-async def test_run_cc_without_a_pool_spawns_the_option_unchanged(tmp_path: Path, monkeypatch) -> None:
+async def test_run_cc_without_a_pool_spawns_the_option_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "login"))
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
@@ -446,7 +451,8 @@ def test_login_required_renders_account_free_in_chat() -> None:
   assert "usage panel" in message["content"]
 
 
-def test_usage_panel_entry_carries_the_login_directory_while_unhealthy(tmp_path: Path, monkeypatch) -> None:
+def test_usage_panel_entry_carries_the_login_directory_while_unhealthy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path)
   monkeypatch.setattr(ext_usage_mod, "get_config", lambda: cfg)
   monkeypatch.setattr(ext_usage_mod, "_cached_usage", {"claude:ext-1": {"provider": "claude", "account": "ext-1"}})

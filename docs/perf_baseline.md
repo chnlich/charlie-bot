@@ -3174,8 +3174,7 @@ home = work / "home"
 (home / "config.yaml").write_text("", encoding="utf-8")
 os.environ["CHARLIEBOT_HOME"] = str(home)
 
-core_config._config = None
-core_config._config_mtime = 0.0
+core_config._config_cache.reset()
 cached = core_config.get_config()  # seed: the running server's last-good config; not timed
 
 (home / "config.yaml").write_text("unknown_m53_key: 1\n", encoding="utf-8")

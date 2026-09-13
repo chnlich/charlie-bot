@@ -1,16 +1,8 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const test = require('node:test');
-const { loadRendererContext } = require('./marked_renderer_harness');
+const { loadRendererContext, paint } = require('./marked_renderer_harness');
 const { LIVE_CHAT_ROOT, largestAssistantDraft } = require('./stream_collector_common');
-
-// The streaming paint path, exactly as usage.js's paintStreamDraft drives it.
-function paint(context, draft) {
-  context.streamPaintCodeTokens = [];
-  const html = context.parseStreamDraft(context.fixNestedFences(draft));
-  context.streamPaintCodeTokens = null;
-  return html;
-}
 
 // The pre-incremental streaming render: lex the whole draft, record the code
 // tokens, render — the behavior the incremental parse must reproduce byte for

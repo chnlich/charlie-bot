@@ -132,6 +132,16 @@ def _padded_opencode_row(pad: int) -> tuple[dict, str, str]:
   return ({"input": 100, "output": 2, "cache": {"read": 0, "write": 0}, "pad": "x" * pad}, "oc-m", "prov")
 
 
+def _step_finish_tokens() -> dict:
+  """The step-finish upsert's token bundle: input 100 / output 2 (total 102)."""
+  return {"input": 100, "output": 2, "cache": {"read": 0, "write": 0}}
+
+
+def _step_finish_record() -> dict:
+  """The step-finish upsert's message.data record, carrying _step_finish_tokens."""
+  return {"role": "assistant", "modelID": "oc-m", "providerID": "prov", "tokens": _step_finish_tokens()}
+
+
 def _spy_row_blobs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
   """Install a blob-read spy on tt._opencode_row_data; returns the projected blobs."""
   projected: list[str] = []
@@ -861,20 +871,9 @@ def test_opencode_row_memo_tracks_in_place_update(tmp_path: Path) -> None:
 
   con = sqlite3.connect(db)
   mid, = con.execute("select id from message").fetchone()
-  data = {
-      "role": "assistant",
-      "modelID": "oc-m",
-      "providerID": "prov",
-      "tokens": {
-          "input": 100,
-          "output": 2,
-          "cache": {
-              "read": 0,
-              "write": 0
-          }
-      }
-  }
-  con.execute("update message set data = ?, time_updated = time_updated + 1 where id = ?", (json.dumps(data), mid))
+  con.execute(
+      "update message set data = ?, time_updated = time_updated + 1 where id = ?",
+      (json.dumps(_step_finish_record()), mid))
   con.commit()
   con.close()
 
@@ -897,7 +896,7 @@ def test_opencode_cache_invalidates_on_wal_write(tmp_path: Path) -> None:
   before = _row(_collect(None, None, db, cache), "opencode", "oc-m")
 
   main_sig = (db.stat().st_mtime_ns, db.stat().st_size)
-  _insert_opencode_raw(con, [({}, ({"input": 100, "output": 2, "cache": {"read": 0, "write": 0}}, "oc-m", "prov"))])
+  _insert_opencode_raw(con, [({}, (_step_finish_tokens(), "oc-m", "prov"))])
   con.commit()
   assert (db.stat().st_mtime_ns, db.stat().st_size) == main_sig
 
@@ -1476,21 +1475,8 @@ def test_restart_cold_recounts_only_moved_rows(tmp_path: Path, monkeypatch: pyte
   _insert_opencode_raw(con, [({}, _padded_opencode_row(500))])
   mid, = con.execute("select id from message where data not like '%pad%'").fetchone()
   con.execute(
-      "update message set data = ?, time_updated = time_updated + 1 where id = ?", (
-          json.dumps(
-              {
-                  "role": "assistant",
-                  "modelID": "oc-m",
-                  "providerID": "prov",
-                  "tokens": {
-                      "input": 100,
-                      "output": 2,
-                      "cache": {
-                          "read": 0,
-                          "write": 0
-                      }
-                  }
-              }), mid))
+      "update message set data = ?, time_updated = time_updated + 1 where id = ?",
+      (json.dumps(_step_finish_record()), mid))
   con.commit()
 
   projected = _spy_row_blobs(monkeypatch)

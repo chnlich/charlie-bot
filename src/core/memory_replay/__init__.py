@@ -12,10 +12,9 @@ manifest, and the only writes go to the requested output root.
 from src.core.memory_replay.compare import CompareOptions, run_comparison
 from src.core.memory_replay.errors import ReplayError
 from src.core.memory_replay.experiment import ExperimentOutcome, run_experiment
-from src.core.memory_replay.runner import MODES, ReplayOptions, run_replay
+from src.core.memory_replay.runner import ReplayOptions, run_replay
 
 __all__ = [
-    "MODES",
     "CompareOptions",
     "ExperimentOutcome",
     "ReplayError",

@@ -15,7 +15,6 @@ import pytest
 import test_memory_replay as base
 import yaml
 
-from src.core.config import CharlieBotConfig
 from src.core.memory_replay import (
     CompareOptions,
     ExperimentOutcome,
@@ -279,10 +278,6 @@ class VariantScriptedTransport:
     return TransportResult(text=text, model="fake-model", prompt_tokens=100, output_tokens=42, latency_ms=5)
 
 
-def replay_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return base.replay_cfg(tmp_path)
-
-
 def run_variant(
     tmp_path: Path,
     variant: str,
@@ -300,7 +295,7 @@ def run_variant(
           output_dir=output_dir or tmp_path / "out",
           backend="fake-clc",
           mode="editor-review"),
-      cfg=replay_cfg(tmp_path),
+      cfg=base.replay_cfg(tmp_path),
       transport_factory=lambda: transport,
       contract=contract)
   return outcome, transport
@@ -311,10 +306,6 @@ def run_variant_expect_failure(tmp_path: Path, variant: str, *, transport, outpu
   with pytest.raises(ReplayError, match=match):
     run_variant(tmp_path, variant, transport=transport, output_dir=output_dir)
   return base.run_record(next(iter((output_dir / "runs").iterdir())))
-
-
-def payload_of(request_text: str) -> dict:
-  return base.evidence_payload(request_text)
 
 
 def stage_calls(transport: VariantScriptedTransport, stage: str) -> list[dict]:
@@ -417,8 +408,8 @@ def test_single_interventions_change_only_their_declared_dimension(tmp_path: Pat
   assert raw_editors[0] == raw_editors[1] == raw_editors[2]
   selected_editors = [requests["approved-edit-feedback"]["editor"], requests["combined-proposed-design"]["editor"]]
   assert selected_editors[0] == selected_editors[1]
-  raw_payload = payload_of(raw_editors[0])
-  selected_payload = payload_of(selected_editors[0])
+  raw_payload = base.evidence_payload(raw_editors[0])
+  selected_payload = base.evidence_payload(selected_editors[0])
   assert "feedback_history" in raw_payload and "feedback" not in raw_payload
   assert "feedback" in selected_payload and "feedback_history" not in selected_payload
   assert {row["comment_event"] for row in raw_payload["feedback_history"]} == {"fb-001", "fb-002", "fb-003", "fb-004"}
@@ -440,8 +431,8 @@ def test_single_interventions_change_only_their_declared_dimension(tmp_path: Pat
   assert requests["baseline-original-flow"]["editor"] == requests["rationale-hidden-review"]["editor"]
   assert variants.resolve_variant("baseline-original-flow").editor_system == variants.resolve_variant(
       "rationale-hidden-review").editor_system
-  visible_payload = payload_of(requests["baseline-original-flow"]["reviewer"])
-  hidden_payload = payload_of(requests["rationale-hidden-review"]["reviewer"])
+  visible_payload = base.evidence_payload(requests["baseline-original-flow"]["reviewer"])
+  hidden_payload = base.evidence_payload(requests["rationale-hidden-review"]["reviewer"])
   assert "dispositions" in visible_payload["editor_proposals"]
   assert set(hidden_payload["editor_proposals"]) == {"entries"}
   assert visible_payload["editor_proposals"]["entries"] == hidden_payload["editor_proposals"]["entries"]
@@ -466,8 +457,8 @@ def test_single_interventions_change_only_their_declared_dimension(tmp_path: Pat
   assert whole_contract.parse_editor_output is visible_contract.parse_editor_output
 
   # combined: hidden rationale (like variant 2) over the selected feedback view (like variant 4).
-  combined_payload = payload_of(requests["combined-proposed-design"]["reviewer"])
-  selected_reviewer_payload = payload_of(requests["approved-edit-feedback"]["reviewer"])
+  combined_payload = base.evidence_payload(requests["combined-proposed-design"]["reviewer"])
+  selected_reviewer_payload = base.evidence_payload(requests["approved-edit-feedback"]["reviewer"])
   assert set(combined_payload["editor_proposals"]) == {"entries"}
   assert set(combined_payload) - {"editor_proposals"} == set(selected_reviewer_payload) - {"editor_proposals"}, (
       "the combined reviewer's evidence is the selected view, identical to variant 4's")
@@ -588,7 +579,7 @@ def test_hidden_rationale_excludes_proofs_from_the_initial_and_repair_requests(t
     assert '"dispositions"' not in request, (
         f"{call['request_file']} (initial or repair) must not carry the withheld handoff")
     if call["attempt"] == 2:
-      payload = payload_of(repair_original_request(request))
+      payload = base.evidence_payload(repair_original_request(request))
       assert "feedback_history" in payload and "feedback" not in payload, (
           "the repair request carries the same raw-history view the initial request carried")
 
@@ -607,7 +598,7 @@ def test_combined_editor_writes_the_shared_proofs_and_hides_them_from_review(tmp
   reviewer_request = transport.calls[1]["user"]
   for proof in PROOFS.values():
     assert proof not in reviewer_request, "the combined review receives none of the author's rationale"
-  payload = payload_of(reviewer_request)
+  payload = base.evidence_payload(reviewer_request)
   assert set(payload["editor_proposals"]) == {"entries"}
   assert "feedback" in payload and "feedback_history" not in payload
 
@@ -696,7 +687,7 @@ def test_report_rationale_claim_matches_what_the_reviewer_request_carried(tmp_pa
         manifest_path=write_manifest(tmp_path, name=f"{name}.yaml"),
         output_dir=tmp_path / f"out-{name}")
     reports[name] = (outcome.run_dir / "report.html").read_text(encoding="utf-8")
-    reviewer_payloads[name] = payload_of(transport.calls[1]["user"])
+    reviewer_payloads[name] = base.evidence_payload(transport.calls[1]["user"])
 
   # Request evidence: the baseline reviewer request carried the handoff — disposition rows with
   # the three proofs — while the hidden variant's carried the proposed entries only.
@@ -717,7 +708,7 @@ def test_raw_history_report_renders_the_pool_it_provided_not_the_selected_view(t
   transport = VariantScriptedTransport(**COMPLETE_RESPONSES)
   outcome, _ = run_variant(tmp_path, "baseline-original-flow", transport=transport)
   report = (outcome.run_dir / "report.html").read_text(encoding="utf-8")
-  pool = payload_of(transport.calls[0]["user"])["feedback_history"]
+  pool = base.evidence_payload(transport.calls[0]["user"])["feedback_history"]
 
   # The raw view exposed the whole pool: the report renders exactly the comments the request
   # carried, with their provenance ids, the unselected one included.
@@ -744,7 +735,7 @@ def test_selected_view_report_renders_exactly_the_provided_selection(tmp_path: P
   transport = VariantScriptedTransport(**COMPLETE_RESPONSES)
   outcome, _ = run_variant(tmp_path, "approved-edit-feedback", transport=transport)
   report = (outcome.run_dir / "report.html").read_text(encoding="utf-8")
-  provided = {row["comment_event"]: row for row in payload_of(transport.calls[0]["user"])["feedback"]}
+  provided = {row["comment_event"]: row for row in base.evidence_payload(transport.calls[0]["user"])["feedback"]}
   assert set(provided) == {"fb-001", "fb-003", "fb-004"}, "the relevance selection, not the pool"
 
   assert "Selected feedback (3)" in report
@@ -1030,9 +1021,10 @@ def test_repair_requests_carry_the_same_feedback_view_as_the_initial_request(
   assert record["status"] == "completed"
   editor_stage_calls = [call for call in record["calls"] if call["role"] == "editor"]
   assert len(editor_stage_calls) == 2
-  initial_payload = payload_of((outcome.run_dir / editor_stage_calls[0]["request_file"]).read_text(encoding="utf-8"))
+  initial_payload = base.evidence_payload(
+      (outcome.run_dir / editor_stage_calls[0]["request_file"]).read_text(encoding="utf-8"))
   repair_text = (outcome.run_dir / editor_stage_calls[1]["request_file"]).read_text(encoding="utf-8")
-  repair_payload = payload_of(repair_original_request(repair_text))
+  repair_payload = base.evidence_payload(repair_original_request(repair_text))
   other = "feedback" if view_key == "feedback_history" else "feedback_history"
   for payload in (initial_payload, repair_payload):
     assert view_key in payload and other not in payload
@@ -1042,7 +1034,7 @@ def test_repair_requests_carry_the_same_feedback_view_as_the_initial_request(
 def test_selected_view_renders_missing_and_empty_approved_sides_honestly(tmp_path: Path) -> None:
   transport = VariantScriptedTransport(editor_response=SELECTOR_EDITOR_RESPONSE, reviewer_response=TRIM_ACCEPT_RESPONSE)
   run_variant(tmp_path, "approved-edit-feedback", transport=transport)
-  payload = payload_of(transport.calls[0]["user"])
+  payload = base.evidence_payload(transport.calls[0]["user"])
   by_event = {row["comment_event"]: row for row in payload["feedback"]}
   assert by_event["fb-004"][
       "approved_change"] is None, "a selected comment without an approved revision stays without one"
@@ -1102,10 +1094,6 @@ def test_registry_resolves_names_and_rejects_unknown_ones() -> None:
 COMPLETE_RESPONSES = dict(editor_response=SELECTOR_EDITOR_RESPONSE, reviewer_response=TRIM_ACCEPT_RESPONSE)
 
 
-def experiment_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return replay_cfg(tmp_path)
-
-
 def run_scripted_experiment(
     tmp_path: Path,
     manifests: list[Path],
@@ -1116,7 +1104,7 @@ def run_scripted_experiment(
   """One experiment run over the scripted transport: fake-clc backend on the tmp replay config."""
   return run_experiment(
       ExperimentOptions(manifests=manifests, output_dir=output_dir, backend="fake-clc", variants=variants),
-      cfg=experiment_cfg(tmp_path),
+      cfg=base.replay_cfg(tmp_path),
       transport_factory=transport_factory)
 
 
@@ -1327,12 +1315,12 @@ def test_experiment_rejects_unknown_variants_and_duplicate_case_ids(tmp_path: Pa
     run_experiment(
         ExperimentOptions(
             manifests=[manifest], output_dir=tmp_path / "e1", backend="fake-clc", variants=["no-such-variant"]),
-        cfg=experiment_cfg(tmp_path))
+        cfg=base.replay_cfg(tmp_path))
   duplicate = write_manifest(tmp_path, name="case-alpha.yaml", data=base.base_manifest_dict())
   with pytest.raises(ReplayError, match="share the case id"):
     run_experiment(
         ExperimentOptions(manifests=[manifest, duplicate], output_dir=tmp_path / "e2", backend="fake-clc"),
-        cfg=experiment_cfg(tmp_path))
+        cfg=base.replay_cfg(tmp_path))
 
 
 # --- the experiment boundary: existing evidence is validated before any replay runs -------------
@@ -1465,7 +1453,7 @@ def test_comparison_rejects_a_tampered_variant_definition(tmp_path: Path) -> Non
   record["variant"]["feedback_view"] = "selected-structured"
   record_path.write_text(json.dumps(record), encoding="utf-8")
   with pytest.raises(ReplayError, match="no longer matches"):
-    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp"), cfg=replay_cfg(tmp_path))
+    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp"), cfg=base.replay_cfg(tmp_path))
 
 
 def test_comparison_rejects_unknown_drifted_or_misversioned_variants(tmp_path: Path) -> None:
@@ -1528,14 +1516,14 @@ def test_comparison_detects_tampered_rationale_response_and_feedback_provenance(
   response = response_path.read_text(encoding="utf-8")
   response_path.write_text(response.replace(PROOFS["action"], "TAMPERED-ACTION-PROOF"), encoding="utf-8")
   with pytest.raises(ReplayError, match="no longer matches the hash recorded at run time"):
-    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp1"), cfg=replay_cfg(tmp_path))
+    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp1"), cfg=base.replay_cfg(tmp_path))
 
   run_dir = completed_variant_run(tmp_path, name="out-tamper-2")
   request_path = run_dir / "raw" / "reviewer-eviction.attempt-1.request.txt"
   request = request_path.read_text(encoding="utf-8")
   request_path.write_text(request.replace("editor_proposals", "editor_suggestions"), encoding="utf-8")
   with pytest.raises(ReplayError, match="no longer matches the hash recorded at run time"):
-    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp2"), cfg=replay_cfg(tmp_path))
+    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp2"), cfg=base.replay_cfg(tmp_path))
 
   run_dir = completed_variant_run(tmp_path, name="out-tamper-3")
   record_path = run_dir / "run.json"
@@ -1549,7 +1537,7 @@ def test_comparison_detects_tampered_rationale_response_and_feedback_provenance(
   proposal["feedback_refs"] = [{"comment_event": "fb-002", "approved_change_ref": None}]
   proposal_path.write_text(json.dumps(proposal), encoding="utf-8")
   with pytest.raises(ReplayError, match="feedback_refs do not match"):
-    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp3"), cfg=replay_cfg(tmp_path))
+    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp3"), cfg=base.replay_cfg(tmp_path))
 
 
 def test_raw_history_proposal_names_the_pool_without_unexposed_approved_refs(tmp_path: Path) -> None:
@@ -1564,10 +1552,6 @@ def test_raw_history_proposal_names_the_pool_without_unexposed_approved_refs(tmp
 
 
 # --- CLI -------------------------------------------------------------------------
-
-
-def _write_cli_profile_config() -> None:
-  base._write_cli_profile_config()
 
 
 class _SharedStubTransportClass:
@@ -1592,7 +1576,7 @@ def test_cli_experiment_end_to_end_with_a_failing_arm_and_reuse(
   from src.cli import memory as memory_cli
   from src.core.memory_replay import runner as runner_module
 
-  _write_cli_profile_config()
+  base._write_cli_profile_config()
   conftest_module.reset_config_caches()
   manifests = [write_manifest(tmp_path, name="case-alpha.yaml"), write_manifest(tmp_path, name="case-beta.yaml")]
   output_dir = tmp_path / "cli-out"
@@ -1639,7 +1623,7 @@ def test_cli_experiment_reports_a_blocked_arm_with_its_preserved_evidence(
   from src.cli import memory as memory_cli
   from src.core.memory_replay import runner as runner_module
 
-  _write_cli_profile_config()
+  base._write_cli_profile_config()
   conftest_module.reset_config_caches()
   manifests = [write_manifest(tmp_path, name="case-alpha.yaml")]
   output_dir = tmp_path / "cli-out"
@@ -1677,7 +1661,7 @@ def test_cli_experiment_reports_input_errors_without_a_summary(
   import tests.conftest as conftest_module
   from src.cli import memory as memory_cli
 
-  _write_cli_profile_config()
+  base._write_cli_profile_config()
   conftest_module.reset_config_caches()
   monkeypatch.setattr(
       sys, "argv", [

@@ -34,12 +34,15 @@ HEAVY_MODULES = (
     "pydantic",
 )
 
-# The plan chain's extra bans: the validation gate's registry stack and the web
-# framework, none of which a plan command touches before its request.
+# The plan chain's extra bans: the validation gate's registry stack, the web
+# framework, and plan_diff — its difflib + html subtree (~10 ms net of the pydantic
+# shared chain) serves only the diff verb's text render, and no sync plan command
+# touches it before its request.
 PLAN_HEAVY_MODULES = HEAVY_MODULES + (
     "fastapi",
     "src.core.artifact_check",
     "src.agents.backends.registry",
+    "src.core.plan_diff",
 )
 
 # The memory chain's ban set: structlog (the log proxy defers it) and the replay-curation

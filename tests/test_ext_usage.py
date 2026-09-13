@@ -220,6 +220,30 @@ def test_codex_usage_transform_uses_the_latest_token_count_event() -> None:
 # credits rows pin the metered balance reading: forwarded as a JSON number,
 # stateless, and shaped strictly (an unreadable credits object is dropped
 # with a warning, never guessed at).
+
+# Every row runs on one event stamped _SHAPE_EVENT_AT and transformed with
+# fetched_at=_SHAPE_FETCHED_AT; each row's expected dict echoes both.
+_SHAPE_EVENT_AT = "2026-03-27T18:39:35.694Z"
+_SHAPE_FETCHED_AT = "2026-03-27T18:40:00+00:00"
+
+
+def _shape_expected_usage(**row_keys: Any) -> dict:
+  """The expected-usage base every shape row shares, plus the row's own keys.
+
+  Empty windows (each row's buckets are absent or dropped) plus the two
+  timestamps and the provider every row carries; *row_keys* adds the row's
+  distinguishing keys (credits, rate_limits_state, a non-empty windows list).
+  """
+  expected: dict[str, Any] = {
+      "windows": [],
+      "fetched_at": _SHAPE_FETCHED_AT,
+      "provider": "codex",
+      "token_count_observed_at": _SHAPE_EVENT_AT,
+  }
+  expected.update(row_keys)
+  return expected
+
+
 _CODEX_RATE_LIMIT_SHAPE_ROWS = [
     pytest.param(
         {
@@ -229,40 +253,21 @@ _CODEX_RATE_LIMIT_SHAPE_ROWS = [
                 "unlimited": True,
             },
             "plan_type": "business",
-        }, {
-            "windows": [],
-            "credits": {
-                "unlimited": True,
-            },
-            "fetched_at": "2026-03-27T18:40:00+00:00",
-            "provider": "codex",
-            "rate_limits_state": "business-unlimited",
-            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
         },
+        _shape_expected_usage(credits={"unlimited": True}, rate_limits_state="business-unlimited"),
         id="null-buckets-business-unlimited"),
     pytest.param(
         {
             "primary": None,
             "secondary": None,
-        }, {
-            "windows": [],
-            "fetched_at": "2026-03-27T18:40:00+00:00",
-            "provider": "codex",
-            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
-        },
-        id="null-buckets-without-metadata-no-state"),
+        }, _shape_expected_usage(), id="null-buckets-without-metadata-no-state"),
     pytest.param(
         {
             "primary": None,
             "secondary": None,
             "plan_type": "business",
-        }, {
-            "windows": [],
-            "fetched_at": "2026-03-27T18:40:00+00:00",
-            "provider": "codex",
-            "rate_limits_state": "business-unlimited",
-            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
         },
+        _shape_expected_usage(rate_limits_state="business-unlimited"),
         id="null-buckets-plan-type-fallback-without-credits"),
     pytest.param(
         {
@@ -274,16 +279,11 @@ _CODEX_RATE_LIMIT_SHAPE_ROWS = [
                 "balance": "29779.358283042908",
             },
             "plan_type": "business",
-        }, {
-            "windows": [],
-            "credits": {
-                "unlimited": False,
-                "balance": pytest.approx(29779.358),
-            },
-            "fetched_at": "2026-03-27T18:40:00+00:00",
-            "provider": "codex",
-            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
         },
+        _shape_expected_usage(credits={
+            "unlimited": False,
+            "balance": pytest.approx(29779.358)
+        }),
         id="metered-credits-balance"),
     pytest.param(
         {
@@ -292,15 +292,8 @@ _CODEX_RATE_LIMIT_SHAPE_ROWS = [
             "credits": {
                 "unlimited": False,
             },
-        }, {
-            "windows": [],
-            "credits": {
-                "unlimited": False,
-            },
-            "fetched_at": "2026-03-27T18:40:00+00:00",
-            "provider": "codex",
-            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
         },
+        _shape_expected_usage(credits={"unlimited": False}),
         id="metered-credits-without-balance"),
     pytest.param(
         {
@@ -308,12 +301,8 @@ _CODEX_RATE_LIMIT_SHAPE_ROWS = [
             "secondary": None,
             "credits": "yes",
             "plan_type": "business",
-        }, {
-            "windows": [],
-            "fetched_at": "2026-03-27T18:40:00+00:00",
-            "provider": "codex",
-            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
         },
+        _shape_expected_usage(),
         id="credits-not-an-object-dropped"),
     pytest.param(
         {
@@ -323,12 +312,8 @@ _CODEX_RATE_LIMIT_SHAPE_ROWS = [
                 "unlimited": "false",
             },
             "plan_type": "business",
-        }, {
-            "windows": [],
-            "fetched_at": "2026-03-27T18:40:00+00:00",
-            "provider": "codex",
-            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
         },
+        _shape_expected_usage(),
         id="credits-unlimited-not-a-bool-dropped"),
     pytest.param(
         {
@@ -337,12 +322,8 @@ _CODEX_RATE_LIMIT_SHAPE_ROWS = [
                 "resets_at": 1785016000,
             },
             "secondary": None,
-        }, {
-            "windows": [],
-            "fetched_at": "2026-03-27T18:40:00+00:00",
-            "provider": "codex",
-            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
         },
+        _shape_expected_usage(),
         id="slot-without-window-minutes-dropped"),
     pytest.param(
         {
@@ -351,30 +332,26 @@ _CODEX_RATE_LIMIT_SHAPE_ROWS = [
                 "resets_at": 1785016000,
             },
             "secondary": None,
-        }, {
-            "windows":
-                [
-                    {
-                        "window_minutes": 10080,
-                        "utilization": None,
-                        "resets_at": datetime.fromtimestamp(1785016000, tz=UTC).isoformat(),
-                    }
-                ],
-            "fetched_at": "2026-03-27T18:40:00+00:00",
-            "provider": "codex",
-            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
         },
+        _shape_expected_usage(
+            windows=[
+                {
+                    "window_minutes": 10080,
+                    "utilization": None,
+                    "resets_at": datetime.fromtimestamp(1785016000, tz=UTC).isoformat(),
+                }
+            ]),
         id="window-without-used-percent-unknown"),
 ]
 
 
 @pytest.mark.parametrize(("rate_limits", "expected_usage"), _CODEX_RATE_LIMIT_SHAPE_ROWS)
 def test_codex_usage_transform_raw_rate_limit_shapes(rate_limits: dict, expected_usage: dict) -> None:
-  lines = [json.dumps(codex_token_count_event("2026-03-27T18:39:35.694Z", rate_limits=rate_limits))]
+  lines = [json.dumps(codex_token_count_event(_SHAPE_EVENT_AT, rate_limits=rate_limits))]
 
   event = _latest_token_count_event(lines)
   assert event is not None
-  usage = _transform_codex_response(event, fetched_at="2026-03-27T18:40:00+00:00")
+  usage = _transform_codex_response(event, fetched_at=_SHAPE_FETCHED_AT)
 
   assert usage == expected_usage
 

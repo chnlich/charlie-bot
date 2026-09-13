@@ -3,9 +3,8 @@
 import asyncio
 from typing import Any
 
-import structlog
-
 from src.core.config import cron_path
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import (
     CreateSessionRequest,
     SessionMetadata,
@@ -14,7 +13,7 @@ from src.core.models import (
 )
 from src.core.yaml_utils import load_yaml, save_yaml
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 
 class ScheduledSessionBusyError(RuntimeError):

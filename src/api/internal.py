@@ -3,7 +3,6 @@
 import asyncio
 import time
 
-import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import (
@@ -24,6 +23,7 @@ from src.core.improve_command import (
     reserve_loop_state,
     run_improve_loop,
 )
+from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
 from src.core.models import (
     DelegateInvocationMetadata,
@@ -60,7 +60,7 @@ from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager
 from src.core.triggers import ArchivedSessionError, RemoteVerifyError, TriggerManager
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 router = APIRouter()
 

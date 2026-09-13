@@ -9,11 +9,11 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 import orjson
-import structlog
 
+from src.core.log_once import LazyStructlogLogger
 from src.core.memo import StatSignatureMemo
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 _COUNT_CHUNK_SIZE = 1024 * 1024
 

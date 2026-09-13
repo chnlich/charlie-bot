@@ -9,7 +9,6 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import structlog
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
@@ -27,6 +26,7 @@ from src.core.git import (
     git_push_refspec,
     git_worktree_remove_reporting,
 )
+from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
 from src.core.message_aggregator import extract_text_from_message
 from src.core.models import SpawnRequest, TaskType, ThreadStatus, utc_now
@@ -34,7 +34,7 @@ from src.core.runs import IMPROVE_ITERATION_PREFIX
 from src.core.tasks import create_logged_task
 from src.core.timeouts import SUBPROCESS_GIT_READ_TIMEOUT_ASYNC
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 _QUOTA_BLOCKER_TEXT_PATTERNS = (
     "quota exhausted",

@@ -5,9 +5,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-import structlog
-
 from src.core import event_types as ET
+from src.core.log_once import LazyStructlogLogger
 from src.core.message_aggregator import MessageAggregator
 from src.core.message_events import _ATTACHED_FILES_MARKER, _stable_history_projection
 
@@ -15,7 +14,7 @@ if TYPE_CHECKING:
   from src.core.models import SessionMetadata
   from src.core.sessions import SessionManager
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 __all__ = [
     "SessionBootstrapData",

@@ -15,12 +15,12 @@ import struct
 import tempfile
 import termios
 
-import structlog
 from fastapi import WebSocket, WebSocketDisconnect
 
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import SESSION_ID_ENV_VAR
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 PTY_INPUT = "pty_input"
 PTY_OUTPUT = "pty_output"

@@ -33,12 +33,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import structlog
-
 from src.core.config import CharlieBotConfig
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendOption, BackendType, ClaudeAccount
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # Resume domain shared by every pooled cc-claude entry (src/api/sessions.py):
 # Fable, Opus and Sonnet switch in place inside the pool without touching accounts.

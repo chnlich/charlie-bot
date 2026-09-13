@@ -8,7 +8,6 @@ from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 
-import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import Headers, MutableHeaders, QueryParams
@@ -45,6 +44,7 @@ from src.core.init import (
     reconcile_master_identity,
     run_crash_recovery,
 )
+from src.core.log_once import LazyStructlogLogger
 from src.core.message_aggregator import MessageAggregator
 from src.core.models import BackendType, SessionMetadata, utc_now
 from src.core.process import log_session_cgroup_startup, sweep_stale_session_cgroups
@@ -54,7 +54,7 @@ from src.core.streaming import streaming_manager
 from src.core.tasks import create_logged_task
 from src.core.triggers import TriggerManager
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # Interval between WebSocket keepalive pings (seconds).
 _WS_KEEPALIVE_TIMEOUT = 30.0

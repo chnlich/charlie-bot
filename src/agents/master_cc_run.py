@@ -7,8 +7,6 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-import structlog
-
 from src.agents import master_cc_relay, master_cc_state
 from src.agents.backends.base import (
     AgentBackend,
@@ -24,6 +22,7 @@ from src.core import claude_accounts, claude_relay, runs
 from src.core import event_types as ET
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig, claude_config_dir
 from src.core.latex import check_tex_changed, clear_snapshot
+from src.core.log_once import LazyStructlogLogger
 from src.core.memory import assemble_master
 from src.core.models import (
     PROJECT_ROLE,
@@ -44,7 +43,7 @@ from src.core.project_config import (
 )
 from src.core.streaming import handle_compaction_events
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # Prefixed to a salvaged silent turn so the user sees the thinking the model
 # produced instead of nothing. Local chat-stream only: preserved verbatim even

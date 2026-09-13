@@ -6,15 +6,15 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-import structlog
 import yaml
 from pydantic import BaseModel
 
 from src.core.config import charliebot_home_dir
+from src.core.log_once import LazyStructlogLogger
 from src.core.process import kill_process_group
 from src.core.timeouts import SLASH_COMMAND_DEFAULT_TIMEOUT
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 
 def _slash_commands_file() -> Path:

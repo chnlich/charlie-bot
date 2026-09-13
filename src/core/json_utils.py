@@ -9,10 +9,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import BinaryIO
 
-import structlog
 from pydantic import BaseModel
 
-log = structlog.get_logger()
+from src.core.log_once import LazyStructlogLogger
+
+log = LazyStructlogLogger()
 
 
 def load_json_meta(

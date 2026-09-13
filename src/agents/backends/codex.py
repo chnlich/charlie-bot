@@ -5,8 +5,6 @@ import json
 import os
 from typing import ClassVar
 
-import structlog
-
 from src.agents.backends.base import (
     USER_LOCAL_BIN,
     AgentBackend,
@@ -21,9 +19,10 @@ from src.agents.backends.base import (
 )
 from src.core import event_types as ET
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
+from src.core.log_once import LazyStructlogLogger
 from src.core.process import make_session_cgroup_preexec, wait_or_kill_group
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 _MAX_ONE_SHOT_STDERR_BYTES = 4 * 1024
 

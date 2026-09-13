@@ -9,11 +9,10 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-import structlog
-
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import utc_now
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # On-disk name of the quarantine dir under the worktree root; the storage sweep
 # excludes the same directory by this name when it lists live worktrees.

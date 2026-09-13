@@ -7,8 +7,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
-import structlog
-
 from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import (
     claude_relay,
@@ -20,6 +18,7 @@ from src.core import (
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_scheduled_tasks
 from src.core.git import git_worktree_remove_reporting
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import LastRunStatus, TaskType, ThreadMetadata, ThreadStatus
 from src.core.notifications import send_telegram
 from src.core.sessions import SessionManager
@@ -29,7 +28,7 @@ from src.core.verify_trailer import (
     verify_result_trailer_error,
 )
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 
 class _WorkerRunOutcome(NamedTuple):

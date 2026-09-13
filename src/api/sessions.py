@@ -4,7 +4,6 @@ import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
-import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, TypeAdapter
@@ -39,6 +38,7 @@ from src.core.config import (
     get_scheduled_tasks,
 )
 from src.core.event_types import BACKEND_SWITCHED
+from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo
 from src.core.message_aggregator import tool_preview
 from src.core.models import (
@@ -68,7 +68,7 @@ from src.core.sessions import (
 )
 from src.core.threads import ThreadManager
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 router = APIRouter()
 
 # The search route's read-only overlay serializes derived datetimes through the

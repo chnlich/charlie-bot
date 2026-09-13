@@ -4,16 +4,16 @@ import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
-import structlog
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from src.core.git import git_add_commit_push
+from src.core.log_once import LazyStructlogLogger
 from src.core.tasks import create_logged_task
 from src.core.yaml_utils import load_yaml, save_yaml
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 router = APIRouter()
 

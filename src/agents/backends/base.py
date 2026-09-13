@@ -19,11 +19,10 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-import structlog
-
 from src.core import event_types as ET
 from src.core import runs
 from src.core.config import get_config
+from src.core.log_once import LazyStructlogLogger
 from src.core.ndjson import parse_ndjson_line, write_all
 from src.core.process import (
     SessionCgroup,
@@ -38,7 +37,7 @@ from src.core.timeouts import (
     SUBPROCESS_DIAG_CAPTURE_TIMEOUT,
 )
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 DEFAULT_BUFFER_LIMIT = 1024 * 1024 * 1024  # 1 GB
 _STDERR_TAIL_BYTES = 64 * 1024

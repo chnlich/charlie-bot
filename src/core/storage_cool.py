@@ -43,10 +43,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import structlog
-
 from src.core.config import CharlieBotConfig, claude_config_dir, get_config
 from src.core.json_utils import load_json_meta
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus, parse_utc_datetime
 from src.core.runs import CURSOR_NAME, RAW_LOG_NAME, STDERR_LOG_NAME
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
@@ -54,7 +53,7 @@ from src.core.timeouts import SQLITE_LOCK_WAIT_MS, SQLITE_LOCK_WAIT_SECONDS
 from src.core.token_tally import DEFAULT_OPENCODE_DB
 from src.core.worktree_trash import TRASH_DIR_NAME
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 MIN_IDLE_DAYS = 14
 # Unreferenced backend records only have to outlive a backend session that is

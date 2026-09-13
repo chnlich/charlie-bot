@@ -28,11 +28,10 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-import structlog
-
+from src.core.log_once import LazyStructlogLogger
 from src.core.timeouts import SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 
 class NcuParseError(Exception):

@@ -1,9 +1,8 @@
 """Spawn-time backend+model resolution — explicit requests, session defaults, verify selection."""
 
-import structlog
-
 from src.core import review
 from src.core.config import CharlieBotConfig, require_backend_option
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import (
     BackendOption,
     SessionMetadata,
@@ -12,7 +11,7 @@ from src.core.models import (
 )
 from src.core.sessions import SessionManager
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 
 def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: str | None) -> BackendOption:

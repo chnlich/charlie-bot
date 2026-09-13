@@ -4,12 +4,11 @@ import tarfile
 from datetime import datetime
 from pathlib import Path
 
-import structlog
-
 from src.core.config import charliebot_home_dir
+from src.core.log_once import LazyStructlogLogger
 from src.core.threads import THREADS_DIR_NAME
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 
 def charliebot_dir() -> Path:

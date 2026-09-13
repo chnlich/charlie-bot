@@ -9,15 +9,14 @@ plus the task config on every call — the module stores nothing on disk beyond
 those two thread fields.
 """
 
-import structlog
-
 from src.core import review
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_scheduled_tasks
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionMetadata, ThreadMetadata
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 
 async def spawn_step(

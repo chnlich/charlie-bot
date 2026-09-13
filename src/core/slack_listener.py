@@ -47,7 +47,6 @@ from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
 import httpx
-import structlog
 import websockets
 from websockets.asyncio.client import ClientConnection
 
@@ -56,6 +55,7 @@ from src.api.message_utils import build_agent_message_event
 from src.core import event_types as ET
 from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig, get_credentials
 from src.core.http import get_http_client
+from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
 from src.core.models import (
     CreateSessionRequest,
@@ -71,7 +71,7 @@ from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
 from src.core.triggers import ArchivedSessionError, TriggerManager
 
-logger = structlog.get_logger()
+logger = LazyStructlogLogger()
 
 # Fixed namespace UUID for Slack summon session ids. Arbitrary but stable
 # across process restarts; changing it would orphan every existing Slack-backed

@@ -1,7 +1,5 @@
 """GeminiCliBackend — AgentBackend wrapping the `gemini` CLI in stream-json mode."""
 
-import structlog
-
 from src.agents.backends.base import (
     USER_LOCAL_BIN,
     AgentBackend,
@@ -14,8 +12,9 @@ from src.agents.backends.base import (
     strip_google_api_keys,
 )
 from src.core import event_types as ET
+from src.core.log_once import LazyStructlogLogger
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 
 class GeminiCliBackend(AgentBackend):

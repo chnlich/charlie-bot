@@ -4,7 +4,6 @@ import asyncio
 from pathlib import Path
 
 import aiofiles
-import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
@@ -18,6 +17,7 @@ from src.api.message_utils import (
 from src.core import event_types as ET
 from src.core.autonamer import is_default_session_name, maybe_auto_name
 from src.core.config import CharlieBotConfig, get_config
+from src.core.log_once import LazyStructlogLogger
 from src.core.message_aggregator import extract_text_from_message
 from src.core.message_events import serialize_uploaded_files
 from src.core.models import (
@@ -30,7 +30,7 @@ from src.core.sessions import SessionManager
 from src.core.slash_commands import SlashDispatchKind, SlashDispatchResult, dispatch_slash_command
 from src.core.tasks import create_logged_task
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 router = APIRouter()
 

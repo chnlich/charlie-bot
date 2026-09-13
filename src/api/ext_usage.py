@@ -12,7 +12,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import structlog
 from fastapi import APIRouter
 
 from src.core import claude_accounts
@@ -21,7 +20,7 @@ from src.core.codex_usage import CODEX_EVENT_MSG, CODEX_TOKEN_COUNT, CODEX_TURN_
 from src.core.config import get_config
 from src.core.http import get_http_client
 from src.core.json_utils import write_json_atomically
-from src.core.log_once import WarnOnceRegistry
+from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.models import ClaudeAccount
 from src.core.streaming import streaming_manager
 from src.core.timeouts import (
@@ -30,7 +29,7 @@ from src.core.timeouts import (
     HTTP_OAUTH_TIMEOUT,
 )
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 router = APIRouter()
 

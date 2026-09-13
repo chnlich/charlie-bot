@@ -4,15 +4,14 @@ import traceback
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-import structlog
-
 from src.agents.master_cc import run_message
 from src.core import event_types as ET
 from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionMetadata, SessionStatus
 from src.core.sessions import SessionManager
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 
 async def run_message_with_resume_recovery(

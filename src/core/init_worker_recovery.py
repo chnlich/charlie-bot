@@ -12,8 +12,6 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING
 
-import structlog
-
 if TYPE_CHECKING:
   from src.core.config import CharlieBotConfig
   from src.core.sessions import SessionManager
@@ -23,6 +21,7 @@ from src.core import event_types as ET
 from src.core import finalize_effects, runs
 from src.core.git import git_quarantine_worktree, git_worktree_dir_name
 from src.core.json_utils import load_json_meta
+from src.core.log_once import LazyStructlogLogger
 from src.core.memo import StatSignatureMemo
 from src.core.models import (
     TERMINAL_THREAD_STATUSES,
@@ -38,7 +37,7 @@ from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 from src.core.worktree_trash import dir_size_bytes, format_size, trash_dir
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # Failed worktrees older than this are swept into <worktree_dir>/.trash/ on startup.
 # Kept (not hard-deleted) so recent failures stay available for debugging.

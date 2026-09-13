@@ -11,11 +11,10 @@ setting and clearing.
 
 from datetime import UTC, datetime
 
-import structlog
-
+from src.core.log_once import LazyStructlogLogger
 from src.core.sidebar_state import mark_sidebar_dirty
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # session_id -> busy interval start (a continuous run+queued stretch).
 _busy_since: dict[str, datetime] = {}

@@ -7,8 +7,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import structlog
-
 from src.core import event_types as ET
 from src.core import runs
 
@@ -24,9 +22,10 @@ from src.core.init_worker_recovery import (
     _report_recovery_event,
     _scan_interrupted_runs,
 )
+from src.core.log_once import LazyStructlogLogger
 from src.core.tasks import create_logged_task
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 
 async def run_crash_recovery(

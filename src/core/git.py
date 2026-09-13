@@ -9,14 +9,13 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-import structlog
-
+from src.core.log_once import LazyStructlogLogger
 from src.core.timeouts import (
     SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
     SUBPROCESS_GIT_WRITE_TIMEOUT,
 )
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 _WORKTREE_LOCAL_ARTIFACT_NAMES = frozenset({".pixi", ".pixi-cache", ".uv-cache", ".venv", ".local", "build"})
 

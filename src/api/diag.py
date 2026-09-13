@@ -2,11 +2,12 @@
 
 from typing import Literal
 
-import structlog
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field
 
-log = structlog.get_logger()
+from src.core.log_once import LazyStructlogLogger
+
+log = LazyStructlogLogger()
 
 router = APIRouter()
 

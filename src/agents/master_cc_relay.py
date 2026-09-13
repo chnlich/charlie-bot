@@ -26,15 +26,14 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 
-import structlog
-
 from src.agents import master_cc_state
 from src.core import claude_accounts, claude_compaction, claude_relay
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendOption, ClaudeAccount, SessionMetadata
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 
 def _persist(item: master_cc_state._WorkItem) -> Callable[[dict], Awaitable[None]]:

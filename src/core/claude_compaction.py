@@ -31,8 +31,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import structlog
-
 from src.agents.backends.base import make_context_compact_failed_event, make_context_compacted_event
 from src.agents.backends.claude_code import (
     BASE_COMMAND,
@@ -43,9 +41,10 @@ from src.agents.backends.claude_code import (
 from src.core import claude_accounts
 from src.core import event_types as ET
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig, get_config
+from src.core.log_once import LazyStructlogLogger
 from src.core.process import kill_process_group, make_session_cgroup_preexec, prepare_session_cgroup
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # Claude Code writes one-hour prompt-cache entries only, and every hit renews the
 # entry, so a request more than an hour after the previous one finds nothing cached.

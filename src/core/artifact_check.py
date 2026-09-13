@@ -418,7 +418,8 @@ def _check_page_height(ctx: _Context) -> list[AssertionOutcome]:
 # An ordinal label is a bare numbered reference (plan 3, 第 2 节, Trade-off 5, 4.1). The Chinese
 # label words are the language of the checked pages and stay as the prototype wrote them.
 ORD = re.compile(
-    r"(?<![A-Za-z0-9_.])(?:(?:Trade-offs?|sections?|Section|fork|Fork|round|Round|divergence|Divergence|question|Question|item|Item|plan|Plan)(?:\s+\(|\s*)(\d+)\)?(?!\w)"
+    r"(?<![A-Za-z0-9_.])(?:(?:Trade-offs?|sections?|Section|fork|Fork|round|Round|"
+    r"divergence|Divergence|question|Question|item|Item|plan|Plan)(?:\s+\(|\s*)(\d+)\)?(?!\w)"
     r"|第\s*([0-9一二三四五六七八九十]+)\s*(?:节|章|题|轮|条|项|问)"
     r"|分歧\s*([0-9一二三四五六七八九十]+)"
     r"|(?:(?<=§)|(?<=section )|(?<=Section ))\s*([1-9])\.(\d)(?![\d.%])"
@@ -429,8 +430,8 @@ ORD = re.compile(
 INTERNAL_UNLESS_QUALIFIED = re.compile(r"round|Round|question|Question|item|Item|轮|条|项|题|问")
 # Document words: a label directly after one of these points off the page.
 QUAL = re.compile(
-    r"(计划|plan|Plan|sitrep|战况|理解页|understanding|任务书|debug|explain|讲解页|上一?份|上一?版|前一?份|那份|另一份|earlier|previous)(?:\s*的|\s*'s|\s*里|\s*中)?\s*$"
-)
+    r"(计划|plan|Plan|sitrep|战况|理解页|understanding|任务书|debug|explain|讲解页|上一?份|上一?版|"
+    r"前一?份|那份|另一份|earlier|previous)(?:\s*的|\s*'s|\s*里|\s*中)?\s*$")
 # Content-name forms: a sentence carrying one of these has a name in reach.
 ANCHOR = re.compile(
     r"(https?://\S+"  # URL

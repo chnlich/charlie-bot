@@ -205,7 +205,8 @@ JSON
     pytest.param(
         """
 cat <<'JSON'
-{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":"para1\\n<SYSTEM_MESSAGE>x</SYSTEM_MESSAGE>\\npara2"}
+{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,
+"response":"para1\\n<SYSTEM_MESSAGE>x</SYSTEM_MESSAGE>\\npara2"}
 JSON
 """,
         "para1\npara2",

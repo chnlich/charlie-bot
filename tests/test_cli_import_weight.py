@@ -129,7 +129,7 @@ def test_plan_constants_match_the_model_literals() -> None:
 
 
 # The artifact chain's ban set: the probe's registry stack (backends.registry →
-# fastapi + numpy + sessions, autonamer → sessions + streaming) and the KaTeX
+# fastapi + sessions, autonamer → sessions + streaming) and the KaTeX
 # fetch's HTTP client serve only the check/wrap verb bodies — the probe imports
 # its stack inside run_probe, and the vendored-KaTeX steady state never fetches.
 ARTIFACT_HEAVY_MODULES = HEAVY_MODULES + (

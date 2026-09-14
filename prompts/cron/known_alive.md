@@ -356,7 +356,7 @@ Known-alive symbols:
   vulture flags it as an unused variable at each request site. Same fixture-name-discovery class
   as `inline_merge_executor` above.
 - `cli_katex` (`tests/core/test_artifact_wrap.py`) — pytest fixture (monkeypatches
-  `src.cli.artifact.get_config` so the wrap verb's config home lands under the pytest tmp tree
+  `src.cli.common.get_config` so the wrap verb's config home lands under the pytest tmp tree
   instead of the host profile), requested by name in five tests' parameter lists; the bodies
   never reference the parameter, so vulture flags it as an unused variable at each request site.
   Same fixture-name-discovery class as `inline_merge_executor` above.

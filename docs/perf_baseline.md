@@ -6387,7 +6387,7 @@ EOF
 
 M102 — artifact-CLI command wall, wrap verb. Every plan page the master ships is a
 `charliebot artifact wrap` invocation — a fresh process whose import chain used to drag the
-probe's registry stack (artifact_check → backends registry → fastapi, numpy, sessions) and the
+probe's registry stack (artifact_check → backends registry → fastapi, sessions) and the
 KaTeX fetch's HTTP client for module-scope imports the wrap verb never exercises (genre plan
 pre-renders no math, and the vendored-KaTeX steady state never fetches). The collector times the
 real assembly command from the checkout under test resolved cwd-first (the same shape as the M97

@@ -798,7 +798,7 @@ def run_probe(cfg: CharlieBotConfig, artifact: Path, trigger: str) -> ProbeResul
   """
   questions = _PROBE_QUESTIONS.replace("<trigger message verbatim>", trigger)
   prompt = f"{artifact.read_text(encoding='utf-8')}\n\n{questions}"
-  # The backends registry drags fastapi, numpy and the sessions stack (~250 ms of
+  # The backends registry drags fastapi and the sessions stack (~250 ms of
   # import) and serves only this probe; the artifact chain's import floor
   # (docs/perf_baseline.md M102) depends on it loading here and nowhere earlier.
   from src.agents.backends.registry import build_backend

@@ -154,6 +154,9 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
     if etype == ET.TASK_CREATED:
       if facts.boundary_index is None:
         facts.boundary_index = absolute
+        # Fresh tasks admit post-creation inputs only: anything folded before
+        # the boundary existed is history, never a candidate.
+        facts.input_candidates = []
     elif etype == ET.TASK_IMPORTED:
       listed: list[str] = []
       for entry in event.get("pending_inputs") or []:
@@ -164,10 +167,12 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
         listed.append(input_id)
       facts.boundary_index = absolute
       facts.imported_pending_ids = frozenset(listed)
-      # The boundary moved: input candidacy restarts from the whole history.
+      # The boundary moved: imported tasks admit post-import input plus ONLY
+      # the old pending inputs the boundary explicitly lists — pre-boundary
+      # candidacy narrows to that declared set, never the whole history.
       facts.input_candidates = [
           e for e in facts.events_by_id.values()
-          if e.get("type") in _INPUT_EVENT_TYPES]
+          if e.get("type") in _INPUT_EVENT_TYPES and e.get("id") in facts.imported_pending_ids]
     elif etype == ET.TASK_CLOSED:
       facts.task_state = str(event.get("outcome") or "completed")
       facts.close_events.append(event)

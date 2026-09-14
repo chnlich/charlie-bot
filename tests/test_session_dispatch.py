@@ -298,6 +298,10 @@ async def test_rotation_preserves_pending_import_close_and_acknowledgement_facts
 
   pending_input = await admit(tree, node.id, "still unanswered", input_id="e-pending",
                               timestamp=(original_time + timedelta(minutes=1)).isoformat())
+  # An old input that migration judged handled-but-unprovable is NOT declared
+  # pending; the import boundary must exclude it from candidacy.
+  await admit(tree, node.id, "unlisted old input", input_id="e-unlisted",
+              timestamp=(original_time + timedelta(minutes=2)).isoformat())
   # A historical close and reopen straddle the facts, then the import boundary
   # declares exactly the still-pending old input.
   await tree.events.append(node.id, {
@@ -320,6 +324,7 @@ async def test_rotation_preserves_pending_import_close_and_acknowledgement_facts
   before_pending = [(str(e["id"]), e["type"], e["timestamp"]) for e in input_events(tree, node.id)]
   before_state = tree.task_state(node.id)
   assert before_pending == [("e-pending", ET.USER, pending_input["timestamp"])]
+  assert "e-unlisted" not in {str(e["id"]) for e in input_events(tree, node.id)}  # only declared old pending
   assert before_state == "open"
 
   # Rotate: every event so far moves into the weekly archive segment.

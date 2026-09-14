@@ -60,6 +60,25 @@ globalThis.makePtySenders = function(sendJson) {
   };
 };
 
+// The fit glue both surfaces share: fit the surface's terminal, then push the
+// fitted grid over its socket. The surfaces keep their own terminal refs, so
+// the bridge reads them through the getters instead of holding copies;
+// mayFit carries the surface's extra guard — the panel only fits while its
+// tab is open, the TUI surface always fits.
+globalThis.makeTerminalFitBridge = function(sendResize, getTerm, getFitAddon, mayFit) {
+  function fitAndSendResize() {
+    if (mayFit && !mayFit()) return;
+    const term = getTerm();
+    const fitAddon = getFitAddon();
+    if (!fitAddon || !term) return;
+    fitTerminalAndSendResize(term, fitAddon, sendResize);
+  }
+  function scheduleFitAndSendResize() {
+    scheduleAfterTerminalPaint(fitAndSendResize);
+  }
+  return {fitAndSendResize, scheduleFitAndSendResize};
+};
+
 // Post-mount relayout: fit once after layout paint, again when the mono font
 // (and so xterm's cell metrics) settles, and on every container resize.
 // Returns the observer so a surface that remounts can disconnect the old one.

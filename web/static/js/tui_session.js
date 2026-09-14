@@ -57,15 +57,8 @@
   }
 
   const {sendInput, sendResize} = makePtySenders(wsSendJson);
-
-  function fitAndSendResize() {
-    if (!fitAddon || !term) return;
-    fitTerminalAndSendResize(term, fitAddon, sendResize);
-  }
-
-  function scheduleFitAndSendResize() {
-    scheduleAfterTerminalPaint(fitAndSendResize);
-  }
+  const {fitAndSendResize, scheduleFitAndSendResize} =
+      makeTerminalFitBridge(sendResize, () => term, () => fitAddon);
 
   function ensureMount(sessionId) {
     const container = getContainer();

@@ -180,6 +180,60 @@ test('makePtySenders emits the shared pty_input / pty_resize shapes', () => {
   ]);
 });
 
+test("makeTerminalFitBridge fits and sends through the surface's live refs", () => {
+  const {context} = loadHelpers();
+  const sent = [];
+  let term = {cols: 120, rows: 30};
+  let fitAddon = {fit() {}};
+  const bridge = context.makeTerminalFitBridge((cols, rows) => sent.push([cols, rows]), () => term, () => fitAddon);
+  bridge.fitAndSendResize();
+  assert.deepEqual(sent, [[120, 30]]);
+  term = {cols: 80, rows: 24};
+  bridge.fitAndSendResize();
+  assert.deepEqual(sent, [[120, 30], [80, 24]]);
+});
+
+test('makeTerminalFitBridge skips the fit while a ref is absent', () => {
+  const {context} = loadHelpers();
+  const sent = [];
+  let term = {cols: 120, rows: 30};
+  const fitAddon = {fit() {}};
+  const bridge = context.makeTerminalFitBridge((cols, rows) => sent.push([cols, rows]), () => term, () => fitAddon);
+  term = null;
+  bridge.fitAndSendResize();
+  assert.deepEqual(sent, []);
+});
+
+test('makeTerminalFitBridge defers the scheduled fit across two frames', () => {
+  const {context} = loadHelpers();
+  const frames = [];
+  context.requestAnimationFrame = fn => frames.push(fn);
+  const sent = [];
+  const term = {cols: 120, rows: 30};
+  const fitAddon = {fit() {}};
+  const bridge = context.makeTerminalFitBridge((cols, rows) => sent.push([cols, rows]), () => term, () => fitAddon);
+  bridge.scheduleFitAndSendResize();
+  assert.deepEqual(sent, []);
+  frames.shift()();
+  frames.shift()();
+  assert.deepEqual(sent, [[120, 30]]);
+});
+
+test('makeTerminalFitBridge applies the surface guard before touching the refs', () => {
+  const {context} = loadHelpers();
+  const sent = [];
+  let open = false;
+  const term = {cols: 120, rows: 30};
+  const fitAddon = {fit() {}};
+  const bridge =
+      context.makeTerminalFitBridge((cols, rows) => sent.push([cols, rows]), () => term, () => fitAddon, () => open);
+  bridge.fitAndSendResize();
+  assert.deepEqual(sent, []);
+  open = true;
+  bridge.fitAndSendResize();
+  assert.deepEqual(sent, [[120, 30]]);
+});
+
 test('wireTerminalRelayout refits after paint, font load, and container resize', () => {
   const {context} = loadHelpers();
   const frames = [];

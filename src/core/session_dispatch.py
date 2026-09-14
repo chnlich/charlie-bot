@@ -37,6 +37,7 @@ from src.core.control_events import (
     stable_child_report_id,
 )
 from src.core.log_once import LazyStructlogLogger
+from src.core.models import RunRecord
 
 if TYPE_CHECKING:
     from src.core.task_sessions import TaskTreeManager
@@ -196,50 +197,89 @@ class TaskInputDispatcher:
         consumer can never double-claim, and a finished or already-launched or
         stop-requested run claims nothing.
         """
+        async with self._tree.control_lock:
+            return await self.claim_input_batch_locked(session_id, run_id, input_ids=input_ids)
+
+    async def claim_input_batch_locked(
+        self, session_id: str, run_id: str, *, input_ids: list[str] | None = None
+    ) -> list[str]:
+        """The claim's core, for callers already holding the control lock.
+
+        The executor's reservation binds the batch inside its own lock hold;
+        taking the lock again here would deadlock a non-reentrant asyncio.Lock.
+        """
         from src.core.json_utils import atomic_write_text
         from src.core.task_sessions import TaskConflictError, TaskNotFoundError
 
         tree = self._tree
-        async with tree.control_lock:
-            run = await tree.runs.get_run(session_id, run_id)
-            if run is None:
-                raise TaskNotFoundError(f"run {run_id} not found in session {session_id}")
-            events = tree.runs.load_events_sync(session_id)
-            if tree.runs.run_has_terminal_fact(run, events):
-                raise TaskConflictError([f"run {run_id} already finished; it claims no new inputs"])
-            if run.pid is not None:
-                raise TaskConflictError([f"run {run_id} already launched; it owns its bound batch"])
-            if tree.runs.stop_requested(events, run_id):
-                raise TaskConflictError([f"run {run_id} has a durable stop request; it never launches"])
-            pending_ids = [str(e.get("id")) for e in self.pending_inputs(session_id)]
-            if input_ids is None:
-                batch = pending_ids
-            else:
-                unknown = [i for i in input_ids if i not in pending_ids]
-                if unknown:
-                    raise TaskConflictError(
-                        [f"input(s) not pending for {session_id}: {', '.join(unknown)}"])
-                batch = list(input_ids)
-            run.input_event_ids = [*run.input_event_ids, *batch]
-            await asyncio.to_thread(
-                atomic_write_text,
-                tree.runs.metadata_path(session_id, run_id),
-                run.model_dump_json(indent=2),
-            )
+        run = await tree.runs.get_run(session_id, run_id)
+        if run is None:
+            raise TaskNotFoundError(f"run {run_id} not found in session {session_id}")
+        events = tree.runs.load_events_sync(session_id)
+        if tree.runs.run_has_terminal_fact(run, events):
+            raise TaskConflictError([f"run {run_id} already finished; it claims no new inputs"])
+        if run.pid is not None:
+            raise TaskConflictError([f"run {run_id} already launched; it owns its bound batch"])
+        if tree.runs.stop_requested(events, run_id):
+            raise TaskConflictError([f"run {run_id} has a durable stop request; it never launches"])
+        pending_ids = [str(e.get("id")) for e in self.pending_inputs(session_id)]
+        if input_ids is None:
+            batch = pending_ids
+        else:
+            unknown = [i for i in input_ids if i not in pending_ids]
+            if unknown:
+                raise TaskConflictError(
+                    [f"input(s) not pending for {session_id}: {', '.join(unknown)}"])
+            batch = list(input_ids)
+        run.input_event_ids = [*run.input_event_ids, *batch]
+        await asyncio.to_thread(
+            atomic_write_text,
+            tree.runs.metadata_path(session_id, run_id),
+            run.model_dump_json(indent=2),
+        )
         return batch
 
     # ------------------------------------------------------------------
     # Launch decision (the executor seam)
     # ------------------------------------------------------------------
 
+    def unresolved_failure_run_ids(self, session_id: str) -> list[str]:
+        """Runs whose failed/interrupted outcome still stands unresolved.
+
+        A successful authorized retry supersedes the failure it retried (the
+        retry_of_run_id chain), the same judgment the work-state projection
+        applies. A standing failure keeps the node at attention: fresh
+        dispatch waits for the explicit retry instead of silently re-running
+        the failed batch's side effects because a new message arrived.
+        """
+        tree = self._tree
+        runs = tree.runs.list_run_records_sync(session_id)
+        outcomes = tree.facts_of(session_id).run_outcomes
+        superseded: set[str] = set()
+        for run in runs:
+            if outcomes.get(run.id) == "success":
+                target = run.retry_of_run_id
+                while target is not None and target not in superseded:
+                    superseded.add(target)
+                    target = next((r.retry_of_run_id for r in runs if r.id == target), None)
+        return [
+            run.id for run in runs
+            if outcomes.get(run.id) in ("failed", "interrupted") and run.id not in superseded]
+
     async def dispatch_pending(self, session_id: str) -> dict:
         """Evaluate the launch decision for one node's pending inputs.
 
         Closed nodes keep late input as history and attention-to-view; paused
-        nodes keep it durable without starting work. While a queued or active
-        consumer exists, later arrivals wait for it. With an executor
-        registered the pending batch is handed over after admission; without
-        one this stage records exactly that and acknowledges nothing.
+        nodes keep it durable without starting work. An active consumer owns
+        the node: later arrivals wait for the next serialized run. A queued
+        (registered, never launched) run is a pending execution request — an
+        explicit retry, or a run a crashed process registered — and is handed
+        to the executor to launch rather than deadlocking the node on itself;
+        a stop-requested queued run never launches and releases its batch. A
+        standing unresolved failure blocks fresh dispatch until the explicit
+        authorized retry lands. With an executor registered the pending batch
+        is handed over after admission; without one this stage records exactly
+        that and acknowledges nothing.
         """
 
         tree = self._tree
@@ -248,7 +288,7 @@ class TaskInputDispatcher:
         assert meta is not None
         pending = self.pending_inputs(session_id)
         decision: dict = {"session_id": session_id, "pending": len(pending)}
-        if tree.task_state(meta.id) != "open":
+        if tree.task_state(session_id) != "open":
             decision["launch"] = False
             decision["reason"] = "task is closed; input retained as history"
             return decision
@@ -257,25 +297,59 @@ class TaskInputDispatcher:
             decision["reason"] = "automation_paused; input retained until resume"
             return decision
         events = tree.runs.load_events_sync(session_id)
+        queued: list[RunRecord] = []
         for run in tree.runs.list_run_records_sync(session_id):
             if tree.runs.run_has_terminal_fact(run, events):
                 continue
-            if run.pid is None and tree.runs.stop_requested(events, run.id):
+            if run.pid is not None:
+                decision["launch"] = False
+                decision["reason"] = f"run {run.id} already consumes this node's inputs"
+                return decision
+            if tree.runs.stop_requested(events, run.id):
                 continue  # a stopped queued run is never launched
-            decision["launch"] = False
-            decision["reason"] = f"run {run.id} already consumes this node's inputs"
+            queued.append(run)
+        if queued:
+            if self.executor is None:
+                decision["launch"] = False
+                decision["reason"] = "execution adapters register in the next stage"
+                log.info("task_input_executor_pending", session_id=session_id, pending=len(pending))
+                return decision
+            launched = await self.executor(  # type: ignore[misc]
+                session_id, pending, launch_run_id=queued[0].id)
+            if launched is None:
+                # A concurrent dispatch launched it first, or the durable facts
+                # (terminal fact, stop request) refused it; nothing was started.
+                decision["launch"] = False
+                decision["reason"] = f"queued run {queued[0].id} was not launched by this call"
+                return decision
+            decision["launch"] = True
+            decision["run_id"] = launched
             return decision
         if not pending:
             decision["launch"] = False
             decision["reason"] = "no pending inputs"
+            return decision
+        unresolved = self.unresolved_failure_run_ids(session_id)
+        if unresolved:
+            decision["launch"] = False
+            decision["reason"] = (
+                f"run {unresolved[0]} has an unresolved failure; explicit retry is required "
+                "before new execution")
             return decision
         if self.executor is None:
             decision["launch"] = False
             decision["reason"] = "execution adapters register in the next stage"
             log.info("task_input_executor_pending", session_id=session_id, pending=len(pending))
             return decision
+        launched = await self.executor(session_id, pending)  # type: ignore[misc]
+        if launched is None:
+            # A concurrent dispatch won the reservation; this call scheduled
+            # no process and the batch stays claimed by the winner's Run.
+            decision["launch"] = False
+            decision["reason"] = "another dispatch reserved this batch"
+            return decision
         decision["launch"] = True
-        await self.executor(session_id, pending)  # type: ignore[misc]
+        decision["run_id"] = launched
         return decision
 
     async def finish_run(
@@ -320,17 +394,19 @@ class TaskInputDispatcher:
                 session_id, run_id, outcome,
                 input_event_ids=input_event_ids, exit_code=exit_code,
                 ended_at=ended_at if isinstance(ended_at, datetime) or ended_at is None else None)
-        if outcome == "success":
-            await tree.completion.recheck_close_requests(session_id, run_id)
-            meta = await tree.load_meta(session_id)
-            if meta is not None and meta.profile == "worker" and run.kind == "work":
-                try:
-                    await tree.completion.evaluate_automatic_completion(session_id, run_id=run_id)
-                except TaskConflictError as e:
-                    # The finish landed; the automatic close stays open with
-                    # its blockers visible, and the adapters re-evaluate.
-                    log.info("automatic_worker_completion_blocked",
-                             session_id=session_id, run_id=run_id, blockers=getattr(e, "blockers", None))
+        # First terminal fact wins: the durable outcome — never the outcome
+        # argument a losing concurrent finisher passed — governs every
+        # post-finish action. The completion owner owns the follow-up policy
+        # (close-request rechecks, automatic worker completion); a blocked
+        # automatic close keeps its blockers visible and the adapters
+        # re-evaluate.
+        durable = tree.runs.terminal_outcome(tree.runs.load_events_sync(session_id), run_id)
+        if durable == "success":
+            try:
+                await tree.completion.after_run_finished(session_id, run_id)
+            except TaskConflictError as e:
+                log.info("post_finish_completion_blocked",
+                         session_id=session_id, run_id=run_id, blockers=getattr(e, "blockers", None))
         return run
 
     # ------------------------------------------------------------------

@@ -780,6 +780,10 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     log.warning("master_cc_resume_unsupported_backend", session=session_meta.id, backend=option.type)
 
   env = _build_master_env(cfg, session_meta.id)
+  if item.extra_env:
+    # The v2 adapter's child identity (its own session id, signed run token,
+    # selected home) rides on top of the supervisor env.
+    env.update(item.extra_env)
   if pooled:
     # The pool chose the login directory; an inherited CLAUDE_CONFIG_DIR must
     # never shadow it.
@@ -817,10 +821,15 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
 
   # Per-turn transport dir: the backend pins its raw NDJSON log, stderr log,
   # and read cursor here so a restarted server can re-attach to this exact
-  # turn from the persisted master_run record. A relay's fresh process gets a
-  # dir and record of its own (see _spawn_and_stream).
+  # turn from the persisted master_run record. A v2 task-tree turn pins the
+  # same files inside its Run's own directory (the Run is the execution
+  # record). A relay's fresh process gets a dir and record of its own (see
+  # _spawn_and_stream).
   started_at = datetime.now(UTC)
-  log_dir = runs.master_run_log_dir(cfg.sessions_dir / session_meta.id, started_at)
+  log_dir = (
+      Path(item.task_run.transport_dir)
+      if item.task_run is not None
+      else runs.master_run_log_dir(cfg.sessions_dir / session_meta.id, started_at))
   raw_log = str(log_dir / runs.RAW_LOG_NAME)
 
   async def _on_spawn(pid: int) -> None:
@@ -830,14 +839,20 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     # callback fired — same contract as the worker path — so the pair cannot
     # be faked by a later pid reuse.
     assert backend is not None
-    record = MasterRunRecord(
-        pid=pid,
-        pid_start=backend.pid_start,
-        started_at=started_at,
-        raw_log=raw_log,
-        user_event_id=item.user_event_id,
-    )
-    await item.callbacks.persist_master_run(session_meta.id, record)
+    if item.task_run is not None:
+      assert item.on_task_spawn is not None
+      # The v2 Run owns the identity: pid/pid_start land on the Run record
+      # before any call from its run credential is accepted.
+      await item.on_task_spawn(pid, backend.pid_start)
+    else:
+      record = MasterRunRecord(
+          pid=pid,
+          pid_start=backend.pid_start,
+          started_at=started_at,
+          raw_log=raw_log,
+          user_event_id=item.user_event_id,
+      )
+      await item.callbacks.persist_master_run(session_meta.id, record)
     record_persisted = True
 
   async def _spawn_and_stream(
@@ -850,7 +865,12 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     if backend is not None:
       record_persisted = False
       started_at = datetime.now(UTC)
-      log_dir = runs.master_run_log_dir(cfg.sessions_dir / session_meta.id, started_at)
+      # A v2 task-tree turn keeps every relay process inside its Run's own
+      # transport dir; the v1 turn gets the per-round master_run dir.
+      log_dir = (
+          Path(item.task_run.transport_dir)
+          if item.task_run is not None
+          else runs.master_run_log_dir(cfg.sessions_dir / session_meta.id, started_at))
       raw_log = str(log_dir / runs.RAW_LOG_NAME)
     backend = build_backend(
         option,

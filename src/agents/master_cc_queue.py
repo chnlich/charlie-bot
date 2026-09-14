@@ -206,11 +206,18 @@ async def _session_consumer(session_id: str) -> None:
         done_event.update(finish_extras)
         await item.callbacks.persist_and_broadcast(session_id, done_event)
 
-        # The turn is fully resolved — clear its restart-identity so the next
-        # startup reconcile neither re-attaches nor replays its user message.
-        # Written after MASTER_DONE: crash between the two replays the message
-        # with a marker (duplicate-tolerant) rather than silently dropping it.
-        await item.callbacks.persist_master_run(session_id, None)
+        # The v2 Run is the sole execution record: the adapter's finish hook
+        # lands the observation and the durable terminal fact (first terminal
+        # fact wins governs the follow-ups inside it). No master_run mirror
+        # exists for a v2 turn.
+        if item.task_run is not None and item.on_task_finish is not None:
+          await item.on_task_finish(cc_session_id, exit_code, finish_extras)
+        else:
+          # The turn is fully resolved — clear its restart-identity so the next
+          # startup reconcile neither re-attaches nor replays its user message.
+          # Written after MASTER_DONE: crash between the two replays the message
+          # with a marker (duplicate-tolerant) rather than silently dropping it.
+          await item.callbacks.persist_master_run(session_id, None)
 
         # Resolve the caller's future
         if not item.future.done():
@@ -266,6 +273,10 @@ async def run_message(
     is_voice: bool = False,
     expect_fresh_session: bool = False,
     user_event_id: str | None = None,
+    task_run: "master_cc_state.TaskRunBinding | None" = None,
+    on_task_spawn: Callable[[int, str | None], Awaitable[None]] | None = None,
+    on_task_finish: Callable[[str | None, int, dict], Awaitable[None]] | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> str | None:
   """Spawn a Claude Code process for the master agent and stream NDJSON events.
 
@@ -353,6 +364,10 @@ async def run_message(
       expect_fresh_session=expect_fresh_session,
       user_event_id=user_event_id,
       uploaded_files=uploaded_files,
+      task_run=task_run,
+      on_task_spawn=on_task_spawn,
+      on_task_finish=on_task_finish,
+      extra_env=extra_env,
   )
 
   # --- atomic enqueue block: no await, no statement that can raise ---

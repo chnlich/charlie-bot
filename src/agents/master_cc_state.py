@@ -2,7 +2,7 @@
 
 import asyncio
 import dataclasses
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from src.agents.backends.base import AgentBackend
 from src.core.config import CharlieBotConfig
@@ -21,6 +21,21 @@ _session_consumers: dict[str, asyncio.Task] = {}
 
 # Per-session running backend reference for external cancellation.
 _active_procs: dict[str, AgentBackend] = {}
+
+
+@dataclasses.dataclass
+class TaskRunBinding:
+  """The v2 task-tree Run one work item executes (data only, no behavior).
+
+  When set, the turn is a v2 manager_turn Run: the consumer records the
+  turn's outcome on the Run through the adapter's callbacks — never a
+  ``SessionMetadata.master_run`` — and the transport dir is the Run's own
+  directory (raw log, stderr log, cursor, launch text all live there).
+  """
+
+  session_id: str
+  run_id: str
+  transport_dir: str
 
 
 @dataclasses.dataclass
@@ -49,6 +64,14 @@ class _WorkItem:
   # live turn's raw log instead of spawning a new process.
   resume_record: MasterRunRecord | None = None
   resume_is_alive: Callable[[], bool] | None = None
+  # v2 task-tree binding plus the adapter's spawn/finish hooks. When task_run
+  # is set the turn records pid/pid_start and its terminal outcome on the Run
+  # (task_execution closures), merges extra_env into the child environment,
+  # and never writes a SessionMetadata.master_run.
+  task_run: TaskRunBinding | None = None
+  on_task_spawn: Callable[[int, str | None], Awaitable[None]] | None = None
+  on_task_finish: Callable[[str | None, int, dict], Awaitable[None]] | None = None
+  extra_env: dict[str, str] | None = None
 
 
 # Per-session currently-processing work item. Read by queued_user_event_ids so

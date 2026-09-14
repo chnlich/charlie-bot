@@ -101,7 +101,8 @@ def claude_supervisor_env(env: Mapping[str, str]) -> dict[str, str]:
   memory store remains the only one, and an inherited ``CHARLIEBOT_SESSION_ID``
   is stripped, so only the id a caller writes afterwards travels on: a master
   gets its own session's id (see ``master_cc_run._build_master_env``) and a
-  worker gets none, whatever session's environment started the server.
+  worker gets the id its launcher applied after this strip (the v2 task-tree
+  adapter's child identity), never the parent's inherited one.
   Returns a copy; the argument is not mutated.
   """
   out = dict(env)

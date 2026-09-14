@@ -91,6 +91,7 @@ def build_review_prompt(
     context: str | None = None,
     user_request: str | None = None,
     worker_summary: str | None = None,
+    worker_log_path: Path | None = None,
 ) -> str:
   """Build the prompt for a review worker."""
   from src.core.spawner import load_worker_prompt_sections
@@ -110,14 +111,16 @@ def build_review_prompt(
   context_section = "\n".join(context_lines)
   session_dir = sessions_dir / session_id
   chat_log_path = chat_events_path(session_dir)
-  worker_log_path = thread_events_log_path(session_dir, original_thread_id)
+  # A v2 review pass reads the work Run's own events log; the legacy default
+  # stays the thread transport path.
+  resolved_worker_log = worker_log_path or thread_events_log_path(session_dir, original_thread_id)
   return (
       f"## Code Review\n"
       f"You are reviewing another worker's code changes.\n\n"
       f"## Context\n"
       f"{context_section}\n\n"
       f"If the summary above is insufficient or you are unsure about intent, "
-      f"read the full logs: Session: `{chat_log_path}`, Worker: `{worker_log_path}`\n\n"
+      f"read the full logs: Session: `{chat_log_path}`, Worker: `{resolved_worker_log}`\n\n"
       f"{coding_principles}\n"
       f"## Review Checklist\n"
       f"IMPORTANT: Make minimal changes. Prefer approving the worker's code as-is. "
@@ -203,6 +206,7 @@ async def extract_review_context(
     session_id: str,
     thread_id: str,
     sessions_dir: Path,
+    worker_log_path: Path | None = None,
 ) -> tuple[str | None, str | None]:
   """Extract user request and worker summary from JSONL logs for review context.
 
@@ -227,7 +231,7 @@ async def extract_review_context(
     log.warning("review_context_user_request_unavailable", session=session_id, thread=thread_id)
 
   try:
-    worker_log = thread_events_log_path(session_dir, thread_id)
+    worker_log = worker_log_path or thread_events_log_path(session_dir, thread_id)
     chosen = await asyncio.to_thread(_worker_summary_from_events_log, worker_log)
     if chosen:
       worker_summary = chosen

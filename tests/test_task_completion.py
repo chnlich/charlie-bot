@@ -151,6 +151,17 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
   assert any("task spec" in b for b in blockers)
   assert any("lands on other-branch" in b for b in blockers)
 
+  # A review run that chains to a different work Run is not this delivery's
+  # evidence (the work/spec/review pin): it names work this claim does not.
+  await tree.runs.register_run(
+      RunRecord(id="run-misreview", session_id=worker.id, kind="review",
+                review_of_run_id="run-earlier-attempt"))
+  await tree.runs.record_finish(worker.id, "run-misreview", "success")
+  mischained = CompletionEvidence(summary="s", result_refs=["review:run-misreview"],
+                                  run_ids=["run-work"], review_run_ids=["run-misreview"])
+  blockers = tree.completion.evidence_blockers(index.metas[worker.id], mischained)
+  assert any("reviews work run run-earlier-attempt" in b for b in blockers)
+
   # A review run of ANOTHER task is not review evidence.
   stranger = await create_task(tree, parent=None, request_id="stranger")
   await tree.runs.register_run(
@@ -162,21 +173,53 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
   assert any("review Run of task" in b for b in blockers)
 
   # Complete evidence closes the implement worker: a successful review run of
-  # this task plus landing on the branch its runs target.
+  # this task (chained to the named work Run) plus a commit that REALLY landed
+  # on the target branch of the task's repository — the git layer verifies
+  # existence and ancestry, so a forged or unlanded hash cannot close.
+  repo = tmp_path / "task-repo"
+  subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+  subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@example.com"], check=True)
+  subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+  (repo / "seed.txt").write_text("seed\n")
+  subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+  subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "seed"], check=True)
+  tree_meta = await tree.load_meta(worker.id)
+  assert tree_meta is not None and tree_meta.task is not None
+  tree_meta.task.repo_path = str(repo)
+  tree_meta.task.base_branch = "main"
+  await tree._save_meta(tree_meta)
+  landed_commit = subprocess.run(
+      ["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
+      capture_output=True, text=True).stdout.strip()
+
   await tree.runs.register_run(
-      RunRecord(id="run-review", session_id=worker.id, kind="review", base_branch="main"))
+      RunRecord(id="run-review", session_id=worker.id, kind="review", base_branch="main",
+                review_of_run_id="run-work"))
   await tree.dispatch.finish_run(worker.id, "run-review", outcome="success")
   good = CompletionEvidence(
       summary="implemented",
-      result_refs=["run:run-work", f"spec:{'a' * 64}", f"landed:main@{'d' * 40}"],
+      result_refs=["run:run-work", f"spec:{'a' * 64}", f"landed:main@{landed_commit}"],
       run_ids=["run-work"], review_run_ids=["run-review"],
-      landing=LandingEvidence(branch="main", commit="d" * 40))
+      landing=LandingEvidence(branch="main", commit=landed_commit, repo_path=str(repo)))
+
+  # The forged variant of the same shape — a hash that exists nowhere — is an
+  # explicit verified blocker on the manual path.
+  forged = CompletionEvidence(
+      summary="forged",
+      result_refs=[f"run:run-work", f"landed:main@{'d' * 40}"],
+      run_ids=["run-work"], review_run_ids=["run-review"],
+      landing=LandingEvidence(branch="main", commit="d" * 40, repo_path=str(repo)))
+  with pytest.raises(TaskConflictError, match="landing evidence unverified"):
+    await tree.completion.complete_task(
+        worker.id, request_id="close-forged", evidence=forged, caller=OPERATOR)
+  assert tree.task_state(worker.id) == "open"
   status, payload = await tree.completion.complete_task(
       worker.id, request_id="close-implement", evidence=good, caller=OPERATOR)
   assert status == 200
   assert tree.task_state(worker.id) == "completed"
   # The run records survive the close (evidence preserved).
-  assert {r.id for r in tree.runs.list_run_records_sync(worker.id)} == {"run-work", "run-review"}
+  assert {r.id for r in tree.runs.list_run_records_sync(worker.id)} == {
+      "run-work", "run-review", "run-misreview"}
 
 
 @pytest.mark.asyncio

@@ -134,9 +134,10 @@ def test_rows_skip_the_walk_until_a_mark_or_the_sweep(
   real = threads_api._row_source_stats
 
   def counting(threads_dir: str,
-               triggers_dir: str) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]]]:
+               triggers_dir: str,
+               runs_dir: str | None = None):
     walks["n"] += 1
-    return real(threads_dir, triggers_dir)
+    return real(threads_dir, triggers_dir, runs_dir)
 
   monkeypatch.setattr(threads_api, "_row_source_stats", counting)
 
@@ -425,9 +426,10 @@ def test_sweep_survives_continuous_marked_polls(tmp_path: Path, monkeypatch: pyt
   real = threads_api._row_source_stats
 
   def counting(threads_dir: str,
-               triggers_dir: str) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]]]:
+               triggers_dir: str,
+               runs_dir: str | None = None):
     walks["n"] += 1
-    return real(threads_dir, triggers_dir)
+    return real(threads_dir, triggers_dir, runs_dir)
 
   monkeypatch.setattr(threads_api, "_row_source_stats", counting)
   client.get(url)

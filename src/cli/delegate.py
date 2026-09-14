@@ -19,6 +19,7 @@ import sys
 
 from src.cli.common import (
     add_session_arg,
+    find_local_task_child,
     find_local_thread,
     post_internal_api,
     read_required_text_file,
@@ -111,6 +112,16 @@ def main() -> None:
           "0 = default cleanup behavior."),
   )
   parser.add_argument(
+      "--request-id",
+      dest="request_id",
+      default=None,
+      help=(
+          "Stable operation id for the delegation (v2 task-tree sessions). A replayed "
+          "create/delegate with the same request-id returns the original child instead of a "
+          "second process. Omitted: a stable id is derived from the request content, so an "
+          "identical spec re-delegated from the same session returns the existing child — "
+          "pass an explicit id for intentional same-spec siblings."))
+  parser.add_argument(
       "--task-type",
       choices=["implement", "quick-edit", "script-run", "verify"],
       default="implement",
@@ -168,10 +179,17 @@ def main() -> None:
     payload["repo_path"] = args.repo
   if reviewer_context is not None:
     payload["context"] = reviewer_context
+  if args.request_id is not None:
+    payload["request_id"] = args.request_id
 
   def _readback() -> dict | None:
-    # Sent-but-lost: this delegation's own thread is the proof the effect
-    # landed. Matches the endpoint's response shape exactly.
+    # Sent-but-lost: this delegation's own product is the proof the effect
+    # landed. A v2 task-tree child (a worker task under this session with the
+    # same spec) returns the new {session_id, parent_session_id, run_id,
+    # thread_id} contract; a v1 session keeps its legacy thread shape.
+    child = find_local_task_child(session_id, description=task_spec, task_type=args.task_type)
+    if child is not None:
+      return child
     thread = find_local_thread(session_id, description=task_spec, task_type=args.task_type)
     if thread is None:
       return None

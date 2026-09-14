@@ -346,7 +346,10 @@ class HookTurnState:
       pre_tokens = payload["pre_tokens"]
       if not isinstance(pre_tokens, (int, float)):
         raise HookProtocolError("PostCompact pre_tokens must be numeric when present")
-    return [make_context_compacted_event(trigger, pre_tokens, model=None)]
+    # The synthesis takes the payload whole; this hook knows only two fields, so
+    # it wraps them into the same two-field payload make_compact_boundary_event
+    # produces for the opencode and charlie-code backends.
+    return [make_context_compacted_event(trigger, {"trigger": trigger, ET.COMPACT_PRE_TOKENS: pre_tokens}, model=None)]
 
   def _handle_stop(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
     self._validate_current_turn("Stop", payload)

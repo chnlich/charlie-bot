@@ -425,7 +425,11 @@ _COMMITTING_EVENT_SEQUENCE: list[dict] = [
     {
         "type": ET.CONTEXT_COMPACTED,
         "trigger": "auto",
-        "pre_tokens": 1000,
+        "compact_metadata": {
+            "trigger": "auto",
+            "pre_tokens": 1000,
+            "post_tokens": 200,
+        },
         "timestamp": "t7"
     },
     {

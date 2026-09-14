@@ -141,6 +141,8 @@ from src.core.codex_usage import CODEX_EVENT_MSG, CODEX_SESSION_META, CODEX_TOKE
 from src.core.config import get_config
 from src.core.json_utils import atomic_write_stream
 from src.core.models import BackendType
+from src.core.runs import DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RAW_LOG_NAME
+from src.core.threads import EVENTS_LOG_NAME, METADATA_NAME, THREADS_DIR_NAME
 
 DEFAULT_CLAUDE_DIR = Path.home() / ".claude"
 DEFAULT_CODEX_HOME = Path.home() / ".codex"
@@ -451,8 +453,10 @@ def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str,
   for session_path, session_is_dir, session_is_symlink in session_listing:
     if not session_is_dir or session_is_symlink:
       continue
-    for kind, container, name in (("thread", "threads", os.path.join("data", "events.jsonl")),
-                                  ("master", "data/master_runs", "agent.raw.ndjson")):
+    for kind, container, name in (
+        ("thread", THREADS_DIR_NAME, os.path.join(DATA_DIR_NAME, EVENTS_LOG_NAME)),
+        ("master", os.path.join(DATA_DIR_NAME, MASTER_RUNS_DIR_NAME), RAW_LOG_NAME),
+    ):
       try:
         listing = _charliebot_listing(os.path.join(session_path, container))
       except OSError as exc:
@@ -1223,7 +1227,7 @@ def _thread_metadata(path: str) -> dict | None:
   """The thread's ``{backend, model}`` pair from its metadata.json, or None when the file is
   absent. Any other read/parse failure propagates: the collect loop notes it and skips the
   thread, same contract as an unreadable log file."""
-  meta_path = Path(path).parent.parent / "metadata.json"
+  meta_path = Path(path).parent.parent / METADATA_NAME
   try:
     with open(meta_path, "rb") as fh:
       meta = orjson.loads(fh.read())

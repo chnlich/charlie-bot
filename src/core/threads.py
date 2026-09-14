@@ -20,6 +20,7 @@ from src.core.models import (
     ThreadStatus,
     utc_now,
 )
+from src.core.runs import DATA_DIR_NAME
 from src.core.sidebar_state import mark_sidebar_dirty
 
 log = LazyStructlogLogger()
@@ -34,6 +35,10 @@ METADATA_NAME = "metadata.json"
 # scan, boot recovery) walks it by name, so all sides must agree on this name.
 THREADS_DIR_NAME = "threads"
 
+# The chat event log inside a thread's data directory. token_tally's corpus
+# walk joins the same relative suffix by string, so the names move together.
+EVENTS_LOG_NAME = "events.jsonl"
+
 # Backstop cap on ThreadManager's parse memo: each walk drops the entries for
 # files it did not see, so the resident set tracks the walked thread files and
 # the cap only bounds a burst of walks across many sessions.
@@ -42,7 +47,7 @@ _THREAD_LIST_MEMO_LIMIT = 1024
 
 def thread_events_log_path(session_dir: Path, thread_id: str) -> Path:
   """Return the path to a thread's events.jsonl under its session directory."""
-  return session_dir / THREADS_DIR_NAME / thread_id / "data" / "events.jsonl"
+  return session_dir / THREADS_DIR_NAME / thread_id / DATA_DIR_NAME / EVENTS_LOG_NAME
 
 
 def iter_thread_meta_stats(threads_dir: str | Path) -> Iterator[tuple[str, os.stat_result]]:
@@ -104,7 +109,7 @@ class ThreadManager:
     )
 
     thread_dir = self.thread_dir(session_meta.id, thread.id)
-    (thread_dir / "data").mkdir(parents=True, exist_ok=True)
+    (thread_dir / DATA_DIR_NAME).mkdir(parents=True, exist_ok=True)
 
     await self._save_metadata(thread)
     log.info("thread_created", thread_id=thread.id)

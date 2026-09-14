@@ -3,6 +3,7 @@
 import asyncio
 import copy
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -47,7 +48,7 @@ _TASK_NOT_FOUND_DETAIL = 'Task "{}" not found'
 _NEXT_RUN_MEMO: dict[tuple[str, str], tuple[datetime, str]] = {}
 
 
-def _load_croniter():
+def _load_croniter() -> Any:
   """Bind croniter into the module namespace on first use.
 
   croniter (+ its dateutil subtree, ~21 ms together) is the M99 import floor's
@@ -61,7 +62,7 @@ def _load_croniter():
   return croniter
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
   if name == "croniter":
     return _load_croniter()
   raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

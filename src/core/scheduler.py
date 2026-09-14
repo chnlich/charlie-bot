@@ -5,6 +5,7 @@ import contextlib
 import traceback
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.core import event_types as ET
@@ -40,7 +41,7 @@ log = LazyStructlogLogger()
 _TICK_INTERVAL = 60  # seconds between scheduler ticks
 
 
-def _load_croniter():
+def _load_croniter() -> Any:
   """Bind croniter into the module namespace on first use.
 
   croniter (+ its dateutil subtree, ~21 ms together) is the M99 import floor's

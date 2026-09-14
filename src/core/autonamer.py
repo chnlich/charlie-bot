@@ -25,11 +25,10 @@ a name the user has already set (matched via is_default_session_name).
 import json
 import re
 from collections.abc import Iterator
-from pathlib import Path
 
 from src.agents.backends.registry import build_backend
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
+from src.core.config import CharlieBotConfig, default_claude_dir
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendOption, SessionMetadata
 from src.core.sessions import SessionManager
@@ -266,7 +265,7 @@ async def maybe_auto_name_from_claude_ai_title(
   Group is intentionally left empty for TUI sessions in this version.
   """
   session_id = session_meta.id
-  claude_projects = Path.home() / ".claude/projects"
+  claude_projects = default_claude_dir() / "projects"
   matches = list(claude_projects.glob(f"*/{session_id}.jsonl"))
   if not matches:
     return

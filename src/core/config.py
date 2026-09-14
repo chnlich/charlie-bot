@@ -981,6 +981,17 @@ def _resolve_prompt_file(entry: dict, repo_root: Path) -> Path | None:
 CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
 
 
+def default_claude_dir() -> Path:
+  """The default claude login directory (``~/.claude``), read from HOME on every call.
+
+  The terminal fallback of :func:`claude_config_dir`'s order and the root the
+  cold-storage, autonamer, tui, and claude-sub readers re-derive per call, so those
+  honor a redirected HOME (tests isolate stores that way); the tally layer freezes an
+  import-time copy in ``token_tally.DEFAULT_CLAUDE_DIR``.
+  """
+  return Path.home() / ".claude"
+
+
 def claude_config_dir(account: ClaudeAccount | None = None) -> Path:
   """Resolve the CLAUDE_CONFIG_DIR a cc-claude process will use.
 
@@ -994,7 +1005,7 @@ def claude_config_dir(account: ClaudeAccount | None = None) -> Path:
   env_dir = os.environ.get(CLAUDE_CONFIG_DIR_ENV_VAR)
   if env_dir:
     return Path(env_dir).expanduser()
-  return Path.home() / ".claude"
+  return default_claude_dir()
 
 
 def _detect_local_timezone() -> str:

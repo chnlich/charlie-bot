@@ -28,7 +28,18 @@ CODEX_TURN_CONTEXT = "turn_context"
 CODEX_EVENT_MSG = "event_msg"
 CODEX_TOKEN_COUNT = "token_count"
 
-DEFAULT_CODEX_HOME = Path.home() / ".codex"
+
+def default_codex_home() -> Path:
+  """The default codex home (``~/.codex``), read from HOME on every call.
+
+  The rollout readers' corpus root; the cold-storage sweep re-derives it per call.
+  A function rather than a constant so every reader honors a redirected HOME
+  (tests isolate stores that way); the constant below is the import-time value.
+  """
+  return Path.home() / ".codex"
+
+
+DEFAULT_CODEX_HOME = default_codex_home()
 
 
 def _extract_codex_rollout_usage_event(event: dict[str, Any]) -> dict[str, Any] | None:

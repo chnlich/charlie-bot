@@ -39,7 +39,7 @@ from src.cli.claude_sub_bridge import (
 )
 from src.core import event_types as ET
 from src.core.claude_accounts import CREDENTIALS_FILE
-from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, charliebot_home_dir
+from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, charliebot_home_dir, default_claude_dir
 from src.core.json_utils import write_json_atomically
 from src.core.process import kill_process_group
 
@@ -297,7 +297,7 @@ def _claude_user_config_paths() -> tuple[Path, Path, Path, Path]:
     settings_root = root
   else:
     root = Path.home()
-    settings_root = root / ".claude"
+    settings_root = default_claude_dir()
   return (
       root / ".claude.json",
       settings_root / "settings.json",

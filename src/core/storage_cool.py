@@ -43,7 +43,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from src.core.config import CharlieBotConfig, claude_config_dir, get_config
+from src.core.codex_usage import default_codex_home
+from src.core.config import CharlieBotConfig, claude_config_dir, default_claude_dir, get_config
 from src.core.json_utils import load_json_meta
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus, parse_utc_datetime
@@ -340,7 +341,7 @@ def claude_projects_roots(cfg: CharlieBotConfig) -> list[Path]:
   CharlieBot session id nor the worktree prefix stays untouched no matter which
   tree it sits in.
   """
-  homes = {Path.home() / ".claude", claude_config_dir()}
+  homes = {default_claude_dir(), claude_config_dir()}
   for account in cfg.accounts.claude:
     homes.add(Path(account.config_dir).expanduser())
   return sorted(home / "projects" for home in homes)
@@ -477,7 +478,7 @@ def _sweep_claude_transcripts(
 
 def codex_session_trees() -> list[Path]:
   """The rollout tree codex writes into; codex runs from the default home."""
-  return [Path.home() / ".codex" / "sessions"]
+  return [default_codex_home() / "sessions"]
 
 
 def codex_rollout_session_id(path: Path) -> str | None:

@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import NoReturn
 
 from websockets.sync import client as _ws_client
 
@@ -89,27 +90,25 @@ class _WarmRenderer:
             stdout=subprocess.DEVNULL,
             stderr=stderr_log)
     except OSError as e:
-      tail = self._stderr_tail()
-      self.close()
-      raise ValueError(f"headless renderer could not be launched: {self._chrome_bin} ({e}){tail}") from e
+      self._launch_failed(str(e), cause=e)
     port_file = self._udd / "DevToolsActivePort"
     while not port_file.is_file():
       if self._proc.poll() is not None or time.monotonic() > self._deadline:
-        tail = self._stderr_tail()
-        self.close()
-        raise ValueError(
-            f"headless renderer could not be launched: {self._chrome_bin} "
-            f"(no DevToolsActivePort){tail}")
+        self._launch_failed("no DevToolsActivePort")
       time.sleep(0.05)
     port, path = port_file.read_text().splitlines()[:2]
     try:
       self._ws = _ws_client.connect(f"ws://127.0.0.1:{port}{path}", open_timeout=HEADLESS_LAUNCH_TIMEOUT)
     except Exception as e:
-      tail = self._stderr_tail()
-      self.close()
-      raise ValueError(f"headless renderer could not be launched: {self._chrome_bin} ({e}){tail}") from e
+      self._launch_failed(str(e), cause=e)
     target_id = self._cmd("Target.createTarget", url="about:blank")["result"]["targetId"]
     self._session = self._cmd("Target.attachToTarget", targetId=target_id, flatten=True)["result"]["sessionId"]
+
+  def _launch_failed(self, reason: str, cause: BaseException | None = None) -> NoReturn:
+    # The stderr tail must be read before close(): close() drops the log file.
+    tail = self._stderr_tail()
+    self.close()
+    raise ValueError(f"headless renderer could not be launched: {self._chrome_bin} ({reason}){tail}") from cause
 
   def _stderr_tail(self) -> str:
     # The browser's last stderr bytes for the failure messages; empty while nothing was written.

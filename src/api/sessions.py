@@ -16,8 +16,11 @@ from src.api.deps import (
     bad_request,
     get_config_on_loop,
     get_plan_manager,
+    get_run_store,
     get_session_manager,
+    get_task_manager,
     get_thread_manager,
+    require_caller,
     require_found,
     require_session,
     trigger_manager,
@@ -43,21 +46,39 @@ from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo
 from src.core.message_aggregator import tool_preview
 from src.core.models import (
+    AncestorRef,
     BackendOption,
     BackendType,
+    CancelRunRequest,
     CreateSessionRequest,
     DeleteGroupRequest,
     EloneSessionRequest,
     ForkSessionRequest,
+    PatchSessionTaskRequest,
     RateRoundRequest,
     RenameGroupRequest,
     RenameSessionRequest,
+    RetryRunRequest,
+    RunCancelResponse,
+    RunPage,
     SessionMetadata,
     SessionStatus,
+    SessionRow,
     SetGroupRequest,
     SwitchBackendRequest,
+    TaskState,
     ThreadMetadata,
     UtcDatetime,
+    WorkState,
+)
+from src.core.run_token import CallerIdentity
+from src.core.runs import RunIdentityConflictError, RunNotFoundError
+from src.core.task_sessions import (
+    TaskConflictError,
+    TaskForbiddenError,
+    TaskInvalidError,
+    TaskNotFoundError,
+    TaskTreeManager,
 )
 from src.core.plans import PlanRegistryManager
 from src.core.sessions import (
@@ -271,7 +292,29 @@ async def create_session(
     req: CreateSessionRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    caller: CallerIdentity = Depends(require_caller),
 ) -> SessionMetadata:
+  if any(getattr(req, f) is not None for f in ("request_id", "task_parent_id", "profile", "task")):
+    # v2 task create: the task-tree owner binds (parent, request_id) to one node.
+    if req.request_id is None:
+      raise HTTPException(status_code=400, detail="request_id is required for task creation")
+    if req.backend is not None:
+      _resolve_requested_backend(req.backend, cfg, fallback_backend=_default_backend_id(cfg))
+    try:
+      meta = await task_mgr.create_task(
+          request_id=req.request_id,
+          task_parent_id=req.task_parent_id,
+          profile=req.profile,
+          task=req.task,
+          name=req.name,
+          backend=req.backend,
+          caller=caller,
+      )
+    except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+      raise _task_http_error(e) from e
+    log.info("task_created", session_id=meta.id, task_parent_id=req.task_parent_id, profile=req.profile)
+    return meta
   backend = _resolve_requested_backend(req.backend, cfg, fallback_backend=_default_backend_id(cfg))
   log.info("creating_session", backend=backend, name=req.name)
   return await session_mgr.create_session(req, backend=backend)
@@ -566,6 +609,57 @@ def _json_scalar_bytes(value: object) -> bytes:
   if isinstance(value, str):
     return b'"' + value.encode("ascii") + b'"'
   raise ValueError(f"unsupported overlay value type: {type(value).__name__}")
+
+
+class SessionDetailResponse(SessionMetadata):
+  """GET /api/sessions/{id} response: the session metadata plus the derived task fields."""
+  task_state: TaskState = "open"
+  work_state: WorkState = "idle"
+  archived: bool = False
+  ancestors: list[AncestorRef] = []
+
+
+class TreePageResponse(BaseModel):
+  """GET /api/sessions/tree response."""
+  items: list[SessionRow]
+  next_cursor: str | None = None
+  tree_revision: str
+
+
+def _task_http_error(e: Exception) -> HTTPException:
+  """Translate one task-tree domain error into its planned HTTP shape."""
+  if isinstance(e, (TaskInvalidError,)):
+    return HTTPException(status_code=400, detail=str(e))
+  if isinstance(e, (TaskNotFoundError, RunNotFoundError)):
+    return HTTPException(status_code=404, detail=str(e))
+  if isinstance(e, TaskForbiddenError):
+    return HTTPException(status_code=403, detail=str(e))
+  if isinstance(e, (TaskConflictError, RunIdentityConflictError)):
+    blockers = getattr(e, "blockers", None)
+    if blockers is None:
+      blockers = [str(e)]
+    return HTTPException(status_code=409, detail={"message": str(e), "blockers": blockers})
+  raise e
+
+
+@router.get("/tree", response_model=TreePageResponse)
+async def get_session_tree(
+    parent_id: str | None = Query(default=None),
+    include_archived: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=500),
+    cursor: str | None = Query(default=None),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+) -> dict:
+  """One revision-bound page of the task tree; empty parent_id queries the roots."""
+  try:
+    return await task_mgr.tree_page(
+        parent_id=parent_id or None,
+        include_archived=include_archived,
+        limit=limit,
+        cursor=cursor,
+    )
+  except (TaskInvalidError, TaskNotFoundError, TaskConflictError) as e:
+    raise _task_http_error(e) from e
 
 
 @router.get('/search', response_model=list[SessionMetadata])
@@ -969,9 +1063,19 @@ async def switch_session_backend(
   return meta
 
 
-@router.get("/{session_id}", response_model=SessionMetadata)
-async def get_session(meta: SessionMetadata = Depends(require_session)) -> SessionMetadata:
-  return meta
+@router.get("/{session_id}", response_model=SessionDetailResponse)
+async def get_session(
+    meta: SessionMetadata = Depends(require_session),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+) -> SessionDetailResponse:
+  """Session detail; task-tree nodes carry the derived task fields from one projection owner."""
+  if meta.profile is None:
+    return SessionDetailResponse(**meta.model_dump())
+  try:
+    detail = await task_mgr.session_detail(meta.id)
+  except (TaskInvalidError, TaskNotFoundError, TaskConflictError) as e:
+    raise _task_http_error(e) from e
+  return SessionDetailResponse.model_validate(detail)
 
 
 @router.delete("/{session_id}", response_model=SessionMetadata)
@@ -990,7 +1094,13 @@ async def archive_session(
 
 @router.delete("/{session_id}/permanent", status_code=204)
 async def delete_session_permanently(
-    session_id: str, session_mgr: SessionManager = Depends(get_session_manager)) -> Response:
+    session_id: str,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+) -> Response:
+  blockers = await task_mgr.deletion_blockers(session_id)
+  if blockers:
+    raise HTTPException(status_code=409, detail={"message": "permanent delete blocked", "blockers": blockers})
   result = await session_mgr.delete_session_permanently(session_id)
   if not result:
     raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
@@ -1037,13 +1147,29 @@ async def rate_round(
   return meta
 
 
-@router.patch("/{session_id}", response_model=SessionMetadata)
-async def rename_session(
+@router.patch("/{session_id}", response_model=SessionDetailResponse)
+async def patch_session(
     session_id: str,
-    req: RenameSessionRequest,
+    req: PatchSessionTaskRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
-) -> SessionMetadata:
-  return require_found(await session_mgr.rename_session(session_id, req.name))
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    caller: CallerIdentity = Depends(require_caller),
+) -> SessionDetailResponse:
+  """Rename plus the v2 task metadata mutations (one PATCH body).
+
+  A name-only PATCH keeps the legacy rename path; task fields route through
+  the task-tree owner with their structural guards.
+  """
+  if req.model_fields_set <= {"name"}:
+    if not req.name:
+      raise HTTPException(status_code=400, detail="rename requires a non-empty name")
+    meta = require_found(await session_mgr.rename_session(session_id, req.name))
+    return SessionDetailResponse(**meta.model_dump())
+  try:
+    meta = await task_mgr.patch_task(session_id, req, caller=caller)
+  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+    raise _task_http_error(e) from e
+  return SessionDetailResponse.model_validate(await task_mgr.session_detail(meta.id))
 
 
 @router.post("/{session_id}/group", response_model=SessionMetadata)
@@ -1120,3 +1246,63 @@ async def list_plans(
   # The plan panel polls this route; FastJsonResponse for the message-page cost
   # reason in get_session_events_page.
   return FastJsonResponse(await plan_mgr.list_plans(session_id))
+
+
+# ---------------------------------------------------------------------------
+# Task-tree run routes (schema_version=2)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{session_id}/runs", response_model=RunPage)
+async def list_session_runs(
+    session_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    cursor: str | None = Query(default=None),
+    _meta: SessionMetadata = Depends(require_session),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+) -> RunPage:
+  """One keyset page of the session's run records, chronological (queued first)."""
+  try:
+    slice_ = await asyncio.to_thread(task_mgr.runs.list_runs_page_sync, session_id, limit, cursor)
+  except ValueError as e:
+    raise bad_request(e) from e
+  return RunPage(items=slice_.items, next_cursor=slice_.next_cursor)
+
+
+@router.post("/{session_id}/retry")
+async def retry_session_run(
+    session_id: str,
+    req: RetryRunRequest,
+    _meta: SessionMetadata = Depends(require_session),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    caller: CallerIdentity = Depends(require_caller),
+) -> dict:
+  """Create the (session, request_id)-stable retry run of one recorded run."""
+  if not caller.is_operator:
+    raise HTTPException(status_code=403, detail="retrying a run requires operator credentials")
+  try:
+    return await task_mgr.create_retry(session_id, req.request_id, req.run_id)
+  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+    raise _task_http_error(e) from e
+
+
+@router.post("/{session_id}/runs/{run_id}/cancel", response_model=RunCancelResponse)
+async def cancel_session_run(
+    session_id: str,
+    run_id: str,
+    req: CancelRunRequest,
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    run_store=Depends(get_run_store),
+    caller: CallerIdentity = Depends(require_caller),
+) -> RunCancelResponse:
+  """Request one stop: durable fact first, then identity-checked signal and exit observation."""
+  if not caller.is_operator:
+    claims = caller.claims
+    assert claims is not None
+    if claims.session_id != session_id or claims.run_id != run_id:
+      raise HTTPException(status_code=403, detail="an agent may only stop its own bound run")
+  try:
+    result = await run_store.request_stop(session_id, run_id, req.request_id)
+  except (RunNotFoundError, RunIdentityConflictError) as e:
+    raise _task_http_error(e) from e
+  return RunCancelResponse(run_id=result.run_id, stop_requested=result.stop_requested, outcome=result.outcome)

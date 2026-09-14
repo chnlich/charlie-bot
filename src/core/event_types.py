@@ -121,6 +121,21 @@ UNREAD_CHANGED = "unread_changed"
 SESSION_RENAMED = "session_renamed"
 SESSION_GROUP_CHANGED = "session_group_changed"
 
+# -- Task tree control events (schema_version=2) -----------------------------
+# Durable task facts appended to a session's chat_events.jsonl through the
+# task-tree owner (src/core/task_sessions.py) and the run owner (src/core/runs.py).
+# Every event carries the common header id/type/timestamp/actor/source_session_id;
+# request_id fields give duplicate requests a stable, dedup-able identity.
+TASK_CREATED = "task_created"
+TASK_CLOSE_REQUESTED = "task_close_requested"
+TASK_CLOSED = "task_closed"
+TASK_REOPENED = "task_reopened"
+RUN_STOP_REQUESTED = "run_stop_requested"
+RUN_FINISHED = "run_finished"
+CHILD_REPORT = "child_report"
+PROMPT_CHANGED = "prompt_changed"
+TASK_IMPORTED = "task_imported"
+
 # -- LaTeX -------------------------------------------------------------------
 TEX_EDIT_PROPOSED = "tex_edit_proposed"
 

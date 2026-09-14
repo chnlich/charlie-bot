@@ -18,7 +18,13 @@ from src.agents.backends.pty_common import (
     tmux_session_exists,
     tmux_session_name,
 )
-from src.api.deps import get_config_on_loop, get_thread_manager, get_trigger_manager
+from src.api.deps import (
+    get_config_on_loop,
+    get_run_store,
+    get_task_manager,
+    get_thread_manager,
+    get_trigger_manager,
+)
 from src.api.responses import FastJsonResponse
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
@@ -35,6 +41,7 @@ from src.core.models import (
     WorkerEvent,
 )
 from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events
+from src.core.runs import RunIdentityConflictError, RunNotFoundError
 from src.core.process import kill_process_group
 from src.core.sidebar_state import RevisionSweepGate, session_revision, take_marked_paths
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME, ThreadManager, iter_thread_meta_stats
@@ -703,10 +710,27 @@ async def cancel_thread(
     session_id: str,
     thread_id: str,
     thread_mgr: ThreadManager = Depends(get_thread_manager),
+    run_store=Depends(get_run_store),
+    task_mgr=Depends(get_task_manager),
 ) -> dict:
-  """Cancel a running thread (sends SIGTERM to the subprocess via streaming manager)."""
+  """Cancel a running thread (sends SIGTERM to the subprocess via streaming manager).
+
+  A v2 alias resolution (new-run compatibility alias, or an imported old id)
+  routes to the Run owner's stop implementation instead: the same durable
+  request, identity check and terminal fact as the v2 cancel route — and no
+  legacy ThreadMetadata status copy is ever written for it.
+  """
   thread = await thread_mgr.get_thread(session_id, thread_id)
-  if not thread:
+  if thread is None:
+    alias = task_mgr.aliases.resolve_thread(session_id, thread_id)
+    if alias is not None:
+      target_session, target_run = alias["session_id"], alias["run_id"]
+      try:
+        result = await run_store.request_stop(target_session, target_run, f"thread-cancel:{thread_id}")
+      except (RunNotFoundError, RunIdentityConflictError) as e:
+        from src.api.sessions import _task_http_error
+        raise _task_http_error(e) from e
+      return {"run_id": result.run_id, "stop_requested": result.stop_requested, "outcome": result.outcome}
     raise HTTPException(status_code=404, detail=_THREAD_NOT_FOUND_DETAIL)
 
   if thread.pid:

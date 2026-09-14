@@ -9,6 +9,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from src.core.config import get_credentials
 from src.core.constants import FILE_SERVER_MOUNTS
+from src.core.run_token import RunTokenError, bearer_from_authorization, verify_run_token
 
 
 def _credential_matches(candidate: str, key: str) -> bool:
@@ -103,8 +104,7 @@ def _header_value(scope: Scope, name: bytes) -> str:
 
 
 def _bearer_from_scope(scope: Scope) -> str:
-  auth_header = _header_value(scope, b"authorization")
-  return auth_header[7:] if auth_header.startswith("Bearer ") else ""
+  return bearer_from_authorization(_header_value(scope, b"authorization"))
 
 
 def _cookie_key_from_scope(scope: Scope) -> str:
@@ -120,10 +120,31 @@ def _cookie_key_from_scope(scope: Scope) -> str:
   return morsel.value if morsel else ""
 
 
+def _scope_bearer_is_run_token(bearer: str, key: str) -> bool:
+  """Signature-only run-token check (the active-Run binding is enforced per route).
+
+  A bearer that is not the access key is treated as run-token use: a valid
+  signature passes the middleware and the caller-identity dependency
+  (``src.api.deps.require_caller``) binds it to an active Run. An invalid one
+  fails closed here — it never falls back to the operator cookie.
+  """
+  if not bearer or not key:
+    return False
+  try:
+    verify_run_token(bearer, key)
+  except RunTokenError:
+    return False
+  return True
+
+
 def _scope_has_access_key(scope: Scope, key: str) -> bool:
   bearer = _bearer_from_scope(scope)
-  if bearer and _credential_matches(bearer, key):
-    return True
+  if bearer:
+    if key and _credential_matches(bearer, key):
+      return True
+    # A presented non-access-key bearer is run-token use: verified or rejected,
+    # the operator cookie is never consulted for it.
+    return _scope_bearer_is_run_token(bearer, key)
   cookie = _cookie_key_from_scope(scope)
   return bool(cookie) and _credential_matches(cookie, key)
 

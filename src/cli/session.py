@@ -1,21 +1,40 @@
 """CLI verbs for session-level mutations, callable from any agent session.
 
   charliebot session create --name N [--backend B] [--group G] [--role R]
+  charliebot session create --parent P --profile manager --task-file FILE
+  charliebot session tree [--root ID] [--include-archived] [--limit N] [--cursor C]
+  charliebot session pause ID / resume ID
+  charliebot session retry ID --run RUN_ID [--request-id ID]
   charliebot session send <target-id> (--message T | --file P)
 
-``create`` builds session metadata only (no first message); with ``--group`` a
-second call assigns the group. ``send`` relays a message into the target
-session as an ``agent_message`` event (never a ``user`` event), so it neither
-mints nor revokes a takeoff authorization window. The caller session comes
-from the server-written CHARLIEBOT_SESSION_ID per the usual CLI convention
-(see ``resolve_session_id``).
+``create`` builds session metadata only (no first message); with ``--parent``
+it becomes the v2 task create: the task-file carries the ``task`` object
+(goal/acceptance/context_refs/repo_path/base_branch/task_type/keep_worktree),
+the server binds (parent, request_id) to one stable node, and a replayed
+request returns the original product. ``tree`` pages the task tree. ``pause``/
+``resume`` flip ``automation_paused`` (pausing never terminates a live run).
+``retry`` creates the request-bound retry run of one recorded run.
+
+``send`` relays a message into the target session as an ``agent_message``
+event (never a ``user`` event), so it neither mints nor revokes a takeoff
+authorization window. The caller session comes from the server-written
+CHARLIEBOT_SESSION_ID per the usual CLI convention (see ``resolve_session_id``).
+
+Authentication: with CHARLIEBOT_RUN_TOKEN set (an agent running inside a Run)
+every request carries that token and nothing else — a rejection surfaces the
+server's 401, never a silent operator-key fallback. complete/reopen/cancel
+verbs belong to the task-completion delivery stage and are intentionally
+absent here.
 """
 
 import argparse
 import json
+import uuid
 
 from src.cli.common import (
     exit_usage_error,
+    get_api,
+    patch_internal_api,
     post_internal_api,
     read_required_text_file,
     resolve_session_id,
@@ -27,10 +46,39 @@ def _build_parser() -> argparse.ArgumentParser:
   sub = parser.add_subparsers(dest="session_command", required=True)
 
   create = sub.add_parser("create", help="Create a session (metadata only, no first message)")
-  create.add_argument("--name", required=True, help="Session name")
+  create.add_argument("--name", default=None, help="Session/task name (optional)")
   create.add_argument("--backend", default=None, help="Backend id (optional)")
   create.add_argument("--group", default=None, help="Group name to assign after creation (optional)")
   create.add_argument("--role", default=None, help="Session role (optional)")
+  # ---- v2 task create ----
+  create.add_argument("--parent", default=None, help="Parent task id (optional; v2 task create)")
+  create.add_argument(
+      "--profile", default=None, choices=["manager", "worker"], help="Task profile (v2 task create)")
+  create.add_argument(
+      "--task-file", default=None, help="Path to the task object JSON (v2 task create; corresponds to the "
+                                        "create request's 'task' field)")
+  create.add_argument(
+      "--request-id", default=None,
+      help="Request id binding the stable node id (v2 task create; defaults to a fresh UUID)")
+
+  tree = sub.add_parser("tree", help="Page the task tree")
+  tree.add_argument("--root", default=None, help="Parent task id (default: the roots)")
+  tree.add_argument("--include-archived", action="store_true", help="Include archived/collapsed rows")
+  tree.add_argument("--limit", type=int, default=100, help="Page size (default 100)")
+  tree.add_argument("--cursor", default=None, help="next_cursor from the previous page")
+
+  pause = sub.add_parser("pause", help="Pause new automatic execution for one task")
+  pause.add_argument("session_id", help="Task id")
+
+  resume = sub.add_parser("resume", help="Resume automatic execution for one task")
+  resume.add_argument("session_id", help="Task id")
+
+  retry = sub.add_parser("retry", help="Create the retry run of one recorded run")
+  retry.add_argument("session_id", help="Task id")
+  retry.add_argument("--run", required=True, help="The run id being retried")
+  retry.add_argument(
+      "--request-id", default=None,
+      help="Request id binding the retry run (defaults to a fresh UUID; replays return the same run)")
 
   send = sub.add_parser("send", help="Relay a message to another session as an agent_message")
   send.add_argument("target", help="Target session id")
@@ -46,15 +94,45 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _cmd_create(args: argparse.Namespace) -> None:
-  payload: dict = {"name": args.name}
+  payload: dict = {}
+  if args.name is not None:
+    payload["name"] = args.name
   if args.backend is not None:
     payload["backend"] = args.backend
-  if args.role is not None:
-    payload["role"] = args.role
+  if args.parent is not None or args.profile is not None or args.task_file is not None:
+    if args.parent is None or args.profile is None:
+      exit_usage_error("v2 task create requires both --parent and --profile")
+    if args.task_file is not None:
+      payload["task"] = json.loads(read_required_text_file("--task-file", args.task_file))
+    payload["task_parent_id"] = args.parent
+    payload["profile"] = args.profile
+    payload["request_id"] = args.request_id or str(uuid.uuid4())
+  else:
+    if args.role is not None:
+      payload["role"] = args.role
   result = post_internal_api("/api/sessions/", payload)
   if args.group is not None:
     result = post_internal_api(f"/api/sessions/{result['id']}/group", {"group": args.group})
   print(json.dumps(result, indent=2))
+
+
+def _cmd_tree(args: argparse.Namespace) -> None:
+  params: dict = {"limit": args.limit, "include_archived": "true" if args.include_archived else "false"}
+  if args.root is not None:
+    params["parent_id"] = args.root
+  if args.cursor is not None:
+    params["cursor"] = args.cursor
+  print(json.dumps(get_api("/api/sessions/tree", params), indent=2))
+
+
+def _set_paused(session_id: str, paused: bool) -> None:
+  result = patch_internal_api(f"/api/sessions/{session_id}", {"automation_paused": paused})
+  print(json.dumps({"id": result["id"], "automation_paused": result["automation_paused"]}, indent=2))
+
+
+def _cmd_retry(args: argparse.Namespace) -> None:
+  payload = {"request_id": args.request_id or str(uuid.uuid4()), "run_id": args.run}
+  print(json.dumps(post_internal_api(f"/api/sessions/{args.session_id}/retry", payload), indent=2))
 
 
 def _cmd_send(args: argparse.Namespace) -> None:
@@ -79,6 +157,14 @@ def main() -> None:
   args = parser.parse_args()
   if args.session_command == "create":
     _cmd_create(args)
+  elif args.session_command == "tree":
+    _cmd_tree(args)
+  elif args.session_command == "pause":
+    _set_paused(args.session_id, True)
+  elif args.session_command == "resume":
+    _set_paused(args.session_id, False)
+  elif args.session_command == "retry":
+    _cmd_retry(args)
   elif args.session_command == "send":
     _cmd_send(args)
   else:

@@ -244,9 +244,9 @@ async def smoke(backend_id: str, purge: bool) -> None:
             "profile": "manager",
             "name": "smoke-manager",
         })
-        if status != 201:
+        if status != 200 or not manager.get("id"):
             fail(f"manager task create failed: {status} {manager}")
-        manager_id = manager["session_id"]
+        manager_id = manager["id"]
         log(f"manager task: {manager_id}")
 
         phrase_instruction = (
@@ -331,12 +331,16 @@ async def smoke(backend_id: str, purge: bool) -> None:
         # -- the delivery facts ----------------------------------------------
         tree = deps_tree()
         deadline = time.monotonic() + 60
+        archived = False
         while time.monotonic() < deadline:
             child_meta = await tree.load_meta(child_id)
-            if child_meta is not None and child_meta.archived_of is not None:
-                break
+            if child_meta is not None and tree.task_state(child_id) == "completed":
+                index = await tree._get_index()
+                if tree.archived_of(index, child_meta):
+                    archived = True
+                    break
             await asyncio.sleep(1.0)
-        else:
+        if not archived:
             fail(f"worker task {child_id} was not archived after its delivered report")
         if tree.task_state(manager_id) != "open":
             fail("the manager task did not remain open after the worker delivered")

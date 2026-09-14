@@ -93,7 +93,7 @@ async def send_message(
     from_session, from_session_name = agent_provenance(caller) if event_type != ET.USER else (None, None)
     uploaded_files = serialize_uploaded_files(req.uploaded_files)
     try:
-      await task_mgr.dispatch.admit_input(
+      admitted = await task_mgr.dispatch.admit_input(
           session_id,
           event_type=event_type,
           content=req.content,
@@ -107,7 +107,8 @@ async def send_message(
       raise HTTPException(status_code=403, detail=str(e)) from e
     except TaskInvalidError as e:
       raise HTTPException(status_code=400, detail=str(e)) from e
-    return JSONResponse(status_code=202, content={"status": "accepted"})
+    return JSONResponse(status_code=202, content={
+        "status": "accepted", "input_event_id": str(admitted.get("id"))})
 
   # The only content path that does not go through trigger_master: unarchive an
   # archived target here, before dispatching, so the slash-command branch and

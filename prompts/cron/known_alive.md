@@ -249,11 +249,11 @@ Known-alive symbols:
   (src/core/process.py), which `src/core/init_worker_recovery.py` already calls with
   two positional arguments. Vulture flags each site at 100% confidence as an unused
   variable. Same class as the `check`/`format` signature-mirror entry above.
- - `check` (`tests/test_terminal_backend.py`, keyword parameter of the inline
-   `fake_run_tmux` stub installed for `terminal._run_tmux` via `monkeypatch.setattr`) —
-   second site of the signature-mirror class: the stub mirrors the real `_run_tmux`
-   signature's keyword flags, `capture` and `check` (src/agents/backends/pty_common.py,
-   imported in src/agents/backends/terminal.py), the reuse test's only stub call is
+- `check` (`tests/test_terminal_backend.py`, keyword parameter of the inline
+  `fake_run_tmux` stub installed for `terminal._run_tmux` via `monkeypatch.setattr`) —
+  second site of the signature-mirror class: the stub mirrors the real `_run_tmux`
+  signature's keyword flags, `capture` and `check` (src/agents/backends/pty_common.py,
+  imported in src/agents/backends/terminal.py), the reuse test's only stub call is
   `("has-session", "-t", "charliebot-terminal")` with no `check=`, so deleting the parameter
   stays green; the mirror keeps the stub a faithful drop-in. Vulture flags it at 100%
   confidence as an unused variable.

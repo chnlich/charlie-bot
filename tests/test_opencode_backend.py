@@ -308,21 +308,18 @@ async def test_one_shot_text_passes_proxy_environment_and_deny_policy(monkeypatc
 def test_translate_tool_error_emits_tool_result(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  translated = backend.translate_event(
+  translated = backend._translate_part(
       {
           "type": "tool",
-          "part":
+          "callID": "call-1",
+          "tool": "glob",
+          "state":
               {
-                  "callID": "call-1",
-                  "tool": "glob",
-                  "state":
-                      {
-                          "input": {
-                              "pattern": "AGENTS.md",
-                              "path": "/tmp"
-                          },
-                          "error": "The user rejected permission to use this specific tool call.",
-                      },
+                  "input": {
+                      "pattern": "AGENTS.md",
+                      "path": "/tmp"
+                  },
+                  "error": "The user rejected permission to use this specific tool call.",
               },
       })
 

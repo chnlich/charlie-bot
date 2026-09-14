@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import os
+import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from conftest import make_home_config
-
-import subprocess
-from datetime import UTC, datetime
 
 from src.core import event_types as ET
 from src.core.models import PatchSessionTaskRequest, RunRecord, TaskSpec
@@ -89,7 +88,7 @@ async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_pa
 
   # The feature's manager consumes its two child reports before closing: they
   # are unprocessed input, and closure blocks on them.
-  feature_turn = await tree.runs.register_run(
+  await tree.runs.register_run(
       RunRecord(id="run-feature-turn", session_id=feature.id, kind="manager_turn"))
   await tree.dispatch.claim_input_batch(feature.id, "run-feature-turn")
   await tree.dispatch.finish_run(feature.id, "run-feature-turn", outcome="success")
@@ -133,10 +132,11 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
       RunRecord(id="run-work", session_id=worker.id, kind="work",
                 task_spec_hash="a" * 64, base_branch="main"))
   # The successful work run does NOT close an implement worker: pending review
-  # blocks, and the task stays open with its evidence and worktree.
-  with pytest.raises(TaskConflictError, match="review"):
-    await finish_worker_run(tree, worker.id, "run-work")
+  # blocks the automatic close, and the task stays open with its evidence.
+  await finish_worker_run(tree, worker.id, "run-work")
   assert tree.task_state(worker.id) == "open"
+  with pytest.raises(TaskConflictError, match="review"):
+    await tree.completion.evaluate_automatic_completion(worker.id, run_id="run-work")
   index = await tree._get_index()
   assert index.metas[worker.id].task is not None
   assert index.metas[worker.id].task.keep_worktree is True  # the worktree stays claimed
@@ -262,7 +262,7 @@ async def test_own_manager_close_returns_202_and_rechecks_after_run_finish(tmp_p
   assert not any("queued" in b or "active" in b for b in remaining)
 
   # Conditions clear: a consumer takes the later inputs, then the close lands.
-  consume = await tree.runs.register_run(
+  await tree.runs.register_run(
       RunRecord(id="run-consume", session_id=manager.id, kind="manager_turn"))
   await tree.dispatch.claim_input_batch(manager.id, "run-consume")
   await tree.dispatch.finish_run(manager.id, "run-consume", outcome="success")
@@ -378,7 +378,7 @@ async def test_reopen_contract(tmp_path: Path) -> None:
   # closure blocks on unprocessed input, and a child report is input.
   await tree.runs.register_run(RunRecord(id="run-w", session_id=worker.id, kind="work"))
   await finish_worker_run(tree, worker.id, "run-w")
-  feature_turn = await tree.runs.register_run(
+  await tree.runs.register_run(
       RunRecord(id="run-feature-turn", session_id=feature.id, kind="manager_turn"))
   await tree.dispatch.claim_input_batch(feature.id, "run-feature-turn")
   await tree.dispatch.finish_run(feature.id, "run-feature-turn", outcome="success")
@@ -387,7 +387,7 @@ async def test_reopen_contract(tmp_path: Path) -> None:
       evidence=CompletionEvidence(summary="s", result_refs=["run:run-w"],
                                   run_ids=["run-feature-turn"]),
       caller=OPERATOR)
-  project_turn = await tree.runs.register_run(
+  await tree.runs.register_run(
       RunRecord(id="run-project-turn", session_id=project.id, kind="manager_turn"))
   await tree.dispatch.claim_input_batch(project.id, "run-project-turn")
   await tree.dispatch.finish_run(project.id, "run-project-turn", outcome="success")
@@ -434,7 +434,7 @@ async def test_reopen_contract(tmp_path: Path) -> None:
       caller=OPERATOR)
   # The second close delivers a second report to the project (a new close
   # event derives a new report id); the project consumes it before closing.
-  project_turn_2 = await tree.runs.register_run(
+  await tree.runs.register_run(
       RunRecord(id="run-project-turn-2", session_id=project.id, kind="manager_turn"))
   await tree.dispatch.claim_input_batch(project.id, "run-project-turn-2")
   await tree.dispatch.finish_run(project.id, "run-project-turn-2", outcome="success")

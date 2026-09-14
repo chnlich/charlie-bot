@@ -103,8 +103,10 @@ async def send_message(
           from_session_name=from_session_name,
       )
       await task_mgr.dispatch.dispatch_pending(session_id)
-    except (TaskInvalidError, TaskForbiddenError) as e:
+    except TaskForbiddenError as e:
       raise HTTPException(status_code=403, detail=str(e)) from e
+    except TaskInvalidError as e:
+      raise HTTPException(status_code=400, detail=str(e)) from e
     return JSONResponse(status_code=202, content={"status": "accepted"})
 
   # The only content path that does not go through trigger_master: unarchive an

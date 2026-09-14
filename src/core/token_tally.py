@@ -270,8 +270,9 @@ def _account_label(path: Path, stem: str) -> str:
 
   The provider default dir (``path.name == stem``) is labelled ``work (default)``; a custom
   dir ``.claude-ext-1`` (stem ``.claude``) reads as ``ext-1``. Parallel to ``src/api/ext_usage.py``'s
-  account labels but not identical -- that one labels the default ``main`` and strips a leading
-  dot from every basename; core must not import the api layer, so the derivation is restated here.
+  account labels but not identical -- that one labels the default ``main`` and takes every other
+  label verbatim from the configured pool; core must not import the api layer, so the derivation
+  is restated here.
   """
   if path.name == stem:
     return "work (default)"

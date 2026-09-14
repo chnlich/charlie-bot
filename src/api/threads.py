@@ -577,7 +577,7 @@ def read_thread_worker_events(events_path: Path) -> list[WorkerEvent]:
 def read_thread_worker_events_memo_hit(events_path: Path) -> list[WorkerEvent] | None:
   """Serve the unchanged-log steady state on the caller's thread; None otherwise.
 
-  The 5 s workers-panel poll of an unchanged log needs one exists+stat to
+  The 5 s workers-panel poll of an unchanged log needs one stat to
   prove the memo current, and the executor round-trip around it measures
   ~95 us against a ~12 us hit. Returns None — the caller re-runs
   ``read_thread_worker_events`` on a thread — for a cold memo, a grown or
@@ -704,7 +704,7 @@ async def cancel_thread(
     thread_id: str,
     thread_mgr: ThreadManager = Depends(get_thread_manager),
 ) -> dict:
-  """Cancel a running thread (sends SIGTERM to the subprocess via streaming manager)."""
+  """Cancel a running thread (sends SIGTERM to the subprocess's process group)."""
   thread = await thread_mgr.get_thread(session_id, thread_id)
   if not thread:
     raise HTTPException(status_code=404, detail=_THREAD_NOT_FOUND_DETAIL)

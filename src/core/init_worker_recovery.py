@@ -577,7 +577,8 @@ async def _complete_finalize_effects(
   thread marked completed/failed with effects pending. Each effect is
   judgment-idempotent (see finalize_effects), so re-running converges to a
   no-op; a thread with all effects present is skipped cheaply here. Improve
-  iterations are excluded (skip_notify semantics died with the loop).
+  iterations are excluded: their workers spawn with skip_notify=True, so the
+  absent notify is by design, and re-complete's notify runs skip_notify=False.
   """
   meta = item.meta
   thread_id = meta.get("id")

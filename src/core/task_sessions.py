@@ -252,9 +252,9 @@ class TaskTreeManager:
   # Tree index (rebuildable)
   # ------------------------------------------------------------------
 
-  async def _get_index(self) -> "_TreeIndex":
+  async def _get_index(self, *, force: bool = False) -> "_TreeIndex":
     now = time.monotonic()
-    if self._index is not None and now - self._index[1] < _TREE_INDEX_TTL_SECONDS:
+    if not force and self._index is not None and now - self._index[1] < _TREE_INDEX_TTL_SECONDS:
       return self._index[0]
     generation = self._index_generation
     index = await asyncio.to_thread(self._build_index_sync)
@@ -959,7 +959,7 @@ class TaskTreeManager:
 
   async def deletion_blockers(self, session_id: str) -> list[str]:
     """Permanent delete requires an empty, unreferenced task (the check half)."""
-    index = await self._get_index()
+    index = await self._get_index(force=True)  # a just-saved reference must be seen
     self._index_meta(index, session_id)
     meta = index.metas[session_id]
     if meta.profile is None:
@@ -1028,7 +1028,7 @@ class TaskTreeManager:
     if not isinstance(caller, CallerIdentity) or not caller.is_operator:
       raise TaskForbiddenError("permanent delete requires operator credentials")
     async with self.control_lock:
-      index = await self._get_index()
+      index = await self._get_index(force=True)
       self._index_meta(index, session_id)
       meta = index.metas[session_id]
       if meta.profile is not None:

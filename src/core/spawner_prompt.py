@@ -9,13 +9,17 @@ from src.core.models import SessionMetadata, TaskType
 _PROMPT_SECTION_MARKER_PREFIX = "<!-- section: "
 _PROMPT_SECTION_MARKER_SUFFIX = " -->"
 
-# Every workflow section draws from the same token map (intro + branch tokens);
-# an absent key fails loud below rather than selecting a wrong workflow body.
-# The id set lives only here: _REQUIRED_WORKER_PROMPT_SECTIONS derives it.
+# Every workflow body draws from the same token map (intro + branch tokens);
+# a task type absent from the map fails loud below rather than selecting a
+# wrong workflow body. implement and quick_edit compose the template's shared
+# workflow_steps body with their own closing STOP section, so the
+# commit-message rule lives once in prompts/worker.md; script_run's body is
+# one complete section. The id set lives only here:
+# _REQUIRED_WORKER_PROMPT_SECTIONS derives it.
 _WORKFLOW_PROMPT_SECTION = {
-    TaskType.IMPLEMENT: "workflow_implement",
-    TaskType.QUICK_EDIT: "workflow_quick_edit",
-    TaskType.SCRIPT_RUN: "workflow_script_run",
+    TaskType.IMPLEMENT: ("workflow_steps", "workflow_implement"),
+    TaskType.QUICK_EDIT: ("workflow_steps", "workflow_quick_edit"),
+    TaskType.SCRIPT_RUN: ("workflow_script_run",),
 }
 
 _REQUIRED_WORKER_PROMPT_SECTIONS = (
@@ -27,7 +31,7 @@ _REQUIRED_WORKER_PROMPT_SECTIONS = (
     "intro_new",
     "intro_continuation",
     "worktree_workflow_header",
-    *_WORKFLOW_PROMPT_SECTION.values(),
+    *dict.fromkeys(sid for ids in _WORKFLOW_PROMPT_SECTION.values() for sid in ids),
     "task_spec_source_files",
     "task",
     "iteration_reports",
@@ -125,10 +129,14 @@ def _build_worker_prompt(
       "{{repo_path}}": str(repo_path),
   }
 
-  workflow_section_id = _WORKFLOW_PROMPT_SECTION.get(task_type)
-  if workflow_section_id is None:
+  workflow_section_ids = _WORKFLOW_PROMPT_SECTION.get(task_type)
+  if workflow_section_ids is None:
     raise ValueError(f"unsupported task_type: {task_type!r}")
-  workflow_body = _substitute_tokens(sections[workflow_section_id], {"{{intro_line}}": intro_line, **branch_tokens})
+  workflow_body = _substitute_tokens(
+      "\n".join(sections[section_id] for section_id in workflow_section_ids), {
+          "{{intro_line}}": intro_line,
+          **branch_tokens
+      })
 
   task_section = sections["task"].replace("{{description}}", description)
 

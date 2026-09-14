@@ -51,7 +51,7 @@ before anything else.
 A dedicated git worktree is already created for you.
 <!-- section: intro_continuation -->
 You are continuing work in an existing worktree from a previous iteration. Review previous iteration changes before starting.
-<!-- section: workflow_implement -->
+<!-- section: workflow_steps -->
 {{intro_line}}
 - Branch: `{{branch_name}}` (from {{base_branch_origin}})
 - Worktree: `{{wt_path}}`
@@ -62,18 +62,9 @@ Follow these steps exactly:
 2. Commit your changes with descriptive messages.
    Use structured commit messages: first line is a short summary, then a blank line, then a "Why:" line explaining the business reason for the change.
 
+<!-- section: workflow_implement -->
 STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.
 <!-- section: workflow_quick_edit -->
-{{intro_line}}
-- Branch: `{{branch_name}}` (from {{base_branch_origin}})
-- Worktree: `{{wt_path}}`
-- Repo: `{{repo_path}}`
-
-Follow these steps exactly:
-1. `cd {{wt_path}}` — do ALL your work inside this worktree.
-2. Commit your changes with descriptive messages.
-   Use structured commit messages: first line is a short summary, then a blank line, then a "Why:" line explaining the business reason for the change.
-
 STOP here. Do NOT rebase, push, or remove the worktree. No reviewer will run; the orchestrator will handle merge/push.
 <!-- section: workflow_script_run -->
 A dedicated git worktree is provided as your isolated sandbox.

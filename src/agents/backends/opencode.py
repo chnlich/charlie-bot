@@ -1,5 +1,7 @@
 """OpenCodeBackend wrapping the `opencode serve` HTTP/SSE API."""
 
+from __future__ import annotations
+
 import asyncio
 import base64
 import json
@@ -8,8 +10,8 @@ import re
 import ssl
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import httpx
 import orjson
 
 from src.agents.backends.base import (
@@ -43,7 +45,25 @@ from src.core.timeouts import (
     OPENCODE_STDOUT_DRAIN_TIMEOUT,
 )
 
+if TYPE_CHECKING:
+  import httpx
+
 log = LazyStructlogLogger()
+
+
+def __getattr__(name: str):
+  # httpx imports on first use: the server import floor (docs/perf_baseline.md
+  # M99) reaches this module through session_usage, and must not pay httpx's
+  # import chain (~60 ms with rich) for a client only opencode runs touch. The
+  # PEP 562 hook serves the external patch target
+  # `src.agents.backends.opencode.httpx.*`; the module's own runtime sites
+  # import httpx locally, which internal global lookups cannot route here.
+  if name == "httpx":
+    import httpx
+
+    return httpx
+  raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # The serve URL is plain localhost HTTP, so no TLS ever rides these clients;
 # the context exists only because httpx builds a fresh default SSL context per
@@ -213,6 +233,8 @@ class OpenCodeBackend(AgentBackend):
         self._server_url = await self._read_server_url()
         self._stdout_task = asyncio.create_task(self._stream_stdout())
 
+        import httpx
+
         async with httpx.AsyncClient(base_url=self._server_url, timeout=OPENCODE_HTTP_API_TIMEOUT,
                                      verify=_SERVE_SSL_CONTEXT) as client:
           await self._check_health(client)
@@ -302,6 +324,8 @@ class OpenCodeBackend(AgentBackend):
 
     A genuine unexpected disconnect (terminate() not called) stays a visible backend error.
     """
+    import httpx
+
     return self.terminated and isinstance(error, httpx.RemoteProtocolError)
 
   def _should_retry_lock_failure(self, attempt: int) -> bool:
@@ -729,6 +753,8 @@ class OpenCodeBackend(AgentBackend):
   async def _abort_session(self) -> None:
     if self._server_url is None or self._session_id is None:
       return
+    import httpx
+
     try:
       async with httpx.AsyncClient(base_url=self._server_url, timeout=OPENCODE_ABORT_TIMEOUT,
                                    verify=_SERVE_SSL_CONTEXT) as client:

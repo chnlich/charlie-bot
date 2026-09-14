@@ -88,8 +88,7 @@ async def test_v2_create_tree_detail_and_runs(task_env) -> None:
     assert detail.json()["ancestors"] == [{"id": ids["root"], "name": "Root"}]
 
     # Retry is stable per request id and visible in GET runs.
-    run = await task_mgr.runs.register_run(RunRecord(id="run-1", session_id=ids["worker"]))
-    _ = run
+    await task_mgr.runs.register_run(RunRecord(id="run-1", session_id=ids["worker"]))
     retry = client.post(f"/api/sessions/{ids['worker']}/retry",
                         json={"request_id": "retry-1", "run_id": "run-1"})
     assert retry.status_code == 200
@@ -274,13 +273,11 @@ async def test_invalid_or_ended_run_tokens_fail_closed(task_env) -> None:
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   with make_client(cfg, session_mgr, task_mgr) as client:
     # Forged signature: 401, even with a valid operator cookie riding along.
-    forged = {"Authorization": "Bearerforged", "Cookie": "charliebot_access_key=op-secret"}
     bad = client.post(
         "/api/sessions/",
         json={"request_id": "x", "task_parent_id": ids["root"], "profile": "worker"},
         headers={"Authorization": "Bearer forged-token", "Cookie": "charliebot_access_key=op-secret"})
     assert bad.status_code == 401
-    _ = forged
 
     # A validly signed token whose Run has ended is expired.
     await task_mgr.runs.register_run(RunRecord(id="run-done", session_id=ids["worker"]))

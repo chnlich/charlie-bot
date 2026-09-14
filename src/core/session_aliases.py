@@ -64,6 +64,10 @@ class SessionAliasStore:
         return mapped
     return None
 
+  def old_ids_for(self, canonical_session_id: str) -> list[str]:
+    """Every imported old id that resolves to *canonical_session_id*."""
+    return sorted(old for old, canonical in self._read()["old_session_ids"].items() if canonical == canonical_session_id)
+
   def register_run_thread(self, session_id: str, run_id: str) -> None:
     """Register the new-run compatibility thread alias (idempotent, atomic rewrite)."""
     self._put(alias_thread_key(session_id, run_id), {"session_id": session_id, "run_id": run_id})

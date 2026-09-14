@@ -1099,7 +1099,10 @@ async def delete_session_permanently(
     session_mgr: SessionManager = Depends(get_session_manager),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> Response:
-  blockers = await task_mgr.deletion_blockers(session_id)
+  try:
+    blockers = await task_mgr.deletion_blockers(session_id)
+  except (TaskInvalidError, TaskNotFoundError, TaskConflictError) as e:
+    raise _task_http_error(e) from e
   if blockers:
     raise HTTPException(status_code=409, detail={"message": "permanent delete blocked", "blockers": blockers})
   result = await session_mgr.delete_session_permanently(session_id)

@@ -750,6 +750,9 @@ class TaskTreeManager:
     triggers_dir = self._cfg.sessions_dir / session_id / "triggers"
     if triggers_dir.is_dir() and any(triggers_dir.glob("*.json")):
       blockers.append("has saved trigger reference(s)")
+    # Any imported old id resolving here is a structured saved reference too.
+    for old_id in self.aliases.old_ids_for(session_id):
+      blockers.append(f"referenced by session alias for old id {old_id}")
     return blockers
 
 

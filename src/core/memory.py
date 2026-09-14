@@ -305,17 +305,6 @@ def _validate_entry(entry: Entry, topics: dict[str, Topic], *, relaxed: bool, st
   return violations
 
 
-def entry_violations(entry: Entry, topics: dict[str, Topic], *, strict_v2: bool = True) -> list[str]:
-  """Semantic violations for one parsed entry under the entries/ rules (empty list = valid).
-
-  Public validation entry point for entries parsed outside the store. Same
-  rules as :func:`load_store` applies to ``entries/``; ``strict_v2`` (default)
-  additionally requires a frontmatter ``title`` and forbids literal ``both``
-  and ``created``/``source``, matching :func:`lint`.
-  """
-  return _validate_entry(entry, topics, relaxed=False, strict_v2=strict_v2)
-
-
 def _iter_entry_files(memory_dir: Path) -> list[Path]:
   """Return sorted entry .md files under entries/<topic>/."""
   entries_dir = memory_dir / _ENTRIES_DIRNAME

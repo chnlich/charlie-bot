@@ -165,7 +165,9 @@ def _mixed_replay_corpus() -> list[dict]:
 async def test_replay_sends_exactly_the_built_frame_list() -> None:
   # The replay's only producer of frames is the _CatchupWalk feed, sliced on
   # the event loop; the async half sends that list in order and nothing else,
-  # as pre-rendered wire text whose bytes match WebSocket.send_json's rendering.
+  # as pre-rendered wire text whose parsed content matches the frames (the
+  # render rides the shared orjson home; only the raw bytes can differ from a
+  # stdlib send_json form).
   events = _mixed_replay_corpus()
   for cursor in (0, 2, len(events)):
     ws = FakeWebSocket()
@@ -173,7 +175,7 @@ async def test_replay_sends_exactly_the_built_frame_list() -> None:
     expected = _catchup_frames(events, cursor)
     assert ws.sent == expected
     assert sent == len(expected)
-    assert ws.sent_text == [json.dumps(frame, separators=(",", ":"), ensure_ascii=False) for frame in expected]
+    assert [json.loads(text) for text in ws.sent_text] == expected
 
 
 @pytest.mark.asyncio

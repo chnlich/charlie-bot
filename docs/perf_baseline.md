@@ -48,7 +48,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M35 chat message-page responses, steady state | M35 collector below | seconds per request, worst projection corpus | events page median < 0.03 s | — (introduced with its first history row) |
 | M36 worker list poll payload and handler time, steady state | M36 collector below | seconds per list request + response body bytes, worst thread-metadata corpus; the conditional repeat (?etag=) of an unchanged poll | full median < 0.02 s; full body < 200 KB; conditional body 0 B (204) | — (introduced with its first history row) |
 | M37 archived-session chat tail page, steady state | M37 collector below | seconds per `parse_ndjson_tail(200)` call, worst on-disk archived live file | median < 0.005 s | — (introduced with its first history row) |
-| M38 session stream-broadcast fan-out, worst on-disk turn replay | M38 collector below | stream frames and json.dumps calls/seconds per turn replay, instant feed, one subscriber | dumps total < 0.02 s; final-frame parity true | — (introduced with its first history row) |
+| M38 session stream-broadcast fan-out, worst on-disk turn replay | M38 collector below | stream frames and wire-serialize calls/seconds per turn replay, instant feed, one subscriber | serialize total < 0.02 s; final-frame parity true | — (introduced with its first history row) |
 | M39 tui/status busy check, steady state | M39 collector below | seconds of loop lag + wall per per-session busy check, live ~/.claude/projects corpus (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.01 s; wall median < 0.001 s | — (introduced with its first history row) |
 | M40 session-list filtered listing + group reduction, steady state | M40 collector below | seconds per `list_sessions(starred=True, …)` call and per group-name reduction, live session corpus | both medians < 0.005 s | — (introduced with its first history row) |
 | M41 git diff/files repeat view, steady state | M41 collector below | seconds per repeat `diff_files` call over the charlie-bot root..HEAD range | median < 0.02 s | — (introduced with its first history row) |
@@ -2206,7 +2206,8 @@ on the preview-hiding types) and serializes once per fan-out. The collector reso
 worst stream turn on disk (events between bare user events whose stream deltas carry the
 most preview bytes; only files ≥ 2 MB contend), replays it instant-feed through the real
 ``MessageAggregator`` and ``StreamingManager`` into a stub socket mirroring starlette's
-send_json (json.dumps wrapped process-wide so both arms count), stopping before
+send_json (both ``json.dumps`` and ``orjson.dumps`` wrapped process-wide, so the counted
+serialize cost is the wire render whichever renderer the checkout uses), stopping before
 ``master_done`` so both arms must deliver the final preview. Evidence points the
 collector at the before and after checkouts (``CHECKOUT`` at each root):
 
@@ -2232,6 +2233,15 @@ real_dumps = json.dumps
 def timed_dumps(*a, **kw):
   t0 = time.perf_counter()
   out = real_dumps(*a, **kw)
+  stats["calls"] += 1
+  stats["time"] += time.perf_counter() - t0
+  return out
+
+import orjson
+real_odumps = orjson.dumps
+def timed_odumps(*a, **kw):
+  t0 = time.perf_counter()
+  out = real_odumps(*a, **kw)
   stats["calls"] += 1
   stats["time"] += time.perf_counter() - t0
   return out
@@ -2276,6 +2286,7 @@ async def main():
   agg = MessageAggregator()
   final = None
   json.dumps = timed_dumps
+  orjson.dumps = timed_odumps
   t0 = time.perf_counter()
   for i, ev in enumerate(turn):
     if ev.get("type") == "master_done":
@@ -2289,10 +2300,11 @@ async def main():
   wall = time.perf_counter() - t0
   await asyncio.sleep(0.5)  # settle: lets the fixed arm's trailing flush land
   json.dumps = real_dumps
+  orjson.dumps = real_odumps
   streams = [f for f in probe.frames if f.get("type") == "stream"]
   parity = bool(streams) and final is not None and streams[-1] == final
   print(f"session {sid}; turn replay {wall:.2f} s, {len(streams)} stream frames, "
-        f"{stats['calls']} json.dumps calls {stats['time'] * 1000:.0f} ms; final-frame parity {parity}")
+        f"{stats['calls']} serialize calls {stats['time'] * 1000:.0f} ms; final-frame parity {parity}")
 
 asyncio.run(main())
 EOF

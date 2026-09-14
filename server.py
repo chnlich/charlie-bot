@@ -28,6 +28,7 @@ from src.api import (
     internal,
     latex,
     pages,
+    responses,
     sessions,
     slash,
     threads,
@@ -545,13 +546,14 @@ def _catchup_frames(events: list[dict], cursor: int, *, event_index_offset: int 
 
 
 def _render_frames(frames: list[dict]) -> list[str]:
-  """Render each catchup frame to the exact bytes WebSocket.send_json would send.
+  """Render each catchup frame to the wire text the sockets receive.
 
-  Starlette's WebSocket.send_json is ``json.dumps(data, separators=(",", ":"),
-  ensure_ascii=False)`` plus a text-mode send; the parameters here must match it,
-  or the wire bytes change.
+  The render rides the shared orjson home (src.api.responses.fast_json_bytes,
+  the same render the broadcast fan-out uses); the parsed content equals the
+  stdlib ``send_json`` form this replay replaced, only the raw bytes differ at
+  the boundaries responses.py pins.
   """
-  return [json.dumps(frame, separators=(",", ":"), ensure_ascii=False) for frame in frames]
+  return [responses.fast_json_bytes(frame).decode("utf-8") for frame in frames]
 
 
 async def _replay_aggregated_catchup(

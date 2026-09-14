@@ -37,9 +37,10 @@ the named curation variants over several frozen cases — is documented in
 - Argument and manifest validation complete before any model call: a missing or
   malformed input exits nonzero without touching an endpoint.
 
-The pipeline lives in `src/core/memory_replay/` (manifest, retrieval, exchange,
-validate, transport, report, runner); `src/cli/memory.py` only parses
-arguments and prints the outcome.
+The pipeline lives in `src/core/memory_replay/`: the replay itself (manifest,
+retrieval, model exchange, mechanical validation, proposal bundle), the paired
+comparison of one recorded run, and the fixed-input variant experiment;
+`src/cli/memory.py` only parses arguments and prints the outcome.
 
 ## Manifest format
 

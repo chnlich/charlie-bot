@@ -419,7 +419,7 @@ async def serve_file(path: str, request: Request) -> Response:
   still there without pulling the file down.
   """
   diff_param = request.query_params.get("diff")
-  url_prefix = f"/files/{path}" if path else "/files"
+  url_prefix = f"{FILE_SERVER_MOUNTS[0]}/{path}" if path else FILE_SERVER_MOUNTS[0]
   # One executor hop carries the resolve, the exists answer, and the whole
   # listing build; None means a file, falling through to the artifact and
   # FileResponse arms.

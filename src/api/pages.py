@@ -61,7 +61,7 @@ _HOME_DESTINATIONS: tuple[dict[str, str], ...] = (
     },
     {
         "name": "File browser",
-        "url": "/files/",
+        "url": f"{FILE_SERVER_MOUNTS[0]}/",
         "description": "Browse any file on this host's filesystem."
     },
 )
@@ -263,7 +263,7 @@ async def perfetto_viewer(
   inputs = [_trace_input(value) for value in trace]
   if dir is not None:
     discovered = await asyncio.to_thread(_discover_trace_paths, dir, pattern)
-    inputs.extend((f"/files{path}", path) for path in discovered)
+    inputs.extend((f"{FILE_SERVER_MOUNTS[0]}{path}", path) for path in discovered)
 
   if not inputs:
     raise HTTPException(status_code=400, detail="No trace files specified. Provide 'trace' or 'dir' query params.")

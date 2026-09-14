@@ -51,10 +51,11 @@ log = LazyStructlogLogger()
 INPUT_EVENT_TYPES: frozenset[str] = frozenset(
     {ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT})
 
-# The admitted input types a browser/operator or agent route may produce. A
-# run-token caller using a user-message route is agent input; only verified
-# operator credentials are user input (route layer passes the type).
+# The admitted input types a message route may produce. A run-token caller on
+# the user-message route is agent input; only verified operator credentials
+# are user input (see input_event_type_for_caller).
 ROUTE_INPUT_TYPES: frozenset[str] = frozenset({ET.USER, ET.AGENT_MESSAGE})
+
 
 class TaskInputDispatcher:
     """The input/report owner wired over one TaskTreeManager."""
@@ -485,6 +486,7 @@ def input_event_type_for_caller(caller: object) -> str:
         claims = caller.claims
         assert claims is not None
         return ET.AGENT_MESSAGE
+    assert ET.USER in ROUTE_INPUT_TYPES and ET.AGENT_MESSAGE in ROUTE_INPUT_TYPES
     raise TaskForbiddenError("message input requires verified caller credentials")
 
 

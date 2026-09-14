@@ -25,15 +25,8 @@
   }
 
   const {sendInput, sendResize} = makePtySenders(sendJson);
-
-  function fitAndSendResize() {
-    if (!terminalOpen || !fitAddon || !term) return;
-    fitTerminalAndSendResize(term, fitAddon, sendResize);
-  }
-
-  function scheduleFitAndSendResize() {
-    scheduleAfterTerminalPaint(fitAndSendResize);
-  }
+  const {fitAndSendResize, scheduleFitAndSendResize} =
+      makeTerminalFitBridge(sendResize, () => term, () => fitAddon, () => terminalOpen);
 
   function ensureMount() {
     const container = getContainer();

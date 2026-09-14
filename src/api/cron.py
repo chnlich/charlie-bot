@@ -28,7 +28,7 @@ from src.core.config import (
 )
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionMetadata
-from src.core.scheduler import scheduled_task_session_binding
+from src.core.scheduler import load_croniter, scheduled_task_session_binding
 from src.core.sessions import ScheduledSessionBusyError, SessionManager
 from src.core.yaml_utils import load_yaml, save_yaml
 
@@ -48,23 +48,9 @@ _TASK_NOT_FOUND_DETAIL = 'Task "{}" not found'
 _NEXT_RUN_MEMO: dict[tuple[str, str], tuple[datetime, str]] = {}
 
 
-def _load_croniter() -> Any:
-  """Bind croniter into the module namespace on first use.
-
-  croniter (+ its dateutil subtree, ~21 ms together) is the M99 import floor's
-  largest deferrable third-party slice and no import path resolves a next run,
-  so the import rides the first next-run resolution; the module attribute it
-  binds stays the tests' monkeypatch target (tests/test_cron_next_run_memo.py).
-  """
-  from croniter import croniter
-
-  globals()["croniter"] = croniter
-  return croniter
-
-
 def __getattr__(name: str) -> Any:
   if name == "croniter":
-    return _load_croniter()
+    return load_croniter(globals())
   raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -74,9 +60,9 @@ def next_run_iso(cron_expr: str, timezone: str, now_utc: datetime) -> str:
   if hit is not None and now_utc < hit[0]:
     return hit[1]
   if "croniter" not in globals():
-    _load_croniter()
+    load_croniter(globals())
   tz = ZoneInfo(timezone)
-  next_run = croniter(cron_expr, datetime.now(tz)).get_next(datetime)  # noqa: F821  # bound by _load_croniter
+  next_run = croniter(cron_expr, datetime.now(tz)).get_next(datetime)  # noqa: F821  # bound by load_croniter
   iso = next_run.isoformat()
   _NEXT_RUN_MEMO[(cron_expr, timezone)] = (next_run, iso)
   return iso

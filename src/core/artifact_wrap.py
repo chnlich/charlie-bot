@@ -11,12 +11,24 @@ so a fragment with mangled control bytes aborts the write instead of shipping.
 
 import subprocess
 from pathlib import Path
-
-import requests
+from typing import Any
 
 from src.core import artifact_check
 from src.core.constants import REPO_ROOT
 from src.core.timeouts import KATEX_CDN_FETCH_TIMEOUT
+
+
+def __getattr__(name: str) -> Any:
+  # requests costs ~100 ms of import (urllib3 + charset_normalizer) and only the
+  # one-time KaTeX CDN fetch sends a request; it loads on first use. Resolving it
+  # as a module attribute keeps the tests' "src.core.artifact_wrap.requests.*"
+  # patch targets valid.
+  if name != "requests":
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+  import requests
+  globals()["requests"] = requests
+  return requests
+
 
 _PRERENDER_DRIVER = REPO_ROOT / "scripts" / "prerender_math.js"
 
@@ -33,6 +45,7 @@ def ensure_vendored_katex(vendor_path: Path) -> Path:
   """Return *vendor_path*, fetching it once from the allowlisted CDN when absent."""
   if vendor_path.is_file():
     return vendor_path
+  import requests  # module-local: the module __getattr__ serves only attribute access
   vendor_path.parent.mkdir(parents=True, exist_ok=True)
   try:
     response = requests.get(KATEX_CDN_URL, timeout=KATEX_CDN_FETCH_TIMEOUT)

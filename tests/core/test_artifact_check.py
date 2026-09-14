@@ -30,7 +30,7 @@ from src.core.models import BackendOption
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET = "src.cli.artifact.get_config"
+_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET = "src.cli.common.get_config"
 
 
 def _genre_doc(genre: str, body: str) -> str:
@@ -712,7 +712,7 @@ def test_cli_two_open_forks_without_explainer_report_two_locations_and_skip_the_
     factory_called.append(option.id)
     raise AssertionError("the probe must never run when an assertion failed")
 
-  monkeypatch.setattr(artifact_check, "build_backend", factory)
+  monkeypatch.setattr("src.agents.backends.registry.build_backend", factory)
   monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
   assert _run_cli([str(artifact), "--genre", genre, "--trigger", "where are we?"]) == 1
   out = capsys.readouterr().out
@@ -751,7 +751,7 @@ class _FakeBackend:
 
 
 def _patch_backends(monkeypatch: pytest.MonkeyPatch, backends: dict[str, _FakeBackend]) -> None:
-  monkeypatch.setattr(artifact_check, "build_backend", lambda option, cfg: backends[option.id])
+  monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda option, cfg: backends[option.id])
 
 
 def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
@@ -830,7 +830,8 @@ def test_cli_assertions_only_skips_probe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], genre: str,
     make_doc: Callable[[], str]) -> None:
   artifact = _write(tmp_path, make_doc())
-  monkeypatch.setattr(artifact_check, "build_backend", lambda option, cfg: pytest.fail("probe must not run"))
+  monkeypatch.setattr(
+      "src.agents.backends.registry.build_backend", lambda option, cfg: pytest.fail("probe must not run"))
   monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
   assert _run_cli([str(artifact), "--genre", genre, "--assertions-only"]) == 0
   assert "--- cold read ---" not in capsys.readouterr().out
@@ -885,7 +886,8 @@ async def test_plan_present_and_artifact_check_reject_the_same_assertions_on_one
 async def test_plan_present_never_calls_build_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Registration stays model-free: present runs the assertions and constructs no backend."""
   monkeypatch.setattr(
-      artifact_check, "build_backend", lambda option, cfg: pytest.fail("registration must not build a backend"))
+      "src.agents.backends.registry.build_backend",
+      lambda option, cfg: pytest.fail("registration must not build a backend"))
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await make_plan_setup(tmp_path)
   file_rel = write_plan_artifact(cfg, meta.id, "plan_01.html")
   result = await plan_mgr.present(meta.id, file=file_rel, title="P1")

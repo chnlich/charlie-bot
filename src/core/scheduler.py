@@ -5,9 +5,8 @@ import contextlib
 import traceback
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
-
-from croniter import croniter
 
 from src.core import event_types as ET
 from src.core import task_chain
@@ -40,6 +39,19 @@ from src.core.threads import ThreadManager
 log = LazyStructlogLogger()
 
 _TICK_INTERVAL = 60  # seconds between scheduler ticks
+
+
+def _load_croniter() -> Any:
+  """Bind croniter into the module namespace on first use.
+
+  croniter (+ its dateutil subtree, ~21 ms together) is the M99 import floor's
+  largest deferrable third-party slice and no import path resolves a next
+  fire, so the import rides the scheduler's first due-task resolution.
+  """
+  from croniter import croniter
+
+  globals()["croniter"] = croniter
+  return croniter
 
 
 async def _backup_handler() -> str:
@@ -255,7 +267,9 @@ class Scheduler:
       # Never run: use a reference 60s before now so it fires immediately if due
       last_run_at = now - timedelta(seconds=_TICK_INTERVAL)
 
-    next_fire = croniter(task_cfg.cron, last_run_at).get_next(datetime)
+    if "croniter" not in globals():
+      _load_croniter()
+    next_fire = croniter(task_cfg.cron, last_run_at).get_next(datetime)  # noqa: F821  # bound by _load_croniter
     if next_fire <= now:
       handle = self._handles.get(task_cfg.name)
       if handle is not None and not handle.done():

@@ -1932,15 +1932,20 @@ class SessionManager:
     if aggregator is None or self._aggregator_epoch.get(session_id, 0) != epoch:
       log.debug("announce_skipped_rebuilt_aggregator", session_id=session_id, type=event.get("type"))
       return
-    meta = await self.get_session(session_id)
-    archive_offset = meta.archive_offset if meta else 0
-    event["event_index"] = archive_offset + self._chat_events.cached_event_count(session_id) - 1
-    channel = session_channel(session_id)
-    deltas = list(aggregator.feed(event))
-    for delta in deltas:
-      await streaming_manager.broadcast(channel, delta)
-    if event.get("type") not in _RAW_EVENTS_REPLACED_BY_DELTAS:
-      await streaming_manager.broadcast(channel, event)
+    try:
+      meta = await self.get_session(session_id)
+      archive_offset = meta.archive_offset if meta else 0
+      event["event_index"] = archive_offset + self._chat_events.cached_event_count(session_id) - 1
+      channel = session_channel(session_id)
+      deltas = list(aggregator.feed(event))
+      for delta in deltas:
+        await streaming_manager.broadcast(channel, delta)
+      if event.get("type") not in _RAW_EVENTS_REPLACED_BY_DELTAS:
+        await streaming_manager.broadcast(channel, event)
+    except Exception:
+      # The event is already durable; a notification failure is repaired by
+      # catch-up/reconciliation, never by persisting a second copy.
+      log.exception("announce_failed", session_id=session_id, type=event.get("type"))
 
   async def broadcast_only(self, session_id: str, event: dict) -> None:
     """Broadcast an event on the session channel without persisting it as a chat event.

@@ -11,7 +11,7 @@ from src.agents.backends.base import (
     SKIP_PERMISSIONS_FLAG,
     USER_LOCAL_BIN,
     AgentBackend,
-    _write_chunk,
+    _tee_stream,
     make_error_event,
     make_result_event,
     make_text_event,
@@ -105,13 +105,7 @@ class AntigravityCliBackend(AgentBackend):
     self._stderr_task = asyncio.create_task(self._stream_stderr(stderr_log_path))
 
     try:
-      while True:
-        chunk = await self._proc.stdout.read(8192)
-        if not chunk:
-          break
-        if stdout_fd is not None:
-          await _write_chunk(stdout_fd, chunk)
-        stdout_bytes.extend(chunk)
+      await _tee_stream(self._proc.stdout.read, stdout_fd, stdout_bytes.extend)
     finally:
       if stdout_fd is not None:
         os.close(stdout_fd)

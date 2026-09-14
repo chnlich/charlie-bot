@@ -16,6 +16,7 @@ from src.agents.backends.base import (
     IMAGE_MIME_BY_EXT,
     SKIP_PERMISSIONS_FLAG,
     AgentBackend,
+    _tee_stream,
     _write_chunk,
     apply_proxy_env,
     iter_ndjson_events,
@@ -385,15 +386,7 @@ class OpenCodeBackend(AgentBackend):
 
   async def _stream_stdout(self) -> None:
     assert self._proc is not None and self._proc.stdout is not None
-    if self._stdout_fd is None:
-      while await self._proc.stdout.read(8192):
-        pass
-      return
-    while True:
-      chunk = await self._proc.stdout.read(8192)
-      if not chunk:
-        break
-      await _write_chunk(self._stdout_fd, chunk)
+    await _tee_stream(self._proc.stdout.read, self._stdout_fd)
 
   async def _check_health(self, client: httpx.AsyncClient) -> None:
     response = await client.get("/global/health")

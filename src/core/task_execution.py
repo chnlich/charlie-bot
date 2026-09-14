@@ -352,6 +352,16 @@ class TaskExecutionAdapter:
                 exit_code=exit_code,
             )
 
+        if option.type == BackendType.TUI_CLI:
+            # The master queue refuses TUI backends (tmux sessions take input
+            # through the terminal, not the SDK). The refusal is a visible
+            # failed run at attention, never a silently stuck queue.
+            log.warning("manager_turn_refused_tui_backend",
+                        session_id=session_id, run_id=run_id, backend=option.id)
+            await self._tree.dispatch.finish_run(
+                session_id, run_id, outcome="failed", exit_code=-1)
+            return
+
         log.info("manager_turn_launching", session_id=session_id, run_id=run_id,
                  backend=option.id, inputs=len(run.input_event_ids))
         await run_message(
@@ -369,6 +379,7 @@ class TaskExecutionAdapter:
             on_task_finish=on_task_finish,
             extra_env=self._child_env(session_id, run_id, meta.name),
         )
+
 
     # ------------------------------------------------------------------
     # Worker work and review runs

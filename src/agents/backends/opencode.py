@@ -801,56 +801,6 @@ class OpenCodeBackend(AgentBackend):
     await self._abort_session()
     await super().terminate()
 
-  def translate_event(self, ev: dict) -> list[dict]:
-    """Translate legacy part-shaped events for direct unit tests."""
-    results: list[dict] = []
-
-    session_id = ev.get("sessionID")
-    if session_id:
-      results.append({"type": ET.SESSION_ATTACHED, "session_id": session_id})
-
-    ev_type = ev.get("type", "")
-
-    if ev_type == "step_start":
-      return results
-    if ev_type == "text":
-      return results + self._translate_text(ev)
-    if ev_type in ("tool_use", "tool"):
-      return results + self._translate_tool_part(ev.get("part", {}))
-    if ev_type == "error":
-      return results + self._translate_error(ev)
-    if ev_type == "step_finish":
-      return results + self._translate_step_finish(ev)
-
-    log.debug("opencode_event_unhandled", type=ev_type)
-    return results
-
-  def _translate_text(self, ev: dict) -> list[dict]:
-    text = ev.get("part", {}).get("text", "")
-    if text:
-      return [make_text_event(text)]
-    return []
-
-  def _translate_error(self, ev: dict) -> list[dict]:
-    msg = ev.get("part", {}).get("error", str(ev))
-    return [make_error_event(msg)]
-
-  def _translate_step_finish(self, ev: dict) -> list[dict]:
-    part = ev.get("part", {})
-    if part.get("reason", "") != "stop":
-      return []
-    tokens = part.get("tokens", {})
-    cache = tokens.get("cache", {})
-    return [
-        make_result_event(
-            input_tokens=tokens.get("input", 0),
-            output_tokens=tokens.get("output", 0),
-            cache_read=cache.get("read", 0),
-            cache_creation=cache.get("write", 0),
-            cost=part.get("cost", 0),
-        )
-    ]
-
   async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
     """Generate text via `opencode run --format json` with all tools denied.
 

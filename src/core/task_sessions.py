@@ -817,6 +817,25 @@ class TaskTreeManager:
       await self._save_meta(meta)
       return meta
 
+  async def set_presentation(self, session_id: str, presentation: str) -> SessionMetadata:
+    """The legacy archive/unarchive entries' v2 form: one explicit preference.
+
+    This is a display preference only — the task's open/closed facts are
+    untouched, so collapsing can never silently close a task and uncollapsing
+    can never silently reopen one.
+    """
+    if presentation not in ("auto", "shown", "hidden"):
+      raise TaskInvalidError(f"presentation must be auto, shown, or hidden (got {presentation!r})")
+    async with self.control_lock:
+      await self._get_index()
+      meta = await self.load_meta(session_id)
+      self._require_task(meta, session_id)
+      assert meta is not None
+      if meta.presentation != presentation:
+        meta.presentation = presentation  # type: ignore[assignment]
+        await self._save_meta(meta)
+      return meta
+
   def _children_count(self, session_id: str) -> int:
     if self._index is None:
       raise RuntimeError("tree index must be built before structural guards")

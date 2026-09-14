@@ -4,7 +4,7 @@
 
 // Roles whose messages open a chat turn. Both turn-layout consumers read this
 // list: rendering.js's DOM matcher and turn-engine.js's fold derive.
-const STIMULUS_ROLES = ['user', 'scheduled_trigger', 'agent_message', 'worker_summary'];
+const STIMULUS_ROLES = ['user', 'scheduled_trigger', 'agent_message', 'worker_summary', 'child_report'];
 
 // ---------------------------------------------------------------------------
 // Auto-scroll helper — returns true only when user is near the bottom

@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, TypeAdapter
 from starlette.responses import Response
 
@@ -33,7 +33,7 @@ from src.api.message_utils import (
 )
 from src.api.responses import FastJsonResponse, PreencodedJSONResponse, fast_json_bytes
 from src.api.threads import view_thread_rows
-from src.core import claude_accounts, sidebar_state, thinking_state
+from src.core import claude_accounts, sidebar_state, task_completion, thinking_state
 from src.core.chat_events import chat_events_path
 from src.core.config import (
   CharlieBotConfig,
@@ -50,6 +50,8 @@ from src.core.models import (
   BackendOption,
   BackendType,
   CancelRunRequest,
+  CancelTaskRequest,
+  CompleteTaskRequest,
   CreateSessionRequest,
   DeleteGroupRequest,
   EloneSessionRequest,
@@ -57,6 +59,7 @@ from src.core.models import (
   PatchSessionTaskRequest,
   RateRoundRequest,
   RenameGroupRequest,
+  ReopenTaskRequest,
   RetryRunRequest,
   RunCancelResponse,
   RunPage,
@@ -1090,7 +1093,19 @@ async def archive_session(
     session_id: str,
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    caller: CallerIdentity = Depends(require_caller),
 ) -> SessionMetadata:
+  """Legacy archive entry: a user collapse, never a lifecycle write.
+
+  On a v2 task this becomes the explicit presentation=hidden preference — the
+  closed/open fact is untouched, so archiving can never silently reopen or
+  close a task — and requires operator scope.
+  """
+  if meta.profile is not None:
+    if not caller.is_operator:
+      raise HTTPException(status_code=403, detail="archiving a task requires operator credentials")
+    return require_found(await task_mgr.set_presentation(session_id, "hidden"))
   event_count = await asyncio.to_thread(session_mgr.get_chat_event_count_sync, session_id, meta)
   if event_count == 0:
     await session_mgr.delete_session_permanently(session_id)
@@ -1104,7 +1119,19 @@ async def delete_session_permanently(
     session_id: str,
     session_mgr: SessionManager = Depends(get_session_manager),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
+    caller: CallerIdentity = Depends(require_caller),
 ) -> Response:
+  """Permanent delete: the empty/unreferenced rule is checked and deleted under
+  the one control lock (v2 nodes); legacy sessions keep the v1 check set."""
+  meta = await session_mgr.get_session(session_id)
+  if meta is not None and meta.profile is not None:
+    try:
+      deleted = await task_mgr.delete_permanently(session_id, caller=caller)
+    except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+      raise _task_http_error(e) from e
+    if not deleted:
+      raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
+    return Response(status_code=204)
   try:
     blockers = await task_mgr.deletion_blockers(session_id)
   except (TaskInvalidError, TaskNotFoundError, TaskConflictError) as e:
@@ -1122,7 +1149,15 @@ async def unarchive_session(
     session_id: str,
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    caller: CallerIdentity = Depends(require_caller),
 ) -> SessionMetadata:
+  """Legacy unarchive entry: on a v2 task this clears the explicit hidden
+  preference (presentation=shown) without ever reopening a closed task."""
+  if meta.profile is not None:
+    if not caller.is_operator:
+      raise HTTPException(status_code=403, detail="unarchiving a task requires operator credentials")
+    return require_found(await task_mgr.set_presentation(session_id, "shown"))
   if meta.status != SessionStatus.ARCHIVED:
     raise HTTPException(status_code=409, detail="Session is not archived")
   return await session_mgr.unarchive_session(session_id)
@@ -1294,6 +1329,82 @@ async def retry_session_run(
     return await task_mgr.create_retry(session_id, req.request_id, req.run_id)
   except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
     raise _task_http_error(e) from e
+
+
+@router.post("/{session_id}/complete")
+async def complete_session_task(
+    session_id: str,
+    req: CompleteTaskRequest,
+    _meta: SessionMetadata = Depends(require_session),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    caller: CallerIdentity = Depends(require_caller),
+) -> Response:
+  """One completion operation: 200 Session, 202 pending_run_finish, or 409 blockers.
+
+  A run-token agent may request closure only of its own manager task through
+  its own active Run (the verified caller's bound run id — the payload never
+  names one); the close re-evaluates only after that Run succeeds. Duplicate
+  request ids replay the original outcome, across later epochs included.
+  """
+  evidence = task_completion.CompletionEvidence(
+      summary=req.summary, result_refs=req.result_refs, run_ids=req.run_ids)
+  try:
+    status, payload = await task_mgr.completion.complete_task(
+        session_id, request_id=req.request_id, evidence=evidence, caller=caller)
+  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+    raise _task_http_error(e) from e
+  if status == 202:
+    return JSONResponse(status_code=202, content=payload)
+  detail = await _completed_session_detail(task_mgr, session_id)
+  return JSONResponse(status_code=200, content=detail)
+
+
+async def _completed_session_detail(task_mgr: TaskTreeManager, session_id: str) -> dict:
+  try:
+    return await task_mgr.session_detail(session_id)
+  except (TaskInvalidError, TaskNotFoundError, TaskConflictError) as e:
+    raise _task_http_error(e) from e
+
+
+@router.post("/{session_id}/cancel", response_model=SessionDetailResponse)
+async def cancel_session_task(
+    session_id: str,
+    req: CancelTaskRequest,
+    _meta: SessionMetadata = Depends(require_session),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    caller: CallerIdentity = Depends(require_caller),
+) -> SessionDetailResponse:
+  """Explicit operator cancellation with reason, preserving evidence.
+
+  Active/unresolved execution or open children return 409; the subtree is not
+  recursively stopped (Run cancel stays the separate operation).
+  """
+  try:
+    await task_mgr.completion.cancel_task(
+        session_id, request_id=req.request_id, reason=req.reason, caller=caller)
+  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+    raise _task_http_error(e) from e
+  return SessionDetailResponse.model_validate(await _completed_session_detail(task_mgr, session_id))
+
+
+@router.post("/{session_id}/reopen", response_model=SessionDetailResponse)
+async def reopen_session_task(
+    session_id: str,
+    req: ReopenTaskRequest,
+    _meta: SessionMetadata = Depends(require_session),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    caller: CallerIdentity = Depends(require_caller),
+) -> SessionDetailResponse:
+  """Explicit operator reopen: references the closed event, refuses closed
+  ancestors with their list, preserves history, and never bypasses
+  automation_paused or authorization."""
+  try:
+    await task_mgr.completion.reopen_task(
+        session_id, request_id=req.request_id, reason=req.reason, caller=caller,
+        closed_event_id=req.closed_event_id)
+  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+    raise _task_http_error(e) from e
+  return SessionDetailResponse.model_validate(await _completed_session_detail(task_mgr, session_id))
 
 
 @router.post("/{session_id}/runs/{run_id}/cancel", response_model=RunCancelResponse)

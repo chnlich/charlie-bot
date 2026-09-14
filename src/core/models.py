@@ -523,6 +523,44 @@ class RetryRunRequest(BaseModel):
   run_id: str
 
 
+class CompleteTaskRequest(BaseModel):
+  # POST /api/sessions/{id}/complete body: the completion claim (plan 4.1).
+  # owner_run_id is NEVER accepted here: an own-run close request takes the
+  # verified caller's bound run id, never a spoofable payload field.
+  model_config = ConfigDict(extra="forbid")
+
+  request_id: str
+  summary: str = ""
+  result_refs: list[str] = Field(default_factory=list)
+  run_ids: list[str] = Field(default_factory=list)
+
+
+class CompleteTaskPendingResponse(BaseModel):
+  # The 202 body of an own-run closure request: re-evaluated after that Run succeeds.
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  request_id: str
+  status: Literal["pending_run_finish"]
+
+
+class CancelTaskRequest(BaseModel):
+  # POST /api/sessions/{id}/cancel body: explicit operator cancellation.
+  model_config = ConfigDict(extra="forbid")
+
+  request_id: str
+  reason: str
+
+
+class ReopenTaskRequest(BaseModel):
+  # POST /api/sessions/{id}/reopen body: explicit operator reopen.
+  model_config = ConfigDict(extra="forbid")
+
+  request_id: str
+  reason: str
+  closed_event_id: str | None = None
+
+
 class CancelRunRequest(BaseModel):
   # POST /api/sessions/{id}/runs/{run_id}/cancel body.
   model_config = ConfigDict(extra="forbid")

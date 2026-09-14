@@ -15,6 +15,13 @@ request returns the original product. ``tree`` pages the task tree. ``pause``/
 ``resume`` flip ``automation_paused`` (pausing never terminates a live run).
 ``retry`` creates the request-bound retry run of one recorded run.
 
+``complete`` closes one task: the result file carries the complete request's
+JSON body (summary/result_refs/run_ids); a duplicate request id replays the
+original outcome, and an agent's own active Run may request its own manager's
+closure (202 pending_run_finish). ``cancel`` explicitly cancels an open task
+with a reason; ``reopen`` reopens one closed task and refuses closed
+ancestors.
+
 ``send`` relays a message into the target session as an ``agent_message``
 event (never a ``user`` event), so it neither mints nor revokes a takeoff
 authorization window. The caller session comes from the server-written
@@ -22,9 +29,7 @@ CHARLIEBOT_SESSION_ID per the usual CLI convention (see ``resolve_session_id``).
 
 Authentication: with CHARLIEBOT_RUN_TOKEN set (an agent running inside a Run)
 every request carries that token and nothing else — a rejection surfaces the
-server's 401, never a silent operator-key fallback. complete/reopen/cancel
-verbs belong to the task-completion delivery stage and are intentionally
-absent here.
+server's 401, never a silent operator-key fallback.
 """
 
 import argparse
@@ -79,6 +84,30 @@ def _build_parser() -> argparse.ArgumentParser:
   retry.add_argument(
       "--request-id", default=None,
       help="Request id binding the retry run (defaults to a fresh UUID; replays return the same run)")
+
+  complete = sub.add_parser("complete", help="Complete (close) one task")
+  complete.add_argument("session_id", help="Task id")
+  complete.add_argument(
+      "--result-file", required=True,
+      help="Path to the complete request's JSON body (summary, result_refs, run_ids; request_id "
+           "optional and defaults to a fresh UUID)")
+  complete.add_argument(
+      "--request-id", default=None, help="Request id binding the close (defaults to a fresh UUID)")
+
+  cancel = sub.add_parser("cancel", help="Explicitly cancel one open task")
+  cancel.add_argument("session_id", help="Task id")
+  cancel.add_argument("--reason", required=True, help="Cancellation reason")
+  cancel.add_argument(
+      "--request-id", default=None, help="Request id binding the cancel (defaults to a fresh UUID)")
+
+  reopen = sub.add_parser("reopen", help="Reopen one closed task")
+  reopen.add_argument("session_id", help="Task id")
+  reopen.add_argument("--reason", required=True, help="Reopen reason")
+  reopen.add_argument(
+      "--request-id", default=None, help="Request id binding the reopen (defaults to a fresh UUID)")
+  reopen.add_argument(
+      "--closed-event", default=None,
+      help="The task_closed event id to reopen (default: the latest close fact)")
 
   send = sub.add_parser("send", help="Relay a message to another session as an agent_message")
   send.add_argument("target", help="Target session id")
@@ -135,6 +164,33 @@ def _cmd_retry(args: argparse.Namespace) -> None:
   print(json.dumps(post_internal_api(f"/api/sessions/{args.session_id}/retry", payload), indent=2))
 
 
+def _cmd_complete(args: argparse.Namespace) -> None:
+  body = json.loads(read_required_text_file("--result-file", args.result_file))
+  if not isinstance(body, dict):
+    exit_usage_error("--result-file must carry the complete request's JSON object")
+  body = dict(body)
+  body["request_id"] = args.request_id or body.get("request_id") or str(uuid.uuid4())
+  print(json.dumps(post_internal_api(f"/api/sessions/{args.session_id}/complete", body), indent=2))
+
+
+def _cmd_cancel(args: argparse.Namespace) -> None:
+  payload = {
+      "request_id": args.request_id or str(uuid.uuid4()),
+      "reason": args.reason,
+  }
+  print(json.dumps(post_internal_api(f"/api/sessions/{args.session_id}/cancel", payload), indent=2))
+
+
+def _cmd_reopen(args: argparse.Namespace) -> None:
+  payload = {
+      "request_id": args.request_id or str(uuid.uuid4()),
+      "reason": args.reason,
+  }
+  if args.closed_event is not None:
+    payload["closed_event_id"] = args.closed_event
+  print(json.dumps(post_internal_api(f"/api/sessions/{args.session_id}/reopen", payload), indent=2))
+
+
 def _cmd_send(args: argparse.Namespace) -> None:
   session_id = resolve_session_id(args.session)
   if args.message is not None:
@@ -165,6 +221,12 @@ def main() -> None:
     _set_paused(args.session_id, False)
   elif args.session_command == "retry":
     _cmd_retry(args)
+  elif args.session_command == "complete":
+    _cmd_complete(args)
+  elif args.session_command == "cancel":
+    _cmd_cancel(args)
+  elif args.session_command == "reopen":
+    _cmd_reopen(args)
   elif args.session_command == "send":
     _cmd_send(args)
   else:

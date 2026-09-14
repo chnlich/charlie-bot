@@ -112,7 +112,7 @@ function isStableRenderedMessage(el) {
 // reader-expanded `N steps` bar, an open recap panel and embedded artifact
 // iframes all survive every later derive.
 // ---------------------------------------------------------------------------
-const TURN_TYPE_LABELS = {user: 'You', scheduled_trigger: 'Trigger', agent_message: 'Agent', worker_summary: 'Worker'};
+const TURN_TYPE_LABELS = {user: 'You', scheduled_trigger: 'Trigger', agent_message: 'Agent', worker_summary: 'Worker', child_report: 'Report'};
 const TEXT_NODE = 3;
 
 function isStimulusMessage(el) {
@@ -596,6 +596,24 @@ function renderMessage(msg, sessionId) {
       + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 5l7 7-7 7M5 5l7 7-7 7\"/></svg>"
       + "Delegated</div>"
       + renderDelegateMetadata(msg) + timeDiv() + "</div></div>";
+  }
+  if (msg.role === "child_report") {
+    var reportOutcome = String(msg.outcome || "completed");
+    var outcomeColor = reportOutcome === "completed" ? "emerald" : (reportOutcome === "cancelled" ? "slate" : "amber");
+    var refsHtml = "";
+    var refs = Array.isArray(msg.result_refs) ? msg.result_refs : [];
+    if (refs.length) {
+      refsHtml = "<div class=\"mt-2 pt-2 border-t border-emerald-700/30 text-xs text-emerald-400/50\">"
+        + refs.map(function(ref) { return "<div>" + escapeHtml(String(ref)) + "</div>"; }).join("")
+        + "</div>";
+    }
+    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\">"
+      + "<div class=\"flex items-center gap-2 text-" + outcomeColor + "-400 text-xs font-semibold mb-2\">"
+      + "<span class=\"px-1.5 py-0.5 rounded bg-emerald-900 text-[10px] tracking-wide\">CHILD " + escapeHtml(reportOutcome.toUpperCase()) + "</span>"
+      + "<a href=\"/?session=" + encodeURIComponent(msg.child_session_id || "") + "\" class=\"text-emerald-400/50 underline truncate\">"
+      + escapeHtml(msg.child_session_id || "") + "</a></div>"
+      + "<div class=\"whitespace-pre-wrap break-words\">" + escapeHtml(String(msg.content || "")) + "</div>"
+      + refsHtml + timeDiv() + "</div></div>";
   }
   if (msg.role === "worker_summary") {
     var originFooter = "";

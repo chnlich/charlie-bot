@@ -62,7 +62,8 @@ from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 # Raw event types whose render content is produced by the per-session
 # MessageAggregator as `message`/`stream` deltas. We persist these events but
 # do not broadcast them raw -- the deltas are the wire format.
-_RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset({ET.ASSISTANT, ET.USER, ET.SCHEDULED_TRIGGER})
+_RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset(
+    {ET.ASSISTANT, ET.USER, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT, ET.TASK_CLOSED, ET.TASK_REOPENED})
 
 log = LazyStructlogLogger()
 
@@ -1907,6 +1908,39 @@ class SessionManager:
       from src.core.slack_listener import deliver_done
 
       create_logged_task(deliver_done(session_id, event, self._cfg, self), name=f"slack-deliver-{session_id}")
+
+  async def prime_aggregator(self, session_id: str) -> int:
+    """Ensure the live aggregator exists before a durable append; return its epoch.
+
+    The announce path pairs this with ``announce_appended_event``: an
+    aggregator initialized BEFORE the append cannot have consumed it, so the
+    announce feed is never a duplicate. The epoch detects a rebuild that
+    happened in between (its catch-up already covers the event).
+    """
+    await self._get_or_init_aggregator(session_id)
+    return self._aggregator_epoch.get(session_id, 0)
+
+  async def announce_appended_event(self, session_id: str, event: dict, *, epoch: int) -> None:
+    """Broadcast one ALREADY-PERSISTED event through the live aggregator.
+
+    The durable append happened before this call and outside this method; a
+    notification failure here is repaired by catch-up/reconciliation, never by
+    persisting a second copy. A rebuilt aggregator (epoch moved) has already
+    consumed the event during its catch-up, so the feed is skipped.
+    """
+    aggregator = self._aggregators.get(session_id)
+    if aggregator is None or self._aggregator_epoch.get(session_id, 0) != epoch:
+      log.debug("announce_skipped_rebuilt_aggregator", session_id=session_id, type=event.get("type"))
+      return
+    meta = await self.get_session(session_id)
+    archive_offset = meta.archive_offset if meta else 0
+    event["event_index"] = archive_offset + self._chat_events.cached_event_count(session_id) - 1
+    channel = session_channel(session_id)
+    deltas = list(aggregator.feed(event))
+    for delta in deltas:
+      await streaming_manager.broadcast(channel, delta)
+    if event.get("type") not in _RAW_EVENTS_REPLACED_BY_DELTAS:
+      await streaming_manager.broadcast(channel, event)
 
   async def broadcast_only(self, session_id: str, event: dict) -> None:
     """Broadcast an event on the session channel without persisting it as a chat event.

@@ -24,7 +24,7 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo, StatSignatureMemo
-from src.core.message_aggregator import TOOL_OUTPUT_RENDER_CAP, extract_text_from_message, extract_tool_result_text
+from src.core.message_aggregator import TOOL_PREVIEW_CHARS, extract_text_from_message, extract_tool_result_text
 from src.core.models import (
     BackendType,
     CcClaudeBackend,
@@ -633,16 +633,16 @@ def _append_worker_events(
           tool_use_id = block.get('tool_use_id', '')
           name = tool_id_to_name.get(tool_use_id, '')
           result_text = extract_tool_result_text(block)
-          # The projected row rides every full fetch and the panel's innerHTML
-          # rebuild, so a result over TOOL_OUTPUT_RENDER_CAP is capped and
-          # marked — the same bound the chat aggregator applies; the persisted
-          # events log keeps the full text.
-          truncated = len(result_text) > TOOL_OUTPUT_RENDER_CAP
+          # The projected row rides every full fetch, and the client renders an
+          # output's first TOOL_PREVIEW_CHARS characters inline (the chat wire's
+          # bound), so the row carries exactly that preview and its marker — the
+          # persisted events log keeps the full text.
+          truncated = len(result_text) > TOOL_PREVIEW_CHARS
           events.append(
               WorkerEvent(
                   type=ET.TOOL_RESULT,
                   tool_name=name,
-                  content=result_text[:TOOL_OUTPUT_RENDER_CAP] if truncated else result_text,
+                  content=result_text[:TOOL_PREVIEW_CHARS] if truncated else result_text,
                   output_truncated=True if truncated else None,
                   timestamp=event_timestamp,
               ))
@@ -653,9 +653,10 @@ def _append_worker_events(
         log.debug('event_parse_failed', error=str(e))
         row = WorkerEvent(type='raw', content=str(data))
       # A top-level tool_result line carries its output in content; the same
-      # render cap as the message-nested branch above bounds the projected row.
-      if row.type == ET.TOOL_RESULT and row.content is not None and len(row.content) > TOOL_OUTPUT_RENDER_CAP:
-        row.content = row.content[:TOOL_OUTPUT_RENDER_CAP]
+      # TOOL_PREVIEW_CHARS wire bound as the message-nested branch above bounds
+      # the projected row.
+      if row.type == ET.TOOL_RESULT and row.content is not None and len(row.content) > TOOL_PREVIEW_CHARS:
+        row.content = row.content[:TOOL_PREVIEW_CHARS]
         row.output_truncated = True
       events.append(row)
 

@@ -339,15 +339,32 @@ async def session_message(
   # agent_message identity and the caller's provenance (never a real user
   # event), persists durably first, and the executor seam decides any launch.
   if target.profile is not None and task_mgr is not None:
-    await task_mgr.dispatch.admit_input(
-        req.target_session_id,
-        event_type=ET.AGENT_MESSAGE,
-        content=req.content,
-        actor="agent",
-        from_session=caller.id,
-        from_session_name=caller.name,
+    from src.core.task_sessions import (
+        TaskConflictError,
+        TaskForbiddenError,
+        TaskInvalidError,
+        TaskNotFoundError,
     )
-    await task_mgr.dispatch.dispatch_pending(req.target_session_id)
+
+    try:
+      await task_mgr.dispatch.admit_input(
+          req.target_session_id,
+          event_type=ET.AGENT_MESSAGE,
+          content=req.content,
+          actor="agent",
+          from_session=caller.id,
+          from_session_name=caller.name,
+      )
+      await task_mgr.dispatch.dispatch_pending(req.target_session_id)
+    except TaskNotFoundError as e:
+      raise HTTPException(status_code=404, detail=str(e)) from e
+    except TaskForbiddenError as e:
+      raise HTTPException(status_code=403, detail=str(e)) from e
+    except TaskConflictError as e:
+      blockers = list(getattr(e, "blockers", None) or [])
+      raise HTTPException(status_code=409, detail={"message": str(e), "blockers": blockers}) from e
+    except TaskInvalidError as e:
+      raise HTTPException(status_code=400, detail=str(e)) from e
     log.info(
         "session_message_dispatched",
         session=req.session_id,

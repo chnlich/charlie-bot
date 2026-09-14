@@ -208,9 +208,11 @@ async def test_later_input_during_execution_keeps_id_and_blocks_close(tmp_path: 
   assert first["id"] == "input-1" and later["id"] == "input-2"
 
   # Both automatic and manual closure stay open on the later arrival: the
-  # successful run re-evaluates and its blocker list names the unprocessed input.
-  with pytest.raises(TaskConflictError, match="unprocessed input"):
-    await tree.dispatch.finish_run(node.id, run_id, outcome="success")
+  # successful run acknowledges only its batch, the automatic close is blocked,
+  # and the later input keeps its id.
+  await tree.dispatch.finish_run(node.id, run_id, outcome="success")
+  assert tree.task_state(node.id) == "open"
+  assert {str(e["id"]) for e in input_events(tree, node.id)} == {"input-2"}
   with pytest.raises(TaskConflictError, match="unprocessed input"):
     await tree.completion.complete_task(
         node.id, request_id="manual-1",
@@ -701,7 +703,7 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
         "request_id": "route-2", "summary": "delivered",
         "result_refs": ["run:run-w"], "run_ids": ["run-w"]})
     assert ok.status_code == 409  # the worker's report is unprocessed input
-    consume = await tree.runs.register_run(
+    await tree.runs.register_run(
         RunRecord(id="run-root-turn", session_id=root.id, kind="manager_turn"))
     await tree.dispatch.claim_input_batch(root.id, "run-root-turn")
     await tree.dispatch.finish_run(root.id, "run-root-turn", outcome="success")

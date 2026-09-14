@@ -56,15 +56,6 @@ INPUT_EVENT_TYPES: frozenset[str] = frozenset(
 # operator credentials are user input (route layer passes the type).
 ROUTE_INPUT_TYPES: frozenset[str] = frozenset({ET.USER, ET.AGENT_MESSAGE})
 
-# Control events whose projected message deltas the live wire carries (the
-# raw forms are suppressed next to them in sessions.py). run_finished,
-# task_created, prompt_changed, run_stop_requested, and task_close_requested
-# stay off the wire: they are facts the tree projection reads, not chat.
-ANNOUNCED_CONTROL_TYPES: frozenset[str] = frozenset(
-    {ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT,
-     ET.TASK_CLOSED, ET.TASK_REOPENED})
-
-
 class TaskInputDispatcher:
     """The input/report owner wired over one TaskTreeManager."""
 
@@ -332,7 +323,13 @@ class TaskInputDispatcher:
             await tree.completion.recheck_close_requests(session_id, run_id)
             meta = await tree.load_meta(session_id)
             if meta is not None and meta.profile == "worker" and run.kind == "work":
-                await tree.completion.evaluate_automatic_completion(session_id, run_id=run_id)
+                try:
+                    await tree.completion.evaluate_automatic_completion(session_id, run_id=run_id)
+                except TaskConflictError as e:
+                    # The finish landed; the automatic close stays open with
+                    # its blockers visible, and the adapters re-evaluate.
+                    log.info("automatic_worker_completion_blocked",
+                             session_id=session_id, run_id=run_id, blockers=getattr(e, "blockers", None))
         return run
 
     # ------------------------------------------------------------------
@@ -358,7 +355,6 @@ class TaskInputDispatcher:
         persistence IS delivery — the parent model consuming it is a separate,
         later concern. A root task (recipient None) requires no receipt.
         """
-        from src.core.task_sessions import TaskNotFoundError
 
         if recipient is None:
             return None

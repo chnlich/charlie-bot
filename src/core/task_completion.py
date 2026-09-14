@@ -515,6 +515,8 @@ class TaskCompletionManager:
         landed or nothing was pending).
         """
         tree = self._tree
+        from src.core.task_sessions import TaskConflictError
+
         facts = tree.facts_of(session_id)
         outcomes = facts.run_outcomes
         if outcomes.get(run_id) != "success":
@@ -544,8 +546,9 @@ class TaskCompletionManager:
                 await self._close_now(
                     session_id, request_id=request_id, evidence=evidence, actor=ACTOR_SYSTEM,
                     exclude_run_ids={run_id}, exclude_input_ids=claimed)
-            except Exception as e:  # noqa: BLE001 - blockers are the visible outcome
-                blockers = getattr(e, "blockers", None) or [str(e)]
+            except TaskConflictError as e:
+                # Changed conditions leave the task open with visible blockers.
+                blockers = list(getattr(e, "blockers", None) or [])
                 remaining.extend(blockers)
                 log.info("task_close_request_still_blocked", session_id=session_id,
                          request_id=request_id, blockers=blockers)

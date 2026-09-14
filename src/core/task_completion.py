@@ -144,6 +144,32 @@ class TaskCompletionManager:
                 blockers.append(f"has open descendant task {descendant}")
         return blockers
 
+    def cancellation_blockers(self, session_id: str) -> list[str]:
+        """The cancellation blockers of one task, from current facts (lock held by caller).
+
+        Explicit operator cancellation refuses active/unresolved execution and
+        open descendants ONLY (plan 4.1: complete blocks on unprocessed input,
+        cancel does not). Unprocessed input is preserved history on the
+        cancelled node — refusing cancel over it would trap every task whose
+        input nothing consumed yet.
+        """
+        tree = self._tree
+        cached = tree._index
+        if cached is None:
+            raise RuntimeError("cancellation blockers require the caller-held tree index")
+        index = cached[0]
+        tree._index_meta(index, session_id)  # 404 on an unknown task before any blocker text
+        blockers: list[str] = []
+        events = tree.runs.load_events_sync(session_id)
+        for run in tree.runs.list_run_records_sync(session_id):
+            blocker = tree.runs.run_blocker(run, events, tree._host_boot_time())
+            if blocker is not None:
+                blockers.append(blocker)
+        for descendant in tree._descendants(index, session_id):
+            if tree.task_state_of(index, descendant) == "open":
+                blockers.append(f"has open descendant task {descendant}")
+        return blockers
+
     # ------------------------------------------------------------------
     # Evidence
     # ------------------------------------------------------------------
@@ -618,9 +644,11 @@ class TaskCompletionManager:
     ) -> dict:
         """Explicit operator cancellation with reason, preserving all evidence.
 
-        Refuses active/unresolved execution or open children with 409; it
-        never recursively stops the subtree (Run cancel stays the separate
-        operation), and duplicate request ids replay the original outcome.
+        Refuses active/unresolved execution or open children with 409 — never
+        unprocessed input, which stays as preserved history on the cancelled
+        node. It never recursively stops the subtree (Run cancel stays the
+        separate operation), and duplicate request ids replay the original
+        outcome.
         """
         from src.core.run_token import CallerIdentity
         from src.core.task_sessions import TaskConflictError, TaskForbiddenError, TaskInvalidError
@@ -651,7 +679,7 @@ class TaskCompletionManager:
             replay = self._replay_close_request(session_id, request_id)
             if replay is not None:
                 return replay[1]
-            blockers = self.completion_blockers(session_id)
+            blockers = self.cancellation_blockers(session_id)
             if blockers:
                 raise TaskConflictError(sorted(set(blockers)))
             close_event = build_control_event(
@@ -716,6 +744,9 @@ class TaskCompletionManager:
         for event in events:
             if event.get("type") == ET.TASK_REOPENED and event.get("request_id") == request_id:
                 return {"session_id": session_id, "reopened_event_id": event.get("id")}
+        # The live-announce epoch is taken before the append, like the close
+        # paths: the fact lands under the lock, the notification follows it.
+        child_epoch = await tree.sessions.prime_aggregator(session_id)
         async with tree.control_lock:
             index = await tree._get_index()
             meta = tree._index_meta(index, session_id)
@@ -756,4 +787,5 @@ class TaskCompletionManager:
             )
             await tree.events.append(session_id, reopen_event)
             tree._invalidate_index()
+        await tree.sessions.announce_appended_event(session_id, reopen_event, epoch=child_epoch)
         return {"session_id": session_id, "reopened_event_id": reopen_event["id"]}

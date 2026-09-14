@@ -742,3 +742,29 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
     refused = client.post(f"/api/sessions/{root.id}/cancel", json={
         "request_id": "route-6", "reason": "again"})
     assert refused.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_batchless_finish_never_acknowledges_another_runs_claimed_batch(tmp_path: Path) -> None:
+  """The locked finish layer itself rejects it: a batchless run's finisher
+  cannot name ids another registered non-terminal run claimed (a claim that
+  lands between the dispatcher's pre-check and the locked finish still fails)."""
+  from src.core.runs import RunInputMismatchError
+
+  cfg, session_mgr, tree = build_env(tmp_path)
+  task = await create_task(tree, parent=None, request_id="root")
+  await admit(tree, task.id, "work", input_id="in-1")
+  await tree.runs.register_run(RunRecord(id="run-b", session_id=task.id, kind="work"))
+  claimed = await tree.dispatch.claim_input_batch(task.id, "run-b")
+  assert claimed == ["in-1"]
+  await tree.runs.register_run(RunRecord(id="run-a", session_id=task.id, kind="manager_turn"))
+  with pytest.raises(RunInputMismatchError, match="claimed batch"):
+    await tree.runs.record_finish(task.id, "run-a", "success", input_event_ids=["in-1"])
+  # No terminal fact landed for run-a; the input stays claimed by its owner.
+  assert tree.runs.terminal_outcome(tree.runs.load_events_sync(task.id), "run-a") is None
+  assert input_events(tree, task.id) == []
+  # The real owner's success acknowledges exactly its batch.
+  await tree.dispatch.finish_run(task.id, "run-b", outcome="success")
+  finished = [e for e in tree.events.load_events(task.id) if e["type"] == ET.RUN_FINISHED]
+  assert finished and finished[-1]["run_id"] == "run-b"
+  assert list(finished[-1]["input_event_ids"]) == ["in-1"]

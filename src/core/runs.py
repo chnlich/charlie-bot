@@ -854,7 +854,9 @@ class RunStore:
             f"run {run.id} acknowledges unknown input id(s) {unknown}: not events of session "
             f"{run.session_id} and not its registered batch")
       # A batchless run acknowledges only inputs no other run already owns:
-      # ids carried by another run's terminal fact are that run's inputs.
+      # ids carried by another run's terminal fact are that run's inputs, and
+      # ids another registered non-terminal run claimed are bound to that
+      # run's batch (a stopped queued run claims nothing — it never launches).
       foreign: set[str] = set()
       for event in events:
         if event.get("type") != ET.RUN_FINISHED or event.get("run_id") == run.id:
@@ -862,11 +864,17 @@ class RunStore:
         payload = event.get("input_event_ids")
         if isinstance(payload, list):
           foreign.update(str(i) for i in payload)
+      for other in self.list_run_records_sync(run.session_id):
+        if other.id == run.id or self.run_has_terminal_fact(other, events):
+          continue
+        if other.pid is None and self.stop_requested(events, other.id):
+          continue
+        foreign.update(str(i) for i in other.input_event_ids)
       stolen = [input_id for input_id in supplied if input_id in foreign]
       if stolen:
         raise RunInputMismatchError(
             f"run {run.id} cannot acknowledge input(s) {stolen}: already the "
-            "acknowledged payload of another run")
+            "acknowledged payload or claimed batch of another run")
     return supplied
 
   async def record_finish_locked(

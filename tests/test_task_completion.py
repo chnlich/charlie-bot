@@ -539,3 +539,71 @@ async def test_child_report_renders_once_across_paths(tmp_path: Path) -> None:
   child_view, _draft = events_to_view(child_events)
   closed_lines = [m for m in child_view if m.get("role") == "system"]
   assert any("completed" in str(m.get("content")) for m in closed_lines)
+
+
+@pytest.mark.asyncio
+async def test_cancel_with_unprocessed_input_keeps_it_as_preserved_history(tmp_path: Path) -> None:
+  """Plan 4.1: complete blocks on unprocessed input; CANCEL does not — it
+  refuses active/unresolved execution and open children only. Otherwise a
+  task whose input nothing consumed yet is uncancellable. The input stays
+  preserved as pending history on the cancelled node."""
+  cfg, session_mgr, tree = build_env(tmp_path)
+  root = await create_task(tree, parent=None, request_id="root")
+  await tree.dispatch.admit_input(
+      root.id, event_type=ET.USER, content="later input", actor="user", input_id="late-1")
+
+  with pytest.raises(TaskConflictError, match="unprocessed input"):
+    await tree.completion.complete_task(
+        root.id, request_id="close-1",
+        evidence=CompletionEvidence(summary="s", result_refs=["x"], run_ids=["r"]),
+        caller=OPERATOR)
+  await tree.completion.cancel_task(
+      root.id, request_id="cancel-1", reason="abandoned", caller=OPERATOR)
+  assert tree.task_state(root.id) == "cancelled"
+  assert [str(e.get("id")) for e in tree.dispatch.pending_inputs(root.id)] == ["late-1"]
+  events = tree.events.load_events(root.id)
+  assert any(e["type"] == ET.USER and e.get("id") == "late-1" for e in events)  # preserved
+  index = await tree._get_index()
+  assert tree.archived_of(index, index.metas[root.id]) is False  # cancelled stays visible
+
+
+@pytest.mark.asyncio
+async def test_reopen_announces_after_the_durable_append(tmp_path: Path) -> None:
+  """Close/cancel/input all announce after the durable append; reopen must
+  too, so live clients see the same single system line catch-up restores."""
+  import src.core.sessions as sessions_module
+
+  cfg, session_mgr, tree = build_env(tmp_path)
+  root = await create_task(tree, parent=None, request_id="root")
+  await tree.runs.register_run(RunRecord(id="run-r", session_id=root.id, kind="work"))
+  await tree.dispatch.finish_run(root.id, "run-r", outcome="success")
+  await tree.completion.complete_task(
+      root.id, request_id="close-1",
+      evidence=CompletionEvidence(summary="done", result_refs=["run:run-r"], run_ids=["run-r"]),
+      caller=OPERATOR)
+
+  class _StreamingManager:
+    def __init__(self) -> None:
+      self.sent: list[tuple[str, dict]] = []
+
+    async def broadcast(self, channel: str, payload: dict) -> None:
+      self.sent.append((channel, payload))
+
+  fake = _StreamingManager()
+  original = sessions_module.streaming_manager
+  sessions_module.streaming_manager = fake  # type: ignore[assignment]
+  try:
+    await tree.completion.reopen_task(
+        root.id, request_id="reopen-1", reason="rework", caller=OPERATOR)
+    deltas = [p["message"] for _channel, p in fake.sent if p.get("type") == "message"]
+    reopened = [m.get("content") for m in deltas if m.get("role") == "system" and "reopened" in str(m.get("content"))]
+    assert reopened == ["Task reopened: rework"]
+    assert tree.task_state(root.id) == "open"
+    # A replayed request id appends and announces nothing new.
+    sent_before = list(fake.sent)
+    again = await tree.completion.reopen_task(
+        root.id, request_id="reopen-1", reason="rework", caller=OPERATOR)
+    assert fake.sent == sent_before
+    assert again["reopened_event_id"]
+  finally:
+    sessions_module.streaming_manager = original  # type: ignore[assignment]

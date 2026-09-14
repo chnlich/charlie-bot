@@ -22,7 +22,6 @@ from pathlib import Path
 
 from src.cli import common as cli_common
 from src.core import artifact_check, artifact_wrap
-from src.core.config import get_config
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -57,7 +56,7 @@ def _run_check(args: argparse.Namespace) -> int:
   artifact = Path(args.file).resolve()
   if not artifact.is_file():
     cli_common.exit_error(f"artifact not found: {args.file}")
-  cfg = get_config()
+  cfg = cli_common.get_config()
   failed = 0
   for outcome in artifact_check.run_assertions(args.genre, artifact, cfg):
     if outcome.passed:
@@ -95,7 +94,7 @@ def _run_wrap(args: argparse.Namespace) -> int:
         fragment=fragment,
         output=Path(args.output).resolve(),
         math=math,
-        vendor_path=artifact_wrap.vendor_katex_path(get_config().charliebot_home),
+        vendor_path=artifact_wrap.vendor_katex_path(cli_common.get_config().charliebot_home),
     )
   except (RuntimeError, ValueError) as e:
     cli_common.exit_error(str(e))

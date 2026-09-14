@@ -43,7 +43,6 @@ _poller_task: asyncio.Task | None = None
 # across cycles so per-instance 429 backoff survives between polls.
 _instances: dict[tuple[str, str], "_UsageInstance"] = {}
 
-ROUND_GAP_SECONDS = EXT_USAGE_ROUND_GAP_SECONDS
 # A token_count event closes every Codex turn, so the newest one sits in the
 # rollout file's trailing bytes; a tail miss (a turn in flight appended more
 # than this window since the last event) falls back to a full-file read.
@@ -1012,7 +1011,7 @@ async def _poll_loop() -> None:
           }
 
       if not cycle:
-        await asyncio.sleep(ROUND_GAP_SECONDS)
+        await asyncio.sleep(EXT_USAGE_ROUND_GAP_SECONDS)
         continue
 
       for inst in cycle:
@@ -1044,13 +1043,13 @@ async def _poll_loop() -> None:
         if _cached_usage:
           await streaming_manager.broadcast("sidebar", {"type": "ext_usage", "providers": _annotated_providers()})
           log.info("ext_usage_fetched", providers=list(_cached_usage.keys()))
-        await asyncio.sleep(ROUND_GAP_SECONDS)
+        await asyncio.sleep(EXT_USAGE_ROUND_GAP_SECONDS)
     except Exception:
       log.exception("ext_usage_poll_error")
       # The except path must yield too: an exception raised before the loop's
       # own sleeps (e.g. from _derive_accounts()) would otherwise re-loop with
       # no await point and busy-spin the event loop instead of backing off.
-      await asyncio.sleep(ROUND_GAP_SECONDS)
+      await asyncio.sleep(EXT_USAGE_ROUND_GAP_SECONDS)
 
 
 def _annotate_login_state(cache_key: str, account: ClaudeAccount) -> None:

@@ -61,6 +61,7 @@ from pathlib import Path
 import structlog
 
 from src.core.config import CharlieBotConfig, get_config
+from src.core.constants import REPLAY_MODE_EDITOR_REVIEW
 from src.core.memory_replay import errors, exchange_v2, variants
 from src.core.memory_replay.exchange import (
     EDITOR_PROMPT_VERSION,
@@ -292,7 +293,7 @@ def run_comparison(
 def _run_comparison(options: CompareOptions, *, cfg: CharlieBotConfig, now: datetime | None) -> CompareOutcome:
   run_dir = options.run_dir
   record = _load_run_record(run_dir)
-  if record.get("mode") != "editor-review":
+  if record.get("mode") != REPLAY_MODE_EDITOR_REVIEW:
     raise errors.ReplayError(
         f"comparison contrasts the two arms of an editor-review run; {run_dir} recorded mode "
         f"{record.get('mode')!r}")

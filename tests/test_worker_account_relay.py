@@ -302,10 +302,6 @@ class _SessionManager(JudgmentShim):
   def __init__(self) -> None:
     self.events: list[dict] = []
 
-  async def deliver_to_successor(self, session_id: str, event: dict) -> str:
-    self.events.append(event)
-    return session_id
-
   async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
     self.events.append(event)
 

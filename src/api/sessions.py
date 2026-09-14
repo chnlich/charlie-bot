@@ -1,10 +1,11 @@
 """Session management API routes."""
 
 import asyncio
+import gzip
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, TypeAdapter
 from starlette.responses import Response
@@ -1054,14 +1055,49 @@ async def set_session_group(
   return require_found(await session_mgr.set_group(session_id, req.group))
 
 
+# The raw events download's compressed serve memo: the file's (mtime_ns, size)
+# keys each entry and the limit holds one big session's wire form per open
+# events-viewer tab — a second flipped-to session misses once and re-compresses.
+_EVENTS_GZIP_MEMO_LIMIT = 2
+_events_gzip_memo: BoundedMemo[tuple[str, int, int], bytes] = BoundedMemo(_EVENTS_GZIP_MEMO_LIMIT)
+
+
+def _events_file_gzip(path: Path) -> bytes:
+  """The events file's gzip level-1 form, memoized on the stat pair the read served.
+
+  stat precedes the read in the same call, so the key proves the bytes a repeat
+  hit serves; an append between requests only makes the next caller miss and
+  re-read. mtime=0 keeps the compressed bytes deterministic across processes.
+  """
+  st = path.stat()
+  key = (str(path), st.st_mtime_ns, st.st_size)
+  hit = _events_gzip_memo.get(key)
+  if hit is not None:
+    return hit
+  compressed = gzip.compress(path.read_bytes(), compresslevel=1, mtime=0)
+  _events_gzip_memo.store(key, compressed)
+  return compressed
+
+
 @router.get("/{session_id}/events.jsonl")
-async def get_events_jsonl(session_id: str) -> FileResponse:
+async def get_events_jsonl(session_id: str, request: Request) -> Response:
   """Serve the raw chat_events.jsonl file for a session."""
   cfg = get_config()
   path = chat_events_path(cfg.sessions_dir / session_id)
   if not path.exists():
     raise HTTPException(status_code=404, detail="Events file not found")
-  return FileResponse(path, media_type="application/x-ndjson")
+  if "gzip" not in request.headers.get("accept-encoding", ""):
+    return FileResponse(path, media_type="application/x-ndjson")
+  # The read and the deflate ride one executor hop: FileResponse streams 64 KiB
+  # chunks and the gzip middleware compresses every chunk inline on the event
+  # loop (the M101 loop-lag readings), while Content-Encoding set upstream is
+  # what makes the middleware skip its own pass — the M72 listing-serve mechanism.
+  body = await asyncio.to_thread(_events_file_gzip, path)
+  return Response(
+      content=body, media_type="application/x-ndjson", headers={
+          "Content-Encoding": "gzip",
+          "Vary": "Accept-Encoding",
+      })
 
 
 @router.get("/{session_id}/threads", response_model=list[ThreadMetadata])

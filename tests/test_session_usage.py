@@ -60,7 +60,7 @@ def _codex_home_under_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pa
   """Pin the codex resolver's default home under tmp_path: codex runs from the default
   home, so the rollout tree the tests seed is ``<tmp>/codex-home/sessions``."""
   home = tmp_path / "codex-home"
-  monkeypatch.setattr(codex_usage, "_DEFAULT_CODEX_HOME", home)
+  monkeypatch.setattr(codex_usage, "DEFAULT_CODEX_HOME", home)
   return home
 
 
@@ -131,7 +131,7 @@ def _seed_codex_session(
       },
   ])
   _write_codex_rollout(
-      codex_usage._DEFAULT_CODEX_HOME, native_thread_id, [
+      codex_usage.DEFAULT_CODEX_HOME, native_thread_id, [
           _codex_turn_context(turn_model),
           token_event,
       ])

@@ -16,7 +16,7 @@ from fastapi import APIRouter
 
 from src.core import claude_accounts
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
-from src.core.codex_usage import CODEX_EVENT_MSG, CODEX_TOKEN_COUNT, CODEX_TURN_CONTEXT
+from src.core.codex_usage import CODEX_EVENT_MSG, CODEX_TOKEN_COUNT, CODEX_TURN_CONTEXT, DEFAULT_CODEX_HOME
 from src.core.config import get_config
 from src.core.http import get_http_client
 from src.core.json_utils import write_json_atomically
@@ -28,6 +28,7 @@ from src.core.timeouts import (
     EXT_USAGE_VERSION_PROBE_TIMEOUT,
     HTTP_OAUTH_TIMEOUT,
 )
+from src.core.token_tally import DEFAULT_CLAUDE_DIR
 
 log = LazyStructlogLogger()
 
@@ -60,8 +61,8 @@ ANTHROPIC_BETA = "oauth-2025-04-20"
 # below); this constant is only the fallback for when that probe fails.
 USER_AGENT_FALLBACK = "claude-code/2.1.219"
 
-CLAUDE_DEFAULT_DIR = str(Path.home() / ".claude")
-CODEX_DEFAULT_DIR = str(Path.home() / ".codex")
+CLAUDE_DEFAULT_DIR = str(DEFAULT_CLAUDE_DIR)
+CODEX_DEFAULT_DIR = str(DEFAULT_CODEX_HOME)
 
 # ---------------------------------------------------------------------------
 # Account-set derivation (no registry): run at the start of every poll cycle.

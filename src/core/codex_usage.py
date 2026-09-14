@@ -3,6 +3,8 @@
 The rollout record-type names are wire bytes an outside producer (the Codex CLI)
 writes; this module defines the CODEX_* constants for them, and the other rollout
 readers (token_tally, ext_usage) import them instead of restating the strings.
+The default codex home lives here for the same reason: token_tally imports this
+module, so a constant owned there could not be shared without an import cycle.
 """
 
 from collections.abc import Callable
@@ -26,7 +28,7 @@ CODEX_TURN_CONTEXT = "turn_context"
 CODEX_EVENT_MSG = "event_msg"
 CODEX_TOKEN_COUNT = "token_count"
 
-_DEFAULT_CODEX_HOME = Path.home() / ".codex"
+DEFAULT_CODEX_HOME = Path.home() / ".codex"
 
 
 def _extract_codex_rollout_usage_event(event: dict[str, Any]) -> dict[str, Any] | None:
@@ -217,7 +219,7 @@ class CodexUsageResolver:
 
     # Codex runs from the default home, so the corpus is that home's sessions
     # tree alone; no per-backend or config-provided home exists to search.
-    candidate_dir = _DEFAULT_CODEX_HOME / "sessions"
+    candidate_dir = DEFAULT_CODEX_HOME / "sessions"
     if not candidate_dir.exists():
       return None
     matches = list(candidate_dir.rglob(f"rollout-*{native_thread_id}.jsonl"))

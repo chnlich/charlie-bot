@@ -137,7 +137,13 @@ from typing import BinaryIO, NamedTuple
 import orjson
 
 from src.core import event_types as ET
-from src.core.codex_usage import CODEX_EVENT_MSG, CODEX_SESSION_META, CODEX_TOKEN_COUNT, CODEX_TURN_CONTEXT
+from src.core.codex_usage import (
+  CODEX_EVENT_MSG,
+  CODEX_SESSION_META,
+  CODEX_TOKEN_COUNT,
+  CODEX_TURN_CONTEXT,
+  DEFAULT_CODEX_HOME,
+)
 from src.core.config import get_config
 from src.core.json_utils import atomic_write_stream
 from src.core.models import BackendType
@@ -145,7 +151,6 @@ from src.core.runs import DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RAW_LOG_NAME
 from src.core.threads import EVENTS_LOG_NAME, METADATA_NAME, THREADS_DIR_NAME
 
 DEFAULT_CLAUDE_DIR = Path.home() / ".claude"
-DEFAULT_CODEX_HOME = Path.home() / ".codex"
 DEFAULT_OPENCODE_DB = Path.home() / ".local/share/opencode/opencode.db"
 
 FIELDS = ("in_fresh", "cache_write", "cache_read", "output", "calls")

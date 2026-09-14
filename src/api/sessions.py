@@ -1322,13 +1322,22 @@ async def retry_session_run(
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
 ) -> dict:
-  """Create the (session, request_id)-stable retry run of one recorded run."""
+  """Create the (session, request_id)-stable retry run of one recorded run.
+
+  The retry is a queued pending execution request; dispatching the node hands
+  it to the execution adapter (a stopped queued retry never launches).
+  """
   if not caller.is_operator:
     raise HTTPException(status_code=403, detail="retrying a run requires operator credentials")
   try:
-    return await task_mgr.create_retry(session_id, req.request_id, req.run_id)
+    result = await task_mgr.create_retry(session_id, req.request_id, req.run_id)
   except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
     raise _task_http_error(e) from e
+  try:
+    await task_mgr.dispatch.dispatch_pending(session_id)
+  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+    raise _task_http_error(e) from e
+  return result
 
 
 @router.post("/{session_id}/complete")

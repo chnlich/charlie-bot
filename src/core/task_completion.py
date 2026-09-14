@@ -32,6 +32,7 @@ Contracts this stage pins:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.core import event_types as ET
@@ -225,12 +226,27 @@ class TaskCompletionManager:
             blockers.append("completion requires delivery run evidence (run_ids)")
         for ref in evidence.result_refs:
             blockers.extend(self._structured_ref_blockers(meta, ref, runs, outcomes, facts, evidence))
+        claimed_work_ids = set(evidence.run_ids)
         for review_run_id in evidence.review_run_ids:
             review = runs.get(review_run_id)
             if review is None or review.kind != "review" or review.session_id != meta.id:
                 blockers.append(f"run {review_run_id} is not a review Run of task {meta.id}")
-            elif facts.run_outcomes.get(review_run_id) != "success":
+                continue
+            if facts.run_outcomes.get(review_run_id) != "success":
                 blockers.append(f"review run {review_run_id} has no successful run_finished fact")
+                continue
+            # The work/spec/review pin: a review authorizes only the work Run it
+            # was chained to, so a historical successful review of a different
+            # work attempt never completes this delivery.
+            if getattr(review, "review_of_run_id", None) is not None:
+                if review.review_of_run_id not in claimed_work_ids:
+                    blockers.append(
+                        f"review run {review_run_id} reviews work run {review.review_of_run_id}, "
+                        "which this completion claim does not name")
+            elif claimed_work_ids:
+                blockers.append(
+                    f"review run {review_run_id} is not chained to a work Run "
+                    "(review_of_run_id is unset; it cannot prove which work it reviewed)")
         if meta.task is not None and meta.task.task_type is not None:
             task_type = str(meta.task.task_type.value)
         else:
@@ -239,7 +255,8 @@ class TaskCompletionManager:
             successful_reviews = [
                 r for r in evidence.review_run_ids
                 if r in runs and runs[r].kind == "review"
-                and runs[r].session_id == meta.id and facts.run_outcomes.get(r) == "success"]
+                and runs[r].session_id == meta.id and facts.run_outcomes.get(r) == "success"
+                and (runs[r].review_of_run_id is None or runs[r].review_of_run_id in set(evidence.run_ids))]
             review_refs = [
                 r for r in evidence.result_refs if r.startswith(REVIEW_REF_PREFIX)]
             if not successful_reviews and not review_refs:
@@ -304,6 +321,80 @@ class TaskCompletionManager:
                     blockers.append(
                         f"result ref {ref} lands on {branch}; this task's runs target "
                         f"{', '.join(sorted(base_branches))}")
+        return blockers
+
+    # ------------------------------------------------------------------
+    # Landing verification (the git truth behind a landed: claim)
+    # ------------------------------------------------------------------
+
+    def _landing_claims(self, meta: SessionMetadata, evidence: CompletionEvidence) -> list[tuple[str, str, str | None]]:
+        """Every (branch, commit, repo_path override) landing claim one completion carries.
+
+        The structured ``landed:<branch>@<commit>`` result refs and the
+        adapter's structured ``landing`` field are the two forms; both pass the
+        same git verification, so a forged ref cannot buy what a structured
+        bundle cannot.
+        """
+        claims: list[tuple[str, str, str | None]] = []
+        if evidence.landing is not None:
+            claims.append(
+                (evidence.landing.branch, evidence.landing.commit, evidence.landing.repo_path))
+        for ref in evidence.result_refs:
+            if not ref.startswith(LANDING_REF_PREFIX):
+                continue
+            body = ref[len(LANDING_REF_PREFIX):]
+            branch, _, commit = body.partition("@")
+            if branch and commit:
+                claims.append((branch, commit, None))
+        return claims
+
+    async def landing_blockers(self, meta: SessionMetadata, evidence: CompletionEvidence) -> list[str]:
+        """Verify every landing claim against the requested repository and target branch.
+
+        Existence and ancestry run through the existing git helpers OUTSIDE the
+        control lock (subprocess work never holds it). A claim that cannot be
+        proven — fake commit, real-but-unmerged commit, wrong branch or repo,
+        unreadable repository — is an explicit blocker; nothing defaults to
+        verified.
+        """
+        blockers: list[str] = []
+        from src.core.git import git_verify_commit_landed
+        from src.core.task_sessions import TaskConflictError  # noqa: F401  (parity with the shape layer)
+
+        claims = self._landing_claims(meta, evidence)
+        if not claims:
+            return blockers
+        fallback_repo = meta.task.repo_path if meta.task is not None else None
+        if fallback_repo is None:
+            for run in self._tree.runs.list_run_records_sync(meta.id):
+                if run.repo_path:
+                    fallback_repo = run.repo_path
+                    break
+        for branch, commit, repo_override in claims:
+            repo = repo_override or fallback_repo
+            if not repo:
+                blockers.append(
+                    f"landing {branch}@{commit} cannot be verified: no repository is recorded "
+                    "for this task or its runs")
+                continue
+            try:
+                landed, reason = await git_verify_commit_landed(Path(repo), branch, commit)
+            except OSError as e:
+                blockers.append(f"landing {branch}@{commit} verification failed in {repo}: {e}")
+                continue
+            if not landed:
+                blockers.append(f"landing evidence unverified in {repo}: {branch}@{commit}: {reason}")
+        return blockers
+
+    async def verified_evidence_blockers(self, meta: SessionMetadata, evidence: CompletionEvidence) -> list[str]:
+        """The full evidence check: the shape/record layer plus the git landing layer.
+
+        The slow git verification runs outside the control lock; the locked
+        revalidation re-runs the shape layer over fresh facts (a landed commit
+        cannot un-land, so the outside-lock git verdict stands).
+        """
+        blockers = self.evidence_blockers(meta, evidence)
+        blockers.extend(await self.landing_blockers(meta, evidence))
         return blockers
 
     # ------------------------------------------------------------------
@@ -448,9 +539,17 @@ class TaskCompletionManager:
             assert meta is not None
         if blockers:
             raise TaskConflictError(sorted(set(blockers)))
-        # The potentially slow evidence validation runs outside the control
-        # lock; the locked pass below revalidates the relevant facts/spec/refs.
-        evidence_blockers = self.evidence_blockers(meta, evidence)
+        # The potentially slow evidence validation — including the git landing
+        # verification — runs outside the control lock and is authoritative:
+        # an unproven claim (forged hash, unlanded commit, wrong branch or
+        # repo) aborts the close here. The locked pass below revalidates the
+        # fast facts (structure plus the shape layer) — a verified landing
+        # cannot un-land between the two passes, and a moving condition
+        # (run finished, input processed) is caught by the fresh structural
+        # and shape revalidation.
+        evidence_blockers = await self.verified_evidence_blockers(meta, evidence)
+        if evidence_blockers:
+            raise TaskConflictError(sorted(set(evidence_blockers)))
         # Live-announce epochs are taken before any append, so the announce
         # feed can never double-render an event the aggregator caught up on.
         child_epoch = await tree.sessions.prime_aggregator(session_id)
@@ -472,12 +571,6 @@ class TaskCompletionManager:
                 # during the outside-the-lock validation leave the task open
                 # with the current, visible blockers.
                 raise TaskConflictError(all_blockers)
-            if evidence_blockers:
-                # The outside-the-lock validation had flagged these; the fresh
-                # facts revalidated them clean (conditions moved), so the close
-                # proceeds on current facts.
-                log.info("completion_evidence_revalidated_clean",
-                         session_id=session_id, resolved=evidence_blockers)
             close_event, report, report_created = await self._append_closed(
                 session_id, fresh_meta, request_id=request_id, evidence=evidence, actor=actor)
         await tree.sessions.announce_appended_event(session_id, close_event, epoch=child_epoch)
@@ -588,6 +681,7 @@ class TaskCompletionManager:
         summary: str | None = None,
         result_refs: "list[str] | None" = None,
         request_id: str | None = None,
+        evidence: "CompletionEvidence | None" = None,
     ) -> "tuple[int, dict]":
         """Automatic successful worker completion: finish first, then close checks.
 
@@ -596,7 +690,9 @@ class TaskCompletionManager:
         success — failed or interrupted evidence keeps the task open. Evidence
         defaults derive from the successful Run record itself (its pinned
         spec, its result ref); the execution-stage adapters pass the recorded
-        artifacts explicitly.
+        artifacts explicitly. A caller-supplied *evidence* bundle — the
+        implement workflow's review/landing delivery — replaces the work-only
+        default wholesale and passes the same verified close checks.
         """
         from src.core.task_sessions import TaskConflictError, TaskForbiddenError, TaskNotFoundError
 
@@ -615,20 +711,58 @@ class TaskCompletionManager:
         if run is None:
             from src.core.task_sessions import TaskNotFoundError
             raise TaskNotFoundError(f"run {run_id} not found in task {session_id}")
-        refs = list(result_refs if result_refs is not None else [f"{RUN_REF_PREFIX}{run_id}"])
-        if run.task_spec_hash:
-            refs.append(f"{SPEC_REF_PREFIX}{run.task_spec_hash}")
-        evidence = CompletionEvidence(
-            summary=summary or f"Run {run_id} completed",
-            result_refs=refs,
-            run_ids=[run_id],
-        )
+        if evidence is not None:
+            effective_evidence = evidence
+        else:
+            refs = list(result_refs if result_refs is not None else [f"{RUN_REF_PREFIX}{run_id}"])
+            if run.task_spec_hash:
+                refs.append(f"{SPEC_REF_PREFIX}{run.task_spec_hash}")
+            effective_evidence = CompletionEvidence(
+                summary=summary or f"Run {run_id} completed",
+                result_refs=refs,
+                run_ids=[run_id],
+            )
+        evidence = effective_evidence
         effective_request_id = request_id or f"auto:{run_id}"
         replay = self._replay_close_request(session_id, effective_request_id)
         if replay is not None:
             return replay
         return await self._close_now(
             session_id, request_id=effective_request_id, evidence=evidence, actor=ACTOR_SYSTEM)
+
+    async def after_run_finished(self, session_id: str, run_id: str) -> None:
+        """The one post-success follow-up owner, driven by the durable outcome.
+
+        A successful Run re-evaluates its manager's pending close requests. A
+        successful worker WORK Run evaluates automatic completion unless the
+        task's delivery rule waits for more evidence — an implement task's
+        delivery waits for its review and target-branch landing, which the
+        execution adapter drives through :meth:`evaluate_automatic_completion`
+        with the full verified bundle. A blocked automatic close keeps its
+        blockers visible and the adapters re-evaluate.
+        """
+        from src.core.task_sessions import TaskConflictError
+
+        tree = self._tree
+        meta = await tree.load_meta(session_id)
+        tree._require_task(meta, session_id)
+        assert meta is not None
+        await self.recheck_close_requests(session_id, run_id)
+        facts = tree.facts_of(session_id)
+        if facts.run_outcomes.get(run_id) != "success":
+            return
+        run = await tree.runs.get_run(session_id, run_id)
+        if run is None or meta.profile != "worker" or run.kind != "work":
+            return
+        task_type = str(meta.task.task_type.value) if (meta.task is not None and meta.task.task_type) else None
+        if task_type == "implement":
+            log.info("worker_delivery_awaits_review", session_id=session_id, run_id=run_id)
+            return
+        try:
+            await self.evaluate_automatic_completion(session_id, run_id=run_id)
+        except TaskConflictError as e:
+            log.info("automatic_worker_completion_blocked",
+                     session_id=session_id, run_id=run_id, blockers=getattr(e, "blockers", None))
 
     # ------------------------------------------------------------------
     # Cancel and reopen

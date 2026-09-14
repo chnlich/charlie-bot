@@ -645,6 +645,9 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
       # A run-token agent on the same user-message route stays agent input
       # with its own session's provenance: never a real USER event.
       await tree.runs.register_run(RunRecord(id="run-agent", session_id=worker.id, kind="work"))
+      # The run credential is accepted only once the launch callback persisted
+      # the process identity on the Run.
+      await tree.runs.record_launch(worker.id, "run-agent", pid=424242, pid_start="ps-1")
       claims = RunTokenClaims(run_id="run-agent", session_id=worker.id, agent="worker-agent")
       agent_client_headers = {"Authorization": f"Bearer {sign_run_token(claims, key)}"}
       relayed = client.post(f"/api/sessions/{worker.id}/message", json={"content": "agent view"},
@@ -730,6 +733,7 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
         "request_id": "route-3", "reason": "more work"})
     assert reopened.status_code == 200 and reopened.json()["task_state"] == "open"
     await tree.runs.register_run(RunRecord(id="run-root-agent", session_id=root.id, kind="work"))
+    await tree.runs.record_launch(root.id, "run-root-agent", pid=424243, pid_start="ps-2")
     key2_headers = {"Authorization": f"Bearer {sign_run_token(
         RunTokenClaims(run_id='run-root-agent', session_id=root.id, agent='a'), key)}"}
     forbidden = client.post(f"/api/sessions/{root.id}/reopen", json={

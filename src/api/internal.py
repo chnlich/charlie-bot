@@ -14,6 +14,9 @@ from src.api.deps import (
   get_trigger_manager,
   require_found,
 )
+from src.api.deps import (
+  require_caller as require_caller_dep,
+)
 from src.api.message_utils import build_agent_message_event
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config
@@ -122,13 +125,153 @@ async def _authorize_spawn_request(
   return meta, cfg, resolved_backend, resolved_model
 
 
+def delegate_request_id(req: DelegateRequest) -> str:
+  """The delegation's stable operation id.
+
+  An explicit ``request_id`` names intentional same-spec siblings; the derived
+  default binds one (session, task type, spec body) to one operation, so a
+  replayed CLI call after a lost response returns the original child instead
+  of a second process.
+  """
+  if req.request_id:
+    return req.request_id
+  from src.core.control_events import sha256_hex
+  return "delegate-" + sha256_hex("\x00".join(
+      [req.session_id, str(req.task_type.value), req.description]))[:24]
+
+
+async def _delegate_task_tree(
+    req: DelegateRequest,
+    meta: SessionMetadata,
+    cfg: CharlieBotConfig,
+    task_mgr: TaskTreeManager,
+    session_mgr: SessionManager,
+    caller: object,
+    resolved_backend: str,
+    resolved_model: str | None,
+) -> dict:
+  """The v2 delegation: one worker child task with its first work Run.
+
+  The child is a task-tree node (profile=worker) under the calling manager
+  task; the Run is its first execution record. A replayed request returns the
+  original child and Run. The returned ``thread_id`` is the compatibility
+  alias the legacy thread routes resolve to the same Run.
+  """
+  from src.core.control_events import stable_run_id
+  from src.core.models import RunRecord, TaskSpec
+  from src.core.task_sessions import (
+      TaskConflictError,
+      TaskForbiddenError,
+      TaskInvalidError,
+      TaskNotFoundError,
+      canonical_task_spec_text,
+  )
+
+  try:
+    # The nearest-user-ancestor gate re-judges at delegation and again at the
+    # child run's actual launch, whatever credential carries the request.
+    await task_mgr.check_task_authorization(req.session_id)
+    request_id = delegate_request_id(req)
+    task_spec = TaskSpec(
+        goal=req.description,
+        context_refs=[req.context] if req.context else [],
+        repo_path=req.repo_path,
+        base_branch=req.base_branch,
+        task_type=req.task_type,
+        keep_worktree=req.keep_worktree,
+    )
+    child = await task_mgr.create_task(
+        request_id=request_id,
+        task_parent_id=req.session_id,
+        profile="worker",
+        task=task_spec,
+        name=None,
+        backend=None,
+        caller=caller,
+    )
+    run_id = stable_run_id(child.id, f"{request_id}:work")
+    existing = await task_mgr.runs.get_run(child.id, run_id)
+    if existing is None:
+      if task_mgr.task_state(child.id) != "open":
+        log.info("delegate_child_closed", parent=req.session_id, child=child.id)
+        return {
+            "session_id": child.id,
+            "parent_session_id": req.session_id,
+            "run_id": None,
+            "thread_id": None,
+            "description": req.description,
+        }
+      record = RunRecord(
+          id=run_id,
+          session_id=child.id,
+          kind="work",
+          backend=resolved_backend,
+          model=resolved_model,
+          repo_path=req.repo_path,
+          base_branch=req.base_branch,
+      )
+      async with task_mgr.control_lock:
+        await task_mgr.runs.register_run_locked(
+            record, task_spec_text=canonical_task_spec_text(task_spec))
+        # The parent-entry compatibility alias: legacy thread routes addressed
+        # from the delegating session resolve to the same Run.
+        task_mgr.aliases.register_run_thread(req.session_id, run_id)
+  except TaskNotFoundError as e:
+    raise HTTPException(status_code=404, detail=str(e)) from e
+  except TaskForbiddenError as e:
+    raise HTTPException(status_code=403, detail=str(e)) from e
+  except TaskConflictError as e:
+    blockers = list(getattr(e, "blockers", None) or [])
+    raise HTTPException(status_code=409, detail={"message": str(e), "blockers": blockers}) from e
+  except TaskInvalidError as e:
+    raise HTTPException(status_code=400, detail=str(e)) from e
+
+  # The same adapter the creating tree owns launches the run — never a
+  # differently-configured singleton.
+  adapter = task_mgr.dispatch.executor
+  from src.core.task_execution import TaskExecutionAdapter
+  if not isinstance(adapter, TaskExecutionAdapter):
+    raise HTTPException(status_code=503, detail="task execution adapter is not installed")
+  adapter.launch(child.id, run_id)
+
+  # Save and broadcast task_delegated so the cursor stays in sync on reconnect.
+  task_event = {
+      "type": ET.TASK_DELEGATED,
+      "thread_id": run_id,
+      "description": req.description,
+      "backend": resolved_backend or "",
+      "model": resolved_model or "",
+      "child_session_id": child.id,
+      ET.DELEGATE_INVOCATION: _delegate_invocation_event_payload(req),
+  }
+  # The delegation card rides the delegating session's chat (persist + broadcast).
+  await session_mgr.persist_and_broadcast(req.session_id, task_event)
+
+  log.info("task_delegated_task_tree", session=req.session_id, child=child.id, run_id=run_id)
+  return {
+      "session_id": child.id,
+      "parent_session_id": req.session_id,
+      "run_id": run_id,
+      "thread_id": run_id,
+      "description": req.description,
+  }
+
+
+
 @router.post("/delegate")
 async def delegate_task(
     req: DelegateRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    caller: object = Depends(require_caller_dep),
 ) -> dict:
-  """Create a thread and spawn a worker agent directly."""
+  """Create a worker task and spawn it, or the legacy thread path for v1 sessions."""
+  target = require_found(await session_mgr.get_session(req.session_id))
+  if target.profile is not None:
+    meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr)
+    return await _delegate_task_tree(
+        req, meta, cfg, task_mgr, session_mgr, caller, resolved_backend, resolved_model)
   if req.task_type == TaskType.VERIFY:
     if req.repo_path is not None:
       raise HTTPException(status_code=400, detail="verify delegations are repo-less; omit repo_path")
@@ -142,7 +285,7 @@ async def delegate_task(
 
   meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr)
 
-  require_review = req.task_type == TaskType.IMPLEMENT
+  require_review = req.task_type == TaskType.IMPLEMENT  # noqa: F841  (legacy shape unchanged)
 
   # Create thread immediately so it's visible in the UI
   thread = await thread_mgr.create_thread(

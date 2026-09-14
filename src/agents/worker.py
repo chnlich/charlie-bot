@@ -178,7 +178,11 @@ class Worker:
 
   async def run(self) -> int:
     """Spawn the Worker and stream its output. Returns exit code."""
-    env = claude_supervisor_env({**os.environ, **self._extra_env})
+    # The supervisor strip runs on the inherited environment; the launch's own
+    # extra_env (the child's session id, its signed run token, the selected
+    # home) applies AFTER it, so the child's explicit identity survives the
+    # inherited-identity strip.
+    env = {**claude_supervisor_env(os.environ), **self._extra_env}
 
     async def _on_spawn(pid: int) -> None:
       self._thread.pid = pid

@@ -190,6 +190,10 @@ class RunRecord(BaseModel):
   prompt_snapshot_ref: str | None = None
   # The run this one retries; the retried run's evidence is preserved.
   retry_of_run_id: str | None = None
+  # The work Run a review Run judges (plan 4.2: a review is the same worker
+  # node's review pass, chained back to the delivered work). None on every
+  # non-review Run.
+  review_of_run_id: str | None = None
   backend: str | None = None
   model: str | None = None
   native_session_id: str | None = None
@@ -639,7 +643,14 @@ class DelegateInvocationMetadata(BaseModel):
 
 
 class DelegateRequest(BaseModel):
-  """Request body for the internal delegation endpoint."""
+  """Request body for the internal delegation endpoint.
+
+  ``request_id`` is the v2 operation identity: on a task-tree manager it binds
+  (parent, request_id) to one stable child task, so a replayed create/delegate
+  returns the original child and Run instead of a second process. The CLI
+  derives a stable default from the request content; an explicit value names
+  intentional same-spec siblings.
+  """
   session_id: str
   description: str
   base_branch: str | None = None
@@ -649,6 +660,7 @@ class DelegateRequest(BaseModel):
   task_type: TaskType = TaskType.IMPLEMENT
   keep_worktree: bool = False
   delegate_invocation: DelegateInvocationMetadata | None = None
+  request_id: str | None = None
 
 
 class ImproveRequest(BaseModel):

@@ -48,10 +48,19 @@ async def get_session_manager() -> SessionManager:
 
 
 def task_manager() -> TaskTreeManager:
-  """The task-tree owner singleton; it owns the control lock the RunStore shares."""
+  """The task-tree owner singleton; it owns the control lock the RunStore shares.
+
+  Construction installs the execution adapter as the input dispatcher's
+  executor — the application initialization owner wiring durable dispatch to
+  actual manager/worker/review execution. A test-built TaskTreeManager keeps
+  its executor None until it installs one.
+  """
   global _task_manager
   if _task_manager is None:
     _task_manager = TaskTreeManager(get_config(), session_manager())
+    from src.core.task_execution import TaskExecutionAdapter
+    _task_manager.dispatch.executor = TaskExecutionAdapter(
+        get_config(), session_manager(), _task_manager)
   return _task_manager
 
 
@@ -195,4 +204,8 @@ async def require_caller(
   events = run_store.load_events_sync(claims.session_id)
   if run_store.run_has_terminal_fact(run, events):
     raise HTTPException(status_code=401, detail=_RUN_TOKEN_ACTIVE_DETAIL)
+  # The run credential names one process instance: calls are accepted only
+  # after the launch callback persisted (pid, pid_start) on the Run.
+  if run.pid is None or run.pid_start is None:
+    raise HTTPException(status_code=401, detail="run token references a run that has not launched")
   return CallerIdentity(kind="agent", claims=claims)

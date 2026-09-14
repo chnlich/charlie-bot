@@ -378,6 +378,47 @@ def get_api(endpoint: str, params: dict[str, Any] | None = None) -> dict[str, An
   return _request_with_contract("GET", endpoint, params=params, unknown_effect="none")
 
 
+def find_local_task_child(session_id: str, description: str, task_type: str) -> dict | None:
+  """The v2 task-tree child this session already delegated this spec to, if any.
+
+  The sent-but-lost readback for a v2 manager: one worker child under the
+  session carries the identical goal body, so the replay returns the original
+  child and Run in the endpoint's response contract instead of creating a
+  second process. None on a v1 session or when no child matches.
+  """
+  try:
+    from src.core.config import get_config
+    from src.core.models import SessionMetadata
+    sessions_dir = get_config().sessions_dir
+    for child_dir in sorted(sessions_dir.iterdir()):
+      meta_path = child_dir / "metadata.json"
+      if not meta_path.is_file():
+        continue
+      try:
+        meta = SessionMetadata.model_validate_json(meta_path.read_text(encoding="utf-8"))
+      except (OSError, ValueError):
+        continue
+      if (meta.task_parent_id == session_id and meta.profile == "worker"
+          and meta.task is not None and meta.task.goal == description
+          and (meta.task.task_type.value if meta.task.task_type else None) == task_type):
+        run_id = None
+        runs_dir = child_dir / "data" / "runs"
+        if runs_dir.is_dir():
+          for run_dir in sorted(runs_dir.iterdir()):
+            if (run_dir / "metadata.json").is_file():
+              run_id = run_dir.name
+              break
+        return {
+            "session_id": meta.id,
+            "parent_session_id": session_id,
+            "run_id": run_id,
+            "thread_id": run_id,
+        }
+  except OSError:
+    return None
+  return None
+
+
 def find_local_thread(
     session_id: str,
     *,

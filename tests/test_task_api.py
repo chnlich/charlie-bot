@@ -214,9 +214,18 @@ def agent_headers(claims: RunTokenClaims) -> dict[str, str]:
 
 
 async def register_agent_run(task_mgr: TaskTreeManager, claims: RunTokenClaims) -> RunRecord:
-  """Register the active Run the test's agent token binds to."""
-  return await task_mgr.runs.register_run(
+  """Register the launched Run the test's agent token binds to.
+
+  The run credential is accepted only after the launch callback persisted
+  (pid, pid_start) on the Run, so the fixture lands the identity like the
+  real on_spawn callback does.
+  """
+  record = await task_mgr.runs.register_run(
       RunRecord(id=claims.run_id, session_id=claims.session_id, kind="work"))
+  await task_mgr.runs.record_launch(
+      claims.session_id, claims.run_id,
+      pid=40000 + (abs(hash(claims.run_id)) % 20000), pid_start="ps-" + claims.run_id[:8])
+  return record
 
 
 @pytest.mark.asyncio
@@ -411,16 +420,24 @@ async def test_legacy_alias_cancel_keeps_agent_own_run_scope(task_env) -> None:
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   own = RunTokenClaims(session_id=ids["worker"], run_id="run-own", agent="worker-alpha")
   await task_mgr.runs.register_run(RunRecord(id="run-own", session_id=ids["worker"], kind="work"))
+  await task_mgr.runs.record_launch(ids["worker"], "run-own", pid=424242, pid_start="ps-own")
   await task_mgr.runs.register_run(RunRecord(id="run-foreign", session_id=ids["root"], kind="work"))
 
   with make_client(cfg, session_mgr, task_mgr) as client:
     # An agent may stop its own bound run through the legacy alias entry.
     ok = client.post(f"/api/threads/{ids['worker']}/threads/run-own/cancel", headers=agent_headers(own))
     assert ok.status_code == 200, ok.text
-    assert ok.json() == {"run_id": "run-own", "stop_requested": True, "outcome": None}
+    # The launched run's identity is observed at stop: the fixture's process
+    # is already gone, so the stop records the durable interrupted fact.
+    assert ok.json() == {"run_id": "run-own", "stop_requested": True, "outcome": "interrupted"}
 
-    # ...but not another session's run, even a validly signed one.
-    denied = client.post(f"/api/threads/{ids['root']}/threads/run-foreign/cancel", headers=agent_headers(own))
+    # ...but not another session's run, even a validly signed one. A second
+    # launched run backs the token: the first stop finalized run-own, and a
+    # finished run's credential is no longer accepted.
+    other = RunTokenClaims(session_id=ids["worker"], run_id="run-own-2", agent="worker-alpha")
+    await task_mgr.runs.register_run(RunRecord(id="run-own-2", session_id=ids["worker"], kind="work"))
+    await task_mgr.runs.record_launch(ids["worker"], "run-own-2", pid=424243, pid_start="ps-own2")
+    denied = client.post(f"/api/threads/{ids['root']}/threads/run-foreign/cancel", headers=agent_headers(other))
     assert denied.status_code == 403
 
     # The operator cookie-less CLI identity keeps full scope.

@@ -776,6 +776,9 @@ class TaskTreeManager:
           branch_name=original.branch_name,
           worktree_path=original.worktree_path,
           sequence_ref=original.sequence_ref,
+          # A review retry stays chained to the same work Run (the work/spec/
+          # review pin must survive the retry).
+          review_of_run_id=original.review_of_run_id,
       )
     return {"session_id": session_id, "run_id": run.id}
 

@@ -803,6 +803,79 @@ class RunStore:
     )
     return await self.register_run_locked(record, task_spec_text=task_spec_text)
 
+  # -- launch and observation facts ----------------------------------------
+
+  async def record_launch(self, session_id: str, run_id: str, *, pid: int, pid_start: str) -> RunRecord:
+    """Persist the spawned process identity on the registered Run.
+
+    Called from the backend's on_spawn callback the moment (pid, pid_start) is
+    pinned, BEFORE any call from the run's credential can be accepted: the
+    caller-identity check requires both fields on the referenced Run. The
+    write takes the control lock (short metadata replace) and is idempotent —
+    a repeated callback for the same process rewrites the same pair, and a
+    pid_start change is a corrupted callback, not a recovery input.
+    """
+    async with self._lock:
+      run = self.read_run_sync(session_id, run_id)
+      if run is None:
+        raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
+      if run.pid is not None and run.pid_start is not None and (
+          run.pid != pid or run.pid_start != pid_start):
+        raise RunIdentityConflictError(
+            f"run {run_id} already records process identity "
+            f"({run.pid}, {run.pid_start!r}); refusing to overwrite with ({pid}, {pid_start!r})")
+      if run.started_at is None:
+        run.started_at = utc_now()
+      run.pid = pid
+      run.pid_start = pid_start
+      await asyncio.to_thread(
+          atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+      return run
+
+  async def record_observation(
+      self,
+      session_id: str,
+      run_id: str,
+      *,
+      native_session_id: str | None = None,
+      model: str | None = None,
+      raw_log_ref: str | None = None,
+      events_ref: str | None = None,
+      result_ref: str | None = None,
+      prompt_snapshot_ref: str | None = None,
+      repo_path: str | None = None,
+      base_branch: str | None = None,
+      branch_name: str | None = None,
+      worktree_path: str | None = None,
+  ) -> RunRecord:
+    """Persist the transport/result evidence the adapter observed on this Run.
+
+    Called before the terminal fact lands, so the evidence exists when the
+    finish does. Only provided fields are written; the terminal fact remains
+    the sole owner of outcome, ended_at and exit_code.
+    """
+    async with self._lock:
+      run = self.read_run_sync(session_id, run_id)
+      if run is None:
+        raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
+      for field, value in (
+          ("native_session_id", native_session_id),
+          ("model", model),
+          ("raw_log_ref", raw_log_ref),
+          ("events_ref", events_ref),
+          ("result_ref", result_ref),
+          ("prompt_snapshot_ref", prompt_snapshot_ref),
+          ("repo_path", repo_path),
+          ("base_branch", base_branch),
+          ("branch_name", branch_name),
+          ("worktree_path", worktree_path),
+      ):
+        if value is not None:
+          setattr(run, field, value)
+      await asyncio.to_thread(
+          atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+      return run
+
   # -- terminal facts ------------------------------------------------------
 
   async def record_finish(

@@ -633,6 +633,61 @@ async def _run_git_cmd(
   return ok, stderr
 
 
+async def git_rev_parse(repo_path: Path, rev: str) -> str | None:
+    """The full commit sha *rev* resolves to, or None when it does not exist."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "-C", str(repo_path), "rev-parse", "--verify", f"{rev}^{{commit}}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
+    except (OSError, TimeoutError) as e:
+        log.warning("git_rev_parse_failed", repo=str(repo_path), rev=rev, error=str(e))
+        return None
+    if proc.returncode != 0:
+        return None
+    return stdout.decode().strip() or None
+
+
+_COMMIT_REV_RE = re.compile(r"[0-9a-f]{7,40}")
+
+
+async def git_verify_commit_landed(repo_path: Path, branch: str, commit: str) -> tuple[bool, str]:
+    """Whether *commit* exists in *repo_path* and is an ancestor of (or equal to) *branch*'s tip.
+
+    The completion evidence check behind every ``landed:<branch>@<commit>`` claim:
+    a commit that does not exist, a real commit the target branch does not
+    contain, or an unresolvable target all fail with an explicit reason —
+    never a silent pass. An ``origin/<branch>`` target is fetched first, so
+    the judgment reads the published tip; a local branch is judged as-is.
+    """
+    if not _COMMIT_REV_RE.fullmatch(commit):
+        return False, f"commit {commit!r} is not a git commit hash"
+    if branch.startswith("origin/"):
+        # Judge the published tip, not a possibly stale remote-tracking ref.
+        fetched, fetch_detail = await git_fetch(repo_path, "origin", branch[len("origin/"):])
+        if not fetched:
+            return False, f"could not fetch {branch} in {repo_path}: {fetch_detail}"
+    for label, args in (
+        ("existence", ("cat-file", "-e", f"{commit}^{{commit}}")),
+        ("ancestry", ("merge-base", "--is-ancestor", commit, branch)),
+    ):
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "-C", str(repo_path), *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
+        except (OSError, TimeoutError) as e:
+            return False, f"git {label} check for {commit} failed: {e}"
+        if proc.returncode != 0:
+            detail = stderr.decode(errors="replace").strip()
+            return False, f"{label} check failed in {repo_path} ({branch}): {detail or proc.returncode}"
+    return True, ""
+
+
 async def git_fetch(repo_path: Path, remote: str, branch: str) -> tuple[bool, str]:
   """Run git fetch <remote> <branch>. Returns (success, stderr)."""
   return await _run_git_cmd(

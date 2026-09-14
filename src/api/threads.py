@@ -8,7 +8,7 @@ import shlex
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -25,6 +25,7 @@ from src.api.deps import (
   get_thread_manager,
   get_trigger_manager,
   require_caller,
+  task_manager,
 )
 from src.api.responses import FastJsonResponse
 from src.core import event_types as ET
@@ -36,6 +37,7 @@ from src.core.models import (
   BackendType,
   CcClaudeBackend,
   PendingTrigger,
+  RunRecord,
   ThreadMetadata,
   ThreadStatus,
   TuiCliBackend,
@@ -168,6 +170,79 @@ def _epoch_ms(dt: datetime) -> int:
   return int(dt.timestamp() * 1000)
 
 
+def _v2_run_status(run: RunRecord, events: list[dict], host_boot: datetime) -> str:
+  """The legacy status string one Run's facts map to (the compat row's contract).
+
+  Terminal facts win; a queued run is idle (cancelled once a durable stop
+  request stands); a launched run is running while its process identity is
+  live and failed once the process is gone without a terminal fact (the
+  recovery stage owns the final resolve).
+  """
+  from src.core.runs import is_run_alive
+  outcome = run_store_outcome(events, run.id)
+  if outcome == "success":
+    return "completed"
+  if outcome is not None:
+    return "failed"
+  if run.pid is None:
+    return "cancelled" if run_store_stop_requested(events, run.id) else "idle"
+  return "running" if is_run_alive(run.pid, run.pid_start, run.started_at, host_boot) else "failed"
+
+
+def run_store_outcome(events: list[dict], run_id: str) -> str | None:
+  """The run_finished outcome of one Run from the fact history (None while none)."""
+  outcome = None
+  for event in events:
+    if event.get("type") == ET.RUN_FINISHED and event.get("run_id") == run_id:
+      outcome = event.get("outcome")
+  return outcome
+
+
+def run_store_stop_requested(events: list[dict], run_id: str) -> bool:
+  """Whether a durable run_stop_requested fact exists for one Run."""
+  return any(
+      event.get("type") == ET.RUN_STOP_REQUESTED and event.get("run_id") == run_id
+      for event in events)
+
+
+def _v2_run_list_item(
+    run: RunRecord,
+    events: list[dict],
+    host_boot: datetime,
+    *,
+    created_at: datetime,
+    description: str,
+    branch_name: str | None = None,
+    worktree_path: str | None = None,
+    pid: int | None = None,
+) -> dict:
+  """One ephemeral compatibility row for a v2 Run (no ThreadMetadata is written).
+
+  The row carries the actual run identity — its own id, backend/model, pid and
+  derived status — so a legacy consumer listing, reading or stopping threads
+  addresses the same Run the v2 routes serve.
+  """
+  item = {
+      "type": "thread",
+      "id": run.id,
+      "description": description[:_LIST_DESCRIPTION_CAP],
+      "status": _v2_run_status(run, events, host_boot),
+      "created_at": _epoch_ms(created_at),
+      "completed_at": _epoch_ms(run.ended_at) if run.ended_at else None,
+      "backend": run.backend,
+      "session_id": run.session_id,
+  }
+  if len(description) > _LIST_DESCRIPTION_CAP:
+    item["description_full_len"] = len(description)
+  if pid is not None:
+    item["pid"] = pid
+  if branch_name:
+    item["branch_name"] = branch_name
+  if worktree_path:
+    item["worktree_path"] = worktree_path
+  return item
+
+
 def _thread_list_item(t: ThreadMetadata) -> dict:
   """One thread row of the workers-panel list and session-view payloads.
 
@@ -217,15 +292,22 @@ _LIST_PROOF_SWEEP_EVERY = 10
 _sig_gate = RevisionSweepGate(_LIST_PROOF_SWEEP_EVERY)
 
 
-def _row_source_stats(threads_dir: str,
-                      triggers_dir: str) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]]]:
-  """One scandir+stat walk of both row-source directories, split by directory.
+def _row_source_stats(
+    threads_dir: str,
+    triggers_dir: str,
+    runs_dir: str | None = None,
+) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]],
+           list[tuple[str, os.stat_result]]]:
+  """One scandir+stat walk of the row-source directories, split by directory.
 
   The list body's freshness signature and its thread rows read the same files,
   so a rebuild walks once and feeds both; two walks would stat every
   metadata.json twice per rebuild. A directory that cannot be scanned
   contributes an empty half, the same "no rows" verdict the signature's
-  OSError swallow gives it.
+  OSError swallow gives it. The third source is the task tree's Run metadata
+  files: the v2 compatibility rows ride the same proof, so a Run's metadata
+  write (atomic rename, mtime moves) refreshes its row inside the same sweep
+  window the unmarked thread write heals in.
   """
   thread_pairs: list[tuple[str, os.stat_result]] = []
   try:
@@ -243,15 +325,31 @@ def _row_source_stats(threads_dir: str,
         continue
   except OSError:
     pass
-  return thread_pairs, trigger_pairs
+  run_pairs: list[tuple[str, os.stat_result]] = []
+  if runs_dir:
+    try:
+      for entry in os.scandir(runs_dir):
+        if not entry.is_dir():
+          continue
+        meta_path = os.path.join(entry.path, "metadata.json")
+        try:
+          run_pairs.append((meta_path, os.stat(meta_path)))
+        except OSError:
+          continue
+    except OSError:
+      pass
+  return thread_pairs, trigger_pairs, run_pairs
 
 
 def _signature_from_stats(
     thread_pairs: list[tuple[str, os.stat_result]],
-    trigger_pairs: list[tuple[str, os.stat_result]]) -> tuple[tuple[str, int, int], ...]:
+    trigger_pairs: list[tuple[str, os.stat_result]],
+    run_pairs: list[tuple[str, os.stat_result]] = (),
+) -> tuple[tuple[str, int, int], ...]:
   """(path, mtime_ns, size) of every row-source file, in the memo's sorted-key order."""
   sig = [(path, st.st_mtime_ns, st.st_size) for path, st in thread_pairs]
   sig.extend((path, st.st_mtime_ns, st.st_size) for path, st in trigger_pairs)
+  sig.extend((path, st.st_mtime_ns, st.st_size) for path, st in run_pairs)
   sig.sort()
   return tuple(sig)
 
@@ -263,6 +361,53 @@ def _signature_from_stats(
 # only the moved files' rows. Rows are shared read-only into the body payload.
 _THREAD_ROW_MEMO_LIMIT = 8
 _thread_row_memo: BoundedMemo[str, dict[str, tuple[int, int, dict]]] = BoundedMemo(_THREAD_ROW_MEMO_LIMIT)
+
+
+async def _v2_run_list_items(
+    session_id: str,
+    run_pairs: list[tuple[str, os.stat_result]],
+) -> list[dict]:
+  """Compatibility rows for the session's v2 Runs, from the walked metadata files.
+
+  A session without task-tree runs (every v1 session) scans zero directories
+  and costs nothing beyond the empty scandir. Rows derive from the Run record
+  plus the fact history — no ThreadMetadata file is read or written; the row
+  memo keys the run metadata files the same (mtime_ns, size) identity the
+  signature proves.
+  """
+  if not run_pairs:
+    return []
+  tree = task_manager()
+  meta = await tree.load_meta(session_id)
+  description = (meta.task.goal if meta is not None and meta.task is not None else "") or ""
+  events = tree.runs.load_events_sync(session_id)
+
+  refreshed: dict[str, tuple[int, int, dict]] = {}
+  hit = _thread_row_memo.get(session_id)
+  items: list[dict] = []
+  for meta_path, st in run_pairs:
+    run_id = Path(meta_path).parent.name
+    cached = hit.get(meta_path) if hit is not None else None
+    if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+      items.append(cached[2])
+      refreshed[meta_path] = cached
+      continue
+    run = await asyncio.to_thread(tree.runs.read_run_sync, session_id, run_id)
+    if run is None:
+      continue
+    created_at = run.started_at or datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+    item = _v2_run_list_item(
+        run, events, datetime.now(UTC),
+        created_at=created_at,
+        description=description,
+        branch_name=run.branch_name,
+        worktree_path=run.worktree_path,
+        pid=run.pid,
+    )
+    refreshed[meta_path] = (st.st_mtime_ns, st.st_size, item)
+    items.append(item)
+  _thread_row_memo.store(session_id, refreshed)
+  return items
 
 
 def _thread_list_items(
@@ -420,12 +565,15 @@ async def view_thread_rows(
     return hit
   session_dir = cfg.sessions_dir / session_id
 
-  def walk_and_parse() -> tuple[list[tuple[str, os.stat_result]], list[ThreadMetadata | None]]:
-    thread_pairs, _ = _row_source_stats(str(session_dir / THREADS_DIR_NAME), str(session_dir / "triggers"))
-    return thread_pairs, thread_mgr.list_threads_from_stats(thread_pairs)
+  def walk_and_parse() -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]], list[ThreadMetadata | None]]:
+    thread_pairs, _triggers, run_pairs = _row_source_stats(
+        str(session_dir / THREADS_DIR_NAME), str(session_dir / "triggers"),
+        str(session_dir / "data" / "runs"))
+    return thread_pairs, run_pairs, thread_mgr.list_threads_from_stats(thread_pairs)
 
-  thread_pairs, metas = await asyncio.to_thread(walk_and_parse)
+  thread_pairs, run_pairs, metas = await asyncio.to_thread(walk_and_parse)
   rows = _thread_list_items(session_id, thread_pairs, metas)
+  rows.extend(await _v2_run_list_items(session_id, run_pairs))
   rows.sort(key=lambda row: row["created_at"], reverse=True)
   _view_rows_memo.store(session_id, rows)
   _view_rows_gate.mark_proven(session_id, rev)
@@ -470,9 +618,10 @@ async def list_threads(
       # an unmarked row-source write heals inside the same ~30 s window.
       _sig_gate.mark_proven(session_id, rev, reset_sweep=False)
       return _list_response(body, etag_value, etag)
-    thread_pairs, trigger_pairs = await asyncio.to_thread(
-        _row_source_stats, str(session_dir / THREADS_DIR_NAME), str(session_dir / "triggers"))
-    sig = _signature_from_stats(thread_pairs, trigger_pairs)
+    thread_pairs, trigger_pairs, run_pairs = await asyncio.to_thread(
+        _row_source_stats, str(session_dir / THREADS_DIR_NAME), str(session_dir / "triggers"),
+        str(session_dir / "data" / "runs"))
+    sig = _signature_from_stats(thread_pairs, trigger_pairs, run_pairs)
     if hit is not None and hit[0] == sig:
       _sig_gate.mark_proven(session_id, rev)
     else:
@@ -486,6 +635,7 @@ async def list_threads(
   assert thread_pairs is not None
   metas = await asyncio.to_thread(thread_mgr.list_threads_from_stats, thread_pairs)
   thread_items = _thread_list_items(session_id, thread_pairs, metas)
+  thread_items.extend(await _v2_run_list_items(session_id, run_pairs))
 
   triggers = await trigger_mgr.list_triggers(session_id)
   # The marked rebuild's body rides this same _list_body build.
@@ -512,6 +662,30 @@ async def get_thread(
   consumer reads it off this endpoint, and the modal fetches ``description``
   once per click).
   """
+  v2_run = await _resolve_v2_run(session_id, thread_id)
+  if v2_run is not None:
+    # The alias resolves to the same Run the v2 routes serve: the detail row
+    # shows its actual running/finished identity, and no second thread write
+    # exists behind it.
+    run = await asyncio.to_thread(task_manager().runs.read_run_sync, v2_run[0], v2_run[1])
+    if run is None:
+      raise HTTPException(status_code=404, detail=_THREAD_NOT_FOUND_DETAIL)
+    if attach:
+      return FastJsonResponse({"attach_command": None, "attach_available": False})
+    tree_meta = await task_manager().load_meta(v2_run[0])
+    description = (tree_meta.task.goal if tree_meta is not None and tree_meta.task is not None else "") or ""
+    events = task_manager().runs.load_events_sync(v2_run[0])
+    row = _v2_run_list_item(
+        run, events, datetime.now(UTC),
+        created_at=run.started_at or datetime.now(UTC),
+        description=description,
+        branch_name=run.branch_name,
+        worktree_path=run.worktree_path,
+        pid=run.pid,
+    )
+    row["session_id"] = v2_run[0]
+    row["description_full"] = description
+    return FastJsonResponse(row)
   meta = await _detail_thread_meta(thread_mgr, session_id, thread_id)
   if not meta:
     raise HTTPException(status_code=404, detail=_THREAD_NOT_FOUND_DETAIL)
@@ -527,6 +701,20 @@ async def get_thread(
   payload["attach_command"] = attach_command
   payload["attach_available"] = attach_available
   return FastJsonResponse(payload)
+
+
+async def _resolve_v2_run(owner_session_id: str, thread_id: str) -> "tuple[str, str] | None":
+  """Resolve a legacy thread address to its owning v2 (session, run), if any.
+
+  Both alias entries — the child-session entry and the delegating-parent
+  entry the delegate path registers — resolve to the same Run.
+  """
+  target = task_manager().aliases.resolve_thread(owner_session_id, thread_id)
+  if not target:
+    return None
+  session_id, run_id = target["session_id"], target["run_id"]
+  run = await asyncio.to_thread(task_manager().runs.read_run_sync, session_id, run_id)
+  return (session_id, run_id) if run is not None else None
 
 
 # Reads from read_thread_worker_events, per events-log path. The workers-panel
@@ -687,7 +875,13 @@ async def get_thread_events(
   (_append_worker_events never rewrites an emitted row), so a count inside
   it is a sound prefix cut.
   """
-  events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
+  v2_run = await _resolve_v2_run(session_id, thread_id)
+  if v2_run is not None:
+    # The worker Run's own events log: the same projection the v2 route
+    # serves, reached through the registered alias.
+    events_path = task_manager().runs.run_dir(v2_run[0], v2_run[1]) / "events.jsonl"
+  else:
+    events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
   # The unchanged-log poll is one stat + a lookup; only a miss pays the
   # executor round-trip the incremental read needs.
   events = read_thread_worker_events_memo_hit(events_path)

@@ -5,7 +5,7 @@ import json
 import pytest
 from conftest import FakeWebSocket, assistant_text_event, scheduled_trigger_event, user_event
 
-from server import _catchup_frames, _replay_aggregated_catchup, _send_session_catchup
+from server import _CatchupWalk, _replay_aggregated_catchup, _send_session_catchup
 from src.core.models import SessionMetadata
 
 VOICE_KEY = "is_" + "voice"
@@ -161,6 +161,13 @@ def _mixed_replay_corpus() -> list[dict]:
   ]
 
 
+def _unsliced_catchup_frames(events: list[dict], cursor: int) -> list[dict]:
+  """Parity oracle: the production walk fed the whole corpus in one slice."""
+  walk = _CatchupWalk(cursor)
+  walk.feed_slice(events, 0, len(events))
+  return walk.finish()
+
+
 @pytest.mark.asyncio
 async def test_replay_sends_exactly_the_built_frame_list() -> None:
   # The replay's only producer of frames is the _CatchupWalk feed, sliced on
@@ -172,7 +179,7 @@ async def test_replay_sends_exactly_the_built_frame_list() -> None:
   for cursor in (0, 2, len(events)):
     ws = FakeWebSocket()
     sent = await _replay_aggregated_catchup(ws, events, cursor=cursor, session_id="s")
-    expected = _catchup_frames(events, cursor)
+    expected = _unsliced_catchup_frames(events, cursor)
     assert ws.sent == expected
     assert sent == len(expected)
     assert [json.loads(text) for text in ws.sent_text] == expected
@@ -191,7 +198,7 @@ async def test_replay_stops_at_first_send_failure_with_match_count() -> None:
   events = _mixed_replay_corpus()
   ws = FailingWebSocket()
   sent = await _replay_aggregated_catchup(ws, events, cursor=0, session_id="s")
-  total = len(_catchup_frames(events, 0))
+  total = len(_unsliced_catchup_frames(events, 0))
   # 1 frame landed, the second send failed, the remaining total - 2 frames
   # were never attempted.
   assert total >= 2

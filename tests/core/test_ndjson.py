@@ -10,7 +10,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
 
 import pytest
 
@@ -365,7 +365,7 @@ def _spy_opens(monkeypatch: pytest.MonkeyPatch) -> list[str]:
   calls: list[str] = []
   real_open = open
 
-  def spy(file: str, mode: str = "r", *args: object, **kwargs: object) -> IO[str]:
+  def spy(file: Path | str, mode: str = "r", *args: object, **kwargs: object) -> IO[Any]:
     calls.append(str(file))
     return real_open(file, mode, *args, **kwargs)
 

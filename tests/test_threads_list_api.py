@@ -35,7 +35,7 @@ from src.core.triggers import TriggerManager
 LONG_DESCRIPTION = "spec " * 300  # 1500 chars, over the list cap
 
 
-def _seeded_client(tmp_path: Path) -> tuple[TestClient, str, dict]:
+def _seeded_client(tmp_path: Path) -> tuple[TestClient, str, str]:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   sessions = SessionManager(cfg)
 

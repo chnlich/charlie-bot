@@ -130,6 +130,32 @@ test('hideScrollToBottom writes exactly once when the button needs to become hid
 });
 
 // ---------------------------------------------------------------------------
+// scroll.js: restoreBottomPin
+// ---------------------------------------------------------------------------
+test('restoreBottomPin keeps the reader pinned when they were at the bottom', () => {
+  const context = loadScrollContext(new Map());
+  const container = { scrollTop: 0, scrollHeight: 900 };
+  context.restoreBottomPin(container, true, false);
+  assert.equal(container.scrollTop, 900);
+});
+
+test('restoreBottomPin forces the pin even when the reader scrolled up', () => {
+  const context = loadScrollContext(new Map());
+  const container = { scrollTop: 0, scrollHeight: 900 };
+  context.restoreBottomPin(container, false, true);
+  assert.equal(container.scrollTop, 900);
+});
+
+test('restoreBottomPin raises the jump button instead of scrolling when the reader scrolled up', () => {
+  const btn = makeCountingElement(['hidden'], '');
+  const context = loadScrollContext(new Map([['scroll-to-bottom', btn]]));
+  const container = { scrollTop: 0, scrollHeight: 900 };
+  context.restoreBottomPin(container, false, false);
+  assert.equal(container.scrollTop, 0);
+  assert.equal(btn.classList.contains('hidden'), false);
+});
+
+// ---------------------------------------------------------------------------
 // sidebar/status.js: refreshTuiDots
 // ---------------------------------------------------------------------------
 test('refreshTuiDots writes nothing when every dot already matches its live status', () => {

@@ -820,7 +820,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   # turn from the persisted master_run record. A relay's fresh process gets a
   # dir and record of its own (see _spawn_and_stream).
   started_at = datetime.now(UTC)
-  log_dir = cfg.sessions_dir / session_meta.id / "data" / "master_runs" / started_at.isoformat()
+  log_dir = runs.master_run_log_dir(cfg.sessions_dir / session_meta.id, started_at)
   raw_log = str(log_dir / runs.RAW_LOG_NAME)
 
   async def _on_spawn(pid: int) -> None:
@@ -850,7 +850,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     if backend is not None:
       record_persisted = False
       started_at = datetime.now(UTC)
-      log_dir = cfg.sessions_dir / session_meta.id / "data" / "master_runs" / started_at.isoformat()
+      log_dir = runs.master_run_log_dir(cfg.sessions_dir / session_meta.id, started_at)
       raw_log = str(log_dir / runs.RAW_LOG_NAME)
     backend = build_backend(
         option,

@@ -20,7 +20,7 @@ from src.core.models import (
     SessionMetadata,
 )
 from src.core.process import kill_group_escalating
-from src.core.streaming import streaming_manager
+from src.core.streaming import SIDEBAR_CHANNEL, streaming_manager
 from src.core.thinking_state import busy_since, clear_busy, mark_busy
 
 if TYPE_CHECKING:
@@ -65,7 +65,7 @@ async def _broadcast_running_changed(
   web/static/js/websocket.js reads them off the event verbatim.
   """
   await streaming_manager.broadcast(
-      "sidebar",
+      SIDEBAR_CHANNEL,
       {
           "type": ET.RUNNING_CHANGED,
           "session_id": session_id,

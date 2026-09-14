@@ -53,7 +53,7 @@ from src.core.scheduled_sessions import (
     ScheduledSessionStore,
 )
 from src.core.session_usage import SessionUsageResolver
-from src.core.streaming import streaming_manager
+from src.core.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
 from src.core.tasks import create_logged_task
 from src.core.thinking_state import busy_since
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
@@ -150,12 +150,6 @@ _TRANSIENT_METADATA_FIELDS = {
     "schedule_allow_failure",
     "thinking_since",
 }
-
-
-def _session_channel(session_id: str) -> str:
-  # Topic string must match the one session_websocket subscribes to in
-  # server.py; this helper keeps this module's two publishers agreeing.
-  return f"session:{session_id}"
 
 
 def _stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
@@ -1607,7 +1601,7 @@ class SessionManager:
     ``session_id`` key; the helper is what keeps the senders agreeing on that
     payload shape.
     """
-    await streaming_manager.broadcast("sidebar", {"type": event_type, "session_id": session_id, **fields})
+    await streaming_manager.broadcast(SIDEBAR_CHANNEL, {"type": event_type, "session_id": session_id, **fields})
 
   async def archive_session(self, session_id: str) -> SessionMetadata | None:
     """Mark a session as archived (does not delete files)."""
@@ -1898,7 +1892,7 @@ class SessionManager:
     await self.save_chat_event(session_id, event)
     event["event_index"] = archive_offset + self._chat_events.cached_event_count(session_id) - 1
 
-    channel = _session_channel(session_id)
+    channel = session_channel(session_id)
     deltas = list(aggregator.feed(event))
     for delta in deltas:
       await streaming_manager.broadcast(channel, delta)
@@ -1922,7 +1916,7 @@ class SessionManager:
     Used for state-change notifications (e.g. ``plan_updated``) that must not
     pollute the chat history or replay on reconnect.
     """
-    channel = _session_channel(session_id)
+    channel = session_channel(session_id)
     await streaming_manager.broadcast(channel, event)
 
   async def _get_or_init_aggregator(self, session_id: str) -> MessageAggregator:

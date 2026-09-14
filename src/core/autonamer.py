@@ -33,7 +33,7 @@ from src.core.config import CharlieBotConfig
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendOption, SessionMetadata
 from src.core.sessions import SessionManager
-from src.core.streaming import streaming_manager
+from src.core.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
 from src.core.timeouts import AUTONAMER_TIMEOUT
 
 log = LazyStructlogLogger()
@@ -161,13 +161,13 @@ async def _apply_name_to_session(
 
   await session_mgr.rename_session(session_meta.id, name)
 
-  channel = f"session:{session_meta.id}"
+  channel = session_channel(session_meta.id)
   await streaming_manager.broadcast(channel, {
       "type": ET.SESSION_RENAMED,
       "name": name,
   })
   await streaming_manager.broadcast(
-      "sidebar", {
+      SIDEBAR_CHANNEL, {
           "type": ET.SESSION_RENAMED,
           "session_id": session_meta.id,
           "name": name,

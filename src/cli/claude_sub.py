@@ -26,8 +26,7 @@ from typing import Any
 from src.agents.backends.base import SKIP_PERMISSIONS_FLAG, SKIP_PERMISSIONS_SETTINGS, build_claude_argv
 from src.agents.backends.claude_code import headless_claude_env
 from src.agents.backends.pty_common import (
-    _TMUX_SOCKET,
-    _tmux_binary,
+    _run_tmux,
     _tmux_client_env,
     tmux_session_exists,
     tmux_session_name,
@@ -228,28 +227,6 @@ def validate_prompt(prompt: str) -> None:
         "for command-line safety)")
   # Claude Code 2.1.212 accepts `--` as the documented command-line separator.  The
   # launch builder always inserts it before this value, including for a leading '-'.
-
-
-async def _run_tmux(*args: str, capture: bool = False) -> tuple[int, str]:
-  tmux = _tmux_binary()
-  env = _tmux_client_env()
-  env.pop("TMUX", None)
-  with tempfile.TemporaryFile() as stderr_file:
-    proc = await asyncio.create_subprocess_exec(
-        tmux,
-        "-L",
-        _TMUX_SOCKET,
-        *args,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE if capture else asyncio.subprocess.DEVNULL,
-        stderr=stderr_file,
-        env=env,
-    )
-    stdout, _ = await proc.communicate()
-    stderr_file.seek(0)
-    error_text = stderr_file.read().decode("utf-8", errors="replace").strip()
-  output = stdout.decode("utf-8", errors="replace") if stdout else ""
-  return proc.returncode or 0, output if capture and proc.returncode == 0 else error_text or output
 
 
 async def _tmux_checked(*args: str, capture: bool = False) -> str:

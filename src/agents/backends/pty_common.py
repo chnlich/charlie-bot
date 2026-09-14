@@ -67,27 +67,35 @@ def _tmux_pty_env() -> dict[str, str]:
   return {**_tmux_client_env(), "TERM": _PTY_CLIENT_TERM}
 
 
-async def _run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
-  """Run a tmux command on the isolated socket. Returns (exit_code, stderr)."""
+async def _run_tmux(*args: str, capture: bool = False, check: bool = False) -> tuple[int, str]:
+  """Run a tmux command on the isolated socket. Returns (exit_code, text).
+
+  The text is stderr; with capture=True a zero exit swaps in stdout. With
+  check=True a nonzero exit raises RuntimeError.
+  """
   tmux = _tmux_binary()
+  env = _tmux_client_env()
+  env.pop("TMUX", None)
   cmd = [tmux, "-L", _TMUX_SOCKET, *args]
   # tmux new-session can fork a server daemon that inherits stderr; under uvloop,
   # communicate() waits forever for PIPE EOF, so capture stderr in a regular file.
   with tempfile.TemporaryFile() as stderr_f:
     proc = await asyncio.create_subprocess_exec(
         *cmd,
-        stdout=asyncio.subprocess.DEVNULL,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE if capture else asyncio.subprocess.DEVNULL,
         stderr=stderr_f,
-        env=_tmux_client_env(),
+        env=env,
     )
-    await proc.wait()
+    stdout, _ = await proc.communicate()
     stderr_f.seek(0)
     stderr_b = stderr_f.read()
-  stderr = stderr_b.decode("utf-8", errors="replace") if stderr_b else ""
+  stderr = stderr_b.decode("utf-8", errors="replace").strip() if stderr_b else ""
+  out = stdout.decode("utf-8", errors="replace") if stdout else ""
   rc = proc.returncode or 0
   if check and rc != 0:
-    raise RuntimeError(f"tmux {' '.join(args)} failed (rc={rc}): {stderr.strip()}")
-  return rc, stderr
+    raise RuntimeError(f"tmux {' '.join(args)} failed (rc={rc}): {stderr}")
+  return rc, out if capture and rc == 0 else stderr or out
 
 
 async def _start_tmux_session(name: str, cwd: str, env_args: list[str], command_argv: list[str]) -> None:

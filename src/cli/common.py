@@ -31,6 +31,7 @@ if TYPE_CHECKING:
   from src.core.config import CharlieBotConfig, Credentials
 
 from src.core.constants import SESSION_ID_ENV_VAR
+from src.core.run_token import load_run_token
 from src.core.timeouts import (
     CLI_CONNECT_TOTAL_TIMEOUT,
     HTTP_INTERNAL_API_TIMEOUT,
@@ -80,11 +81,17 @@ def get_credentials() -> Credentials:
 def internal_api_auth_headers() -> dict[str, str]:
   """Authorization header for internal-API calls.
 
-  Returns a Bearer header when the access key is configured — it lives in
-  credentials.yaml under ``charliebot.access_key`` — so the internal CLIs
-  authenticate against the auth middleware; returns no header when the key is
-  empty (the middleware is a no-op in that case).
+  A run token in the environment (``CHARLIEBOT_RUN_TOKEN``) always wins and is
+  the only credential sent: a supported CLI request running under a Run never
+  falls back to the operator access key, so a rejected run token surfaces as
+  the server's 401 instead of silently upgrading to operator identity.
+  Without a run token the operator access key is used as before — it lives in
+  credentials.yaml under ``charliebot.access_key``; with neither, no header is
+  sent (the middleware is a no-op for an empty key).
   """
+  run_token = load_run_token()
+  if run_token:
+    return {"Authorization": f"Bearer {run_token}"}
   access_key = get_credentials().get("charliebot", "access_key")
   if access_key:
     return {"Authorization": f"Bearer {access_key}"}
@@ -336,6 +343,29 @@ def post_internal_api(
       rejection_exit_codes=rejection_exit_codes,
       unknown_effect="unknown",
   )
+
+
+def patch_internal_api(
+    endpoint: str,
+    payload: dict[str, Any],
+    *,
+    rejection_exit_codes: dict[int, int] | None = None,
+) -> dict[str, Any]:
+  """PATCH an internal CharlieBot API endpoint under the same error contract as ``post_internal_api``."""
+  import requests  # module-local: the module __getattr__ serves only attribute access
+  cfg = get_config()
+  url = f"{cfg.server_base_url}{endpoint}"
+  try:
+    resp = requests.patch(
+        url,
+        json=payload,
+        headers=internal_api_auth_headers(),
+        timeout=HTTP_INTERNAL_API_TIMEOUT,
+        verify=False)
+    resp.raise_for_status()
+    return resp.json()
+  except requests.RequestException as e:
+    _exit_server_rejection(cfg, e, rejection_exit_codes)
 
 
 def get_api(endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:

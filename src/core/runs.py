@@ -19,22 +19,35 @@ This module owns the pure/queryable parts of that contract:
 - reading the run's true completion time (the raw log's final mtime).
 """
 
+import asyncio
+import base64
 import os
+import signal
 import stat
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import orjson
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendType
+from src.core.control_events import (
+    ACTOR_SYSTEM,
+    ControlEventSink,
+    build_control_event,
+    sha256_hex,
+    stable_run_id,
+)
+from src.core.json_utils import atomic_write_text
+from src.core.models import BackendType, RunRecord, ensure_utc, utc_now
 from src.core.ndjson import parse_ndjson_line
+from src.core.session_aliases import SessionAliasStore
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
-
 RAW_LOG_NAME = "agent.raw.ndjson"
 STDERR_LOG_NAME = "agent.stderr.log"
 CURSOR_NAME = "agent.raw.cursor"
@@ -509,3 +522,375 @@ def resolve_run(
       completed_at=completed_at,
       leftover_holders=leftovers,
   )
+
+
+# ---------------------------------------------------------------------------
+# Run records (schema_version=2)
+# ---------------------------------------------------------------------------
+# A v2 Run lives at sessions/<id>/data/runs/<run_id>/ with its metadata.json,
+# its pinned task-spec body, and (once an execution adapter launches it) the
+# same raw transport files the master-run dir carries. The store below is the
+# single owner of run metadata and terminal facts: registration, retry
+# binding, durable stop requests, and the run_finished write all funnel
+# through it, so a natural finish and a cancellation race resolve to whichever
+# terminal fact landed first and a restart's fresh readers read the same
+# durable request and result.
+
+RUNS_DIR_NAME = "runs"
+RUN_METADATA_NAME = "metadata.json"
+RUN_TASK_SPEC_NAME = "task_spec.md"
+
+# Bounded wait after SIGTERM for the actual exit the interrupted fact requires.
+STOP_EXIT_POLL_SECONDS = 0.05
+STOP_EXIT_WAIT_SECONDS = 10.0
+
+
+class RunNotFoundError(LookupError):
+  """The requested run record does not exist (API: 404)."""
+
+
+class RunIdentityConflictError(Exception):
+  """The recorded (pid, pid_start) pair no longer names one process instance (API: 409).
+
+  The durable stop request stays on disk when this raises — it is the pending
+  evidence a fresh recovery reader re-checks against the same identity rule.
+  """
+
+
+@dataclass(frozen=True)
+class RunStopResult:
+  """The outcome of one stop request against one run."""
+  run_id: str
+  stop_requested: bool
+  # None while the request is only durably recorded — never a completion assertion.
+  outcome: str | None
+
+
+@dataclass(frozen=True)
+class RunPageSlice:
+  """One keyset page of a session's run records."""
+  items: list[RunRecord]
+  next_cursor: str | None
+
+
+def _run_sort_key(run: RunRecord) -> tuple[datetime, str]:
+  """Runs order chronologically by launch; a queued (never-launched) run sorts first."""
+  started = run.started_at if run.started_at is not None else datetime.min.replace(tzinfo=UTC)
+  return (started, run.id)
+
+
+
+def _encode_run_cursor(key: tuple[datetime, str]) -> str:
+  """Opaque keyset cursor: base64url JSON of the (started_at, id) boundary."""
+  payload = {"s": key[0].isoformat(), "i": key[1]}
+  return base64.urlsafe_b64encode(orjson.dumps(payload)).rstrip(b"=").decode("ascii")
+
+
+def _decode_run_cursor(cursor: str) -> tuple[datetime, str]:
+  """Decode one run-page cursor, failing loud on a malformed value."""
+  try:
+    payload = orjson.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+    started = datetime.fromisoformat(payload["s"]) if payload["s"] else datetime.min.replace(tzinfo=UTC)
+    return (ensure_utc(started), payload["i"])
+  except (ValueError, KeyError, TypeError) as e:
+    raise ValueError(f"malformed run page cursor: {cursor!r}") from e
+
+class RunStore:
+  """Owns v2 run records, their aliases, and every terminal fact."""
+
+  def __init__(
+      self,
+      cfg: CharlieBotConfig,
+      control_lock: asyncio.Lock,
+      events: ControlEventSink,
+      aliases: SessionAliasStore,
+  ) -> None:
+    self._cfg = cfg
+    self._lock = control_lock  # the one short control write lock, shared with the tree owner
+    self._events = events
+    self._aliases = aliases
+
+  # -- paths ---------------------------------------------------------------
+
+  def runs_root(self, session_id: str) -> Path:
+    return self._cfg.sessions_dir / session_id / DATA_DIR_NAME / RUNS_DIR_NAME
+
+  def run_dir(self, session_id: str, run_id: str) -> Path:
+    return self.runs_root(session_id) / run_id
+
+  def metadata_path(self, session_id: str, run_id: str) -> Path:
+    return self.run_dir(session_id, run_id) / RUN_METADATA_NAME
+
+  def task_spec_path(self, session_id: str, run_id: str) -> Path:
+    return self.run_dir(session_id, run_id) / RUN_TASK_SPEC_NAME
+
+  # -- reads ---------------------------------------------------------------
+
+  def read_run_sync(self, session_id: str, run_id: str) -> RunRecord | None:
+    path = self.metadata_path(session_id, run_id)
+    if not path.is_file():
+      return None
+    try:
+      return RunRecord.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+      raise RuntimeError(f"run metadata unreadable at {path}: {e}") from e
+
+  async def get_run(self, session_id: str, run_id: str) -> RunRecord | None:
+    return await asyncio.to_thread(self.read_run_sync, session_id, run_id)
+
+  def list_run_records_sync(self, session_id: str) -> list[RunRecord]:
+    """Every run record of one session, chronological (queued first)."""
+    root = self.runs_root(session_id)
+    if not root.is_dir():
+      return []
+    runs: list[RunRecord] = []
+    for entry in root.iterdir():
+      if not entry.is_dir():
+        continue
+      run = self.read_run_sync(session_id, entry.name)
+      if run is not None:
+        runs.append(run)
+    runs.sort(key=_run_sort_key)
+    return runs
+
+  def list_runs_page_sync(self, session_id: str, limit: int, cursor: str | None) -> RunPageSlice:
+    """One keyset page ordered by (started_at, id); cursor is the opaque page boundary."""
+    runs = self.list_run_records_sync(session_id)
+    after = _decode_run_cursor(cursor) if cursor else None
+    if after is not None:
+      runs = [r for r in runs if _run_sort_key(r) > after]
+    page = runs[:limit]
+    next_cursor = _encode_run_cursor(_run_sort_key(page[-1])) if len(runs) > limit and page else None
+    return RunPageSlice(items=page, next_cursor=next_cursor)
+
+  # -- facts ---------------------------------------------------------------
+
+  def load_events_sync(self, session_id: str) -> list[dict]:
+    return self._events.load_events(session_id)
+
+  def terminal_outcome(self, events: list[dict], run_id: str) -> str | None:
+    """The run's recorded run_finished outcome, or None while it has none."""
+    outcome: str | None = None
+    for event in events:
+      if event.get("type") == ET.RUN_FINISHED and event.get("run_id") == run_id:
+        outcome = event.get("outcome")
+    return outcome
+
+  def stop_requested(self, events: list[dict], run_id: str, request_id: str | None = None) -> bool:
+    """Whether a durable run_stop_requested fact exists (optionally one request_id's)."""
+    for event in events:
+      if event.get("type") != ET.RUN_STOP_REQUESTED or event.get("run_id") != run_id:
+        continue
+      if request_id is None or event.get("request_id") == request_id:
+        return True
+    return False
+
+  def run_is_active(self, run: RunRecord, events: list[dict], host_boot_time: datetime) -> bool:
+    """Whether *run* holds a verified-live process (queued and dead are both false)."""
+    return is_run_alive(run.pid, run.pid_start, run.started_at, host_boot_time)
+
+  def run_has_terminal_fact(self, run: RunRecord, events: list[dict]) -> bool:
+    return self.terminal_outcome(events, run.id) is not None
+
+  def run_is_queued(self, run: RunRecord, events: list[dict]) -> bool:
+    """Registered but never launched: retains its inputs for later dispatch."""
+    return run.pid is None and not self.run_has_terminal_fact(run, events)
+
+  def run_blocker(self, run: RunRecord, events: list[dict], host_boot_time: datetime) -> str | None:
+    """The structural-mutation blocker one run poses, or None.
+
+    Terminal runs block nothing; a live process is an active run; a launched
+    run without a terminal fact needs recovery before structural change; a
+    queued run is a pending execution request.
+    """
+    if self.run_has_terminal_fact(run, events):
+      return None
+    if run.pid is None:
+      return f"run {run.id} is queued (pending dispatch)"
+    if is_run_alive(run.pid, run.pid_start, run.started_at, host_boot_time):
+      return f"run {run.id} is active"
+    return f"run {run.id} has an unresolved process identity (needs recovery)"
+
+  # -- registration --------------------------------------------------------
+
+  async def register_run(self, record: RunRecord, *, task_spec_text: str | None = None) -> RunRecord:
+    """Publish one run record (idempotent by id) and its compatibility thread alias.
+
+    The pinned task-spec body lands before the metadata that references it, so
+    a crash between the two leaves an unreferenced body, never a record whose
+    evidence pointer dangles. Registration runs under the control lock.
+    """
+    async with self._lock:
+      existing = self.read_run_sync(record.session_id, record.id)
+      if existing is not None:
+        return existing
+      run_dir = self.run_dir(record.session_id, record.id)
+      if task_spec_text is not None:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        spec_path = self.task_spec_path(record.session_id, record.id)
+        atomic_write_text(spec_path, task_spec_text)
+        record.task_spec_ref = str(spec_path)
+        record.task_spec_hash = sha256_hex(task_spec_text)
+      run_dir.mkdir(parents=True, exist_ok=True)
+      path = self.metadata_path(record.session_id, record.id)
+      await asyncio.to_thread(atomic_write_text, path, record.model_dump_json(indent=2))
+      self._aliases.register_run_thread(record.session_id, record.id)
+      return record
+
+  async def create_retry_run(
+      self,
+      session_id: str,
+      request_id: str,
+      original_run_id: str,
+      *,
+      task_spec_text: str | None = None,
+      **fields: object,
+  ) -> RunRecord:
+    """Bind (session, request_id) to one retry run; replays return the original product."""
+    run_id = stable_run_id(session_id, request_id)
+    record = RunRecord(
+        id=run_id,
+        session_id=session_id,
+        kind="work",
+        retry_of_run_id=original_run_id,
+        **fields,  # type: ignore[arg-type]
+    )
+    return await self.register_run(record, task_spec_text=task_spec_text)
+
+  # -- terminal facts ------------------------------------------------------
+
+  async def record_finish(
+      self,
+      session_id: str,
+      run_id: str,
+      outcome: str,
+      *,
+      input_event_ids: list[str] | None = None,
+      exit_code: int | None = None,
+      ended_at: datetime | None = None,
+  ) -> RunRecord:
+    """Write the one run_finished fact (idempotent: the first terminal fact wins).
+
+    The durable event lands before the metadata mirror (ended_at/exit_code), so
+    a crash between the two leaves the fact — which every state reader
+    consumes — intact.
+    """
+    async with self._lock:
+      events = self.load_events_sync(session_id)
+      existing = self.terminal_outcome(events, run_id)
+      if existing is not None:
+        run = self.read_run_sync(session_id, run_id)
+        if run is None:
+          raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
+        return run
+      event = build_control_event(
+          ET.RUN_FINISHED,
+          actor=ACTOR_SYSTEM,
+          source_session_id=session_id,
+          run_id=run_id,
+          input_event_ids=input_event_ids or [],
+          outcome=outcome,
+      )
+      await self._events.append(session_id, event)
+      run = self.read_run_sync(session_id, run_id)
+      if run is None:
+        raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
+      run.ended_at = ended_at or utc_now()
+      run.exit_code = exit_code
+      if input_event_ids is not None:
+        run.input_event_ids = input_event_ids
+      await asyncio.to_thread(
+          atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+      return run
+
+  # -- stop ----------------------------------------------------------------
+
+  async def request_stop(self, session_id: str, run_id: str, request_id: str) -> RunStopResult:
+    """One idempotent stop request: durable fact first, then identity-checked signal.
+
+    The run_stop_requested event lands under the control lock before any
+    signal is sent, so a crash right after the append leaves the request
+    durably recorded for the fresh-reader recovery path. Identity validation,
+    signalling, and the exit wait all run outside the lock.
+    """
+    async with self._lock:
+      run = self.read_run_sync(session_id, run_id)
+      if run is None:
+        raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
+      events = self.load_events_sync(session_id)
+      existing = self.terminal_outcome(events, run_id)
+      if existing is not None:
+        # A naturally completed run retains its outcome; no stop request is added.
+        return RunStopResult(run_id=run_id, stop_requested=False, outcome=existing)
+      if not self.stop_requested(events, run_id, request_id):
+        event = build_control_event(
+            ET.RUN_STOP_REQUESTED,
+            actor=ACTOR_SYSTEM,
+            source_session_id=session_id,
+            request_id=request_id,
+            run_id=run_id,
+        )
+        await self._events.append(session_id, event)
+
+    # A queued (never-launched) run has no process to signal and no exit to
+    # observe; the durable request is the fact, and the dispatch stage honors
+    # it instead of launching.
+    if run.pid is None:
+      return RunStopResult(run_id=run_id, stop_requested=True, outcome=None)
+    return await self._follow_through_stop(session_id, run)
+
+  async def reconcile_stop_request(self, session_id: str, run_id: str) -> RunStopResult:
+    """Fresh-reader recovery: finish a durably requested stop from current process facts."""
+    run = self.read_run_sync(session_id, run_id)
+    if run is None:
+      raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
+    events = self.load_events_sync(session_id)
+    existing = self.terminal_outcome(events, run_id)
+    if existing is not None:
+      return RunStopResult(run_id=run_id, stop_requested=False, outcome=existing)
+    if not self.stop_requested(events, run_id):
+      return RunStopResult(run_id=run_id, stop_requested=False, outcome=None)
+    if run.pid is None:
+      return RunStopResult(run_id=run_id, stop_requested=True, outcome=None)
+    return await self._follow_through_stop(session_id, run)
+
+  async def _follow_through_stop(self, session_id: str, run: RunRecord) -> RunStopResult:
+    """Validate identity, signal the specific owned process, observe the exit.
+
+    Called outside the control lock. A pid_start mismatch (pid reuse) raises
+    :class:`RunIdentityConflictError` with the current /proc evidence; the
+    durable stop request from the requesting phase stays on disk.
+    """
+    pid = run.pid
+    assert pid is not None
+    stat_pair = read_pid_stat(pid)
+    exited = stat_pair is None or stat_pair[1] == "Z"
+    if not exited:
+      current_start = stat_pair[0]
+      if current_start != run.pid_start:
+        raise RunIdentityConflictError(
+            f"run {run.id} process identity mismatch: recorded pid_start {run.pid_start!r}, "
+            f"/proc/{pid} reports {current_start!r}")
+      if run.started_at is None or run.started_at.tzinfo is None:
+        raise RunIdentityConflictError(f"run {run.id} has no usable started_at for identity validation")
+      if run.started_at.astimezone(UTC) <= read_host_boot_time():
+        raise RunIdentityConflictError(
+            f"run {run.id} started_at predates the current host boot; recorded identity is stale")
+      os.kill(pid, signal.SIGTERM)
+      exited = await self._wait_for_exit(pid)
+    if exited:
+      await self.record_finish(session_id, run.id, "interrupted")
+      outcome = self.terminal_outcome(self.load_events_sync(session_id), run.id)
+      return RunStopResult(run_id=run.id, stop_requested=True, outcome=outcome)
+    return RunStopResult(run_id=run.id, stop_requested=True, outcome=None)
+
+  @staticmethod
+  async def _wait_for_exit(pid: int) -> bool:
+    """Bounded poll for the process's actual exit after the signal."""
+    deadline = time.monotonic() + STOP_EXIT_WAIT_SECONDS
+    while time.monotonic() < deadline:
+      stat_pair = read_pid_stat(pid)
+      if stat_pair is None or stat_pair[1] == "Z":
+        return True
+      await asyncio.sleep(STOP_EXIT_POLL_SECONDS)
+    return False

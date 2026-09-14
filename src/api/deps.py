@@ -10,12 +10,21 @@ the websocket handlers in server.py and tui.py); the ``get_*`` names are the
 Depends forms.
 """
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig, get_config, get_credentials
 from src.core.models import SessionMetadata
 from src.core.plans import PlanRegistryManager
+from src.core.run_token import (
+    RUN_TOKEN_ENV,
+    CallerIdentity,
+    RunTokenError,
+    bearer_from_authorization,
+    verify_run_token,
+)
+from src.core.runs import RunStore
 from src.core.sessions import SessionManager
+from src.core.task_sessions import TaskTreeManager
 from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
 
@@ -24,6 +33,7 @@ _session_manager: SessionManager | None = None
 _thread_manager: ThreadManager | None = None
 _trigger_manager: TriggerManager | None = None
 _plan_manager: PlanRegistryManager | None = None
+_task_manager: TaskTreeManager | None = None
 
 
 def session_manager() -> SessionManager:
@@ -35,6 +45,32 @@ def session_manager() -> SessionManager:
 
 async def get_session_manager() -> SessionManager:
   return session_manager()
+
+
+def task_manager() -> TaskTreeManager:
+  """The task-tree owner singleton; it owns the control lock the RunStore shares."""
+  global _task_manager
+  if _task_manager is None:
+    _task_manager = TaskTreeManager(get_config(), session_manager())
+  return _task_manager
+
+
+async def get_task_manager() -> TaskTreeManager:
+  return task_manager()
+
+
+def run_store() -> RunStore:
+  return task_manager().runs
+
+
+async def get_run_store() -> RunStore:
+  return task_manager().runs
+
+
+def set_task_manager(mgr: TaskTreeManager | None) -> None:
+  """Replace the task-tree owner singleton (tests); None restores lazy construction."""
+  global _task_manager
+  _task_manager = mgr
 
 
 def thread_manager() -> ThreadManager:
@@ -120,3 +156,43 @@ def bad_request(exc: Exception) -> HTTPException:
   keeps the ``from e`` chain intact.
   """
   return HTTPException(status_code=400, detail=str(exc))
+
+
+_RUN_TOKEN_ACTIVE_DETAIL = "run token does not reference an active run"
+
+
+async def require_caller(
+    request: Request,
+    run_store: RunStore = Depends(get_run_store),
+) -> CallerIdentity:
+  """Resolve the verified caller identity of a structural request.
+
+  A bearer equal to the operator access key (or no bearer at all — the cookie
+  the auth middleware already checked) is an operator caller. Any other bearer
+  is a run token: it must verify against the operator signing key AND reference
+  a Run without a terminal fact, and it never falls back to the cookie or the
+  access key. Run-token use with a missing signing key is an explicit 401.
+  """
+  bearer = bearer_from_authorization(request.headers.get("authorization"))
+  if not bearer:
+    return CallerIdentity(kind="operator")
+  key = str(get_credentials().get("charliebot", "access_key") or "")
+  if key and bearer == key:
+    return CallerIdentity(kind="operator")
+  # Anything else is run-token use: fail closed, never fall back.
+  if not key:
+    raise HTTPException(
+        status_code=401,
+        detail=f"run token presented ({RUN_TOKEN_ENV}) but no signing key is configured",
+    )
+  try:
+    claims = verify_run_token(bearer, key)
+  except RunTokenError as e:
+    raise HTTPException(status_code=401, detail=f"invalid run token: {e}") from e
+  run = await run_store.get_run(claims.session_id, claims.run_id)
+  if run is None:
+    raise HTTPException(status_code=401, detail=_RUN_TOKEN_ACTIVE_DETAIL)
+  events = run_store.load_events_sync(claims.session_id)
+  if run_store.run_has_terminal_fact(run, events):
+    raise HTTPException(status_code=401, detail=_RUN_TOKEN_ACTIVE_DETAIL)
+  return CallerIdentity(kind="agent", claims=claims)

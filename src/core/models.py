@@ -61,6 +61,7 @@ UtcDatetime = Annotated[datetime, BeforeValidator(ensure_utc)]
 
 SessionRating = Literal['thumbs_up', 'neutral', 'thumbs_down']
 
+
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
@@ -104,6 +105,107 @@ class LastRunStatus(StrEnum):
   SUCCESS = "success"
   FAILED = "failed"
   SKIPPED = "skipped"
+
+
+
+# ---------------------------------------------------------------------------
+# Task-tree record types (schema_version=2)
+# ---------------------------------------------------------------------------
+
+# The only execution roles a v2 task carries; every manager depth shares one
+# role and a worker is always a leaf. None on a legacy (v1) session, which is
+# not a task-tree node.
+TaskProfile = Literal["manager", "worker"]
+
+# Tree display preference: shown pins the row visible, hidden pins it collapsed
+# (the legacy archive entry maps here), auto derives from task facts.
+PresentationMode = Literal["auto", "shown", "hidden"]
+
+# What one Run actually executed. review is the same worker node's review pass;
+# iteration is one round of an improve loop; scheduled_step is one cron-chain
+# step.
+RunKind = Literal["manager_turn", "work", "review", "iteration", "scheduled_step"]
+
+# Derived task lifecycle, rebuilt from task_closed/task_reopened facts - never
+# persisted as a state machine.
+TaskState = Literal["open", "completed", "cancelled"]
+
+# Derived per-node work state, rebuilt from run and input facts.
+WorkState = Literal["idle", "running", "waiting", "attention"]
+
+# Outcome carried by a run_finished fact.
+RunOutcomeValue = Literal["success", "failed", "interrupted"]
+
+
+class TaskSpec(BaseModel):
+  # The task record a v2 session carries: goal, acceptance, and execution bounds.
+  model_config = ConfigDict(extra="forbid")
+
+  goal: str = ""
+  acceptance: list[str] = Field(default_factory=list)
+  context_refs: list[str] = Field(default_factory=list)
+  repo_path: str | None = None
+  base_branch: str | None = None
+  task_type: TaskType | None = None
+  keep_worktree: bool = False
+
+
+class EventRef(BaseModel):
+  # Pointer to the source chat event behind a metadata fact (provenance, not identity).
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  # origin_ref allows a null event id (the copy source predates event ids);
+  # created_by_event always carries one and is validated at its write site.
+  event_id: str | None = None
+
+
+class SequenceRef(BaseModel):
+  # Execution-sequence association: an improve loop or a cron-steps chain.
+  model_config = ConfigDict(extra="forbid")
+
+  kind: Literal["improve", "cron_steps"]
+  owner_ref: str
+  position: int
+
+
+class RunRecord(BaseModel):
+  # One actual execution and its evidence (schema_version=2 Run schema).
+  #
+  # Owned by src.core.runs; lives at sessions/<id>/data/runs/<run_id>/metadata.json.
+  # Identity and evidence fields pin the execution; activity is always re-read
+  # from process identity plus terminal facts, never from a persisted status.
+  model_config = ConfigDict(extra="forbid")
+
+  id: str
+  session_id: str
+  kind: RunKind = "work"
+  # The exact input batch this run was dispatched against.
+  input_event_ids: list[str] = Field(default_factory=list)
+  # The task-spec body pinned at launch: ref points at the immutable pinned
+  # text, hash is its SHA-256 (execution evidence binding).
+  task_spec_hash: str | None = None
+  task_spec_ref: str | None = None
+  # Reference to the launch instruction snapshot (context stage writes it).
+  prompt_snapshot_ref: str | None = None
+  # The run this one retries; the retried run's evidence is preserved.
+  retry_of_run_id: str | None = None
+  backend: str | None = None
+  model: str | None = None
+  native_session_id: str | None = None
+  pid: int | None = None
+  pid_start: str | None = None
+  started_at: UtcDatetime | None = None
+  ended_at: UtcDatetime | None = None
+  exit_code: int | None = None
+  repo_path: str | None = None
+  base_branch: str | None = None
+  branch_name: str | None = None
+  worktree_path: str | None = None
+  sequence_ref: SequenceRef | None = None
+  raw_log_ref: str | None = None
+  events_ref: str | None = None
+  result_ref: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +379,33 @@ class SessionMetadata(BaseModel):
   # Newest consumed thread ts for a followed Slack thread; None = nothing
   # consumed yet. Advanced by summon creation (mention ts) and ack only.
   slack_watermark_ts: str | None = None
+  # ------------------------------------------------------------------
+  # Task-tree fields (schema_version=2). All default to their v1 absence so
+  # existing metadata.json files keep parsing; a v2 task sets profile=manager
+  # or worker and schema_version=2 at creation.
+  # ------------------------------------------------------------------
+  schema_version: int = 1
+  # Parent task (decomposition edge). Null on an independent root. History
+  # copying (parent_session_id/origin_ref) never becomes a task parent.
+  task_parent_id: str | None = None
+  profile: TaskProfile | None = None
+  task: TaskSpec | None = None
+  # Compatibility label for project/group grouping; effective rules come from
+  # prompt references and task ancestry, not from this value.
+  project_key: str | None = None
+  presentation: PresentationMode = "auto"
+  # Pausing blocks new automatic execution only; it never terminates a live run.
+  automation_paused: bool = False
+  # The create operation's source event (provenance and retry dedup).
+  created_by_event: EventRef | None = None
+  # History-copy source (fork/elone), kept separate from task_parent_id.
+  origin_ref: EventRef | None = None
+  # SHA-256 body references: subtree_prompt applies to this node and every
+  # descendant, node_prompt to this node only. Bodies live immutable under
+  # prompt_bodies/<sha256>.md in the selected home.
+  subtree_prompt_ref: str | None = None
+  node_prompt_ref: str | None = None
+
   # Rating
   rating: SessionRating | None = None
   # Key is the round event id (UUID generated at event write time, or
@@ -326,6 +455,89 @@ class CreateSessionRequest(BaseModel):
   role: str | None = None
   session_id: str | None = None
   slack_origin: SlackOrigin | None = None
+  # ---- v2 task create: any of these set routes POST /api/sessions/ through the
+  # task-tree owner; request_id is required there and binds the stable node id.
+  request_id: str | None = None
+  task_parent_id: str | None = None
+  profile: TaskProfile | None = None
+  task: TaskSpec | None = None
+
+
+class PatchSessionTaskRequest(BaseModel):
+  # v2 PATCH /api/sessions/{id} body: task metadata mutations.
+  #
+  # Field absence (None + not in model_fields_set) means "no change"; an
+  # explicit null clears where clearing is legal (task_parent_id -> root,
+  # prompts -> no local rule). Name rides the same PATCH as the rename route.
+  model_config = ConfigDict(extra="forbid")
+
+  name: str | None = None
+  task_parent_id: str | None = None
+  profile: TaskProfile | None = None
+  task: TaskSpec | None = None
+  presentation: PresentationMode | None = None
+  automation_paused: bool | None = None
+  # New rule bodies (or null to clear); the server stores the body immutable
+  # and swaps the reference atomically, recording prompt_changed.
+  subtree_prompt: str | None = None
+  node_prompt: str | None = None
+
+
+class AncestorRef(BaseModel):
+  # One entry of a session detail's ancestors path (the task-parent chain).
+  model_config = ConfigDict(extra="forbid")
+
+  id: str
+  name: str
+
+
+class SessionRow(BaseModel):
+  # One task summary row of GET /api/sessions/tree (and the archive/search projection).
+  model_config = ConfigDict(extra="forbid")
+
+  id: str
+  name: str
+  profile: TaskProfile | None = None
+  task_parent_id: str | None = None
+  task_state: TaskState
+  work_state: WorkState
+  archived: bool
+  child_count: int
+  open_descendant_count: int
+  attention_descendant_count: int
+
+
+class RunPage(BaseModel):
+  # GET /api/sessions/{id}/runs response: one keyset page plus its cursor.
+  model_config = ConfigDict(extra="forbid")
+
+  items: list[RunRecord]
+  next_cursor: str | None = None
+
+
+class RetryRunRequest(BaseModel):
+  # POST /api/sessions/{id}/retry body.
+  model_config = ConfigDict(extra="forbid")
+
+  request_id: str
+  run_id: str
+
+
+class CancelRunRequest(BaseModel):
+  # POST /api/sessions/{id}/runs/{run_id}/cancel body.
+  model_config = ConfigDict(extra="forbid")
+
+  request_id: str
+
+
+class RunCancelResponse(BaseModel):
+  # Run cancel response: outcome is null while a stop is only requested, not observed.
+  model_config = ConfigDict(extra="forbid")
+
+  run_id: str
+  stop_requested: bool
+  outcome: RunOutcomeValue | None = None
+
 
 
 class ForkSessionRequest(BaseModel):

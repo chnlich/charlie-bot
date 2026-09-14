@@ -17,6 +17,7 @@ rebuilds from a fresh walk, the same identity contract the usage fold's memo
 rides.
 """
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from src.core import event_types as ET
@@ -31,7 +32,7 @@ _TAKEOFF_PHRASE = "take off"
 _PRE_TAKEOFF_WINDOW = timedelta(hours=12)
 
 # session_id -> (events list, covered length, latest_user_has_takeoff,
-# latest_pre_takeoff_at). Pinning the list keeps id() stable, so an identity
+# latest_pre_takeoff_at, seen_any_real_user_message). Pinning the list keeps id() stable, so an identity
 # match can never be an id-reuse collision with a different list; the
 # chat-events cache mutates the list only by in-place append (save_chat_event)
 # or wholesale replacement, and a replacement is a new object. The answers are
@@ -122,8 +123,8 @@ def _backward_user_answers(
 def _settled_user_answers(
     events: list[dict],
     session_id: str,
-) -> tuple[bool, datetime | None]:
-  """Return the two answers over ``events``, serving the answers memo.
+) -> tuple[bool, datetime | None, bool]:
+  """Return the two gate answers plus whether *events* holds any real user message.
 
   A cold or replaced list pays one full backward walk and stores the answers
   with the list and its length. An identity match folds only the appended
@@ -135,21 +136,23 @@ def _settled_user_answers(
   """
   cached = _gate_answers_memo.get(session_id)
   if cached is not None and cached[0] is events:
-    covered, has_takeoff, pre_takeoff_at = cached[1], cached[2], cached[3]
+    covered, has_takeoff, pre_takeoff_at, seen_any_user = cached[1], cached[2], cached[3], cached[4]
     suffix = events[covered:]
     if suffix:
       suffix_has_takeoff, suffix_pre_takeoff_at, seen_user = _backward_user_answers(suffix, session_id)
       if seen_user:
         has_takeoff = suffix_has_takeoff
+        seen_any_user = True
       if suffix_pre_takeoff_at is not None:
         pre_takeoff_at = suffix_pre_takeoff_at
-      _gate_answers_memo.store(session_id, (events, covered + len(suffix), has_takeoff, pre_takeoff_at))
-    return has_takeoff, pre_takeoff_at
+      _gate_answers_memo.store(
+          session_id, (events, covered + len(suffix), has_takeoff, pre_takeoff_at, seen_any_user))
+    return has_takeoff, pre_takeoff_at, seen_any_user
   count = len(events)
   span = events[:count]  # the walked span is the claimed span: an append landing mid-walk is not claimed unseen
-  has_takeoff, pre_takeoff_at, _ = _backward_user_answers(span, session_id)
-  _gate_answers_memo.store(session_id, (events, count, has_takeoff, pre_takeoff_at))
-  return has_takeoff, pre_takeoff_at
+  has_takeoff, pre_takeoff_at, seen_any_user = _backward_user_answers(span, session_id)
+  _gate_answers_memo.store(session_id, (events, count, has_takeoff, pre_takeoff_at, seen_any_user))
+  return has_takeoff, pre_takeoff_at, seen_any_user
 
 
 def check_takeoff_gate(
@@ -164,7 +167,7 @@ def check_takeoff_gate(
   effective_now = effective_now.astimezone(UTC)
 
   events = session_mgr.load_chat_events_sync(session_id)
-  latest_user_has_takeoff, latest_pre_takeoff_at = _settled_user_answers(events, session_id)
+  latest_user_has_takeoff, latest_pre_takeoff_at, _ = _settled_user_answers(events, session_id)
 
   pre_takeoff_active = (
       latest_pre_takeoff_at is not None and
@@ -175,3 +178,63 @@ def check_takeoff_gate(
   raise DelegationBlockedError(
       'Delegation blocked: no active authorization. A valid "pre take off" within 12 hours or '
       '"take off" in the latest real user message is required before delegating.')
+
+
+_TASK_ANCESTOR_HOP_LIMIT = 1000
+
+
+def check_takeoff_gate_for_task(
+    start_session_id: str,
+    *,
+    load_events: Callable[[str], list[dict]],
+    task_meta_of: Callable[[str], tuple[str | None, str | None]],
+    task_state_of: Callable[[str], str],
+    now: datetime | None = None,
+) -> str:
+  """The v2 task-caller gate: nearest-real-user-ancestor lookup over the task tree.
+
+  From the calling node upward, the first node whose chat history carries a
+  real user instruction is where the existing gate applies; a failed gate
+  there blocks — the walk never borrows from a higher ancestor past a node
+  that holds a real user message. Every ancestor on the way must be an open
+  task, and the calling node itself must be a manager. Agent messages, cron
+  inputs, and child reports never mint or revoke a user authorization window;
+  only real user messages (the same judgment the legacy gate rides) count.
+
+  Returns the session id whose gate authorized; raises
+  :class:`DelegationBlockedError` otherwise. ``task_meta_of`` returns
+  ``(task_parent_id, profile)`` for one node, or (None, None) when unknown.
+  """
+  effective_now = now if now is not None else datetime.now(UTC)
+  if effective_now.tzinfo is None:
+    raise ValueError("authorization check time must be timezone-aware")
+  effective_now = effective_now.astimezone(UTC)
+
+  current = start_session_id
+  for _ in range(_TASK_ANCESTOR_HOP_LIMIT):
+    task_parent_id, profile = task_meta_of(current)
+    if current == start_session_id and profile != "manager":
+      raise DelegationBlockedError(
+          f"task {current} is not a manager; agent calls run only under a manager task")
+    if current != start_session_id and task_state_of(current) != "open":
+      raise DelegationBlockedError(f"ancestor task {current} is {task_state_of(current)}; open it first")
+
+    events = load_events(current)
+    has_takeoff, pre_takeoff_at, seen_user = _settled_user_answers(events, current)
+    if seen_user:
+      # The nearest node with a real user instruction: apply the existing gate
+      # here and never borrow past it (a local instruction blocks higher ones).
+      pre_takeoff_active = (
+          pre_takeoff_at is not None and
+          pre_takeoff_at <= effective_now < pre_takeoff_at + _PRE_TAKEOFF_WINDOW)
+      if has_takeoff or pre_takeoff_active:
+        return current
+      raise DelegationBlockedError(
+          'Delegation blocked: no active authorization. A valid "pre take off" within 12 hours or '
+          f'"take off" in the latest real user message of task {current} is required before delegating.')
+    if task_parent_id is None:
+      break
+    current = task_parent_id
+  raise DelegationBlockedError(
+      "Delegation blocked: no real user instruction found along the task ancestor chain; "
+      "authorization cannot be borrowed past the root.")

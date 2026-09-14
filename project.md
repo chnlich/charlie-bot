@@ -281,9 +281,9 @@ it to the session cwd (CLAUDE.md for Claude Code, AGENTS.md for the other backen
 
 **Frontend**
 - Vanilla-JS UI under `web/static/js/`, served by FastAPI StaticFiles (Node.js/npm is build-time only: Tailwind CSS)
-- Panels: Sessions sidebar, Chat (WebSocket streaming), Threads list, Plan review checklist, Voice push-to-talk
-- ChatPanel subscribes to session WebSocket — receives worker summaries and renders them as assistant messages
-- ThreadsPanel polls every 3 seconds for thread status updates
+- Panels: the sessions sidebar plus the tab strip — Terminal, Chat w/ TeX, Backlog, Plans, Chat, Workers (the thread list and per-thread detail)
+- The session WebSocket (`web/static/js/websocket.js`) drives the chat: rendering is fully driven by aggregated `message`/`stream` deltas, so a worker completion summary arrives as an assistant message
+- Polls: the workers tab list polls every 3 seconds; an open thread detail polls its events every 5 seconds while its worker runs (both ride the page-timers registry, so a hidden tab polls nothing)
 - Draft persistence: unsent message text is saved to localStorage per session (debounced 300ms) and restored on session switch-back or page reload
 
 **Configuration**

@@ -15,10 +15,10 @@ from pathlib import Path
 import requests
 
 from src.core import artifact_check
+from src.core.constants import REPO_ROOT
 from src.core.timeouts import KATEX_CDN_FETCH_TIMEOUT
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_PRERENDER_DRIVER = _REPO_ROOT / "scripts" / "prerender_math.js"
+_PRERENDER_DRIVER = REPO_ROOT / "scripts" / "prerender_math.js"
 
 KATEX_VERSION = "0.16.21"
 KATEX_CDN_URL = f"https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist/katex.min.js"
@@ -80,7 +80,7 @@ def wrap_fragment(genre: str, fragment: Path, output: Path, math: bool, vendor_p
   byte-integrity rule on the assembled bytes -> write. The self-check aborts
   before any write and names the offending byte offsets."""
   template_rel = f"prompts/{artifact_check._GENRE_TEMPLATES[genre]}"
-  template = (_REPO_ROOT / template_rel).read_text(encoding="utf-8")
+  template = (REPO_ROOT / template_rel).read_text(encoding="utf-8")
   fragment_text = fragment.read_bytes().decode("utf-8")  # strict: a non-UTF-8 fragment fails loudly here
   body = _prerender_math(fragment, vendor_path) if math else fragment_text
   assembled = _splice(template, body).encode("utf-8")

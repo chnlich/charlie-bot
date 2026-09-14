@@ -6,12 +6,9 @@ server's build identity without re-running git on every request.
 
 import subprocess
 from datetime import UTC, datetime
-from pathlib import Path
 
+from src.core.constants import REPO_ROOT
 from src.core.timeouts import SUBPROCESS_GIT_SHA_TIMEOUT
-
-# Repo root: src/core/buildinfo.py -> parents[2] == repo root (where pyproject.toml lives).
-_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _sha: str = "unknown"
 _started_at: str = ""
@@ -36,7 +33,7 @@ def read_repo_head_sha(timeout: float) -> str | None:
   try:
     proc = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"],
-        cwd=str(_REPO_ROOT),
+        cwd=str(REPO_ROOT),
         capture_output=True,
         check=False,
         timeout=timeout,

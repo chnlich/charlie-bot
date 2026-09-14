@@ -1,4 +1,4 @@
-"""Cross-layer constants shared by the argparse/CLI layer and the model layer.
+"""Cross-layer constants shared by the CLI, server, and model layers.
 
 stdlib-only by contract: the CLI import floor (docs/perf_baseline.md M92) loads
 this module on every ``charliebot`` invocation, so nothing here may import
@@ -6,6 +6,14 @@ pydantic, config, or any other server stack.
 """
 
 from enum import StrEnum
+from pathlib import Path
+
+# Checkout root (where pyproject.toml lives): this file sits at src/core/, so
+# parents[2] is the root; moving this file breaks the depth. Buildinfo's git
+# calls, the artifact template reads, the /static mount, and the pages layer's
+# git-version cwd, static-tree digest, and Jinja templates directory derive
+# from it.
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Cross-process session-identity wire name: the server writes the master's
 # session id into every spawned process env (master_cc_run._build_master_env),

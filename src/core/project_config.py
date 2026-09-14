@@ -99,7 +99,6 @@ class ProjectBody:
 class ProjectBodies:
   """The bodies one session's turn injects, resolved at call time."""
 
-  config_path: Path
   common: ProjectBody
   manager_supplement: ProjectBody | None
 
@@ -217,7 +216,7 @@ def load_project_bodies(home: Path, group: str, *, manager: bool) -> ProjectBodi
   supplement: ProjectBody | None = None
   if manager and supplement_path is not None:
     supplement = _read_body(supplement_path, "manager_prompt_file")
-  return ProjectBodies(config_path=config_path, common=common, manager_supplement=supplement)
+  return ProjectBodies(common=common, manager_supplement=supplement)
 
 
 def content_sha256(text: str) -> str:

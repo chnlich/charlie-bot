@@ -67,13 +67,18 @@ class _DerivedState(IntEnum):
 AWAITING_APPROVAL_STATE = "awaiting approval"
 
 _DERIVED_STATE_STR: dict[_DerivedState, str] = {
-    _DerivedState.AWAITING_APPROVAL: AWAITING_APPROVAL_STATE,
-    _DerivedState.APPROVED: "approved",
+    _DerivedState.AWAITING_APPROVAL:
+        AWAITING_APPROVAL_STATE,
+    _DerivedState.APPROVED:
+        "approved",
     # A closed plan's derived state IS its close mode's spelling; the three entries reuse
     # constants' named spellings so the derive and the close verb cannot drift apart.
-    _DerivedState.SUPERSEDED: PLAN_CLOSE_SUPERSEDED,
-    _DerivedState.ABANDONED: PLAN_CLOSE_ABANDONED,
-    _DerivedState.COMPLETED: PLAN_CLOSE_COMPLETED,
+    _DerivedState.SUPERSEDED:
+        PLAN_CLOSE_SUPERSEDED,
+    _DerivedState.ABANDONED:
+        PLAN_CLOSE_ABANDONED,
+    _DerivedState.COMPLETED:
+        PLAN_CLOSE_COMPLETED,
 }
 
 

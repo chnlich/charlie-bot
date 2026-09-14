@@ -41,16 +41,19 @@ log = LazyStructlogLogger()
 _TICK_INTERVAL = 60  # seconds between scheduler ticks
 
 
-def _load_croniter() -> Any:
-  """Bind croniter into the module namespace on first use.
+def load_croniter(namespace: dict[str, Any]) -> Any:
+  """Bind croniter into *namespace* on first use and return it.
 
-  croniter (+ its dateutil subtree, ~21 ms together) is the M99 import floor's
-  largest deferrable third-party slice and no import path resolves a next
-  fire, so the import rides the scheduler's first due-task resolution.
+  croniter (+ its dateutil subtree, ~21 ms together) is the server import
+  floor's largest deferrable third-party slice and no import path resolves a
+  next fire, so the import rides the first due-task or next-run resolution.
+  The binding is per consumer module: each caller passes its own ``globals()``
+  so its bare-name reads keep working and stay the tests' monkeypatch target
+  (tests/test_cron_next_run_memo.py patches ``src.api.cron.croniter``).
   """
   from croniter import croniter
 
-  globals()["croniter"] = croniter
+  namespace["croniter"] = croniter
   return croniter
 
 
@@ -268,8 +271,8 @@ class Scheduler:
       last_run_at = now - timedelta(seconds=_TICK_INTERVAL)
 
     if "croniter" not in globals():
-      _load_croniter()
-    next_fire = croniter(task_cfg.cron, last_run_at).get_next(datetime)  # noqa: F821  # bound by _load_croniter
+      load_croniter(globals())
+    next_fire = croniter(task_cfg.cron, last_run_at).get_next(datetime)  # noqa: F821  # bound by load_croniter
     if next_fire <= now:
       handle = self._handles.get(task_cfg.name)
       if handle is not None and not handle.done():

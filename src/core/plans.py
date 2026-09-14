@@ -19,7 +19,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.core import plan_paths
-from src.core.constants import PLAN_AMEND_TRIGGERS, PLAN_CLOSE_MODES
+from src.core.constants import (
+    PLAN_AMEND_TRIGGERS,
+    PLAN_CLOSE_ABANDONED,
+    PLAN_CLOSE_COMPLETED,
+    PLAN_CLOSE_MODES,
+    PLAN_CLOSE_SUPERSEDED,
+)
 from src.core.memo import StatSignatureMemo
 from src.core.sidebar_state import mark_sidebar_dirty
 
@@ -56,12 +62,18 @@ class _DerivedState(IntEnum):
   COMPLETED = 5
 
 
+# The derived-state spelling the sidebar probe matches (has_pending_plan_approval_sync in
+# src.core.sessions); this module owns the state vocabulary, so the probe imports it here.
+AWAITING_APPROVAL_STATE = "awaiting approval"
+
 _DERIVED_STATE_STR: dict[_DerivedState, str] = {
-    _DerivedState.AWAITING_APPROVAL: "awaiting approval",
+    _DerivedState.AWAITING_APPROVAL: AWAITING_APPROVAL_STATE,
     _DerivedState.APPROVED: "approved",
-    _DerivedState.SUPERSEDED: "superseded",
-    _DerivedState.ABANDONED: "abandoned",
-    _DerivedState.COMPLETED: "completed",
+    # A closed plan's derived state IS its close mode's spelling; the three entries reuse
+    # constants' named spellings so the derive and the close verb cannot drift apart.
+    _DerivedState.SUPERSEDED: PLAN_CLOSE_SUPERSEDED,
+    _DerivedState.ABANDONED: PLAN_CLOSE_ABANDONED,
+    _DerivedState.COMPLETED: PLAN_CLOSE_COMPLETED,
 }
 
 
@@ -77,11 +89,11 @@ def _derive_state(closed: dict | None, takeoff: dict | None) -> _DerivedState:
     if not isinstance(closed, dict):
       raise ValueError(f"closed must be a dict or None, got {type(closed).__name__}")
     close_as = closed.get("as")
-    if close_as == "superseded":
+    if close_as == PLAN_CLOSE_SUPERSEDED:
       return _DerivedState.SUPERSEDED
-    if close_as == "abandoned":
+    if close_as == PLAN_CLOSE_ABANDONED:
       return _DerivedState.ABANDONED
-    if close_as == "completed":
+    if close_as == PLAN_CLOSE_COMPLETED:
       return _DerivedState.COMPLETED
     raise ValueError(f"unknown closed.as: {close_as!r}")
   if takeoff is None:

@@ -32,7 +32,7 @@ from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus
 from src.core.ncu_parsing import NcuParseError, parse_ncu_report
 from src.core.sessions import SessionManager
-from src.core.timeouts import SUBPROCESS_GIT_VERSION_TIMEOUT
+from src.core.timeouts import HOME_SERVICE_PROBE_TIMEOUT, SUBPROCESS_GIT_VERSION_TIMEOUT
 from src.core.token_tally import TokenTally, collect_token_usage
 from src.core.trace_merge import _MERGE_COMPRESSLEVEL, merge_traces
 
@@ -66,8 +66,6 @@ _HOME_DESTINATIONS: tuple[dict[str, str], ...] = (
     },
 )
 
-_HOME_PROBE_TIMEOUT_S = 0.3
-
 
 def _probe_home_service(url: str) -> bool:
   """TCP-connect to the host and port parsed out of *url*; True when the connect succeeds.
@@ -87,7 +85,7 @@ def _probe_home_service(url: str) -> bool:
   if port is None:
     port = 443 if parsed.scheme == "https" else 80
   try:
-    with socket.create_connection((host, port), timeout=_HOME_PROBE_TIMEOUT_S):
+    with socket.create_connection((host, port), timeout=HOME_SERVICE_PROBE_TIMEOUT):
       return True
   except OSError:
     return False

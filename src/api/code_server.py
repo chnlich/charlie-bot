@@ -10,13 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.core.config import CharlieBotConfig, get_config
 from src.core.log_once import LazyStructlogLogger
+from src.core.timeouts import CODE_SERVER_CONNECT_TIMEOUT, CODE_SERVER_START_TIMEOUT
 
 router = APIRouter()
 log = LazyStructlogLogger()
 
 _CODE_SERVER_HOST = "127.0.0.1"
-_CONNECT_TIMEOUT_SEC = 0.2
-_START_TIMEOUT_SEC = 5.0
 _POLL_INTERVAL_SEC = 0.2
 # One client-visible spelling for both 503 raisers below (spawn failure and
 # the failed wait-for-listen), so tests and greps pin a single home.
@@ -47,7 +46,7 @@ def _resolve_folder_under_allowed_root(folder: str, cfg: CharlieBotConfig) -> Pa
 
 def _is_listening(port: int) -> bool:
   with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-    sock.settimeout(_CONNECT_TIMEOUT_SEC)
+    sock.settimeout(CODE_SERVER_CONNECT_TIMEOUT)
     return sock.connect_ex((_CODE_SERVER_HOST, port)) == 0
 
 
@@ -86,7 +85,7 @@ def open_code_server(
       log.exception("code_server_start_failed")
       raise HTTPException(status_code=503, detail=_START_FAILURE_DETAIL) from exc
 
-    deadline = time.monotonic() + _START_TIMEOUT_SEC
+    deadline = time.monotonic() + CODE_SERVER_START_TIMEOUT
     while time.monotonic() < deadline:
       if _is_listening(port):
         break

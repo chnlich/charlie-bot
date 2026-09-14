@@ -19,6 +19,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SESSION_ID_ENV_VAR
+from src.core.timeouts import PTY_WS_RECV_TIMEOUT
 
 log = LazyStructlogLogger()
 
@@ -32,7 +33,6 @@ _INITIAL_COLS = 80
 _INITIAL_ROWS = 24
 _HISTORY_LIMIT = 50000
 _PTY_READ_CHUNK = 4096
-_WS_RECV_TIMEOUT = 30.0
 # The browser end of every PTY is xterm.js; tmux only emits OSC 52 to a client whose
 # terminfo advertises `Ms`, which screen-256color does not.
 _PTY_CLIENT_TERM = "xterm-256color"
@@ -265,7 +265,7 @@ async def _run_pty_relay(websocket: WebSocket, attachment: PtyAttachment, *, pum
   try:
     while True:
       try:
-        raw = await asyncio.wait_for(websocket.receive_text(), timeout=_WS_RECV_TIMEOUT)
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=PTY_WS_RECV_TIMEOUT)
       except TimeoutError:
         try:
           await websocket.send_json({"type": "ping"})

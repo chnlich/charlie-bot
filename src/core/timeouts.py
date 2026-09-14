@@ -89,6 +89,11 @@ NOTIFICATION_TIMEOUT = 10.0  # seconds — fast external API, fail quickly
 # Anthropic OAuth usage API and token refresh.
 HTTP_OAUTH_TIMEOUT = 30  # seconds — remote API may be slow under load
 
+# Socket connect probe behind home.html's per-service up/down badge; the card
+# renders and links regardless of the outcome, so the bound only caps how long
+# the page load waits on the badge.
+HOME_SERVICE_PROBE_TIMEOUT = 0.3  # seconds
+
 # `claude --version` subprocess behind the ext_usage User-Agent (probed once
 # per process, cached in src/api/ext_usage.py). A slow or missing CLI falls
 # back to the static User-Agent, so the bound only caps the first request's wait.
@@ -138,6 +143,61 @@ CLAUDE_SUB_HOOK_SOCKET_TIMEOUT = 30.0  # seconds
 # from event 0. Expiry is logged as a parse failure, not fatal.
 SESSION_WS_CURSOR_TIMEOUT = 5.0  # seconds
 
+# Receive wait on the same websocket; expiry sends the client a {"type": "ping"}
+# keepalive instead of closing, and the next receive wait starts fresh.
+WS_KEEPALIVE_TIMEOUT = 30.0  # seconds
+
+# ---------------------------------------------------------------------------
+# Claude compaction
+# ---------------------------------------------------------------------------
+
+# Whole Claude Code /compact run. A 70K-token compaction measured 21 s; the
+# ceiling leaves room for a 400K one.
+CLAUDE_COMPACTION_TIMEOUT = 900.0  # seconds
+
+# ---------------------------------------------------------------------------
+# code-server
+# ---------------------------------------------------------------------------
+
+# Socket connect probe deciding whether an existing code-server already answers.
+CODE_SERVER_CONNECT_TIMEOUT = 0.2  # seconds
+
+# Wait for the spawned code-server to accept connections before giving up.
+CODE_SERVER_START_TIMEOUT = 5.0  # seconds
+
+# ---------------------------------------------------------------------------
+# PTY bridge (tmux websocket)
+# ---------------------------------------------------------------------------
+
+# Receive wait on the PTY websocket; expiry sends the client a {"type": "ping"}
+# keepalive instead of closing, the same shape as WS_KEEPALIVE_TIMEOUT.
+PTY_WS_RECV_TIMEOUT = 30.0  # seconds
+
+# ---------------------------------------------------------------------------
+# Claude-sub CLI submission
+# ---------------------------------------------------------------------------
+
+# Wait for the hook bridge to confirm Claude received the submitted prompt; also
+# the UserPromptSubmit hook's own timeout, so the hook cannot outlive the wait
+# that depends on it.
+CLAUDE_SUB_CONFIRMATION_TIMEOUT = 30.0  # seconds
+
+# Whole claude-sub turn budget; expiry terminates the foreground Claude and
+# raises ClaudeSubError.
+CLAUDE_SUB_TURN_TIMEOUT = 7200.0  # seconds
+
+# Per-signal wait while terminating the foreground Claude: SIGTERM gets this
+# window, then SIGKILL gets another before the error is raised.
+CLAUDE_SUB_TERMINATE_TIMEOUT = 5.0  # seconds
+
+# ---------------------------------------------------------------------------
+# Remote-trigger ssh probes
+# ---------------------------------------------------------------------------
+
+# Per-probe ssh subprocess timeouts (locked, no flag).
+SSH_CONNECT_TIMEOUT = 10  # seconds — ssh -o ConnectTimeout=10
+SSH_OVERALL_TIMEOUT = 60.0  # seconds — asyncio.wait_for timeout wrapping the subprocess
+
 # ---------------------------------------------------------------------------
 # Hung-subprocess diagnostics capture
 # ---------------------------------------------------------------------------
@@ -185,6 +245,14 @@ CLI_CONNECT_TOTAL_TIMEOUT = 60  # seconds
 # create, prompt send. The long-lived SSE stream overrides this with
 # timeout=None (its liveness is the watchdog constant below).
 OPENCODE_HTTP_API_TIMEOUT = 30.0  # seconds
+
+# Spawned `opencode serve` startup: deadline for the server URL to appear on
+# the subprocess's stdout.
+OPENCODE_SERVER_START_TIMEOUT = 30.0  # seconds
+
+# Grace for the spawned server to exit after SIGTERM; past it the shutdown
+# escalates to SIGKILL (base._graceful_shutdown).
+OPENCODE_SERVER_STOP_TIMEOUT = 5.0  # seconds
 
 # POST to /session/{id}/abort when a turn is cancelled. Best-effort: a failure
 # is logged and cleanup proceeds without it.

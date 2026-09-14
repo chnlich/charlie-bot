@@ -12,9 +12,13 @@ from conftest import queued_user_reorder_events as _reorder_events
 
 from src.api.message_utils import events_to_messages, events_to_view
 from src.core import event_types as ET
-from src.core.message_aggregator import TOOL_OUTPUT_RENDER_CAP, TOOL_PREVIEW_CHARS, MessageAggregator
+from src.core.message_aggregator import TOOL_PREVIEW_CHARS, MessageAggregator
 
 VOICE_KEY = "is_" + "voice"
+
+# An oversized tool output, comfortably past TOOL_PREVIEW_CHARS; the exact
+# size is arbitrary, the over-bound shape is the point.
+_OVER_PREVIEW = 25_000
 
 
 def test_user_event_emits_a_user_message_delta() -> None:
@@ -862,7 +866,7 @@ def test_clone_preserves_emit_stream_deltas() -> None:
 def test_flat_tool_result_output_is_capped_with_marker() -> None:
   agg = MessageAggregator()
   list(agg.feed({"type": ET.TOOL_USE, "name": "Bash", "input": {"cmd": "dump"}}))
-  giant = "x" * (TOOL_OUTPUT_RENDER_CAP + 5000)
+  giant = "x" * (_OVER_PREVIEW + 5000)
   list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": giant}))
 
   draft = agg.pending_draft_message()
@@ -873,7 +877,7 @@ def test_flat_tool_result_output_is_capped_with_marker() -> None:
 def test_cc_tool_result_output_is_capped_with_marker() -> None:
   agg = MessageAggregator()
   list(agg.feed(_assistant_text_tool_use_event("Running", "Bash", {"command": "ls"}, "t1")))
-  giant = "y" * (TOOL_OUTPUT_RENDER_CAP + 1)
+  giant = "y" * (_OVER_PREVIEW + 1)
   list(
       agg.feed(
           {
@@ -911,7 +915,7 @@ def test_tool_output_under_cap_carries_no_marker() -> None:
 def test_stream_deltas_stay_bounded_after_a_giant_tool_result() -> None:
   agg = MessageAggregator()
   list(agg.feed({"type": ET.TOOL_USE, "name": "Bash", "input": {"cmd": "cat big.log"}}))
-  list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "z" * (TOOL_OUTPUT_RENDER_CAP * 500)}))
+  list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "z" * 10_000_000}))
 
   serialized = []
   for i in range(20):
@@ -921,13 +925,13 @@ def test_stream_deltas_stay_bounded_after_a_giant_tool_result() -> None:
 
   # Every live delta re-serializes the whole buffered draft, so one uncapped
   # output would ride all of them; the cap bounds each snapshot instead.
-  assert max(serialized) < TOOL_OUTPUT_RENDER_CAP + 100_000
+  assert max(serialized) < 100_000
 
 
 def test_stream_delta_tool_rows_carry_the_preview_shape() -> None:
   agg = MessageAggregator()
   list(agg.feed({"type": ET.TOOL_USE, "name": "Write", "input": {"file_path": "/tmp/a", "content": "c" * 5000}}))
-  list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Write", "content": "o" * (TOOL_OUTPUT_RENDER_CAP + 1)}))
+  list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Write", "content": "o" * (_OVER_PREVIEW + 1)}))
   stream = next(d for d in agg.feed({"type": ET.THINKING, "content": "t"}) if d["type"] == "stream")
 
   tool = stream["message"]["tools"][0]
@@ -941,7 +945,7 @@ def test_stream_delta_tool_rows_carry_the_preview_shape() -> None:
 def test_committed_message_tool_rows_carry_the_preview_shape() -> None:
   agg = MessageAggregator()
   list(agg.feed({"type": ET.TOOL_USE, "name": "Bash", "input": {"command": "x" * 5000}}))
-  list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "y" * (TOOL_OUTPUT_RENDER_CAP + 1)}))
+  list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "y" * (_OVER_PREVIEW + 1)}))
 
   commit = next(d for d in agg.flush_pending() if d["type"] == "message")
   tool = commit["message"]["tools"][0]

@@ -22,7 +22,7 @@ from src.core.http import get_http_client
 from src.core.json_utils import write_json_atomically
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.models import ClaudeAccount
-from src.core.streaming import streaming_manager
+from src.core.streaming import SIDEBAR_CHANNEL, streaming_manager
 from src.core.timeouts import (
     EXT_USAGE_ROUND_GAP_SECONDS,
     EXT_USAGE_VERSION_PROBE_TIMEOUT,
@@ -1041,7 +1041,7 @@ async def _poll_loop() -> None:
         if inst.provider == "claude" and inst.label in pool_dirs:
           _annotate_login_state(cache_key, ClaudeAccount(label=inst.label, config_dir=pool_dirs[inst.label]))
         if _cached_usage:
-          await streaming_manager.broadcast("sidebar", {"type": "ext_usage", "providers": _annotated_providers()})
+          await streaming_manager.broadcast(SIDEBAR_CHANNEL, {"type": "ext_usage", "providers": _annotated_providers()})
           log.info("ext_usage_fetched", providers=list(_cached_usage.keys()))
         await asyncio.sleep(EXT_USAGE_ROUND_GAP_SECONDS)
     except Exception:

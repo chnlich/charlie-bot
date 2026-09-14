@@ -51,7 +51,7 @@ from src.core.models import BackendType, SessionMetadata, utc_now
 from src.core.process import log_session_cgroup_startup, sweep_stale_session_cgroups
 from src.core.scheduler import Scheduler
 from src.core.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager
-from src.core.streaming import streaming_manager
+from src.core.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
 from src.core.tasks import create_logged_task
 from src.core.triggers import TriggerManager
 
@@ -411,9 +411,9 @@ async def session_websocket(websocket: WebSocket, session_id: str) -> None:
     log.debug("session_ws_cursor_parse_failed", session_id=session_id, error=str(e))
 
   # Subscribe BEFORE catchup so no events are lost between catchup and subscribe.
-  channel = f"session:{session_id}"
+  channel = session_channel(session_id)
   await streaming_manager.subscribe(channel, websocket)
-  await streaming_manager.subscribe("sidebar", websocket)
+  await streaming_manager.subscribe(SIDEBAR_CHANNEL, websocket)
   try:
     session_mgr = session_manager()
     meta = await session_mgr.get_session(session_id)
@@ -439,7 +439,7 @@ async def session_websocket(websocket: WebSocket, session_id: str) -> None:
       await _ws_keepalive(websocket, "session_ws", session_id=session_id)
   finally:
     await streaming_manager.unsubscribe(channel, websocket)
-    await streaming_manager.unsubscribe("sidebar", websocket)
+    await streaming_manager.unsubscribe(SIDEBAR_CHANNEL, websocket)
     log.info("session_ws_disconnected", session_id=session_id)
 
 

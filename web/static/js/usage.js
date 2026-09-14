@@ -43,11 +43,7 @@ function paintStreamDraft(draft) {
   // KaTeX scan when it carries no math delimiter, and concatenation can only
   // create a delimiter across the seam, never remove one.
   renderChatMath(inner, content + thinking);
-  if (wasAtBottom) {
-    container.scrollTop = container.scrollHeight;
-  } else {
-    showScrollToBottom();
-  }
+  restoreBottomPin(container, wasAtBottom, false);
 }
 
 function flushStreamDraft() {

@@ -41,6 +41,7 @@ function buildStreamHarness(markedSource, options = {}) {
     },
     shouldAutoScroll: () => false,
     showScrollToBottom() {},
+    restoreBottomPin() {},
     // Length-proportional escape stub: the real thinkingToggleHtml's cost shape
     // (regex passes over the full thinking text) without a DOM.
     thinkingToggleHtml: (id, thinking) =>

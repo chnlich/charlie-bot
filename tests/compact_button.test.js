@@ -48,7 +48,7 @@ function loadChatContext(elements) {
     renderChatMath: () => {},
     scheduleCodeHighlightFlush: () => {},
     renderUserMessageBubble: () => '',
-    showScrollToBottom: () => {},
+    restoreBottomPin: () => {},
     hideStreaming: () => {},
     CSS: { escape: (v) => String(v) },
     SESSION_ID: 'session-a',

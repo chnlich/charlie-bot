@@ -11,6 +11,7 @@ import pytest
 from conftest import (
     OPUS_BACKEND_ID,
     SPAWNER_SPAWN_WORKER_PATCH_TARGET,
+    SuccessorDeliveryShim,
     assistant_text_event,
     patch_improve_git_ops,
 )
@@ -339,7 +340,7 @@ def test_extract_iteration_summary_prefers_newest_result_or_assistant() -> None:
   assert _extract_iteration_summary(iter(reversed(events)), 3, "failed") == "newest words"
 
 
-class _FakeImproveSessionManager:
+class _FakeImproveSessionManager(SuccessorDeliveryShim):
 
   def __init__(self) -> None:
     self.persisted_events: list[dict] = []
@@ -350,10 +351,6 @@ class _FakeImproveSessionManager:
   async def persist_and_broadcast(self, session: str, event: dict) -> None:
     del session
     self.persisted_events.append(event)
-
-  async def deliver_to_successor(self, session: str, event: dict) -> str:
-    await self.persist_and_broadcast(session, event)
-    return session
 
 
 class _FakeImproveThreadManager:
@@ -681,7 +678,7 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
   spawn_requests: list[SpawnRequest] = []
   persisted_events: list[dict] = []
 
-  class FakeSessionManager:
+  class FakeSessionManager(SuccessorDeliveryShim):
 
     async def get_session(self, session: str) -> MagicMock:
       return MagicMock(id=session, name="Pinned", backend=OPUS_BACKEND_ID)
@@ -689,10 +686,6 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
     async def persist_and_broadcast(self, session: str, event: dict) -> None:
       del session
       persisted_events.append(event)
-
-    async def deliver_to_successor(self, session: str, event: dict) -> str:
-      await self.persist_and_broadcast(session, event)
-      return session
 
   class FakeThreadManager:
 

@@ -772,7 +772,6 @@ class AgentBackend(ABC):
     covered transports are designed to survive parent death. The pdeathsig
     preexec is merged with the session cgroup move (not replaced by it).
     """
-    self._active_session_cgroup = self._prepare_session_cgroup()
     self._proc = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=cwd,
@@ -782,19 +781,18 @@ class AgentBackend(ABC):
         env=final_env,
         limit=self._buffer_limit,
         start_new_session=True,
-        preexec_fn=compose_preexec(
-            make_pdeathsig_kill_preexec(),
-            make_session_cgroup_preexec(self._active_session_cgroup.path if self._active_session_cgroup else None)),
+        preexec_fn=self._spawn_preexec(pdeathsig=True),
     )
     await self._pin_identity_and_fire_on_spawn()
 
   def _prepare_session_cgroup(self) -> SessionCgroup | None:
     """Ensure this backend's session cgroup exists and snapshot its counters; None when off.
 
-    Shared pre-spawn step for every spawn point below. The cgroup is keyed by
-    the session id the caller pinned at construction (master turn, worker
-    task, session-scoped one-shot); a backend constructed with
-    cgroup_session_id=None (a spawn with no session home) never enters one.
+    Shared pre-spawn step for every spawn point, called from
+    :meth:`_spawn_preexec`. The cgroup is keyed by the session id the caller
+    pinned at construction (master turn, worker task, session-scoped
+    one-shot); a backend constructed with cgroup_session_id=None (a spawn
+    with no session home) never enters one.
     """
     if self._cgroup_session_id is None:
       return None
@@ -804,6 +802,22 @@ class AgentBackend(ABC):
         memory_max_mb=cfg.server.session_memory_max_mb,
         swap_max_mb=cfg.server.session_swap_max_mb,
     )
+
+  def _spawn_preexec(self, pdeathsig: bool) -> Callable[[], None] | None:
+    """Preexec for one subprocess spawn: session cgroup move, optionally pdeathsig.
+
+    Also snapshots this spawn's cgroup into ``_active_session_cgroup``, so
+    call it exactly once per spawn, directly as the ``preexec_fn`` argument.
+    The cgroup move is behavior-neutral when cgroup control is off (the
+    backend was built with cgroup_session_id=None): the preexec is None, or
+    the pdeathsig preexec alone.
+    """
+    self._active_session_cgroup = self._prepare_session_cgroup()
+    cgroup_preexec = make_session_cgroup_preexec(
+        self._active_session_cgroup.path if self._active_session_cgroup else None)
+    if pdeathsig:
+      return compose_preexec(make_pdeathsig_kill_preexec(), cgroup_preexec)
+    return cgroup_preexec
 
   def cgroup_exit_report(self) -> str | None:
     """Cap / host-OOM attribution message for this run's exit, or None.
@@ -886,7 +900,6 @@ class AgentBackend(ABC):
         # Covered (raw-log) transport: no pdeathsig by design — but the child
         # still lands in the session's memory-cap cgroup when cgroup control
         # is on (preexec is None, i.e. behavior unchanged, when it is off).
-        self._active_session_cgroup = self._prepare_session_cgroup()
         self._proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=cwd,
@@ -895,8 +908,7 @@ class AgentBackend(ABC):
             stderr=stderr_fd,
             env=final_env,
             start_new_session=True,
-            preexec_fn=make_session_cgroup_preexec(
-                self._active_session_cgroup.path if self._active_session_cgroup else None),
+            preexec_fn=self._spawn_preexec(pdeathsig=False),
         )
       finally:
         # The child holds its own copies of both fds.

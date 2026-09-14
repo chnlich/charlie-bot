@@ -408,3 +408,10 @@ Known-alive symbols:
   wrapper as the semantics reference. A src-only vulture scan flags it as an unused method;
   a whole-repo grep finds only those tests, one docstring cross-reference, the same-named
   route handler in `src/api/sessions.py`, and the perf doc.
+- `ClientConnection` (`src/core/slack_listener.py`, the `TYPE_CHECKING`-guarded
+  `websockets.asyncio.client` import) — reached by string: `_expect_hello`'s parameter is
+  annotated `"ClientConnection"`, and that import is what resolves the forward reference
+  for type checkers and IDEs. No type checker runs in CI, so a deletion stays suite-green
+  while leaving the annotation unresolved. Vulture flags the import as its only
+  production-scope finding (unused import, 90% confidence); never delete it on that
+  evidence.

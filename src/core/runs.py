@@ -727,6 +727,10 @@ class RunStore:
     """register_run for a caller already holding the control lock (the lock is not reentrant)."""
     existing = self.read_run_sync(record.session_id, record.id)
     if existing is not None:
+      # Re-register the alias on the replay path: a crash between the original
+      # metadata write and its alias write must not leave the compatibility
+      # entry missing forever (the write is idempotent).
+      self._aliases.register_run_thread(record.session_id, record.id)
       return existing
     run_dir = self.run_dir(record.session_id, record.id)
     if task_spec_text is not None:
@@ -909,8 +913,14 @@ class RunStore:
       if run.started_at.astimezone(UTC) <= read_host_boot_time():
         raise RunIdentityConflictError(
             f"run {run.id} started_at predates the current host boot; recorded identity is stale")
-      os.kill(pid, signal.SIGTERM)
-      exited = await self._wait_for_exit(pid)
+      try:
+        os.kill(pid, signal.SIGTERM)
+      except ProcessLookupError:
+        # The exit beat the signal (pid vanished after the identity read): the
+        # observed exit is the fact an interrupted terminal record rides on.
+        exited = True
+      else:
+        exited = await self._wait_for_exit(pid)
     if exited:
       await self.record_finish(session_id, run.id, "interrupted")
       outcome = self.terminal_outcome(self.load_events_sync(session_id), run.id)

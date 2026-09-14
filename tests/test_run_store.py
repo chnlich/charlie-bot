@@ -287,3 +287,27 @@ async def test_exit_before_stop_observes_interrupted(tmp_path: Path) -> None:
                 started_at=datetime.now(UTC)))
   result = await store.request_stop(session_id, "run-exited", "stop-1")
   assert result.outcome == "interrupted"
+
+
+@pytest.mark.asyncio
+async def test_exit_between_identity_read_and_signal_still_records_interrupted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The stat->kill race: the pid vanishes after the identity read; the observed exit is the fact."""
+  env = build_env(tmp_path)
+  _, _, _, store = env
+  session_id = await make_task(env, "t1")
+  proc = live_subprocess()
+  try:
+    await register_live_run(store, session_id, proc)
+
+    def vanished(pid: int, sig: int) -> None:
+      raise ProcessLookupError
+
+    monkeypatch.setattr("src.core.runs.os.kill", vanished)
+    result = await store.request_stop(session_id, "run-live", "stop-race")
+    assert result.stop_requested is True and result.outcome == "interrupted"
+    events = store.load_events_sync(session_id)
+    assert len([e for e in events if e["type"] == ET.RUN_FINISHED]) == 1
+    assert proc.poll() is None  # the signal never actually left
+  finally:
+    proc.kill()

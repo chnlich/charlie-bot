@@ -24,6 +24,7 @@ from src.api.deps import (
   get_task_manager,
   get_thread_manager,
   get_trigger_manager,
+  require_caller,
 )
 from src.api.responses import FastJsonResponse
 from src.core import event_types as ET
@@ -42,6 +43,7 @@ from src.core.models import (
 )
 from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events
 from src.core.process import kill_process_group
+from src.core.run_token import CallerIdentity
 from src.core.runs import RunIdentityConflictError, RunNotFoundError
 from src.core.sidebar_state import RevisionSweepGate, session_revision, take_marked_paths
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME, ThreadManager, iter_thread_meta_stats
@@ -712,19 +714,28 @@ async def cancel_thread(
     thread_mgr: ThreadManager = Depends(get_thread_manager),
     run_store=Depends(get_run_store),
     task_mgr=Depends(get_task_manager),
+    caller: CallerIdentity = Depends(require_caller),
 ) -> dict:
   """Cancel a running thread (sends SIGTERM to the subprocess via streaming manager).
 
   A v2 alias resolution (new-run compatibility alias, or an imported old id)
   routes to the Run owner's stop implementation instead: the same durable
-  request, identity check and terminal fact as the v2 cancel route — and no
-  legacy ThreadMetadata status copy is ever written for it.
+  request, identity check, terminal fact and agent own-run scope as the v2
+  cancel route — and no legacy ThreadMetadata status copy is ever written for
+  it.
   """
   thread = await thread_mgr.get_thread(session_id, thread_id)
   if thread is None:
     alias = task_mgr.aliases.resolve_thread(session_id, thread_id)
     if alias is not None:
       target_session, target_run = alias["session_id"], alias["run_id"]
+      if not caller.is_operator:
+        # The v2 cancel route's own-run scope applies on the alias path too:
+        # a run token never authorizes stopping another session's Run.
+        claims = caller.claims
+        assert claims is not None
+        if claims.session_id != target_session or claims.run_id != target_run:
+          raise HTTPException(status_code=403, detail="an agent may only stop its own bound run")
       try:
         result = await run_store.request_stop(target_session, target_run, f"thread-cancel:{thread_id}")
       except (RunNotFoundError, RunIdentityConflictError) as e:

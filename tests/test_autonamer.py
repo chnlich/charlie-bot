@@ -17,7 +17,6 @@ from conftest import (
     make_one_shot_backend,
 )
 
-from src.core import autonamer
 from src.core.autonamer import (
     iter_light_backends,
     maybe_auto_name,

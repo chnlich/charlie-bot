@@ -14,9 +14,13 @@ import yaml
 from conftest import CODEX_BACKEND_OPTION, backend_option
 from conftest import make_sessions_client as _build_client
 from conftest import make_transcript as _make_transcript
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from src.agents import master_cc
+from src.api.deps import get_config, get_config_on_loop, get_session_manager, get_thread_manager
 from src.api.sessions import _active_backend_payload, _same_backend_domain
+from src.api.sessions import router as sessions_router
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig
 from src.core.models import (
     CreateSessionRequest,
@@ -24,6 +28,7 @@ from src.core.models import (
     SessionStatus,
 )
 from src.core.sessions import SessionManager
+from src.core.threads import ThreadManager
 
 
 def _build_cfg(tmp_path: Path) -> tuple[CharlieBotConfig, Path]:
@@ -117,6 +122,29 @@ def test_payload_resolves_default_when_backend_empty(tmp_path: Path) -> None:
   payload = _active_backend_payload(meta, cfg)
   assert payload["active_backend"] == cfg.backends.options[0].id
   assert "claude-opus-5" in payload["switchable_backends"]
+
+
+@pytest.mark.asyncio
+async def test_session_view_ships_the_backend_payload_fields(tmp_path: Path) -> None:
+  """The view route serves the same backend derivation the bootstrap and usage
+  routes do: renderSessionView reads switchable_backends and
+  backend_switch_rotates off the first render, before the idle usage poll runs."""
+  cfg, _config_a = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = await session_mgr.create_session(CreateSessionRequest(name="t"), backend="claude-opus-5")
+  app = FastAPI()
+  app.include_router(sessions_router, prefix="/api/sessions")
+  app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[get_thread_manager] = lambda: ThreadManager(cfg)
+  app.dependency_overrides[get_config] = lambda: cfg
+  app.dependency_overrides[get_config_on_loop] = lambda: cfg
+  with TestClient(app) as client:
+    body = client.get(f"/api/sessions/{meta.id}/view").json()
+  expected = _active_backend_payload(meta, cfg)
+  assert body["active_backend"] == expected["active_backend"] == "claude-opus-5"
+  assert body["active_backend_type"] == expected["active_backend_type"]
+  assert body["switchable_backends"] == expected["switchable_backends"]
+  assert body["backend_switch_rotates"] == expected["backend_switch_rotates"]
 
 
 # ---------------------------------------------------------------------------

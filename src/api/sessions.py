@@ -654,28 +654,24 @@ async def get_session_view(
   view = await build_session_view_data(session_id, session_mgr, thread_rows)
   trigger_mgr = trigger_manager()
   triggers = await trigger_mgr.list_triggers(session_id)
-  active_backend = meta.backend or _default_backend_id(cfg)
-  active_backend_opt = cfg.get_backend_option(active_backend)
-  active_backend_type = active_backend_opt.type if active_backend_opt else ""
   # FastJsonResponse for the message-page cost reason in get_session_events_page.
   # The workers tab paints one CSS-truncated description line per card and its
   # full-text modal fetches the thread row on click (the workers-panel list's
   # truncation contract), so the view ships the same prefixed rows — the
   # worst session's whole-row dumps measured 2.6 MB of body per session open.
-  return FastJsonResponse(
-      {
-          "session": meta.model_dump(mode="json"),
-          "messages": view.messages,
-          "pending_draft": view.pending_draft,
-          "threads": view.threads,
-          "triggers": [tr.model_dump(mode="json") for tr in triggers],
-          "event_count": view.total_event_count,
-          "oldest_message_ordinal": view.oldest_message_ordinal,
-          "usage": view.usage,
-          "active_backend": active_backend,
-          "active_backend_type": active_backend_type,
-          "has_more": view.has_more,
-      })
+  payload = {
+      "session": meta.model_dump(mode="json"),
+      "messages": view.messages,
+      "pending_draft": view.pending_draft,
+      "threads": view.threads,
+      "triggers": [tr.model_dump(mode="json") for tr in triggers],
+      "event_count": view.total_event_count,
+      "oldest_message_ordinal": view.oldest_message_ordinal,
+      "usage": view.usage,
+      "has_more": view.has_more,
+  }
+  payload.update(_active_backend_payload(meta, cfg))
+  return FastJsonResponse(payload)
 
 
 @router.get('/{session_id}/bootstrap')

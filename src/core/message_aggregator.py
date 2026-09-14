@@ -342,11 +342,6 @@ class MessageAggregator:
     self._processed += 1
     yield from self._feed(event, idx)
 
-  def feed_all(self, events: list[dict]) -> Iterator[dict]:
-    """Feed a list of events in order, yielding deltas as they arise."""
-    for ev in events:
-      yield from self.feed(ev)
-
   def feed_indexed(self, events: list[tuple[int, dict]]) -> Iterator[dict]:
     """Feed projected events while preserving their original list indices."""
     for idx, ev in events:

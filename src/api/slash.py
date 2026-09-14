@@ -31,6 +31,7 @@ async def _persist_command_message(
   """Record the invoked command as the session's user chat event, before the command's response."""
   await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
 
+
 # ---------------------------------------------------------------------------
 # Built-in command descriptors
 # ---------------------------------------------------------------------------

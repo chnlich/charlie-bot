@@ -38,8 +38,8 @@ def main() -> None:
   cool = sub.add_parser(
       "cool",
       help="Delete transport logs and backend records of cold sessions",
-      description="Delete the bytes no reader can reach again: cold sessions' raw "
-      "transport files and the backend conversation stores the cold rule names.")
+      description="Delete the bytes no reader can reach again: cold sessions' raw transport files and backend "
+      "conversation stores of cold or orphaned sessions.")
   cool.add_argument("--dry-run", action="store_true", help="Report what would be freed; write nothing, delete nothing.")
   cool.add_argument(
       "--min-idle-days",

@@ -82,12 +82,15 @@ RESUME_CONTEXT_DROPPED = "resume_context_dropped"
 # (src/core/session_usage.py), so producer and consumers share one definition.
 COMPACT_BOUNDARY = "compact_boundary"
 COMPACT_METADATA = "compact_metadata"
-# Token counts a compaction event carries. ``pre_tokens`` is the count the compaction crossed: the
-# inner key of a ``compact_boundary`` ``compact_metadata`` payload, and the same-named top-level key
-# of the synthesized ``context_compacted`` event, which the projection re-reads from persisted
-# history (src/core/message_aggregator.py). ``post_tokens`` is the post-compaction count the usage
-# resolver re-reads from history (src/core/session_usage.py). Both are persisted wire values: the
-# Claude CLI stream and the PostCompact hook payload carry the same names.
+# Token counts a compaction event carries. Both are persisted wire values and both live as inner
+# keys of a ``compact_metadata`` payload — on a ``compact_boundary`` system event and on the
+# synthesized ``context_compacted`` event alike, which passes the upstream payload through whole
+# (src/core/streaming.py). ``pre_tokens`` is the count the compaction crossed, which the projection
+# reads from the synthesized event's payload (src/core/message_aggregator.py); ``post_tokens`` is
+# the post-compaction count the usage resolver re-reads from the boundary payload
+# (src/core/session_usage.py). A top-level ``pre_tokens`` on a ``context_compacted`` event is the
+# legacy shape events persisted before the payload move carry; the renderer still reads it when the
+# payload is absent. The Claude CLI stream and the PostCompact hook payload carry the same names.
 COMPACT_PRE_TOKENS = "pre_tokens"
 COMPACT_POST_TOKENS = "post_tokens"
 # A backend emits this ``subtype`` on a ``system`` event carrying an

@@ -374,14 +374,19 @@ def make_compact_boundary_event(trigger: str, pre_tokens: int | None) -> dict:
   }
 
 
-def make_context_compacted_event(trigger: str, pre_tokens: int | float | None, model: str | None) -> dict:
+def make_context_compacted_event(trigger: str, compact_metadata: dict | None, model: str | None) -> dict:
   """Build the synthesized ``context_compacted`` event producers persist and broadcast.
 
-  ``pre_tokens`` is the count the compaction crossed. ``model`` names the model
-  that ran the compaction; a producer relaying Claude Code's own compaction
-  passes None, which omits the key so the aggregator renders no model note.
+  ``compact_metadata`` is the upstream compaction payload, carried whole: which
+  inner keys exist is the upstream's business, and a filter here would be the
+  field-by-field projection loss this parameter replaced, written a second
+  time. ``model`` names the model that ran the compaction; a producer relaying
+  Claude Code's own compaction passes None. Either argument None omits its key,
+  so the aggregator renders the line from what the event actually carries.
   """
-  event: dict = {"type": ET.CONTEXT_COMPACTED, "trigger": trigger, ET.COMPACT_PRE_TOKENS: pre_tokens}
+  event: dict = {"type": ET.CONTEXT_COMPACTED, "trigger": trigger}
+  if compact_metadata is not None:
+    event[ET.COMPACT_METADATA] = compact_metadata
   if model is not None:
     event["model"] = model
   return event

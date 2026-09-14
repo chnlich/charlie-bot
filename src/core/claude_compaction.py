@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -133,13 +134,25 @@ def count_compact_boundaries(transcript: Path) -> int:
   return len(_boundary_rows(transcript))
 
 
-def _newest_boundary_pre_tokens(transcript: Path) -> int | None:
+# A camelCase/lowercase-or-digit boundary, i.e. every place a snake_case name
+# would carry an underscore: the transcript's camelCase keys convert by this one
+# rule, so a key the upstream adds later converts without a change here.
+_CAMEL_TO_SNAKE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+
+def _snake_case_keys(meta: dict) -> dict:
+  """Rename every key camelCase to snake_case, the form the streaming payload uses."""
+  return {_CAMEL_TO_SNAKE.sub("_", key).lower(): value for key, value in meta.items()}
+
+
+def _newest_boundary_compact_metadata(transcript: Path) -> dict | None:
+  """The newest boundary row's ``compactMetadata`` with snake_case keys; None when
+  the transcript has no boundary row carrying one."""
   rows = _boundary_rows(transcript)
   if not rows:
     return None
   meta = rows[-1].get("compactMetadata")
-  value = meta.get("preTokens") if isinstance(meta, dict) else None
-  return value if isinstance(value, int) and not isinstance(value, bool) else None
+  return _snake_case_keys(meta) if isinstance(meta, dict) else None
 
 
 # ---------------------------------------------------------------------------
@@ -212,10 +225,11 @@ async def compact_with_sonnet(
 ) -> bool:
   """Compact *cc_session_id*'s transcript under *config_dir* with Sonnet; True on success.
 
-  Emits one ``context_compacted`` (``model`` = Sonnet, ``pre_tokens`` = the
-  caller's pre-compaction reading, else the boundary row's own count) or one
-  ``context_compact_failed`` (``error`` names the cause). Never raises for a
-  failed run: the caller proceeds on the untouched transcript.
+  Emits one ``context_compacted`` (``model`` = Sonnet; ``compact_metadata`` is
+  the new boundary row's payload, with the caller's pre-compaction reading
+  winning for ``pre_tokens``) or one ``context_compact_failed`` (``error``
+  names the cause). Never raises for a failed run: the caller proceeds on the
+  untouched transcript.
 
   *cgroup_session_id* is the owning CharlieBot session, so the compaction
   process lands in that session's memory-cap cgroup; None (no session home)
@@ -267,15 +281,22 @@ async def compact_with_sonnet(
     )
     await persist_and_broadcast(make_context_compact_failed_event(outcome.error, model=COMPACTION_MODEL))
     return False
-  event_pre_tokens = pre_tokens if pre_tokens is not None else _newest_boundary_pre_tokens(transcript)
+  # The boundary row's payload travels whole; the caller's own reading still wins
+  # for the pre count (today's precedence). When the row carries no readable
+  # compactMetadata the payload stays None and the line renders from what the
+  # caller contributed alone.
+  compact_metadata = _newest_boundary_compact_metadata(transcript)
+  if pre_tokens is not None:
+    compact_metadata = {**(compact_metadata or {}), ET.COMPACT_PRE_TOKENS: pre_tokens}
   log.info(
       "claude_compaction_done",
       cc_session_id=cc_session_id,
-      pre_tokens=event_pre_tokens,
+      pre_tokens=compact_metadata.get(ET.COMPACT_PRE_TOKENS) if compact_metadata else None,
+      post_tokens=compact_metadata.get(ET.COMPACT_POST_TOKENS) if compact_metadata else None,
       models=list(outcome.models),
       **log_context,
   )
-  await persist_and_broadcast(make_context_compacted_event("manual", event_pre_tokens, model=COMPACTION_MODEL))
+  await persist_and_broadcast(make_context_compacted_event("manual", compact_metadata, model=COMPACTION_MODEL))
   return True
 
 

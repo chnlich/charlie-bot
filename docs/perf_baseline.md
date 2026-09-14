@@ -98,8 +98,8 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M86 delegation takeoff-gate scan, delegation-flow shape | M86 collector below | seconds per `check_takeoff_gate` call, worst live chat corpus, one authorized user message appended; the blocked-round repeat (the corpus-as-it-stands shape — nine steady-state calls on an unchanged corpus, the parity witness) | median < 0.001 s; blocked-round median < 0.0005 s | — (introduced with its first history row) |
 | M87 opencode abort client round-trip | M87 collector below | seconds per `_abort_session` call against a local stub serve (the per-turn cleanup POST, and the run-start client pays the same construction; loop lag reads the 5 ms ticker floor like M14) | wall median < 0.005 s | — (introduced with its first history row) |
 | M88 perfetto direct-pass build, worst on-disk trace corpus | M88 collector below | seconds per `_build_direct_pass_gzip` build (validation parse + parallel gzip subprocess over the original bytes), largest Chrome-JSON trace under the documented trace roots (~/data, ~/scripts) | median < 3.5 s (recalibrated from < 6 s: the compress now overlaps the parse in a gzip subprocess, landing at 2.79-2.85 s on the 307.3 MB / 1,068,461-event corpus; the validation parse is the floor — 2.72 s measured standalone — and grows with the corpus) | — (introduced with its first history row) |
-| M89 backend stderr tee, per chunk | M89 collector below | seconds per 8 KB chunk tee to the run's stderr.log, the streamed-turn pump shape | median < 0.0002 s | — (introduced with its first history row) |
-| M90 backend stdout pump, per chunk or startup line | M90 collector below | seconds per 8 KB chunk write (the streamed pump shape) and per startup line append (the run-start shape) to the covered backends' stdout.log | chunk median < 0.0002 s; line median < 0.0002 s | — (introduced with its first history row) |
+| M89 backend stderr pump, per chunk | M89 collector below | seconds per 8 KB chunk pumped through the stderr tee (the streamed pump shape: buffer work plus amortized log flushes) | median < 0.00005 s | — (introduced with its first history row) |
+| M90 backend stdout pump, per chunk or startup line | M90 collector below | seconds per 8 KB chunk pumped through the opencode stdout pump (the streamed pump shape) and per startup line append (the run-start shape) to the covered backends' stdout.log | chunk median < 0.00003 s; line median < 0.0002 s | — (introduced with its first history row) |
 | M91 worker per-event quota-scan head, streamed-turn replay | M91 collector below | seconds per `Worker._process_event` call over a full-corpus replay of the worst on-disk worker events log — per-event median, worst single event, and the replay's total wall (scratch append target, zero-subscriber broadcast) | per-event median < 0.0002 s; worst single event < 0.020 s (recalibrated from < 1.0 ms: the worst on-disk worker log now carries one 9.5 MB tool_result line whose orjson dumps + page-cache write floor measures ~13-14 ms — the funnel's floor; the 2026-09-11 range was set on the 234 KB-era corpus); replay wall median < 0.30 s | — (introduced with its first history row) |
 | M92 CLI invocation startup, common-family command | M92 collector below | seconds per `charliebot` invocation's import-and-dispatch floor (`schedule-trigger --help`: fresh process, the shared `src.cli.common` chain, no server round trip); a real common-family command (delegate/plan/improve) pays the same floor plus its request | median < 0.10 s (recalibrated from < 0.40 s: the config-deferral landing's readings sit 0.044-0.047 s, ~8x under the old line the three earlier deferral rows had already been shaving toward) | — (introduced with its first history row) |
 | M93 thread-detail 500s, per 24 h server log | M93 collector below | 500 responses per newest server log for `GET /api/threads/{sid}/threads/{tid}` (the workers panel's per-thread detail fetch and its 5 s `?attach=1` poll — a 500 here fails the poll continuously while the panel is open, and each failure ships a ~30-line traceback into the log) | 0 | 9 (the AttributeError 500s the 2026-09-11 cli-binary fix removed; the live server carries the fix from its next deploy on) |
@@ -5635,41 +5635,54 @@ subprocess.run(["rm", "-rf", str(work)], check=True)
 EOF
 ```
 
-M89 — backend stderr tee, per chunk. Every covered backend's run tees subprocess stderr to the
-run's stderr.log (0.6-4 MB on disk per run) through the streamed loop's per-chunk write before
-the in-memory tail update, and the tee's executor-hop count is invisible to the HTTP probes
-above. The collector drives the per-chunk tee exactly as the pump issues it — a scratch
-stderr.log under /tmp, 8 KB chunks, one warm pass then 50 timed tees — through the tee's
-module-level write, read as a direct attribute so a renamed helper fails the collector instead
-of silently timing a removed shape, the same shape as the M82 protocol. Evidence points the
-same collector at the before and after checkouts (``CHECKOUT`` at each root):
+M89 — backend stderr pump, per chunk. Every covered backend's run tees subprocess stderr to the
+run's stderr.log (0.6-4 MB on disk per run) through the streamed pump before the in-memory tail
+update, and the pump's per-chunk cost is invisible to the HTTP probes above. The collector drives
+the pump exactly as the run issues it — a scripted 8 KB-chunk stream (400 chunks) through
+`AgentBackend._stream_stderr` over a scratch stderr.log under /tmp, one warm pass then five timed
+pump rounds reported per chunk — so the reading carries the pump's whole per-chunk cost, whatever
+a checkout implements it with (timing a helper directly would keep reading a removed per-chunk
+write after the pump stops issuing one, the vacuous-read class the M68/M70 repairs called out).
+Evidence points the same collector at the before and after checkouts (``CHECKOUT`` at each root):
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
 import asyncio, os, sys, tempfile, time
 sys.path.insert(0, os.environ["CHECKOUT"])
-import src.agents.backends.base as base_mod
+from src.agents.backends.base import AgentBackend
 
+CHUNKS = 400
 chunk = b"x" * 8192
-path = os.path.join(tempfile.mkdtemp(prefix="m89-stderr-tee-"), "stderr.log")
 
-# The tee's write; a checkout whose base module lacks the name has no shape
-# worth timing, so the AttributeError is the finding.
-tee = base_mod._write_chunk
+class _StubStream:
+    def __init__(self):
+        self._left = CHUNKS
+    async def read(self, size):
+        if not self._left:
+            return b""
+        self._left -= 1
+        return chunk
+
+class _StubBackend:
+    def __init__(self):
+        self._proc = type("P", (), {"stderr": _StubStream()})()
+        self._stderr_tail = bytearray()
 
 async def main():
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
-    for _ in range(5):
-        await tee(fd, chunk)  # warm, as a run's first stderr bytes; not timed
+    path = os.path.join(tempfile.mkdtemp(prefix="m89-stderr-tee-"), "stderr.log")
+    stub = _StubBackend()
+    await AgentBackend._stream_stderr(stub, path)  # warm, as a run's first stderr bytes; not timed
     times = []
-    for _ in range(50):
+    for _ in range(5):
+        stub = _StubBackend()
         t0 = time.perf_counter()
-        await tee(fd, chunk)
+        await AgentBackend._stream_stderr(stub, path)
         times.append(time.perf_counter() - t0)
     times.sort()
-    os.close(fd)
-    print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: stderr tee chunk "
-          f"median {times[24] * 1e6:.0f} us, max {times[-1] * 1e6:.0f} us over 50")
+    per_chunk = times[2] / CHUNKS
+    print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: stderr pump "
+          f"{CHUNKS} chunks in {times[2] * 1000:.2f} ms median; per-chunk "
+          f"{per_chunk * 1e6:.1f} us, max {times[-1] / CHUNKS * 1e6:.1f} us over 5 pump rounds")
 
 asyncio.run(main())
 EOF
@@ -5679,44 +5692,69 @@ M90 — backend stdout pump, per chunk or startup line. The opencode run tees `o
 stdout through the streamed pump (the startup wait appends each printed line, then the pump
 writes every 8 KB chunk), and the antigravity envelope pump writes its whole stdout the same
 way; the claude-family backends' raw stdout lands through the spawn fd, so those runs pay no
-per-chunk write. The collector drives both shapes exactly as the pump issues them — a scratch
-stdout.log under /tmp, 8 KB chunks and one printed line, one warm pass then 50 timed writes
-each — through the pumps' module-level write, read as a direct attribute so a renamed helper
-fails the collector instead of silently timing a removed shape, the same shape as the M89
-protocol. Evidence points the same collector at the before and after checkouts (``CHECKOUT``
-at each root):
+per-chunk write. The chunk shape drives `OpenCodeBackend._stream_stdout` exactly as the run
+issues it (a scripted 400-chunk stream over a scratch stdout.log under /tmp, one warm pass then
+five timed pump rounds reported per chunk, the same vacuous-read guard as M89); the startup-line
+shape stays the per-line write the startup wait issues, timed through the pumps' module-level
+write read as a direct attribute so a renamed helper fails the collector instead of silently
+timing a removed shape. Evidence points the same collector at the before and after checkouts
+(``CHECKOUT`` at each root):
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
 import asyncio, os, sys, tempfile, time
 sys.path.insert(0, os.environ["CHECKOUT"])
 import src.agents.backends.base as base_mod
+from src.agents.backends.opencode import OpenCodeBackend
 
+CHUNKS = 400
 chunk = b"x" * 8192
 line = b"2026-09-11T04:00:00.000Z  INFO serve listening on 127.0.0.1:4099\n"
 path = os.path.join(tempfile.mkdtemp(prefix="m90-stdout-pump-"), "stdout.log")
 
-# The pumps' write; a checkout whose base module lacks the name has no shape
-# worth timing, so the AttributeError is the finding.
+class _StubStream:
+    def __init__(self):
+        self._left = CHUNKS
+    async def read(self, size):
+        if not self._left:
+            return b""
+        self._left -= 1
+        return chunk
+
+class _StubBackend:
+    def __init__(self, fd):
+        self._proc = type("P", (), {"stdout": _StubStream()})()
+        self._stdout_fd = fd
+
+# The startup line's write; a checkout whose base module lacks the name has no
+# shape worth timing, so the AttributeError is the finding.
 helper = base_mod._write_chunk
 
 async def main():
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o666)
-    async def chunk_one():
-        await helper(fd, chunk)
+    stub = _StubBackend(fd)
+    await OpenCodeBackend._stream_stdout(stub)  # warm, as a run's first bytes; not timed
+    times = []
+    for _ in range(5):
+        stub = _StubBackend(fd)
+        t0 = time.perf_counter()
+        await OpenCodeBackend._stream_stdout(stub)
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    print(f"chunk {CHUNKS} chunks in {times[2] * 1000:.2f} ms median; per-chunk "
+          f"{times[2] / CHUNKS * 1e6:.1f} us, max {times[-1] / CHUNKS * 1e6:.1f} us over 5 pump rounds")
+
     async def line_one():
         await helper(fd, line)
-    for one in (chunk_one, line_one):
-        for _ in range(5):
-            await one()  # warm, as a run's first bytes; not timed
-        times = []
-        for _ in range(50):
-            t0 = time.perf_counter()
-            await one()
-            times.append(time.perf_counter() - t0)
-        times.sort()
-        name = "chunk" if one is chunk_one else "line"
-        print(f"{name} median {times[24] * 1e6:.0f} us, max {times[-1] * 1e6:.0f} us over 50")
+    for _ in range(5):
+        await line_one()  # warm, as the startup wait's first lines; not timed
+    times = []
+    for _ in range(50):
+        t0 = time.perf_counter()
+        await line_one()
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    print(f"line median {times[24] * 1e6:.0f} us, max {times[-1] * 1e6:.0f} us over 50")
     os.close(fd)
 
 asyncio.run(main())
@@ -6239,6 +6277,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-13 | this PR | M89 stderr pump per chunk 89.9/89.2/84.5 → 24.6/23.2/24.1 µs, −72 % to −73 %, maxima 96.9-100.6 → 24.2-26.6 µs (400-chunk pump wall 35.98/35.68/33.81 → 9.84/9.29/9.66 ms); M90 stdout pump per chunk 90.8/87.0/73.0 → 12.3/11.9/12.0 µs, −86 % to −87 %, maxima 97.9-92.9 → 15.1-12.3 µs (400-chunk pump wall 36.31/34.81/29.22 → 4.92/4.76/4.81 ms); every paired round faster (three interleaved rounds of the repaired collector — main checkout before vs branch worktree after back-to-back, 400 scripted 8 KB chunks per round, scratch log per round, load 1.67-1.81 one-minute; the standing collectors timed the flush primitive per chunk — a shape the batching makes per-window — so both were repaired to drive the real pumps, the vacuous-read class the M68/M70 repairs called out); M90 startup line unchanged 80/76/80 → 84/69/68 µs both arms (the per-line write the startup wait issues, by design); healthy ranges recalibrated with this PR: M89 median < 0.0002 s → < 0.00005 s, M90 chunk median < 0.0002 s → < 0.00003 s (line unchanged); no-regression witnesses on the branch: M84 tail-follow replay 15.2 ms / stdout-stream 13.4 ms with parity 0 divergences (standing 15.3/13.3), M82 events-log append 2 µs medians both eras, M38 fan-out 186 serialize calls 1 ms inside the #1524 after band with final-frame parity true; 5539-passed suite plus 4 new batching tests (window parity, sparse-line liveness, tail-stays-per-chunk, stdout parity) | every covered backend's stderr tee and the opencode/antigravity stdout pumps paid one asyncio.to_thread executor hop per 8 KB chunk — 73-91 µs of handoff against a ~2-5 µs page-cache write — so a 10 MB streamed turn's pump cost ~36 ms of pure dispatch (1250 hops) whose executor traffic contended with the request path's own to_thread work; the pumps now batch into a 64 KB window flushed through the existing _write_chunk (one hop per window), the flush firing at window-full, at a short read (the StreamReader's drain signal, so a sparse stream's every line lands immediately and tail -f stays live), and at stream end; the in-memory stderr tail stays per chunk, and a pump cancelled mid-window loses at most one buffered diagnostic log window |
 | 2026-09-13 | this PR | M72 served-path repeat view, repaired collector: 9.08/9.51/8.73 → 7.05/7.34/6.73 ms, −22 % to −29 %, maxima 10.24-11.05 → 8.57-9.70 ms, every paired round faster (three interleaved rounds of the repaired collector — main checkout before vs branch worktree after back-to-back, 1165-entry sessions root, live state read-only, decoded body 255692 B sha1 6219a0514d10 identical across all six arms, load 1.00-1.16 one-minute; the standing collector had read this metric 7.09 ms since its landing because its bare FastAPI app mounted no gzip middleware and sent no Accept-Encoding header — the served-path deflate was invisible to it, the vacuous-read class the M68/M89/M90/M70 repairs called out, and the repaired collector's before reading sat above the 0.008 s line); component attribution: the middleware's off-loop level-1 deflate of the 255692 B page measured 1.16 ms standalone plus the responder's to_thread round-trip, both gone from a repeat view that now serves the memoized compressed form; no-regression witnesses on the branch: the bare collector's no-Accept-Encoding arm 7.09 ms with the same sha1 (the identity path untouched), changed-round rebuild 5.33 ms (standing band 5.33-6.67), M70 clean view 7.3 ms (standing band 7.3-7.7), M55 compare view 2.4 ms with digest be3110683106 byte-identical to the standing reading; 5533-passed suite plus 4 new listing-gzip tests (precompressed ship through the middleware, no-gzip-accept plain body, repeat-view zero deflate, corpus-move recompress) | every browser navigation click on the file browser paid the server's whole-body gzip middleware a level-1 deflate of the memoized listing page plus its off-loop thread hop per view — the artifact view's identical pathology received the memoized-gzip fix in the M70 landing; the listing now memoizes the compressed form beside the plain one under the same walked-state key and ships it with Content-Encoding: gzip set upstream, which is what makes the middleware skip its own deflate, and a client sending no Accept-Encoding: gzip still reads the plain body |
 | 2026-09-14 | #1524 (row recorded in this docs-only follow-up per the #1046 precedent, the landing PR shipped without it) | M38 wire-serialize total 4/4/4 → 1/1/1 ms per worst-turn replay, −75 % at the collector's whole-ms rounding, every paired round faster (three interleaved rounds of the repaired collector — main checkout before vs branch worktree after back-to-back, worst on-disk stream turn of session 7a966888, instant feed, one subscriber, final-frame parity True every arm, load 1.19-1.75 one-minute); component attribution through the real StreamingManager with perf_counter around the render, three interleaved rounds at load 1.50-1.75: stdlib 185 calls 3.86/4.06/3.78 ms → orjson 185 calls 0.56/0.55/0.56 ms, −85 % to −86 %; the standing collector read this metric 4 ms since its 09-03 landing because its stdlib-json.dumps wrap never counted the after-arm's renderer — the repair wraps both json.dumps and orjson.dumps so the counted cost is the wire render whichever renderer the checkout runs (the #1285 vacuous-read class); no-regression witnesses on the branch: M45 catchup replay digest e9f92b4cfe29 identical with wall 0.0288 s / loop-lag 0.0065 s (standing 0.0299/0.0065), M26 advance 0.12 ms parity True digest e94c56635194, M94 page 0.20 MB / streamed serialized 5.5 MB / dumps wall 21 ms unchanged (its dumps wall is the collector's own fixture render, independent of the product serializer by design); 5536-passed suite plus 3 new wire-render tests (parsed-parity vs the stdlib send_json form on a CJK/emoji frame, the NaN→null boundary, the non-str-key raise) | the broadcast fan-out and the catchup replay still serialized every wire frame with the stdlib C encoder — 3.8 ms of event-loop json.dumps per worst-turn replay, the one wire-serialization boundary the orjson sweep (#1490) never reached — while the shared orjson render spends 0.56 ms on the same 185 frames; both sites now ride responses.py's fast_json_bytes, whose two pinned boundaries (NaN/Infinity as null, non-str dict keys raising) replace the stdlib send_json byte form on the wire, the same boundary move the M35 response-render landing made; parsed content is unchanged for the client |
 | 2026-09-13 | this PR | M80 churn changed-round wall median 0.1429/0.1529/0.1502 → 0.1106/0.1121/0.1052 s, −27 % to −31 % (four after rounds 0.1052-0.1121 s including an initial 0.1101 s before the interleaved trio), scanned 1.45 MB and rows digest df92885496c3 identical across all seven arms (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back at load 1.31-3.22 one-minute); M7 changed-round collect median 0.156/0.155/0.147 → 0.112/0.111/0.110 s, −28 % to −29 %, 19 rows and 0.0 MB re-read both arms (three interleaved rounds of the verbatim harness, the branch arm with its sys.path line at the worktree root); component attribution: the warm charlie-bot corpus walk measured standalone 0.1056/0.1070/0.1050 → 0.0679/0.0678/0.0673 s median, −36 %, 6352 rows both arms; whole-corpus cold pass rows digest 100098c6f26a and scanned 2059.4 MB identical, wall 7.223 → 6.877 s; 5529-passed suite plus 4 new walk-contract tests (a late candidate file's discovery, absent-candidate silence, the never-listed deep directories, symlinked-entry skip) | the walk listed and statted every intermediate directory — 1164 session dirs × (threads/ + every thread dir + its data/ + master_runs/ + every run dir) ≈ 33 k stats per collect against 6352 corpus files, the corpus signature's floor paid on every /token-usage page load — while both file names are writer-pinned constants (threads.thread_events_log_path, runs.RAW_LOG_NAME), so the deep listings discover nothing the fresh per-candidate stat does not; the walk now lists only the three discovery levels (the sessions root, each threads/, each data/master_runs/, still memoized on the directory's own stat pair) and stats each candidate directly — a deep file's appearance or disappearance moves only its own containing directory, which the walk never lists, so the fresh stat is the only thing that can see it; one stat per candidate plus one per discovered directory is the walk's floor, and the stat count now scales with candidates (6352 present + 8504 known-absent) instead of with corpus directories |

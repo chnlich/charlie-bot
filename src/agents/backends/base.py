@@ -17,6 +17,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
 from src.core import event_types as ET
@@ -43,12 +44,49 @@ DEFAULT_BUFFER_LIMIT = 1024 * 1024 * 1024  # 1 GB
 _STDERR_TAIL_BYTES = 64 * 1024
 
 
-# One executor hop per chunk, on the stderr tee and the stdout pumps alike:
+# One executor hop per flush, on the stderr tee and the stdout pumps alike:
 # aiofiles' write+flush pair costs two round-trips on the streamed-turn path.
 # No fdatasync on the fd — these logs are diagnostic streams, not the chat
 # funnel.
 async def _write_chunk(fd: int, chunk: bytes) -> None:
   await asyncio.to_thread(write_all, fd, chunk)
+
+
+# The chunk size every pump reads its subprocess stream with, and the buffer a
+# flush waits to fill: the write itself is a ~2 us page-cache write while its
+# executor hop is ~70 us, so chunks batch to bound the hops at one per window.
+_PUMP_CHUNK_BYTES = 8192
+_LOG_FLUSH_BYTES = 64 * 1024
+
+
+async def _tee_stream(
+    read: Callable[[int], Awaitable[bytes]], fd: int | None, on_chunk: Callable[[bytes], None] | None = None) -> None:
+  """Pump one subprocess stream into the caller's log fd, batching the executor hop.
+
+  The fd is the caller's: opened and closed by the pump's owner (the stderr
+  tee closes in its own finally; the opencode stdout fd serves the startup
+  lines and closes via _close_stdout_log). A flush fires when the buffer
+  fills, at a short read (the StreamReader hands out full chunks while its
+  transport buffer holds them, so a short read marks the moment the stream
+  drained — every sparse line flushes immediately and `tail -f` stays live),
+  and at stream end. A pump cancelled mid-window loses at most one buffered
+  window of the diagnostic log; readers needing every byte per chunk (the
+  stderr tail) ride on_chunk, which still fires per chunk.
+  """
+  buffer = bytearray()
+  while True:
+    chunk = await read(_PUMP_CHUNK_BYTES)
+    if not chunk:
+      break
+    if fd is not None:
+      buffer.extend(chunk)
+      if len(buffer) >= _LOG_FLUSH_BYTES or len(chunk) < _PUMP_CHUNK_BYTES:
+        await _write_chunk(fd, bytes(buffer))
+        buffer.clear()
+    if on_chunk is not None:
+      on_chunk(chunk)
+  if fd is not None and buffer:
+    await _write_chunk(fd, bytes(buffer))
 
 
 # The flag that suppresses the CLI's interactive permission prompt. Its
@@ -582,6 +620,13 @@ def _read_stderr_tail(stderr_path: Path) -> str:
   return data.decode("utf-8", errors="replace").strip()
 
 
+def _keep_stderr_tail(tail: bytearray, chunk: bytes) -> None:
+  """Keep the run's in-memory stderr tail at _STDERR_TAIL_BYTES, per chunk."""
+  tail.extend(chunk)
+  if len(tail) > _STDERR_TAIL_BYTES:
+    del tail[:len(tail) - _STDERR_TAIL_BYTES]
+
+
 class AgentBackend(ABC):
   """Abstract interface for running a Claude agent subprocess.
 
@@ -900,22 +945,15 @@ class AgentBackend(ABC):
     """Continuously read subprocess stderr; tee to <log_dir>/stderr.log and a 64 KB tail buffer.
 
     Streams live so `tail -f stderr.log` works during long runs and the in-memory
-    tail is always up to date for `self.stderr_text`.
+    tail is always up to date for `self.stderr_text`. The log file's writes batch
+    per _tee_stream's flush contract; the tail buffer stays per chunk.
     """
     assert self._proc is not None and self._proc.stderr is not None
     # The open truncates like the "wb" mode it replaces, so a run's log starts
     # empty for its tail -f readers.
     fd = os.open(stderr_log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666) if stderr_log_path is not None else None
     try:
-      while True:
-        chunk = await self._proc.stderr.read(8192)
-        if not chunk:
-          break
-        if fd is not None:
-          await _write_chunk(fd, chunk)
-        self._stderr_tail.extend(chunk)
-        if len(self._stderr_tail) > _STDERR_TAIL_BYTES:
-          del self._stderr_tail[:len(self._stderr_tail) - _STDERR_TAIL_BYTES]
+      await _tee_stream(self._proc.stderr.read, fd, partial(_keep_stderr_tail, self._stderr_tail))
     finally:
       if fd is not None:
         os.close(fd)

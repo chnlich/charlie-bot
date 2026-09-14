@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
@@ -144,3 +145,111 @@ async def test_write_chunk_lands_every_byte_in_order(tmp_path: Path) -> None:
   finally:
     os.close(fd)
   assert path.read_bytes() == b"".join(chunks)
+
+
+class _StubStream:
+  """A subprocess stream standing in for StreamReader.read: scripted chunks, then EOF."""
+
+  def __init__(self, chunks: list[bytes]) -> None:
+    self._chunks = list(chunks)
+
+  async def read(self, size: int) -> bytes:
+    if not self._chunks:
+      return b""
+    return self._chunks.pop(0)
+
+
+class _CountingWrites:
+  """A _write_chunk stand-in that records each flushed window's size."""
+
+  def __init__(self, real: Callable[[int, bytes], Awaitable[None]]) -> None:
+    self.real = real
+    self.flushes: list[int] = []
+
+  async def __call__(self, fd: int, chunk: bytes) -> None:
+    self.flushes.append(len(chunk))
+    await self.real(fd, chunk)
+
+
+@pytest.mark.asyncio
+async def test_tee_stream_batches_flushes_and_lands_every_byte(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Full chunks batch to one executor hop per _LOG_FLUSH_BYTES window; a short
+  read flushes its window; the file lands byte-identical to the stream."""
+  from src.agents.backends import base as base_mod
+
+  counter = _CountingWrites(base_mod._write_chunk)
+  monkeypatch.setattr(base_mod, "_write_chunk", counter)
+  chunks = [bytes([i % 256]) * base_mod._PUMP_CHUNK_BYTES for i in range(20)]
+  chunks.append(b"tail")  # a short read: the stream drained below one chunk
+  expected = b"".join(chunks)
+
+  path = tmp_path / "pump.log"
+  fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+  await base_mod._tee_stream(_StubStream(chunks).read, fd)
+  assert path.read_bytes() == expected
+  # 20 full chunks = 2.5 windows: two fills, then the short read's flush of
+  # the 32 KB remainder; the end flush finds an empty buffer.
+  assert counter.flushes == [base_mod._LOG_FLUSH_BYTES, base_mod._LOG_FLUSH_BYTES, 32772]
+
+
+@pytest.mark.asyncio
+async def test_tee_stream_flushes_a_sparse_line_immediately(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The tail -f contract: a lone short chunk (one sparse line) flushes during
+  the loop, not at stream end, so the log stays live between bursts."""
+  from src.agents.backends import base as base_mod
+
+  counter = _CountingWrites(base_mod._write_chunk)
+  monkeypatch.setattr(base_mod, "_write_chunk", counter)
+  chunks = [b"one sparse line\n", b"x" * base_mod._PUMP_CHUNK_BYTES]
+
+  path = tmp_path / "pump.log"
+  fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+  await base_mod._tee_stream(_StubStream(chunks).read, fd)
+  assert path.read_bytes() == b"".join(chunks)
+  assert counter.flushes == [16, base_mod._PUMP_CHUNK_BYTES]
+
+
+@pytest.mark.asyncio
+async def test_stream_stderr_batches_writes_and_keeps_tail_current(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The stderr pump batches its log writes while the in-memory tail stays
+  per chunk: after the pump, the tail holds every byte the stream carried."""
+  from src.agents.backends import base as base_mod
+
+  counter = _CountingWrites(base_mod._write_chunk)
+  monkeypatch.setattr(base_mod, "_write_chunk", counter)
+  chunks = [bytes([i % 256]) * base_mod._PUMP_CHUNK_BYTES for i in range(20)]
+  chunks.append(b"tail")
+
+  backend = _ScriptedBackend("true", log_dir=tmp_path / "logs")
+  backend._proc = type("P", (), {"stderr": _StubStream(chunks)})()
+  await backend._stream_stderr(tmp_path / "stderr.log")
+  # The tail is the stream's last _STDERR_TAIL_BYTES, kept current per chunk
+  # while the log file's writes batched underneath it.
+  assert bytes(backend._stderr_tail) == b"".join(chunks)[-base_mod._STDERR_TAIL_BYTES:]
+  assert len(counter.flushes) == 3
+
+
+@pytest.mark.asyncio
+async def test_stream_stdout_batches_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The opencode stdout pump rides the same batching: one hop per window,
+  byte parity at the log."""
+  from src.agents.backends import base as base_mod
+  from src.agents.backends.opencode import OpenCodeBackend
+
+  counter = _CountingWrites(base_mod._write_chunk)
+  monkeypatch.setattr(base_mod, "_write_chunk", counter)
+  chunks = [bytes([i % 256]) * base_mod._PUMP_CHUNK_BYTES for i in range(20)]
+  chunks.append(b"tail")
+
+  class _StubBackend:
+    _proc = None
+    _stdout_fd = None
+
+  stub = _StubBackend()
+  stub._proc = type("P", (), {"stdout": _StubStream(chunks)})()
+  fd = os.open(tmp_path / "stdout.log", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+  stub._stdout_fd = fd
+  await OpenCodeBackend._stream_stdout(stub)  # type: ignore[arg-type]
+  assert (tmp_path / "stdout.log").read_bytes() == b"".join(chunks)
+  assert len(counter.flushes) == 3

@@ -34,11 +34,9 @@ from src.agents.backends.registry import build_backend
 from src.core import headless_render
 from src.core.autonamer import iter_light_backends
 from src.core.config import CharlieBotConfig
+from src.core.constants import REPO_ROOT
 from src.core.plan_diff import VOID_TAGS
 from src.core.timeouts import ARTIFACT_PROBE_TIMEOUT
-
-# Repo root derived from this file: src/core/artifact_check.py -> parents[2] == repo root.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # One name per assertion: the outcome name a check stamps, its _ASSERTION_RUNNERS key, and its
 # _ASSERTION_SETS member are the same string, so the registry and the genre sets build on these
@@ -300,7 +298,7 @@ def _check_style_verbatim(ctx: _Context) -> list[AssertionOutcome]:
   if len(page_styles) != 1:
     return [_fail(name, f"page carries {len(page_styles)} <style> blocks, expected exactly one")]
   template_rel = f"prompts/{_GENRE_TEMPLATES[ctx.genre]}"
-  template_styles = _find(_parse_dom((_REPO_ROOT / template_rel).read_text(encoding="utf-8")), "style")
+  template_styles = _find(_parse_dom((REPO_ROOT / template_rel).read_text(encoding="utf-8")), "style")
   if len(template_styles) != 1:
     raise RuntimeError(f"genre template {template_rel} carries {len(template_styles)} <style> blocks, expected one")
   if " ".join(_text(page_styles[0]).split()) == " ".join(_text(template_styles[0]).split()):

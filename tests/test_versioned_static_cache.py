@@ -56,7 +56,7 @@ def test_asset_token_tracks_the_served_tree(tmp_path: Path) -> None:
   static.mkdir(parents=True)
   (static / "a.js").write_text("one", encoding="utf-8")
   with pytest.MonkeyPatch.context() as mp:
-    mp.setattr(pages, "_REPO_ROOT", tmp_path)
+    mp.setattr(pages, "REPO_ROOT", tmp_path)
     pages._ASSET_DIGEST_STATE.update(sig=(), digests={}, digest="")
     first = pages._asset_tree_digest()
     again = pages._asset_tree_digest()

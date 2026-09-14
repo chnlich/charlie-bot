@@ -19,6 +19,7 @@ from pydantic import (
     model_validator,
 )
 
+from src.core.constants import REPO_ROOT
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.models import (
     BackendOption,
@@ -521,7 +522,7 @@ class CharlieBotConfig(BaseModel):
   @property
   def charlie_bot_repo(self) -> Path:
     """Root of the charlie-bot repository (derived from package location)."""
-    return Path(__file__).resolve().parents[2]
+    return REPO_ROOT
 
   @property
   def code_server_config_path(self) -> Path:

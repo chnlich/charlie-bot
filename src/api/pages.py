@@ -26,7 +26,7 @@ from src.api.deps import SESSION_NOT_FOUND_DETAIL, get_session_manager
 from src.api.message_utils import build_session_bootstrap_data
 from src.api.sessions import _bootstrap_payload, _default_backend_id
 from src.core.config import CharlieBotConfig, get_config, get_credentials
-from src.core.constants import FILE_SERVER_MOUNTS
+from src.core.constants import FILE_SERVER_MOUNTS, REPO_ROOT
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus
 from src.core.ncu_parsing import NcuParseError, parse_ncu_report
@@ -37,7 +37,6 @@ from src.core.trace_merge import _MERGE_COMPRESSLEVEL, merge_traces
 
 log = LazyStructlogLogger()
 
-_REPO_ROOT = Path(__file__).parent.parent.parent
 _PERFETTO_MERGE_CACHE_LIMIT = 24
 
 # Destinations served by this server, listed on the home page. The same on every
@@ -123,13 +122,13 @@ def _get_git_version() -> str:
   try:
     short_hash = subprocess.check_output(
         ["git", "rev-parse", "--short", "HEAD"],
-        cwd=_REPO_ROOT,
+        cwd=REPO_ROOT,
         text=True,
         timeout=SUBPROCESS_GIT_VERSION_TIMEOUT,
     ).strip()
     commit_date = subprocess.check_output(
         ["git", "log", "-1", "--format=%cd", "--date=format:%m-%d"],
-        cwd=_REPO_ROOT,
+        cwd=REPO_ROOT,
         text=True,
         timeout=SUBPROCESS_GIT_VERSION_TIMEOUT,
     ).strip()
@@ -163,7 +162,7 @@ def _asset_tree_digest() -> str:
   os.scandir so each entry answers is_file from the directory record and
   stats once, the M44/M72 conversion of the pathlib double-stat pattern.
   """
-  static_root = _REPO_ROOT / "web" / "static"
+  static_root = REPO_ROOT / "web" / "static"
   if not static_root.is_dir():
     return ""
   pairs: list[tuple[str, int, int]] = []
@@ -208,7 +207,7 @@ def _static_asset_version() -> str:
 
 
 router = APIRouter()
-templates = Jinja2Templates(directory=str(Path(__file__).parent.parent.parent / "web" / "templates"))
+templates = Jinja2Templates(directory=str(REPO_ROOT / "web" / "templates"))
 
 
 @router.get("/api/auth/status")

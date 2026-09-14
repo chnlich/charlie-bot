@@ -267,11 +267,10 @@ async def delegate_task(
     caller: object = Depends(require_caller_dep),
 ) -> dict:
   """Create a worker task and spawn it, or the legacy thread path for v1 sessions."""
-  target = require_found(await session_mgr.get_session(req.session_id))
-  if target.profile is not None:
-    meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr)
-    return await _delegate_task_tree(
-        req, meta, cfg, task_mgr, session_mgr, caller, resolved_backend, resolved_model)
+  # Repo/branch contract first, before any session access or backend
+  # resolution: the rejection must not depend on the caller's configured
+  # backends, and a replayed request must fail identically on both the v2
+  # task-tree path and the legacy thread path.
   if req.task_type == TaskType.VERIFY:
     if req.repo_path is not None:
       raise HTTPException(status_code=400, detail="verify delegations are repo-less; omit repo_path")
@@ -279,10 +278,16 @@ async def delegate_task(
       raise HTTPException(status_code=400, detail="verify delegations are repo-less; omit base_branch")
   else:
     if req.repo_path is None:
-      raise HTTPException(status_code=400, detail=f"{req.task_type.value} delegations require repo_path")
+      raise HTTPException(
+          status_code=400, detail=f"{req.task_type.value} delegations require repo_path")
     if req.base_branch is None:
-      raise HTTPException(status_code=400, detail=f"{req.task_type.value} delegations require base_branch")
-
+      raise HTTPException(
+          status_code=400, detail=f"{req.task_type.value} delegations require base_branch")
+  target = require_found(await session_mgr.get_session(req.session_id))
+  if target.profile is not None:
+    meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr)
+    return await _delegate_task_tree(
+        req, meta, cfg, task_mgr, session_mgr, caller, resolved_backend, resolved_model)
   meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr)
 
   require_review = req.task_type == TaskType.IMPLEMENT  # noqa: F841  (legacy shape unchanged)

@@ -177,8 +177,10 @@ def test_module_defers_structlog_until_the_first_log_call(module_name: str, impo
 # sessions' parent-reference frames), all of which load lazily at their use
 # sites; structlog rides the log proxy (~77 ms of the floor, lines the import
 # path never emits); httpx (~60 ms with rich) rides src.core.http and the
-# backends' outbound clients, which load it on first use.
-SERVER_HEAVY_MODULES = ("numpy", "src.agents.transcriber", "structlog", "httpx")
+# backends' outbound clients, which load it on first use; croniter rides its
+# two next-run resolutions (the scheduler tick, the /scheduled handler, ~21 ms
+# with dateutil) and websockets rides the Slack listener's connect loop (~13 ms).
+SERVER_HEAVY_MODULES = ("numpy", "src.agents.transcriber", "structlog", "httpx", "croniter", "dateutil", "websockets")
 
 
 def test_server_import_defers_the_speech_stack() -> None:

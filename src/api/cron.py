@@ -5,7 +5,6 @@ import copy
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
@@ -48,13 +47,35 @@ _TASK_NOT_FOUND_DETAIL = 'Task "{}" not found'
 _NEXT_RUN_MEMO: dict[tuple[str, str], tuple[datetime, str]] = {}
 
 
+def _load_croniter():
+  """Bind croniter into the module namespace on first use.
+
+  croniter (+ its dateutil subtree, ~21 ms together) is the M99 import floor's
+  largest deferrable third-party slice and no import path resolves a next run,
+  so the import rides the first next-run resolution; the module attribute it
+  binds stays the tests' monkeypatch target (tests/test_cron_next_run_memo.py).
+  """
+  from croniter import croniter
+
+  globals()["croniter"] = croniter
+  return croniter
+
+
+def __getattr__(name: str):
+  if name == "croniter":
+    return _load_croniter()
+  raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 def next_run_iso(cron_expr: str, timezone: str, now_utc: datetime) -> str:
   """ISO next fire time of *cron_expr* in *timezone*, memoized until it passes."""
   hit = _NEXT_RUN_MEMO.get((cron_expr, timezone))
   if hit is not None and now_utc < hit[0]:
     return hit[1]
+  if "croniter" not in globals():
+    _load_croniter()
   tz = ZoneInfo(timezone)
-  next_run = croniter(cron_expr, datetime.now(tz)).get_next(datetime)
+  next_run = croniter(cron_expr, datetime.now(tz)).get_next(datetime)  # noqa: F821  # bound by _load_croniter
   iso = next_run.isoformat()
   _NEXT_RUN_MEMO[(cron_expr, timezone)] = (next_run, iso)
   return iso

@@ -45,9 +45,8 @@ PLAN_HEAVY_MODULES = HEAVY_MODULES + (
     "src.core.plan_diff",
 )
 
-# The memory chain's ban set: structlog (the log proxy defers it) and the replay-curation
-# stack, which only the replay/experiment/compare verbs run (lazy imports inside the _cmd_
-# functions). config + models + pydantic stay out of the ban set: the get_config
+# The memory chain's ban set: structlog (the log proxy defers it to first use).
+# config + models + pydantic stay out of the ban set: the get_config
 # module-attribute contract (tests/test_memory_store.py) and every verb's config read
 # bind them at import.
 MEMORY_HEAVY_MODULES = (
@@ -58,7 +57,6 @@ MEMORY_HEAVY_MODULES = (
     "numpy",
     "structlog",
     "requests",
-    "src.core.memory_replay",
 )
 
 
@@ -156,10 +154,9 @@ def test_artifact_chain_imports_without_the_heavy_chains() -> None:
 def test_memory_chain_imports_without_the_heavy_chains() -> None:
   loaded = _modules_loaded_after_import("import src.cli.memory", MEMORY_HEAVY_MODULES)
   assert loaded == [], (
-      "the memory command chain pulled the replay stack or structlog into the CLI "
+      "the memory command chain pulled a heavy chain or structlog into the CLI "
       f"process: {loaded}; the M98 invocation wall (docs/perf_baseline.md) depends "
-      "on these staying out — the replay verbs import their stack inside the verb "
-      "path, and src.core.memory's log proxy defers structlog to first use")
+      "on these staying out — src.core.memory's log proxy defers structlog to first use")
 
 
 # Modules whose log proxy defers structlog to first use. Each imports on an

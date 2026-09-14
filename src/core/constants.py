@@ -39,15 +39,6 @@ PLAN_CLOSE_ABANDONED = "abandoned"
 PLAN_CLOSE_COMPLETED = "completed"
 PLAN_CLOSE_MODES = (PLAN_CLOSE_SUPERSEDED, PLAN_CLOSE_ABANDONED, PLAN_CLOSE_COMPLETED)
 
-# Memory-replay mode vocabulary: the named spellings are the home for the values the replay
-# stack compares against (src.core.memory_replay runner/report/compare/experiment). The tuple
-# feeds the memory CLI's argparse choices (src.cli.memory) and the replay runner's validation
-# (src.core.memory_replay.runner), so the memory query/add/lint verbs import no replay stack
-# to build the parser. One spelling everywhere.
-REPLAY_MODE_EDITOR_ONLY = "editor-only"
-REPLAY_MODE_EDITOR_REVIEW = "editor-review"
-REPLAY_MODES = (REPLAY_MODE_EDITOR_ONLY, REPLAY_MODE_EDITOR_REVIEW)
-
 # File-server URL prefixes: server.py mounts the one files router under each, so both
 # spellings reach the same handler. The first entry is the canonical form the UI builds
 # and older links carry; the second is the form written into chat text to name absolute

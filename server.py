@@ -482,7 +482,13 @@ async def _send_session_catchup(
 
 
 class _CatchupWalk:
-  """Incremental catchup walk: the aggregator state and frame buffer behind `_catchup_frames`.
+  """Incremental catchup walk: the session-WS catchup replay's aggregator state and frame buffer.
+
+  Feed the full event list so the aggregator state aligns with the client's
+  SSR/SPA aggregator; deltas from events before the cursor are dropped because
+  the client has already rendered them, and raw events in
+  `_RAW_EVENTS_REPLACED_BY_DELTAS` are suppressed because their content is
+  represented by `message`/`stream` deltas on the wire.
 
   The walk is pure-Python CPU at ~1.2 µs per event; fed in slices from the event
   loop with a yield between slices, no slice holds the loop longer than the
@@ -527,22 +533,6 @@ class _CatchupWalk:
     if self._latest_stream is not None:
       self._frames.append(self._latest_stream)
     return self._frames
-
-
-def _catchup_frames(events: list[dict], cursor: int, *, event_index_offset: int = 0) -> list[dict]:
-  """Build the ordered catchup frame list for events past *cursor*.
-
-  Walks the full event list to keep the aggregator state aligned with how the
-  client's SSR/SPA aggregator processed events[0..cursor-1]; deltas from events
-  before the cursor are dropped from the result because the client has already
-  rendered them. Raw events in `_RAW_EVENTS_REPLACED_BY_DELTAS` are suppressed
-  because their content is represented by `message`/`stream` deltas on the wire.
-  Sync whole-corpus form; the live replay runs the same walk sliced through
-  `_CatchupWalk` (see its docstring for why).
-  """
-  walk = _CatchupWalk(cursor, event_index_offset=event_index_offset)
-  walk.feed_slice(events, 0, len(events))
-  return walk.finish()
 
 
 def _render_frames(frames: list[dict]) -> list[str]:

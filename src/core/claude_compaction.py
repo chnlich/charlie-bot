@@ -31,7 +31,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from src.agents.backends.base import make_context_compact_failed_event, make_context_compacted_event
+from src.agents.backends.base import (
+    DISALLOWED_TOOLS_FLAG,
+    make_context_compact_failed_event,
+    make_context_compacted_event,
+)
 from src.agents.backends.claude_code import (
     BASE_COMMAND,
     HEADLESS_DISALLOWED_TOOLS,
@@ -162,7 +166,7 @@ def compaction_command(cc_session_id: str) -> list[str]:
       COMPACTION_MODEL,
       "--output-format",
       "json",
-      "--disallowed-tools",
+      DISALLOWED_TOOLS_FLAG,
       COMPACTION_DISALLOWED_TOOLS,
   ]
 

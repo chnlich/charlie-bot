@@ -123,7 +123,6 @@ class SlashDispatchKind(StrEnum):
 class SlashDispatchResult:
   """Result of dispatching a slash command."""
   kind: SlashDispatchKind
-  command: SlashCommand | None = None
   shell_result: dict | None = None  # {stdout, stderr, exit_code}
   substituted_prompt: str | None = None
   claude_code_flags: list[str] | None = None
@@ -151,23 +150,19 @@ async def dispatch_slash_command(
     if not cmd.command:
       log.warning('slash_shell_missing_command_template', name=name)
       return SlashDispatchResult(
-          kind=SlashDispatchKind.ERROR, command=cmd, error=f'Command /{name} has no command template configured')
+          kind=SlashDispatchKind.ERROR, error=f'Command /{name} has no command template configured')
     result = await execute_shell_command(
         cmd_template=cmd.command, args=args, session_dir=session_dir, timeout=cmd.timeout, cwd=cmd.cwd)
-    return SlashDispatchResult(kind=SlashDispatchKind.SHELL_RESULT, command=cmd, shell_result=result)
+    return SlashDispatchResult(kind=SlashDispatchKind.SHELL_RESULT, shell_result=result)
 
   if cmd.scope == 'prompt':
     if not cmd.prompt:
       log.warning('slash_prompt_missing_template', name=name)
       return SlashDispatchResult(
-          kind=SlashDispatchKind.ERROR, command=cmd, error=f'Command /{name} has no prompt template configured')
+          kind=SlashDispatchKind.ERROR, error=f'Command /{name} has no prompt template configured')
     substituted = cmd.prompt.replace('{args}', args)
     return SlashDispatchResult(
-        kind=SlashDispatchKind.PROMPT,
-        command=cmd,
-        substituted_prompt=substituted,
-        claude_code_flags=cmd.claude_code_flags or None)
+        kind=SlashDispatchKind.PROMPT, substituted_prompt=substituted, claude_code_flags=cmd.claude_code_flags or None)
 
   log.warning('slash_unknown_scope', name=name, scope=cmd.scope)
-  return SlashDispatchResult(
-      kind=SlashDispatchKind.ERROR, command=cmd, error=f'Unknown scope for command /{name}: {cmd.scope}')
+  return SlashDispatchResult(kind=SlashDispatchKind.ERROR, error=f'Unknown scope for command /{name}: {cmd.scope}')

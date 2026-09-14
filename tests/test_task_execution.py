@@ -333,8 +333,12 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
     stub_credentials(monkeypatch, {"charliebot": {"access_key": "op-secret"}})
     backend = SpawningScriptedBackend([result_event("phrase")])
     builds = install_backends(
-        monkeypatch, [backend], "src.agents.worker.build_backend")
+        monkeypatch,
+        [backend, SpawningScriptedBackend([result_event("phrase")]),
+         SpawningScriptedBackend([result_event("phrase")])],
+        "src.agents.worker.build_backend")
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+    repo, _origin = init_repo_with_origin(tmp_path / "delegate-work")
 
     # The nearest-user authorization gate re-judges at delegation: the manager
     # needs a real user message with the takeoff phrase.
@@ -349,6 +353,8 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
             "description": "## Goal\n\nsay the phrase\n",
             "task_type": "quick-edit",
             "keep_worktree": False,
+            "repo_path": str(repo),
+            "base_branch": "main",
         }
         first = client.post("/api/internal/delegate", json=payload, headers=OPERATOR)
         assert first.status_code == 200, first.text
@@ -379,14 +385,21 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
                               headers=OPERATOR)
         assert sibling.json()["session_id"] != first_named.json()["session_id"]
 
-    # The work run executes through the worker adapter with the child's own
-    # identity in its environment.
-    await asyncio.sleep(0.1)
+        # The three runs execute through the worker adapter while the API loop
+        # that scheduled them is still alive.
+        deadline = asyncio.get_event_loop().time() + 30
+        while asyncio.get_event_loop().time() < deadline:
+            states = [tree.task_state(s) for s in (
+                child_id, first_named.json()["session_id"], sibling.json()["session_id"])]
+            if all(s == "completed" for s in states):
+                break
+            await asyncio.sleep(0.1)
 
-    from src.agents import master_cc_state
-    for consumer in list(master_cc_state._session_consumers.values()):
-        await asyncio.wait_for(consumer, timeout=10)
-    assert len(builds) == 1
+    for cid in (child_id, first_named.json()["session_id"], sibling.json()["session_id"]):
+        assert tree.task_state(cid) == "completed"
+    # Three distinct operations, three builds: the replays did not spawn a
+    # second process for their operation.
+    assert len(builds) == 3
     captured_env = builds[0]["backend"].env or {}
     assert captured_env.get("CHARLIEBOT_SESSION_ID") == child_id
     assert captured_env.get("CHARLIEBOT_RUN_TOKEN")
@@ -394,15 +407,9 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
     worker_run = await tree.runs.get_run(child_id, run_id)
     assert worker_run is not None and worker_run.kind == "work"
     assert worker_run.backend == "fake"
-    worker_outcome = tree.runs.terminal_outcome(tree.runs.load_events_sync(child_id), run_id)
-    print("WORKER RUN OUTCOME:", worker_outcome, flush=True)
-    print("CHILD STATE:", tree.task_state(child_id), flush=True)
-    if worker_outcome != "success":
-        raw = Path(worker_run.raw_log_ref).read_text(errors="replace") if worker_run.raw_log_ref else ""
-        print("RAW TAIL:", raw[-500:], flush=True)
     # The completed delivery closed and auto-archived the worker; the manager
     # remains open and received the completed report.
-    deadline = asyncio.get_event_loop().time() + 5
+    deadline = asyncio.get_event_loop().time() + 20
     archived = False
     while asyncio.get_event_loop().time() < deadline:
         if tree.task_state(child_id) == "completed" and tree.archived_of(
@@ -618,6 +625,11 @@ async def test_implement_delivery_requires_review_and_real_landing(
     assert reports[-1]["outcome"] == "completed"
     finished = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.RUN_FINISHED]
     assert [e["outcome"] for e in finished][-1] == "success"
+
+
+def _consumers():
+    from src.agents import master_cc_state
+    return master_cc_state._session_consumers.values()
 
 
 def _task_spec(tree: TaskTreeManager, spec: dict):

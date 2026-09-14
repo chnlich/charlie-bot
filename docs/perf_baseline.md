@@ -110,6 +110,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M98 memory-CLI invocation wall, read verb | M98 collector below | seconds per `charliebot memory query --topic <t> --index` wall (fresh process: the memory chain's import+dispatch plus the live store read; a replay/experiment/compare verb pays the replay stack it runs) | median < 0.30 s | — (introduced with its first history row) |
 | M99 server import floor, fresh process | M99 collector below | seconds per `import server` wall (fresh process: the module uvicorn imports; the speech stack — numpy via src.agents.transcriber plus the two SIMD scanners — must stay out, loading on the provisioning thread and at the voice use sites) | median < 0.75 s | — (introduced with its first history row) |
 | M100 run-start session-adopt signal, worker-log read trip and wire | M100 collector below | broadcast frames per signal; the cold read+transform raw rows and wall over a 51-signal scratch worker log (one signal per production log's head); the chat marker lines the master funnel persists (parity witness — the durable append is the stable-history projection's run-start marker, load-bearing) | 0 broadcast frames per signal; 0 raw rows; read wall median < 0.0005 s; marker persists (1 line per signal, both shapes) | — (introduced with its first history row) |
+| M101 raw events download, gzip-accepted | M101 collector below | seconds of loop lag + wall per full download of the worst on-disk live chat file through the real app stack (the events viewer's fetch and its download link, the browser's Accept-Encoding: gzip shape); the first view (the cold read+compress a fresh open pays, scratch home) | loop-lag median < 0.010 s; steady-state wall median < 0.10 s; first-view wall < 1.0 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -6273,10 +6274,121 @@ asyncio.run(main())
 EOF
 ```
 
+M101 — raw events download, gzip-accepted. The events viewer page fetches the
+session's whole `chat_events.jsonl` and the page's download link points at the
+same endpoint, and the browser sends `Accept-Encoding: gzip` on both. Starlette's
+FileResponse streams the file in 64 KiB chunks and the gzip middleware
+compresses every chunk inline on the event loop — ~11 ms worst loop gap per
+chunk on the 36 MB worst corpus, 1.3 s of server-side wall per download — while
+a pre-compressed body with Content-Encoding set upstream skips the middleware's
+pass entirely (the M72 listing-serve mechanism) and moves the read+compress to
+one executor hop behind a stat-keyed memo. The collector drives the real app
+stack (gzip + auth middleware) raw-ASGI with a concurrent 5 ms ticker against a
+scratch `CHARLIEBOT_HOME` (its config carries an empty access key, which the
+auth middleware passes through) holding a copy of the worst on-disk live events
+corpus (metadata.json and data/, live home read once for the copy, never
+written): one first view, as at a fresh events-viewer open (the cold
+read+compress; not part of the steady-state medians), then nine timed
+steady-state downloads of the unchanged file — the repeat-serve shape the memo
+serves. Evidence points the same collector at the before and after checkouts
+(`CHECKOUT` at each root), the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, shutil, sys, tempfile, time
+from pathlib import Path
+
+sys.path.insert(0, os.environ["CHECKOUT"])
+
+# Worst download corpus: the session whose live chat file carries the most bytes.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    p = d / "data" / "chat_events.jsonl"
+    if p.is_file():
+        n = p.stat().st_size
+        if n > best_n:
+            best, best_n = d, n
+SID = best.name
+print(f"worst download corpus: session {SID}, {best_n / 1e6:.1f} MB")
+
+# Isolation: scratch CHARLIEBOT_HOME under /tmp holding a copy of that session's
+# metadata.json and data/ (live home read once for the copy, never written); the
+# scratch credentials carry an empty access key, which the auth middleware passes through.
+home = Path(tempfile.mkdtemp(prefix="m101-events-home-"))
+(home / "sessions" / SID).mkdir(parents=True)
+shutil.copy2(best / "metadata.json", home / "sessions" / SID / "metadata.json")
+shutil.copytree(best / "data", home / "sessions" / SID / "data")
+(home / "credentials.yaml").write_text("charliebot:\n  access_key: ''\n")
+os.environ["CHARLIEBOT_HOME"] = str(home)
+
+import server  # noqa: E402  (the real app stack: _CharlieBotGZipMiddleware + AuthMiddleware)
+
+SCOPE = {
+    "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+    "http_version": "1.1", "method": "GET", "scheme": "http",
+    "path": f"/api/sessions/{SID}/events.jsonl",
+    "raw_path": f"/api/sessions/{SID}/events.jsonl".encode(),
+    "query_string": b"", "root_path": "",
+    "headers": [(b"host", b"test"), (b"accept-encoding", b"gzip")],
+    "client": ("test", 123), "server": ("test", 80),
+}
+
+
+async def drive():
+    body = b""
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        nonlocal body
+        if msg["type"] == "http.response.body":
+            body += msg.get("body", b"")
+
+    t0 = time.perf_counter()
+    await server.app(SCOPE, receive, send)
+    return time.perf_counter() - t0, body
+
+
+async def main():
+    await drive()  # first view: the cold read+compress a fresh open pays; not timed
+    worst, walls, body = [], [], b""
+    for _ in range(9):
+        stop = False
+        gaps = []
+
+        async def ticker():
+            prev = time.perf_counter()
+            while not stop:
+                await asyncio.sleep(0.005)
+                now = time.perf_counter()
+                gaps.append(now - prev)
+                prev = now
+
+        t = asyncio.create_task(ticker())
+        dt, body = await drive()
+        stop = True
+        await t
+        worst.append(max(gaps) if gaps else dt)
+        walls.append(dt)
+    worst.sort()
+    walls.sort()
+    print(f"{best_n / 1e6:.1f} MB file, {len(body) / 1e6:.1f} MB gzip wire; "
+          f"loop-lag median {worst[4] * 1000:.2f} ms, max {worst[-1] * 1000:.2f} ms; "
+          f"steady-state wall median {walls[4] * 1000:.1f} ms, max {walls[-1] * 1000:.1f} ms over 9")
+    shutil.rmtree(home)
+
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-14 | this PR | M101 raw events download, gzip-accepted: loop-lag median 12.00/11.79/10.49 → 5.37/5.41/5.39 ms (the 5 ms ticker floor), maxima 19.28-21.93 → 5.48-5.54 ms; steady-state wall median 1270.0/1265.7/1288.5 → 0.6/0.6/0.6 ms, maxima 1314.3-1319.9 → 1.0 ms over 9 (three interleaved rounds of the new collector — main checkout before vs branch worktree after back-to-back, 36.3 MB / 5519-event worst live chat file of session aa196b47, wire 22.7 MB gzip identical across all six arms, load 0.70-1.20 one-minute, every paired round faster; the first view a fresh open pays measures 741/753/811 ms off-loop on the branch — the read+compress a thread hop carries — and the live server log reads the same endpoint at 1542/1663/1849 ms server-side, 2026-09-11 11:45-12:10); no-regression witnesses on the branch: M65 big-page gzip loop-lag 5.30 ms / wall 3.51 ms (standing 5.28/3.54 this morning) and M35 events page 2.67 ms with digest 1217561fba10 identical (standing 2.67 ms); 5547-passed suite + 11 skipped, ruff and yapf clean; M101 definition, collector, and healthy ranges introduced with this PR | the events viewer's fetch and its download link ride `GET /api/sessions/{id}/events.jsonl`, a FileResponse whose 64 KiB streaming chunks the gzip middleware compresses inline on the event loop — 576 inline deflate slices of ~11-22 ms worst gap each and 1.3 s of server-side wall per download of the worst corpus, on the loop every concurrent poll and WebSocket shares; the download now reads and deflates in one executor hop (level-1 gzip, 755 ms measured standalone on this corpus) behind a stat-keyed memo serving repeat opens of an unchanged file with zero corpus bytes, and Content-Encoding set upstream is what makes the middleware skip its own pass (the M72 listing-serve mechanism); a client sending no Accept-Encoding: gzip still reads the plain FileResponse stream unchanged |
 | 2026-09-14 | this PR | M97 plan-CLI command wall median 0.299/0.302/0.303/0.302 → 0.273/0.275/0.277/0.284 s, −19 to −29 ms (−6.6 % to −8.9 %), maxima 0.307-0.320 → 0.279-0.291 s; M98 memory-CLI invocation wall median 0.236/0.238/0.238/0.240 → 0.212/0.217/0.217/0.221 s, −19 to −24 ms (−8.0 % to −9.9 %) (four interleaved verbatim-collector rounds, 15.4 KB worst plans corpus of session a9bb2346, live state read-only, main checkout before vs branch worktree after back-to-back at load 0.45-0.92, every paired round faster; component attribution, fresh processes per arm: `import src.core.config` 179.8 → 151.5 ms and the chain no longer loads src.core.models at all); no-regression witnesses interleaved ×2: M92 schedule-trigger --help floor 0.039-0.040 s both arms and M99 `import server` 0.637-0.646 s both arms (the server's api modules import src.core.models directly, so its floor is untouched); 5539-passed suite + 11 skipped, ruff and yapf clean | the config chain built all 62 of models.py's pydantic models on every CLI invocation's first `get_config` while the config schema's fields ride three of them — the backend-option discriminated union and the two Claude-account models, which now live in `src/core/backend_models` (imported by config directly) with models.py re-exporting the moved names so every established `src.core.models` import path keeps working; the pydantic import itself and the config module's own exec are load-bearing (CharlieBotConfig validates through pydantic), and the requests import (57 ms, lazy at request time) is the remaining floor of the verb walls; M97/M98 healthy ranges unchanged |
 | 2026-09-14 | #1553 (row recorded in this docs-only follow-up per the #1046 precedent, the landing PR shipped without it) | M88 direct-pass build median 2.76/2.84/2.79 → 2.51/2.55/2.42 s, −9 % to −13 %, maxima 2.82-2.85 → 2.43-2.61 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, 307.3 MB / 1,068,461-event worst on-disk trace /home/chaoli/data/hayden_243809_traces/step000110/trace_rank008_step000110.json, scratch output under /tmp, live home read-only, load 1.69-2.10 one-minute; artifact 23.8 MB.gz identical across all six arms); component attribution, standalone interleaved parse of the same corpus, fresh process per round: gc-on 2.165/2.061/2.087 s vs gc-off 1.794/1.765/1.734 s — 0.27-0.35 s per parse, the slice off the build's floor; no-regression witness: M66 merged build median 3.93 s on the branch (standing band 3.8-4.0 s), the merge path untouched; 5542-passed suite + 11 skipped plus the new GC-contract test (a build's success and parse-failure paths must both re-enable collection), ruff and yapf clean | the direct-pass build's validation parse allocated ~1M dicts with GC enabled while the merge path's build has run GC-off since the M66 landing for the same measured churn; the parse holds the GIL solid either way, so the #1520 gzip-subprocess overlap leaves the parse the build's floor and the disable trims that floor |
 | 2026-09-13 | this PR | M96 standing-collector reading classified as the deploy-skew shape, not a regression: the verbatim collector against the running server read median 254402 B, p90 1066055 B, max 1165935 B, total 10308741 B over 26 active sessions (23:46, load 1.14/1.32/1.01 one-minute) — above the median < 0.15 MB and max < 0.60 MB lines — while the same 26 sessions served through the current code read median 97618 B, p90 214912 B, max 295040 B, total 2776189 B (TestClient on the main checkout @ 35a10fb9, scratch CHARLIEBOT_HOME under /tmp holding the 26 sessions' metadata + data with master_runs excluded, live home read once for the id list and the copy, never written) — −62 % median, −80 % p90, −75 % max, inside every healthy line. The live server (started 2026-09-10 12:42) predates the 2026-09-12 payload trim, so its bootstrap bodies still carry every tail tool's whole input and output; the corpus the untrimmed shape serves also grew ~11 % since the landing day's live-before sweep (25 sessions median 244912 B → 26 sessions median 254402 B) | the M96 healthy ranges were set from the landing day's after numbers on branch code, while the standing collector points at the running server, which carries the trim only from its next deploy on — until then every hourly round reads the pre-trim shape and re-chases a fix that already landed; this row pins the trip as deploy skew that heals at the next server restart, not by code (the same class the M7 restart-cold row documents) |

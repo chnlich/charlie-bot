@@ -19,13 +19,9 @@ from pydantic import (
     model_validator,
 )
 
+from src.core.backend_models import BackendOption, ClaudeAccount, ClaudeCompactionConfig
 from src.core.constants import REPO_ROOT
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
-from src.core.models import (
-    BackendOption,
-    ClaudeAccount,
-    ClaudeCompactionConfig,
-)
 from src.core.yaml_utils import load_yaml
 
 log = LazyStructlogLogger()

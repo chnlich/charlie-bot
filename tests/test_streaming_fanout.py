@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from src.api import responses
 from src.core import streaming
 from src.core.streaming import StreamingManager
 
@@ -82,14 +83,14 @@ async def test_preview_neutral_frame_keeps_pending(manager: StreamingManager) ->
 async def test_serialize_once_per_fan_out_over_subscribers(
     manager: StreamingManager, monkeypatch: pytest.MonkeyPatch) -> None:
   render_calls = 0
-  real_render = streaming.fast_json_bytes
+  real_render = responses.fast_json_bytes
 
   def counting_render(content: object) -> bytes:
     nonlocal render_calls
     render_calls += 1
     return real_render(content)
 
-  monkeypatch.setattr(streaming, "fast_json_bytes", counting_render)
+  monkeypatch.setattr(responses, "fast_json_bytes", counting_render)
   ws1, ws2 = _Socket(), _Socket()
   await manager.subscribe("s", ws1)
   await manager.subscribe("s", ws2)

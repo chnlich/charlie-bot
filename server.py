@@ -28,6 +28,7 @@ from src.api import (
     internal,
     latex,
     pages,
+    responses,
     sessions,
     slash,
     threads,
@@ -35,7 +36,6 @@ from src.api import (
 )
 from src.api.auth import AuthMiddleware, _credential_matches
 from src.api.deps import session_manager, set_trigger_manager, thread_manager
-from src.api.responses import fast_json_bytes
 from src.core import timeouts
 from src.core.buildinfo import init_build_info
 from src.core.config import CharlieBotConfig, get_config, get_credentials, require_backends
@@ -553,7 +553,7 @@ def _render_frames(frames: list[dict]) -> list[str]:
   stdlib ``send_json`` form this replay replaced, only the raw bytes differ at
   the boundaries responses.py pins.
   """
-  return [fast_json_bytes(frame).decode("utf-8") for frame in frames]
+  return [responses.fast_json_bytes(frame).decode("utf-8") for frame in frames]
 
 
 async def _replay_aggregated_catchup(

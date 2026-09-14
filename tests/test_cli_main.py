@@ -1,6 +1,7 @@
 """Tests for the unified charliebot CLI dispatcher."""
 
 import sys
+from types import ModuleType
 
 import pytest
 
@@ -22,7 +23,7 @@ from src.cli import main as cli_main
 def test_dispatcher_delegates_to_supported_subcommands(
     monkeypatch: pytest.MonkeyPatch,
     subcommand: str,
-    module,
+    module: ModuleType,
 ) -> None:
   calls: list[list[str]] = []
 

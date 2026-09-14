@@ -8,7 +8,7 @@ from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_ID, OPUS_BACKEND_OPTION
 
 from src.core.config import CharlieBotConfig
 from src.core.master_trigger import is_resume_not_found_error, trigger_master
-from src.core.models import BackendOption, SessionCallbacks, SessionMetadata
+from src.core.models import BackendOption, MasterRunRecord, SessionCallbacks, SessionMetadata
 
 _RUN_MESSAGE_PATCH_TARGET = "src.core.master_trigger.run_message"
 _LOG_PATCH_TARGET = "src.core.master_trigger.log"
@@ -64,7 +64,7 @@ class FakeSessionManager:
   async def mark_unread(self, session_id: str) -> None:
     return None
 
-  async def persist_master_run(self, session_id: str, record) -> None:
+  async def persist_master_run(self, session_id: str, record: MasterRunRecord | None) -> None:
     if self._meta is not None:
       self._meta.master_run = record
 

@@ -75,7 +75,7 @@ def _patched_launch(cfg: MagicMock, argv_tail: list[str], run_patch: Any = None)
     yield handles[-1] if run_patch is not None else None
 
 
-def _run_e2e(tmp_path: Path, capsys: pytest.CaptureFixture[str], host: str):
+def _run_e2e(tmp_path: Path, capsys: pytest.CaptureFixture[str], host: str) -> tuple[dict, Path, str]:
   """Drive main() with the supplied ssh argv prefix and return parsed metadata."""
   session = "sess-e2e"
   home = _make_session_dir(tmp_path, session)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -71,7 +72,7 @@ def _assistant(
   return event
 
 
-def _result(**extra) -> dict:
+def _result(**extra: object) -> dict:
   return {"type": ET.RESULT, "result": "", "usage": {"input_tokens": 10, "output_tokens": 5}, **extra}
 
 
@@ -303,7 +304,8 @@ class _RawLogBackend(TerminateFlagBackend):
   def translate_event(self, event: dict) -> list[dict]:
     return [event]
 
-  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
+  async def run(self, prompt: str, cwd: str, env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     if self._log_dir is not None:
       raw_path = self._log_dir / runs.RAW_LOG_NAME
       raw_path.parent.mkdir(parents=True, exist_ok=True)
@@ -324,7 +326,7 @@ async def _run_live_round(
   meta = SessionMetadata(id=session_id, name="t", backend=option.id)
   cb = mock_session_callbacks()
 
-  def fake_build_backend(_option, _cfg, **kwargs):
+  def fake_build_backend(_option: object, _cfg: object, **kwargs: object) -> _RawLogBackend:
     return _RawLogBackend(events, kwargs.get("log_dir"))
 
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)

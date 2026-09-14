@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -30,7 +31,7 @@ VOICE_KEY = "is_" + "voice"
 
 
 @pytest.mark.asyncio
-async def test_upload_file_strips_directory_components(tmp_path) -> None:
+async def test_upload_file_strips_directory_components(tmp_path: Path) -> None:
   cfg = make_home_config(tmp_path)
   meta = SessionMetadata(name="Upload Session")
   outside_path = cfg.sessions_dir / "evil.txt"
@@ -118,7 +119,7 @@ def test_events_to_messages_extracts_legacy_attachment_block() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_message_passes_structured_files_to_run_and_finalize(tmp_path) -> None:
+async def test_send_message_passes_structured_files_to_run_and_finalize(tmp_path: Path) -> None:
   cfg = make_home_config(tmp_path)
   meta = SessionMetadata(name="Test Session")
   session_mgr = AsyncMock()
@@ -155,7 +156,7 @@ async def test_send_message_passes_structured_files_to_run_and_finalize(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_send_message_unarchives_archived_session_before_dispatch(tmp_path) -> None:
+async def test_send_message_unarchives_archived_session_before_dispatch(tmp_path: Path) -> None:
   """A manual chat message to an archived session pulls it back to active and runs
   the master — the one content path that does not go through trigger_master."""
   cfg, session_mgr, meta = await make_home_session(tmp_path, name="Archived chat", backend=OPUS_BACKEND_ID)
@@ -182,7 +183,7 @@ async def test_send_message_unarchives_archived_session_before_dispatch(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_execute_command_persists_uploaded_files_for_prompt_dispatch(tmp_path) -> None:
+async def test_execute_command_persists_uploaded_files_for_prompt_dispatch(tmp_path: Path) -> None:
   cfg = make_home_config(tmp_path)
   meta = SessionMetadata(name="Slash Session")
   session_mgr = AsyncMock()

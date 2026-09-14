@@ -18,7 +18,7 @@ from src.core.models import ThreadMetadata
 class _FakeBackend(AgentBackend):
   """In-process fake backend that pre-populates hang_diagnostics and skips subprocess work."""
 
-  def __init__(self, *, exit_code: int = 0, hang_diagnostics: dict | None = None, **kwargs) -> None:
+  def __init__(self, *, exit_code: int = 0, hang_diagnostics: dict | None = None, **kwargs: object) -> None:
     super().__init__(**kwargs)
     self.exit_code = exit_code
     self.hang_diagnostics = hang_diagnostics

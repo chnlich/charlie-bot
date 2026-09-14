@@ -35,7 +35,7 @@ def test_event_line_round_trips_the_event() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_event_persists_a_line_that_parses_back(tmp_path: Path, monkeypatch) -> None:
+async def test_process_event_persists_a_line_that_parses_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   worker = make_worker(tmp_path, "event-line")
   event = {"type": "user", "message": {"content": [{"type": "text", "text": "café ✓"}]}}
   lines = (await process_worker_event(worker, tmp_path, event, monkeypatch)).splitlines()
@@ -43,7 +43,8 @@ async def test_process_event_persists_a_line_that_parses_back(tmp_path: Path, mo
 
 
 @pytest.mark.asyncio
-async def test_process_event_persists_the_attach_signal_without_broadcasting_it(tmp_path: Path, monkeypatch) -> None:
+async def test_process_event_persists_the_attach_signal_without_broadcasting_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The typed adoption signal is the worker log's session-id record (the token
   tally's codex reconciliation reads it from the raw line) but no thread
   subscriber reads it and the projection skips it, so it appends exactly one

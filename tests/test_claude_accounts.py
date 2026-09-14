@@ -19,7 +19,7 @@ from conftest import (
     write_pool_credentials,
 )
 
-from src.agents import master_cc_run
+from src.agents import master_cc_run, master_cc_state
 from src.api import ext_usage as ext_usage_mod
 from src.api.sessions import _active_backend_payload, _backend_domain
 from src.core import claude_accounts, storage_cool, token_tally
@@ -617,7 +617,8 @@ def test_pooled_entries_share_one_switch_domain(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_usage_panel_accounts_are_the_default_dir_plus_the_pool_labels(tmp_path: Path, monkeypatch) -> None:
+def test_usage_panel_accounts_are_the_default_dir_plus_the_pool_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _pool_cfg(tmp_path)
   monkeypatch.setattr(ext_usage_mod, "get_config", lambda: cfg)
 
@@ -628,7 +629,8 @@ def test_usage_panel_accounts_are_the_default_dir_plus_the_pool_labels(tmp_path:
   assert dict(accounts)["ext-1"] == str(tmp_path / "claude-ext-1")
 
 
-def test_token_tally_and_cold_storage_include_pool_directories(tmp_path: Path, monkeypatch) -> None:
+def test_token_tally_and_cold_storage_include_pool_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _pool_cfg(tmp_path)
   for label in ("main", "ext-1", "ext-2"):
     (tmp_path / f"claude-{label}" / "projects").mkdir(parents=True, exist_ok=True)
@@ -668,7 +670,7 @@ async def test_consumer_persists_the_account_the_run_settled_on(tmp_path: Path) 
   callbacks.persist_claude_account.side_effect = lambda sid, label: "other"
   item = make_work_item(cfg, session_meta, cfg.backends.options[0], callbacks=callbacks)
 
-  async def fake_run_cc(work_item):
+  async def fake_run_cc(work_item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
     work_item.session_meta.claude_account = "ext-1"
     return "uuid-8", 0, None, {}
 
@@ -690,7 +692,7 @@ async def test_consumer_skips_account_persistence_when_no_account_was_assigned(t
   callbacks = mock_session_callbacks()
   item = make_work_item(cfg, session_meta, cfg.backends.options[0], callbacks=callbacks)
 
-  async def fake_run_cc(work_item):
+  async def fake_run_cc(work_item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
     return "uuid-9", 0, None, {}
 
   await run_session_consumer(session_meta.id, [item], fake_run_cc)

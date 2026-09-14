@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -33,7 +34,7 @@ from src.core.spawner_events import _thread_worker_event
 from src.core.spawner_finalize import _persist_worker_summary_once
 
 
-def _broadcast_patch():
+def _broadcast_patch() -> Any:
   return patch(BROADCAST_PATCH_TARGET, new=AsyncMock())
 
 
@@ -236,7 +237,8 @@ async def test_improve_final_summary_no_successor_writes_into_itself_without_ori
 
 def _patch_review_reviewer_chain(monkeypatch: pytest.MonkeyPatch, *, cleanup_error: str) -> None:
 
-  async def fake_finalize_review_chain(session_id, original_thread, worktree_parent) -> str:
+  async def fake_finalize_review_chain(session_id: str, original_thread: ThreadMetadata,
+                                       worktree_parent: Path) -> str:
     del session_id, original_thread, worktree_parent
     return cleanup_error
 
@@ -266,7 +268,7 @@ async def _run_cleanup_error_review(
   """
   real_deliver = mgr.deliver_to_successor
 
-  async def fake_deliver(session, event):
+  async def fake_deliver(session: str, event: dict) -> str | None:
     return await real_deliver(session, event)
 
   _patch_review_reviewer_chain(monkeypatch, cleanup_error="Worktree cleanup failed for /x: boom")

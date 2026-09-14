@@ -650,7 +650,7 @@ async def test_claude_one_shot_text_raises_on_nonzero_exit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_codex_one_shot_text_accumulates_agent_message(monkeypatch) -> None:
+async def test_codex_one_shot_text_accumulates_agent_message(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(
       CODEX_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/codex",
@@ -680,7 +680,7 @@ async def test_codex_one_shot_text_accumulates_agent_message(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_codex_one_shot_text_returns_empty_when_no_agent_message(monkeypatch) -> None:
+async def test_codex_one_shot_text_returns_empty_when_no_agent_message(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(
       CODEX_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/codex",
@@ -700,7 +700,7 @@ async def test_codex_one_shot_text_returns_empty_when_no_agent_message(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_opencode_one_shot_text_extracts_text_from_flat_part_event(monkeypatch) -> None:
+async def test_opencode_one_shot_text_extracts_text_from_flat_part_event(monkeypatch: pytest.MonkeyPatch) -> None:
   """`opencode run --format json` emits flat part-shaped events
   ({"type":"text","part":{...}}), not the SSE-bus shape serve uses."""
   from src.agents.backends.opencode import OpenCodeBackend
@@ -735,7 +735,7 @@ async def test_opencode_one_shot_text_extracts_text_from_flat_part_event(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_opencode_one_shot_text_returns_empty_when_no_text_part(monkeypatch) -> None:
+async def test_opencode_one_shot_text_returns_empty_when_no_text_part(monkeypatch: pytest.MonkeyPatch) -> None:
   from src.agents.backends.opencode import OpenCodeBackend
 
   monkeypatch.setattr(

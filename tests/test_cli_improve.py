@@ -159,7 +159,7 @@ def test_improve_request_rejects_branch_prefix() -> None:
 
 
 @pytest.mark.asyncio
-async def test_improve_endpoint_creates_background_task(tmp_path: Path):
+async def test_improve_endpoint_creates_background_task(tmp_path: Path) -> None:
   """POST /api/internal/improve returns immediately and creates a background task."""
   from src.api.internal import start_improve_loop
 

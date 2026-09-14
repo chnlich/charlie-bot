@@ -21,7 +21,7 @@ WORKING_DIRECTORY = "/tmp/claude-sub-test"
 PROMPT = "Fix the race\nwith details on later lines"
 
 
-def _payload(event_name: str, **fields) -> dict:
+def _payload(event_name: str, **fields: object) -> dict:
   payload = {
       "hook_event_name": event_name,
       "session_id": SESSION_ID,
@@ -55,7 +55,7 @@ def _started_turn(prompt: str = PROMPT) -> HookTurnState:
   return state
 
 
-def _stop_payload(**fields) -> dict:
+def _stop_payload(**fields: object) -> dict:
   values = {
       "stop_hook_active": False,
       "last_assistant_message": "final answer",
@@ -661,7 +661,7 @@ async def test_respawn_passes_one_prompt_directly_and_does_not_use_a_shell(
 ) -> None:
   calls: list[tuple[str, ...]] = []
 
-  async def fake_tmux_checked(*args: str, **kwargs) -> str:
+  async def fake_tmux_checked(*args: str, **kwargs: object) -> str:
     calls.append(args)
     return ""
 
@@ -691,7 +691,7 @@ async def test_respawn_passes_auto_compact_window_default_to_the_pane(
 ) -> None:
   calls: list[tuple[str, ...]] = []
 
-  async def fake_tmux_checked(*args: str, **kwargs) -> str:
+  async def fake_tmux_checked(*args: str, **kwargs: object) -> str:
     calls.append(args)
     return ""
 

@@ -14,7 +14,7 @@ def _build_client() -> TestClient:
   return TestClient(app, raise_server_exceptions=False)
 
 
-def _payload(**overrides) -> dict:
+def _payload(**overrides: object) -> dict:
   record = {
       "phase": "started",
       "from_session": "s-old",

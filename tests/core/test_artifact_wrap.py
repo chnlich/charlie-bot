@@ -76,7 +76,7 @@ def _wrap(
   return output
 
 
-def _wrap_cli(tmp_path: Path, fragment_path: Path, output: Path, genre: str, *flags: str):
+def _wrap_cli(tmp_path: Path, fragment_path: Path, output: Path, genre: str, *flags: str) -> SystemExit:
   with pytest.raises(SystemExit) as exc_info:
     artifact_main(["wrap", str(fragment_path), "--genre", genre, "--output", str(output), *flags])
   return exc_info.value

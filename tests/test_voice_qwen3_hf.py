@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 import time
 import wave
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -30,7 +31,7 @@ def _require_gpu_assets(cfg: CharlieBotConfig) -> None:
   transcriber.ensure_models_cached(cfg)
 
 
-def _load_wav_frames(path) -> bytes:
+def _load_wav_frames(path: Path) -> bytes:
   with wave.open(str(path), "rb") as wav:
     assert wav.getnchannels() == 1
     assert wav.getframerate() == transcriber.SAMPLE_RATE

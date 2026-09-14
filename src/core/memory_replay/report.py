@@ -19,6 +19,7 @@ revisions under the raw-history view, pool comments the selection did not pick
 import html
 from dataclasses import dataclass, field
 
+from src.core.constants import REPLAY_MODE_EDITOR_ONLY, REPLAY_MODE_EDITOR_REVIEW
 from src.core.memory_replay.manifest import FeedbackExample, Source
 from src.core.memory_replay.retrieval import FeedbackSelection
 from src.core.memory_replay.variants import (
@@ -226,7 +227,7 @@ def _raw_history_feedback_section(data: ReportData) -> list[str]:
 
 def _editor_section(data: ReportData) -> list[str]:
   """The editor's own rows and proofs, captioned by what the run's second stage actually received."""
-  if data.mode == "editor-only":
+  if data.mode == REPLAY_MODE_EDITOR_ONLY:
     summary_note = "editor-only run: no second review ran, so no reviewer received any of this"
     proof_caption = "proofs (model output; no reviewer ran in this editor-only run):"
   elif data.rationale_visibility == RATIONALE_VISIBLE:
@@ -260,9 +261,9 @@ def _editor_section(data: ReportData) -> list[str]:
 
 def _stage_reach(mode: str) -> str:
   """How far the feedback view traveled, in the run's own mode."""
-  if mode == "editor-review":
+  if mode == REPLAY_MODE_EDITOR_REVIEW:
     return "provided to both stages"
-  if mode == "editor-only":
+  if mode == REPLAY_MODE_EDITOR_ONLY:
     return "provided to the editor only (this run ran no reviewer)"
   raise ValueError(f"unknown replay mode: {mode!r}")
 

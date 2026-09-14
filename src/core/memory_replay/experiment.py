@@ -42,6 +42,7 @@ from pathlib import Path
 import structlog
 
 from src.core.config import CharlieBotConfig, get_config
+from src.core.constants import REPLAY_MODE_EDITOR_REVIEW
 from src.core.memory_replay import variants
 from src.core.memory_replay.compare import CompareOptions, _denominators, _usage, run_comparison
 from src.core.memory_replay.errors import ReplayError
@@ -66,7 +67,7 @@ log = structlog.get_logger()
 # Summary schema v2: per-case/theme editor call provenance replaces the old content-hash "draw"
 # grouping, and blocked-evidence arms joined the arm statuses. v1 summaries are not reinterpreted.
 EXPERIMENT_SCHEMA = "memory-curation-variant-experiment/2"
-MODE = "editor-review"
+MODE = REPLAY_MODE_EDITOR_REVIEW
 
 QUALITY_NOTE = (
     "No semantic quality judgment is made here: fewer lines, fewer proposals, or more deletions never "

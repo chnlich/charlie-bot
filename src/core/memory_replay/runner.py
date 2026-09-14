@@ -42,6 +42,7 @@ from pathlib import Path
 import structlog
 
 from src.core.config import BackendOption, CharlieBotConfig, get_config, require_backend_option
+from src.core.constants import REPLAY_MODE_EDITOR_REVIEW
 from src.core.constants import REPLAY_MODES as MODES
 from src.core.memory_replay import validate
 from src.core.memory_replay.errors import (
@@ -349,7 +350,7 @@ def _run_stages(
   for theme in manifest.themes:
     _record_editor_audit(record, theme.name, editor_outputs[theme.name])
   final_outputs = editor_outputs
-  if options.mode == "editor-review":
+  if options.mode == REPLAY_MODE_EDITOR_REVIEW:
     final_outputs = {}
     for theme in manifest.themes:
       final_outputs[theme.name] = _run_stage(

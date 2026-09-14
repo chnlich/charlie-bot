@@ -11,8 +11,10 @@ import json
 import os
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import backend_option
@@ -22,11 +24,11 @@ from src.core import scheduler as scheduler_module
 from src.core import storage_cool
 from src.core.config import CharlieBotConfig
 from src.core.storage_cool import (
-    claude_project_dir_name,
-    codex_rollout_session_id,
-    format_sweep_table,
-    is_cold_session,
-    run_cool_sweep,
+  claude_project_dir_name,
+  codex_rollout_session_id,
+  format_sweep_table,
+  is_cold_session,
+  run_cool_sweep,
 )
 
 NOW = datetime(2026, 9, 4, 12, 0, 0, tzinfo=UTC)
@@ -531,7 +533,7 @@ class _RecordingConnection:
     object.__setattr__(self, "_connection", connection)
     object.__setattr__(self, "_tracker", tracker)
 
-  def __getattr__(self, name: str):
+  def __getattr__(self, name: str) -> Any:
     return getattr(self._connection, name)
 
   def __setattr__(self, name: str, value: object) -> None:
@@ -949,7 +951,7 @@ def test_dry_run_leaves_every_byte_untouched_and_matches_real_run(tmp_path: Path
 # ---------------------------------------------------------------------------
 
 
-def _unlink_failing_for(blocked: Path):
+def _unlink_failing_for(blocked: Path) -> Callable[..., None]:
   real_unlink = Path.unlink
 
   def failing_unlink(self: Path, *args: object, **kwargs: object) -> None:

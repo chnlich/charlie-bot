@@ -192,7 +192,7 @@ async def test_archive_range_repeat_reads_reuse_memo(tmp_path: Path) -> None:
   real_open = open
   archive_opens = []
 
-  def counting_open(file, *args, **kwargs):
+  def counting_open(file: Any, *args: Any, **kwargs: Any) -> IO[Any]:
     if "archives" in str(file):
       archive_opens.append(str(file))
     return real_open(file, *args, **kwargs)
@@ -285,7 +285,7 @@ async def test_live_range_repeat_reads_reuse_memo(tmp_path: Path) -> None:
   real_open = open
   live_opens = []
 
-  def counting_open(file, *args, **kwargs):
+  def counting_open(file: Any, *args: Any, **kwargs: Any) -> IO[Any]:
     if str(file).endswith("chat_events.jsonl") and "archives" not in str(file):
       live_opens.append(str(file))
     return real_open(file, *args, **kwargs)
@@ -625,7 +625,7 @@ async def test_unarchived_range_serves_warm_events_cache_without_disk_read(tmp_p
   real_open = open
   live_opens = []
 
-  def counting_open(file, *args, **kwargs):
+  def counting_open(file: Any, *args: Any, **kwargs: Any) -> IO[Any]:
     if str(file) == str(live_path):
       live_opens.append(str(file))
     return real_open(file, *args, **kwargs)

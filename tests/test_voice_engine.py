@@ -8,6 +8,7 @@ around each test so a stub bundle never leaks into the streaming or websocket su
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 import pytest
 from conftest import fresh_state_fixture
@@ -30,7 +31,7 @@ def test_default_engine_builds_sherpa_bundle(monkeypatch: pytest.MonkeyPatch) ->
   sherpa = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
   calls: list[str] = []
 
-  def fail_gpu(*_args) -> None:
+  def fail_gpu(*_args: object) -> None:
     raise AssertionError("create_qwen3_hf_bundle must not run for the default engine")
 
   monkeypatch.setattr(transcriber, "create_sherpa_bundle", lambda paths: calls.append("sherpa") or sherpa)
@@ -49,7 +50,7 @@ def test_qwen3_hf_engine_builds_gpu_bundle(monkeypatch: pytest.MonkeyPatch) -> N
   gpu = _stub_bundle("qwen3_hf", cfg.voice.model_id)
   received: list[tuple] = []
 
-  def fake_gpu(received_cfg, paths):
+  def fake_gpu(received_cfg: CharlieBotConfig, paths: transcriber.VoiceModelPaths) -> transcriber._SpeechModelBundle:
     received.append((received_cfg, paths))
     return gpu
 
@@ -65,13 +66,13 @@ def test_qwen3_hf_engine_builds_gpu_bundle(monkeypatch: pytest.MonkeyPatch) -> N
   assert received == [(cfg, paths)]
 
 
-def test_gpu_engine_failure_falls_back_to_sherpa_with_warning(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_gpu_engine_failure_falls_back_to_sherpa_with_warning(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """A GPU init error warns and decodes on the CPU engine instead of failing the session."""
   cfg = CharlieBotConfig(voice={"engine": "qwen3_hf"}, charliebot_home=tmp_path)
   sherpa = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
   ensured: list[CharlieBotConfig] = []
 
-  def fail_gpu(*_args) -> None:
+  def fail_gpu(*_args: object) -> None:
     raise RuntimeError("no CUDA GPU is available")
 
   monkeypatch.setattr(transcriber, "create_qwen3_hf_bundle", fail_gpu)
@@ -101,7 +102,7 @@ def test_gpu_fallback_result_is_cached_under_the_requested_engine(monkeypatch: p
   gpu_calls: list[int] = []
   sherpa_calls: list[int] = []
 
-  def fail_gpu(*_args) -> None:
+  def fail_gpu(*_args: object) -> None:
     gpu_calls.append(1)
     raise RuntimeError("missing CUDA driver")
 

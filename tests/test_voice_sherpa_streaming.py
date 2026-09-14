@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from conftest import make_home_config
 from fastapi.testclient import TestClient
+from starlette.testclient import WebSocketTestSession
 
 import server
 from src.agents import transcriber
@@ -114,7 +115,7 @@ def test_voice_websocket_streams_partials_final_and_persists_dump(
   session_id = "voice-ws-test"
   messages: list[dict] = []
 
-  def receive_until_final(ws) -> None:
+  def receive_until_final(ws: WebSocketTestSession) -> None:
     while True:
       message = ws.receive_json()
       messages.append(message)

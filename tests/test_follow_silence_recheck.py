@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import os
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
@@ -48,7 +49,7 @@ class _FakeSessionMgr:
 _clear_once_keys = fresh_state_fixture(init_module._silence_reported_thread_ids.clear)
 
 
-async def _consume(raw: Path, sink: list[dict], on_silence) -> None:
+async def _consume(raw: Path, sink: list[dict], on_silence: Callable[[], Awaitable[None]]) -> None:
   # The sink must receive events as they arrive: the follow runs until
   # cancelled, so a collect-then-extend form would leave the sink empty, and
   # an async generator cannot feed list.extend directly.

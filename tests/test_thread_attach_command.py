@@ -15,7 +15,7 @@ from src.core.models import ThreadMetadata
 from src.core.threads import ThreadManager
 
 
-def _thread(**overrides) -> ThreadMetadata:
+def _thread(**overrides: object) -> ThreadMetadata:
   base = {
       "id": "thread-id",
       "session_id": "session-id",
@@ -108,8 +108,8 @@ def _build_client(cfg: CharlieBotConfig, thread_mgr: ThreadManager) -> TestClien
   return TestClient(app)
 
 
-async def _saved_opus_thread(tmp_path: Path,
-                             **thread_overrides) -> tuple[CharlieBotConfig, ThreadManager, Path, ThreadMetadata]:
+async def _saved_opus_thread(
+    tmp_path: Path, **thread_overrides: object) -> tuple[CharlieBotConfig, ThreadManager, Path, ThreadMetadata]:
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       backends={

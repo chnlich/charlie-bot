@@ -1,5 +1,6 @@
 """Headless render tests: warm-pool lifecycle under fakes, plus a local_only real-Chrome drive check."""
 
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,7 +11,7 @@ import src.core.headless_render as headless_render
 
 
 @pytest.fixture(autouse=True)
-def _fresh_renderer_singleton():
+def _fresh_renderer_singleton() -> Iterator[None]:
   headless_render._renderer = None
   yield
   if headless_render._renderer is not None:
@@ -22,7 +23,7 @@ def test_render_height_launches_once_and_serves_warm(tmp_path: Path, monkeypatch
   renderer = headless_render._WarmRenderer(tmp_path / "chrome")
   launches = []
 
-  def fake_launch(self):
+  def fake_launch(self) -> None:
     launches.append(1)
     self._proc, self._ws = SimpleNamespace(poll=lambda: None), SimpleNamespace()
 

@@ -72,7 +72,7 @@ def test_oserror_read_is_never_memoized(tmp_path: Path, monkeypatch: pytest.Monk
   real_read_text = Path.read_text
   failing = {"on": True}
 
-  def flaky_read_text(self: Path, *args, **kwargs):
+  def flaky_read_text(self: Path, *args: object, **kwargs: object) -> str:
     if self == p and failing["on"]:
       raise OSError("simulated transient io")
     return real_read_text(self, *args, **kwargs)

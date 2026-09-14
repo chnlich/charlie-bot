@@ -11,7 +11,7 @@ from src.core.backlog_loop import _next_id, determine_action
 from src.core.config import ImprovementLoopConfig
 
 
-def _make_cfg(**overrides) -> ImprovementLoopConfig:
+def _make_cfg(**overrides: object) -> ImprovementLoopConfig:
   defaults = {
       'backlog': 'backlog/backlog.yaml',
       'role': 'test agent',

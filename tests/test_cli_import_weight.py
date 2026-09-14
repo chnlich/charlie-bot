@@ -62,11 +62,11 @@ MEMORY_HEAVY_MODULES = (
 )
 
 
-def _modules_loaded_after_import(module_expr: str, heavy: tuple[str, ...]) -> list[str]:
-  code = ("import json, sys; "
-          f"{module_expr}; "
-          f"print(json.dumps(sorted(set(sys.modules) & {set(heavy)!r})))")
-  proc = subprocess.run(
+def _run_probe(code: str) -> subprocess.CompletedProcess[str]:
+  # Every probe forks one fresh interpreter against the repo root: the imports
+  # must resolve to the checked-out sources, and a probe crash fails the test
+  # (check=True) instead of parsing an empty stream.
+  return subprocess.run(
       [sys.executable, "-c", code],
       cwd=REPO_ROOT,
       capture_output=True,
@@ -74,7 +74,13 @@ def _modules_loaded_after_import(module_expr: str, heavy: tuple[str, ...]) -> li
       timeout=120,
       check=True,
   )
-  return json.loads(proc.stdout)
+
+
+def _modules_loaded_after_import(module_expr: str, heavy: tuple[str, ...]) -> list[str]:
+  code = ("import json, sys; "
+          f"{module_expr}; "
+          f"print(json.dumps(sorted(set(sys.modules) & {set(heavy)!r})))")
+  return json.loads(_run_probe(code).stdout)
 
 
 def test_cli_common_defers_buildinfo() -> None:
@@ -115,14 +121,7 @@ def test_plan_constants_match_the_model_literals() -> None:
       "import src.core.constants as c; import src.core.models as m; "
       "print(json.dumps([list(c.PLAN_AMEND_TRIGGERS), list(get_args(m.PlanAmendTrigger)), "
       "list(c.PLAN_CLOSE_MODES), list(get_args(m.PlanCloseMode))]))")
-  proc = subprocess.run(
-      [sys.executable, "-c", code],
-      cwd=REPO_ROOT,
-      capture_output=True,
-      text=True,
-      timeout=120,
-      check=True,
-  )
+  proc = _run_probe(code)
   amend_tuple, amend_literal, close_tuple, close_literal = json.loads(proc.stdout)
   assert amend_tuple == amend_literal and close_tuple == close_literal, (
       "src.core.constants' plan vocabularies drifted from the models Literals: "
@@ -167,14 +166,7 @@ def test_module_defers_structlog_until_the_first_log_call(module_name: str, impo
       "before = 'structlog' in sys.modules; "
       f"{module_name}.log.warning('probe'); "
       "sys.stderr.write(json.dumps([before, 'structlog' in sys.modules]))")
-  proc = subprocess.run(
-      [sys.executable, "-c", code],
-      cwd=REPO_ROOT,
-      capture_output=True,
-      text=True,
-      timeout=120,
-      check=True,
-  )
+  proc = _run_probe(code)
   before, after = json.loads(proc.stderr)
   assert before is False, f"{module_name} imported structlog at module import; {import_cost}"
   assert after is True, f"{module_name}.log did not resolve structlog on first use"
@@ -199,12 +191,5 @@ def test_server_import_defers_the_speech_stack() -> None:
       "import sys; import server; "
       "from src.api import voice; "
       "print('numpy' in sys.modules or 'src.agents.transcriber' in sys.modules)")
-  pulled = subprocess.run(
-      [sys.executable, "-c", code],
-      cwd=REPO_ROOT,
-      capture_output=True,
-      text=True,
-      timeout=120,
-      check=True,
-  ).stdout.strip()
+  pulled = _run_probe(code).stdout.strip()
   assert pulled == "False", "importing the voice route pulled the speech stack at module import"

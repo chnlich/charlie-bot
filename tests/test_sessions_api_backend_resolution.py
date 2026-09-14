@@ -27,11 +27,10 @@ async def _seed_parent(session_mgr: SessionManager, *, backend: str = OPUS_BACKE
   events_path = session_mgr.get_chat_events_path(parent.id)
   events_path.parent.mkdir(parents=True, exist_ok=True)
   events_path.write_text(
-      "\n".join(
-          [
-              json.dumps(user_event("hello")),
-              json.dumps(assistant_text_event("world")),
-          ]) + "\n",
+      "\n".join([
+          json.dumps(user_event("hello")),
+          json.dumps(assistant_text_event("world")),
+      ]) + "\n",
       encoding="utf-8",
   )
   return parent.id
@@ -41,8 +40,8 @@ def _capture_bootstrap(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
   calls: list[dict[str, Any]] = []
 
   def fake_run_and_finalize(
-      cfg: CharlieBotConfig, meta: SessionMetadata, content: str, session_mgr: SessionManager, **kwargs: object
-  ) -> Awaitable[None]:
+      cfg: CharlieBotConfig, meta: SessionMetadata, content: str, session_mgr: SessionManager,
+      **kwargs: object) -> Awaitable[None]:
     calls.append({"meta": meta, "content": content, "kwargs": kwargs})
 
     async def noop() -> None:

@@ -37,18 +37,18 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-  OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
-  REVIEW_TRIGGER_MASTER_PATCH_TARGET,
-  _assert_failed_with_transport_reason,
-  _await_recovery_tasks,
-  _cfg,
-  _kill_driver_mid_run,
-  _read_meta,
-  _recover,
-  _terminal_summaries,
-  _wait_for,
-  build_recovery_cfg,
-  read_chat_events,
+    OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
+    REVIEW_TRIGGER_MASTER_PATCH_TARGET,
+    _assert_failed_with_transport_reason,
+    _await_recovery_tasks,
+    _cfg,
+    _kill_driver_mid_run,
+    _read_meta,
+    _recover,
+    _terminal_summaries,
+    _wait_for,
+    build_recovery_cfg,
+    read_chat_events,
 )
 
 from src.agents.worker import QuotaExhaustedException, Worker
@@ -59,12 +59,12 @@ from src.core import spawner as spawner_module
 from src.core.config import CharlieBotConfig
 from src.core.git import git_create_worktree, git_worktree_dir_name
 from src.core.models import (
-  CreateSessionRequest,
-  SpawnRequest,
-  TaskType,
-  ThreadMetadata,
-  ThreadStatus,
-  utc_now,
+    CreateSessionRequest,
+    SpawnRequest,
+    TaskType,
+    ThreadMetadata,
+    ThreadStatus,
+    utc_now,
 )
 from src.core.process import kill_process_group
 from src.core.sessions import SessionManager

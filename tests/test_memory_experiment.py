@@ -16,13 +16,13 @@ import test_memory_replay as base
 import yaml
 
 from src.core.memory_replay import (
-  CompareOptions,
-  ExperimentOutcome,
-  ReplayError,
-  ReplayOptions,
-  run_comparison,
-  run_replay,
-  variants,
+    CompareOptions,
+    ExperimentOutcome,
+    ReplayError,
+    ReplayOptions,
+    run_comparison,
+    run_replay,
+    variants,
 )
 from src.core.memory_replay.experiment import ExperimentOptions, run_experiment
 from src.core.memory_replay.identity import sha256_hex
@@ -302,8 +302,7 @@ def run_variant(
 
 
 def run_variant_expect_failure(
-    tmp_path: Path, variant: str, *, transport: VariantScriptedTransport, output_dir: Path, match: str
-) -> dict:
+    tmp_path: Path, variant: str, *, transport: VariantScriptedTransport, output_dir: Path, match: str) -> dict:
   """A run that must fail visibly; returns the preserved failed record."""
   with pytest.raises(ReplayError, match=match):
     run_variant(tmp_path, variant, transport=transport, output_dir=output_dir)

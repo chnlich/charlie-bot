@@ -528,8 +528,7 @@ def _client(cfg: CharlieBotConfig) -> TestClient:
     [(inject, name) for inject, name, _ in _BROKEN_CASES],
     ids=_BROKEN_CASE_IDS,
 )
-def test_list_tasks_never_500_with_broken(
-    temp_home: Path, inject: Callable[[Path], Path], expected_name: str) -> None:
+def test_list_tasks_never_500_with_broken(temp_home: Path, inject: Callable[[Path], Path], expected_name: str) -> None:
   _write_healthy(temp_home, "task-a", "0 0 * * *", "a body")
   _write_healthy(temp_home, "task-b", "0 1 * * *", "b body")
   inject(temp_home)

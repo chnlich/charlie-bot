@@ -401,3 +401,45 @@ async def test_agent_messages_and_cron_inputs_never_mint_authorization(task_env)
         json={"request_id": "no-auth", "task_parent_id": root.id, "profile": "worker"},
         headers=agent_headers(claims))
     assert blocked.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_legacy_alias_cancel_keeps_agent_own_run_scope(task_env) -> None:
+  """The legacy thread cancel route resolves aliases under the v2 route's caller scope."""
+  cfg, session_mgr, task_mgr = task_env
+  ids = await seed_tree(task_mgr)
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  own = RunTokenClaims(session_id=ids["worker"], run_id="run-own", agent="worker-alpha")
+  await task_mgr.runs.register_run(RunRecord(id="run-own", session_id=ids["worker"], kind="work"))
+  await task_mgr.runs.register_run(RunRecord(id="run-foreign", session_id=ids["root"], kind="work"))
+
+  with make_client(cfg, session_mgr, task_mgr) as client:
+    # An agent may stop its own bound run through the legacy alias entry.
+    ok = client.post(f"/api/threads/{ids['worker']}/threads/run-own/cancel", headers=agent_headers(own))
+    assert ok.status_code == 200, ok.text
+    assert ok.json() == {"run_id": "run-own", "stop_requested": True, "outcome": None}
+
+    # ...but not another session's run, even a validly signed one.
+    denied = client.post(f"/api/threads/{ids['root']}/threads/run-foreign/cancel", headers=agent_headers(own))
+    assert denied.status_code == 403
+
+    # The operator cookie-less CLI identity keeps full scope.
+    operator = client.post(f"/api/threads/{ids['root']}/threads/run-foreign/cancel",
+                           headers={"Authorization": "Bearer op-secret"})
+    assert operator.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_agent_run_token_cannot_use_the_legacy_create_shape(task_env) -> None:
+  """Run credentials create only their own worker child; the v1 create shape is operator scope."""
+  cfg, session_mgr, task_mgr = task_env
+  ids = await seed_tree(task_mgr)
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  claims = RunTokenClaims(session_id=ids["root"], run_id="agent-run-1", agent="worker-alpha")
+  await register_agent_run(task_mgr, claims)
+  with make_client(cfg, session_mgr, task_mgr) as client:
+    denied = client.post("/api/sessions/", json={"name": "Legacy"}, headers=agent_headers(claims))
+    assert denied.status_code == 403
+    allowed = client.post("/api/sessions/", json={"name": "Legacy"})
+    assert allowed.status_code == 200
+    assert allowed.json()["profile"] is None  # the legacy v1 shape still works for operators

@@ -38,7 +38,7 @@ _PRE_TAKEOFF_WINDOW = timedelta(hours=12)
 # or wholesale replacement, and a replacement is a new object. The answers are
 # a pure function of the list content, so a list object shared by two
 # managers serves one entry safely.
-_gate_answers_memo: BoundedMemo[str, tuple[list[dict], int, bool, datetime | None]] = BoundedMemo(64)
+_gate_answers_memo: BoundedMemo[str, tuple[list[dict], int, bool, datetime | None, bool]] = BoundedMemo(64)
 
 
 class DelegationBlockedError(Exception):

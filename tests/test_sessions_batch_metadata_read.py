@@ -162,8 +162,7 @@ async def test_batch_install_uses_setdefault_for_cache_entry_added_during_read(
   real_to_thread = asyncio.to_thread
   to_thread_calls = 0
 
-  async def install_between_diff_and_install(
-      func: Callable[..., object], *args: object, **kwargs: object) -> object:
+  async def install_between_diff_and_install(func: Callable[..., object], *args: object, **kwargs: object) -> object:
     nonlocal to_thread_calls
     to_thread_calls += 1
     result = await real_to_thread(func, *args, **kwargs)

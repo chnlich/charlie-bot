@@ -16,16 +16,16 @@ import pytest
 
 from core import byte_count_open
 from src.core.ndjson import (
-  _COUNT_MEMO_LIMIT,
-  _TAIL_WINDOW_SIZE,
-  append_ndjson,
-  count_ndjson_lines,
-  iter_ndjson_events,
-  iter_ndjson_events_from_end,
-  parse_ndjson_file,
-  parse_ndjson_line,
-  parse_ndjson_tail,
-  parse_ndjson_tail_parseable,
+    _COUNT_MEMO_LIMIT,
+    _TAIL_WINDOW_SIZE,
+    append_ndjson,
+    count_ndjson_lines,
+    iter_ndjson_events,
+    iter_ndjson_events_from_end,
+    parse_ndjson_file,
+    parse_ndjson_line,
+    parse_ndjson_tail,
+    parse_ndjson_tail_parseable,
 )
 
 

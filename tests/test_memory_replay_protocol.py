@@ -19,8 +19,8 @@ import test_memory_replay as base
 from src.core.memory_replay import CompareOptions, ReplayOptions, run_comparison, run_replay
 from src.core.memory_replay.errors import ReplayError, ReplayValidationError
 from src.core.memory_replay.exchange import (
-  EDITOR_PROMPT_VERSION,
-  build_repair_request,
+    EDITOR_PROMPT_VERSION,
+    build_repair_request,
 )
 from src.core.memory_replay.identity import input_identity, sha256_hex
 from src.core.memory_replay.manifest import load_manifest
@@ -80,12 +80,13 @@ class DyingTransport:
     return TransportResult(text=self.responses.pop(0), model="m", prompt_tokens=1, output_tokens=2, latency_ms=3)
 
 
-def run_with(tmp_path: Path,
-             responses: list[str],
-             *,
-             mode: str = "editor-review",
-             manifest_path: Path | None = None,
-             output_dir: Path | None = None) -> tuple[ReplayOutcome, ScriptedTransport]:
+def run_with(
+    tmp_path: Path,
+    responses: list[str],
+    *,
+    mode: str = "editor-review",
+    manifest_path: Path | None = None,
+    output_dir: Path | None = None) -> tuple[ReplayOutcome, ScriptedTransport]:
   transport = ScriptedTransport([(text, 10 + i) for i, text in enumerate(responses)])
   outcome = run_replay(
       ReplayOptions(

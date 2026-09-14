@@ -11,42 +11,42 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import requests
 from conftest import (
-  CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
-  SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET,
-  SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
-  SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
-  TRIGGER_MASTER_PATCH_TARGET,
-  TRIGGERS_GET_CONFIG_PATCH_TARGET,
-  build_slack_cfg,
-  make_internal_router_client,
-  make_json_response,
-  make_task_spawner,
-  patched_cli_post,
-  setup_session_cwd,
+    CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
+    SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET,
+    SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
+    SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
+    TRIGGER_MASTER_PATCH_TARGET,
+    TRIGGERS_GET_CONFIG_PATCH_TARGET,
+    build_slack_cfg,
+    make_internal_router_client,
+    make_json_response,
+    make_task_spawner,
+    patched_cli_post,
+    setup_session_cwd,
 )
 
 from src.cli.slack import main as cli_main
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-  CreateSessionRequest,
-  PendingTrigger,
-  SessionMetadata,
-  SlackOrigin,
-  TriggerStatus,
-  utc_now,
+    CreateSessionRequest,
+    PendingTrigger,
+    SessionMetadata,
+    SlackOrigin,
+    TriggerStatus,
+    utc_now,
 )
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
-  SlackReplyError,
-  _arm_follow_trigger,
-  _backfill_followed_threads,
-  _build_follow_wake_message,
-  ack_messages,
-  assert_thread_fresh,
-  handle_app_mention,
-  handle_thread_message,
-  summon_session_id,
+    SlackReplyError,
+    _arm_follow_trigger,
+    _backfill_followed_threads,
+    _build_follow_wake_message,
+    ack_messages,
+    assert_thread_fresh,
+    handle_app_mention,
+    handle_thread_message,
+    summon_session_id,
 )
 from src.core.triggers import TriggerManager
 

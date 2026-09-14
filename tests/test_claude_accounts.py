@@ -629,8 +629,7 @@ def test_usage_panel_accounts_are_the_default_dir_plus_the_pool_labels(
   assert dict(accounts)["ext-1"] == str(tmp_path / "claude-ext-1")
 
 
-def test_token_tally_and_cold_storage_include_pool_directories(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_token_tally_and_cold_storage_include_pool_directories(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _pool_cfg(tmp_path)
   for label in ("main", "ext-1", "ext-2"):
     (tmp_path / f"claude-{label}" / "projects").mkdir(parents=True, exist_ok=True)

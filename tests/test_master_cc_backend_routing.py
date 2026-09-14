@@ -106,16 +106,22 @@ class _SessionIdBackend(FakeBackend):
   def __init__(self, session_id: str) -> None:
     self._session_id = session_id
 
-  async def run(
-      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     yield {"session_id": self._session_id}
     yield backend_base.make_result_event()
 
 
 class _AnchorMismatchBackend(FakeBackend):
 
-  async def run(
-      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     yield backend_base.make_error_event("agy resume envelope id fresh-id does not match anchor anchor-id")
     raise ValueError("antigravity envelope guard: resume envelope id fresh-id does not match anchor anchor-id")
 

@@ -304,7 +304,10 @@ class _RawLogBackend(TerminateFlagBackend):
   def translate_event(self, event: dict) -> list[dict]:
     return [event]
 
-  async def run(self, prompt: str, cwd: str, env: dict,
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
                 uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     if self._log_dir is not None:
       raw_path = self._log_dir / runs.RAW_LOG_NAME

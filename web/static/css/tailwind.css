@@ -1468,6 +1468,11 @@ video {
   background-color: rgb(4 120 87 / var(--tw-bg-opacity, 1));
 }
 
+.bg-emerald-900 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(6 78 59 / var(--tw-bg-opacity, 1));
+}
+
 .bg-emerald-900\/40 {
   background-color: rgb(6 78 59 / 0.4);
 }

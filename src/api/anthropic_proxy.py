@@ -3,9 +3,8 @@
 import json
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import httpx
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -16,6 +15,9 @@ from src.core.config import CharlieBotConfig, get_config, get_credentials
 from src.core.http import get_http_client
 from src.core.models import BackendType
 from src.core.sse import iter_sse_lines
+
+if TYPE_CHECKING:
+  import httpx
 
 router = APIRouter()
 
@@ -445,7 +447,7 @@ class OpenAIChatStreamToAnthropic:
     return events
 
 
-async def _iter_anthropic_sse(upstream: httpx.Response, model: str) -> AsyncIterator[bytes]:
+async def _iter_anthropic_sse(upstream: "httpx.Response", model: str) -> AsyncIterator[bytes]:
   translator = OpenAIChatStreamToAnthropic(model)
   try:
     for event, data in translator.start_events():
@@ -485,7 +487,7 @@ def _upstream_headers(credential: str | None, backend_id: str) -> dict[str, str]
   return headers
 
 
-async def _upstream_error(response: httpx.Response) -> HTTPException:
+async def _upstream_error(response: "httpx.Response") -> HTTPException:
   body = (await response.aread()).decode("utf-8", errors="replace")
   await response.aclose()
   return HTTPException(status_code=response.status_code, detail=body)

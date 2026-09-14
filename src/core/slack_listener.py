@@ -46,9 +46,6 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
-import websockets
-from websockets.asyncio.client import ClientConnection
-
 from src.api.deps import SESSION_NOT_FOUND_DETAIL
 from src.api.message_utils import build_agent_message_event
 from src.core import event_types as ET
@@ -73,6 +70,7 @@ from src.core.triggers import ArchivedSessionError, TriggerManager
 
 if TYPE_CHECKING:
   import httpx
+  from websockets.asyncio.client import ClientConnection
 
 logger = LazyStructlogLogger()
 
@@ -1213,7 +1211,7 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
   return reported
 
 
-async def _expect_hello(ws: ClientConnection) -> None:
+async def _expect_hello(ws: "ClientConnection") -> None:
   """Consume the Socket Mode connection's ``hello`` frame."""
   raw = await ws.recv()
   envelope = json.loads(raw)
@@ -1223,6 +1221,11 @@ async def _expect_hello(ws: ClientConnection) -> None:
 
 async def run_listener(cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
   """Socket Mode connect/receive/reconnect loop; never returns."""
+  # websockets (~13 ms with its asyncio client) rides first use: the import
+  # path never opens the Socket Mode connection, and the M99 server import
+  # floor (docs/perf_baseline.md) depends on it staying out of the chain.
+  import websockets
+
   http = get_http_client()
   creds = get_credentials()
   client = SlackClient(

@@ -112,6 +112,12 @@ _UNHANDLED_PART_TYPES = WarnOnceRegistry()
 # type re-fires once per unhandled frame.
 _UNHANDLED_SSE_EVENT_TYPES = WarnOnceRegistry()
 
+# The install dir the opencode installer targets, USER_LOCAL_BIN's sibling for
+# this binary. resolve_binary's fallback dir and the child-PATH prepend both
+# point at it, and the two must stay the same dir: a binary the resolver finds
+# there must also be on the spawned CLI's PATH.
+OPENCODE_BIN_DIR = str(Path.home() / ".opencode" / "bin")
+
 
 def _image_file_parts(uploaded_files: list[dict] | None) -> list[dict]:
   """One OpenCode file part per readable image attachment, in reference order.
@@ -150,7 +156,7 @@ class OpenCodeBackend(AgentBackend):
 
   def __init__(self, *, proxy_url: str | None = None, **kwargs: object) -> None:
     super().__init__(**kwargs)
-    self._opencode_bin = resolve_binary("opencode", str(Path.home() / ".opencode" / "bin"))
+    self._opencode_bin = resolve_binary("opencode", OPENCODE_BIN_DIR)
     self._proxy_url = proxy_url
     # Injectable seam so lock-retry tests never sleep real seconds.
     self._sleep = asyncio.sleep
@@ -168,7 +174,7 @@ class OpenCodeBackend(AgentBackend):
 
   def _prepare_env(self, env: dict, *, opencode_config: dict | None = None) -> dict:
     oc_env = {**env}
-    prepend_path_dir(oc_env, str(Path.home() / ".opencode" / "bin"))
+    prepend_path_dir(oc_env, OPENCODE_BIN_DIR)
     oc_env["OPENCODE_CONFIG_CONTENT"] = json.dumps(
         self._headless_config() if opencode_config is None else opencode_config)
     if self._proxy_url is not None:

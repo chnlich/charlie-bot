@@ -21,6 +21,16 @@ log = LazyStructlogLogger()
 
 router = APIRouter()
 
+
+async def _persist_command_message(
+    session_mgr: SessionManager,
+    session_id: str,
+    display_text: str,
+    uploaded_files: list[dict],
+) -> None:
+  """Record the invoked command as the session's user chat event, before the command's response."""
+  await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
+
 # ---------------------------------------------------------------------------
 # Built-in command descriptors
 # ---------------------------------------------------------------------------
@@ -102,7 +112,7 @@ async def _handle_run_command(
   except ValueError as e:
     log.debug("slash_command_value_error", error=str(e))
     return {'error': str(e)}
-  await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
+  await _persist_command_message(session_mgr, session_id, display_text, uploaded_files)
   return JSONResponse(
       status_code=202,
       content={
@@ -143,7 +153,7 @@ async def execute_command(
 
   # Built-in /help
   if name == 'help':
-    await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
+    await _persist_command_message(session_mgr, session_id, display_text, uploaded_files)
     return {'type': ET.HELP, 'commands': await _build_command_list()}
 
   # Built-in /stop-improve
@@ -151,7 +161,7 @@ async def execute_command(
     from src.core.improve_command import stop_improve_loop
     stopped = await stop_improve_loop(session_id, cfg)
     if stopped:
-      await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
+      await _persist_command_message(session_mgr, session_id, display_text, uploaded_files)
       return {'type': ET.IMPROVE_STOPPED, 'message': 'Improve loop will stop after current iteration'}
     return {'error': 'No active improve loop in this session'}
 
@@ -170,7 +180,7 @@ async def execute_command(
 
   if dispatch.kind == SlashDispatchKind.SHELL_RESULT:
     result = dispatch.shell_result
-    await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
+    await _persist_command_message(session_mgr, session_id, display_text, uploaded_files)
     return {
         'type': ET.SHELL_RESULT,
         'command': name,
@@ -180,7 +190,7 @@ async def execute_command(
     }
 
   if dispatch.kind == SlashDispatchKind.PROMPT:
-    await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
+    await _persist_command_message(session_mgr, session_id, display_text, uploaded_files)
     launch_prompt_dispatch(cfg, meta, dispatch, session_mgr, display_text, uploaded_files)
     return JSONResponse(status_code=202, content={'type': ET.PROMPT_DISPATCHED, 'command': name})
 

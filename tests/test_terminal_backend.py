@@ -85,8 +85,8 @@ async def test_run_tmux_strips_session_env(monkeypatch: pytest.MonkeyPatch) -> N
   class FakeProcess:
     returncode = 0
 
-    async def wait(self) -> None:
-      return None
+    async def communicate(self) -> tuple[bytes, bytes]:
+      return b"", b""
 
   async def fake_create_subprocess_exec(*args: object, **kwargs: object) -> FakeProcess:
     captured["env"] = kwargs["env"]
@@ -202,7 +202,7 @@ async def test_ensure_terminal_session_reuses_existing_tmux_session(monkeypatch:
   monkeypatch.delenv(CHARLIEBOT_HOME_ENV, raising=False)
   calls = []
 
-  async def fake_run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
+  async def fake_run_tmux(*args: str, capture: bool = False, check: bool = False) -> tuple[int, str]:
     calls.append(args)
     return 0, ""
 

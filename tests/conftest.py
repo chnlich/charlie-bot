@@ -2407,7 +2407,21 @@ def make_one_shot_chain(*one_shots: AsyncMock) -> list[MagicMock]:
   return [make_one_shot_backend(one_shot) for one_shot in one_shots]
 
 
-class JudgmentShim:
+class SuccessorDeliveryShim:
+  """Default succession delivery for test fakes: no successor, persist into the owning session.
+
+  The stage-C migrated producers call ``deliver_to_successor`` instead of
+  ``persist_and_broadcast``. A fake pairs this shim with its own
+  ``persist_and_broadcast``, so delivery lands in the fake's capture sink and
+  returns the owning session's id — the unchanged no-redirect path.
+  """
+
+  async def deliver_to_successor(self, session_id: str, event: dict[str, Any]) -> str:
+    await self.persist_and_broadcast(session_id, event)
+    return session_id
+
+
+class JudgmentShim(SuccessorDeliveryShim):
   """Default finalize-judgment reads for test fakes: no prior effects recorded.
 
   The finalize chain gates its side effects on judgment reads
@@ -2426,17 +2440,6 @@ class JudgmentShim:
 
   async def finalize_master_woke(self, session_id: str, thread_id: str) -> bool:
     return False
-
-  async def deliver_to_successor(self, session_id: str, event: dict[str, Any]) -> str:
-    """Default succession-aware delivery for test fakes: no successor, write into itself.
-
-    The stage-C migrated producers call ``deliver_to_successor`` instead of
-    ``persist_and_broadcast``. Fakes that never elone their sessions inherit this
-    no-successor behavior: the event is persisted into the owning session and the
-    id is returned, so those tests keep exercising the unchanged no-redirect path.
-    """
-    await self.persist_and_broadcast(session_id, event)
-    return session_id
 
   async def list_threads(self, session_id: str) -> list[Any]:
     return []

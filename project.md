@@ -284,7 +284,6 @@ it to the session cwd (CLAUDE.md for Claude Code, AGENTS.md for the other backen
 - Panels: Sessions sidebar, Chat (WebSocket streaming), Threads list, Plan review checklist, Voice push-to-talk
 - ChatPanel subscribes to session WebSocket — receives worker summaries and renders them as assistant messages
 - ThreadsPanel polls every 3 seconds for thread status updates
-- No-cache middleware on HTML to prevent stale JS bundles
 - Draft persistence: unsent message text is saved to localStorage per session (debounced 300ms) and restored on session switch-back or page reload
 
 **Configuration**

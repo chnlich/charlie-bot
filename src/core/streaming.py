@@ -37,6 +37,18 @@ _STREAM_COALESCE_INTERVAL = 0.2  # seconds
 # and ``error`` arms of the event switch.
 _PREVIEW_HIDING_TYPES = frozenset({"message", ET.ASSISTANT_ERROR, ET.ERROR})
 
+# Channel vocabulary: the two named topic forms the fan-out routes on. The
+# websocket subscriber (server.py) and every publisher (sessions, autonamer,
+# ext_usage, master_cc_queue) name their channels through these; the
+# per-session wire shape is pinned by the broadcast assertions in
+# tests/test_autonamer.py and tests/test_delayed_trigger_delivery.py.
+SIDEBAR_CHANNEL = "sidebar"
+
+
+def session_channel(session_id: str) -> str:
+  """The per-session channel topic: ``session:<session_id>``."""
+  return f"session:{session_id}"
+
 
 class StreamingManager:
   """Fan-out WebSocket events from Worker subprocesses to browser clients."""

@@ -81,20 +81,54 @@ async def test_preview_neutral_frame_keeps_pending(manager: StreamingManager) ->
 @pytest.mark.asyncio
 async def test_serialize_once_per_fan_out_over_subscribers(
     manager: StreamingManager, monkeypatch: pytest.MonkeyPatch) -> None:
-  dumps_calls = 0
-  real_dumps = streaming.json.dumps
+  render_calls = 0
+  real_render = streaming.fast_json_bytes
 
-  def counting_dumps(*args: object, **kwargs: object) -> str:
-    nonlocal dumps_calls
-    dumps_calls += 1
-    return real_dumps(*args, **kwargs)
+  def counting_render(content: object) -> bytes:
+    nonlocal render_calls
+    render_calls += 1
+    return real_render(content)
 
-  monkeypatch.setattr(streaming.json, "dumps", counting_dumps)
+  monkeypatch.setattr(streaming, "fast_json_bytes", counting_render)
   ws1, ws2 = _Socket(), _Socket()
   await manager.subscribe("s", ws1)
   await manager.subscribe("s", ws2)
   await manager.broadcast("s", {"type": "error", "message": "boom"})
-  assert dumps_calls == 1 and ws1.texts == ws2.texts
+  assert render_calls == 1 and ws1.texts == ws2.texts
+
+
+@pytest.mark.asyncio
+async def test_wire_render_parsed_equal_to_stdlib_send_json_form(manager: StreamingManager) -> None:
+  # The fan-out replaced the stdlib send_json render; the frames' parsed
+  # content must equal that form, with raw UTF-8 where both renders agree.
+  ws = _Socket()
+  await manager.subscribe("s", ws)
+  frame = {"type": "stream", "message": {"role": "assistant", "content": "中文 \U0001F600 tail"}}
+  await manager.broadcast("s", frame)
+  assert ws.payloads() == [frame]
+  assert ws.texts[0] == json.dumps(frame, separators=(",", ":"), ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_wire_render_nan_boundary(manager: StreamingManager) -> None:
+  # A NaN float rides the wire as null — valid JSON the client parses — where
+  # the replaced stdlib form shipped the invalid literal NaN.
+  ws = _Socket()
+  await manager.subscribe("s", ws)
+  await manager.broadcast("s", {"type": "diag", "ratio": float("nan")})
+  assert ws.payloads() == [{"type": "diag", "ratio": None}]
+  json.loads(ws.texts[0])  # the wire text must stay parseable
+
+
+@pytest.mark.asyncio
+async def test_wire_render_non_str_key_raises(manager: StreamingManager) -> None:
+  # A non-str dict key raises at the fan-out instead of the stdlib's silent
+  # str coercion, so a malformed frame surfaces at its producer.
+  ws = _Socket()
+  await manager.subscribe("s", ws)
+  with pytest.raises(TypeError):
+    await manager.broadcast("s", {"type": "diag", 7: "x"})
+  assert ws.texts == []
 
 
 @pytest.mark.asyncio

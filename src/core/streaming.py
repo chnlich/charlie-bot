@@ -12,7 +12,6 @@ never surfaces after one of them.
 """
 
 import asyncio
-import json
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -20,6 +19,7 @@ from typing import Any
 from fastapi import WebSocket
 
 from src.agents.backends.base import make_context_compact_failed_event, make_context_compacted_event
+from src.api.responses import fast_json_bytes
 from src.core import event_types as ET
 from src.core.log_once import LazyStructlogLogger
 from src.core.tasks import create_logged_task
@@ -127,8 +127,15 @@ class StreamingManager:
 
 
 def _serialize(event: dict[str, Any]) -> str:
-  """Same dumps starlette's send_json ran, so the wire bytes are unchanged."""
-  return json.dumps(event, separators=(",", ":"), ensure_ascii=False)
+  """The wire render of one broadcast frame, shared with the response endpoints'
+  FastJsonResponse home (fast_json_bytes).
+
+  The parsed content equals the stdlib ``send_json`` render this fan-out
+  replaced; only the raw bytes differ, at the two boundaries responses.py pins:
+  a NaN/Infinity float renders as null instead of the stdlib's invalid-JSON
+  literal, and a non-str dict key raises instead of the silent str coercion.
+  """
+  return fast_json_bytes(event).decode("utf-8")
 
 
 # Module-level singleton used across the application

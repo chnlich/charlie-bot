@@ -145,19 +145,13 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
    - `branch_name`, `worktree_path`, `repo_path`: Git isolation state
    - `backend`, `model`: Which LLM backend/model was used
 
-### 5.2 Plan Mode (Two-Phase Execution)
-For complex tasks, CharlieBot uses a planning phase:
+### 5.2 Plan Registry (Draft, Approve, Delegate)
+For complex tasks, the master plans before building; the plan registry keeps that lifecycle:
 
-**Phase 1: Planning**
-- Master Agent determines task requires planning phase
-- A "Plan Thread" is created with `--plan-mode` flag
-- Worker analyzes and outputs detailed execution plan (no file modifications)
-- Plan displayed in Web UI as editable checklist
-
-**Phase 2: Execution**
-- User reviews, edits, or approves the plan
-- Approved steps are delegated as individual worker tasks
-- Multiple plans can execute in parallel across different Threads
+- **Draft & present**: The master drafts the plan as an HTML artifact (`artifacts/plan_NN.html`, grammar in `prompts/plan_template.html`) and registers it with `charliebot plan present --file <artifact> --title <title>` (`src/cli/plan.py` → `PlanRegistryManager` in `src/core/plans.py`). `charliebot plan amend --note <why>` appends the next version (trigger: `auto_amend` or `feedback`).
+- **Review**: The plan renders in the web Plans panel with a version switcher, a diff toggle against the predecessor, and line-anchored comments (`web/static/js/plan-panel.js`).
+- **Approve**: The user's "take off" approves the settled terms; `charliebot plan approve` records it against the latest version. The takeoff gate (`src/core/takeoff_gate.py`) lets `/delegate` and `/improve` proceed only when the session's latest real user message carries the approval (or a "pre take off" stamp within 12 hours).
+- **Close**: `charliebot plan close --plan N --as superseded|abandoned|completed` terminates the lineage.
 
 ---
 

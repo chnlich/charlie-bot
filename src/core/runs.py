@@ -557,6 +557,10 @@ class RunIdentityConflictError(Exception):
   """
 
 
+class RunInputMismatchError(ValueError):
+  """A finish acknowledgement payload that does not match the run's registered batch."""
+
+
 @dataclass(frozen=True)
 class RunStopResult:
   """The outcome of one stop request against one run."""
@@ -609,6 +613,14 @@ class RunStore:
     self._lock = control_lock  # the one short control write lock, shared with the tree owner
     self._events = events
     self._aliases = aliases
+    # Installed by the tree owner: the full fact-history reader (archived
+    # segments included) the terminal/stop/identity reads use, so a rotated
+    # acknowledgement or stop request never un-dones itself.
+    self._fact_history_loader: Callable[[str], list[dict]] | None = None
+
+  def set_fact_history_loader(self, loader: Callable[[str], list[dict]]) -> None:
+    """Install the tree owner's full-history reader (archived segments included)."""
+    self._fact_history_loader = loader
 
   # -- paths ---------------------------------------------------------------
 
@@ -666,6 +678,10 @@ class RunStore:
   # -- facts ---------------------------------------------------------------
 
   def load_events_sync(self, session_id: str) -> list[dict]:
+    """The session's durable fact history (archived segments included once the
+    tree owner installs the reader; the live log before that)."""
+    if self._fact_history_loader is not None:
+      return self._fact_history_loader(session_id)
     return self._events.load_events(session_id)
 
   def terminal_outcome(self, events: list[dict], run_id: str) -> str | None:
@@ -675,6 +691,14 @@ class RunStore:
       if event.get("type") == ET.RUN_FINISHED and event.get("run_id") == run_id:
         outcome = event.get("outcome")
     return outcome
+
+  def _fact_input_payload(self, events: list[dict], run_id: str) -> list[str]:
+    """The input ids the run's recorded run_finished fact carries ([] without one)."""
+    for event in events:
+      if event.get("type") == ET.RUN_FINISHED and event.get("run_id") == run_id:
+        payload = event.get("input_event_ids")
+        return list(payload) if isinstance(payload, list) else []
+    return []
 
   def stop_requested(self, events: list[dict], run_id: str, request_id: str | None = None) -> bool:
     """Whether a durable run_stop_requested fact exists (optionally one request_id's)."""
@@ -802,6 +826,32 @@ class RunStore:
           session_id, run_id, outcome, input_event_ids=input_event_ids, exit_code=exit_code,
           ended_at=ended_at)
 
+  def _finish_payload(self, run: RunRecord, input_event_ids: list[str] | None) -> list[str]:
+    """The durable acknowledgement payload of one finish, validated against the record.
+
+    A dispatched run's payload is exactly its registered batch: later arrivals
+    belong to the next run, and a caller can never acknowledge ids beyond the
+    batch its own Run bound (a different session's or an unrelated Run's input).
+    A run that never claimed a batch acknowledges only what its finisher names,
+    and those ids must be input events of this same session (identity-bound,
+    not arbitrary strings).
+    """
+    if run.input_event_ids:
+      if input_event_ids is not None and list(input_event_ids) != list(run.input_event_ids):
+        raise RunInputMismatchError(
+            f"run {run.id} finish payload {input_event_ids!r} does not match its registered "
+            f"input batch {run.input_event_ids!r}")
+      return list(run.input_event_ids)
+    supplied = list(input_event_ids or [])
+    if supplied:
+      known = {event.get("id") for event in self.load_events_sync(run.session_id)}
+      unknown = [input_id for input_id in supplied if input_id not in known]
+      if unknown:
+        raise RunInputMismatchError(
+            f"run {run.id} acknowledges unknown input id(s) {unknown}: not events of session "
+            f"{run.session_id} and not its registered batch")
+    return supplied
+
   async def record_finish_locked(
       self,
       session_id: str,
@@ -812,30 +862,43 @@ class RunStore:
       exit_code: int | None = None,
       ended_at: datetime | None = None,
   ) -> RunRecord:
-    """record_finish for a caller already holding the control lock."""
+    """record_finish for a caller already holding the control lock.
+
+    The record is validated before anything is appended, the acknowledgement
+    payload is derived from the registered batch (never a permissive caller
+    default), and the durable fact lands before the metadata mirror. A repeat
+    call after a crash between the two restores the mirror from the
+    authoritative terminal fact without changing the first outcome.
+    """
     events = self.load_events_sync(session_id)
     existing = self.terminal_outcome(events, run_id)
+    run = self.read_run_sync(session_id, run_id)
+    if run is None:
+      raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
+    existing_payload = self._fact_input_payload(events, run_id)
     if existing is not None:
-      run = self.read_run_sync(session_id, run_id)
-      if run is None:
-        raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
+      # Repeat reconciliation: the terminal fact is authoritative; repair the
+      # metadata mirror a crash may have left behind. The first outcome and its
+      # acknowledgement payload never move, whatever a repeat caller names.
+      if run.input_event_ids != existing_payload or run.ended_at is None:
+        run.input_event_ids = existing_payload
+        run.ended_at = run.ended_at or utc_now()
+        await asyncio.to_thread(
+            atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
       return run
+    payload = self._finish_payload(run, input_event_ids)
     event = build_control_event(
         ET.RUN_FINISHED,
         actor=ACTOR_SYSTEM,
         source_session_id=session_id,
         run_id=run_id,
-        input_event_ids=input_event_ids or [],
+        input_event_ids=payload,
         outcome=outcome,
     )
     await self._events.append(session_id, event)
-    run = self.read_run_sync(session_id, run_id)
-    if run is None:
-      raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
     run.ended_at = ended_at or utc_now()
     run.exit_code = exit_code
-    if input_event_ids is not None:
-      run.input_event_ids = input_event_ids
+    run.input_event_ids = payload
     await asyncio.to_thread(
         atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
     return run

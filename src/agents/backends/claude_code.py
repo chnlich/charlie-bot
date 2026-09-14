@@ -7,7 +7,7 @@ import signal
 from collections.abc import Mapping
 from pathlib import Path
 
-from src.agents.backends.base import SKIP_PERMISSIONS_FLAG, AgentBackend
+from src.agents.backends.base import DISALLOWED_TOOLS_FLAG, SKIP_PERMISSIONS_FLAG, AgentBackend
 from src.core import event_types as ET
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
@@ -33,7 +33,7 @@ BASE_COMMAND: list[str] = [
     "stream-json",
     "--verbose",
     SKIP_PERMISSIONS_FLAG,
-    "--disallowed-tools",
+    DISALLOWED_TOOLS_FLAG,
     HEADLESS_DISALLOWED_TOOLS,
 ]
 
@@ -285,7 +285,7 @@ class ClaudeCodeBackend(AgentBackend):
     if cli_binary:
       self._cmd[0] = cli_binary
       if cli_binary == "claude-sub":
-        self._cmd += ["--disallowed-tools", SUBSCRIPTION_DISALLOWED_TOOLS]
+        self._cmd += [DISALLOWED_TOOLS_FLAG, SUBSCRIPTION_DISALLOWED_TOOLS]
     if claude_session_id:
       self._cmd += ["--session-id", claude_session_id]
     if self._model:
@@ -333,7 +333,7 @@ class ClaudeCodeBackend(AgentBackend):
         self._model,
         "--system-prompt",
         system_prompt,
-        "--disallowed-tools",
+        DISALLOWED_TOOLS_FLAG,
         "Bash,Read,Write,Edit,Glob,Grep,Agent",
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,

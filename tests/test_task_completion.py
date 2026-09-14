@@ -206,7 +206,7 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
   # explicit verified blocker on the manual path.
   forged = CompletionEvidence(
       summary="forged",
-      result_refs=[f"run:run-work", f"landed:main@{'d' * 40}"],
+      result_refs=["run:run-work", f"landed:main@{'d' * 40}"],
       run_ids=["run-work"], review_run_ids=["run-review"],
       landing=LandingEvidence(branch="main", commit="d" * 40, repo_path=str(repo)))
   with pytest.raises(TaskConflictError, match="landing evidence unverified"):

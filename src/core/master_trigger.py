@@ -144,6 +144,19 @@ async def trigger_master(
       log.error("trigger_master_session_not_found", session=resolved.id)
       return
 
+    # A v2 task-tree node is never woken through the legacy writer: its inputs
+    # are durable dispatcher admissions and its turns are Runs. The scheduled/
+    # iteration controller conversion is the next bounded stage; until then a
+    # wake aimed at a v2 node is explicitly unavailable, and nothing is
+    # written through the legacy user-event path.
+    if session_meta.profile is not None:
+      log.warning(
+          "task_tree_wake_not_yet_supported",
+          session=resolved.id,
+          profile=str(session_meta.profile),
+      )
+      return
+
     # expect_fresh_session is True only on the weekly-recycle path that
     # deliberately clears the anchor; it suppresses the resume-anchor-missing
     # pre-flight alarm. The stale-resume retry clears the anchor too but must

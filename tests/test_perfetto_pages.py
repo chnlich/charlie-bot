@@ -114,6 +114,25 @@ def test_direct_pass_gzip_decompresses_to_identical_bytes(client: TestClient, tm
   assert gzip.decompress(response.content) == trace.read_bytes()
 
 
+def test_direct_pass_build_reenables_gc_on_success_and_parse_failure(tmp_path: Path) -> None:
+  """The build runs on a server thread, so its gc.disable is process-wide; a build that
+  leaves GC disabled (the parse raises, the finally is skipped) would silently turn off
+  collection for the server's remaining lifetime."""
+  import gc
+
+  trace = tmp_path / "rank0.json"
+  _write_trace(trace)
+  out = tmp_path / "rank0.json.gz"
+  pages._build_direct_pass_gzip(trace, out)
+  assert gc.isenabled()
+
+  corrupt = tmp_path / "corrupt.json"
+  corrupt.write_text("{broken", encoding="utf-8")
+  with pytest.raises(ValueError):
+    pages._build_direct_pass_gzip(corrupt, tmp_path / "corrupt.json.gz")
+  assert gc.isenabled()
+
+
 def test_merge_endpoint_combines_trace_then_directory_inputs(client: TestClient, tmp_path: Path) -> None:
   explicit = tmp_path / "rank0.json"
   directory = tmp_path / "ranks"

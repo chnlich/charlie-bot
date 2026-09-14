@@ -4,6 +4,7 @@ import asyncio
 import concurrent.futures
 import datetime as dt
 import fnmatch
+import gc
 import hashlib
 import json
 import multiprocessing
@@ -433,6 +434,12 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
   """
   with out_path.open("wb") as compressed, subprocess.Popen(["gzip", f"-{_MERGE_COMPRESSLEVEL}", "-c", str(path)],
                                                            stdout=compressed, stderr=subprocess.PIPE) as gzip_proc:
+    # The parse allocates ~1M dicts per 1M input events; the generational passes
+    # over that churn measured 0.27-0.35 s per 307 MB parse. Unlike the merge
+    # path's pool worker, this build runs on a server thread, so the disable is
+    # process-wide but bounded by the build window; the re-enable collect
+    # reclaims the parse's cyclic leftovers.
+    gc.disable()
     try:
       with path.open("rb") as validate_file:
         orjson.loads(validate_file.read())
@@ -443,6 +450,9 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
       gzip_proc.kill()
       gzip_proc.wait()
       raise
+    finally:
+      gc.enable()
+      gc.collect()
 
 
 async def _cached_direct_pass(path: Path) -> Path:

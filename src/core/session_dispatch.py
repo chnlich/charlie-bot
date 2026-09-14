@@ -286,6 +286,55 @@ class TaskInputDispatcher:
         await self.executor(session_id, pending)  # type: ignore[misc]
         return decision
 
+    async def finish_run(
+        self,
+        session_id: str,
+        run_id: str,
+        *,
+        outcome: str,
+        exit_code: int | None = None,
+        ended_at: "object | None" = None,
+        input_event_ids: "list[str] | None" = None,
+    ) -> "object":
+        """The one entry adapters use to land a Run's terminal fact.
+
+        The acknowledgement payload is validated against the Run's registered
+        batch (a failure or interruption acknowledges nothing), the fact lands
+        first, and only afterwards do the follow-ups run: a successful Run
+        re-evaluates its own manager's pending close requests, and a
+        successful worker work Run evaluates automatic completion. Those
+        re-evaluations re-acquire the control lock themselves — this method
+        never holds it across them.
+        """
+        from datetime import datetime
+
+        from src.core.task_sessions import TaskConflictError
+
+        tree = self._tree
+        if input_event_ids:
+            # A run without a registered batch may acknowledge only currently
+            # pending inputs of this node (the master-turn shape): ids bound to
+            # another Run's batch or already acknowledged are foreign, and a
+            # foreign id never lands as a terminal fact.
+            run_for_check = await tree.runs.get_run(session_id, run_id)
+            if run_for_check is not None and not run_for_check.input_event_ids:
+                pending_ids = {str(e.get("id")) for e in self.pending_inputs(session_id)}
+                foreign = [i for i in input_event_ids if i not in pending_ids]
+                if foreign:
+                    raise TaskConflictError(
+                        [f"input(s) not pending for {session_id}: {', '.join(foreign)}"])
+        async with tree.control_lock:
+            run = await tree.runs.record_finish_locked(
+                session_id, run_id, outcome,
+                input_event_ids=input_event_ids, exit_code=exit_code,
+                ended_at=ended_at if isinstance(ended_at, datetime) or ended_at is None else None)
+        if outcome == "success":
+            await tree.completion.recheck_close_requests(session_id, run_id)
+            meta = await tree.load_meta(session_id)
+            if meta is not None and meta.profile == "worker" and run.kind == "work":
+                await tree.completion.evaluate_automatic_completion(session_id, run_id=run_id)
+        return run
+
     # ------------------------------------------------------------------
     # Parent reports
     # ------------------------------------------------------------------
@@ -314,31 +363,59 @@ class TaskInputDispatcher:
         if recipient is None:
             return None
         tree = self._tree
-        report_id = stable_child_report_id(
-            child_session_id, str(source_event.get("id")), recipient)
         epoch = await tree.sessions.prime_aggregator(recipient)
         async with tree.control_lock:
-            parent_meta = await tree.load_meta(recipient)
-            if parent_meta is None:
-                raise TaskNotFoundError(f"report recipient task {recipient} not found")
-            parent_events = tree.fact_history(recipient)
-            existing = next((e for e in parent_events if e.get("id") == report_id), None)
-            if existing is not None:
-                return existing
-            report = build_control_event(
-                ET.CHILD_REPORT,
-                actor=actor,
-                source_session_id=child_session_id,
-                event_id=report_id,
-                child_session_id=child_session_id,
-                child_event_id=str(source_event.get("id")),
-                outcome=outcome,
-                summary=summary,
-                result_refs=list(result_refs or []),
-            )
-            await tree.events.append(recipient, report)
-        await tree.sessions.announce_appended_event(recipient, report, epoch=epoch)
+            report, created = await self.deliver_child_report_locked(
+                child_session_id, source_event=source_event, outcome=outcome, summary=summary,
+                result_refs=result_refs, recipient=recipient, actor=actor)
+        if created:
+            await tree.sessions.announce_appended_event(recipient, report, epoch=epoch)
         return report
+
+    async def deliver_child_report_locked(
+        self,
+        child_session_id: str,
+        *,
+        source_event: dict,
+        outcome: str,
+        summary: str,
+        result_refs: list[str] | None = None,
+        recipient: str | None,
+        actor: str = ACTOR_AGENT,
+    ) -> "tuple[dict, bool]":
+        """deliver_child_report for a caller already holding the control lock.
+
+        Returns (report, created): created is False when the stable report id
+        already exists in the recipient's fact history (the dedup path), so the
+        caller never announces a second copy of a delivered report.
+        """
+        from src.core.task_sessions import TaskNotFoundError
+
+        if recipient is None:
+            return {}, False
+        tree = self._tree
+        report_id = stable_child_report_id(
+            child_session_id, str(source_event.get("id")), recipient)
+        parent_meta = await tree.load_meta(recipient)
+        if parent_meta is None:
+            raise TaskNotFoundError(f"report recipient task {recipient} not found")
+        parent_events = tree.fact_history(recipient)
+        existing = next((e for e in parent_events if e.get("id") == report_id), None)
+        if existing is not None:
+            return existing, False
+        report = build_control_event(
+            ET.CHILD_REPORT,
+            actor=actor,
+            source_session_id=child_session_id,
+            event_id=report_id,
+            child_session_id=child_session_id,
+            child_event_id=str(source_event.get("id")),
+            outcome=outcome,
+            summary=summary,
+            result_refs=list(result_refs or []),
+        )
+        await tree.events.append(recipient, report)
+        return report, True
 
     async def recover_pending_reports(self, session_id: str) -> list[dict]:
         """Repair the crash window *child result saved before parent append*.
@@ -359,6 +436,10 @@ class TaskInputDispatcher:
             recipient = close.get("report_to")
             if not recipient:
                 continue
+            report_id = stable_child_report_id(session_id, str(close.get("id")), str(recipient))
+            parent_events = tree.fact_history(str(recipient))
+            if any(e.get("id") == report_id for e in parent_events):
+                continue  # already delivered: a repeat pass never re-reports it
             outcome = str(close.get("outcome") or "completed")
             report = await self.deliver_child_report(
                 session_id,

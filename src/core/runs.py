@@ -837,19 +837,36 @@ class RunStore:
     not arbitrary strings).
     """
     if run.input_event_ids:
-      if input_event_ids is not None and list(input_event_ids) != list(run.input_event_ids):
+      # An empty caller list is the permissive default, never a shrink: the
+      # durable payload is exactly the registered batch.
+      if input_event_ids and list(input_event_ids) != list(run.input_event_ids):
         raise RunInputMismatchError(
             f"run {run.id} finish payload {input_event_ids!r} does not match its registered "
             f"input batch {run.input_event_ids!r}")
       return list(run.input_event_ids)
     supplied = list(input_event_ids or [])
     if supplied:
-      known = {event.get("id") for event in self.load_events_sync(run.session_id)}
+      events = self.load_events_sync(run.session_id)
+      known = {event.get("id") for event in events}
       unknown = [input_id for input_id in supplied if input_id not in known]
       if unknown:
         raise RunInputMismatchError(
             f"run {run.id} acknowledges unknown input id(s) {unknown}: not events of session "
             f"{run.session_id} and not its registered batch")
+      # A batchless run acknowledges only inputs no other run already owns:
+      # ids carried by another run's terminal fact are that run's inputs.
+      foreign: set[str] = set()
+      for event in events:
+        if event.get("type") != ET.RUN_FINISHED or event.get("run_id") == run.id:
+          continue
+        payload = event.get("input_event_ids")
+        if isinstance(payload, list):
+          foreign.update(str(i) for i in payload)
+      stolen = [input_id for input_id in supplied if input_id in foreign]
+      if stolen:
+        raise RunInputMismatchError(
+            f"run {run.id} cannot acknowledge input(s) {stolen}: already the "
+            "acknowledged payload of another run")
     return supplied
 
   async def record_finish_locked(

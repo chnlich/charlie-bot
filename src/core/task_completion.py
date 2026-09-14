@@ -119,10 +119,11 @@ class TaskCompletionManager:
         """
 
         tree = self._tree
-        index = tree._index
-        if index is None:
+        cached = tree._index
+        if cached is None:
             raise RuntimeError("completion blockers require the caller-held tree index")
-        meta = tree._index_meta(index, session_id)
+        index = cached[0]
+        tree._index_meta(index, session_id)  # 404 on an unknown task before any blocker text
         blockers: list[str] = []
         pending = [
             e for e in tree.dispatch.pending_inputs(session_id)
@@ -147,6 +148,25 @@ class TaskCompletionManager:
     # Evidence
     # ------------------------------------------------------------------
 
+    def _delivery_run_outcomes(self, meta: SessionMetadata) -> tuple[dict[str, str | None], dict[str, str]]:
+        """The delivery-run universe of one task: its own Runs plus the Runs of
+        its direct children (a manager's delivery evidence legitimately cites
+        the child work it consumed). Returns (run records by id, outcomes)."""
+        tree = self._tree
+        runs: dict[str, object] = {}
+        outcomes: dict[str, str | None] = {}
+        for run in tree.runs.list_run_records_sync(meta.id):
+            runs[run.id] = run
+            outcomes[run.id] = tree.facts_of(meta.id).run_outcomes.get(run.id)
+        index = tree._index[0] if tree._index is not None else None
+        if index is not None:
+            for child_id in tree._children_of(index, meta.id):
+                child_facts = tree.facts_of(child_id)
+                for run in tree.runs.list_run_records_sync(child_id):
+                    runs[run.id] = run
+                    outcomes[run.id] = child_facts.run_outcomes.get(run.id)
+        return runs, outcomes
+
     def evidence_blockers(self, meta: SessionMetadata, evidence: CompletionEvidence) -> list[str]:
         """Validate one completion claim against this task's own facts.
 
@@ -160,28 +180,28 @@ class TaskCompletionManager:
         if not evidence.result_refs:
             blockers.append("completion requires result evidence (result_refs)")
         tree = self._tree
-        runs = {run.id: run for run in tree.runs.list_run_records_sync(meta.id)}
+        runs, outcomes = self._delivery_run_outcomes(meta)
         facts = tree.facts_of(meta.id)
         claimed: dict[str, object] = {}
         for run_id in evidence.run_ids:
             run = runs.get(run_id)
             if run is None:
-                blockers.append(f"run {run_id} is not a Run of task {meta.id}")
+                blockers.append(f"run {run_id} is not a Run of task {meta.id} or its children")
                 continue
             claimed[run_id] = run
-            if facts.run_outcomes.get(run_id) != "success":
+            if outcomes.get(run_id) != "success":
                 blockers.append(
                     f"run {run_id} has no successful run_finished fact"
                     + (" (a bare exit code is not evidence)" if run.exit_code == 0 else ""))
         if evidence.run_ids and not claimed:
-            blockers.append("completion evidence names no Run of this task")
+            blockers.append("completion evidence names no delivery Run of this task")
         if not evidence.run_ids:
             blockers.append("completion requires delivery run evidence (run_ids)")
         for ref in evidence.result_refs:
-            blockers.extend(self._structured_ref_blockers(meta, ref, runs, facts, evidence))
+            blockers.extend(self._structured_ref_blockers(meta, ref, runs, outcomes, facts, evidence))
         for review_run_id in evidence.review_run_ids:
             review = runs.get(review_run_id)
-            if review is None or review.kind != "review":
+            if review is None or review.kind != "review" or review.session_id != meta.id:
                 blockers.append(f"run {review_run_id} is not a review Run of task {meta.id}")
             elif facts.run_outcomes.get(review_run_id) != "success":
                 blockers.append(f"review run {review_run_id} has no successful run_finished fact")
@@ -192,7 +212,8 @@ class TaskCompletionManager:
         if task_type == "implement":
             successful_reviews = [
                 r for r in evidence.review_run_ids
-                if r in runs and runs[r].kind == "review" and facts.run_outcomes.get(r) == "success"]
+                if r in runs and runs[r].kind == "review"
+                and runs[r].session_id == meta.id and facts.run_outcomes.get(r) == "success"]
             review_refs = [
                 r for r in evidence.result_refs if r.startswith(REVIEW_REF_PREFIX)]
             if not successful_reviews and not review_refs:
@@ -209,6 +230,7 @@ class TaskCompletionManager:
         meta: SessionMetadata,
         ref: str,
         runs: dict,
+        outcomes: dict[str, str | None],
         facts: object,
         evidence: CompletionEvidence,
     ) -> list[str]:
@@ -231,13 +253,14 @@ class TaskCompletionManager:
             spec_hash = ref[len(SPEC_REF_PREFIX):]
             claimed_ids = evidence.run_ids or list(runs)
             pinned = {runs[r].task_spec_hash for r in claimed_ids if r in runs}
+            pinned.discard(None)
             if spec_hash not in pinned:
                 blockers.append(
                     f"result ref {ref} does not match the task spec pinned by this task's runs")
         elif ref.startswith(REVIEW_REF_PREFIX):
             review_id = ref[len(REVIEW_REF_PREFIX):]
             review = runs.get(review_id)
-            if review is None or review.kind != "review":
+            if review is None or review.kind != "review" or review.session_id != meta.id:
                 blockers.append(f"result ref {ref} does not name a review Run of task {meta.id}")
             elif facts.run_outcomes.get(review_id) != "success":  # type: ignore[union-attr]
                 blockers.append(f"result ref {ref} names a review without a successful run_finished fact")
@@ -395,28 +418,46 @@ class TaskCompletionManager:
             tree._index_meta(index, session_id)
             blockers = self.completion_blockers(
                 session_id, exclude_run_ids=exclude_run_ids, exclude_input_ids=exclude_input_ids)
-            meta = index.metas[session_id]
+            meta = await tree.load_meta(session_id)
+            assert meta is not None
         if blockers:
             raise TaskConflictError(sorted(set(blockers)))
+        # The potentially slow evidence validation runs outside the control
+        # lock; the locked pass below revalidates the relevant facts/spec/refs.
         evidence_blockers = self.evidence_blockers(meta, evidence)
+        # Live-announce epochs are taken before any append, so the announce
+        # feed can never double-render an event the aggregator caught up on.
+        child_epoch = await tree.sessions.prime_aggregator(session_id)
+        parent_epoch = (await tree.sessions.prime_aggregator(meta.task_parent_id)
+                        if meta.task_parent_id else None)
         async with tree.control_lock:
             index = await tree._get_index()
             tree._index_meta(index, session_id)
-            meta = index.metas[session_id]
             if tree.task_state_of(index, session_id) != "open":
                 raise TaskConflictError([f"task {session_id} is no longer open"])
             fresh_blockers = self.completion_blockers(
                 session_id, exclude_run_ids=exclude_run_ids, exclude_input_ids=exclude_input_ids)
-            fresh_evidence_blockers = self.evidence_blockers(meta, evidence)
+            fresh_meta = await tree.load_meta(session_id)
+            assert fresh_meta is not None
+            fresh_evidence_blockers = self.evidence_blockers(fresh_meta, evidence)
             all_blockers = sorted(set(fresh_blockers + fresh_evidence_blockers))
             if all_blockers:
+                # The locked revalidation is authoritative: conditions changed
+                # during the outside-the-lock validation leave the task open
+                # with the current, visible blockers.
                 raise TaskConflictError(all_blockers)
             if evidence_blockers:
-                # Evidence failed slow validation and the facts did not change
-                # to explain it: the blockers are the failure, visibly.
-                raise TaskConflictError(sorted(set(evidence_blockers)))
-            close_event = await self._append_closed(
-                session_id, meta, request_id=request_id, evidence=evidence, actor=actor)
+                # The outside-the-lock validation had flagged these; the fresh
+                # facts revalidated them clean (conditions moved), so the close
+                # proceeds on current facts.
+                log.info("completion_evidence_revalidated_clean",
+                         session_id=session_id, resolved=evidence_blockers)
+            close_event, report, report_created = await self._append_closed(
+                session_id, fresh_meta, request_id=request_id, evidence=evidence, actor=actor)
+        await tree.sessions.announce_appended_event(session_id, close_event, epoch=child_epoch)
+        if report_created and parent_epoch is not None:
+            await tree.sessions.announce_appended_event(
+                str(fresh_meta.task_parent_id), report, epoch=parent_epoch)
         return 200, {"session_id": session_id, "closed_event_id": close_event["id"]}
 
     async def _append_closed(
@@ -433,7 +474,7 @@ class TaskCompletionManager:
         Lock held by the caller. report_to fixes this closure's delivery
         ownership at close time; retries, recovery, and reparenting can never
         retarget it. The report lands before the lock releases (a control
-        fact), the live announcements follow outside it.
+        fact); the live announcements follow outside it (the caller's).
         """
         tree = self._tree
         close_event = build_control_event(
@@ -449,7 +490,7 @@ class TaskCompletionManager:
             report_to=meta.task_parent_id,
         )
         await tree.events.append(session_id, close_event)
-        await tree.dispatch.deliver_child_report(
+        report, report_created = await tree.dispatch.deliver_child_report_locked(
             session_id,
             source_event=close_event,
             outcome="completed",
@@ -459,7 +500,7 @@ class TaskCompletionManager:
             actor=ACTOR_SYSTEM,
         )
         self._tree._invalidate_index()
-        return close_event
+        return close_event, report, report_created
 
     # ------------------------------------------------------------------
     # Own-run close re-evaluation and automatic worker completion
@@ -591,9 +632,22 @@ class TaskCompletionManager:
         replay = self._replay_close_request(session_id, request_id)
         if replay is not None:
             return replay[1]
+        pre_meta = await tree.load_meta(session_id)
+        tree._require_task(pre_meta, session_id)
+        assert pre_meta is not None
+        child_epoch = await tree.sessions.prime_aggregator(session_id)
+        parent_epoch = (await tree.sessions.prime_aggregator(pre_meta.task_parent_id)
+                        if pre_meta.task_parent_id else None)
         async with tree.control_lock:
             index = await tree._get_index()
             meta = tree._index_meta(index, session_id)
+            if tree.task_state_of(index, session_id) != "open":
+                raise TaskConflictError(
+                    [f"task {session_id} is {tree.task_state_of(index, session_id)}; "
+                     "only an open task can be cancelled"])
+            replay = self._replay_close_request(session_id, request_id)
+            if replay is not None:
+                return replay[1]
             blockers = self.completion_blockers(session_id)
             if blockers:
                 raise TaskConflictError(sorted(set(blockers)))
@@ -610,7 +664,7 @@ class TaskCompletionManager:
                 report_to=meta.task_parent_id,
             )
             await tree.events.append(session_id, close_event)
-            await tree.dispatch.deliver_child_report(
+            report, report_created = await tree.dispatch.deliver_child_report_locked(
                 session_id,
                 source_event=close_event,
                 outcome="cancelled",
@@ -620,6 +674,10 @@ class TaskCompletionManager:
                 actor=ACTOR_SYSTEM,
             )
             tree._invalidate_index()
+        await tree.sessions.announce_appended_event(session_id, close_event, epoch=child_epoch)
+        if report_created and parent_epoch is not None:
+            await tree.sessions.announce_appended_event(
+                str(meta.task_parent_id), report, epoch=parent_epoch)
         return {"session_id": session_id, "closed_event_id": close_event["id"]}
 
     async def reopen_task(
@@ -669,6 +727,14 @@ class TaskCompletionManager:
                 if not facts.close_events:
                     raise TaskInvalidError(f"task {session_id} is not closed")
                 close = facts.close_events[-1]
+            replay = self._replay_close_request(session_id, request_id)
+            if replay is not None and replay[0] == 200:
+                # A close landed while this reopen waited on the lock.
+                raise TaskConflictError(
+                    [f"task {session_id} was closed again during the reopen; use a fresh request"])
+            for event in tree.fact_history(session_id):
+                if event.get("type") == ET.TASK_REOPENED and event.get("request_id") == request_id:
+                    return {"session_id": session_id, "reopened_event_id": event.get("id")}
             chain_ids = [a.id for a in tree._ancestors(index, session_id)]
             closed_ancestors = [
                 a for a in chain_ids if tree.task_state_of(index, a) != "open"]

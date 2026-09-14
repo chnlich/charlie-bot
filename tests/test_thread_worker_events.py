@@ -88,27 +88,27 @@ def test_tool_result_resolves_tool_name_written_by_an_earlier_read(tmp_path: Pat
   assert result.tool_name == "Bash"
 
 
-def test_tool_result_over_render_cap_is_capped_and_marked(tmp_path: Path) -> None:
+def test_tool_result_over_wire_bound_is_trimmed_and_marked(tmp_path: Path) -> None:
   path = tmp_path / "events.jsonl"
-  cap = threads_api.TOOL_OUTPUT_RENDER_CAP
-  _write_events(path, [_tool_result_block("t1", "x" * (cap + 1)), _tool_result_block("t2", "small")])
+  bound = threads_api.TOOL_PREVIEW_CHARS
+  _write_events(path, [_tool_result_block("t1", "x" * (bound + 1)), _tool_result_block("t2", "small")])
 
   events = threads_api.read_thread_worker_events(path)
   assert events[0].output_truncated is True
-  assert events[0].content == "x" * cap
+  assert events[0].content == "x" * bound
   assert events[1].output_truncated is None
   assert events[1].content == "small"
 
 
-def test_top_level_tool_result_line_is_capped_and_marked(tmp_path: Path) -> None:
+def test_top_level_tool_result_line_is_trimmed_and_marked(tmp_path: Path) -> None:
   path = tmp_path / "events.jsonl"
-  cap = threads_api.TOOL_OUTPUT_RENDER_CAP
+  bound = threads_api.TOOL_PREVIEW_CHARS
   line = json.dumps(
       {
           "type": "tool_result",
           "tool_name": "Bash",
           "tool_use_id": "t1",
-          "content": "y" * (cap + 1),
+          "content": "y" * (bound + 1),
           "timestamp": TS
       }) + "\n"
   _write_events(
@@ -126,24 +126,24 @@ def test_top_level_tool_result_line_is_capped_and_marked(tmp_path: Path) -> None
 
   events = threads_api.read_thread_worker_events(path)
   assert events[0].output_truncated is True
-  assert events[0].content == "y" * cap
+  assert events[0].content == "y" * bound
   assert events[1].output_truncated is None
   assert events[1].content == "small"
 
 
-def test_capped_marker_survives_incremental_append_parity(tmp_path: Path) -> None:
+def test_trimmed_marker_survives_incremental_append_parity(tmp_path: Path) -> None:
   path = tmp_path / "events.jsonl"
-  cap = threads_api.TOOL_OUTPUT_RENDER_CAP
+  bound = threads_api.TOOL_PREVIEW_CHARS
   _write_events(path, [_assistant_block("run", tool_id="t1")])
   first = threads_api.read_thread_worker_events(path)
 
   with path.open("a", encoding="utf-8") as f:
-    f.write(_tool_result_block("t1", "y" * (cap + 5)))
+    f.write(_tool_result_block("t1", "y" * (bound + 5)))
   second = threads_api.read_thread_worker_events(path)
 
   assert [e.model_dump() for e in second][:len(first)] == [e.model_dump() for e in first]
   assert second[-1].output_truncated is True
-  assert len(second[-1].content) == cap
+  assert len(second[-1].content) == bound
 
 
 def test_missing_file_returns_empty_and_drops_stale_cache(tmp_path: Path) -> None:

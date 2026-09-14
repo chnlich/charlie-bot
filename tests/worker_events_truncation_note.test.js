@@ -1,5 +1,6 @@
-// The projection's output_truncated marker (the TOOL_OUTPUT_RENDER_CAP cap)
-// renders a truncation note on the tool_result row; an uncapped row renders none.
+// The projection trims each tool_result output to the inline-render bound and
+// marks the row; the note names the raw events log, and no tail ships to hide
+// behind a toggle.
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -22,12 +23,12 @@ function renderHtml(events) {
   return ctx._elements.get('thread-events-t1').innerHTML;
 }
 
-test('capped tool_result rows carry the truncation note; uncapped rows do not', () => {
+test('marked tool_result rows carry the raw-log note; unmarked rows do not', () => {
   const ts = '2026-09-12T00:00:00Z';
-  const capped = renderHtml([{type: 'tool_result', tool_name: 'Bash', content: 'x'.repeat(600), output_truncated: true, timestamp: ts}]);
-  assert.ok(capped.includes('output truncated'), 'note present on a marked row');
-  assert.ok(capped.includes('showMoreToggle') || capped.includes('tr-more-'), 'the capped tail stays expandable');
+  const marked = renderHtml([{type: 'tool_result', tool_name: 'Bash', content: 'x'.repeat(600), output_truncated: true, timestamp: ts}]);
+  assert.ok(marked.includes('output truncated'), 'note present on a marked row');
+  assert.ok(!marked.includes('showMoreToggle') && !marked.includes('tr-more-'), 'no hidden tail span: the full text stays in the raw events log');
 
-  const uncapped = renderHtml([{type: 'tool_result', tool_name: 'Bash', content: 'x'.repeat(600), timestamp: ts}]);
-  assert.ok(!uncapped.includes('output truncated'), 'no note without the marker');
+  const unmarked = renderHtml([{type: 'tool_result', tool_name: 'Bash', content: 'x'.repeat(600), timestamp: ts}]);
+  assert.ok(!unmarked.includes('output truncated'), 'no note without the marker');
 });

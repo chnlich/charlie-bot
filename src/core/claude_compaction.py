@@ -47,6 +47,7 @@ from src.core import event_types as ET
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig, get_config
 from src.core.log_once import LazyStructlogLogger
 from src.core.process import kill_process_group, make_session_cgroup_preexec, prepare_session_cgroup
+from src.core.timeouts import CLAUDE_COMPACTION_TIMEOUT
 
 log = LazyStructlogLogger()
 
@@ -58,9 +59,6 @@ COMPACTION_MODEL = "claude-sonnet-5"
 COMPACTION_FAMILY = "sonnet"
 # The family whose own weekly bucket the compaction spares.
 FABLE_FAMILY = "fable"
-
-# A 70K-token compaction measured 21 s; the ceiling leaves room for a 400K one.
-COMPACTION_TIMEOUT_SECONDS = 900.0
 
 # /compact needs no tool; every tool Claude Code could reach is disallowed so the
 # run can only read the transcript and write the summary.
@@ -209,7 +207,7 @@ async def compact_with_sonnet(
     pre_tokens: int | None,
     persist_and_broadcast: Callable[[dict], Awaitable[None]],
     log_context: dict,
-    timeout: float = COMPACTION_TIMEOUT_SECONDS,
+    timeout: float = CLAUDE_COMPACTION_TIMEOUT,
     cgroup_session_id: str | None = None,
 ) -> bool:
   """Compact *cc_session_id*'s transcript under *config_dir* with Sonnet; True on success.

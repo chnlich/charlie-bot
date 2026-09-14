@@ -41,6 +41,8 @@ from src.core.sse import iter_sse_lines
 from src.core.timeouts import (
     OPENCODE_ABORT_TIMEOUT,
     OPENCODE_HTTP_API_TIMEOUT,
+    OPENCODE_SERVER_START_TIMEOUT,
+    OPENCODE_SERVER_STOP_TIMEOUT,
     OPENCODE_SSE_PROGRESS_TIMEOUT,
     OPENCODE_STDOUT_DRAIN_TIMEOUT,
 )
@@ -150,9 +152,6 @@ class OpenCodeSseSilenceError(RuntimeError):
 
 class OpenCodeBackend(AgentBackend):
   """Runs an `opencode serve` subprocess and translates SSE events to CC-compatible format."""
-
-  _SERVER_START_TIMEOUT = 30.0
-  _SERVER_STOP_TIMEOUT = 5.0
 
   def __init__(self, *, proxy_url: str | None = None, **kwargs: object) -> None:
     super().__init__(**kwargs)
@@ -396,7 +395,7 @@ class OpenCodeBackend(AgentBackend):
   async def _read_server_url(self) -> str:
     assert self._proc is not None and self._proc.stdout is not None
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + self._SERVER_START_TIMEOUT
+    deadline = loop.time() + OPENCODE_SERVER_START_TIMEOUT
     while True:
       remaining = deadline - loop.time()
       if remaining <= 0:
@@ -789,7 +788,7 @@ class OpenCodeBackend(AgentBackend):
     try:
       await self._abort_session()
       if self._proc is not None and self._proc.returncode is None:
-        await self._graceful_shutdown(self._SERVER_STOP_TIMEOUT, timeout_log_event="opencode_server_stop_timeout")
+        await self._graceful_shutdown(OPENCODE_SERVER_STOP_TIMEOUT, timeout_log_event="opencode_server_stop_timeout")
       await self._finish_stdout_task()
       self._close_stdout_log()
       if self._proc is not None:

@@ -1940,9 +1940,11 @@ class ScriptedRelayBackend:
     """Session memory-cap attribution read: doubles never run inside a cgroup, so None."""
     return None
 
-  async def run(
-      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None
-  ) -> AsyncIterator[dict]:
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     self.prompt = prompt
     self.cwd = cwd
     self.env = env
@@ -2035,9 +2037,11 @@ class FakeBackend(TerminateFlagBackend):
   exit_code = 0
   stderr_text = ""
 
-  async def run(
-      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None
-  ) -> AsyncIterator[dict]:
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     yield backend_base.make_result_event()
 
 
@@ -2054,9 +2058,11 @@ class CapturingBackend(TerminateFlagBackend):
   def __init__(self) -> None:
     self.calls: list[dict] = []
 
-  async def run(
-      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None
-  ) -> AsyncIterator[dict]:
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     self.calls.append({"prompt": prompt, "uploaded_files": uploaded_files})
     if False:
       yield {}  # keeps run() an async generator; the consumer's async-for would TypeError on a coroutine

@@ -53,7 +53,10 @@ def _by_name(outcomes: list[artifact_check.AssertionOutcome]) -> dict[str, list[
   return by_name
 
 
-def _run(genre: str, artifact: Path, cfg: CharlieBotConfig | None = None,
+def _run(
+    genre: str,
+    artifact: Path,
+    cfg: CharlieBotConfig | None = None,
 ) -> dict[str, list[artifact_check.AssertionOutcome]]:
   return _by_name(run_assertions(genre, artifact, cfg))
 

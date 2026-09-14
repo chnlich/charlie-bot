@@ -155,9 +155,9 @@ _FILE_URL_PREFIXES = tuple(mount + "/" for mount in FILE_SERVER_MOUNTS)
 # server's port, one of the file-service prefixes, then the absolute filesystem
 # path, with the query string and fragment carried onto the published URL unchanged.
 _FILE_SERVER_URL_RE = re.compile(
-    r"https?://(?P<host>\[[^\]\s]+\]|[^/\s:]+):(?P<port>\d+)/(?P<prefix>"
-    + "|".join(mount.lstrip("/") for mount in FILE_SERVER_MOUNTS)
-    + r")(?P<fs_path>/[^\s?#]*)(?P<query>\?[^\s#]*)?(?P<fragment>#[^\s]*)?")
+    r"https?://(?P<host>\[[^\]\s]+\]|[^/\s:]+):(?P<port>\d+)/(?P<prefix>" +
+    "|".join(mount.lstrip("/") for mount in FILE_SERVER_MOUNTS) +
+    r")(?P<fs_path>/[^\s?#]*)(?P<query>\?[^\s#]*)?(?P<fragment>#[^\s]*)?")
 
 # Any URL naming a port, for the application-route naming: the matches whose port is
 # this server's and whose path is not a file-service prefix reach the operator alone.

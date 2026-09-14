@@ -10,7 +10,9 @@ from pathlib import Path
 
 # Checkout root (where pyproject.toml lives): this file sits at src/core/, so
 # parents[2] is the root; moving this file breaks the depth. Buildinfo's git
-# calls, the artifact template reads, and the web static mount derive from it.
+# calls, the artifact template reads, the /static mount, and the pages layer's
+# git-version cwd, static-tree digest, and Jinja templates directory derive
+# from it.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Cross-process session-identity wire name: the server writes the master's

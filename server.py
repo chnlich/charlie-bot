@@ -6,7 +6,6 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime
-from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
@@ -39,7 +38,7 @@ from src.api.deps import session_manager, set_trigger_manager, thread_manager
 from src.core import timeouts
 from src.core.buildinfo import init_build_info
 from src.core.config import CharlieBotConfig, get_config, get_credentials, require_backends
-from src.core.constants import FILE_SERVER_MOUNTS
+from src.core.constants import FILE_SERVER_MOUNTS, REPO_ROOT
 from src.core.http import close_http_client
 from src.core.init import (
     init_charliebot_home,
@@ -609,7 +608,7 @@ async def terminal_websocket(websocket: WebSocket) -> None:
 # Static files (CSS, JS, images — NOT the SPA)
 # ---------------------------------------------------------------------------
 
-_static_dir = Path(__file__).parent / "web" / "static"
+_static_dir = REPO_ROOT / "web" / "static"
 
 # Every template-referenced asset URL carries ?v=<static_asset_version>: the
 # runtime git version plus the served tree's content digest, refreshed per page

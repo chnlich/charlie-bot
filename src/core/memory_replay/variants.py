@@ -886,8 +886,7 @@ _REVIEWER_TRIM_SELECTED_VISIBLE = "memory-experiment-reviewer-trim-selected-visi
 _REVIEWER_WHOLE_ENTRY_RAW_VISIBLE = "memory-experiment-reviewer-whole-entry-raw-history-visible-v2"
 _REVIEWER_WHOLE_ENTRY_SELECTED_HIDDEN = "memory-experiment-reviewer-whole-entry-selected-hidden-v2"
 
-_VARIANT_VERSION = 2
-VARIANT_DEFINITION_VERSION = _VARIANT_VERSION
+VARIANT_DEFINITION_VERSION = 2
 
 
 def _variant(
@@ -912,7 +911,7 @@ def _variant(
   return ExperimentContract(
       name=name,
       title=title,
-      version=_VARIANT_VERSION,
+      version=VARIANT_DEFINITION_VERSION,
       editor_stage=editor_stage,
       reviewer_stage=reviewer_stage,
       entry_scope=entry_scope,

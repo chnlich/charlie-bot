@@ -30,9 +30,14 @@ MAX_TRIGGER_MESSAGE_CHARS = 200
 # registry verbs' validation (src.core.plans) share one tuple per vocabulary, so the
 # plan chain imports no pydantic to parse args. The request models' Literal types
 # (src.core.models PlanAmendTrigger / PlanCloseMode) are the type home; the import
-# contract pins tuple == get_args(Literal).
+# contract pins tuple == get_args(Literal). The named close-mode spellings are the
+# home for the values plans derives and compares against (src.core.plans _derive_state,
+# _DERIVED_STATE_STR): a closed plan's derived state IS its close mode's spelling.
 PLAN_AMEND_TRIGGERS = ("auto_amend", "feedback")
-PLAN_CLOSE_MODES = ("superseded", "abandoned", "completed")
+PLAN_CLOSE_SUPERSEDED = "superseded"
+PLAN_CLOSE_ABANDONED = "abandoned"
+PLAN_CLOSE_COMPLETED = "completed"
+PLAN_CLOSE_MODES = (PLAN_CLOSE_SUPERSEDED, PLAN_CLOSE_ABANDONED, PLAN_CLOSE_COMPLETED)
 
 # Memory-replay mode vocabulary: the named spellings are the home for the values the replay
 # stack compares against (src.core.memory_replay runner/report/compare/experiment). The tuple

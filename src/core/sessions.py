@@ -46,6 +46,7 @@ from src.core.models import (
     utc_now,
 )
 from src.core.ndjson import append_ndjson
+from src.core.plans import AWAITING_APPROVAL_STATE, read_plans_tolerant
 from src.core.process import cleanup_session_cgroup
 from src.core.scheduled_sessions import (
     # re-export: src/api/cron.py imports ScheduledSessionBusyError from this module
@@ -348,9 +349,6 @@ def has_pending_plan_approval_sync(plans_path: Path, session_id: str) -> bool:
   and contributes no pending approval. The probe must never raise — a corrupt
   single-session file cannot 5xx the sidebar poll for all sessions.
   """
-  # lazy: plans imports SessionManager from this module at top level
-  from src.core.plans import read_plans_tolerant
-
   result = read_plans_tolerant(plans_path, session_id)
   for error in result["errors"]:
     log.warning(
@@ -358,7 +356,7 @@ def has_pending_plan_approval_sync(plans_path: Path, session_id: str) -> bool:
         session_id=error.get("session_id"),
         error=error.get("error"),
     )
-  return any(plan.get("state") == "awaiting approval" for plan in result["plans"])
+  return any(plan.get("state") == AWAITING_APPROVAL_STATE for plan in result["plans"])
 
 
 # Search scans take the failed-read path for every active session whose live

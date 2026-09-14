@@ -61,23 +61,25 @@ def get_pending_proposal() -> dict | None:
   return _pending_proposal
 
 
+def _pop_pending_proposal() -> dict | None:
+  """Return the pending proposal and clear its slot; None when nothing is pending."""
+  global _pending_proposal
+  pending, _pending_proposal = _pending_proposal, None
+  return pending
+
+
 def accept_proposal() -> bool:
   """Write the proposed new content to disk and clear the proposal."""
-  global _pending_proposal
-  if _pending_proposal is None:
+  pending = _pop_pending_proposal()
+  if pending is None:
     return False
-  get_tex_path().write_text(_pending_proposal['new'], encoding='utf-8')
-  _pending_proposal = None
+  get_tex_path().write_text(pending['new'], encoding='utf-8')
   return True
 
 
 def reject_proposal() -> bool:
   """Clear the pending proposal (keep reverted on-disk content)."""
-  global _pending_proposal
-  if _pending_proposal is None:
-    return False
-  _pending_proposal = None
-  return True
+  return _pop_pending_proposal() is not None
 
 
 def clear_snapshot() -> None:

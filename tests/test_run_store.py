@@ -138,7 +138,11 @@ async def test_record_finish_is_the_one_terminal_writer(tmp_path: Path) -> None:
   _, _, _, store = env
   session_id = await make_task(env, "t1")
   await store.register_run(RunRecord(id="r1", session_id=session_id))
-
+  # An unclaimed run's finisher names real input events of this session only:
+  # the acknowledgement payload is identity-bound, never arbitrary strings.
+  await store._events.append(session_id, {
+      "id": "e1", "type": ET.USER, "timestamp": datetime.now(UTC).isoformat(),
+      "content": "real input event"})
   await store.record_finish(session_id, "r1", "success", input_event_ids=["e1"], exit_code=0)
   events = store.load_events_sync(session_id)
   finished = [e for e in events if e["type"] == ET.RUN_FINISHED]

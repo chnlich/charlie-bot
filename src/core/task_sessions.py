@@ -20,10 +20,10 @@ Guarantees the delivery stage pins down:
 - Task state and work state are rebuilt from durable facts (task_closed /
   task_reopened / run_finished / run records) — no persisted lifecycle state
   machine and no durable aggregate tree status exists.
-- Input delivery (``session_dispatch.py``) and completion guards
-  (``task_completion.py``) join the control/event seams in their own delivery
-  stage; the seams are the sink, the pending-input blocker hook, and the
-  derived-fact folds.
+- Input delivery (``src.core.session_dispatch``) and completion guards
+  (``src.core.task_completion``) own their policies and join the same control
+  lock; this module hosts their wiring, the fact-history reader they share,
+  and the pending-input blocker hook they answer.
 """
 
 import asyncio
@@ -64,7 +64,9 @@ from src.core.ndjson import append_ndjson
 from src.core.run_token import CallerIdentity
 from src.core.runs import RunStore
 from src.core.session_aliases import SessionAliasStore
+from src.core.session_dispatch import TaskInputDispatcher
 from src.core.sessions import _TRANSIENT_METADATA_FIELDS, SessionManager
+from src.core.task_completion import TaskCompletionManager
 
 if TYPE_CHECKING:
   pass
@@ -104,10 +106,98 @@ class TaskConflictError(Exception):
 
 @dataclass
 class _TaskFacts:
-  """The derived facts one session's event stream folds to (suffix-memoized)."""
+  """The derived facts one session's full event history folds to.
+
+  The fold is the single derived-fact owner for the tree projection, the
+  input dispatcher, and the completion owner: task lifecycle, run outcomes,
+  input candidacy with its boundary, close/reopen/close-request facts, and
+  delivered child reports all come from this one pass over the durable
+  events (archived segments included).
+  """
   task_state: str = "open"
   run_outcomes: dict[str, str] = field(default_factory=dict)
+  # Input ids a successful run_finished acknowledged.
+  confirmed_input_ids: set[str] = field(default_factory=set)
+  # Input events inside the valid boundary (pre confirmation/claim filtering).
+  input_candidates: list[dict] = field(default_factory=list)
+  # Old pending input ids the task_imported boundary explicitly admits.
+  imported_pending_ids: frozenset[str] = frozenset()
+  # Absolute history position of the creation (or import) boundary; None
+  # before either fact exists.
+  boundary_index: int | None = None
+  close_events: list[dict] = field(default_factory=list)
+  reopen_events: list[dict] = field(default_factory=list)
+  close_requests: list[dict] = field(default_factory=list)
+  # (child_session_id, child_event_id) pairs this session's log has received.
+  delivered_reports: set[tuple[str, str]] = field(default_factory=set)
+  # Every event id in the folded history (identity dedup for reports/inputs).
+  event_ids: set[str] = field(default_factory=set)
+  events_by_id: dict[str, dict] = field(default_factory=dict)
   covered: int = 0
+
+
+def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) -> _TaskFacts:
+  """Fold *events* (absolute history positions from *index_offset*) into *facts*.
+
+  Duplicate event ids are folded once, so an overlapping archived/live read
+  can double-present a segment without double-counting its facts.
+  """
+  for position, event in enumerate(events):
+    event_id = event.get("id")
+    if event_id is not None:
+      if event_id in facts.event_ids:
+        continue
+      facts.event_ids.add(event_id)
+      facts.events_by_id[event_id] = event
+    etype = event.get("type")
+    absolute = index_offset + position
+    if etype == ET.TASK_CREATED:
+      if facts.boundary_index is None:
+        facts.boundary_index = absolute
+    elif etype == ET.TASK_IMPORTED:
+      listed: list[str] = []
+      for entry in event.get("pending_inputs") or []:
+        input_id = entry.get("input_id") if isinstance(entry, dict) else None
+        if not isinstance(input_id, str) or not input_id:
+          raise ValueError(
+              f"task_imported event {event_id!r} lists a pending input without a stable input_id")
+        listed.append(input_id)
+      facts.boundary_index = absolute
+      facts.imported_pending_ids = frozenset(listed)
+      # The boundary moved: input candidacy restarts from the whole history.
+      facts.input_candidates = [
+          e for e in facts.events_by_id.values()
+          if e.get("type") in _INPUT_EVENT_TYPES]
+    elif etype == ET.TASK_CLOSED:
+      facts.task_state = str(event.get("outcome") or "completed")
+      facts.close_events.append(event)
+    elif etype == ET.TASK_REOPENED:
+      facts.task_state = "open"
+      facts.reopen_events.append(event)
+    elif etype == ET.TASK_CLOSE_REQUESTED:
+      facts.close_requests.append(event)
+    elif etype == ET.RUN_FINISHED:
+      run_id = event.get("run_id")
+      if isinstance(run_id, str):
+        facts.run_outcomes[run_id] = str(event.get("outcome"))
+        if event.get("outcome") == "success":
+          ids = event.get("input_event_ids")
+          if isinstance(ids, list):
+            facts.confirmed_input_ids.update(str(i) for i in ids)
+    elif etype == ET.CHILD_REPORT:
+      child_session_id = event.get("child_session_id")
+      child_event_id = event.get("child_event_id")
+      if isinstance(child_session_id, str) and isinstance(child_event_id, str):
+        facts.delivered_reports.add((child_session_id, child_event_id))
+    if etype in _INPUT_EVENT_TYPES:
+      if facts.boundary_index is None or absolute > facts.boundary_index or (
+          event_id is not None and event_id in facts.imported_pending_ids):
+        facts.input_candidates.append(event)
+  return facts
+
+
+_INPUT_EVENT_TYPES = frozenset({
+    ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT})
 
 
 class TaskTreeManager:
@@ -120,12 +210,24 @@ class TaskTreeManager:
     self.events = ControlEventSink(session_mgr)
     self.aliases = SessionAliasStore(cfg.sessions_dir)
     self.runs = RunStore(cfg, self.control_lock, self.events, self.aliases)
-    # Seam for the input-delivery stage: a callable returning the pending-input
-    # blockers of one session ([] until session_dispatch.py owns it).
-    self.pending_input_blockers: Callable[[str], list[str]] | None = None
+    # The run owner's terminal/stop/identity reads see the full fact history
+    # (archived segments included), so a rotated acknowledgement never un-dones
+    # itself and a repeat finish stays idempotent across rotation.
+    self.runs.set_fact_history_loader(self.fact_history)
+    self.dispatch = TaskInputDispatcher(self)
+    self.completion = TaskCompletionManager(self)
+    # The pending-input blockers of one session ([] when none): the structural
+    # guard seam the input dispatcher answers.
+    self.pending_input_blockers: Callable[[str], list[str]] | None = self.dispatch.pending_input_blockers
     self._index: tuple[_TreeIndex, float] | None = None
-    self._facts_memo: dict[str, tuple[list[dict], _TaskFacts]] = {}
+    self._index_generation = 0
+    self._facts_memo: dict[str, tuple[list[dict], int, _TaskFacts]] = {}
     self._prompt_bodies_dir = cfg.charliebot_home / PROMPT_BODIES_DIR_NAME
+
+  @property
+  def sessions(self) -> SessionManager:
+    """The conversation/attachment service this tree is wired over."""
+    return self._sessions
 
   # ------------------------------------------------------------------
   # Metadata reads/writes (single owner of the v2 fields)
@@ -144,7 +246,7 @@ class TaskTreeManager:
   async def _save_meta(self, meta: SessionMetadata) -> None:
     meta.updated_at = utc_now()
     await self._sessions.save_metadata(meta)
-    self._index = None  # any metadata write may move the projection inputs
+    self._invalidate_index()  # any metadata write may move the projection inputs
 
   # ------------------------------------------------------------------
   # Tree index (rebuildable)
@@ -154,9 +256,20 @@ class TaskTreeManager:
     now = time.monotonic()
     if self._index is not None and now - self._index[1] < _TREE_INDEX_TTL_SECONDS:
       return self._index[0]
+    generation = self._index_generation
     index = await asyncio.to_thread(self._build_index_sync)
-    self._index = (index, now)
+    if self._index_generation == generation:
+      self._index = (index, now)
+    # A structural write landing mid-build bumped the generation: the build's
+    # snapshot is still a valid pre- (or post-) write read for THIS caller,
+    # but it must never be installed over the newer invalidation.
     return index
+
+  def _invalidate_index(self) -> None:
+    """Drop the cached index and bump the generation, so an asynchronous
+    build in flight cannot install a stale result over this write."""
+    self._index = None
+    self._index_generation += 1
 
   def _build_index_sync(self) -> "_TreeIndex":
     sessions_dir = self._cfg.sessions_dir
@@ -172,6 +285,8 @@ class TaskTreeManager:
     except OSError as e:
       raise RuntimeError(f"sessions dir unscannable at {sessions_dir}: {e}") from e
     for name in entries:
+      if name.startswith(".task-") and name.endswith(".tmp"):
+        continue  # an unpublished create's staging directory is never a node
       path = sessions_dir / name / "metadata.json"
       try:
         raw = path.read_text(encoding="utf-8")
@@ -187,7 +302,13 @@ class TaskTreeManager:
       if meta.profile is None:
         continue  # legacy v1 session: not a task-tree node
       children.setdefault(meta.task_parent_id, []).append(sid)
-      structural.append(f"{sid}|{meta.task_parent_id or ''}|{meta.profile}|{meta.presentation}|{meta.status.value}")
+      # The revision covers every input of archive membership (the tree page's
+      # row filter), so a facts-driven membership change during pagination is
+      # a visible 409 instead of a silently omitted or repeated row.
+      facts = self._facts_of(sid)
+      structural.append(
+          f"{sid}|{meta.task_parent_id or ''}|{meta.profile}|{meta.presentation}|{meta.status.value}"
+          f"|{facts.task_state}|{self._archived_facts_based(meta, facts)}")
     for kids in children.values():
       kids.sort(key=lambda sid: (metas[sid].created_at, sid))
     revision_input = "\n".join(sorted(structural))
@@ -238,7 +359,7 @@ class TaskTreeManager:
     """Every ancestor of *session_id* must be an open task (API: 409 otherwise)."""
     index = await self._get_index()
     chain = self._ancestors(index, session_id)
-    closed = [a.id for a in chain if self._facts_of(index, a.id).task_state != "open"]
+    closed = [a.id for a in chain if self._facts_of(a.id).task_state != "open"]
     if closed:
       raise TaskConflictError([f"closed ancestor task(s): {', '.join(closed)}"])
     return chain
@@ -247,61 +368,107 @@ class TaskTreeManager:
   # Derived facts (rebuilt from durable facts, suffix-memoized)
   # ------------------------------------------------------------------
 
-  def _facts_of(self, index: "_TreeIndex", session_id: str) -> _TaskFacts:
-    """The session's task/run facts, folding only the event-stream suffix since the last call.
+  def fact_history(self, session_id: str) -> list[dict]:
+    """The session's full durable fact history: archived segments, then the live log.
+
+    A close/import boundary, a successful acknowledgement, or a delivered
+    report never disappears when chat_events.jsonl rotates — the archived
+    segments remain part of the fact history every fold and every recovery
+    scan reads.
+    """
+    live = self._sessions.load_chat_events_sync(session_id)
+    archived_count = self._archived_event_count(session_id, live)
+    if not archived_count:
+      return live
+    return [*self._load_archived_events(session_id, archived_count), *live]
+
+  def _archived_event_count(self, session_id: str, live: list[dict]) -> int:
+    total = self._sessions.get_chat_event_count_sync(session_id)
+    return max(0, total - len(live))
+
+  def _load_archived_events(self, session_id: str, count: int) -> list[dict]:
+    events, _has_more = self._sessions.load_chat_events_range(session_id, 0, count)
+    return events
+
+  def _facts_of(self, session_id: str) -> _TaskFacts:
+    """The session's folded task/run facts over the full history (suffix-memoized).
 
     The memo rides the chat-events cache's list identity (append-only growth or
-    wholesale replacement), so token streaming extends the fold by its suffix
-    and never re-walks the covered prefix.
+    wholesale replacement) plus the archived extent: token streaming extends
+    the fold by its suffix, and a rotation re-keys the archived half. A
+    task_imported fact in the suffix moves the input boundary, so the suffix
+    fold that sees one restarts from the whole history.
     """
-    events = self._sessions.load_chat_events_sync(session_id)
+    live = self._sessions.load_chat_events_sync(session_id)
+    archived_count = self._archived_event_count(session_id, live)
     cached = self._facts_memo.get(session_id)
-    if cached is not None and cached[0] is events:
-      facts = cached[1]
+    if cached is not None and cached[0] is live and cached[1] == archived_count:
+      facts = cached[2]
     else:
       facts = _TaskFacts()
-    start = facts.covered
-    for event in events[start:]:
-      etype = event.get("type")
-      if etype == ET.TASK_CLOSED:
-        facts.task_state = str(event.get("outcome") or "completed")
-      elif etype == ET.TASK_REOPENED:
-        facts.task_state = "open"
-      elif etype == ET.RUN_FINISHED:
-        run_id = event.get("run_id")
-        if isinstance(run_id, str):
-          facts.run_outcomes[run_id] = str(event.get("outcome"))
-    facts.covered = len(events)
-    self._facts_memo[session_id] = (events, facts)
+      if archived_count:
+        facts = _fold_task_events(facts, self._load_archived_events(session_id, archived_count), 0)
+      facts.covered = 0
+      self._facts_memo[session_id] = (live, archived_count, facts)
+    suffix = live[facts.covered:]
+    if suffix:
+      if any(event.get("type") == ET.TASK_IMPORTED for event in suffix):
+        rebuilt = _TaskFacts()
+        if archived_count:
+          rebuilt = _fold_task_events(rebuilt, self._load_archived_events(session_id, archived_count), 0)
+        facts = _fold_task_events(rebuilt, live, archived_count)
+      else:
+        facts = _fold_task_events(facts, suffix, archived_count + facts.covered)
+      facts.covered = len(live)
+      self._facts_memo[session_id] = (live, archived_count, facts)
     return facts
 
+  def facts_of(self, session_id: str) -> _TaskFacts:
+    """Public fold entry for the input/completion owners (same memo)."""
+    return self._facts_of(session_id)
+
+  def task_state(self, session_id: str) -> str:
+    """The task's derived lifecycle state without a caller-held index."""
+    return self._facts_of(session_id).task_state
+
   def task_state_of(self, index: "_TreeIndex", session_id: str) -> str:
-    return self._facts_of(index, session_id).task_state
+    return self._facts_of(session_id).task_state
 
   def work_state_of(self, index: "_TreeIndex", session_id: str) -> WorkState:
-    """idle | running | waiting | attention, rebuilt from run records plus terminal facts."""
-    meta = self._index_meta(index, session_id)
-    facts = self._facts_of(index, session_id)
+    """idle | running | waiting | attention, from CURRENT unresolved facts.
+
+    An active run wins, then an unresolved failure, then waiting work. A
+    failed or interrupted run draws attention only while it stands
+    unresolved: a successful authorized retry (the retry_of_run_id chain)
+    resolves the older failure instead of leaving attention forever.
+    """
+    facts = self._facts_of(session_id)
     runs = self.runs.list_run_records_sync(session_id)
+    events = self.runs.load_events_sync(session_id)
     host_boot = self._host_boot_time()
+    superseded: set[str] = set()
+    for run in runs:
+      if facts.run_outcomes.get(run.id) == "success":
+        target = run.retry_of_run_id
+        while target is not None and target not in superseded:
+          superseded.add(target)
+          target = next((r.retry_of_run_id for r in runs if r.id == target), None)
     verdicts: list[str] = []
     for run in runs:
       outcome = facts.run_outcomes.get(run.id)
+      if outcome is not None:
+        if outcome in ("failed", "interrupted") and run.id not in superseded:
+          verdicts.append("attention")
+        continue
       alive = self.runs.run_is_active(run, [], host_boot)
-      if outcome is None:
-        if run.pid is None:
-          verdicts.append("waiting")  # queued: retains inputs for later dispatch
-        elif alive:
-          verdicts.append("running")
-        else:
-          verdicts.append("attention")  # launched, exit observed by nobody yet
+      if run.pid is None:
+        if self.runs.stop_requested(events, run.id):
+          continue  # a stopped queued run is resolved-by-request, not waiting work
+        verdicts.append("waiting")  # queued: retains its inputs for later dispatch
       elif alive:
         verdicts.append("running")
-      elif outcome in ("failed", "interrupted"):
-        verdicts.append("attention")
       else:
-        verdicts.append("idle")
-    _ = meta  # reserved: automation_paused gates *dispatch*, not the work-state display
+        verdicts.append("attention")  # launched, exit observed by nobody yet
     for state in ("running", "attention", "waiting"):
       if state in verdicts:
         return state  # type: ignore[return-value]
@@ -311,9 +478,36 @@ class TaskTreeManager:
     from src.core.runs import read_host_boot_time
     return read_host_boot_time()
 
-  def archived_of(self, meta: SessionMetadata) -> bool:
-    """Archive visibility: the legacy status flag or the user's hidden preference."""
-    return meta.status == SessionStatus.ARCHIVED or meta.presentation == "hidden"
+  def _archived_facts_based(self, meta: SessionMetadata, facts: _TaskFacts) -> bool:
+    """Archive visibility from a pre-folded fact set (the index build's form)."""
+    if meta.presentation == "hidden":
+      return True
+    if meta.presentation == "shown":
+      return False
+    if meta.status == SessionStatus.ARCHIVED:
+      return True  # a legacy archived preference stays an archive preference
+    if facts.task_state != "completed":
+      # Failed, blocked, cancelled, and open tasks stay visible; cancelled ones
+      # until the user explicitly hides them.
+      return False
+    completed = [c for c in facts.close_events if c.get("outcome") == "completed"]
+    if not completed:
+      return False
+    close = completed[-1]
+    recipient = close.get("report_to")
+    if not recipient:
+      return True  # a root task archives immediately on its own success
+    parent_facts = self._facts_of(str(recipient))
+    return (meta.id, str(close.get("id"))) in parent_facts.delivered_reports
+
+  def archived_of(self, index: "_TreeIndex", meta: SessionMetadata) -> bool:
+    """Archive visibility: the explicit preference, or auto after successful receipt.
+
+    presentation=auto archives a successful task once its parent receipt is on
+    disk (a root immediately on success); shown keeps it visible; hidden is an
+    explicit user collapse. Reopened nodes are open again, so they unarchive.
+    """
+    return self._archived_facts_based(meta, self._facts_of(meta.id))
 
   def session_row(self, index: "_TreeIndex", session_id: str) -> SessionRow:
     meta = self._index_meta(index, session_id)
@@ -328,7 +522,7 @@ class TaskTreeManager:
         task_parent_id=meta.task_parent_id,
         task_state=self.task_state_of(index, session_id),  # type: ignore[arg-type]
         work_state=self.work_state_of(index, session_id),
-        archived=self.archived_of(meta),
+        archived=self.archived_of(index, meta),
         child_count=len(child_ids),
         open_descendant_count=open_count,
         attention_descendant_count=attention_count,
@@ -349,7 +543,7 @@ class TaskTreeManager:
     payload.update({
         "task_state": self.task_state_of(index, session_id),
         "work_state": self.work_state_of(index, session_id),
-        "archived": self.archived_of(indexed),
+        "archived": self.archived_of(index, indexed),
         "ancestors": [AncestorRef(id=a.id, name=a.name).model_dump() for a in ancestors],
     })
     return payload
@@ -383,6 +577,13 @@ class TaskTreeManager:
     async with self.control_lock:
       existing = await self.load_meta(task_id)
       if existing is not None:
+        # A replayed operation returns its original product only to a caller
+        # authorized for that same create — the replay is never an
+        # authorization bypass.
+        if isinstance(caller, CallerIdentity) and not caller.is_operator:
+          parent_meta = await self.load_meta(task_parent_id) if task_parent_id is not None else None
+          parent_meta = parent_meta if parent_meta is not None and parent_meta.profile is not None else None
+          await self._authorize_agent_worker_creation(caller, profile, task_parent_id, parent_meta)
         return existing
       parent_meta: SessionMetadata | None = None
       # Caller scope first: an agent's 403 must not depend on the target's shape.
@@ -413,7 +614,7 @@ class TaskTreeManager:
           parent_meta=parent_meta,
           actor=ACTOR_USER if (isinstance(caller, CallerIdentity) and caller.is_operator) else ACTOR_AGENT,
       )
-    self._index = None
+    self._invalidate_index()
     # The publish rename took the node out from under any cached entry.
     self._sessions._invalidate_cache(task_id)
     fresh = await self.load_meta(task_id)
@@ -441,7 +642,7 @@ class TaskTreeManager:
 
   async def _require_open_ancestry_from_index(self, index: "_TreeIndex", session_id: str) -> None:
     chain = self._ancestors(index, session_id)
-    closed = [a.id for a in chain if self._facts_of(index, a.id).task_state != "open"]
+    closed = [a.id for a in chain if self._facts_of(a.id).task_state != "open"]
     if closed:
       raise TaskConflictError([f"closed ancestor task(s): {', '.join(closed)}"])
 
@@ -653,16 +854,17 @@ class TaskTreeManager:
         blockers.append(f"reparent target {new_parent_id} is inside {session_id}'s own subtree")
       else:
         closed = [a.id for a in self._ancestors(index, new_parent_id)
-                  if self._facts_of(index, a.id).task_state != "open"]
+                  if self._facts_of(a.id).task_state != "open"]
         if closed:
           blockers.append(f"closed ancestor task(s): {', '.join(closed)}")
     # The moving subtree itself must be idle: every node in it, self included.
     subtree = [session_id, *self._descendants(index, session_id)]
     for sid in subtree:
       blockers.extend(f"{sid}: {b}" for b in self._structural_blockers(sid))
-    # Historical child_report recipients (report_to) are fixed facts of past
-    # close events and are never rewritten by a move; the seam for *pending*
-    # (undelivered) reports is the input-delivery stage's.
+      # Every undelivered close report anywhere in the moving subtree is
+      # repaired before a move; historical report_to recipients are fixed
+      # facts and are never rewritten by the move itself.
+      blockers.extend(f"{sid}: {b}" for b in self.dispatch.undelivered_report_blockers(sid))
     return blockers
 
   async def _apply_prompt_change(self, session_id: str, meta: SessionMetadata, scope: str, body: str | None) -> None:
@@ -737,9 +939,18 @@ class TaskTreeManager:
   # ------------------------------------------------------------------
 
   async def deletion_blockers(self, session_id: str) -> list[str]:
-    """Permanent delete requires an empty task: no children, runs, triggers or references."""
+    """Permanent delete requires an empty, unreferenced task (the check half)."""
     index = await self._get_index()
     self._index_meta(index, session_id)
+    meta = index.metas[session_id]
+    if meta.profile is None:
+      blockers = self._legacy_deletion_blockers(index, session_id)
+    else:
+      blockers = self._deletion_blockers_locked(index, session_id)
+    return blockers
+
+  def _legacy_deletion_blockers(self, index: "_TreeIndex", session_id: str) -> list[str]:
+    """The v1 check set (children via the flat index, runs, triggers, aliases)."""
     blockers: list[str] = []
     children = self._children_of(index, session_id)
     if children:
@@ -750,10 +961,66 @@ class TaskTreeManager:
     triggers_dir = self._cfg.sessions_dir / session_id / "triggers"
     if triggers_dir.is_dir() and any(triggers_dir.glob("*.json")):
       blockers.append("has saved trigger reference(s)")
-    # Any imported old id resolving here is a structured saved reference too.
     for old_id in self.aliases.old_ids_for(session_id):
       blockers.append(f"referenced by session alias for old id {old_id}")
     return blockers
+
+  def _deletion_blockers_locked(self, index: "_TreeIndex", session_id: str) -> list[str]:
+    """The v2 empty/unreferenced rule, evaluated under the control lock.
+
+    No children, runs, triggers, aliases, or any other saved structured
+    reference (origin/created-by/parent/successor pointers from other
+    records, child reports another log holds), and no preserved conversation
+    or evidence beyond the creation fact itself.
+    """
+    blockers = self._legacy_deletion_blockers(index, session_id)
+    facts = self._facts_of(session_id)
+    substance = [
+        e for e in facts.events_by_id.values() if e.get("type") != ET.TASK_CREATED]
+    if substance:
+      kinds = sorted({str(e.get("type")) for e in substance})
+      blockers.append(f"has preserved conversation/evidence: {', '.join(kinds)}")
+    for other_id, other in index.metas.items():
+      if other_id == session_id or other.profile is None:
+        continue
+      refs: list[str] = []
+      if other.parent_session_id == session_id:
+        refs.append("parent_session_id")
+      if other.successor_session_id == session_id:
+        refs.append("successor_session_id")
+      if other.origin_ref is not None and other.origin_ref.session_id == session_id:
+        refs.append("origin_ref")
+      if other.created_by_event is not None and other.created_by_event.session_id == session_id:
+        refs.append("created_by_event")
+      if refs:
+        blockers.append(f"referenced by task {other_id} ({', '.join(refs)})")
+        continue
+      other_facts = self._facts_of(other_id)
+      if any(child == session_id for child, _event in other_facts.delivered_reports):
+        blockers.append(f"referenced by a child report in task {other_id}")
+    return blockers
+
+  async def delete_permanently(self, session_id: str, *, caller: object) -> bool:
+    """Check and delete under the one control lock: no separate toctou window.
+
+    Operator scope only for v2 nodes; the empty/unreferenced rule is
+    re-evaluated inside the lock immediately before the delete.
+    """
+    if not isinstance(caller, CallerIdentity) or not caller.is_operator:
+      raise TaskForbiddenError("permanent delete requires operator credentials")
+    async with self.control_lock:
+      index = await self._get_index()
+      self._index_meta(index, session_id)
+      meta = index.metas[session_id]
+      if meta.profile is not None:
+        blockers = self._deletion_blockers_locked(index, session_id)
+        if blockers:
+          raise TaskConflictError(sorted(set(blockers)))
+      result = await self._sessions.delete_session_permanently(session_id)
+    if result:
+      self._invalidate_index()
+      self._facts_memo.pop(session_id, None)
+    return result
 
 
 # ---------------------------------------------------------------------------

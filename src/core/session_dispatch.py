@@ -1,0 +1,422 @@
+"""Input delivery, deduplication, claims, and parent reports for the task tree.
+
+This module owns the input side of the delivery stage: admission of browser,
+agent-relay, cron, and child-report input as durable facts with stable
+identity; the pure recoverable pending-input calculation over the fact
+history; the per-node input claims that bind one exact batch to one Run
+before launch; and the parent-report delivery with its fixed recipient.
+
+Ordering contract (the one this stage exists to pin):
+
+- Every accepted input is durable (``chat_events.jsonl``, through the control
+  sink, under the tree control write lock) before any acknowledgement, live
+  notification, or launch effect. Live notification happens after the lock is
+  released; a notification failure is repaired by catch-up, never by a second
+  persisted copy.
+- A node has at most one executing input consumer while siblings progress
+  independently: a Run claims one exact batch, later arrivals stay pending for
+  the next run, and only that Run's own successful ``run_finished``
+  acknowledges its batch. Failures and interruptions acknowledge nothing.
+- Recovery derives everything from disk facts — the valid input boundary
+  (post-creation, or post-import plus the explicitly listed old pending
+  inputs), minus successful acknowledgements, minus live claims — so a fresh
+  manager computes the same pending set as the process that died.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import TYPE_CHECKING
+
+from src.core import event_types as ET
+from src.core.control_events import (
+    ACTOR_AGENT,
+    ACTOR_SYSTEM,
+    ACTOR_USER,
+    build_control_event,
+    stable_child_report_id,
+)
+from src.core.log_once import LazyStructlogLogger
+
+if TYPE_CHECKING:
+    from src.core.task_sessions import TaskTreeManager
+
+log = LazyStructlogLogger()
+
+# The event types that carry consumable task input. Real user input is the
+# USER type and nothing else: agent relays, scheduled triggers, and child
+# reports keep their own types even when their text contains a takeoff
+# phrase, so machine input can never mint or revoke a user authorization
+# window (the takeoff gate judges ET.USER events only).
+INPUT_EVENT_TYPES: frozenset[str] = frozenset(
+    {ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT})
+
+# The admitted input types a browser/operator or agent route may produce. A
+# run-token caller using a user-message route is agent input; only verified
+# operator credentials are user input (route layer passes the type).
+ROUTE_INPUT_TYPES: frozenset[str] = frozenset({ET.USER, ET.AGENT_MESSAGE})
+
+# Control events whose projected message deltas the live wire carries (the
+# raw forms are suppressed next to them in sessions.py). run_finished,
+# task_created, prompt_changed, run_stop_requested, and task_close_requested
+# stay off the wire: they are facts the tree projection reads, not chat.
+ANNOUNCED_CONTROL_TYPES: frozenset[str] = frozenset(
+    {ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT,
+     ET.TASK_CLOSED, ET.TASK_REOPENED})
+
+
+class TaskInputDispatcher:
+    """The input/report owner wired over one TaskTreeManager."""
+
+    def __init__(self, tree: "TaskTreeManager") -> None:
+        self._tree = tree
+        # The execution-stage seam: an async callable (session_id, pending input
+        # event dicts) that binds a Run and launches. None until the execution
+        # adapters land — admission and recovery work without it, and no
+        # acknowledgement ever stands in for a Run that did not run.
+        self.executor: "object | None" = None
+
+    # ------------------------------------------------------------------
+    # Admission
+    # ------------------------------------------------------------------
+
+    async def admit_input(
+        self,
+        session_id: str,
+        *,
+        event_type: str,
+        content: str,
+        actor: str,
+        uploaded_files: list[dict] | None = None,
+        input_id: str | None = None,
+        timestamp: str | None = None,
+        from_session: str | None = None,
+        from_session_name: str | None = None,
+    ) -> dict:
+        """Persist one input as a durable fact and return it.
+
+        Identity is stable: a caller retrying with the same ``input_id`` gets
+        the original event back and no second append. The event lands before
+        the lock is released; the live announcement follows outside the lock.
+        ``event_type`` is the caller's proof of origin — the user-message
+        route may mint USER only for operator callers (the route enforces
+        that; this method refuses the mismatch as a backstop).
+        """
+        from src.core.task_sessions import TaskForbiddenError, TaskInvalidError
+
+        if event_type not in INPUT_EVENT_TYPES:
+            raise TaskInvalidError(f"{event_type} is not a task input type")
+        if event_type == ET.USER and actor != ACTOR_USER:
+            raise TaskForbiddenError("only verified operator input is a real user message")
+        tree = self._tree
+        epoch = await tree.sessions.prime_aggregator(session_id)
+        async with tree.control_lock:
+            meta = await tree.load_meta(session_id)
+            tree._require_task(meta, session_id)
+            events = tree.fact_history(session_id)
+            if input_id is not None:
+                existing = next((e for e in events if e.get("id") == input_id), None)
+                if existing is not None:
+                    # A replayed input keeps its original identity, timestamps,
+                    # content, and attachments; no second durable copy exists.
+                    return existing
+            event = build_control_event(
+                event_type,
+                actor=actor,
+                source_session_id=session_id,
+                event_id=input_id,
+                content=content,
+            )
+            if timestamp is not None:
+                event["timestamp"] = timestamp  # imported history keeps original times
+            if uploaded_files:
+                event["uploaded_files"] = uploaded_files
+            if from_session is not None:
+                event["from_session"] = from_session
+            if from_session_name is not None:
+                event["from_session_name"] = from_session_name
+            await tree.events.append(session_id, event)
+        await tree.sessions.announce_appended_event(session_id, event, epoch=epoch)
+        return event
+
+    # ------------------------------------------------------------------
+    # Pending inputs (pure, recoverable)
+    # ------------------------------------------------------------------
+
+    def pending_inputs(self, session_id: str) -> list[dict]:
+        """The task's currently pending input events, derived from disk facts.
+
+        Exactly the valid input boundary (post-creation for fresh tasks;
+        post-import plus only the explicitly listed old pending inputs for
+        imported ones), minus ids a successful run_finished acknowledged,
+        minus ids currently claimed by registered queued/active Runs. A
+        stopped queued Run claims nothing: it will never launch, so its batch
+        returns to the pending set for the next consumer.
+        """
+        from src.core.task_sessions import TaskInvalidError
+
+        tree = self._tree
+        facts = tree.facts_of(session_id)
+        if facts.boundary_index is None and not facts.imported_pending_ids:
+            raise TaskInvalidError(
+                f"task {session_id} has no creation or import boundary; it is not a task-tree node")
+        runs = tree.runs.list_run_records_sync(session_id)
+        events = tree.fact_history(session_id)
+        confirmed: set[str] = set()
+        for event in events:
+            if event.get("type") == ET.RUN_FINISHED and event.get("outcome") == "success":
+                ids = event.get("input_event_ids")
+                if isinstance(ids, list):
+                    confirmed.update(str(i) for i in ids)
+        claimed: set[str] = set()
+        for run in runs:
+            if tree.runs.run_has_terminal_fact(run, events):
+                continue
+            if run.pid is None and tree.runs.stop_requested(events, run.id):
+                continue  # a stopped queued run never launches and never claims
+            claimed.update(run.input_event_ids)
+        pending: dict[str, dict] = {}
+        for event in facts.input_candidates:
+            input_id = str(event.get("id"))
+            if input_id in confirmed or input_id in claimed:
+                continue
+            pending[input_id] = event
+        return list(pending.values())
+
+    def pending_input_blockers(self, session_id: str) -> list[str]:
+        """The structural-mutation blocker form of the pending set (the tree seam)."""
+        pending = self.pending_inputs(session_id)
+        if not pending:
+            return []
+        ids = ", ".join(str(e.get("id")) for e in pending[:8])
+        more = "" if len(pending) <= 8 else f" (+{len(pending) - 8} more)"
+        return [f"has unprocessed input: {ids}{more}"]
+
+    # ------------------------------------------------------------------
+    # Claims
+    # ------------------------------------------------------------------
+
+    async def claim_input_batch(self, session_id: str, run_id: str, *, input_ids: list[str] | None = None) -> list[str]:
+        """Atomically bind the exact pending batch to *run_id* before launch.
+
+        Later arrivals stay pending for the next run. The binding is the run
+        record's own metadata write under the control lock, so a concurrent
+        consumer can never double-claim, and a finished or already-launched or
+        stop-requested run claims nothing.
+        """
+        from src.core.json_utils import atomic_write_text
+        from src.core.task_sessions import TaskConflictError, TaskNotFoundError
+
+        tree = self._tree
+        async with tree.control_lock:
+            run = await tree.runs.get_run(session_id, run_id)
+            if run is None:
+                raise TaskNotFoundError(f"run {run_id} not found in session {session_id}")
+            events = tree.runs.load_events_sync(session_id)
+            if tree.runs.run_has_terminal_fact(run, events):
+                raise TaskConflictError([f"run {run_id} already finished; it claims no new inputs"])
+            if run.pid is not None:
+                raise TaskConflictError([f"run {run_id} already launched; it owns its bound batch"])
+            if tree.runs.stop_requested(events, run_id):
+                raise TaskConflictError([f"run {run_id} has a durable stop request; it never launches"])
+            pending_ids = [str(e.get("id")) for e in self.pending_inputs(session_id)]
+            if input_ids is None:
+                batch = pending_ids
+            else:
+                unknown = [i for i in input_ids if i not in pending_ids]
+                if unknown:
+                    raise TaskConflictError(
+                        [f"input(s) not pending for {session_id}: {', '.join(unknown)}"])
+                batch = list(input_ids)
+            run.input_event_ids = [*run.input_event_ids, *batch]
+            await asyncio.to_thread(
+                atomic_write_text,
+                tree.runs.metadata_path(session_id, run_id),
+                run.model_dump_json(indent=2),
+            )
+        return batch
+
+    # ------------------------------------------------------------------
+    # Launch decision (the executor seam)
+    # ------------------------------------------------------------------
+
+    async def dispatch_pending(self, session_id: str) -> dict:
+        """Evaluate the launch decision for one node's pending inputs.
+
+        Closed nodes keep late input as history and attention-to-view; paused
+        nodes keep it durable without starting work. While a queued or active
+        consumer exists, later arrivals wait for it. With an executor
+        registered the pending batch is handed over after admission; without
+        one this stage records exactly that and acknowledges nothing.
+        """
+
+        tree = self._tree
+        meta = await tree.load_meta(session_id)
+        tree._require_task(meta, session_id)
+        assert meta is not None
+        pending = self.pending_inputs(session_id)
+        decision: dict = {"session_id": session_id, "pending": len(pending)}
+        if tree.task_state(meta.id) != "open":
+            decision["launch"] = False
+            decision["reason"] = "task is closed; input retained as history"
+            return decision
+        if meta.automation_paused:
+            decision["launch"] = False
+            decision["reason"] = "automation_paused; input retained until resume"
+            return decision
+        events = tree.runs.load_events_sync(session_id)
+        for run in tree.runs.list_run_records_sync(session_id):
+            if tree.runs.run_has_terminal_fact(run, events):
+                continue
+            if run.pid is None and tree.runs.stop_requested(events, run.id):
+                continue  # a stopped queued run is never launched
+            decision["launch"] = False
+            decision["reason"] = f"run {run.id} already consumes this node's inputs"
+            return decision
+        if not pending:
+            decision["launch"] = False
+            decision["reason"] = "no pending inputs"
+            return decision
+        if self.executor is None:
+            decision["launch"] = False
+            decision["reason"] = "execution adapters register in the next stage"
+            log.info("task_input_executor_pending", session_id=session_id, pending=len(pending))
+            return decision
+        decision["launch"] = True
+        await self.executor(session_id, pending)  # type: ignore[misc]
+        return decision
+
+    # ------------------------------------------------------------------
+    # Parent reports
+    # ------------------------------------------------------------------
+
+    async def deliver_child_report(
+        self,
+        child_session_id: str,
+        *,
+        source_event: dict,
+        outcome: str,
+        summary: str,
+        result_refs: list[str] | None = None,
+        recipient: str | None,
+        actor: str = ACTOR_AGENT,
+    ) -> dict | None:
+        """Persist one child_report fact to the fixed recipient's log.
+
+        The report id derives from the child event and the recipient, so a
+        retry, a recovery pass, or a reparent re-derives the same id and finds
+        the already-delivered report instead of duplicating it. Parent log
+        persistence IS delivery — the parent model consuming it is a separate,
+        later concern. A root task (recipient None) requires no receipt.
+        """
+        from src.core.task_sessions import TaskNotFoundError
+
+        if recipient is None:
+            return None
+        tree = self._tree
+        report_id = stable_child_report_id(
+            child_session_id, str(source_event.get("id")), recipient)
+        epoch = await tree.sessions.prime_aggregator(recipient)
+        async with tree.control_lock:
+            parent_meta = await tree.load_meta(recipient)
+            if parent_meta is None:
+                raise TaskNotFoundError(f"report recipient task {recipient} not found")
+            parent_events = tree.fact_history(recipient)
+            existing = next((e for e in parent_events if e.get("id") == report_id), None)
+            if existing is not None:
+                return existing
+            report = build_control_event(
+                ET.CHILD_REPORT,
+                actor=actor,
+                source_session_id=child_session_id,
+                event_id=report_id,
+                child_session_id=child_session_id,
+                child_event_id=str(source_event.get("id")),
+                outcome=outcome,
+                summary=summary,
+                result_refs=list(result_refs or []),
+            )
+            await tree.events.append(recipient, report)
+        await tree.sessions.announce_appended_event(recipient, report, epoch=epoch)
+        return report
+
+    async def recover_pending_reports(self, session_id: str) -> list[dict]:
+        """Repair the crash window *child result saved before parent append*.
+
+        Scans this task's close facts whose ``report_to`` names a recipient and
+        delivers every close report the recipient's log does not hold yet.
+        Recovery never duplicates: the stable report id dedups against the
+        parent's fact history, so repeated passes and fresh instances converge
+        on the same single report event. Late reports to a closed parent stay
+        history (the parent is not reopened by them).
+        """
+        tree = self._tree
+        meta = await tree.load_meta(session_id)
+        tree._require_task(meta, session_id)
+        facts = tree.facts_of(session_id)
+        delivered: list[dict] = []
+        for close in facts.close_events:
+            recipient = close.get("report_to")
+            if not recipient:
+                continue
+            outcome = str(close.get("outcome") or "completed")
+            report = await self.deliver_child_report(
+                session_id,
+                source_event=close,
+                outcome=outcome,
+                summary=str(close.get("summary") or ""),
+                result_refs=list(close.get("result_refs") or []),
+                recipient=str(recipient),
+                actor=ACTOR_SYSTEM,
+            )
+            if report is not None:
+                delivered.append(report)
+        return delivered
+
+    def undelivered_report_blockers(self, session_id: str) -> list[str]:
+        """The reparent-guard form of the crash-window repair: every close fact
+        this task still owes its fixed recipient (the entire moving subtree is
+        guarded by the caller walking its nodes)."""
+        tree = self._tree
+        facts = tree.facts_of(session_id)
+        blockers: list[str] = []
+        for close in facts.close_events:
+            recipient = close.get("report_to")
+            if not recipient:
+                continue
+            report_id = stable_child_report_id(session_id, str(close.get("id")), str(recipient))
+            parent_events = tree.fact_history(str(recipient))
+            if not any(e.get("id") == report_id for e in parent_events):
+                blockers.append(
+                    f"has an undelivered parent report for close event {close.get('id')}")
+        return blockers
+
+
+def input_event_type_for_caller(caller: object) -> str:
+    """The input type a verified caller identity may produce on a message route.
+
+    Browser and operator credentials are user input; a run-token agent on the
+    same route stays agent input with its own session's provenance — it can
+    never manufacture a real USER event or another caller's provenance.
+    """
+    from src.core.run_token import CallerIdentity
+    from src.core.task_sessions import TaskForbiddenError
+
+    if isinstance(caller, CallerIdentity):
+        if caller.is_operator:
+            return ET.USER
+        claims = caller.claims
+        assert claims is not None
+        return ET.AGENT_MESSAGE
+    raise TaskForbiddenError("message input requires verified caller credentials")
+
+
+def agent_provenance(caller: object) -> tuple[str | None, str | None]:
+    """The (from_session, from_session_name) provenance for agent-relayed input."""
+    from src.core.run_token import CallerIdentity
+
+    if isinstance(caller, CallerIdentity) and not caller.is_operator:
+        claims = caller.claims
+        assert claims is not None
+        return claims.session_id, None
+    return None, None

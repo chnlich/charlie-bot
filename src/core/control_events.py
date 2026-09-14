@@ -48,6 +48,34 @@ def stable_run_id(session_id: str, request_id: str) -> str:
   return str(uuid.uuid5(TASK_ID_NAMESPACE, f"run:{session_id}:{request_id}"))
 
 
+def stable_close_request_event_id(session_id: str, request_id: str) -> str:
+  """The event id one (session, request_id) close request binds to: repeated
+  recovery replays the same task_close_requested fact, never a second one."""
+  return str(uuid.uuid5(TASK_ID_NAMESPACE, f"close-request:{session_id}:{request_id}"))
+
+
+def stable_close_event_id(session_id: str, request_id: str) -> str:
+  """The event id one (session, request_id) close binds to: a duplicate close
+  operation id replays the original task_closed fact instead of a new transition,
+  across later reopen/close epochs alike."""
+  return str(uuid.uuid5(TASK_ID_NAMESPACE, f"task-closed:{session_id}:{request_id}"))
+
+
+def stable_reopen_event_id(session_id: str, request_id: str) -> str:
+  """The event id one (session, request_id) reopen binds to (same replay rule)."""
+  return str(uuid.uuid5(TASK_ID_NAMESPACE, f"task-reopened:{session_id}:{request_id}"))
+
+
+def stable_child_report_id(child_session_id: str, source_event_id: str, recipient_session_id: str) -> str:
+  """The child_report id one (child event, fixed recipient) pair derives to.
+
+  The recipient is part of the identity: task_closed.report_to fixes delivery
+  ownership at close time, so retries, recovery, and reparenting can never
+  retarget or duplicate a historical report."""
+  return str(uuid.uuid5(
+      TASK_ID_NAMESPACE, f"child-report:{child_session_id}:{source_event_id}:{recipient_session_id}"))
+
+
 def sha256_hex(text: str) -> str:
   """The SHA-256 hex digest of *text* (UTF-8) — the prompt-body and task-spec fingerprint."""
   return hashlib.sha256(text.encode("utf-8")).hexdigest()

@@ -144,13 +144,13 @@ from src.core.codex_usage import (
   CODEX_TURN_CONTEXT,
   DEFAULT_CODEX_HOME,
 )
-from src.core.config import get_config
+from src.core.config import default_claude_dir, get_config
 from src.core.json_utils import atomic_write_stream
 from src.core.models import BackendType
 from src.core.runs import DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RAW_LOG_NAME
 from src.core.threads import EVENTS_LOG_NAME, METADATA_NAME, THREADS_DIR_NAME
 
-DEFAULT_CLAUDE_DIR = Path.home() / ".claude"
+DEFAULT_CLAUDE_DIR = default_claude_dir()
 DEFAULT_OPENCODE_DB = Path.home() / ".local/share/opencode/opencode.db"
 
 FIELDS = ("in_fresh", "cache_write", "cache_read", "output", "calls")

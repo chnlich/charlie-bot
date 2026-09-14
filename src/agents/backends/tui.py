@@ -31,7 +31,7 @@ from src.agents.backends.pty_common import (
     tmux_session_exists,
     tmux_session_name,
 )
-from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR
+from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, default_claude_dir
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendType
 
@@ -58,7 +58,7 @@ def _find_existing_claude_jsonl(session_id: str) -> Path | None:
         return path
     elif time.monotonic() < miss_deadline:
       return None
-  matches = list(Path.home().glob(f".claude/projects/*/{session_id}.jsonl"))
+  matches = list(default_claude_dir().glob(f"projects/*/{session_id}.jsonl"))
   path = matches[0] if matches else None
   _jsonl_path_memo[session_id] = (path, time.monotonic() + _JSONL_MISS_TTL_SECONDS)
   return path

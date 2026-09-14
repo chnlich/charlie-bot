@@ -474,7 +474,7 @@ async def test_claude_ai_title_returns_when_no_jsonl_exists(
     tmp_path: Path,
 ) -> None:
   home_dir = tmp_path / "home"
-  monkeypatch.setattr(autonamer.Path, "home", staticmethod(lambda: home_dir))
+  monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
   session_mgr = AsyncMock()
   session_meta = SessionMetadata(id="session-no-jsonl", name="Session 1")
 
@@ -489,7 +489,7 @@ async def test_claude_ai_title_returns_when_jsonl_has_no_ai_title(
     tmp_path: Path,
 ) -> None:
   home_dir = tmp_path / "home"
-  monkeypatch.setattr(autonamer.Path, "home", staticmethod(lambda: home_dir))
+  monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
   session_meta = SessionMetadata(id="session-no-title", name="Session 2")
   session_mgr = AsyncMock()
   _write_claude_jsonl(
@@ -523,7 +523,7 @@ async def test_claude_ai_title_applies_title_for_default_session(
     tmp_path: Path,
 ) -> None:
   home_dir = tmp_path / "home"
-  monkeypatch.setattr(autonamer.Path, "home", staticmethod(lambda: home_dir))
+  monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
   session_meta = SessionMetadata(id="session-title", name="Session 3")
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="session-title", name="Session 3")
@@ -558,7 +558,7 @@ async def test_claude_ai_title_prefixes_default_session_number(
     tmp_path: Path,
 ) -> None:
   home_dir = tmp_path / "home"
-  monkeypatch.setattr(autonamer.Path, "home", staticmethod(lambda: home_dir))
+  monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
   session_meta = SessionMetadata(id="session-tui-prefix", name="Session 77")
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="session-tui-prefix", name="Session 77")
@@ -586,7 +586,7 @@ async def test_claude_ai_title_does_not_overwrite_manual_session_name(
     tmp_path: Path,
 ) -> None:
   home_dir = tmp_path / "home"
-  monkeypatch.setattr(autonamer.Path, "home", staticmethod(lambda: home_dir))
+  monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
   session_meta = SessionMetadata(id="session-manual", name="My Custom Name")
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="session-manual", name="My Custom Name")

@@ -50,7 +50,7 @@ def _rendered_overlay_alert(event: dict) -> list[dict]:
   """Feed a persisted event through the aggregator; return visible message deltas."""
   return [
       delta["message"]
-      for delta in MessageAggregator().feed_all([event])
+      for delta in MessageAggregator().feed(event)
       if delta.get("type") == "message" and delta.get("message", {}).get("role") == "system"
   ]
 

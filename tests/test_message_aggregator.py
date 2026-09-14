@@ -695,7 +695,7 @@ def test_stable_history_leaves_tool_result_and_slash_users_on_immediate_path() -
       },
   ]
   live = MessageAggregator()
-  live_messages = [delta["message"] for delta in live.feed_all(events) if delta["type"] == "message"]
+  live_messages = [delta["message"] for ev in events for delta in live.feed(ev) if delta["type"] == "message"]
 
   messages = events_to_messages(events)
 

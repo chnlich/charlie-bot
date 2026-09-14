@@ -498,7 +498,8 @@ def _full_projection(home: Path, session_id: str, cfg: CharlieBotConfig) -> list
 def _assert_round_operable(events: list[dict]) -> None:
   """The round closes with a separator whose event_index is present — the
   render condition for Clone to here / Elon-e / Recap."""
-  messages = [d["message"] for d in MessageAggregator().feed_all(events) if d.get("type") == "message"]
+  agg = MessageAggregator()
+  messages = [d["message"] for ev in events for d in agg.feed(ev) if d.get("type") == "message"]
   separators = [m for m in messages if m.get("role") == "separator"]
   assert separators, "no separator row projected for the recovered round"
   assert all(m.get("event_index") is not None for m in separators)

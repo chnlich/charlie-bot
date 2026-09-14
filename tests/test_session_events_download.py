@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from conftest import OPUS_BACKEND_OPTION, make_session_mgr
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -80,7 +81,7 @@ def test_missing_session_is_404(profile_home: Path) -> None:
   assert resp.status_code == 404
 
 
-def test_repeat_gzip_download_recompresses_nothing(profile_home: Path, monkeypatch) -> None:
+def test_repeat_gzip_download_recompresses_nothing(profile_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A repeat gzip download of an unchanged file must serve the stored
   compressed body with zero deflate calls."""
   cfg, mgr, sid = _session_with_events(profile_home)
@@ -99,7 +100,7 @@ def test_repeat_gzip_download_recompresses_nothing(profile_home: Path, monkeypat
   assert resp.content == first.content
 
 
-def test_gzip_download_recompresses_when_file_appends(profile_home: Path, monkeypatch) -> None:
+def test_gzip_download_recompresses_when_file_appends(profile_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """An append moves the stat pair the memo keys on — the move must re-run the
   deflate over the fresh bytes, never serve the old form."""
   cfg, mgr, sid = _session_with_events(profile_home)

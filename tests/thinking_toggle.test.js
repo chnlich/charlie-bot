@@ -16,7 +16,7 @@ const { loadToggleHarness } = require('./chat_rendering_context_stub');
 const { FakeElement } = require('./fake_dom');
 
 function loadContext() {
-  return loadToggleHarness('usage.js', {showScrollToBottom: () => {}, restoreBottomPin: () => {}});
+  return loadToggleHarness('usage.js', {restoreBottomPin: () => {}});
 }
 
 function toggleHtml(id, escapedThinking) {

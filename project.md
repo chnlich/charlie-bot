@@ -148,8 +148,8 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
 ### 5.2 Plan Registry (Draft, Approve, Delegate)
 For complex tasks, the master plans before building; the plan registry keeps that lifecycle:
 
-- **Draft & present**: The master drafts the plan as an HTML artifact (`artifacts/plan_NN.html`, grammar in `prompts/plan_template.html`) and registers it with `charliebot plan present --file <artifact> --title <title>` (`src/cli/plan.py` → `PlanRegistryManager` in `src/core/plans.py`). `charliebot plan amend --note <why>` appends the next version (trigger: `auto_amend` or `feedback`).
-- **Review**: The plan renders in the web Plans panel with a version switcher, a diff toggle against the predecessor, and line-anchored comments (`web/static/js/plan-panel.js`).
+- **Draft & present**: The master drafts the plan as an HTML artifact (`artifacts/plan_NN.html`, grammar in `prompts/plan_template.html`) and registers it with `charliebot plan present --file <artifact> --title <title>` (`src/cli/plan.py` → `PlanRegistryManager` in `src/core/plans.py`). `charliebot plan amend --file <artifact> --note <why>` appends the next version (trigger: `auto_amend` or `feedback`).
+- **Review**: The plan renders in the web Plans panel with a version switcher, a diff toggle against the predecessor, and block-anchored comments (`web/static/js/plan-panel.js`).
 - **Approve**: The user's "take off" approves the settled terms; `charliebot plan approve` records it against the latest version. The takeoff gate (`src/core/takeoff_gate.py`) lets `/delegate` and `/improve` proceed only when the session's latest real user message carries the approval (or a "pre take off" stamp within 12 hours).
 - **Close**: `charliebot plan close --plan N --as superseded|abandoned|completed` terminates the lineage.
 

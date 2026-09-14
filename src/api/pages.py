@@ -26,6 +26,7 @@ from src.api.deps import SESSION_NOT_FOUND_DETAIL, get_session_manager
 from src.api.message_utils import build_session_bootstrap_data
 from src.api.sessions import _bootstrap_payload, _default_backend_id
 from src.core.config import CharlieBotConfig, get_config, get_credentials
+from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus
 from src.core.ncu_parsing import NcuParseError, parse_ncu_report
@@ -38,9 +39,6 @@ log = LazyStructlogLogger()
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _PERFETTO_MERGE_CACHE_LIMIT = 24
-# Prefixes the file server answers on (server.py mounts one router under both). A trace= input
-# names an absolute path under either of them.
-_FILE_SERVER_PREFIXES = ("/files", "/absolute_filepath")
 
 # Destinations served by this server, listed on the home page. The same on every
 # host, so they live in code rather than config; each renders as a card linking
@@ -63,7 +61,7 @@ _HOME_DESTINATIONS: tuple[dict[str, str], ...] = (
     },
     {
         "name": "File browser",
-        "url": "/files/",
+        "url": f"{FILE_SERVER_MOUNTS[0]}/",
         "description": "Browse any file on this host's filesystem."
     },
 )
@@ -265,7 +263,7 @@ async def perfetto_viewer(
   inputs = [_trace_input(value) for value in trace]
   if dir is not None:
     discovered = await asyncio.to_thread(_discover_trace_paths, dir, pattern)
-    inputs.extend((f"/files{path}", path) for path in discovered)
+    inputs.extend((f"{FILE_SERVER_MOUNTS[0]}{path}", path) for path in discovered)
 
   if not inputs:
     raise HTTPException(status_code=400, detail="No trace files specified. Provide 'trace' or 'dir' query params.")
@@ -311,11 +309,11 @@ def _discover_trace_paths(directory: str, pattern: str) -> list[Path]:
 
 
 def _trace_input(value: str) -> tuple[str, Path | None]:
-  for prefix in _FILE_SERVER_PREFIXES:
+  for prefix in FILE_SERVER_MOUNTS:
     if value.startswith(f"{prefix}/"):
       return value, Path(value.removeprefix(prefix))
   if value.startswith("/"):
-    return f"/files{value}", Path(value)
+    return f"{FILE_SERVER_MOUNTS[0]}{value}", Path(value)
   return value, None
 
 
@@ -537,7 +535,7 @@ async def ncu_viewer(
   except NcuParseError as exc:
     return _ncu_error_page(request, str(exc), 422)
 
-  download_url = "/files" + str(path)
+  download_url = FILE_SERVER_MOUNTS[0] + str(path)
   return templates.TemplateResponse(
       request,
       "ncu.html",

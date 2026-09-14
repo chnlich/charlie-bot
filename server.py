@@ -39,6 +39,7 @@ from src.api.deps import session_manager, set_trigger_manager, thread_manager
 from src.core import timeouts
 from src.core.buildinfo import init_build_info
 from src.core.config import CharlieBotConfig, get_config, get_credentials, require_backends
+from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.http import close_http_client
 from src.core.init import (
     init_charliebot_home,
@@ -375,12 +376,13 @@ app.include_router(code_server.router, prefix="/api/code-server", tags=["code-se
 app.include_router(ext_usage.router, prefix="/api", tags=["ext-usage"])
 app.include_router(anthropic_proxy.router, prefix="/api/anthropic-proxy", tags=["anthropic-proxy"])
 
-# File server (filesystem browser). The same router is mounted under two prefixes, so both
-# reach one handler and one path resolution. "/absolute_filepath" is the prefix written into
-# chat text: it names what has to follow it, so a link missing its absolute prefix reads as
-# wrong where it is written. "/files" stays as the form the UI builds and older links carry.
-app.include_router(files.router, prefix="/files", tags=["files"])
-app.include_router(files.router, prefix="/absolute_filepath", tags=["files"])
+# File server (filesystem browser). The same router is mounted under every prefix in
+# FILE_SERVER_MOUNTS, so all of them reach one handler and one path resolution. "/absolute_filepath"
+# is the prefix written into chat text: it names what has to follow it, so a link missing its
+# absolute prefix reads as wrong where it is written. "/files" stays as the form the UI builds
+# and older links carry.
+for mount in FILE_SERVER_MOUNTS:
+  app.include_router(files.router, prefix=mount, tags=["files"])
 
 # ---------------------------------------------------------------------------
 # WebSocket endpoint for session-level events (master CC + worker summaries)

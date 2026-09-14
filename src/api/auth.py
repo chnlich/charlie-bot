@@ -8,6 +8,7 @@ from starlette.requests import Request
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from src.core.config import get_credentials
+from src.core.constants import FILE_SERVER_MOUNTS
 
 
 def _credential_matches(candidate: str, key: str) -> bool:
@@ -34,10 +35,10 @@ def request_has_access_key(request: Request, key: str) -> bool:
 
 
 # Paths that are always public (no auth required). The viewer routes only render
-# or re-serve data already public via "/files/", so exposing them leaks nothing
+# or re-serve data already public via the file server, so exposing them leaks nothing
 # new and makes trace/report links shareable.
 _PUBLIC_PATHS = frozenset({"/", "/perfetto", "/perfetto/merged", "/ncu", "/api/auth/status"})
-_PUBLIC_PREFIXES = ("/static/", "/files/", "/absolute_filepath/")
+_PUBLIC_PREFIXES = ("/static/", *(mount + "/" for mount in FILE_SERVER_MOUNTS))
 
 # Self-contained HTML login page served to unauthenticated browser navigations.
 # On submit it stores the key in localStorage (the source of truth for the SPA

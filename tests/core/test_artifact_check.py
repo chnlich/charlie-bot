@@ -441,20 +441,20 @@ def _patch_height(monkeypatch: pytest.MonkeyPatch, height: int) -> None:
 
 
 def test_page_height_failure_names_measured_and_budget(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  _patch_height(monkeypatch, 1700)
+  _patch_height(monkeypatch, 2100)
   cfg = SimpleNamespace(headless_chrome_bin=sys.executable)  # exists, satisfying the binary check
   (outcome,) = _run("plan", _write(tmp_path, plan_page_html()), cfg)["page-height"]
   assert not outcome.passed
-  assert "1700 px as it opens: 100 px over" in outcome.detail
+  assert "2100 px as it opens: 100 px over" in outcome.detail
   assert f"{artifact_check.PAGE_HEIGHT_BUDGET} px budget" in outcome.detail
 
 
 def test_page_height_passes_at_budget(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  _patch_height(monkeypatch, 1600)
+  _patch_height(monkeypatch, 2000)
   cfg = SimpleNamespace(headless_chrome_bin=sys.executable)
   (outcome,) = _run("plan", _write(tmp_path, plan_page_html()), cfg)["page-height"]
   assert outcome.passed
-  assert outcome.detail == f"1600 px (budget {artifact_check.PAGE_HEIGHT_BUDGET})"
+  assert outcome.detail == f"2000 px (budget {artifact_check.PAGE_HEIGHT_BUDGET})"
 
 
 def test_page_height_rejects_missing_renderer(tmp_path: Path) -> None:

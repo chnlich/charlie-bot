@@ -698,11 +698,7 @@ function _appendRenderedMessage(html, forceScroll) {
   // A landed separator finishes a turn: derive so it becomes a wrapper and the
   // turn before it folds.
   if (renderedMessageRole(el) === 'separator') globalThis.applyTurnOutline(container);
-  if (forceScroll || wasAtBottom) {
-    container.scrollTop = container.scrollHeight;
-  } else {
-    showScrollToBottom();
-  }
+  restoreBottomPin(container, wasAtBottom, forceScroll);
 }
 
 function appendMessageObject(msg, sessionId) {

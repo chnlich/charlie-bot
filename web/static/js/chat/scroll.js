@@ -21,6 +21,19 @@ function scrollToBottom() {
   hideScrollToBottom();
 }
 
+// Shared post-render scroll rule. *wasAtBottom* is the pin state each render
+// path captured before mutating the container: reading it afterwards would
+// see the grown scrollHeight. A render landing while the reader is pinned
+// keeps them at the bottom; one landing while they scrolled up raises the
+// jump button instead of yanking them down.
+function restoreBottomPin(container, wasAtBottom, forceScroll) {
+  if (forceScroll || wasAtBottom) {
+    container.scrollTop = container.scrollHeight;
+  } else {
+    showScrollToBottom();
+  }
+}
+
 
 // Hide the button when user scrolls back to bottom
 document.addEventListener('DOMContentLoaded', () => {
@@ -36,10 +49,12 @@ document.addEventListener('DOMContentLoaded', () => {
 Chat.showScrollToBottom = showScrollToBottom;
 Chat.hideScrollToBottom = hideScrollToBottom;
 Chat.scrollToBottom = scrollToBottom;
+Chat.restoreBottomPin = restoreBottomPin;
 Chat.expose([
   'showScrollToBottom',
   'hideScrollToBottom',
   'scrollToBottom',
+  'restoreBottomPin',
 ]);
 
 })();

@@ -90,7 +90,7 @@ function makeChatRenderContext(elements = new Map()) {
 // sequence above, then one extra module (workers.js or usage.js) whose own
 // deps arrive via extraStubs. extraStubs spread onto the context before
 // createContext, so a stub is a context global when the extra module's render
-// path reads it (usage.js reads the bare identifier showScrollToBottom).
+// path reads it (usage.js reads the bare identifier restoreBottomPin).
 function loadToggleHarness(extraModule, extraStubs = {}) {
   const elements = new Map();
   // The toggle context drops confirm on purpose: these suites exercise render

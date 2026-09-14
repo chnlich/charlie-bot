@@ -281,8 +281,12 @@ async def test_permanent_delete_blockers(tmp_path: Path) -> None:
   blockers = await mgr.deletion_blockers(ids["worker2"])
   assert any("trigger" in b for b in blockers)
 
-  # A leaf with nothing attached deletes clean.
+  # A saved alias mapping referencing the session blocks deletion too.
   leaf = await create_task(mgr, parent=ids["root"], request_id="leafy", profile="worker", name="Leafy")
+  mgr.aliases.put_old_session("old-leaf", leaf.id)
+  blockers = await mgr.deletion_blockers(leaf.id)
+  assert any("alias" in b for b in blockers)
+  mgr.aliases.path.unlink()
   assert await mgr.deletion_blockers(leaf.id) == []
 
 
@@ -337,6 +341,20 @@ async def test_worker_promotion_and_demotion_constraints(tmp_path: Path) -> None
   await mgr.runs.register_run(RunRecord(id="run-pending", session_id=ids["worker1"]))
   with pytest.raises(TaskConflictError, match="queued"):
     await mgr.patch_task(ids["worker1"], PatchSessionTaskRequest(profile="manager"), caller=OPERATOR)
+
+
+@pytest.mark.asyncio
+async def test_pending_input_seam_blocks_structural_edits(tmp_path: Path) -> None:
+  """The input-delivery stage extends the guard through the seam; this pins its shape."""
+  _, _, mgr = build_env(tmp_path)
+  ids = await build_three_levels(mgr)
+  mgr.pending_input_blockers = lambda session_id: [f"input pending in {session_id}"]
+  with pytest.raises(TaskConflictError, match="input pending"):
+    await mgr.patch_task(
+        ids["worker1"], PatchSessionTaskRequest(task=TaskSpec(goal="edited")), caller=OPERATOR)
+  mgr.pending_input_blockers = None
+  await mgr.patch_task(
+      ids["worker1"], PatchSessionTaskRequest(task=TaskSpec(goal="edited")), caller=OPERATOR)
 
 
 # ---------------------------------------------------------------------------

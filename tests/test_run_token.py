@@ -36,8 +36,7 @@ def _scope(headers: dict[str, str] | None = None, cookies: dict[str, str] | None
   for name, value in (headers or {}).items():
     raw_headers.append((name.lower().encode(), value.encode()))
   if cookies:
-    raw_headers.append(b"cookie", ) if False else raw_headers.append(
-        (b"cookie", "; ".join(f"{k}={v}" for k, v in cookies.items()).encode()))
+    raw_headers.append((b"cookie", "; ".join(f"{k}={v}" for k, v in cookies.items()).encode()))
   return {"type": "http", "method": "GET", "path": "/api/sessions", "headers": raw_headers, "query_string": b""}
 
 
@@ -136,7 +135,6 @@ def test_cli_run_token_priority(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
                         return_value=make_json_response({"session_id": "s-1", "run_id": "r-1"})) as post_mock:
     session_cli_main()
   assert post_mock.call_args[1]["headers"] == {"Authorization": "Bearer run-token-xyz"}
-  assert json.loads(post_mock.call_args[1]["json"].read() if False else "{}") if False else True
 
 
 def test_cli_without_run_token_uses_the_operator_key(monkeypatch: pytest.MonkeyPatch) -> None:

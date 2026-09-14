@@ -55,8 +55,7 @@ _store_memo: BoundedMemo[Path, tuple[tuple[tuple[str, int, int], ...], "Store"]]
 _HEADER_RE = re.compile(r"^([a-z_]+): (.+)$")
 # Topic vocabulary line: ``name`` or ``name resident``.
 _TOPIC_LINE_RE = re.compile(r"^([a-z0-9][a-z0-9-]*)( resident)?$")
-# Topic name: the store's namespace charset for entry header fields; the
-# replay manifest's topic list validates declared names against it too.
+# Topic name: the store's namespace charset for entry header fields.
 TOPIC_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # Slug charset (entry filename stem / header value charset).
 _SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -309,11 +308,10 @@ def _validate_entry(entry: Entry, topics: dict[str, Topic], *, relaxed: bool, st
 def entry_violations(entry: Entry, topics: dict[str, Topic], *, strict_v2: bool = True) -> list[str]:
   """Semantic violations for one parsed entry under the entries/ rules (empty list = valid).
 
-  Public validation entry point for entries parsed outside the store: the
-  replay pipeline validates model-proposed entry text through this before any
-  file is written. Same rules as :func:`load_store` applies to ``entries/``;
-  ``strict_v2`` (default) additionally requires a frontmatter ``title`` and
-  forbids literal ``both`` and ``created``/``source``, matching :func:`lint`.
+  Public validation entry point for entries parsed outside the store. Same
+  rules as :func:`load_store` applies to ``entries/``; ``strict_v2`` (default)
+  additionally requires a frontmatter ``title`` and forbids literal ``both``
+  and ``created``/``source``, matching :func:`lint`.
   """
   return _validate_entry(entry, topics, relaxed=False, strict_v2=strict_v2)
 

@@ -482,6 +482,19 @@ async def test_ensure_slack_group_skips_sessions_without_slack_origin(tmp_path: 
   set_group.assert_not_awaited()
 
 
+class _StubResp:
+  """Minimal httpx.Response stand-in: only the two members get_channel_name touches."""
+
+  def __init__(self, body: dict) -> None:
+    self._body = body
+
+  def raise_for_status(self) -> None:
+    return None
+
+  def json(self) -> dict:
+    return self._body
+
+
 class _StubHttp:
   """Minimal httpx.AsyncClient stand-in for SlackClient.get_channel_name tests."""
 
@@ -489,21 +502,9 @@ class _StubHttp:
     self.payload = payload
     self.gets: list[dict] = []
 
-  async def get(self, url: str, *, headers: dict, params: dict):
+  async def get(self, url: str, *, headers: dict, params: dict) -> _StubResp:
     self.gets.append({"url": url, "params": params})
-
-    class _Resp:
-
-      def __init__(self, body: dict) -> None:
-        self._body = body
-
-      def raise_for_status(self) -> None:
-        return None
-
-      def json(self) -> dict:
-        return self._body
-
-    return _Resp(self.payload)
+    return _StubResp(self.payload)
 
 
 @pytest.mark.asyncio

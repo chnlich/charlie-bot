@@ -1940,7 +1940,9 @@ class ScriptedRelayBackend:
     """Session memory-cap attribution read: doubles never run inside a cgroup, so None."""
     return None
 
-  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
+  async def run(
+      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None
+  ) -> AsyncIterator[dict]:
     self.prompt = prompt
     self.cwd = cwd
     self.env = env
@@ -2033,7 +2035,9 @@ class FakeBackend(TerminateFlagBackend):
   exit_code = 0
   stderr_text = ""
 
-  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
+  async def run(
+      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None
+  ) -> AsyncIterator[dict]:
     yield backend_base.make_result_event()
 
 
@@ -2050,7 +2054,9 @@ class CapturingBackend(TerminateFlagBackend):
   def __init__(self) -> None:
     self.calls: list[dict] = []
 
-  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
+  async def run(
+      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None
+  ) -> AsyncIterator[dict]:
     self.calls.append({"prompt": prompt, "uploaded_files": uploaded_files})
     if False:
       yield {}  # keeps run() an async generator; the consumer's async-for would TypeError on a coroutine
@@ -2747,7 +2753,7 @@ def _cfg(home: Path) -> CharlieBotConfig:
   )
 
 
-def _wait_for(predicate, timeout: float, what: str) -> None:
+def _wait_for(predicate: Callable[[], bool], timeout: float, what: str) -> None:
   deadline = time.monotonic() + timeout
   while time.monotonic() < deadline:
     if predicate():
@@ -2795,16 +2801,17 @@ async def _recover(monkeypatch: pytest.MonkeyPatch,
   master_wakes: list[str] = []
   outcomes: list[runs.RunOutcome] = []
 
-  async def spy_resume(*args, **kwargs) -> None:
+  async def spy_resume(*args: object, **kwargs: object) -> None:
     alive_at_reattach.append(bool(kwargs["is_alive"]()))
     await _real_resume_worker(*args, **kwargs)
 
-  async def fake_trigger_master(session_id: str, summary: str, cfg, session_mgr) -> None:
+  async def fake_trigger_master(
+      session_id: str, summary: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
     master_wakes.append(summary)
 
   real_resolve = runs.resolve_run
 
-  def spy_resolve(**kwargs):
+  def spy_resolve(**kwargs: object) -> runs.RunResolution:
     resolution = real_resolve(**kwargs)
     outcomes.append(resolution.outcome)
     return resolution

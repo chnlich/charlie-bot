@@ -1604,14 +1604,15 @@ class Charliebot:
       self,
       session: str,
       tid: str,
+      results: list[tuple[str, dict]],
+      session_ids: list[str],
       backend: str | None = None,
       model: str | None = None,
-      results: list[tuple[str, dict]] = [],
-      session_ids: list[str] = [],
       meta: bool = True,
   ) -> Path:
     """One thread dir with its metadata.json (unless *meta* is False) and events.jsonl whose
-    lines are the bare session-id events followed by result events."""
+    lines are the bare session-id events followed by result events. The two list parameters
+    take no default: a mutable default would leak one call's corpus into the next."""
     data = self.root / session / "threads" / tid / "data"
     data.mkdir(parents=True, exist_ok=True)
     if meta:
@@ -1681,18 +1682,21 @@ def test_charliebot_thread_types(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
       "t1",
       backend="charlie-code-gemini-3.8-flash",
       model="openai/gemini-3.8-flash",
+      session_ids=[],
       results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
   cb.thread(
       "s1",
       "t2",
       backend="claude-sonnet-5",
       model="claude-sonnet-5",
+      session_ids=[],
       results=[("2026-09-11T22:08:00+00:00", _result_usage(2000, 20))])
   cb.thread(
       "s1",
       "t3",
       backend="opencode-kimi-k3",
       model="fpt-kimi-k3/moonshotai/Kimi-K3",
+      session_ids=[],
       results=[("2026-09-11T22:08:00+00:00", _result_usage(3000, 30))])
 
   tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)
@@ -1780,11 +1784,22 @@ def test_charliebot_metadata_classification(tmp_path: Path, monkeypatch: pytest.
       "t1",
       backend=None,
       model="openai/zai-org/GLM-5.3-Flash",
+      session_ids=[],
       results=[("2026-09-11T20:00:00+00:00", _result_usage(100, 5))])
   cb.thread(
-      "s1", "t2", backend=None, model="mystery/model-x", results=[("2026-09-11T20:00:00+00:00", _result_usage(200, 5))])
+      "s1",
+      "t2",
+      backend=None,
+      model="mystery/model-x",
+      session_ids=[],
+      results=[("2026-09-11T20:00:00+00:00", _result_usage(200, 5))])
   cb.thread(
-      "s1", "t3", backend="weird-backend-x", model=None, results=[("2026-09-11T20:00:00+00:00", _result_usage(300, 5))])
+      "s1",
+      "t3",
+      backend="weird-backend-x",
+      model=None,
+      session_ids=[],
+      results=[("2026-09-11T20:00:00+00:00", _result_usage(300, 5))])
 
   tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)
 
@@ -1903,6 +1918,7 @@ def test_charliebot_missing_metadata_skips_with_note(tmp_path: Path, monkeypatch
       "t1",
       backend="charlie-code-gemini-3.8-flash",
       model="openai/gemini-3.8-flash",
+      session_ids=[],
       results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))],
       meta=False)
 
@@ -1923,6 +1939,7 @@ def test_charliebot_cache_serves_and_appends(tmp_path: Path, monkeypatch: pytest
       "t1",
       backend="charlie-code-gemini-3.8-flash",
       model="openai/gemini-3.8-flash",
+      session_ids=[],
       results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
   capture = cb.master(
       "s1", "2026-09-11T21:00:00+00:00", [_master_context(1, "openai/gemini-3.8-flash"),
@@ -1968,6 +1985,7 @@ def test_charliebot_dir_listing_memo(tmp_path: Path, monkeypatch: pytest.MonkeyP
       "t1",
       backend="charlie-code-gemini-3.8-flash",
       model="openai/gemini-3.8-flash",
+      session_ids=[],
       results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   first = _collect(None, None, db, cache, sessions=cb.root)
@@ -1991,12 +2009,14 @@ def test_charliebot_dir_listing_memo(tmp_path: Path, monkeypatch: pytest.MonkeyP
       "t1",
       backend="charlie-code-gemini-3.8-flash",
       model="openai/gemini-3.8-flash",
+      session_ids=[],
       results=[("2026-09-11T23:08:00+00:00", _result_usage(200, 5))])
   cb.thread(
       "s1",
       "t2",
       backend="charlie-code-gemini-3.8-flash",
       model="openai/gemini-3.8-flash",
+      session_ids=[],
       results=[("2026-09-11T23:09:00+00:00", _result_usage(300, 6))])
   cb.master("s1", "2026-09-11T23:10:00+00:00", [_master_context(1, "openai/gemini-3.8-flash"), _master_result(400, 7)])
   before = calls["n"]
@@ -2023,12 +2043,14 @@ def test_charliebot_walk_errors_become_notes(tmp_path: Path, monkeypatch: pytest
       "t1",
       backend="charlie-code-gemini-3.8-flash",
       model="openai/gemini-3.8-flash",
+      session_ids=[],
       results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
   cb.thread(
       "s1",
       "t2",
       backend="charlie-code-gemini-3.8-flash",
       model="openai/gemini-3.8-flash",
+      session_ids=[],
       results=[("2026-09-11T22:09:00+00:00", _result_usage(10, 1))])
   events.chmod(0o000)
   try:
@@ -2092,6 +2114,7 @@ def test_charliebot_walk_never_lists_or_stats_the_deep_dirs(tmp_path: Path, monk
       "t1",
       backend="charlie-code-gemini-3.8-flash",
       model="openai/gemini-3.8-flash",
+      session_ids=[],
       results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
   cb.master("s1", "2026-09-11T21:00:00+00:00", [_master_context(1, "openai/gemini-3.8-flash"), _master_result(1, 1)])
   (cb.root / "s1" / "threads" / "t2").mkdir()  # a second thread with no events.jsonl yet
@@ -2135,6 +2158,7 @@ def test_charliebot_walk_skips_symlinked_entries(tmp_path: Path) -> None:
       "t1",
       backend="charlie-code-gemini-3.8-flash",
       model="openai/gemini-3.8-flash",
+      session_ids=[],
       results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
   outside = tmp_path / "outside"
   (outside / "data").mkdir(parents=True)

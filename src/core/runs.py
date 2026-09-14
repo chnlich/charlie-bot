@@ -32,7 +32,7 @@ import orjson
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendType
-from src.core.ndjson import iter_ndjson_events
+from src.core.ndjson import parse_ndjson_line
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 
 RAW_LOG_NAME = "agent.raw.ndjson"
@@ -283,28 +283,29 @@ def parse_raw_lines(raw_bytes: bytes) -> list[dict]:
   its offset stays un-consumed semantics make re-reading it produce at most a
   duplicate, never a loss.
   """
-  # The strict bytes parse is the fast path: orjson reads the raw bytes, so a
-  # valid-UTF-8 log pays no decode pass (5.7 ms per 9.9 MB measured) and no
-  # whole-file line list (one find+slice per line, the M84 tail-follow walk).
+  # Lines ride zero-copy memoryview slices: a bytes slice copies, and the copy
+  # is parse inflation at the multi-MB line a tool-result-heavy turn produces
+  # (a 10 MB line measured ~14 ms parsed from a view against ~27 ms through
+  # the copy, the same floor the M84 tail-follow walk documented). Valid lines
+  # parse straight off the slice; a rejected line takes the reader skip
+  # contract's verdict (blank invisible, malformed logged, a torn multibyte
+  # char parsing as U+FFFD) instead of an inline duplicate of it.
   events: list[dict] = []
+  view = memoryview(raw_bytes)
   start = 0
   size = len(raw_bytes)
   find = raw_bytes.find
   while start < size:
     end = find(b"\n", start)
-    piece = raw_bytes[start:size if end == -1 else end]
-    start = size if end == -1 else end + 1
+    stop = size if end == -1 else end
+    piece = view[start:stop]
+    start = stop + 1
     try:
       events.append(orjson.loads(piece))
     except ValueError:
-      # A line the strict bytes parse rejects still gets the errors="replace"
-      # decode before the skip verdict: a torn multi-byte char inside a string
-      # must parse as U+FFFD instead of the line skipping as malformed (the
-      # skip contract catches ValueError, UnicodeDecodeError included). The
-      # funnel owns the skip contract — blank lines stay invisible there, and
-      # only the lines reaching this fallback can log.
-      events.extend(
-          iter_ndjson_events([piece.decode("utf-8", errors="replace")], log_event="raw_line_not_json", log_fields={}))
+      event = parse_ndjson_line(piece, log_event="raw_line_not_json", log_fields={})
+      if event is not None:
+        events.append(event)
   return events
 
 

@@ -47,7 +47,7 @@ from src.core.config import CharlieBotConfig, claude_config_dir, get_config
 from src.core.json_utils import load_json_meta
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus, parse_utc_datetime
-from src.core.runs import CURSOR_NAME, RAW_LOG_NAME, STDERR_LOG_NAME
+from src.core.runs import CURSOR_NAME, DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RAW_LOG_NAME, STDERR_LOG_NAME
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 from src.core.timeouts import SQLITE_LOCK_WAIT_MS, SQLITE_LOCK_WAIT_SECONDS
 from src.core.token_tally import DEFAULT_OPENCODE_DB
@@ -257,8 +257,8 @@ def _sorted_scan(root: Path, listing: Iterable[Path]) -> list[Path] | None:
 def _managed_transport_dirs(session_dir: Path) -> list[Path]:
   """The two directory shapes whose direct children the transport rule governs."""
   managed: list[Path] = []
-  data_root = session_dir / "data"
-  master_runs = data_root / "master_runs"
+  data_root = session_dir / DATA_DIR_NAME
+  master_runs = data_root / MASTER_RUNS_DIR_NAME
   if data_root.is_dir() and not data_root.is_symlink() and master_runs.is_dir() and not master_runs.is_symlink():
     run_dirs = _sorted_scan(master_runs, master_runs.iterdir())
     if run_dirs is not None:
@@ -269,7 +269,7 @@ def _managed_transport_dirs(session_dir: Path) -> list[Path]:
     for thread_dir in thread_dirs:
       if not thread_dir.is_dir() or thread_dir.is_symlink():
         continue
-      data_dir = thread_dir / "data"
+      data_dir = thread_dir / DATA_DIR_NAME
       if data_dir.is_dir() and not data_dir.is_symlink():
         managed.append(data_dir)
   return managed

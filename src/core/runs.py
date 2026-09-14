@@ -39,6 +39,15 @@ RAW_LOG_NAME = "agent.raw.ndjson"
 STDERR_LOG_NAME = "agent.stderr.log"
 CURSOR_NAME = "agent.raw.cursor"
 
+# The transport directory every per-run file sits in (a thread's data dir, a
+# master run's <session>/data/master_runs/<started_at> dir) and the
+# master-capture directory name under a session's data dir. Writers (the
+# master turn in src/agents, threads.py's creation skeleton) and readers
+# (token_tally's corpus walk, storage_cool's transport sweep) must agree on
+# these names.
+DATA_DIR_NAME = "data"
+MASTER_RUNS_DIR_NAME = "master_runs"
+
 # Backend types whose event transport does not go through the shared base read
 # loop (opencode serves events over its own HTTP SSE; antigravity and tui-cli
 # manage their own pipes). A restart cannot attach to those, so an interrupted
@@ -112,15 +121,20 @@ class RunResolution:
 
 
 def raw_log_path(thread_dir: Path) -> Path:
-  return thread_dir / "data" / RAW_LOG_NAME
+  return thread_dir / DATA_DIR_NAME / RAW_LOG_NAME
 
 
 def stderr_log_path(thread_dir: Path) -> Path:
-  return thread_dir / "data" / STDERR_LOG_NAME
+  return thread_dir / DATA_DIR_NAME / STDERR_LOG_NAME
 
 
 def cursor_path(thread_dir: Path) -> Path:
-  return thread_dir / "data" / CURSOR_NAME
+  return thread_dir / DATA_DIR_NAME / CURSOR_NAME
+
+
+def master_run_log_dir(session_dir: Path, started_at: datetime) -> Path:
+  """The per-turn transport dir one master run pins its raw log, stderr log, and cursor in."""
+  return session_dir / DATA_DIR_NAME / MASTER_RUNS_DIR_NAME / started_at.isoformat()
 
 
 # ---------------------------------------------------------------------------

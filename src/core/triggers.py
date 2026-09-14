@@ -32,6 +32,7 @@ from src.core.models import (
 from src.core.sessions import SessionManager
 from src.core.sidebar_state import mark_sidebar_dirty
 from src.core.tasks import create_logged_task
+from src.core.timeouts import SSH_CONNECT_TIMEOUT, SSH_OVERALL_TIMEOUT
 
 log = LazyStructlogLogger()
 
@@ -41,10 +42,6 @@ _SYS_pidfd_open = {"x86_64": 434, "aarch64": 434}
 _REMOTE_PROBE_INTERVALS = [10, 20, 40, 80, 160, 320]
 _REMOTE_PROBE_PLATEAU = 600
 _REMOTE_PROBE_NOISE_MAX = 10  # uniform random 0..10s added to each interval
-
-# Per-probe ssh subprocess timeouts (locked, no flag).
-_SSH_CONNECT_TIMEOUT = 10  # ssh -o ConnectTimeout=10
-_SSH_OVERALL_TIMEOUT = 60.0  # asyncio.wait_for timeout wrapping the subprocess
 
 # SLURM watch (sacct polling).
 _SACCT_POLL_INTERVAL = 30  # seconds between sacct probes
@@ -205,7 +202,7 @@ def _ssh_cmd(host: str, remote_cmd: str) -> list[str]:
       "-o",
       "BatchMode=yes",
       "-o",
-      f"ConnectTimeout={_SSH_CONNECT_TIMEOUT}",
+      f"ConnectTimeout={SSH_CONNECT_TIMEOUT}",
       host,
       remote_cmd,
   ]
@@ -260,7 +257,7 @@ async def _ssh_probe_pid(host: str, pid: int) -> tuple[str, str]:
   """
   run = await _run_probe_cmd(
       _ssh_cmd(host, f"kill -0 {pid} 2>&1 && echo ALIVE || echo DEAD"),
-      timeout=_SSH_OVERALL_TIMEOUT,
+      timeout=SSH_OVERALL_TIMEOUT,
       kill_wait_log_event="ssh_probe_wait_after_kill_failed",
       host=host,
       pid=pid,
@@ -341,7 +338,7 @@ async def _probe_sacct(
     timeout = None
   else:
     cmd = _ssh_cmd(host, " ".join(sacct_args))
-    timeout = _SSH_OVERALL_TIMEOUT
+    timeout = SSH_OVERALL_TIMEOUT
 
   run = await _run_probe_cmd(
       cmd,

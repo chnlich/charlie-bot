@@ -57,9 +57,6 @@ from src.core.triggers import TriggerManager
 
 log = LazyStructlogLogger()
 
-# Interval between WebSocket keepalive pings (seconds).
-_WS_KEEPALIVE_TIMEOUT = 30.0
-
 # Catchup replay slicing: events walked and frames rendered per on-loop slice.
 # The walk measures ~1.2 µs per event; a ticker waking mid-slice waits out the
 # rest of the slice (gap = its 5 ms sleep + the slice remainder), so slices stay
@@ -188,7 +185,7 @@ async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context: obj
   try:
     while True:
       try:
-        await asyncio.wait_for(websocket.receive_text(), timeout=_WS_KEEPALIVE_TIMEOUT)
+        await asyncio.wait_for(websocket.receive_text(), timeout=timeouts.WS_KEEPALIVE_TIMEOUT)
       except TimeoutError:
         await websocket.send_json({"type": "ping"})
   except WebSocketDisconnect:

@@ -42,6 +42,11 @@ from src.core.claude_accounts import CREDENTIALS_FILE
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, charliebot_home_dir, default_claude_dir
 from src.core.json_utils import write_json_atomically
 from src.core.process import kill_process_group
+from src.core.timeouts import (
+    CLAUDE_SUB_CONFIRMATION_TIMEOUT,
+    CLAUDE_SUB_TERMINATE_TIMEOUT,
+    CLAUDE_SUB_TURN_TIMEOUT,
+)
 
 _MIN_CLAUDE_VERSION = (2, 1, 210)
 _TARGET_CLAUDE_VERSION = (2, 1, 211)
@@ -52,9 +57,6 @@ _TMUX_COLS = 120
 _TMUX_ROWS = 40
 _POLL_SECONDS = 0.1
 _PROCESS_PROBE_INTERVAL_SECONDS = 0.5
-_SUBMISSION_CONFIRMATION_TIMEOUT_SECONDS = 30.0
-_TURN_TIMEOUT_SECONDS = 7200.0
-_TERMINATE_TIMEOUT_SECONDS = 5.0
 _IDLE_NOTIFICATION_THRESHOLD_MS = 1000
 _MANAGED_NOTIFICATION_SETTINGS: dict[str, Any] = {
     "messageIdleNotifThresholdMs": _IDLE_NOTIFICATION_THRESHOLD_MS,
@@ -545,7 +547,7 @@ def _write_hook_plugin(root: Path, bridge: HookBridge) -> Path:
         "args": hook_args,
     }
     if event_name == "UserPromptSubmit":
-      command["timeout"] = int(_SUBMISSION_CONFIRMATION_TIMEOUT_SECONDS)
+      command["timeout"] = int(CLAUDE_SUB_CONFIRMATION_TIMEOUT)
     group: dict[str, Any] = {"hooks": [command]}
     hooks[event_name] = [group]
   (hooks_dir / "hooks.json").write_text(
@@ -604,7 +606,7 @@ async def _terminate_foreground(session_id: str) -> None:
   if info.dead or not info.is_claude:
     return
   kill_process_group(info.pid, signal.SIGTERM)
-  deadline = time.monotonic() + _TERMINATE_TIMEOUT_SECONDS
+  deadline = time.monotonic() + CLAUDE_SUB_TERMINATE_TIMEOUT
   while time.monotonic() < deadline:
     current = await _pane_info(session_id)
     if current.dead or not current.is_claude:
@@ -613,7 +615,7 @@ async def _terminate_foreground(session_id: str) -> None:
   current = await _pane_info(session_id)
   if not current.dead and current.is_claude:
     kill_process_group(current.pid, signal.SIGKILL)
-    kill_deadline = time.monotonic() + _TERMINATE_TIMEOUT_SECONDS
+    kill_deadline = time.monotonic() + CLAUDE_SUB_TERMINATE_TIMEOUT
     while time.monotonic() < kill_deadline:
       current = await _pane_info(session_id)
       if current.dead or not current.is_claude:
@@ -695,8 +697,8 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
       turn_start = time.monotonic()
       await _respawn_claude(args, session_id, resume, plugin_dir, cwd, config_dir)
       _write_marker(session_id, SessionMarkerState.STARTED_BY_NEW_ADAPTER)
-      confirmation_deadline = turn_start + _SUBMISSION_CONFIRMATION_TIMEOUT_SECONDS
-      turn_deadline = turn_start + _TURN_TIMEOUT_SECONDS
+      confirmation_deadline = turn_start + CLAUDE_SUB_CONFIRMATION_TIMEOUT
+      turn_deadline = turn_start + CLAUDE_SUB_TURN_TIMEOUT
       last_process_probe = turn_start
       while True:
         if stop_event.is_set():
@@ -729,7 +731,7 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
         if now >= turn_deadline:
           await _terminate_foreground(session_id)
           terminated = True
-          raise ClaudeSubError(f"overall turn timeout after {_TURN_TIMEOUT_SECONDS:.0f}s")
+          raise ClaudeSubError(f"overall turn timeout after {CLAUDE_SUB_TURN_TIMEOUT:.0f}s")
         if now - last_process_probe >= _PROCESS_PROBE_INTERVAL_SECONDS:
           last_process_probe = now
           info = await _pane_info(session_id)

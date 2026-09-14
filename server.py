@@ -183,7 +183,7 @@ async def _check_ws_auth(websocket: WebSocket) -> bool:
   return False
 
 
-async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context) -> None:
+async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context: object) -> None:
   """Hold a WebSocket open with periodic pings until the client disconnects."""
   try:
     while True:

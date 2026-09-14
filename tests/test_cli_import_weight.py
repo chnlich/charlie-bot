@@ -159,6 +159,36 @@ def test_memory_chain_imports_without_the_heavy_chains() -> None:
       "on these staying out — src.core.memory's log proxy defers structlog to first use")
 
 
+# The timestamp-stamping CLI chains' ban set: remote-launch and gc-trash read
+# config and call utc_now, so pydantic and src.core.config ride their import
+# legitimately (get_config validates through pydantic) — but neither verb's
+# parser build constructs the session/API model stack; utc_now single-homes in
+# the stdlib-only src.core.time_utils for exactly this reason.
+STAMPING_HEAVY_MODULES = (
+    "src.agents.backends.base",
+    "src.core.threads",
+    "src.core.sessions",
+    "src.core.runs",
+    "src.core.models",
+    "numpy",
+    "structlog",
+    "requests",
+)
+
+
+@pytest.mark.parametrize(
+    "module_expr",
+    ["import src.cli.remote_launch", "import src.cli.gc_trash"],
+)
+def test_stamping_cli_chains_import_without_the_model_stack(module_expr: str) -> None:
+  loaded = _modules_loaded_after_import(module_expr, STAMPING_HEAVY_MODULES)
+  assert loaded == [], (
+      f"{module_expr} pulled the session/API model stack or another heavy chain "
+      f"into the CLI process: {loaded}; these verbs stamp times and read config "
+      "only, so their import must not construct src.core.models — utc_now "
+      "single-homes in src.core.time_utils (stdlib-only) for this")
+
+
 # Modules whose log proxy defers structlog to first use. Each imports on an
 # error path only, so an eager structlog import would tax every invocation for
 # lines the read path never emits; the probe pin: `import` alone must leave

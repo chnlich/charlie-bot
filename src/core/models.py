@@ -33,6 +33,11 @@ from src.core.backend_models import (  # noqa: F401  (re-export)
 )
 from src.core.constants import MAX_TRIGGER_MESSAGE_CHARS, SESSION_ID_ENV_VAR, WatchKind  # noqa: F401  (re-export)
 
+# utc_now single-homes in the stdlib-only time_utils (the CLI verbs that stamp
+# times must not construct this module); the import both serves the Field
+# defaults below and keeps the established src.core.models import path working.
+from src.core.time_utils import utc_now
+
 
 def ensure_utc(v: datetime | str) -> datetime:
   """Coerce naive datetimes to UTC; pass aware datetimes through unchanged."""
@@ -46,11 +51,6 @@ def ensure_utc(v: datetime | str) -> datetime:
 def parse_utc_datetime(v: str) -> datetime:
   """Parse an ISO 8601 string and normalize naive datetimes to UTC."""
   return ensure_utc(v)
-
-
-def utc_now() -> datetime:
-  """Return the current UTC datetime as a tz-aware value."""
-  return datetime.now(UTC)
 
 
 UtcDatetime = Annotated[datetime, BeforeValidator(ensure_utc)]

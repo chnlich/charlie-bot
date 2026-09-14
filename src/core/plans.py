@@ -119,8 +119,9 @@ def derive_state_str(plan: dict) -> str:
 
 
 def _utc_now_iso() -> str:
-  # Lazy: utc_now lives in the model stack (pydantic); only the verb paths stamp times.
-  from src.core.models import utc_now
+  # Lazy: only the verb paths stamp times, so the parser build stays free of
+  # even the datetime import.
+  from src.core.time_utils import utc_now
 
   return utc_now().isoformat()
 

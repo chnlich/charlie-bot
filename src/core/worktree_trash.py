@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import utc_now
+from src.core.time_utils import utc_now
 
 log = LazyStructlogLogger()
 

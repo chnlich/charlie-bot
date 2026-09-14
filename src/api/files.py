@@ -18,6 +18,7 @@ from src.api.auth import request_has_access_key
 from src.api.pages import _static_asset_version
 from src.core import plan_diff
 from src.core.config import get_config, get_credentials
+from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.memo import BoundedMemo
 
 router = APIRouter()
@@ -338,9 +339,9 @@ def _dir_listing_page(dir_path: Path, url_prefix: str, diff_param: str | None) -
 
   rows = []
   prefix = url_prefix.rstrip("/")
-  # Parent directory link (unless at root)
-  if prefix != "/files":
-    parent = "/".join(prefix.split("/")[:-1]) or "/files"
+  # Parent directory link (unless at a mount root)
+  if prefix != FILE_SERVER_MOUNTS[0]:
+    parent = "/".join(prefix.split("/")[:-1]) or FILE_SERVER_MOUNTS[0]
     rows.append('<tr>'
                 f'<td>📁</td><td><a href="{html.escape(parent)}">..</a></td>'
                 '<td></td><td></td>'
@@ -418,7 +419,7 @@ async def serve_file(path: str, request: Request) -> Response:
   still there without pulling the file down.
   """
   diff_param = request.query_params.get("diff")
-  url_prefix = f"/files/{path}" if path else "/files"
+  url_prefix = f"{FILE_SERVER_MOUNTS[0]}/{path}" if path else FILE_SERVER_MOUNTS[0]
   # One executor hop carries the resolve, the exists answer, and the whole
   # listing build; None means a file, falling through to the artifact and
   # FileResponse arms.

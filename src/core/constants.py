@@ -31,6 +31,15 @@ PLAN_CLOSE_MODES = ("superseded", "abandoned", "completed")
 # query/add/lint verbs import no replay stack to build the parser. One spelling everywhere.
 REPLAY_MODES = ("editor-only", "editor-review")
 
+# File-server URL prefixes: server.py mounts the one files router under each, so both
+# spellings reach the same handler. The first entry is the canonical form the UI builds
+# and older links carry; the second is the form written into chat text to name absolute
+# filesystem paths. Every Python reader derives its form (auth whitelist entries, trace
+# parsing, listing roots, slack URL rewriting) from this tuple; the frontend gate
+# (web/static/js/chat/artifacts.js) mirrors the set, pinned by
+# tests/test_frontend_file_server_prefixes.py.
+FILE_SERVER_MOUNTS = ("/files", "/absolute_filepath")
+
 
 class WatchKind(StrEnum):
   UNKNOWN = "unknown"  # fail-loud sentinel; never a valid target, no default

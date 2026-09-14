@@ -3,24 +3,20 @@
 from __future__ import annotations
 
 import os
-import signal
 import subprocess
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-
 from conftest import make_home_config
 
 from src.core import event_types as ET
 from src.core.models import RunRecord
 from src.core.runs import (
-    RunIdentityConflictError,
-    RunStore,
-    STOP_EXIT_POLL_SECONDS,
-    STOP_EXIT_WAIT_SECONDS,
-    read_pid_stat,
+  RunIdentityConflictError,
+  RunStore,
+  read_pid_stat,
 )
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager

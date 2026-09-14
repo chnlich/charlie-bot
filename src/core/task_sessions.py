@@ -39,36 +39,35 @@ from typing import TYPE_CHECKING
 import orjson
 
 from src.core import event_types as ET
+from src.core.config import CharlieBotConfig
 from src.core.control_events import (
-    ACTOR_AGENT,
-    ACTOR_USER,
-    ControlEventSink,
-    build_control_event,
-    sha256_hex,
-    stable_task_id,
+  ACTOR_AGENT,
+  ACTOR_USER,
+  ControlEventSink,
+  build_control_event,
+  sha256_hex,
+  stable_task_id,
+)
+from src.core.json_utils import atomic_write_text
+from src.core.models import (
+  AncestorRef,
+  EventRef,
+  PatchSessionTaskRequest,
+  SessionMetadata,
+  SessionRow,
+  SessionStatus,
+  TaskSpec,
+  WorkState,
+  utc_now,
 )
 from src.core.ndjson import append_ndjson
-from src.core.models import (
-    AncestorRef,
-    EventRef,
-    PatchSessionTaskRequest,
-    RunRecord,
-    SessionMetadata,
-    SessionRow,
-    SessionStatus,
-    TaskSpec,
-    WorkState,
-    utc_now,
-)
-from src.core.config import CharlieBotConfig
-from src.core.json_utils import atomic_write_text
 from src.core.run_token import CallerIdentity
 from src.core.runs import RunStore
 from src.core.session_aliases import SessionAliasStore
 from src.core.sessions import _TRANSIENT_METADATA_FIELDS, SessionManager
 
 if TYPE_CHECKING:
-  from src.core.takeoff_gate import DelegationBlockedError
+  pass
 
 PROMPT_BODIES_DIR_NAME = "prompt_bodies"
 
@@ -386,6 +385,12 @@ class TaskTreeManager:
       if existing is not None:
         return existing
       parent_meta: SessionMetadata | None = None
+      # Caller scope first: an agent's 403 must not depend on the target's shape.
+      if isinstance(caller, CallerIdentity) and not caller.is_operator:
+        if task_parent_id is not None:
+          parent_meta = await self.load_meta(task_parent_id)
+          parent_meta = parent_meta if parent_meta is not None and parent_meta.profile is not None else None
+        await self._authorize_agent_worker_creation(caller, profile, task_parent_id, parent_meta)
       if task_parent_id is not None:
         parent_meta = await self.load_meta(task_parent_id)
         self._require_task(parent_meta, task_parent_id)
@@ -397,9 +402,7 @@ class TaskTreeManager:
         if parent_state != "open":
           raise TaskConflictError([f"parent task {task_parent_id} is {parent_state}"])
         await self._require_open_ancestry_from_index(index, task_parent_id)
-      if isinstance(caller, CallerIdentity) and not caller.is_operator:
-        await self._authorize_agent_worker_creation(caller, task_parent_id, parent_meta)
-      meta = await self._publish_new_task(
+      await self._publish_new_task(
           task_id=task_id,
           request_id=request_id,
           task_parent_id=task_parent_id,
@@ -420,6 +423,7 @@ class TaskTreeManager:
   async def _authorize_agent_worker_creation(
       self,
       caller: "object",
+      profile: str,
       task_parent_id: str | None,
       parent_meta: SessionMetadata | None,
   ) -> None:
@@ -427,12 +431,13 @@ class TaskTreeManager:
     assert isinstance(caller, CallerIdentity)
     claims = caller.claims
     assert claims is not None
-    if profile_guard_failed(claims, task_parent_id, parent_meta):
+    if (profile != "worker" or task_parent_id != claims.session_id or parent_meta is None or
+            parent_meta.profile != "manager"):
       raise TaskForbiddenError(
           "an agent may only create a worker task directly under its own open manager task")
     # The caller's own manager task must carry the authorization: the
     # nearest-real-user-ancestor gate (takeoff_gate) decides.
-    await asyncio.to_thread(self.check_task_authorization, claims.session_id)
+    await self.check_task_authorization(claims.session_id)
 
   async def _require_open_ancestry_from_index(self, index: "_TreeIndex", session_id: str) -> None:
     chain = self._ancestors(index, session_id)
@@ -505,7 +510,7 @@ class TaskTreeManager:
     except (OSError, ValueError):
       return None
 
-  def check_task_authorization(self, session_id: str, now: datetime | None = None) -> str:
+  async def check_task_authorization(self, session_id: str, now: datetime | None = None) -> str:
     """The nearest-real-user-ancestor gate for a v2 task caller (takeoff_gate).
 
     Every ancestor must be open and the calling node a manager; the first node
@@ -513,9 +518,7 @@ class TaskTreeManager:
     apply, and a failure there blocks without borrowing from higher ancestors.
     """
     from src.core.takeoff_gate import check_takeoff_gate_for_task
-    if self._index is None:
-      raise RuntimeError("tree index must be built before authorization checks")
-    index = self._index[0]
+    index = await self._get_index()
 
     def meta_of(sid: str) -> tuple[str | None, str | None]:
       meta = index.metas.get(sid)
@@ -531,7 +534,7 @@ class TaskTreeManager:
 
     return check_takeoff_gate_for_task(
         session_id,
-        load_events=self._events.load_events,
+        load_events=self.events.load_events,
         task_meta_of=meta_of,
         task_state_of=state_of,
         now=now,
@@ -554,7 +557,7 @@ class TaskTreeManager:
       original = await self.runs.get_run(session_id, original_run_id)
       if original is None:
         raise TaskNotFoundError(f"run {original_run_id} not found in session {session_id}")
-      run = await self.runs.create_retry_run(
+      run = await self.runs.create_retry_run_locked(
           session_id,
           request_id,
           original_run_id,

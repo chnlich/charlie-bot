@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-import pytest_asyncio
-
 from conftest import OPUS_BACKEND_ID, make_home_config
 
 from src.core import event_types as ET
@@ -17,15 +14,15 @@ from src.core.control_events import sha256_hex, stable_task_id
 from src.core.models import EventRef, PatchSessionTaskRequest, RunRecord, TaskSpec
 from src.core.run_token import CallerIdentity
 from src.core.runs import read_pid_stat
-
-OPERATOR = CallerIdentity(kind="operator")
 from src.core.sessions import SessionManager
 from src.core.task_sessions import (
-    TaskConflictError,
-    TaskInvalidError,
-    TaskNotFoundError,
-    TaskTreeManager,
+  TaskConflictError,
+  TaskInvalidError,
+  TaskNotFoundError,
+  TaskTreeManager,
 )
+
+OPERATOR = CallerIdentity(kind="operator")
 
 
 def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:

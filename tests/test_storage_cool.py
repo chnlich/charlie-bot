@@ -24,11 +24,11 @@ from src.core import scheduler as scheduler_module
 from src.core import storage_cool
 from src.core.config import CharlieBotConfig
 from src.core.storage_cool import (
-  claude_project_dir_name,
-  codex_rollout_session_id,
-  format_sweep_table,
-  is_cold_session,
-  run_cool_sweep,
+    claude_project_dir_name,
+    codex_rollout_session_id,
+    format_sweep_table,
+    is_cold_session,
+    run_cool_sweep,
 )
 
 NOW = datetime(2026, 9, 4, 12, 0, 0, tzinfo=UTC)

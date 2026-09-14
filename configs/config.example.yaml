@@ -18,6 +18,11 @@ server:
   host: 127.0.0.1
   port: 18498
   subprocess_buffer_limit_mb: 1024
+  # Per-session memory-cap cgroup, MB: every agent process a session spawns is held
+  # to this hard limit; 0 disables cgroup control entirely. session_swap_max_mb
+  # bounds swap use separately (0 = no swap).
+  session_memory_max_mb: 12288
+  session_swap_max_mb: 2048
 
 # Paths: repos to scan and where worker worktrees live.
 paths:

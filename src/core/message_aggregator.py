@@ -23,11 +23,6 @@ from collections.abc import Callable, Iterator
 from src.core import event_types as ET
 from src.core.message_events import normalize_user_message_event
 
-# The worker-events projection's output cap (src/api/threads.py): a thread
-# event's tool_result content caps here and the persisted event keeps the full
-# text.
-TOOL_OUTPUT_RENDER_CAP = 20000
-
 # The renderer's preview bound for one tool row (renderToolActivity,
 # web/static/js/chat/rendering.js): an output's first 500 characters render
 # plain and an input feeds only a bounded summary (a Bash command renders 80
@@ -35,7 +30,8 @@ TOOL_OUTPUT_RENDER_CAP = 20000
 # string tool content over this bound never renders from a wire shape. Every
 # chat wire shape carries the bound — the stream delta, the committed message
 # behind the events pages, and the bootstrap payload — because the trim lands
-# at ingestion (tool_preview on every buffered row); the persisted event keeps
+# at ingestion (tool_preview on every buffered row); the workers-events
+# projection (src/api/threads.py) carries it too. The persisted event keeps
 # the full content (raw download, fork reference, review scans all read it
 # there).
 TOOL_PREVIEW_CHARS = 500

@@ -60,7 +60,7 @@ function renderWorkerEvents(ctx, events) {
   return container.innerHTML;
 }
 
-test('worker event list toggles assistant, tool_use, and tool_result overflow', () => {
+test('worker event list toggles assistant and tool_use overflow; tool_result renders plain', () => {
   const ctx = loadContext();
   const html = renderWorkerEvents(ctx, [
     { type: 'assistant', content: 'a'.repeat(350) },
@@ -71,9 +71,12 @@ test('worker event list toggles assistant, tool_use, and tool_result overflow', 
     '<div class="text-sm text-slate-300">' + 'a'.repeat(300) + toggleHtml('evt-more-i', 'a'.repeat(50)) + '</div>'));
   assert.ok(html.includes(
     'flex-1">' + 'x'.repeat(80) + toggleHtml('tu-i', 'x'.repeat(10)) + '</span>'));
+  // The projection trims each tool_result output to the inline-render bound and
+  // marks the row, so the renderer carries no tail span: the note names the raw
+  // events log.
   assert.ok(html.includes(
-    '<pre class="text-xs text-slate-500 whitespace-pre-wrap break-all">'
-    + 'y'.repeat(500) + toggleHtml('tr-more-i', 'y'.repeat(100)) + '</pre>'));
+    '<pre class="text-xs text-slate-500 whitespace-pre-wrap break-all">' + 'y'.repeat(600) + '</pre>'));
+  assert.ok(!html.includes('tr-more-'));
 });
 
 test('worker event list within limits renders no toggle', () => {

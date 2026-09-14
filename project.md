@@ -242,9 +242,10 @@ Master parses this to distinguish "thinking" from "stuck" and track progress pre
   split_before_first_argument = true
   column_limit = 120
   ```
-  The code-health cron runs `yapf --in-place --recursive src/` and verifies with
-  `yapf --diff`, so the config file is load-bearing: without it YAPF falls back to
-  pep8 defaults and reformats the tree to 4-space indent.
+  Nothing in the tracked tree invokes YAPF, so the config reads as unused to every
+  in-repo scan; the CI "Formatter config present" step keeps `.style.yapf` and the
+  pin from being deleted on that evidence. Without the config, a yapf run falls
+  back to pep8 defaults and reformats the tree to 4-space indent.
 
 ### 10.2 Worker Instructions
 Worker and reviewer directives (role, skills discovery, worktree workflow, coding standards) ride in the prompt

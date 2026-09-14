@@ -101,6 +101,10 @@ SKIP_PERMISSIONS_FLAG = "--dangerously-skip-permissions"
 # claude-sub both pin the same dict.
 SKIP_PERMISSIONS_SETTINGS = {"skipDangerousModePermissionPrompt": True}
 
+# The tool-deny flag's spelling is vendor-fixed like SKIP_PERMISSIONS_FLAG's; the
+# CLI also accepts a camelCase alias, which only the claude-sub parser mirrors.
+DISALLOWED_TOOLS_FLAG = "--disallowed-tools"
+
 # Poll cadence of the tail-follow read loop. Event volume is low (median
 # inter-event gap ~54 s measured), so a fixed poll beats an inotify dependency.
 _TAIL_POLL_INTERVAL = 0.15
@@ -260,9 +264,9 @@ def build_claude_argv(
   if effort:
     argv.extend(["--effort", effort])
   # Collapse every incoming entry into one comma-joined value: the launched `claude`
-  # reliably honors a single --disallowed-tools flag, not repeated ones.
+  # reliably honors a single disallowed-tools flag, not repeated ones.
   if disallowed_tools:
-    argv.extend(["--disallowed-tools", ",".join(disallowed_tools)])
+    argv.extend([DISALLOWED_TOOLS_FLAG, ",".join(disallowed_tools)])
   if prompt is not None:
     # Claude Code 2.1.212 accepts `--` and treats the following value as the prompt,
     # even when it starts with '-'.  tmux respawn-pane passes these argv entries

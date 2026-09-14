@@ -213,11 +213,14 @@ def check_takeoff_gate_for_task(
   current = start_session_id
   for _ in range(_TASK_ANCESTOR_HOP_LIMIT):
     task_parent_id, profile = task_meta_of(current)
-    if current == start_session_id and profile != "manager":
+    is_start = current == start_session_id
+    if is_start and profile != "manager":
       raise DelegationBlockedError(
           f"task {current} is not a manager; agent calls run only under a manager task")
-    if current != start_session_id and task_state_of(current) != "open":
-      raise DelegationBlockedError(f"ancestor task {current} is {task_state_of(current)}; open it first")
+    if task_state_of(current) != "open":
+      raise DelegationBlockedError(
+          f"{'ancestor task' if not is_start else 'task'} {current} is "
+          f"{task_state_of(current)}; open it first")
 
     events = load_events(current)
     has_takeoff, pre_takeoff_at, seen_user = _settled_user_answers(events, current)

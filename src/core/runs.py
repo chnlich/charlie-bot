@@ -30,24 +30,24 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import orjson
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.control_events import (
-    ACTOR_SYSTEM,
-    ControlEventSink,
-    build_control_event,
-    sha256_hex,
-    stable_run_id,
+  ACTOR_SYSTEM,
+  ControlEventSink,
+  build_control_event,
+  sha256_hex,
+  stable_run_id,
 )
 from src.core.json_utils import atomic_write_text
 from src.core.models import BackendType, RunRecord, ensure_utc, utc_now
 from src.core.ndjson import parse_ndjson_line
 from src.core.session_aliases import SessionAliasStore
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
+
 RAW_LOG_NAME = "agent.raw.ndjson"
 STDERR_LOG_NAME = "agent.stderr.log"
 CURSOR_NAME = "agent.raw.cursor"
@@ -721,21 +721,25 @@ class RunStore:
     evidence pointer dangles. Registration runs under the control lock.
     """
     async with self._lock:
-      existing = self.read_run_sync(record.session_id, record.id)
-      if existing is not None:
-        return existing
-      run_dir = self.run_dir(record.session_id, record.id)
-      if task_spec_text is not None:
-        run_dir.mkdir(parents=True, exist_ok=True)
-        spec_path = self.task_spec_path(record.session_id, record.id)
-        atomic_write_text(spec_path, task_spec_text)
-        record.task_spec_ref = str(spec_path)
-        record.task_spec_hash = sha256_hex(task_spec_text)
+      return await self.register_run_locked(record, task_spec_text=task_spec_text)
+
+  async def register_run_locked(self, record: RunRecord, *, task_spec_text: str | None = None) -> RunRecord:
+    """register_run for a caller already holding the control lock (the lock is not reentrant)."""
+    existing = self.read_run_sync(record.session_id, record.id)
+    if existing is not None:
+      return existing
+    run_dir = self.run_dir(record.session_id, record.id)
+    if task_spec_text is not None:
       run_dir.mkdir(parents=True, exist_ok=True)
-      path = self.metadata_path(record.session_id, record.id)
-      await asyncio.to_thread(atomic_write_text, path, record.model_dump_json(indent=2))
-      self._aliases.register_run_thread(record.session_id, record.id)
-      return record
+      spec_path = self.task_spec_path(record.session_id, record.id)
+      atomic_write_text(spec_path, task_spec_text)
+      record.task_spec_ref = str(spec_path)
+      record.task_spec_hash = sha256_hex(task_spec_text)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    path = self.metadata_path(record.session_id, record.id)
+    await asyncio.to_thread(atomic_write_text, path, record.model_dump_json(indent=2))
+    self._aliases.register_run_thread(record.session_id, record.id)
+    return record
 
   async def create_retry_run(
       self,
@@ -747,15 +751,29 @@ class RunStore:
       **fields: object,
   ) -> RunRecord:
     """Bind (session, request_id) to one retry run; replays return the original product."""
+    async with self._lock:
+      return await self.create_retry_run_locked(
+          session_id, request_id, original_run_id, task_spec_text=task_spec_text, **fields)
+
+  async def create_retry_run_locked(
+      self,
+      session_id: str,
+      request_id: str,
+      original_run_id: str,
+      *,
+      task_spec_text: str | None = None,
+      **fields: object,
+  ) -> RunRecord:
+    """create_retry_run for a caller already holding the control lock."""
     run_id = stable_run_id(session_id, request_id)
+    record_kwargs: dict = {"kind": "work", **fields}
     record = RunRecord(
         id=run_id,
         session_id=session_id,
-        kind="work",
         retry_of_run_id=original_run_id,
-        **fields,  # type: ignore[arg-type]
+        **record_kwargs,  # type: ignore[arg-type]
     )
-    return await self.register_run(record, task_spec_text=task_spec_text)
+    return await self.register_run_locked(record, task_spec_text=task_spec_text)
 
   # -- terminal facts ------------------------------------------------------
 
@@ -776,32 +794,47 @@ class RunStore:
     consumes — intact.
     """
     async with self._lock:
-      events = self.load_events_sync(session_id)
-      existing = self.terminal_outcome(events, run_id)
-      if existing is not None:
-        run = self.read_run_sync(session_id, run_id)
-        if run is None:
-          raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
-        return run
-      event = build_control_event(
-          ET.RUN_FINISHED,
-          actor=ACTOR_SYSTEM,
-          source_session_id=session_id,
-          run_id=run_id,
-          input_event_ids=input_event_ids or [],
-          outcome=outcome,
-      )
-      await self._events.append(session_id, event)
+      return await self.record_finish_locked(
+          session_id, run_id, outcome, input_event_ids=input_event_ids, exit_code=exit_code,
+          ended_at=ended_at)
+
+  async def record_finish_locked(
+      self,
+      session_id: str,
+      run_id: str,
+      outcome: str,
+      *,
+      input_event_ids: list[str] | None = None,
+      exit_code: int | None = None,
+      ended_at: datetime | None = None,
+  ) -> RunRecord:
+    """record_finish for a caller already holding the control lock."""
+    events = self.load_events_sync(session_id)
+    existing = self.terminal_outcome(events, run_id)
+    if existing is not None:
       run = self.read_run_sync(session_id, run_id)
       if run is None:
         raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
-      run.ended_at = ended_at or utc_now()
-      run.exit_code = exit_code
-      if input_event_ids is not None:
-        run.input_event_ids = input_event_ids
-      await asyncio.to_thread(
-          atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
       return run
+    event = build_control_event(
+        ET.RUN_FINISHED,
+        actor=ACTOR_SYSTEM,
+        source_session_id=session_id,
+        run_id=run_id,
+        input_event_ids=input_event_ids or [],
+        outcome=outcome,
+    )
+    await self._events.append(session_id, event)
+    run = self.read_run_sync(session_id, run_id)
+    if run is None:
+      raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
+    run.ended_at = ended_at or utc_now()
+    run.exit_code = exit_code
+    if input_event_ids is not None:
+      run.input_event_ids = input_event_ids
+    await asyncio.to_thread(
+        atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+    return run
 
   # -- stop ----------------------------------------------------------------
 

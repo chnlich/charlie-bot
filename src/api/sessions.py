@@ -12,81 +12,81 @@ from starlette.responses import Response
 
 from src.api.cron import TaskUpdate, apply_task_yaml_update, next_run_iso
 from src.api.deps import (
-    SESSION_NOT_FOUND_DETAIL,
-    bad_request,
-    get_config_on_loop,
-    get_plan_manager,
-    get_run_store,
-    get_session_manager,
-    get_task_manager,
-    get_thread_manager,
-    require_caller,
-    require_found,
-    require_session,
-    trigger_manager,
+  SESSION_NOT_FOUND_DETAIL,
+  bad_request,
+  get_config_on_loop,
+  get_plan_manager,
+  get_run_store,
+  get_session_manager,
+  get_task_manager,
+  get_thread_manager,
+  require_caller,
+  require_found,
+  require_session,
+  trigger_manager,
 )
 from src.api.message_utils import (
-    SessionBootstrapData,
-    build_session_bootstrap_data,
-    build_session_view_data,
-    events_to_messages,
+  SessionBootstrapData,
+  build_session_bootstrap_data,
+  build_session_view_data,
+  events_to_messages,
 )
 from src.api.responses import FastJsonResponse, PreencodedJSONResponse, fast_json_bytes
 from src.api.threads import view_thread_rows
 from src.core import claude_accounts, sidebar_state, thinking_state
 from src.core.chat_events import chat_events_path
 from src.core.config import (
-    CharlieBotConfig,
-    claude_config_dir,
-    get_config,
-    get_scheduled_tasks,
+  CharlieBotConfig,
+  claude_config_dir,
+  get_config,
+  get_scheduled_tasks,
 )
 from src.core.event_types import BACKEND_SWITCHED
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo
 from src.core.message_aggregator import tool_preview
 from src.core.models import (
-    AncestorRef,
-    BackendOption,
-    BackendType,
-    CancelRunRequest,
-    CreateSessionRequest,
-    DeleteGroupRequest,
-    EloneSessionRequest,
-    ForkSessionRequest,
-    PatchSessionTaskRequest,
-    RateRoundRequest,
-    RenameGroupRequest,
-    RenameSessionRequest,
-    RetryRunRequest,
-    RunCancelResponse,
-    RunPage,
-    SessionMetadata,
-    SessionStatus,
-    SessionRow,
-    SetGroupRequest,
-    SwitchBackendRequest,
-    TaskState,
-    ThreadMetadata,
-    UtcDatetime,
-    WorkState,
-)
-from src.core.run_token import CallerIdentity
-from src.core.runs import RunIdentityConflictError, RunNotFoundError
-from src.core.task_sessions import (
-    TaskConflictError,
-    TaskForbiddenError,
-    TaskInvalidError,
-    TaskNotFoundError,
-    TaskTreeManager,
+  AncestorRef,
+  BackendOption,
+  BackendType,
+  CancelRunRequest,
+  CreateSessionRequest,
+  DeleteGroupRequest,
+  EloneSessionRequest,
+  ForkSessionRequest,
+  PatchSessionTaskRequest,
+  RateRoundRequest,
+  RenameGroupRequest,
+  RetryRunRequest,
+  RunCancelResponse,
+  RunPage,
+  SessionMetadata,
+  SessionRow,
+  SessionStatus,
+  SetGroupRequest,
+  SwitchBackendRequest,
+  TaskState,
+  ThreadMetadata,
+  UtcDatetime,
+  WorkState,
 )
 from src.core.plans import PlanRegistryManager
+from src.core.run_token import CallerIdentity
+from src.core.runs import RunIdentityConflictError, RunNotFoundError
 from src.core.sessions import (
-    ELONE_BOOTSTRAP_OPENER,
-    FORK_BOOTSTRAP_OPENER,
-    ScheduledSessionBusyError,
-    SessionManager,
-    SuccessionRefused,
+  ELONE_BOOTSTRAP_OPENER,
+  FORK_BOOTSTRAP_OPENER,
+  ScheduledSessionBusyError,
+  SessionManager,
+  SuccessionRefused,
+)
+from src.core.takeoff_gate import DelegationBlockedError
+from src.core.task_sessions import (
+  TaskConflictError,
+  TaskForbiddenError,
+  TaskInvalidError,
+  TaskNotFoundError,
+  TaskTreeManager,
 )
 from src.core.threads import ThreadManager
 
@@ -311,7 +311,8 @@ async def create_session(
           backend=req.backend,
           caller=caller,
       )
-    except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+    except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError,
+            DelegationBlockedError) as e:
       raise _task_http_error(e) from e
     log.info("task_created", session_id=meta.id, task_parent_id=req.task_parent_id, profile=req.profile)
     return meta
@@ -632,7 +633,7 @@ def _task_http_error(e: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=str(e))
   if isinstance(e, (TaskNotFoundError, RunNotFoundError)):
     return HTTPException(status_code=404, detail=str(e))
-  if isinstance(e, TaskForbiddenError):
+  if isinstance(e, (TaskForbiddenError, DelegationBlockedError)):
     return HTTPException(status_code=403, detail=str(e))
   if isinstance(e, (TaskConflictError, RunIdentityConflictError)):
     blockers = getattr(e, "blockers", None)

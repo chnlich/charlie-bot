@@ -599,7 +599,8 @@ function renderMessage(msg, sessionId) {
   }
   if (msg.role === "child_report") {
     var reportOutcome = String(msg.outcome || "completed");
-    var outcomeColor = reportOutcome === "completed" ? "emerald" : (reportOutcome === "cancelled" ? "slate" : "amber");
+    // Literal classes only: the Tailwind scanner never sees composed names.
+    var outcomeColorCls = reportOutcome === "completed" ? "text-emerald-400" : (reportOutcome === "cancelled" ? "text-slate-400" : "text-amber-400");
     var refsHtml = "";
     var refs = Array.isArray(msg.result_refs) ? msg.result_refs : [];
     if (refs.length) {
@@ -608,7 +609,7 @@ function renderMessage(msg, sessionId) {
         + "</div>";
     }
     return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\">"
-      + "<div class=\"flex items-center gap-2 text-" + outcomeColor + "-400 text-xs font-semibold mb-2\">"
+      + "<div class=\"flex items-center gap-2 " + outcomeColorCls + " text-xs font-semibold mb-2\">"
       + "<span class=\"px-1.5 py-0.5 rounded bg-emerald-900 text-[10px] tracking-wide\">CHILD " + escapeHtml(reportOutcome.toUpperCase()) + "</span>"
       + "<a href=\"/?session=" + encodeURIComponent(msg.child_session_id || "") + "\" class=\"text-emerald-400/50 underline truncate\">"
       + escapeHtml(msg.child_session_id || "") + "</a></div>"

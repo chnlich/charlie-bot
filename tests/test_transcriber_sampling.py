@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from src.agents import transcriber
 
@@ -13,7 +14,7 @@ class _LengthOnlySamples:
   def __len__(self) -> int:
     return self._length
 
-  def __array__(self, *args, **kwargs) -> None:
+  def __array__(self, *args: object, **kwargs: object) -> None:
     raise AssertionError("segment.samples must not be decoded")
 
 
@@ -73,14 +74,14 @@ def _session_with_pcm(samples: np.ndarray) -> transcriber.SimulatedStreamingTran
   return session
 
 
-def test_closed_vad_segments_decode_padded_raw_pcm_without_overlap(monkeypatch) -> None:
+def test_closed_vad_segments_decode_padded_raw_pcm_without_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
   source = np.arange(20_000, dtype=np.int16)
   session = _session_with_pcm(source)
   session._decoded_region_end = 5_000
   session._vad = _ClosedVad(_ClosedSegment(start=10_000, length=1_000))
   captured: list[np.ndarray] = []
 
-  def fake_decode(bundle, samples: np.ndarray) -> str:
+  def fake_decode(bundle: transcriber._SpeechModelBundle, samples: np.ndarray) -> str:
     captured.append(samples.copy())
     return "decoded"
 
@@ -95,14 +96,15 @@ def test_closed_vad_segments_decode_padded_raw_pcm_without_overlap(monkeypatch) 
   assert session._saw_speech
 
 
-def test_live_vad_segment_decodes_padded_raw_pcm_without_advancing_frozen_boundary(monkeypatch) -> None:
+def test_live_vad_segment_decodes_padded_raw_pcm_without_advancing_frozen_boundary(
+    monkeypatch: pytest.MonkeyPatch) -> None:
   source = np.arange(20_000, dtype=np.int16)
   session = _session_with_pcm(source)
   session._decoded_region_end = 5_000
   session._vad = _LiveVad(_LiveSegment(start=10_000))
   captured: list[np.ndarray] = []
 
-  def fake_decode(bundle, samples: np.ndarray) -> str:
+  def fake_decode(bundle: transcriber._SpeechModelBundle, samples: np.ndarray) -> str:
     captured.append(samples.copy())
     return "live"
 

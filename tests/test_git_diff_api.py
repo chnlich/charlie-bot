@@ -3,6 +3,7 @@
 import asyncio
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -70,7 +71,7 @@ def _counting_run(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
   calls: list[list[str]] = []
   real_run = subprocess.run
 
-  def counting_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+  def counting_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
     calls.append(args[0])
     return real_run(*args, **kwargs)
 

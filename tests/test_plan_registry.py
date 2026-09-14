@@ -51,7 +51,7 @@ from src.core.plans import (
         }, "approved"),
     ],
 )
-def test_derive_state_str_truth_table(closed, takeoff, expected) -> None:
+def test_derive_state_str_truth_table(closed: dict | None, takeoff: dict | None, expected: str) -> None:
   assert derive_state_str(plan_doc(closed=closed, takeoff=takeoff)) == expected
 
 
@@ -542,7 +542,7 @@ def test_read_plans_tolerant_unknown_closed_as_is_per_plan_error(tmp_path: Path)
     ],
     ids=["null", "string", "list-of-non-dicts"],
 )
-def test_read_plans_tolerant_wrong_typed_versions_is_per_plan_error(tmp_path: Path, versions) -> None:
+def test_read_plans_tolerant_wrong_typed_versions_is_per_plan_error(tmp_path: Path, versions: object) -> None:
   """A plan with a wrong-typed ``versions`` field yields a per-plan error, never crashes the read."""
   p = tmp_path / "plans.json"
   data = {"plans": [{"id": 1, "title": "Bad", "versions": versions, "takeoff": None, "closed": None}]}

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterator
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -30,7 +31,7 @@ from src.core.sessions import (
 
 
 @pytest.fixture(autouse=True)
-def _clean_probe_state():
+def _clean_probe_state() -> Iterator[None]:
   from src.core.init_worker_recovery import _reset_thread_meta_memo_for_tests
   from src.core.sessions import _reset_trigger_meta_memo_for_tests
 

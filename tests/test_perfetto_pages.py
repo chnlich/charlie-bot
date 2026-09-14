@@ -393,7 +393,7 @@ def test_perfetto_template_has_no_browser_merger() -> None:
     assert deleted_name not in template
 
 
-async def _wait_until(predicate, timeout: float = 5.0) -> bool:
+async def _wait_until(predicate: Callable[[], bool], timeout: float = 5.0) -> bool:
   loop = asyncio.get_running_loop()
   deadline = loop.time() + timeout
   while loop.time() < deadline:

@@ -11,8 +11,10 @@ import json
 import os
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import backend_option
@@ -531,7 +533,7 @@ class _RecordingConnection:
     object.__setattr__(self, "_connection", connection)
     object.__setattr__(self, "_tracker", tracker)
 
-  def __getattr__(self, name: str):
+  def __getattr__(self, name: str) -> Any:
     return getattr(self._connection, name)
 
   def __setattr__(self, name: str, value: object) -> None:
@@ -949,7 +951,7 @@ def test_dry_run_leaves_every_byte_untouched_and_matches_real_run(tmp_path: Path
 # ---------------------------------------------------------------------------
 
 
-def _unlink_failing_for(blocked: Path):
+def _unlink_failing_for(blocked: Path) -> Callable[..., None]:
   real_unlink = Path.unlink
 
   def failing_unlink(self: Path, *args: object, **kwargs: object) -> None:

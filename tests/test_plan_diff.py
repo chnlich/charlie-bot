@@ -1,5 +1,6 @@
 import random
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from html import unescape
 from html.parser import HTMLParser
@@ -75,7 +76,7 @@ def _parse(html: str) -> _Element:
   return next((node for node in _descendants(parser.root) if node.tag == "body"), parser.root)
 
 
-def _descendants(node: _Element):
+def _descendants(node: _Element) -> Iterator[_Element]:
   for child in node.children:
     if isinstance(child, _Element):
       yield child

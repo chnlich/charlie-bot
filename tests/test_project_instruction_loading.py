@@ -579,7 +579,7 @@ async def test_run_cc_fails_turn_on_project_error(
 
   built: dict[str, bool] = {"called": False}
 
-  def fake_build_backend(*args: object, **kwargs: object):
+  def fake_build_backend(*args: object, **kwargs: object) -> FakeBackend:
     built["called"] = True
     return FakeBackend()
 
@@ -612,7 +612,7 @@ async def test_run_cc_success_with_enabled_project(tmp_path: Path, monkeypatch: 
   session_meta = SessionMetadata(id="s1", name="Researcher", group="proj")
   option = AGY_BACKEND_OPTION.model_copy(update={"prompt_overlay": "none"})
 
-  def fake_build_backend(*args: object, **kwargs: object):
+  def fake_build_backend(*args: object, **kwargs: object) -> FakeBackend:
     return FakeBackend()
 
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)

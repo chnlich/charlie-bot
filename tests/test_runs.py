@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -185,7 +186,7 @@ def test_raw_cursor_roundtrip_and_fallbacks(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _resolve(thread_dir: Path, **overrides) -> runs.RunResolution:
+def _resolve(thread_dir: Path, **overrides: object) -> runs.RunResolution:
   kwargs = {
       "raw_path": runs.raw_log_path(thread_dir),
       "pid": None,
@@ -310,7 +311,7 @@ def test_resolve_drops_torn_final_line_from_the_result_scan(tmp_path: Path) -> N
 
 
 @pytest.fixture
-def sleep_holding_stdout(tmp_path: Path):
+def sleep_holding_stdout(tmp_path: Path) -> Iterator[tuple[subprocess.Popen, Path]]:
   """A live process whose fd 1 points at a real file; cleaned up after the test."""
   target = tmp_path / "held.log"
   fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
@@ -323,7 +324,7 @@ def sleep_holding_stdout(tmp_path: Path):
     proc.wait()
 
 
-def test_scan_and_leftover_holders(sleep_holding_stdout) -> None:
+def test_scan_and_leftover_holders(sleep_holding_stdout: tuple[subprocess.Popen, Path]) -> None:
   proc, target = sleep_holding_stdout
   holders_scan = runs.scan_stdout_holders()
   st = target.stat()
@@ -341,7 +342,8 @@ def test_scan_and_leftover_holders(sleep_holding_stdout) -> None:
   assert not runs.leftover_holders_for(target.parent / "gone", holders_scan, run_pid=None)
 
 
-def test_resolve_attaches_leftover_holders_only_when_not_alive(sleep_holding_stdout, tmp_path: Path) -> None:
+def test_resolve_attaches_leftover_holders_only_when_not_alive(
+    sleep_holding_stdout: tuple[subprocess.Popen, Path], tmp_path: Path) -> None:
   proc, target = sleep_holding_stdout
   raw = runs.raw_log_path(tmp_path)
   raw.parent.mkdir(parents=True)

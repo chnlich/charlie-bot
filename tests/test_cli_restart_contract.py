@@ -34,11 +34,11 @@ from src.core.config import CharlieBotConfig
 from src.core.models import PendingTrigger, TriggerStatus
 
 
-def _cfg(tmp_path: Path, **overrides) -> CharlieBotConfig:
+def _cfg(tmp_path: Path, **overrides: object) -> CharlieBotConfig:
   return CharlieBotConfig(charliebot_home=tmp_path / "home", **overrides)
 
 
-def _write_thread(cfg: CharlieBotConfig, session_id: str, thread_id: str, **fields) -> None:
+def _write_thread(cfg: CharlieBotConfig, session_id: str, thread_id: str, **fields: object) -> None:
   thread_dir = cfg.sessions_dir / session_id / "threads" / thread_id
   thread_dir.mkdir(parents=True, exist_ok=True)
   meta = {"id": thread_id, "session_id": session_id, "description": "d", "created_at": "2024-01-01T00:00:00+00:00"}
@@ -102,7 +102,7 @@ def test_connect_never_established_retries_with_backoff_then_exhausts(
 
   call_count = 0
 
-  def fake_post(*args, **kwargs) -> None:
+  def fake_post(*args: object, **kwargs: object) -> None:
     nonlocal call_count
     call_count += 1
     raise _connect_refused()
@@ -155,7 +155,7 @@ def test_listener_absent_then_appears_mid_budget_succeeds(tmp_path: Path, monkey
 
   attempts = 0
 
-  def fake_post(*args, **kwargs):
+  def fake_post(*args: object, **kwargs: object) -> requests.Response:
     nonlocal attempts
     attempts += 1
     if attempts < 3:
@@ -425,7 +425,7 @@ class _StubPlanListener:
         self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
         self.connection.close()
 
-      def log_message(self, format: str, *args) -> None:
+      def log_message(self, format: str, *args: object) -> None:
         pass
 
     self._httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)

@@ -25,6 +25,8 @@ from conftest import (
 from src.cli.artifact import main as artifact_main
 from src.core import artifact_check
 from src.core.artifact_check import run_assertions, run_probe
+from src.core.config import CharlieBotConfig
+from src.core.models import BackendOption
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -51,7 +53,8 @@ def _by_name(outcomes: list[artifact_check.AssertionOutcome]) -> dict[str, list[
   return by_name
 
 
-def _run(genre: str, artifact: Path, cfg=None) -> dict[str, list[artifact_check.AssertionOutcome]]:
+def _run(genre: str, artifact: Path, cfg: CharlieBotConfig | None = None,
+) -> dict[str, list[artifact_check.AssertionOutcome]]:
   return _by_name(run_assertions(genre, artifact, cfg))
 
 
@@ -473,7 +476,7 @@ def _ordinal_doc(body: str, *, numbered_h2: int = 5, sn: tuple[str, ...] = ()) -
       f"<p>{body}</p>")
 
 
-def _ordinal_outcome(tmp_path: Path, body: str, **kwargs) -> artifact_check.AssertionOutcome:
+def _ordinal_outcome(tmp_path: Path, body: str, **kwargs: object) -> artifact_check.AssertionOutcome:
   (outcome,) = _run("debug", _write(tmp_path, _ordinal_doc(body, **kwargs)))["ordinal-named"]
   return outcome
 
@@ -702,7 +705,7 @@ def test_cli_two_open_forks_without_explainer_report_two_locations_and_skip_the_
   artifact = _write(tmp_path, make_doc())
   factory_called: list = []
 
-  def factory(option, cfg) -> None:
+  def factory(option: BackendOption, cfg: CharlieBotConfig) -> None:
     factory_called.append(option.id)
     raise AssertionError("the probe must never run when an assertion failed")
 

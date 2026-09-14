@@ -16,7 +16,8 @@ from src.core import event_types as ET
 
 
 @pytest.mark.asyncio
-async def test_error_event_with_quota_pattern_raises_and_persists(tmp_path: Path, monkeypatch) -> None:
+async def test_error_event_with_quota_pattern_raises_and_persists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   event = {"type": ET.ERROR, "message": "API Error: quota exceeded for project", "content": ""}
   with pytest.raises(QuotaExhaustedException):
     await process_worker_event(make_worker(tmp_path, "quota-scan"), tmp_path, event, monkeypatch)
@@ -25,14 +26,14 @@ async def test_error_event_with_quota_pattern_raises_and_persists(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_error_event_without_quota_pattern_passes(tmp_path: Path, monkeypatch) -> None:
+async def test_error_event_without_quota_pattern_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   event = {"type": ET.ERROR, "message": "tool schema rejected", "content": ""}
   text = await process_worker_event(make_worker(tmp_path, "quota-scan"), tmp_path, event, monkeypatch)
   assert len(text.splitlines()) == 1
 
 
 @pytest.mark.asyncio
-async def test_non_error_payload_never_raises(tmp_path: Path, monkeypatch) -> None:
+async def test_non_error_payload_never_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # The loop's heaviest payload shape: a user event whose tool_result content
   # carries the patterns verbatim. The type gate alone answers, both before and
   # after the copies run.

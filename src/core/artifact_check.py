@@ -21,6 +21,8 @@ gate (src/core/plans.py) enforces exactly the set ``run_assertions("plan", ...)`
 off the page carries a content name at first use.
 """
 
+from __future__ import annotations
+
 import asyncio
 import dataclasses
 import html
@@ -29,14 +31,15 @@ import uuid
 from collections.abc import Callable, Iterator
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from src.agents.backends.registry import build_backend
 from src.core import headless_render
-from src.core.autonamer import iter_light_backends
-from src.core.config import CharlieBotConfig
 from src.core.constants import REPO_ROOT
 from src.core.plan_diff import VOID_TAGS
 from src.core.timeouts import ARTIFACT_PROBE_TIMEOUT
+
+if TYPE_CHECKING:
+  from src.core.config import CharlieBotConfig
 
 # One name per assertion: the outcome name a check stamps, its _ASSERTION_RUNNERS key, and its
 # _ASSERTION_SETS member are the same string, so the registry and the genre sets build on these
@@ -795,6 +798,11 @@ def run_probe(cfg: CharlieBotConfig, artifact: Path, trigger: str) -> ProbeResul
   """
   questions = _PROBE_QUESTIONS.replace("<trigger message verbatim>", trigger)
   prompt = f"{artifact.read_text(encoding='utf-8')}\n\n{questions}"
+  # The backends registry drags fastapi, numpy and the sessions stack (~250 ms of
+  # import) and serves only this probe; the artifact chain's import floor
+  # (docs/perf_baseline.md M102) depends on it loading here and nowhere earlier.
+  from src.agents.backends.registry import build_backend
+  from src.core.autonamer import iter_light_backends
   options = list(iter_light_backends(cfg))
   if not options:
     raise ValueError("no light backends resolvable from config backends.preference")

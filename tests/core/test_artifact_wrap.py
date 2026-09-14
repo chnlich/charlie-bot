@@ -45,7 +45,7 @@ def vendored_katex(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def cli_katex(monkeypatch: pytest.MonkeyPatch, vendored_katex: Path) -> Path:
   """Point the CLI verb's config home at a dir whose vendor copy is the session-fetched one."""
   monkeypatch.setattr(
-      "src.cli.artifact.get_config", lambda: SimpleNamespace(charliebot_home=vendored_katex.parent.parent))
+      "src.cli.common.get_config", lambda: SimpleNamespace(charliebot_home=vendored_katex.parent.parent))
   return vendored_katex
 
 

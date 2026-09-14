@@ -128,6 +128,31 @@ def test_plan_constants_match_the_model_literals() -> None:
       f"{amend_tuple} vs {amend_literal}; {close_tuple} vs {close_literal}")
 
 
+# The artifact chain's ban set: the probe's registry stack (backends.registry →
+# fastapi + numpy + sessions, autonamer → sessions + streaming) and the KaTeX
+# fetch's HTTP client serve only the check/wrap verb bodies — the probe imports
+# its stack inside run_probe, and the vendored-KaTeX steady state never fetches.
+ARTIFACT_HEAVY_MODULES = HEAVY_MODULES + (
+    "fastapi",
+    "src.agents.backends.registry",
+    "src.agents.backends.base",
+    "src.core.autonamer",
+    "src.core.sessions",
+    "src.core.streaming",
+)
+
+
+def test_artifact_chain_imports_without_the_heavy_chains() -> None:
+  loaded = _modules_loaded_after_import(
+      "import src.cli.artifact; src.cli.artifact._build_parser()", ARTIFACT_HEAVY_MODULES)
+  assert loaded == [], (
+      "the artifact command chain pulled the probe's registry stack or the HTTP "
+      f"client into the CLI process: {loaded}; the M102 command wall "
+      "(docs/perf_baseline.md) depends on these staying out — run_probe imports "
+      "the registry stack inside the probe, and ensure_vendored_katex imports "
+      "requests on the CDN-fetch path only")
+
+
 def test_memory_chain_imports_without_the_heavy_chains() -> None:
   loaded = _modules_loaded_after_import("import src.cli.memory", MEMORY_HEAVY_MODULES)
   assert loaded == [], (

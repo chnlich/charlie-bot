@@ -9,10 +9,10 @@ from fastapi.responses import JSONResponse
 
 from src.agents.backends.base import make_master_done_event, make_text_event
 from src.agents.master_cc import cancel_master, run_message
-from src.api.deps import get_session_manager, require_found, require_session
+from src.api.deps import get_session_manager, get_task_manager, require_caller, require_found, require_session
 from src.api.message_utils import (
-    build_agent_input_content,
-    build_user_event,
+  build_agent_input_content,
+  build_user_event,
 )
 from src.core import event_types as ET
 from src.core.autonamer import is_default_session_name, maybe_auto_name
@@ -21,13 +21,16 @@ from src.core.log_once import LazyStructlogLogger
 from src.core.message_aggregator import extract_text_from_message
 from src.core.message_events import serialize_uploaded_files
 from src.core.models import (
-    BackendType,
-    SendMessageRequest,
-    SessionMetadata,
-    SessionStatus,
+  BackendType,
+  SendMessageRequest,
+  SessionMetadata,
+  SessionStatus,
 )
+from src.core.run_token import CallerIdentity
+from src.core.session_dispatch import agent_provenance, input_event_type_for_caller
 from src.core.sessions import SessionManager
 from src.core.slash_commands import SlashDispatchKind, SlashDispatchResult, dispatch_slash_command
+from src.core.task_sessions import TaskTreeManager
 from src.core.tasks import create_logged_task
 
 log = LazyStructlogLogger()
@@ -71,11 +74,38 @@ async def send_message(
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    caller: CallerIdentity = Depends(require_caller),
 ) -> JSONResponse:
   """Send a message to the master CC agent. Returns 202; response streams via WebSocket."""
   backend_option = cfg.get_backend_option(meta.backend) if meta.backend else None
   if backend_option is not None and backend_option.type == BackendType.TUI_CLI:
     raise HTTPException(status_code=400, detail="Chat input is not supported for tui-cli sessions; use the terminal.")
+
+  # A v2 task node routes input through the durable dispatcher: browser and
+  # operator input are real user input, a run-token agent on the same route
+  # stays agent input with its own provenance. Closed nodes retain the input
+  # as history; the executor seam (next stage) decides any launch.
+  if meta.profile is not None:
+    from src.core.task_sessions import TaskForbiddenError, TaskInvalidError
+
+    event_type = input_event_type_for_caller(caller)
+    from_session, from_session_name = agent_provenance(caller) if event_type != ET.USER else (None, None)
+    uploaded_files = serialize_uploaded_files(req.uploaded_files)
+    try:
+      await task_mgr.dispatch.admit_input(
+          session_id,
+          event_type=event_type,
+          content=req.content,
+          actor="user" if event_type == ET.USER else "agent",
+          uploaded_files=uploaded_files,
+          from_session=from_session,
+          from_session_name=from_session_name,
+      )
+      await task_mgr.dispatch.dispatch_pending(session_id)
+    except (TaskInvalidError, TaskForbiddenError) as e:
+      raise HTTPException(status_code=403, detail=str(e)) from e
+    return JSONResponse(status_code=202, content={"status": "accepted"})
 
   # The only content path that does not go through trigger_master: unarchive an
   # archived target here, before dispatching, so the slash-command branch and

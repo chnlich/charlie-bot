@@ -221,6 +221,27 @@ def _scheduled_run_skipped_msg(ev: dict) -> dict:
   }
 
 
+def _child_report_msg(ev: dict) -> dict:
+    """One child task's result report: summary, evidence refs, and its node link."""
+    outcome = ev.get("outcome", "")
+    return {
+        "role": ET.CHILD_REPORT,
+        "content": ev.get("summary", ""),
+        "child_session_id": ev.get("child_session_id", ""),
+        "outcome": outcome,
+        "result_refs": ev.get("result_refs") or [],
+    }
+
+
+def _task_closed_msg(ev: dict) -> dict:
+    outcome = ev.get("outcome", "completed")
+    summary = ev.get("summary") or ""
+    return {
+        "role": "system",
+        "content": f"Task {outcome}: {summary}".rstrip(),
+    }
+
+
 def _task_delegated_msg(ev: dict) -> dict:
   backend = ev.get("backend") or ev.get("resolved_backend") or ""
   model = ev.get("model") or ev.get("resolved_model") or ""
@@ -315,6 +336,20 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
         _model_fallback_notice_msg,
     ET.SCHEDULED_RUN_SKIPPED:
         _scheduled_run_skipped_msg,
+    # Task-tree control events the chat surface renders. child_report carries
+    # the child node link and evidence refs; close/reopen render as system
+    # lines. All three ride the message-delta path only (the raw forms are in
+    # sessions._RAW_EVENTS_REPLACED_BY_DELTAS), so live, catch-up, and
+    # reloaded history render each fact exactly once.
+    ET.CHILD_REPORT:
+        _child_report_msg,
+    ET.TASK_CLOSED:
+        _task_closed_msg,
+    ET.TASK_REOPENED:
+        lambda ev: {
+            "role": "system",
+            "content": f"Task reopened: {ev.get('reason') or ''}".rstrip(),
+        },
 }
 
 

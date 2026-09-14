@@ -6,56 +6,58 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import (
-    bad_request,
-    get_plan_manager,
-    get_session_manager,
-    get_thread_manager,
-    get_trigger_manager,
-    require_found,
+  bad_request,
+  get_plan_manager,
+  get_session_manager,
+  get_task_manager,
+  get_thread_manager,
+  get_trigger_manager,
+  require_found,
 )
 from src.api.message_utils import build_agent_message_event
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config
 from src.core.improve_command import (
-    ImproveLoopAlreadyRunningError,
-    loop_goal_path,
-    loop_plan_path,
-    reserve_loop_state,
-    run_improve_loop,
+  ImproveLoopAlreadyRunningError,
+  loop_goal_path,
+  loop_plan_path,
+  reserve_loop_state,
+  run_improve_loop,
 )
 from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
 from src.core.models import (
-    DelegateInvocationMetadata,
-    DelegateRequest,
-    ImproveRequest,
-    PlanAmendRequest,
-    PlanApproveRequest,
-    PlanCloseRequest,
-    PlanPresentRequest,
-    ScheduleTriggerRequest,
-    SessionMessageRequest,
-    SessionMetadata,
-    SlackAckRequest,
-    SlackReplyRequest,
-    SpawnRequest,
-    TaskType,
-    WatchKind,
+  DelegateInvocationMetadata,
+  DelegateRequest,
+  ImproveRequest,
+  PlanAmendRequest,
+  PlanApproveRequest,
+  PlanCloseRequest,
+  PlanPresentRequest,
+  ScheduleTriggerRequest,
+  SessionMessageRequest,
+  SessionMetadata,
+  SlackAckRequest,
+  SlackReplyRequest,
+  SpawnRequest,
+  TaskType,
+  WatchKind,
 )
 from src.core.plans import PlanRegistryManager
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
-    SlackReplyError,
-    ack_messages,
-    assert_thread_fresh,
-    post_reply,
+  SlackReplyError,
+  ack_messages,
+  assert_thread_fresh,
+  post_reply,
 )
 from src.core.spawner import (
-    resolve_requested_subagent_backend_model,
-    select_verify_backend,
-    spawn_worker,
+  resolve_requested_subagent_backend_model,
+  select_verify_backend,
+  spawn_worker,
 )
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
+from src.core.task_sessions import TaskTreeManager
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager
 from src.core.triggers import ArchivedSessionError, RemoteVerifyError, TriggerManager
@@ -317,6 +319,7 @@ async def session_message(
     req: SessionMessageRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> dict:
   """Relay an agent message into another session's event log and wake its master.
 
@@ -331,6 +334,27 @@ async def session_message(
   target = await session_mgr.get_session(req.target_session_id)
   if target is None:
     raise HTTPException(status_code=404, detail="Target session not found")
+
+  # A v2 target takes the durable dispatcher path: the relay keeps its
+  # agent_message identity and the caller's provenance (never a real user
+  # event), persists durably first, and the executor seam decides any launch.
+  if target.profile is not None and task_mgr is not None:
+    await task_mgr.dispatch.admit_input(
+        req.target_session_id,
+        event_type=ET.AGENT_MESSAGE,
+        content=req.content,
+        actor="agent",
+        from_session=caller.id,
+        from_session_name=caller.name,
+    )
+    await task_mgr.dispatch.dispatch_pending(req.target_session_id)
+    log.info(
+        "session_message_dispatched",
+        session=req.session_id,
+        target_session=req.target_session_id,
+        content_chars=len(req.content),
+    )
+    return {"status": "accepted"}
 
   await session_mgr.persist_and_broadcast(
       req.target_session_id,

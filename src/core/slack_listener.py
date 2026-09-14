@@ -54,6 +54,7 @@ from src.api.deps import SESSION_NOT_FOUND_DETAIL
 from src.api.message_utils import build_agent_message_event
 from src.core import event_types as ET
 from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig, get_credentials
+from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.http import get_http_client
 from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
@@ -146,16 +147,17 @@ _ACK_EVENT_TYPE = "slack_ack"
 # How much of an unread message's text the 412 refusal and the gate list carry.
 _TEXT_PREVIEW_CHARS = 200
 
-# The file-service URL prefixes (the same two the auth middleware lets through and
-# the file server answers).
-_FILE_URL_PREFIXES = ("/files/", "/absolute_filepath/")
+# The file-service URL prefixes: the mounted mounts with the trailing slash the
+# rewrite gate matches on.
+_FILE_URL_PREFIXES = tuple(mount + "/" for mount in FILE_SERVER_MOUNTS)
 
 # The file-server URL shapes the reply path rewrites: scheme, any host, this
 # server's port, one of the file-service prefixes, then the absolute filesystem
 # path, with the query string and fragment carried onto the published URL unchanged.
 _FILE_SERVER_URL_RE = re.compile(
-    r"https?://(?P<host>\[[^\]\s]+\]|[^/\s:]+):(?P<port>\d+)/(?P<prefix>files|absolute_filepath)"
-    r"(?P<fs_path>/[^\s?#]*)(?P<query>\?[^\s#]*)?(?P<fragment>#[^\s]*)?")
+    r"https?://(?P<host>\[[^\]\s]+\]|[^/\s:]+):(?P<port>\d+)/(?P<prefix>"
+    + "|".join(mount.lstrip("/") for mount in FILE_SERVER_MOUNTS)
+    + r")(?P<fs_path>/[^\s?#]*)(?P<query>\?[^\s#]*)?(?P<fragment>#[^\s]*)?")
 
 # Any URL naming a port, for the application-route naming: the matches whose port is
 # this server's and whose path is not a file-service prefix reach the operator alone.

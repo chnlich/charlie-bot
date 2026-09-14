@@ -89,8 +89,9 @@ NOTIFICATION_TIMEOUT = 10.0  # seconds — fast external API, fail quickly
 # Anthropic OAuth usage API and token refresh.
 HTTP_OAUTH_TIMEOUT = 30  # seconds — remote API may be slow under load
 
-# Socket connect probe deciding whether a configured home service answers; the
-# probe only gates whether the UI links the service, so it must stay fast.
+# Socket connect probe behind home.html's per-service up/down badge; the card
+# renders and links regardless of the outcome, so the bound only caps how long
+# the page load waits on the badge.
 HOME_SERVICE_PROBE_TIMEOUT = 0.3  # seconds
 
 # `claude --version` subprocess behind the ext_usage User-Agent (probed once

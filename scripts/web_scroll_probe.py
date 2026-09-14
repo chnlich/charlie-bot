@@ -97,6 +97,7 @@ if str(_REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(_REPO_ROOT))
 
 import websockets  # noqa: E402
+from websockets.asyncio import client  # noqa: E402
 
 from src.core.config import CharlieBotConfig, get_config, get_credentials  # noqa: E402
 
@@ -155,7 +156,7 @@ def free_port() -> int:
 class CDP:
   """Minimal CDP client over one WebSocket: request/response plus event handlers."""
 
-  def __init__(self, ws) -> None:
+  def __init__(self, ws: client.ClientConnection) -> None:
     self.ws = ws
     self.mid = 0
     self.pending: dict[int, asyncio.Future] = {}

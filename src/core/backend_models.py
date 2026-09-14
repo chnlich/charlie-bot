@@ -112,8 +112,8 @@ class TuiCliBackend(BackendBase):
 
 
 # One class per type: a config entry validates against the subclass its ``type``
-# names, so illegal field/type combinations are unconstructable (same pattern as
-# WatchTarget above).
+# names, so illegal field/type combinations are unconstructable (the same
+# discriminated-union pattern as src.core.models' WatchTarget).
 BACKEND_CLASSES = (
     CcClaudeBackend, CcKimiBackend, CcOpenAICompatibleBackend, CodexBackend, CharlieCodeBackend, GeminiBackend,
     OpencodeBackend, AntigravityBackend, TuiCliBackend)

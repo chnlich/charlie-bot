@@ -162,17 +162,21 @@ async def _session_consumer(session_id: str) -> None:
         if cc_session_id:
           item.session_meta.cc_session_id = cc_session_id
           last_cc_session_id = cc_session_id
-        # The consumer is the single owner of persisting the resume anchor:
-        # every round, unconditionally, with no comparison against any
-        # in-memory value. The read-back verifies the write landed on disk.
-        await _persist_with_readback(
-            item.callbacks,
-            item.callbacks.persist_cc_session_id,
-            session_id,
-            cc_session_id,
-            "resume_anchor",
-            "Resume anchor",
-        )
+          # The consumer is the single owner of persisting the resume anchor:
+          # every round, unconditionally, with no comparison against any
+          # in-memory value. The read-back verifies the write landed on disk.
+          # Only a truthy id persists: a turn that ended without a backend
+          # session (a refusal or a spawn/transport failure) must not wipe the
+          # durable anchor — a fresh-native clear is the adapter's spawn-time
+          # write, not this path.
+          await _persist_with_readback(
+              item.callbacks,
+              item.callbacks.persist_cc_session_id,
+              session_id,
+              cc_session_id,
+              "resume_anchor",
+              "Resume anchor",
+          )
 
         # The pool account holding the transcript is persisted the same way,
         # every round with a read-back: a relay or a pool-wide transcript search

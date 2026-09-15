@@ -840,3 +840,32 @@ async def test_handle_event_keeps_an_already_adopted_session_id_over_the_signal(
 
   assert cc_session_id == "oc-early"
   assert [e.get("type") for e in persisted] == [ET.SESSION_ATTACHED]
+
+
+@pytest.mark.asyncio
+async def test_consumer_keeps_the_durable_anchor_when_a_turn_returns_no_session_id(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A turn that ends without a backend session id (a refusal or a spawn /
+  transport failure) must not wipe the durable resume anchor: only a truthy id
+  ever persists. Clearing for a v2 fresh-native launch is the adapter's
+  spawn-time write, not this path."""
+  cfg = _make_consumer_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  session = await session_mgr.create_session(CreateSessionRequest(name="anchor-preserved"))
+  await session_mgr.persist_cc_session_id(session.id, "kept-anchor")
+
+  async def fake_run_cc(item: master_cc._WorkItem) -> tuple:
+    return (None, 1, "refused", {})
+
+  monkeypatch.setattr(master_cc_run, "_run_cc", fake_run_cc)
+  monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
+  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
+
+  async with fresh_master_state(session.id):
+    await master_cc.run_message(cfg, session, "hi", session_mgr.callbacks(), skip_user_event=True)
+    await drain_session_consumer(session.id, timeout=5)
+
+  cold_reader = SessionManager(cfg)
+  cold_meta = await cold_reader.get_session(session.id)
+  assert cold_meta is not None
+  assert cold_meta.cc_session_id == "kept-anchor"

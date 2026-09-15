@@ -2020,7 +2020,7 @@ Then run per checkout (``eval`` the snapshot export first):
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import gzip, hashlib, json, os, sys, time
+import asyncio, gzip, hashlib, json, os, sys, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from fastapi import FastAPI

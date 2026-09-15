@@ -70,4 +70,4 @@ def test_asset_token_tracks_the_served_tree(tmp_path: Path) -> None:
 def test_asset_token_composes_git_version_and_digest() -> None:
   version = pages._static_asset_version()
   assert version.endswith(f"-{pages._ASSET_DIGEST_STATE['digest']}")
-  assert version.startswith(pages._RUNTIME_GIT_VERSION.replace(" · ", "-").replace(" ", "-"))
+  assert version.startswith(pages._git_version().replace(" · ", "-").replace(" ", "-"))

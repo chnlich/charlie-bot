@@ -144,7 +144,18 @@ def _get_git_version() -> str:
     return ""
 
 
-_RUNTIME_GIT_VERSION = _get_git_version()
+# The two git subprocesses behind the version run only when a page renders the
+# token or the footer; the server import floor (docs/perf_baseline.md M99)
+# depends on them staying off it.
+_GIT_VERSION: str | None = None
+
+
+def _git_version() -> str:
+  """The module's git version, computed on first use and memoized."""
+  global _GIT_VERSION
+  if _GIT_VERSION is None:
+    _GIT_VERSION = _get_git_version()
+  return _GIT_VERSION
 
 # Content half of the ?v= asset token, keyed on the walk-instant signature
 # tuple: a file that moves after the walk keys the older digest and the next
@@ -208,7 +219,7 @@ def _asset_tree_digest() -> str:
 
 def _static_asset_version() -> str:
   """Cache-bust token for static assets: the runtime git version plus the served tree's content digest."""
-  git_part = _RUNTIME_GIT_VERSION.replace(" · ", "-").replace(" ", "-")
+  git_part = _git_version().replace(" · ", "-").replace(" ", "-")
   return f"{git_part}-{_asset_tree_digest()}"
 
 
@@ -794,6 +805,6 @@ async def index(
           "auth_enabled": bool(configured_access_key()),
           "hostname": socket.gethostname(),
           "sessions_root": str(cfg.sessions_dir),
-          "version": _RUNTIME_GIT_VERSION,
+          "version": _git_version(),
           "static_asset_version": _static_asset_version(),
       })

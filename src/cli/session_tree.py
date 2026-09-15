@@ -1,11 +1,12 @@
-"""Session-tree CLI: the migration verbs of the task-tree line.
+"""Session-tree CLI: the migration and preview verbs of the task-tree line.
 
   charliebot session-tree migrate --dry-run --output FILE
   charliebot session-tree migrate --apply --manifest FILE
   charliebot session-tree migrate --rollback --manifest FILE
+  charliebot session-tree preview --home DIR --port PORT [--backend ID]
 
-The commands target the current explicitly selected CHARLIEBOT_HOME and touch
-nothing else: no HTTP delegation, no server startup, no external messages.
+The migrate commands target the current explicitly selected CHARLIEBOT_HOME and
+touch nothing else: no HTTP delegation, no server startup, no external messages.
 ``--dry-run`` reads the source read-only and writes the reviewable manifest to
 FILE (FILE must live outside the home: a manifest inside the inventoried home
 would overwrite a source or hide a new file in its own input set);
@@ -16,13 +17,19 @@ the ordinary readers after the write; ``--rollback`` re-validates the whole
 protected home under the writer fence before its first restore, restores
 originals and removes only migration-owned unchanged products, and refuses
 once anything in the home is no longer accounted for by the manifest's
-binding and receipts. Every refusal exits 1 with a structured JSON diagnostic
-on stderr — never an uncaught traceback. Exit code 0 success, 1
-refusal/conflict, 2 usage.
+binding and receipts.
+
+``preview`` prepares, validates and runs one isolated trial instance of the
+real application in the foreground (src/core/session_tree_preview.py owns the
+contract); it never reads or writes the source profile's sessions, memory,
+schedules, triggers, native sessions or operator key.
+
+Every refusal exits 1 with a structured JSON diagnostic on stderr — never an
+uncaught traceback. Exit code 0 success, 1 refusal/conflict, 2 usage.
 
 Not yet part of this command (separate owners, do not assume them here): the
-real-data offline rehearsal, the interactive ``session-tree preview``
-instance, runtime cutover integration, and production apply authorization.
+real-data offline rehearsal, real session import into a preview home, runtime
+cutover integration, and production apply authorization.
 """
 
 import argparse
@@ -66,6 +73,25 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="Manifest output path (--dry-run)")
   migrate.add_argument("--manifest", default=None,
                        help="Manifest path (--apply / --rollback)")
+
+  preview = sub.add_parser(
+      "preview",
+      help="Start an isolated session-tree trial instance in the foreground",
+      description=(
+          "Prepare, validate and run one isolated trial instance of the real "
+          "application on its own home and loopback port. A fresh home is "
+          "seeded with minimal private config and its own random access key; "
+          "an existing validated preview home is reused with its tasks and "
+          "config. Existing legacy/migrated state, unrelated configurations, "
+          "overlapping paths, occupied ports and unprovable instance ownership "
+          "refuse before any write."))
+  preview.add_argument("--home", required=True, metavar="DIR",
+                       help="The preview instance's own CharlieBot home (required)")
+  preview.add_argument("--port", required=True, type=int, metavar="PORT",
+                       help="The preview instance's loopback port (required)")
+  preview.add_argument("--backend", default=None, metavar="ID",
+                       help="Backend id for initial setup (required for a fresh home; "
+                            "on restart it must match the home's configured backend)")
   return parser
 
 
@@ -146,11 +172,22 @@ def _cmd_migrate(args: argparse.Namespace) -> None:
   _emit(result)
 
 
+def _cmd_preview(args: argparse.Namespace) -> None:
+  from src.core.session_tree_preview import PreviewRefused, run_preview_command
+
+  try:
+    run_preview_command(args.home, args.port, args.backend)
+  except PreviewRefused as e:
+    _fail(str(e), e.details)
+
+
 def main() -> None:
   parser = _build_parser()
   args = parser.parse_args()
   if args.session_tree_command == "migrate":
     _cmd_migrate(args)
+  elif args.session_tree_command == "preview":
+    _cmd_preview(args)
 
 
 if __name__ == "__main__":

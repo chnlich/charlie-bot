@@ -251,6 +251,11 @@ class TaskExecutionAdapter:
         # sequence controllers await this barrier instead of polling forever
         # behind a withheld launch.
         self._launch_settlements: dict[tuple[str, str], asyncio.Future] = {}
+        # Launch workspace boundary: when installed (the session-tree preview
+        # entry point), every worktree-creating launch refuses a repo outside
+        # the instance's own workspace dirs. None leaves production behavior
+        # unchanged.
+        self.launch_workspace_guard: Callable[[Path], None] | None = None
 
     # ------------------------------------------------------------------
     # The dispatcher seam
@@ -1110,6 +1115,8 @@ class TaskExecutionAdapter:
         when no base was requested; a requested base is used verbatim. The
         created branch, worktree and canonical base land on the Run record.
         """
+        if self.launch_workspace_guard is not None:
+            self.launch_workspace_guard(repo_path)
         remote_tip: str | None = None
         if run.base_branch:
             base_branch = run.base_branch

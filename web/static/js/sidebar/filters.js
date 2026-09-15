@@ -265,6 +265,10 @@ function restoreSidebarFromUrl() {
   } else if (SESSION_BOOTSTRAP && SESSION_BOOTSTRAP.session && SESSION_BOOTSTRAP.session.profile) {
     // A v2 task node (deep link or reload): the task tree is its navigation.
     switchSidebarFilter('tasks');
+  } else if (globalThis.__CHARLIEBOT_PREVIEW__) {
+    // Preview instance: the task tree is the only navigation and the only
+    // create flow; the legacy session list is not a preview surface.
+    switchSidebarFilter('tasks');
   } else {
     setSidebarFilterPill('all');
     if (INITIAL_LOAD_ERRORS.length) {

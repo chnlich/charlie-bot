@@ -47,6 +47,8 @@
     globalThis.ACTIVE_BACKEND_ID = {{ active_backend|tojson }};
     globalThis.ACTIVE_BACKEND_TYPE = {{ (active_backend_type or '')|tojson }};
     const AUTH_ENABLED = {{ auth_enabled|tojson }};
+    const PREVIEW_MODE = {{ preview_mode|tojson }};
+    globalThis.__CHARLIEBOT_PREVIEW__ = PREVIEW_MODE;
   </script>
 </head>
 <body class="dark bg-slate-900 text-slate-100 overflow-hidden" style="height:var(--app-h,100dvh)">
@@ -80,6 +82,9 @@
       <!-- Logo -->
       <div class="p-4 border-b border-slate-700">
         <h1 class="text-lg font-bold text-blue-400">CharlieBot{% if version %} <span class="text-xs text-slate-500 font-normal hidden sm:inline">{{ version }}</span>{% endif %}</h1>
+        {% if preview_mode %}
+        <p id="preview-indicator" class="mt-1 text-xs font-medium text-amber-300">Preview — isolated trial instance</p>
+        {% endif %}
       </div>
 
       <!-- New session -->
@@ -87,9 +92,9 @@
         <div class="flex gap-2">
           <button onclick="createSessionOrTask()" class="flex-1 flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium transition-colors min-w-0">
             <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-            <span class="truncate">New Session</span>
+            <span class="truncate">{% if preview_mode %}New Task{% else %}New Session{% endif %}</span>
           </button>
-          {% if backend_options %}
+          {% if backend_options and not preview_mode %}
           <select id="new-session-backend"
                   class="text-xs bg-slate-800 border border-slate-600 rounded-lg px-2 py-2 text-slate-300 focus:outline-none focus:border-blue-500 cursor-pointer hover:border-slate-500 transition-colors"
                   style="max-width: 110px;"
@@ -104,7 +109,9 @@
 
       <!-- Sidebar filter tabs -->
       <div id="sidebar-filter-pills" class="px-3 py-2 border-b border-slate-700 flex gap-1 items-center">
+        {% if not preview_mode %}
         <button onclick="openCronAdder()" id="cron-add-btn" class="ml-auto px-2 py-0.5 text-sm rounded font-medium text-slate-400 hover:text-slate-200 hidden" title="New scheduled task">+</button>
+        {% endif %}
       </div>
 
       <!-- Search -->
@@ -200,7 +207,9 @@
           </svg>
         </a>
         <div id="tab-buttons" class="flex gap-1">
+          {% if not preview_mode %}
           <button onclick="switchTab('terminal')" id="btn-terminal" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Terminal</button>
+          {% endif %}
           <button onclick="switchTab('chat-tex')" id="btn-chat-tex" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Chat w/ TeX</button>
           <button onclick="switchTab('chat-backlog')" id="btn-chat-backlog" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Backlog</button>
           <button onclick="switchTab('chat-plans')" id="btn-chat-plans" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Plans</button>

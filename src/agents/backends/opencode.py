@@ -10,7 +10,7 @@ import re
 import ssl
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import orjson
 
@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 log = LazyStructlogLogger()
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
   # httpx imports on first use: the server import floor (docs/perf_baseline.md
   # M99) reaches this module through session_usage, and must not pay httpx's
   # import chain (~60 ms with rich) for a client only opencode runs touch. The

@@ -9,7 +9,10 @@ test pins the rest so no route reintroduces the hop.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Iterator
+from typing import Any
 
+from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute
 
 import server
@@ -17,7 +20,7 @@ from src.api.deps import get_config_on_loop
 from src.core.config import get_config
 
 
-def _dependency_calls(dependant):
+def _dependency_calls(dependant: Dependant) -> Iterator[Callable[..., Any]]:
   yield dependant.call
   for sub in dependant.dependencies:
     yield from _dependency_calls(sub)

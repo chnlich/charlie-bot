@@ -38,6 +38,11 @@ _NODE_TESTS = [
     "prose_markdown_memo.test.js",
     "rendering_worker_summary_origin.test.js",
     "session_switch_stale_pagination.test.js",
+    # v2 session-tree UI (stage 5): tree navigation, task/context/runs panels.
+    "session_tree_render.test.js",
+    "task_panel_actions.test.js",
+    "task_context_rules.test.js",
+    "task_runs_panel.test.js",
     "session_view_sentinel.test.js",
     "show_more_toggle.test.js",
     "sidebar_rename_prefill.test.js",

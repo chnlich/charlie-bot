@@ -26,16 +26,15 @@ const panel = {
   actionRequests: new Map(), // actionKey -> request_id (stable per logical action)
 };
 
-function currentSessionId() {
-  return typeof SESSION_ID !== 'undefined' ? SESSION_ID : null;
-}
-
-function requestGeneration() {
-  return {sessionId: currentSessionId(), gen: ++panel.gen};
+// The panel binds to the session it was shown for: every fetch carries that
+// binding and a generation, so a late response for a prior node can never
+// replace the active node's editor, run list or header.
+function boundSessionId() {
+  return panel.sessionId;
 }
 
 function isStale(flight) {
-  return flight.sessionId !== currentSessionId() || flight.gen !== panel.gen;
+  return flight.gen !== panel.gen || flight.sessionId !== panel.sessionId;
 }
 
 function requestIdFor(actionKey) {
@@ -110,9 +109,9 @@ function draftDiffersFromDetail(draft) {
 // -- data --------------------------------------------------------------------
 
 async function refresh() {
-  const sessionId = currentSessionId();
+  const sessionId = boundSessionId();
   if (!sessionId) return;
-  const flight = requestGeneration();
+  const flight = {sessionId: panel.sessionId, gen: ++panel.gen};
   try {
     const res = await fetch('/api/sessions/' + sessionId);
     if (!res.ok) throw new Error('task detail failed: ' + res.status);
@@ -185,8 +184,9 @@ function render() {
   wrap.appendChild(renderBlockers());
   wrap.appendChild(renderTaskForm(detail));
   wrap.appendChild(renderActions(detail));
-  wrap.appendChild(renderPendingInputs());
-  wrap.appendChild(renderRunsPickerSection());
+  // Pending inputs insert themselves after the actions box (or no-op when
+  // none); the runs picker refreshes the completion modal in place.
+  renderPendingInputs();
   container.appendChild(wrap);
 }
 
@@ -328,8 +328,9 @@ function onEditorInput() {
 }
 
 async function saveTask() {
-  const sessionId = currentSessionId();
+  const sessionId = boundSessionId();
   if (!sessionId) return;
+  const flight = {sessionId, gen: panel.gen};
   const draft = readEditorDraft();
   const body = {task: {
     goal: draft.goal,
@@ -343,6 +344,7 @@ async function saveTask() {
   const res = await fetch('/api/sessions/' + sessionId, {
     method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify(body),
   });
+  if (isStale(flight)) return; // the node changed mid-request: never write its result here
   await handleMutationResponse(res, 'Save task', () => saveDraft(sessionId, null));
 }
 
@@ -357,6 +359,7 @@ function actionButton(label, className, handler, id) {
 
 function renderActions(detail) {
   const box = el('div', 'rounded-xl border border-slate-700 bg-slate-800/60 p-4 space-y-3');
+  box.id = 'task-actions-box';
   box.appendChild(sectionTitle('Actions'));
   const row = el('div', 'flex flex-wrap gap-2');
 
@@ -411,11 +414,13 @@ function renderActions(detail) {
 }
 
 async function patchTaskFields(body, actionKey) {
-  const sessionId = currentSessionId();
+  const sessionId = boundSessionId();
   if (!sessionId) return;
+  const flight = {sessionId, gen: panel.gen};
   const res = await fetch('/api/sessions/' + sessionId, {
     method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify(body),
   });
+  if (isStale(flight)) return;
   await handleMutationResponse(res, actionKey, () => {});
 }
 
@@ -633,7 +638,7 @@ function openReasonModal(kind) {
     kind === 'cancel' ? 'bg-red-700 hover:bg-red-600 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white',
     async () => {
       confirm.disabled = true;
-      const sessionId = currentSessionId();
+      const sessionId = boundSessionId();
       const url = '/api/sessions/' + sessionId + '/' + (kind === 'cancel' ? 'cancel' : 'reopen');
       const body = kind === 'cancel'
         ? {request_id: requestIdFor('cancel'), reason: reason.value}
@@ -667,12 +672,6 @@ function openReasonModal(kind) {
 }
 
 // -- completion ------------------------------------------------------------
-
-function renderRunsPickerSection() {
-  // The completion evidence picker lives in its own modal; this section only
-  // names the finished runs the modal will offer.
-  return document.createDocumentFragment();
-}
 
 function renderRunsPicker() {
   // Called when the runs page lands; if the completion modal is open, refresh
@@ -733,7 +732,7 @@ function openCompleteModal() {
   buttons.appendChild(actionButton('Cancel', 'border border-slate-600 text-slate-300 hover:bg-slate-700', () => overlay.remove()));
   const confirm = actionButton('Complete task', 'bg-green-700 hover:bg-green-600 text-white', async () => {
     confirm.disabled = true;
-    const sessionId = currentSessionId();
+    const sessionId = boundSessionId();
     const body = {
       request_id: requestIdFor('complete'),
       summary: summary.value,
@@ -777,9 +776,10 @@ function openCompleteModal() {
 // -- pending inputs -----------------------------------------------------------
 
 function renderPendingInputs() {
-  const container = document.getElementById('task-pending-inputs');
-  if (container) container.remove();
-  if (!panel.pendingInputs.length) return document.createDocumentFragment();
+  // Updates the live panel in place (the fetch lands after the first render);
+  // render() also calls this, so both orders converge on the same DOM.
+  document.getElementById('task-pending-inputs')?.remove();
+  if (!panel.pendingInputs.length) return;
   const box = el('div', 'rounded-xl border border-amber-600/50 bg-amber-900/10 p-4 space-y-2');
   box.id = 'task-pending-inputs';
   box.appendChild(sectionTitle('Pending inputs (' + panel.pendingInputs.length + ')'));
@@ -813,6 +813,8 @@ function renderPendingInputs() {
     () => acknowledgeSelected(), 'task-ack-btn');
   ackBtn.disabled = true;
   box.appendChild(ackBtn);
+  const actions = document.getElementById('task-actions-box');
+  if (actions && actions.parentElement) actions.after(box);
   return box;
 }
 
@@ -829,8 +831,9 @@ function syncAckSelection() {
 }
 
 async function acknowledgeSelected() {
-  const sessionId = currentSessionId();
+  const sessionId = boundSessionId();
   if (!sessionId || !panel.selection.ackIds.size) return;
+  const flight = {sessionId, gen: panel.gen};
   const noteEl = document.getElementById('task-ack-note');
   const body = {
     request_id: requestIdFor('ack'),
@@ -840,6 +843,7 @@ async function acknowledgeSelected() {
   const res = await fetch('/api/sessions/' + sessionId + '/task-inputs/acknowledge', {
     method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body),
   });
+  if (isStale(flight)) return;
   await handleMutationResponse(res, 'ack', () => {
     panel.selection.ackIds = new Set();
   });
@@ -868,7 +872,7 @@ function onTreeChanged(sessionIds) {
 }
 
 function onTabShown() {
-  if (panel.sessionId === currentSessionId() && panel.detail) return;
+  if (panel.sessionId === boundSessionId() && panel.detail) return;
   refresh();
 }
 

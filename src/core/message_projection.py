@@ -73,6 +73,7 @@ class MessageProjection:
       "_history",
       "_offset",
       "_page_bodies",
+      "_page_body_gzips",
       "_region_events",
       "_seps_final",
       "committed",
@@ -88,6 +89,7 @@ class MessageProjection:
     self._seps_final: list[int] = []
     self._region_events: list[dict] = []
     self._page_bodies: dict[tuple[int, int], bytes] = {}
+    self._page_body_gzips: dict[tuple[int, int], bytes] = {}
     self.event_count = event_index_offset
     self._ingest(events)
 
@@ -105,6 +107,7 @@ class MessageProjection:
     copied._seps_final = list(self._seps_final)
     copied._region_events = list(self._region_events)
     copied._page_bodies = {}
+    copied._page_body_gzips = {}
     copied.event_count = self.event_count
     copied._ingest(events)
     return copied
@@ -207,3 +210,21 @@ class MessageProjection:
     self._page_bodies[(before, limit)] = body
     while len(self._page_bodies) > self._PAGE_BODY_LIMIT:
       del self._page_bodies[next(iter(self._page_bodies))]
+
+  def cached_page_body_gzip(self, before: int, limit: int) -> bytes | None:
+    """Gzip form of the (``before``, ``limit``) page body, or None.
+
+    Same key, lifetime, and invalidation as the plain body: one compression
+    per page per projection generation serves every later repeat click, and
+    every ``advanced`` copy starts with an empty cache.
+    """
+    gz = self._page_body_gzips.get((before, limit))
+    if gz is not None:
+      self._page_body_gzips[(before, limit)] = self._page_body_gzips.pop((before, limit))
+    return gz
+
+  def store_page_body_gzip(self, before: int, limit: int, gz: bytes) -> None:
+    """Cache the gzip form of the (``before``, ``limit``) page body, LRU-capped."""
+    self._page_body_gzips[(before, limit)] = gz
+    while len(self._page_body_gzips) > self._PAGE_BODY_LIMIT:
+      del self._page_body_gzips[next(iter(self._page_body_gzips))]

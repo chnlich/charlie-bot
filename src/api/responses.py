@@ -50,11 +50,12 @@ class PreencodedJSONResponse(Response):
   """JSON response serving body bytes a caller already rendered.
 
   The bytes must come from :func:`fast_json_bytes` (directly or via a memo of
-  its output), so served bodies stay byte-identical to the FastJsonResponse
-  render of the same payload.
+  its output), or be a reversible transform of such bytes — the events page's
+  gzip form — so the served parsed content stays identical to the
+  FastJsonResponse render of the same payload.
   """
 
   media_type = "application/json"
 
-  def __init__(self, body: bytes) -> None:
-    super().__init__(content=body)
+  def __init__(self, body: bytes, headers: dict[str, str] | None = None) -> None:
+    super().__init__(content=body, headers=headers)

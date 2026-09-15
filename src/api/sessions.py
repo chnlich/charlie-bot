@@ -753,6 +753,7 @@ async def get_session_usage(
 @router.get('/{session_id}/events')
 async def get_session_events_page(
     session_id: str,
+    request: Request,
     before: int,
     limit: int = 40,
     meta: SessionMetadata = Depends(require_session),
@@ -792,6 +793,17 @@ async def get_session_events_page(
         messages, next_before, has_more = projection.slice_before(before, limit)
         body = fast_json_bytes({"messages": messages, "has_more": has_more, "next_before": next_before})
         projection.store_page_body(before, limit, body)
+      if "gzip" in request.headers.get("accept-encoding", ""):
+        gz = projection.cached_page_body_gzip(before, limit)
+        if gz is None:
+          # One deflate per page per projection generation, in the executor the
+          # middleware's replaced pass also used; Content-Encoding set upstream
+          # is what makes that middleware skip its own pass (the M72 listing
+          # mechanism), and mtime=0 keeps the bytes deterministic (the M101
+          # serve's rule).
+          gz = await asyncio.to_thread(gzip.compress, body, 1, mtime=0)
+          projection.store_page_body_gzip(before, limit, gz)
+        return PreencodedJSONResponse(gz, headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
       return PreencodedJSONResponse(body)
   start = max(0, before - limit)
   events, has_more = await asyncio.to_thread(session_mgr.load_chat_events_range, session_id, start, before)

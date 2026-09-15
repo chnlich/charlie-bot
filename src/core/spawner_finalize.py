@@ -18,6 +18,7 @@ from src.core import (
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_scheduled_tasks
 from src.core.git import git_worktree_remove_reporting
+from src.core.locks import lock_for
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import LastRunStatus, TaskType, ThreadMetadata, ThreadStatus
 from src.core.notifications import send_telegram
@@ -362,10 +363,7 @@ _summary_send_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
 def _summary_send_lock(key: tuple[str, str]) -> asyncio.Lock:
   """The per-(session, thread) lock guarding the summary presence judgment."""
-  lock = _summary_send_locks.get(key)
-  if lock is None:
-    lock = _summary_send_locks.setdefault(key, asyncio.Lock())
-  return lock
+  return lock_for(_summary_send_locks, key)
 
 
 async def _broadcast_completion(

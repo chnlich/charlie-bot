@@ -29,6 +29,7 @@ from src.core.json_utils import (
     load_json_meta,
     write_json_atomically,
 )
+from src.core.locks import lock_for
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.message_aggregator import MessageAggregator
@@ -1941,7 +1942,7 @@ class SessionManager:
       return aggregator
     while True:
       epoch = self._aggregator_epoch.get(session_id, 0)
-      lock = self._aggregator_init_locks.setdefault(session_id, asyncio.Lock())
+      lock = lock_for(self._aggregator_init_locks, session_id)
       async with lock:
         # A concurrent first event for the same session may have finished the
         # init while this caller waited on the lock.
@@ -2353,11 +2354,7 @@ class SessionManager:
 
   def _lock_for(self, session_id: str) -> asyncio.Lock:
     """Return (creating on first use) the per-session metadata RMW lock."""
-    lock = self._metadata_locks.get(session_id)
-    if lock is None:
-      lock = asyncio.Lock()
-      self._metadata_locks[session_id] = lock
-    return lock
+    return lock_for(self._metadata_locks, session_id)
 
   async def _update_field(
       self, session_id: str, field: str, value: Any, log_event: str, **log_fields: Any) -> SessionMetadata | None:

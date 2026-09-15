@@ -51,8 +51,9 @@ _PUBLIC_PREFIXES = ("/static/", *(mount + "/" for mount in FILE_SERVER_MOUNTS))
 # fetch wrapper and the terminal WS ?token=) AND sets the charliebot_access_key
 # cookie, which is the only credential a browser auto-sends on a top-level
 # navigation, then reloads. SameSite=Strict closes the CSRF surface cookie auth
-# would otherwise open; Secure is appropriate since the server is reached only
-# over HTTPS (Tailscale).
+# would otherwise open; Secure is set on https (Tailscale) and omitted on plain
+# http, where the browser refuses Secure cookies — the loopback session-tree
+# preview serves plain http, and its login must survive the reload.
 _LOGIN_PAGE = """<!doctype html>
 <html lang="en">
 <head>
@@ -89,9 +90,12 @@ _LOGIN_PAGE = """<!doctype html>
       if (!k) return false;
       // localStorage is the source of truth for the SPA fetch wrapper and the terminal WS ?token=.
       localStorage.setItem('charliebot_access_key', k);
-      // The cookie carries the credential on top-level navigations. SameSite=Strict + Secure;
-      // see _LOGIN_PAGE comment above for why.
-      document.cookie = 'charliebot_access_key=' + k + '; path=/; SameSite=Strict; Secure';
+      // The cookie carries the credential on top-level navigations. SameSite=Strict; Secure
+      // only on https: — a loopback-HTTP deployment (the session-tree preview) cannot set
+      // Secure cookies, and without the cookie every top-level navigation would loop back
+      // to this login page.
+      var cookieAttrs = 'path=/; SameSite=Strict' + (location.protocol === 'https:' ? '; Secure' : '');
+      document.cookie = 'charliebot_access_key=' + k + '; ' + cookieAttrs;
       location.reload();
       return false;
     }

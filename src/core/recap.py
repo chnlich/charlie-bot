@@ -26,7 +26,7 @@ from src.core.sessions import (
     FORK_BOOTSTRAP_OPENER,
     SessionManager,
 )
-from src.core.timeouts import AUTONAMER_TIMEOUT
+from src.core.timeouts import LIGHT_ONESHOT_TIMEOUT
 
 log = structlog.get_logger()
 
@@ -301,7 +301,7 @@ async def generate_and_cache_summary(
   for option in options:
     try:
       backend = load_build_backend(globals())(option, cfg, cgroup_session_id=session_id)
-      summary = await backend.one_shot_text(prompt, _SUMMARY_SYSTEM_PROMPT, timeout=AUTONAMER_TIMEOUT)
+      summary = await backend.one_shot_text(prompt, _SUMMARY_SYSTEM_PROMPT, timeout=LIGHT_ONESHOT_TIMEOUT)
     except Exception as e:
       last_exception = e
       log.warning("recap_backend_failed", session_id=session_id, error=str(e))

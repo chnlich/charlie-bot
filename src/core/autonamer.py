@@ -34,7 +34,7 @@ from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendOption, SessionMetadata
 from src.core.sessions import SessionManager
 from src.core.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
-from src.core.timeouts import AUTONAMER_TIMEOUT
+from src.core.timeouts import LIGHT_ONESHOT_TIMEOUT
 
 log = LazyStructlogLogger()
 
@@ -228,7 +228,8 @@ async def maybe_auto_name(
     for option in options:
       try:
         backend = load_build_backend(globals())(option, cfg, cgroup_session_id=session_meta.id)
-        raw = await backend.one_shot_text(f"{title_instruction}\n\n{prompt}", system_prompt, timeout=AUTONAMER_TIMEOUT)
+        raw = await backend.one_shot_text(
+            f"{title_instruction}\n\n{prompt}", system_prompt, timeout=LIGHT_ONESHOT_TIMEOUT)
       except Exception as e:
         log.warning("autonamer_failed", session_id=session_meta.id, error=str(e))
         continue

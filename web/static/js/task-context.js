@@ -89,7 +89,7 @@ async function refreshCurrentRun(flight) {
     if (isStale(flight)) return;
     const withSnapshot = (page.items || []).filter((r) => r.prompt_snapshot_ref);
     // Current run = the latest run that carries a committed instruction snapshot.
-    const current = withSnapshot[0] || null;
+    const current = withSnapshot[withSnapshot.length - 1] || null;
     if (!current) {
       panel.currentRun = null;
       panel.currentSnapshot = null;

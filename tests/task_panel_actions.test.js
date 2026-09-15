@@ -343,3 +343,30 @@ test('pause/resume, presentation and role actions PATCH their specific fields', 
   await flush();
   assert.ok(shownPatchBodies(context).some((b) => b.profile === 'worker'), 'role change PATCHes profile');
 });
+
+test('a refused action render keeps the pending-inputs box (the ack path) visible', async () => {
+  const {context, tab} = build();
+  const pending = [{id: 'input-aaa', type: 'user', timestamp: '2026-01-01T00:00:00Z', actor: 'user', text: 'pending work'}];
+  context.fetchHandlers.push((url, opts) => {
+    if (url === '/api/sessions/node-1' && (!opts || opts.method !== 'PATCH')) return jsonResponse(DETAIL);
+    if (url === '/api/sessions/node-1' && opts.method === 'PATCH') {
+      return {ok: false, status: 409, json: async () => ({detail: {message: 'refused', blockers: ['node-1: run run-1 is running']}})};
+    }
+    if (url.endsWith('/runs?limit=100')) return jsonResponse({items: [], next_cursor: null});
+    if (url.endsWith('/task-inputs/pending')) return jsonResponse({items: pending});
+    return undefined;
+  });
+  context.TaskPanel.onSessionChanged({id: 'node-1', profile: 'manager', name: 'Feature manager'});
+  await flush();
+  assert.ok(context.__doc.getElementById('task-pending-inputs'), 'pending inputs render after the initial load');
+  // A refused action re-renders from the same facts without healing fetches:
+  // the pending-inputs box (the actionable ack path) must survive the render.
+  const goal = context.__doc.getElementById('task-goal-input');
+  goal.value = 'another unsaved edit';
+  goal.dispatch('input', {target: goal});
+  context.__doc.getElementById('task-save-btn').dispatch('click');
+  await flush();
+  assert.ok(tab.textContent.includes('run run-1 is running'), 'the refusal surfaces');
+  assert.ok(context.__doc.getElementById('task-pending-inputs'), 'the ack path stays visible after a refused-action render');
+  assert.ok(tab.textContent.includes('pending work'), 'the pending input is still listed');
+});

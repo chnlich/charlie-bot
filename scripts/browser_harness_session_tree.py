@@ -236,6 +236,7 @@ class Results:
         self.evidence_dir = evidence_dir
         self.commit = commit
         self.scenarios: list[dict] = []
+        self.console_errors: list[str] = []
 
     def record(self, name: str, ok: bool, detail: str, screenshot: str | None) -> None:
         self.scenarios.append({"name": name, "ok": ok, "detail": detail, "screenshot": screenshot})
@@ -249,15 +250,11 @@ class Results:
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "browser": "google-chrome headless (CDP)",
             "scenarios": self.scenarios,
-            "console_errors": ConsoleCollector.errors,
+            "console_errors": self.console_errors,
         }
         out = self.evidence_dir / "session_tree_browser_results.json"
         out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         log(f"results written to {out}")
-
-
-class ConsoleCollector:
-    errors: list[str] = []
 
 
 async def evaluate(cdp: CDP, session_id: str, expression: str) -> object:
@@ -372,7 +369,6 @@ async def run_harness(args: argparse.Namespace) -> None:
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT,
                             capture_output=True, text=True, check=True).stdout.strip()
     results = Results(evidence_dir, commit)
-    ConsoleCollector.errors = []
 
     with tempfile.TemporaryDirectory(prefix="charliebot-browser-harness-") as tmp:
         tmp_path = Path(tmp)
@@ -668,7 +664,9 @@ async def run_harness(args: argparse.Namespace) -> None:
                 text = await evaluate(cdp, session_id, "document.getElementById('tab-runs').textContent")
                 assert_true("success" in text and "review" in text, "both worker run rows render with kind/outcome")
                 assert_true("N/A" in text, "unavailable measurements show N/A")
-                assert_true("Stop" not in text or "Stop" in text, "stop offered per state")
+                # Every seeded run here is terminal: no Stop button is offered
+                # on a finished row (stop only rides running/queued/attention).
+                assert_true("Stop" not in text, "no stop button on terminal run rows")
                 shot = await screenshot(cdp, session_id, results, "s4_runs_panel")
                 results.record("runs panel (replaces Workers for v2)", True,
                                "paged runs with kind/outcome/timing and N/A measurements", shot)
@@ -974,7 +972,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                 shot = await screenshot(cdp, session_id, results, "s10_reload_FAILED")
                 results.record("reload agreement", False, repr(exc), shot)
 
-            console_errors = [e for e in ConsoleCollector.errors if "favicon" not in e]
+            # The CDP collector records console.error calls and uncaught page
+            # exceptions from Runtime.enable onward — this list is the only
+            # source; an assertion over an always-empty list is a faked pass.
+            console_errors = [e for e in cdp.console_errors if "favicon" not in e]
+            results.console_errors = console_errors
             results.record("console clean", len(console_errors) == 0,
                            f"{len(console_errors)} console errors" + (f": {console_errors[:3]}" if console_errors else ""),
                            None)

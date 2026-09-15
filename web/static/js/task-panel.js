@@ -184,10 +184,11 @@ function render() {
   wrap.appendChild(renderBlockers());
   wrap.appendChild(renderTaskForm(detail));
   wrap.appendChild(renderActions(detail));
-  // Pending inputs insert themselves after the actions box (or no-op when
-  // none); the runs picker refreshes the completion modal in place.
-  renderPendingInputs();
   container.appendChild(wrap);
+  // Pending inputs insert themselves after the actions box (or no-op when
+  // none) — the anchor exists only once wrap is attached. The runs picker
+  // refreshes the completion modal in place.
+  renderPendingInputs();
 }
 
 function renderHeader(detail) {

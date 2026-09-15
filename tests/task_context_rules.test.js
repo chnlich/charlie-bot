@@ -236,3 +236,37 @@ test('editing a rule never promotes chat text and never writes a second store', 
   assert.equal(writes.length, 0, 'typing alone never issues a PATCH');
   assert.ok(tab.textContent.includes('Unsaved draft'));
 });
+
+test('the current-run section uses the LATEST run with a snapshot, never the oldest', async () => {
+  const {context, tab} = build();
+  context.fetchHandlers.push((url) => {
+    if (url === '/api/sessions/node-1') return jsonResponse(DETAIL);
+    if (url.startsWith('/api/sessions/node-1/effective-prompt')) return jsonResponse(PREVIEW);
+    if (url.endsWith('/runs?limit=100')) return jsonResponse({
+      // The paged Run API is chronological (queued first): the latest run
+      // closes the page, it does not open it.
+      items: [
+        {id: 'run-old-0001', kind: 'manager_turn', state: 'success', prompt_snapshot_ref: '/x/prompt_snapshot.json'},
+        {id: 'run-new-0002', kind: 'manager_turn', state: 'success', prompt_snapshot_ref: '/y/prompt_snapshot.json'},
+      ],
+      next_cursor: null,
+    });
+    if (url.includes('/runs/run-new-0002/context')) return jsonResponse({snapshot: {
+      prompt_hash: 'n'.repeat(64), char_count: 21,
+      blocks: [{text: 'newest snapshot block', delivery: 'full',
+                sources: [{scope: 'node', source_ref: 'prompt_bodies/new.md', source_session_id: 'node-1'}]}],
+    }, legacy_prompt: null});
+    if (url.includes('/runs/run-old-0001/context')) return jsonResponse({snapshot: {
+      prompt_hash: 'o'.repeat(64), char_count: 20,
+      blocks: [{text: 'oldest snapshot block', delivery: 'full',
+                sources: [{scope: 'node', source_ref: 'prompt_bodies/old.md', source_session_id: 'node-1'}]}],
+    }, legacy_prompt: null});
+    return undefined;
+  });
+  context.TaskContextPanel.onSessionChanged({id: 'node-1', profile: 'manager'});
+  await flush();
+  const text = tab.textContent;
+  assert.ok(text.includes('Run run-new'), 'the latest snapshot-carrying run is the current run');
+  assert.ok(text.includes('newest snapshot block'), 'its snapshot is the one rendered');
+  assert.ok(!text.includes('oldest snapshot block'), 'the oldest run is not presented as current');
+});

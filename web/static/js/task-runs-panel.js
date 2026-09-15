@@ -278,7 +278,7 @@ function render() {
   }
   for (const run of panel.items) runsSection.appendChild(runCard(run));
   if (panel.nextCursor) {
-    const more = el('button', 'w-full text-xs text-blue-400 hover:text-blue-300 border border-slate-700 rounded-lg py-2', 'Load older runs');
+    const more = el('button', 'w-full text-xs text-blue-400 hover:text-blue-300 border border-slate-700 rounded-lg py-2', 'Load newer runs');
     more.addEventListener('click', loadMore);
     runsSection.appendChild(more);
   }

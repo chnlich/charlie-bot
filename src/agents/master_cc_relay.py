@@ -113,6 +113,68 @@ def choose_turn_account(
   return chosen, cold
 
 
+async def adopt_transcript_holder(
+    item: master_cc_state._WorkItem,
+    cc_session_id: str | None,
+    holder: ClaudeAccount,
+    previous_label: str | None,
+    reason: str,
+) -> None:
+  """Make *holder* the session's account label: funnel-persist it, then warn.
+
+  The one adoption reaction the plan's reconciliation paths share -- the
+  placement probe (forked or stale lineage) and the two guard-refusal consumers
+  (the placement move, the mid-turn relay): the label follows the holder that
+  actually carries the newest transcript, the turn continues from it with no
+  copy, and every trigger lands a persistent grep-able row.
+  """
+  session_meta = item.session_meta
+  if item.callbacks.persist_claude_account is not None:
+    await item.callbacks.persist_claude_account(session_meta.id, holder.label)
+  session_meta.claude_account = holder.label
+  log.warning(
+      "master_cc_account_label_reconciled",
+      session=session_meta.id,
+      cc_session_id=cc_session_id,
+      adopted=holder.label,
+      previous=previous_label,
+      reason=reason,
+  )
+
+
+async def _probe_reconcile_label(
+    cfg: CharlieBotConfig,
+    item: master_cc_state._WorkItem,
+    cc_session_id: str | None,
+) -> None:
+  """Placement probe: adopt the newest pool holder when the label's copy split from it.
+
+  Runs before account selection on every placement that has a transcript to
+  resume, so the corrected label is what the warm-stickiness and busy-set rules
+  read. Skipped for the no-transcript scenarios -- no resume id, or the weekly
+  recycle's declared fresh start -- which keep the existing label path, and
+  when the pool holds at most the label's own copy: with nothing to compare
+  against there is nothing to reconcile. The kill-shaped window (a relay's move
+  landed, its label persist did not) shows up here as a label copy whose tail
+  line the newest holder's tail window no longer contains; the adoption never
+  moves bytes.
+  """
+  if not cc_session_id or item.expect_fresh_session:
+    return
+  label = claude_accounts.account_by_label(cfg, item.session_meta.claude_account)
+  if label is None:
+    return
+  label_copy = claude_accounts.transcript_path(label.config_dir, cc_session_id)
+  newest = claude_accounts.newest_transcript_copy(cfg, cc_session_id)
+  if label_copy is None or newest is None or newest[1] == label_copy:
+    return
+  newest_account, newest_copy = newest
+  if not claude_accounts.transcript_lineage_split(label_copy, newest_copy):
+    return
+  await adopt_transcript_holder(
+      item, cc_session_id, newest_account, label.label, reason="forked_or_stale_lineage")
+
+
 async def place_turn(
     cfg: CharlieBotConfig,
     item: master_cc_state._WorkItem,
@@ -125,10 +187,15 @@ async def place_turn(
 ) -> tuple[ClaudeAccount | None, str | None]:
   """Pick the turn's account, move the transcript to it and compact on a cold cache.
 
-  Returns ``(account, None)`` or ``(None, error)`` when no account is available
-  or the transcript could not be moved; the caller ends the turn loudly.
+  The account label is disk-true from the moment the move lands: the lineage
+  probe runs before selection, and a successful (or refusal-adopted) move is
+  followed immediately by the ``persist_claude_account`` funnel, so the label
+  and the transcript cannot split for a whole round. Returns ``(account,
+  None)`` or ``(None, error)`` when no account is available or the transcript
+  could not be moved; the caller ends the turn loudly.
   """
   session_meta = item.session_meta
+  await _probe_reconcile_label(cfg, item, resume_id)
   chosen, cold = choose_turn_account(cfg, session_meta, option.model, last_request_at, now)
   if chosen is None:
     return None, claude_relay.pool_exhausted_message(cfg, now)
@@ -138,7 +205,17 @@ async def place_turn(
       try:
         claude_accounts.move_transcript(resume_id, previous.config_dir, chosen.config_dir)
       except claude_accounts.TranscriptMoveError as exc:
-        return None, f"Claude account switch failed: {exc}"
+        if not claude_accounts.is_newer_transcript_refusal(exc):
+          return None, f"Claude account switch failed: {exc}"
+        # The guard refused: the destination holds the newer transcript (the
+        # kill between a relay's move and its label persist, or an unknown
+        # defect). The move layer never redirects -- this consumer reconciles:
+        # adopt the newer holder and continue the turn from it with no copy.
+        await adopt_transcript_holder(
+            item, resume_id, chosen, previous.label, reason="guard_refused_newer_transcript")
+    session_meta.claude_account = chosen.label
+    if item.callbacks.persist_claude_account is not None:
+      await item.callbacks.persist_claude_account(session_meta.id, chosen.label)
     log.info(
         "master_cc_account_chosen",
         session=session_meta.id,
@@ -146,7 +223,6 @@ async def place_turn(
         previous=previous.label if previous else None,
         cold_cache=cold,
     )
-  session_meta.claude_account = chosen.label
   await report_empty_credentials(cfg, item)
   if (resume_id and cold and
       claude_compaction.expired_cache_compaction_wanted(cfg, option.model, context_tokens, last_request_at, now)):
@@ -205,16 +281,18 @@ async def prepare_relay(
     cwd: str,
     reason: str,
     now: datetime | None = None,
-) -> tuple[ClaudeAccount | None, str | None]:
+) -> tuple[ClaudeAccount | None, str | None, ClaudeAccount | None]:
   """Move the turn to the next account and compact a large Fable context there.
 
-  Returns ``(account, None)``, or ``(None, error)`` when the pool is exhausted,
-  the transcript has no id yet, or the copy failed.
+  Returns ``(account, None, None)``, or ``(None, error, refused_holder)`` when
+  the pool is exhausted, the transcript has no id yet, or the copy failed; a
+  copy the newer-transcript guard refused carries the destination account
+  holding the newer transcript, for the consumer's adoption decision.
   """
   session_meta = item.session_meta
-  nxt, error = claude_relay.move_to_next_account(cfg, option.model, current, cc_session_id, now)
+  nxt, error, refused_holder = claude_relay.move_to_next_account(cfg, option.model, current, cc_session_id, now)
   if nxt is None:
-    return None, error
+    return None, error, refused_holder
   log.warning(
       "master_cc_account_relay",
       session=session_meta.id,
@@ -235,4 +313,4 @@ async def prepare_relay(
         account_label=nxt.label,
         trigger="relay",
         context_tokens=context_tokens)
-  return nxt, None
+  return nxt, None, None

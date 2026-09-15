@@ -395,3 +395,13 @@ async def append_ndjson(path: Path, data: dict) -> None:
   """Async-append a single JSON line to an NDJSON file."""
   path.parent.mkdir(parents=True, exist_ok=True)
   await asyncio.to_thread(_append_ndjson_sync, path, json.dumps(data) + "\n")
+
+
+def append_ndjson_sync(path: Path, data: dict) -> None:
+  """Synchronous form of :func:`append_ndjson` (same durability contract).
+
+  The migration apply runs its fact appends inside one asyncio loop; the
+  offline callers that hold no loop use this form instead of nesting event
+  loops. One open(O_APPEND)+write+fsync per append, exactly as the async form.
+  """
+  _append_ndjson_sync(path, json.dumps(data) + "\n")

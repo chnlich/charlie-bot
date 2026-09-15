@@ -1,0 +1,131 @@
+"""Session-tree CLI: the migration verbs of the task-tree line.
+
+  charliebot session-tree migrate --dry-run --output FILE
+  charliebot session-tree migrate --apply --manifest FILE
+  charliebot session-tree migrate --rollback --manifest FILE
+
+The commands target the current explicitly selected CHARLIEBOT_HOME and touch
+nothing else: no HTTP delegation, no server startup, no external messages.
+``--dry-run`` reads the source read-only and writes the reviewable manifest to
+FILE; ``--apply`` refuses unresolved conversions, source/converter hash drift,
+target collisions and unproven quiescence before its first replacement, keeps
+a verified backup before mutating, and re-verifies through the ordinary
+readers after the write; ``--rollback`` restores originals and removes only
+migration-owned unchanged products, refusing once any product no longer
+matches its receipt. Exit code 0 success, 1 refusal/conflict, 2 usage.
+
+Not yet part of this command (separate owners, do not assume them here): the
+real-data offline rehearsal, the interactive ``session-tree preview``
+instance, runtime cutover integration, and production apply authorization.
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from src.core.config import get_config
+from src.core.session_tree_migration import (
+    MigrationRefused,
+    apply_manifest,
+    build_manifest,
+    rollback_manifest,
+    scan_source,
+)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+  parser = argparse.ArgumentParser(
+      prog="charliebot session-tree",
+      description="Session task-tree maintenance commands")
+  sub = parser.add_subparsers(dest="session_tree_command", required=True)
+
+  migrate = sub.add_parser(
+      "migrate",
+      help="Convert the selected home's legacy sessions to the task tree",
+      description=(
+          "Inventory the selected CHARLIEBOT_HOME and convert it to the "
+          "session task tree. --dry-run writes a reviewable manifest; --apply "
+          "executes one reviewed manifest under the stopped-writer boundary; "
+          "--rollback restores a manifest's originals."))
+  mode = migrate.add_mutually_exclusive_group(required=True)
+  mode.add_argument("--dry-run", action="store_true",
+                    help="Read-only: build the manifest and write it to --output")
+  mode.add_argument("--apply", action="store_true",
+                    help="Apply the reviewed manifest at --manifest")
+  mode.add_argument("--rollback", action="store_true",
+                    help="Roll back the applied manifest at --manifest")
+  migrate.add_argument("--output", default=None,
+                       help="Manifest output path (--dry-run)")
+  migrate.add_argument("--manifest", default=None,
+                       help="Manifest path (--apply / --rollback)")
+  return parser
+
+
+def _emit(payload: dict) -> None:
+  print(json.dumps(payload, indent=2, default=str))
+
+
+def _fail(message: str, details: list[str] | None = None) -> None:
+  payload = {"error": message}
+  if details:
+    payload["details"] = details
+  print(json.dumps(payload, indent=2), file=sys.stderr)
+  sys.exit(1)
+
+
+def _cmd_migrate(args: argparse.Namespace) -> None:
+  cfg = get_config()
+  if args.dry_run:
+    if not args.output:
+      _fail("--dry-run requires --output FILE")
+    snap = scan_source(cfg)
+    manifest, plan = build_manifest(cfg, snap)
+    output = Path(args.output)
+    if output.parent and not output.parent.exists():
+      output.parent.mkdir(parents=True, exist_ok=True)
+    from src.core.json_utils import atomic_write_text
+    atomic_write_text(output, manifest.model_dump_json(indent=2))
+    _emit({
+        "status": "dry_run",
+        "manifest": str(output),
+        "source_sha": manifest.source_sha,
+        "mappings": len(manifest.mappings),
+        "unresolved": [u.model_dump() for u in manifest.unresolved],
+        "unresolved_count": len(manifest.unresolved),
+        "pending_inputs": sum(len(m.pending_inputs) for m in plan.managers),
+        "input_summary": plan.input_summary,
+        "organization_pending": plan.organization_pending,
+    })
+    if manifest.unresolved:
+      sys.exit(1)
+    return
+
+  if args.apply:
+    if not args.manifest:
+      _fail("--apply requires --manifest FILE")
+    try:
+      result = apply_manifest(cfg, Path(args.manifest))
+    except MigrationRefused as e:
+      _fail(str(e), e.details)
+    _emit(result)
+    return
+
+  if not args.manifest:
+    _fail("--rollback requires --manifest FILE")
+  try:
+    result = rollback_manifest(cfg, Path(args.manifest))
+  except MigrationRefused as e:
+    _fail(str(e), e.details)
+  _emit(result)
+
+
+def main() -> None:
+  parser = _build_parser()
+  args = parser.parse_args()
+  if args.session_tree_command == "migrate":
+    _cmd_migrate(args)
+
+
+if __name__ == "__main__":
+  main()

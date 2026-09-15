@@ -246,6 +246,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   cfg = get_config()
   boot_time = utc_now()
 
+  # The home writer fence: this server is THE writer of its selected home, and
+  # a session-tree migration apply takes the same exclusive exclusion. Startup
+  # refuses (and exits) while an apply or another server holds the fence;
+  # holding it makes a concurrent apply refuse with this server's identity.
+  # See src/core/home_writer_fence.py — the flock is the exclusion, the
+  # identity record is only the holder's name plate.
+  from src.core.home_writer_fence import HomeWriterActiveError, acquire_home_writer_fence
+  try:
+    writer_fence = acquire_home_writer_fence(cfg.charliebot_home, purpose="server startup")
+  except HomeWriterActiveError as e:
+    log.error("server_startup_refused_home_writer_fence", home=str(cfg.charliebot_home),
+              error=str(e))
+    raise
+
   # Capture build info (git SHA + start time) for the /api/internal/version endpoint
   # and the CLI version-skew hint. Runs synchronously; ~2 s worst case for git rev-parse.
   init_build_info()
@@ -349,6 +363,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   await scheduler.stop()
   await streaming_manager.close_all()
   pages.shutdown_merge_executor()
+  if writer_fence is not None:
+    writer_fence.release()
   log.info("charliebot_shutdown")
 
 

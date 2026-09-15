@@ -31,6 +31,7 @@ _COMMANDS = {
     "publish": "src.cli.publish",
     "memory": "src.cli.memory",
     "session": "src.cli.session",
+    "session-tree": "src.cli.session_tree",
     "slack": "src.cli.slack",
     "storage": "src.cli.storage",
 }

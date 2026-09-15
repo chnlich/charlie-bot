@@ -154,21 +154,25 @@ async def _session_consumer(session_id: str) -> None:
             await item.callbacks.persist_and_broadcast(session_id, zero_err)
           exit_code = 1
 
+        # A fresh-native task turn never adopts the previous turn's anchor:
+        # its conversation was deliberately started fresh.
+        if item.task_run is not None and item.task_run.fresh_native_context:
+          last_cc_session_id = None
         # Update session_meta.cc_session_id for subsequent queued runs.
         if cc_session_id:
           item.session_meta.cc_session_id = cc_session_id
           last_cc_session_id = cc_session_id
-          # The consumer is the single owner of persisting the resume anchor:
-          # every round, unconditionally, with no comparison against any
-          # in-memory value. The read-back verifies the write landed on disk.
-          await _persist_with_readback(
-              item.callbacks,
-              item.callbacks.persist_cc_session_id,
-              session_id,
-              cc_session_id,
-              "resume_anchor",
-              "Resume anchor",
-          )
+        # The consumer is the single owner of persisting the resume anchor:
+        # every round, unconditionally, with no comparison against any
+        # in-memory value. The read-back verifies the write landed on disk.
+        await _persist_with_readback(
+            item.callbacks,
+            item.callbacks.persist_cc_session_id,
+            session_id,
+            cc_session_id,
+            "resume_anchor",
+            "Resume anchor",
+        )
 
         # The pool account holding the transcript is persisted the same way,
         # every round with a read-back: a relay or a pool-wide transcript search
@@ -273,6 +277,7 @@ async def run_message(
     is_voice: bool = False,
     expect_fresh_session: bool = False,
     user_event_id: str | None = None,
+    task_instructions: str | None = None,
     task_run: "master_cc_state.TaskRunBinding | None" = None,
     on_task_spawn: Callable[[int, str | None], Awaitable[None]] | None = None,
     on_task_finish: Callable[[str | None, int, dict], Awaitable[None]] | None = None,
@@ -364,6 +369,7 @@ async def run_message(
       expect_fresh_session=expect_fresh_session,
       user_event_id=user_event_id,
       uploaded_files=uploaded_files,
+      task_instructions=task_instructions,
       task_run=task_run,
       on_task_spawn=on_task_spawn,
       on_task_finish=on_task_finish,
@@ -440,12 +446,18 @@ async def enqueue_master_resume(
     callbacks: SessionCallbacks,
     *,
     is_alive: Callable[[], bool],
+    task_run: "master_cc_state.TaskRunBinding | None" = None,
+    on_task_spawn: Callable[[int, str | None], Awaitable[None]] | None = None,
+    on_task_finish: Callable[[str | None, int, dict], Awaitable[None]] | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> asyncio.Future:
   """Re-attach a recorded live master turn by queueing a resume-follow item.
 
   Goes through the normal per-session queue: the re-attached turn always
   drains before any queued or replayed turn spawns a new CLI against the same
-  conversation. Returns the future the consumer resolves with the followed
+  conversation. A v2 task-tree follow passes its Run's binding plus the
+  adapter's spawn/finish hooks so the followed turn still records its outcome
+  on the Run. Returns the future the consumer resolves with the followed
   turn's cc_session_id when its MASTER_DONE lands.
   """
   loop = asyncio.get_running_loop()
@@ -464,6 +476,10 @@ async def enqueue_master_resume(
       user_event_id=record.user_event_id,
       resume_record=record,
       resume_is_alive=is_alive,
+      task_run=task_run,
+      on_task_spawn=on_task_spawn,
+      on_task_finish=on_task_finish,
+      extra_env=extra_env,
   )
   # Atomic (see _enqueue_work_item); the broadcast below is a pure
   # notification — correctness comes from readers deriving the state.

@@ -58,6 +58,13 @@ def test_memory_block_renders_into_prompt(tmp_path: Path) -> None:
 # --- Fail-loud loader semantics -----------------------------------------------
 
 
+def _real_task_base_prompt_text() -> str:
+  return (
+      CharlieBotConfig(charliebot_home=Path("/tmp/unused"), paths={
+          "worktree_dir": "/tmp/worktrees"
+      }).charlie_bot_repo / "prompts" / "task_base.md").read_text(encoding="utf-8")
+
+
 def _real_worker_prompt_text() -> str:
   return (
       CharlieBotConfig(charliebot_home=Path("/tmp/unused"), paths={
@@ -75,19 +82,23 @@ def test_missing_worker_prompt_file_raises_with_path_and_cause(tmp_path: Path) -
 
 
 @pytest.mark.parametrize(
-    ("drop_start", "drop_end", "section"), [
-        ("<!-- section: role -->", "<!-- section: memory -->", "role"),
-        ("<!-- section: remote_scratch -->", "<!-- section: role -->", "remote_scratch"),
+    ("filename", "drop_start", "drop_end", "section"), [
+        ("worker.md", "<!-- section: role -->", "<!-- section: memory -->", "role"),
+        ("task_base.md", "<!-- section: remote_scratch -->", None, "remote_scratch"),
     ])
-def test_missing_required_section_raises(tmp_path: Path, drop_start: str, drop_end: str, section: str) -> None:
-  text = _real_worker_prompt_text()
-  start = text.index(drop_start)
-  end = text.index(drop_end)
-  mutated = text[:start] + text[end:]  # drop the entire section
+def test_missing_required_section_raises(tmp_path: Path, filename: str, drop_start: str,
+                                         drop_end: str | None, section: str) -> None:
+  source = _real_worker_prompt_text() if filename == "worker.md" else _real_task_base_prompt_text()
+  start = source.index(drop_start)
+  end = source.index(drop_end) if drop_end is not None else len(source)
+  mutated = source[:start] + source[end:]  # drop the entire section
 
   prompts_dir = tmp_path / "prompts"
   prompts_dir.mkdir()
-  (prompts_dir / "worker.md").write_text(mutated, encoding="utf-8")
+  (prompts_dir / "worker.md").write_text(
+      _real_worker_prompt_text() if filename != "worker.md" else mutated, encoding="utf-8")
+  (prompts_dir / "task_base.md").write_text(
+      _real_task_base_prompt_text() if filename != "task_base.md" else mutated, encoding="utf-8")
 
   with pytest.raises(ValueError, match=section):
     spawner.load_worker_prompt_sections(_cfg_with_repo(tmp_path))
@@ -113,6 +124,7 @@ def test_unresolved_token_in_assembled_output_raises(tmp_path: Path) -> None:
   prompts_dir = tmp_path / "prompts"
   prompts_dir.mkdir()
   (prompts_dir / "worker.md").write_text(mutated, encoding="utf-8")
+  (prompts_dir / "task_base.md").write_text(_real_task_base_prompt_text(), encoding="utf-8")
 
   with pytest.raises(ValueError, match="unresolved"):
     build_worker_prompt("desc", cfg=_cfg_with_repo(tmp_path))
@@ -121,8 +133,8 @@ def test_unresolved_token_in_assembled_output_raises(tmp_path: Path) -> None:
 # --- Reviewer-prompt sourcing --------------------------------------------------
 
 
-def test_reviewer_prompt_sources_coding_principles_from_worker_prompt_file(tmp_path: Path) -> None:
-  text = _real_worker_prompt_text()
+def test_reviewer_prompt_sources_coding_principles_from_task_base_file(tmp_path: Path) -> None:
+  text = _real_task_base_prompt_text()
   marker = "<!-- section: coding_principles -->"
   next_marker = "<!-- section: skills_discovery -->"
   start = text.index(marker) + len(marker) + 1
@@ -132,7 +144,8 @@ def test_reviewer_prompt_sources_coding_principles_from_worker_prompt_file(tmp_p
 
   prompts_dir = tmp_path / "prompts"
   prompts_dir.mkdir()
-  (prompts_dir / "worker.md").write_text(mutated, encoding="utf-8")
+  (prompts_dir / "worker.md").write_text(_real_worker_prompt_text(), encoding="utf-8")
+  (prompts_dir / "task_base.md").write_text(mutated, encoding="utf-8")
 
   cfg = _cfg_with_repo(tmp_path)
   prompt = review.build_review_prompt(

@@ -445,7 +445,7 @@ async def session_websocket(websocket: WebSocket, session_id: str) -> None:
     backend_option = cfg.get_backend_option(meta.backend) if meta and meta.backend else None
     if backend_option is not None and backend_option.type == BackendType.TUI_CLI:
       from src.agents.backends.tui import run_tui_attachment
-      await run_tui_attachment(websocket, session_id, cfg.sessions_dir)
+      await run_tui_attachment(websocket, session_id, cfg, task_manager())
     else:
       await _ws_keepalive(websocket, "session_ws", session_id=session_id)
   finally:

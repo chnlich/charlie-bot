@@ -80,6 +80,59 @@ async def finalize_review_chain(
   )
 
 
+# The reviewer contract's stable parts, shared verbatim by the v1 review prompt
+# (build_review_prompt) and the v2 managed instruction block (review_rules_text).
+# One maintained home: src/core/review.py owns the review rules; prompts/ owns
+# the generic templates.
+_REVIEW_ROLE_TEXT = "## Code Review\nYou are reviewing another worker's code changes."
+
+_REVIEW_CHECKLIST_INTRO = (
+    "IMPORTANT: Make minimal changes. Prefer approving the worker's code as-is. "
+    "Only fix clear bugs, correctness issues, or scope violations. "
+    "Do not refactor, restyle, or improve code that is functionally correct.\n\n"
+    "If the user request contains task spec sections, read every path listed under `## Source Files` "
+    "before judging the diff. Apply the task spec's `## Reviewer Checklist`. For control-flow or "
+    "state-machine tasks, verify the implementation against `## Required Behavior`; do not rely only "
+    "on tests.")
+
+# The checklist's stable judgment rules (the volatile cd/fetch/diff/push steps
+# stay in build_review_prompt, which formats them with the run's actual paths).
+_REVIEW_SCOPE_CHECK = (
+    "**Scope check**: Flag any changes NOT requested in the task — extra flags, altered defaults,\n"
+    "   new parameters, behavioral changes. Workers must only do what was asked.")
+_REVIEW_DIVERGENT_CHECK = (
+    "**Think divergently**: Beyond the diff, consider what could go wrong.\n"
+    "   - Do changed values make sense? Cross-check against existing defaults and conventions.\n"
+    "   - Are there edge cases, regressions, or interactions with other code the worker missed?\n"
+    "   - Would this change surprise someone reading the code for the first time?")
+_REVIEW_CORRECTNESS_CHECK = (
+    "Check for: correctness, bugs, unintended side effects, missing edge cases.")
+_REVIEW_STYLE_CHECK = (
+    "Style: Google Style, 2-space indent, 120-col (only flag if egregious — YAPF handles most).")
+
+_REVIEW_STABLE_RULES = "\n".join(
+    f"{label} {body}" for label, body in (
+        ("-", _REVIEW_SCOPE_CHECK),
+        ("-", _REVIEW_DIVERGENT_CHECK),
+        ("-", _REVIEW_CORRECTNESS_CHECK),
+        ("-", _REVIEW_STYLE_CHECK),
+    ))
+
+
+def review_rules_text() -> str:
+  """The reviewer contract's stable rules (the v2 review Run's managed instruction block).
+
+  The volatile steps (cd/fetch/diff/push with this run's branch, worktree and
+  base) are the review's task/input context, rendered by the launch path from
+  build_review_prompt's numbered sequence — never part of the stable
+  instruction hash.
+  """
+  return (
+      f"{_REVIEW_ROLE_TEXT}\n\n"
+      f"## Review Checklist\n{_REVIEW_CHECKLIST_INTRO}\n\n"
+      f"{_REVIEW_STABLE_RULES}")
+
+
 def build_review_prompt(
     branch_name: str,
     wt_path: str,
@@ -114,43 +167,63 @@ def build_review_prompt(
   # A v2 review pass reads the work Run's own events log; the legacy default
   # stays the thread transport path.
   resolved_worker_log = worker_log_path or thread_events_log_path(session_dir, original_thread_id)
+  numbered_steps = review_numbered_steps(branch_name, wt_path, base_branch)
+  return _compose_review_prompt(
+      context_section=context_section,
+      chat_log_path=chat_log_path,
+      resolved_worker_log=resolved_worker_log,
+      coding_principles=coding_principles,
+      branch_name=branch_name,
+      wt_path=wt_path,
+      base_branch=base_branch,
+      numbered_steps=numbered_steps)
+
+
+def review_numbered_steps(branch_name: str, wt_path: str, base_branch: str) -> str:
+  """The review prompt's git steps with this run's actual branch/worktree/base."""
+  return "\n".join([
+      f"1. `cd {wt_path}`",
+      f"2. Fetch the latest base branch: `git fetch origin {base_branch}`",
+      f"3. Review the changes: `git diff origin/{base_branch}...{branch_name}`",
+      "4. Verify the changes address the user's actual intent (from context research above).",
+      f"5. {_REVIEW_SCOPE_CHECK}",
+      f"6. {_REVIEW_DIVERGENT_CHECK}",
+      f"7. {_REVIEW_CORRECTNESS_CHECK}",
+      f"8. {_REVIEW_STYLE_CHECK}",
+      "9. If you find issues, fix them and commit with descriptive messages.",
+      "10. Stash untracked/modified files: `git stash --include-untracked`",
+      f"11. Fetch the latest base branch: `git fetch origin {base_branch}`",
+      f"12. Rebase onto the remote base: `git rebase origin/{base_branch}`",
+      f"13. Push to remote base branch from the worktree: `git push origin HEAD:{base_branch}`",
+      "14. Verify: `git log --oneline -1 HEAD` and `git log --oneline -1 origin/{base_branch}` "
+      "must show the same commit.".replace("{base_branch}", base_branch),
+  ])
+
+
+def _compose_review_prompt(
+    *,
+    context_section: str,
+    chat_log_path: Path,
+    resolved_worker_log: Path,
+    coding_principles: str,
+    branch_name: str,
+    wt_path: str,
+    base_branch: str,
+    numbered_steps: str,
+) -> str:
+  """The v1 review prompt: role, context, principles, checklist, and the run's steps."""
   return (
-      f"## Code Review\n"
-      f"You are reviewing another worker's code changes.\n\n"
+      f"{_REVIEW_ROLE_TEXT}\n\n"
       f"## Context\n"
       f"{context_section}\n\n"
       f"If the summary above is insufficient or you are unsure about intent, "
       f"read the full logs: Session: `{chat_log_path}`, Worker: `{resolved_worker_log}`\n\n"
       f"{coding_principles}\n"
       f"## Review Checklist\n"
-      f"IMPORTANT: Make minimal changes. Prefer approving the worker's code as-is. "
-      f"Only fix clear bugs, correctness issues, or scope violations. "
-      f"Do not refactor, restyle, or improve code that is functionally correct.\n\n"
-      f"If the user request contains task spec sections, read every path listed under `## Source Files` "
-      f"before judging the diff. Apply the task spec's `## Reviewer Checklist`. For control-flow or "
-      f"state-machine tasks, verify the implementation against `## Required Behavior`; do not rely only "
-      f"on tests.\n\n"
+      f"{_REVIEW_CHECKLIST_INTRO}\n\n"
       f"The work is on branch `{branch_name}` in worktree `{wt_path}`. "
       f"All git operations below run from the worktree.\n\n"
-      f"1. `cd {wt_path}`\n"
-      f"2. Fetch the latest base branch: `git fetch origin {base_branch}`\n"
-      f"3. Review the changes: `git diff origin/{base_branch}...{branch_name}`\n"
-      f"4. Verify the changes address the user's actual intent (from context research above).\n"
-      f"5. **Scope check**: Flag any changes NOT requested in the task — extra flags, altered defaults,\n"
-      f"   new parameters, behavioral changes. Workers must only do what was asked.\n"
-      f"6. **Think divergently**: Beyond the diff, consider what could go wrong.\n"
-      f"   - Do changed values make sense? Cross-check against existing defaults and conventions.\n"
-      f"   - Are there edge cases, regressions, or interactions with other code the worker missed?\n"
-      f"   - Would this change surprise someone reading the code for the first time?\n"
-      f"7. Check for: correctness, bugs, unintended side effects, missing edge cases.\n"
-      f"8. Style: Google Style, 2-space indent, 120-col (only flag if egregious — YAPF handles most).\n"
-      f"9. If you find issues, fix them and commit with descriptive messages.\n"
-      f"10. Stash untracked/modified files: `git stash --include-untracked`\n"
-      f"11. Fetch the latest base branch: `git fetch origin {base_branch}`\n"
-      f"12. Rebase onto the remote base: `git rebase origin/{base_branch}`\n"
-      f"13. Push to remote base branch from the worktree: `git push origin HEAD:{base_branch}`\n"
-      f"14. Verify: `git log --oneline -1 HEAD` and `git log --oneline -1 origin/{base_branch}` "
-      f"must show the same commit.")
+      f"{numbered_steps}")
 
 
 def _first_delegation_description(chat_log: Path, thread_id: str) -> str | None:

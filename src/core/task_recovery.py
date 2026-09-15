@@ -102,6 +102,15 @@ async def _reconcile_node(
     events = tree.runs.load_events_sync(session_id)
     run_records = tree.runs.list_run_records_sync(session_id)
 
+    # --- 0. an interrupted prompt edit lands its missing fact --------------
+    # Idempotent: a landed fact appends nothing, so repeated recovery and
+    # concurrent double-reconcile never duplicate a prompt_changed event.
+    async with tree.control_lock:
+        locked_meta = await tree.load_meta(session_id)
+        if locked_meta is not None:
+            for scope in ("subtree", "node"):
+                await tree._ensure_prompt_changed_fact(session_id, locked_meta, scope)
+
     # --- 1. stop requests take precedence over any launch or follow --------
     for run in run_records:
         if tree.runs.run_has_terminal_fact(run, events):

@@ -28,6 +28,15 @@ of the default test run) and must be reviewed for isolation before it runs:
   and auto-archive on its delivered report; the manager must remain open. The
   compatibility aliases must resolve both run ids to the same Run. A network
   or backend failure is an explicit test failure, never a mocked pass.
+- Context stage. Both real launches ride the one assembler: the preview
+  endpoint's next-start object equals the stored launch snapshot byte for byte
+  (same prompt_hash/char_count/blocks), the stored snapshot's blocks carry
+  full source provenance with body_ref = sha256(text), the launch prompt text
+  is separate evidence, default-empty local rules produce no subtree/node
+  scope, the manager contract is prompts/task_manager.md (no PM body), the
+  worker contract is prompts/worker.md, the run-context endpoint serves the
+  stored snapshot, and the manager's second turn (the delivered report) keeps
+  the same instruction hash with its native anchor retained.
 
 Run:  uv run python scripts/live_smoke_task_tree.py [--backend ID] [--purge]
 """
@@ -175,6 +184,10 @@ def deps_tree():
     return task_manager()
 
 
+def tree_run_dir(session_id: str, run_id: str) -> Path:
+    return deps_tree().runs.run_dir(session_id, run_id)
+
+
 _SERVERS: list = []
 
 
@@ -291,6 +304,12 @@ async def smoke(backend_id: str, purge: bool) -> None:
             "Take off. This is a bounded live smoke instruction: reply with exactly the "
             f"fixed synthetic phrase {SMOKE_PHRASE} and nothing else. Do not run any tool "
             "and do not delegate.")
+        # The next-start preview is the current configuration; the launch must
+        # commit exactly these bytes.
+        status, preview = await arequest(
+            base, "GET", f"/api/sessions/{manager_id}/effective-prompt", access_key)
+        if status != 200 or preview.get("kind") != "manager_turn":
+            fail(f"effective-prompt preview failed: {status} {preview}")
         status, posted = await arequest(base, "POST", f"/api/chat/{manager_id}/message", access_key,
                                  {"content": phrase_instruction})
         if status != 202:
@@ -312,6 +331,53 @@ async def smoke(backend_id: str, purge: bool) -> None:
             fail(f"manager run {run_id} did not persist its model")
         if not manager_run.raw_log_ref or not Path(manager_run.raw_log_ref).is_file():
             fail(f"manager run {run_id} raw log missing: {manager_run.raw_log_ref}")
+        # -- context-stage equality and provenance (manager launch) ----------
+        if not manager_run.prompt_snapshot_ref or not Path(manager_run.prompt_snapshot_ref).is_file():
+            fail(f"manager run {run_id} has no durable snapshot reference")
+        stored = json.loads(Path(manager_run.prompt_snapshot_ref).read_text(encoding="utf-8"))
+        joined = "\n\n".join(b["text"] for b in stored["blocks"])
+        if stored["char_count"] != len(joined):
+            fail(f"manager snapshot char_count {stored['char_count']} != measured {len(joined)}")
+        import hashlib
+        for block in stored["blocks"]:
+            if block["body_ref"] != hashlib.sha256(block["text"].encode("utf-8")).hexdigest():
+                fail(f"manager snapshot block body_ref mismatch for sources={block['sources']}")
+        scope_refs = [(s["scope"], s["source_ref"]) for b in stored["blocks"] for s in b["sources"]]
+        if ("base", "prompts/task_base.md") not in scope_refs or \
+                ("base", "prompts/task_manager.md") not in scope_refs:
+            fail(f"manager snapshot lacks the manager contract blocks: {scope_refs}")
+        if any(scope in ("subtree", "node") for scope, _ref in scope_refs):
+            fail(f"manager snapshot invented local rules for default-empty scopes: {scope_refs}")
+        if any("project_manager" in ref or "Project Manager" in text
+               for _scope, ref in scope_refs
+               for text in [b["text"] for b in stored["blocks"]]):
+            fail("manager snapshot injected a retired PM body")
+        # Preview parity: the preview taken before launch equals the stored
+        # snapshot object (same hash, char_count and block sources/text).
+        if preview.get("prompt_hash") != stored["prompt_hash"] or \
+                preview.get("char_count") != stored["char_count"]:
+            fail(f"preview {preview.get('prompt_hash')} != stored "
+                 f"{stored['prompt_hash']}: the preview is not the launch contract")
+        def _blocks_shape(snapshot: dict) -> list:
+            return [([s["source_ref"] for s in b["sources"]], b["text"]) for b in snapshot["blocks"]]
+        if _blocks_shape(preview) != _blocks_shape(stored):
+            fail("preview blocks differ from the stored launch snapshot")
+        # The historical endpoint serves the stored snapshot.
+        status, ctx = await arequest(
+            base, "GET", f"/api/sessions/{manager_id}/runs/{run_id}/context", access_key)
+        if status != 200 or ctx.get("snapshot") is None:
+            fail(f"run context endpoint failed: {status} {ctx}")
+        if ctx["snapshot"] != stored:
+            fail("run-context snapshot differs from the stored prompt_snapshot.json")
+        if ctx.get("legacy_prompt") is not None:
+            fail(f"a fresh v2 run must not carry legacy raw-prompt evidence: {ctx['legacy_prompt']}")
+        # The launch prompt text is the separate task/input evidence.
+        launch_text_path = tree_run_dir(manager_id, run_id) / "launch_prompt.md"
+        if not launch_text_path.is_file() or \
+                phrase_instruction.split(":")[-1].strip()[:20] not in launch_text_path.read_text(encoding="utf-8"):
+            fail(f"manager launch text evidence missing or wrong at {launch_text_path}")
+        log(f"manager snapshot: hash={stored['prompt_hash'][:12]}... "
+            f"chars={stored['char_count']} blocks={len(stored['blocks'])}")
         pending = deps_tree().dispatch.pending_inputs(manager_id)
         if any(str(e.get("id")) == input_event_id for e in pending):
             fail("manager input batch was not acknowledged by the successful turn")
@@ -363,6 +429,29 @@ async def smoke(backend_id: str, purge: bool) -> None:
             fail(f"worker run {worker_run_id} did not persist a native session id")
         if not worker_run.raw_log_ref or not Path(worker_run.raw_log_ref).is_file():
             fail(f"worker run {worker_run_id} raw log missing: {worker_run.raw_log_ref}")
+        # -- context-stage equality and provenance (worker launch) -----------
+        if not worker_run.prompt_snapshot_ref or not Path(worker_run.prompt_snapshot_ref).is_file():
+            fail(f"worker run {worker_run_id} has no durable snapshot reference")
+        w_stored = json.loads(Path(worker_run.prompt_snapshot_ref).read_text(encoding="utf-8"))
+        w_joined = "\n\n".join(b["text"] for b in w_stored["blocks"])
+        if w_stored["char_count"] != len(w_joined):
+            fail(f"worker snapshot char_count {w_stored['char_count']} != measured {len(w_joined)}")
+        w_scope_refs = [(s["scope"], s["source_ref"]) for b in w_stored["blocks"] for s in b["sources"]]
+        if ("base", "prompts/worker.md") not in w_scope_refs:
+            fail(f"worker snapshot lacks the worker contract block: {w_scope_refs}")
+        if ("base", "prompts/task_manager.md") in w_scope_refs:
+            fail("worker snapshot injected the manager contract")
+        w_launch = tree_run_dir(child_id, worker_run_id) / "launch_prompt.md"
+        if not w_launch.is_file() or SMOKE_PHRASE not in w_launch.read_text(encoding="utf-8"):
+            fail(f"worker launch text evidence missing the pinned spec at {w_launch}")
+        w_preview_status, w_preview = await arequest(
+            base, "GET", f"/api/sessions/{child_id}/effective-prompt", access_key)
+        if w_preview_status != 200 or w_preview.get("kind") != "work":
+            fail(f"worker effective-prompt failed: {w_preview_status} {w_preview}")
+        if w_preview.get("prompt_hash") != w_stored["prompt_hash"]:
+            fail(f"worker preview {w_preview.get('prompt_hash')} != stored {w_stored['prompt_hash']}")
+        log(f"worker snapshot: hash={w_stored['prompt_hash'][:12]}... "
+            f"chars={w_stored['char_count']} blocks={len(w_stored['blocks'])}")
         log(f"worker run {worker_run_id}: native={str(worker_run.native_session_id)[:12]}... "
             f"model={worker_run.model} outcome=success")
 
@@ -419,6 +508,21 @@ async def smoke(backend_id: str, purge: bool) -> None:
                 fail(f"the manager's report turn {r.id} did not succeed "
                      f"(raw_log={r.raw_log_ref})")
         log(f"manager report turn {manager_runs[-1].id}: report consumed, outcome=success")
+        # -- native continuation kept the instruction hash and the anchor ----
+        report_snapshot = json.loads(
+            Path(manager_runs[-1].prompt_snapshot_ref).read_text(encoding="utf-8"))
+        if report_snapshot["prompt_hash"] != stored["prompt_hash"]:
+            fail("the manager's second turn changed the instruction hash without a "
+                 "source change: input-only turns must retain the hash")
+        meta_after = await deps_tree().load_meta(manager_id)
+        if meta_after.native_prompt_hash != stored["prompt_hash"]:
+            fail("the native anchor's recorded instruction hash left the snapshot's hash")
+        if meta_after.cc_session_id and manager_run.native_session_id and \
+                meta_after.cc_session_id != manager_run.native_session_id:
+            # The anchor may legitimately advance within the same native
+            # conversation; it must never fall back to a foreign one here.
+            fail(f"manager native anchor jumped conversations: {meta_after.cc_session_id}")
+        log("manager native continuation: instruction hash retained across the report turn")
 
         # -- the compatibility aliases resolve to the same Run ---------------
         for owner in (child_id, manager_id):

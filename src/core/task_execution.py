@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import functools
+import json
 import time
 import uuid
 from collections.abc import Callable
@@ -45,8 +46,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.agents.worker import QuotaExhaustedException, Worker
-from src.core import claude_relay, git, review, runs, spawner_prompt
+from src.core import claude_relay, git, review, runs, task_prompts
 from src.core import event_types as ET
+from src.core.chat_events import chat_events_path
 from src.core.config import CharlieBotConfig, get_credentials
 from src.core.control_events import sha256_hex, stable_run_id
 from src.core.log_once import LazyStructlogLogger
@@ -63,13 +65,13 @@ from src.core.runs import RunNotFoundError, scan_result_exit
 from src.core.sessions import SessionManager
 from src.core.spawner_backends import resolve_backend_option
 from src.core.takeoff_gate import DelegationBlockedError
+from src.core.task_prompts import PromptSnapshot, TaskPromptError
 from src.core.task_sessions import (
     TaskConflictError,
     TaskInvalidError,
     TaskNotFoundError,
     canonical_task_spec_text,
 )
-from src.core.verify_trailer import VERIFY_RESULT_TRAILER_EXPECTED
 
 if TYPE_CHECKING:
     from src.core.task_sessions import TaskTreeManager
@@ -139,6 +141,92 @@ def compose_input_prompt(events: list[dict]) -> tuple[str, list[dict]]:
             parts.append(content)
         uploads.extend(event.get("uploaded_files") or [])
     return "\n\n".join(part for part in parts if part), uploads
+
+
+def resolve_launch_overlay(option: BackendOption) -> tuple[str | None, bool]:
+    """The three-state overlay judgment a v2 launch shares with the v1 wake path.
+
+    Returns (overlay_name_or_None, declared). None + declared=False means
+    undeclared (alert); "none" is normalized to (None, True) — explicitly no
+    overlay, silent; any other string names the overlay file.
+    """
+    overlay = option.prompt_overlay
+    if overlay is None:
+        return None, False
+    if overlay == "none":
+        return None, True
+    return overlay, True
+
+
+def capture_prompt_chain(
+    tree: "TaskTreeManager", index: object, meta: SessionMetadata,
+) -> "tuple[tuple[tuple[str, str | None], ...], str | None]":
+    """Ancestor subtree refs (root → parent) plus this node's own rule ref.
+
+    Reads the tree index the caller's control-lock hold just built; refs are
+    the metadata-owned fingerprints the recheck compares.
+    """
+    chain: list[tuple[str, str | None]] = []
+    for ancestor in reversed(tree._ancestors(index, meta.id)):  # root → parent
+        ancestor_meta = index.metas.get(ancestor.id)
+        chain.append((ancestor.id, ancestor_meta.subtree_prompt_ref if ancestor_meta else None))
+    return tuple(chain), meta.node_prompt_ref
+
+
+async def assemble_coherent_snapshot(
+    cfg: CharlieBotConfig,
+    tree: "TaskTreeManager",
+    meta: SessionMetadata,
+    kind: str,
+    option: BackendOption,
+) -> "tuple[PromptSnapshot, OSError | None, bool]":
+    """One coherent assembly pass over the tree, templates, memory and rules.
+
+    Ancestor relations and refs are captured under the control lock; the
+    bodies, templates, host/overlay supplements and memory are read outside it.
+    Before returning, the chain/refs are re-captured under the lock and the
+    mutable sources are re-assembled: any change rebuilds from a coherent view
+    (bounded passes, then a visible failure). The launch path commits the
+    returned snapshot; the preview endpoint returns it as the next-start
+    configuration — one assembly path for both, never a preview-only selector.
+    """
+    overlay, declared = resolve_launch_overlay(option)
+    snapshot: PromptSnapshot | None = None
+    overlay_error: OSError | None = None
+    for _ in range(task_prompts._COHERENCE_PASSES):
+        async with tree.control_lock:
+            index = await tree._get_index()
+            fresh_meta = await tree.load_meta(meta.id)
+            if fresh_meta is None:
+                raise TaskNotFoundError(f"task {meta.id} vanished during prompt assembly")
+            chain, node_ref = capture_prompt_chain(tree, index, fresh_meta)
+        built, err = await asyncio.to_thread(
+            task_prompts.build_segments, cfg, fresh_meta, kind,
+            overlay=overlay, chain=chain, node_ref=node_ref)
+        candidate = task_prompts.assemble_snapshot(built)
+        # Mutable-source fingerprint recheck: re-assemble and compare. Any
+        # template/host/overlay/memory change between the two passes means no
+        # coherent view existed yet.
+        rebuilt, err2 = await asyncio.to_thread(
+            task_prompts.build_segments, cfg, fresh_meta, kind,
+            overlay=overlay, chain=chain, node_ref=node_ref)
+        if candidate.to_json_dict() != task_prompts.assemble_snapshot(rebuilt).to_json_dict():
+            continue
+        async with tree.control_lock:
+            index = await tree._get_index()
+            fresh_meta = await tree.load_meta(meta.id)
+            if fresh_meta is None:
+                raise TaskNotFoundError(f"task {meta.id} vanished during prompt assembly")
+            chain2, node_ref2 = capture_prompt_chain(tree, index, fresh_meta)
+        if (chain2, node_ref2) != (chain, node_ref):
+            continue  # a rule/ancestor moved: rebuild from the new view
+        snapshot, overlay_error = candidate, (err or err2)
+        break
+    if snapshot is None:
+        raise TaskPromptError(
+            f"prompt sources for task {meta.id} did not settle across "
+            f"{task_prompts._COHERENCE_PASSES} coherent-view attempts")
+    return snapshot, overlay_error, declared
 
 
 class TaskExecutionAdapter:
@@ -391,10 +479,21 @@ class TaskExecutionAdapter:
                              session_id=session_id, run_id=run_id, reason=str(e))
                     return f"withheld: {e}"
         option = self._resolve_run_backend(run)
+        # The one assembly owner builds this launch's managed instructions and
+        # their durable snapshot BEFORE any backend is invoked. A preparation
+        # failure (missing/corrupt rule, malformed memory, unsettled sources)
+        # is a definitely-unlaunched withheld verdict: the queued Run and its
+        # unconsumed inputs stay exactly as they were.
+        try:
+            snapshot = await self._prepare_launch_snapshot(meta, run, option)
+        except TaskPromptError as e:
+            log.error("task_prompt_preparation_failed", session_id=session_id, run_id=run_id,
+                      kind=run.kind, error=str(e))
+            return f"withheld: prompt preparation failed: {e}"
         if meta.profile == "manager" and run.kind == "manager_turn":
-            await self._execute_manager_turn(meta, run, option)
+            await self._execute_manager_turn(meta, run, option, snapshot)
         elif meta.profile == "worker" and run.kind in ("work", "review", "iteration", "scheduled_step"):
-            await self._execute_worker_run(meta, run, option, launch_prompt=launch_prompt)
+            await self._execute_worker_run(meta, run, option, snapshot, launch_prompt=launch_prompt)
         else:
             raise TaskInvalidError(
                 f"run {run_id} (profile={meta.profile}, kind={run.kind}) has no executable adapter")
@@ -505,15 +604,62 @@ class TaskExecutionAdapter:
     # Manager turns
     # ------------------------------------------------------------------
 
-    async def _execute_manager_turn(self, meta: SessionMetadata, run: RunRecord, option: BackendOption) -> None:
+
+    async def _alert_overlay_inactive(
+        self, session_id: str, option: BackendOption, overlay_error: OSError | None,
+        declared: bool,
+    ) -> None:
+        """The unified fenceless-run alert (undeclared or unreadable overlay)."""
+        reason = "unreadable" if overlay_error is not None else "undeclared"
+        log.warning("task_overlay_inactive", session_id=session_id, backend=option.id, reason=reason)
+        await self._sessions.callbacks().persist_and_broadcast(session_id, {
+            "type": ET.BACKEND_OVERLAY_INACTIVE,
+            "backend": option.id,
+            "reason": reason,
+            **({"overlay": option.prompt_overlay,
+                "error": type(overlay_error).__name__} if overlay_error is not None else {}),
+        })
+
+    async def _prepare_launch_snapshot(
+        self, meta: SessionMetadata, run: RunRecord, option: BackendOption,
+    ) -> PromptSnapshot:
+        """Build, recheck, and durably commit this launch's instruction snapshot.
+
+        The committed bytes are the bytes the adapters launch — never a second
+        build. A declared-but-unreadable or undeclared overlay emits the unified
+        fenceless-run alert exactly like the v1 wake path.
+        """
+        snapshot, overlay_error, declared = await assemble_coherent_snapshot(
+            self._cfg, self._tree, meta, run.kind, option)
+        path = self._tree.runs.run_dir(meta.id, run.id) / task_prompts.SNAPSHOT_FILENAME
+        from src.core.json_utils import atomic_write_text
+        await asyncio.to_thread(
+            atomic_write_text, path,
+            json.dumps(snapshot.to_json_dict(), indent=2, ensure_ascii=False))
+        await self._tree.runs.record_observation(meta.id, run.id, prompt_snapshot_ref=str(path))
+        if not declared or overlay_error is not None:
+            await self._alert_overlay_inactive(meta.id, option, overlay_error, declared)
+        return snapshot
+
+    async def _execute_manager_turn(
+        self, meta: SessionMetadata, run: RunRecord, option: BackendOption, snapshot: PromptSnapshot,
+    ) -> None:
         """One manager turn on the existing per-session master queue.
 
         The turn's input is the exact durable batch the Run claimed; the
         existing queue serializes turns per node, streams events into the
         session chat, and keeps the native continuation anchor on the stable
-        session. The Run is the sole new execution record: pid/pid_start land
-        at spawn, native_session_id/model/raw log land at finish, and the
+        session. The launch's managed instructions are the committed snapshot's
+        bytes — delivered through the backend's system-instruction seam, never
+        rebuilt here. The Run is the sole new execution record: pid/pid_start
+        land at spawn, native_session_id/model/raw log land at finish, and the
         terminal fact goes through ``dispatch.finish_run``.
+
+        Native continuation rule: the anchor's conversation continues only when
+        the effective instruction hash AND the backend identity are unchanged;
+        a rules/source change starts a fresh native context carrying a reset
+        notice (the task summary and where the earlier history lives), while an
+        input-only change keeps the conversation.
         """
         from src.agents.master_cc import run_message
         from src.agents.master_cc_state import TaskRunBinding
@@ -526,10 +672,35 @@ class TaskExecutionAdapter:
         if not content:
             raise TaskInvalidError(f"run {run_id} claimed no consumable input; nothing to execute")
 
+        anchor_continues = (
+            meta.cc_session_id is not None
+            and meta.native_prompt_hash == snapshot.prompt_hash
+            and meta.native_backend == option.id
+            and meta.native_model == option.model)
+        fresh_native = not anchor_continues
+        prompt = content
+        if fresh_native and meta.cc_session_id is not None:
+            # A reset, not a first turn: name the task and where the earlier
+            # history lives, so the fresh native context can catch up without
+            # the old conversation being copied or destroyed.
+            goal = meta.task.goal if meta.task is not None else meta.name
+            prompt = (
+                f"[Context reset: this task's managed instructions or sources changed since the "
+                f"previous turn, so this turn starts a fresh native conversation. The task is: "
+                f"{goal}. Earlier turns' history remains readable in session {session_id}'s chat "
+                f"log and Run records (GET /api/sessions/{session_id}/runs).]\n\n{content}")
+
         async def on_task_spawn(pid: int, pid_start: str | None) -> None:
             if pid_start is None:
                 raise RuntimeError(f"run {run_id} spawned without a pinned pid_start")
             await self._tree.runs.record_launch(session_id, run_id, pid=pid, pid_start=pid_start)
+            # The anchor decision is durable the moment the process exists: a
+            # reset clears the anchor here (never during preparation, which may
+            # fail without touching the usable old anchor), and the identity
+            # fields pin the snapshot this conversation continues under.
+            await self._tree.record_native_anchor(
+                session_id, prompt_hash=snapshot.prompt_hash, backend=option.id,
+                model=option.model, reset_anchor=fresh_native)
 
         async def on_task_finish(cc_session_id: str | None, exit_code: int, finish_extras: dict) -> None:
             await self._tree.runs.record_observation(
@@ -548,19 +719,24 @@ class TaskExecutionAdapter:
             # consumer; the turn's finish is what dispatches their next run.
             await self._tree.dispatch.dispatch_pending(session_id)
 
+        await self._persist_launch_text(session_id, run_id, prompt)
         log.info("manager_turn_launching", session_id=session_id, run_id=run_id,
-                 backend=option.id, inputs=len(run.input_event_ids))
+                 backend=option.id, inputs=len(run.input_event_ids),
+                 prompt_hash=snapshot.prompt_hash[:12], fresh_native=fresh_native)
         await run_message(
             self._cfg,
             meta,
-            content,
+            prompt,
             self._sessions.callbacks(),
             skip_user_event=True,
             auto_trigger=any(e.get("type") == ET.SCHEDULED_TRIGGER for e in batch_events),
             backend_option=option,
             uploaded_files=uploaded_files or None,
+            expect_fresh_session=fresh_native,
+            task_instructions=snapshot.instructions_text,
             task_run=TaskRunBinding(
-                session_id=session_id, run_id=run_id, transport_dir=str(transport_dir)),
+                session_id=session_id, run_id=run_id, transport_dir=str(transport_dir),
+                fresh_native_context=fresh_native),
             on_task_spawn=on_task_spawn,
             on_task_finish=on_task_finish,
             extra_env=self._child_env(session_id, run_id, meta.name),
@@ -572,10 +748,19 @@ class TaskExecutionAdapter:
     # ------------------------------------------------------------------
 
     async def _execute_worker_run(
-        self, meta: SessionMetadata, run: RunRecord, option: BackendOption,
+        self, meta: SessionMetadata, run: RunRecord, option: BackendOption, snapshot: PromptSnapshot,
         *, launch_prompt: str | None = None,
     ) -> None:
-        """One work, review, or sequence Run on the existing Worker/backend adapter."""
+        """One work, review, or sequence Run on the existing Worker/backend adapter.
+
+        The context owner supplies every applicable managed rule/memory block
+        exactly once — the committed ``snapshot`` rides the backend's
+        system-instruction seam — while the controllers keep owning their task /
+        step input: this adapter renders only the task/input context (bindings,
+        pinned spec, claimed batch, sequence positions) from the same maintained
+        template sections. A scheduled prompt override no longer bypasses the
+        assembly.
+        """
         session_id, run_id = meta.id, run.id
         run_dir = self._tree.runs.run_dir(session_id, run_id)
         events_log = run_dir / "events.jsonl"
@@ -589,18 +774,20 @@ class TaskExecutionAdapter:
                 raise TaskInvalidError(f"review run {run_id} names no recorded work Run")
             # The review reuses the work Run's exact repo, branch and worktree.
             review_worktree = work_run.worktree_path
-            prompt = await self._build_review_prompt(session_id, run, work_run)
-        elif launch_prompt is not None and run.kind == "iteration":
-            prompt = await self._build_iteration_prompt(meta, run, launch_prompt)
+            context = await self._build_review_context(session_id, run, work_run)
+        elif run.kind == "iteration":
+            context = await self._build_iteration_context(meta, run, launch_prompt)
         elif launch_prompt is not None:
             # The sequence controllers' explicit launch text (a cron step's
             # prompt rides verbatim, exactly as the legacy scheduled worker's
             # prompt_override did). The controller owns the composition; the
-            # adapter persists it onto the Run as the launch-text evidence.
-            prompt = launch_prompt
-            await self._persist_launch_text(session_id, run_id, prompt)
+            # adapter renders it as the task/input context of the assembled
+            # instructions.
+            context = await self._build_step_context(meta, run, launch_prompt, task_type)
         else:
-            prompt = await self._build_work_prompt(meta, run, task_type)
+            context = await self._build_work_context(meta, run, task_type)
+        prompt = context
+        await self._persist_launch_text(session_id, run_id, prompt)
 
         binding = RunWorkerBinding(id=run_id, session_id=session_id)
         if option.type == BackendType.CC_CLAUDE:
@@ -626,6 +813,7 @@ class TaskExecutionAdapter:
                 backend_option=option,
                 on_spawned=on_spawned,
                 extra_env=self._child_env(session_id, run_id, meta.name),
+                instructions_content=snapshot.instructions_text,
             )
             # Session-level notices (a pool login that needs re-login) reach
             # the session chat through the successor chain, exactly as the
@@ -761,15 +949,8 @@ class TaskExecutionAdapter:
     # Prompts (existing sources; the launch text rides the Run as evidence)
     # ------------------------------------------------------------------
 
-    async def _build_work_prompt(self, meta: SessionMetadata, run: RunRecord, task_type: TaskType) -> str:
-        """The work Run's prompt from the existing worker prompt sources.
-
-        The task spec body is the description; direct node input (the Run's
-        claimed batch) rides after it. The actual launch text is persisted to
-        the Run as the prompt-snapshot seam's evidence (the v4 snapshot schema
-        itself lands with the context stage).
-        """
-        from src.core.spawner_prompt import _build_worker_prompt
+    async def _work_description(self, meta: SessionMetadata, run: RunRecord) -> str:
+        """The task/input body: the pinned spec's goal plus this run's claimed batch."""
         task = meta.task
         spec_text = task.goal if (task is not None and task.goal.strip()) else ""
         batch_ids = set(run.input_event_ids)
@@ -778,17 +959,32 @@ class TaskExecutionAdapter:
         description = "\n\n".join(part for part in (spec_text, content) if part)
         if not description.strip():
             raise TaskInvalidError(f"run {run.id} has no task spec and no input; nothing to execute")
+        return description
 
+    def _binding_intro(self, run: RunRecord) -> str:
+        """The workflow bindings' intro line: a retry continuing the worktree says so."""
+        if run.retry_of_run_id is not None and run.worktree_path is not None:
+            from src.core.spawner_prompt import load_worker_prompt_sections
+            return load_worker_prompt_sections(self._cfg)["intro_continuation"].strip()
+        from src.core.spawner_prompt import load_worker_prompt_sections
+        return load_worker_prompt_sections(self._cfg)["intro_new"].strip()
+
+    async def _build_work_context(self, meta: SessionMetadata, run: RunRecord, task_type: TaskType) -> str:
+        """The work Run's task/input context from the maintained template sections.
+
+        Verify runs stay read-only: their contract is entirely managed
+        instructions, so their context is the pinned spec and batch alone (no
+        worktree, no review artifacts). Repo-less work runs keep the run dir as
+        the working directory.
+        """
+        description = await self._work_description(meta, run)
+        task = meta.task
+        if task_type == TaskType.VERIFY:
+            return task_prompts.render_task_body(self._cfg, description)
+        parts = [task_prompts.render_session_info(self._cfg, meta.name)]
         if not (task is not None and task.repo_path):
-            # Repo-less work run (verify or a repo-less task): the run dir is
-            # the working directory; no worktree, no review artifacts.
-            if task_type == TaskType.VERIFY:
-                prompt = self._build_verify_prompt(description)
-            else:
-                prompt = description
-            await self._persist_launch_text(meta.id, run.id, prompt)
-            return prompt
-
+            parts.append(task_prompts.render_task_body(self._cfg, description))
+            return "\n\n".join(part for part in parts if part)
         assert task.repo_path is not None
         repo_path = Path(task.repo_path).resolve()
         base_branch = run.base_branch or task.base_branch
@@ -799,39 +995,26 @@ class TaskExecutionAdapter:
             base_branch, branch_name, worktree_path, start_point = await self._prepare_worktree(
                 meta, run, repo_path)
         assert base_branch and branch_name and worktree_path
-        prompt = _build_worker_prompt(
-            description,
-            repo_path,
-            base_branch,
-            branch_name,
-            worktree_path,
-            meta,
-            self._cfg,
-            task_type=task_type,
-            loop_dir=None,
-            iteration_number=None,
-            is_continuation=run.retry_of_run_id is not None and run.worktree_path is not None,
-            keep_worktree=bool(task.keep_worktree),
-            start_point=start_point,
-        )
-        await self._persist_launch_text(meta.id, run.id, prompt)
-        return prompt
+        origin = f"`{base_branch}`" + (f" @ `{start_point}`" if start_point else "")
+        parts.append(task_prompts.render_worktree_bindings(
+            self._cfg, task_type=task_type, intro_line=self._binding_intro(run),
+            branch_name=branch_name, base_branch_origin=origin,
+            wt_path=worktree_path, repo_path=str(repo_path)))
+        parts.append(task_prompts.render_task_body(self._cfg, description))
+        if task is not None and task.keep_worktree:
+            parts.append(task_prompts.render_worktree_persistence(self._cfg))
+        return "\n\n".join(part for part in parts if part)
 
-    async def _build_iteration_prompt(self, meta: SessionMetadata, run: RunRecord, description: str) -> str:
-        """One improve iteration's full prompt: the existing worker prompt
-        builder with the loop context the sequence_ref pins.
+    async def _build_iteration_context(self, meta: SessionMetadata, run: RunRecord, description: str) -> str:
+        """One improve iteration's context: shared-worktree bindings + the loop position.
 
         The controller composes the description (live goal, optional plan,
-        previous summaries) and passes it as the launch text; the adapter wraps
-        it with the shared worktree's workflow contract, the iteration-report
-        instructions (loop_dir + position), and the worker memory block — the
-        same assembly the legacy improve iterations rode. The shared worktree
-        facts are pinned on the Run at registration; an iteration Run without
-        them is a controller bug and fails loudly instead of creating a
-        worktree of its own.
+        previous summaries) and passes it as the launch text; the sequence_ref
+        pins the shared worktree facts — an iteration Run without them is a
+        controller bug and fails loudly instead of creating a worktree of its
+        own. The report contract renders from the maintained iteration section
+        with the actual loop directory and position.
         """
-        from src.core.spawner_prompt import _build_worker_prompt
-
         seq = run.sequence_ref
         if seq is None or seq.kind != "improve":
             raise TaskInvalidError(
@@ -841,43 +1024,41 @@ class TaskExecutionAdapter:
             raise TaskInvalidError(
                 f"iteration run {run.id} is missing its pinned shared-worktree provenance "
                 "(repo/base/branch/worktree); refusing to create a divergent worktree")
-        prompt = _build_worker_prompt(
-            description,
-            Path(run.repo_path),
-            run.base_branch,
-            run.branch_name,
-            run.worktree_path,
-            meta,
-            self._cfg,
-            task_type=TaskType.IMPLEMENT,
-            loop_dir=seq.owner_ref,
-            iteration_number=seq.position,
-            is_continuation=seq.position > 1,
-            keep_worktree=False,
-            start_point=None,
-        )
-        await self._persist_launch_text(meta.id, run.id, prompt)
-        return prompt
+        parts = [task_prompts.render_session_info(self._cfg, meta.name)]
+        parts.append(task_prompts.render_worktree_bindings(
+            self._cfg, task_type=TaskType.IMPLEMENT, intro_line=self._binding_intro(run),
+            branch_name=run.branch_name, base_branch_origin=f"`{run.base_branch}`",
+            wt_path=run.worktree_path, repo_path=run.repo_path))
+        parts.append(task_prompts.render_task_body(self._cfg, description))
+        parts.append(task_prompts.render_iteration_reports(
+            self._cfg, loop_dir=seq.owner_ref, iteration_number=seq.position))
+        return "\n\n".join(part for part in parts if part)
 
-    def _build_verify_prompt(self, description: str) -> str:
-        """The repo-less verify contract from the existing verify prompt source."""
-        sections = spawner_prompt._load_prompt_sections(
-            self._cfg.charlie_bot_repo / "prompts" / "verify.md",
-            spawner_prompt._REQUIRED_VERIFY_PROMPT_SECTIONS,
-            extraction="verify-prompt")
-        contract = spawner_prompt._substitute_tokens(
-            "\n".join(
-                sections[section_id].strip("\n")
-                for section_id in spawner_prompt._REQUIRED_VERIFY_PROMPT_SECTIONS), {
-                    "{{result_trailer_expected}}": VERIFY_RESULT_TRAILER_EXPECTED,
-                    "{{canonical_template_path}}": str(
-                        (self._cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()),
-                })
-        spawner_prompt._require_tokens_resolved(contract, prompt="verify")
-        return f"{contract}\n\n{description}"
+    async def _build_step_context(
+        self, meta: SessionMetadata, run: RunRecord, step_prompt: str, task_type: TaskType,
+    ) -> str:
+        """One scheduled step's context: the controller's prompt over the task's bindings.
 
-    async def _build_review_prompt(self, session_id: str, run: RunRecord, work_run: RunRecord) -> str:
-        """The review Run's prompt: the existing review builder over the exact work context."""
+        The step Run shares the leaf task's worktree provenance (pinned at
+        registration); the controller's prompt is the task/input body.
+        """
+        parts = [task_prompts.render_session_info(self._cfg, meta.name)]
+        if run.worktree_path and run.branch_name and run.base_branch and run.repo_path:
+            parts.append(task_prompts.render_worktree_bindings(
+                self._cfg, task_type=task_type, intro_line=self._binding_intro(run),
+                branch_name=run.branch_name, base_branch_origin=f"`{run.base_branch}`",
+                wt_path=run.worktree_path, repo_path=run.repo_path))
+        parts.append(task_prompts.render_task_body(self._cfg, step_prompt))
+        return "\n\n".join(part for part in parts if part)
+
+    async def _build_review_context(self, session_id: str, run: RunRecord, work_run: RunRecord) -> str:
+        """The review Run's task/input context: the work being judged and its git steps.
+
+        The reviewer's stable contract rides the managed instructions
+        (review_rules_text); this context names the exact work Run, its logs,
+        and the volatile git steps — it never turns the reviewer into an
+        implementer beyond the checklist's minimal-fix rule.
+        """
         assert (work_run.branch_name and work_run.worktree_path and work_run.repo_path
                 and work_run.base_branch), (
             f"review of work run {work_run.id} needs its exact repo/base/branch/worktree "
@@ -885,32 +1066,35 @@ class TaskExecutionAdapter:
         user_request, worker_summary = await review.extract_review_context(
             session_id, work_run.id, self._cfg.sessions_dir,
             worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / "events.jsonl")
-        prompt = review.build_review_prompt(
-            work_run.branch_name,
-            work_run.worktree_path,
-            work_run.base_branch,
-            cfg=self._cfg,
+        context_lines: list[str] = []
+        if user_request:
+            context_lines.append(f"**User request:** {user_request}")
+        if worker_summary:
+            context_lines.append(f"**Worker summary:** {worker_summary}")
+        if not context_lines:
+            context_lines.append("*(Log extraction unavailable — review based on delegator hint and diff only.)*")
+        context_lines.append(f"**Delegator hint:** (work run {work_run.id})")
+        return task_prompts.review_task_context(
+            branch_name=work_run.branch_name,
+            wt_path=work_run.worktree_path,
+            base_branch=work_run.base_branch,
             session_id=session_id,
-            original_thread_id=work_run.id,
-            sessions_dir=self._cfg.sessions_dir,
-            user_request=user_request,
-            worker_summary=worker_summary,
+            chat_log_path=chat_events_path(self._cfg.sessions_dir / session_id),
             worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / "events.jsonl",
+            context_section="\n".join(context_lines),
         )
-        await self._persist_launch_text(session_id, run.id, prompt)
-        return prompt
 
     async def _persist_launch_text(self, session_id: str, run_id: str, prompt: str) -> None:
-        """Retain the actual launch text on the Run as the snapshot seam's evidence.
+        """Retain the launch's exact task/input text on the Run as separate evidence.
 
-        The Run's ``prompt_snapshot_ref`` points at this file; the v4 snapshot
-        schema (ordered blocks, sources, delivery modes) is the context
-        stage's contract and is deliberately not fabricated here.
+        The managed instruction half lives in the Run's committed snapshot
+        (``prompt_snapshot.json`` via ``prompt_snapshot_ref``); this file keeps
+        the volatile half — bindings, pinned spec, claimed batch, sequence
+        positions — exactly as it was handed to the adapter.
         """
         from src.core.json_utils import atomic_write_text
-        path = self._tree.runs.run_dir(session_id, run_id) / "launch_prompt.md"
+        path = self._tree.runs.run_dir(session_id, run_id) / task_prompts.LAUNCH_TEXT_FILENAME
         atomic_write_text(path, prompt)
-        await self._tree.runs.record_observation(session_id, run_id, prompt_snapshot_ref=str(path))
 
     async def _prepare_worktree(
         self, meta: SessionMetadata, run: RunRecord, repo_path: Path
@@ -1303,3 +1487,159 @@ class TaskExecutionAdapter:
             if text:
                 return text
         return f"run {run.id} failed without a reportable output"
+
+
+# ---------------------------------------------------------------------------
+# TUI terminal launch (the v2 startup context boundary's terminal edge)
+# ---------------------------------------------------------------------------
+
+
+# In-process launch guard for TUI terminal launches: one prepare per task per
+# process, spanning registration to the tmux ensure. The durable (pid,
+# pid_start) identity write is the cross-restart backstop, exactly like the
+# headless launch guard.
+_TUI_LAUNCH_INFLIGHT: set[str] = set()
+
+
+@dataclasses.dataclass
+class TuiTaskLaunch:
+    """One scripted-or-real terminal launch's committed context.
+
+    Carries exactly what the terminal launch needs: the Run's id, the native
+    conversation id (hash-qualified), the injected child environment (its own
+    identity and signed run credential — never the operator key), and the
+    snapshot's instruction bytes for the instruction file the terminal claude
+    reads. ``record_process`` pins the pane process identity onto the Run with
+    the same owners a headless launch uses.
+    """
+
+    session_id: str
+    run_id: str
+    native_session_id: str
+    inject_env: dict[str, str]
+    instructions_text: str
+    working_dir: Path
+    model: str | None
+    _tree: "TaskTreeManager"
+
+    async def record_process(self) -> None:
+        """Pin the terminal's process identity (tmux pane pid + start marker) on the Run."""
+        from src.agents.backends.pty_common import tmux_pane_pid
+        from src.core.runs import read_pid_stat
+
+        pid = await tmux_pane_pid(self.session_id)
+        if pid is None:
+            raise RuntimeError(
+                f"TUI launch of run {self.run_id} created no tmux pane to pin a pid from")
+        stat = read_pid_stat(pid)
+        if stat is None:
+            raise RuntimeError(
+                f"TUI launch of run {self.run_id}: pane pid {pid} has no /proc entry; "
+                "refusing to pin a start marker that cannot be verified")
+        pid_start = stat[0]
+        await self._tree.runs.record_launch(self.session_id, self.run_id, pid=pid, pid_start=pid_start)
+        await self._tree.runs.record_observation(
+            self.session_id, self.run_id, native_session_id=self.native_session_id)
+
+
+async def prepare_tui_task_launch(
+    cfg: CharlieBotConfig, session_id: str, tree: "TaskTreeManager | None" = None,
+) -> TuiTaskLaunch | None:
+    """The v2 TUI task's launch seam: one Run per actual terminal launch, or None.
+
+    Returns None when the attach must not launch anything: a v1 session (its
+    legacy terminal behavior is untouched), a non-tui backend, or a live
+    terminal (a re-attach never creates a Run or relaunches — an ongoing
+    terminal keeps its start snapshot). A launch registers the Run, commits its
+    instruction snapshot under the same coherence protocol as every other
+    launch, and signs the run credential the terminal's CLI will use — never
+    the operator key. Native continuation is chosen by instruction hash: the
+    native conversation id qualifies the stable task id with the snapshot's
+    hash, so an unchanged hash resumes the conversation and a rules/source
+    change starts a fresh native context (the earlier transcript stays on
+    disk).
+
+    The caller must call :meth:`TuiTaskLaunch.release` once the tmux session is
+    ensured (or failed to ensure): the in-process launch marker spans the
+    registration-to-tmux window, so two concurrent attaches cannot register two
+    Runs for one terminal.
+    """
+    from src.agents.backends.pty_common import tmux_session_exists
+    from src.core.backend_models import BackendType
+
+    if await tmux_session_exists(session_id):
+        return None  # a re-attach: the ongoing terminal keeps its start snapshot
+    if tree is None:
+        # The server's singleton owner (the same one every API route uses); the
+        # lazy import keeps this core module off the API modules' import path.
+        from src.api.deps import task_manager
+        tree = task_manager()
+    async with tree.control_lock:
+        meta = await tree.load_meta(session_id)
+        if meta is None or meta.profile is None:
+            return None  # not a task-tree node: legacy terminal behavior
+        option = cfg.get_backend_option(meta.backend) if meta.backend else None
+        if option is None or option.type is not BackendType.TUI_CLI:
+            return None
+        if meta.profile != "manager":
+            raise TaskInvalidError(
+                f"task {session_id}: a tui terminal launch requires a manager node")
+        if session_id in _TUI_LAUNCH_INFLIGHT:
+            return None  # a concurrent attach owns this launch
+        events = tree.runs.load_events_sync(session_id)
+        runs = tree.runs.list_run_records_sync(session_id)
+        if any(
+            r.kind == "manager_turn" and r.pid is not None and
+            not any(e.get("type") == ET.RUN_FINISHED and e.get("run_id") == r.id for e in events)
+            for r in runs):
+            return None  # a live terminal Run already owns this task's terminal
+        _TUI_LAUNCH_INFLIGHT.add(session_id)
+        index = await tree._get_index()
+        chain, node_ref = capture_prompt_chain(tree, index, meta)
+        launch_no = 1 + len([r for r in runs if r.kind == "manager_turn"])
+        run_id = stable_run_id(session_id, f"tui-launch:{launch_no}")
+        record = RunRecord(
+            id=run_id, session_id=session_id, kind="manager_turn",
+            backend=meta.backend, model=option.model)
+        await tree.runs.register_run_locked(
+            record, task_spec_text=canonical_task_spec_text(meta.task))
+    # Snapshot assembly and persistence run outside the control lock (they take
+    # their own short holds); the bytes are committed before the tmux session
+    # exists, so the launched claude reads the saved bytes.
+    fresh_meta = await tree.load_meta(session_id)
+    assert fresh_meta is not None
+    snapshot, _overlay_error, _declared = await assemble_coherent_snapshot(
+        cfg, tree, fresh_meta, "manager_turn", option)
+    snapshot_path = tree.runs.run_dir(session_id, run_id) / task_prompts.SNAPSHOT_FILENAME
+    from src.core.json_utils import atomic_write_text
+    await asyncio.to_thread(
+        atomic_write_text, snapshot_path,
+        json.dumps(snapshot.to_json_dict(), indent=2, ensure_ascii=False))
+    await tree.runs.record_observation(session_id, run_id, prompt_snapshot_ref=str(snapshot_path))
+    key = str(get_credentials().get("charliebot", "access_key") or "")
+    if not key:
+        _TUI_LAUNCH_INFLIGHT.discard(session_id)
+        raise RuntimeError(
+            "run-token signing requires credentials.yaml charliebot.access_key; "
+            "a TUI task launch cannot inject its run credential without it")
+    token = sign_run_token(
+        RunTokenClaims(session_id=session_id, run_id=run_id, agent=meta.name or "manager"), key)
+    return TuiTaskLaunch(
+        session_id=session_id,
+        run_id=run_id,
+        native_session_id=f"{session_id}-{snapshot.prompt_hash[:8]}",
+        inject_env={
+            SESSION_ID_ENV_VAR: session_id,
+            RUN_TOKEN_ENV: token,
+            "CHARLIEBOT_HOME": str(cfg.charliebot_home),
+        },
+        instructions_text=snapshot.instructions_text,
+        working_dir=cfg.sessions_dir / session_id,
+        model=option.model,
+        _tree=tree,
+    )
+
+
+def release_tui_launch(session_id: str) -> None:
+    """Drop the in-process TUI launch marker once the tmux ensure settled."""
+    _TUI_LAUNCH_INFLIGHT.discard(session_id)

@@ -31,7 +31,7 @@ from src.agents.backends.pty_common import (
     tmux_session_exists,
     tmux_session_name,
 )
-from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, default_claude_dir
+from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig, default_claude_dir
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendType
 
@@ -124,16 +124,29 @@ async def ensure_tmux_session(
     effort: str | None = None,
     disallowed_tools: list[str] | None = None,
     inject_env: dict[str, str] | None = None,
+    native_session_id: str | None = None,
+    instructions_text: str | None = None,
 ) -> None:
-  """Idempotently create the tmux session running Claude TUI in *working_dir*."""
+  """Idempotently create the tmux session running Claude TUI in *working_dir*.
+
+  ``native_session_id`` is the claude conversation id the TUI launches under —
+  the task id on the v1 path, and the task id qualified by the launch's
+  instruction hash on v2 (a changed hash starts a fresh native context; an
+  unchanged hash resumes). ``instructions_text`` is written to the working
+  directory's CLAUDE.md before the session exists, so the launched claude
+  reads exactly the snapshot's managed instruction bytes.
+  """
   name = tmux_session_name(session_id)
   working_dir.mkdir(parents=True, exist_ok=True)
+  if instructions_text is not None:
+    (working_dir / "CLAUDE.md").write_text(instructions_text, encoding="utf-8")
   _ensure_claude_project_trusted(working_dir)
   if await tmux_session_exists(session_id):
     return
-  resume = _find_existing_claude_jsonl(session_id) is not None
+  native_id = native_session_id or session_id
+  resume = _find_existing_claude_jsonl(native_id) is not None
   command_args = build_claude_argv(
-      session_id,
+      native_id,
       resume,
       settings=_CLAUDE_TUI_SETTINGS,
       model=model,
@@ -165,19 +178,55 @@ class TuiBackend:
     _tmux_binary()
 
 
-async def run_tui_attachment(websocket: WebSocket, session_id: str, sessions_dir: Path) -> None:
+async def run_tui_attachment(
+    websocket: WebSocket, session_id: str, cfg: "CharlieBotConfig", task_tree: object = None,
+) -> None:
   """Per-WS PTY loop: spawn `tmux attach`, pump bytes, handle pty_input/pty_resize.
 
   Returns when the WebSocket disconnects or the PTY exits. Called from the
   session WebSocket handler after subscription + catchup.
+
+  A v2 task node launches its terminal through the context boundary: one Run
+  per actual terminal launch, carrying the committed instruction snapshot, the
+  run's own signed credential, and the (pid, pid_start) identity — the same
+  Run/credential owners as a headless launch. Re-attaching a live terminal
+  never creates a Run or relaunches anything; a later explicit terminal launch
+  uses the current rules.
   """
+  sessions_dir = cfg.sessions_dir
+  launch: "TuiTaskLaunch | None" = None
   try:
-    await ensure_tmux_session(session_id, sessions_dir / session_id)
+    # Lazy: the launch seam lives with the other Run owners, whose module must
+    # not be pulled onto this transport module's import path.
+    from src.core.task_execution import TuiTaskLaunch, prepare_tui_task_launch
+    launch = await prepare_tui_task_launch(cfg, session_id, task_tree)
+  except Exception as e:  # surface to client
+    log.exception("tui_task_launch_failed", session_id=session_id)
+    with contextlib.suppress(Exception):
+      await websocket.send_json({"type": PTY_EXIT, "error": str(e)})
+    return
+  try:
+    if launch is None:
+      await ensure_tmux_session(session_id, sessions_dir / session_id)
+    else:
+      await ensure_tmux_session(
+          session_id,
+          sessions_dir / session_id,
+          model=launch.model,
+          native_session_id=launch.native_session_id,
+          inject_env=launch.inject_env,
+          instructions_text=launch.instructions_text,
+      )
+      await launch.record_process()
   except Exception as e:  # surface to client
     log.exception("tui_ensure_session_failed", session_id=session_id)
     with contextlib.suppress(Exception):
       await websocket.send_json({"type": PTY_EXIT, "error": str(e)})
     return
+  finally:
+    if launch is not None:
+      from src.core.task_execution import release_tui_launch
+      release_tui_launch(session_id)
 
   attachment = PtyAttachment(session_id)
   try:

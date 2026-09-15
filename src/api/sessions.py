@@ -2,6 +2,7 @@
 
 import asyncio
 import gzip
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -41,6 +42,7 @@ from src.core.config import (
   get_config,
   get_scheduled_tasks,
 )
+from src.core.control_events import sha256_hex
 from src.core.event_types import BACKEND_SWITCHED
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo
@@ -85,6 +87,8 @@ from src.core.sessions import (
   SuccessionRefused,
 )
 from src.core.takeoff_gate import DelegationBlockedError
+from src.core.task_execution import assemble_coherent_snapshot
+from src.core.task_prompts import PromptSnapshot, TaskPromptError
 from src.core.task_sessions import (
   TaskConflictError,
   TaskForbiddenError,
@@ -529,6 +533,7 @@ async def stop_tui(
     session_id: str,
     meta: SessionMetadata = Depends(require_session),
     cfg: CharlieBotConfig = Depends(get_config),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> dict:
   option = cfg.get_backend_option(meta.backend)
   if option is None or option.type != BackendType.TUI_CLI:
@@ -536,6 +541,22 @@ async def stop_tui(
 
   from src.agents.backends.tui import kill_tmux_session
   await kill_tmux_session(session_id)
+  # The explicit stop is a real terminal outcome, not a completion: the TUI
+  # Run's process ended without a result, and its durable terminal fact is the
+  # same first-fact-wins record every other Run uses. Silence or detach alone
+  # lands nothing.
+  if meta.profile is not None:
+    from src.core.runs import RunNotFoundError
+    for run in await asyncio.to_thread(task_mgr.runs.list_run_records_sync, session_id):
+      if run.kind != "manager_turn" or run.pid is None:
+        continue
+      events = task_mgr.runs.load_events_sync(session_id)
+      if task_mgr.runs.run_has_terminal_fact(run, events):
+        continue
+      try:
+        await task_mgr.runs.record_finish(session_id, run.id, "interrupted")
+      except RunNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
   return {"stopped": True}
 
 
@@ -628,6 +649,9 @@ class SessionDetailResponse(SessionMetadata):
   work_state: WorkState = "idle"
   archived: bool = False
   ancestors: list[AncestorRef] = []
+  # The scope/source/current-rule facts the later Task/Context UI reads; body
+  # content stays in the immutable prompt_bodies store.
+  prompt_rules: dict = {}
 
 
 class TreePageResponse(BaseModel):
@@ -1313,6 +1337,119 @@ async def list_session_runs(
   except ValueError as e:
     raise bad_request(e) from e
   return RunPage(items=slice_.items, next_cursor=slice_.next_cursor)
+
+
+@router.get("/{session_id}/effective-prompt")
+async def get_effective_prompt(
+    session_id: str,
+    kind: str | None = Query(default=None),
+    _meta: SessionMetadata = Depends(require_session),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+) -> dict:
+  """The next-start snapshot-shaped preview: one assembly path with the launch.
+
+  ``kind`` selects the Run kind and defaults from the profile (manager_turn for
+  a manager, work for a worker); an unknown kind is an explicit 400. A queued
+  preview is the current configuration; after launch the historical endpoint
+  (``/runs/{run_id}/context``) is authoritative. Read-only: never launches a
+  process, mutates a native anchor, or manufactures inputs.
+  """
+  meta = await _require_task_meta(task_mgr, session_id)
+  default_kind = "manager_turn" if meta.profile == "manager" else "work"
+  resolved_kind = kind or default_kind
+  if resolved_kind not in ("manager_turn", "work", "review", "iteration", "scheduled_step"):
+    raise HTTPException(status_code=400, detail=f"unknown run kind: {kind!r}")
+  option = cfg.get_backend_option(meta.backend) if meta.backend else None
+  if option is None:
+    raise HTTPException(status_code=400, detail=f"task {session_id} has no resolvable backend")
+  try:
+    snapshot, overlay_error, declared = await assemble_coherent_snapshot(
+        cfg, task_mgr, meta, resolved_kind, option)
+  except TaskPromptError as e:
+    raise HTTPException(status_code=500, detail=str(e)) from e
+  payload = {
+      "session_id": session_id,
+      "kind": resolved_kind,
+      "mode": "preview",
+      "overlay": {
+          "declared": declared,
+          "error": type(overlay_error).__name__ if overlay_error is not None else None,
+      },
+  }
+  payload.update(snapshot.to_json_dict())
+  return payload
+
+
+async def _require_task_meta(task_mgr: TaskTreeManager, session_id: str) -> SessionMetadata:
+  """The task metadata a context read needs, with the task-tree 404/400 mapping."""
+  meta = await task_mgr.load_meta(session_id)
+  if meta is None:
+    raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
+  if meta.profile is None:
+    raise HTTPException(
+        status_code=400, detail=f"session {session_id} is not a task-tree node (no profile)")
+  return meta
+
+
+@router.get("/{session_id}/runs/{run_id}/context")
+async def get_run_context(
+    session_id: str,
+    run_id: str,
+    _meta: SessionMetadata = Depends(require_session),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+) -> dict:
+  """One historical Run's stored startup snapshot plus its pinned evidence references.
+
+  The snapshot is the committed object of record (blocks, provenance, hash,
+  char_count) — the startup injection, never a recomposition from current
+  sources. Runs predating the context stage carry only a raw launch-text file:
+  reported as explicitly limited legacy evidence, never fabricated into full
+  provenance. Read-only and history-immutable.
+  """
+  run = await task_mgr.runs.get_run(session_id, run_id)
+  if run is None:
+    raise HTTPException(status_code=404, detail=f"run {run_id} not found in task {session_id}")
+  snapshot_payload: dict | None = None
+  legacy_prompt: dict | None = None
+  if run.prompt_snapshot_ref and Path(run.prompt_snapshot_ref).is_file():
+    try:
+      stored = json.loads(Path(run.prompt_snapshot_ref).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+      raise HTTPException(
+          status_code=500,
+          detail=f"stored prompt snapshot unreadable at {run.prompt_snapshot_ref}: {e}") from e
+    try:
+      snapshot_payload = PromptSnapshot.from_json_dict(stored).to_json_dict()
+    except TaskPromptError as e:
+      raise HTTPException(status_code=500, detail=str(e)) from e
+  else:
+    legacy_path = task_mgr.runs.run_dir(session_id, run_id) / "launch_prompt.md"
+    if legacy_path.is_file():
+      legacy_prompt = {
+          "ref": str(legacy_path),
+          "sha256": sha256_hex(legacy_path.read_text(encoding="utf-8")),
+          "note": (
+              "raw launch text recorded before the context stage: the managed "
+              "instructions are visible but per-source provenance was not "
+              "recorded, so this is limited evidence, not a full snapshot"),
+      }
+  return {
+      "session_id": session_id,
+      "run_id": run_id,
+      "kind": run.kind,
+      "mode": "historical",
+      "snapshot": snapshot_payload,
+      "legacy_prompt": legacy_prompt,
+      "task_spec": (
+          {"ref": run.task_spec_ref, "sha256": run.task_spec_hash}
+          if run.task_spec_ref else None),
+      "logs": {
+          "raw_log_ref": run.raw_log_ref,
+          "events_ref": run.events_ref,
+          "result_ref": run.result_ref,
+      },
+  }
 
 
 @router.post("/{session_id}/retry")

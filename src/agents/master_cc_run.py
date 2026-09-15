@@ -676,61 +676,69 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   if backend_type_allows_missing_model(option.type) and option.model is not None:
     option = option.model_copy(update={"model": None})
 
-  # Three-state overlay judgment on the wake path, never at config-load time
-  # (a hot reload would swallow a load-time exception as a warning and keep the
-  # old config). None (absent key or explicit YAML null) = undeclared: run
-  # without a fence and emit the unified overlay-inactive alert with
-  # reason="undeclared"; the literal string "none" = explicitly no overlay:
-  # pass None, silent, no alert; any other string names the overlay file
-  # (without ".md") under prompts/model_overlays/, read by the builder — a
-  # read failure degrades the same way as undeclared: fenceless run plus the
-  # same unified alert with reason="unreadable", never a raise.
-  prompt_overlay = option.prompt_overlay
-  if prompt_overlay is None:
-    log.warning("master_cc_overlay_undeclared", session=session_meta.id, backend=option.id)
-    await item.callbacks.persist_and_broadcast(
-        session_meta.id, {
-            "type": ET.BACKEND_OVERLAY_INACTIVE,
-            "backend": option.id,
-            "reason": "undeclared",
-        })
-  elif prompt_overlay == "none":
-    prompt_overlay = None
-  # Any other string is the overlay filename (sans ".md"); pass it through.
+  if item.task_instructions is not None:
+    # A v2 task turn delivers the context owner's committed snapshot bytes and
+    # never runs the v1 builder: no second memory/project/PM injection. The
+    # overlay judgment (with its unified alert) already happened at the launch
+    # seam, so nothing is re-judged or re-alerted here.
+    instructions_content: str | None = item.task_instructions
+  else:
+    # Three-state overlay judgment on the wake path, never at config-load time
+    # (a hot reload would swallow a load-time exception as a warning and keep the
+    # old config). None (absent key or explicit YAML null) = undeclared: run
+    # without a fence and emit the unified overlay-inactive alert with
+    # reason="undeclared"; the literal string "none" = explicitly no overlay:
+    # pass None, silent, no alert; any other string names the overlay file
+    # (without ".md") under prompts/model_overlays/, read by the builder — a
+    # read failure degrades the same way as undeclared: fenceless run plus the
+    # same unified alert with reason="unreadable", never a raise.
+    prompt_overlay = option.prompt_overlay
+    if prompt_overlay is None:
+      log.warning("master_cc_overlay_undeclared", session=session_meta.id, backend=option.id)
+      await item.callbacks.persist_and_broadcast(
+          session_meta.id, {
+              "type": ET.BACKEND_OVERLAY_INACTIVE,
+              "backend": option.id,
+              "reason": "undeclared",
+          })
+    elif prompt_overlay == "none":
+      prompt_overlay = None
+    # Any other string is the overlay filename (sans ".md"); pass it through.
 
-  instructions_content = await asyncio.to_thread(_build_instructions_content, session_meta, cfg, prompt_overlay)
-  overlay_error = getattr(instructions_content, "overlay_error", None)
-  if overlay_error is not None:
-    log.warning(
-        "master_cc_overlay_unreadable",
-        session=session_meta.id,
-        backend=option.id,
-        overlay=prompt_overlay,
-        error=type(overlay_error).__name__,
-        detail=str(overlay_error),
-    )
-    await item.callbacks.persist_and_broadcast(
-        session_meta.id, {
-            "type": ET.BACKEND_OVERLAY_INACTIVE,
-            "backend": option.id,
-            "reason": "unreadable",
-            "overlay": prompt_overlay,
-            "error": type(overlay_error).__name__,
-        })
+    instructions_content = await asyncio.to_thread(
+        _build_instructions_content, session_meta, cfg, prompt_overlay)
+    overlay_error = getattr(instructions_content, "overlay_error", None)
+    if overlay_error is not None:
+      log.warning(
+          "master_cc_overlay_unreadable",
+          session=session_meta.id,
+          backend=option.id,
+          overlay=prompt_overlay,
+          error=type(overlay_error).__name__,
+          detail=str(overlay_error),
+      )
+      await item.callbacks.persist_and_broadcast(
+          session_meta.id, {
+              "type": ET.BACKEND_OVERLAY_INACTIVE,
+              "backend": option.id,
+              "reason": "unreadable",
+              "overlay": prompt_overlay,
+              "error": type(overlay_error).__name__,
+          })
 
-  # Project-layer failure is fatal, unlike the overlay: an enabled project
-  # whose config or applicable body cannot be read must not run a turn with
-  # missing rules. The next new turn re-reads the files.
-  project_error = getattr(instructions_content, "project_error", None)
-  if project_error is not None:
-    msg = f"project instruction loading failed: {project_error}"
-    log.error(
-        "master_cc_project_instructions_failed",
-        session=session_meta.id,
-        group=session_meta.group,
-        error=str(project_error),
-    )
-    return await _refuse_turn(item, msg)
+    # Project-layer failure is fatal, unlike the overlay: an enabled project
+    # whose config or applicable body cannot be read must not run a turn with
+    # missing rules. The next new turn re-reads the files.
+    project_error = getattr(instructions_content, "project_error", None)
+    if project_error is not None:
+      msg = f"project instruction loading failed: {project_error}"
+      log.error(
+          "master_cc_project_instructions_failed",
+          session=session_meta.id,
+          group=session_meta.group,
+          error=str(project_error),
+      )
+      return await _refuse_turn(item, msg)
 
   pooled = claude_accounts.is_pooled(option, cfg)
   account: ClaudeAccount | None = None
@@ -738,7 +746,17 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   last_request_at: datetime | None = None
   if pooled and item.callbacks.claude_context_state is not None:
     context_tokens, last_request_at = await item.callbacks.claude_context_state(session_meta.id, session_meta)
-  resume_id = _resolve_resume_id(option, session_meta, cfg=cfg)
+  # A v2 fresh-native launch never resumes: the instruction hash or backend
+  # identity changed, so the previous conversation is not this launch's
+  # context. The adapter clears the stale anchor at spawn (after the process
+  # exists — a failed spawn leaves the usable old anchor intact).
+  fresh_native = item.task_run is not None and item.task_run.fresh_native_context
+  if fresh_native:
+    # The in-memory whole-object writes this turn may make (usage, account,
+    # thinking state) must carry the cleared anchor, not the stale one the
+    # item was enqueued with; the durable clearing itself happens at spawn.
+    session_meta.cc_session_id = None
+  resume_id = None if fresh_native else _resolve_resume_id(option, session_meta, cfg=cfg)
   if pooled:
     # The pool picks the login for this turn, moves the transcript to it when the
     # account changes, and compacts a large Fable context when the cache is cold.
@@ -753,7 +771,8 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   # id, when the session already has an anchor on disk or a completed round, is
   # about to start a zero-context conversation. Fail loudly unless the caller
   # declared a fresh start (the scheduled-session weekly-recycle path).
-  if (option.type in _RESUME_CAPABLE_BACKEND_TYPES and not resume_id and not item.expect_fresh_session):
+  if (option.type in _RESUME_CAPABLE_BACKEND_TYPES and not resume_id
+      and not item.expect_fresh_session and not fresh_native):
     anchor_on_disk = session_meta.cc_session_id
     if anchor_on_disk or await item.callbacks.has_completed_round(session_meta.id):
       reason = "transcript_missing" if anchor_on_disk else "anchor_missing"

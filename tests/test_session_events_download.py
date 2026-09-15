@@ -9,10 +9,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_OPTION, gzip_counting_compress, gzip_explode_compress
+from conftest import OPUS_BACKEND_OPTION, gzip_counting_compress, gzip_explode_compress, mount_production_gzip
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from starlette.middleware.gzip import GZipMiddleware
 
 import src.api.sessions as sessions_api
 from src.api.sessions import router as sessions_router
@@ -31,11 +30,11 @@ def _client(cfg: CharlieBotConfig) -> TestClient:
 
 
 def _gzip_client(cfg: CharlieBotConfig) -> TestClient:
-  """The sessions router behind the gzip middleware every production request
-  passes through, so the test sees the skip the pre-compressed body buys."""
+  """The sessions router behind the production gzip mount, so the test sees the
+  skip the pre-compressed body buys."""
   app = FastAPI()
   app.include_router(sessions_router, prefix="/api/sessions")
-  app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1)
+  mount_production_gzip(app)
   app.dependency_overrides[sessions_api.get_config] = lambda: cfg
   return TestClient(app)
 

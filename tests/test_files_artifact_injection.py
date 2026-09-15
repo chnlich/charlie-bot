@@ -5,10 +5,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import gzip_explode_compress, stub_credentials
+from conftest import gzip_explode_compress, mount_production_gzip, stub_credentials
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from starlette.middleware.gzip import GZipMiddleware
 
 from src.api import files as files_api
 from src.api import pages as pages_api
@@ -247,11 +246,11 @@ def test_serve_file_clean_reinjects_when_page_is_rewritten(sessions_root: Path) 
 
 
 def _build_gzip_client(access_key: str | None) -> TestClient:
-  """The files router behind the gzip middleware every production request
-  passes through, so the test sees the skip the pre-compressed response buys."""
+  """The files router behind the production gzip mount, so the test sees the
+  skip the pre-compressed response buys."""
   app = FastAPI()
   app.include_router(files_api.router, prefix="/files")
-  app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1)
+  mount_production_gzip(app)
   cookies = {"charliebot_access_key": access_key} if access_key is not None else None
   return TestClient(app, cookies=cookies)
 

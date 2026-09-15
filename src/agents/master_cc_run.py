@@ -442,13 +442,8 @@ def _build_prompt(user_content: str, is_voice: bool) -> str:
 
 
 def _cc_transcript_exists(config_dir: Path, cc_session_id: str) -> bool:
-  """True when *config_dir* holds a resumable transcript for *cc_session_id*.
-
-  Top-level conversations live at projects/<cwd-slug>/<uuid>.jsonl; the glob avoids
-  depending on Claude Code's undocumented cwd-slug rule. Files nested deeper are
-  subagent logs named agent-*.jsonl and cannot collide with a conversation uuid.
-  """
-  return any((config_dir / "projects").glob(f"*/{cc_session_id}.jsonl"))
+  """True when *config_dir* holds a resumable transcript for *cc_session_id*."""
+  return bool(claude_accounts.transcript_matches(config_dir, cc_session_id))
 
 
 def _resolve_resume_id(

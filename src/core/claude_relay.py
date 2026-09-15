@@ -149,22 +149,27 @@ def move_to_next_account(
     current: ClaudeAccount,
     cc_session_id: str | None,
     now: datetime | None = None,
-) -> tuple[ClaudeAccount | None, str | None]:
+) -> tuple[ClaudeAccount | None, str | None, ClaudeAccount | None]:
   """Choose the account with the most headroom besides *current* and copy the transcript there.
 
-  Returns ``(account, None)``, or ``(None, error)`` when the pool is exhausted,
-  the transcript has no id yet, or the copy failed; the caller ends the run loudly.
+  Returns ``(account, None, None)``, or ``(None, error, refused_holder)``: the
+  pool exhausted and the transcript-missing cases leave *refused_holder* None,
+  and a copy the newer-transcript guard refused carries the destination account
+  holding the newer transcript. This module never redirects a refused move --
+  adopting *refused_holder* and continuing the run from it is the consumer's
+  decision; a consumer that has none ends the run loudly on *error*.
   """
   if not cc_session_id:
-    return None, "Claude account relay impossible: the run produced no session id to resume."
+    return None, "Claude account relay impossible: the run produced no session id to resume.", None
   nxt = claude_accounts.select(cfg, model, exclude={current.label}, now=now)
   if nxt is None:
-    return None, pool_exhausted_message(cfg, now)
+    return None, pool_exhausted_message(cfg, now), None
   try:
     claude_accounts.move_transcript(cc_session_id, current.config_dir, nxt.config_dir)
   except claude_accounts.TranscriptMoveError as exc:
-    return None, f"Claude account relay failed: {exc}"
-  return nxt, None
+    refused = claude_accounts.is_newer_transcript_refusal(exc)
+    return None, f"Claude account relay failed: {exc}", nxt if refused else None
+  return nxt, None, None
 
 
 class PoolExhaustedError(Exception):

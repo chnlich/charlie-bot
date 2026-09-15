@@ -894,15 +894,33 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
         error_msg = claude_relay.relay_limit_message()
         exit_code = 1
         break
-      next_account, relay_error = await master_cc_relay.prepare_relay(
+      next_account, relay_error, refused_holder = await master_cc_relay.prepare_relay(
           cfg, item, option, cc_session_id, account, cwd, decision)
       if next_account is None:
-        error_msg = relay_error
-        exit_code = 1
-        break
+        if refused_holder is None:
+          error_msg = relay_error
+          exit_code = 1
+          break
+        # The mid-turn move hit the newer-transcript guard: the destination
+        # holds the newer copy (the kill between a previous relay's move and
+        # its persist, or an unknown defect). Same predicate and reaction as
+        # the placement layer's self-heal -- adopt the destination, persist it
+        # through the funnel, continue the turn from it; a refusal the copy on
+        # disk already answers never fails the turn.
+        await master_cc_relay.adopt_transcript_holder(
+            item, cc_session_id, refused_holder, account.label, reason="guard_refused_newer_transcript")
+        next_account = refused_holder
+      # Counted toward the relay cap like any other account change, so even a
+      # pathological refusal loop ends loudly at the same bound.
       relays += 1
       account = next_account
       session_meta.claude_account = account.label
+      # The relay's label persist point: disk carries the new account from the
+      # moment the continuation is built, not at round end (the placement and
+      # refusal paths persist through the same funnel; an unchanged account
+      # skips the write inside it).
+      if item.callbacks.persist_claude_account is not None:
+        await item.callbacks.persist_claude_account(session_meta.id, account.label)
       spawn_prompt = claude_relay.CONTINUATION_PROMPT
       spawn_flags, spawn_resume_id = _build_extra_flags(option, cc_session_id, item)
 

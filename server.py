@@ -253,118 +253,126 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   # See src/core/home_writer_fence.py — the flock is the exclusion, the
   # identity record is only the holder's name plate.
   from src.core.home_writer_fence import HomeWriterActiveError, acquire_home_writer_fence
+  writer_fence = None
   try:
     writer_fence = acquire_home_writer_fence(cfg.charliebot_home, purpose="server startup")
   except HomeWriterActiveError as e:
     log.error("server_startup_refused_home_writer_fence", home=str(cfg.charliebot_home),
               error=str(e))
     raise
-
-  # Capture build info (git SHA + start time) for the /api/internal/version endpoint
-  # and the CLI version-skew hint. Runs synchronously; ~2 s worst case for git rev-parse.
-  init_build_info()
-
-  # Ensure home directory structure exists (fast, mandatory part of startup).
-  await init_charliebot_home()
-  log.info("charliebot_home_ready", path=str(cfg.charliebot_home))
-
-  # Session memory-cap cgroups: the one boot line stating whether
-  # the feature is on for this host (off when the cap is 0 or the delegated
-  # app.slice is missing/unwritable), plus a warning when a configured backend
-  # spawns through the shared tmux server (claude-sub / tui-cli) and therefore
-  # escapes fork-time cgroup placement. Then sweep cgroup directories a
-  # previous server life left behind (empty ones only).
-  uncovered_backends = any(
-      option.type == BackendType.TUI_CLI or
-      (option.type == BackendType.CC_CLAUDE and option.cli_binary == "claude-sub") for option in cfg.backends.options)
-  log_session_cgroup_startup(cfg.server.session_memory_max_mb, cfg.server.session_swap_max_mb, uncovered_backends)
-  sweep_stale_session_cgroups()
-
-  # Crash recovery / worktree quarantine / stale-thinking cleanup scans every
-  # thread's metadata (O(history)). Run it off the critical path so the server
-  # reaches readiness immediately; boot_time guards against killing a worker
-  # spawned during the recovery window.
-  #
-  # The master_run identity judgment is the exception: master_run is a single
-  # slot per session that a new turn overwrites unconditionally, so the
-  # judgment must complete before any door that can start a new turn — the
-  # worker-finalize chain dispatched by this same background task,
-  # scheduler.start(), and trigger_mgr.recover_pending() below. Barrier on it
-  # with a timeout; the shield keeps the one judgment running past the bound
-  # and the recovery task re-awaits that same task for the replay pass.
-  session_mgr = session_manager()
-  identity = asyncio.create_task(reconcile_master_identity(cfg, session_mgr, boot_time))
+  # Every exit path of a still-live process releases the exclusion: a startup
+  # failure after acquisition, and any exception during shutdown, must not
+  # leave this process holding (or owning the identity of) the fence. The
+  # kernel only reclaims the flock when the process dies; a lifespan failure
+  # does not kill it.
   try:
-    await asyncio.wait_for(asyncio.shield(identity), timeout=timeouts.MASTER_IDENTITY_BARRIER_TIMEOUT)
-  except TimeoutError:
-    log.warning("master_identity_barrier_timeout", timeout_s=timeouts.MASTER_IDENTITY_BARRIER_TIMEOUT)
-  except Exception:
-    pass  # reported where the task is awaited: crash recovery logs it loudly
-  app.state.recovery_task = asyncio.create_task(_run_crash_recovery(cfg, boot_time, identity))
-  app.state.speech_model_task = create_logged_task(
-      asyncio.to_thread(_provision_speech_models, cfg), name="speech-model-provisioning")
 
-  # Task-tree (v2) reconciliation is the startup owner's own pass and belongs
-  # BEFORE any door that can start a competing process: a new chat input, a
-  # cron fire, or a recovered trigger must not launch while a recorded live
-  # run is still unattached, a pending batch unclaimed, or a sequence
-  # boundary unreconciled. The scan is bounded to this configured instance's
-  # own sessions directory and its owned records. The legacy (v1) scan stays
-  # on the background task above for unmigrated v1 sessions only.
-  try:
-    from src.core.task_recovery import reconcile_task_tree
-    task_tree_stats = await reconcile_task_tree(cfg, task_manager(), session_mgr)
-    log.info("task_tree_recovery_done", **task_tree_stats)
-  except Exception:
-    log.exception("task_tree_recovery_failed")
+    # Capture build info (git SHA + start time) for the /api/internal/version endpoint
+    # and the CLI version-skew hint. Runs synchronously; ~2 s worst case for git rev-parse.
+    init_build_info()
 
-  scheduler = Scheduler(cfg, session_mgr)
-  app.state.scheduler = scheduler
-  await scheduler.start()
+    # Ensure home directory structure exists (fast, mandatory part of startup).
+    await init_charliebot_home()
+    log.info("charliebot_home_ready", path=str(cfg.charliebot_home))
 
-  trigger_mgr = TriggerManager(cfg, session_mgr)
-  set_trigger_manager(trigger_mgr)
-  app.state.trigger_mgr = trigger_mgr
-  await trigger_mgr.recover_pending()
+    # Session memory-cap cgroups: the one boot line stating whether
+    # the feature is on for this host (off when the cap is 0 or the delegated
+    # app.slice is missing/unwritable), plus a warning when a configured backend
+    # spawns through the shared tmux server (claude-sub / tui-cli) and therefore
+    # escapes fork-time cgroup placement. Then sweep cgroup directories a
+    # previous server life left behind (empty ones only).
+    uncovered_backends = any(
+        option.type == BackendType.TUI_CLI or
+        (option.type == BackendType.CC_CLAUDE and option.cli_binary == "claude-sub") for option in cfg.backends.options)
+    log_session_cgroup_startup(cfg.server.session_memory_max_mb, cfg.server.session_swap_max_mb, uncovered_backends)
+    sweep_stale_session_cgroups()
 
-  await ext_usage.start_poller()
+    # Crash recovery / worktree quarantine / stale-thinking cleanup scans every
+    # thread's metadata (O(history)). Run it off the critical path so the server
+    # reaches readiness immediately; boot_time guards against killing a worker
+    # spawned during the recovery window.
+    #
+    # The master_run identity judgment is the exception: master_run is a single
+    # slot per session that a new turn overwrites unconditionally, so the
+    # judgment must complete before any door that can start a new turn — the
+    # worker-finalize chain dispatched by this same background task,
+    # scheduler.start(), and trigger_mgr.recover_pending() below. Barrier on it
+    # with a timeout; the shield keeps the one judgment running past the bound
+    # and the recovery task re-awaits that same task for the replay pass.
+    session_mgr = session_manager()
+    identity = asyncio.create_task(reconcile_master_identity(cfg, session_mgr, boot_time))
+    try:
+      await asyncio.wait_for(asyncio.shield(identity), timeout=timeouts.MASTER_IDENTITY_BARRIER_TIMEOUT)
+    except TimeoutError:
+      log.warning("master_identity_barrier_timeout", timeout_s=timeouts.MASTER_IDENTITY_BARRIER_TIMEOUT)
+    except Exception:
+      pass  # reported where the task is awaited: crash recovery logs it loudly
+    app.state.recovery_task = asyncio.create_task(_run_crash_recovery(cfg, boot_time, identity))
+    app.state.speech_model_task = create_logged_task(
+        asyncio.to_thread(_provision_speech_models, cfg), name="speech-model-provisioning")
 
-  slack_listener_task = None
-  creds = get_credentials()
-  if creds.get("slack", "bot_token") and creds.get("slack", "app_token") and cfg.slack.allowed_user_ids:
-    from src.core.slack_listener import (
-        run_listener,  # lazy: avoids import cycle at module scope
-    )
+    # Task-tree (v2) reconciliation is the startup owner's own pass and belongs
+    # BEFORE any door that can start a competing process: a new chat input, a
+    # cron fire, or a recovered trigger must not launch while a recorded live
+    # run is still unattached, a pending batch unclaimed, or a sequence
+    # boundary unreconciled. The scan is bounded to this configured instance's
+    # own sessions directory and its owned records. The legacy (v1) scan stays
+    # on the background task above for unmigrated v1 sessions only.
+    try:
+      from src.core.task_recovery import reconcile_task_tree
+      task_tree_stats = await reconcile_task_tree(cfg, task_manager(), session_mgr)
+      log.info("task_tree_recovery_done", **task_tree_stats)
+    except Exception:
+      log.exception("task_tree_recovery_failed")
 
-    slack_listener_task = create_logged_task(run_listener(cfg, session_mgr), name="slack-listener")
-    app.state.slack_listener_task = slack_listener_task
-    app.state.slack_backfill_task = create_logged_task(
-        _run_slack_backfill(cfg, session_mgr, app.state.recovery_task), name="slack-backfill")
-    log.info("slack_entrypoint_started")
-  else:
-    log.info("slack_entrypoint_off")
+    scheduler = Scheduler(cfg, session_mgr)
+    app.state.scheduler = scheduler
+    await scheduler.start()
 
-  log.info("server_ready", ready_in_ms=round((utc_now() - boot_time).total_seconds() * 1000))
-  yield
+    trigger_mgr = TriggerManager(cfg, session_mgr)
+    set_trigger_manager(trigger_mgr)
+    app.state.trigger_mgr = trigger_mgr
+    await trigger_mgr.recover_pending()
 
-  speech_model_task = getattr(app.state, "speech_model_task", None)
-  if speech_model_task is not None and not speech_model_task.done():
-    speech_model_task.cancel()
-    with suppress(asyncio.CancelledError):
-      await speech_model_task
-  for attr in ("slack_listener_task", "slack_backfill_task"):
-    task = getattr(app.state, attr, None)
-    if task is not None and not task.done():
-      task.cancel()
+    await ext_usage.start_poller()
+
+    slack_listener_task = None
+    creds = get_credentials()
+    if creds.get("slack", "bot_token") and creds.get("slack", "app_token") and cfg.slack.allowed_user_ids:
+      from src.core.slack_listener import (
+          run_listener,  # lazy: avoids import cycle at module scope
+      )
+
+      slack_listener_task = create_logged_task(run_listener(cfg, session_mgr), name="slack-listener")
+      app.state.slack_listener_task = slack_listener_task
+      app.state.slack_backfill_task = create_logged_task(
+          _run_slack_backfill(cfg, session_mgr, app.state.recovery_task), name="slack-backfill")
+      log.info("slack_entrypoint_started")
+    else:
+      log.info("slack_entrypoint_off")
+
+    log.info("server_ready", ready_in_ms=round((utc_now() - boot_time).total_seconds() * 1000))
+    yield
+
+    speech_model_task = getattr(app.state, "speech_model_task", None)
+    if speech_model_task is not None and not speech_model_task.done():
+      speech_model_task.cancel()
       with suppress(asyncio.CancelledError):
-        await task
-  await ext_usage.stop_poller()
-  await close_http_client()
-  await scheduler.stop()
-  await streaming_manager.close_all()
-  pages.shutdown_merge_executor()
-  if writer_fence is not None:
-    writer_fence.release()
+        await speech_model_task
+    for attr in ("slack_listener_task", "slack_backfill_task"):
+      task = getattr(app.state, attr, None)
+      if task is not None and not task.done():
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+          await task
+      await ext_usage.stop_poller()
+      await close_http_client()
+      await scheduler.stop()
+      await streaming_manager.close_all()
+      pages.shutdown_merge_executor()
+  finally:
+    if writer_fence is not None:
+      writer_fence.release()
   log.info("charliebot_shutdown")
 
 

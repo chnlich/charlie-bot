@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shlex
+import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -612,3 +614,220 @@ def test_predecessor_threads_and_trigger_own_the_tail_task(
   resolved = aliases.resolve_thread(fx.S_PREDECESSOR, fx.T_COMPLETED)
   assert resolved == {"session_id": tail_workers[0].id,
                       "run_id": tree.runs.list_run_records_sync(tail_workers[0].id)[0].id}
+
+
+# ---------------------------------------------------------------------------
+# Quiescence: supported process bindings, writer ancestors, boot identity
+# ---------------------------------------------------------------------------
+
+
+_REPO_ROOT = str(Path(__file__).parent.parent)
+
+_SCAN_CODE = (
+    "import json, sys\n"
+    f"sys.path.insert(0, {_REPO_ROOT!r})\n"
+    "from src.core.session_tree_migration import scan_live_home_processes\n"
+    "from pathlib import Path\n"
+    "print(json.dumps(scan_live_home_processes(Path(sys.argv[1]),\n"
+    "    default_home=Path(sys.argv[2]) if sys.argv[2] != '-' else None)))\n"
+)
+
+
+def _wait_for_scan_output(proc: subprocess.Popen, timeout: float = 20.0) -> list[dict]:
+  try:
+    out, _ = proc.communicate(timeout=timeout)
+  except subprocess.TimeoutExpired:
+    proc.kill()
+    proc.communicate()
+    raise
+  assert proc.returncode == 0, out
+  return json.loads(out.strip().splitlines()[-1])
+
+
+def test_scan_reports_a_writer_ancestor_and_excludes_launchers(
+    tmp_path: Path) -> None:
+  """A server-bound ancestor that launched the scan is reported; a shell that
+  merely forwarded the environment is not."""
+  home = tmp_path / "home"
+  (home / "sessions").mkdir(parents=True)
+  server_script = tmp_path / "server.py"
+  server_script.write_text(
+      "import json, subprocess, sys\n"
+      f"out = subprocess.run([sys.executable, '-c', {_SCAN_CODE!r}, sys.argv[1], sys.argv[2]],\n"
+      "                     capture_output=True, text=True)\n"
+      "print(out.stdout.strip().splitlines()[-1])\n",
+      encoding="utf-8")
+  env = dict(os.environ)
+  env["CHARLIEBOT_HOME"] = str(home)
+  # The writer-ancestor case: a server-entrypoint process bound to this home
+  # launched the scan.
+  server = subprocess.Popen([sys.executable, str(server_script), str(home), "-"],
+                            env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+  try:
+    hits = _wait_for_scan_output(server)
+  finally:
+    if server.poll() is None:
+      server.kill()
+      server.wait()
+  mine = [h for h in hits if h["pid"] == server.pid]
+  assert len(mine) == 1
+  assert mine[0]["kind"] == "live_writer_ancestor"
+  assert "server.py" in mine[0]["cmdline"]
+  # The launcher case: a bash ancestor that exported the same variable is not
+  # a home writer and is not reported.
+  scan_script = tmp_path / "scan_processes.py"
+  scan_script.write_text(_SCAN_CODE, encoding="utf-8")
+  launcher = subprocess.Popen(
+      ["bash", "-c",
+       f"export CHARLIEBOT_HOME={shlex.quote(str(home))}; "
+       f"{shlex.quote(sys.executable)} {shlex.quote(str(scan_script))} "
+       f"{shlex.quote(str(home))} -"],
+      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+  try:
+    hits = _wait_for_scan_output(launcher)
+  finally:
+    if launcher.poll() is None:
+      launcher.kill()
+      launcher.wait()
+  assert hits == [], hits
+
+
+def test_scan_default_home_fallback_for_writer_entrypoints(tmp_path: Path) -> None:
+  """Without an explicit CHARLIEBOT_HOME, only writer-entrypoint command lines
+  bind a process to the default home — and only when this home IS the default."""
+  home = tmp_path / "home"
+  (home / "sessions").mkdir(parents=True)
+  server_script = tmp_path / "server.py"
+  server_script.write_text("import time; time.sleep(120)\n", encoding="utf-8")
+  env = dict(os.environ)
+  env.pop("CHARLIEBOT_HOME", None)
+  server = subprocess.Popen([sys.executable, str(server_script)], env=env,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+  plain = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"], env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+  try:
+    from src.core.session_tree_migration import scan_live_home_processes
+    # This home resolves as the default: the writer entrypoint is a blocker,
+    # the unrelated plain process is not.
+    hits = scan_live_home_processes(home, default_home=home)
+    by_pid = {h["pid"]: h for h in hits}
+    assert by_pid[server.pid]["kind"] == "default_home_writer"
+    assert plain.pid not in by_pid
+    # A different default home: no binding evidence for this home at all.
+    assert scan_live_home_processes(home, default_home=tmp_path / "other") == []
+    assert scan_live_home_processes(home, default_home=None) == []
+  finally:
+    server.kill()
+    server.wait()
+    plain.kill()
+    plain.wait()
+
+
+def test_scan_unreadable_identity_is_unknown_ownership_not_death(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An environment that cannot be read never proves a writer-entrypoint
+  process innocent: it is reported as unknown ownership, never signalled."""
+  home = tmp_path / "home"
+  (home / "sessions").mkdir(parents=True)
+  server_script = tmp_path / "server.py"
+  server_script.write_text("import time; time.sleep(120)\n", encoding="utf-8")
+  env = dict(os.environ)
+  env.pop("CHARLIEBOT_HOME", None)
+  server = subprocess.Popen([sys.executable, str(server_script)], env=env,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+  plain = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"], env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+  try:
+    import src.core.session_tree_migration as migration
+
+    def unreadable_environ(pid: int) -> bytes:
+      if pid == server.pid:
+        raise OSError("simulated unreadable /proc environ")
+      return Path(f"/proc/{pid}/environ").read_bytes()
+
+    monkeypatch.setattr(migration, "_read_proc_environ", unreadable_environ)
+    hits = migration.scan_live_home_processes(home, default_home=None)
+    by_pid = {h["pid"]: h for h in hits}
+    assert by_pid[server.pid]["kind"] == "unknown_writer_identity"
+    assert "unreadable" in by_pid[server.pid]["detail"]
+    assert plain.pid not in by_pid
+  finally:
+    server.kill()
+    server.wait()
+    plain.kill()
+    plain.wait()
+
+
+def test_recorded_verdict_uses_boot_identity() -> None:
+  """A recorded start time predating the current boot is a dead instance even
+  when a same-pid process is alive now (pid reuse across a reboot)."""
+  from src.core.runs import read_pid_stat
+  from src.core.session_tree_migration import _recorded_process_verdict
+  pair = read_pid_stat(os.getpid())
+  assert pair is not None
+  pid_start, _state = pair
+  assert _recorded_process_verdict(os.getpid(), pid_start) == "alive"
+  assert _recorded_process_verdict(
+      os.getpid(), pid_start, datetime(2000, 1, 1, tzinfo=UTC)) == "dead"
+  assert _recorded_process_verdict(
+      os.getpid(), pid_start, datetime.now(UTC) - timedelta(minutes=1)) == "alive"
+  assert _recorded_process_verdict(os.getpid(), None) == "unknown"
+
+
+def test_mixed_v2_run_activity_blocks_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Mixed-home v2 Run activity is part of quiescence: a live recorded process
+  blocks, unknown identity blocks, and a finished run does not."""
+  from src.core.models import RunRecord
+  from src.core.runs import read_pid_stat
+
+  def build(name: str, record: RunRecord) -> Path:
+    home = fx.build_full_home(tmp_path / name)
+    run_dir = home / "sessions" / fx.S_V2 / "data" / "runs" / record.id
+    run_dir.mkdir(parents=True)
+    atomic_write_text(run_dir / "metadata.json", record.model_dump_json(indent=2))
+    return home
+
+  env = dict(os.environ)
+  env.pop("CHARLIEBOT_HOME", None)
+  sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"], env=env,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+  try:
+    pid_start, _state = read_pid_stat(sleeper.pid)
+    recent = datetime.now(UTC)  # a live process started this boot
+    # A live recorded process blocks apply.
+    home = build("live", RunRecord(
+        id="run-live", session_id=fx.S_V2, kind="work", backend="synth",
+        pid=sleeper.pid, pid_start=pid_start, started_at=recent))
+    point_home(monkeypatch, home)
+    manifest_path = tmp_path / "live.json"
+    dry_run(monkeypatch, home, manifest_path)
+    code, _, err = run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))
+    assert code == 1
+    payload = cli_json(err)
+    assert "quiescence" in payload["error"]
+    assert any("live_v2_run" in d and str(sleeper.pid) in d
+               for d in payload.get("details", []))
+    # An unfinished run without a provable process identity blocks too.
+    home = build("unknown", RunRecord(
+        id="run-unknown", session_id=fx.S_V2, kind="work", backend="synth",
+        pid=sleeper.pid, pid_start=None, started_at=recent))
+    point_home(monkeypatch, home)
+    manifest_path = tmp_path / "unknown.json"
+    dry_run(monkeypatch, home, manifest_path)
+    code, _, err = run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))
+    assert code == 1
+    assert any("unknown_v2_run" in d for d in cli_json(err).get("details", []))
+  finally:
+    sleeper.kill()
+    sleeper.wait()
+  # A finished run records no live writer: the same home applies.
+  home = build("finished", RunRecord(
+      id="run-finished", session_id=fx.S_V2, kind="work", backend="synth",
+      pid=sleeper.pid, pid_start=pid_start, started_at=fx.BASE, ended_at=fx.BASE,
+      exit_code=0))
+  point_home(monkeypatch, home)
+  manifest_path = tmp_path / "finished.json"
+  code, manifest, _ = dry_run(monkeypatch, home, manifest_path)
+  assert code == 0 and manifest.unresolved == []
+  assert run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))[0] == 0

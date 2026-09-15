@@ -14,6 +14,9 @@ port, or a private lock the writers ignore:
   current holder (pid, /proc start time, argv, purpose, started_at) so a
   refused caller can report exactly who holds the home. It is evidence, not
   the exclusion: the flock is.
+- **The fence's own paths are protected**: a symlinked ``state`` directory, or
+  a symlinked lock/identity file, refuses acquisition instead of placing (or
+  reading) the exclusion outside the home.
 - :func:`probe_writer_fence` answers read-only questions (is a holder alive,
   which one) for dry-run reporting. A probe never signals a process.
 
@@ -53,6 +56,10 @@ class HomeWriterActiveError(RuntimeError):
     super().__init__(f"{purpose} refused for home {home}: {detail}")
 
 
+class FencePathRefusal(RuntimeError):
+  """A fence path is unsafe (symlinked state dir, lock, or identity record)."""
+
+
 @dataclass(frozen=True)
 class FenceHolder:
   """The recorded identity of the fence's current holder."""
@@ -70,6 +77,26 @@ def fence_lock_path(home: Path) -> Path:
 
 def fence_identity_path(home: Path) -> Path:
   return home / STATE_DIR_NAME / FENCE_IDENTITY_NAME
+
+
+def _checked_fence_paths(home: Path) -> None:
+  """Refuse fence paths that would place or read the exclusion outside the home.
+
+  The state directory must be a real directory inside the home, and neither
+  fence file may be a symlink: a symlink would redirect the exclusion (or the
+  identity evidence) to whatever the link names.
+  """
+  home = Path(home)
+  state = home / STATE_DIR_NAME
+  if state.is_symlink():
+    raise FencePathRefusal(f"home state directory is a symlink: {state}")
+  if state.exists() and not state.is_dir():
+    raise FencePathRefusal(f"home state path is not a directory: {state}")
+  if not state.resolve().is_relative_to(home.resolve()):
+    raise FencePathRefusal(f"home state directory resolves outside the home: {state}")
+  for path in (fence_lock_path(home), fence_identity_path(home)):
+    if path.is_symlink():
+      raise FencePathRefusal(f"home writer fence path is a symlink: {path}")
 
 
 def _pid_start_of(pid: int) -> str | None:
@@ -98,16 +125,26 @@ class HomeWriterFence:
     self._fd: int | None = None
 
   def release(self) -> None:
-    """Drop the exclusion and the identity record (idempotent)."""
-    if self._fd is not None:
+    """Drop the exclusion and the identity record (idempotent).
+
+    The identity record is unlinked while this holder still owns the flock: a
+    successor cannot have acquired the exclusion (and written its own
+    identity) before the lock is let go, so a slow release can never erase a
+    successor's identity. Identity remains diagnostic; the lock is the
+    exclusion.
+    """
+    if self._fd is None:
+      return
+    path = fence_identity_path(self.home)
+    try:
+      if path.exists() or path.is_symlink():
+        path.unlink()
+    finally:
       try:
         fcntl.flock(self._fd, fcntl.LOCK_UN)
       finally:
         os.close(self._fd)
         self._fd = None
-      path = fence_identity_path(self.home)
-      if path.exists():
-        path.unlink()
 
   def __enter__(self) -> "HomeWriterFence":
     return self
@@ -124,12 +161,18 @@ def acquire_home_writer_fence(home: Path, *, purpose: str) -> HomeWriterFence:
   immediately instead of queueing. The identity record is written after the
   lock is held, so a crash between the two leaves the exclusion (kernel-held)
   without an identity row — a probe then reports an unidentifiable holder,
-  never a falsely free home.
+  never a falsely free home. A failed identity publication releases the lock
+  and its fd before re-raising: a half-acquired fence is never left behind in
+  a still-live process.
   """
   home = Path(home)
+  _checked_fence_paths(home)
   lock_path = fence_lock_path(home)
   lock_path.parent.mkdir(parents=True, exist_ok=True)
-  fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+  try:
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+  except OSError as e:
+    raise FencePathRefusal(f"home writer fence lock is not usable at {lock_path}: {e}") from e
   try:
     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
   except OSError as e:
@@ -145,7 +188,15 @@ def acquire_home_writer_fence(home: Path, *, purpose: str) -> HomeWriterFence:
       argv=" ".join(os.sys.argv),
       home=str(home),
   )
-  atomic_write_text(fence_identity_path(home), _holder_json(holder))
+  try:
+    atomic_write_text(fence_identity_path(home), _holder_json(holder))
+  except BaseException:
+    fence._fd = None
+    try:
+      fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+      os.close(fd)
+    raise
   log.info("home_writer_fence_acquired", home=str(home), purpose=purpose, pid=holder.pid)
   return fence
 
@@ -188,6 +239,7 @@ def probe_writer_fence(home: Path) -> dict:
   mutates nothing. The identity row names the holder when it can.
   """
   home = Path(home)
+  _checked_fence_paths(home)
   lock_path = fence_lock_path(home)
   status: dict = {
       "lock_path": str(lock_path),
@@ -197,7 +249,7 @@ def probe_writer_fence(home: Path) -> dict:
   if not lock_path.exists():
     status["exclusive_holder_alive"] = False
     return status
-  fd = os.open(lock_path, os.O_RDWR)
+  fd = os.open(lock_path, os.O_RDWR | os.O_NOFOLLOW)
   try:
     fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
     fcntl.flock(fd, fcntl.LOCK_UN)

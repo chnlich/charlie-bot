@@ -374,6 +374,48 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
   assert tree.task_state(session_id) == "open"
   assert [e for e in tree.events.load_events(session_id) if e.get("type") == ET.TASK_CLOSED] == []
 
+  # An explicit new terminal launch after the stop (the live edit changed the
+  # instruction hash): one more Run, a fresh hash-qualified native context, the
+  # updated snapshot bytes as the instruction file, and a second scoped
+  # credential — then its own explicit stop lands its own interrupted fact.
+  with client.websocket_connect(f"/ws/sessions/{session_id}?token=x") as ws3:
+    ws3.send_json({"type": "cursor", "index": 0})
+    deadline = asyncio.get_event_loop().time() + 10
+    while asyncio.get_event_loop().time() < deadline and len(start_calls) < 2:
+      await asyncio.sleep(0.05)
+  assert len(start_calls) == 2, ("the new attach never launched its terminal "
+                                 "(or produced no second Run)")
+  relaunch_call = start_calls[1]
+  relaunch_env = dict(kv.split("=", 1) for kv in relaunch_call["env_args"] if kv != "-e")
+  relaunch_argv = relaunch_call["command_args"]
+  tui_runs_now = [r for r in tree.runs.list_run_records_sync(session_id)
+                  if r.kind == "manager_turn"]
+  assert len(tui_runs_now) == 2
+  second_run_id = next(r.id for r in tui_runs_now if r.id != runs_first.id)
+  run2 = await tree.runs.get_run(session_id, second_run_id)
+  assert run2 is not None
+  relaunch_native = relaunch_argv[relaunch_argv.index("--session-id") + 1]
+  assert relaunch_native.startswith(session_id + "-")
+  assert relaunch_native != native_id  # the changed hash chose a fresh native context
+  assert relaunch_env["CHARLIEBOT_SESSION_ID"] == session_id
+  assert relaunch_env["CHARLIEBOT_RUN_TOKEN"].count(".") == 1
+  assert relaunch_env["CHARLIEBOT_RUN_TOKEN"] != "tui-op-key"
+  stored2 = json.loads(Path(run2.prompt_snapshot_ref).read_text(encoding="utf-8"))
+  assert stored2["prompt_hash"] != stored["prompt_hash"]
+  joined2 = "\n\n".join(b["text"] for b in stored2["blocks"])
+  assert (Path(relaunch_call["working_dir"]) / "CLAUDE.md").read_text(encoding="utf-8") == joined2
+  assert "Live edit while attached" in joined2  # the live rule edit reached the next launch
+  assert run2.pid == pane_proc.pid
+  assert run2.native_session_id == relaunch_native
+  stop2 = client.post(f"/api/sessions/{session_id}/tui/stop")
+  assert stop2.status_code == 200, stop2.text
+  assert killed == [session_id, session_id]
+  events_now = tree.events.load_events(session_id)
+  assert any(e.get("type") == ET.RUN_FINISHED and e.get("run_id") == run2.id
+             and e.get("outcome") == "interrupted" for e in events_now)
+  # Both terminal Runs are terminal facts; the task remains open.
+  assert tree.task_state(session_id) == "open"
+
   # A later input arrives concurrently with the acknowledgement of the first.
   second = _send_input(client, session_id, "a later instruction", "input-2")
   second_id = second["input_event_id"]
@@ -508,6 +550,7 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
     assert len(acks) == 3
   finally:
     proc.terminate()
+    pane_proc.terminate()
 
   # The second instance's data was never touched.
   assert len(other_tree.events.load_events(other_task.id)) == other_events_before
@@ -546,3 +589,64 @@ async def test_acknowledged_input_unblocks_a_structural_operation(
   renamed = await tree.patch_task(
       session_id, PatchSessionTaskRequest(name="renamed"), caller=CallerIdentity(kind="operator"))
   assert renamed.name == "renamed"
+
+
+@pytest.mark.asyncio
+async def test_tui_attach_prepare_failure_lands_a_terminal_fact_and_retries_cleanly(
+        tui_env) -> None:
+  """A launch-preparation failure (a rule body that vanished) surfaces on the
+  attach, the registered Run records a definite failed terminal fact — never
+  a permanently queued ghost — the in-flight marker is released, and the next
+  attach after repair launches for real."""
+  cfg, session_mgr, tree, client, ensured, killed, streaming, start_calls, pane_proc = tui_env
+  task = _create_tui_task(client)
+  session_id = task["id"]
+  from src.core.models import PatchSessionTaskRequest
+  from src.core.run_token import CallerIdentity
+  patched = await tree.patch_task(
+      session_id, PatchSessionTaskRequest(node_prompt="terminal rule"),
+      caller=CallerIdentity(kind="operator"))
+  body = cfg.charliebot_home / "prompt_bodies" / f"{patched.node_prompt_ref}.md"
+  body.unlink()  # the rule vanished before the launch
+
+  def _attach_until_terminal() -> dict:
+    # Read frames until the attach's terminal pty_exit frame (catchup history
+    # frames arrive first; the handler returns right after the exit frame).
+    with client.websocket_connect(f"/ws/sessions/{session_id}?token=x") as ws:
+      ws.send_json({"type": "cursor", "index": 0})
+      while True:
+        frame = ws.receive_json()
+        if frame.get("type") == "pty_exit":
+          return frame
+
+  failure = _attach_until_terminal()
+  assert start_calls == []  # no tmux was ever started
+  assert "unavailable" in failure.get("error", "")
+  # In-flight marker released; the registered Run landed its failed fact.
+  import src.core.task_execution as task_execution
+  assert session_id not in task_execution._TUI_LAUNCH_INFLIGHT
+  runs1 = [r for r in tree.runs.list_run_records_sync(session_id) if r.kind == "manager_turn"]
+  assert len(runs1) == 1
+  events1 = tree.runs.load_events_sync(session_id)
+  assert tree.runs.terminal_outcome(events1, runs1[0].id) == "failed"
+
+  # Restoring the rule makes the next attach a real launch: a second Run with
+  # its own snapshot, credential, and pinned pane identity.
+  body.write_text("terminal rule", encoding="utf-8")
+  with client.websocket_connect(f"/ws/sessions/{session_id}?token=x") as ws:
+    ws.send_json({"type": "cursor", "index": 0})
+    deadline = asyncio.get_event_loop().time() + 10
+    while asyncio.get_event_loop().time() < deadline and len(start_calls) < 1:
+      await asyncio.sleep(0.05)
+  assert len(start_calls) == 1
+  runs2 = [r for r in tree.runs.list_run_records_sync(session_id) if r.kind == "manager_turn"]
+  assert len(runs2) == 2
+  live_run = await tree.runs.get_run(
+      session_id, next(r.id for r in runs2 if r.id != runs1[0].id))
+  assert live_run is not None and live_run.pid == pane_proc.pid
+  assert Path(live_run.prompt_snapshot_ref).is_file()
+  stop = client.post(f"/api/sessions/{session_id}/tui/stop")
+  assert stop.status_code == 200, stop.text
+  assert tree.runs.terminal_outcome(
+      tree.runs.load_events_sync(session_id), live_run.id) == "interrupted"
+  pane_proc.terminate()

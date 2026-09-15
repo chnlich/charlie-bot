@@ -220,6 +220,12 @@ async def run_tui_attachment(
       await launch.record_process()
   except Exception as e:  # surface to client
     log.exception("tui_ensure_session_failed", session_id=session_id)
+    if launch is not None:
+      # The Run is registered and its snapshot committed but nothing launched
+      # (or the pane never appeared): land the definite terminal fact instead
+      # of leaving a permanently queued ghost Run.
+      from src.core.task_execution import fail_unlaunched_tui_run
+      await fail_unlaunched_tui_run(launch._tree, session_id, launch.run_id, reason=str(e))
     with contextlib.suppress(Exception):
       await websocket.send_json({"type": PTY_EXIT, "error": str(e)})
     return

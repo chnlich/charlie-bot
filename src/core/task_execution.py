@@ -1500,6 +1500,12 @@ class TaskExecutionAdapter:
 # headless launch guard.
 _TUI_LAUNCH_INFLIGHT: set[str] = set()
 
+# How long a second attach waits for the in-flight owner's launch window before
+# refusing to guess: it must never fall through to the legacy uncredentialed
+# ensure while the owner's Run credential and snapshot are still being
+# delivered.
+_TUI_LAUNCH_WAIT_SECONDS = 15.0
+
 
 @dataclasses.dataclass
 class TuiTaskLaunch:
@@ -1542,6 +1548,31 @@ class TuiTaskLaunch:
             self.session_id, self.run_id, native_session_id=self.native_session_id)
 
 
+async def fail_unlaunched_tui_run(
+    tree: "TaskTreeManager", session_id: str, run_id: str, *, reason: str,
+) -> None:
+    """Land the definitely-unlaunched terminal fact for a prepared TUI launch.
+
+    Nothing started and the Run never claimed an input batch, so it records
+    ``failed`` — never a ghost queued Run that blocks the node's structural
+    operations forever. The fact lands only while no process identity is
+    pinned: a pinned pane means a live process exists and the explicit stop
+    owns its ending. Best-effort: a failure here logs and never masks the
+    launch failure it reports.
+    """
+    try:
+        events = tree.runs.load_events_sync(session_id)
+        run = await tree.runs.get_run(session_id, run_id)
+        if run is None or run.pid is not None or tree.runs.run_has_terminal_fact(run, events):
+            return
+        await tree.runs.record_finish(session_id, run_id, "failed")
+        log.warning("tui_task_launch_marked_failed", session_id=session_id, run_id=run_id,
+                    reason=reason)
+    except Exception:
+        log.error("tui_task_launch_failure_fact_failed", session_id=session_id, run_id=run_id,
+                  reason=reason, exc_info=True)
+
+
 async def prepare_tui_task_launch(
     cfg: CharlieBotConfig, session_id: str, tree: "TaskTreeManager | None" = None,
 ) -> TuiTaskLaunch | None:
@@ -1559,85 +1590,98 @@ async def prepare_tui_task_launch(
     change starts a fresh native context (the earlier transcript stays on
     disk).
 
-    The caller must call :meth:`TuiTaskLaunch.release` once the tmux session is
+    The caller must call :func:`release_tui_launch` once the tmux session is
     ensured (or failed to ensure): the in-process launch marker spans the
     registration-to-tmux window, so two concurrent attaches cannot register two
-    Runs for one terminal.
+    Runs for one terminal. A second attach inside that window waits for it
+    (bounded) instead of falling through to the legacy uncredentialed ensure.
+    A failure after registration discards the marker and lands a ``failed``
+    terminal fact on the registered Run, so the next attach retries cleanly
+    and the node never keeps a permanently queued ghost Run.
     """
     from src.agents.backends.pty_common import tmux_session_exists
     from src.core.backend_models import BackendType
 
-    if await tmux_session_exists(session_id):
-        return None  # a re-attach: the ongoing terminal keeps its start snapshot
     if tree is None:
         # The server's singleton owner (the same one every API route uses); the
         # lazy import keeps this core module off the API modules' import path.
         from src.api.deps import task_manager
         tree = task_manager()
-    async with tree.control_lock:
-        meta = await tree.load_meta(session_id)
-        if meta is None or meta.profile is None:
-            return None  # not a task-tree node: legacy terminal behavior
-        option = cfg.get_backend_option(meta.backend) if meta.backend else None
-        if option is None or option.type is not BackendType.TUI_CLI:
-            return None
-        if meta.profile != "manager":
+    deadline = time.monotonic() + _TUI_LAUNCH_WAIT_SECONDS
+    while True:
+        if await tmux_session_exists(session_id):
+            return None  # a re-attach: the ongoing terminal keeps its start snapshot
+        async with tree.control_lock:
+            meta = await tree.load_meta(session_id)
+            if meta is None or meta.profile is None:
+                return None  # not a task-tree node: legacy terminal behavior
+            option = cfg.get_backend_option(meta.backend) if meta.backend else None
+            if option is None or option.type is not BackendType.TUI_CLI:
+                return None
+            if meta.profile != "manager":
+                raise TaskInvalidError(
+                    f"task {session_id}: a tui terminal launch requires a manager node")
+            owner_in_flight = session_id in _TUI_LAUNCH_INFLIGHT
+            if not owner_in_flight:
+                events = tree.runs.load_events_sync(session_id)
+                runs = tree.runs.list_run_records_sync(session_id)
+                if any(
+                    r.kind == "manager_turn" and r.pid is not None and
+                    not any(e.get("type") == ET.RUN_FINISHED and e.get("run_id") == r.id
+                            for e in events)
+                    for r in runs):
+                    return None  # a live terminal Run already owns this task's terminal
+                _TUI_LAUNCH_INFLIGHT.add(session_id)
+                launch_no = 1 + len([r for r in runs if r.kind == "manager_turn"])
+                run_id = stable_run_id(session_id, f"tui-launch:{launch_no}")
+                record = RunRecord(
+                    id=run_id, session_id=session_id, kind="manager_turn",
+                    backend=meta.backend, model=option.model)
+                await tree.runs.register_run_locked(
+                    record, task_spec_text=canonical_task_spec_text(meta.task))
+        if not owner_in_flight:
+            break
+        if time.monotonic() > deadline:
             raise TaskInvalidError(
-                f"task {session_id}: a tui terminal launch requires a manager node")
-        if session_id in _TUI_LAUNCH_INFLIGHT:
-            return None  # a concurrent attach owns this launch
-        events = tree.runs.load_events_sync(session_id)
-        runs = tree.runs.list_run_records_sync(session_id)
-        if any(
-            r.kind == "manager_turn" and r.pid is not None and
-            not any(e.get("type") == ET.RUN_FINISHED and e.get("run_id") == r.id for e in events)
-            for r in runs):
-            return None  # a live terminal Run already owns this task's terminal
-        _TUI_LAUNCH_INFLIGHT.add(session_id)
-        index = await tree._get_index()
-        chain, node_ref = capture_prompt_chain(tree, index, meta)
-        launch_no = 1 + len([r for r in runs if r.kind == "manager_turn"])
-        run_id = stable_run_id(session_id, f"tui-launch:{launch_no}")
-        record = RunRecord(
-            id=run_id, session_id=session_id, kind="manager_turn",
-            backend=meta.backend, model=option.model)
-        await tree.runs.register_run_locked(
-            record, task_spec_text=canonical_task_spec_text(meta.task))
-    # Snapshot assembly and persistence run outside the control lock (they take
-    # their own short holds); the bytes are committed before the tmux session
-    # exists, so the launched claude reads the saved bytes.
-    fresh_meta = await tree.load_meta(session_id)
-    assert fresh_meta is not None
-    snapshot, _overlay_error, _declared = await assemble_coherent_snapshot(
-        cfg, tree, fresh_meta, "manager_turn", option)
-    snapshot_path = tree.runs.run_dir(session_id, run_id) / task_prompts.SNAPSHOT_FILENAME
-    from src.core.json_utils import atomic_write_text
-    await asyncio.to_thread(
-        atomic_write_text, snapshot_path,
-        json.dumps(snapshot.to_json_dict(), indent=2, ensure_ascii=False))
-    await tree.runs.record_observation(session_id, run_id, prompt_snapshot_ref=str(snapshot_path))
-    key = str(get_credentials().get("charliebot", "access_key") or "")
-    if not key:
-        _TUI_LAUNCH_INFLIGHT.discard(session_id)
-        raise RuntimeError(
-            "run-token signing requires credentials.yaml charliebot.access_key; "
-            "a TUI task launch cannot inject its run credential without it")
-    token = sign_run_token(
-        RunTokenClaims(session_id=session_id, run_id=run_id, agent=meta.name or "manager"), key)
-    return TuiTaskLaunch(
-        session_id=session_id,
-        run_id=run_id,
-        native_session_id=f"{session_id}-{snapshot.prompt_hash[:8]}",
-        inject_env={
-            SESSION_ID_ENV_VAR: session_id,
-            RUN_TOKEN_ENV: token,
-            "CHARLIEBOT_HOME": str(cfg.charliebot_home),
-        },
-        instructions_text=snapshot.instructions_text,
-        working_dir=cfg.sessions_dir / session_id,
-        model=option.model,
-        _tree=tree,
-    )
+                f"task {session_id}: another TUI terminal launch is still in flight")
+        await asyncio.sleep(0.05)
+    try:
+        # Snapshot assembly and persistence run outside the control lock (they
+        # take their own short holds); the bytes are committed before the tmux
+        # session exists, so the launched claude reads the saved bytes.
+        snapshot, _overlay_error, _declared = await assemble_coherent_snapshot(
+            cfg, tree, meta, "manager_turn", option)
+        snapshot_path = tree.runs.run_dir(session_id, run_id) / task_prompts.SNAPSHOT_FILENAME
+        from src.core.json_utils import atomic_write_text
+        await asyncio.to_thread(
+            atomic_write_text, snapshot_path,
+            json.dumps(snapshot.to_json_dict(), indent=2, ensure_ascii=False))
+        await tree.runs.record_observation(session_id, run_id, prompt_snapshot_ref=str(snapshot_path))
+        key = str(get_credentials().get("charliebot", "access_key") or "")
+        if not key:
+            raise RuntimeError(
+                "run-token signing requires credentials.yaml charliebot.access_key; "
+                "a TUI task launch cannot inject its run credential without it")
+        token = sign_run_token(
+            RunTokenClaims(session_id=session_id, run_id=run_id, agent=meta.name or "manager"), key)
+        return TuiTaskLaunch(
+            session_id=session_id,
+            run_id=run_id,
+            native_session_id=f"{session_id}-{snapshot.prompt_hash[:8]}",
+            inject_env={
+                SESSION_ID_ENV_VAR: session_id,
+                RUN_TOKEN_ENV: token,
+                "CHARLIEBOT_HOME": str(cfg.charliebot_home),
+            },
+            instructions_text=snapshot.instructions_text,
+            working_dir=cfg.sessions_dir / session_id,
+            model=option.model,
+            _tree=tree,
+        )
+    except BaseException as e:
+        release_tui_launch(session_id)
+        await fail_unlaunched_tui_run(tree, session_id, run_id, reason=str(e))
+        raise
 
 
 def release_tui_launch(session_id: str) -> None:

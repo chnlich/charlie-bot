@@ -38,7 +38,7 @@ from src.api.deps import session_manager, set_trigger_manager, thread_manager
 from src.core import timeouts
 from src.core.buildinfo import init_build_info
 from src.core.config import CharlieBotConfig, configured_access_key, get_config, get_credentials, require_backends
-from src.core.constants import FILE_SERVER_MOUNTS, REPO_ROOT
+from src.core.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH, REPO_ROOT
 from src.core.http import close_http_client
 from src.core.init import (
     init_charliebot_home,
@@ -101,7 +101,7 @@ class _CharlieBotGZipMiddleware(GZipMiddleware):
   """Skip HTTP transport compression for already-compressed trace files."""
 
   async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-    if scope["type"] == "http" and scope["path"] == "/perfetto/merged":
+    if scope["type"] == "http" and scope["path"] == PERFETTO_MERGED_PATH:
       await self.app(scope, receive, send)
       return
     if scope["type"] == "http" and "gzip" in Headers(scope=scope).get("Accept-Encoding", ""):

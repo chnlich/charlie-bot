@@ -27,7 +27,14 @@ from src.api.deps import SESSION_NOT_FOUND_DETAIL, get_config_on_loop, get_sessi
 from src.api.message_utils import build_session_bootstrap_data
 from src.api.sessions import _bootstrap_payload, _default_backend_id
 from src.core.config import CharlieBotConfig, configured_access_key, get_config
-from src.core.constants import FILE_SERVER_MOUNTS, REPO_ROOT
+from src.core.constants import (
+    AUTH_STATUS_PATH,
+    FILE_SERVER_MOUNTS,
+    NCU_VIEWER_PATH,
+    PERFETTO_MERGED_PATH,
+    PERFETTO_VIEWER_PATH,
+    REPO_ROOT,
+)
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus
 from src.core.ncu_parsing import NcuParseError, parse_ncu_report
@@ -209,7 +216,7 @@ router = APIRouter()
 templates = Jinja2Templates(directory=str(REPO_ROOT / "web" / "templates"))
 
 
-@router.get("/api/auth/status")
+@router.get(AUTH_STATUS_PATH)
 async def auth_status() -> JSONResponse:
   """Return whether access-key authentication is enabled."""
   return JSONResponse({"auth_enabled": bool(configured_access_key())})
@@ -245,7 +252,7 @@ async def events_viewer(
       })
 
 
-@router.get("/perfetto", response_class=HTMLResponse)
+@router.get(PERFETTO_VIEWER_PATH, response_class=HTMLResponse)
 async def perfetto_viewer(
     request: Request,
     trace: list[str] = Query(default=[]),
@@ -273,14 +280,14 @@ async def perfetto_viewer(
       query.extend((("dir", dir), ("pattern", pattern)))
     if slim is not None:
       query.append(("slim", str(slim)))
-    trace_url = f"/perfetto/merged?{urlencode(query)}"
+    trace_url = f"{PERFETTO_MERGED_PATH}?{urlencode(query)}"
   else:
     trace_url = inputs[0][0]
     if len(inputs) > 1:
       warn = "⚠ Remote or non-JSON traces cannot be merged, showing first trace only"
 
   display_title = title or dir or inputs[0][0].rsplit("/", 1)[-1]
-  is_merge = trace_url.startswith("/perfetto/merged") and (len(inputs) > 1 or bool(slim))
+  is_merge = trace_url.startswith(PERFETTO_MERGED_PATH) and (len(inputs) > 1 or bool(slim))
 
   return templates.TemplateResponse(
       request,
@@ -291,7 +298,7 @@ async def perfetto_viewer(
           "warn": warn,
           "merge_count": len(inputs),
           "is_merge": is_merge,
-          "is_direct_pass": trace_url.startswith("/perfetto/merged") and not is_merge,
+          "is_direct_pass": trace_url.startswith(PERFETTO_MERGED_PATH) and not is_merge,
       })
 
 
@@ -461,7 +468,7 @@ async def _cached_direct_pass(path: Path) -> Path:
   return await _cached_gzip_build(_merge_cache_key([path], False, "gzip"), build)
 
 
-@router.get("/perfetto/merged")
+@router.get(PERFETTO_MERGED_PATH)
 async def perfetto_merged(
     trace: list[str] = Query(default=[]),
     dir: str | None = None,
@@ -512,7 +519,7 @@ def _ncu_error_page(request: Request, message: str, status_code: int) -> HTMLRes
   )
 
 
-@router.get("/ncu", response_class=HTMLResponse)
+@router.get(NCU_VIEWER_PATH, response_class=HTMLResponse)
 async def ncu_viewer(
     request: Request,
     file: list[str] = Query(default=[]),

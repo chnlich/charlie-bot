@@ -189,10 +189,9 @@ async def build_session_bootstrap_data(
 ) -> SessionBootstrapData:
   """Load the minimal session data needed for first paint or SPA switching.
 
-  *messages* are a turn-aligned page of at least *message_limit* messages
-  (unless history is exhausted), served from the session's message projection
-  when one is usable and from the legacy tail-events path otherwise
-  (``_messages_page``).
+  A projection-served page is turn-aligned and holds at least *message_limit*
+  messages (unless history is exhausted); the legacy tail-events path folds
+  the last *message_limit* raw events, which can render fewer messages.
   """
   session_meta = await session_mgr.get_session(session_id)
   if session_meta is None:
@@ -227,9 +226,11 @@ async def build_session_view_data(
   *thread_rows* are the session view's thread rows (``view_thread_rows``'s
   shape), resolved by the caller so the view's row proof is shared with the
   workers-panel list. When *message_limit* is None, loads all events. When
-  set, *messages* are a turn-aligned page of at least *message_limit* messages
-  (unless history is exhausted) under the shared projection-or-tail policy
-  (``_messages_page``).
+  set, the page shape follows the shared projection-or-tail policy
+  (``_messages_page``): a projection-served page is turn-aligned and holds at
+  least *message_limit* messages (unless history is exhausted), while the
+  tail path folds the last *message_limit* raw events, which can render
+  fewer messages.
 
   Returns committed messages plus an optional pending_draft (the in-progress
   assistant draft that has not yet been flushed). Live render paths show the

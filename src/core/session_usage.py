@@ -49,10 +49,10 @@ from src.agents.backends.claude_code import (
     CLAUDE_COMPACT_OUTPUT_RESERVE,
     headless_claude_declared_window,
 )
-from src.agents.backends.opencode import OPENCODE_COMPACT_OUTPUT_RESERVE
 from src.core import event_types as ET
 from src.core.codex_usage import CodexUsageResolver
 from src.core.config import CharlieBotConfig
+from src.core.constants import OPENCODE_COMPACT_OUTPUT_RESERVE
 from src.core.memo import BoundedMemo
 from src.core.models import SessionMetadata
 

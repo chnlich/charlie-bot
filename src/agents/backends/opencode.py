@@ -86,10 +86,12 @@ _IGNORED_SSE_EVENT_TYPES = {
     "session.status",
     "session.updated",
 }
-# opencode's own compaction output-reserve default ($d = 20000 in the opencode binary,
+# opencode's compaction output-reserve default ($d = 20000 in the opencode binary,
 # applied as `compaction.reserved ?? min($d, maxOutputTokens)`; checkable via
-# `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`).
-OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
+# `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`) single-homes in
+# src.core.constants, whose only reader is the usage chain's compact-point math
+# (src.core.session_usage) — importing it here would drag this module onto the
+# usage chain (the M99 server import floor).
 
 # opencode's SQLite store locking (e.g. the boot-time `insert into "project"`
 # collision observed in production) surfaces as an HTTP 500 or session.error

@@ -29,9 +29,7 @@ from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 
 
-def _build_app(
-    cfg: CharlieBotConfig, session_mgr: SessionManager, thread_mgr: ThreadManager,
-    plan_mgr: PlanRegistryManager) -> FastAPI:
+def _build_app(session_mgr: SessionManager, thread_mgr: ThreadManager, plan_mgr: PlanRegistryManager) -> FastAPI:
   app = FastAPI()
   app.include_router(internal_router, prefix="/api/internal")
   app.include_router(sessions_router, prefix="/api/sessions")
@@ -50,7 +48,7 @@ async def _presented_rig(tmp_path: Path,) -> tuple[FastAPI, CharlieBotConfig, Pl
   cfg, session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   f = _write_artifact(cfg, meta.id, "plan_01.html")
   await plan_mgr.present(meta.id, file=f, title="P1")
-  return _build_app(cfg, session_mgr, thread_mgr, plan_mgr), cfg, plan_mgr, meta
+  return _build_app(session_mgr, thread_mgr, plan_mgr), cfg, plan_mgr, meta
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +60,7 @@ async def _presented_rig(tmp_path: Path,) -> tuple[FastAPI, CharlieBotConfig, Pl
 async def test_plan_present_endpoint_happy_path(tmp_path: Path) -> None:
   cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   f = _write_artifact(cfg, meta.id, "plan_01.html")
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  app = _build_app(_session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/present", json={
@@ -194,7 +192,7 @@ async def test_get_plans_endpoint_returns_registry(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_plan_present_rejects_unknown_session_404(tmp_path: Path) -> None:
   cfg, _session_mgr, thread_mgr, plan_mgr, _meta = await _setup(tmp_path)
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  app = _build_app(_session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/present", json={
@@ -209,7 +207,7 @@ async def test_plan_present_rejects_unknown_session_404(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_plan_present_rejects_missing_file_400(tmp_path: Path) -> None:
   cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  app = _build_app(_session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/present", json={
@@ -257,7 +255,7 @@ async def test_plan_close_rejects_already_closed_400(tmp_path: Path) -> None:
 async def test_plan_reverify_endpoint_removed(tmp_path: Path) -> None:
   """The /plan/reverify endpoint is gone; FastAPI returns 404 (or 405) for the old path."""
   cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  app = _build_app(_session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/reverify", json={
@@ -298,7 +296,7 @@ async def test_plan_updated_broadcast_on_present_and_absent_from_chat_events(tmp
 
   session_mgr.broadcast_only = _capture_broadcast  # type: ignore[method-assign]
   f = _write_artifact(cfg, meta.id, "plan_01.html")
-  app = _build_app(cfg, session_mgr, thread_mgr, plan_mgr)
+  app = _build_app(session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/present", json={
@@ -367,7 +365,7 @@ async def test_delegate_sets_task_type_on_thread(tmp_path: Path, monkeypatch: py
 @pytest.mark.asyncio
 async def test_get_plans_endpoint_unknown_session_404(tmp_path: Path) -> None:
   cfg, _session_mgr, thread_mgr, plan_mgr, _meta = await _setup(tmp_path)
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  app = _build_app(_session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.get("/api/sessions/nonexistent/plans")
   assert resp.status_code == 404
@@ -380,7 +378,7 @@ async def test_get_plans_endpoint_corrupt_file_200_with_error_entry(tmp_path: Pa
   plans_path = cfg.sessions_dir / meta.id / "plans.json"
   plans_path.parent.mkdir(parents=True, exist_ok=True)
   plans_path.write_text("{not valid json", encoding="utf-8")
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  app = _build_app(_session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.get(f"/api/sessions/{meta.id}/plans")
   assert resp.status_code == 200

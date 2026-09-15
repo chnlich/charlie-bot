@@ -76,7 +76,7 @@ def _wrap(
   return output
 
 
-def _wrap_cli(tmp_path: Path, fragment_path: Path, output: Path, genre: str, *flags: str) -> SystemExit:
+def _wrap_cli(fragment_path: Path, output: Path, genre: str, *flags: str) -> SystemExit:
   with pytest.raises(SystemExit) as exc_info:
     artifact_main(["wrap", str(fragment_path), "--genre", genre, "--output", str(output), *flags])
   return exc_info.value
@@ -197,11 +197,11 @@ def test_cli_defaults_math_on_for_explain_and_off_for_other_genres(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], cli_katex: Path) -> None:
   fragment = _write_fragment(tmp_path, r"<p>$$y = x$$</p>")
   explain_output = tmp_path / "explain.html"
-  assert _wrap_cli(tmp_path, fragment, explain_output, "explain").code == 0
+  assert _wrap_cli(fragment, explain_output, "explain").code == 0
   assert 'class="katex-display"' in explain_output.read_text(encoding="utf-8")
 
   sitrep_output = tmp_path / "sitrep.html"
-  assert _wrap_cli(tmp_path, fragment, sitrep_output, "sitrep").code == 0
+  assert _wrap_cli(fragment, sitrep_output, "sitrep").code == 0
   sitrep_page = sitrep_output.read_text(encoding="utf-8")
   assert 'class="katex"' not in sitrep_page
   assert "$$y = x$$" in sitrep_page
@@ -211,7 +211,7 @@ def test_cli_no_math_disables_prerender_for_explain(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], cli_katex: Path) -> None:
   fragment = _write_fragment(tmp_path, r"<p>$$y = x$$</p>")
   output = tmp_path / "plain.html"
-  assert _wrap_cli(tmp_path, fragment, output, "explain", "--no-math").code == 0
+  assert _wrap_cli(fragment, output, "explain", "--no-math").code == 0
   page = output.read_text(encoding="utf-8")
   assert 'class="katex"' not in page
   assert "$$y = x$$" in page
@@ -233,7 +233,7 @@ def test_wrap_byte_gate_aborts_before_write_and_names_offsets(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], cli_katex: Path) -> None:
   fragment = _write_fragment(tmp_path, _damaged_fragment(), name="damaged.html")
   output = tmp_path / "damaged_page.html"
-  assert _wrap_cli(tmp_path, fragment, output, "explain").code == 1
+  assert _wrap_cli(fragment, output, "explain").code == 1
   err = capsys.readouterr().err
   assert "0x09 at offset" in err
   assert "0x0c at offset" in err
@@ -246,7 +246,7 @@ def test_wrap_byte_gate_runs_on_the_assembled_bytes(
   r"""A fragment TAB reports at its assembled-page offset, past the template head."""
   fragment = _write_fragment(tmp_path, "<p>x\ty</p>")
   output = tmp_path / "page.html"
-  assert _wrap_cli(tmp_path, fragment, output, "explain").code == 1
+  assert _wrap_cli(fragment, output, "explain").code == 1
   offset = int(re.search(r"0x09 at offset (\d+)", capsys.readouterr().err).group(1))
   assert offset > 5000  # the template head alone is longer than any fragment prefix
 
@@ -255,7 +255,7 @@ def test_wrap_byte_gate_passes_a_clean_fragment_through(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], cli_katex: Path) -> None:
   fragment = _write_fragment(tmp_path, r"<p>$$\text{logits} = Wx$$</p>")
   output = tmp_path / "clean.html"
-  assert _wrap_cli(tmp_path, fragment, output, "explain").code == 0
+  assert _wrap_cli(fragment, output, "explain").code == 0
   assembled = output.read_bytes()
   assert not [1 for b in assembled if b < 0x20 and b != 0x0A]
 

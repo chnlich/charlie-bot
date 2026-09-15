@@ -46,15 +46,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-Chat.showScrollToBottom = showScrollToBottom;
-Chat.hideScrollToBottom = hideScrollToBottom;
-Chat.scrollToBottom = scrollToBottom;
-Chat.restoreBottomPin = restoreBottomPin;
-Chat.expose([
-  'showScrollToBottom',
-  'hideScrollToBottom',
-  'scrollToBottom',
-  'restoreBottomPin',
-]);
+Chat.wire({
+  showScrollToBottom,
+  hideScrollToBottom,
+  scrollToBottom,
+  restoreBottomPin,
+});
 
 })();

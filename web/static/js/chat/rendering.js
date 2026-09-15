@@ -720,31 +720,25 @@ function appendMessage(role, content, isVoice, timestamp, uploadedFiles) {
   return msg;
 }
 
-Chat.renderMessage = renderMessage;
-Chat.renderMessagesIntoContainer = renderMessagesIntoContainer;
-Chat.postProcessRenderedMessages = postProcessRenderedMessages;
-Chat.renderMessagesToDetachedContainer = renderMessagesToDetachedContainer;
-Chat.appendMessageObject = appendMessageObject;
-Chat.appendMessage = appendMessage;
-Chat.applyTurnOutline = applyTurnOutline;
-Chat.setPageDepth = setPageDepth;
-Chat.toggleTurnFold = toggleTurnFold;
+const GLOBALS = {
+  renderMessage,
+  renderMessagesIntoContainer,
+  postProcessRenderedMessages,
+  renderMessagesToDetachedContainer,
+  appendMessageObject,
+  appendMessage,
+  applyTurnOutline,
+  setPageDepth,
+  toggleTurnFold,
+};
 // Turn primitives the window engine builds wraps from. Legacy callers go
 // through wrapTurn / applyTurnOutline above and never touch these directly.
-Chat.buildTurnRowFromSpec = buildTurnRowFromSpec;
-Chat.installTurnFold = installTurnFold;
-Chat.installTurnCollapseControl = installTurnCollapseControl;
-Chat.setTurnFoldExpanded = setTurnFoldExpanded;
-Chat.expose([
-  'renderMessage',
-  'renderMessagesIntoContainer',
-  'postProcessRenderedMessages',
-  'renderMessagesToDetachedContainer',
-  'appendMessageObject',
-  'appendMessage',
-  'applyTurnOutline',
-  'setPageDepth',
-  'toggleTurnFold',
-]);
+const CHAT_ONLY = {
+  buildTurnRowFromSpec,
+  installTurnFold,
+  installTurnCollapseControl,
+  setTurnFoldExpanded,
+};
+Chat.wire(GLOBALS, CHAT_ONLY);
 
 })();

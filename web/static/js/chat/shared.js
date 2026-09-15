@@ -113,31 +113,23 @@ function isRenderedMessage(msg) {
   return document.querySelector('[data-message-id="' + CSS.escape(id) + '"]') !== null;
 }
 
-Chat.shouldAutoScroll = shouldAutoScroll;
-Chat.escapeHtml = escapeHtml;
-Chat.escapeHtmlAttr = escapeHtmlAttr;
-Chat.escapeJsSingleQuoted = escapeJsSingleQuoted;
-Chat.showMoreToggleHtml = showMoreToggleHtml;
-Chat.thinkingButtonHtml = thinkingButtonHtml;
-Chat.thinkingToggleHtml = thinkingToggleHtml;
-Chat.toolNameChipHtml = toolNameChipHtml;
-Chat.toolInputSummary = toolInputSummary;
-Chat.formatBubbleTime = formatBubbleTime;
-Chat.messageIdentityAttrs = messageIdentityAttrs;
-Chat.isRenderedMessage = isRenderedMessage;
-Chat.STIMULUS_ROLES = STIMULUS_ROLES;
-Chat.expose([
-  'shouldAutoScroll',
-  'escapeHtml',
-  'escapeHtmlAttr',
-  'isRenderedMessage',
-  'showMoreToggleHtml',
-  'thinkingButtonHtml',
-  'thinkingToggleHtml',
-  'toolNameChipHtml',
-  'toolInputSummary',
-  'formatBubbleTime',
-  'STIMULUS_ROLES',
-]);
+const GLOBALS = {
+  shouldAutoScroll,
+  escapeHtml,
+  escapeHtmlAttr,
+  isRenderedMessage,
+  showMoreToggleHtml,
+  thinkingButtonHtml,
+  thinkingToggleHtml,
+  toolNameChipHtml,
+  toolInputSummary,
+  formatBubbleTime,
+  STIMULUS_ROLES,
+};
+const CHAT_ONLY = {
+  escapeJsSingleQuoted,
+  messageIdentityAttrs,
+};
+Chat.wire(GLOBALS, CHAT_ONLY);
 
 })();

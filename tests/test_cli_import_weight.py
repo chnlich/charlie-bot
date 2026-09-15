@@ -204,8 +204,8 @@ def test_module_defers_structlog_until_the_first_log_call(module_name: str, impo
 # with dateutil) and websockets rides the Slack listener's connect loop (~13 ms);
 # the backends stack rides its two spawn-path builds (the autonamer naming round
 # and the recap summarize, ~65 ms through src.agents.backends.registry and the
-# opencode/charlie_code module bodies), which load it on first use via each
-# module's load_build_backend.
+# opencode/charlie_code module bodies), which load it on first use via the shared
+# load_build_backend (src/agents/backends/deferred_build.py).
 SERVER_HEAVY_MODULES = (
     "numpy",
     "src.agents.transcriber",
@@ -254,7 +254,7 @@ def test_sessions_chain_imports_without_the_backends_stack() -> None:
 def test_autonamer_and_recap_defer_the_registry_until_first_use() -> None:
   # The naming round and the summarize path each build one backend; the import
   # binds nothing and the module attribute resolves (and patch-pins) lazily
-  # through each module's load_build_backend.
+  # through the shared load_build_backend (src/agents/backends/deferred_build.py).
   code = (
       "import json, sys; "
       "import src.core.autonamer, src.core.recap; "

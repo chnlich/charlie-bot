@@ -214,16 +214,7 @@ def _cron_tasks_body() -> tuple[bytes, bytes]:
   cache = _CRON_TASKS_BODY_CACHE
   if cache is not None and cache[0] is tasks:
     return cache[1], cache[2]
-  valid = [
-      t.model_dump(mode="json", exclude={
-          'prompt': True,
-          'steps': {
-              '__all__': {
-                  'prompt': True
-              }
-          }
-      }) for t in tasks
-  ]
+  valid = [t.model_dump(mode="json", exclude={'prompt': True, 'steps': {'__all__': {'prompt': True}}}) for t in tasks]
   broken = [
       {
           'name': e.name,

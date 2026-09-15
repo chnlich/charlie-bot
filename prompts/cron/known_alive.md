@@ -420,7 +420,8 @@ Known-alive symbols:
   production-scope finding (unused import, 90% confidence); never delete it on that
   evidence.
 - `__getattr__` (`src/cli/common.py` and `src/core/artifact_wrap.py`) — the PEP 562
-  lazy-`requests` hooks, delegating to the shared `load_requests` (`src/core/http.py`).
+  lazy-`requests` hooks, one-line delegates to the shared `requests_module_getattr`
+  (`src/core/http.py`), which wraps `load_requests`.
   Reached by string: the patch targets `src.cli.common.requests.*`
   (`CLI_COMMON_REQUESTS_POST_PATCH_TARGET` / `CLI_COMMON_REQUESTS_GET_PATCH_TARGET` in
   `tests/conftest.py`) and `src.core.artifact_wrap.requests.get`

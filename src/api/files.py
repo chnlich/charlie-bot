@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from src.api.auth import request_has_access_key
 from src.api.pages import _static_asset_version
+from src.api.responses import PrecompressedGzipResponse
 from src.core import plan_diff
 from src.core.config import get_config, get_credentials
 from src.core.constants import FILE_SERVER_MOUNTS
@@ -124,9 +125,7 @@ def _injected_artifact_page(fs_path: Path, session_id: str) -> bytes:
 def _injected_artifact_page_gzip(fs_path: Path, session_id: str) -> bytes:
   """The credentialed artifact view's gzip form, memoized beside the plain body.
 
-  The route ships these bytes with Content-Encoding: gzip set upstream, which
-  is what makes the server's gzip middleware skip its own whole-body deflate —
-  level 1 over the ~1 MB worst page measures ~27 ms per view. mtime=0 keeps
+  Level 1 over the ~1 MB worst page measures ~27 ms per view. mtime=0 keeps
   the compressed bytes deterministic across processes.
   """
   key: _CleanViewKey = (str(fs_path), *_file_signature(fs_path))
@@ -377,8 +376,6 @@ def _dir_listing_page(dir_path: Path, url_prefix: str, diff_param: str | None) -
 def _listing_page_gzip(key: _ListingKey, listing: str) -> bytes:
   """The listing page's gzip form, memoized beside the plain page.
 
-  The route ships these bytes with Content-Encoding: gzip set upstream, which
-  is what makes the server's gzip middleware skip its own whole-body deflate.
   mtime=0 keeps the compressed bytes deterministic across processes.
   """
   hit = _listing_gzip_memo.get(key)
@@ -429,14 +426,9 @@ async def serve_file(path: str, request: Request) -> Response:
   if page is not None:
     listing, listing_key = page
     if "gzip" in request.headers.get("accept-encoding", ""):
-      # The same check the gzip middleware makes on the way in; answering with
-      # the pre-compressed body and the header set is what skips its deflate.
+      # The same check the gzip middleware makes on the way in.
       body = await asyncio.to_thread(_listing_page_gzip, listing_key, listing)
-      return Response(
-          content=body, media_type="text/html", headers={
-              "Content-Encoding": "gzip",
-              "Vary": "Accept-Encoding"
-          })
+      return PrecompressedGzipResponse(body, "text/html")
     return HTMLResponse(listing)
 
   # Standalone artifact HTML gets the review UI injected here — the single chokepoint
@@ -461,14 +453,9 @@ async def serve_file(path: str, request: Request) -> Response:
   if session_id is not None and request_has_access_key(request, str(get_credentials().get("charliebot", "access_key") or
                                                                     "")):
     if "gzip" in request.headers.get("accept-encoding", ""):
-      # The same check the gzip middleware makes on the way in; answering with
-      # the pre-compressed body and the header set is what skips its deflate.
+      # The same check the gzip middleware makes on the way in.
       body = await asyncio.to_thread(_injected_artifact_page_gzip, fs_path, session_id)
-      return Response(
-          content=body, media_type="text/html", headers={
-              "Content-Encoding": "gzip",
-              "Vary": "Accept-Encoding"
-          })
+      return PrecompressedGzipResponse(body, "text/html")
     # One executor hop: signature, memo hit, and on a miss the read+inject+store.
     body = await asyncio.to_thread(_injected_artifact_page, fs_path, session_id)
     return HTMLResponse(body, media_type="text/html")

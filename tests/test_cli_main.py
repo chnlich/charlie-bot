@@ -5,7 +5,7 @@ from types import ModuleType
 
 import pytest
 
-from src.cli import delegate, improve, publish, remote_launch, schedule_trigger, slack
+from src.cli import delegate, improve, publish, remote_launch, schedule_trigger, session_tree, slack
 from src.cli import main as cli_main
 
 
@@ -18,6 +18,7 @@ from src.cli import main as cli_main
         ("remote-launch", remote_launch),
         ("publish", publish),
         ("slack", slack),
+        ("session-tree", session_tree),
     ],
 )
 def test_dispatcher_delegates_to_supported_subcommands(

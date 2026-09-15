@@ -24,9 +24,9 @@ from fastapi.testclient import TestClient
 from src.api import sessions as sessions_api
 from src.api.deps import get_run_store, get_session_manager, get_task_manager
 from src.core.models import RunRecord
+from src.core.run_token import CallerIdentity
 from src.core.runs import _encode_run_cursor
 from src.core.sessions import SessionManager
-from src.core.run_token import CallerIdentity
 from src.core.task_sessions import TaskTreeManager
 
 OP = CallerIdentity(kind="operator")

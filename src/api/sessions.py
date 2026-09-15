@@ -1425,17 +1425,30 @@ async def list_session_runs(
     session_id: str,
     limit: int = Query(default=100, ge=1, le=500),
     cursor: str | None = Query(default=None),
+    order: str = Query(default="asc"),
     _meta: SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> RunPage:
-  """One keyset page of the session's run records, chronological (queued first).
+  """One keyset page of the session's run records over the canonical launch order.
+
+  ``order`` defaults to ``asc`` — chronological, queued reservations first —
+  which keeps every existing client's pagination exactly as it was.
+  ``order=desc`` reads the same (started_at, id) total order backwards: the
+  most recently started run opens the page, so ``order=desc&limit=1`` is the
+  session's authoritative latest launch without paging through older history.
+  A queued reservation never opens a descending page while any run has
+  started, and a cursor minted under one order is an explicit 400 under the
+  other.
 
   Each row carries its fact-derived display state and stop-request flag — the
   same fold the guards consume, so the Runs panel never guesses state from a
   status badge.
   """
+  if order not in ("asc", "desc"):
+    raise HTTPException(status_code=400, detail=f"unknown runs order: {order!r} (use 'asc' or 'desc')")
   try:
-    slice_ = await asyncio.to_thread(task_mgr.runs.list_runs_page_sync, session_id, limit, cursor)
+    slice_ = await asyncio.to_thread(
+        task_mgr.runs.list_runs_page_sync, session_id, limit, cursor, descending=(order == "desc"))
   except ValueError as e:
     raise bad_request(e) from e
   events = task_mgr.runs.load_events_sync(session_id)

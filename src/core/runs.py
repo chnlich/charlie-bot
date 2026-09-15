@@ -608,18 +608,28 @@ def _run_sort_key(run: RunRecord) -> tuple[datetime, str]:
 
 
 
-def _encode_run_cursor(key: tuple[datetime, str]) -> str:
-  """Opaque keyset cursor: base64url JSON of the (started_at, id) boundary."""
-  payload = {"s": key[0].isoformat(), "i": key[1]}
+def _encode_run_cursor(key: tuple[datetime, str], descending: bool = False) -> str:
+  """Opaque keyset cursor: base64url JSON of the (started_at, id) boundary.
+
+  The page order rides inside the cursor so a cursor minted under one order
+  can never be replayed against the other: the boundary pair alone is not
+  order-aware, and a mismatched replay would silently skip or repeat rows.
+  Pre-order cursors (no flag) decode as ascending, which keeps every cursor a
+  current client already holds valid.
+  """
+  payload: dict = {"s": key[0].isoformat(), "i": key[1]}
+  if descending:
+    payload["d"] = True
   return base64.urlsafe_b64encode(orjson.dumps(payload)).rstrip(b"=").decode("ascii")
 
 
-def _decode_run_cursor(cursor: str) -> tuple[datetime, str]:
-  """Decode one run-page cursor, failing loud on a malformed value."""
+def _decode_run_cursor(cursor: str) -> tuple[tuple[datetime, str], bool]:
+  """Decode one run-page cursor into its boundary and page order, failing loud
+  on a malformed value."""
   try:
     payload = orjson.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
     started = datetime.fromisoformat(payload["s"]) if payload["s"] else datetime.min.replace(tzinfo=UTC)
-    return (ensure_utc(started), payload["i"])
+    return (ensure_utc(started), payload["i"]), bool(payload.get("d", False))
   except (ValueError, KeyError, TypeError) as e:
     raise ValueError(f"malformed run page cursor: {cursor!r}") from e
 
@@ -689,14 +699,35 @@ class RunStore:
     runs.sort(key=_run_sort_key)
     return runs
 
-  def list_runs_page_sync(self, session_id: str, limit: int, cursor: str | None) -> RunPageSlice:
-    """One keyset page ordered by (started_at, id); cursor is the opaque page boundary."""
+  def list_runs_page_sync(
+      self, session_id: str, limit: int, cursor: str | None, *, descending: bool = False,
+  ) -> RunPageSlice:
+    """One keyset page ordered by the canonical (started_at, id) launch order.
+
+    The default stays chronological ascending (queued reservations first) with
+    its original cursor semantics. ``descending`` is the same total order read
+    backwards: the most recently started run opens the page, and queued
+    (never-launched) reservations close it — so a one-row descending page IS
+    the session's authoritative latest launch, at a request cost that never
+    grows with history length. A cursor minted under one order is refused
+    under the other instead of being silently misapplied.
+    """
     runs = self.list_run_records_sync(session_id)
+    runs.sort(key=_run_sort_key, reverse=descending)
     after = _decode_run_cursor(cursor) if cursor else None
     if after is not None:
-      runs = [r for r in runs if _run_sort_key(r) > after]
+      boundary, cursor_descending = after
+      if cursor_descending != descending:
+        raise ValueError(
+            f"run page cursor was minted for {'descending' if cursor_descending else 'ascending'} "
+            f"order and cannot be replayed under {'descending' if descending else 'ascending'} order")
+      if descending:
+        runs = [r for r in runs if _run_sort_key(r) < boundary]
+      else:
+        runs = [r for r in runs if _run_sort_key(r) > boundary]
     page = runs[:limit]
-    next_cursor = _encode_run_cursor(_run_sort_key(page[-1])) if len(runs) > limit and page else None
+    next_cursor = (
+        _encode_run_cursor(_run_sort_key(page[-1]), descending) if len(runs) > limit and page else None)
     return RunPageSlice(items=page, next_cursor=next_cursor)
 
   # -- facts ---------------------------------------------------------------

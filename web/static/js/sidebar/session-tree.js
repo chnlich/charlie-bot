@@ -459,6 +459,10 @@ async function revealNode(nodeId, ancestorRefs) {
     .map((a) => (typeof a === 'string' ? a : a.id))
     .reverse();
   chainIds.push(nodeId);
+  // The path's base level first: the archived deep-link caller clears every
+  // cached level before revealing, and the render reads the tree from the
+  // roots level down — without this refetch the reveal leaves an empty tree.
+  await ensureLevel(null);
   for (const id of chainIds) {
     if (id === nodeId) break;
     tree.expanded.add(id);
@@ -515,12 +519,16 @@ function onTreeChanged(sessionId) {
     const ids = [...pendingTreeEvents];
     pendingTreeEvents.clear();
     treeEventTimer = null;
-    if (currentFilter !== 'tasks') return;
-    void refreshAffectedLevels(ids);
+    // The data refresh (affected levels + the open session's panel hooks)
+    // always runs, so a report/close/ack/Run/creation fact is never lost while
+    // another sidebar filter is showing and the cached levels stay fresh for
+    // the return to the tree. Only the on-screen repaint is gated: another
+    // filter owns #session-list right now.
+    void refreshAffectedLevels(ids, {render: currentFilter === 'tasks'});
   }, 150);
 }
 
-async function refreshAffectedLevels(sessionIds) {
+async function refreshAffectedLevels(sessionIds, opts = {}) {
   // Refetch exactly the levels the changed nodes live on, plus each ancestor
   // level above them (the counts on ancestor rows are server facts).
   const levels = new Set(['']);
@@ -563,8 +571,10 @@ async function refreshAffectedLevels(sessionIds) {
   // Fresh server facts landed: a prior pagination-conflict explanation is
   // obsolete.
   tree.staleNotice.clear();
-  renderTree();
-  if (SESSION_ID) highlightNode(SESSION_ID);
+  if (opts.render !== false) {
+    renderTree();
+    if (SESSION_ID) highlightNode(SESSION_ID);
+  }
   if (globalThis.TaskPanel) globalThis.TaskPanel.onTreeChanged(sessionIds);
   if (globalThis.TaskRunsPanel) globalThis.TaskRunsPanel.onTreeChanged(sessionIds);
   if (globalThis.TaskContextPanel) globalThis.TaskContextPanel.onTreeChanged(sessionIds);

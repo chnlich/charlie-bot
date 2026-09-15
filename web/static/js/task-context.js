@@ -17,6 +17,9 @@ const panel = {
   previewError: null,
   historical: null,      // {runId, payload} when a Run's snapshot is selected
   historicalError: null,
+  currentRun: null,      // the latest STARTED run (server-selected), or null
+  currentPayload: null,  // its /context payload: {snapshot, legacy_prompt}
+  currentError: null,
   ruleDraft: null,       // {scope: 'node'|'subtree', text} unsaved
   ruleScope: 'node',
   kind: null,            // preview run kind override
@@ -36,8 +39,10 @@ async function refresh() {
   const sessionId = boundSessionId();
   if (!sessionId) return;
   const flight = {sessionId, gen: ++panel.gen};
-  panel.historical = null;
-  panel.historicalError = null;
+  // The historical run the user selected is NOT dropped by a data refresh:
+  // snapshots are immutable and the selection is the user's, so unrelated
+  // live updates (rename, sibling Run lifecycle) re-render around it. Only a
+  // session change clears it (onSessionChanged).
   try {
     const res = await fetch('/api/sessions/' + sessionId, {cache: 'no-store'});
     if (!res.ok) throw new Error('detail failed: ' + res.status);
@@ -83,35 +88,36 @@ async function refreshCurrentRun(flight) {
   if (!sessionId) return;
   flight = flight || {sessionId, gen: panel.gen};
   try {
-    const res = await fetch('/api/sessions/' + sessionId + '/runs?limit=100', {cache: 'no-store'});
+    // Authoritative latest-run selection lives on the run owner: one row of
+    // the newest-first page IS the session's most recently started run (the
+    // canonical started_at/id order), at a request cost that never grows with
+    // history length. A queued reservation sorts behind every launch and is
+    // never presented as one; its own limited/missing evidence stays visible
+    // instead of silently substituting an older well-formed snapshot.
+    const res = await fetch('/api/sessions/' + sessionId + '/runs?limit=1&order=desc', {cache: 'no-store'});
     if (!res.ok) throw new Error('runs failed: ' + res.status);
     const page = await res.json();
     if (isStale(flight)) return;
-    const withSnapshot = (page.items || []).filter((r) => r.prompt_snapshot_ref);
-    // Current run = the latest run that carries a committed instruction snapshot.
-    const current = withSnapshot[withSnapshot.length - 1] || null;
-    if (!current) {
+    const latest = (page.items || [])[0] || null;
+    if (!latest || !latest.started_at) {
+      // No run of this session has ever started (the row, if any, is a queued
+      // reservation): say so and drop any stale error from a prior view.
       panel.currentRun = null;
-      panel.currentSnapshot = null;
+      panel.currentPayload = null;
+      panel.currentError = null;
       render();
       return;
     }
-    const ctxRes = await fetch('/api/sessions/' + sessionId + '/runs/' + encodeURIComponent(current.id) + '/context', {cache: 'no-store'});
+    const ctxRes = await fetch('/api/sessions/' + sessionId + '/runs/' + encodeURIComponent(latest.id) + '/context', {cache: 'no-store'});
     const ctxBody = await ctxRes.json().catch(() => ({}));
     if (isStale(flight)) return;
-    if (!ctxRes.ok) {
-      panel.currentRun = current;
-      panel.currentSnapshot = null;
-      panel.currentError = ctxBody.detail || ('HTTP ' + ctxRes.status);
-    } else {
-      panel.currentRun = current;
-      panel.currentSnapshot = ctxBody.snapshot;
-      panel.currentError = null;
-    }
+    panel.currentRun = latest;
+    panel.currentPayload = ctxRes.ok ? ctxBody : null;
+    panel.currentError = ctxRes.ok ? null : (ctxBody.detail || ('HTTP ' + ctxRes.status));
   } catch (err) {
     if (isStale(flight)) return;
     panel.currentRun = null;
-    panel.currentSnapshot = null;
+    panel.currentPayload = null;
     panel.currentError = String(err);
   }
   render();
@@ -206,14 +212,36 @@ function blockCard(block, opts) {
   return card;
 }
 
-function snapshotSummary(node, snapshot, label) {
-  node.appendChild(sectionTitle(label));
-  if (!snapshot) {
-    node.appendChild(el('p', 'text-xs text-slate-500', 'Not available.'));
-    return;
+// One context payload's evidence, classified exactly as the server recorded
+// it: a committed snapshot, limited legacy raw-launch evidence, or honestly
+// nothing. Both the current-run and historical-run boxes render through this
+// one path — the client never re-derives evidence classes or re-parses
+// artifacts.
+function renderEvidenceInto(container, payload) {
+  const body = payload || {};
+  let shown = false;
+  if (body.snapshot) {
+    container.appendChild(el('p', 'text-xs text-slate-400',
+      body.snapshot.char_count + ' chars · hash ' + body.snapshot.prompt_hash.slice(0, 12) + '…'));
+    renderSnapshotInto(container, body.snapshot, null);
+    shown = true;
   }
-  node.appendChild(el('p', 'text-xs text-slate-400',
-    snapshot.char_count + ' chars · hash ' + snapshot.prompt_hash.slice(0, 12) + '…'));
+  if (body.legacy_prompt) {
+    container.appendChild(el('p', 'text-xs text-amber-300', 'Limited historical evidence: ' + body.legacy_prompt.note));
+    const details = el('details');
+    details.appendChild(el('summary', 'text-xs text-blue-400 cursor-pointer', 'View raw launch text'));
+    const pre = el('pre', 'mt-1 max-h-64 overflow-auto text-xs text-slate-300 whitespace-pre-wrap bg-slate-900 rounded p-2');
+    fetch('/files/' + encodePathSegments(body.legacy_prompt.ref))
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
+      .then((text) => { pre.textContent = text; })
+      .catch((err) => { pre.textContent = '(raw launch text unavailable: ' + err.message + ')'; });
+    details.appendChild(pre);
+    container.appendChild(details);
+    shown = true;
+  }
+  if (!shown) {
+    container.appendChild(el('p', 'text-xs text-slate-500', 'No stored instruction evidence for this run.'));
+  }
 }
 
 function changedSourceSets(currentBlocks, previewBlocks) {
@@ -285,8 +313,9 @@ function render() {
       nextBox.appendChild(el('p', 'text-xs text-amber-300',
         'Model overlay inactive: ' + panel.preview.overlay.error));
     }
-    renderSnapshotInto(nextBox, panel.preview, {compare: panel.currentSnapshot ? changedSourceSets(panel.currentSnapshot.blocks, panel.preview.blocks) : null});
-    if (panel.currentSnapshot) {
+    const currentSnapshot = panel.currentPayload && panel.currentPayload.snapshot;
+    renderSnapshotInto(nextBox, panel.preview, {compare: currentSnapshot ? changedSourceSets(currentSnapshot.blocks, panel.preview.blocks) : null});
+    if (currentSnapshot) {
       nextBox.appendChild(el('p', 'text-[11px] text-slate-500',
         'Green outline: source present in the next run but not the current one. Red: removed since the current run. Both lists are server facts.'));
     }
@@ -308,8 +337,11 @@ function render() {
   const curBox = el('div', 'rounded-xl border border-slate-700 bg-slate-800/60 p-4 space-y-3');
   curBox.appendChild(sectionTitle('Current run — startup snapshot of record'));
   if (panel.currentRun) {
+    // The row's fact-derived state names a finished latest run truthfully —
+    // the snapshot of record is labeled even when nothing is active anymore.
     curBox.appendChild(el('p', 'text-xs text-slate-400',
-      'Run ' + panel.currentRun.id.slice(0, 8) + ' · ' + panel.currentRun.kind));
+      'Run ' + panel.currentRun.id.slice(0, 8) + ' · ' + panel.currentRun.kind +
+      (panel.currentRun.state ? ' · ' + panel.currentRun.state : '')));
   }
   if (panel.currentError) {
     const err = el('div', 'rounded-lg bg-red-900/40 border border-red-700/50 text-red-200 text-xs px-3 py-2 space-y-2');
@@ -318,10 +350,10 @@ function render() {
     retry.addEventListener('click', () => refreshCurrentRun());
     err.appendChild(retry);
     curBox.appendChild(err);
-  } else if (panel.currentSnapshot) {
-    renderSnapshotInto(curBox, panel.currentSnapshot, null);
   } else if (panel.currentRun) {
-    curBox.appendChild(el('p', 'text-xs text-slate-500', 'This run has no stored managed-instruction snapshot.'));
+    // Same classification as the historical view: committed snapshot, limited
+    // legacy evidence, or honestly no stored evidence for this run.
+    renderEvidenceInto(curBox, panel.currentPayload);
   } else {
     curBox.appendChild(el('p', 'text-xs text-slate-500', 'No run has started yet — the next run will commit its snapshot here.'));
   }
@@ -335,27 +367,7 @@ function render() {
   if (panel.historical) {
     const hBox = el('div', 'rounded-xl border border-blue-700/50 bg-slate-800/60 p-4 space-y-3');
     hBox.appendChild(sectionTitle('Historical run ' + panel.historical.runId.slice(0, 8)));
-    const payload = panel.historical.payload;
-    if (payload.snapshot) {
-      hBox.appendChild(el('p', 'text-xs text-slate-400',
-        payload.snapshot.char_count + ' chars · hash ' + payload.snapshot.prompt_hash.slice(0, 12) + '…'));
-      renderSnapshotInto(hBox, payload.snapshot, null);
-    }
-    if (payload.legacy_prompt) {
-      hBox.appendChild(el('p', 'text-xs text-amber-300', 'Limited historical evidence: ' + payload.legacy_prompt.note));
-      const details = el('details');
-      details.appendChild(el('summary', 'text-xs text-blue-400 cursor-pointer', 'View raw launch text'));
-      const pre = el('pre', 'mt-1 max-h-64 overflow-auto text-xs text-slate-300 whitespace-pre-wrap bg-slate-900 rounded p-2');
-      fetch('/files/' + encodePathSegments(payload.legacy_prompt.ref))
-        .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
-        .then((text) => { pre.textContent = text; })
-        .catch((err) => { pre.textContent = '(raw launch text unavailable: ' + err.message + ')'; });
-      details.appendChild(pre);
-      hBox.appendChild(details);
-    }
-    if (!payload.snapshot && !payload.legacy_prompt) {
-      hBox.appendChild(el('p', 'text-xs text-slate-500', 'No stored instruction evidence for this run.'));
-    }
+    renderEvidenceInto(hBox, panel.historical.payload);
     const close = el('button', 'text-xs text-slate-400 hover:text-slate-200 underline', 'Close historical view');
     close.addEventListener('click', () => { panel.historical = null; render(); });
     hBox.appendChild(close);
@@ -485,7 +497,7 @@ function onSessionChanged(session) {
   panel.historical = null;
   panel.historicalError = null;
   panel.currentRun = null;
-  panel.currentSnapshot = null;
+  panel.currentPayload = null;
   panel.currentError = null;
   panel.ruleDraft = null;
   if (!session || !session.profile) {

@@ -187,12 +187,18 @@ class CharlieCodeBackend(AgentBackend):
     if event_type == "command_progress":
       state = "terminated" if event["killed"] else "still running"
       command = " ".join(self._commands_by_id[event["id"]].split())[:80]
-      return [{
-          "type": ET.SYSTEM,
-          "subtype": ET.COMMAND_PROGRESS,
-          "content": (f"Command {state} after {_duration_label(event['elapsed_seconds'])} "
+      return [
+          {
+              "type":
+                  ET.SYSTEM,
+              "subtype":
+                  ET.COMMAND_PROGRESS,
+              "content":
+                  (
+                      f"Command {state} after {_duration_label(event['elapsed_seconds'])} "
                       f"(pid {event['pid']}): {command}"),
-      }]
+          }
+      ]
 
     if event_type == "observation":
       translated = make_tool_result_event("Bash", event.get("output", ""))

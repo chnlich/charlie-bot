@@ -157,6 +157,7 @@ def _git_version() -> str:
     _GIT_VERSION = _get_git_version()
   return _GIT_VERSION
 
+
 # Content half of the ?v= asset token, keyed on the walk-instant signature
 # tuple: a file that moves after the walk keys the older digest and the next
 # render's walk re-hashes it, the same pre-read rule the file memos keep.

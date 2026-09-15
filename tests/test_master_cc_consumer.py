@@ -7,7 +7,7 @@ import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import (
@@ -840,3 +840,250 @@ async def test_handle_event_keeps_an_already_adopted_session_id_over_the_signal(
 
   assert cc_session_id == "oc-early"
   assert [e.get("type") for e in persisted] == [ET.SESSION_ATTACHED]
+
+
+# ---------------------------------------------------------------------------
+# Dequeue anchor refresh, post-round copy retirement, and the 9-14 incident shape
+# ---------------------------------------------------------------------------
+
+
+def _manager_backed_callbacks(mgr: SessionManager) -> SessionCallbacks:
+  """Mocked broadcast bundle whose anchor funnels are the real manager's."""
+  return SessionCallbacks(
+      persist_and_broadcast=AsyncMock(),
+      update_thinking_state=AsyncMock(),
+      mark_unread=AsyncMock(),
+      persist_cc_session_id=mgr.persist_cc_session_id,
+      has_completed_round=mgr.has_completed_round,
+      persist_master_run=mgr.persist_master_run,
+      persist_claude_account=mgr.persist_claude_account,
+      claude_context_state=AsyncMock(return_value=(None, None)),
+  )
+
+
+class _RealManagerSilentTeardown(SessionManager):
+  """The real SessionManager with only the teardown probe silenced: the dequeue
+  refresh reads disk through the real class while the consumer run stays hermetic."""
+
+  async def _has_running_tasks(self, session_id: str) -> bool:
+    return False
+
+
+async def run_consumer_over_real_disk(
+    session_id: str,
+    work_items: list[master_cc_state._WorkItem],
+    fake_run_cc,
+) -> None:
+  """run_session_consumer with the SessionManager class kept real: the dequeue
+  refresh reads disk through it, the teardown probe is silenced at the method, and
+  no class-level patch can shadow the refresh's own local import."""
+  master_cc_state._session_queues.pop(session_id, None)
+  master_cc_state._session_queues[session_id] = asyncio.Queue()
+  for work_item in work_items:
+    master_cc_state._session_queues[session_id].put_nowait(work_item)
+  try:
+    with (
+        patch.object(master_cc_run, "_run_cc", side_effect=fake_run_cc),
+        patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
+        patch.object(SessionManager, "_has_running_tasks", AsyncMock(return_value=False)),
+    ):
+      await asyncio.wait_for(master_cc_queue._session_consumer(session_id), timeout=5)
+  finally:
+    master_cc_state._session_queues.pop(session_id, None)
+    master_cc_state._session_consumers.pop(session_id, None)
+
+
+def _sound_round(cc_session_id: str):
+
+  async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
+    return (cc_session_id, 0, None, {})
+
+  return fake_run_cc
+
+
+def _failed_round(cc_session_id: str):
+
+  async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
+    return (cc_session_id, 1, "backend died", {})
+
+  return fake_run_cc
+
+
+@pytest.mark.asyncio
+async def test_stale_enqueue_snapshot_wakes_after_move_and_persist_and_does_not_overwrite(tmp_path: Path) -> None:
+  """The 2026-09-14 incident shape as a regression: an enqueue-time stale snapshot
+  wakes after a successful move+persist. The dequeue refresh reads disk, the round
+  runs from the disk-true account, no second move is attempted, and replaying the
+  same stale wake is harmless. Fully synthetic fixtures (pool-a/pool-b style
+  labels, synthetic jsonl lines)."""
+  from conftest import fable_pool_cfg, make_transcript
+
+  cfg = fable_pool_cfg(tmp_path, labels=("pool-a", "pool-b", "pool-c"))
+  cc_id = "sid-test-1"
+  # The previous round moved the transcript to pool-b and its label persisted:
+  # disk is true, and pool-b holds the live copy.
+  live = make_transcript(tmp_path / "claude-pool-b", cc_id)
+  live.write_text('{"type": "user", "content": "seed"}\n{"type": "assistant", "content": "live"}\n', encoding="utf-8")
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="incident-replay"))
+  await mgr.persist_cc_session_id(session.id, cc_id)
+  await mgr.persist_claude_account(session.id, "pool-b")
+
+  def stale_snapshot_item() -> master_cc_state._WorkItem:
+    # The enqueue-time snapshot still names the pre-move account.
+    snapshot = SessionMetadata(id=session.id, name="incident-replay", backend=cfg.backends.options[0].id)
+    snapshot.cc_session_id = cc_id
+    snapshot.claude_account = "pool-a"
+    return make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+
+  from src.core import claude_accounts as claude_accounts_mod
+  claude_accounts_mod.reset_for_tests()
+
+  item = stale_snapshot_item()
+  live_before = live.stat()
+  await run_consumer_over_real_disk(session.id, [item], _sound_round(cc_id))
+
+  disk = await mgr.read_metadata_fresh(session.id)
+  assert disk.claude_account == "pool-b", "the refresh overwrote the stale label with the disk value"
+  assert disk.cc_session_id == cc_id
+  live_after = live.stat()
+  assert (live_after.st_mtime_ns, live_after.st_size) == (live_before.st_mtime_ns, live_before.st_size), (
+      "no second move: the live copy's bytes and stamp are untouched")
+
+  # Replay the same stale wake: the refresh reads disk again, still harmless.
+  replay = stale_snapshot_item()
+  await run_consumer_over_real_disk(session.id, [replay], _sound_round(cc_id))
+  disk = await mgr.read_metadata_fresh(session.id)
+  assert disk.claude_account == "pool-b"
+  live_replayed = live.stat()
+  assert (live_replayed.st_mtime_ns, live_replayed.st_size) == (live_before.st_mtime_ns, live_before.st_size)
+
+
+@pytest.mark.asyncio
+async def test_dequeue_refresh_keeps_a_deliberately_empty_anchor(tmp_path: Path) -> None:
+  """A snapshot dequeuing with a cleared cc_session_id is the stale-resume retry's
+  fresh-start declaration: the refresh must not resurrect the disk's stale anchor
+  into it, and the new round's own id lands on disk afterwards."""
+  from conftest import build_sessions_cfg
+
+  cfg = build_sessions_cfg(tmp_path)
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="retry"))
+  await mgr.persist_cc_session_id(session.id, "stale-id")
+
+  snapshot = SessionMetadata(id=session.id, name="retry", backend=cfg.backends.options[0].id)
+  snapshot.cc_session_id = None
+  item = make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+  seen_at_dequeue: list[str | None] = []
+
+  async def retry_round(work_item: master_cc_state._WorkItem):
+    seen_at_dequeue.append(work_item.session_meta.cc_session_id)
+    return ("fresh-id", 0, None, {})
+
+  await run_consumer_over_real_disk(session.id, [item], retry_round)
+
+  assert seen_at_dequeue == [None], "no disk anchor may be resurrected into a cleared snapshot"
+  disk = await mgr.read_metadata_fresh(session.id)
+  assert disk.cc_session_id == "fresh-id", "the new round's own anchor persists normally"
+
+
+@pytest.mark.asyncio
+async def test_consumer_refreshes_a_stale_label_and_cc_id_from_disk(tmp_path: Path) -> None:
+  """Both anchors refresh from disk: an enqueue-time label and cc-id that a recycle
+  or a concurrent placement superseded are overwritten by the disk values."""
+  from conftest import build_sessions_cfg
+
+  cfg = build_sessions_cfg(tmp_path)
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="refresh"))
+  await mgr.persist_cc_session_id(session.id, "cc-new")
+  await mgr.persist_claude_account(session.id, "pool-b")
+
+  snapshot = SessionMetadata(id=session.id, name="refresh", backend=cfg.backends.options[0].id)
+  snapshot.cc_session_id = "cc-old"
+  snapshot.claude_account = "pool-a"
+  item = make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+
+  await run_consumer_over_real_disk(session.id, [item], _sound_round("cc-new"))
+
+  assert item.session_meta.cc_session_id == "cc-new"
+  assert item.session_meta.claude_account == "pool-b"
+
+
+@pytest.mark.asyncio
+async def test_consumer_disk_read_failure_falls_back_to_fill_empty_only(tmp_path: Path) -> None:
+  """A failed disk read keeps the enqueue loop's previous behavior: the last round's
+  values relay into empty fields only."""
+  from conftest import build_sessions_cfg
+
+  cfg = build_sessions_cfg(tmp_path)
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="fallback"))
+
+  def broken_read(session_id: str):
+    raise OSError("disk gone")
+
+  snapshot = SessionMetadata(id=session.id, name="fallback", backend=cfg.backends.options[0].id)
+  snapshot.cc_session_id = None
+  snapshot.claude_account = None
+  first = make_work_item(
+      cfg, snapshot.model_copy(deep=True), cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+  second_snapshot = snapshot.model_copy(deep=True)
+  second = make_work_item(cfg, second_snapshot, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+
+  async def fake_run_cc(item: master_cc_state._WorkItem):
+    return ("cc-1", 0, None, {})
+
+  real_read = SessionManager.read_metadata_fresh
+  reads = {"n": 0}
+
+  async def flaky_read(self, session_id: str):
+    reads["n"] += 1
+    if reads["n"] == 2:  # the second item's dequeue read fails
+      raise OSError("disk gone")
+    return await real_read(self, session_id)
+
+  with patch.object(SessionManager, "read_metadata_fresh", flaky_read):
+    await run_consumer_over_real_disk(session.id, [first, second], fake_run_cc)
+
+  # The failed read fell back to fill-empty-only from the first round's values.
+  assert second.session_meta.cc_session_id == "cc-1"
+
+
+@pytest.mark.asyncio
+async def test_consumer_retires_transcript_copies_after_a_sound_round(tmp_path: Path) -> None:
+  """Post-MASTER_DONE, with the label persisted, the pool's redundant copies collapse
+  to the newest two; a failed round deletes nothing."""
+  from conftest import fable_pool_cfg, make_transcript
+
+  cfg = fable_pool_cfg(tmp_path, labels=("pool-a", "pool-b", "pool-c"))
+  cc_id = "sid-test-2"
+  import os
+
+  copies = {}
+  for label, body, stamp in (("pool-c", "oldest", 1_000), ("pool-b", "middle", 2_000), ("pool-a", "newest", 3_000)):
+    path = make_transcript(tmp_path / f"claude-{label}", cc_id)
+    path.write_text(body, encoding="utf-8")
+    os.utime(path, ns=(stamp, stamp))
+    copies[label] = path
+
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="sweep"))
+  await mgr.persist_cc_session_id(session.id, cc_id)
+  await mgr.persist_claude_account(session.id, "pool-a")
+
+  item = make_work_item(
+      cfg, (await mgr.get_session(session.id)), cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+  await run_consumer_over_real_disk(session.id, [item], _sound_round(cc_id))
+
+  assert not copies["pool-c"].exists(), "the oldest copy retired"
+  assert copies["pool-b"].exists() and copies["pool-a"].exists(), "the newest two stay"
+
+  # A failed round deletes nothing.
+  failed = make_work_item(
+      cfg, (await mgr.get_session(session.id)), cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+  make_transcript(tmp_path / "claude-pool-c", cc_id)
+  await run_consumer_over_real_disk(session.id, [failed], _failed_round(cc_id))
+
+  assert copies["pool-c"].exists(), "a failed round keeps every copy as its fallback"
+  assert copies["pool-b"].exists() and copies["pool-a"].exists()

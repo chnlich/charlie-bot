@@ -1,6 +1,7 @@
 """Master account relay: turn placement, the in-run watch, and _run_cc continuing a turn on another pool account."""
 
 import dataclasses
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -8,21 +9,22 @@ from unittest.mock import AsyncMock
 
 import pytest
 from conftest import (
-    BUILD_BACKEND_PATCH_TARGET,
-    FABLE_MODEL,
-    POOLED_FABLE_ID,
-    ScriptedRelayBackend,
-    backend_option,
-    fable_pool_cfg,
-    fresh_state_fixture,
-    install_scripted_backends,
-    make_transcript,
-    make_work_item,
-    mock_session_callbacks,
-    patch_instructions_content,
-    rate_limit_event,
-    write_pool_credentials,
+  BUILD_BACKEND_PATCH_TARGET,
+  FABLE_MODEL,
+  POOLED_FABLE_ID,
+  ScriptedRelayBackend,
+  backend_option,
+  fable_pool_cfg,
+  fresh_state_fixture,
+  install_scripted_backends,
+  make_transcript,
+  make_work_item,
+  mock_session_callbacks,
+  patch_instructions_content,
+  rate_limit_event,
+  write_pool_credentials,
 )
+from structlog.testing import capture_logs
 
 from src.agents import master_cc_relay, master_cc_run, master_cc_state
 from src.agents.backends import base as backend_base
@@ -31,7 +33,8 @@ from src.core import claude_accounts, claude_relay
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.message_aggregator import MessageAggregator
-from src.core.models import BackendOption, SessionCallbacks, SessionMetadata
+from src.core.models import BackendOption, CreateSessionRequest, SessionCallbacks, SessionMetadata
+from src.core.sessions import SessionManager
 
 NOW = datetime(2026, 9, 6, 20, 0, tzinfo=UTC)
 UUID = "uuid-relay-1"
@@ -467,3 +470,267 @@ def test_usage_panel_entry_carries_the_login_directory_while_unhealthy(
   claude_accounts.reset_for_tests()
   ext_usage_mod._annotate_login_state("claude:ext-1", account)
   assert "login_required" not in ext_usage_mod._cached_usage["claude:ext-1"]
+
+
+# ---------------------------------------------------------------------------
+# Label persistence at placement, the lineage probe, and refusal self-heal
+# ---------------------------------------------------------------------------
+
+
+def _manager_backed_callbacks(mgr) -> SessionCallbacks:
+  """A mocked broadcast bundle whose anchor funnels are the real manager's, so label
+  persistence is observable on disk rather than on a mock's call list."""
+  return SessionCallbacks(
+      persist_and_broadcast=AsyncMock(),
+      update_thinking_state=AsyncMock(),
+      mark_unread=AsyncMock(),
+      persist_cc_session_id=mgr.persist_cc_session_id,
+      has_completed_round=mgr.has_completed_round,
+      persist_master_run=mgr.persist_master_run,
+      persist_claude_account=mgr.persist_claude_account,
+      claude_context_state=AsyncMock(return_value=(None, None)),
+  )
+
+
+def _seed_copy(config_dir: Path, cc_session_id: str, body: str, *, mtime_ns: int) -> Path:
+  path = make_transcript(config_dir, cc_session_id)
+  path.write_text(body, encoding="utf-8")
+  os.utime(path, ns=(mtime_ns, mtime_ns))
+  return path
+
+
+def _reconciled(logs: list[dict]) -> dict | None:
+  return next((entry for entry in logs if entry["event"] == "master_cc_account_label_reconciled"), None)
+
+
+@pytest.mark.asyncio
+async def test_place_turn_persists_the_label_when_the_move_lands(tmp_path: Path) -> None:
+  """A cold-cache switch moves the transcript and the label lands on disk immediately:
+  a fresh SessionManager reads the new account before the round has done anything."""
+  cfg = fable_pool_cfg(tmp_path)
+  make_transcript(tmp_path / "claude-main", UUID)
+  claude_accounts.observe_rate_limit("main", rate_limit_event("allowed_warning", 0.95)["rate_limit_info"], now=NOW)
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="disk-true"))
+  await mgr.persist_cc_session_id(session.id, UUID)
+  await mgr.persist_claude_account(session.id, "main")
+  meta = await mgr.get_session(session.id)
+  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+
+  account, error = await master_cc_relay.place_turn(
+      cfg, item, cfg.backends.options[0], UUID, str(tmp_path), None, None, now=NOW)
+
+  assert error is None
+  disk = await mgr.read_metadata_fresh(session.id)
+  assert disk.claude_account == account.label
+  cold_reader = SessionManager(cfg)
+  cold_disk = await cold_reader.read_metadata_fresh(session.id)
+  assert cold_disk.claude_account == account.label
+
+
+@pytest.mark.asyncio
+async def test_place_turn_probe_adopts_the_newest_holder_after_a_kill_between_move_and_persist(tmp_path: Path) -> None:
+  """Kill-shaped interleave: the relay's move landed, its label persist did not. The
+  next placement's probe adopts the newest holder before selection and continues
+  from it without moving or touching a byte of it."""
+  cfg = fable_pool_cfg(tmp_path)
+  seed_line = '{"type": "user", "content": "seed"}\n'
+  grown_tail = '{"type": "assistant", "content": "' + "x" * (claude_accounts.PROBE_TAIL_BYTES * 2) + '"}\n'
+  stale = _seed_copy(tmp_path / "claude-main", UUID, seed_line, mtime_ns=1_000)
+  live = _seed_copy(tmp_path / "claude-ext-1", UUID, seed_line + grown_tail, mtime_ns=2_000)
+  live_before = live.stat()
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="kill-window"))
+  await mgr.persist_cc_session_id(session.id, UUID)
+  await mgr.persist_claude_account(session.id, "main")
+  meta = await mgr.get_session(session.id)
+  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+
+  with capture_logs() as logs:
+    account, error = await master_cc_relay.place_turn(
+        cfg, item, cfg.backends.options[0], UUID, str(tmp_path), NOW - timedelta(minutes=10), None, now=NOW)
+
+  assert error is None
+  assert account.label == "ext-1", "the probe adopted the holder of the grown copy"
+  assert meta.claude_account == "ext-1"
+  disk = await mgr.read_metadata_fresh(session.id)
+  assert disk.claude_account == "ext-1"
+  reconciled = _reconciled(logs)
+  assert reconciled is not None
+  assert reconciled["adopted"] == "ext-1" and reconciled["previous"] == "main"
+  assert reconciled["reason"] == "forked_or_stale_lineage"
+  live_after = live.stat()
+  assert (live_after.st_mtime_ns,
+          live_after.st_size) == (live_before.st_mtime_ns,
+                                  live_before.st_size), ("the adopted copy's bytes and stamp are untouched")
+  assert stale.read_text(encoding="utf-8") == seed_line
+
+
+@pytest.mark.asyncio
+async def test_place_turn_probe_skips_with_at_most_the_labels_own_copy(tmp_path: Path) -> None:
+  """One pool copy (the label's own) is nothing to reconcile: no adoption, no warn."""
+  cfg = fable_pool_cfg(tmp_path)
+  make_transcript(tmp_path / "claude-main", UUID)
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="single-copy"))
+  await mgr.persist_cc_session_id(session.id, UUID)
+  await mgr.persist_claude_account(session.id, "main")
+  meta = await mgr.get_session(session.id)
+  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+
+  with capture_logs() as logs:
+    account, error = await master_cc_relay.place_turn(
+        cfg, item, cfg.backends.options[0], UUID, str(tmp_path), NOW - timedelta(minutes=10), None, now=NOW)
+
+  assert error is None
+  assert _reconciled(logs) is None
+  disk = await mgr.read_metadata_fresh(session.id)
+  assert disk.claude_account == account.label
+  assert account.label == "main", "the label was never second-guessed"
+
+
+@pytest.mark.asyncio
+async def test_place_turn_probe_skips_without_a_resume_id(tmp_path: Path) -> None:
+  cfg = fable_pool_cfg(tmp_path)
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="fresh"))
+  meta = await mgr.get_session(session.id)
+  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+
+  with capture_logs() as logs:
+    account, error = await master_cc_relay.place_turn(
+        cfg, item, cfg.backends.options[0], None, str(tmp_path), None, None, now=NOW)
+
+  assert error is None
+  assert _reconciled(logs) is None
+  assert account is not None
+
+
+@pytest.mark.asyncio
+async def test_place_turn_probe_skips_for_a_declared_fresh_start(tmp_path: Path) -> None:
+  """expect_fresh_session is the weekly recycle's no-transcript scenario: the probe
+  stays out and the existing label path runs."""
+  cfg = fable_pool_cfg(tmp_path)
+  seed_line = '{"type": "user", "content": "seed"}\n'
+  grown_tail = '{"type": "assistant", "content": "' + "x" * (claude_accounts.PROBE_TAIL_BYTES * 2) + '"}\n'
+  _seed_copy(tmp_path / "claude-main", UUID, seed_line, mtime_ns=1_000)
+  _seed_copy(tmp_path / "claude-ext-1", UUID, seed_line + grown_tail, mtime_ns=2_000)
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="recycled"))
+  await mgr.persist_cc_session_id(session.id, UUID)
+  await mgr.persist_claude_account(session.id, "main")
+  meta = await mgr.get_session(session.id)
+  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+  item.expect_fresh_session = True
+
+  with capture_logs() as logs:
+    account, error = await master_cc_relay.place_turn(
+        cfg, item, cfg.backends.options[0], UUID, str(tmp_path), NOW - timedelta(minutes=10), None, now=NOW)
+
+  assert error is None
+  assert _reconciled(logs) is None
+  assert meta.claude_account == account.label
+
+
+@pytest.mark.asyncio
+async def test_place_turn_adopts_the_refused_destination_and_continues_from_it(tmp_path: Path) -> None:
+  """The placement move refused by the guard (the destination holds a strictly newer
+  copy) does not fail the turn: the destination is adopted, persisted, and the turn
+  continues from it with no copy."""
+  cfg = fable_pool_cfg(tmp_path)
+  _seed_copy(tmp_path / "claude-main", UUID, '{"stale": true}\n', mtime_ns=1_000)
+  live = _seed_copy(tmp_path / "claude-ext-1", UUID, '{"stale": true}\n{"live": true}\n', mtime_ns=2_000)
+  claude_accounts.observe_rate_limit("main", rate_limit_event("allowed_warning", 0.95)["rate_limit_info"], now=NOW)
+  live_before = live.stat()
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="refused"))
+  await mgr.persist_cc_session_id(session.id, UUID)
+  await mgr.persist_claude_account(session.id, "main")
+  meta = await mgr.get_session(session.id)
+  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+
+  with capture_logs() as logs:
+    account, error = await master_cc_relay.place_turn(
+        cfg, item, cfg.backends.options[0], UUID, str(tmp_path), NOW - timedelta(hours=2), None, now=NOW)
+
+  assert error is None, "a refusal the newer copy already answers is not a failed placement"
+  assert account.label == "ext-1"
+  assert meta.claude_account == "ext-1"
+  disk = await mgr.read_metadata_fresh(session.id)
+  assert disk.claude_account == "ext-1"
+  reconciled = _reconciled(logs)
+  assert reconciled is not None
+  assert reconciled["reason"] == "guard_refused_newer_transcript"
+  live_after = live.stat()
+  assert (live_after.st_mtime_ns, live_after.st_size) == (live_before.st_mtime_ns, live_before.st_size)
+
+
+@pytest.mark.asyncio
+async def test_run_cc_persists_the_label_when_the_mid_turn_relay_lands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = fable_pool_cfg(tmp_path)
+  make_transcript(tmp_path / "claude-main", UUID)
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="mid-relay"))
+  await mgr.persist_cc_session_id(session.id, UUID)
+  await mgr.persist_claude_account(session.id, "main")
+  meta = await mgr.get_session(session.id)
+  first = ScriptedRelayBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
+  second = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
+  _install_backends(monkeypatch, [first, second])
+  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+
+  cc_session_id, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
+
+  assert (cc_session_id, exit_code, error_msg) == (UUID, 0, None)
+  disk = await mgr.read_metadata_fresh(session.id)
+  assert disk.claude_account == "ext-1", "the label is disk-true from the relay, not at round end"
+
+
+@pytest.mark.asyncio
+async def test_run_cc_mid_turn_refusal_adopts_the_destination_and_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The mid-turn relay's move refused by the guard (the destination holds a newer
+  copy) adopts the destination and continues the turn from it -- no failed turn, no
+  overwrite."""
+  cfg = fable_pool_cfg(tmp_path)
+  # The label copy is old; ext-2 holds its successor -- same lineage, grown
+  # inside the probe's tail window -- under a newer stamp from an earlier state
+  # of this session. The placement probe therefore stays out of the way, and the
+  # mid-turn relay onto ext-2 refuses and is adopted rather than overwriting.
+  seed_line = '{"type": "user", "content": "seed"}\n'
+  _seed_copy(tmp_path / "claude-main", UUID, seed_line, mtime_ns=1_000)
+  live = _seed_copy(
+      tmp_path / "claude-ext-2",
+      UUID,
+      seed_line + '{"type": "assistant", "content": "grew a little"}\n',
+      mtime_ns=9_000)
+  live_before = live.stat()
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="mid-refusal"))
+  await mgr.persist_cc_session_id(session.id, UUID)
+  await mgr.persist_claude_account(session.id, "main")
+  meta = await mgr.get_session(session.id)
+  first = ScriptedRelayBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
+  second = ScriptedRelayBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
+  third = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
+  builds = _install_backends(monkeypatch, [first, second, third])
+  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+
+  with capture_logs() as logs:
+    cc_session_id, exit_code, error_msg, extras = await master_cc_run._run_cc(item)
+
+  assert (cc_session_id, exit_code, error_msg) == (UUID, 0, None)
+  assert extras["account_relays"] == 2, "the adoption counts toward the relay cap like any account change"
+  assert builds[2]["kwargs"]["claude_account"].config_dir == str(tmp_path / "claude-ext-2")
+  assert third.prompt == claude_relay.CONTINUATION_PROMPT
+  reconciled = _reconciled(logs)
+  assert reconciled is not None
+  assert reconciled["adopted"] == "ext-2" and reconciled["previous"] == "ext-1"
+  assert reconciled["reason"] == "guard_refused_newer_transcript"
+  disk = await mgr.read_metadata_fresh(session.id)
+  assert disk.claude_account == "ext-2"
+  live_after = live.stat()
+  assert (live_after.st_mtime_ns,
+          live_after.st_size) == (live_before.st_mtime_ns,
+                                  live_before.st_size), ("the adopted copy was not overwritten")

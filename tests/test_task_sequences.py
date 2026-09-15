@@ -558,3 +558,160 @@ async def test_improve_without_authorization_is_forbidden_not_a_server_error(
     assert await find_running_loop(manager.id, cfg) is None
     loops_dir = _loops_dir(manager.id, cfg)
     assert not loops_dir.is_dir() or list(loops_dir.glob("*")) == []
+
+
+# ---------------------------------------------------------------------------
+# Withheld launches settle: no hung waiter, released lock, honest report
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_withheld_iteration_launch_settles_the_loop_without_hanging(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    """A launch precondition that fails in the registration-to-launch interval
+    (here: the loop's child paused) must never leave the controller polling
+    forever: the loop settles blocked with the actual reason, the active lock
+    is released, the queued iteration Run stays as the retained pending
+    request, and the ONE blocked report lands on the manager."""
+    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+    from src.core.control_events import stable_run_id
+    from src.core.improve_command import (
+        _active_loop_path,
+        reserve_loop_state,
+    )
+    from src.core.improve_sequence import create_improve_child, run_improve_sequence
+    from src.core.models import TaskSpec
+    manager = await tree.create_task(
+        request_id="root", task_parent_id=None, profile="manager",
+        task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
+    await tree.dispatch.admit_input(
+        manager.id, event_type=ET.USER, content="Take off. Improve the thing.", actor="user")
+    install_backends(monkeypatch, [], "src.agents.worker.build_backend")
+    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+
+    state = await reserve_loop_state(
+        manager.id, "improve the thing", "improve/withheld", str(repo), cfg,
+        base_branch="main", resolved_backend="fake", resolved_model=None)
+    child = await create_improve_child(
+        tree, manager.id, state.loop_id, "improve the thing",
+        repo_path=str(repo), base_branch="main")
+    # The launch precondition fails before any process may start: the child
+    # (the iteration Runs' node) is paused.
+    from src.core.models import PatchSessionTaskRequest
+    from src.core.run_token import CallerIdentity
+    await tree.patch_task(
+        child.id, PatchSessionTaskRequest(automation_paused=True), caller=CallerIdentity(kind="operator"))
+
+    controller = asyncio.create_task(run_improve_sequence(
+        manager.id, cfg, tree, loop_id=state.loop_id, iterations=2, child_id=child.id,
+        goal="improve the thing"))
+    await asyncio.wait_for(controller, 30)
+
+    from src.core.improve_command import load_loop_state
+    settled = await load_loop_state(manager.id, state.loop_id, cfg)
+    assert settled is not None and settled.status == "blocked"
+    assert not _active_loop_path(manager.id, cfg).exists(), (
+        "a settled loop must release its active lock")
+    # The queued iteration Run stays as the retained pending request (no
+    # terminal fact, no side effects, no automatic retry).
+    runs = tree.runs.list_run_records_sync(child.id)
+    assert len(runs) == 1
+    iteration_run_id = stable_run_id(child.id, f"improve:{state.loop_id}:iter:1")
+    assert runs[0].id == iteration_run_id
+    assert runs[0].pid is None
+    assert tree.runs.terminal_outcome(tree.runs.load_events_sync(child.id), iteration_run_id) is None
+    # The actual reason is delivered: one blocked report on the manager.
+    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+    assert len(reports) == 1
+    assert reports[0]["outcome"] == "blocked"
+    assert "paused" in str(reports[0]["summary"])
+    # The released lock allows an explicit restart (the existing resume policy).
+    next_state = await reserve_loop_state(
+        manager.id, "improve the thing", "improve/withheld-2", str(repo), cfg,
+        base_branch="main", resolved_backend="fake", resolved_model=None)
+    assert next_state.loop_id != state.loop_id
+
+
+@pytest.mark.asyncio
+async def test_stopped_queued_iteration_never_launches_and_settles(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    """A durable stop request landing on a queued iteration is a settle fact:
+    the launch refuses, the controller settles blocked, and the run keeps its
+    stop request (never launched behind it)."""
+    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+    from src.core.improve_command import reserve_loop_state
+    from src.core.improve_sequence import create_improve_child, run_improve_sequence
+    from src.core.models import TaskSpec
+    manager = await tree.create_task(
+        request_id="root", task_parent_id=None, profile="manager",
+        task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
+    await tree.dispatch.admit_input(
+        manager.id, event_type=ET.USER, content="Take off. Improve the thing.", actor="user")
+    install_backends(monkeypatch, [], "src.agents.worker.build_backend")
+    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+
+    state = await reserve_loop_state(
+        manager.id, "improve the thing", "improve/stopped", str(repo), cfg,
+        base_branch="main", resolved_backend="fake", resolved_model=None)
+    child = await create_improve_child(
+        tree, manager.id, state.loop_id, "improve the thing",
+        repo_path=str(repo), base_branch="main")
+    from src.core.control_events import stable_run_id
+    from src.core.models import RunRecord
+    iteration_run_id = stable_run_id(child.id, f"improve:{state.loop_id}:iter:1")
+    # Register the run first so the stop request has a record to bind to.
+    await tree.runs.register_run(
+        RunRecord(id=iteration_run_id, session_id=child.id, kind="iteration",
+                  backend="fake", repo_path=str(repo), base_branch="main",
+                  branch_name="improve/stopped",
+                  worktree_path=str(Path(cfg.paths.worktree_dir) / "improve-stopped")))
+    await tree.runs.request_stop(child.id, iteration_run_id, "stop before launch")
+
+    controller = asyncio.create_task(run_improve_sequence(
+        manager.id, cfg, tree, loop_id=state.loop_id, iterations=2, child_id=child.id,
+        goal="improve the thing"))
+    await asyncio.wait_for(controller, 30)
+
+    from src.core.improve_command import load_loop_state
+    settled = await load_loop_state(manager.id, state.loop_id, cfg)
+    assert settled is not None and settled.status == "blocked"
+    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+    assert len(reports) == 1 and reports[0]["outcome"] == "blocked"
+    assert "stop" in str(reports[0]["summary"]).lower()
+
+
+@pytest.mark.asyncio
+async def test_launch_and_settle_follows_a_live_process_without_relaunching(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    """The shared observation never duplicates a live process: a Run that
+    already carries a pid is followed to its durable fact (however long it
+    takes), and the settlement outcome is that run's own result — no second
+    build, no kill for running long."""
+    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+    from src.core.models import RunRecord, TaskSpec
+    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+    builds = install_backends(monkeypatch, [], "src.agents.worker.build_backend")
+    manager = await tree.create_task(
+        request_id="root", task_parent_id=None, profile="manager",
+        task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
+    await tree.dispatch.admit_input(
+        manager.id, event_type=ET.USER, content="Take off. Go.", actor="user")
+    child = await tree.create_task(
+        request_id="leaf", task_parent_id=manager.id, profile="worker",
+        task=TaskSpec(goal="work"), name="W", backend="fake", caller="operator")
+    run = await tree.runs.register_run(
+        RunRecord(id="live-run", session_id=child.id, kind="work", backend="fake",
+                  repo_path=str(repo), base_branch="main", branch_name="live",
+                  worktree_path=str(Path(cfg.paths.worktree_dir) / "live")))
+    # A live process identity with no terminal fact yet (as a recovered or
+    # replayed registration sees it).
+    await tree.runs.record_launch(child.id, run.id, pid=424001, pid_start="1-424001")
+    settled = asyncio.create_task(
+        tree.dispatch.executor.launch_and_settle(child.id, run.id))
+    # The process's own follow lands the durable fact (whenever it lands, the
+    # follower returns it — the pid alone decided not to relaunch).
+    await tree.runs.record_finish(child.id, run.id, outcome="success")
+    observation = await asyncio.wait_for(settled, 10)
+    assert observation.withheld is None
+    assert observation.outcome == "success"
+    assert builds == []  # followed, never relaunched

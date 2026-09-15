@@ -135,6 +135,11 @@ RUN_FINISHED = "run_finished"
 CHILD_REPORT = "child_report"
 PROMPT_CHANGED = "prompt_changed"
 TASK_IMPORTED = "task_imported"
+# An operator's durable confirmation that specific task inputs were actually
+# handled out-of-band (the terminal-driven TUI node's normal case). The event
+# names the exact input ids; the fold treats them like a successful run's
+# acknowledged batch, so they stop pending while anything later stays pending.
+TASK_INPUT_ACKNOWLEDGED = "task_input_acknowledged"
 
 # -- LaTeX -------------------------------------------------------------------
 TEX_EDIT_PROPOSED = "tex_edit_proposed"

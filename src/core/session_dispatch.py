@@ -160,12 +160,9 @@ class TaskInputDispatcher:
                 f"task {session_id} has no creation or import boundary; it is not a task-tree node")
         runs = tree.runs.list_run_records_sync(session_id)
         events = tree.fact_history(session_id)
-        confirmed: set[str] = set()
-        for event in events:
-            if event.get("type") == ET.RUN_FINISHED and event.get("outcome") == "success":
-                ids = event.get("input_event_ids")
-                if isinstance(ids, list):
-                    confirmed.update(str(i) for i in ids)
+        # Everything the facts fold treats as acknowledged: a successful run's
+        # batch, and the operator's durable input acknowledgements.
+        confirmed: set[str] = set(facts.confirmed_input_ids)
         claimed: set[str] = set()
         for run in runs:
             if tree.runs.run_has_terminal_fact(run, events):
@@ -321,6 +318,13 @@ class TaskInputDispatcher:
                 return decision
             if tree.runs.stop_requested(events, run.id):
                 continue  # a stopped queued run is never launched
+            if run.kind in ("iteration", "scheduled_step"):
+                # Sequence Runs are their controller's launches: they need the
+                # controller's composed prompt and sequence context, so the
+                # dispatcher never starts one headlessly (and an interrupted
+                # improve iteration is never silently auto-resumed). The
+                # owning controller or the recovery re-drive advances them.
+                continue
             if run.kind == "manager_turn" and not run.input_event_ids and not pending:
                 # A void reservation (registered, never claimed): with nothing
                 # pending it must never launch an empty side-effecting turn,

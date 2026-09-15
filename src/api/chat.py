@@ -79,13 +79,17 @@ async def send_message(
 ) -> JSONResponse:
   """Send a message to the master CC agent. Returns 202; response streams via WebSocket."""
   backend_option = cfg.get_backend_option(meta.backend) if meta.backend else None
-  if backend_option is not None and backend_option.type == BackendType.TUI_CLI:
+  is_tui = backend_option is not None and backend_option.type == BackendType.TUI_CLI
+  if is_tui and meta.profile is None:
     raise HTTPException(status_code=400, detail="Chat input is not supported for tui-cli sessions; use the terminal.")
 
   # A v2 task node routes input through the durable dispatcher: browser and
   # operator input are real user input, a run-token agent on the same route
   # stays agent input with its own provenance. Closed nodes retain the input
-  # as history; the executor seam (next stage) decides any launch.
+  # as history; the executor seam (next stage) decides any launch. A tui-cli
+  # manager task's input is durable and pending (the terminal is its execution
+  # surface — no headless turn is started), so the response carries the
+  # decision that names the transport limit.
   if meta.profile is not None:
     from src.core.task_sessions import TaskForbiddenError, TaskInvalidError
 
@@ -102,13 +106,17 @@ async def send_message(
           from_session=from_session,
           from_session_name=from_session_name,
       )
-      await task_mgr.dispatch.dispatch_pending(session_id)
+      decision = await task_mgr.dispatch.dispatch_pending(session_id)
     except TaskForbiddenError as e:
       raise HTTPException(status_code=403, detail=str(e)) from e
     except TaskInvalidError as e:
       raise HTTPException(status_code=400, detail=str(e)) from e
     return JSONResponse(status_code=202, content={
-        "status": "accepted", "input_event_id": str(admitted.get("id"))})
+        "status": "accepted",
+        "input_event_id": str(admitted.get("id")),
+        "launch": bool(decision.get("launch")),
+        **({"reason": decision["reason"]} if decision.get("reason") else {}),
+    })
 
   # The only content path that does not go through trigger_master: unarchive an
   # archived target here, before dispatching, so the slash-command branch and

@@ -190,6 +190,10 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
           ids = event.get("input_event_ids")
           if isinstance(ids, list):
             facts.confirmed_input_ids.update(str(i) for i in ids)
+    elif etype == ET.TASK_INPUT_ACKNOWLEDGED:
+      ids = event.get("input_ids")
+      if isinstance(ids, list):
+        facts.confirmed_input_ids.update(str(i) for i in ids)
     elif etype == ET.CHILD_REPORT:
       child_session_id = event.get("child_session_id")
       child_event_id = event.get("child_event_id")
@@ -746,6 +750,38 @@ class TaskTreeManager:
         task_state_of=state_of,
         now=now,
     )
+
+  async def record_scheduled_fire(
+      self,
+      session_id: str,
+      *,
+      last_scheduled_run: str | None = None,
+      cron: str | None = None,
+      last_run_status: str | None = None,
+  ) -> SessionMetadata:
+    """The scheduler's per-fire bookkeeping on one bound node.
+
+    The node is re-read under the control lock and only the scheduling fields
+    named by the caller are written, so a concurrent task edit (name, spec,
+    prompts, pause) between the scheduler's earlier load and this write is
+    preserved instead of being overwritten by a stale SessionMetadata
+    snapshot. This is the metadata owner's single entry for cron bookkeeping.
+    """
+    if last_scheduled_run is None and cron is None and last_run_status is None:
+      raise TaskInvalidError("record_scheduled_fire requires at least one scheduling field")
+    async with self.control_lock:
+      meta = await self.load_meta(session_id)
+      self._require_task(meta, session_id)
+      assert meta is not None
+      if last_scheduled_run is not None:
+        meta.last_scheduled_run = last_scheduled_run
+      if cron is not None:
+        meta.last_scheduled_cron = cron
+      if last_run_status is not None:
+        meta.last_run_status = last_run_status
+      meta.updated_at = utc_now()
+      await self._save_meta(meta)
+      return meta
 
   async def create_retry(self, session_id: str, request_id: str, original_run_id: str) -> dict:
     """Create one retry run on the open task; a replayed request returns the same run.

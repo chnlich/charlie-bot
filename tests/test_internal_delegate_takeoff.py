@@ -32,6 +32,22 @@ from src.core.models import (
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
 
 
+def _stub_task_manager():
+  """A task-tree manager over the test's session manager (v1 sessions never
+  reach its authorization path; the signature keeps one owner for both)."""
+  from src.core.task_sessions import TaskTreeManager
+  return TaskTreeManager(CharlieBotConfig(charliebot_home=Path("/tmp/delegate-takeoff-stub")),
+                         _LastSessionManager())
+
+
+class _LastSessionManager:
+  """The no-op session seam the stub task-tree owner reads (never queried on
+  these v1-shaped paths, since their sessions carry profile=None)."""
+
+  async def get_session(self, session_id: str):
+    return None
+
+
 def _reference_takeoff_gate(
     events: list[dict[str, Any]],
     now: datetime,
@@ -667,7 +683,7 @@ async def test_all_nonverify_delegate_types_can_reuse_ordinary_takeoff(
   monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve)
 
   for _ in range(3):
-    _meta, resolved_cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(req, session_mgr)
+    _meta, resolved_cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(req, session_mgr, _stub_task_manager())
     assert resolved_cfg is cfg
     assert (resolved_backend, resolved_model) == ("codex-o3", "o3")
 
@@ -695,7 +711,7 @@ async def test_improve_uses_the_same_pre_takeoff_gate(monkeypatch: pytest.Monkey
 
   monkeypatch.setattr(internal, "get_config", lambda: cfg)
   monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve)
-  _meta, resolved_cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(req, session_mgr)
+  _meta, resolved_cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(req, session_mgr, _stub_task_manager())
 
   assert resolved_cfg is cfg
   assert (resolved_backend, resolved_model) == ("codex-o3", "o3")
@@ -861,7 +877,7 @@ async def _authorize_verify(
   req = _build_request(task_type=TaskType.VERIFY, repo_path=None, base_branch=None, backend=backend)
   monkeypatch.setattr(internal, "get_config", lambda: _build_verify_cfg(preference))
   session_mgr = BackendFakeSessionManager(session_backend)
-  _meta, _cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(req, session_mgr)
+  _meta, _cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(req, session_mgr, _stub_task_manager())
   return resolved_backend, resolved_model
 
 

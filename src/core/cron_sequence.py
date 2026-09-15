@@ -48,6 +48,7 @@ from src.core.log_once import LazyStructlogLogger
 from src.core.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec
 
 if TYPE_CHECKING:
+    from src.core.task_execution import LaunchSettlement
     from src.core.task_sessions import TaskTreeManager
 
 log = LazyStructlogLogger()
@@ -325,8 +326,19 @@ async def run_firing_steps(
         previous_name = steps[position - 1].name
         previous = executed[-1][3] if executed else ""
         prompt = f"{prompt.rstrip()}\n\n## Result of the previous step ({previous_name})\n{previous}"
-      launch(tree, leaf_id, run.id, prompt)
-      outcome = await wait_for_terminal(tree, leaf_id, run.id)
+      observation = await launch_and_settle(tree, leaf_id, run.id, prompt)
+      if observation.withheld is not None:
+        # No process started and no terminal fact will arrive: the chain
+        # cannot advance. Settle the boundary explicitly — the step Run stays
+        # queued as the retained pending request, the actual reason is
+        # delivered through the report owner, and the scheduler's overlap
+        # handle ends with this controller.
+        await deliver_withheld_boundary(
+            tree, leaf_id, meta.id, task_cfg, firing, position, step.name,
+            observation.withheld, executed)
+        return
+      outcome = observation.outcome
+      assert outcome is not None
     result = await run_result_text(tree, leaf_id, run.id)
     executed.append((position, run.id, step.name, result))
     if outcome != "success" or not await step_advanced(tree, leaf_id, run.id):
@@ -382,6 +394,65 @@ async def deliver_boundary_report(
   log.info("cron_sequence_report_delivered", task=task_cfg.name, leaf=leaf_id, firing=firing, outcome=outcome)
 
 
+async def deliver_withheld_boundary(
+    tree: "TaskTreeManager",
+    leaf_id: str,
+    recipient: str,
+    task_cfg: ScheduledTaskConfig,
+    firing: str,
+    position: int,
+    step_name: str,
+    reason: str,
+    executed: "list[tuple[int, str, str, str]]",
+) -> None:
+  """The boundary report for a chain whose next launch was withheld.
+
+  The same report owner the failed/blocked boundaries use: the withheld step
+  Run stays queued as the retained pending request, the report carries the
+  actual reason (and every step that did execute), and no side effect is
+  retried automatically. Resume/retry rides the existing policy.
+  """
+  blocks = [f"**{name} result:**\n{result or '(no result)'}" for _pos, _rid, name, result in executed]
+  summary = (
+      f"Scheduled task '{task_cfg.name}' stopped before step '{step_name}': its launch was "
+      f"withheld and no process started ({reason}). The step run stays queued on the firing's "
+      "leaf as the retained pending request; no side effects ran.\n\n" + "\n\n".join(blocks))
+  await deliver_boundary_report(
+      tree, leaf_id, recipient, task_cfg, firing, "blocked", summary)
+
+
+async def redrive_firing(leaf_id: str, tree: "TaskTreeManager", cfg) -> None:
+  """Re-drive one firing's chain or boundary from its leaf's durable facts.
+
+  The single re-drive entry the startup recovery pass and every scheduled_step
+  finish chain share: the step Runs' sequence positions decide the frontier, so
+  a finished step re-launches the next permitted position or re-delivers the
+  ONE boundary report — idempotent by stable Run/close/report ids, and never
+  dependent on the next tick or restart.
+  """
+  records = tree.runs.list_run_records_sync(leaf_id)
+  seq = next((r.sequence_ref for r in records
+              if r.sequence_ref is not None and r.sequence_ref.kind == "cron_steps"), None)
+  if seq is None:
+    return
+  parsed = firing_ref_prefix(seq.owner_ref)
+  if parsed is None:
+    log.warning("cron_firing_ref_unparsable", leaf=leaf_id, owner_ref=seq.owner_ref)
+    return
+  task_name, firing = parsed
+  task_cfg = load_bound_task(task_name, cfg)
+  if task_cfg is None:
+    log.warning("cron_firing_task_missing", leaf=leaf_id, task=task_name)
+    return
+  leaf_meta = await tree.load_meta(leaf_id)
+  if leaf_meta is None or not leaf_meta.task_parent_id:
+    return
+  parent_meta = await tree.load_meta(leaf_meta.task_parent_id)
+  if parent_meta is None:
+    return
+  await reconcile_bound_firings(task_cfg, parent_meta, tree, firing, leaf_id)
+
+
 # ---------------------------------------------------------------------------
 # Shared small helpers
 # ---------------------------------------------------------------------------
@@ -408,14 +479,29 @@ def resolved_backend_model(
   return _option_default_backend_model(option, source="scheduled task ")
 
 
-def launch(tree: "TaskTreeManager", leaf_id: str, run_id: str, prompt: str | None) -> None:
-  """The scheduler-owned launch through the shared adapter."""
+def _adapter_of(tree: "TaskTreeManager") -> "object":
   from src.core.task_execution import TaskExecutionAdapter
 
   adapter = tree.dispatch.executor
   if not isinstance(adapter, TaskExecutionAdapter):
     raise RuntimeError("task execution adapter is not installed; cannot fire a scheduled task")
-  adapter.launch_scheduled(leaf_id, run_id, prompt=prompt)
+  return adapter
+
+
+def launch(tree: "TaskTreeManager", leaf_id: str, run_id: str, prompt: str | None) -> None:
+  """The scheduler-owned launch through the shared adapter."""
+  _adapter_of(tree).launch_scheduled(leaf_id, run_id, prompt=prompt)
+
+
+async def launch_and_settle(
+    tree: "TaskTreeManager", leaf_id: str, run_id: str, prompt: str | None,
+) -> "LaunchSettlement":
+  """The scheduler-owned launch followed to its settlement (the shared
+  launch/wait observation): a durable terminal outcome, or an explicit
+  withheld verdict when the launch precondition failed and no process
+  started. A live process from a replayed registration is followed, never
+  relaunched."""
+  return await _adapter_of(tree).launch_and_settle(leaf_id, run_id, prompt=prompt, scheduled=True)
 
 
 async def terminal_outcome(tree: "TaskTreeManager", leaf_id: str, run_id: str) -> str | None:
@@ -483,6 +569,47 @@ async def reconcile_bound_firings(
       by_position[run.sequence_ref.position] = run
   executed_positions = sorted(
       pos for pos, run in by_position.items() if tree.runs.run_has_terminal_fact(run, events))
+  # A registered-but-unlaunched frontier step is the admitted product its
+  # controller never got to launch (withheld precondition, or a crash before
+  # the launch): the replay launches that SAME step Run — the retained pending
+  # request — through the same checks; a live process is followed, never
+  # relaunched, and the re-drive stays idempotent by stable ids.
+  pending_positions = sorted(
+      pos for pos, run in by_position.items() if not tree.runs.run_has_terminal_fact(run, events))
+  if pending_positions:
+    pos = pending_positions[0]
+    queued_run = by_position[pos]
+    if queued_run.pid is not None:
+      return  # a live recovered process; its own finish chain re-drives
+    backend, model = resolved_backend_model(task_cfg, tree, steps[pos].backend or task_cfg.backend)
+    run = await register_leaf_run(
+        tree, leaf_id, task_cfg, firing, kind="scheduled_step", position=pos,
+        backend=backend, model=model)
+    prompt = steps[pos].prompt or ""
+    executed: list[tuple[int, str, str, str]] = []
+    for previous_pos in executed_positions:
+      if previous_pos >= pos:
+        break
+      executed.append((
+          previous_pos, by_position[previous_pos].id, steps[previous_pos].name,
+          await run_result_text(tree, leaf_id, by_position[previous_pos].id)))
+    if pos > 0 and executed_positions:
+      previous_pos = executed_positions[-1]
+      previous = await run_result_text(tree, leaf_id, by_position[previous_pos].id)
+      prompt = (f"{prompt.rstrip()}\n\n## Result of the previous step "
+                f"({steps[previous_pos].name})\n{previous}")
+    from src.core.tasks import create_logged_task
+
+    async def _settle_recovered_launch(run_id: str = run.id, launch_prompt: str = prompt) -> None:
+      observation = await launch_and_settle(tree, leaf_id, run_id, launch_prompt)
+      if observation.withheld is not None:
+        await deliver_withheld_boundary(
+            tree, leaf_id, meta.id, task_cfg, firing, pos, steps[pos].name,
+            observation.withheld, executed)
+
+    create_logged_task(
+        _settle_recovered_launch(), name=f"cron-recovered-step-{run.id[:8]}")
+    return
   if not executed_positions:
     return
   last_pos = executed_positions[-1]
@@ -501,7 +628,22 @@ async def reconcile_bound_firings(
       if last_pos + 1 > 0:
         previous = await run_result_text(tree, leaf_id, by_position[last_pos].id)
         prompt = f"{prompt.rstrip()}\n\n## Result of the previous step ({steps[last_pos].name})\n{previous}"
-      launch(tree, leaf_id, next_run.id, prompt)
+      # The recovered launch settles in its own task (never inline — a live
+      # process's follow must not hold this pass): a withheld launch delivers
+      # the same blocked boundary report the fresh controller would.
+      from src.core.tasks import create_logged_task
+
+      async def _settle_recovered_launch(run_id: str = next_run.id, launch_prompt: str = prompt) -> None:
+        observation = await launch_and_settle(tree, leaf_id, run_id, launch_prompt)
+        if observation.withheld is not None:
+          await deliver_withheld_boundary(
+              tree, leaf_id, meta.id, task_cfg, firing, last_pos + 1,
+              steps[last_pos + 1].name, observation.withheld, executed)
+        # A settled step Run's own finish chain re-drives the frontier from
+        # here; nothing further is owed inline.
+
+      create_logged_task(
+          _settle_recovered_launch(), name=f"cron-recovered-step-{next_run.id[:8]}")
     return
   # The chain reached its boundary: re-deliver the ONE report (dedup by id).
   if last_outcome == "success" and last_pos == len(steps) - 1:
@@ -525,6 +667,8 @@ async def run_firing_steps_boundary_report(
     leaf_id: str,
 ) -> None:
   """The successful boundary's close (which delivers the one report)."""
+  from src.core.task_sessions import TaskConflictError
+
   records = tree.runs.list_run_records_sync(leaf_id)
   events = tree.runs.load_events_sync(leaf_id)
   chain = sorted(
@@ -539,6 +683,20 @@ async def run_firing_steps_boundary_report(
     name = steps[position].name if position < len(steps) else f"step {position}"
     blocks.append(f"**{name} result:**\n{await run_result_text(tree, leaf_id, run.id) or '(no result)'}")
   summary = f"Scheduled task '{task_cfg.name}' completed all {len(chain)} step(s).\n\n" + "\n\n".join(blocks)
+
+  async def _deliver_blocked_close(e: Exception) -> None:
+    # The blocked close keeps the leaf open with its evidence/worktree intact
+    # and delivers the SAME stable blocked report the fresh chain delivers —
+    # never a log-only boundary. A repaired close later follows the normal
+    # completion/report policy (the stable report id dedups).
+    log.warning("cron_sequence_close_blocked", task=task_cfg.name, leaf=leaf_id, error=str(e))
+    blocked_summary = (
+        f"Scheduled task '{task_cfg.name}' completed all {len(chain)} step(s) but the leaf's "
+        f"automatic close is blocked ({e}); the task stays open with its evidence.\n\n"
+        + "\n\n".join(blocks))
+    await deliver_boundary_report(
+        tree, leaf_id, meta.id, task_cfg, firing, "blocked", blocked_summary)
+
   try:
     await tree.completion.evaluate_automatic_completion(
         leaf_id,
@@ -547,5 +705,12 @@ async def run_firing_steps_boundary_report(
         result_refs=[f"{RUN_REF_PREFIX}{r.id}" for r in chain],
         request_id=f"auto:{firing_ref(task_cfg, firing)}",
     )
+  except TaskConflictError as e:
+    blockers = list(getattr(e, "blockers", None) or [])
+    if any("no longer open" in str(b) for b in blockers):
+      # A concurrent owner landed this close and delivered the completed
+      # report; there is no blocked boundary to deliver.
+      return
+    await _deliver_blocked_close(e)
   except Exception as e:
-    log.warning("cron_sequence_close_blocked", task=task_cfg.name, leaf=leaf_id, error=str(e))
+    await _deliver_blocked_close(e)

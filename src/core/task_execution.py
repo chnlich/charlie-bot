@@ -62,6 +62,7 @@ from src.core.run_token import RUN_TOKEN_ENV, RunTokenClaims, sign_run_token
 from src.core.runs import RunNotFoundError, scan_result_exit
 from src.core.sessions import SessionManager
 from src.core.spawner_backends import resolve_backend_option
+from src.core.takeoff_gate import DelegationBlockedError
 from src.core.task_sessions import (
     TaskConflictError,
     TaskInvalidError,
@@ -91,6 +92,23 @@ class RunWorkerBinding:
     pid: int | None = None
     pid_start: str | None = None
     claude_session_id: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class LaunchSettlement:
+    """The settled launch/wait verdict one controller-owned Run reached.
+
+    ``outcome`` is the durable terminal outcome of a Run that executed;
+    ``withheld`` is the actual reason no process will ever start for it (the
+    launch precondition failed in the registration-to-launch interval). The
+    two are mutually exclusive, and neither ever fabricates a result.
+    """
+
+    outcome: str | None = None
+    withheld: str | None = None
+
+
+LAUNCH_STARTED = "started"
 
 
 def compose_input_prompt(events: list[dict]) -> tuple[str, list[dict]]:
@@ -134,6 +152,12 @@ class TaskExecutionAdapter:
         # durable (pid, pid_start) identity write is the cross-restart
         # backstop; this set closes the same-loop double-schedule window.
         self._launch_inflight: set[tuple[str, str]] = set()
+        # Launch settlements: one future per scheduled launch, resolved when
+        # the launch attempt settles — the process started, or a launch
+        # precondition refused it (no terminal fact will ever arrive). The
+        # sequence controllers await this barrier instead of polling forever
+        # behind a withheld launch.
+        self._launch_settlements: dict[tuple[str, str], asyncio.Future] = {}
 
     # ------------------------------------------------------------------
     # The dispatcher seam
@@ -186,9 +210,18 @@ class TaskExecutionAdapter:
                     await tree.dispatch.claim_input_batch_locked(session_id, run.id)
                 run_id = run.id
             else:
+                # The batch is re-derived inside this lock hold: the caller's
+                # pending snapshot was taken without the lock, so a concurrent
+                # dispatch may have consumed part of it. Reserving against the
+                # stale snapshot would register a Run that can never claim
+                # anything — a void queued record no terminal fact ever
+                # resolves.
+                pending_now = tree.dispatch.pending_inputs(session_id)
+                if not pending_now:
+                    return None
                 backend, model = self._reserve_backend_model(meta)
                 request_id = "dispatch:" + sha256_hex(
-                    "\x00".join(sorted(str(e.get("id")) for e in pending)))
+                    "\x00".join(sorted(str(e.get("id")) for e in pending_now)))
                 run_id = stable_run_id(session_id, request_id)
                 existing = await tree.runs.get_run(session_id, run_id)
                 if existing is None:
@@ -205,14 +238,15 @@ class TaskExecutionAdapter:
                 except TaskConflictError as e:
                     log.info("dispatch_reservation_contested", session_id=session_id, run_id=run_id, error=str(e))
                     return None
-                if not bound:
-                    # A concurrent dispatch already reserved this exact batch.
-                    log.info("dispatch_reservation_lost", session_id=session_id, run_id=run_id)
-                    return None
+                if not bound:  # unreachable: the batch was read under this lock hold
+                    raise RuntimeError(
+                        f"dispatch reserved run {run_id} against a batch that vanished "
+                        f"within one lock hold ({session_id})")
             key = (session_id, run_id)
             if key in self._launch_inflight:
                 return run_id  # the concurrent winner schedules the launch
             self._launch_inflight.add(key)
+            self._arm_launch_settlement(key)
         # This call owns the launch guard now; schedule directly (launch()
         # would early-return on the guard this reservation just took).
         self._schedule_launch(session_id, run_id)
@@ -226,6 +260,17 @@ class TaskExecutionAdapter:
     # ------------------------------------------------------------------
     # Common launch interface
     # ------------------------------------------------------------------
+
+    def _arm_launch_settlement(self, key: tuple[str, str]) -> None:
+        """Arm the launch-settlement future one waiting controller will observe."""
+        if key not in self._launch_settlements:
+            self._launch_settlements[key] = asyncio.get_running_loop().create_future()
+
+    def _settle_launch(self, key: tuple[str, str], verdict: str) -> None:
+        """Resolve the launch-settlement future; drop the entry once resolved."""
+        future = self._launch_settlements.pop(key, None)
+        if future is not None and not future.done():
+            future.set_result(verdict)
 
     def launch(self, session_id: str, run_id: str, *, prompt: str | None = None) -> None:
         """Schedule one registered Run's execution (the common launch seam).
@@ -242,22 +287,8 @@ class TaskExecutionAdapter:
         if key in self._launch_inflight:
             return
         self._launch_inflight.add(key)
+        self._arm_launch_settlement(key)
         self._schedule_launch(session_id, run_id, prompt=prompt)
-
-    def _schedule_launch(
-        self, session_id: str, run_id: str, *, prompt: str | None = None,
-        scheduled: bool = False,
-    ) -> None:
-        """Fire-and-forget the actual execution; the reservation is already durable."""
-        from src.core.tasks import create_logged_task
-
-        async def _execute_and_release() -> None:
-            try:
-                await self.execute_run(session_id, run_id, launch_prompt=prompt, scheduled=scheduled)
-            finally:
-                self._launch_inflight.discard((session_id, run_id))
-
-        create_logged_task(_execute_and_release(), name=f"task-run-{run_id[:8]}")
 
     def launch_scheduled(self, session_id: str, run_id: str, *, prompt: str | None = None) -> None:
         """The configured scheduler's launch seam: a server-owned fire.
@@ -271,12 +302,38 @@ class TaskExecutionAdapter:
         if key in self._launch_inflight:
             return
         self._launch_inflight.add(key)
+        self._arm_launch_settlement(key)
         self._schedule_launch(session_id, run_id, prompt=prompt, scheduled=True)
+
+    def _schedule_launch(
+        self, session_id: str, run_id: str, *, prompt: str | None = None,
+        scheduled: bool = False,
+    ) -> None:
+        """Fire-and-forget the actual execution; the reservation is already durable."""
+        from src.core.tasks import create_logged_task
+
+        async def _execute_and_release() -> None:
+            key = (session_id, run_id)
+            try:
+                verdict = await self.execute_run(
+                    session_id, run_id, launch_prompt=prompt, scheduled=scheduled)
+            except Exception as exc:
+                # The launch died before the run's execution could land a
+                # terminal fact: the waiting controller must see the actual
+                # failure instead of polling forever behind it. The exception
+                # still propagates (the logging task owner records it).
+                self._settle_launch(key, f"failed-to-start: {exc}")
+                raise
+            finally:
+                self._launch_inflight.discard(key)
+            self._settle_launch(key, verdict)
+
+        create_logged_task(_execute_and_release(), name=f"task-run-{run_id[:8]}")
 
     async def execute_run(
         self, session_id: str, run_id: str, *, launch_prompt: str | None = None,
         scheduled: bool = False,
-    ) -> None:
+    ) -> str:
         """Pre-launch rechecks, then execute one Run on its kind's adapter.
 
         Rechecks run under the control lock immediately before the launch:
@@ -289,6 +346,13 @@ class TaskExecutionAdapter:
         existing scheduled execution authorization, with provenance the
         server derived itself); every other launch re-judges the
         nearest-real-user-ancestor gate at the actual start.
+
+        Returns ``LAUNCH_STARTED`` when the Run's execution adapter was
+        entered, or the actual refusal reason when a launch precondition
+        withheld it (no process started and no terminal fact will arrive).
+        An exception escaping before the adapter was entered is a
+        failed-to-start launch: the caller's settlement sees it, never an
+        endless wait.
         """
         tree = self._tree
         async with tree.control_lock:
@@ -298,21 +362,34 @@ class TaskExecutionAdapter:
             run = await tree.runs.get_run(session_id, run_id)
             if run is None:
                 raise RunNotFoundError(f"run {run_id} not found in task {session_id}")
-            if tree.task_state(session_id) != "open" or meta.automation_paused:
-                log.info("run_launch_withheld", session_id=session_id, run_id=run_id)
-                return
+            state = tree.task_state(session_id)
+            if state != "open" or meta.automation_paused:
+                reason = (f"withheld: task {session_id} is {state}" if state != "open"
+                          else f"withheld: task {session_id} is paused")
+                log.info("run_launch_withheld", session_id=session_id, run_id=run_id, reason=reason)
+                return reason
             await tree._require_open_ancestry(session_id)
             events = tree.runs.load_events_sync(session_id)
-            if tree.runs.run_has_terminal_fact(run, events) or tree.runs.stop_requested(events, run_id):
+            if tree.runs.run_has_terminal_fact(run, events):
                 log.info("run_launch_refused_by_facts", session_id=session_id, run_id=run_id)
-                return
+                return f"refused: run {run_id} already finished"
+            if tree.runs.stop_requested(events, run_id):
+                log.info("run_launch_refused_by_facts", session_id=session_id, run_id=run_id)
+                return f"refused: run {run_id} has a durable stop request"
             if (meta.profile == "worker" and run.kind in ("work", "review") and meta.task_parent_id
-                    and not scheduled):
+                    and not scheduled and not self._verify_exempt(meta)):
                 # The nearest-user-ancestor gate re-judges at actual launch
                 # (plan 4.2: pending execution requests re-judge where they
                 # start). A configured scheduler fire runs under the existing
-                # scheduled execution authorization instead (see launch_scheduled).
-                await tree.check_task_authorization(meta.task_parent_id)
+                # scheduled execution authorization instead (see
+                # launch_scheduled), and the read-only verify exemption rides
+                # the same task-type judgment the delegation route applies.
+                try:
+                    await tree.check_task_authorization(meta.task_parent_id)
+                except DelegationBlockedError as e:
+                    log.info("run_launch_authorization_withheld",
+                             session_id=session_id, run_id=run_id, reason=str(e))
+                    return f"withheld: {e}"
         option = self._resolve_run_backend(run)
         if meta.profile == "manager" and run.kind == "manager_turn":
             await self._execute_manager_turn(meta, run, option)
@@ -321,6 +398,81 @@ class TaskExecutionAdapter:
         else:
             raise TaskInvalidError(
                 f"run {run_id} (profile={meta.profile}, kind={run.kind}) has no executable adapter")
+        return LAUNCH_STARTED
+
+    @staticmethod
+    def _verify_exempt(meta: SessionMetadata) -> bool:
+        """The established read-only verify exemption: a verify task's run
+        never needs a takeoff window (the same exemption the delegation route
+        applies at admission)."""
+        return meta.task is not None and meta.task.task_type == TaskType.VERIFY
+
+    async def _await_terminal(self, session_id: str, run_id: str) -> str:
+        """Await one Run's durable terminal fact; returns its outcome."""
+        tree = self._tree
+        while True:
+            run = await tree.runs.get_run(session_id, run_id)
+            events = tree.runs.load_events_sync(session_id)
+            outcome = tree.runs.terminal_outcome(events, run_id) if run is not None else None
+            if outcome is not None:
+                return outcome
+            await asyncio.sleep(0.2)
+
+    async def launch_and_settle(
+        self, session_id: str, run_id: str, *, prompt: str | None = None,
+        scheduled: bool = False,
+    ) -> LaunchSettlement:
+        """The sequence controllers' shared launch/wait observation.
+
+        Launches one registered Run (or joins the in-flight launch) and
+        settles to either its durable terminal outcome or an explicit
+        withheld verdict. Lifecycle facts decide which: a Run that already
+        carries a terminal fact returns it; a live or ended process is
+        followed to its fact (never relaunched, never killed for running
+        long); only a launch whose precondition failed in the
+        registration-to-launch interval — node closed/paused, durable stop,
+        expired authorization, startup failure — settles withheld, with the
+        actual reason. The first terminal fact always wins over a settle
+        race.
+        """
+        tree = self._tree
+        run = await tree.runs.get_run(session_id, run_id)
+        if run is None:
+            raise RunNotFoundError(f"run {run_id} not found in task {session_id}")
+        events = tree.runs.load_events_sync(session_id)
+        outcome = tree.runs.terminal_outcome(events, run_id)
+        if outcome is not None:
+            return LaunchSettlement(outcome=outcome)
+        if run.pid is not None:
+            # A process this launch must never duplicate (a replayed
+            # registration, or a follow that outlives the controller): follow
+            # it to its durable fact.
+            return LaunchSettlement(outcome=await self._await_terminal(session_id, run_id))
+        key = (session_id, run_id)
+        if key not in self._launch_settlements:
+            if scheduled:
+                self.launch_scheduled(session_id, run_id, prompt=prompt)
+            else:
+                self.launch(session_id, run_id, prompt=prompt)
+        future = self._launch_settlements.get(key)
+        if future is None:
+            # The launch settled (and dropped its entry) between the facts
+            # read above and now: re-read what actually happened.
+            events = tree.runs.load_events_sync(session_id)
+            outcome = tree.runs.terminal_outcome(events, run_id)
+            if outcome is not None:
+                return LaunchSettlement(outcome=outcome)
+            raise RuntimeError(f"run {run_id} settled without a terminal fact or launch verdict")
+        verdict = await future
+        if verdict != LAUNCH_STARTED:
+            # First terminal fact wins over a settle race: the run may have
+            # finished through another path while this verdict was formed.
+            events = tree.runs.load_events_sync(session_id)
+            outcome = tree.runs.terminal_outcome(events, run_id)
+            if outcome is not None:
+                return LaunchSettlement(outcome=outcome)
+            return LaunchSettlement(withheld=verdict)
+        return LaunchSettlement(outcome=await self._await_terminal(session_id, run_id))
 
     def _resolve_run_backend(self, run: RunRecord) -> BackendOption:
         """The Run's explicitly recorded backend/model, resolved strictly."""
@@ -930,7 +1082,14 @@ class TaskExecutionAdapter:
         """
         session_id = meta.id
         try:
-            if run.kind in ("iteration", "scheduled_step"):
+            if run.kind == "scheduled_step":
+                # The firing's owning module re-drives the frontier from this
+                # durable finish: the next permitted step launches, or the ONE
+                # boundary report re-delivers — without waiting for the next
+                # tick or restart, and idempotent against a live controller.
+                await self._redrive_firing(session_id)
+                return
+            if run.kind == "iteration":
                 return
             if run.kind == "review":
                 await self._after_review_run(meta, run, durable_outcome)
@@ -951,6 +1110,12 @@ class TaskExecutionAdapter:
             # chain left pending. The review path reaches it too — its early
             # return used to strand inputs admitted during a review Run.
             await self._tree.dispatch.dispatch_pending(session_id)
+
+    async def _redrive_firing(self, session_id: str) -> None:
+        """Re-drive one scheduled firing from its leaf's durable facts."""
+        from src.core.cron_sequence import redrive_firing
+
+        await redrive_firing(session_id, self._tree, self._cfg)
 
     async def _after_review_run(self, meta: SessionMetadata, run: RunRecord, durable_outcome: str) -> None:
         from src.core.task_completion import (

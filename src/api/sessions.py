@@ -661,6 +661,34 @@ class TreePageResponse(BaseModel):
   tree_revision: str
 
 
+class TreeSearchHit(BaseModel):
+  """One GET /api/sessions/tree/search hit: the row plus its ancestor path."""
+  row: SessionRow
+  ancestors: list[SessionRow]
+
+
+class TreeSearchResponse(BaseModel):
+  """GET /api/sessions/tree/search response."""
+  items: list[TreeSearchHit]
+  tree_revision: str
+
+
+class PendingTaskInput(BaseModel):
+  """One pending task input with the source/text facts the acknowledgement UI shows."""
+  id: str
+  type: str
+  timestamp: datetime | None = None
+  actor: str | None = None
+  source_session_id: str | None = None
+  from_session_name: str | None = None
+  text: str = ""
+
+
+class PendingTaskInputsResponse(BaseModel):
+  """GET /api/sessions/{id}/task-inputs/pending response."""
+  items: list[PendingTaskInput]
+
+
 def _task_http_error(e: Exception) -> HTTPException:
   """Translate one task-tree domain error into its planned HTTP shape."""
   if isinstance(e, (TaskInvalidError,)):
@@ -693,6 +721,24 @@ async def get_session_tree(
         limit=limit,
         cursor=cursor,
     )
+  except (TaskInvalidError, TaskNotFoundError, TaskConflictError) as e:
+    raise _task_http_error(e) from e
+
+
+@router.get("/tree/search", response_model=TreeSearchResponse)
+async def search_session_tree(
+    q: str = Query(default=''),
+    limit: int = Query(default=20, ge=1, le=100),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+) -> dict:
+  """Task-tree search: each hit ships its complete root→parent row path.
+
+  A match's path is server fact, not client inference: an archived or hidden
+  ancestor cannot be recovered from a partial client tree. Archived tasks
+  match too — search reveals them.
+  """
+  try:
+    return await task_mgr.tree_search(query=q, limit=limit)
   except (TaskInvalidError, TaskNotFoundError, TaskConflictError) as e:
     raise _task_http_error(e) from e
 
@@ -1502,6 +1548,36 @@ async def retry_session_run(
   except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
     raise _task_http_error(e) from e
   return result
+
+
+@router.get("/{session_id}/task-inputs/pending", response_model=PendingTaskInputsResponse)
+async def list_pending_task_inputs(
+    session_id: str,
+    _meta: SessionMetadata = Depends(require_session),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+) -> dict:
+  """The task's currently pending inputs, with each one's source and text.
+
+  The acknowledgement UI's read side: the same boundary/confirmation/claim
+  folding the dispatcher and completion guards consume, never a second
+  derivation. Read-only.
+  """
+  try:
+    pending = task_mgr.dispatch.pending_inputs(session_id)
+  except (TaskInvalidError, TaskNotFoundError) as e:
+    raise _task_http_error(e) from e
+  items = []
+  for event in pending:
+    items.append({
+        "id": str(event.get("id")),
+        "type": str(event.get("type")),
+        "timestamp": event.get("timestamp"),
+        "actor": event.get("actor"),
+        "source_session_id": event.get("source_session_id"),
+        "from_session_name": event.get("from_session_name"),
+        "text": str(event.get("content") or event.get("summary") or ""),
+    })
+  return {"items": items}
 
 
 @router.post("/{session_id}/task-inputs/acknowledge")

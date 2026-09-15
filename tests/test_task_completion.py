@@ -559,8 +559,12 @@ async def test_hidden_ancestor_keeps_descendant_path_navigable(tmp_path: Path) -
       RunRecord(id="run-leaf", session_id=leaf.id, kind="work", pid=os.getpid()))
   index = await tree._get_index()
   page = await tree.tree_page(parent_id=None, include_archived=False, limit=100, cursor=None)
-  row_ids = {r["id"] for r in page["items"]}
-  assert root.id not in row_ids  # the hidden ancestor is filtered from its level
+  # The hidden ancestor stays navigable as ancestor context while active work
+  # (the launched leaf run) lives below it: dropping the row would sever the
+  # path to the running descendant. Its stored presentation is unchanged — the
+  # row still reports archived=true.
+  root_row = next(r for r in page["items"] if r["id"] == root.id)
+  assert root_row["archived"] is True
   # The running descendant's level stays navigable even under a hidden ancestor.
   mid_page = await tree.tree_page(parent_id=root.id, include_archived=False, limit=100, cursor=None)
   assert {r["id"] for r in mid_page["items"]} == {mid.id}

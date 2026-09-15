@@ -170,10 +170,19 @@ class TaskExecutionAdapter:
                 if (tree.runs.run_has_terminal_fact(run, events) or run.pid is not None or
                         tree.runs.stop_requested(events, run.id)):
                     return None  # stopped, finished, or already launching: never a second process
-                if run.kind == "manager_turn" and not run.input_event_ids and pending:
+                if run.kind == "manager_turn" and not run.input_event_ids:
+                    if not pending:
+                        # A reservation whose claim was lost with nothing left
+                        # pending has no consumable input: launching it would be
+                        # an empty side-effecting turn. It stays queued, claims
+                        # nothing, and the node's decision explains it.
+                        log.info("queued_run_void_reservation", session_id=session_id, run_id=run.id)
+                        return None
                     # A queued retry claims the node's pending batch when it
                     # launches — the retried failure released it, and this is
-                    # the serialized turn that consumes it.
+                    # the serialized turn that consumes it. The deterministic
+                    # repair also covers a run registered before a crash
+                    # separated it from its claim.
                     await tree.dispatch.claim_input_batch_locked(session_id, run.id)
                 run_id = run.id
             else:
@@ -218,39 +227,68 @@ class TaskExecutionAdapter:
     # Common launch interface
     # ------------------------------------------------------------------
 
-    def launch(self, session_id: str, run_id: str) -> None:
+    def launch(self, session_id: str, run_id: str, *, prompt: str | None = None) -> None:
         """Schedule one registered Run's execution (the common launch seam).
 
         The delegate path, the review chain, and the later controller stages
         (improve, cron, triggers) all enter here; the dispatcher's executor
-        seam lands on the same code through :meth:`__call__`.
+        seam lands on the same code through :meth:`__call__`. ``prompt`` is the
+        sequence controllers' explicit launch text (an improve iteration's
+        composed description, a cron step's prompt): the Run's own input batch
+        stays what its registration bound, and the override is persisted onto
+        the Run as the launch-text evidence before any process starts.
         """
         key = (session_id, run_id)
         if key in self._launch_inflight:
             return
         self._launch_inflight.add(key)
-        self._schedule_launch(session_id, run_id)
+        self._schedule_launch(session_id, run_id, prompt=prompt)
 
-    def _schedule_launch(self, session_id: str, run_id: str) -> None:
+    def _schedule_launch(
+        self, session_id: str, run_id: str, *, prompt: str | None = None,
+        scheduled: bool = False,
+    ) -> None:
         """Fire-and-forget the actual execution; the reservation is already durable."""
         from src.core.tasks import create_logged_task
 
         async def _execute_and_release() -> None:
             try:
-                await self.execute_run(session_id, run_id)
+                await self.execute_run(session_id, run_id, launch_prompt=prompt, scheduled=scheduled)
             finally:
                 self._launch_inflight.discard((session_id, run_id))
 
         create_logged_task(_execute_and_release(), name=f"task-run-{run_id[:8]}")
 
-    async def execute_run(self, session_id: str, run_id: str) -> None:
+    def launch_scheduled(self, session_id: str, run_id: str, *, prompt: str | None = None) -> None:
+        """The configured scheduler's launch seam: a server-owned fire.
+
+        The scheduler (and only in-process server code) reaches this; the run's
+        launch authorization is the existing scheduled execution authorization
+        rather than the nearest-user gate, exactly like the legacy scheduled
+        worker entry this replaces.
+        """
+        key = (session_id, run_id)
+        if key in self._launch_inflight:
+            return
+        self._launch_inflight.add(key)
+        self._schedule_launch(session_id, run_id, prompt=prompt, scheduled=True)
+
+    async def execute_run(
+        self, session_id: str, run_id: str, *, launch_prompt: str | None = None,
+        scheduled: bool = False,
+    ) -> None:
         """Pre-launch rechecks, then execute one Run on its kind's adapter.
 
         Rechecks run under the control lock immediately before the launch:
         role (the kind/profile pairing), open ancestors, pause, authorization
         and any durable stop request. The backend resolution afterwards is
         explicit — a missing or invalid backend fails visibly, never
-        silently substituted.
+        silently substituted. ``launch_prompt`` is the sequence controllers'
+        explicit launch text; see :meth:`launch`. ``scheduled`` marks a fire
+        the configured scheduler owns (its server-side invocation is the
+        existing scheduled execution authorization, with provenance the
+        server derived itself); every other launch re-judges the
+        nearest-real-user-ancestor gate at the actual start.
         """
         tree = self._tree
         async with tree.control_lock:
@@ -268,15 +306,18 @@ class TaskExecutionAdapter:
             if tree.runs.run_has_terminal_fact(run, events) or tree.runs.stop_requested(events, run_id):
                 log.info("run_launch_refused_by_facts", session_id=session_id, run_id=run_id)
                 return
-            if meta.profile == "worker" and run.kind in ("work", "review") and meta.task_parent_id:
+            if (meta.profile == "worker" and run.kind in ("work", "review") and meta.task_parent_id
+                    and not scheduled):
                 # The nearest-user-ancestor gate re-judges at actual launch
-                # (plan 4.2: pending execution requests re-judge where they start).
+                # (plan 4.2: pending execution requests re-judge where they
+                # start). A configured scheduler fire runs under the existing
+                # scheduled execution authorization instead (see launch_scheduled).
                 await tree.check_task_authorization(meta.task_parent_id)
         option = self._resolve_run_backend(run)
         if meta.profile == "manager" and run.kind == "manager_turn":
             await self._execute_manager_turn(meta, run, option)
-        elif meta.profile == "worker" and run.kind in ("work", "review"):
-            await self._execute_worker_run(meta, run, option)
+        elif meta.profile == "worker" and run.kind in ("work", "review", "iteration", "scheduled_step"):
+            await self._execute_worker_run(meta, run, option, launch_prompt=launch_prompt)
         else:
             raise TaskInvalidError(
                 f"run {run_id} (profile={meta.profile}, kind={run.kind}) has no executable adapter")
@@ -355,16 +396,6 @@ class TaskExecutionAdapter:
             # consumer; the turn's finish is what dispatches their next run.
             await self._tree.dispatch.dispatch_pending(session_id)
 
-        if option.type == BackendType.TUI_CLI:
-            # The master queue refuses TUI backends (tmux sessions take input
-            # through the terminal, not the SDK). The refusal is a visible
-            # failed run at attention, never a silently stuck queue.
-            log.warning("manager_turn_refused_tui_backend",
-                        session_id=session_id, run_id=run_id, backend=option.id)
-            await self._tree.dispatch.finish_run(
-                session_id, run_id, outcome="failed", exit_code=-1)
-            return
-
         log.info("manager_turn_launching", session_id=session_id, run_id=run_id,
                  backend=option.id, inputs=len(run.input_event_ids))
         await run_message(
@@ -388,8 +419,11 @@ class TaskExecutionAdapter:
     # Worker work and review runs
     # ------------------------------------------------------------------
 
-    async def _execute_worker_run(self, meta: SessionMetadata, run: RunRecord, option: BackendOption) -> None:
-        """One work or review Run on the existing Worker/backend adapter."""
+    async def _execute_worker_run(
+        self, meta: SessionMetadata, run: RunRecord, option: BackendOption,
+        *, launch_prompt: str | None = None,
+    ) -> None:
+        """One work, review, or sequence Run on the existing Worker/backend adapter."""
         session_id, run_id = meta.id, run.id
         run_dir = self._tree.runs.run_dir(session_id, run_id)
         events_log = run_dir / "events.jsonl"
@@ -404,6 +438,15 @@ class TaskExecutionAdapter:
             # The review reuses the work Run's exact repo, branch and worktree.
             review_worktree = work_run.worktree_path
             prompt = await self._build_review_prompt(session_id, run, work_run)
+        elif launch_prompt is not None and run.kind == "iteration":
+            prompt = await self._build_iteration_prompt(meta, run, launch_prompt)
+        elif launch_prompt is not None:
+            # The sequence controllers' explicit launch text (a cron step's
+            # prompt rides verbatim, exactly as the legacy scheduled worker's
+            # prompt_override did). The controller owns the composition; the
+            # adapter persists it onto the Run as the launch-text evidence.
+            prompt = launch_prompt
+            await self._persist_launch_text(session_id, run_id, prompt)
         else:
             prompt = await self._build_work_prompt(meta, run, task_type)
 
@@ -456,6 +499,12 @@ class TaskExecutionAdapter:
 
         durable_outcome = await self._finalize_worker_run(
             meta, run, option, exit_code=exit_code, error=error)
+        # The launch's own writes (worktree facts, native session id) landed on
+        # the DURABLE record after this in-memory snapshot was taken; the
+        # delivery chain must judge the recorded provenance, not the stale one.
+        fresh = await self._tree.runs.get_run(session_id, run_id)
+        if fresh is not None:
+            run = fresh
         await self._after_worker_run(meta, run, durable_outcome)
 
     async def _finalize_worker_run(
@@ -616,6 +665,48 @@ class TaskExecutionAdapter:
         await self._persist_launch_text(meta.id, run.id, prompt)
         return prompt
 
+    async def _build_iteration_prompt(self, meta: SessionMetadata, run: RunRecord, description: str) -> str:
+        """One improve iteration's full prompt: the existing worker prompt
+        builder with the loop context the sequence_ref pins.
+
+        The controller composes the description (live goal, optional plan,
+        previous summaries) and passes it as the launch text; the adapter wraps
+        it with the shared worktree's workflow contract, the iteration-report
+        instructions (loop_dir + position), and the worker memory block — the
+        same assembly the legacy improve iterations rode. The shared worktree
+        facts are pinned on the Run at registration; an iteration Run without
+        them is a controller bug and fails loudly instead of creating a
+        worktree of its own.
+        """
+        from src.core.spawner_prompt import _build_worker_prompt
+
+        seq = run.sequence_ref
+        if seq is None or seq.kind != "improve":
+            raise TaskInvalidError(
+                f"iteration run {run.id} carries no improve sequence_ref; the controller "
+                "that registered it is broken")
+        if not (run.repo_path and run.base_branch and run.branch_name and run.worktree_path):
+            raise TaskInvalidError(
+                f"iteration run {run.id} is missing its pinned shared-worktree provenance "
+                "(repo/base/branch/worktree); refusing to create a divergent worktree")
+        prompt = _build_worker_prompt(
+            description,
+            Path(run.repo_path),
+            run.base_branch,
+            run.branch_name,
+            run.worktree_path,
+            meta,
+            self._cfg,
+            task_type=TaskType.IMPLEMENT,
+            loop_dir=seq.owner_ref,
+            iteration_number=seq.position,
+            is_continuation=seq.position > 1,
+            keep_worktree=False,
+            start_point=None,
+        )
+        await self._persist_launch_text(meta.id, run.id, prompt)
+        return prompt
+
     def _build_verify_prompt(self, description: str) -> str:
         """The repo-less verify contract from the existing verify prompt source."""
         sections = spawner_prompt._load_prompt_sections(
@@ -710,13 +801,17 @@ class TaskExecutionAdapter:
     async def resume_run(self, session_id: str, run_id: str, *, is_alive: "Callable[[], bool] | None" = None) -> None:
         """Re-attach one launched Run and follow it to its terminal fact.
 
-        The comprehensive startup-recovery retirement is the next bounded
-        task; this is the common resume interface it consumes. Liveness comes
-        from the caller's (pid, pid_start) judgment — when omitted, the run's
-        recorded identity is judged against the host. Manager turns re-attach
+        The startup-recovery pass consumes this interface. Liveness comes from
+        the caller's (pid, pid_start) judgment — when omitted, the run's
+        recorded identity is judged against the host on every poll (a
+        re-evaluable probe, never a captured boolean). Manager turns re-attach
         through the same per-session queue (the follow drains before any
         queued turn spawns); worker runs re-attach through Worker.resume's
-        tail-follow. Both land on the same finalize glue as a fresh run.
+        tail-follow. Both land on the same finalize glue as a fresh run. A Run
+        that already carries a terminal fact returns without a follow here —
+        the recovery pass re-drives missing follow-ups for terminal Runs
+        separately, so a Run whose process ended before its follow-up ran is
+        never skipped forever.
         """
         tree = self._tree
         run = await tree.runs.get_run(session_id, run_id)
@@ -729,24 +824,27 @@ class TaskExecutionAdapter:
         if tree.runs.run_has_terminal_fact(run, events):
             return
         if is_alive is None:
-            from src.core.runs import is_run_alive, read_host_boot_time
-            alive = is_run_alive(run.pid, run.pid_start, run.started_at, read_host_boot_time())
-        else:
-            alive = is_alive()
+            # The re-evaluable probe, not a captured boolean: the follow must
+            # observe the matching process ENDING (pid reuse and descendants
+            # that kept stdout are judged by the existing identity rules on
+            # every poll), and a stopped/ended process must converge to its
+            # durable result instead of following forever.
+            from src.core.runs import read_host_boot_time, run_alive_probe
+            is_alive = run_alive_probe(run.pid, run.pid_start, run.started_at, read_host_boot_time())
         meta = await tree.load_meta(session_id)
         if meta is None:
             raise TaskNotFoundError(f"task {session_id} not found")
         option = self._resolve_run_backend(run)
         if meta.profile == "manager" and run.kind == "manager_turn":
-            await self._resume_manager_turn(meta, run, option, alive)
+            await self._resume_manager_turn(meta, run, option, is_alive)
             return
-        if meta.profile == "worker" and run.kind in ("work", "review"):
-            await self._resume_worker_run(meta, run, option, alive)
+        if meta.profile == "worker" and run.kind in ("work", "review", "iteration", "scheduled_step"):
+            await self._resume_worker_run(meta, run, option, is_alive)
             return
         raise TaskInvalidError(f"run {run_id} (kind={run.kind}) has no resume adapter")
 
     async def _resume_manager_turn(
-        self, meta: SessionMetadata, run: RunRecord, option: BackendOption, alive: bool
+        self, meta: SessionMetadata, run: RunRecord, option: BackendOption, is_alive: "Callable[[], bool]"
     ) -> None:
         """Re-attach a v2 manager turn through the per-session queue's follow path."""
         from src.agents.master_cc import enqueue_master_resume
@@ -782,7 +880,7 @@ class TaskExecutionAdapter:
 
         await enqueue_master_resume(
             self._cfg, meta, record, self._sessions.callbacks(),
-            is_alive=lambda: alive,
+            is_alive=is_alive,
             task_run=TaskRunBinding(session_id=meta.id, run_id=run.id, transport_dir=str(transport_dir)),
             on_task_spawn=on_task_spawn,
             on_task_finish=on_task_finish,
@@ -790,7 +888,7 @@ class TaskExecutionAdapter:
         )
 
     async def _resume_worker_run(
-        self, meta: SessionMetadata, run: RunRecord, option: BackendOption, alive: bool
+        self, meta: SessionMetadata, run: RunRecord, option: BackendOption, is_alive: "Callable[[], bool]"
     ) -> None:
         """Re-attach a worker Run through Worker.resume's tail-follow."""
         session_id, run_id = meta.id, run.id
@@ -809,7 +907,7 @@ class TaskExecutionAdapter:
         )
         # Session-level notices reach the session chat exactly as a fresh run's do.
         worker.on_session_event = functools.partial(self._sessions.deliver_to_successor, session_id)
-        exit_code = await worker.resume(is_alive=lambda: alive)
+        exit_code = await worker.resume(is_alive=is_alive)
         durable_outcome = await self._finalize_worker_run(
             meta, run, option, exit_code=exit_code, error="")
         await self._after_worker_run(meta, run, durable_outcome)
@@ -824,25 +922,35 @@ class TaskExecutionAdapter:
         A work Run finishing is not delivery: an implement task's review and
         target-branch landing must complete first, and a failed or blocked
         outcome reports the parent with durable stable evidence while the task
-        and its worktree stay available for the explicit retry.
+        and its worktree stay available for the explicit retry. Sequence Runs
+        (iteration, scheduled_step) have no delivery chain of their own: their
+        sequence controller owns progression and the one final report, so this
+        method only re-enters the node's own dispatcher for inputs the Run left
+        pending.
         """
         session_id = meta.id
-        if run.kind == "review":
-            await self._after_review_run(meta, run, durable_outcome)
-            return
-        if durable_outcome == "success":
-            task_type = meta.task.task_type if meta.task is not None else TaskType.IMPLEMENT
-            if task_type == TaskType.IMPLEMENT and run.repo_path:
-                await self._maybe_spawn_review(session_id, run)
-            else:
-                await self._cleanup_worktree_if_delivered(session_id, run)
-            return
-        if durable_outcome == "failed":
-            await self._report_failure_to_parent(session_id, run, durable_outcome)
-        # Inputs admitted during this run waited for the serialized consumer;
-        # the finish chain (review queued/landed, closure, failure report) ran
-        # first, so this dispatch only sees what that chain left pending.
-        await self._tree.dispatch.dispatch_pending(session_id)
+        try:
+            if run.kind in ("iteration", "scheduled_step"):
+                return
+            if run.kind == "review":
+                await self._after_review_run(meta, run, durable_outcome)
+                return
+            if durable_outcome == "success":
+                task_type = meta.task.task_type if meta.task is not None else TaskType.IMPLEMENT
+                if task_type == TaskType.IMPLEMENT and run.repo_path:
+                    await self._maybe_spawn_review(session_id, run)
+                else:
+                    await self._cleanup_worktree_if_delivered(session_id, run)
+                return
+            if durable_outcome == "failed":
+                await self._report_failure_to_parent(session_id, run, durable_outcome)
+        finally:
+            # Inputs admitted during this run waited for the serialized
+            # consumer; the finish chain (review queued/landed, closure,
+            # failure report) ran first, so this dispatch only sees what that
+            # chain left pending. The review path reaches it too — its early
+            # return used to strand inputs admitted during a review Run.
+            await self._tree.dispatch.dispatch_pending(session_id)
 
     async def _after_review_run(self, meta: SessionMetadata, run: RunRecord, durable_outcome: str) -> None:
         from src.core.task_completion import (

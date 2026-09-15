@@ -298,6 +298,10 @@ async def _replay_unanswered_user_messages(
   from src.agents import master_cc  # lazy: mirrors the spawner import's cycle guard
 
   for meta in await asyncio.to_thread(session_mgr.list_active_session_metas):
+    if meta.profile is not None:
+      # A task-tree (v2) session's pending inputs are dispatcher facts the v2
+      # recovery replays; a legacy replay here would double-admit them.
+      continue
     try:
       events = session_mgr.load_chat_events_sync(meta.id)
       skip = excluded.get(meta.id, set()) | master_cc.queued_user_event_ids(meta.id)

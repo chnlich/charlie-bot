@@ -42,6 +42,7 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.control_events import (
   ACTOR_AGENT,
+  ACTOR_SYSTEM,
   ACTOR_USER,
   ControlEventSink,
   build_control_event,
@@ -617,7 +618,7 @@ class TaskTreeManager:
           name=name,
           backend=backend,
           parent_meta=parent_meta,
-          actor=ACTOR_USER if (isinstance(caller, CallerIdentity) and caller.is_operator) else ACTOR_AGENT,
+          actor=_create_actor_for(caller),
       )
     self._invalidate_index()
     # The publish rename took the node out from under any cached entry.
@@ -1053,6 +1054,20 @@ class TaskTreeManager:
 # ---------------------------------------------------------------------------
 # Module helpers
 # ---------------------------------------------------------------------------
+
+
+def _create_actor_for(caller: object) -> str:
+  """The creation fact's actor for one create_task caller.
+
+  A verified operator is a user; the configured scheduler's server-owned fire
+  passes the "system" sentinel (provenance the server owns — never a payload
+  bit a run-token caller can forge); anything else is an agent.
+  """
+  if isinstance(caller, CallerIdentity) and caller.is_operator:
+    return ACTOR_USER
+  if caller == "system":
+    return ACTOR_SYSTEM
+  return ACTOR_AGENT
 
 
 def canonical_task_spec_text(task: TaskSpec | None) -> str | None:

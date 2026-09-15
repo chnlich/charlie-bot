@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -68,7 +69,11 @@ _QUOTA_BLOCKER_TEXT_PATTERNS = (
 class ImproveState(BaseModel):
   loop_id: int
   goal: str
-  status: str = "running"  # running | stopped | completed | failed
+  # running | stopped | completed | failed | blocked | interrupted.
+  # "blocked" is the v2 sequence's exhausted-without-proven-delivery verdict;
+  # "interrupted" is a controller that died with an old server process (the
+  # restart never resumes the loop — see src.core.improve_sequence).
+  status: str = "running"
   work_branch: str
   base_branch: str | None = None
   repo_path: str
@@ -76,6 +81,10 @@ class ImproveState(BaseModel):
   backend: str | None = None
   model: str | None = None
   created_at: str
+  # The server process that owns this loop's controller. A restart finds a
+  # "running" state stamped with a dead pid and marks it interrupted instead
+  # of leaving a permanently blocking active lock (src.core.improve_sequence).
+  server_pid: int | None = None
 
 
 class ImproveLoopAlreadyRunningError(RuntimeError):
@@ -433,6 +442,7 @@ async def reserve_loop_state(
         backend=resolved_backend or None,
         model=resolved_model or None,
         created_at=utc_now().isoformat(),
+        server_pid=os.getpid(),
     )
     await save_loop_state(session_id, state, cfg)
     await asyncio.to_thread(active_path.write_text, f"{loop_id}\n")

@@ -26,6 +26,7 @@ from src.core.improve_command import (
   loop_plan_path,
   reserve_loop_state,
   run_improve_loop,
+  save_loop_state,
 )
 from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
@@ -345,10 +346,22 @@ async def delegate_task(
 @router.post("/improve")
 async def start_improve_loop(
     req: ImproveRequest,
+    cfg: CharlieBotConfig = Depends(get_config),
     session_mgr: SessionManager = Depends(get_session_manager),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> dict:
-  """Launch an iterative improvement loop as a background task."""
+  """Launch an iterative improvement loop as a background task.
+
+  A v2 manager target runs the sequence on the task tree: one worker child
+  task, one iteration Run per round (``sequence_ref`` kind=improve), and the
+  one final sequence result delivered to the manager through the common report
+  owner. A legacy (v1) session keeps the existing thread-based loop unchanged.
+  """
+  target = require_found(await session_mgr.get_session(req.session_id))
+  if target.profile is not None:
+    return await _start_improve_sequence(req, cfg, task_mgr, session_mgr)
+
   _meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr)
 
   work_branch = req.work_branch or f"improve/{int(time.time())}"
@@ -396,6 +409,84 @@ async def start_improve_loop(
       "iterations": req.iterations,
       "loop_id": state.loop_id,
       "goal_path": str(loop_goal_path(req.session_id, state.loop_id, cfg)),
+  }
+  if req.plan is not None:
+    response["plan_path"] = str(loop_plan_path(req.session_id, state.loop_id, cfg))
+  return response
+
+
+async def _start_improve_sequence(
+    req: ImproveRequest,
+    cfg: CharlieBotConfig,
+    task_mgr: TaskTreeManager,
+    session_mgr: SessionManager,
+) -> dict:
+  """The v2 improve path: one worker child, iteration Runs, one final report.
+
+  The nearest-real-user-ancestor gate re-judges here (whatever credential
+  carried the request), the loop state and the child are reserved under the
+  stable ids, and the controller task owns the iterations from there.
+  """
+  from src.core.improve_sequence import create_improve_child, run_improve_sequence
+  from src.core.task_sessions import (
+      TaskConflictError,
+      TaskForbiddenError,
+      TaskInvalidError,
+      TaskNotFoundError,
+  )
+
+  try:
+    await task_mgr.check_task_authorization(req.session_id)
+    work_branch = req.work_branch or f"improve/{int(time.time())}"
+    state = await reserve_loop_state(
+        req.session_id,
+        req.goal,
+        work_branch,
+        req.repo_path,
+        cfg,
+        plan=req.plan,
+        base_branch=req.base_branch,
+        merge_back=req.merge_back,
+        resolved_backend="",  # the sequence reads the resolved ids from state
+        resolved_model="",
+    )
+    # The backend/model resolution happens against the manager task before the
+    # child is created, so the iteration Runs pin one explicit choice.
+    resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
+        req.session_id, cfg, session_mgr, requested_backend=req.backend)
+    state.backend = resolved_backend
+    state.model = resolved_model
+    await save_loop_state(req.session_id, state, cfg)
+    child = await create_improve_child(
+        task_mgr, req.session_id, state.loop_id, req.goal,
+        repo_path=req.repo_path, base_branch=req.base_branch)
+  except ImproveLoopAlreadyRunningError as e:
+    raise HTTPException(status_code=409, detail=str(e)) from e
+  except TaskNotFoundError as e:
+    raise HTTPException(status_code=404, detail=str(e)) from e
+  except TaskForbiddenError as e:
+    raise HTTPException(status_code=403, detail=str(e)) from e
+  except TaskConflictError as e:
+    blockers = list(getattr(e, "blockers", None) or [])
+    raise HTTPException(status_code=409, detail={"message": str(e), "blockers": blockers}) from e
+  except TaskInvalidError as e:
+    raise HTTPException(status_code=400, detail=str(e)) from e
+
+  create_logged_task(
+      run_improve_sequence(
+          req.session_id, cfg, task_mgr,
+          loop_id=state.loop_id, iterations=req.iterations, child_id=child.id, goal=req.goal),
+      name=f"improve-sequence-{req.session_id[:8]}-{state.loop_id}",
+  )
+  log.info("improve_sequence_started", session=req.session_id, loop_id=state.loop_id,
+           child=child.id, iterations=req.iterations)
+  response = {
+      "status": "started",
+      "session_id": req.session_id,
+      "iterations": req.iterations,
+      "loop_id": state.loop_id,
+      "goal_path": str(loop_goal_path(req.session_id, state.loop_id, cfg)),
+      "child_session_id": child.id,
   }
   if req.plan is not None:
     response["plan_path"] = str(loop_plan_path(req.session_id, state.loop_id, cfg))

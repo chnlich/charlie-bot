@@ -22,14 +22,16 @@ import argparse
 import json
 
 from src.cli.common import (
-    add_session_arg,
-    find_local_thread,
-    post_internal_api,
-    read_required_text_file,
-    resolve_session_id,
-    validate_repo_path,
+  add_session_arg,
+  find_local_task_child,
+  find_local_thread,
+  post_internal_api,
+  read_required_text_file,
+  resolve_session_id,
+  validate_repo_path,
 )
 from src.core.config import get_config
+from src.core.improve_sequence import improve_child_request_id
 
 
 def _read_goal_file(goal_file: str) -> str:
@@ -109,9 +111,11 @@ def main() -> None:
     payload["plan"] = plan
 
   def _readback() -> dict | None:
-    # Sent-but-lost: the loop's live goal file plus an iteration-1 thread that
-    # embeds this goal together prove the launch landed. Returns the endpoint's
-    # response shape so steering output stays identical.
+    # Sent-but-lost: the loop's live goal file (plus its sequence's worker
+    # child for a v2 manager, or an iteration-1 thread for v1) proves the
+    # launch landed. Returns the endpoint's response shape so steering output
+    # stays identical.
+    from src.core.models import SessionMetadata
     cfg = get_config()
     loops_dir = cfg.sessions_dir / session_id / "loops"
     if not loops_dir.is_dir():
@@ -127,14 +131,6 @@ def main() -> None:
         continue
     if not candidates:
       return None
-    thread = find_local_thread(
-        session_id,
-        description=f"Goal: {goal}",
-        task_type="implement",
-        description_match="contains",
-    )
-    if thread is None:
-      return None
     loop_id = max(candidates)
     response = {
         "status": "started",
@@ -145,6 +141,29 @@ def main() -> None:
     }
     if plan is not None:
       response["plan_path"] = str(loops_dir / str(loop_id) / "plan.md")
+    # The v2 sequence's one worker child binds by its stable request id; its
+    # presence (and only the matching parent's) proves the v2 admission.
+    try:
+      meta = SessionMetadata.model_validate_json(
+          (cfg.sessions_dir / session_id / "metadata.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+      meta = None
+    if meta is not None and meta.profile is not None:
+      child = find_local_task_child(
+          session_id, description=goal, task_type=None,
+          request_id=improve_child_request_id(loop_id))
+      if child is None:
+        return None
+      response["child_session_id"] = child["session_id"]
+      return response
+    thread = find_local_thread(
+        session_id,
+        description=f"Goal: {goal}",
+        task_type="implement",
+        description_match="contains",
+    )
+    if thread is None:
+      return None
     return response
 
   result = post_internal_api("/api/internal/improve", payload, readback=_readback)

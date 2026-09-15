@@ -25,6 +25,7 @@ from src.core.config import (
     get_scheduled_tasks,
     master_task_project_error,
     require_backend_option,
+    scheduled_binding_error,
 )
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionMetadata
@@ -112,6 +113,11 @@ def _apply_task_update(task: dict, req: "TaskUpdate") -> dict:
     updated['project'] = req.project or None
   if req.allow_failure is not None:
     updated['allow_failure'] = req.allow_failure
+  if 'session_id' in req.model_fields_set:
+    if req.session_id:
+      updated['session_id'] = req.session_id
+    else:
+      updated.pop('session_id', None)
   return updated
 
 
@@ -157,6 +163,7 @@ class TaskUpdate(BaseModel):
   enabled: bool | None = None
   project: str | None = None
   allow_failure: bool | None = None
+  session_id: str | None = None
 
 
 class TaskCreate(ScheduledTaskFields):
@@ -280,6 +287,8 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
   _validate_backend_id(req.backend, cfg)
   if project_error := master_task_project_error(req.mode, req.project):
     raise HTTPException(status_code=400, detail=project_error)
+  if binding_error := scheduled_binding_error(req):
+    raise HTTPException(status_code=400, detail=binding_error)
   _check_master_project_unique(req.name, req.mode, req.project)
   path = cron_path(req.name)
   if path.exists():

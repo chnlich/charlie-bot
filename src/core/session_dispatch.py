@@ -101,6 +101,11 @@ class TaskInputDispatcher:
             raise TaskInvalidError(f"{event_type} is not a task input type")
         if event_type == ET.USER and actor != ACTOR_USER:
             raise TaskForbiddenError("only verified operator input is a real user message")
+        if event_type == ET.SCHEDULED_TRIGGER and actor != ACTOR_SYSTEM:
+            # A scheduled input's provenance is the server's own fire — the
+            # scheduler derives the identity and stamps actor=system. No
+            # caller (run-token agent included) can mint one.
+            raise TaskForbiddenError("only the server's own scheduler mints scheduled triggers")
         tree = self._tree
         epoch = await tree.sessions.prime_aggregator(session_id)
         async with tree.control_lock:
@@ -296,6 +301,15 @@ class TaskInputDispatcher:
             decision["launch"] = False
             decision["reason"] = "automation_paused; input retained until resume"
             return decision
+        tui_refusal = self._tui_manager_refusal(meta)
+        if tui_refusal is not None:
+            # A tui-cli manager node takes input through the terminal, not a
+            # headless SDK turn. No Run is reserved and none fails: the input
+            # stays durable and pending, the decision names the transport
+            # limit, and the terminal remains the node's execution surface.
+            decision["launch"] = False
+            decision["reason"] = tui_refusal
+            return decision
         events = tree.runs.load_events_sync(session_id)
         queued: list[RunRecord] = []
         for run in tree.runs.list_run_records_sync(session_id):
@@ -307,6 +321,13 @@ class TaskInputDispatcher:
                 return decision
             if tree.runs.stop_requested(events, run.id):
                 continue  # a stopped queued run is never launched
+            if run.kind == "manager_turn" and not run.input_event_ids and not pending:
+                # A void reservation (registered, never claimed): with nothing
+                # pending it must never launch an empty side-effecting turn,
+                # and it must not block the node either — skip it like a
+                # stopped run. A later input hands it the pending batch again
+                # (the deterministic repair) and it becomes the consumer.
+                continue
             queued.append(run)
         if queued:
             if self.executor is None:
@@ -351,6 +372,26 @@ class TaskInputDispatcher:
         decision["launch"] = True
         decision["run_id"] = launched
         return decision
+
+    def _tui_manager_refusal(self, meta) -> str | None:
+        """Why a headless manager turn must not start on *meta*, or None.
+
+        Only a tui-cli-backed MANAGER node refuses: its turns are the user's
+        terminal session (tmux takes input through the browser terminal, not
+        the SDK), so a dispatched input can never be executed headlessly.
+        Worker nodes keep their ordinary adapters; a tui worker is a launch
+        failure, not a terminal-driven node.
+        """
+        from src.core.backend_models import BackendType
+
+        if meta.profile != "manager" or not meta.backend:
+            return None
+        option = self._tree._cfg.get_backend_option(meta.backend)
+        if option is None or option.type is not BackendType.TUI_CLI:
+            return None
+        return (
+            "tui-cli manager takes input through the terminal; no headless "
+            "manager turn is started and the input stays pending")
 
     async def finish_run(
         self,

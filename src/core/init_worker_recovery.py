@@ -190,6 +190,18 @@ def _session_archived(session_dir: Path) -> bool:
   return meta is not None and meta.get("status") == SessionStatus.ARCHIVED
 
 
+def _session_is_task_tree(session_dir: Path) -> bool:
+  """Whether the session directory belongs to a task-tree (v2) node.
+
+  Read from the metadata file directly (one cheap read per session with a
+  threads directory); unreadable metadata means "not provably v2", and the
+  legacy scan then behaves exactly as before.
+  """
+  from src.core.json_utils import load_json_meta
+  raw = load_json_meta(session_dir / "metadata.json", "thread_scan_meta_unreadable")
+  return raw is not None and bool(raw.get("profile"))
+
+
 def _scan_interrupted_runs(cfg: CharlieBotConfig, boot_time: datetime) -> tuple[list[_InterruptedRun], list[dict]]:
   """Collect pre-boot threads (any status) plus the full in-window metadata list.
 
@@ -217,6 +229,12 @@ def _scan_interrupted_runs(cfg: CharlieBotConfig, boot_time: datetime) -> tuple[
   now = utc_now()
   for session_dir in cfg.sessions_dir.iterdir():
     threads_dir = session_dir / THREADS_DIR_NAME
+    if _session_is_task_tree(session_dir):
+      # A task-tree (v2) session has no ThreadManager rows and never gets
+      # ThreadMetadata or master_run writes from this recovery: its Runs are
+      # facts the v2 startup pass (src.core.task_recovery) reconciles, and a
+      # legacy respawn heuristic here would double-admit them.
+      continue
     for thread_dir, _meta_path, meta in iter_recent_thread_metas(threads_dir, now, "thread_meta_unreadable"):
       threads.append(meta)
       if not _started_before_boot(meta, thread_dir, boot_time):

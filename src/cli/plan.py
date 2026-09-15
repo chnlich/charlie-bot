@@ -46,6 +46,16 @@ def _latest_version(plan: dict) -> dict:
   return max(plan["versions"], key=lambda v: v["v"])
 
 
+def _readback_verdict(plan: dict) -> dict:
+  """The sent-but-lost verdict for present/amend/approve, mirroring those server verbs' response.
+
+  Each verb succeeds on the registry's latest version, so the readback's ``v`` is
+  the listing's max; close's server response omits ``v``, and its branch below
+  builds that shape itself.
+  """
+  return {"plan": plan["id"], "v": _latest_version(plan)["v"], "state": plan["state"]}
+
+
 def _readback_plan(session_id: str, verb: str, args: argparse.Namespace) -> dict | None:
   """Sent-but-lost: compare the session's plan registry against this verb's intent.
 
@@ -58,7 +68,7 @@ def _readback_plan(session_id: str, verb: str, args: argparse.Namespace) -> dict
   if verb == "present":
     for plan in plans:
       if plan.get("title") == args.title and any(_same_file(v.get("file"), args.file) for v in plan["versions"]):
-        return {"plan": plan["id"], "v": _latest_version(plan)["v"], "state": plan["state"]}
+        return _readback_verdict(plan)
     return None
 
   if verb == "amend":
@@ -66,7 +76,7 @@ def _readback_plan(session_id: str, verb: str, args: argparse.Namespace) -> dict
       if args.plan is not None and plan.get("id") != args.plan:
         continue
       if _same_file(_latest_version(plan).get("file"), args.file):
-        return {"plan": plan["id"], "v": _latest_version(plan)["v"], "state": plan["state"]}
+        return _readback_verdict(plan)
     return None
 
   if verb == "approve":
@@ -75,8 +85,7 @@ def _readback_plan(session_id: str, verb: str, args: argparse.Namespace) -> dict
         if p.get("takeoff") is not None and p.get("closed") is None and (args.plan is None or p.get("id") == args.plan)
     ]
     if len(candidates) == 1:
-      plan = candidates[0]
-      return {"plan": plan["id"], "v": _latest_version(plan)["v"], "state": plan["state"]}
+      return _readback_verdict(candidates[0])
     return None
 
   if verb == "close":

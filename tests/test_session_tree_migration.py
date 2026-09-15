@@ -13,7 +13,7 @@ import asyncio
 import json
 import os
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -542,3 +542,41 @@ def test_mixed_v2_data_preserved(
   aliases = json.loads((full_home / "sessions" / "session_aliases.json").read_text())
   assert aliases["old_threads"]["11111111-0000-4000-8000-000000000001/run-existing-1"] == {
       "session_id": fx.S_V2, "run_id": "run-existing-1"}
+
+
+def test_predecessor_threads_and_trigger_own_the_tail_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Elone canonicalization moves logical thread ownership consistently.
+
+  The predecessor's worker thread becomes a child of the tail's manager with
+  a stable id derived from the ORIGINAL owner id, and the old thread address
+  resolves through the alias store exactly as before migration.
+  """
+  home = fx.build_full_home(tmp_path / "home")
+  builder = fx.FixtureBuilder(home)
+  builder.thread(fx.S_PREDECESSOR, fx.ThreadMetadata(
+      id=fx.T_COMPLETED, session_id=fx.S_PREDECESSOR,
+      description="Work started under the predecessor",
+      status="completed", created_at=fx.BASE, started_at=fx.BASE,
+      completed_at=fx.BASE + timedelta(minutes=10), exit_code=0, backend="synth",
+      require_review=False))
+  point_home(monkeypatch, home)
+  manifest_path = tmp_path / "m.json"
+  code, manifest, _ = dry_run(monkeypatch, home, manifest_path)
+  assert code == 0 and manifest.unresolved == []
+  work = [m for m in manifest.mappings if m.source_kind == "worker_thread"
+          and m.source_id == f"{fx.S_PREDECESSOR}/{fx.T_COMPLETED}"]
+  assert len(work) == 1
+  assert work[0].target_session_id  # stable source-derived id (uuid form)
+  assert run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))[0] == 0
+
+  tree = tree_of(home)
+  index = asyncio.run(tree._get_index(force=True))
+  tail_workers = [m for m in index.metas.values() if m.profile == "worker"
+                  and m.task_parent_id == fx.S_TAIL]
+  assert len(tail_workers) == 1
+  # The old thread address still resolves to the same task/run.
+  aliases = SessionAliasStore(home / "sessions")
+  resolved = aliases.resolve_thread(fx.S_PREDECESSOR, fx.T_COMPLETED)
+  assert resolved == {"session_id": tail_workers[0].id,
+                      "run_id": tree.runs.list_run_records_sync(tail_workers[0].id)[0].id}

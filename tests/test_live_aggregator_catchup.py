@@ -20,6 +20,7 @@ import pytest
 from conftest import BROADCAST_PATCH_TARGET, assistant_text_event, fake_backends
 
 from src.core import event_types as ET
+from src.core import gc_control
 from src.core import sessions as sessions_module
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest
@@ -147,7 +148,7 @@ async def test_catchup_init_reenables_gc_on_success_and_drop(tmp_path: Path) -> 
   turn off collection for the server's remaining lifetime."""
   import gc
 
-  real_gc = sessions_module.gc
+  real_gc = gc_control.gc
   states: list[str] = []
 
   class SpyGC:
@@ -167,7 +168,7 @@ async def test_catchup_init_reenables_gc_on_success_and_drop(tmp_path: Path) -> 
   mgr = SessionManager(cfg)
   sid = await _seed_session(mgr)
 
-  with patch.object(sessions_module, "gc", SpyGC()):
+  with patch.object(gc_control, "gc", SpyGC()):
     aggregator = await mgr._get_or_init_aggregator(sid)
   assert states == ["off", "on"]
   assert gc.isenabled()
@@ -186,7 +187,7 @@ async def test_catchup_init_reenables_gc_on_success_and_drop(tmp_path: Path) -> 
 
   states.clear()
   mgr._aggregators.pop(sid, None)
-  with patch.object(sessions_module, "gc", SpyGC()):
+  with patch.object(gc_control, "gc", SpyGC()):
     with patch.object(SessionManager, "_load_aggregator_init_inputs", dropping_load):
       rerun = await mgr._get_or_init_aggregator(sid)
   assert loads == 2  # the dropped init plus the rerun

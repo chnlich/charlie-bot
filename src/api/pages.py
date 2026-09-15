@@ -4,7 +4,6 @@ import asyncio
 import concurrent.futures
 import datetime as dt
 import fnmatch
-import gc
 import hashlib
 import json
 import multiprocessing
@@ -35,6 +34,7 @@ from src.core.constants import (
     PERFETTO_VIEWER_PATH,
     REPO_ROOT,
 )
+from src.core.gc_control import gc_off
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus
 from src.core.ncu_parsing import NcuParseError, parse_ncu_report
@@ -437,14 +437,14 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
   share one JSON boundary: the NaN/Infinity literals stdlib json accepts fail the build loudly
   here too — a literal Perfetto cannot render must not reach the cache.
   """
-  with out_path.open("wb") as compressed, subprocess.Popen(["gzip", f"-{_MERGE_COMPRESSLEVEL}", "-c", str(path)],
-                                                           stdout=compressed, stderr=subprocess.PIPE) as gzip_proc:
+  with (out_path.open("wb") as compressed, subprocess.Popen(["gzip", f"-{_MERGE_COMPRESSLEVEL}", "-c", str(path)],
+                                                            stdout=compressed, stderr=subprocess.PIPE) as
+        gzip_proc, gc_off(collect=True)):
     # The parse allocates ~1M dicts per 1M input events; the generational passes
     # over that churn measured 0.27-0.35 s per 307 MB parse. Unlike the merge
     # path's pool worker, this build runs on a server thread, so the disable is
-    # process-wide but bounded by the build window; the re-enable collect
-    # reclaims the parse's cyclic leftovers.
-    gc.disable()
+    # process-wide but bounded by the build window; collect reclaims the parse's
+    # cyclic leftovers.
     try:
       with path.open("rb") as validate_file:
         orjson.loads(validate_file.read())
@@ -455,9 +455,6 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
       gzip_proc.kill()
       gzip_proc.wait()
       raise
-    finally:
-      gc.enable()
-      gc.collect()
 
 
 async def _cached_direct_pass(path: Path) -> Path:

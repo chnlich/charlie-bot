@@ -1,13 +1,14 @@
 """Streaming merge support for Chrome-format JSON traces."""
 
 import fcntl
-import gc
 import re
 import subprocess
 from pathlib import Path
 from typing import BinaryIO
 
 import orjson
+
+from src.core.gc_control import gc_off
 
 # Compression level for the merged gzip output. Measured on a 191.2 MB /
 # 496,099-event input: level 1 builds in 0.57 s / 15.5 MB against level 6's
@@ -221,15 +222,11 @@ def merge_traces(paths: list[Path], out_path: Path, slim: bool) -> None:
   # A build allocates ~1M dicts per 500k input events and mutates every one;
   # the generational passes over that churn measured 0.3-0.6 s per 1.07M-event
   # build. The build runs inside the merge process pool (spawn context, whose
-  # workers run nothing else), so disabling GC is scoped to this build; the
-  # re-enable collect reclaims the build's cyclic leftovers so they never
-  # accumulate across builds in a long-lived worker.
-  gc.disable()
-  try:
+  # workers run nothing else), so the disable is scoped to this build; collect
+  # reclaims the build's cyclic leftovers so they never accumulate across
+  # builds in a long-lived worker.
+  with gc_off(collect=True):
     _merge_all(paths, out_path, slim)
-  finally:
-    gc.enable()
-    gc.collect()
 
 
 def _merge_all(paths: list[Path], out_path: Path, slim: bool) -> None:

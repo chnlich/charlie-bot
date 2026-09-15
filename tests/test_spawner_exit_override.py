@@ -133,13 +133,13 @@ def test_helper_is_wired_into_spawn_worker_after_stream_events() -> None:
   source = inspect.getsource(spawner.spawn_worker)
   stream_idx = source.find("_stream_worker_events")
   override_idx = source.find("_maybe_override_exit_code_from_result")
-  finalize_idx = source.find("_finalize_worker_safely")
+  finalize_idx = source.find("finalize_thread")
 
   assert stream_idx != -1, "spawn_worker must call _stream_worker_events"
   assert override_idx != -1, "spawn_worker must call _maybe_override_exit_code_from_result"
-  assert finalize_idx != -1, "spawn_worker must call _finalize_worker_safely"
+  assert finalize_idx != -1, "spawn_worker must call finalize_thread"
   assert stream_idx < override_idx < finalize_idx, (
-      "override must run after _stream_worker_events and before _finalize_worker_safely")
+      "override must run after _stream_worker_events and before finalize_thread")
   # The override is gated on a failed outcome (exit_code != 0 and not quota_exhausted) with
   # no recorded error.
   assert "outcome.failed" in source

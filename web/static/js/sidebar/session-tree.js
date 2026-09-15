@@ -173,6 +173,14 @@ function buildRowBadges(container, row) {
 
 // One tree row. Built with DOM APIs and textContent for every name/state
 // string — names and goals are user data and are never interpolated as HTML.
+//
+// Name space is allocated before badge space: the name is a flex item with a
+// 55%-of-row width floor, and the role/status/count badge group is one
+// shrink-proof item that wraps to a second line as a whole when it no longer
+// fits beside it. A root manager with attention and subtree counts used to
+// squeeze the name to zero visible width on the 320px sidebar; now the name
+// keeps over half the row at any depth, compact rows stay single-line, and
+// nothing relies on hover.
 function buildRowElement(row, depth) {
   const el = document.createElement('div');
   el.className = 'tree-row';
@@ -183,7 +191,7 @@ function buildRowElement(row, depth) {
   el.id = 'tree-node-' + row.id;
 
   const inner = document.createElement('div');
-  inner.className = 'flex items-center gap-1.5 rounded-lg px-2 py-1.5 cursor-pointer transition-colors min-w-0 ' + rowMainClass(row);
+  inner.className = 'flex flex-wrap items-center gap-x-1.5 gap-y-0.5 rounded-lg px-2 py-1.5 cursor-pointer transition-colors min-w-0 ' + rowMainClass(row);
   inner.style.paddingLeft = (8 + depth * 16) + 'px';
   if (row.id === tree.highlighted) inner.classList.add('ring-1', 'ring-blue-400');
 
@@ -198,14 +206,14 @@ function buildRowElement(row, depth) {
   inner.appendChild(chevron);
 
   const name = document.createElement('span');
-  name.className = 'flex-1 min-w-0 truncate text-sm session-name';
+  name.className = 'flex-1 min-w-[55%] truncate text-sm session-name';
   name.textContent = row.name;
   name.title = row.name;
   name.dataset.action = 'open';
   inner.appendChild(name);
 
   const badges = document.createElement('span');
-  badges.className = 'flex items-center gap-1.5 flex-shrink-0';
+  badges.className = 'flex items-center gap-1.5 flex-shrink-0 tree-meta-row';
   buildRowBadges(badges, row);
   inner.appendChild(badges);
 

@@ -82,6 +82,7 @@ class CDP:
         self.console_errors: list[str] = []
         self.tree_fetch_counts: list[str] = []
         self.runs_fetch_counts: list[str] = []
+        self.mutations: list[dict] = []
         self._reader = asyncio.create_task(self._read_loop())
 
     async def _read_loop(self) -> None:
@@ -108,6 +109,16 @@ class CDP:
                             self.tree_fetch_counts.append(url)
                         if "/runs?" in url:
                             self.runs_fetch_counts.append(url)
+                        request = msg["params"]["request"]
+                        if request.get("method") in ("POST", "PATCH") and "/api/sessions" in url:
+                            # Every outgoing mutation with its exact target URL
+                            # and body — the ground truth for "which task did
+                            # this dialog actually submit against".
+                            self.mutations.append({
+                                "url": url,
+                                "method": request.get("method"),
+                                "body": (request.get("postData") or "")[:600],
+                            })
         except Exception as exc:  # reader exit is fine at shutdown
             log(f"cdp reader stopped: {exc!r}")
 
@@ -131,6 +142,12 @@ class CDP:
         seen = self.runs_fetch_counts
         self.runs_fetch_counts = []
         return seen
+
+    def mutations_since(self, mark: int) -> list[dict]:
+        return self.mutations[mark:]
+
+    def mutation_mark(self) -> int:
+        return len(self.mutations)
 
 
 async def connect_cdp(port: int) -> CDP:
@@ -168,7 +185,14 @@ def seed_memory_store(home: Path) -> None:
 
 
 async def seed_scenario(home: Path) -> dict:
-    """Create the acceptance scenario's task tree and recorded run facts."""
+    """Create the acceptance scenario's task tree and recorded run facts.
+
+    The operator-actions scenarios need collection sizes beyond one page:
+    more roots than the move chooser's page, a manager with more direct
+    children than the old single 100-record read, and a run history deeper
+    than the completion dialog's page — all seeded through the same
+    task_sessions owner the APIs serve, in-process only.
+    """
     os.environ["CHARLIEBOT_HOME"] = str(home)
     from src.core.config import get_config
     from src.core.sessions import SessionManager
@@ -183,6 +207,17 @@ async def seed_scenario(home: Path) -> dict:
     OP = CallerIdentity(kind="operator")
 
     async def seed() -> dict:
+        # Bulk roots first: created_at order puts them on the move chooser's
+        # first pages, so "Program rollout" and everything created after land
+        # on a LATER page.
+        bulk = {}
+        for i in range(1, 29):
+            meta = await tree.create_task(
+                request_id=f"seed-bulk-{i}", task_parent_id=None, profile="manager",
+                task=TaskSpec(goal=f"bulk root {i:02d}"), name=f"Bulk root {i:02d}",
+                backend=None, caller=OP)
+            if i <= 3:
+                bulk[f"bulk{i}"] = meta.id
         root = await tree.create_task(
             request_id="seed-root", task_parent_id=None, profile="manager", task=None,
             name="Program rollout", backend=None, caller=OP)
@@ -277,9 +312,80 @@ async def seed_scenario(home: Path) -> dict:
         await tree.runs.register_run(RunRecord(
             id="agent-auth-run", session_id=root.id, kind="manager_turn",
             pid=os.getpid(), pid_start=pid_start))
+
+        # --- operator-actions scenarios (S16-S20) ---------------------------
+        # A late root holding an intermediate manager (a move target reached
+        # through the chooser's later roots page) and a wide manager whose
+        # direct-children list exceeds the old single 100-record read.
+        late_root = await tree.create_task(
+            request_id="seed-late-root", task_parent_id=None, profile="manager",
+            task=TaskSpec(goal="late root for move paging"), name="Late root",
+            backend=None, caller=OP)
+        late_mid = await tree.create_task(
+            request_id="seed-late-mid", task_parent_id=late_root.id, profile="manager",
+            task=TaskSpec(goal="intermediate manager"), name="Late mid",
+            backend=None, caller=OP)
+        wide = await tree.create_task(
+            request_id="seed-wide", task_parent_id=late_mid.id, profile="manager",
+            task=TaskSpec(goal="a manager with more children than one page"), name="Wide manager",
+            backend=None, caller=OP)
+        for i in range(1, 106):
+            await tree.create_task(
+                request_id=f"seed-wide-child-{i}", task_parent_id=wide.id, profile="worker",
+                task=TaskSpec(goal=f"wide child {i:03d}"), name=f"Wide child {i:03d}",
+                backend=None, caller=OP)
+
+        # A three-level ops tree whose leaf has a FAILED run: the root and the
+        # nested manager rows carry attention + subtree counts — the rows the
+        # readability scenario measures.
+        ops_root = await tree.create_task(
+            request_id="seed-ops-root", task_parent_id=None, profile="manager",
+            task=TaskSpec(goal="ops root"), name="Ops root", backend=None, caller=OP)
+        ops_mid = await tree.create_task(
+            request_id="seed-ops-mid", task_parent_id=ops_root.id, profile="manager",
+            task=TaskSpec(goal="ops mid manager"), name="Ops mid", backend=None, caller=OP)
+        failing = await tree.create_task(
+            request_id="seed-failing", task_parent_id=ops_mid.id, profile="worker",
+            task=TaskSpec(goal="a worker whose run failed"), name="Failing worker",
+            backend=None, caller=OP)
+        await tree.runs.register_run(RunRecord(
+            id="run-fail-1", session_id=failing.id, kind="work", backend="fake-scripted",
+            model="scripted-model", started_at=base + timedelta(minutes=500)))
+        await tree.dispatch.finish_run(failing.id, "run-fail-1", outcome="failed")
+
+        # Completion-evidence MANAGER: 120 successful manager_turn runs. A
+        # manager never auto-completes (that is worker-only), so the task stays
+        # open and manually completable, with early evidence beyond the first
+        # desc page and beyond the old 100-record read.
+        evidence = await tree.create_task(
+            request_id="seed-evidence", task_parent_id=feature.id, profile="manager",
+            task=TaskSpec(goal="carry enough runs to page the evidence picker"),
+            name="Evidence manager", backend=None, caller=OP)
+        for i in range(1, 121):
+            run_id = f"run-e{i:04d}"
+            await tree.runs.register_run(RunRecord(
+                id=run_id, session_id=evidence.id, kind="manager_turn", backend="fake-scripted",
+                model="scripted-model", started_at=base + timedelta(minutes=1000 + i)))
+            await tree.dispatch.finish_run(evidence.id, run_id, outcome="success")
+
+        # Dialog-binding pair: A is a run-less worker (open, completable in
+        # principle, nothing auto-closes it), B is a childless manager (its
+        # cancel succeeds — used for the late-response drop).
+        bind_a = await tree.create_task(
+            request_id="seed-bind-a", task_parent_id=root.id, profile="worker",
+            task=TaskSpec(goal="dialog binding task A"), name="Bind task A",
+            backend=None, caller=OP)
+        bind_b = await tree.create_task(
+            request_id="seed-bind-b", task_parent_id=None, profile="manager",
+            task=TaskSpec(goal="dialog binding task B"), name="Bind task B",
+            backend=None, caller=OP)
+
         seed_memory_store(home)
         return {"root": root.id, "feature": feature.id, "worker1": worker1.id, "worker2": worker2.id,
-                "long": long_worker.id, "latest_hash": latest_hash}
+                "long": long_worker.id, "latest_hash": latest_hash,
+                "late_root": late_root.id, "late_mid": late_mid.id, "wide": wide.id,
+                "ops_root": ops_root.id, "ops_mid": ops_mid.id, "failing": failing.id,
+                "evidence": evidence.id, "bind_a": bind_a.id, "bind_b": bind_b.id, **bulk}
 
     return await seed()
 
@@ -401,6 +507,17 @@ DIAGNOSTIC_SNAPSHOT = """
         if (!m) return 'no-modal';
         const eb = m.querySelector('.text-red-300');
         return eb ? eb.textContent.slice(0, 200) : 'no-errbox';
+      })(),
+      moveDebug: (() => {
+        const m = document.getElementById('task-move-modal');
+        if (!m) return 'no-modal';
+        const list = document.getElementById('task-move-list');
+        return JSON.stringify({
+          chosen: (document.getElementById('task-move-chosen') || {}).textContent,
+          listHead: list ? list.textContent.slice(0, 160) : null,
+          hasLateRoot: list ? list.textContent.includes('Late root') : null,
+          err: (list && list.textContent.includes('Failed to load candidates')) || null,
+        });
       })(),
     })
 """
@@ -1265,6 +1382,605 @@ async def run_harness(args: argparse.Namespace) -> None:
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s15_replay_refusal_FAILED")
                 results.record("replay, refusal, draft and selection preservation", False, repr(exc), shot)
+
+            # ---- S16: completion evidence beyond the first page ---------------
+            try:
+                log("  s16: completion evidence paging")
+                await evaluate(cdp, session_id, f"switchSession('{ids['evidence']}')")
+                await evaluate(cdp, session_id, "switchTab('task')")
+                await wait_for(cdp, session_id,
+                               "document.getElementById('tab-task').textContent.includes('Evidence manager')")
+                await wait_for(cdp, session_id, "!!document.getElementById('task-action-complete')")
+                await evaluate(cdp, session_id, """
+                    (async () => {
+                      [...document.querySelectorAll('#tab-task button')]
+                        .find(b => b.textContent.startsWith('Complete')).click();
+                    })()
+                """)
+                await wait_for(cdp, session_id, "!!document.getElementById('task-complete-modal')")
+                box_values = "JSON.stringify([...document.querySelectorAll('#task-complete-runs input[type=checkbox]')].map(b => b.value))"
+                await wait_for(cdp, session_id, f"({box_values}).includes('run-e0120')",
+                               label="s16 newest-first first page rendered")
+                vals = json.loads(await evaluate(cdp, session_id, box_values))
+                assert_true("run-e0120" in vals and "run-e0071" in vals,
+                            f"the newest-first page holds runs e0071..e0120 ({len(vals)} rows)")
+                assert_true("run-e0070" not in vals and "run-e0003" not in vals,
+                            "older history is not silently fetched")
+                # Draft + a recent selection, then page older: both survive.
+                await evaluate(cdp, session_id, """
+                    (() => {
+                      const s = document.getElementById('task-complete-summary');
+                      s.value = 'delivered via runs e0119 and the early e0003';
+                      s.dispatchEvent(new Event('input'));
+                      const refs = document.getElementById('task-complete-refs');
+                      refs.value = 'evidence/run-e0119.log';
+                      refs.dispatchEvent(new Event('input'));
+                      const box = [...document.querySelectorAll('#task-complete-runs input[type=checkbox]')]
+                        .find(b => b.value === 'run-e0119');
+                      box.checked = true; box.dispatchEvent(new Event('change'));
+                    })()
+                """)
+                more = await evaluate(cdp, session_id, """
+                    (() => {
+                      const b = [...document.querySelectorAll('#task-complete-runs button')]
+                        .find(x => x.textContent.startsWith('Load older runs'));
+                      if (!b) return 'no-continuation';
+                      b.click(); return 'clicked';
+                    })()
+                """)
+                assert_true(more == 'clicked', f"the continuation was offered ({more})")
+                await wait_for(cdp, session_id, f"({box_values}).includes('run-e0070')",
+                               label="s16 second page appended")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-complete-selected').textContent.includes('Selected evidence (1)')",
+                    label="s16 selection chip survives the page load")
+                summary_val = await evaluate(cdp, session_id, "document.getElementById('task-complete-summary').value")
+                assert_true(summary_val.startswith('delivered via runs'),
+                            "the summary draft survived the page load")
+                # A live event (an out-of-band rename of THIS task) refreshes the
+                # panel while the dialog is open: selection and draft must hold.
+                status, _renamed = await asyncio.to_thread(
+                    api_request, base, access_key, "PATCH", f"/api/sessions/{ids['evidence']}",
+                    {"name": "Evidence manager renamed"})
+                assert_true(status == 200, f"the out-of-band rename succeeded ({status})")
+                await asyncio.sleep(1.0)
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-complete-selected').textContent.includes('run-e0119'.slice(0,8))",
+                    timeout=6, label="s16 selection chip survives the live refresh")
+                vals_live = json.loads(await evaluate(cdp, session_id, box_values))
+                assert_true(len(vals_live) == 100 and len(set(vals_live)) == 100,
+                            f"the live refresh merged without duplicates ({len(vals_live)} rows)")
+                # Page 3: the early history, then select the early run.
+                await evaluate(cdp, session_id, """
+                    (() => { [...document.querySelectorAll('#task-complete-runs button')]
+                      .find(x => x.textContent.startsWith('Load older runs')).click(); })()
+                """)
+                await wait_for(cdp, session_id, f"({box_values}).includes('run-e0003')",
+                               label="s16 third page reached the early history")
+                vals = json.loads(await evaluate(cdp, session_id, box_values))
+                assert_true(len(vals) == 120 and len(set(vals)) == 120,
+                            f"all 120 runs are reachable without duplicates ({len(vals)})")
+                await evaluate(cdp, session_id, """
+                    (() => {
+                      const box = [...document.querySelectorAll('#task-complete-runs input[type=checkbox]')]
+                        .find(b => b.value === 'run-e0003');
+                      box.checked = true; box.dispatchEvent(new Event('change'));
+                    })()
+                """)
+                shot = await screenshot(cdp, session_id, results, "s16_completion_paging")
+                # Submit through the guarded complete path and verify the exact
+                # outgoing ids plus the server fact.
+                mark = cdp.mutation_mark()
+                await evaluate(cdp, session_id, """
+                    (() => { [...document.querySelectorAll('#task-complete-modal button')]
+                      .find(b => b.textContent === 'Complete task').click(); })()
+                """)
+                await wait_for(cdp, session_id,
+                               "document.getElementById('tab-task').textContent.includes('task: completed')",
+                               timeout=20, label="s16 completion landed")
+                muts = [m for m in cdp.mutations_since(mark) if m["url"].endswith("/complete")]
+                assert_true(len(muts) == 1, f"exactly one complete request left ({len(muts)})")
+                body = json.loads(muts[0]["body"])
+                assert_true(sorted(body["run_ids"]) == ["run-e0003", "run-e0119"],
+                            f"exactly the two selected ids were submitted ({body['run_ids']})")
+                assert_true(body["summary"].startswith("delivered via runs")
+                            and body["result_refs"] == ["evidence/run-e0119.log"],
+                            "the draft summary and refs rode the claim")
+                status, detail = await asyncio.to_thread(
+                    api_request, base, access_key, "GET", f"/api/sessions/{ids['evidence']}")
+                assert_true(status == 200 and detail["task_state"] == "completed",
+                            f"the server closed the task ({status}, {detail.get('task_state')})")
+                shot2 = await screenshot(cdp, session_id, results, "s16b_completion_submitted")
+                results.record("completion evidence beyond the first page", True,
+                               "desc-first picker paged to run-e0003 (beyond the old 100-read); selection+draft held across page load and a live event; exact run_ids submitted and closed server-side",
+                               shot2)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s16_completion_FAILED")
+                results.record("completion evidence beyond the first page", False, repr(exc), shot)
+
+            # ---- S16c: a failed evidence read is an error, never "no runs" ----
+            try:
+                log("  s16c: failed evidence read")
+                await evaluate(cdp, session_id, f"switchSession('{ids['ops_mid']}')")
+                await evaluate(cdp, session_id, "switchTab('task')")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('tab-task').textContent.includes('Ops mid')")
+                await wait_for(cdp, session_id, "!!document.getElementById('task-action-complete')")
+                # One injected 503 at the fetch boundary (the only honest way to
+                # exercise this UI's failure rendering against a healthy server).
+                await evaluate(cdp, session_id, """
+                    (() => {
+                      const orig = window.fetch;
+                      window.__origFetch = orig;
+                      window.__injectedFail = true;
+                      window.fetch = (url, opts) => {
+                        if (window.__injectedFail && String(url).includes('order=desc')) {
+                          window.__injectedFail = false;
+                          return Promise.resolve(new Response('{}', {status: 503}));
+                        }
+                        return orig(url, opts);
+                      };
+                    })()
+                """)
+                await evaluate(cdp, session_id, """
+                    (() => { [...document.querySelectorAll('#tab-task button')]
+                      .find(b => b.textContent.startsWith('Complete')).click(); })()
+                """)
+                await wait_for(cdp, session_id, "!!document.getElementById('task-complete-modal')")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-complete-runs').textContent.includes('Failed to load runs')",
+                    label="s16c fetch error surfaced")
+                err_text = await evaluate(cdp, session_id, "document.getElementById('task-complete-runs').textContent")
+                assert_true("No finished runs yet." not in err_text,
+                            "a failed read is never misreported as an empty history")
+                shot = await screenshot(cdp, session_id, results, "s16c_complete_fetch_error")
+                await evaluate(cdp, session_id, """
+                    (() => {
+                      if (window.__origFetch) { window.fetch = window.__origFetch; }
+                      [...document.querySelectorAll('#task-complete-runs button')]
+                        .find(b => b.textContent === 'Retry').click();
+                    })()
+                """)
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-complete-runs').textContent.includes('No finished runs yet.')",
+                    timeout=10, label="s16c retry reached the truthful empty state")
+                shot2 = await screenshot(cdp, session_id, results, "s16c2_complete_empty_state")
+                results.record("failed evidence read surfaces as an error", True,
+                               "one injected 503 rendered 'Failed to load runs' + Retry, never 'No finished runs'; retry reached the truthful empty state",
+                               shot2)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s16c_fetch_error_FAILED")
+                results.record("failed evidence read surfaces as an error", False, repr(exc), shot)
+
+            # ---- S17: the move chooser across root pages, depths and search ---
+            try:
+                log("  s17: move chooser")
+                await evaluate(cdp, session_id, f"switchSession('{ids['bulk1']}')")
+                await evaluate(cdp, session_id, "switchTab('task')")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('tab-task').textContent.includes('Bulk root 01')")
+                await evaluate(cdp, session_id, "document.getElementById('task-action-move').click()")
+                await wait_for(cdp, session_id, "!!document.getElementById('task-move-modal')")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-move-list').textContent.includes('Bulk root 25')")
+                list_text = await evaluate(cdp, session_id, "document.getElementById('task-move-list').textContent")
+                assert_true("Bulk root 26" not in list_text, "later roots are not silently fetched")
+                assert_true(await evaluate(cdp, session_id, "document.getElementById('task-move-confirm').disabled"),
+                            "Move starts disabled: root is never a silent default")
+                # A cross-client root creation between the pages forces a
+                # tree_revision change during pagination.
+                status, _r = await asyncio.to_thread(
+                    api_request, base, access_key, "POST", "/api/sessions/",
+                    {"request_id": "harness-move-page-root", "profile": "manager",
+                     "name": "Remote late root", "task": {"goal": "created mid-pagination", "acceptance": [], "context_refs": []}})
+                assert_true(status == 200, f"the mid-pagination create succeeded ({status})")
+                await evaluate(cdp, session_id, """
+                    (() => { [...document.querySelectorAll('#task-move-list button')]
+                      .find(b => b.textContent.startsWith('Load more')).click(); })()
+                """)
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-move-list').textContent.includes('Remote late root')",
+                    timeout=10, label="s17 later roots page after a revision change")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-move-list').textContent.includes('task tree changed')",
+                    timeout=6, label="s17 revision-change explanation visible")
+                occurrence = await evaluate(cdp, session_id, """
+                    document.getElementById('task-move-list').textContent.split('Bulk root 26').length - 1
+                """)
+                assert_true(occurrence == 1, f"the coherent reload duplicated nothing ({occurrence})")
+                shot = await screenshot(cdp, session_id, results, "s17_move_browse")
+                # Expand Late root (a later-page root) and choose its
+                # intermediate manager.
+                await evaluate(cdp, session_id, """
+                    (() => { [...document.querySelectorAll('#task-move-list button')]
+                      .find(b => (b.getAttribute('aria-label') || '').includes("Expand Late root")).click(); })()
+                """)
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-move-list').textContent.includes('Late mid')")
+                await evaluate(cdp, session_id, """
+                    (() => { [...document.querySelectorAll('#task-move-list [role="button"]')]
+                      .find(r => r.textContent.includes('Late mid')).click(); })()
+                """)
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-move-chosen').textContent.includes('Late mid')")
+                mark = cdp.mutation_mark()
+                await evaluate(cdp, session_id, "document.getElementById('task-move-confirm').click()")
+                await wait_for(cdp, session_id, "!document.getElementById('task-move-modal')",
+                               timeout=10, label="s17 move submitted")
+                status, detail = await asyncio.to_thread(
+                    api_request, base, access_key, "GET", f"/api/sessions/{ids['bulk1']}")
+                assert_true(status == 200 and detail["task_parent_id"] == ids["late_mid"],
+                            f"the moved task's real parent is the chosen manager ({detail.get('task_parent_id')})")
+                muts = [m for m in cdp.mutations_since(mark) if m["method"] == "PATCH"]
+                assert_true(len(muts) == 1 and json.loads(muts[0]["body"])["task_parent_id"] == ids["late_mid"],
+                            f"the submitted target id is the chosen manager ({muts})")
+                # Refusal: a target that becomes invalid between the choice
+                # and the submit. A fresh dialog is opened for Program rollout;
+                # a childless manager root is created while the chooser sits on
+                # its first page (a revision bump mid-pagination); the
+                # continuation recovers coherently; the new target is chosen,
+                # closed out-of-band, and the submit is refused by the server;
+                # the dialog keeps the intended choice for correction.
+                await evaluate(cdp, session_id, f"switchSession('{ids['root']}')")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('tab-task').textContent.includes('Program rollout')")
+                await evaluate(cdp, session_id, "document.getElementById('task-action-move').click()")
+                await wait_for(cdp, session_id, "!!document.getElementById('task-move-modal')")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-move-list').textContent.includes('Bulk root 25')")
+                status, victim = await asyncio.to_thread(
+                    api_request, base, access_key, "POST", "/api/sessions/",
+                    {"request_id": "harness-refusal-victim", "profile": "manager",
+                     "name": "Refusal victim", "task": {"goal": "closed right after being chosen", "acceptance": [], "context_refs": []}})
+                assert_true(status == 200, f"the refusal victim was created ({status})")
+                await evaluate(cdp, session_id, """
+                    (() => { [...document.querySelectorAll('#task-move-list button')]
+                      .find(b => b.textContent.startsWith('Load more')).click(); })()
+                """)
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-move-list').textContent.includes('Refusal victim')",
+                    timeout=10, label="s17 refusal victim reached through the recovered later page")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-move-list').textContent.includes('task tree changed')",
+                    timeout=6, label="s17 refusal-page revision change explained")
+                await evaluate(cdp, session_id, """
+                    (() => { [...document.querySelectorAll('#task-move-list [role="button"]')]
+                      .find(r => r.textContent.includes('Refusal victim')).click(); })()
+                """)
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-move-chosen').textContent.includes('Refusal victim')")
+                status, _c = await asyncio.to_thread(
+                    api_request, base, access_key, "POST", f"/api/sessions/{victim['id']}/cancel",
+                    {"request_id": "harness-close-victim", "reason": "closed out-of-band for the refusal case"})
+                assert_true(status == 200, f"the out-of-band close succeeded ({status})")
+                await evaluate(cdp, session_id, "document.getElementById('task-move-confirm').click()")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-move-modal').textContent.includes('refused this move')",
+                    timeout=10, label="s17 refusal explained")
+                err_text = await evaluate(cdp, session_id, "document.getElementById('task-move-modal').textContent")
+                assert_true("Refusal victim" in err_text or "closed" in err_text or "not an open" in err_text,
+                            f"the refusal names the conflict: {err_text[:300]}")
+                chosen_after = await evaluate(cdp, session_id, "document.getElementById('task-move-chosen').textContent")
+                assert_true("Refusal victim" in chosen_after, "the intended choice is retained for correction")
+                assert_true(not await evaluate(cdp, session_id, "document.getElementById('task-move-confirm').disabled"),
+                            "the corrected resubmit stays possible")
+                shot2 = await screenshot(cdp, session_id, results, "s17b_move_refusal")
+                await evaluate(cdp, session_id, """
+                    (() => { [...document.querySelectorAll('#task-move-modal button')]
+                      .find(b => b.textContent === 'Cancel').click(); })()
+                """)
+                # Explicit root choice.
+                await evaluate(cdp, session_id, f"switchSession('{ids['bulk2']}')")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('tab-task').textContent.includes('Bulk root 02')")
+                await evaluate(cdp, session_id, "document.getElementById('task-action-move').click()")
+                await wait_for(cdp, session_id, "!!document.getElementById('task-move-modal')")
+                await evaluate(cdp, session_id, """
+                    (() => { [...document.querySelectorAll('#task-move-list [role="button"]')]
+                      .find(r => r.textContent.includes('make it a root task')).click(); })()
+                """)
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-move-chosen').textContent.includes('root')")
+                mark = cdp.mutation_mark()
+                await evaluate(cdp, session_id, "document.getElementById('task-move-confirm').click()")
+                await wait_for(cdp, session_id, "!document.getElementById('task-move-modal')",
+                               timeout=10, label="s17 explicit root move submitted")
+                status, detail = await asyncio.to_thread(
+                    api_request, base, access_key, "GET", f"/api/sessions/{ids['bulk2']}")
+                assert_true(status == 200 and detail["task_parent_id"] is None,
+                            f"the explicit root choice submitted a null parent ({detail.get('task_parent_id')})")
+                muts = [m for m in cdp.mutations_since(mark) if m["method"] == "PATCH"]
+                assert_true(len(muts) == 1 and json.loads(muts[0]["body"])["task_parent_id"] is None,
+                            "the submitted root choice is a real null parent")
+                # Search reaches a manager anywhere and submits its real id.
+                await evaluate(cdp, session_id, f"switchSession('{ids['bulk3']}')")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('tab-task').textContent.includes('Bulk root 03')")
+                await evaluate(cdp, session_id, "document.getElementById('task-action-move').click()")
+                await wait_for(cdp, session_id, "!!document.getElementById('task-move-modal')")
+                await evaluate(cdp, session_id, """
+                    (() => {
+                      const input = document.getElementById('task-move-search');
+                      input.value = 'Late mid';
+                      [...document.querySelectorAll('#task-move-modal button')]
+                        .find(b => b.textContent === 'Search').click();
+                    })()
+                """)
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-move-list').textContent.includes('Late root \u203a Late mid')")
+                await evaluate(cdp, session_id, """
+                    (() => { [...document.querySelectorAll('#task-move-list [role="button"]')]
+                      .find(r => r.textContent.includes('Late mid')).click(); })()
+                """)
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-move-chosen').textContent.includes('Late mid')")
+                await evaluate(cdp, session_id, "document.getElementById('task-move-confirm').click()")
+                await wait_for(cdp, session_id, "!document.getElementById('task-move-modal')",
+                               timeout=10, label="s17 search-chosen move submitted")
+                status, detail = await asyncio.to_thread(
+                    api_request, base, access_key, "GET", f"/api/sessions/{ids['bulk3']}")
+                assert_true(status == 200 and detail["task_parent_id"] == ids["late_mid"],
+                            f"the search-chosen move submitted its real id ({detail.get('task_parent_id')})")
+                results.record("move chooser across pages, depths and search", True,
+                               "later-page roots reached; intermediate manager chosen under a later-page root and read back via task_parent_id; revision change mid-pagination explained and reloaded; invalidated-target refusal kept the chosen selection; explicit root submitted a real null parent; search hit submitted its real id",
+                               shot2)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s17_move_FAILED")
+                results.record("move chooser across pages, depths and search", False, repr(exc), shot)
+
+            # ---- S18: the child list pages past the old 100-record read -------
+            try:
+                log("  s18: children paging")
+                await evaluate(cdp, session_id, f"switchSession('{ids['wide']}')")
+                await evaluate(cdp, session_id, "switchTab('runs')")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('tab-runs').textContent.includes('Load more children')")
+                links = await evaluate(cdp, session_id, """
+                    [...document.querySelectorAll('#tab-runs a')].filter(a => a.href.includes('session=')).map(a => a.href)
+                """)
+                assert_true(len(links) == 50, f"the first page holds {len(links)} children")
+                await evaluate(cdp, session_id, """
+                    (() => { [...document.querySelectorAll('#tab-runs button')]
+                      .find(b => b.textContent.startsWith('Load more children')).click(); })()
+                """)
+                await wait_for(cdp, session_id, """
+                    [...document.querySelectorAll('#tab-runs a')].filter(a => a.href.includes('session=')).length >= 100
+                """, label="s18 second children page")
+                # A cross-client creation between pages bumps tree_revision: the
+                # stale cursor must 409 and reload coherently.
+                status, new_child = await asyncio.to_thread(
+                    api_request, base, access_key, "POST", "/api/sessions/",
+                    {"request_id": "harness-wide-new-child", "task_parent_id": ids["wide"],
+                     "profile": "worker", "name": "Wide child new",
+                     "task": {"goal": "created mid-pagination", "acceptance": [], "context_refs": []}})
+                assert_true(status == 200, f"the mid-pagination child create succeeded ({status})")
+                await evaluate(cdp, session_id, """
+                    (() => { [...document.querySelectorAll('#tab-runs button')]
+                      .find(b => b.textContent.startsWith('Load more children')).click(); })()
+                """)
+                await wait_for(cdp, session_id,
+                    "document.getElementById('tab-runs').textContent.includes('task tree changed')",
+                    timeout=10, label="s18 revision-change explanation visible")
+                await wait_for(cdp, session_id, """
+                    [...document.querySelectorAll('#tab-runs a')].some(a => a.href.endsWith('session=%s'))
+                """ % new_child["id"], timeout=10, label="s18 the mid-paging child appeared")
+                hrefs = await evaluate(cdp, session_id, """
+                    [...document.querySelectorAll('#tab-runs a')].filter(a => a.href.includes('session=')).map(a => a.href)
+                """)
+                assert_true(len(hrefs) == len(set(hrefs)) == 106,
+                            f"all 106 children are listed exactly once ({len(hrefs)})")
+                shot = await screenshot(cdp, session_id, results, "s18_children_paging")
+                # Follow the real deep link of a child beyond the old read.
+                await evaluate(cdp, session_id, """
+                    (() => { [...document.querySelectorAll('#tab-runs a')]
+                      .find(a => a.textContent === 'Wide child 105').click(); })()
+                """)
+                await wait_for(cdp, session_id, """
+                    document.getElementById('header-session-name') && document.getElementById('header-session-name').textContent === 'Wide child 105'
+                """, timeout=10, label="s18 deep link switched to the child")
+                active = await evaluate(cdp, session_id, "SESSION_ID")
+                assert_true(active != ids["wide"], "the deep link left the wide manager")
+                results.record("child list pages past 100 with revision recovery", True,
+                               "50 -> 100 -> 106 children through the continuation; 409 explained and reloaded without duplicates/omissions; deep link followed",
+                               shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s18_children_FAILED")
+                results.record("child list pages past 100 with revision recovery", False, repr(exc), shot)
+
+            # ---- S19: dialogs bind to their task across a real session switch -
+            try:
+                log("  s19: dialog binding")
+                await evaluate(cdp, session_id, f"switchSession('{ids['bind_a']}')")
+                await evaluate(cdp, session_id, "switchTab('task')")
+                await wait_for(cdp, session_id, "document.getElementById('tab-task').textContent.includes('Bind task A')")
+                await evaluate(cdp, session_id, """
+                    (() => { [...document.querySelectorAll('#tab-task button')]
+                      .find(b => b.textContent.startsWith('Complete')).click(); })()
+                """)
+                await wait_for(cdp, session_id, "!!document.getElementById('task-complete-modal')")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-complete-runs').textContent.includes('No finished runs yet.')",
+                    label="s19 A's empty evidence list rendered truthfully")
+                await evaluate(cdp, session_id, """
+                    (() => {
+                      const s = document.getElementById('task-complete-summary');
+                      s.value = 'A half-written completion';
+                      s.dispatchEvent(new Event('input'));
+                    })()
+                """)
+                mark = cdp.mutation_mark()
+                # The app's real session-switch path.
+                await evaluate(cdp, session_id, f"switchSession('{ids['bind_b']}')")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('tab-task').textContent.includes('Bind task B')",
+                    timeout=10, label="s19 switched to B")
+                assert_true(not await evaluate(cdp, session_id, "!!document.getElementById('task-complete-modal')"),
+                            "A's completion dialog was dismissed by the switch")
+                muts = cdp.mutations_since(mark)
+                assert_true(not muts, f"no request left the dismissed dialog ({muts})")
+                # A late refusal/success after the switch: the delayed cancel.
+                await evaluate(cdp, session_id, """
+                    (() => {
+                      const orig = window.fetch;
+                      window.__origFetch = orig;
+                      window.fetch = (url, opts) => {
+                        const p = orig(url, opts);
+                        if (String(url).endsWith('/cancel')) {
+                          return p.then((r) => new Promise((res) => setTimeout(() => res(r), 500)));
+                        }
+                        return p;
+                      };
+                    })()
+                """)
+                await evaluate(cdp, session_id, """
+                    (() => { [...document.querySelectorAll('#tab-task button')]
+                      .find(b => b.textContent === 'Cancel task…').click(); })()
+                """)
+                await wait_for(cdp, session_id, "!!document.getElementById('task-reason-modal')")
+                await evaluate(cdp, session_id, """
+                    (() => {
+                      const r = document.getElementById('task-reason-input');
+                      r.value = 'late-response probe';
+                      r.dispatchEvent(new Event('input'));
+                      [...document.querySelectorAll('#task-reason-modal button')]
+                        .find(b => b.textContent === 'Cancel task').click();
+                    })()
+                """)
+                await asyncio.sleep(0.3)  # the delayed POST is in flight
+                # Switch away while B's cancel POST is still delayed in flight.
+                await evaluate(cdp, session_id, f"switchSession('{ids['root']}')")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('tab-task').textContent.includes('Program rollout')",
+                    timeout=10, label="s19 switched to the root")
+                assert_true(not await evaluate(cdp, session_id, "!!document.getElementById('task-reason-modal')"),
+                            "B's reason dialog died with the switch")
+                await asyncio.sleep(0.8)  # the delayed response lands here
+                cancels = [m for m in cdp.mutations if m["url"].endswith("/cancel")]
+                assert_true(len(cancels) == 1 and f"/api/sessions/{ids['bind_b']}/cancel" in cancels[0]["url"],
+                            f"exactly one cancel request, targeting B ({cancels})")
+                errs = await evaluate(cdp, session_id, "(window.__errs || []).length")
+                assert_true(errs == 0, f"no unexpected browser error from the late response ({errs})")
+                # Re-opening on the new task targets the new task: the root's
+                # cancel is refused with its concrete open-children blockers.
+                await evaluate(cdp, session_id, """
+                    (() => { [...document.querySelectorAll('#tab-task button')]
+                      .find(b => b.textContent === 'Cancel task…').click(); })()
+                """)
+                await wait_for(cdp, session_id, "!!document.getElementById('task-reason-modal')")
+                mark = cdp.mutation_mark()
+                await evaluate(cdp, session_id, """
+                    (() => {
+                      const r = document.getElementById('task-reason-input');
+                      r.value = 'should be refused';
+                      r.dispatchEvent(new Event('input'));
+                      [...document.querySelectorAll('#task-reason-modal button')]
+                        .find(b => b.textContent === 'Cancel task').click();
+                    })()
+                """)
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-reason-modal').textContent.includes('open descendant')",
+                    timeout=10, label="s19 root cancel refused with blockers")
+                root_cancels = [m for m in cdp.mutations_since(mark) if m["url"].endswith("/cancel")]
+                assert_true(len(root_cancels) == 1 and f"/api/sessions/{ids['root']}/cancel" in root_cancels[0]["url"],
+                            f"the re-opened dialog submitted against the ROOT task ({root_cancels})")
+                assert_true(await evaluate(cdp, session_id, "!!document.getElementById('task-reason-modal')"),
+                            "the refused dialog stays open with its draft")
+                shot = await screenshot(cdp, session_id, results, "s19_dialog_binding")
+                await evaluate(cdp, session_id, """
+                    (() => {
+                      if (window.__origFetch) { window.fetch = window.__origFetch; }
+                      [...document.querySelectorAll('#task-reason-modal button')]
+                        .find(b => b.textContent === 'Cancel').click();
+                    })()
+                """)
+                results.record("dialogs bind to their task across session switches", True,
+                               "A's dialog dismissed with zero requests; the late cancel targeted B only and was dropped; the re-opened dialog submitted against the root and surfaced its blockers",
+                               shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s19_dialog_binding_FAILED")
+                results.record("dialogs bind to their task across session switches", False, repr(exc), shot)
+
+            # ---- S20: the name keeps visible width at any depth ----------------
+            try:
+                log("  s20: name readability")
+                await evaluate(cdp, session_id, f"switchSession('{ids['ops_root']}')")
+                await wait_for(cdp, session_id, "!!document.getElementById('tree-node-%s')" % ids["ops_root"])
+                # The nested manager's row exists once its parent is expanded.
+                await evaluate(cdp, session_id, f"Sidebar.SessionTree.ensureExpanded('{ids['ops_root']}')")
+                await wait_for(cdp, session_id, "!!document.getElementById('tree-node-%s')" % ids["ops_mid"])
+
+                def geometry_expr(node_id):
+                    return """
+                    (() => {
+                      const row = document.getElementById('tree-node-%s');
+                      if (!row) return null;
+                      const inner = row.firstElementChild;
+                      const name = row.querySelector('.session-name');
+                      const meta = row.querySelector('.tree-meta-row');
+                      const r = (el) => { const b = el.getBoundingClientRect(); return {x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height)}; };
+                      return {name: r(name), meta: meta ? r(meta) : null, inner: r(inner),
+                              nameText: name.textContent};
+                    })()
+                    """ % node_id
+
+                async def assert_readable(node_id, label):
+                    geo = await evaluate(cdp, session_id, geometry_expr(node_id))
+                    shape = json.dumps(geo)
+                    assert_true(geo and geo["name"]["w"] >= 0.5 * geo["inner"]["w"],
+                                f"{label}: name width vs row: {shape}")
+                    assert_true(geo["nameText"], f"{label}: the name text renders")
+                    assert_true(geo["meta"] and geo["meta"]["w"] > 0, f"{label}: badges render: {shape}")
+                    assert_true(geo["meta"]["y"] > geo["name"]["y"] + geo["name"]["h"] - 2,
+                                f"{label}: badges did not wrap below the name: {shape}")
+                    return geo
+
+                ops_geo = await assert_readable(ids["ops_root"], "ops root (attention + counts)")
+                mid_geo = await assert_readable(ids["ops_mid"], "nested ops manager")
+                assert_true("Ops root" == ops_geo["nameText"] and "Ops mid" == mid_geo["nameText"],
+                            "both measured rows carry their full task names")
+                # Keyboard focus and actionable controls.
+                await evaluate(cdp, session_id, f"document.getElementById('tree-node-{ids['ops_root']}').focus()")
+                focused = await evaluate(cdp, session_id, "document.activeElement && document.activeElement.dataset.nodeId")
+                assert_true(focused == ids["ops_root"], f"the row is keyboard-focusable ({focused})")
+                controls = await evaluate(cdp, session_id, """
+                    (() => {
+                      const row = document.getElementById('tree-node-%s');
+                      const add = row.querySelector('.tree-add-child');
+                      const addRect = add.getBoundingClientRect();
+                      return {addVisible: addRect.width > 0 && addRect.height > 0,
+                              addLabel: add.getAttribute('aria-label')};
+                    })()
+                """ % ids["ops_mid"])
+                assert_true(controls["addVisible"] and "New subtask" in (controls["addLabel"] or ""),
+                            f"the nested manager keeps its actionable add control ({controls})")
+                shot = await screenshot(cdp, session_id, results, "s20_desktop_readability")
+                # 390px: same guarantees, no horizontal overflow.
+                await cdp.send("Emulation.setDeviceMetricsOverride", {
+                    "width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": True,
+                }, session_id=session_id)
+                await asyncio.sleep(0.4)
+                # <=768px hides the sidebar behind the drawer toggle: open it,
+                # exactly as a 390px operator would.
+                await evaluate(cdp, session_id, "toggleMobileSidebar()")
+                await asyncio.sleep(0.4)
+                overflow = await evaluate(cdp, session_id,
+                    "document.documentElement.scrollWidth - document.documentElement.clientWidth")
+                assert_true(overflow <= 1, f"no horizontal overflow at 390px (delta={overflow})")
+                mob_geo = await assert_readable(ids["ops_root"], "ops root @390px")
+                mob_mid = await assert_readable(ids["ops_mid"], "nested ops manager @390px")
+                shot2 = await screenshot(cdp, session_id, results, "s20b_mobile_readability")
+                await cdp.send("Emulation.setDeviceMetricsOverride", {
+                    "width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False,
+                }, session_id=session_id)
+                results.record("tree names stay readable at any depth", True,
+                               f"desktop name {ops_geo['name']['w']}px / mobile {mob_geo['name']['w']}px of a {ops_geo['inner']['w']}px row; badges on their own line; focus and add control actionable",
+                               shot2)
+            except Exception as exc:
+                await cdp.send("Emulation.setDeviceMetricsOverride", {
+                    "width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False,
+                }, session_id=session_id)
+                shot = await screenshot(cdp, session_id, results, "s20_readability_FAILED")
+                results.record("tree names stay readable at any depth", False, repr(exc), shot)
 
             # The CDP collector records console.error calls and uncaught page
             # exceptions from Runtime.enable onward — this list is the only

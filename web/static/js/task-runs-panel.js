@@ -14,8 +14,15 @@ const panel = {
   items: [],
   nextCursor: null,
   children: [],
+  childrenCursor: null,
+  childrenLoading: false,
+  childrenNotice: null,
+  childrenError: null,
+  childrenPages: 1,   // pages the operator has loaded (the 409 recovery re-pages to this depth)
   loading: false,
 };
+
+const CHILDREN_PAGE_LIMIT = 50;
 
 // The panel binds to the session it was shown for; responses for a prior node
 // are dropped.
@@ -31,6 +38,11 @@ function reset() {
   panel.items = [];
   panel.nextCursor = null;
   panel.children = [];
+  panel.childrenCursor = null;
+  panel.childrenLoading = false;
+  panel.childrenNotice = null;
+  panel.childrenError = null;
+  panel.childrenPages = 1;
   panel.loading = false;
 }
 
@@ -40,7 +52,7 @@ async function refresh() {
   const flight = {sessionId, gen: ++panel.gen};
   reset();
   await loadPage(flight, null);
-  loadChildren(flight);
+  loadChildren(flight, null, 0);
 }
 
 async function loadPage(flight, cursor) {
@@ -76,18 +88,77 @@ async function loadMore() {
   await loadPage(flight, panel.nextCursor);
 }
 
-async function loadChildren(flight) {
+async function loadChildren(flight, cursor, attempt, reloadDepth) {
+  // One bounded page chain per visit: the child section pages through the
+  // complete set on demand (a "show more" continuation), instead of silently
+  // listing only the first records. Appends dedupe by id, so a row created
+  // between pages cannot appear twice. A 409 (the tree moved mid-pagination)
+  // reloads coherently: from fresh facts, re-paging to the depth the operator
+  // had already reached — never silently dropping the loaded rows — with a
+  // visible explanation that stays until the next data-driven refresh.
+  if (!cursor) {
+    panel.children = [];
+    panel.childrenCursor = null;
+    panel.childrenError = null;
+    if (reloadDepth === undefined) {
+      panel.childrenNotice = null;
+      panel.childrenPages = 1;
+    }
+  }
+  panel.childrenLoading = true;
+  if (!isStale(flight)) render();
+  let next = cursor;
+  let done = 0;
+  const wantPages = reloadDepth === undefined ? 1 : reloadDepth;
   try {
-    const res = await fetch('/api/sessions/tree?parent_id=' + encodeURIComponent(boundSessionId()) + '&include_archived=true&limit=100', {cache: 'no-store'});
-    if (!res.ok) throw new Error(String(res.status));
-    const page = await res.json();
-    if (isStale(flight)) return;
-    panel.children = page.items || [];
+    while (true) {
+      const params = new URLSearchParams({
+        parent_id: boundSessionId(),
+        include_archived: 'true',
+        limit: String(CHILDREN_PAGE_LIMIT),
+      });
+      if (next) params.set('cursor', next);
+      const res = await fetch('/api/sessions/tree?' + params.toString(), {cache: 'no-store'});
+      if (isStale(flight)) { panel.childrenLoading = false; return; }
+      if (res.status === 409) {
+        const body = await res.json().catch(() => ({}));
+        if (attempt >= 2) throw new Error(body.detail?.message || 'task tree changed during pagination');
+        panel.childrenNotice = body.detail?.message || 'Task tree changed while loading children';
+        return loadChildren(flight, null, attempt + 1, Math.max(1, panel.childrenPages));
+      }
+      if (!res.ok) throw new Error('children failed: ' + res.status);
+      const page = await res.json();
+      if (isStale(flight)) { panel.childrenLoading = false; return; }
+      const known = new Set(panel.children.map((c) => c.id));
+      for (const row of page.items || []) {
+        if (!known.has(row.id)) panel.children.push(row);
+      }
+      panel.childrenCursor = page.next_cursor || null;
+      panel.childrenError = null;
+      done += 1;
+      if (done < wantPages && panel.childrenCursor) {
+        next = panel.childrenCursor;
+        continue;
+      }
+      break;
+    }
   } catch (err) {
-    if (!isStale(flight)) console.error('children fetch failed:', err);
+    panel.childrenLoading = false;
+    if (!isStale(flight)) {
+      panel.childrenError = 'Failed to load child tasks: ' + (err && err.message ? err.message : err);
+      render();
+    }
     return;
   }
+  panel.childrenLoading = false;
   if (!isStale(flight)) render();
+}
+
+function loadMoreChildren() {
+  if (!panel.childrenCursor || panel.childrenLoading) return;
+  panel.childrenPages += 1;
+  const flight = {sessionId: boundSessionId(), gen: panel.gen};
+  void loadChildren(flight, panel.childrenCursor, 0);
 }
 
 // -- actions -----------------------------------------------------------
@@ -247,15 +318,22 @@ function renderLoadingNotice() {
   container.appendChild(el('p', 'text-slate-500 text-sm p-4', 'Loading runs...'));
 }
 
-function render() {
-  const container = document.getElementById('tab-runs');
-  if (!container) return;
-  container.textContent = '';
-  const wrap = el('div', 'mx-auto max-w-3xl p-4 space-y-4');
-
-  // Direct child tasks (one click each; the tree remains the hierarchy owner).
+function renderChildrenSection(wrap) {
   const childSection = el('div', 'rounded-xl border border-slate-700 bg-slate-800/60 p-4 space-y-2');
   childSection.appendChild(el('h3', 'text-xs font-semibold uppercase tracking-wide text-slate-400', 'Direct child tasks'));
+  if (panel.childrenNotice) {
+    childSection.appendChild(el('p', 'text-xs text-amber-300', panel.childrenNotice + ' — reloaded from the current tree.'));
+  }
+  if (panel.childrenError) {
+    const errWrap = el('div', 'space-y-1');
+    errWrap.appendChild(el('p', 'text-xs text-red-300', panel.childrenError));
+    const retryBtn = el('button', 'text-xs border border-slate-600 text-slate-300 hover:bg-slate-700 rounded px-2 py-1', 'Retry');
+    retryBtn.addEventListener('click', () => {
+      void loadChildren({sessionId: boundSessionId(), gen: panel.gen}, null, 0);
+    });
+    errWrap.appendChild(retryBtn);
+    childSection.appendChild(errWrap);
+  }
   if (panel.children.length) {
     for (const child of panel.children) {
       const row = el('div', 'flex items-center gap-2');
@@ -266,10 +344,29 @@ function render() {
       row.appendChild(el('span', 'text-[11px] text-slate-500', child.profile + ' · ' + child.work_state + (child.archived ? ' · archived' : '')));
       childSection.appendChild(row);
     }
-  } else {
+  } else if (!panel.childrenLoading && !panel.childrenError) {
     childSection.appendChild(el('p', 'text-xs text-slate-500', 'No child tasks.'));
   }
+  if (panel.childrenLoading) {
+    childSection.appendChild(el('p', 'text-xs text-slate-500', 'Loading children…'));
+  }
+  if (panel.childrenCursor) {
+    const more = el('button', 'w-full text-xs text-blue-400 hover:text-blue-300 border border-slate-700 rounded-lg py-1.5',
+      'Load more children (showing ' + panel.children.length + ')');
+    more.addEventListener('click', loadMoreChildren);
+    childSection.appendChild(more);
+  }
   wrap.appendChild(childSection);
+}
+
+function render() {
+  const container = document.getElementById('tab-runs');
+  if (!container) return;
+  container.textContent = '';
+  const wrap = el('div', 'mx-auto max-w-3xl p-4 space-y-4');
+
+  // Direct child tasks (one click each; the tree remains the hierarchy owner).
+  renderChildrenSection(wrap);
 
   const runsSection = el('div', 'space-y-2');
   runsSection.appendChild(el('h3', 'text-xs font-semibold uppercase tracking-wide text-slate-400', 'Runs (' + panel.items.length + ')'));

@@ -16,12 +16,17 @@ from pathlib import Path
 
 import pytest
 import yaml
-from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_ID, OPUS_BACKEND_OPTION
+from conftest import (
+    CODEX_BACKEND_OPTION,
+    OPUS_BACKEND_ID,
+    OPUS_BACKEND_OPTION,
+    patch_instructions_content,
+)
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig, StepConfig
 from src.core.control_events import stable_run_id
-from src.core.models import RunRecord, SessionMetadata, SessionStatus, TaskSpec
+from src.core.models import RunRecord, SessionMetadata, TaskSpec
 from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
@@ -81,6 +86,32 @@ def _bound_task(name: str, session_id: str, **overrides) -> ScheduledTaskConfig:
   }
   body.update(overrides)
   return ScheduledTaskConfig(**body)
+
+
+def _script_manager_turn(monkeypatch: pytest.MonkeyPatch, notes: list[str]) -> None:
+  """Script the parent node's report-consuming turn through the registry
+  builder (the manager dispatch path), so no external process starts from
+  these tests. One scripted backend per expected manager-turn build."""
+  install_backends(
+      monkeypatch,
+      [SpawningScriptedBackend([result_event(note)]) for note in notes],
+      "src.agents.backends.registry.build_backend")
+  patch_instructions_content(monkeypatch)
+
+
+async def _drain_manager_turns(tree: TaskTreeManager, manager_id: str) -> None:
+  """Wait until every manager_turn Run of the node reached a terminal fact,
+  so no launch task outlives the test as background residue."""
+  deadline = asyncio.get_event_loop().time() + 15
+  while asyncio.get_event_loop().time() < deadline:
+    records = [r for r in tree.runs.list_run_records_sync(manager_id)
+               if r.kind == "manager_turn"]
+    events = tree.runs.load_events_sync(manager_id)
+    if records and all(
+        tree.runs.terminal_outcome(events, r.id) is not None for r in records):
+      return
+    await asyncio.sleep(0.05)
+  pytest.fail(f"the manager turn never settled: {tree.runs.list_run_records_sync(manager_id)}")
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +212,9 @@ async def test_bound_steps_one_leaf_ordered_runs_one_report(
       SpawningScriptedBackend([result_event("selector says pick three")]),
       SpawningScriptedBackend([result_event("reviewer wrote the report")]),
   ], "src.agents.worker.build_backend")
+  # The sequence boundary's report-consuming turn rides the manager dispatch
+  # path (registry builder): script it so no external process starts here.
+  _script_manager_turn(monkeypatch, ["report noted"])
   task_cfg = _bound_task(
       "chained", manager.id,
       steps=[
@@ -235,6 +269,9 @@ async def test_bound_steps_one_leaf_ordered_runs_one_report(
   assert "completed all 2 step(s)" in str(reports[0].get("summary"))
   assert "selector" in str(reports[0].get("summary")) and "reviewer" in str(reports[0].get("summary"))
   assert tree.task_state(leaf_id) == "completed"
+
+  # The parent's report-consuming turn settled (no background residue).
+  await _drain_manager_turns(tree, manager.id)
 
   # A replayed fire at the same firing identity creates nothing new.
   await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
@@ -307,6 +344,9 @@ async def test_bound_prompt_task_one_leaf_per_firing_and_distinct_firings(
       SpawningScriptedBackend([result_event("round one")]),
       SpawningScriptedBackend([result_event("round two")]),
   ], "src.agents.worker.build_backend")
+  # Each firing's report-consuming turn rides the manager dispatch path:
+  # script both so no external process starts here.
+  _script_manager_turn(monkeypatch, ["noted round one", "noted round two"])
   task_cfg = _bound_task("daily-nudge", manager.id, prompt="Do the nudge.")
   scheduler = Scheduler(cfg, session_mgr)
   r1 = await scheduler._execute_task(task_cfg, record_handle=True, firing="2026-01-01T03:00:00+00:00")
@@ -331,6 +371,8 @@ async def test_bound_prompt_task_one_leaf_per_firing_and_distinct_firings(
       children.append(meta.id)
   assert sorted(children) == sorted([leaf1, leaf2])
   assert tree.task_state(leaf1) == "completed"
+  # Both firing reports' parent turns settled (no background residue).
+  await _drain_manager_turns(tree, manager.id)
 
 
 # ---------------------------------------------------------------------------
@@ -473,17 +515,32 @@ async def test_config_loader_and_api_round_trip_binding(tmp_path: Path, monkeypa
 @pytest.mark.asyncio
 async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
         bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A restart between step 0's terminal fact and the controller's advance:
-  recovery launches the next position through the same launch checks and the
-  chain ends with exactly ONE boundary report; a repeated pass adds nothing."""
-  from src.core.control_events import stable_run_id
+  """A restart between step 0's terminal fact and the controller's advance.
+
+  The fixture builds the mid-chain state from durable facts only — the state a
+  stopped process actually leaves behind (step 0's Run terminally successful,
+  no later position registered, no close, no report) — and never rewrites
+  event files under live writers: the old fixture drove a real controller and
+  then dropped its CHILD_REPORT/TASK_CLOSED facts while the un-cancelled
+  step-finish chains were still running, tearing the manager's pending batch
+  out of the events store between a wake dispatch's two reservation reads.
+  That torn state used to trip the dispatch reservation invariant and the
+  close owner then fabricated a blocked boundary report on top of the landed
+  completed one (two reports — the retained acceptance flake).
+
+  Fresh recovery must launch the next position through the same launch checks,
+  complete the leaf, and deliver exactly ONE completed boundary report; a
+  repeated recovery pass creates no extra step, close, or report."""
   from src.core.task_recovery import reconcile_task_tree
   cfg, session_mgr, tree = bound_env
   manager = await make_manager(tree)
+  # Step 1 rides a scripted worker process; the manager's report-consuming
+  # turn rides the registry builder (scripted) — no external process starts
+  # from this test, and no background launch outlives it.
   install_backends(monkeypatch, [
-      SpawningScriptedBackend([result_event("selector done")]),
-      SpawningScriptedBackend([result_event("reviewer done")]),
+      SpawningScriptedBackend([result_event("reviewer wrote the report")]),
   ], "src.agents.worker.build_backend")
+  _script_manager_turn(monkeypatch, ["report noted"])
   task_cfg = _bound_task(
       "chained", manager.id,
       steps=[
@@ -507,67 +564,40 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
           {"name": "reviewer", "prompt_file": str(rev_md)},
       ],
   }), encoding="utf-8")
-  scheduler = Scheduler(cfg, session_mgr)
-  firing = "2026-01-01T03:00:00+00:00"
-  result = await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
-  leaf_id = result["leaf_session_id"]
+  # The durable mid-chain facts of a stopped process: the firing's leaf with
+  # step 0's Run terminally successful (exit 0 — the frontier's advance
+  # evidence), and nothing else.
+  from src.core import cron_sequence
+  meta = await tree.load_meta(manager.id)
+  leaf = await cron_sequence.ensure_firing_leaf(
+      task_cfg, meta, tree, FIRING, "chained steps", backend="fake",
+      model="fake-model")
+  leaf_id = leaf.id
+  run0 = await cron_sequence.register_leaf_run(
+      tree, leaf_id, task_cfg, FIRING, kind="scheduled_step", position=0,
+      backend="fake", model="fake-model")
+  await tree.runs.record_finish(leaf_id, run0.id, outcome="success", exit_code=0)
 
-  # Hand-craft the post-restart mid-chain state: step 0 ran to its durable
-  # success; the controller (dead with the old process) never advanced, no
-  # step 1 exists, and no boundary report was delivered. The child's create
-  # task and step runs are removed of their manager-side reports.
-  from src.core.chat_events import chat_events_path
+  # Reassert the mid-chain facts and the absence of old callbacks before
+  # recovery: exactly one terminal Run, nothing advanced, nothing closed,
+  # nothing reported, and no task from an old firing alive in this loop.
+  records = tree.runs.list_run_records_sync(leaf_id)
+  assert [(r.id, r.sequence_ref.position if r.sequence_ref else None)
+          for r in records] == [(run0.id, 0)]
+  leaf_events = tree.runs.load_events_sync(leaf_id)
+  assert tree.runs.terminal_outcome(leaf_events, run0.id) == "success"
+  assert tree.task_state(leaf_id) == "open"
+  assert [e for e in tree.events.load_events(manager.id)
+          if e.get("type") == ET.CHILD_REPORT] == []
+  assert [e for e in tree.events.load_events(leaf_id)
+          if e.get("type") == ET.TASK_CLOSED] == []
+  old_callbacks = [t.get_name() for t in asyncio.all_tasks()
+                   if t is not asyncio.current_task() and "chained" in t.get_name()]
+  assert old_callbacks == [], old_callbacks
 
-  def drop_facts(session_id: str, *drop_types: str) -> None:
-    path = chat_events_path(cfg.sessions_dir / session_id)
-    kept = [e for e in tree.events.load_events(session_id)
-            if e.get("type") not in drop_types]
-    path.write_text("".join(_json.dumps(e) + "\n" for e in kept), encoding="utf-8")
-    session_mgr._chat_events.clear_cache(session_id)
-
-  # Hand-craft the post-restart mid-chain state: the first controller task is
-  # cancelled at the boundary (the fire-time handle), so step 0's durable
-  # success is all that exists — no advance, no step 1, no report, no close.
-  handle = asyncio.all_tasks()  # no-op guard; the real cancellation is below
-  del handle
-  leaf_meta = await tree.load_meta(leaf_id)
-  assert leaf_meta is not None
-
-  async def _cancel_controller_when_step0_done():
-    step0_id = stable_run_id(leaf_id, f"cron:chained:{firing}:step:0")
-    deadline = asyncio.get_event_loop().time() + 20
-    while asyncio.get_event_loop().time() < deadline:
-      if tree.runs.terminal_outcome(
-          tree.runs.load_events_sync(leaf_id), step0_id) is not None:
-        for task in asyncio.all_tasks():
-          if task.get_name() == f"bound_steps_chained_{firing}":
-            task.cancel()
-            return
-        return
-      await asyncio.sleep(0.05)
-
-  watcher = asyncio.get_event_loop().create_task(_cancel_controller_when_step0_done())
-  deadline = asyncio.get_event_loop().time() + 20
-  while asyncio.get_event_loop().time() < deadline:
-    records = tree.runs.list_run_records_sync(leaf_id)
-    if len(records) == 1:
-      break
-    await asyncio.sleep(0.1)
-  await asyncio.wait_for(watcher, 20)
-  # Whatever the controller delivered before the cancel is dropped: the state
-  # is exactly "step 0 terminal, nothing else".
-  drop_facts(manager.id, ET.CHILD_REPORT)
-  drop_facts(leaf_id, ET.TASK_CLOSED)
-  fresh_leaf = await tree.load_meta(leaf_id)
-  assert fresh_leaf is not None
-  fresh_leaf.status = SessionStatus.ACTIVE
-  await session_mgr.save_metadata(fresh_leaf)
-
-  # Pass 1: the recovery launches the next position (the fact-driven frontier)
-  # and the chain settles at its boundary WITHOUT another tick or scan: the
+  # Fresh recovery advances the frontier through the same launch checks; the
   # recovered step's durable finish re-drives the frontier, so the remaining
-  # step runs, the close, and the ONE boundary report all land before pass 1
-  # returns.
+  # step run, the close, and the ONE boundary report all land from this pass.
   await reconcile_task_tree(cfg, tree, session_mgr)
   deadline = asyncio.get_event_loop().time() + 20
   while asyncio.get_event_loop().time() < deadline:
@@ -587,16 +617,25 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   records = tree.runs.list_run_records_sync(leaf_id)
   assert sorted(r.sequence_ref.position for r in records if r.sequence_ref) == [0, 1]
   assert tree.task_state(leaf_id) == "completed"
+  assert len([e for e in tree.events.load_events(leaf_id)
+              if e.get("type") == ET.TASK_CLOSED]) == 1
   reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
   assert len(reports) == 1, f"expected exactly one boundary report: {reports}"
-  # A repeated pass adds nothing (no second step, no second report, no second close).
+  assert reports[0]["outcome"] == "completed"
+  assert "completed all 2 step(s)" in str(reports[0]["summary"])
+  # The parent's report-consuming turn settled (no background residue).
+  await _drain_manager_turns(tree, manager.id)
+
+  # A repeated pass adds nothing: no second step, no second close, no second
+  # report.
   await reconcile_task_tree(cfg, tree, session_mgr)
   await reconcile_task_tree(cfg, tree, session_mgr)
   assert len(tree.runs.list_run_records_sync(leaf_id)) == 2
   assert len([e for e in tree.events.load_events(manager.id)
               if e.get("type") == ET.CHILD_REPORT]) == 1
-  assert len([e for e in tree.events.load_events(leaf_id)
+  assert len([e for e in tree.events.load_events(leaf.id)
               if e.get("type") == ET.TASK_CLOSED]) == 1
+  assert tree.task_state(leaf.id) == "completed"
 
 
 # ---------------------------------------------------------------------------
@@ -854,6 +893,9 @@ async def _successful_two_step_leaf(bound_env, monkeypatch: pytest.MonkeyPatch):
       [SpawningScriptedBackend([result_event("step zero done")]),
        SpawningScriptedBackend([result_event("step one done")])],
       "src.agents.worker.build_backend")
+  # The boundary close dispatches the parent's report-consuming turn through
+  # the registry builder: script it so no external process starts here.
+  _script_manager_turn(monkeypatch, ["report noted"])
   task_cfg = _bound_task(
       "recovered-boundary", manager.id,
       steps=[StepConfig(name="zero", prompt="Zero."),
@@ -924,6 +966,7 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
   assert len(kinds) == 2
   assert sorted(o for o, _ in kinds) == ["blocked", "completed"]
   assert tree.task_state(leaf.id) == "completed"
+  await _drain_manager_turns(tree, manager.id)
 
 
 @pytest.mark.asyncio
@@ -939,6 +982,7 @@ async def test_recovered_final_step_boundary_settles_without_a_new_tick(
   reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
   assert len(reports) == 1
   assert "completed all 2 step(s)" in str(reports[0].get("summary"))
+  await _drain_manager_turns(tree, manager.id)
 
 
 @pytest.mark.asyncio
@@ -958,6 +1002,57 @@ async def test_simultaneous_fresh_and_recovery_followup_produce_no_duplicate(
               if e.get("type") == ET.CHILD_REPORT]) == 1
   assert len([e for e in tree.events.load_events(leaf.id)
               if e.get("type") == ET.TASK_CLOSED]) == 1
+  assert len(tree.runs.list_run_records_sync(leaf.id)) == 2
+  await _drain_manager_turns(tree, manager.id)
+
+
+@pytest.mark.asyncio
+async def test_completed_close_survives_a_failing_parent_wake_without_a_blocked_report(
+        bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A close whose parent wake fails after the close fact and report landed
+  keeps the completed boundary (never a blocked report over a landed close).
+
+  This is the deterministic form of the recovery acceptance flake: the old
+  fixture tore the manager's pending batch out of the events store between a
+  wake dispatch's two reservation reads, the dispatch raised its reservation
+  invariant after the close and the completed report were already durable,
+  and the automatic-completion caller then delivered a contradictory blocked
+  report on top of the completed one (two reports). The close owner now logs
+  the wake failure and the close stands; the wake is separately re-drivable."""
+  cfg, session_mgr, tree, manager, task_cfg, meta, leaf, leaf_meta = (
+      await _successful_two_step_leaf(bound_env, monkeypatch))
+  # The parent wake fails exactly once, after the close and its report landed:
+  # the executor raises before reserving, so the pending batch stays pending.
+  from src.core.task_execution import TaskExecutionAdapter
+  orig_call = TaskExecutionAdapter.__call__
+  calls = {"n": 0}
+
+  async def failing_call(self, session_id, pending, *, launch_run_id=None):
+    assert session_id == manager.id
+    calls["n"] += 1
+    raise RuntimeError(
+        "dispatch reserved run x against a batch that vanished within one lock hold")
+
+  monkeypatch.setattr(TaskExecutionAdapter, "__call__", failing_call)
+  from src.core import cron_sequence
+  await cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id)
+  assert calls["n"] == 1
+  # The close landed and the boundary product is exactly ONE completed report.
+  assert tree.task_state(leaf.id) == "completed"
+  reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+  assert len(reports) == 1
+  assert reports[0]["outcome"] == "completed"
+  assert len([e for e in tree.events.load_events(leaf.id)
+              if e.get("type") == ET.TASK_CLOSED]) == 1
+
+  # The wake is re-drivable: the delivered report is the parent's durable
+  # input, and the next dispatch consumes it through the scripted turn.
+  monkeypatch.setattr(TaskExecutionAdapter, "__call__", orig_call)
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  assert decision["launch"] is True
+  await _drain_manager_turns(tree, manager.id)
+  assert len([e for e in tree.events.load_events(manager.id)
+              if e.get("type") == ET.CHILD_REPORT]) == 1
   assert len(tree.runs.list_run_records_sync(leaf.id)) == 2
 
 

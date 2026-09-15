@@ -11,11 +11,13 @@ of the default test run) and must be reviewed for isolation before it runs:
   binds one explicit unused local port, runs without the normal lifespan (no
   crash recovery, scheduler or trigger scans), and its uvicorn instance is
   torn down at the end. Native CLC session state is isolated too: the
-  configured backend entry rides ``extra_flags: ["--session-dir", ...]`` (a
-  supported ``charlie-code --help`` override), so both real runs persist their
-  native session state under the synthetic home, never in the production CLC
-  state. Inherited production credentials are cleared from the harness
-  environment; the shell HOME variable is never repurposed.
+  harness wraps the registry/worker ``build_backend`` entry points — this
+  process only — so every charlie-code build rides the existing adapter
+  ``extra_flags`` kwarg seam with ``--session-dir <home>/clc-sessions`` (a
+  supported ``charlie-code --help`` override), so both real runs persist
+  their native session state under the synthetic home, never in the CLI's
+  default state dir. Inherited production session/run credentials are cleared
+  from the harness environment; the shell HOME variable is never repurposed.
 - Credentials. The selected production backend entry is read only to build the
   test config (its model/api-base/credential references). The synthetic key
   stays in the synthetic home's credentials file; this script never prints or
@@ -93,15 +95,37 @@ def load_production_backend_entry(backend_id: str) -> dict:
     return json.loads(option.model_dump_json())
 
 
+def install_native_session_dir_isolation(clc_sessions: Path) -> None:
+    """Route charlie-code builds' extra_flags through --session-dir in THIS process.
+
+    The production config is untouched: the harness wraps the two build entry
+    points the adapter uses (the registry — which the master path imports at
+    call time — and the worker module's bound name) so every charlie-code
+    backend for these runs appends the isolation flag through the existing
+    extra_flags constructor kwarg.
+    """
+    master_module = __import__("src.agents.backends.registry", fromlist=["build_backend"])
+    worker_module = __import__("src.agents.worker", fromlist=["build_backend"])
+    original = master_module.build_backend
+
+    def wrapped(option, cfg, **kwargs):
+        from src.core.backend_models import BackendType
+        if option.type == BackendType.CHARLIE_CODE:
+            kwargs["extra_flags"] = [
+                *(kwargs.get("extra_flags") or []), "--session-dir", str(clc_sessions)]
+        return original(option, cfg, **kwargs)
+
+    master_module.build_backend = wrapped
+    worker_module.build_backend = wrapped
+
+
 def build_synthetic_home(home: Path, backend_id: str, entry: dict) -> tuple[int, str]:
     """Write the synthetic home's config and credentials; return (port, access_key)."""
     port = pick_free_port()
     entry = dict(entry)
     clc_sessions = home / "clc-sessions"
     clc_sessions.mkdir(parents=True, exist_ok=True)
-    flags = list(entry.get("extra_flags") or [])
-    flags += ["--session-dir", str(clc_sessions)]
-    entry["extra_flags"] = flags
+    install_native_session_dir_isolation(clc_sessions)
     config = {
         "server": {"port": port, "host": "127.0.0.1"},
         "backends": {"options": [entry], "preference": [backend_id]},

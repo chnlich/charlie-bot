@@ -1,11 +1,13 @@
-"""Shared httpx.AsyncClient singleton for outbound HTTP requests.
+"""Shared outbound-HTTP helpers: the httpx.AsyncClient singleton and the deferred
+requests loader.
 
-httpx imports lazily on first use: the server import floor (docs/perf_baseline.md
-M99) must not pay httpx's import chain (~60 ms with rich) for a client that only
-outbound requests touch.
+Both third-party imports defer to first use: no import floor (server M99, CLI
+M92 in docs/perf_baseline.md) pays an HTTP library's chain for paths that never
+send a request (~60 ms httpx with rich, ~100 ms requests via urllib3 +
+charset_normalizer).
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
   import httpx
@@ -29,3 +31,17 @@ async def close_http_client() -> None:
   if _client is not None:
     await _client.aclose()
     _client = None
+
+
+def load_requests(namespace: dict[str, Any]) -> Any:
+  """Bind requests into *namespace* on first use and return it.
+
+  Each consumer passes its own ``globals()``: the per-module binding keeps that
+  module's bare-name reads working and its module-attribute route (e.g.
+  ``src.cli.common.requests``) the tests' monkeypatch target, exactly as
+  ``load_croniter`` does for croniter.
+  """
+  import requests
+
+  namespace["requests"] = requests
+  return requests

@@ -270,7 +270,7 @@ async def list_sessions(session_mgr: SessionManager = Depends(get_session_manage
 async def create_session(
     req: CreateSessionRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> SessionMetadata:
   backend = _resolve_requested_backend(req.backend, cfg, fallback_backend=_default_backend_id(cfg))
   log.info("creating_session", backend=backend, name=req.name)
@@ -474,7 +474,7 @@ async def _not_busy() -> bool:
 async def stop_tui(
     session_id: str,
     meta: SessionMetadata = Depends(require_session),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   option = cfg.get_backend_option(meta.backend)
   if option is None or option.type != BackendType.TUI_CLI:
@@ -790,7 +790,7 @@ async def summarize_session_recap(
     upto: int,
     _meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   """Generate (via a light backend), cache, and return the recap summary for a divider."""
   from src.core import recap
@@ -832,7 +832,7 @@ async def fork_session(
     body: ForkSessionRequest | None = None,
     parent: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> SessionMetadata:
   """Clone a session. Optional body supports event_index and backend override."""
   backend = _resolve_requested_backend(
@@ -868,7 +868,7 @@ async def elone_session(
     body: EloneSessionRequest,
     parent: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> SessionMetadata:
   """Create an Elon-e session: fresh start with a bootstrap prompt that reads the parent."""
   backend = _resolve_requested_backend(body.backend, cfg, fallback_backend=parent.backend)
@@ -903,7 +903,7 @@ async def switch_session_backend(
     body: SwitchBackendRequest,
     parent: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> SessionMetadata:
   """Switch a session's backend, in place or via write-through rotation.
 

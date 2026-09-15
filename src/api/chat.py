@@ -9,14 +9,14 @@ from fastapi.responses import JSONResponse
 
 from src.agents.backends.base import make_master_done_event, make_text_event
 from src.agents.master_cc import cancel_master, run_message
-from src.api.deps import get_session_manager, require_found, require_session
+from src.api.deps import get_config_on_loop, get_session_manager, require_found, require_session
 from src.api.message_utils import (
     build_agent_input_content,
     build_user_event,
 )
 from src.core import event_types as ET
 from src.core.autonamer import is_default_session_name, maybe_auto_name
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig
 from src.core.log_once import LazyStructlogLogger
 from src.core.message_aggregator import extract_text_from_message
 from src.core.message_events import serialize_uploaded_files
@@ -40,7 +40,7 @@ async def upload_file(
     session_id: str,
     file: UploadFile = File(...),
     _meta: SessionMetadata = Depends(require_session),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   """Upload a file to the session's uploads directory. Returns {filename, path, size}."""
   uploads_dir = cfg.sessions_dir / session_id / "uploads"
@@ -70,7 +70,7 @@ async def send_message(
     req: SendMessageRequest,
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> JSONResponse:
   """Send a message to the master CC agent. Returns 202; response streams via WebSocket."""
   backend_option = cfg.get_backend_option(meta.backend) if meta.backend else None

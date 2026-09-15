@@ -8,7 +8,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from src.core.config import CharlieBotConfig, get_config
+from src.api.deps import get_config_on_loop
+from src.core.config import CharlieBotConfig
 from src.core.log_once import LazyStructlogLogger
 from src.core.timeouts import CODE_SERVER_CONNECT_TIMEOUT, CODE_SERVER_START_TIMEOUT
 
@@ -64,7 +65,7 @@ def _start_code_server(binary: str, config_path: Path) -> subprocess.Popen:
 @router.get("/open")
 def open_code_server(
     folder: str = Query(..., description="Folder path to open in code-server"),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   binary = _resolve_code_server_executable(cfg)
   if binary is None:

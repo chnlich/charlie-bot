@@ -9,9 +9,9 @@ import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from src.api.deps import bad_request
+from src.api.deps import bad_request, get_config_on_loop
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig, get_config, get_credentials
+from src.core.config import CharlieBotConfig, get_credentials
 from src.core.http import get_http_client
 from src.core.models import BackendType
 from src.core.sse import iter_sse_lines
@@ -497,7 +497,7 @@ async def _upstream_error(response: "httpx.Response") -> HTTPException:
 async def openai_compatible_messages(
     backend_id: str,
     request: Request,
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> Response:
   """Serve Anthropic Messages API requests through a per-backend OpenAI-compatible endpoint."""
   option = cfg.get_backend_option(backend_id)

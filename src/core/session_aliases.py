@@ -96,3 +96,34 @@ class SessionAliasStore:
   def _write(self, payload: dict) -> None:
     self.path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(self.path, json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+
+  def merge_imported_entries(
+      self,
+      old_sessions: dict[str, str],
+      old_threads: dict[str, dict],
+  ) -> None:
+    """Merge one migration's imported alias rows in a single atomic rewrite.
+
+    The migration-stage bulk path (one write per apply instead of one per row).
+    Existing rows are preserved untouched; an existing row that disagrees with
+    an imported mapping is a corruption, never a silent overwrite, so the
+    conflicting old id/key is raised with both targets named.
+    """
+    raw = self._read()
+    sessions = raw["old_session_ids"]
+    threads = raw["old_threads"]
+    for old, canonical in old_sessions.items():
+      existing = sessions.get(old)
+      if existing is not None and existing != canonical:
+        raise ValueError(
+            f"session alias conflict for old id {old}: existing target {existing}, "
+            f"imported mapping targets {canonical}")
+      sessions[old] = canonical
+    for key, target in old_threads.items():
+      existing = threads.get(key)
+      if existing is not None and existing != target:
+        raise ValueError(
+            f"thread alias conflict for {key}: existing target {existing}, "
+            f"imported mapping targets {target}")
+      threads[key] = target
+    self._write({"old_session_ids": sessions, "old_threads": threads})

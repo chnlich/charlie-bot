@@ -1,6 +1,7 @@
 """Thread management API routes."""
 
 import asyncio
+import gzip
 import hashlib
 import json
 import os
@@ -11,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from src.agents.backends.pty_common import (
     _TMUX_SOCKET,
@@ -198,6 +199,15 @@ _LIST_BODY_MEMO_LIMIT = 8
 _list_body_memo: BoundedMemo[str, tuple[tuple[tuple[str, int, int], ...], bytes,
                                         str]] = BoundedMemo(_LIST_BODY_MEMO_LIMIT)
 
+# The list poll's gzip form rides the body-keyed memo: the rendered body bytes
+# are their own invalidation ground (a memo hit proves byte equality because
+# the dict key IS the body), so one off-loop level-1 deflate per distinct body
+# replaces the middleware's per-request pass; Content-Encoding set upstream
+# makes the middleware skip (the M72 mechanism). The key shares the lifetime
+# rule the body memo's signature proves, so the same LRU cap fits.
+_LIST_GZIP_MEMO_LIMIT = 8
+_list_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_LIST_GZIP_MEMO_LIMIT)
+
 # Polls between signature walks, per session. Every writer of a row-source
 # file (thread metadata via _save_metadata, triggers via _save_trigger) marks
 # through mark_sidebar_dirty, so an unchanged session_revision proves the
@@ -369,15 +379,20 @@ async def _marked_rebuild(
   return sig, body, etag_value
 
 
-def _list_response(body: bytes, etag_value: str, etag: str | None) -> Response:
+async def _list_response(request: Request, body: bytes, etag_value: str, etag: str | None) -> Response:
   """The list body's answer: a bodyless 204 when the poll repeats the rendered tag."""
   if etag == etag_value:
     return Response(status_code=204, headers={"ETag": etag_value, "Cache-Control": "no-store"})
-  return Response(
-      content=body, media_type="application/json", headers={
-          "ETag": etag_value,
-          "Cache-Control": "no-store"
-      })
+  headers = {"ETag": etag_value, "Cache-Control": "no-store"}
+  if "gzip" in request.headers.get("accept-encoding", ""):
+    gz = _list_gzip_memo.get(body)
+    if gz is None:
+      gz = await asyncio.to_thread(gzip.compress, body, 1, mtime=0)
+      _list_gzip_memo.store(body, gz)
+    headers["Content-Encoding"] = "gzip"
+    headers["Vary"] = "Accept-Encoding"
+    return Response(content=gz, media_type="application/json", headers=headers)
+  return Response(content=body, media_type="application/json", headers=headers)
 
 
 # The session view's threads array rides the same row proof as the list body:
@@ -425,6 +440,7 @@ async def view_thread_rows(
 
 @router.get("/{session_id}/list")
 async def list_threads(
+    request: Request,
     session_id: str,
     etag: str | None = Query(default=None),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
@@ -460,7 +476,7 @@ async def list_threads(
       # advances the countdown, so the full walk still arrives on schedule and
       # an unmarked row-source write heals inside the same ~30 s window.
       _sig_gate.mark_proven(session_id, rev, reset_sweep=False)
-      return _list_response(body, etag_value, etag)
+      return await _list_response(request, body, etag_value, etag)
     thread_pairs, trigger_pairs = await asyncio.to_thread(
         _row_source_stats, str(session_dir / THREADS_DIR_NAME), str(session_dir / "triggers"))
     sig = _signature_from_stats(thread_pairs, trigger_pairs)
@@ -469,7 +485,7 @@ async def list_threads(
     else:
       _sig_gate.drop(session_id)
   if hit is not None and hit[0] == sig:
-    return _list_response(hit[1], hit[2], etag)
+    return await _list_response(request, hit[1], hit[2], etag)
 
   # The rebuild's rows parse from the same walked pairs the signature keys, so
   # the memo's proof and the rows behind the body describe one instant. The
@@ -484,7 +500,7 @@ async def list_threads(
   etag_value = '"' + hashlib.sha1(body).hexdigest() + '"'
   _list_body_memo.store(session_id, (sig, body, etag_value))
   _sig_gate.mark_proven(session_id, rev)
-  return _list_response(body, etag_value, etag)
+  return await _list_response(request, body, etag_value, etag)
 
 
 @router.get("/{session_id}/threads/{thread_id}")

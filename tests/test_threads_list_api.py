@@ -6,6 +6,7 @@ import json
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -442,3 +443,74 @@ def test_sweep_survives_continuous_marked_polls(tmp_path: Path, monkeypatch: pyt
     if walks["n"] == 2:
       break
   assert walks["n"] == 2, "no full walk within 10 continuously marked polls"
+
+
+def test_list_gzip_ships_precompressed_body(tmp_path: Path) -> None:
+  """The 3 s poll's gzip form rides the body-keyed memo: the served bytes
+  decompress to the plain body, the tag names the plain render, and the
+  conditional 204 stays bodyless under a gzip-accepting client."""
+  client, session_id, _ = _seeded_client(tmp_path)
+  threads_api._list_gzip_memo.clear()
+  url = f"/api/threads/{session_id}/list"
+
+  gz = client.get(url)
+  plain = client.get(url, headers={"accept-encoding": "identity"})
+  assert gz.headers["content-encoding"] == "gzip"
+  assert gz.headers["vary"] == "Accept-Encoding"
+  assert gz.headers["ETag"] == plain.headers["ETag"]
+  assert gz.json() == plain.json()
+
+  conditional = client.get(url, params={"etag": plain.headers["ETag"]})
+  assert conditional.status_code == 204
+  assert conditional.content == b""
+  assert conditional.headers["ETag"] == plain.headers["ETag"]
+
+
+def test_list_gzip_repeat_serves_memo_without_recompress(tmp_path: Path) -> None:
+  """A repeat poll of the same body serves the memo's bytes and re-compresses nothing."""
+  client, session_id, _ = _seeded_client(tmp_path)
+  threads_api._list_gzip_memo.clear()
+  url = f"/api/threads/{session_id}/list"
+
+  first = client.get(url)
+
+  def explode(data, compresslevel=9, *, mtime=None):
+    raise AssertionError("repeat list poll re-ran the deflate")
+
+  with patch("src.api.threads.gzip.compress", explode):
+    second = client.get(url)
+  assert second.headers["content-encoding"] == "gzip"
+  assert second.content == first.content
+  assert len(threads_api._list_gzip_memo) == 1
+
+
+def test_list_gzip_changed_body_recompresses(tmp_path: Path) -> None:
+  """A row-source rewrite changes the body: the next gzip poll compresses that
+  body once and its decompressed bytes carry the new status."""
+  client, session_id, _ = _seeded_client(tmp_path)
+  threads_api._list_gzip_memo.clear()
+  url = f"/api/threads/{session_id}/list"
+
+  first = client.get(url)
+  rows = {row["id"] for row in first.json()}
+  any_id = next(iter(rows))
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
+  asyncio.run(ThreadManager(cfg).update_status(session_id, any_id, ThreadStatus.RUNNING))
+
+  second = client.get(url)
+  assert second.headers["content-encoding"] == "gzip"
+  plain = client.get(url, headers={"accept-encoding": "identity"})
+  assert second.content == plain.content
+  assert next(row for row in plain.json() if row["id"] == any_id)["status"] == "running"
+
+
+def test_list_plain_request_stays_uncompressed(tmp_path: Path) -> None:
+  """A client sending no Accept-Encoding reads the plain render, and the gzip
+  memo gains no entry."""
+  client, session_id, _ = _seeded_client(tmp_path)
+  threads_api._list_gzip_memo.clear()
+  url = f"/api/threads/{session_id}/list"
+
+  plain = client.get(url, headers={"accept-encoding": "identity"})
+  assert "content-encoding" not in plain.headers
+  assert len(threads_api._list_gzip_memo) == 0

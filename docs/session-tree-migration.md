@@ -31,30 +31,74 @@ source-derived task/Run identities and the same `source_sha`.
 - **Stopped-writer boundary.** Apply takes the home's writer fence
   (`state/home_writer.lock`, an exclusive `flock`; the server holds the same
   fence for its whole lifetime) and scans `/proc` for live processes bound to
-  the home, recorded worker/master/loop process identities, leftover raw-log
-  holders, and pending triggers' watch targets. Anything live or of unknown
-  ownership is a named blocker; nothing is signalled. A server starting during
-  an apply refuses to start. The live-process scan re-runs under the fence at
-  the mutation boundary, so a legacy writer that started between the preflight
-  check and fence acquisition also blocks the apply.
+  the home, recorded worker/master/loop process identities, mixed v2 Run
+  activity, leftover raw-log holders, and pending triggers' watch targets.
+  The scan covers three supported bindings: an explicit `CHARLIEBOT_HOME`
+  naming the home, the default-home fallback (a process without an explicit
+  profile writes the default home only when its command line names a writer
+  entrypoint — `server.py`, `uvicorn`, the `charliebot` CLI), and writer
+  ancestors: a server or controller that launched the CLI is never excluded
+  merely because it launched it, while shells, multiplexers and test runners
+  that merely forwarded the environment are. An unreadable process identity is
+  reported as unknown ownership, never read as death. Anything live or of
+  unknown ownership is a named blocker; nothing is signalled. A server
+  starting during an apply refuses to start. The live-process scan re-runs
+  under the fence at the mutation boundary, so a legacy writer that appeared
+  between the preflight check and fence acquisition also blocks the apply.
 - **No silent drift.** Apply refuses when the source no longer matches the
   manifest's hash binding, when the converter code changed since the manifest
   was built, or when a rebuilt plan would differ — and re-checks at the
-  mutation boundary under the fence.
+  mutation boundary under the fence. The manifest binds the whole home, not
+  only the records the converter parses: a newly added record (a new v2 Run
+  record, a new task node) or an unrelated file refuses apply even when every
+  recorded hash still matches.
 - **No unresolved apply.** Every uncertain item (ambiguous loop association,
   cyclic or orphaned reviews, unattributable input handling, unreadable
   records, conflicting targets or aliases, ambiguous PM prose) blocks apply
   until a human resolves it and the manifest is rebuilt.
+- **Exact interrupted-apply recognition.** A chat log that differs from its
+  manifest hash is accepted only with proof: the manifest's original bytes
+  must be an intact prefix of the current file (same length, same hash), and
+  every appended line must be one complete fact this manifest writes. Changed
+  history or an unrelated appended input refuses; no receipt is minted over
+  either. An intact interrupted append resumes idempotently.
+- **Authoritative backups.** Originals are backed up and hash-verified before
+  the first replacement (atomically, so a crash never leaves a torn backup),
+  the backup copy of an interrupted run is kept only when it still matches the
+  manifest's pre-apply hash, and every receipted backup is re-verified on
+  resume. The pre-apply bytes are authoritative; apply never replaces them
+  with the file's current content.
+- **Confinement.** Every source, product, state, receipt, backup, and lock
+  path is confined to the selected home: a malformed `source_sha`, an absolute
+  or traversal receipt/backup reference, a symlinked state/backup directory,
+  or a symlinked fence path refuses before anything is written. A manifest is
+  bound to the home it inventoried — a transplanted manifest refuses. The
+  receipt journal is created only after every guard has passed, so a refused
+  apply leaves no source-side state behind. `--dry-run --output` refuses an
+  output path inside the home: the inventory must not overwrite a source or
+  plant a file in its own input set.
 - **Recoverable partial apply.** Every product is idempotent and receipted
   (`state/session_tree_migration/<source_sha>/receipts.ndjson`); an interrupted
   apply resumes from the same manifest in a fresh process without duplicating
-  nodes, facts, or aliases. Originals are backed up and hash-verified before
-  the first replacement.
-- **Receipt-guarded rollback.** Rollback restores originals and removes only
-  migration-owned, unchanged products. Once any product changed (a
-  new-system write, an edit, added unrelated data) rollback refuses instead of
-  erasing it, and every backup is hash-verified before the first restore — a
-  missing or corrupted backup aborts with nothing restored.
+  nodes, facts, or aliases.
+- **Fenced, guarded rollback.** Rollback re-validates the whole protected home
+  after acquiring the writer fence and before its first replacement: every
+  file must still be the manifest's bound input, a receipted product, or an
+  already-restored original, under the same quiescence requirements as apply.
+  A writer that lands a change between the precheck and the fence acquisition
+  is refused there, with every new byte preserved. A new task node, an
+  unrelated file, a changed untouched source record, or a deleted file refuses
+  rollback — receipt hashes of the migration's own product paths alone prove
+  nothing about the rest of the home. Every backup is hash-verified before the
+  first restore — a missing or corrupted backup aborts with nothing restored.
+  Restores and removals journal durable per-path completion evidence
+  (`rollback.ndjson`), so an interrupted rollback resumes from the same
+  manifest instead of stranding a partial v1/v2 conversion.
+- **Fence ownership survives failures.** A failed identity publication
+  releases the lock and its fd; server startup and shutdown exceptions release
+  the fence in the still-live process; a holder's release unlinks the identity
+  record while it still owns the lock, so it can never erase a successor's
+  identity. The identity record stays diagnostic; the flock is the exclusion.
 
 ## What it does not do (remaining integration boundaries)
 

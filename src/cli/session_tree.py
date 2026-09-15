@@ -7,12 +7,18 @@
 The commands target the current explicitly selected CHARLIEBOT_HOME and touch
 nothing else: no HTTP delegation, no server startup, no external messages.
 ``--dry-run`` reads the source read-only and writes the reviewable manifest to
-FILE; ``--apply`` refuses unresolved conversions, source/converter hash drift,
-target collisions and unproven quiescence before its first replacement, keeps
-a verified backup before mutating, and re-verifies through the ordinary
-readers after the write; ``--rollback`` restores originals and removes only
-migration-owned unchanged products, refusing once any product no longer
-matches its receipt. Exit code 0 success, 1 refusal/conflict, 2 usage.
+FILE (FILE must live outside the home: a manifest inside the inventoried home
+would overwrite a source or hide a new file in its own input set);
+``--apply`` refuses unresolved conversions, source/converter hash drift,
+unaccounted files, target collisions and unproven quiescence before its first
+replacement, keeps a verified backup before mutating, and re-verifies through
+the ordinary readers after the write; ``--rollback`` re-validates the whole
+protected home under the writer fence before its first restore, restores
+originals and removes only migration-owned unchanged products, and refuses
+once anything in the home is no longer accounted for by the manifest's
+binding and receipts. Every refusal exits 1 with a structured JSON diagnostic
+on stderr — never an uncaught traceback. Exit code 0 success, 1
+refusal/conflict, 2 usage.
 
 Not yet part of this command (separate owners, do not assume them here): the
 real-data offline rehearsal, the interactive ``session-tree preview``
@@ -26,6 +32,7 @@ from pathlib import Path
 
 from src.core.config import get_config
 from src.core.session_tree_migration import (
+    MigrationError,
     MigrationRefused,
     apply_manifest,
     build_manifest,
@@ -79,13 +86,28 @@ def _cmd_migrate(args: argparse.Namespace) -> None:
   if args.dry_run:
     if not args.output:
       _fail("--dry-run requires --output FILE")
-    snap = scan_source(cfg)
-    manifest, plan = build_manifest(cfg, snap)
+    # The "read-only inventory" must not write inside its own input: an output
+    # inside the home would overwrite an existing source or plant a new file
+    # the manifest's own binding would then have to account for.
     output = Path(args.output)
-    if output.parent and not output.parent.exists():
-      output.parent.mkdir(parents=True, exist_ok=True)
-    from src.core.json_utils import atomic_write_text
-    atomic_write_text(output, manifest.model_dump_json(indent=2))
+    try:
+      if output.resolve().is_relative_to(cfg.charliebot_home.resolve()):
+        _fail(
+            f"--output {args.output!r} is inside the selected home "
+            f"({cfg.charliebot_home}); the manifest must live outside the home it inventories")
+    except OSError as e:
+      _fail(f"--output path is unusable: {e}")
+    try:
+      snap = scan_source(cfg)
+      manifest, plan = build_manifest(cfg, snap)
+      if output.parent and not output.parent.exists():
+        output.parent.mkdir(parents=True, exist_ok=True)
+      from src.core.json_utils import atomic_write_text
+      atomic_write_text(output, manifest.model_dump_json(indent=2))
+    except MigrationRefused as e:
+      _fail(str(e), e.details)
+    except OSError as e:
+      _fail(f"dry-run output could not be written to {output}: {e}")
     _emit({
         "status": "dry_run",
         "manifest": str(output),
@@ -108,6 +130,8 @@ def _cmd_migrate(args: argparse.Namespace) -> None:
       result = apply_manifest(cfg, Path(args.manifest))
     except MigrationRefused as e:
       _fail(str(e), e.details)
+    except MigrationError as e:
+      _fail(str(e))
     _emit(result)
     return
 
@@ -117,6 +141,8 @@ def _cmd_migrate(args: argparse.Namespace) -> None:
     result = rollback_manifest(cfg, Path(args.manifest))
   except MigrationRefused as e:
     _fail(str(e), e.details)
+  except MigrationError as e:
+    _fail(str(e))
   _emit(result)
 
 

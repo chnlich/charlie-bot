@@ -39,6 +39,7 @@ import pytest
 from conftest import (
     OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
     REVIEW_TRIGGER_MASTER_PATCH_TARGET,
+    ROOT,
     _assert_failed_with_transport_reason,
     _await_recovery_tasks,
     _cfg,
@@ -69,8 +70,6 @@ from src.core.models import (
 from src.core.process import kill_process_group
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # A fake reviewer: no LLM, just a real commit-of-its-own plus a `git push` of the
 # worker's already-committed change to the shared worktree's base branch, standing
@@ -178,7 +177,7 @@ def _launch_driver(tmp_path: Path, home: Path, result_delay: float) -> tuple[sub
   driver = tmp_path / "driver.py"
   driver.write_text(DRIVER, encoding="utf-8")
   env = dict(os.environ)
-  env["PYTHONPATH"] = str(REPO_ROOT)
+  env["PYTHONPATH"] = str(ROOT)
   env["PATH"] = f"{shim_dir}:{env['PATH']}"
   env["FAKE_RESULT_DELAY"] = str(result_delay)
   proc = subprocess.Popen(
@@ -687,7 +686,7 @@ def _launch_graceful_driver(tmp_path: Path,
   driver = tmp_path / "graceful_driver.py"
   driver.write_text(GRACEFUL_DRIVER, encoding="utf-8")
   env = dict(os.environ)
-  env["PYTHONPATH"] = str(REPO_ROOT)
+  env["PYTHONPATH"] = str(ROOT)
   env["PATH"] = f"{shim_dir}:{env['PATH']}"
   env["FAKE_RESULT_DELAY"] = str(result_delay)
   proc = subprocess.Popen(

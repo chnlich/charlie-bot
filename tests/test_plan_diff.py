@@ -4,7 +4,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from html import unescape
 from html.parser import HTMLParser
-from pathlib import Path
+
+from conftest import ROOT
 
 from src.core import plan_diff
 from src.core.plan_diff import (
@@ -17,7 +18,6 @@ from src.core.plan_diff import (
     diff_text,
 )
 
-_ROOT = Path(__file__).resolve().parents[1]
 _BLOCK_TAGS = {
     "address", "article", "aside", "blockquote", "body", "caption", "dd", "details", "dialog", "div", "dl", "dt",
     "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr",
@@ -196,7 +196,7 @@ def test_four_invariants_hold_for_synthetic_pair() -> None:
 
 def _fixture_pair() -> tuple[str, str]:
   """The real captured plan page pair the whole-pipeline tests annotate: v10 base, v11 new."""
-  data = _ROOT / "tests/data"
+  data = ROOT / "tests/data"
   base = (data / "plan_move2-direct-kill_v10.html").read_text(encoding="utf-8")
   new = (data / "plan_move2-direct-kill_v11.html").read_text(encoding="utf-8")
   return base, new

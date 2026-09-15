@@ -11,7 +11,7 @@ import asyncio
 import pathlib
 
 import pytest
-from conftest import fresh_state_fixture, reset_config_caches
+from conftest import ROOT, fresh_state_fixture, reset_config_caches
 
 from src.core import config as core_config
 
@@ -157,26 +157,25 @@ def test_no_new_hardcoded_state_paths() -> None:
   any path but only the two spellings that build one from the user's home directory.
   ``src/core/config.py`` owns the resolution and is the single exemption.
   """
-  repo_root = pathlib.Path(__file__).resolve().parents[1]
-  exempt = {repo_root / "src" / "core" / "config.py"}
+  exempt = {ROOT / "src" / "core" / "config.py"}
   offenders: list[str] = []
 
-  python_files = [repo_root / "server.py", *sorted((repo_root / "src").rglob("*.py"))]
+  python_files = [ROOT / "server.py", *sorted((ROOT / "src").rglob("*.py"))]
   for path in python_files:
     if path in exempt:
       continue
     for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
       if "Path.home()" in line and ".charliebot" in line:
-        offenders.append(f"{path.relative_to(repo_root)}:{lineno}: {line.strip()}")
+        offenders.append(f"{path.relative_to(ROOT)}:{lineno}: {line.strip()}")
 
   web_files = [
-      *sorted((repo_root / "web" / "static" / "js").rglob("*.js")),
-      *sorted((repo_root / "web" / "templates").rglob("*.html")),
+      *sorted((ROOT / "web" / "static" / "js").rglob("*.js")),
+      *sorted((ROOT / "web" / "templates").rglob("*.html")),
   ]
   for path in web_files:
     for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
       if "/.charliebot/" in line:
-        offenders.append(f"{path.relative_to(repo_root)}:{lineno}: {line.strip()}")
+        offenders.append(f"{path.relative_to(ROOT)}:{lineno}: {line.strip()}")
 
   assert not offenders, (
       "state paths must come from CharlieBotConfig, not from the user's home directory:\n" + "\n".join(offenders))

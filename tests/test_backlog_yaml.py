@@ -1,11 +1,10 @@
 """Validate that backlog/backlog.yaml is well-formed."""
 
-from pathlib import Path
-
 import pytest
 import yaml
+from conftest import ROOT
 
-BACKLOG_PATH = Path(__file__).resolve().parent.parent / 'backlog' / 'backlog.yaml'
+BACKLOG_PATH = ROOT / 'backlog' / 'backlog.yaml'
 
 VALID_STATUSES = frozenset({
     'pending',

@@ -18,6 +18,7 @@ from conftest import (
     BROADCAST_PATCH_TARGET,
     CLI_COMMON_GET_CONFIG_PATCH_TARGET,
     MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET,
+    ROOT,
     FakeSessionManager,
     _noop,
     make_home_config,
@@ -43,8 +44,6 @@ from src.core.models import (
 )
 from src.core.sessions import SessionManager
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
-
-ROOT = Path(__file__).resolve().parents[1]
 
 
 def _agent_message_event(content: str, timestamp: str | None = None) -> dict[str, Any]:

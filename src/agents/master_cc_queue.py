@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from src.agents import master_cc_run, master_cc_state
 from src.agents.backends.base import make_error_event, make_master_done_event
-from src.core import event_types as ET
+from src.core import claude_accounts, event_types as ET
 from src.core import runs, sidebar_state
 from src.core.config import CharlieBotConfig
 from src.core.latex import get_tex_path, snapshot_tex
@@ -118,6 +118,47 @@ async def _persist_with_readback(
       })
 
 
+async def _refresh_anchors_from_disk(
+    item: master_cc_state._WorkItem,
+    session_id: str,
+    last_cc_session_id: str | None,
+    last_claude_account: str | None,
+) -> None:
+  """Overwrite the dequeued item's anchor snapshot with what disk holds.
+
+  The queue item carries the session metadata as it stood at enqueue time; by
+  the time it dequeues, disk is the authority -- the previous round's placement
+  funnel-persisted the account holding the transcript (a stale snapshot was
+  the 2026-09-14 overwrite's trigger), and a weekly recycle clears the anchor.
+  The read is the bypass-cache fresh read (``read_metadata_fresh``: no cache
+  populate, so no second cache). A snapshot anchor that is set is refreshed to
+  the disk value, including a disk-cleared one; a snapshot anchor that is None
+  stays None -- a snapshot dequeuing without an anchor declares this round
+  starts without one (a fresh session, or the stale-resume retry's deliberately
+  cleared copy), and must not have a disk anchor resurrected into it. A failed
+  disk read -- raised or missing metadata -- falls back to the enqueue loop's
+  previous behavior: relay the last round's values into empty fields only.
+  """
+  fresh: SessionMetadata | None = None
+  try:
+    # Local import: sessions sits above this module in the import graph.
+    from src.core.sessions import SessionManager
+    fresh = await SessionManager(item.cfg).read_metadata_fresh(session_id)
+  except Exception:
+    log.exception("master_cc_dequeue_anchor_refresh_failed", session=session_id)
+  meta = item.session_meta
+  if fresh is None:
+    if last_cc_session_id and not meta.cc_session_id:
+      meta.cc_session_id = last_cc_session_id
+    if last_claude_account and not meta.claude_account:
+      meta.claude_account = last_claude_account
+    return
+  if meta.cc_session_id is not None:
+    meta.cc_session_id = fresh.cc_session_id
+  if meta.claude_account is not None:
+    meta.claude_account = fresh.claude_account
+
+
 async def _session_consumer(session_id: str) -> None:
   """Drain the per-session queue sequentially, one CC run at a time."""
   queue = master_cc_state._session_queues[session_id]
@@ -138,12 +179,9 @@ async def _session_consumer(session_id: str) -> None:
       teardown_cfg = item.cfg
       teardown_auto_trigger = item.auto_trigger
       try:
-        # Carry the previous run's cc_session_id onto a freshly-loaded meta
-        # so --resume picks up the in-progress CC transcript.
-        if last_cc_session_id and not item.session_meta.cc_session_id:
-          item.session_meta.cc_session_id = last_cc_session_id
-        if last_claude_account and not item.session_meta.claude_account:
-          item.session_meta.claude_account = last_claude_account
+        # Disk is the authority at dequeue time; the last_* relay below is the
+        # failed-read fallback (see _refresh_anchors_from_disk).
+        await _refresh_anchors_from_disk(item, session_id, last_cc_session_id, last_claude_account)
         result = await (
             master_cc_run._resume_cc(item) if item.resume_record is not None else master_cc_run._run_cc(item))
         cc_session_id, exit_code, _error_msg, finish_extras = result
@@ -231,6 +269,16 @@ async def _session_consumer(session_id: str) -> None:
         # Resolve the caller's future
         if not item.future.done():
           item.future.set_result(cc_session_id)
+
+        # Post-MASTER_DONE copy retirement: with the round's account label
+        # funnel-persisted above, the pool's redundant copies of this transcript
+        # (every relay leaves its source behind) collapse to the newest two.
+        # Runs only on a sound round -- a failed round keeps every copy as its
+        # fallback -- and after the future resolution, so a retirement failure
+        # can never corrupt a finished turn's result (the consumer's handler
+        # logs it instead).
+        if exit_code == 0 and cc_session_id and item.session_meta.claude_account:
+          await asyncio.to_thread(claude_accounts.retire_transcript_copies, item.cfg, cc_session_id)
 
       except Exception as exc:
         log.exception("session_consumer_item_error", session=session_id)

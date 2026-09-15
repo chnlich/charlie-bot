@@ -508,6 +508,24 @@ _SEARCH_NULL_PIECES: dict[str, bytes] = {
 }
 _search_row_fragments: BoundedMemo[int, tuple[SessionMetadata, tuple[bytes | str,
                                                                      ...]]] = BoundedMemo(_SEARCH_ROW_FRAGMENT_CAP)
+# The finished row's wire bytes: metadata object -> (that object, the row's five
+# derived values, the spliced body). The body is a pure function of the metadata
+# object and those five values, both in the value — the metadata cache replaces
+# the object whenever its file provably changes, and the values ride the check —
+# so a repeat request with an unchanged row state serves the cached bytes; the
+# stored object pins the row so an id reuse can never serve another object's
+# bytes.
+_SEARCH_ROW_BODY_CAP = 512
+_search_row_bodies: BoundedMemo[int, tuple[SessionMetadata, tuple, bytes]] = BoundedMemo(_SEARCH_ROW_BODY_CAP)
+# The whole response body of the last render: (the rows' metadata objects, each
+# row's five derived values, the body). The body is a pure function of the row
+# sequence and those values, both in the check — so the steady-state repeat
+# request (the debounced search box re-firing the same query) serves the cached
+# bytes after one identity-and-values compare and rebuilds only when a row's
+# state moved. The stored rows pin their objects, so ids in play can never name
+# another object; the render runs synchronously on the event loop between
+# awaits, so the single slot needs no lock.
+_search_whole_body: tuple[tuple[SessionMetadata, ...], tuple, bytes] | None = None
 
 
 def _search_row_static_segments(meta: SessionMetadata) -> tuple[bytes | str, ...]:
@@ -574,6 +592,7 @@ async def search_sessions(
     session_mgr: SessionManager = Depends(get_session_manager),
 ) -> list[SessionMetadata] | PreencodedJSONResponse:
   """Full-text search across session names and chat content."""
+  global _search_whole_body
   if not q.strip():
     return await session_mgr.list_sessions(
         status=SessionStatus.ACTIVE,
@@ -598,36 +617,59 @@ async def search_sessions(
   # bytes in _SEARCH_DERIVED_PREFIXES, and a None datetime field rides its whole
   # prebuilt null piece (both fields are None on the common idle row), so the
   # pydantic dump_python call under it never runs.
-  parts: list[bytes] = []
+  states = []
   for meta in rows:
     entry = derived[meta.id]
-    thinking_since = thinking_state.busy_since(meta.id)
-    next_trigger_at = entry[sidebar_state.NEXT_TRIGGER_AT]
-    values = {
-        "thinking_since":
-            (_UTC_DATETIME_JSON.dump_python(thinking_since, mode="json") if thinking_since is not None else None),
-        sidebar_state.HAS_RUNNING_TASKS:
-            entry[sidebar_state.HAS_RUNNING_TASKS],
-        sidebar_state.HAS_PENDING_TRIGGER:
-            entry[sidebar_state.HAS_PENDING_TRIGGER],
-        sidebar_state.PENDING_TRIGGER_COUNT:
-            entry[sidebar_state.PENDING_TRIGGER_COUNT],
-        sidebar_state.NEXT_TRIGGER_AT:
-            (_UTC_DATETIME_JSON.dump_python(next_trigger_at, mode="json") if next_trigger_at is not None else None),
-    }
-    rendered: list[bytes] = []
-    for segment in _search_row_static_segments(meta):
-      if isinstance(segment, bytes):
-        rendered.append(segment)
-        continue
-      value = values[segment]
-      null_piece = _SEARCH_NULL_PIECES.get(segment)
-      if null_piece is not None and value is None:
-        rendered.append(null_piece)
-      else:
-        rendered.append(_SEARCH_DERIVED_PREFIXES[segment] + _json_scalar_bytes(value))
-    parts.append(b"{" + b",".join(rendered) + b"}")
-  return PreencodedJSONResponse(b"[" + b",".join(parts) + b"]")
+    states.append(
+        (
+            thinking_state.busy_since(meta.id), entry[sidebar_state.HAS_RUNNING_TASKS],
+            entry[sidebar_state.HAS_PENDING_TRIGGER], entry[sidebar_state.PENDING_TRIGGER_COUNT],
+            entry[sidebar_state.NEXT_TRIGGER_AT]))
+  cached = _search_whole_body
+  if (cached is not None and len(cached[0]) == len(rows) and
+      all(c is m for c, m in zip(cached[0], rows, strict=True)) and cached[1] == tuple(states)):
+    return PreencodedJSONResponse(cached[2])
+  parts: list[bytes] = []
+  for meta, state in zip(rows, states, strict=True):
+    thinking_since, has_running, has_pending, pending_count, next_trigger_at = state
+    row_key = (thinking_since, has_running, has_pending, pending_count, next_trigger_at)
+    body = _search_row_body(meta, row_key)
+    parts.append(body)
+  body = b"[" + b",".join(parts) + b"]"
+  _search_whole_body = (tuple(rows), tuple(states), body)
+  return PreencodedJSONResponse(body)
+
+
+def _search_row_body(meta: SessionMetadata, row_key: tuple) -> bytes:
+  """Render one search row's wire bytes, memoized on the row's identity and state."""
+  cached = _search_row_bodies.get(id(meta))
+  if cached is not None and cached[0] is meta and cached[1] == row_key:
+    return cached[2]
+  values = {
+      "thinking_since": (_UTC_DATETIME_JSON.dump_python(row_key[0], mode="json") if row_key[0] is not None else None),
+      sidebar_state.HAS_RUNNING_TASKS:
+          row_key[1],
+      sidebar_state.HAS_PENDING_TRIGGER:
+          row_key[2],
+      sidebar_state.PENDING_TRIGGER_COUNT:
+          row_key[3],
+      sidebar_state.NEXT_TRIGGER_AT:
+          (_UTC_DATETIME_JSON.dump_python(row_key[4], mode="json") if row_key[4] is not None else None),
+  }
+  rendered: list[bytes] = []
+  for segment in _search_row_static_segments(meta):
+    if isinstance(segment, bytes):
+      rendered.append(segment)
+      continue
+    value = values[segment]
+    null_piece = _SEARCH_NULL_PIECES.get(segment)
+    if null_piece is not None and value is None:
+      rendered.append(null_piece)
+    else:
+      rendered.append(_SEARCH_DERIVED_PREFIXES[segment] + _json_scalar_bytes(value))
+  body = b"{" + b",".join(rendered) + b"}"
+  _search_row_bodies.store(id(meta), (meta, row_key, body))
+  return body
 
 
 @router.get('/{session_id}/view')

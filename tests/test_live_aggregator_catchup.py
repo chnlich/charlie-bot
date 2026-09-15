@@ -11,7 +11,7 @@ re-checked at every slice boundary) discards the unfinished init and reruns.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -86,29 +86,39 @@ async def test_concurrent_first_persists_catch_up_once(tmp_path: Path) -> None:
   assert first is second
 
 
+def _dropping_load() -> tuple[Callable[[Any, str], tuple[list[dict], int]], Callable[[], int]]:
+  """Corpus-load stand-in whose first call drops the session's runtime state.
+
+  A drop landing while the catch-up runs must win over it: the epoch re-check
+  at the first slice boundary discards the unfinished init, so a clean rerun
+  loads the corpus a second time. Returns the stand-in and its load counter;
+  both callers assert a count of 2 (the dropped init plus the rerun).
+  """
+  original = SessionManager._load_aggregator_init_inputs
+  loads = 0
+
+  def dropping_load(self: SessionManager, session_id: str) -> tuple[list[dict], int]:
+    nonlocal loads
+    loads += 1
+    inputs = original(self, session_id)
+    if loads == 1:
+      self._drop_session_runtime_state(session_id)
+    return inputs
+
+  return dropping_load, lambda: loads
+
+
 @pytest.mark.asyncio
 async def test_drop_during_catchup_discards_stale_init(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   mgr = SessionManager(cfg)
   sid = await _seed_session(mgr)
 
-  original = SessionManager._load_aggregator_init_inputs
-  loads = 0
-
-  def dropping_load(self, session_id: str) -> tuple[list[dict], int]:
-    nonlocal loads
-    loads += 1
-    inputs = original(self, session_id)
-    if loads == 1:
-      # A drop landing while the catch-up runs must win over it: the epoch
-      # re-check at the first slice boundary discards this init.
-      self._drop_session_runtime_state(session_id)
-    return inputs
-
+  dropping_load, load_count = _dropping_load()
   with patch.object(SessionManager, "_load_aggregator_init_inputs", dropping_load):
     aggregator = await mgr._get_or_init_aggregator(sid)
 
-  assert loads == 2
+  assert load_count() == 2
   assert mgr._aggregators[sid] is aggregator
   assert aggregator.emit_stream_deltas is True
 
@@ -174,23 +184,14 @@ async def test_catchup_init_reenables_gc_on_success_and_drop(tmp_path: Path) -> 
   assert gc.isenabled()
   assert mgr._aggregators[sid] is aggregator
 
-  original = SessionManager._load_aggregator_init_inputs
-  loads = 0
-
-  def dropping_load(self: SessionManager, session_id: str) -> tuple[list[dict], int]:
-    nonlocal loads
-    loads += 1
-    inputs = original(self, session_id)
-    if loads == 1:
-      self._drop_session_runtime_state(session_id)
-    return inputs
+  dropping_load, load_count = _dropping_load()
 
   states.clear()
   mgr._aggregators.pop(sid, None)
   with patch.object(gc_control, "gc", SpyGC()):
     with patch.object(SessionManager, "_load_aggregator_init_inputs", dropping_load):
       rerun = await mgr._get_or_init_aggregator(sid)
-  assert loads == 2  # the dropped init plus the rerun
+  assert load_count() == 2  # the dropped init plus the rerun
   assert states == ["off", "on", "off", "on"]
   assert gc.isenabled()
   assert mgr._aggregators[sid] is rerun

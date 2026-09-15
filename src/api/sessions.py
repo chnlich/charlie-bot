@@ -674,14 +674,40 @@ def _search_row_body(meta: SessionMetadata, row_key: tuple) -> bytes:
   return body
 
 
+# The switch fetches (view, bootstrap) rebuild their payload per request, so
+# unlike the events page there is no projection generation to key a gzip form
+# on; the rendered body bytes are their own invalidation ground — a memo hit
+# proves byte equality because the dict key IS the body. Without it every
+# gzip-accepting fetch pays the middleware's whole-body level-1 deflate in the
+# send path, the M35 events-page cost the projection fix removed there.
+# Content-Encoding set upstream is what makes that middleware skip its own
+# pass (the M72 listing mechanism), and mtime=0 keeps the bytes deterministic
+# (the M101 serve's rule).
+_SWITCH_GZIP_MEMO_LIMIT = 8
+_switch_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SWITCH_GZIP_MEMO_LIMIT)
+
+
+async def _switch_payload_response(request: Request, payload: dict) -> Response:
+  """Render a switch-fetch payload once and serve its gzip form from the body-keyed memo."""
+  body = fast_json_bytes(payload)
+  if "gzip" not in request.headers.get("accept-encoding", ""):
+    return PreencodedJSONResponse(body)
+  gz = _switch_gzip_memo.get(body)
+  if gz is None:
+    gz = await asyncio.to_thread(gzip.compress, body, 1, mtime=0)
+    _switch_gzip_memo.store(body, gz)
+  return PreencodedJSONResponse(gz, headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
+
+
 @router.get('/{session_id}/view')
 async def get_session_view(
     session_id: str,
+    request: Request,
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
-) -> FastJsonResponse:
+) -> Response:
   """Return data needed to render a session chat panel (SPA switch).
 
   Uses tail-loading: only the last 40 messages are parsed and returned.
@@ -716,20 +742,24 @@ async def get_session_view(
       "has_more": view.has_more,
   }
   payload.update(_active_backend_payload(meta, cfg))
-  return FastJsonResponse(payload)
+  # FastJsonResponse for the message-page cost reason in get_session_events_page;
+  # the switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
+  return await _switch_payload_response(request, payload)
 
 
 @router.get('/{session_id}/bootstrap')
 async def get_session_bootstrap(
     session_id: str,
+    request: Request,
     _meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
-) -> FastJsonResponse:
+) -> Response:
   """Return the minimal data needed to make one chat session usable."""
   bootstrap = await build_session_bootstrap_data(session_id, session_mgr)
-  # FastJsonResponse for the message-page cost reason in get_session_events_page.
-  return FastJsonResponse(_bootstrap_payload(bootstrap, cfg))
+  # FastJsonResponse for the message-page cost reason in get_session_events_page;
+  # the switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
+  return await _switch_payload_response(request, _bootstrap_payload(bootstrap, cfg))
 
 
 @router.get('/{session_id}/usage')

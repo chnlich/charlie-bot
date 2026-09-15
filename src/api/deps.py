@@ -12,7 +12,7 @@ Depends forms.
 
 from fastapi import Depends, HTTPException, Request
 
-from src.core.config import CharlieBotConfig, get_config, get_credentials
+from src.core.config import CharlieBotConfig, configured_access_key, get_config
 from src.core.models import SessionMetadata
 from src.core.plans import PlanRegistryManager
 from src.core.run_token import (
@@ -184,7 +184,7 @@ async def require_caller(
   bearer = bearer_from_authorization(request.headers.get("authorization"))
   if not bearer:
     return CallerIdentity(kind="operator")
-  key = str(get_credentials().get("charliebot", "access_key") or "")
+  key = configured_access_key()
   if key and bearer == key:
     return CallerIdentity(kind="operator")
   # Anything else is run-token use: fail closed, never fall back.

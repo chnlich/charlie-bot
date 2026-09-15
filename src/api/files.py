@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from src.api.auth import request_has_access_key
 from src.api.pages import _static_asset_version
 from src.core import plan_diff
-from src.core.config import get_config, get_credentials
+from src.core.config import configured_access_key, get_config
 from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.memo import BoundedMemo
 
@@ -452,14 +452,13 @@ async def serve_file(path: str, request: Request) -> Response:
     if session_id is None:
       raise HTTPException(status_code=400, detail=_DIFF_TARGET_DETAIL.format(fs_path))
     base_path = _resolve_diff_base(session_id, diff_param)
-    inject_ui = request_has_access_key(request, str(get_credentials().get("charliebot", "access_key") or ""))
+    inject_ui = request_has_access_key(request, configured_access_key())
     # A cold annotate parses both pages whole (~0.25 s on a 1 MB pair), so the
     # build runs off the event loop; a memo hit answers with zero file bytes.
     html_text = await asyncio.to_thread(_annotated_diff_page, base_path, fs_path, inject_ui, session_id)
     return HTMLResponse(html_text, media_type="text/html")
 
-  if session_id is not None and request_has_access_key(request, str(get_credentials().get("charliebot", "access_key") or
-                                                                    "")):
+  if session_id is not None and request_has_access_key(request, configured_access_key()):
     if "gzip" in request.headers.get("accept-encoding", ""):
       # The same check the gzip middleware makes on the way in; answering with
       # the pre-compressed body and the header set is what skips its deflate.

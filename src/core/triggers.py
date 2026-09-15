@@ -423,12 +423,9 @@ class TriggerManager:
     self._list_memo: BoundedMemo[str, dict[str, tuple[int, int,
                                                       PendingTrigger]]] = BoundedMemo(_TRIGGER_LIST_MEMO_SESSION_LIMIT)
     # list_triggers' directory verdict: session id -> sorted list, signed on the
-    # directory's (mtime_ns, size) (StatSignatureMemo). Every trigger-file write
-    # publishes through the atomic rename INTO the triggers directory, and a rename
-    # that creates, replaces, or removes a directory entry moves the directory's own
-    # mtime_ns — so an unchanged directory signature proves no file appeared, vanished,
-    # or was replaced, and the steady-state poll serves without the per-file stat walk
-    # or its executor round-trip.
+    # directory's (mtime_ns, size) (StatSignatureMemo). The rename-publish ground
+    # that makes the directory signature a sound verdict is stated in
+    # list_triggers' docstring.
     self._list_verdicts: StatSignatureMemo[str,
                                            list[PendingTrigger]] = StatSignatureMemo(_TRIGGER_LIST_MEMO_SESSION_LIMIT)
 

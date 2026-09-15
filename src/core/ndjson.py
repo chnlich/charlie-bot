@@ -3,7 +3,7 @@
 import asyncio
 import json
 import os
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from itertools import islice
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -111,14 +111,23 @@ def parse_ndjson_line(
     return None
 
 
-def iter_ndjson_events(lines: Iterable[str | bytes], *, log_event: str, log_fields: dict[str, Any]) -> Iterator[dict]:
+def iter_ndjson_events(
+    lines: Iterable[str | bytes],
+    *,
+    log_event: str,
+    log_fields: dict[str, Any],
+    parse_filter: Callable[[bytes], bool] | None = None) -> Iterator[dict]:
   """Yield the JSON objects parsed from *lines*, skipping blank and malformed lines.
 
   Rides :func:`parse_ndjson_line`, the one definition of the reader skip
   contract. Lazy, so first-match and early-stop readers terminate without
-  reading the rest.
+  reading the rest. *parse_filter*, when given, decides from the raw line
+  bytes before any parse work: a False line is skipped unparsed and
+  unlogged — the caller's proof it cannot match, not a parse failure.
   """
   for raw_line in lines:
+    if parse_filter is not None and not parse_filter(raw_line):
+      continue
     event = parse_ndjson_line(raw_line, log_event=log_event, log_fields=log_fields)
     if event is not None:
       yield event
@@ -205,12 +214,17 @@ def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bo
   return events, total, has_more
 
 
-def iter_ndjson_events_from_end(path: Path, *, log_event: str, log_fields: dict[str, Any]) -> Iterator[dict]:
+def iter_ndjson_events_from_end(
+    path: Path,
+    *,
+    log_event: str,
+    log_fields: dict[str, Any],
+    parse_filter: Callable[[bytes], bool] | None = None) -> Iterator[dict]:
   """Yield the JSON objects parsed from *path*, newest line first.
 
   Same skip contract as :func:`iter_ndjson_events` (an empty or
   whitespace-only line is invisible, a line the parser rejects logs and
-  yields nothing).
+  yields nothing); *parse_filter* rides it with the same raw-line contract.
   _TAIL_WINDOW_SIZE segments from the end walk lines backwards, so a consumer
   that stops early never reads the bytes past its answer. A line longer than
   the window accumulates one window-piece per walk step and joins them once
@@ -220,6 +234,10 @@ def iter_ndjson_events_from_end(path: Path, *, log_event: str, log_fields: dict[
   """
   if not path.exists():
     return
+  # A head fragment decides only a head-provable filter: a plain callable
+  # keyed on bytes beyond the head would misread the fragment, so the walker
+  # feeds it whole lines only.
+  head_filter = parse_filter if isinstance(parse_filter, HeadProvableFilter) else None
   with open(path, "rb") as f:
     f.seek(0, 2)
     pos = f.tell()
@@ -235,14 +253,24 @@ def iter_ndjson_events_from_end(path: Path, *, log_event: str, log_fields: dict[
         pending.insert(0, window)
         if start == 0:
           # The file's first line closes at the file start — no older segment
-          # follows, so the pending pieces are the whole line.
-          yield from iter_ndjson_events([b"".join(pending)], log_event=log_event, log_fields=log_fields)
+          # follows, so the pending pieces are the whole line, and its head is
+          # pending[0]'s head (the window starting at byte 0): a rejected head
+          # skips the join, same contract as the closing-newline branch below.
+          if head_filter is None or head_filter(pending[0]):
+            yield from iter_ndjson_events(
+                [b"".join(pending)], log_event=log_event, log_fields=log_fields, parse_filter=parse_filter)
         pos = start
         continue
       lines = window[:nl].split(b"\n")
       spanning = window[nl + 1:]
       if pending:
-        lines.append(b"".join([spanning, *pending]))
+        # The joined line's head is *spanning* (the bytes from its opening
+        # newline to the window end), and a head-provable filter reads only
+        # that head — so a rejected head skips the join and the parse of the
+        # whole line, the multi-megabyte shape a no-match newest-first scan
+        # would otherwise carry and join. A head too short to prove parses.
+        if head_filter is None or head_filter(spanning):
+          lines.append(b"".join([spanning, *pending]))
       elif spanning:
         lines.append(spanning)
       if start > 0:
@@ -250,8 +278,61 @@ def iter_ndjson_events_from_end(path: Path, *, log_event: str, log_fields: dict[
         lines = lines[1:]
       else:
         pending = []
-      yield from iter_ndjson_events(reversed(lines), log_event=log_event, log_fields=log_fields)
+      yield from iter_ndjson_events(
+          reversed(lines), log_event=log_event, log_fields=log_fields, parse_filter=parse_filter)
       pos = start
+
+
+class HeadProvableFilter:
+  """A parse_filter whose False answers are provable from a line's head bytes
+  alone.
+
+  The from-the-end walker hands one of these a multi-window line's head
+  fragment so a rejected head skips the line's join; a plain callable keyed on
+  bytes beyond the head would misread the fragment, so the walker extends
+  that trust to this type only and feeds every other filter whole lines.
+  """
+
+  __slots__ = ("_keep",)
+
+  def __init__(self, keep: Callable[[bytes], bool]) -> None:
+    self._keep = keep
+
+  def __call__(self, raw_line: bytes) -> bool:
+    return self._keep(raw_line)
+
+
+def type_line_filter(types: frozenset[str]) -> HeadProvableFilter:
+  """A :func:`iter_ndjson_events` parse_filter keeping only lines whose event
+  type is in *types*.
+
+  The proof is the line's head: every writer in this repo serializes each key
+  once and leads with ``type`` (orjson dict order; the stdlib-era shapes the
+  corpora still carry do the same), so a line opening ``{"type"`` names its
+  event in that first value, and a value outside *types* cannot match a
+  consumer keyed on those types. Every other shape — a foreign leading key,
+  whitespace before the object, a value the head walk cannot read — returns
+  True and parses: the filter skips only what it can prove. The walker may
+  pass a line's head fragment (the bytes from its opening newline to the
+  window end); the fragment opens with the line's own first bytes, so the
+  proof reads identically, and a fragment without the closing quote parses.
+  """
+
+  def keep(raw_line: bytes) -> bool:
+    if not raw_line.startswith(b'{"type"'):
+      return True
+    rest = raw_line[7:].lstrip(b" \t")
+    if not rest.startswith(b":"):
+      return True
+    rest = rest[1:].lstrip(b" \t")
+    if not rest.startswith(b'"'):
+      return True
+    end = rest.find(b'"', 1)
+    if end < 0:
+      return True
+    return rest[1:end].decode("utf-8", errors="replace") in types
+
+  return HeadProvableFilter(keep)
 
 
 def parse_ndjson_tail_parseable(path: Path, limit: int) -> list[dict]:

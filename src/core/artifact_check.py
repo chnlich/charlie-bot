@@ -102,7 +102,7 @@ def _measure_goal_weighted(artifact: Path) -> int:
   return _weighted_goal_length(re.sub(r"\s+", " ", text).strip())
 
 
-PAGE_HEIGHT_BUDGET = 1600
+PAGE_HEIGHT_BUDGET = 2000
 
 _PAGE_PROBE_WIDTH_PX = 1280
 

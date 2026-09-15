@@ -29,6 +29,7 @@ from src.core.json_utils import (
     load_json_meta,
     write_json_atomically,
 )
+from src.core.locks import lock_for
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.message_aggregator import MessageAggregator
@@ -229,21 +230,18 @@ def has_running_tasks_sync(threads_dir: Path, walked: list | None = None) -> boo
 # that follows any write to the session, and re-reading every trigger file
 # dominated the probe (~3.6 ms per probe on the 101-file worst corpus); a repeat
 # scan pays one scandir + stat per file and reads only files whose signature
-# moved. Every trigger-file write (_save_trigger, recover_pending's schema
-# migration) publishes through the atomic tmp-file rename, so any content change
-# moves mtime_ns and an unchanged (mtime_ns, size) proves the content current
-# (the stat-before-read race contract is StatSignatureMemo's). Stored dicts are
-# shared across calls — consumers must treat them as read-only.
+# moved — the same rename-publish ground TriggerManager.list_triggers
+# (src/core/triggers.py) states once for both memos (the stat-before-read race
+# contract is StatSignatureMemo's). Stored dicts are shared across calls —
+# consumers must treat them as read-only.
 _TRIGGER_META_MEMO_LIMIT = 1024
 _trigger_meta_memo: StatSignatureMemo[str, dict] = StatSignatureMemo(_TRIGGER_META_MEMO_LIMIT)
 
 # The trigger scan's directory verdict: dir path -> (dir (mtime_ns, size),
-# pending count, earliest fire). Every trigger-file write publishes through the
-# atomic rename INTO the triggers directory, and a rename that creates,
-# replaces, or removes a directory entry moves the directory's own mtime_ns —
-# so an unchanged directory signature proves the derived state current, and the
-# steady-state scan serves it for one directory stat without the scandir+stat
-# walk or the per-file memo loop.
+# pending count, earliest fire). Signed on the directory's (mtime_ns, size) on
+# the rename-publish ground TriggerManager.list_triggers (src/core/triggers.py)
+# states once; the steady-state scan serves it for one directory stat without
+# the scandir+stat walk or the per-file memo loop.
 _TRIGGER_STATE_VERDICT_LIMIT = 1024
 _trigger_state_verdicts: BoundedMemo[str, tuple[tuple[int, int], int,
                                                 datetime | None]] = BoundedMemo(_TRIGGER_STATE_VERDICT_LIMIT)
@@ -264,14 +262,11 @@ def pending_trigger_state_sync(
 
   Steady state pays one directory stat: an unchanged (mtime_ns, size) of the
   directory serves the stored verdict without the scandir+stat walk or the
-  per-file memo loop. Every trigger-file write publishes through the atomic
-  rename into the directory — a rename that creates, replaces, or removes an
-  entry moves the directory's own mtime_ns — the same ground the per-file
-  memo's key stands on; a file edited in place (no rename) would evade the
-  directory proof. The signature is taken before the walk, so a write landing
-  mid-walk moves the directory past the stored signature and the next call
-  re-walks; within one proved directory state, a file that fails to parse
-  re-reads and re-warns once for that state, not once per call.
+  per-file memo loop, on the rename-publish ground TriggerManager.list_triggers
+  (src/core/triggers.py) states once. The signature is taken before the walk,
+  so a write landing mid-walk moves the directory past the stored signature and
+  the next call re-walks; within one proved directory state, a file that fails
+  to parse re-reads and re-warns once for that state, not once per call.
 
   *walked* supplies (path, stat) pairs a caller already walked, replacing this
   scan's own scandir+stat phase; *dir_sig* must then be the directory's
@@ -1545,7 +1540,10 @@ class SessionManager:
     log.info(event, new_session=meta.id, parent=parent_id, event_index=event_index, backend=meta.backend)
 
   def get_chat_events_path(self, session_id: str) -> Path:
-    """Return the absolute path to a session's chat_events.jsonl."""
+    """Return the absolute path to a session's chat_events.jsonl.
+
+    See ``src/core/chat_events.py`` for the path layout.
+    """
     return self._chat_events.get_chat_events_path(session_id)
 
   def parent_reference_path(self, session_id: str) -> Path:
@@ -1869,7 +1867,10 @@ class SessionManager:
   # ---------------------------------------------------------------------------
 
   async def save_chat_event(self, session_id: str, event: dict) -> None:
-    """Append a single NDJSON event line to chat_events.jsonl."""
+    """Append a single NDJSON event line to chat_events.jsonl.
+
+    See ``src/core/chat_events.py`` for the id/timestamp injection and cache-sync contract.
+    """
     await self._chat_events.save_chat_event(session_id, event)
 
   async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
@@ -1990,7 +1991,7 @@ class SessionManager:
       return aggregator
     while True:
       epoch = self._aggregator_epoch.get(session_id, 0)
-      lock = self._aggregator_init_locks.setdefault(session_id, asyncio.Lock())
+      lock = lock_for(self._aggregator_init_locks, session_id)
       async with lock:
         # A concurrent first event for the same session may have finished the
         # init while this caller waited on the lock.
@@ -2099,7 +2100,10 @@ class SessionManager:
     return self._chat_events.load_chat_events_tail(session_id, limit)
 
   def get_chat_event_count_sync(self, session_id: str, session_meta: SessionMetadata | None = None) -> int:
-    """Return the current global chat event count without parsing event payloads."""
+    """Return the current global chat event count without parsing event payloads.
+
+    See ``src/core/chat_events.py`` for the count's index-space contract.
+    """
     return self._chat_events.get_chat_event_count_sync(session_id, session_meta)
 
   def load_chat_events_range(self, session_id: str, start: int, end: int) -> tuple[list[dict], bool]:
@@ -2402,11 +2406,7 @@ class SessionManager:
 
   def _lock_for(self, session_id: str) -> asyncio.Lock:
     """Return (creating on first use) the per-session metadata RMW lock."""
-    lock = self._metadata_locks.get(session_id)
-    if lock is None:
-      lock = asyncio.Lock()
-      self._metadata_locks[session_id] = lock
-    return lock
+    return lock_for(self._metadata_locks, session_id)
 
   async def _update_field(
       self, session_id: str, field: str, value: Any, log_event: str, **log_fields: Any) -> SessionMetadata | None:

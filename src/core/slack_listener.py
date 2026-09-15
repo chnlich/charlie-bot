@@ -172,8 +172,8 @@ def summon_session_id(team_id: str, channel_id: str, thread_ts: str) -> str:
 
 
 class SlackClient:
-  """Thin Slack Web API wrapper: open_connection / post_message / get_permalink / add_reaction /
-  remove_reaction / get_channel_name."""
+  """Thin Slack Web API wrapper: open_connection / post_message / get_permalink / get_thread_replies /
+  add_reaction / remove_reaction / get_channel_name."""
 
   def __init__(self, http: "httpx.AsyncClient", *, bot_token: str, app_token: str) -> None:
     self._http = http
@@ -869,7 +869,6 @@ async def ack_messages(
   skipped = [ts for ts in sorted(eligible) if (watermark is None or ts > watermark) and ts <= ceiling and ts not in ids]
   if skipped:
     raise SlackReplyError(422, f"Skipped eligible message id at or below {ceiling}: {skipped[0]}")
-  watermark = meta.slack_watermark_ts
   if watermark is None or ceiling > watermark:
     watermark = ceiling
     meta.slack_watermark_ts = watermark

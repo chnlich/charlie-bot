@@ -15,19 +15,13 @@ from typing import Any
 
 from src.core import artifact_check
 from src.core.constants import REPO_ROOT
+from src.core.http import requests_module_getattr
 from src.core.timeouts import KATEX_CDN_FETCH_TIMEOUT
 
 
 def __getattr__(name: str) -> Any:
-  # requests costs ~100 ms of import (urllib3 + charset_normalizer) and only the
-  # one-time KaTeX CDN fetch sends a request; it loads on first use. Resolving it
-  # as a module attribute keeps the tests' "src.core.artifact_wrap.requests.*"
-  # patch targets valid.
-  if name != "requests":
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-  import requests
-  globals()["requests"] = requests
-  return requests
+  # The "src.core.artifact_wrap.requests.*" patch targets resolve through this hook.
+  return requests_module_getattr(name, __name__, globals())
 
 
 _PRERENDER_DRIVER = REPO_ROOT / "scripts" / "prerender_math.js"

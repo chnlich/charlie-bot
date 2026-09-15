@@ -6,6 +6,7 @@ import os
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import orjson
 
@@ -16,7 +17,7 @@ from src.agents.backends.base import (
     tail_follow_events,
 )
 from src.agents.backends.claude_code import ClaudeCodeBackend, claude_supervisor_env
-from src.agents.backends.registry import build_backend
+from src.agents.backends.deferred_build import build_backend_module_getattr, load_build_backend
 from src.core import claude_accounts, claude_compaction, claude_relay, runs
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
@@ -29,6 +30,12 @@ from src.core.session_usage import _prompt_token_sum
 from src.core.streaming import handle_compaction_events, streaming_manager
 
 log = LazyStructlogLogger()
+
+
+def __getattr__(name: str) -> Any:
+  # The "src.agents.worker.build_backend" patch target resolves through this hook.
+  return build_backend_module_getattr(name, __name__, globals())
+
 
 QUOTA_ERROR_PATTERNS = [
     "quota exceeded",
@@ -157,7 +164,8 @@ class Worker:
         else:
           backend_kwargs["claude_session_id"] = self._thread.claude_session_id
       try:
-        return build_backend(self._backend_option, self._cfg, claude_account=self._claude_account, **backend_kwargs)
+        backend = load_build_backend(globals())
+        return backend(self._backend_option, self._cfg, claude_account=self._claude_account, **backend_kwargs)
       except Exception as e:
         if on_spawn is not None:
           raise

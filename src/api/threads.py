@@ -774,7 +774,7 @@ def read_thread_worker_events(events_path: Path) -> list[WorkerEvent]:
 def read_thread_worker_events_memo_hit(events_path: Path) -> list[WorkerEvent] | None:
   """Serve the unchanged-log steady state on the caller's thread; None otherwise.
 
-  The 5 s workers-panel poll of an unchanged log needs one exists+stat to
+  The 5 s workers-panel poll of an unchanged log needs one stat to
   prove the memo current, and the executor round-trip around it measures
   ~95 us against a ~12 us hit. Returns None — the caller re-runs
   ``read_thread_worker_events`` on a thread — for a cold memo, a grown or
@@ -910,7 +910,7 @@ async def cancel_thread(
     task_mgr=Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
 ) -> dict:
-  """Cancel a running thread (sends SIGTERM to the subprocess via streaming manager).
+  """Cancel a running thread (sends SIGTERM to the subprocess's process group).
 
   A v2 alias resolution (new-run compatibility alias, or an imported old id)
   routes to the Run owner's stop implementation instead: the same durable

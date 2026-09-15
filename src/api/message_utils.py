@@ -146,6 +146,28 @@ async def _tail_events_page(
   return (messages, pending_draft, archive_offset + total_count, offset, has_more or archive_offset > 0)
 
 
+async def _messages_page(
+    session_mgr: 'SessionManager',
+    session_id: str,
+    archive_offset: int,
+    message_limit: int,
+) -> tuple[list[dict], dict | None, int, int, bool]:
+  """One bounded message page: the projection when usable, the tail path otherwise.
+
+  Returns (messages, pending_draft, event_count, oldest_ordinal, has_more).
+  The projection getter refuses an archived (``archive_offset != 0``) session,
+  so that gate runs here, before the executor round-trip, and archived
+  sessions always take the legacy tail-events path. A live session whose
+  projection read still misses (it was archived after the caller read its
+  metadata) falls back the same way.
+  """
+  if archive_offset == 0:
+    page = await _projection_page(session_mgr, session_id, message_limit)
+    if page is not None:
+      return page
+  return await _tail_events_page(session_mgr, session_id, archive_offset, message_limit)
+
+
 async def _mark_read_best_effort(session_mgr: 'SessionManager', session_id: str) -> 'SessionMetadata | None':
   """mark_read whose failure degrades to a logged warning.
 
@@ -167,24 +189,16 @@ async def build_session_bootstrap_data(
 ) -> SessionBootstrapData:
   """Load the minimal session data needed for first paint or SPA switching.
 
-  When a message projection is available (``archive_offset == 0``), first
-  paint is served from ``projection.tail(message_limit)`` — a turn-aligned
-  page of at least ``message_limit`` messages (unless history is exhausted)
-  with O(page) cost and zero file reads. Otherwise the legacy
-  tail-events path is used.
+  A projection-served page is turn-aligned and holds at least *message_limit*
+  messages (unless history is exhausted); the legacy tail-events path folds
+  the last *message_limit* raw events, which can render fewer messages.
   """
   session_meta = await session_mgr.get_session(session_id)
   if session_meta is None:
     raise ValueError(f"session '{session_id}' metadata missing during bootstrap build")
 
-  page = None
-  if session_meta.archive_offset == 0:
-    page = await _projection_page(session_mgr, session_id, message_limit)
-  if page is None:
-    (messages, pending_draft, total_event_count, oldest_ordinal,
-     has_more) = await _tail_events_page(session_mgr, session_id, session_meta.archive_offset, message_limit)
-  else:
-    messages, pending_draft, total_event_count, oldest_ordinal, has_more = page
+  messages, pending_draft, total_event_count, oldest_ordinal, has_more = await _messages_page(
+      session_mgr, session_id, session_meta.archive_offset, message_limit)
 
   read_meta = await _mark_read_best_effort(session_mgr, session_id)
   if read_meta is not None:
@@ -212,10 +226,11 @@ async def build_session_view_data(
   *thread_rows* are the session view's thread rows (``view_thread_rows``'s
   shape), resolved by the caller so the view's row proof is shared with the
   workers-panel list. When *message_limit* is None, loads all events. When
-  set, loads the last *message_limit* messages — served from the message
-  projection when ``archive_offset == 0`` (turn-aligned page of at least
-  *message_limit* messages, O(page) cost and zero corpus reads), or from the
-  legacy tail-events path otherwise.
+  set, the page shape follows the shared projection-or-tail policy
+  (``_messages_page``): a projection-served page is turn-aligned and holds at
+  least *message_limit* messages (unless history is exhausted), while the
+  tail path folds the last *message_limit* raw events, which can render
+  fewer messages.
 
   Returns committed messages plus an optional pending_draft (the in-progress
   assistant draft that has not yet been flushed). Live render paths show the
@@ -227,24 +242,15 @@ async def build_session_view_data(
   if session_meta is None:
     raise ValueError(f"session '{session_id}' metadata missing during view build")
 
-  # A projection miss (the session can be archived between the metadata read
-  # above and the threaded projection read, so get_message_projection returns
-  # None) must still take the legacy tail-events fallback, like
-  # build_session_bootstrap_data's `page is None` branch does.
-  result = None
-  if message_limit is not None and session_meta.archive_offset == 0:
-    result = await _projection_page(session_mgr, session_id, message_limit)
-  if result is not None:
-    messages, pending_draft, total_event_count, oldest_message_ordinal, has_more = result
-  elif message_limit is not None:
-    (messages, pending_draft, total_event_count, oldest_message_ordinal,
-     has_more) = await _tail_events_page(session_mgr, session_id, session_meta.archive_offset, message_limit)
-  else:
+  if message_limit is None:
     raw_events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
     total_event_count = session_meta.archive_offset + len(raw_events)
     oldest_message_ordinal = session_meta.archive_offset
     has_more = session_meta.archive_offset > 0
     messages, pending_draft = events_to_view(raw_events, event_index_offset=session_meta.archive_offset)
+  else:
+    messages, pending_draft, total_event_count, oldest_message_ordinal, has_more = await _messages_page(
+        session_mgr, session_id, session_meta.archive_offset, message_limit)
 
   usage = await session_mgr.resolve_session_usage(session_id, session_meta)
   await _mark_read_best_effort(session_mgr, session_id)

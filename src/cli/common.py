@@ -31,6 +31,7 @@ if TYPE_CHECKING:
   from src.core.config import CharlieBotConfig, Credentials
 
 from src.core.constants import SESSION_ID_ENV_VAR
+from src.core.http import requests_module_getattr
 from src.core.run_token import load_run_token
 from src.core.timeouts import (
     CLI_CONNECT_TOTAL_TIMEOUT,
@@ -50,14 +51,8 @@ TASK_SPEC_REQUIRED_HEADINGS = (
 
 
 def __getattr__(name: str) -> Any:
-  # requests costs ~100 ms of the M92 CLI import floor (urllib3 + charset_normalizer)
-  # and --help paths never send a request; it loads on first use. Resolving it as a
-  # module attribute keeps the tests' "src.cli.common.requests.*" patch targets valid.
-  if name != "requests":
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-  import requests
-  globals()["requests"] = requests
-  return requests
+  # The "src.cli.common.requests.*" patch targets resolve through this hook.
+  return requests_module_getattr(name, __name__, globals())
 
 
 def get_config() -> CharlieBotConfig:
@@ -92,7 +87,8 @@ def internal_api_auth_headers() -> dict[str, str]:
   run_token = load_run_token()
   if run_token:
     return {"Authorization": f"Bearer {run_token}"}
-  access_key = get_credentials().get("charliebot", "access_key")
+  from src.core.config import configured_access_key
+  access_key = configured_access_key()
   if access_key:
     return {"Authorization": f"Bearer {access_key}"}
   return {}

@@ -12,17 +12,48 @@ async def _record(persisted: list[dict], event: dict) -> None:
 
 
 @pytest.mark.asyncio
-async def test_compact_boundary_still_emits_context_compacted_unchanged() -> None:
+async def test_compact_boundary_emits_context_compacted_with_the_payload_whole() -> None:
   persisted: list[dict] = []
   event = compact_boundary_event(pre_tokens=239_708)
 
   await handle_compaction_events(event, lambda ev: _record(persisted, ev), {"session": "s1"})
 
-  assert persisted == [{
-      "type": ET.CONTEXT_COMPACTED,
-      "trigger": "manual",
-      "pre_tokens": 239_708,
-  }]
+  assert persisted == [
+      {
+          "type": ET.CONTEXT_COMPACTED,
+          "trigger": "manual",
+          ET.COMPACT_METADATA: {
+              "trigger": "manual",
+              "pre_tokens": 239_708
+          },
+      }
+  ]
+
+
+@pytest.mark.asyncio
+async def test_unknown_payload_keys_reach_the_persisted_event_verbatim() -> None:
+  """The load-bearing mechanism assertion: the payload travels whole, so an upstream
+  key no CharlieBot code knows about lands on the persisted context_compacted event
+  unchanged and the next upstream field costs no producer change."""
+  persisted: list[dict] = []
+  event = compact_boundary_event(pre_tokens=239_708, post_tokens=15_534)
+  event[ET.COMPACT_METADATA]["pre_compact_discovered_tools"] = ["WebFetch"]
+
+  await handle_compaction_events(event, lambda ev: _record(persisted, ev), {"session": "s1"})
+
+  assert persisted == [
+      {
+          "type": ET.CONTEXT_COMPACTED,
+          "trigger": "manual",
+          ET.COMPACT_METADATA:
+              {
+                  "trigger": "manual",
+                  "pre_tokens": 239_708,
+                  "post_tokens": 15_534,
+                  "pre_compact_discovered_tools": ["WebFetch"],
+              },
+      }
+  ]
 
 
 _STATUS_FAILED_ROWS = [

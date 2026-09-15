@@ -10,10 +10,11 @@ an unchanged divider costs nothing.
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 import structlog
 
-from src.agents.backends.registry import build_backend
+from src.agents.backends.deferred_build import build_backend_module_getattr, load_build_backend
 from src.api.message_utils import events_to_messages
 from src.core.autonamer import iter_light_backends
 from src.core.config import CharlieBotConfig
@@ -25,9 +26,15 @@ from src.core.sessions import (
     FORK_BOOTSTRAP_OPENER,
     SessionManager,
 )
-from src.core.timeouts import AUTONAMER_TIMEOUT
+from src.core.timeouts import LIGHT_ONESHOT_TIMEOUT
 
 log = structlog.get_logger()
+
+
+def __getattr__(name: str) -> Any:
+  # The "src.core.recap.build_backend" patch target resolves through this hook.
+  return build_backend_module_getattr(name, __name__, globals())
+
 
 _ASK_CHARS = 80
 _LAST_CHARS = 250
@@ -293,8 +300,8 @@ async def generate_and_cache_summary(
   last_exception: Exception | None = None
   for option in options:
     try:
-      backend = build_backend(option, cfg, cgroup_session_id=session_id)
-      summary = await backend.one_shot_text(prompt, _SUMMARY_SYSTEM_PROMPT, timeout=AUTONAMER_TIMEOUT)
+      backend = load_build_backend(globals())(option, cfg, cgroup_session_id=session_id)
+      summary = await backend.one_shot_text(prompt, _SUMMARY_SYSTEM_PROMPT, timeout=LIGHT_ONESHOT_TIMEOUT)
     except Exception as e:
       last_exception = e
       log.warning("recap_backend_failed", session_id=session_id, error=str(e))

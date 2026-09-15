@@ -38,13 +38,17 @@ kinds of entry, and only these:
 3. A host, cluster, or account level pointer that cannot be guessed and has no owning document.
 
 Everything else stays out by default; when in doubt, reject and name the candidate in the
-report. Knowledge the model derives with no context (general engineering or statistical
-reasoning) is never admitted: the cheapest home is the model itself (user ruling 2026-08-26).
-An entry records what holds across models, fixes, and runs: rules, mechanisms, and contracts.
-A phenomenon observed in the present (how the system behaves now, a measured rate, an open
-regression, one incident's detail) expires with the next change and then misleads its reader:
-it stays in the capture, the run dir, or `LESSONS.md`, and the entry keeps only the rule or
-method the observation taught (user ruling 2026-09-01).
+report. The model itself is the canonical home for general engineering and statistical
+reasoning. An entry records what holds across models, fixes, and runs: rules, mechanisms, and
+contracts. Entries hold durable mechanisms and standing policies: execution logs and `LESSONS.md`
+retain ephemeral identifiers, transient instance names, and active incident telemetry; repository
+guides and skills retain documentation and reference procedures, with the store carrying at most
+a pointer line; and runtime inspection resolves on-demand system facts.
+
+State each fact at the category level in its most concise form, bounded to one to three lines of
+core conclusion, keeping narrative deduction and case histories in session records. Phrasing
+follows positive framing: state the working action or standing reality, and lead any warning
+with the working alternative.
 
 Every admit and every revise carries three proof lines in the report, each headed by the
 question it answers; a question that finds no answer is the signal to rethink whether the
@@ -57,8 +61,7 @@ entry belongs in the store at all, and such a candidate is rejected:
   repo-scoped knowledge lives in that repo's own CLAUDE.md or docs; charlie-bot behavior lives
   in the master prompt, a skill, config, or the source; incidents and event history live in
   `LESSONS.md`; run results, live state, and receipts live in the run dir or owning session; a
-  project's experiment verdicts live in its tracker (Linear), not the store (user ruling
-  2026-08-26).
+  project's experiment verdicts live in its tracker (Linear).
   A project-scoped finding lives under that project's topic or its repo docs; a cluster or host
   entry holds only what binds every project there. The Home line also names the reader and the
   delivery path that reaches them at the moment the entry changes their action. A reader who
@@ -126,7 +129,7 @@ One coherent fact or rule set per entry. The title lives in frontmatter; the bod
 content. Timeless phrasing: state the standing reality. Dates, session ids, commit hashes,
 quoted rulings, event history, and case enumerations belong in `LESSONS.md`. Said once, in one language, lines
 120 columns or fewer; new entry prose is written in Chinese (code, paths,
-identifiers, and commands stay English; user rulings 2026-08-24, 2026-08-31); pre-existing prose keeps its
+identifiers, and commands stay English); pre-existing prose keeps its
 language until its next substantive edit. Entry prose follows the Writing Style section of prompts/master.md. Apply the
 admission test line by line as well as entry by entry: a line that changes no future action
 leaves.

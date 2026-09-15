@@ -10,7 +10,7 @@ import re
 import ssl
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import orjson
 
@@ -31,12 +31,7 @@ from src.agents.backends.base import (
 )
 from src.core import event_types as ET
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
-from src.core.process import (
-    compose_preexec,
-    make_pdeathsig_kill_preexec,
-    make_session_cgroup_preexec,
-    wait_or_kill_group,
-)
+from src.core.process import wait_or_kill_group
 from src.core.sse import iter_sse_lines
 from src.core.timeouts import (
     OPENCODE_ABORT_TIMEOUT,
@@ -53,11 +48,12 @@ if TYPE_CHECKING:
 log = LazyStructlogLogger()
 
 
-def __getattr__(name: str):
-  # httpx imports on first use: the server import floor (docs/perf_baseline.md
-  # M99) reaches this module through session_usage, and must not pay httpx's
-  # import chain (~60 ms with rich) for a client only opencode runs touch. The
-  # PEP 562 hook serves the external patch target
+def __getattr__(name: str) -> Any:
+  # httpx imports on first use: this module sits on no eager server import
+  # chain (the M99 deferrals keep every carrier off it — the import-weight
+  # contract pins the ban set), so only opencode runs pay httpx's import
+  # chain (~60 ms with rich) for its outbound client. The PEP 562 hook serves
+  # the external patch target
   # `src.agents.backends.opencode.httpx.*`; the module's own runtime sites
   # import httpx locally, which internal global lookups cannot route here.
   if name == "httpx":
@@ -91,10 +87,12 @@ _IGNORED_SSE_EVENT_TYPES = {
     "session.status",
     "session.updated",
 }
-# opencode's own compaction output-reserve default ($d = 20000 in the opencode binary,
+# opencode's compaction output-reserve default ($d = 20000 in the opencode binary,
 # applied as `compaction.reserved ?? min($d, maxOutputTokens)`; checkable via
-# `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`).
-OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
+# `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`) single-homes in
+# src.core.constants, whose only reader is the usage chain's compact-point math
+# (src.core.session_usage) — importing it here would drag this module onto the
+# usage chain (the M99 server import floor).
 
 # opencode's SQLite store locking (e.g. the boot-time `insert into "project"`
 # collision observed in production) surfaces as an HTTP 500 or session.error
@@ -839,21 +837,7 @@ class OpenCodeBackend(AgentBackend):
     ]
     env = self._prepare_env(dict(os.environ), opencode_config={"permission": {"*": "deny"}})
 
-    # One-shot pipe transport: pdeathsig preexec merged with the session
-    # cgroup move (behavior unchanged when cgroup control is off).
-    self._active_session_cgroup = self._prepare_session_cgroup()
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
-        limit=self._buffer_limit,
-        start_new_session=True,
-        preexec_fn=compose_preexec(
-            make_pdeathsig_kill_preexec(),
-            make_session_cgroup_preexec(self._active_session_cgroup.path if self._active_session_cgroup else None)),
-    )
+    proc = await self._spawn_one_shot_subprocess(cmd, env, pdeathsig=True)
 
     async def _collect() -> str:
       parts: list[str] = []

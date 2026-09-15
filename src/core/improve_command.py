@@ -533,9 +533,14 @@ def _newest_first_events(events_path: Path) -> Iterator[dict]:
   """The iteration thread's events log, newest line first — the stream both
   iteration judgments scan (the from-the-end walk parses only the bytes the
   answer needs)."""
-  from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events_from_end
+  from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events_from_end, type_line_filter
 
-  return iter_ndjson_events_from_end(events_path, log_event=PARSE_SKIP_LOG_EVENT, log_fields={})
+  # Both judgments match on these five types alone (_quota_blocker_match,
+  # _summary_text), so the walk parses nothing else — the multi-megabyte
+  # tool_result lines a no-match exhaustion would otherwise parse whole.
+  candidate_types = frozenset({ET.RESULT, ET.ASSISTANT, ET.ASSISTANT_ERROR, ET.ERROR, ET.RATE_LIMIT_EVENT})
+  return iter_ndjson_events_from_end(
+      events_path, log_event=PARSE_SKIP_LOG_EVENT, log_fields={}, parse_filter=type_line_filter(candidate_types))
 
 
 async def _run_single_iteration(

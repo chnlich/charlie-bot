@@ -265,11 +265,16 @@ def test_hook_mapping_covers_message_tools_compaction_and_unknown_fields() -> No
           compact_summary="summary",
           unknown_non_control=True,
       ))
-  assert compact_events == [{
-      "type": ET.CONTEXT_COMPACTED,
-      "trigger": "auto",
-      "pre_tokens": 123,
-  }]
+  assert compact_events == [
+      {
+          "type": ET.CONTEXT_COMPACTED,
+          "trigger": "auto",
+          ET.COMPACT_METADATA: {
+              "trigger": "auto",
+              "pre_tokens": 123,
+          },
+      }
+  ]
 
 
 def test_message_display_uses_turn_id_for_the_wrapped_event() -> None:

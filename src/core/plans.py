@@ -26,6 +26,7 @@ from src.core.constants import (
     PLAN_CLOSE_MODES,
     PLAN_CLOSE_SUPERSEDED,
 )
+from src.core.locks import lock_for
 from src.core.memo import StatSignatureMemo
 from src.core.sidebar_state import mark_sidebar_dirty
 
@@ -289,11 +290,7 @@ class PlanRegistryManager:
   # -- locking ------------------------------------------------------------
 
   def _lock_for(self, session_id: str) -> asyncio.Lock:
-    lock = self._locks.get(session_id)
-    if lock is None:
-      lock = asyncio.Lock()
-      self._locks[session_id] = lock
-    return lock
+    return lock_for(self._locks, session_id)
 
   # -- persistence --------------------------------------------------------
 

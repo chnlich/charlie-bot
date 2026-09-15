@@ -226,13 +226,21 @@ class TaskCompletionManager:
         if not evidence.run_ids and any(
                 outcome == "success" for outcome in outcomes.values()):
             # Delivery run evidence is required while the delivery universe has
-            # a successful Run to cite. A task whose executed work never
-            # succeeded through Runs (the terminal-driven node's explicit
-            # operator completion; cancelled-only child work) closes on the
-            # operator's own attributed evidence; every closure blocker still
-            # applies, and a failed-only subtree still refuses to be called
-            # completed on a bare claim.
+            # a successful Run to cite.
             blockers.append("completion requires delivery run evidence (run_ids)")
+        elif not evidence.run_ids and any(
+                outcome == "failed" for outcome in outcomes.values()):
+            # A failed-only subtree still refuses to be called completed on a
+            # bare claim: the failure stays attention — cancel the failed work,
+            # or retry it to success and cite that Run. Only a delivery
+            # universe with neither a successful nor a failed Run (the
+            # terminal-driven node's explicit operator completion;
+            # cancelled-only or interrupted-only child work) closes on the
+            # operator's own attributed evidence (summary + result_refs), and
+            # every other closure blocker still applies.
+            blockers.append(
+                "completion requires delivery run evidence (run_ids); "
+                "failed Runs are not completion evidence")
         for ref in evidence.result_refs:
             blockers.extend(self._structured_ref_blockers(meta, ref, runs, outcomes, facts, evidence))
         claimed_work_ids = set(evidence.run_ids)

@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_OPTION
+from conftest import OPUS_BACKEND_OPTION, gzip_counting_compress, gzip_explode_compress
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.gzip import GZipMiddleware
@@ -88,10 +88,8 @@ def test_repeat_gzip_download_recompresses_nothing(profile_home: Path, monkeypat
   first = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert first.status_code == 200
 
-  def explode_compress(*args: object, **kwargs: object) -> bytes:
-    raise AssertionError("repeat gzip download re-ran the deflate")
-
-  monkeypatch.setattr(sessions_api.gzip, "compress", explode_compress)
+  monkeypatch.setattr(sessions_api.gzip, "compress",
+                      gzip_explode_compress("repeat gzip download re-ran the deflate"))
   resp = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
   assert resp.headers["content-encoding"] == "gzip"
@@ -107,14 +105,9 @@ def test_gzip_download_recompresses_when_file_appends(profile_home: Path, monkey
   first = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert first.status_code == 200
 
-  real_compress = sessions_api.gzip.compress
   calls: list[bytes] = []
-
-  def counting_compress(data: bytes, *args: object, **kwargs: object) -> bytes:
-    calls.append(data)
-    return real_compress(data, *args, **kwargs)
-
-  monkeypatch.setattr(sessions_api.gzip, "compress", counting_compress)
+  monkeypatch.setattr(
+      sessions_api.gzip, "compress", gzip_counting_compress(sessions_api.gzip.compress, calls))
   events_path = profile_home / "sessions" / sid / "data" / "chat_events.jsonl"
   with events_path.open("a", encoding="utf-8") as stream:
     stream.write(

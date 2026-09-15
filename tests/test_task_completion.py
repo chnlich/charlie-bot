@@ -251,6 +251,48 @@ async def test_failed_child_reports_remain_visible(tmp_path: Path) -> None:
   assert tree.task_state(child.id) == "completed"
 
 
+@pytest.mark.asyncio
+async def test_failed_only_universe_still_refuses_completion_on_a_bare_claim(tmp_path: Path) -> None:
+  """The operator-evidence relaxation (no ``run_ids`` required) opens only for
+  a delivery universe with neither a successful nor a failed Run to cite — the
+  terminal-driven node, cancelled-only or interrupted-only child work. A
+  failed-only subtree still refuses to be called completed on a bare claim."""
+  cfg, session_mgr, tree = build_env(tmp_path)
+  root = await create_task(tree, parent=None, request_id="root")
+  failed_child = await create_task(tree, parent=root.id, request_id="failed", profile="worker")
+  await tree.runs.register_run(RunRecord(id="run-f", session_id=failed_child.id, kind="work"))
+  await tree.dispatch.finish_run(failed_child.id, "run-f", outcome="failed")
+  cancelled_child = await create_task(tree, parent=root.id, request_id="cancelled", profile="worker")
+  await tree.runs.register_run(RunRecord(id="run-c", session_id=cancelled_child.id, kind="work"))
+  await tree.dispatch.finish_run(cancelled_child.id, "run-c", outcome="cancelled")
+  index = await tree._get_index()
+  claim = CompletionEvidence(
+      summary="gave up and delivered it manually", result_refs=["terminal:transcript"])
+
+  # Failed (here beside cancelled) Runs in the universe: a bare claim refuses.
+  blockers = tree.completion.evidence_blockers(index.metas[root.id], claim)
+  assert any("run_ids" in b and "failed Runs are not completion evidence" in b
+             for b in blockers), blockers
+
+  # A universe with neither a failed nor a successful Run to cite closes on
+  # the operator's own attributed evidence.
+  other = await create_task(tree, parent=None, request_id="other-root")
+  cancelled_only = await create_task(tree, parent=other.id, request_id="c", profile="worker")
+  await tree.runs.register_run(RunRecord(id="run-c2", session_id=cancelled_only.id, kind="work"))
+  await tree.dispatch.finish_run(cancelled_only.id, "run-c2", outcome="cancelled")
+  index = await tree._get_index()
+  blockers = tree.completion.evidence_blockers(index.metas[other.id], claim)
+  assert blockers == [], blockers
+
+  # A success in the universe keeps the cite-the-Run requirement.
+  succeeding = await create_task(tree, parent=other.id, request_id="s", profile="worker")
+  await tree.runs.register_run(RunRecord(id="run-s", session_id=succeeding.id, kind="work"))
+  await finish_worker_run(tree, succeeding.id, "run-s")
+  index = await tree._get_index()
+  blockers = tree.completion.evidence_blockers(index.metas[other.id], claim)
+  assert any("requires delivery run evidence (run_ids)" in b for b in blockers), blockers
+
+
 # ---------------------------------------------------------------------------
 # Own-manager close: 202 pending_run_finish
 # ---------------------------------------------------------------------------

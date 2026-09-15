@@ -81,6 +81,11 @@ RESUME_CONTEXT_DROPPED = "resume_context_dropped"
 # tier resolution re-reads them from chat_events.jsonl history
 # (src/core/session_usage.py), so producer and consumers share one definition.
 COMPACT_BOUNDARY = "compact_boundary"
+# A backend emits this ``subtype`` on a ``system`` event while one of its
+# commands is still running at a progress tick, and once more when the command
+# is terminated at the cap; ``content`` carries the rendered chat note. The
+# aggregator renders the note as a system message (src/core/message_aggregator.py).
+COMMAND_PROGRESS = "command_progress"
 COMPACT_METADATA = "compact_metadata"
 # Token counts a compaction event carries. Both are persisted wire values and both live as inner
 # keys of a ``compact_metadata`` payload — on a ``compact_boundary`` system event and on the

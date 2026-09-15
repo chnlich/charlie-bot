@@ -837,16 +837,7 @@ class OpenCodeBackend(AgentBackend):
     ]
     env = self._prepare_env(dict(os.environ), opencode_config={"permission": {"*": "deny"}})
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
-        limit=self._buffer_limit,
-        start_new_session=True,
-        preexec_fn=self._spawn_preexec(pdeathsig=True),
-    )
+    proc = await self._spawn_one_shot_subprocess(cmd, env, pdeathsig=True)
 
     async def _collect() -> str:
       parts: list[str] = []

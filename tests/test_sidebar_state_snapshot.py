@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 from conftest import (
+    _page_request,
     append_events,
     fresh_state_fixture,
     make_home_session,
@@ -46,8 +47,8 @@ _clean_sidebar_state = fresh_state_fixture(sidebar_state.reset_for_tests)
 
 
 async def _status_json(**kwargs: object) -> dict:
-  """Decode the status handler's FastJsonResponse body for direct-call assertions."""
-  return json.loads((await sessions_api.all_sessions_status(**kwargs)).body)
+  """Decode the status handler's plain body for direct-call assertions."""
+  return json.loads((await sessions_api.all_sessions_status(_page_request(), **kwargs)).body)
 
 
 def _counting_probes(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:

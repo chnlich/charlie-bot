@@ -1,7 +1,7 @@
-"""The switch fetches' body-keyed gzip memo (src/api/sessions.py
-_switch_payload_response): the view and bootstrap handlers ship their
-compressed form byte-identical to the plain render, re-compress nothing on a
-repeat of the same body, and re-compress when the body changes."""
+"""The body-keyed gzip memo (src/api/sessions.py _switch_payload_response):
+the switch fetches, the sidebar's status poll, and the scheduled list ship
+their compressed form byte-identical to the plain render, re-compress nothing
+on a repeat of the same body, and re-compress when the body changes."""
 
 from __future__ import annotations
 
@@ -15,18 +15,21 @@ from conftest import _page_request, make_home_session
 from starlette.responses import Response
 
 from src.api import deps
-from src.api.sessions import get_session_bootstrap, get_session_view
+from src.api.sessions import all_sessions_status, get_session_bootstrap, get_session_view, list_scheduled_sessions
 from src.core.models import SessionMetadata
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
 
 
-async def _call(handler, session_id: str, request, meta: SessionMetadata, mgr: SessionManager,
-                cfg) -> Response:
+async def _call(handler, session_id: str, request, meta: SessionMetadata, mgr: SessionManager, cfg) -> Response:
   """One direct handler call with the dependency shape each signature carries."""
   if handler is get_session_view:
     return await handler(session_id, request, meta, mgr, ThreadManager(cfg), cfg)
+  if handler is all_sessions_status:
+    return await handler(request, session_id, session_mgr=mgr)
+  if handler is list_scheduled_sessions:
+    return await handler(request, session_mgr=mgr)
   return await handler(session_id, request, meta, mgr, cfg)
 
 
@@ -99,3 +102,48 @@ async def test_switch_plain_request_stays_uncompressed(tmp_path: Path) -> None:
     plain = await _call(get_session_bootstrap, session.id, _page_request(), meta, mgr, cfg)
     assert "content-encoding" not in plain.headers
     assert len(_switch_gzip_memo) == 0
+
+
+@pytest.mark.asyncio
+async def test_sidebar_gzip_ships_precompressed_body(tmp_path: Path) -> None:
+  """The sidebar's status poll and scheduled list serve their gzip form from
+  the body-keyed memo: the decompressed bytes equal the plain render, the vary
+  header names the negotiator, and the parsed payload keeps its shape."""
+  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  meta = await mgr.get_session(session.id)
+  with patch.object(deps, "_trigger_manager", TriggerManager(cfg, mgr)):
+    status_gz = await _call(all_sessions_status, session.id, _page_request("gzip"), meta, mgr, cfg)
+    status_plain = await _call(all_sessions_status, session.id, _page_request(), meta, mgr, cfg)
+    assert status_gz.headers["content-encoding"] == "gzip"
+    assert status_gz.headers["vary"] == "Accept-Encoding"
+    assert gzip.decompress(status_gz.body) == status_plain.body
+    assert json.loads(status_plain.body)[session.id]["has_unread"] is False
+
+    sched_gz = await _call(list_scheduled_sessions, session.id, _page_request("gzip"), meta, mgr, cfg)
+    sched_plain = await _call(list_scheduled_sessions, session.id, _page_request(), meta, mgr, cfg)
+    assert sched_gz.headers["content-encoding"] == "gzip"
+    assert gzip.decompress(sched_gz.body) == sched_plain.body
+    assert json.loads(sched_plain.body) == []
+
+
+@pytest.mark.asyncio
+async def test_sidebar_gzip_repeat_serves_memo_without_recompress(tmp_path: Path) -> None:
+  """A repeat sidebar poll of the same body serves the memo's bytes and
+  re-compresses nothing."""
+  from src.api.sessions import _switch_gzip_memo
+
+  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  meta = await mgr.get_session(session.id)
+  with patch.object(deps, "_trigger_manager", TriggerManager(cfg, mgr)):
+    first = await _call(all_sessions_status, session.id, _page_request("gzip"), meta, mgr, cfg)
+    first_sched = await _call(list_scheduled_sessions, session.id, _page_request("gzip"), meta, mgr, cfg)
+
+    def explode(data, compresslevel=9, *, mtime=None):
+      raise AssertionError("repeat sidebar fetch re-ran the deflate")
+
+    with patch("src.api.sessions.gzip.compress", explode):
+      second = await _call(all_sessions_status, session.id, _page_request("gzip"), meta, mgr, cfg)
+      second_sched = await _call(list_scheduled_sessions, session.id, _page_request("gzip"), meta, mgr, cfg)
+    assert second.body == first.body
+    assert second_sched.body == first_sched.body
+    assert len(_switch_gzip_memo) == 2

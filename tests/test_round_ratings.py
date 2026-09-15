@@ -52,10 +52,10 @@ async def test_round_rating_metadata_migration_is_idempotent(tmp_path: Path) -> 
   real_save = load_mgr.save_metadata
   save_calls = 0
 
-  async def counting_save(updated: SessionMetadata) -> None:
+  async def counting_save(updated: SessionMetadata, **_kwargs: bool) -> None:
     nonlocal save_calls
     save_calls += 1
-    await real_save(updated)
+    await real_save(updated, **_kwargs)
 
   with patch.object(load_mgr, "save_metadata", side_effect=counting_save):
     first = await load_mgr.get_session(meta.id)

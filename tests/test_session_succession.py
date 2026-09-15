@@ -478,7 +478,13 @@ async def test_deliver_to_successor_reresolves_when_successor_appears_between_re
       # (under the lock) sees one — as if an elone landed while we waited.
       if calls["n"] >= 2:
         meta.successor_session_id = gen1.id
-        await mgr.save_metadata(meta)
+        # Written straight to the file: this stub runs inside
+        # deliver_to_successor's held tail lock, where a save_metadata call
+        # would both re-enter the patched read (the save guard reconciles
+        # anchors through it) and re-take the never-reentrant lock. A landing
+        # elone writes through its own lock, never this one, so the file
+        # write is the honest simulation.
+        mgr._metadata_path(gen0).write_text(meta.model_dump_json(indent=2), encoding="utf-8")
       return meta
     return await real_read(session_id)
 

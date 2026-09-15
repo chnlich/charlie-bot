@@ -821,3 +821,37 @@ test('a pending input that left the pending set is pruned from the selection, no
   const ackCall = context.fetchCalls.find((c) => c.url.endsWith('/task-inputs/acknowledge'));
   assert.deepEqual(JSON.parse(ackCall.opts.body).input_ids, ['input-bbb'], 'only the still-pending id is submitted');
 });
+
+test('a queued stale evidence page issues no cross-session read or render after a session switch', async () => {
+  // The completion chain serializes pages: a live refresh fires item #2 while
+  // page #1 is still in flight. If the switch lands before #1 resolves, #2
+  // dequeues with the old flight — it must bail at the head: no read for the
+  // new task, no render of the orphaned collection into the new dialog.
+  const {context} = build();
+  let resolveRuns;
+  context.fetchHandlers.push((url) => {
+    if (url === '/api/sessions/node-1') return jsonResponse(detailFor('node-1', 'Task A'));
+    if (url === '/api/sessions/node-2') return jsonResponse(detailFor('node-2', 'Task B'));
+    if (url.includes('/runs?')) {
+      return new Promise((resolve) => { resolveRuns = () => resolve(jsonResponse({items: [], next_cursor: null})); });
+    }
+    if (url.endsWith('/task-inputs/pending')) return jsonResponse({items: []});
+    return undefined;
+  });
+  context.TaskPanel.onSessionChanged({id: 'node-1', profile: 'manager'});
+  await flush();
+  openComplete(context);
+  await flush(2);
+  // Live refresh while page #1 is in flight queues chain item #2.
+  context.TaskPanel.refresh();
+  await flush(2);
+  // The switch lands before page #1 resolves.
+  context.TaskPanel.onSessionChanged({id: 'node-2', profile: 'manager'});
+  await flush(2);
+  const runsBefore = context.fetchCalls.filter((c) => c.url.includes('/runs?')).length;
+  resolveRuns();
+  await flush(8);
+  const runsAfter = context.fetchCalls.filter((c) => c.url.includes('/runs?')).length;
+  assert.equal(runsAfter, runsBefore, 'the queued stale page issued no read after the switch');
+  assert.ok(!context.__doc.getElementById('task-complete-modal'), 'the old dialog stays dismissed');
+});

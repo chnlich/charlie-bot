@@ -1013,7 +1013,9 @@ function fetchCompleteRunsPage(flight, cursor) {
 
 async function doFetchCompleteRunsPage(flight, cursor, col) {
   const sessionId = boundSessionId();
-  if (!sessionId) return;
+  // Late-dequeued after a session switch: never render the orphaned
+  // collection into the new task's dialog, never issue a read for it.
+  if (!sessionId || dialogStale(flight)) return;
   col.loading = true;
   col.error = null;
   renderCompleteRuns();

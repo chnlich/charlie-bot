@@ -31,6 +31,7 @@ from src.core.constants import FILE_SERVER_MOUNTS, REPO_ROOT
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus
 from src.core.ncu_parsing import NcuParseError, parse_ncu_report
+from src.core.session_tree_preview import is_preview_mode
 from src.core.sessions import SessionManager
 from src.core.timeouts import HOME_SERVICE_PROBE_TIMEOUT, SUBPROCESS_GIT_VERSION_TIMEOUT
 from src.core.token_tally import TokenTally, collect_token_usage
@@ -795,4 +796,5 @@ async def index(
           "sessions_root": str(cfg.sessions_dir),
           "version": _RUNTIME_GIT_VERSION,
           "static_asset_version": _static_asset_version(),
+          "preview_mode": is_preview_mode(),
       })

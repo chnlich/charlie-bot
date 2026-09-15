@@ -206,8 +206,10 @@ multiple plausible loops are unresolved.
   The real-data offline rehearsal, the production apply, and any cutover
   decision are separate follow-up work; this CLI must not be run against
   production data until that rehearsal has happened.
-- **No interactive preview.** The `session-tree preview` command (a separate
-  trial instance) is a following task and does not exist here.
+- **No interactive preview here.** The `session-tree preview` command is a
+  separate trial instance with its own home and port
+  (docs/session-tree-preview.md); it never reads or writes the home this
+  command inventories, and no real data is imported into it.
 - **No runtime cutover behavior change.** Default creation for ordinary
   runtime sessions is unchanged; wiring migrated homes into normal startup
   behavior (e.g. scheduling of migrated cron bindings, pending-trigger

@@ -751,7 +751,9 @@ function renderUsageFromData(usage) {
 // (root manager when no parent is selected); everywhere else it keeps the
 // legacy session create.
 function createSessionOrTask() {
-  if (currentFilter === 'tasks' && globalThis.TaskPanel) {
+  if (globalThis.TaskPanel && (currentFilter === 'tasks' || globalThis.__CHARLIEBOT_PREVIEW__)) {
+    // In preview mode every create action is a v2 task (root manager when no
+    // parent is selected); the legacy session path does not exist there.
     globalThis.TaskPanel.openChildModal(null);
     return;
   }

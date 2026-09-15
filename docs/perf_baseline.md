@@ -67,7 +67,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M54 stream-draft paint work, code-bearing draft, real highlight.js | M54 collector below | seconds of paint work per full-turn replay of the largest fence-bearing on-disk assistant draft, 200 B deltas at 40 ms virtual cadence, page-pinned marked + hljs 11.9.0 common builds | median < 0.2 s | — (introduced with its first history row) |
 | M55 artifact compare-view serve, steady state | M55 collector below | seconds per repeat `?diff=` compare-view request over the worst on-disk artifact pair, plus the request's worst event-loop gap (the 5 ms ticker floor like M14); the cold first compare of a pair (the annotate the repeat memo serves from — the collector's first-view line) | repeat-view median < 0.010 s; loop-lag median < 0.010 s; first-view median < 0.25 s | — (introduced with its first history row) |
 | M56 sidebar status poll, steady state | M56 collector below | seconds per `GET /api/sessions/status` request over the active-session id set | median < 0.004 s (the TestClient request adds a ~1.7 ms harness floor over the ~0.3 ms raw-ASGI handler, so a tripped reading is read as host load first — the cron-collision bias the M56 history documents) | — (introduced with its first history row) |
-| M57 plan-registry poll, steady state | M57 collector below | seconds per `GET /api/sessions/{id}/plans` request, worst on-disk plans corpus | median < 0.0030 s | — (introduced with its first history row) |
+| M57 plan-registry poll, steady state | M57 collector below | seconds per `GET /api/sessions/{id}/plans` request, worst on-disk plans corpus | median < 0.0020 s (recalibrated from < 0.0030 s: the old line sat on the TestClient/httpx harness floor the 2026-09-15 repair removed — the served path reads 0.8-1.7 ms across the repair round's loads 2.0-2.7, the cron-collision bias the M56 history documents; see that history row) | — (introduced with its first history row) |
 | M58 per-request config read, steady state | M58 collector below | seconds per `get_config` call, live config corpus | median < 0.0001 s | — (introduced with its first history row) |
 | M59 worker thread-detail poll payload and handler time, steady state | M59 collector below | seconds per request + response body bytes, worst thread-metadata corpus; the attach-mode repeat (`?attach=1`) of the unchanged poll | full-row median < 0.005 s; attach-mode median < 0.005 s, body < 300 B | — (introduced with its first history row) |
 | M60 chat message-body markdown parse, repeat page render | M60 collector below | ms per 40-body page render pass over the worst on-disk live chat file (the cold first render is reported, not the metric — since the deferral PR it splits into a deferred-parse slice and a highlight-flush slice); the repeat is the session re-entry / re-render shape — every session switch rebuilds the turn engine and re-renders the same bodies | repeat median < 0.5 ms; cold first paint < 50 ms deferred-parse + the flush slice carrying the deferred highlight | — (introduced with its first history row) |
@@ -3422,20 +3422,20 @@ EOF
 ```
 
 M57 — plan-registry poll, steady state. The plan panel polls `GET /api/sessions/{id}/plans` every
-3 s while open; M27 memoized the registry read itself (10.6 µs steady state) but the endpoint's
-mapped dict return still paid FastAPI's jsonable_encoder pass over the 12-plan payload on every
-poll. The cost is per-poll latency invisible to the standing HTTP probes, so the collector drives
-the endpoint through TestClient over the worst on-disk plans corpus (the session whose plans.json
+3 s while open; M27 memoized the registry read itself (10.6 µs steady state) and the endpoint
+renders through FastJsonResponse. The cost is per-poll latency invisible to the standing HTTP
+probes, so the collector drives the endpoint raw-ASGI — the served path the middleware and route
+actually run; a TestClient drive adds ~1.5 ms of httpx harness per request, the vacuous-read class
+the M70/M72 repair called out — over the worst on-disk plans corpus (the session whose plans.json
 carries the most bytes, live state read-only), from the checkout under test: one cold pass, as at
 first panel paint after a server start, then nine timed requests, with a parsed-body digest.
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import hashlib, json, os, sys, time
+import asyncio, hashlib, json, os, sys, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from src.api.deps import get_plan_manager
 from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
@@ -3459,23 +3459,49 @@ plan_mgr = PlanRegistryManager(cfg, mgr)
 app = FastAPI()
 app.include_router(sessions_router, prefix="/api/sessions")
 app.dependency_overrides[get_plan_manager] = lambda: plan_mgr
-client = TestClient(app)
 url = f"/api/sessions/{SID}/plans"
+SCOPE = {
+    "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+    "http_version": "1.1", "method": "GET", "scheme": "http",
+    "path": url, "raw_path": url.encode(), "query_string": b"", "root_path": "",
+    "headers": [(b"host", b"test")], "client": ("test", 123), "server": ("test", 80),
+}
 
 def digest(body):
     return hashlib.sha256(json.dumps(json.loads(body), sort_keys=True).encode()).hexdigest()[:12]
 
-client.get(url)  # cold pass, as at first panel paint after a server start; not timed
-times, body = [], None
-for _ in range(9):
+async def drive():
+    body = b""
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        nonlocal body
+        if msg["type"] == "http.response.body":
+            body += msg.get("body", b"")
+
     t0 = time.perf_counter()
-    r = client.get(url)
-    times.append(time.perf_counter() - t0)
-    body = r.content
-times.sort()
-print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: session {SID}, {best_n / 1e3:.1f} KB plans.json; "
-      f"/plans request median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms, "
-      f"body {len(body)} B, digest {digest(body)}")
+    await app(SCOPE, receive, send)
+    return time.perf_counter() - t0, body
+
+
+async def main():
+    cold, body = await drive()  # cold pass, as at first panel paint after a server start; not timed
+    times, bodies, digests = [], set(), set()
+    for _ in range(9):
+        dt, body = await drive()
+        times.append(dt)
+        bodies.add(len(body))
+        digests.add(digest(body))
+    times.sort()
+    assert len(bodies) == 1 and len(digests) == 1, f"repeat bodies differ: {bodies} {digests}"
+    print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: session {SID}, {best_n / 1e3:.1f} KB plans.json; "
+          f"first view {cold * 1000:.2f} ms; /plans request median {times[4] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms over 9, "
+          f"body {bodies.pop()} B, digest {digests.pop()}")
+
+
+asyncio.run(main())
 EOF
 ```
 
@@ -6562,6 +6588,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-15 | this PR | M57 plan-registry poll, repaired collector: 2.62/2.16/2.31/2.29 → 0.94/0.89/0.87/0.88 ms medians (standing sweep reading first, then three interleaved rounds of old TestClient drive vs new raw-ASGI drive back-to-back, same main-checkout code and worst plans corpus in all arms, load 2.03-2.75 one-minute, 15.4 KB plans.json of session a9bb2346, live state read-only; parsed-body digest f0098c1aae15 and body 10485 B identical across every arm; maxima 2.75-2.92 → 1.10-1.67 ms across the repair round's eight raw-ASGI runs); component attribution, same app + dependency override, fresh drives at load ~2.4: TestClient repeat 2.24 ms vs raw-ASGI 0.79 ms on the same 10485 B body — the httpx layer is ~1.4-1.5 ms of harness per request, and the standing reading had sat on that floor since the 2026-09-04 landing; M57 healthy range recalibrated < 0.0030 s → < 0.0020 s with this PR | the standing collector timed the harness, not the served path — the vacuous-read class the M68/M89/M90/M70/M72 repairs called out; the raw-ASGI drive (the M101 pattern) reads the served path the route actually runs, whose floor is 0.8-1.2 ms with the round's host load reading the 1.7 ms max |
 | 2026-09-15 | this PR | M70 artifact clean-view serve, repaired collector: 0.0079/0.0081/0.0147 → 0.0008/0.0027/0.0007 s medians over three interleaved rounds (old TestClient drive vs new raw-ASGI drive back-to-back, same main-checkout code and snapshot in all six arms, load 3.61-3.92 one-minute; the old collector's "gzip body 1084806 B" was the httpx-decoded size — the wire body the raw drive reads is 809814 B, and the per-collector digests stand stable across all rounds: decoded c3352d6e6277, wire b8ff4b1735f0); component attribution, same app + middleware, fresh drives at load ~3: TestClient repeat 10.16 ms vs raw-ASGI 1.16 ms — the httpx layer is ~9.0 ms of harness per request on the ~0.8 MB wire body, and the old line sat entirely on that floor; M70 healthy range recalibrated < 0.010 s → < 0.003 s with this PR | the standing collector timed the harness, not the served path — the vacuous-read class the M68/M89/M90/M72 repairs called out — and the M70 landing's own −76 % fix had been invisible under that floor since 2026-09-13; the raw-ASGI drive (the M101 pattern) reads the served path the middleware and route actually run, whose served floor is 0.7-1.2 ms with the round's host-load spike reading 2.7 ms (the reading discipline the recalibrated range's note pins) |
 | 2026-09-15 | this PR | M72 file-browser directory listing, repaired collector: 8.43/15.86/27.74 → 6.54/8.72/14.48 ms medians over the same three interleaved rounds (same main-checkout code, live sessions root read-only, 1186 entries, decoded body 260291 B with the sha1 identical within every round pair across both collectors — 4ca49b8b75d2 rounds 1-2, bb8b030a7d87 round 3 after a corpus move — so the collectors provably read the same pages); component attribution at load ~3: TestClient repeat 8.29 ms vs raw-ASGI 6.08 ms on the same app + middleware — ~2.2 ms of harness per request, which also amplifies host-load noise ~2x (the round-3 pair 27.74 vs 14.48); the standing 8.13-9.04 ms readings that tripped the < 0.008 s line at this round's start were harness + load bias over a served path whose walk floor is 4.1 ms of the 6.1-6.5 ms steady reading; M72 healthy-range cell gains the load-and-corpus reading note, value unchanged | the same harness disease as the M70 repair in the same PR: the httpx/TestClient layer rode every timed request with 2-3 ms of decode and header work that the served path never pays, and the floor grew with host load faster than the walk itself — the false trip this round opened with (8.13 ms standing vs the 6.1 ms served truth) |
 | 2026-09-14 | this PR | M4 docs-only calibration, collector precision: old form "1 running sessions with last event older than 1h" — session 8a7964a3 (659: Redesign CharlieBot Session Tree), chat file 1.2 h stale while its running thread 75891ee8 (charlie-code-kimi-k3) had appended to its own worker log 0.1-0.9 min before the reading (670-672 KB and growing) — the in-flight-delegation shape, live work; new form on the same live state: 0 hung with the turn stats unchanged (174 turns, median 122 s, max 4834 s both rules); scratch shape checks, the same walk under both rules: an active session with a running thread whose chat file AND worker log are both 2 h stale reads hung 1 under both rules, the same session with a fresh worker log reads hung 1 → 0 (old → new), an archived session with a stale running marker stays 0 (the 2026-09-07 rule); no range change (hung = 0) | the 2026-09-07 archived-rule calibration's sibling class: the hung watch read the session chat file alone, and a delegation's chat file goes quiet for the delegation's whole run — the worker appends only its own events log and the summary lands at completion — so every hourly round during a > 1 h delegation read a false hung = 1 (this round's sweep tripped on exactly that shape); the collector now checks the running threads' own worker logs before counting, so the tripwire keeps catching genuinely stuck runs (chat and worker logs both stale) at zero extra scan cost on the common shape |

@@ -294,3 +294,29 @@ test('the v2 scenario fixture: four task nodes, workers stay leaves, manager tur
   const managerRunFetch = context.fetchCalls.filter((c) => c.url.includes('/api/sessions/root-1/runs'));
   assert.equal(managerRunFetch.length, 0, 'the tree view never pulls another node\'s runs');
 });
+
+test('the name keeps a guaranteed width floor; badges wrap as one group', async () => {
+  const {context, sessionList} = build();
+  installTreeFetch(context);
+  context.Sidebar.SessionTree.enterTreeFilter();
+  await new Promise((r) => setImmediate(r));
+  const rootRow = findRow(sessionList, 'root-1');
+  const inner = rootRow.firstElementChild;
+  const name = rootRow.querySelector('.session-name');
+  assert.ok(name.className.includes('flex-1') && name.className.includes('min-w-[55%]'),
+    'the name is a flex item with a 55%-of-row width floor');
+  const badges = inner.querySelector('.tree-meta-row');
+  assert.ok(badges, 'the badge group renders');
+  assert.ok(badges.className.includes('flex-shrink-0'),
+    'the badge group never shrinks the name — it wraps instead');
+  assert.equal(inner.className.includes('flex-wrap'), true, 'the row wraps badges below the name');
+  assert.ok(badges.textContent.includes('Manager') && badges.textContent.includes('idle') && badges.textContent.includes('3 open'),
+    'role, state and counts all render on the badge line');
+  // Indentation, focus and action wiring are unchanged.
+  await context.Sidebar.SessionTree.ensureExpanded('root-1');
+  await context.Sidebar.SessionTree.ensureExpanded('feat-1');
+  const workerRow = findRow(sessionList, 'work-1');
+  assert.equal(workerRow.firstElementChild.style.paddingLeft, (8 + 2 * 16) + 'px');
+  workerRow.focus();
+  assert.equal(context.__doc.focused, workerRow, 'rows stay keyboard-focusable');
+});

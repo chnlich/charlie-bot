@@ -198,3 +198,91 @@ test('run context selection hands the run to the Context panel', async () => {
   await flush(2);
   assert.deepEqual(historicalCalls, ['run-h'], 'the Context panel receives the exact run');
 });
+
+test('the child list pages past its first page and never duplicates a row', async () => {
+  const {context, tab} = build();
+  const first = Array.from({length: 3}, (_, i) => ({id: 'ch-' + i, name: 'Child ' + i, profile: 'worker', work_state: 'idle', archived: false}));
+  const second = [{id: 'ch-2', name: 'Child 2', profile: 'worker', work_state: 'idle', archived: false}, {id: 'ch-late', name: 'Late child', profile: 'worker', work_state: 'idle', archived: false}];
+  let call = 0;
+  context.fetchHandlers.push((url) => {
+    if (url.includes('/runs?limit=50')) return jsonResponse({items: [], next_cursor: null});
+    if (url.includes('/api/sessions/tree?')) {
+      assert.ok(url.includes('parent_id=node-1') && url.includes('include_archived=true'), 'children ride the tree API');
+      call++;
+      if (call === 1) return jsonResponse({items: first, next_cursor: 'c2', tree_revision: 'r'});
+      return jsonResponse({items: second, next_cursor: null, tree_revision: 'r'});
+    }
+    return undefined;
+  });
+  context.TaskRunsPanel.onSessionChanged({id: 'node-1', profile: 'manager'});
+  context.TaskRunsPanel.refresh();
+  await flush();
+  assert.ok(tab.textContent.includes('Load more children'), 'a visible continuation is offered');
+  const before = context.fetchCalls.filter((c) => c.url.includes('/tree?')).length;
+  tab.querySelectorAll('button').find((b) => b.textContent.startsWith('Load more children')).dispatch('click');
+  await flush();
+  assert.equal(context.fetchCalls.filter((c) => c.url.includes('/tree?')).length, before + 1, 'the continuation fetched exactly one more page');
+  const linkIds = tab.querySelectorAll('a').filter((a) => a.href && a.href.includes('session=ch-')).map((a) => a.href);
+  assert.equal(linkIds.length, 4, 'all children are linked');
+  assert.deepEqual([...new Set(linkIds)].length, 4, 'the row repeated across pages never duplicates');
+  assert.ok(tab.textContent.includes('Late child'), 'the child beyond the first page is reachable');
+  assert.ok(!tab.textContent.includes('Load more children'), 'the exhausted list stops offering a continuation');
+});
+
+test('a tree change during child pagination reloads the section coherently', async () => {
+  const {context, tab} = build();
+  const first = [{id: 'ch-1', name: 'Child 1', profile: 'worker', work_state: 'idle', archived: false}];
+  const fresh = [
+    {id: 'ch-1', name: 'Child 1', profile: 'worker', work_state: 'idle', archived: false},
+    {id: 'ch-new', name: 'Child created mid-paging', profile: 'worker', work_state: 'idle', archived: false},
+  ];
+  let call = 0;
+  context.fetchHandlers.push((url) => {
+    if (url.includes('/runs?limit=50')) return jsonResponse({items: [], next_cursor: null});
+    if (url.includes('/api/sessions/tree?')) {
+      call++;
+      if (call === 1) return jsonResponse({items: first, next_cursor: 'stale-cursor', tree_revision: 'rev-1'});
+      if (call === 2) {
+        // The cursor was minted under rev-1; the tree moved since: the server refuses.
+        return {ok: false, status: 409, json: async () => ({detail: {message: 'task tree changed during pagination; refresh and re-paginate'}})};
+      }
+      return jsonResponse({items: fresh, next_cursor: null, tree_revision: 'rev-2'});
+    }
+    return undefined;
+  });
+  context.TaskRunsPanel.onSessionChanged({id: 'node-1', profile: 'manager'});
+  context.TaskRunsPanel.refresh();
+  await flush();
+  tab.querySelectorAll('button').find((b) => b.textContent.startsWith('Load more children')).dispatch('click');
+  await flush();
+  const links = tab.querySelectorAll('a').filter((a) => a.href && a.href.includes('session=ch-'));
+  assert.deepEqual(links.map((a) => a.href.match(/session=([^&]+)/)[1]).sort(), ['ch-1', 'ch-new'],
+    'the reloaded section has every child exactly once');
+  assert.ok(tab.textContent.includes('task tree changed'), 'the revision change is explained');
+  assert.ok(!tab.textContent.includes('Load more children'), 'the reloaded exhausted list closes the continuation');
+});
+
+test('a failed children read surfaces with retry instead of a false "No child tasks"', async () => {
+  const {context, tab} = build();
+  context.fetchHandlers.push((url) => {
+    if (url.includes('/runs?limit=50')) return jsonResponse({items: [], next_cursor: null});
+    if (url.includes('/api/sessions/tree?')) return {ok: false, status: 500, json: async () => ({detail: 'boom'})};
+    return undefined;
+  });
+  context.TaskRunsPanel.onSessionChanged({id: 'node-1', profile: 'manager'});
+  context.TaskRunsPanel.refresh();
+  await flush();
+  assert.ok(tab.textContent.includes('Failed to load child tasks'), 'the failure is named');
+  assert.ok(!tab.textContent.includes('No child tasks.'), 'an error is never misreported as an empty list');
+  const retry = tab.querySelectorAll('button').find((b) => b.textContent === 'Retry');
+  assert.ok(retry, 'a retry action is offered');
+  context.fetchHandlers.splice(0, context.fetchHandlers.length);
+  context.fetchHandlers.push((url) => {
+    if (url.includes('/runs?limit=50')) return jsonResponse({items: [], next_cursor: null});
+    if (url.includes('/api/sessions/tree?')) return jsonResponse({items: [{id: 'ch-ok', name: 'Child ok', profile: 'worker', work_state: 'idle', archived: false}], next_cursor: null, tree_revision: 'r'});
+    return undefined;
+  });
+  retry.dispatch('click');
+  await flush();
+  assert.ok(tab.textContent.includes('Child ok'), 'the retry recovers into the real list');
+});

@@ -240,6 +240,13 @@ async def wait_for_dispatch_run(session_id: str, label: str) -> str:
             run = await tree.runs.get_run(session_id, predicted)
             if run is not None:
                 return run.id
+        # The route's admission already dispatched inline: the claim usually
+        # lands before the first poll, so pending is empty and the
+        # deterministic prediction never fires — the single registered run is
+        # the reservation.
+        registered = await asyncio.to_thread(tree.runs.list_run_records_sync, session_id)
+        if len(registered) == 1:
+            return registered[0].id
         await asyncio.sleep(0.2)
     fail(f"{label}: the dispatcher never reserved a run for the admitted input")
 

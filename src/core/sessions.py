@@ -8,7 +8,6 @@ import os
 import shutil
 import stat
 import time
-from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO, NamedTuple
@@ -791,7 +790,8 @@ class SessionManager:
     # to_thread side must not observe a half-updated map, so the memo
     # mechanics are BoundedMemo's locked ones, not a bare OrderedDict's.
     self._projection_cache: BoundedMemo[str, MessageProjection] = BoundedMemo(_PROJECTION_LRU_LIMIT)
-    self._search_miss_memo: OrderedDict[str, OrderedDict[str, tuple[int, int, int]]] = OrderedDict()
+    self._search_miss_memo: BoundedMemo[str, BoundedMemo[str, tuple[int, int,
+                                                                    int]]] = BoundedMemo(_SEARCH_MISS_MEMO_LIMIT)
 
   # ---------------------------------------------------------------------------
   # Session CRUD
@@ -1193,7 +1193,8 @@ class SessionManager:
     read_jobs: list[tuple[SessionMetadata, Path, tuple[int, int, int], int]] = []
     for meta, path in content_candidates:
       key = str(path)
-      memo_roots = tuple((self._search_miss_memo.get(key) or {}).items())
+      roots = self._search_miss_memo.peek(key)
+      memo_roots = tuple(roots.items()) if roots is not None else ()
       try:
         stat = path.stat()
       except OSError as e:
@@ -1239,15 +1240,9 @@ class SessionManager:
     """
     roots = self._search_miss_memo.get(memo_key)
     if roots is None:
-      roots = OrderedDict()
-      self._search_miss_memo[memo_key] = roots
-    roots[needle] = sig
-    roots.move_to_end(needle)
-    while len(roots) > _SEARCH_MISS_ROOTS_PER_FILE:
-      roots.popitem(last=False)
-    self._search_miss_memo.move_to_end(memo_key)
-    while len(self._search_miss_memo) > _SEARCH_MISS_MEMO_LIMIT:
-      self._search_miss_memo.popitem(last=False)
+      roots = BoundedMemo(_SEARCH_MISS_ROOTS_PER_FILE)
+    roots.store(needle, sig)
+    self._search_miss_memo.store(memo_key, roots)
 
   async def fork_session(
       self,

@@ -419,3 +419,10 @@ Known-alive symbols:
   while leaving the annotation unresolved. Vulture flags the import as its only
   production-scope finding (unused import, 90% confidence); never delete it on that
   evidence.
+- `__getattr__` (`src/cli/common.py` and `src/core/artifact_wrap.py`) — the PEP 562
+  lazy-`requests` hooks, delegating to the shared `load_requests` (`src/core/http.py`).
+  Reached by string: the patch targets `src.cli.common.requests.*`
+  (`CLI_COMMON_REQUESTS_POST_PATCH_TARGET` / `CLI_COMMON_REQUESTS_GET_PATCH_TARGET` in
+  `tests/conftest.py`) and `src.core.artifact_wrap.requests.get`
+  (`tests/core/test_artifact_wrap.py`) resolve the module attribute through the hook.
+  Vulture flags each as an unused function at 60% confidence.

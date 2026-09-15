@@ -276,14 +276,48 @@ def _managed_transport_dirs(session_dir: Path) -> list[Path]:
   return managed
 
 
+def _run_referenced_transport(session_dir: Path) -> set[Path]:
+  """Transport files a v2 Run record of this session references.
+
+  Migrated task-tree runs point at their original evidence
+  (``raw_log_ref``/``events_ref``/``result_ref``), so those files stay readable
+  through the ordinary run read APIs after migration; the cold-session sweep
+  must not reclaim them. Unreferenced transport files keep the existing
+  contract.
+  """
+  runs_dir = session_dir / DATA_DIR_NAME / "runs"
+  if not runs_dir.is_dir() or runs_dir.is_symlink():
+    return set()
+  referenced: set[str] = set()
+  for run_dir in _sorted_scan(runs_dir, runs_dir.iterdir()) or []:
+    if not run_dir.is_dir() or run_dir.is_symlink():
+      continue
+    meta = load_json_meta(run_dir / "metadata.json", "storage_cool_run_meta_read_failed")
+    if not isinstance(meta, dict):
+      continue
+    for key in ("raw_log_ref", "events_ref", "result_ref"):
+      value = meta.get(key)
+      if isinstance(value, str) and value:
+        referenced.add(os.path.realpath(value))
+  return referenced
+
+
 def _sweep_raw_transport(session_dir: Path, counter: _Counter, dry_run: bool) -> None:
-  """Delete the reserved transport names inside the session's managed run directories."""
+  """Delete the reserved transport names inside the session's managed run directories.
+
+  Files a v2 Run record references are retention-protected: they are the
+  imported run's own evidence and must stay resolvable (session-tree
+  migration, plan 1 v4 section 4.2).
+  """
+  referenced = _run_referenced_transport(session_dir)
   for managed_dir in _managed_transport_dirs(session_dir):
     entries = _sorted_scan(managed_dir, managed_dir.iterdir())
     if entries is None:
       continue
     for entry in entries:
       if not entry.is_file() or not _is_transport_name(entry.name):
+        continue
+      if os.path.realpath(entry) in referenced:
         continue
       _delete_file(entry, counter, dry_run)
 

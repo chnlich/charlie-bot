@@ -30,6 +30,7 @@ from src.core.storage_cool import (
     is_cold_session,
     run_cool_sweep,
 )
+from src.core.runs import RAW_LOG_NAME, STDERR_LOG_NAME
 
 NOW = datetime(2026, 9, 4, 12, 0, 0, tzinfo=UTC)
 OLD = (NOW - timedelta(days=30)).isoformat()
@@ -1152,3 +1153,71 @@ def test_cool_storage_scheduler_handler_runs_the_real_sweep(
   assert not transport.exists()
   assert "raw-transport 1 files" in summary
   assert summary.startswith("total")
+
+
+# ---------------------------------------------------------------------------
+# Migrated run references: retention-protected evidence
+# ---------------------------------------------------------------------------
+
+
+def test_migrated_run_referenced_transport_survives_the_sweep(cool_env: CharlieBotConfig) -> None:
+  """A session-tree migration's run refs keep their original evidence readable.
+
+  The migrated v2 node is cold exactly like any archived session, but its Run
+  record points at the original thread's raw log; the sweep must not reclaim
+  the referenced file while an unreferenced sibling still follows the
+  existing contract.
+  """
+  cfg = cool_env
+  write_session_meta(cfg, SID_COLD, cold_meta(schema_version=2, profile="manager"))
+  raw = master_run_dir(cfg, SID_COLD) / RAW_LOG_NAME
+  raw.write_bytes(b"migrated-turn-evidence")
+  age_file(raw, timedelta(days=30))
+  stderr = master_run_dir(cfg, SID_COLD) / STDERR_LOG_NAME
+  stderr.write_bytes(b"unreferenced-noise")
+  age_file(stderr, timedelta(days=30))
+
+  referenced_raw = cfg.sessions_dir / SID_COLD / "threads" / TID / "data" / RAW_LOG_NAME
+  referenced_raw.parent.mkdir(parents=True, exist_ok=True)
+  referenced_raw.write_bytes(b"migrated-worker-evidence")
+  age_file(referenced_raw, timedelta(days=30))
+  runs_dir = cfg.sessions_dir / SID_COLD / "data" / "runs" / "run-migrated"
+  runs_dir.mkdir(parents=True)
+  (runs_dir / "metadata.json").write_text(json.dumps({
+      "id": "run-migrated", "session_id": SID_COLD, "kind": "work",
+      "raw_log_ref": str(referenced_raw),
+      "events_ref": str(cfg.sessions_dir / SID_COLD / "threads" / TID / "data" / "events.jsonl"),
+  }), encoding="utf-8")
+  # The migrated manager-turn run references the historical master_runs log.
+  turn_runs_dir = cfg.sessions_dir / SID_COLD / "data" / "runs" / "run-migrated-turn"
+  turn_runs_dir.mkdir(parents=True)
+  (turn_runs_dir / "metadata.json").write_text(json.dumps({
+      "id": "run-migrated-turn", "session_id": SID_COLD, "kind": "manager_turn",
+      "raw_log_ref": str(raw),
+  }), encoding="utf-8")
+
+  result = run_cool_sweep(cfg=cfg, now=NOW)
+
+  assert referenced_raw.exists()
+  assert raw.exists()  # the referenced master turn log is protected too
+  assert not stderr.exists()  # unreferenced transport still follows the contract
+  assert result.category("raw-transport").count == 1
+
+
+def test_run_reference_to_outside_path_is_ignored_not_created(cool_env: CharlieBotConfig) -> None:
+  """A run ref pointing outside the sessions tree cannot divert the sweep."""
+  cfg = cool_env
+  write_session_meta(cfg, SID_COLD, cold_meta(schema_version=2, profile="manager"))
+  transport = master_run_dir(cfg, SID_COLD) / RAW_LOG_NAME
+  transport.write_bytes(b"x")
+  age_file(transport, timedelta(days=30))
+  run_meta = {
+      "id": "run-outside", "session_id": SID_COLD, "kind": "work",
+      "raw_log_ref": "/nonexistent/outside/agent.raw.ndjson",
+  }
+  runs_dir = cfg.sessions_dir / SID_COLD / "data" / "runs" / "run-outside"
+  runs_dir.mkdir(parents=True)
+  (runs_dir / "metadata.json").write_text(json.dumps(run_meta), encoding="utf-8")
+
+  run_cool_sweep(cfg=cfg, now=NOW)
+  assert not transport.exists()

@@ -504,8 +504,10 @@ def entry_order_key(entry: Entry) -> tuple[str | None, str]:
 def resident_topic_names(store: Store) -> set[str]:
   """Names of the store's resident topics.
 
-  The assemble paths inject resident-topic entries in full and serve the rest
-  as index lines; the CLI query's ``--resident`` filter matches the same set.
+  ``assemble_master`` injects resident-topic entries in full and serves the
+  rest as index lines; the CLI query's ``--resident`` filter matches the same
+  set. ``assemble_worker`` does not consult residency — it splits on
+  ``topic == repo_basename``.
   """
   return {t.name for t in store.topics.values() if t.resident}
 

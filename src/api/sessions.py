@@ -88,7 +88,7 @@ from src.core.sessions import (
 )
 from src.core.takeoff_gate import DelegationBlockedError
 from src.core.task_execution import assemble_coherent_snapshot
-from src.core.task_prompts import PromptSnapshot, TaskPromptError
+from src.core.task_prompts import LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME, PromptSnapshot, TaskPromptError
 from src.core.task_sessions import (
   TaskConflictError,
   TaskForbiddenError,
@@ -1412,19 +1412,45 @@ async def get_run_context(
     raise HTTPException(status_code=404, detail=f"run {run_id} not found in task {session_id}")
   snapshot_payload: dict | None = None
   legacy_prompt: dict | None = None
-  if run.prompt_snapshot_ref and Path(run.prompt_snapshot_ref).is_file():
-    try:
-      stored = json.loads(Path(run.prompt_snapshot_ref).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as e:
-      raise HTTPException(
-          status_code=500,
-          detail=f"stored prompt snapshot unreadable at {run.prompt_snapshot_ref}: {e}") from e
-    try:
-      snapshot_payload = PromptSnapshot.from_json_dict(stored).to_json_dict()
-    except TaskPromptError as e:
-      raise HTTPException(status_code=500, detail=str(e)) from e
+  if run.prompt_snapshot_ref:
+    # Classification rides the recorded artifact contract, not the file's
+    # current contents: the snapshot stage records ``prompt_snapshot.json``
+    # (validated, provenance-carrying); a pre-stage run recorded a raw
+    # launch-text path instead.
+    ref_path = Path(run.prompt_snapshot_ref)
+    if ref_path.name == SNAPSHOT_FILENAME:
+      if not ref_path.is_file():
+        raise HTTPException(
+            status_code=500,
+            detail=f"stored prompt snapshot missing at {run.prompt_snapshot_ref}")
+      try:
+        stored = json.loads(ref_path.read_text(encoding="utf-8"))
+      except (OSError, ValueError) as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"stored prompt snapshot unreadable at {run.prompt_snapshot_ref}: {e}") from e
+      try:
+        snapshot_payload = PromptSnapshot.from_json_dict(stored).to_json_dict()
+      except TaskPromptError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    else:
+      # A recorded raw launch-text ref: limited historical evidence — the
+      # managed instructions are visible but per-source provenance was never
+      # recorded. Never recomposed into snapshot-shaped provenance.
+      if not ref_path.is_file():
+        raise HTTPException(
+            status_code=500,
+            detail=f"recorded raw launch text missing at {run.prompt_snapshot_ref}")
+      legacy_prompt = {
+          "ref": str(ref_path),
+          "sha256": sha256_hex(ref_path.read_text(encoding="utf-8")),
+          "note": (
+              "raw launch text recorded before the context stage: the managed "
+              "instructions are visible but per-source provenance was not "
+              "recorded, so this is limited evidence, not a full snapshot"),
+      }
   else:
-    legacy_path = task_mgr.runs.run_dir(session_id, run_id) / "launch_prompt.md"
+    legacy_path = task_mgr.runs.run_dir(session_id, run_id) / LAUNCH_TEXT_FILENAME
     if legacy_path.is_file():
       legacy_prompt = {
           "ref": str(legacy_path),

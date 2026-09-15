@@ -122,16 +122,7 @@ class CodexBackend(AgentBackend):
         framed,
     ]
     self._last_agent_text.clear()
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=self._prepare_env(dict(os.environ)),
-        limit=self._buffer_limit,
-        start_new_session=True,
-        preexec_fn=self._spawn_preexec(pdeathsig=False),
-    )
+    proc = await self._spawn_one_shot_subprocess(cmd, self._prepare_env(dict(os.environ)), pdeathsig=False)
 
     async def _read_bounded_stderr() -> bytes:
       assert proc.stderr is not None

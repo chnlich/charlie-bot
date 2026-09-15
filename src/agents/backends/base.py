@@ -785,6 +785,25 @@ class AgentBackend(ABC):
     )
     await self._pin_identity_and_fire_on_spawn()
 
+  async def _spawn_one_shot_subprocess(
+      self, cmd: list[str], env: dict, *, pdeathsig: bool) -> asyncio.subprocess.Process:
+    """Spawn the one-shot child: devnull stdin, piped stdout/stderr for the collector.
+
+    The unpinned counterpart of :meth:`_spawn_piped_and_pin_identity`: the
+    prompt rides argv, no spawn identity is pinned, and the preexec wires the
+    session cgroup move plus the caller's pdeathsig choice exactly once.
+    """
+    return await asyncio.create_subprocess_exec(
+        *cmd,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+        limit=self._buffer_limit,
+        start_new_session=True,
+        preexec_fn=self._spawn_preexec(pdeathsig=pdeathsig),
+    )
+
   def _prepare_session_cgroup(self) -> SessionCgroup | None:
     """Ensure this backend's session cgroup exists and snapshot its counters; None when off.
 

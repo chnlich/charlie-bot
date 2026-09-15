@@ -1352,7 +1352,6 @@ def test_resume_after_alias_merge_crash_recognizes_its_own_product(
   point_home(monkeypatch, home)
   manifest_path = tmp_path / "m.json"
   dry_run(monkeypatch, home, manifest_path)
-  manifest = migration.MigrationManifest.model_validate_json(manifest_path.read_text())
   aliases_rel = "sessions/session_aliases.json"
   cfg = home_config_of(monkeypatch, home)
 
@@ -1407,8 +1406,6 @@ def test_resume_after_alias_merge_crash_recognizes_its_own_product(
       migration.apply_manifest(cfg2, manifest_path2)
   finally:
     migration._append_receipt = original_append
-  with open(home / aliases_rel, "ab") as f:  # not valid JSON alone: corrupts the file
-    pass
   (home / aliases_rel).write_text(
       json.dumps({"old_session_ids": {"foreign-old": "foreign-target"},
                   "old_threads": {}}) + "\n", encoding="utf-8")

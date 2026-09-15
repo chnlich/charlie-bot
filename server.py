@@ -365,11 +365,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         task.cancel()
         with suppress(asyncio.CancelledError):
           await task
-      await ext_usage.stop_poller()
-      await close_http_client()
-      await scheduler.stop()
-      await streaming_manager.close_all()
-      pages.shutdown_merge_executor()
+    await ext_usage.stop_poller()
+    await close_http_client()
+    await scheduler.stop()
+    await streaming_manager.close_all()
+    pages.shutdown_merge_executor()
   finally:
     if writer_fence is not None:
       writer_fence.release()

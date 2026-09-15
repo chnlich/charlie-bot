@@ -1277,8 +1277,8 @@ async def test_own_subtree_rule_launch_parity_and_edit_boundary(
     assert "program-wide rule" in joined
 
     # Hash/snapshot parity: the preview API's assembly equals the committed bytes.
-    from src.core.task_prompts import preview_snapshot
     from src.core.task_execution import capture_prompt_chain
+    from src.core.task_prompts import preview_snapshot
     meta = await tree.load_meta(manager.id)
     index = await tree._get_index()
     chain, node_ref = capture_prompt_chain(tree, index, meta)

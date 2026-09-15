@@ -577,10 +577,12 @@ class TaskTreeManager:
 
     def summary(ref: str | None) -> dict:
       if ref is None:
-        return {"ref": None, "source": None, "chars": 0}
+        return {"ref": None, "source": None, "chars": 0, "text": None}
       path = self._prompt_bodies_dir / f"{ref}.md"
       body = path.read_text(encoding="utf-8")
-      return {"ref": ref, "source": str(path), "chars": len(body)}
+      # The body rides the same read that measures it: the editor's existing
+      # text comes from its authoritative source, never from a guess.
+      return {"ref": ref, "source": str(path), "chars": len(body), "text": body}
 
     return {
         "subtree": summary(meta.subtree_prompt_ref),
@@ -1050,6 +1052,38 @@ class TaskTreeManager:
   # Tree queries
   # ------------------------------------------------------------------
 
+  def _has_active_work_descendant(self, index: "_TreeIndex", session_id: str) -> bool:
+    """True when any descendant's current work is running or needs attention."""
+    return any(
+        self.work_state_of(index, d) in ("running", "attention")
+        for d in self._descendants(index, session_id))
+
+  async def tree_search(self, *, query: str, limit: int = 20) -> dict:
+    """Task-tree search: matching rows with each one's complete ancestor path.
+
+    The client cannot reconstruct a path from a partial tree (an archived or
+    hidden ancestor is absent from its cached pages), so each hit carries the
+    full ancestor row chain (nearest-first, the session-detail convention).
+    Archived tasks match too — search reveals them; presentation never hides
+    a search hit.
+    """
+    index = await self._get_index()
+    needle = query.strip().lower()
+    if not needle:
+      return {"items": [], "tree_revision": index.revision}
+    hits: list[SessionRow] = []
+    for sid, meta in index.metas.items():
+      goal = meta.task.goal if meta.task is not None else ""
+      if needle in meta.name.lower() or needle in goal.lower():
+        hits.append(self.session_row(index, sid))
+    hits.sort(key=lambda r: (index.metas[r.id].created_at, r.id))
+    hits = hits[:limit]
+    items = []
+    for row in hits:
+      ancestors = [self.session_row(index, a.id) for a in self._ancestors(index, row.id)]
+      items.append({"row": jsonable_row(row), "ancestors": [jsonable_row(a) for a in ancestors]})
+    return {"items": items, "tree_revision": index.revision}
+
   async def tree_page(
       self,
       *,
@@ -1065,7 +1099,13 @@ class TaskTreeManager:
     children = self._children_of(index, parent_id or None)
     rows_all = [self.session_row(index, sid) for sid in children]
     if not include_archived:
-      rows_all = [r for r in rows_all if not r.archived]
+      # A hidden/archived row stays navigable as ancestor context when active
+      # work (running/attention) lives below it: dropping it would sever the
+      # path to that descendant in a partial client tree. Its stored
+      # presentation is unchanged — the row still reports archived=true.
+      rows_all = [
+          r for r in rows_all
+          if not r.archived or self._has_active_work_descendant(index, r.id)]
     rows_all.sort(key=lambda r: (index.metas[r.id].created_at, r.id))
     after = _decode_tree_cursor(cursor) if cursor else None
     if after is not None:

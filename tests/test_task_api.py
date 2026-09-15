@@ -15,10 +15,13 @@ from fastapi.testclient import TestClient
 from src.api import sessions as sessions_api
 from src.api import threads as threads_api
 from src.api.deps import get_config, get_config_on_loop, get_run_store, get_session_manager, get_task_manager
-from src.core.models import RunRecord
-from src.core.run_token import RunTokenClaims, sign_run_token
+from src.core import event_types as ET
+from src.core.models import PatchSessionTaskRequest, RunRecord
+from src.core.run_token import CallerIdentity, RunTokenClaims, sign_run_token
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
+
+OP = CallerIdentity(kind="operator")
 
 
 @pytest_asyncio.fixture
@@ -112,7 +115,7 @@ async def test_stale_tree_pagination_returns_409(task_env) -> None:
   await seed_tree(task_mgr)
   await task_mgr.create_task(
       request_id="root-2", task_parent_id=None, profile="manager", task=None, name="Root2",
-      backend=None, caller="operator")
+      backend=None, caller=OP)
   with make_client(cfg, session_mgr, task_mgr) as client:
     first = client.get("/api/sessions/tree", params={"limit": 1})
     cursor = first.json()["next_cursor"]
@@ -460,3 +463,103 @@ async def test_agent_run_token_cannot_use_the_legacy_create_shape(task_env) -> N
     allowed = client.post("/api/sessions/", json={"name": "Legacy"})
     assert allowed.status_code == 200
     assert allowed.json()["profile"] is None  # the legacy v1 shape still works for operators
+
+
+# ---------------------------------------------------------------------------
+# Tree search path projection, ancestor-context rows, pending inputs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tree_search_returns_complete_ancestor_paths(task_env) -> None:
+  cfg, session_mgr, task_mgr = task_env
+  root = await task_mgr.create_task(
+      request_id="root", task_parent_id=None, profile="manager", task=None, name="Atlas",
+      backend=None, caller="operator")
+  mid = await task_mgr.create_task(
+      request_id="mid", task_parent_id=root.id, profile="manager",
+      task=None, name="Feature", backend=None, caller="operator")
+  leaf = await task_mgr.create_task(
+      request_id="leaf", task_parent_id=mid.id, profile="worker",
+      task=None, name="Fold widget", backend=None, caller="operator")
+  await task_mgr.patch_task(root.id, PatchSessionTaskRequest(presentation="hidden"), caller=OP)
+  with make_client(cfg, session_mgr, task_mgr) as client:
+    resp = client.get("/api/sessions/tree/search", params={"q": "fold"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body["items"]) == 1
+    hit = body["items"][0]
+    assert hit["row"]["id"] == leaf.id
+    # The complete path ships with the hit (nearest-first, the detail
+    # route's convention): a hidden ancestor is server fact, never something
+    # a partial client tree can reconstruct.
+    assert [a["id"] for a in hit["ancestors"]] == [mid.id, root.id]
+    assert hit["ancestors"][1]["archived"] is True
+    # Goal text matches too.
+    goal_hit = client.get("/api/sessions/tree/search", params={"q": "atlas"})
+    assert [h["row"]["id"] for h in goal_hit.json()["items"]] == [root.id]
+    assert client.get("/api/sessions/tree/search", params={"q": ""}).json()["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_tree_page_keeps_archived_ancestor_of_running_descendant(task_env) -> None:
+  cfg, session_mgr, task_mgr = task_env
+  root = await task_mgr.create_task(
+      request_id="root", task_parent_id=None, profile="manager", task=None, name="Root",
+      backend=None, caller="operator")
+  leaf = await task_mgr.create_task(
+      request_id="leaf", task_parent_id=root.id, profile="worker", task=None, name="Leaf",
+      backend=None, caller="operator")
+  await task_mgr.patch_task(root.id, PatchSessionTaskRequest(presentation="hidden"), caller=OP)
+  import os as _os
+  await task_mgr.runs.register_run(
+      RunRecord(id="run-live", session_id=leaf.id, pid=_os.getpid(), pid_start="1"))
+  with make_client(cfg, session_mgr, task_mgr) as client:
+    page = client.get("/api/sessions/tree", params={"include_archived": "false"}).json()
+    rows = {r["id"]: r for r in page["items"]}
+    # The hidden ancestor remains navigable as ancestor context, still archived.
+    assert rows[root.id]["archived"] is True
+    under = client.get("/api/sessions/tree", params={"parent_id": root.id}).json()
+    assert {r["id"] for r in under["items"]} == {leaf.id}
+    # With the descendant's run finished (terminal, no attention), the
+    # presentation preference wins again and the ancestor drops from its level.
+    # A successful delivered worker autoarchives (server facts): the leaf
+    # leaves the default projection, and with no active work below it the
+    # hidden ancestor's own presentation wins again — the root level empties.
+    await task_mgr.dispatch.finish_run(leaf.id, "run-live", outcome="success")
+    page2 = client.get("/api/sessions/tree", params={"include_archived": "false"}).json()
+    assert page2["items"] == []
+    under2 = client.get("/api/sessions/tree", params={"parent_id": root.id}).json()
+    assert under2["items"] == []
+    # The archived view still preserves the ancestry in place.
+    archived_page = client.get("/api/sessions/tree", params={"include_archived": "true"}).json()
+    assert {r["id"] for r in archived_page["items"]} == {root.id}
+
+
+@pytest.mark.asyncio
+async def test_pending_task_inputs_endpoint_lists_source_and_text(task_env) -> None:
+  cfg, session_mgr, task_mgr = task_env
+  root = await task_mgr.create_task(
+      request_id="root", task_parent_id=None, profile="manager", task=None, name="Root",
+      backend=None, caller="operator")
+  await task_mgr.dispatch.admit_input(
+      root.id, event_type=ET.USER, content="first instruction", actor="user")
+  await task_mgr.dispatch.admit_input(
+      root.id, event_type=ET.AGENT_MESSAGE, content="child report body",
+      actor="agent", from_session="child-1", from_session_name="Child task")
+  with make_client(cfg, session_mgr, task_mgr) as client:
+    resp = client.get(f"/api/sessions/{root.id}/task-inputs/pending")
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert [i["text"] for i in items] == ["first instruction", "child report body"]
+    assert [i["type"] for i in items] == [ET.USER, ET.AGENT_MESSAGE]
+    assert items[1]["from_session_name"] == "Child task"
+    # The acknowledge route consumes exactly these ids; an unknown id refuses.
+    ok = client.post(f"/api/sessions/{root.id}/task-inputs/acknowledge", json={
+        "request_id": "ack-1", "input_ids": [items[0]["id"]], "note": "handled in terminal"})
+    assert ok.status_code == 200, ok.text
+    after = client.get(f"/api/sessions/{root.id}/task-inputs/pending").json()["items"]
+    assert [i["id"] for i in after] == [items[1]["id"]]
+    bad = client.post(f"/api/sessions/{root.id}/task-inputs/acknowledge", json={
+        "request_id": "ack-2", "input_ids": ["not-an-input"]})
+    assert bad.status_code == 409

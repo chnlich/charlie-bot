@@ -364,6 +364,8 @@ def test_import_boundary_and_recovery_facts(
 
 def test_manager_turn_runs_and_uncertain_logs(
     full_home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  u_handled_id = f"{fx.S_ORDINARY[:8]}-0000-0000-0000-00000000000a"
+  st_fired_id = f"{fx.S_ORDINARY[:8]}-0000-0000-0000-00000000000b"
   # An extra manager turn log without a result: uncertain historical evidence.
   raw_no_result = json.dumps({"type": "assistant", "message": {"content": []}}) + "\n"
   turn_dir = full_home / "sessions" / fx.S_ORDINARY / "data" / "master_runs" / fx.iso(90)
@@ -388,12 +390,16 @@ def test_manager_turn_runs_and_uncertain_logs(
   outcomes = {r.id: tree.runs.terminal_outcome(
       tree.runs.load_events_sync(fx.S_ORDINARY), r.id) for r in turns}
   assert set(outcomes.values()) == {"success"}
-  # The turn whose raw log carries the handled input's content carries its id.
-  raw_content = (full_home / "sessions" / fx.S_ORDINARY / "data" / "master_runs"
-                 / fx.iso(10) / RAW_LOG_NAME).read_bytes()
-  assert b"deploy pipeline" in raw_content
-  named = [r for r in turns if r.input_event_ids]
-  assert len(named) == 1
+  # Input-to-Run binding follows retained identity, not text matching: the
+  # handled user round's run carries the user input's id, and the scheduled
+  # wake's round (proven by the marker identity plus the launch echo) carries
+  # the scheduled input's id.
+  named = {r.id: list(r.input_event_ids) for r in turns if r.input_event_ids}
+  assert len(named) == 2
+  handled_run = next(r for r in turns if r.raw_log_ref.endswith(f"{fx.iso(10)}/agent.raw.ndjson"))
+  wake_run = next(r for r in turns if r.raw_log_ref.endswith(f"{fx.iso(35)}/agent.raw.ndjson"))
+  assert named[handled_run.id] == [u_handled_id]
+  assert named[wake_run.id] == [st_fired_id]
 
 
 def test_completed_import_requires_evidence(

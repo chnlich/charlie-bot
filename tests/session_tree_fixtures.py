@@ -11,6 +11,7 @@ session-tree migration tests.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -50,6 +51,16 @@ S_STEPS = "9a9a9999-0000-4000-8000-000000000009"
 S_IMPROVE = "aaaa0000-0000-4000-8000-00000000000a"
 S_WORKERS = "bbbb2222-0000-4000-8000-00000000000b"
 S_V2 = "cccc3333-0000-4000-8000-00000000000c"
+S_FAILED_ROUNDS = "d1d1d111-0000-4000-8000-000000000001"
+S_UNBOUND = "d2d2d222-0000-4000-8000-000000000002"
+S_TIMES = "d3d3d333-0000-4000-8000-000000000003"
+S_SCHED_UNPROVEN = "d4d4d444-0000-4000-8000-000000000004"
+S_IDENTICAL = "d5d5d555-0000-4000-8000-000000000005"
+S_REVIEW_RETRY = "d6d6d666-0000-4000-8000-000000000006"
+S_IDENT_BASE = "d7d7d777-0000-4000-8000-000000000007"
+T_RETRY_FAILED = "f0f0f000-0000-4000-8000-000000000001"
+T_RETRY_OK = "f0f0f000-0000-4000-8000-000000000002"
+T_REVIEW_CONFLICT = "f1f1f111-0000-4000-8000-000000000001"
 
 T_WORK = "eeee1111-0000-4000-8000-000000000001"
 T_REVIEW = "eeee1111-0000-4000-8000-000000000003"
@@ -117,10 +128,17 @@ class FixtureBuilder:
     if raw is not None:
       (directory / "data" / "agent.raw.ndjson").write_text(raw, encoding="utf-8")
 
-  def master_turn_dir(self, session_id: str, started_at: str, raw: str) -> Path:
+  def master_turn_dir(self, session_id: str, started_at: str, raw: str, *,
+                      mtime: str | None = None) -> Path:
     directory = self.home / "sessions" / session_id / "data" / "master_runs" / started_at
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "agent.raw.ndjson").write_text(raw, encoding="utf-8")
+    raw_path = directory / "agent.raw.ndjson"
+    raw_path.write_text(raw, encoding="utf-8")
+    if mtime is not None:
+      # An offline copy preserves mtimes; the runtime's own completion contract
+      # for raw logs reads the last write.
+      stamp = datetime.fromisoformat(mtime).timestamp()
+      os.utime(raw_path, (stamp, stamp))
     return directory
 
   def trigger(self, session_id: str, trigger: PendingTrigger) -> None:
@@ -206,10 +224,29 @@ def build_full_home(home: Path) -> Path:
                   source_session_id=S_ORDINARY)
   assistant_rotated = ev("assistant", -1434, f"{S_ORDINARY[:8]}-0000-0000-0000-000000000010",
                          actor="agent", content="done", source_session_id=S_ORDINARY)
+  # The handled round's transport log adopts the same backend session id the
+  # chat log's run-start marker carries; the scheduled wake's round does too,
+  # and its stream holds the wake text as the launch's own prompt echo.
   raw_turn = (
-      json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": handled_text}]}}) + "\n"
-      + json.dumps({"type": "result", "subtype": "success", "is_error": False}) + "\n")
-  raw_scheduled = json.dumps({"type": "result", "subtype": "success", "is_error": False}) + "\n"
+      json.dumps({"type": "system", "subtype": "init",
+                  "session_id": "native-cc-ordinary-turn-1"}) + "\n"
+      + json.dumps({"type": "assistant", "message": {"content": [
+          {"type": "text", "text": handled_text}]}}) + "\n"
+      + json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                    "usage": {"input_tokens": 120, "output_tokens": 40,
+                              "cache_read_input_tokens": 0,
+                              "cache_creation_input_tokens": 0}}) + "\n")
+  raw_scheduled = (
+      json.dumps({"type": "system", "subtype": "init",
+                  "session_id": "native-sched-1"}) + "\n"
+      + json.dumps({"type": "user", "message": {"role": "user", "content": [
+          {"type": "text", "text": "cron wake"}]}}) + "\n"
+      + json.dumps({"type": "assistant", "message": {"content": [
+          {"type": "text", "text": "cron wake acknowledged"}]}}) + "\n"
+      + json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                    "usage": {"input_tokens": 90, "output_tokens": 25,
+                              "cache_read_input_tokens": 0,
+                              "cache_creation_input_tokens": 0}}) + "\n")
 
   meta1 = SessionMetadata(id=S_ORDINARY, name="Deploy pipeline ops", backend="synth",
                           created_at=BASE, updated_at=BASE)
@@ -220,11 +257,35 @@ def build_full_home(home: Path) -> Path:
   meta1.master_run = MasterRunRecord(
       raw_log=str(home / "sessions" / S_ORDINARY / "data" / "master_runs" / iso(35) / "agent.raw.ndjson"),
       started_at=BASE + timedelta(minutes=35), pid=0, pid_start="0")
+  # The producers' round structure: a run-start adoption marker opens each
+  # turn's interval and the round's MASTER_DONE closes it (the bare
+  # session_id-only spelling is the pre-typed corpus's marker). Each round's
+  # transport log was last written before its MASTER_DONE landed.
+  marker_handled = {
+      "id": f"{S_ORDINARY[:8]}-0000-0000-0000-0000000000b1",
+      "session_id": "native-cc-ordinary-turn-1",
+      "timestamp": iso(12),
+  }
+  marker_sched = {
+      "id": f"{S_ORDINARY[:8]}-0000-0000-0000-0000000000b3",
+      "session_id": "native-sched-1",
+      "timestamp": iso(36),
+  }
+  md_sched = {
+      "id": f"{S_ORDINARY[:8]}-0000-0000-0000-0000000000b2",
+      "type": "master_done",
+      "timestamp": iso(40),
+      "actor": "agent",
+      "source_session_id": S_ORDINARY,
+      "exit_code": 0,
+  }
   builder.session(meta1)
-  builder.chat_log(S_ORDINARY, [u_handled, md_handled, st_fired, ws_old],
+  builder.chat_log(S_ORDINARY,
+                   [u_handled, marker_handled, md_handled, ws_old, st_fired,
+                    marker_sched, md_sched],
                    archives={"chat_events.2026-W01.jsonl": [u_rotated, md_rotated, assistant_rotated]})
-  builder.master_turn_dir(S_ORDINARY, iso(10), raw_turn)
-  builder.master_turn_dir(S_ORDINARY, iso(35), raw_scheduled)
+  builder.master_turn_dir(S_ORDINARY, iso(10), raw_turn, mtime=iso(18))
+  builder.master_turn_dir(S_ORDINARY, iso(35), raw_scheduled, mtime=iso(38))
   builder.thread(S_ORDINARY, ThreadMetadata(
       id=T_WORK, session_id=S_ORDINARY, description="Do the deploy work",
       status="completed", created_at=BASE - timedelta(minutes=5), started_at=BASE - timedelta(minutes=4),
@@ -312,6 +373,10 @@ def build_full_home(home: Path) -> Path:
       "iter_0001.md": "Iteration 1 report: shaved 200ms.\n",
       "iter_0002.md": "Iteration 2 report: still failing.\n",
   })
+  # The controller's own launch identity: both iterations ran in the loop's
+  # shared worktree against the loop's recorded repo and work branch, and each
+  # launch's prompt echo references the iteration report it was told to write.
+  loop_worktree = str(home / "worktrees" / "improve-metrics")
   builder.thread(S_IMPROVE, ThreadMetadata(
       id=T_ITER1, session_id=S_IMPROVE, status="completed",
       description=("Iterative improvement — iteration 1/2\n"
@@ -319,7 +384,9 @@ def build_full_home(home: Path) -> Path:
       created_at=BASE + timedelta(minutes=101), started_at=BASE + timedelta(minutes=101),
       completed_at=BASE + timedelta(minutes=111), exit_code=0, backend="synth",
       repo_path=str(home / "repo"), branch_name="improve/metrics", base_branch="main",
-      require_review=False))
+      worktree_path=loop_worktree, require_review=False),
+      raw="Write your report to: " + str(home / "sessions" / S_IMPROVE / "loops" / "3" /
+                                          "iter_0001.md") + "\n")
   builder.thread(S_IMPROVE, ThreadMetadata(
       id=T_ITER2, session_id=S_IMPROVE, status="failed",
       description=("Iterative improvement — iteration 2/2\n"
@@ -327,7 +394,9 @@ def build_full_home(home: Path) -> Path:
       created_at=BASE + timedelta(minutes=112), started_at=BASE + timedelta(minutes=112),
       completed_at=BASE + timedelta(minutes=120), exit_code=1, backend="synth",
       repo_path=str(home / "repo"), branch_name="improve/metrics", base_branch="main",
-      require_review=False))
+      worktree_path=loop_worktree, require_review=False),
+      raw="Write your report to: " + str(home / "sessions" / S_IMPROVE / "loops" / "3" /
+                                          "iter_0002.md") + "\n")
 
   builder.session(SessionMetadata(id=S_WORKERS, name="Implementation hub", backend="synth",
                                   created_at=BASE, updated_at=BASE))
@@ -410,7 +479,14 @@ def build_completed_implement_home(home: Path) -> Path:
   subprocess.run(["git", "-C", str(repo), "checkout", "-qb", work_branch], check=True)
   (repo / "landed.txt").write_text("reviewed and landed\n", encoding="utf-8")
   subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
-  subprocess.run(["git", "-C", str(repo), "commit", "-qm", "landed work"], check=True)
+  # The worker committed inside the run's own execution window: the result
+  # commit's committer date pins it to this run, so a branch that moved later
+  # can never pass as this run's output.
+  env = dict(**os.environ)
+  stamp = (BASE + timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%S %z")
+  env["GIT_AUTHOR_DATE"] = stamp
+  env["GIT_COMMITTER_DATE"] = stamp
+  subprocess.run(["git", "-C", str(repo), "commit", "-qm", "landed work"], check=True, env=env)
   subprocess.run(["git", "-C", str(repo), "checkout", "-q", "main"], check=True)
   subprocess.run(["git", "-C", str(repo), "merge", "-q", "--ff-only", work_branch], check=True)
   builder.thread(S_WORKERS, ThreadMetadata(
@@ -450,13 +526,16 @@ def build_ambiguous_loop_home(home: Path) -> Path:
                                   created_at=BASE, updated_at=BASE))
   builder.loop(S_IMPROVE, "a", {"state.json": json.dumps(loop_state), "iter_0001.md": "a\n"})
   builder.loop(S_IMPROVE, "b", {"state.json": json.dumps(loop_state), "iter_0001.md": "b\n"})
+  # Both loops carry the same controller identity (repo, work branch, shared
+  # worktree, iteration report): the association is ambiguous, never guessed.
   builder.thread(S_IMPROVE, ThreadMetadata(
       id=T_ITER1, session_id=S_IMPROVE, status="completed",
       description=f"Iterative improvement — iteration 1/1\nGoal: {goal}",
       created_at=BASE + timedelta(minutes=1), started_at=BASE + timedelta(minutes=1),
       completed_at=BASE + timedelta(minutes=10), exit_code=0, backend="synth",
       repo_path=str(home / "repo"), branch_name="improve/probe", base_branch="main",
-      require_review=False))
+      worktree_path=str(home / "worktrees" / "improve-probe"), require_review=False),
+      raw="Write your report to: iter_0001.md\n")
   return home
 
 
@@ -475,3 +554,354 @@ def build_uncertain_input_home(home: Path) -> Path:
   builder.chat_log(S_PENDING, [u_uncertain, md_unrelated])
   builder.master_turn_dir(S_PENDING, iso(10), raw)
   return home
+
+def _round(marker_sid: str, *, input_event: dict | None, done_offset: float,
+           done_event_id: str, session_id: str, exit_code: int = 0,
+           extra_done: dict | None = None) -> tuple[dict, dict]:
+  """One legacy round's chat-log half: run-start marker + its MASTER_DONE."""
+  marker = {
+      "id": f"m{done_event_id[-11:]}",
+      "session_id": marker_sid,
+      "timestamp": iso(done_offset - 3),
+  }
+  done = ev("master_done", done_offset, done_event_id, actor="agent",
+            exit_code=exit_code, source_session_id=session_id)
+  if input_event is not None:
+    done["input_event_id"] = input_event["id"]
+  if extra_done:
+    done.update(extra_done)
+  return marker, done
+
+
+def _turn_raw(marker_sid: str, *, echo: str | None = None, outcome: str = "success",
+              zero_usage: bool = False, with_output: bool = True) -> str:
+  """A raw manager log in the claude-family stream shape the producer writes."""
+  lines = [json.dumps({"type": "system", "subtype": "init", "session_id": marker_sid})]
+  if echo is not None and with_output:
+    lines.append(json.dumps({"type": "user", "message": {"role": "user", "content": [
+        {"type": "text", "text": echo}]}}))
+    lines.append(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "acknowledged"}]}}))
+  usage = ({"input_tokens": 0, "output_tokens": 0,
+            "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+           if zero_usage else
+           {"input_tokens": 100, "output_tokens": 30,
+            "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0})
+  result: dict = {"type": "result", "is_error": False,
+                  "usage": usage}
+  if outcome == "success":
+    result["subtype"] = "success"
+  else:
+    result["subtype"] = "error_during_execution"
+  lines.append(json.dumps(result))
+  return "".join(line + "\n" for line in lines)
+
+
+def build_failed_rounds_home(home: Path) -> Path:
+  """Failed named rounds, a zero-output named round, and a later successful retry.
+
+  - u_retry: a failed named round (its raw stream settled successfully but the
+    consumer's MASTER_DONE records exit 1), then a proven successful retry:
+    both runs keep the input id, the failed one as a failed execution.
+  - u_zero: a zero-output named round (all-zero usage, no output signal, the
+    guard's exit 1): the run imports failed and the input waits behind it.
+  """
+  builder = FixtureBuilder(home)
+  builder.build()
+  sid = S_FAILED_ROUNDS
+  u_retry = ev("user", 0, f"{sid[:8]}-0000-0000-0000-00000000000a",
+               content="Retry the deploy", source_session_id=sid)
+  md_failed = ev("master_done", 20, f"{sid[:8]}-0000-0000-0000-00000000000b",
+                 actor="agent", exit_code=1, input_event_id=u_retry["id"],
+                 source_session_id=sid)
+  md_retry = ev("master_done", 60, f"{sid[:8]}-0000-0000-0000-00000000000c",
+                actor="agent", exit_code=0, input_event_id=u_retry["id"],
+                source_session_id=sid)
+  u_zero = ev("user", 70, f"{sid[:8]}-0000-0000-0000-00000000000d",
+              content="Summarize the board", source_session_id=sid)
+  md_zero = ev("master_done", 90, f"{sid[:8]}-0000-0000-0000-00000000000e",
+               actor="agent", exit_code=1, input_event_id=u_zero["id"],
+               zero_output=True, source_session_id=sid)
+  m1, _ = _round("sid-failed-1", input_event=u_retry, done_offset=20,
+                 done_event_id=md_failed["id"], session_id=sid)
+  m2, _ = _round("sid-failed-2", input_event=u_retry, done_offset=60,
+                 done_event_id=md_retry["id"], session_id=sid)
+  m3, _ = _round("sid-zero-1", input_event=u_zero, done_offset=90,
+                 done_event_id=md_zero["id"], session_id=sid)
+  builder.session(SessionMetadata(id=sid, name="Failed rounds", backend="synth",
+                                  created_at=BASE, updated_at=BASE))
+  builder.chat_log(sid, [u_retry, m1, md_failed, m2, md_retry, u_zero, m3, md_zero])
+  # Round 1: the stream settled with a success-shaped result but the consumer
+  # failed the round (exit 1) — the completion fact outranks the raw shape.
+  builder.master_turn_dir(sid, iso(10), _turn_raw("sid-failed-1", echo="Retry the deploy"),
+                          mtime=iso(18))
+  builder.master_turn_dir(sid, iso(40), _turn_raw("sid-failed-2", echo="Retry the deploy"),
+                          mtime=iso(58))
+  builder.master_turn_dir(sid, iso(75),
+                          _turn_raw("sid-zero-1", echo="Summarize the board", zero_usage=True,
+                                    with_output=False),
+                          mtime=iso(88))
+  return home
+
+
+def build_inflight_failed_home(home: Path) -> Path:
+  """The recorded in-flight turn names an input whose raw result failed."""
+  builder = FixtureBuilder(home)
+  builder.build()
+  sid = S_UNBOUND
+  u = ev("user", 0, f"{sid[:8]}-0000-0000-0000-00000000000a",
+         content="Ship the release", source_session_id=sid)
+  meta = SessionMetadata(id=sid, name="Inflight failed", backend="synth",
+                         created_at=BASE, updated_at=BASE)
+  meta.master_run = MasterRunRecord(
+      raw_log=str(home / "sessions" / sid / "data" / "master_runs" / iso(10) /
+                  "agent.raw.ndjson"),
+      started_at=BASE + timedelta(minutes=10),
+      user_event_id=u["id"], pid=0, pid_start="0")
+  builder.session(meta)
+  builder.chat_log(sid, [u])
+  builder.master_turn_dir(sid, iso(10),
+                          json.dumps({"type": "result", "subtype": "error_during_execution",
+                                      "is_error": True}) + "\n",
+                          mtime=iso(15))
+  return home
+
+
+def build_unbound_success_home(home: Path) -> Path:
+  """A proven successful named round whose raw log is gone: handled but unbound."""
+  builder = FixtureBuilder(home)
+  builder.build()
+  sid = S_UNBOUND
+  u = ev("user", 0, f"{sid[:8]}-0000-0000-0000-00000000000b",
+         content="Audit the timers", source_session_id=sid)
+  marker, md = _round("sid-gone", input_event=u, done_offset=20,
+                      done_event_id=f"{sid[:8]}-0000-0000-0000-00000000000c",
+                      session_id=sid)
+  builder.session(SessionMetadata(id=sid, name="Unbound success", backend="synth",
+                                  created_at=BASE, updated_at=BASE))
+  builder.chat_log(sid, [u, marker, md])
+  # The round's execution log is missing (deleted with its directory).
+  return home
+
+
+def build_malformed_times_home(home: Path) -> Path:
+  """Malformed input timestamps: the old replay rule is positional, not time-based.
+
+  - S_TIMES/U1: malformed timestamp, no later round: proven unhandled (pending).
+  - S_TIMES/U2: malformed timestamp, later unnamed rounds exist: uncertain.
+  """
+  builder = FixtureBuilder(home)
+  builder.build()
+  sid = S_TIMES
+  u1 = ev("user", 0, f"{sid[:8]}-0000-0000-0000-00000000000a",
+          content="First malformed request", source_session_id=sid)
+  u1["timestamp"] = "not-a-timestamp"
+  u2 = ev("user", 0, f"{sid[:8]}-0000-0000-0000-00000000000b",
+          content="Second malformed request", source_session_id=sid)
+  u2["timestamp"] = ""
+  md_unrelated = ev("master_done", 30, f"{sid[:8]}-0000-0000-0000-00000000000c",
+                    actor="agent", exit_code=0, input_event_id=None,
+                    source_session_id=sid)
+  marker = {"id": f"{sid[:8]}-0000-0000-0000-00000000000d",
+            "session_id": "sid-times-1", "timestamp": iso(28)}
+  builder.session(SessionMetadata(id=sid, name="Malformed times", backend="synth",
+                                  created_at=BASE, updated_at=BASE))
+  # u1's malformed timestamp sorts it first, but the positional replay rule
+  # reads order, not clocks: u1 precedes every round and is replay-proven
+  # unhandled; u2 precedes the completed unnamed round and stays uncertain.
+  builder.chat_log(sid, [u1, u2, marker, md_unrelated])
+  builder.master_turn_dir(sid, iso(20), _turn_raw("sid-times-1", echo=None),
+                          mtime=iso(29))
+  return home
+
+
+def build_scheduled_unproven_home(home: Path) -> Path:
+  """Scheduled wakes without proven handling: interrupted round, echo-less round."""
+  builder = FixtureBuilder(home)
+  builder.build()
+  sid = S_SCHED_UNPROVEN
+  st_interrupted = ev("scheduled_trigger", 0, f"{sid[:8]}-0000-0000-0000-00000000000a",
+                      actor="system", content="interrupted wake", source_session_id=sid)
+  st_echoless = ev("scheduled_trigger", 60, f"{sid[:8]}-0000-0000-0000-00000000000b",
+                   actor="system", content="echoless wake", source_session_id=sid)
+  marker_interrupted = {"id": f"{sid[:8]}-0000-0000-0000-00000000000c",
+                        "session_id": "sid-sched-int", "timestamp": iso(3)}
+  marker_echoless = {"id": f"{sid[:8]}-0000-0000-0000-00000000000d",
+                     "session_id": "sid-sched-echo", "timestamp": iso(63)}
+  md_echoless = ev("master_done", 80, f"{sid[:8]}-0000-0000-0000-00000000000e",
+                   actor="agent", exit_code=0, input_event_id=None,
+                   source_session_id=sid)
+  builder.session(SessionMetadata(id=sid, name="Scheduled unproven", backend="synth",
+                                  created_at=BASE, updated_at=BASE))
+  builder.chat_log(sid, [st_interrupted, marker_interrupted, st_echoless,
+                         marker_echoless, md_echoless])
+  # The echoless wake's round is proven and successful but its transport log
+  # never echoes the wake text, so it cannot prove it consumed this wake.
+  builder.master_turn_dir(sid, iso(62), _turn_raw("sid-sched-echo", echo=None),
+                          mtime=iso(78))
+  # The interrupted wake's round started but never completed: no log result.
+  builder.master_turn_dir(sid, iso(2), json.dumps({"type": "assistant", "message": {
+      "content": [{"type": "text", "text": "partial"}]}}) + "\n", mtime=iso(4))
+  return home
+
+
+def build_identical_requests_home(home: Path) -> Path:
+  """Identical input bodies in distinct requests: identity binds each to its own run."""
+  builder = FixtureBuilder(home)
+  builder.build()
+  sid = S_IDENTICAL
+  body = "Run the same migration twice"
+  u1 = ev("user", 0, f"{sid[:8]}-0000-0000-0000-00000000000a", content=body,
+          source_session_id=sid)
+  u2 = ev("user", 60, f"{sid[:8]}-0000-0000-0000-00000000000b", content=body,
+          source_session_id=sid)
+  md1 = ev("master_done", 20, f"{sid[:8]}-0000-0000-0000-00000000000c",
+           actor="agent", exit_code=0, input_event_id=u1["id"], source_session_id=sid)
+  md2 = ev("master_done", 80, f"{sid[:8]}-0000-0000-0000-00000000000d",
+           actor="agent", exit_code=0, input_event_id=u2["id"], source_session_id=sid)
+  m1, _ = _round("sid-ident-1", input_event=u1, done_offset=20,
+                 done_event_id=md1["id"], session_id=sid)
+  m2, _ = _round("sid-ident-2", input_event=u2, done_offset=80,
+                 done_event_id=md2["id"], session_id=sid)
+  builder.session(SessionMetadata(id=sid, name="Identical requests", backend="synth",
+                                  created_at=BASE, updated_at=BASE))
+  builder.chat_log(sid, [u1, m1, md1, u2, m2, md2])
+  builder.master_turn_dir(sid, iso(10), _turn_raw("sid-ident-1", echo=body),
+                          mtime=iso(18))
+  builder.master_turn_dir(sid, iso(70), _turn_raw("sid-ident-2", echo=body),
+                          mtime=iso(78))
+  # A later turn whose stream merely quotes the first request's text: it
+  # adopts its own session id and cannot inherit the first round's input.
+  quote_raw = (json.dumps({"type": "system", "subtype": "init",
+                           "session_id": "sid-ident-quote"}) + "\n"
+               + json.dumps({"type": "assistant", "message": {"content": [
+                   {"type": "text", "text": "Earlier you asked: " + body}]}}) + "\n"
+               + json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                             "usage": {"input_tokens": 50, "output_tokens": 10,
+                                       "cache_read_input_tokens": 0,
+                                       "cache_creation_input_tokens": 0}}) + "\n")
+  builder.master_turn_dir(sid, iso(120), quote_raw, mtime=iso(128))
+  return home
+
+
+def build_review_retry_home(home: Path) -> Path:
+  """A failed reviewer attempt followed by a provably accepted successful retry."""
+  builder = FixtureBuilder(home)
+  builder.build()
+  builder.session(SessionMetadata(id=S_REVIEW_RETRY, name="Review retry", backend="synth",
+                                  created_at=BASE, updated_at=BASE))
+  builder.thread(S_REVIEW_RETRY, ThreadMetadata(
+      id=T_WORK, session_id=S_REVIEW_RETRY, description="Implement the retry fix",
+      status="completed", created_at=BASE, started_at=BASE,
+      completed_at=BASE + timedelta(minutes=20), exit_code=0, backend="synth",
+      task_type=TaskType.QUICK_EDIT, require_review=True),
+      events=[ev("result", 19, f"{S_REVIEW_RETRY[:8]}-0000-0000-0000-00000000000a",
+                 actor="agent", subtype="success", is_error=False,
+                 source_session_id=S_REVIEW_RETRY)])
+  builder.thread(S_REVIEW_RETRY, ThreadMetadata(
+      id=T_RETRY_FAILED, session_id=S_REVIEW_RETRY,
+      description="Review of: Implement the retry fix", status="failed",
+      created_at=BASE + timedelta(minutes=21), started_at=BASE + timedelta(minutes=21),
+      completed_at=BASE + timedelta(minutes=25), exit_code=1, backend="synth",
+      review_of=T_WORK, require_review=False),
+      events=[ev("result", 24, f"{S_REVIEW_RETRY[:8]}-0000-0000-0000-00000000000b",
+                 actor="agent", subtype="error_during_execution", is_error=True,
+                 source_session_id=S_REVIEW_RETRY)])
+  builder.thread(S_REVIEW_RETRY, ThreadMetadata(
+      id=T_RETRY_OK, session_id=S_REVIEW_RETRY,
+      description="Review of: Implement the retry fix", status="completed",
+      created_at=BASE + timedelta(minutes=30), started_at=BASE + timedelta(minutes=30),
+      completed_at=BASE + timedelta(minutes=40), exit_code=0, backend="synth",
+      review_of=T_WORK, require_review=False),
+      events=[ev("result", 39, f"{S_REVIEW_RETRY[:8]}-0000-0000-0000-00000000000c",
+                 actor="agent", subtype="success", is_error=False,
+                 source_session_id=S_REVIEW_RETRY)])
+  return home
+
+
+def build_review_metadata_conflict_home(home: Path) -> Path:
+  """Completed review metadata over a retained failed review result cannot close."""
+  builder = FixtureBuilder(home)
+  builder.build()
+  builder.session(SessionMetadata(id=S_REVIEW_RETRY, name="Review conflict", backend="synth",
+                                  created_at=BASE, updated_at=BASE))
+  builder.thread(S_REVIEW_RETRY, ThreadMetadata(
+      id=T_WORK, session_id=S_REVIEW_RETRY, description="Implement the conflict fix",
+      status="completed", created_at=BASE, started_at=BASE,
+      completed_at=BASE + timedelta(minutes=20), exit_code=0, backend="synth",
+      task_type=TaskType.QUICK_EDIT, require_review=True),
+      events=[ev("result", 19, f"{S_REVIEW_RETRY[:8]}-0000-0000-0000-00000000000a",
+                 actor="agent", subtype="success", is_error=False,
+                 source_session_id=S_REVIEW_RETRY)])
+  builder.thread(S_REVIEW_RETRY, ThreadMetadata(
+      id=T_REVIEW_CONFLICT, session_id=S_REVIEW_RETRY,
+      description="Review of: Implement the conflict fix", status="completed",
+      created_at=BASE + timedelta(minutes=21), started_at=BASE + timedelta(minutes=21),
+      completed_at=BASE + timedelta(minutes=30), exit_code=0, backend="synth",
+      review_of=T_WORK, require_review=False),
+      events=[ev("result", 29, f"{S_REVIEW_RETRY[:8]}-0000-0000-0000-00000000000b",
+                 actor="agent", subtype="error_during_execution", is_error=True,
+                 source_session_id=S_REVIEW_RETRY)])
+  return home
+
+
+def _implement_with_branch(home: Path, *, worktree: bool, move_branch: bool) -> Path:
+  """An implement home whose result commit is pinned; optionally reuse the branch."""
+  builder = FixtureBuilder(home)
+  builder.build()
+  builder.session(SessionMetadata(id=S_WORKERS, name="Landing hub", backend="synth",
+                                  created_at=BASE, updated_at=BASE))
+  repo = home / "repo"
+  work_branch = "work/pinned"
+  env = dict(**os.environ)
+  stamp = (BASE + timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%S %z")
+  env["GIT_AUTHOR_DATE"] = stamp
+  env["GIT_COMMITTER_DATE"] = stamp
+  subprocess.run(["git", "-C", str(repo), "checkout", "-qb", work_branch], check=True)
+  (repo / "pinned.txt").write_text("pinned work\n", encoding="utf-8")
+  subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+  subprocess.run(["git", "-C", str(repo), "commit", "-qm", "pinned work"], check=True, env=env)
+  result_commit = subprocess.run(
+      ["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True,
+      text=True).stdout.strip()
+  if move_branch:
+    # A later, unrelated reuse of the work branch: its tip is not this run's
+    # output, and the run's window proves it.
+    later = (BASE + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S %z")
+    env["GIT_AUTHOR_DATE"] = later
+    env["GIT_COMMITTER_DATE"] = later
+    (repo / "pinned.txt").write_text("reused later\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "reuse the branch"],
+                   check=True, env=env)
+    env["GIT_AUTHOR_DATE"] = stamp
+    env["GIT_COMMITTER_DATE"] = stamp
+  subprocess.run(["git", "-C", str(repo), "checkout", "-q", "main"], check=True)
+  subprocess.run(["git", "-C", str(repo), "merge", "-q", "--ff-only", work_branch],
+                 check=True)
+  if worktree:
+    # The run's own retained worktree still sits at the run's result commit,
+    # even though the branch later moved past it.
+    wt = home / "worktrees" / "work-pinned"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q",
+                    "--detach", str(wt), result_commit], check=True, env=env)
+  builder.thread(S_WORKERS, ThreadMetadata(
+      id=T_WORK, session_id=S_WORKERS, description="Implement the pinned fix",
+      status="completed", created_at=BASE, started_at=BASE,
+      completed_at=BASE + timedelta(minutes=30), exit_code=0, backend="synth",
+      repo_path=str(repo), branch_name=work_branch, base_branch="main",
+      task_type=TaskType.IMPLEMENT, require_review=False,
+      worktree_path=str(home / "worktrees" / "work-pinned") if worktree else None),
+      events=[ev("result", 29, f"{S_WORKERS[:8]}-0000-0000-0000-00000000000a", actor="agent",
+                 subtype="success", is_error=False, source_session_id=S_WORKERS)])
+  return home
+
+
+def build_moved_branch_home(home: Path) -> Path:
+  """The work branch was reused after the run: the tip is not this run's output."""
+  return _implement_with_branch(home, worktree=False, move_branch=True)
+
+
+def build_pinned_worktree_home(home: Path) -> Path:
+  """A moved branch whose run's own worktree still pins the result commit."""
+  return _implement_with_branch(home, worktree=True, move_branch=True)

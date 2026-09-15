@@ -2,7 +2,6 @@
 reach into resume resolution, the backend-switch domain, the usage panel, and metadata persistence."""
 
 import asyncio
-import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -17,6 +16,7 @@ from conftest import (
     mock_session_callbacks,
     pool_cfg,
     run_session_consumer,
+    seed_transcript_copy,
     write_pool_credentials,
 )
 from structlog.testing import capture_logs
@@ -707,18 +707,10 @@ async def test_consumer_skips_account_persistence_when_no_account_was_assigned(t
 # ---------------------------------------------------------------------------
 
 
-def _seed_copy(config_dir: Path, cc_session_id: str, body: str, *, mtime_ns: int) -> Path:
-  """One transcript copy with an explicit mtime, so newness never rides on timing."""
-  path = make_transcript(config_dir, cc_session_id)
-  path.write_text(body, encoding="utf-8")
-  os.utime(path, ns=(mtime_ns, mtime_ns))
-  return path
-
-
 def test_move_transcript_refuses_to_overwrite_a_strictly_newer_destination(tmp_path: Path) -> None:
   src_dir, dst_dir = tmp_path / "claude-main", tmp_path / "claude-ext-1"
-  src = _seed_copy(src_dir, "uuid-1", '{"stale": true}\n', mtime_ns=1_000)
-  dst = _seed_copy(dst_dir, "uuid-1", '{"stale": true}\n{"live": true}\n', mtime_ns=2_000)
+  src = seed_transcript_copy(src_dir, "uuid-1", '{"stale": true}\n', mtime_ns=1_000)
+  dst = seed_transcript_copy(dst_dir, "uuid-1", '{"stale": true}\n{"live": true}\n', mtime_ns=2_000)
 
   with pytest.raises(claude_accounts.TranscriptMoveError) as excinfo:
     claude_accounts.move_transcript("uuid-1", src_dir, dst_dir)
@@ -736,8 +728,8 @@ def test_move_transcript_refuses_to_overwrite_a_strictly_newer_destination(tmp_p
 
 def test_move_transcript_refuses_when_mtimes_match_and_destination_is_larger(tmp_path: Path) -> None:
   src_dir, dst_dir = tmp_path / "claude-main", tmp_path / "claude-ext-1"
-  _seed_copy(src_dir, "uuid-1", "short\n", mtime_ns=5_000)
-  _seed_copy(dst_dir, "uuid-1", "short\nand the destination grew under the same stamp\n", mtime_ns=5_000)
+  seed_transcript_copy(src_dir, "uuid-1", "short\n", mtime_ns=5_000)
+  seed_transcript_copy(dst_dir, "uuid-1", "short\nand the destination grew under the same stamp\n", mtime_ns=5_000)
 
   with pytest.raises(claude_accounts.TranscriptMoveError) as excinfo:
     claude_accounts.move_transcript("uuid-1", src_dir, dst_dir)
@@ -749,8 +741,8 @@ def test_move_transcript_passes_an_identical_copy_back_through(tmp_path: Path) -
   """Equal mtime and size is the same copy re-moved: the move proceeds, not a refusal."""
   src_dir, dst_dir = tmp_path / "claude-main", tmp_path / "claude-ext-1"
   body = '{"same": true}\n'
-  src = _seed_copy(src_dir, "uuid-1", body, mtime_ns=5_000)
-  dst = _seed_copy(dst_dir, "uuid-1", body, mtime_ns=5_000)
+  src = seed_transcript_copy(src_dir, "uuid-1", body, mtime_ns=5_000)
+  dst = seed_transcript_copy(dst_dir, "uuid-1", body, mtime_ns=5_000)
 
   moved = claude_accounts.move_transcript("uuid-1", src_dir, dst_dir)
 
@@ -827,9 +819,9 @@ def test_move_transcript_retains_and_counts_destination_born_sidecar_files(tmp_p
 
 def test_retire_transcript_copies_keeps_the_newest_two(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
-  oldest = _seed_copy(tmp_path / "claude-ext-2", "uuid-1", "oldest\n", mtime_ns=1_000)
-  middle = _seed_copy(tmp_path / "claude-ext-1", "uuid-1", "middle\n", mtime_ns=2_000)
-  newest = _seed_copy(tmp_path / "claude-main", "uuid-1", "newest\n", mtime_ns=3_000)
+  oldest = seed_transcript_copy(tmp_path / "claude-ext-2", "uuid-1", "oldest\n", mtime_ns=1_000)
+  middle = seed_transcript_copy(tmp_path / "claude-ext-1", "uuid-1", "middle\n", mtime_ns=2_000)
+  newest = seed_transcript_copy(tmp_path / "claude-main", "uuid-1", "newest\n", mtime_ns=3_000)
   for copy in (oldest, middle, newest):
     (copy.with_suffix("") / "tool-results").mkdir(parents=True)
     (copy.with_suffix("") / "tool-results" / "r.txt").write_text("x", encoding="utf-8")
@@ -844,9 +836,9 @@ def test_retire_transcript_copies_keeps_the_newest_two(tmp_path: Path) -> None:
 
 def test_retire_transcript_copies_keeps_a_custom_count(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
-  _seed_copy(tmp_path / "claude-ext-2", "uuid-1", "oldest\n", mtime_ns=1_000)
-  middle = _seed_copy(tmp_path / "claude-ext-1", "uuid-1", "middle\n", mtime_ns=2_000)
-  newest = _seed_copy(tmp_path / "claude-main", "uuid-1", "newest\n", mtime_ns=3_000)
+  seed_transcript_copy(tmp_path / "claude-ext-2", "uuid-1", "oldest\n", mtime_ns=1_000)
+  middle = seed_transcript_copy(tmp_path / "claude-ext-1", "uuid-1", "middle\n", mtime_ns=2_000)
+  newest = seed_transcript_copy(tmp_path / "claude-main", "uuid-1", "newest\n", mtime_ns=3_000)
 
   claude_accounts.retire_transcript_copies(cfg, "uuid-1", keep=1)
 
@@ -856,7 +848,7 @@ def test_retire_transcript_copies_keeps_a_custom_count(tmp_path: Path) -> None:
 
 def test_retire_transcript_copies_is_a_noop_below_the_keep_count(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
-  only = _seed_copy(tmp_path / "claude-main", "uuid-1", "only\n", mtime_ns=1_000)
+  only = seed_transcript_copy(tmp_path / "claude-main", "uuid-1", "only\n", mtime_ns=1_000)
 
   claude_accounts.retire_transcript_copies(cfg, "uuid-1")
 
@@ -870,8 +862,8 @@ def test_retire_transcript_copies_is_a_noop_below_the_keep_count(tmp_path: Path)
 
 def test_newest_transcript_copy_picks_the_mtime_newest_pool_holder(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
-  _seed_copy(tmp_path / "claude-ext-2", "uuid-1", "old\n", mtime_ns=1_000)
-  newest = _seed_copy(tmp_path / "claude-ext-1", "uuid-1", "new\n", mtime_ns=2_000)
+  seed_transcript_copy(tmp_path / "claude-ext-2", "uuid-1", "old\n", mtime_ns=1_000)
+  newest = seed_transcript_copy(tmp_path / "claude-ext-1", "uuid-1", "new\n", mtime_ns=2_000)
 
   holder = claude_accounts.newest_transcript_copy(cfg, "uuid-1")
 

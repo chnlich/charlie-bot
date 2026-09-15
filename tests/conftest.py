@@ -114,6 +114,21 @@ def mock_session_callbacks() -> models.SessionCallbacks:
   )
 
 
+def manager_backed_callbacks(mgr: SessionManager) -> models.SessionCallbacks:
+  """SessionCallbacks whose anchor funnels are the real manager's, so anchor persistence is
+  observable on disk rather than on a mock's call list; broadcast stays mocked."""
+  return models.SessionCallbacks(
+      persist_and_broadcast=AsyncMock(),
+      **mocked_callback_fields(
+          persist_cc_session_id=mgr.persist_cc_session_id,
+          has_completed_round=mgr.has_completed_round,
+      ),
+      persist_master_run=mgr.persist_master_run,
+      persist_claude_account=mgr.persist_claude_account,
+      claude_context_state=AsyncMock(return_value=(None, None)),
+  )
+
+
 def make_work_item(
     cfg: CharlieBotConfig,
     session_meta: models.SessionMetadata,
@@ -834,6 +849,14 @@ def make_transcript(config_dir: Path, cc_session_id: str) -> Path:
   transcript.parent.mkdir(parents=True, exist_ok=True)
   transcript.write_text("[]", encoding="utf-8")
   return transcript
+
+
+def seed_transcript_copy(config_dir: Path, cc_session_id: str, body: str, *, mtime_ns: int) -> Path:
+  """One transcript copy with an explicit mtime, so newness never rides on timing."""
+  path = make_transcript(config_dir, cc_session_id)
+  path.write_text(body, encoding="utf-8")
+  os.utime(path, ns=(mtime_ns, mtime_ns))
+  return path
 
 
 def write_pool_credentials(config_dir: Path, access_token: str = "token") -> None:

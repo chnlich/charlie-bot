@@ -472,3 +472,89 @@ async def test_replayed_finalization_does_not_duplicate_child_or_iterations(
     assert run1.sequence_ref.kind == "improve"
     assert run1.sequence_ref.position == 1
     assert len(tree.runs.list_run_records_sync(child1.id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_invalid_backend_fails_admission_without_leaking_the_lock(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    """An unknown requested backend is a clean 400 BEFORE the reservation: no
+    leaked active.lock, no "running" state stamped with the live pid, and a
+    valid retry is not blocked by the failed admission."""
+    from src.core.improve_command import _active_loop_path, _loops_dir, find_running_loop
+    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+    from src.core.models import TaskSpec
+    manager = await tree.create_task(
+        request_id="root", task_parent_id=None, profile="manager",
+        task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
+    patch_instructions_content(monkeypatch)
+    stub_credentials(monkeypatch, {"charliebot": {"access_key": "op-secret"}})
+    monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
+    await tree.dispatch.admit_input(
+        manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
+    payload = {
+        "session_id": manager.id,
+        "goal": "## Goal\n\nimprove the thing\n",
+        "iterations": 1,
+        "repo_path": str(repo),
+        "base_branch": "main",
+        "backend": "does-not-exist",
+    }
+    with make_api_client(cfg, session_mgr, tree) as client:
+        resp = client.post("/api/internal/improve", json=payload, headers=OPERATOR)
+    assert resp.status_code == 400, resp.text
+    assert not _active_loop_path(manager.id, cfg).exists()
+    assert await find_running_loop(manager.id, cfg) is None
+    # The reservation never ran: no loop directory state exists at all.
+    assert not _loops_dir(manager.id, cfg).is_dir()
+
+    # The failed admission blocks nothing: the valid retry starts its loop.
+    _worker_backends(monkeypatch, ["iter one words"])
+    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+    payload.pop("backend")
+    payload["work_branch"] = "improve/retry-branch"
+    with make_api_client(cfg, session_mgr, tree) as client:
+        resp = client.post("/api/internal/improve", json=payload, headers=OPERATOR)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        child_id = body["child_session_id"]
+        deadline = asyncio.get_event_loop().time() + 30
+        state_status = None
+        while asyncio.get_event_loop().time() < deadline:
+            state = await load_loop_state(manager.id, body["loop_id"], cfg)
+            if state is not None and state.status != "running":
+                state_status = state.status
+                break
+            await asyncio.sleep(0.1)
+        assert state_status is not None, "the retried loop never finished"
+        assert child_id
+        assert not _active_loop_path(manager.id, cfg).exists()
+
+
+@pytest.mark.asyncio
+async def test_improve_without_authorization_is_forbidden_not_a_server_error(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    """No take-off anywhere in the chain: 403 with the gate's reason, never a
+    500, and nothing reserved."""
+    from src.core.improve_command import _active_loop_path, _loops_dir, find_running_loop
+    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+    from src.core.models import TaskSpec
+    manager = await tree.create_task(
+        request_id="root", task_parent_id=None, profile="manager",
+        task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
+    stub_credentials(monkeypatch, {"charliebot": {"access_key": "op-secret"}})
+    monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
+    payload = {
+        "session_id": manager.id,
+        "goal": "## Goal\n\nimprove the thing\n",
+        "iterations": 1,
+        "repo_path": str(repo),
+        "base_branch": "main",
+    }
+    with make_api_client(cfg, session_mgr, tree) as client:
+        resp = client.post("/api/internal/improve", json=payload, headers=OPERATOR)
+    assert resp.status_code == 403, resp.text
+    assert "take off" in str(resp.json()["detail"]).lower() or "authorization" in str(resp.json()["detail"]).lower()
+    assert not _active_loop_path(manager.id, cfg).exists()
+    assert await find_running_loop(manager.id, cfg) is None
+    loops_dir = _loops_dir(manager.id, cfg)
+    assert not loops_dir.is_dir() or list(loops_dir.glob("*")) == []

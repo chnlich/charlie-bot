@@ -117,16 +117,15 @@ async function compactContext() {
   }
 }
 
-Chat.setVoiceContributed = setVoiceContributed;
-Chat.bumpCurrentSessionToTop = bumpCurrentSessionToTop;
-Chat.postChatMessage = postChatMessage;
-Chat.sendMessage = sendMessage;
-Chat.compactContext = compactContext;
-Chat.expose([
-  'bumpCurrentSessionToTop',
-  'postChatMessage',
-  'sendMessage',
-  'compactContext',
-]);
+const GLOBALS = {
+  bumpCurrentSessionToTop,
+  postChatMessage,
+  sendMessage,
+  compactContext,
+};
+const CHAT_ONLY = {
+  setVoiceContributed,
+};
+Chat.wire(GLOBALS, CHAT_ONLY);
 
 })();

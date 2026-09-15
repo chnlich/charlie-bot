@@ -56,6 +56,16 @@ OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
 # tests/test_frontend_file_server_prefixes.py.
 FILE_SERVER_MOUNTS = ("/files", "/absolute_filepath")
 
+# Public viewer route paths: pages.py declares each route with its spelling, and the
+# auth whitelist (src.api.auth) admits exactly these paths without a key, so a route
+# rename and its whitelist entry move together. The merged path is additionally the
+# special case server.py's gzip middleware skips (the body is already-compressed
+# trace bytes) and the URL pages.py builds for merged traces.
+PERFETTO_VIEWER_PATH = "/perfetto"
+PERFETTO_MERGED_PATH = "/perfetto/merged"
+NCU_VIEWER_PATH = "/ncu"
+AUTH_STATUS_PATH = "/api/auth/status"
+
 
 class WatchKind(StrEnum):
   UNKNOWN = "unknown"  # fail-loud sentinel; never a valid target, no default

@@ -264,6 +264,7 @@ function buildAppContext() {
     postProcessRenderedMessages: noop('postProcessRenderedMessages'),
     initScrollPagination: noop('initScrollPagination'),
     connectWS: noop('connectWS'),
+    cancelReconnect: noop('cancelReconnect'),
     scheduleLazySessionDataLoad: noop('scheduleLazySessionDataLoad'),
     ensureActiveSessionViewPolling: noop('ensureActiveSessionViewPolling'),
     refreshSessionStatusNow: noop('refreshSessionStatusNow'),

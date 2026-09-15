@@ -285,7 +285,7 @@ async function switchSession(sessionId) {
     // Same session — but if it's a stopped TUI, force WS reconnect to respawn tmux/claude.
     if (globalThis.TuiStatusMap[sessionId]?.running === false) {
       disconnectWS();
-      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      cancelReconnect();
       connectWS();
       setTimeout(() => { if (typeof fetchTuiStatus === 'function') fetchTuiStatus(); }, 1500);
     }
@@ -310,7 +310,7 @@ async function switchSession(sessionId) {
 
   // Close WebSocket (suppress auto-reconnect)
   disconnectWS();
-  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  cancelReconnect();
 
   // Reset streaming state
   pendingUserMsg = false;
@@ -759,7 +759,7 @@ async function createSession() {
     if (masterThinking) stopThinking();
     teardownActiveSessionView();
     disconnectWS();
-    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    cancelReconnect();
     pendingUserMsg = false;
     hideStreaming();
 
@@ -798,7 +798,7 @@ function renderNoActiveSessionView() {
   teardownActiveSessionView();
   hideStreaming();
   disconnectWS();
-  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  cancelReconnect();
   pendingUserMsg = false;
 
   SESSION_ID = null;

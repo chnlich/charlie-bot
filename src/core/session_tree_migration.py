@@ -1127,13 +1127,17 @@ def _done_outcome(done: dict) -> str | None:
 
 
 def _session_rounds(events: list[dict]) -> list[RoundInterval]:
-  """The chat log's round structure, per the old projection's own interval rule.
+  """The chat log's round structure. The MASTER_DONE's round is the projection's.
 
   A run-start adoption marker (``session_attached`` or the bare
-  ``session_id``-only pre-typed spelling) opens one turn's interval; the
-  round's MASTER_DONE closes it. MASTER_DONEs seen before any marker close
-  marker-less rounds (a pre-marker corpus): still completed rounds, but with
-  no retained identity to bind to a raw log.
+  ``session_id``-only pre-typed spelling) opens one turn's interval; the next
+  MASTER_DONE closes the LATEST open round — the same interval rule the old
+  projection applies — so a resume's MASTER_DONE belongs to the resumed turn,
+  never to the turn that died. A marker arriving while one is open closes the
+  previous round as interrupted (its MASTER_DONE never landed: the turn died
+  before the consumer settled it) and opens the new one. MASTER_DONEs seen
+  before any marker close marker-less rounds (a pre-marker corpus): still
+  completed rounds, but with no retained identity to bind to a raw log.
   """
   rounds: list[RoundInterval] = []
   open_index: int | None = None
@@ -1141,8 +1145,11 @@ def _session_rounds(events: list[dict]) -> list[RoundInterval]:
   for index, event in enumerate(events):
     kind = event.get("type")
     if kind in (None, ET.SESSION_ATTACHED) and event.get("session_id"):
-      if open_index is None:
-        open_index, open_sid = index, str(event["session_id"])
+      if open_index is not None:
+        # The round this marker supersedes never settled: interrupted.
+        rounds.append(RoundInterval(marker_index=open_index, marker_session_id=open_sid,
+                                    done_index=None, done=None))
+      open_index, open_sid = index, str(event["session_id"])
       continue
     if kind == ET.MASTER_DONE:
       if open_index is None:
@@ -1385,14 +1392,18 @@ def _classify_inputs(info: SessionInfo, events: list[dict], meta: SessionMetadat
     disposition.pending.append(_pending_entry(input_event, input_id, event_type, info))
 
   def classify_scheduled_input(input_event: dict, input_id: str, index: int) -> None:
-    # The wake's round: the first round after the input whose closing
-    # MASTER_DONE names no input (a scheduled wake is admitted without one).
-    # Rounds whose done names an input consumed that input; the wake stays
-    # queued behind them.
+    # The wake's round: the first round that BEGAN after this wake fired
+    # whose closing MASTER_DONE names no input (a scheduled wake is admitted
+    # without one). Rounds whose done names an input consumed that input; the
+    # wake stays queued behind them. A round straddling the wake — opened
+    # before it, settling after — belongs to an earlier wake (the trigger is
+    # persisted, then the launcher spawns the round), so it is compared by
+    # its start marker; a marker-less orphan round can only be compared by
+    # its done, which binds nothing either way.
     wake: RoundInterval | None = None
     interrupted: RoundInterval | None = None
     for interval in rounds:
-      start = interval.done_index if interval.done is not None else interval.marker_index
+      start = interval.marker_index if interval.marker_index is not None else interval.done_index
       if start is None or start <= index:
         continue
       if interval.done is None:
@@ -2006,44 +2017,6 @@ def _thread_outcome(meta: ThreadMetadata) -> str | None:
   return None
 
 
-def _worktree_landing_proven(thread: ThreadInfo) -> tuple[bool, str | None]:
-  """Whether the implement work provably landed on its base branch.
-
-  The migration's offline form of the ``landed:`` evidence check the completion
-  owner enforces: the recorded repo, work branch and base branch must all
-  exist and git must show the work branch's tip reachable from the base branch
-  tip. A missing repo or branch is missing evidence, never a proven landing;
-  the check is read-only against the recorded repo.
-  """
-  repo_path = thread.meta.repo_path
-  branch = thread.meta.branch_name
-  base = thread.meta.base_branch
-  if not repo_path or not branch or not base:
-    return False, "recorded repo/branch/base_branch do not name a checkable landing"
-  repo = Path(repo_path)
-  if not (repo / ".git").exists():
-    return False, f"recorded repo {repo_path} is not present; landing cannot be checked"
-
-  def git(*args: str, check: bool = True) -> str:
-    result = subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, timeout=30, check=False)
-    if check and result.returncode != 0:
-      raise ValueError(f"git {' '.join(args[:2])}: {result.stderr.decode('utf-8', 'replace')[:200]}")
-    return result.stdout.decode("utf-8", "replace").strip()
-
-  try:
-    tip = git("rev-parse", "--verify", branch)
-    git("rev-parse", "--verify", base)
-    landed = subprocess.run(
-        ["git", "-C", str(repo), "merge-base", "--is-ancestor", tip, base],
-        capture_output=True, timeout=30, check=False)
-  except (ValueError, OSError, subprocess.TimeoutExpired) as e:
-    return False, f"git landing check failed: {e}"
-  if landed.returncode != 0:
-    return False, f"work branch {branch!r} is not reachable from base {base!r}"
-  return True, None
-
-
 def _improve_loop_association(
     snap: SourceSnapshot,
     session: SessionInfo,
@@ -2350,8 +2323,21 @@ def _plan_manager_conversion(
     run_id = _run_id_for(sid, _manager_turn_request_id_by_dir(log_dir))
     _bind_input_to_run(turn_runs, run_id, input_id)
 
+  # The boundary fact's content must re-derive identically across the apply
+  # boundary: the chat log is original evidence only when it holds history
+  # this conversion did not append. classified_events already strips the
+  # appended task_imported/run_finished facts on the re-derivation branch;
+  # the remaining converter fact types in an owner log (child_report,
+  # task_closed) are v2 control types no legacy producer ever writes, so a
+  # log holding only this converter's own writes — or an empty one — adds no
+  # source reference and a repeat apply re-derives the same task_imported
+  # event it wrote.
+  original_history = [
+      e for e in classified_events
+      if e.get("type") not in (ET.TASK_IMPORTED, ET.RUN_FINISHED, ET.TASK_CLOSED, ET.CHILD_REPORT)
+  ]
   source_refs = [f"sessions/{sid}/metadata.json"]
-  if info.chat_rel_path:
+  if info.chat_rel_path and original_history:
     source_refs.append(info.chat_rel_path)
   source_refs.extend(info.archive_rel_paths)
 
@@ -3666,7 +3652,7 @@ def _fact_mismatch(expected: PlannedFact, landed: dict,
 def _planned_fact_expected(ctx: "_ApplyContext", session_id: str,
                            key: tuple) -> PlannedFact | None:
   """The plan's expected content for one fact key (None: not planned here)."""
-  facts = _planned_facts(ctx.plan, ctx.manifest.created_at)
+  facts = _planned_facts(ctx.plan)
   return facts.get(session_id, {}).get(key)
 
 
@@ -3682,8 +3668,7 @@ def _expected_run_finished(run: RunProduct) -> PlannedFact:
   }, generated=("id", "timestamp"))
 
 
-def _planned_facts(plan: ConversionPlan,
-                   manifest_created_at: datetime) -> dict[str, dict[tuple, PlannedFact]]:
+def _planned_facts(plan: ConversionPlan) -> dict[str, dict[tuple, PlannedFact]]:
   """Per-node expected content of every fact this plan appends.
 
   A child_report lands in the OWNER's log, so it belongs to the owner's set:
@@ -3717,26 +3702,6 @@ def _planned_facts(plan: ConversionPlan,
   return planned
 
 
-def _planned_run_ids(cfg: CharlieBotConfig, plan: ConversionPlan) -> dict[str, set[str]]:
-  """Per-node ids of every run this plan writes a terminal fact for.
-
-  A run_finished fact's own event id is minted at write time; its identity for
-  the append proof is its ``run_id`` field naming a run this plan finishes.
-  """
-  planned: dict[str, set[str]] = {}
-  for manager in plan.managers:
-    ids = planned.setdefault(manager.session_id, set())
-    for run in manager.manager_turn_runs:
-      if run.outcome is not None:
-        ids.add(run.record.id)
-  for product in plan.workers:
-    ids = planned.setdefault(product.target_id, set())
-    for run in product.runs:
-      if run.outcome is not None:
-        ids.add(run.record.id)
-  return planned
-
-
 def _planned_product_paths(cfg: CharlieBotConfig, plan: ConversionPlan) -> set[str]:
   """Home-relative paths this plan may create, replace, append to or remove."""
   paths: set[str] = set()
@@ -3781,10 +3746,15 @@ def _append_fact_if_absent(cfg: CharlieBotConfig, session_id: str, event: dict,
   event_id = str(event.get("id"))
   if not event_id:
     raise MigrationRefused(f"refusing to append a fact without a stable id to {session_id}")
+  if (expected is None) != (manifest_created_at is None):
+    raise MigrationRefused(
+        "content-verified append needs the planned fact and the manifest's creation "
+        "time together; one without the other would silently skip the proof")
   log_rel = f"sessions/{session_id}/data/chat_events.jsonl"
   landed = _log_contains_event(cfg, session_id, event_id)
   if landed is not None:
-    if expected is not None and manifest_created_at is not None:
+    if expected is not None:
+      assert manifest_created_at is not None
       mismatch = _fact_mismatch(expected, landed, manifest_created_at)
       if mismatch is not None:
         raise MigrationRefused(
@@ -3893,263 +3863,10 @@ def _expected_product_hashes(cfg: CharlieBotConfig, plan: ConversionPlan) -> dic
   if plan.aliases_text is not None:
     expected[f"sessions/{ALIASES_FILE_NAME}"] = _sha256_bytes(plan.aliases_text.encode("utf-8"))
   return expected
-
-
-def _planned_run_ids(cfg: CharlieBotConfig, plan: ConversionPlan) -> dict[str, set[str]]:
-  """Per-node ids of every run this plan writes a terminal fact for.
-
-  A run_finished fact's own event id is minted at write time; its identity for
-  the append proof is its ``run_id`` field naming a run this plan finishes.
-  """
-  planned: dict[str, set[str]] = {}
-  for manager in plan.managers:
-    ids = planned.setdefault(manager.session_id, set())
-    for run in manager.manager_turn_runs:
-      if run.outcome is not None:
-        ids.add(run.record.id)
-  for product in plan.workers:
-    ids = planned.setdefault(product.target_id, set())
-    for run in product.runs:
-      if run.outcome is not None:
-        ids.add(run.record.id)
-  return planned
-
-
-def _planned_product_paths(cfg: CharlieBotConfig, plan: ConversionPlan) -> set[str]:
-  """Home-relative paths this plan may create, replace, append to or remove."""
-  paths: set[str] = set()
-  bodies_dir = cfg.charliebot_home / PROMPT_BODIES_DIR_NAME
-  for body in plan.prompt_bodies:
-    paths.add((bodies_dir / f"{body.ref}.md").relative_to(cfg.charliebot_home).as_posix())
-  for product in plan.workers:
-    node = f"sessions/{product.target_id}"
-    paths.add(f"{node}/metadata.json")
-    paths.add(f"{node}/data/chat_events.jsonl")
-    for run in product.runs:
-      paths.add(f"{node}/data/runs/{run.record.id}/metadata.json")
-  for manager in plan.managers:
-    sid = manager.session_id
-    paths.add(f"sessions/{sid}/metadata.json")
-    paths.add(f"sessions/{sid}/data/chat_events.jsonl")
-    for run in manager.manager_turn_runs:
-      paths.add(f"sessions/{sid}/data/runs/{run.record.id}/metadata.json")
-  if plan.alias_old_sessions or plan.alias_old_threads:
-    paths.add(f"sessions/{ALIASES_FILE_NAME}")
-  for rewrite in plan.cron_rewrites:
-    paths.add(rewrite.rel_path)
-  for move in plan.trigger_moves:
-    paths.add(move.new_rel_path)
-  return paths
-
-
-def _append_fact_if_absent(cfg: CharlieBotConfig, session_id: str, event: dict,
-                           expected: PlannedFact | None = None,
-                           manifest_created_at: datetime | None = None,
-                           ) -> tuple[str, bool]:
-  """Append one control fact unless a content-identical copy is already in the log.
-
-  Idempotent by event id AND content: an interrupted apply re-derives the same
-  fact and finds its landed copy instead of duplicating it; an id that exists
-  with different content is a foreign occupant of this plan's identity space
-  and refuses with zero mutation. Returns (log hash after the (non-)write,
-  whether this call wrote).
-  """
-  from src.core.ndjson import append_ndjson_sync
-
-  event_id = str(event.get("id"))
-  if not event_id:
-    raise MigrationRefused(f"refusing to append a fact without a stable id to {session_id}")
-  log_rel = f"sessions/{session_id}/data/chat_events.jsonl"
-  landed = _log_contains_event(cfg, session_id, event_id)
-  if landed is not None:
-    if expected is not None and manifest_created_at is not None:
-      mismatch = _fact_mismatch(expected, landed, manifest_created_at)
-      if mismatch is not None:
-        raise MigrationRefused(
-            f"chat log of {session_id} already holds id {event_id} with different content: "
-            f"{mismatch}")
-    return _hash_rel(cfg, log_rel) or "", False
-  path = cfg.sessions_dir / session_id / DATA_DIR_NAME / "chat_events.jsonl"
-  path.parent.mkdir(parents=True, exist_ok=True)
-  append_ndjson_sync(path, event)
-  return _sha256_file(path), True
-
-
-def _validate_manifest_shape(manifest: MigrationManifest) -> None:
-  if manifest.schema_version != MANIFEST_SCHEMA_VERSION:
-    raise MigrationRefused(
-        f"manifest schema_version {manifest.schema_version} is not supported "
-        f"(this converter writes {MANIFEST_SCHEMA_VERSION})")
-  for record in manifest.source_files:
-    rel = record.path
-    if rel.startswith("/") or ".." in Path(rel).parts or not rel:
-      raise MigrationRefused(f"manifest source path {rel!r} is not a confined relative path")
-  # source_sha names the migration state directory: it must be exactly the
-  # hash the converter writes, or a crafted manifest could escape the home.
-  if not _SOURCE_SHA_RE.fullmatch(manifest.source_sha):
-    raise MigrationRefused(
-        f"manifest source_sha {manifest.source_sha!r} is not a sha-256 hex digest")
-  if not manifest.home_path:
-    raise MigrationRefused("manifest carries no home_path")
-  for receipt in manifest.receipts:
-    _validate_receipt(receipt)
-
-
-def _check_manifest_home(cfg: CharlieBotConfig, manifest: MigrationManifest) -> None:
-  """A manifest is bound to the home it inventoried; a transplanted one refuses."""
-  try:
-    recorded = Path(manifest.home_path).resolve()
-  except (OSError, RuntimeError, ValueError) as e:
-    raise MigrationRefused(f"manifest home_path {manifest.home_path!r} is unusable: {e}") from e
-  if recorded != cfg.charliebot_home.resolve():
-    raise MigrationRefused(
-        f"manifest was built for home {manifest.home_path!r}, not the selected home "
-        f"{cfg.charliebot_home}; a manifest must not be transplanted between homes — "
-        "regenerate it with --dry-run against the selected home")
-
-
-def _checked_state_dir(cfg: CharlieBotConfig, source_sha: str) -> Path:
-  """The migration state directory for one manifest, symlink-refused."""
-  state = cfg.charliebot_home / "state"
-  migration_state = state / MIGRATION_STATE_DIR_NAME
-  target = migration_state / source_sha[:16]
-  home_resolved = cfg.charliebot_home.resolve()
-  for path in (state, migration_state, target, target / "backup"):
-    if path.is_symlink():
-      raise MigrationRefused(f"migration state path is a symlink: {path}")
-    if path.exists() and not path.is_dir():
-      raise MigrationRefused(f"migration state path is not a directory: {path}")
-    if not path.resolve().is_relative_to(home_resolved):
-      raise MigrationRefused(f"migration state path resolves outside the home: {path}")
-  return target
-
-
-def _confine_under(base: Path, rel: str, *, what: str) -> Path:
-  """Resolve base/rel refusing traversal or symlinked components."""
-  _validate_receipt_rel(rel, what=what)
-  current = base
-  for part in Path(rel).parts:
-    current = current / part
-    if current.is_symlink():
-      raise MigrationRefused(f"{what} {rel!r} traverses the symlink {current}")
-  resolved = current.resolve()
-  if not resolved.is_relative_to(base.resolve()):
-    raise MigrationRefused(f"{what} {rel!r} resolves outside {base}")
-  return resolved
-
-
-def _expected_product_hashes(cfg: CharlieBotConfig, plan: ConversionPlan) -> dict[str, str]:
-  """Content hashes of this plan's deterministic replacement/created products.
-
-  A crash between an atomic write and its receipt append leaves the product
-  on disk with no receipt; the deterministic content proves the product is
-  this manifest's own, so a resumed apply neither duplicates it nor mistakes
-  it for drift.
-  """
-  expected: dict[str, str] = {}
-  bodies_dir = cfg.charliebot_home / PROMPT_BODIES_DIR_NAME
-  for body in plan.prompt_bodies:
-    rel = (bodies_dir / f"{body.ref}.md").relative_to(cfg.charliebot_home).as_posix()
-    expected[rel] = _sha256_bytes(body.text.encode("utf-8"))
-  for product in plan.workers:
-    node = f"sessions/{product.target_id}"
-    expected[f"{node}/metadata.json"] = _sha256_bytes(
-        _expected_worker_metadata_bytes(product).encode("utf-8"))
-    for run in product.runs:
-      expected[f"{node}/data/runs/{run.record.id}/metadata.json"] = _sha256_bytes(
-          _expected_run_bytes(run.record).encode("utf-8"))
-  for manager in plan.managers:
-    expected[f"sessions/{manager.session_id}/metadata.json"] = _sha256_bytes(
-        manager.metadata.model_dump_json(indent=2, exclude=_TRANSIENT_METADATA_FIELDS).encode("utf-8"))
-    for run in manager.manager_turn_runs:
-      expected[f"sessions/{manager.session_id}/data/runs/{run.record.id}/metadata.json"] = _sha256_bytes(
-          _expected_run_bytes(run.record).encode("utf-8"))
-  for rewrite in plan.cron_rewrites:
-    expected[rewrite.rel_path] = _sha256_bytes(rewrite.new_text.encode("utf-8"))
-  for move in plan.trigger_moves:
-    expected[move.new_rel_path] = _sha256_bytes(move.trigger.model_dump_json(indent=2).encode("utf-8"))
-  if plan.aliases_text is not None:
-    expected[f"sessions/{ALIASES_FILE_NAME}"] = _sha256_bytes(plan.aliases_text.encode("utf-8"))
-  return expected
-
-
-def _planned_fact_ids(cfg: CharlieBotConfig, plan: ConversionPlan) -> dict[str, set[str]]:
-  """Per-node ids of every fact this plan appends (append-only proof of apply).
-
-  A child_report lands in the OWNER's log, so its id belongs to the owner's
-  set: an interrupted apply that got as far as a child report must resume, and
-  a foreign event in that log must refuse.
-  """
-  planned: dict[str, set[str]] = {}
-  for manager in plan.managers:
-    ids = planned.setdefault(manager.session_id, set())
-    for run in manager.manager_turn_runs:
-      if run.outcome is not None:
-        ids.add(run.record.id)  # run_finished facts carry the run id
-    ids.add(str(manager.task_imported["id"]))
-  for product in plan.workers:
-    ids = planned.setdefault(product.target_id, set())
-    for run in product.runs:
-      if run.outcome is not None:
-        ids.add(run.record.id)
-    if product.task_closed is not None:
-      ids.add(str(product.task_closed["id"]))
-    ids.add(str(product.task_imported["id"]))
-    if product.child_report is not None:
-      planned.setdefault(product.owner_id, set()).add(str(product.child_report["id"]))
-  return planned
-
-
-def _planned_run_ids(cfg: CharlieBotConfig, plan: ConversionPlan) -> dict[str, set[str]]:
-  """Per-node ids of every run this plan writes a terminal fact for.
-
-  A run_finished fact's own event id is minted at write time; its identity for
-  the append proof is its ``run_id`` field naming a run this plan finishes.
-  """
-  planned: dict[str, set[str]] = {}
-  for manager in plan.managers:
-    ids = planned.setdefault(manager.session_id, set())
-    for run in manager.manager_turn_runs:
-      if run.outcome is not None:
-        ids.add(run.record.id)
-  for product in plan.workers:
-    ids = planned.setdefault(product.target_id, set())
-    for run in product.runs:
-      if run.outcome is not None:
-        ids.add(run.record.id)
-  return planned
-
-
-def _planned_product_paths(cfg: CharlieBotConfig, plan: ConversionPlan) -> set[str]:
-  """Home-relative paths this plan may create, replace, append to or remove."""
-  paths: set[str] = set()
-  bodies_dir = cfg.charliebot_home / PROMPT_BODIES_DIR_NAME
-  for body in plan.prompt_bodies:
-    paths.add((bodies_dir / f"{body.ref}.md").relative_to(cfg.charliebot_home).as_posix())
-  for product in plan.workers:
-    node = f"sessions/{product.target_id}"
-    paths.add(f"{node}/metadata.json")
-    paths.add(f"{node}/data/chat_events.jsonl")
-    for run in product.runs:
-      paths.add(f"{node}/data/runs/{run.record.id}/metadata.json")
-  for manager in plan.managers:
-    sid = manager.session_id
-    paths.add(f"sessions/{sid}/metadata.json")
-    paths.add(f"sessions/{sid}/data/chat_events.jsonl")
-    for run in manager.manager_turn_runs:
-      paths.add(f"sessions/{sid}/data/runs/{run.record.id}/metadata.json")
-  if plan.alias_old_sessions or plan.alias_old_threads:
-    paths.add(f"sessions/{ALIASES_FILE_NAME}")
-  for rewrite in plan.cron_rewrites:
-    paths.add(rewrite.rel_path)
-  for move in plan.trigger_moves:
-    paths.add(move.new_rel_path)
-  return paths
 
 
 def _log_append_problems(cfg: CharlieBotConfig, rel: str, record: SourceFileRecord | None,
                          planned_facts: dict[tuple, PlannedFact],
-                         planned_run_ids: set[str],
                          manifest_created_at: datetime,
                          ) -> list[str]:
   """Suffix events the append-only proof cannot attribute to this plan.
@@ -4166,7 +3883,6 @@ def _log_append_problems(cfg: CharlieBotConfig, rel: str, record: SourceFileReco
   here; so is an unplanned event of any shape, a torn append, or a planned
   fact appearing twice.
   """
-  problems: list[str] = []
   path = cfg.charliebot_home / rel
   try:
     raw = path.read_bytes()
@@ -4203,13 +3919,13 @@ def _log_append_problems(cfg: CharlieBotConfig, rel: str, record: SourceFileReco
     mismatch = _fact_mismatch(expected, event, manifest_created_at)
     if mismatch is not None:
       return [f"{rel}: appended fact {key[1]!r} does not match the planned content: {mismatch}"]
-  return problems
+  return []
 
 
 def _check_drift(cfg: CharlieBotConfig, manifest: MigrationManifest, receipts: dict[str, ProductReceipt],
                  snap: SourceSnapshot, expected: dict[str, str],
                  planned_facts: dict[str, dict[tuple, PlannedFact]],
-                 planned_paths: set[str], planned_run_ids: dict[str, set[str]]) -> None:
+                 planned_paths: set[str]) -> None:
   """Every file in the home must be the manifest's input, a receipt, or this plan's product.
 
   After a partial apply the replaced/appended files no longer match their
@@ -4238,8 +3954,7 @@ def _check_drift(cfg: CharlieBotConfig, manifest: MigrationManifest, receipts: d
     if rel in chat_logs and current is not None:
       node = rel.split("/")[1]
       drifted.extend(_log_append_problems(
-          cfg, rel, record, planned_facts.get(node, {}),
-          planned_run_ids.get(node, set()), manifest.created_at))
+          cfg, rel, record, planned_facts.get(node, {}), manifest.created_at))
       continue
     if current is not None and expected.get(rel) == current:
       continue  # this plan's own deterministic product, landed by a previous run
@@ -4414,9 +4129,7 @@ def apply_manifest(cfg: CharlieBotConfig, manifest_path: Path, *, manifest: Migr
   plan = build_conversion_plan(cfg, snap)
   _plan_matches_manifest(plan, manifest)
   _check_drift(cfg, manifest, receipts, snap, _expected_product_hashes(cfg, plan),
-               _planned_facts(plan, manifest.created_at),
-               _planned_product_paths(cfg, plan),
-               _planned_run_ids(cfg, plan))
+               _planned_facts(plan), _planned_product_paths(cfg, plan))
 
   ctx = _ApplyContext(
       cfg=cfg, plan=plan, manifest=manifest, state_dir=state_dir,
@@ -4534,9 +4247,7 @@ async def _apply_locked(cfg: CharlieBotConfig, manifest_path: Path, ctx: _ApplyC
   fresh_plan = build_conversion_plan(cfg, fresh_snap)
   _plan_matches_manifest(fresh_plan, manifest)
   _check_drift(cfg, manifest, ctx.receipts, fresh_snap, _expected_product_hashes(cfg, fresh_plan),
-               _planned_facts(fresh_plan, manifest.created_at),
-               _planned_product_paths(cfg, fresh_plan),
-               _planned_run_ids(cfg, fresh_plan))
+               _planned_facts(fresh_plan), _planned_product_paths(cfg, fresh_plan))
 
   # The state (journal, backups) lives under the fence too: the receipt
   # journal is created only after every guard has passed, never as a
@@ -4739,7 +4450,8 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
     post, wrote = _append_fact_if_absent(
         ctx.cfg, product.target_id, product.task_closed,
         _planned_fact_expected(ctx, product.target_id, (str(product.task_closed["type"]),
-                                                        str(product.task_closed["id"]))))
+                                                        str(product.task_closed["id"]))),
+        ctx.manifest.created_at)
     log_rel = f"sessions/{product.target_id}/data/chat_events.jsonl"
     existing = ctx.receipts.get(log_rel)
     if existing is None or existing.post_sha256 != post:
@@ -4755,7 +4467,8 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
     post, wrote = _append_fact_if_absent(
         ctx.cfg, product.owner_id, product.child_report,
         _planned_fact_expected(ctx, product.owner_id, (str(product.child_report["type"]),
-                                                       str(product.child_report["id"]))))
+                                                       str(product.child_report["id"]))),
+        ctx.manifest.created_at)
     log_rel = f"sessions/{product.owner_id}/data/chat_events.jsonl"
     existing = ctx.receipts.get(log_rel)
     if existing is None or existing.post_sha256 != post:
@@ -4777,7 +4490,8 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
     log_rel = f"sessions/{session_id}/data/chat_events.jsonl"
     post, wrote = _append_fact_if_absent(
         ctx.cfg, session_id, event,
-        _planned_fact_expected(ctx, session_id, (str(event["type"]), str(event["id"]))))
+        _planned_fact_expected(ctx, session_id, (str(event["type"]), str(event["id"]))),
+        ctx.manifest.created_at)
     if is_worker:
       # A published node's log: receipt it as a created product at its final
       # fact state (rollback deletes it whole, only when unchanged).

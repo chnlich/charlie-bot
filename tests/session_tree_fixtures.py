@@ -58,6 +58,8 @@ S_SCHED_UNPROVEN = "d4d4d444-0000-4000-8000-000000000004"
 S_IDENTICAL = "d5d5d555-0000-4000-8000-000000000005"
 S_REVIEW_RETRY = "d6d6d666-0000-4000-8000-000000000006"
 S_IDENT_BASE = "d7d7d777-0000-4000-8000-000000000007"
+S_RESUME = "d8d8d888-0000-4000-8000-000000000008"
+S_STRADDLE = "d9d9d999-0000-4000-8000-000000000009"
 T_RETRY_FAILED = "f0f0f000-0000-4000-8000-000000000001"
 T_RETRY_OK = "f0f0f000-0000-4000-8000-000000000002"
 T_REVIEW_CONFLICT = "f1f1f111-0000-4000-8000-000000000001"
@@ -894,6 +896,72 @@ def _implement_with_branch(home: Path, *, worktree: bool, move_branch: bool) -> 
       worktree_path=str(home / "worktrees" / "work-pinned") if worktree else None),
       events=[ev("result", 29, f"{S_WORKERS[:8]}-0000-0000-0000-00000000000a", actor="agent",
                  subtype="success", is_error=False, source_session_id=S_WORKERS)])
+  return home
+
+
+def build_resume_bound_home(home: Path) -> Path:
+  """A crashed round resumed to completion under the same backend session id.
+
+  The resume anchor reuses the crashed turn's backend id, so both transports
+  adopt it; the consumer's MASTER_DONE closes the RESUMED round (the
+  projection's latest-open interval), not the dead one. Only that interval
+  rule binds the input to the resumed turn's own transport.
+  """
+  builder = FixtureBuilder(home)
+  builder.build()
+  sid = S_RESUME
+  u = ev("user", 0, f"{sid[:8]}-0000-0000-0000-00000000000a",
+         content="Retry after the crash", source_session_id=sid)
+  marker_crashed = {"id": f"{sid[:8]}-0000-0000-0000-0000000000b1",
+                    "session_id": "sid-resume-1", "timestamp": iso(3)}
+  marker_resumed = {"id": f"{sid[:8]}-0000-0000-0000-0000000000b2",
+                    "session_id": "sid-resume-1", "timestamp": iso(63)}
+  done = ev("master_done", 80, f"{sid[:8]}-0000-0000-0000-0000000000b3",
+            actor="agent", exit_code=0, input_event_id=u["id"], source_session_id=sid)
+  builder.session(SessionMetadata(id=sid, name="Resume retry", backend="synth",
+                                  created_at=BASE, updated_at=BASE))
+  builder.chat_log(sid, [u, marker_crashed, marker_resumed, done])
+  # The crashed turn never settled (no terminal result → not a proven
+  # completion); the resumed turn's transport adopts the same backend id.
+  crashed_raw = (json.dumps({"type": "system", "subtype": "init",
+                             "session_id": "sid-resume-1"}) + "\n"
+                 + json.dumps({"type": "assistant", "message": {
+                     "content": [{"type": "text", "text": "partial"}]}}) + "\n")
+  builder.master_turn_dir(sid, iso(2), crashed_raw, mtime=iso(4))
+  builder.master_turn_dir(sid, iso(60), _turn_raw("sid-resume-1", echo="Retry after the crash"),
+                          mtime=iso(78))
+  return home
+
+
+def build_scheduled_straddle_home(home: Path) -> Path:
+  """A wake fired while the previous wake's identical-text round was still open.
+
+  Both rounds' launch prompts echo the recurring wake text; the straddling
+  round BEGAN before this trigger and belongs to the earlier wake. Only the
+  wake's own later round is its proven handling — the straddling round's
+  identical echo must not inherit this wake.
+  """
+  builder = FixtureBuilder(home)
+  builder.build()
+  sid = S_STRADDLE
+  text = "tidy the board"
+  st = ev("scheduled_trigger", 5, f"{sid[:8]}-0000-0000-0000-00000000000a",
+          actor="system", content=text, source_session_id=sid)
+  marker_a = {"id": f"{sid[:8]}-0000-0000-0000-0000000000b1",
+              "session_id": "sid-cron-a", "timestamp": iso(2)}
+  done_a = ev("master_done", 8, f"{sid[:8]}-0000-0000-0000-0000000000b2",
+              actor="agent", exit_code=0, source_session_id=sid)
+  marker_b = {"id": f"{sid[:8]}-0000-0000-0000-0000000000b3",
+              "session_id": "sid-cron-b", "timestamp": iso(12)}
+  done_b = ev("master_done", 20, f"{sid[:8]}-0000-0000-0000-0000000000b4",
+              actor="agent", exit_code=0, source_session_id=sid)
+  builder.session(SessionMetadata(id=sid, name="Straddled wake", backend="synth",
+                                  created_at=BASE, updated_at=BASE))
+  # Chat order is evidence: the wake lands while round A is open; its own
+  # round B launches behind A's completion.
+  builder.chat_log(sid, [marker_a, st, done_a, marker_b, done_b])
+  builder.master_turn_dir(sid, iso(1), _turn_raw("sid-cron-a", echo=text), mtime=iso(7))
+  builder.master_turn_dir(sid, iso(10), _turn_raw("sid-cron-b", echo=text), mtime=iso(18))
   return home
 
 

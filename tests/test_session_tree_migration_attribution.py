@@ -263,6 +263,59 @@ def test_identical_request_bodies_bind_to_their_own_rounds(tmp_path, monkeypatch
   assert bound[by_log[fx.iso(120)]] == []
 
 
+def test_resumed_round_binds_the_resumed_transport(tmp_path, monkeypatch):
+  """A crash-then-resume round: the MASTER_DONE closes the LATEST open round.
+
+  Both launches adopt the same backend session id (the resume anchor), so
+  adoption identity alone cannot separate the two transports; the old
+  projection's interval rule — the round the consumer settles is the latest
+  opened one — binds the input to the resumed turn's own raw log. The dead
+  turn's unsettled log inherits nothing.
+  """
+  home = fx.build_resume_bound_home(tmp_path / "home")
+  point_home(monkeypatch, home)
+  manifest_path = tmp_path / "m.json"
+  code, manifest, _ = dry_run(monkeypatch, home, manifest_path)
+  assert code == 0 and manifest.unresolved == []
+  sid = fx.S_RESUME
+  u = f"{sid[:8]}-0000-0000-0000-00000000000a"
+  summary = manager_mapping(manifest, sid).detail["input_disposition"]
+  assert summary["confirmed_bound"] == 1
+  assert summary["confirmed_unbound"] == 0
+  assert run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))[0] == 0
+  tree = tree_of(home)
+  turns = run_records(tree, sid, "manager_turn")
+  assert len(turns) == 1  # the crashed transport is unproven history, not a Run
+  assert input_ids_of(tree, sid, turns[0].id) == [u]
+  assert turns[0].raw_log_ref.endswith(f"{fx.iso(60)}/agent.raw.ndjson")
+
+
+def test_straddled_scheduled_wake_binds_its_own_round(tmp_path, monkeypatch):
+  """A wake fired inside an earlier identical-text round binds only its OWN round.
+
+  Both transports echo the recurring wake text, so an echo alone cannot
+  transfer the wake to the straddling round (which began before the trigger
+  and belongs to the earlier wake). Only the round that began after the
+  trigger provably consumed it.
+  """
+  home = fx.build_scheduled_straddle_home(tmp_path / "home")
+  point_home(monkeypatch, home)
+  manifest_path = tmp_path / "m.json"
+  code, manifest, _ = dry_run(monkeypatch, home, manifest_path)
+  assert code == 0 and manifest.unresolved == []
+  sid = fx.S_STRADDLE
+  st = f"{sid[:8]}-0000-0000-0000-00000000000a"
+  summary = manager_mapping(manifest, sid).detail["input_disposition"]
+  assert summary["confirmed_bound"] == 1
+  assert run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))[0] == 0
+  tree = tree_of(home)
+  turns = run_records(tree, sid, "manager_turn")
+  assert len(turns) == 2
+  wake_runs = [r for r in turns if st in input_ids_of(tree, sid, r.id)]
+  assert len(wake_runs) == 1
+  assert wake_runs[0].raw_log_ref.endswith(f"{fx.iso(10)}/agent.raw.ndjson")
+
+
 # ---------------------------------------------------------------------------
 # Improve loop association
 # ---------------------------------------------------------------------------
@@ -459,7 +512,7 @@ def test_altered_payload_with_planned_identity_refuses(tmp_path, monkeypatch, ca
   builder, family, field, value = _ALTERED_CASES[case_index]
   home = builder(tmp_path / "home")
   cfg, snap, plan = _fresh_apply_context(monkeypatch, home)
-  facts = migration._planned_facts(plan, datetime.now(UTC))
+  facts = migration._planned_facts(plan)
   planned = [(node, key, expected) for node, node_facts in facts.items()
              for key, expected in node_facts.items()
              if key[0] == family]
@@ -476,8 +529,7 @@ def test_altered_payload_with_planned_identity_refuses(tmp_path, monkeypatch, ca
   with open(log_path, "ab") as f:
     f.write(json.dumps(forged).encode() + b"\n")
   problems = migration._log_append_problems(
-      cfg, log_rel, record, facts.get(node, {}), set(),
-      datetime.now(UTC) - timedelta(hours=1))
+      cfg, log_rel, record, facts.get(node, {}), datetime.now(UTC) - timedelta(hours=1))
   assert problems, f"{family} must refuse on altered {field}"
   assert "does not match the planned content" in problems[0]
 
@@ -486,7 +538,7 @@ def test_suffix_event_with_unplanned_identity_refuses(tmp_path, monkeypatch):
   """A suffix event that is not one of this plan's facts refuses outright."""
   home = fx.build_failed_rounds_home(tmp_path / "home")
   cfg, snap, plan = _fresh_apply_context(monkeypatch, home)
-  facts = migration._planned_facts(plan, datetime.now(UTC))
+  facts = migration._planned_facts(plan)
   node = fx.S_FAILED_ROUNDS
   log_rel = f"sessions/{node}/data/chat_events.jsonl"
   record = migration.SourceFileRecord(
@@ -498,8 +550,7 @@ def test_suffix_event_with_unplanned_identity_refuses(tmp_path, monkeypatch):
   with open(home / log_rel, "ab") as f:
     f.write(json.dumps(forged).encode() + b"\n")
   problems = migration._log_append_problems(
-      cfg, log_rel, record, facts.get(node, {}), set(),
-      datetime.now(UTC) - timedelta(hours=1))
+      cfg, log_rel, record, facts.get(node, {}), datetime.now(UTC) - timedelta(hours=1))
   assert problems and "not one of this plan's facts" in problems[0]
 
 
@@ -508,7 +559,7 @@ def test_append_fact_if_absent_verifies_existing_content(tmp_path, monkeypatch):
   home = fx.build_unbound_success_home(tmp_path / "home")
   cfg, snap, plan = _fresh_apply_context(monkeypatch, home)
   manager = plan.managers[0]
-  facts = migration._planned_facts(plan, datetime.now(UTC))
+  facts = migration._planned_facts(plan)
   key = (str(manager.task_imported["type"]), str(manager.task_imported["id"]))
   expected = facts[manager.session_id][key]
   log = home / "sessions" / manager.session_id / "data" / "chat_events.jsonl"

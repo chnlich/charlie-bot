@@ -17,6 +17,7 @@ from src.agents.backends.base import (
     tail_follow_events,
 )
 from src.agents.backends.claude_code import ClaudeCodeBackend, claude_supervisor_env
+from src.agents.backends.deferred_build import build_backend_module_getattr, load_build_backend
 from src.core import claude_accounts, claude_compaction, claude_relay, runs
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
@@ -31,31 +32,9 @@ from src.core.streaming import handle_compaction_events, streaming_manager
 log = LazyStructlogLogger()
 
 
-def load_build_backend() -> Any:
-  """Return this module's ``build_backend``, importing the registry on first use.
-
-  The registry stack (src.agents.backends.registry and every backend module it
-  imports, ~35 ms of the M99 server import floor) serves only the run's own
-  build; the module attribute stays the tests' patch target (conftest
-  WORKER_BUILD_BACKEND_PATCH_TARGET) and an existing binding — a test's
-  stand-in — is returned untouched, exactly as ``load_requests`` does for
-  requests.
-  """
-  bound = globals().get("build_backend")
-  if bound is not None:
-    return bound
-  from src.agents.backends.registry import build_backend
-
-  globals()["build_backend"] = build_backend
-  return build_backend
-
-
 def __getattr__(name: str) -> Any:
-  # The "src.agents.worker.build_backend" patch target resolves through this
-  # hook; any other name was never a module attribute.
-  if name == "build_backend":
-    return load_build_backend()
-  raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+  # The "src.agents.worker.build_backend" patch target resolves through this hook.
+  return build_backend_module_getattr(name, __name__, globals())
 
 
 QUOTA_ERROR_PATTERNS = [
@@ -185,7 +164,7 @@ class Worker:
         else:
           backend_kwargs["claude_session_id"] = self._thread.claude_session_id
       try:
-        backend = load_build_backend()
+        backend = load_build_backend(globals())
         return backend(self._backend_option, self._cfg, claude_account=self._claude_account, **backend_kwargs)
       except Exception as e:
         if on_spawn is not None:

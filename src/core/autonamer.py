@@ -27,6 +27,7 @@ import re
 from collections.abc import Iterator
 from typing import Any
 
+from src.agents.backends.deferred_build import build_backend_module_getattr, load_build_backend
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, default_claude_dir
 from src.core.log_once import LazyStructlogLogger
@@ -38,30 +39,9 @@ from src.core.timeouts import AUTONAMER_TIMEOUT
 log = LazyStructlogLogger()
 
 
-def load_build_backend() -> Any:
-  """Return this module's ``build_backend``, importing the registry on first use.
-
-  The registry stack (src.agents.backends.registry and every backend module it
-  imports, ~35 ms of the M99 server import floor) serves only the naming round's
-  one build; the module attribute stays the tests' patch target
-  (tests/test_autonamer.py) and an existing binding — a test's stand-in — is
-  returned untouched, exactly as ``load_requests`` does for requests.
-  """
-  bound = globals().get("build_backend")
-  if bound is not None:
-    return bound
-  from src.agents.backends.registry import build_backend
-
-  globals()["build_backend"] = build_backend
-  return build_backend
-
-
 def __getattr__(name: str) -> Any:
-  # The "src.core.autonamer.build_backend" patch target resolves through this
-  # hook; any other name was never a module attribute.
-  if name == "build_backend":
-    return load_build_backend()
-  raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+  # The "src.core.autonamer.build_backend" patch target resolves through this hook.
+  return build_backend_module_getattr(name, __name__, globals())
 
 
 # Matches true defaults ("Session 7") and legacy empty placeholders ("7: ").
@@ -247,7 +227,7 @@ async def maybe_auto_name(
 
     for option in options:
       try:
-        backend = load_build_backend()(option, cfg, cgroup_session_id=session_meta.id)
+        backend = load_build_backend(globals())(option, cfg, cgroup_session_id=session_meta.id)
         raw = await backend.one_shot_text(f"{title_instruction}\n\n{prompt}", system_prompt, timeout=AUTONAMER_TIMEOUT)
       except Exception as e:
         log.warning("autonamer_failed", session_id=session_meta.id, error=str(e))

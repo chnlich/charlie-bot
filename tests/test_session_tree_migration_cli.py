@@ -29,6 +29,7 @@ from test_session_tree_migration import (
   run_cli,
 )
 
+from src.core import event_types as ET
 from src.core import session_tree_migration as migration
 from src.core.json_utils import atomic_write_text
 from src.core.session_tree_migration import MigrationRefused
@@ -782,6 +783,44 @@ def _interrupted_log(
   return home / hits[0].path, hits[0]
 
 
+def test_resume_refuses_suffix_event_that_kept_its_run_id_but_altered_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A crashed append whose suffix was edited in place is foreign content.
+
+  The suffix event keeps the planned run_id but carries a different outcome
+  and input batch: the resumed apply refuses with zero mutation — the whole
+  home inventory, the original backup, and the receipt journal are untouched.
+  """
+  home = fx.build_full_home(tmp_path / "home")
+  point_home(monkeypatch, home)
+  manifest_path = tmp_path / "m.json"
+  dry_run(monkeypatch, home, manifest_path)
+  manifest, cfg = _crash_between_append_and_receipt(home, manifest_path, monkeypatch)
+  before_receipts = _receipted_paths(home, manifest)
+  log_path, record = _interrupted_log(home, manifest, cfg)
+  current = log_path.read_bytes()
+  original = current[:record.size]
+  suffix_lines = [line for line in current[record.size:].splitlines() if line.strip()]
+  assert len(suffix_lines) == 1
+  landed = json.loads(suffix_lines[0])
+  assert landed["type"] == ET.RUN_FINISHED
+  forged = dict(landed)
+  forged["outcome"] = "failed" if landed["outcome"] == "success" else "success"
+  forged["input_event_ids"] = ["u-someone-else"]
+  log_path.write_bytes(original + json.dumps(forged).encode() + b"\n")
+  interrupted_inventory = _tree_snapshot(home)
+
+  code, out, err = run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))
+  assert code == 1
+  payload = cli_json(err)
+  assert "does not match the planned content" in " ".join(payload.get("details", []))
+  # Zero mutation: the whole-home inventory is byte-identical to the interrupted
+  # state (the altered suffix's foreign bytes are preserved), and the receipt
+  # journal never grew past the crash.
+  assert _tree_snapshot(home) == interrupted_inventory
+  assert _receipted_paths(home, manifest) == before_receipts
+
+
 def _restore_append_receipt_writer(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(migration, "_append_receipt", migration._append_receipt)
 
@@ -871,7 +910,7 @@ def test_resume_refuses_foreign_append_and_mints_no_receipt(
   code, _, err = run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))
   assert code == 1
   payload = cli_json(err)
-  assert "not one of this manifest's facts" in " ".join(payload.get("details", [])) + payload["error"]
+  assert "not one of this plan's facts" in " ".join(payload.get("details", [])) + payload["error"]
   # Every new byte is preserved and no receipt covers the foreign write.
   assert log_path.read_bytes() == before + foreign
   assert record.path not in _receipted_paths(home, manifest)

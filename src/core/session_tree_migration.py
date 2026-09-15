@@ -49,12 +49,25 @@ turn's own completed raw log) becomes a ``manager_turn`` Run on the same
 logical manager with its input correlation, while an uncertain log stays
 explicitly identified historical evidence.
 
-Input-handling correlation is fact-based, never heuristic: a USER input is
-*handled* only when a MASTER_DONE names its exact event id (or the recorded
-in-flight turn naming it provably completed with a final result). A later
-unrelated master output acknowledges nothing. A confirmed unhandled input is
-one no manager activity could have consumed (no later manager turn evidence at
-all); anything else is unresolved.
+Input handling and Run attribution are fact-based, never heuristic. The old
+chat log carries the old system's own round structure: a run-start adoption
+marker (a ``session_attached`` event or its bare ``session_id``-only
+pre-typed spelling) opens one turn's interval and the round's MASTER_DONE
+closes it. A MASTER_DONE acknowledges an input only when the round it closes
+provably succeeded (``exit_code == 0``, the zero-output guard's own verdict);
+a failed or zero-output round is preserved as a failed execution carrying the
+exact input it attempted, and never acknowledges anything. An input is bound
+to a specific raw manager log only through retained identity: the round
+marker's backend session id must appear in that log's own session adoption
+(top-level ``session_id``/``thread_id``), with the producers' write ordering
+(input before launch, log completion before the round's MASTER_DONE). Without
+such identity the input stays a proven-but-unbound handling fact; identical
+text in a later transcript, an assistant quote, or a second request transfers
+nothing. Scheduled wakes (which the old producer admits without a named
+input) are proven handled only by an identity-backed launch echo of the wake
+text in the bound round's own raw log; anything less is unresolved. Uncertain
+handling stays explicitly unresolved with source references; only inputs the
+old system's own replay rule proves unhandled enter ``pending_inputs``.
 
 Durability contract: apply runs under the home writer fence
 (:mod:`src.core.home_writer_fence`), refuses unresolved conversions, source or
@@ -312,6 +325,28 @@ class ManagerTurnLog:
   proven: bool
   outcome: str | None  # success | failed, from the log's final result event
   completed_at: datetime | None
+  # The raw log's top-level session_id/thread_id values (the backend's own
+  # session adoption); the retained identity that binds a chat-log round
+  # marker to this transport. Empty when the log is missing or unreadable.
+  adoption_ids: frozenset[str] = field(default_factory=frozenset)
+
+
+@dataclass
+class RoundInterval:
+  """One legacy manager round in the chat log, per the old projection's rule.
+
+  A run-start adoption marker (a ``session_attached`` event or its bare
+  ``session_id``-only pre-typed spelling) opens the interval; the round's
+  MASTER_DONE closes it. ``done`` is None for an interrupted round (the marker
+  opened a round whose completion never landed). ``orphan`` marks a MASTER_DONE
+  seen before any marker (a pre-marker corpus): its round still closed
+  successfully, but no retained identity ties it to a raw log.
+  """
+  marker_index: int | None
+  marker_session_id: str | None
+  done_index: int | None
+  done: dict | None
+  orphan: bool = False
 
 
 @dataclass
@@ -421,6 +456,135 @@ def _archive_files(session_dir: Path) -> list[Path]:
   return sorted(archives.glob("chat_events.*.jsonl"))
 
 
+def _raw_line_output_signal(event: dict) -> bool:
+  """Whether one raw stream line evidences model or tool output.
+
+  The generic form of the runtime's zero-output guard inputs, read from the
+  retained raw shapes the legacy producers write: claude-family streams carry
+  ``assistant`` messages (text/thinking blocks), ``tool_use`` and the CLI's
+  ``user``-typed tool_result echoes; codex streams carry ``item.*`` activity.
+  A line of none of these shapes is stream bookkeeping, not output.
+  """
+  kind = event.get("type")
+  if kind == ET.ASSISTANT:
+    message = event.get("message")
+    blocks = message.get("content") if isinstance(message, dict) else None
+    if isinstance(blocks, list):
+      for block in blocks:
+        if not isinstance(block, dict):
+          continue
+        if block.get("type") == ET.TOOL_USE:
+          return True
+        for key in ("text", "thinking"):
+          value = block.get(key)
+          if isinstance(value, str) and value.strip():
+            return True
+    return False
+  if kind in (ET.TOOL_USE, ET.TOOL_RESULT):
+    return True
+  if kind == ET.THINKING:
+    return bool(isinstance(event.get("content"), str) and event["content"].strip())
+  if kind == ET.USER:
+    # The claude-family raw stream echoes tool results under type "user";
+    # a tool result implies tool activity happened.
+    return isinstance(event.get("message"), dict)
+  if kind in ("item.started", "item.updated", "item.completed"):
+    return isinstance(event.get("item"), dict)
+  return False
+
+
+def _raw_manual_compact(event: dict) -> bool:
+  """The raw form of the runtime's manual-compaction exemption."""
+  return (
+      event.get("type") == ET.SYSTEM and event.get("subtype") == ET.COMPACT_BOUNDARY and
+      (event.get(ET.COMPACT_METADATA) or {}).get("trigger") == "manual")
+
+
+@dataclass
+class RawTurnScan:
+  """One raw manager log's completion facts, from one read of its bytes."""
+  result: dict | None
+  outcome: str | None  # success | failed, None when no terminal result exists
+  last_timestamp: datetime | None
+
+
+def _result_base_outcome(result: dict) -> str:
+  """The terminal event's own verdict, across the retained raw shapes.
+
+  Claude-family logs carry ``result`` events (``subtype``/``is_error``);
+  codex logs carry ``turn.completed`` (the success terminal) or
+  ``turn.failed``.
+  """
+  kind = result.get("type")
+  if kind == "turn.failed":
+    return "failed"
+  if kind == "turn.completed":
+    return "success"
+  subtype = result.get("subtype")
+  is_error = result.get("is_error")
+  return "failed" if (subtype not in (None, "success") or is_error not in (None, False)) else "success"
+
+
+def _zero_usage(result: dict) -> bool:
+  usage = result.get("usage")
+  if not isinstance(usage, dict):
+    return False
+  return all(
+      usage.get(key, 0) == 0
+      for key in (ET.USAGE_INPUT_TOKENS, ET.USAGE_OUTPUT_TOKENS,
+                  ET.USAGE_CACHE_READ_INPUT_TOKENS, ET.USAGE_CACHE_CREATION_INPUT_TOKENS))
+
+
+def _scan_raw_turn(raw_path: Path) -> RawTurnScan:
+  """One raw manager log's outcome, mirroring the runtime's completion rules.
+
+  The last terminal event (``result`` / ``turn.completed`` / ``turn.failed``)
+  gives the base verdict; the zero-output guard's conjunction then fails a
+  turn that settled with all-zero usage and no output signal and no manual
+  compaction (``src/agents/master_cc_run.py`` applies the same rule before it
+  writes the round's MASTER_DONE, so the retained completion fact and the
+  raw log agree). The last parseable event timestamp doubles as the
+  completion time when the copy's mtimes are unreliable.
+  """
+  result: dict | None = None
+  saw_output = False
+  saw_manual_compact = False
+  last_timestamp: datetime | None = None
+  try:
+    data = raw_path.read_bytes()
+  except OSError:
+    return RawTurnScan(result=None, outcome=None, last_timestamp=None)
+  for line in data.split(b"\n"):
+    if not line.strip():
+      continue
+    try:
+      event = orjson.loads(line)
+    except ValueError:
+      continue
+    if not isinstance(event, dict):
+      continue
+    kind = event.get("type")
+    if kind in (ET.RESULT, "turn.completed", "turn.failed"):
+      result = event
+    if _raw_line_output_signal(event):
+      saw_output = True
+    if _raw_manual_compact(event):
+      saw_manual_compact = True
+    ts = event.get("timestamp")
+    if isinstance(ts, str):
+      try:
+        last_timestamp = ensure_utc(datetime.fromisoformat(ts))
+      except ValueError:
+        pass
+  if result is None:
+    return RawTurnScan(result=None, outcome=None, last_timestamp=last_timestamp)
+  outcome = _result_base_outcome(result)
+  if (outcome == "success" and _zero_usage(result) and not saw_output
+          and not saw_manual_compact):
+    outcome = "failed"  # the zero-output guard's own verdict
+  return RawTurnScan(result=result, outcome=outcome, last_timestamp=last_timestamp)
+
+
 def _scan_manager_turn_logs(home: Path, session: SessionInfo) -> None:
   """Every historical manager execution log under data/master_runs."""
   root = session.dir / DATA_DIR_NAME / MASTER_RUNS_DIR_NAME
@@ -437,14 +601,19 @@ def _scan_manager_turn_logs(home: Path, session: SessionInfo) -> None:
     raw_sha: str | None = None
     outcome: str | None = None
     proven = False
+    adoption: frozenset[str] = frozenset()
+    completed_at: datetime | None = None
     if raw_path.is_file():
       raw_sha = _sha256_file(raw_path)
-      result = _final_result_event(raw_path)
-      if result is not None:
-        subtype = result.get("subtype")
-        is_error = result.get("is_error")
-        outcome = "failed" if (subtype not in (None, "success") or is_error not in (None, False)) else "success"
-        proven = True
+      scan = _scan_raw_turn(raw_path)
+      outcome = scan.outcome
+      proven = scan.result is not None
+      adoption = _raw_adoption_ids(raw_path)
+      completed_at = scan.last_timestamp
+      if completed_at is None:
+        # The raw file's final mtime — the runtime's own completion contract
+        # for raw logs — valid whenever the offline copy preserves mtimes.
+        completed_at = raw_completion_time(raw_path)
     session.manager_turn_logs.append(ManagerTurnLog(
         owner_id=session.id,
         dir_name=child.name,
@@ -454,26 +623,25 @@ def _scan_manager_turn_logs(home: Path, session: SessionInfo) -> None:
         raw_sha256=raw_sha,
         proven=proven,
         outcome=outcome,
-        completed_at=_log_completion_time(raw_path) if raw_path.is_file() else None,
+        completed_at=completed_at,
+        adoption_ids=adoption,
     ))
 
 
-def _log_completion_time(raw_path: Path) -> datetime | None:
-  """The turn's completion time, from evidence in this order.
+def _raw_adoption_ids(raw_path: Path) -> frozenset[str]:
+  """The raw log's top-level session_id/thread_id values.
 
-  1. The log's own event timestamps (portable across copies).
-  2. The raw file's final mtime — the runtime's own completion contract for
-     raw logs (``src/agents/backends/base.py`` clamps injected event times to
-     it), valid whenever the offline copy preserves mtimes.
-
-  Returns None only when neither is available (no parseable event time and no
-  stat), in which case the turn's end is simply not timestamped.
+  Every covered transport names its own backend session at run start (claude
+  family on each stream event, codex on ``thread.started``); the chat log's
+  run-start marker carries the same value, so this is the retained identity
+  that binds one round's marker to one transport log. Only top-level string
+  fields count: quoted session ids inside message content prove nothing.
   """
   try:
     data = raw_path.read_bytes()
   except OSError:
-    return raw_completion_time(raw_path)
-  last: datetime | None = None
+    return frozenset()
+  ids: set[str] = set()
   for line in data.split(b"\n"):
     if not line.strip():
       continue
@@ -483,35 +651,11 @@ def _log_completion_time(raw_path: Path) -> datetime | None:
       continue
     if not isinstance(event, dict):
       continue
-    ts = event.get("timestamp")
-    if not isinstance(ts, str):
-      continue
-    try:
-      last = ensure_utc(datetime.fromisoformat(ts))
-    except ValueError:
-      continue
-  if last is not None:
-    return last
-  return raw_completion_time(raw_path)
-
-
-def _final_result_event(raw_path: Path) -> dict | None:
-  """The last ``result`` event in a raw NDJSON log, or None (absent/unreadable)."""
-  try:
-    data = raw_path.read_bytes()
-  except OSError:
-    return None
-  last: dict | None = None
-  for line in data.split(b"\n"):
-    if not line.strip():
-      continue
-    try:
-      event = orjson.loads(line)
-    except ValueError:
-      continue
-    if isinstance(event, dict) and event.get("type") == ET.RESULT:
-      last = event
-  return last
+    for key in ("session_id", "thread_id"):
+      value = event.get(key)
+      if isinstance(value, str) and value:
+        ids.add(value)
+  return frozenset(ids)
 
 
 def _home_inventory(cfg: CharlieBotConfig, snap: SourceSnapshot) -> None:
@@ -832,6 +976,9 @@ class RunProduct:
   ended_at: datetime | None = None
   exit_code: int | None = None
   input_event_ids: list[str] = field(default_factory=list)
+  # The retained thread this Run was derived from (the thread's own events log
+  # is the Run's retained result source for the completed-import verdicts).
+  evidence_thread: "ThreadInfo | None" = None
 
 
 @dataclass
@@ -952,169 +1099,386 @@ def canonical_successor_tail(sessions: dict[str, SessionInfo], start_id: str,
     current = nxt
 
 
-def _user_round_activity(events: list[dict]) -> dict:
-  """Correlation facts of one manager log's history.
-
-  Returns the MASTER_DONE events that name an input (``input_event_id``), the
-  recorded in-flight turn's naming (metadata is handled by the caller), and
-  every proven manager turn start/end window.
-  """
-  done_by_input: dict[str, list[dict]] = {}
-  done_events: list[dict] = []
-  for event in events:
-    if event.get("type") != ET.MASTER_DONE:
-      continue
-    done_events.append(event)
-    named = event.get(ET.INPUT_EVENT_ID)
-    if isinstance(named, str) and named:
-      done_by_input.setdefault(named, []).append(event)
-  return {"done_by_input": done_by_input, "done_events": done_events}
-
-
-def _input_handled_by_done(events_by_id: dict[str, dict], done_by_input: dict[str, list[dict]],
-                           input_id: str) -> dict | None:
-  """The MASTER_DONE fact naming this exact input, if one exists."""
-  named = done_by_input.get(input_id)
-  if not named:
+def _parse_event_time(event: dict) -> datetime | None:
+  """One persisted event's timestamp as an aware UTC datetime (None: unparseable)."""
+  ts = event.get("timestamp")
+  if not isinstance(ts, str):
     return None
-  return named[0]
-
-
-def _turn_log_covering(events_by_id: dict[str, dict], log: ManagerTurnLog,
-                       input_event: dict | None, named_id: str | None) -> bool:
-  """Whether *log* is the proven turn that consumed the named input.
-
-  The turn's own raw log carries the input's text (the old launch prompt was
-  the message content), and the input must predate the turn's start. An empty
-  input body proves nothing and is never correlated.
-  """
-  if log.raw_path is None or not log.proven:
-    return False
-  if input_event is None:
-    return False
-  content = input_event.get("content")
-  if not isinstance(content, str) or not content.strip():
-    return False
-  if log.started_at is None or log.completed_at is None:
-    return False
-  ts = input_event.get("timestamp")
-  if isinstance(ts, str):
-    try:
-      from src.core.models import ensure_utc
-      stamp = ensure_utc(datetime.fromisoformat(ts))
-      if stamp > log.started_at:
-        return False  # the input was written after this turn launched
-    except ValueError:
-      pass
   try:
-    return content.encode("utf-8") in log.raw_path.read_bytes()
-  except OSError:
-    return False
+    return ensure_utc(datetime.fromisoformat(ts))
+  except ValueError:
+    return None
+
+
+def _done_outcome(done: dict) -> str | None:
+  """The round outcome the MASTER_DONE fact itself records.
+
+  The old consumer emits MASTER_DONE for every settled round, carrying the
+  round's exit code and the zero-output guard's verdict: only ``exit_code == 0``
+  without a zero-output flag proves a successful round. A missing or
+  non-integer exit code proves neither direction (None).
+  """
+  if done.get("zero_output") is True:
+    return "failed"
+  code = done.get("exit_code")
+  if not isinstance(code, int) or isinstance(code, bool):
+    return None
+  return "success" if code == 0 else "failed"
+
+
+def _session_rounds(events: list[dict]) -> list[RoundInterval]:
+  """The chat log's round structure, per the old projection's own interval rule.
+
+  A run-start adoption marker (``session_attached`` or the bare
+  ``session_id``-only pre-typed spelling) opens one turn's interval; the
+  round's MASTER_DONE closes it. MASTER_DONEs seen before any marker close
+  marker-less rounds (a pre-marker corpus): still completed rounds, but with
+  no retained identity to bind to a raw log.
+  """
+  rounds: list[RoundInterval] = []
+  open_index: int | None = None
+  open_sid: str | None = None
+  for index, event in enumerate(events):
+    kind = event.get("type")
+    if kind in (None, ET.SESSION_ATTACHED) and event.get("session_id"):
+      if open_index is None:
+        open_index, open_sid = index, str(event["session_id"])
+      continue
+    if kind == ET.MASTER_DONE:
+      if open_index is None:
+        rounds.append(RoundInterval(marker_index=None, marker_session_id=None,
+                                    done_index=index, done=event, orphan=True))
+      else:
+        rounds.append(RoundInterval(marker_index=open_index, marker_session_id=open_sid,
+                                    done_index=index, done=event))
+        open_index, open_sid = None, None
+  if open_index is not None:
+    rounds.append(RoundInterval(marker_index=open_index, marker_session_id=open_sid,
+                                done_index=None, done=None))
+  return rounds
+
+
+def _bind_round_log(interval: RoundInterval, events: list[dict],
+                    input_event: dict | None,
+                    logs: list[ManagerTurnLog]) -> ManagerTurnLog | None:
+  """The one raw log the round's retained identity proves is this round's transport.
+
+  Conjuncts derived from the producers' own write ordering: the log's session
+  adoption names the round marker's backend session id, the log started no
+  later than the marker's persist time (the marker is persisted from the
+  log's own stream), and the log completed no later than the round's
+  MASTER_DONE (the consumer emits it after the stream drains). An input's own
+  timestamp must not postdate the launch. Zero or several surviving candidates
+  bind nothing: identical text elsewhere cannot transfer ownership, and
+  ambiguity is returned unbound rather than guessed.
+  """
+  marker_ts = _parse_event_time(events[interval.marker_index]) if interval.marker_index is not None else None
+  done_ts = _parse_event_time(interval.done)
+  input_ts = _parse_event_time(input_event) if input_event is not None else None
+  candidates: list[ManagerTurnLog] = []
+  for log in logs:
+    if not log.proven or interval.marker_session_id not in log.adoption_ids:
+      continue
+    if marker_ts is not None and (log.started_at is None or log.started_at > marker_ts):
+      continue
+    if done_ts is not None and (log.completed_at is None or log.completed_at > done_ts):
+      continue
+    if input_ts is not None and log.started_at is not None and input_ts > log.started_at:
+      continue  # the input was written after this turn launched
+    candidates.append(log)
+  if len(candidates) == 1:
+    return candidates[0]
+  return None
+
+
+@dataclass
+class InputDisposition:
+  """The three-way input verdicts of one manager log's original history.
+
+  ``confirmed`` pairs each successfully handled input id with the exact raw
+  log that provably consumed it, or with ``UNBOUND`` when the handling fact
+  stands but no retained identity pins the log. ``failed_bindings`` pairs
+  each failed attempt's input id with its provably failed round's log (the
+  failed Run carries the exact input it attempted). ``pending`` lists inputs
+  the old system's own replay rule proves unhandled. ``uncertain`` entries
+  become unresolved items with precise source references.
+  """
+  pending: list[dict] = field(default_factory=list)
+  confirmed: list[tuple[str, str]] = field(default_factory=list)
+  failed_bindings: list[tuple[str, str]] = field(default_factory=list)
+  uncertain: list[UnresolvedEntry] = field(default_factory=list)
+  # dir names of logs whose bound round's MASTER_DONE recorded a failed or
+  # zero-output round: the Run product's outcome follows the round's own
+  # completion fact, not the raw stream's terminal shape alone.
+  round_failed_logs: set[str] = field(default_factory=set)
+  unbound_confirmed: list[str] = field(default_factory=list)
+
+  @property
+  def summary(self) -> dict:
+    return {
+        "confirmed_bound": len(self.confirmed) - len(self.unbound_confirmed),
+        "confirmed_unbound": len(self.unbound_confirmed),
+        "failed_attempts_bound": len(self.failed_bindings),
+        "pending": len(self.pending),
+        "uncertain": len(self.uncertain),
+    }
+
+
+UNBOUND_LOG = "unbound"
+
+_NAMED_INPUT_TYPES = frozenset({ET.USER, ET.AGENT_MESSAGE})
 
 
 def _classify_inputs(info: SessionInfo, events: list[dict], meta: SessionMetadata,
-                     plan_unresolved: list[UnresolvedEntry],
-                     done_by_input: dict[str, list[dict]],
                      proven_logs: list[ManagerTurnLog],
-                     master_run_record: object | None) -> tuple[list[dict], list[dict], list[dict]]:
-  """The three-way input disposition of one manager log's history.
+                     master_run_record: object | None) -> InputDisposition:
+  """Classify every legacy input event through the old producers' semantics.
 
-  Returns (pending, confirmed_pairs, uncertain) where confirmed_pairs is
-  (input_id, correlated log dir_name) and uncertain entries become unresolved
-  items with precise refs.
+  Dispositions (plan rows 6 and 10):
+
+  - ``success`` handling: a MASTER_DONE naming the exact input id whose round
+    provably succeeded, or the recorded in-flight turn naming it with a
+    provably successful final result. Binding to one raw Run additionally
+    needs the round's retained identity; unbound-but-proven stays visible.
+  - failed attempts: failed/zero-output named rounds, preserved as failed
+    executions bound to their exact logs. Their inputs re-enter the v2
+    pending set only while the standing failed Run blocks auto-dispatch
+    (the v2 fold's own failed-turn policy); a failed attempt without its
+    execution log is unresolved, because re-admitting it there would
+    auto-execute on ambiguous evidence.
+  - pending: only inputs the old system's replay rule proves unhandled —
+    no MASTER_DONE of any round after them. Scheduled wakes are proven
+    unexecuted the same way, and proven handled only with an
+    identity-backed launch echo of the wake text.
+  - everything else is uncertain, with the source references and the precise
+    reason. Uncertain never auto-executes and never acknowledges.
   """
   from src.core.models import MasterRunRecord
 
-  pending: list[dict] = []
-  confirmed: list[tuple[str, str]] = []
-  uncertain: list[UnresolvedEntry] = []
-  events_by_id = {str(e.get("id")): e for e in events if isinstance(e.get("id"), str)}
-  in_flight_named: str | None = None
-  in_flight_proven = False
-  if isinstance(master_run_record, MasterRunRecord):
-    in_flight_named = master_run_record.user_event_id
-    if master_run_record.raw_log:
-      raw_path = Path(master_run_record.raw_log)
-      if raw_path.is_file() and _final_result_event(raw_path) is not None:
-        in_flight_proven = True
+  disposition = InputDisposition()
+  chat_ref = info.chat_rel_path or f"sessions/{info.id}/data/chat_events.jsonl"
+  rounds = _session_rounds(events)
+  interval_of_done = {r.done_index: r for r in rounds if r.done_index is not None}
+  done_positions = sorted(r.done_index for r in rounds if r.done_index is not None)
+  marker_positions = sorted(r.marker_index for r in rounds if r.marker_index is not None)
 
-  # Manager activity windows: any proven turn's start, any MASTER_DONE. A
-  # confirmed-unhandled input needs NO activity after it — nothing could have
-  # consumed it. Activity that does not name the input is never an
-  # acknowledgement (the unrelated-master-output rule).
-  activity_stamps: list[datetime] = []
-  for log in proven_logs:
-    if log.started_at is not None:
-      activity_stamps.append(log.started_at)
-  for done in _user_round_activity(events)["done_events"]:
-    ts = done.get("timestamp")
-    if isinstance(ts, str):
-      try:
-        from src.core.models import ensure_utc
-        activity_stamps.append(ensure_utc(datetime.fromisoformat(ts)))
-      except ValueError:
-        pass
+  def round_log(interval: RoundInterval, input_event: dict | None) -> ManagerTurnLog | None:
+    return _bind_round_log(interval, events, input_event, proven_logs)
 
-  for event in events:
-    etype = event.get("type")
-    if etype not in (ET.USER, ET.AGENT_MESSAGE):
-      continue
-    input_id = event.get("id")
-    if not isinstance(input_id, str) or not input_id:
-      uncertain.append(UnresolvedEntry(
-          source_kind="old_input", source_id=f"{info.id}:untitled",
-          reason="input event carries no stable id; handling cannot be correlated",
-          refs=[info.chat_rel_path or f"sessions/{info.id}/data/chat_events.jsonl"]))
-      continue
-    done = _input_handled_by_done(events_by_id, done_by_input, input_id)
-    if done is not None:
-      # The MASTER_DONE fact is the old system's durable handled marker for
-      # this exact event id. Binding it to a specific proven turn log (whose
-      # raw content carries the input) sharpens the evidence when uniquely
-      # possible; without such a log the input is still proven handled by the
-      # round's own completion fact and is excluded from the import boundary.
-      covering = [log for log in proven_logs if _turn_log_covering(events_by_id, log, event, input_id)]
-      if len(covering) == 1:
-        confirmed.append((input_id, covering[0].dir_name))
-      else:
-        confirmed.append((input_id, "master_done_unbound"))
-      continue
-    if in_flight_named == input_id and in_flight_proven:
-      confirmed.append((input_id, "master_run"))
-      continue
-    if in_flight_named == input_id:
-      uncertain.append(UnresolvedEntry(
-          source_kind="old_input", source_id=f"{info.id}:{input_id}",
-          reason="the recorded in-flight turn names this input but its raw log does not "
-                 "prove a completed turn; handling is unproven",
-          refs=[info.chat_rel_path or f"sessions/{info.id}/data/chat_events.jsonl"]))
-      continue
-    # Not named by any round: pending only when NO manager activity could have
-    # consumed it (the old system replays exactly such messages on restart).
-    stamp = event.get("timestamp")
-    input_time: datetime | None = None
-    if isinstance(stamp, str):
-      try:
-        from src.core.models import ensure_utc
-        input_time = ensure_utc(datetime.fromisoformat(stamp))
-      except ValueError:
-        input_time = None
-    later_activity = [s for s in activity_stamps if input_time is None or s > input_time]
-    if not later_activity:
-      source_ref = f"sessions/{info.id}/data/chat_events.jsonl#{input_id}"
-      pending.append({
-          "source_ref": source_ref,
-          "input_id": input_id,
-          "event_type": etype,
-      })
-      continue
-    uncertain.append(UnresolvedEntry(
+  # The recorded in-flight turn: its raw_log names one exact transport dir and
+  # its user_event_id names one exact input — the producers' own identity.
+  in_flight: tuple[str | None, ManagerTurnLog | None] = (None, None)
+  if isinstance(master_run_record, MasterRunRecord) and master_run_record.user_event_id:
+    named_log = next(
+        (log for log in proven_logs if log.raw_path is not None
+         and master_run_record.raw_log
+         and Path(master_run_record.raw_log) == log.raw_path), None)
+    in_flight = (master_run_record.user_event_id, named_log)
+
+  def uncertain(source_id: str, reason: str) -> None:
+    disposition.uncertain.append(UnresolvedEntry(
+        source_kind="old_input", source_id=f"{info.id}:{source_id}",
+        reason=reason, refs=[chat_ref]))
+
+  def bound_or_unbound(log: ManagerTurnLog | None, input_id: str,
+                       *, in_flight_log: ManagerTurnLog | None = None) -> str:
+    log = log or in_flight_log
+    if log is None:
+      disposition.unbound_confirmed.append(input_id)
+      return UNBOUND_LOG
+    return log.dir_name
+
+  def named_round_verdicts(input_id: str, input_event: dict) -> list[tuple[RoundInterval | None, dict, ManagerTurnLog | None, str | None]]:
+    verdicts: list[tuple[RoundInterval | None, dict, ManagerTurnLog | None, str | None]] = []
+    for index, event in enumerate(events):
+      if event.get("type") != ET.MASTER_DONE:
+        continue
+      if event.get(ET.INPUT_EVENT_ID) != input_id:
+        continue
+      interval = interval_of_done.get(index)
+      log = round_log(interval, input_event) if interval is not None else None
+      # The round's MASTER_DONE is the completion fact the old consumer wrote
+      # AFTER applying its own guards to the stream: it outranks the raw
+      # terminal event's shape. A log's own outcome only speaks when the done
+      # records no verdict at all.
+      outcome = _done_outcome(event)
+      if outcome is None and log is not None:
+        outcome = log.outcome
+      verdicts.append((interval, event, log, outcome))
+      if log is not None and outcome == "failed":
+        disposition.round_failed_logs.add(log.dir_name)
+    return verdicts
+
+  def unresolved_failure_reason(input_id: str) -> UnresolvedEntry:
+    return UnresolvedEntry(
         source_kind="old_input", source_id=f"{info.id}:{input_id}",
-        reason="no manager round names this input but later manager activity exists; "
-               "whether a queued round consumed it cannot be proven from retained evidence",
-        refs=[info.chat_rel_path or f"sessions/{info.id}/data/chat_events.jsonl"]))
-  pending.sort(key=lambda e: e["input_id"])
-  return pending, confirmed, uncertain
+        reason="a manager round named this input with a non-success outcome but its "
+               "execution log is missing or unresolvable; whether the request should "
+               "be re-admitted needs human judgment",
+        refs=[chat_ref])
+
+  def classify_named_input(input_event: dict, input_id: str, event_type: str) -> None:
+    verdicts = named_round_verdicts(input_id, input_event)
+    if verdicts:
+      successes = [v for v in verdicts if v[3] == "success"]
+      failures = [v for v in verdicts if v[3] == "failed"]
+      if successes:
+        # A proven successful round acknowledges this input; binding it to the
+        # exact Run is a separate proof question resolved from identity. The
+        # failed attempts stay failed executions with their exact causal
+        # references — a later successful retry erases nothing.
+        bound = next((v[2] for v in successes if v[2] is not None), None)
+        in_flight_log = in_flight[1] if in_flight[0] == input_id else None
+        bound = bound or in_flight_log
+        correlation = bound_or_unbound(bound, input_id)
+        disposition.confirmed.append((input_id, correlation))
+        for verdict in failures:
+          if verdict[2] is not None:
+            disposition.failed_bindings.append((input_id, verdict[2].dir_name))
+        return
+      unknowns = [v for v in verdicts if v[3] is None]
+      if unknowns or not failures:
+        uncertain(input_id,
+                  "a manager round names this input but no retained fact records whether "
+                  "its round succeeded; handling is unproven")
+        return
+      bound = [v[2] for v in failures if v[2] is not None]
+      if len(bound) != len(failures):
+        disposition.uncertain.append(unresolved_failure_reason(input_id))
+        return
+      # The failed rounds stay failed executions; the input they attempted
+      # returns to the v2 pending set behind the standing failed Runs (the
+      # fold's failed-turn policy), which blocks auto-dispatch.
+      for log in bound:
+        disposition.failed_bindings.append((input_id, log.dir_name))
+      disposition.pending.append(_pending_entry(input_event, input_id, event_type, info))
+      return
+    if in_flight[0] == input_id:
+      log = in_flight[1]
+      if log is not None and log.proven:
+        if log.outcome == "success":
+          correlation = bound_or_unbound(log, input_id)
+          disposition.confirmed.append((input_id, correlation))
+        else:
+          # A retained failed final result is not a successful acknowledgement:
+          # the failed execution is preserved with its exact causal reference.
+          disposition.failed_bindings.append((input_id, log.dir_name))
+          disposition.round_failed_logs.add(log.dir_name)
+          disposition.pending.append(_pending_entry(input_event, input_id, event_type, info))
+      else:
+        uncertain(input_id,
+                  "the recorded in-flight turn names this input but its raw log does not "
+                  "prove a completed turn; handling is unproven")
+      return
+    # No round ever named this input. The old system's own replay rule
+    # (``unanswered_user_events``) redelivers USER events with no MASTER_DONE
+    # after them: a proven unhandled admission. Any later completed round
+    # without a naming MASTER_DONE is the ambiguous interleaving the replay
+    # rule cannot resolve — uncertain, never pending.
+    later_done = any(position > _index_of(events, input_event) for position in done_positions)
+    if later_done:
+      uncertain(input_id,
+                "no manager round names this input but later manager rounds exist; "
+                "whether a queued round consumed it cannot be proven from retained "
+                "evidence")
+      return
+    disposition.pending.append(_pending_entry(input_event, input_id, event_type, info))
+
+  def classify_scheduled_input(input_event: dict, input_id: str, index: int) -> None:
+    # The wake's round: the first round after the input whose closing
+    # MASTER_DONE names no input (a scheduled wake is admitted without one).
+    # Rounds whose done names an input consumed that input; the wake stays
+    # queued behind them.
+    wake: RoundInterval | None = None
+    interrupted: RoundInterval | None = None
+    for interval in rounds:
+      start = interval.done_index if interval.done is not None else interval.marker_index
+      if start is None or start <= index:
+        continue
+      if interval.done is None:
+        interrupted = interval
+        break
+      if interval.done.get(ET.INPUT_EVENT_ID):
+        continue
+      wake = interval
+      break
+    if wake is None:
+      if interrupted is not None:
+        uncertain(input_id,
+                  "this scheduled wake's round started but never completed; whether it "
+                  "consumed the wake cannot be proven from retained evidence")
+        return
+      if done_positions or marker_positions:
+        later = [p for p in done_positions + marker_positions if p > index]
+        if later:
+          uncertain(input_id,
+                    "later manager activity followed this scheduled wake but no completed "
+                    "unnamed round provably consumed it; handling is unproven")
+          return
+      # No round ever started after the wake: the old system's fire-once wake
+      # provably never ran. It enters the v2 pending set as a proven unhandled
+      # scheduled input.
+      disposition.pending.append(_pending_entry(input_event, input_id, ET.SCHEDULED_TRIGGER, info))
+      return
+    log = round_log(wake, None)
+    outcome = _done_outcome(wake.done)
+    if log is not None and log.outcome is not None:
+      outcome = log.outcome
+      if outcome == "failed":
+        disposition.round_failed_logs.add(log.dir_name)
+    # Handling proof needs the launch identity: the wake text is the round's
+    # own launch prompt, echoed into the bound round's raw log.
+    echo = (log is not None and log.raw_path is not None
+            and isinstance(input_event.get("content"), str) and input_event["content"]
+            and input_event["content"].encode("utf-8") in log.raw_path.read_bytes())
+    if outcome == "success" and echo:
+      correlation = bound_or_unbound(log, input_id)
+      disposition.confirmed.append((input_id, correlation))
+      return
+    if outcome == "failed" and echo and log is not None and log.proven:
+      disposition.failed_bindings.append((input_id, log.dir_name))
+      disposition.pending.append(_pending_entry(input_event, input_id, ET.SCHEDULED_TRIGGER, info))
+      return
+    uncertain(input_id,
+              "a completed unnamed round followed this scheduled wake but the retained "
+              "evidence cannot prove it consumed this wake (no identity-backed launch "
+              "echo); handling is unproven")
+
+  for index, event in enumerate(events):
+    event_type = event.get("type")
+    input_id = event.get("id")
+    if event_type in _NAMED_INPUT_TYPES:
+      if not isinstance(input_id, str) or not input_id:
+        disposition.uncertain.append(UnresolvedEntry(
+            source_kind="old_input", source_id=f"{info.id}:untitled",
+            reason="input event carries no stable id; handling cannot be correlated",
+            refs=[chat_ref]))
+        continue
+      classify_named_input(event, input_id, str(event_type))
+    elif event_type == ET.SCHEDULED_TRIGGER:
+      if not isinstance(input_id, str) or not input_id:
+        disposition.uncertain.append(UnresolvedEntry(
+            source_kind="old_input", source_id=f"{info.id}:untitled-scheduled",
+            reason="scheduled input carries no stable id; handling cannot be correlated",
+            refs=[chat_ref]))
+        continue
+      classify_scheduled_input(event, input_id, index)
+  disposition.pending.sort(key=lambda e: str(e["input_id"]))
+  return disposition
+
+
+def _index_of(events: list[dict], event: dict) -> int:
+  return next(i for i, e in enumerate(events) if e is event)
+
+
+def _pending_entry(input_event: dict, input_id: str, event_type: str,
+                   info: SessionInfo) -> dict:
+  """One proven-unhandled old input's pending_inputs entry (original identity)."""
+  return {
+      "source_ref": f"sessions/{info.id}/data/chat_events.jsonl#{input_id}",
+      "input_id": input_id,
+      "event_type": event_type,
+  }
 
 
 def _migration_appended_event_ids(info: SessionInfo, migrated_run_ids: set[str]) -> set[str]:
@@ -1688,44 +2052,65 @@ def _improve_loop_association(
 ) -> tuple[LoopInfo | None, str | None]:
   """The one loop an iteration thread provably belongs to, or an ambiguity reason.
 
-  Association needs causal identity, never the description prefix alone: the
-  loop's goal text, work branch and repo must match the thread's recorded
-  execution context, the thread must postdate the loop's creation, and the
-  loop directory must hold this iteration's report. Zero or several candidate
-  loops is unresolved.
+  Association needs the controller's own causal identity, never the
+  description pattern, goal text, branch compatibility, or an mtime
+  coincidence: the iteration ran in the loop's shared worktree, against the
+  loop's recorded repo and work branch (all three recorded on the thread by
+  the actual launch), the loop directory holds this iteration's report (the
+  controller writes one for every executed iteration, including its fallback),
+  and the thread postdates the loop's creation. When the thread's raw log
+  survives it must carry the loop directory path — the launch's own
+  ``{{loop_dir}}`` substitution — which rules out a same-shaped loop;
+  a missing raw log leaves the remaining identity to stand on its own.
+  Missing identity fields and multiple plausible loops are unresolved.
   """
+  from src.core.git import git_worktree_dir_name
+
   iteration = int(match.group(1))
-  goal_text = thread.meta.description
+  meta = thread.meta
+  if not meta.repo_path or not meta.branch_name or not meta.worktree_path:
+    return None, ("this iteration thread lacks its recorded repo/work-branch/worktree "
+                  "identity; the improve controller's launch evidence is missing")
+  report_name = f"iter_{iteration:04d}.md"
+  expected_wt_name = git_worktree_dir_name(meta.branch_name)
   candidates: list[LoopInfo] = []
   for loop in session.loops:
     state = loop.state
     if state is None:
       continue
-    if state.goal and state.goal not in goal_text:
+    if state.repo_path != meta.repo_path or state.work_branch != meta.branch_name:
       continue
-    if thread.meta.branch_name and state.work_branch and thread.meta.branch_name != state.work_branch:
+    if Path(meta.worktree_path).name != expected_wt_name:
       continue
-    if thread.meta.repo_path and state.repo_path and thread.meta.repo_path != state.repo_path:
+    if report_name not in loop.report_files and not (loop.dir / report_name).is_file():
       continue
-    if thread.meta.created_at and state.created_at:
+    if meta.created_at and state.created_at:
       try:
-        from src.core.models import ensure_utc
         loop_start = ensure_utc(datetime.fromisoformat(state.created_at))
-        if thread.meta.created_at < loop_start:
-          continue
+        if meta.created_at < loop_start:
+          continue  # the iteration predates the loop that would own it
       except ValueError:
         pass
-    report_name = f"iter_{iteration:04d}.md"
-    if report_name not in loop.report_files and (loop.dir / report_name).exists() is False:
-      continue
+    if thread.raw_log_path is not None and thread.raw_log_path.is_file():
+      try:
+        raw = thread.raw_log_path.read_bytes()
+      except OSError:
+        raw = b""
+      # The launch's own report-path substitution: the controller tells the
+      # worker to write this exact iteration report. Compared by file name so
+      # an offline copy of the home (whose absolute loop paths moved) still
+      # matches the retained launch evidence.
+      if report_name.encode("utf-8") not in raw:
+        continue
     candidates.append(loop)
   if len(candidates) == 1:
     return candidates[0], None
   if not candidates:
-    return None, ("no improve loop's recorded goal/branch/repo/report evidence matches this "
+    return None, ("no improve loop's recorded controller evidence (repo, work branch, "
+                  "shared worktree, iteration report, launch echo) matches this "
                   "iteration thread")
-  return None, (f"{len(candidates)} improve loops match this iteration thread's evidence; "
-                "the association is ambiguous")
+  return None, (f"{len(candidates)} improve loops share this iteration thread's controller "
+                "evidence; the association is ambiguous")
 
 
 def _plan_thread(
@@ -1928,34 +2313,42 @@ def _plan_manager_conversion(
     classified_events = [e for e in info.events if e.get("id") not in appended_ids]
   else:
     classified_events = info.events
-  pending, confirmed, session_uncertain = _classify_inputs(
-      info, classified_events, meta, unresolved,
-      _user_round_activity(classified_events)["done_by_input"],
-      [log for log in info.manager_turn_logs if log.proven],
+  proven_logs = [log for log in info.manager_turn_logs if log.proven]
+  disposition = _classify_inputs(
+      info, classified_events, meta, proven_logs,
       meta.master_run if meta.profile is None else None,
   )
-  unresolved.extend(session_uncertain)
+  unresolved.extend(disposition.uncertain)
+  pending = disposition.pending
+
+  # A run whose bound round's MASTER_DONE recorded a failed or zero-output
+  # round imports as that failed execution: the round's own completion fact
+  # outranks the raw stream's terminal shape.
+  failed_dir_by_run = {}
+  for log in proven_logs:
+    if log.dir_name in disposition.round_failed_logs and log.outcome == "success":
+      run_id = _run_id_for(sid, _manager_turn_request_id_by_dir(log.dir_name))
+      failed_dir_by_run[run_id] = log.dir_name
+  for run_product in turn_runs:
+    if run_product.record.id in failed_dir_by_run:
+      run_product.outcome = "failed"
+      run_product.record.exit_code = 1
+      run_product.exit_code = 1
 
   confirmed_map: dict[str, str] = {}
-  for input_id, correlation in confirmed:
-    if correlation == "master_run" and meta.master_run is not None and meta.master_run.raw_log:
-      # Bind to the run derived from the recorded in-flight turn's log dir.
-      log_dir = Path(meta.master_run.raw_log).parent.name
-      run_id = _run_id_for(sid, _manager_turn_request_id_by_dir(log_dir))
-    elif correlation == "master_done_unbound":
-      # Proven handled by the MASTER_DONE fact itself; no turn log binds it.
+  for input_id, correlation in disposition.confirmed:
+    if correlation == UNBOUND_LOG:
+      # Proven handled by the round's own successful completion fact; no
+      # retained identity binds it to a specific raw Run, and none is invented.
       continue
-    else:
-      run_id = _run_id_for(sid, _manager_turn_request_id_by_dir(correlation))
+    run_id = _run_id_for(sid, _manager_turn_request_id_by_dir(correlation))
     confirmed_map[input_id] = run_id
-    for run_product in turn_runs:
-      if run_product.record.id == run_id:
-        # The run's registered batch is the exact input it provably consumed;
-        # its run_finished fact acknowledges exactly this batch (the fold's
-        # handled-input confirmation).
-        if input_id not in run_product.record.input_event_ids:
-          run_product.record.input_event_ids.append(input_id)
-          run_product.input_event_ids.append(input_id)
+    _bind_input_to_run(turn_runs, run_id, input_id)
+  for input_id, log_dir in disposition.failed_bindings:
+    # The failed execution keeps the exact input it attempted (its causal
+    # reference); a failed run_finished acknowledges nothing.
+    run_id = _run_id_for(sid, _manager_turn_request_id_by_dir(log_dir))
+    _bind_input_to_run(turn_runs, run_id, input_id)
 
   source_refs = [f"sessions/{sid}/metadata.json"]
   if info.chat_rel_path:
@@ -1972,6 +2365,7 @@ def _plan_manager_conversion(
     unproven = ("old archived session metadata alone does not prove delivery; the task "
                 "stays open (hidden) with its original evidence")
     detail["unproven_delivery"] = unproven
+  detail["input_disposition"] = disposition.summary
   mappings.append(MappingEntry(
       source_kind=kind, source_id=sid, target_session_id=sid,
       disposition=kind_disposition, detail=detail, reason=unproven))
@@ -1984,8 +2378,12 @@ def _plan_manager_conversion(
       "actor": "system",
       "source_session_id": sid,
       "source_refs": source_refs,
+      # Each entry keeps the original event's type: the imported input's
+      # category is provenance (the fold re-reads the original event by id,
+      # so no identity is re-derived here).
       "pending_inputs": [
-          {"source_ref": entry["source_ref"], "input_id": entry["input_id"]}
+          {"source_ref": entry["source_ref"], "input_id": entry["input_id"],
+           "event_type": entry["event_type"]}
           for entry in pending],
   }
   managers.append(ManagerConversion(
@@ -2084,7 +2482,8 @@ def _run_from_thread(
       result_ref=str(thread.events_path) if thread.events_path.is_file() else None,
   )
   return RunProduct(record=record, outcome=_thread_outcome(meta),
-                    ended_at=meta.completed_at, exit_code=meta.exit_code)
+                    ended_at=meta.completed_at, exit_code=meta.exit_code,
+                    evidence_thread=thread)
 
 
 def _register_worker(
@@ -2174,6 +2573,24 @@ def _plan_work_thread(
 
 def thread_key_of(owner: str, thread_id: str) -> tuple[str, str]:
   return (owner, thread_id)
+
+
+def _bind_input_to_run(turn_runs: list[RunProduct], run_id: str, input_id: str) -> None:
+  """Write one input id into its provably consuming run's registered batch.
+
+  The run's registered batch is the exact input it provably consumed; its
+  run_finished fact acknowledges exactly this batch (the fold's
+  handled-input confirmation for a success; a failed fact acknowledges
+  nothing but preserves the causal reference).
+  """
+  for run_product in turn_runs:
+    if run_product.record.id == run_id:
+      if input_id not in run_product.record.input_event_ids:
+        run_product.record.input_event_ids.append(input_id)
+        run_product.input_event_ids.append(input_id)
+      return
+  raise MigrationRefused(
+      f"input {input_id} correlates to run {run_id}, which this conversion does not plan")
 
 
 def _manager_of(managers: list[ManagerConversion], session_id: str) -> ManagerConversion | None:
@@ -2379,6 +2796,129 @@ def _plan_improve_iteration(
               "old_status": meta.status.value}))
 
 
+def _thread_result_evidence(thread: ThreadInfo) -> tuple[str | None, str | None]:
+  """The outcome the thread's retained result events prove, or why they prove nothing.
+
+  The worker funnel persists the backend's own terminal ``result`` event; a
+  successful run requires that fact to read as a success. Metadata status
+  alone never proves success, and an incomplete events log (unreadable lines)
+  is not complete retained evidence.
+  """
+  if not thread.events_path.is_file():
+    return None, "thread events log missing; no retained result evidence"
+  events, errors = _read_ndjson_file(thread.events_path)
+  if errors:
+    return None, f"thread events log has unreadable lines: {errors[0]}"
+  results = [e for e in events if e.get("type") == ET.RESULT]
+  if not results:
+    return None, "no retained result event proves the run's success"
+  last = results[-1]
+  if last.get("subtype") in (None, "success") and last.get("is_error") in (None, False):
+    return "success", None
+  return "failed", None
+
+
+def _git_commit_window(repo: Path, commit: str) -> datetime | None:
+  """The commit's committer date as an aware UTC datetime (None: unreadable)."""
+  try:
+    result = subprocess.run(
+        ["git", "-C", str(repo), "show", "-s", "--format=%ct", commit],
+        capture_output=True, timeout=30, check=False)
+  except (OSError, subprocess.TimeoutExpired):
+    return None
+  if result.returncode != 0:
+    return None
+  try:
+    return datetime.fromtimestamp(int(result.stdout.decode().strip()), tz=UTC)
+  except (ValueError, OSError):
+    return None
+
+
+def _pinned_result_commit(thread: ThreadInfo) -> tuple[str | None, str | None]:
+  """The run's immutable result commit, pinned from its own retained state.
+
+  Two retained sources, in evidence order: the recorded worktree's HEAD (the
+  run's own working state, which survives a branch that was later moved or
+  reused), else the recorded work branch's tip. Either way the commit must be
+  a product of this run's own execution window — its committer date falls
+  within [started_at, completed_at] — so a branch tip that moved after the
+  run never passes as this run's output.
+  """
+  repo_path = thread.meta.repo_path
+  branch = thread.meta.branch_name
+  if not repo_path or not branch:
+    return None, "recorded repo/branch do not name a checkable result"
+  repo = Path(repo_path)
+  if not (repo / ".git").exists():
+    return None, f"recorded repo {repo_path} is not present; the result cannot be checked"
+  started = thread.meta.started_at
+  completed = thread.meta.completed_at
+  if started is None or completed is None:
+    return None, "the run's execution window is not retained; its result commit cannot be pinned"
+
+  def within_window(commit: str) -> bool:
+    committed = _git_commit_window(repo, commit)
+    if committed is None:
+      return False
+    return ensure_utc(started) <= committed <= ensure_utc(completed)
+
+  worktree = Path(thread.meta.worktree_path) if thread.meta.worktree_path else None
+  if worktree is not None and (worktree / ".git").exists():
+    head = subprocess.run(
+        ["git", "-C", str(worktree), "rev-parse", "--verify", "HEAD"],
+        capture_output=True, timeout=30, check=False)
+    if head.returncode == 0:
+      commit = head.stdout.decode().strip()
+      if within_window(commit):
+        return commit, None
+      return None, ("the recorded worktree's HEAD is not a product of this run's "
+                    "execution window; the retained work state does not match this run")
+  tip = subprocess.run(
+      ["git", "-C", str(repo), "rev-parse", "--verify", branch],
+      capture_output=True, timeout=30, check=False)
+  if tip.returncode != 0:
+    return None, f"work branch {branch!r} does not exist in {repo_path}"
+  commit = tip.stdout.decode().strip()
+  if not within_window(commit):
+    return None, (f"work branch {branch!r}'s tip is not a product of this run's execution "
+                  "window (the branch moved or was reused after the run)")
+  return commit, None
+
+
+def _worktree_landing_proven(thread: ThreadInfo) -> tuple[bool, str | None, str | None]:
+  """Whether the implement work provably landed on its actual target lineage.
+
+  The migration's offline form of the completion owner's ``landed:`` check:
+  the run's pinned immutable result commit must exist and be an ancestor of
+  the recorded base branch's tip. Branch names and reachability alone prove
+  nothing; a moved or reused branch, a missing repo, or a result commit that
+  cannot be pinned all stay explicitly unproven. Read-only against the
+  recorded repo. Returns (landed, reason, pinned_commit).
+  """
+  base = thread.meta.base_branch
+  if not base:
+    return False, "no recorded base branch; the target lineage is unknown", None
+  commit, pin_reason = _pinned_result_commit(thread)
+  if commit is None:
+    return False, pin_reason, None
+  repo = Path(thread.meta.repo_path)
+  target = subprocess.run(
+      ["git", "-C", str(repo), "rev-parse", "--verify", base],
+      capture_output=True, timeout=30, check=False)
+  if target.returncode != 0:
+    return False, f"base branch {base!r} does not exist in {thread.meta.repo_path}", commit
+  landed = subprocess.run(
+      ["git", "-C", str(repo), "merge-base", "--is-ancestor", commit, base],
+      capture_output=True, timeout=30, check=False)
+  if landed.returncode != 0:
+    return False, (f"pinned result commit {commit[:12]} is not reachable from base "
+                   f"{base!r}"), commit
+  return True, None, commit
+
+
+LANDED_REF_PREFIX = "landed:"
+
+
 def _finalize_completed_imports(
     snap: SourceSnapshot,
     workers: list[WorkerNodeProduct],
@@ -2389,11 +2929,18 @@ def _finalize_completed_imports(
   """Second pass: decide completed import for each work thread (row 8).
 
   Old completed metadata alone never proves delivery. A worker imports
-  completed only with the full evidence set: a proven successful run, a
-  successful review when the thread required one, and — for implement work —
-  a provable target-branch landing. Everything else stays open with its
-  evidence; an archived owner also keeps the task hidden, and the mapping
-  records the explicit unproven-delivery reason.
+  completed only with the full evidence set, each fact derived from the
+  legacy source that really establishes it: a proven successful work run
+  (metadata outcome AND the retained result event), a required review whose
+  latest provably accepted attempt succeeded (the reviewer-retry policy keeps
+  earlier failed attempts as failed Runs), and — for implement work — the
+  pinned result commit landing on the recorded target lineage. The
+  converter-written close and parent report are import-time delivery records:
+  they carry the converter's write time, not a manufactured historical
+  success or receipt time, while the old completion time stays on the Run
+  and in the provenance. Everything else stays open with its evidence; an
+  archived owner also keeps the task hidden, and the mapping records the
+  explicit unproven-delivery reason.
   """
   from src.core.models import TaskType
 
@@ -2411,27 +2958,37 @@ def _finalize_completed_imports(
     unproven: str | None = None
     if run.outcome != "success":
       unproven = f"old thread status {meta.status.value} does not prove successful delivery"
-    elif thread.events_path.is_file():
-      events, errors = _read_ndjson_file(thread.events_path)
-      results = [e for e in events if e.get("type") == ET.RESULT]
-      if not results:
-        unproven = "no retained result event proves the run's success"
-      else:
-        last = results[-1]
-        if not (last.get("subtype") in (None, "success") and last.get("is_error") in (None, False)):
-          unproven = "the retained result event records a failure"
-      if errors:
-        unproven = unproven or f"thread events log has unreadable lines: {errors[0]}"
     else:
-      unproven = "thread events log missing; no retained result evidence"
+      retained, problem = _thread_result_evidence(thread)
+      if retained is None:
+        unproven = problem
+      elif retained != "success":
+        unproven = "the retained result event records a failure"
     review_runs = [r for r in product.runs if r.record.kind == "review"]
     if unproven is None and meta.require_review:
       if not review_runs:
         unproven = "the thread required review and no review thread is retained"
-      elif any(r.outcome != "success" for r in review_runs):
-        unproven = "a retained review run did not succeed"
+      else:
+        # The reviewer-retry policy: a failed reviewer is replaced by a fresh
+        # one; the chain's LAST attempt is the acceptance that counts, and its
+        # success must come from retained result facts (contradictory
+        # completed metadata versus a failed retained result cannot close).
+        review_runs = sorted(
+            review_runs,
+            key=lambda r: (r.record.started_at or datetime.min.replace(tzinfo=UTC),
+                           r.record.id))
+        latest = review_runs[-1]
+        retained = problem = None
+        if latest.evidence_thread is not None:
+          retained, problem = _thread_result_evidence(latest.evidence_thread)
+        else:
+          problem = "the review attempt's events log is not retained"
+        if latest.outcome != "success" or retained != "success":
+          unproven = (f"the latest retained review attempt does not prove an accepted "
+                      f"review from its retained result facts ({problem})")
+    pinned_commit: str | None = None
     if unproven is None and meta.task_type == TaskType.IMPLEMENT:
-      landed, reason = _worktree_landing_proven(thread)
+      landed, reason, pinned_commit = _worktree_landing_proven(thread)
       if not landed:
         unproven = f"implement landing unproven: {reason}"
     entry = next(
@@ -2442,14 +2999,21 @@ def _finalize_completed_imports(
     if unproven is None:
       entry.disposition = "worker_work_completed"
       entry.reason = None
+      entry.detail["landing_commit"] = pinned_commit or ""
       close_request = f"migration:{product.original_owner_id}/{meta.id}"
       close_event_id = stable_close_event_id(product.target_id, close_request)
-      summary = f"Imported completed from old thread {meta.id} (status completed, exit 0)."
       result_refs = [r for r in (run.record.result_ref, run.record.raw_log_ref) if r]
+      if pinned_commit:
+        result_refs.append(
+            f"{LANDED_REF_PREFIX}{meta.base_branch}@{pinned_commit}")
+      summary = (f"Imported completed from old thread {meta.id}: work finished "
+                 f"{_iso(meta.completed_at)}, exit 0; delivery evidence verified at "
+                 "import time.")
+      write_time = datetime.now(UTC).isoformat()
       close_event = {
           "id": close_event_id,
           "type": ET.TASK_CLOSED,
-          "timestamp": (meta.completed_at or meta.created_at).astimezone(UTC).isoformat(),
+          "timestamp": write_time,
           "actor": "system",
           "source_session_id": product.target_id,
           "outcome": "completed",
@@ -2462,7 +3026,7 @@ def _finalize_completed_imports(
       report_event = {
           "id": report_id,
           "type": ET.CHILD_REPORT,
-          "timestamp": (meta.completed_at or meta.created_at).astimezone(UTC).isoformat(),
+          "timestamp": write_time,
           "actor": "system",
           "source_session_id": product.target_id,
           "child_session_id": product.target_id,
@@ -3028,11 +3592,11 @@ def _expected_run_bytes(record: RunRecord) -> str:
   return record.model_dump_json(indent=2)
 
 
-def _log_contains_event(cfg: CharlieBotConfig, session_id: str, event_id: str) -> bool:
-  """Whether the node's durable history already holds this event id."""
+def _log_contains_event(cfg: CharlieBotConfig, session_id: str, event_id: str) -> dict | None:
+  """The node's durable history's event with this id, or None."""
   path = cfg.sessions_dir / session_id / DATA_DIR_NAME / "chat_events.jsonl"
   if not path.is_file():
-    return False
+    return None
   try:
     raw = path.read_bytes()
   except OSError as e:
@@ -3045,16 +3609,172 @@ def _log_contains_event(cfg: CharlieBotConfig, session_id: str, event_id: str) -
     except ValueError:
       continue
     if isinstance(event, dict) and event.get("id") == event_id:
-      return True
-  return False
+      return event
+  return None
 
 
-def _append_fact_if_absent(cfg: CharlieBotConfig, session_id: str, event: dict) -> tuple[str, bool]:
-  """Append one control fact unless its stable id is already in the log.
+@dataclass
+class PlannedFact:
+  """One fact this plan appends, with the fields minted at write time.
 
-  Idempotent by event id: an interrupted apply re-derives the same fact and
-  finds the landed copy instead of duplicating it. Returns (log hash after the
-  (non-)write, whether this call wrote).
+  ``event`` carries every field the plan determines, byte-for-byte as it is
+  written. ``generated`` names the fields the writer mints at write time (a
+  control event's ``timestamp``, a run_finished fact's ``id``): their planned
+  VALUE does not exist, so the proof checks them against a stable rule —
+  parseable UTC time, not before this manifest's creation — instead of
+  silently excluding them from verification.
+  """
+  event: dict
+  generated: tuple[str, ...] = ()
+
+
+def _generated_field_problems(name: str, value: object,
+                              manifest_created_at: datetime) -> str | None:
+  if not isinstance(value, str) or not value:
+    return f"{name}: missing or empty"
+  if name == "timestamp":
+    try:
+      written = ensure_utc(datetime.fromisoformat(value))
+    except ValueError:
+      return f"timestamp: unparseable {value!r}"
+    if written < manifest_created_at:
+      return f"timestamp {value} predates this manifest's creation"
+  return None
+
+
+def _fact_mismatch(expected: PlannedFact, landed: dict,
+                   manifest_created_at: datetime) -> str | None:
+  """Why a landed event is not this plan's fact (complete-content proof)."""
+  planned_keys = set(expected.event)
+  for key, value in expected.event.items():
+    if key in expected.generated:
+      continue
+    if landed.get(key) != value:
+      return f"{key}: planned {value!r}, landed {landed.get(key)!r}"
+  for name in expected.generated:
+    if name not in landed:
+      return f"{name}: write-time field missing from the landed copy"
+    problem = _generated_field_problems(name, landed.get(name), manifest_created_at)
+    if problem is not None:
+      return problem
+  extra = sorted(set(landed) - planned_keys - set(expected.generated))
+  if extra:
+    return f"unplanned fields present: {', '.join(extra)}"
+  return None
+
+
+def _planned_fact_expected(ctx: "_ApplyContext", session_id: str,
+                           key: tuple) -> PlannedFact | None:
+  """The plan's expected content for one fact key (None: not planned here)."""
+  facts = _planned_facts(ctx.plan, ctx.manifest.created_at)
+  return facts.get(session_id, {}).get(key)
+
+
+def _expected_run_finished(run: RunProduct) -> PlannedFact:
+  """The run_finished fact's planned content (id and timestamp minted at write)."""
+  return PlannedFact(event={
+      "type": ET.RUN_FINISHED,
+      "run_id": run.record.id,
+      "input_event_ids": list(run.input_event_ids),
+      "outcome": run.outcome,
+      "actor": "system",
+      "source_session_id": run.record.session_id,
+  }, generated=("id", "timestamp"))
+
+
+def _planned_facts(plan: ConversionPlan,
+                   manifest_created_at: datetime) -> dict[str, dict[tuple, PlannedFact]]:
+  """Per-node expected content of every fact this plan appends.
+
+  A child_report lands in the OWNER's log, so it belongs to the owner's set:
+  an interrupted apply that got as far as a child report must resume, and a
+  foreign event in that log must refuse. run_finished facts are keyed by
+  (type, run_id) — their event id is minted at write time — the others by
+  (type, id).
+  """
+  planned: dict[str, dict[tuple, PlannedFact]] = {}
+  for manager in plan.managers:
+    facts = planned.setdefault(manager.session_id, {})
+    for run in manager.manager_turn_runs:
+      if run.outcome is not None:
+        facts[(ET.RUN_FINISHED, run.record.id)] = _expected_run_finished(run)
+    facts[(str(manager.task_imported["type"]), str(manager.task_imported["id"]))] = (
+        PlannedFact(event=dict(manager.task_imported), generated=()))
+  for product in plan.workers:
+    facts = planned.setdefault(product.target_id, {})
+    for run in product.runs:
+      if run.outcome is not None:
+        facts[(ET.RUN_FINISHED, run.record.id)] = _expected_run_finished(run)
+    if product.task_closed is not None:
+      facts[(str(product.task_closed["type"]), str(product.task_closed["id"]))] = (
+          PlannedFact(event=dict(product.task_closed), generated=("timestamp",)))
+    facts[(str(product.task_imported["type"]), str(product.task_imported["id"]))] = (
+        PlannedFact(event=dict(product.task_imported), generated=()))
+    if product.child_report is not None:
+      owner = planned.setdefault(product.owner_id, {})
+      owner[(str(product.child_report["type"]), str(product.child_report["id"]))] = (
+          PlannedFact(event=dict(product.child_report), generated=("timestamp",)))
+  return planned
+
+
+def _planned_run_ids(cfg: CharlieBotConfig, plan: ConversionPlan) -> dict[str, set[str]]:
+  """Per-node ids of every run this plan writes a terminal fact for.
+
+  A run_finished fact's own event id is minted at write time; its identity for
+  the append proof is its ``run_id`` field naming a run this plan finishes.
+  """
+  planned: dict[str, set[str]] = {}
+  for manager in plan.managers:
+    ids = planned.setdefault(manager.session_id, set())
+    for run in manager.manager_turn_runs:
+      if run.outcome is not None:
+        ids.add(run.record.id)
+  for product in plan.workers:
+    ids = planned.setdefault(product.target_id, set())
+    for run in product.runs:
+      if run.outcome is not None:
+        ids.add(run.record.id)
+  return planned
+
+
+def _planned_product_paths(cfg: CharlieBotConfig, plan: ConversionPlan) -> set[str]:
+  """Home-relative paths this plan may create, replace, append to or remove."""
+  paths: set[str] = set()
+  bodies_dir = cfg.charliebot_home / PROMPT_BODIES_DIR_NAME
+  for body in plan.prompt_bodies:
+    paths.add((bodies_dir / f"{body.ref}.md").relative_to(cfg.charliebot_home).as_posix())
+  for product in plan.workers:
+    node = f"sessions/{product.target_id}"
+    paths.add(f"{node}/metadata.json")
+    paths.add(f"{node}/data/chat_events.jsonl")
+    for run in product.runs:
+      paths.add(f"{node}/data/runs/{run.record.id}/metadata.json")
+  for manager in plan.managers:
+    sid = manager.session_id
+    paths.add(f"sessions/{sid}/metadata.json")
+    paths.add(f"sessions/{sid}/data/chat_events.jsonl")
+    for run in manager.manager_turn_runs:
+      paths.add(f"sessions/{sid}/data/runs/{run.record.id}/metadata.json")
+  if plan.alias_old_sessions or plan.alias_old_threads:
+    paths.add(f"sessions/{ALIASES_FILE_NAME}")
+  for rewrite in plan.cron_rewrites:
+    paths.add(rewrite.rel_path)
+  for move in plan.trigger_moves:
+    paths.add(move.new_rel_path)
+  return paths
+
+
+def _append_fact_if_absent(cfg: CharlieBotConfig, session_id: str, event: dict,
+                           expected: PlannedFact | None = None,
+                           manifest_created_at: datetime | None = None,
+                           ) -> tuple[str, bool]:
+  """Append one control fact unless a content-identical copy is already in the log.
+
+  Idempotent by event id AND content: an interrupted apply re-derives the same
+  fact and finds its landed copy instead of duplicating it; an id that exists
+  with different content is a foreign occupant of this plan's identity space
+  and refuses with zero mutation. Returns (log hash after the (non-)write,
+  whether this call wrote).
   """
   from src.core.ndjson import append_ndjson_sync
 
@@ -3062,7 +3782,192 @@ def _append_fact_if_absent(cfg: CharlieBotConfig, session_id: str, event: dict) 
   if not event_id:
     raise MigrationRefused(f"refusing to append a fact without a stable id to {session_id}")
   log_rel = f"sessions/{session_id}/data/chat_events.jsonl"
-  if _log_contains_event(cfg, session_id, event_id):
+  landed = _log_contains_event(cfg, session_id, event_id)
+  if landed is not None:
+    if expected is not None and manifest_created_at is not None:
+      mismatch = _fact_mismatch(expected, landed, manifest_created_at)
+      if mismatch is not None:
+        raise MigrationRefused(
+            f"chat log of {session_id} already holds id {event_id} with different content: "
+            f"{mismatch}")
+    return _hash_rel(cfg, log_rel) or "", False
+  path = cfg.sessions_dir / session_id / DATA_DIR_NAME / "chat_events.jsonl"
+  path.parent.mkdir(parents=True, exist_ok=True)
+  append_ndjson_sync(path, event)
+  return _sha256_file(path), True
+
+
+def _validate_manifest_shape(manifest: MigrationManifest) -> None:
+  if manifest.schema_version != MANIFEST_SCHEMA_VERSION:
+    raise MigrationRefused(
+        f"manifest schema_version {manifest.schema_version} is not supported "
+        f"(this converter writes {MANIFEST_SCHEMA_VERSION})")
+  for record in manifest.source_files:
+    rel = record.path
+    if rel.startswith("/") or ".." in Path(rel).parts or not rel:
+      raise MigrationRefused(f"manifest source path {rel!r} is not a confined relative path")
+  # source_sha names the migration state directory: it must be exactly the
+  # hash the converter writes, or a crafted manifest could escape the home.
+  if not _SOURCE_SHA_RE.fullmatch(manifest.source_sha):
+    raise MigrationRefused(
+        f"manifest source_sha {manifest.source_sha!r} is not a sha-256 hex digest")
+  if not manifest.home_path:
+    raise MigrationRefused("manifest carries no home_path")
+  for receipt in manifest.receipts:
+    _validate_receipt(receipt)
+
+
+def _check_manifest_home(cfg: CharlieBotConfig, manifest: MigrationManifest) -> None:
+  """A manifest is bound to the home it inventoried; a transplanted one refuses."""
+  try:
+    recorded = Path(manifest.home_path).resolve()
+  except (OSError, RuntimeError, ValueError) as e:
+    raise MigrationRefused(f"manifest home_path {manifest.home_path!r} is unusable: {e}") from e
+  if recorded != cfg.charliebot_home.resolve():
+    raise MigrationRefused(
+        f"manifest was built for home {manifest.home_path!r}, not the selected home "
+        f"{cfg.charliebot_home}; a manifest must not be transplanted between homes — "
+        "regenerate it with --dry-run against the selected home")
+
+
+def _checked_state_dir(cfg: CharlieBotConfig, source_sha: str) -> Path:
+  """The migration state directory for one manifest, symlink-refused."""
+  state = cfg.charliebot_home / "state"
+  migration_state = state / MIGRATION_STATE_DIR_NAME
+  target = migration_state / source_sha[:16]
+  home_resolved = cfg.charliebot_home.resolve()
+  for path in (state, migration_state, target, target / "backup"):
+    if path.is_symlink():
+      raise MigrationRefused(f"migration state path is a symlink: {path}")
+    if path.exists() and not path.is_dir():
+      raise MigrationRefused(f"migration state path is not a directory: {path}")
+    if not path.resolve().is_relative_to(home_resolved):
+      raise MigrationRefused(f"migration state path resolves outside the home: {path}")
+  return target
+
+
+def _confine_under(base: Path, rel: str, *, what: str) -> Path:
+  """Resolve base/rel refusing traversal or symlinked components."""
+  _validate_receipt_rel(rel, what=what)
+  current = base
+  for part in Path(rel).parts:
+    current = current / part
+    if current.is_symlink():
+      raise MigrationRefused(f"{what} {rel!r} traverses the symlink {current}")
+  resolved = current.resolve()
+  if not resolved.is_relative_to(base.resolve()):
+    raise MigrationRefused(f"{what} {rel!r} resolves outside {base}")
+  return resolved
+
+
+def _expected_product_hashes(cfg: CharlieBotConfig, plan: ConversionPlan) -> dict[str, str]:
+  """Content hashes of this plan's deterministic replacement/created products.
+
+  A crash between an atomic write and its receipt append leaves the product
+  on disk with no receipt; the deterministic content proves the product is
+  this manifest's own, so a resumed apply neither duplicates it nor mistakes
+  it for drift.
+  """
+  expected: dict[str, str] = {}
+  bodies_dir = cfg.charliebot_home / PROMPT_BODIES_DIR_NAME
+  for body in plan.prompt_bodies:
+    rel = (bodies_dir / f"{body.ref}.md").relative_to(cfg.charliebot_home).as_posix()
+    expected[rel] = _sha256_bytes(body.text.encode("utf-8"))
+  for product in plan.workers:
+    node = f"sessions/{product.target_id}"
+    expected[f"{node}/metadata.json"] = _sha256_bytes(
+        _expected_worker_metadata_bytes(product).encode("utf-8"))
+    for run in product.runs:
+      expected[f"{node}/data/runs/{run.record.id}/metadata.json"] = _sha256_bytes(
+          _expected_run_bytes(run.record).encode("utf-8"))
+  for manager in plan.managers:
+    expected[f"sessions/{manager.session_id}/metadata.json"] = _sha256_bytes(
+        manager.metadata.model_dump_json(indent=2, exclude=_TRANSIENT_METADATA_FIELDS).encode("utf-8"))
+    for run in manager.manager_turn_runs:
+      expected[f"sessions/{manager.session_id}/data/runs/{run.record.id}/metadata.json"] = _sha256_bytes(
+          _expected_run_bytes(run.record).encode("utf-8"))
+  for rewrite in plan.cron_rewrites:
+    expected[rewrite.rel_path] = _sha256_bytes(rewrite.new_text.encode("utf-8"))
+  for move in plan.trigger_moves:
+    expected[move.new_rel_path] = _sha256_bytes(move.trigger.model_dump_json(indent=2).encode("utf-8"))
+  if plan.aliases_text is not None:
+    expected[f"sessions/{ALIASES_FILE_NAME}"] = _sha256_bytes(plan.aliases_text.encode("utf-8"))
+  return expected
+
+
+def _planned_run_ids(cfg: CharlieBotConfig, plan: ConversionPlan) -> dict[str, set[str]]:
+  """Per-node ids of every run this plan writes a terminal fact for.
+
+  A run_finished fact's own event id is minted at write time; its identity for
+  the append proof is its ``run_id`` field naming a run this plan finishes.
+  """
+  planned: dict[str, set[str]] = {}
+  for manager in plan.managers:
+    ids = planned.setdefault(manager.session_id, set())
+    for run in manager.manager_turn_runs:
+      if run.outcome is not None:
+        ids.add(run.record.id)
+  for product in plan.workers:
+    ids = planned.setdefault(product.target_id, set())
+    for run in product.runs:
+      if run.outcome is not None:
+        ids.add(run.record.id)
+  return planned
+
+
+def _planned_product_paths(cfg: CharlieBotConfig, plan: ConversionPlan) -> set[str]:
+  """Home-relative paths this plan may create, replace, append to or remove."""
+  paths: set[str] = set()
+  bodies_dir = cfg.charliebot_home / PROMPT_BODIES_DIR_NAME
+  for body in plan.prompt_bodies:
+    paths.add((bodies_dir / f"{body.ref}.md").relative_to(cfg.charliebot_home).as_posix())
+  for product in plan.workers:
+    node = f"sessions/{product.target_id}"
+    paths.add(f"{node}/metadata.json")
+    paths.add(f"{node}/data/chat_events.jsonl")
+    for run in product.runs:
+      paths.add(f"{node}/data/runs/{run.record.id}/metadata.json")
+  for manager in plan.managers:
+    sid = manager.session_id
+    paths.add(f"sessions/{sid}/metadata.json")
+    paths.add(f"sessions/{sid}/data/chat_events.jsonl")
+    for run in manager.manager_turn_runs:
+      paths.add(f"sessions/{sid}/data/runs/{run.record.id}/metadata.json")
+  if plan.alias_old_sessions or plan.alias_old_threads:
+    paths.add(f"sessions/{ALIASES_FILE_NAME}")
+  for rewrite in plan.cron_rewrites:
+    paths.add(rewrite.rel_path)
+  for move in plan.trigger_moves:
+    paths.add(move.new_rel_path)
+  return paths
+
+
+def _append_fact_if_absent(cfg: CharlieBotConfig, session_id: str, event: dict,
+                           expected: PlannedFact | None = None,
+                           manifest_created_at: datetime | None = None,
+                           ) -> tuple[str, bool]:
+  """Append one control fact unless a content-identical copy is already in the log.
+
+  Idempotent by event id AND content: an interrupted apply re-derives the same
+  fact and finds its landed copy instead of duplicating it; an id that exists
+  with different content is a foreign occupant of this plan's identity space
+  and refuses with zero mutation. Returns (log hash after the (non-)write,
+  whether this call wrote).
+  """
+  from src.core.ndjson import append_ndjson_sync
+
+  event_id = str(event.get("id"))
+  if not event_id:
+    raise MigrationRefused(f"refusing to append a fact without a stable id to {session_id}")
+  log_rel = f"sessions/{session_id}/data/chat_events.jsonl"
+  landed = _log_contains_event(cfg, session_id, event_id)
+  if landed is not None:
+    if expected is not None and manifest_created_at is not None:
+      mismatch = _fact_mismatch(expected, landed, manifest_created_at)
+      if mismatch is not None:
+        raise MigrationRefused(
+            f"chat log of {session_id} already holds id {event_id} with different content: "
+            f"{mismatch}")
     return _hash_rel(cfg, log_rel) or "", False
   path = cfg.sessions_dir / session_id / DATA_DIR_NAME / "chat_events.jsonl"
   path.parent.mkdir(parents=True, exist_ok=True)
@@ -3243,16 +4148,25 @@ def _planned_product_paths(cfg: CharlieBotConfig, plan: ConversionPlan) -> set[s
 
 
 def _log_append_problems(cfg: CharlieBotConfig, rel: str, record: SourceFileRecord | None,
-                         planned_ids: set[str], planned_runs: set[str]) -> list[str]:
-  """Proof problems for a chat log whose bytes are not the manifest's original.
+                         planned_facts: dict[tuple, PlannedFact],
+                         planned_run_ids: set[str],
+                         manifest_created_at: datetime,
+                         ) -> list[str]:
+  """Suffix events the append-only proof cannot attribute to this plan.
 
-  The interrupted-append proof is exact on both sides: the manifest's original
+  The interrupted-append proof is exact on both sides. The manifest's original
   bytes must be an intact prefix of the current file (same length, same hash —
   changed history refuses), and every appended line must be one complete JSON
-  fact whose stable id this plan appends (a foreign or torn append refuses).
-  Merely finding a set of planned ids somewhere in the file proves nothing
-  about the original bytes or about extra unrelated input.
+  fact of this plan carrying the planned complete content: for run_finished
+  facts the planned identity is the ``run_id``, and every other field —
+  outcome, the acknowledged input batch, actor, source session — must match
+  exactly, with only the write-time-minted id and timestamp checked by their
+  stable rule. An unchanged id or run_id with altered type, outcome, input
+  acknowledgements, or any other planned field is foreign content and refuses
+  here; so is an unplanned event of any shape, a torn append, or a planned
+  fact appearing twice.
   """
+  problems: list[str] = []
   path = cfg.charliebot_home / rel
   try:
     raw = path.read_bytes()
@@ -3267,27 +4181,34 @@ def _log_append_problems(cfg: CharlieBotConfig, rel: str, record: SourceFileReco
     suffix = raw  # a migration-created node's log: the whole file is this apply's append
   if suffix and not suffix.endswith(b"\n"):
     return [f"{rel}: the appended region ends in a torn (partial) line; cannot prove it"]
-  seen: set[str] = set()
+  seen: set[tuple] = set()
   for line in suffix.split(b"\n"):
     if not line.strip():
       continue
     event = _safe_json(line)
     if event is None:
       return [f"{rel}: unparseable line in the appended region"]
-    event_id = str(event.get("id") or "")
-    is_own = event_id in planned_ids or (
-        event.get("type") == ET.RUN_FINISHED and str(event.get("run_id") or "") in planned_runs)
-    if not is_own:
-      return [f"{rel}: appended event {event.get('id')!r} is not one of this manifest's facts "
-              "(a new-system write or unrelated input reached the log)"]
-    if event_id in seen:
-      return [f"{rel}: appended fact {event_id} appears twice"]
-    seen.add(event_id)
-  return []
+    kind = event.get("type")
+    if kind == ET.RUN_FINISHED:
+      key = (ET.RUN_FINISHED, str(event.get("run_id") or ""))
+    else:
+      key = (str(kind), str(event.get("id") or ""))
+    expected = planned_facts.get(key)
+    if expected is None:
+      return [f"{rel}: appended event {event.get('id')!r} (type {kind!r}) is not one of this "
+              "plan's facts (a new-system write or unrelated input reached the log)"]
+    if key in seen:
+      return [f"{rel}: appended fact {key[1]!r} appears twice"]
+    seen.add(key)
+    mismatch = _fact_mismatch(expected, event, manifest_created_at)
+    if mismatch is not None:
+      return [f"{rel}: appended fact {key[1]!r} does not match the planned content: {mismatch}"]
+  return problems
 
 
 def _check_drift(cfg: CharlieBotConfig, manifest: MigrationManifest, receipts: dict[str, ProductReceipt],
-                 snap: SourceSnapshot, expected: dict[str, str], planned_fact_ids: dict[str, set[str]],
+                 snap: SourceSnapshot, expected: dict[str, str],
+                 planned_facts: dict[str, dict[tuple, PlannedFact]],
                  planned_paths: set[str], planned_run_ids: dict[str, set[str]]) -> None:
   """Every file in the home must be the manifest's input, a receipt, or this plan's product.
 
@@ -3317,8 +4238,8 @@ def _check_drift(cfg: CharlieBotConfig, manifest: MigrationManifest, receipts: d
     if rel in chat_logs and current is not None:
       node = rel.split("/")[1]
       drifted.extend(_log_append_problems(
-          cfg, rel, record, planned_fact_ids.get(node, set()),
-          planned_run_ids.get(node, set())))
+          cfg, rel, record, planned_facts.get(node, {}),
+          planned_run_ids.get(node, set()), manifest.created_at))
       continue
     if current is not None and expected.get(rel) == current:
       continue  # this plan's own deterministic product, landed by a previous run
@@ -3493,7 +4414,8 @@ def apply_manifest(cfg: CharlieBotConfig, manifest_path: Path, *, manifest: Migr
   plan = build_conversion_plan(cfg, snap)
   _plan_matches_manifest(plan, manifest)
   _check_drift(cfg, manifest, receipts, snap, _expected_product_hashes(cfg, plan),
-               _planned_fact_ids(cfg, plan), _planned_product_paths(cfg, plan),
+               _planned_facts(plan, manifest.created_at),
+               _planned_product_paths(cfg, plan),
                _planned_run_ids(cfg, plan))
 
   ctx = _ApplyContext(
@@ -3612,7 +4534,8 @@ async def _apply_locked(cfg: CharlieBotConfig, manifest_path: Path, ctx: _ApplyC
   fresh_plan = build_conversion_plan(cfg, fresh_snap)
   _plan_matches_manifest(fresh_plan, manifest)
   _check_drift(cfg, manifest, ctx.receipts, fresh_snap, _expected_product_hashes(cfg, fresh_plan),
-               _planned_fact_ids(cfg, fresh_plan), _planned_product_paths(cfg, fresh_plan),
+               _planned_facts(fresh_plan, manifest.created_at),
+               _planned_product_paths(cfg, fresh_plan),
                _planned_run_ids(cfg, fresh_plan))
 
   # The state (journal, backups) lives under the fence too: the receipt
@@ -3785,6 +4708,22 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
           session_id, run_product.record.id, str(run_product.outcome),
           exit_code=run_product.exit_code,
           ended_at=run_product.ended_at)
+    else:
+      # An already-landed terminal fact must be this plan's own complete fact:
+      # a matching run_id with a different outcome or acknowledged batch is
+      # foreign content occupying this identity and refuses with zero mutation.
+      expected = _expected_run_finished(run_product)
+      landed = [e for e in events
+                if e.get("type") == ET.RUN_FINISHED and e.get("run_id") == run_product.record.id]
+      if not landed:
+        raise MigrationRefused(
+            f"run {run_product.record.id} has terminal outcome {existing_outcome!r} but no "
+            "retained run_finished fact")
+      mismatch = _fact_mismatch(expected, landed[0], ctx.manifest.created_at)
+      if mismatch is not None:
+        raise MigrationRefused(
+            f"chat log of {session_id} already holds a run_finished fact for "
+            f"{run_product.record.id} with different content: {mismatch}")
     post = _hash_rel(ctx.cfg, log_rel)
     existing = ctx.receipts.get(log_rel)
     if post is not None and (existing is None or existing.post_sha256 != post):
@@ -3798,7 +4737,9 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
     assert isinstance(product, WorkerNodeProduct)
     assert product.task_closed is not None
     post, wrote = _append_fact_if_absent(
-        ctx.cfg, product.target_id, product.task_closed)
+        ctx.cfg, product.target_id, product.task_closed,
+        _planned_fact_expected(ctx, product.target_id, (str(product.task_closed["type"]),
+                                                        str(product.task_closed["id"]))))
     log_rel = f"sessions/{product.target_id}/data/chat_events.jsonl"
     existing = ctx.receipts.get(log_rel)
     if existing is None or existing.post_sha256 != post:
@@ -3812,7 +4753,9 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
     assert isinstance(product, WorkerNodeProduct)
     assert product.child_report is not None
     post, wrote = _append_fact_if_absent(
-        ctx.cfg, product.owner_id, product.child_report)
+        ctx.cfg, product.owner_id, product.child_report,
+        _planned_fact_expected(ctx, product.owner_id, (str(product.child_report["type"]),
+                                                       str(product.child_report["id"]))))
     log_rel = f"sessions/{product.owner_id}/data/chat_events.jsonl"
     existing = ctx.receipts.get(log_rel)
     if existing is None or existing.post_sha256 != post:
@@ -3832,7 +4775,9 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
       assert isinstance(manager, ManagerConversion)
       session_id, event = manager.session_id, manager.task_imported
     log_rel = f"sessions/{session_id}/data/chat_events.jsonl"
-    post, wrote = _append_fact_if_absent(ctx.cfg, session_id, event)
+    post, wrote = _append_fact_if_absent(
+        ctx.cfg, session_id, event,
+        _planned_fact_expected(ctx, session_id, (str(event["type"]), str(event["id"]))))
     if is_worker:
       # A published node's log: receipt it as a created product at its final
       # fact state (rollback deletes it whole, only when unchanged).

@@ -50,7 +50,12 @@ function install(context, overrides = {}) {
   context.fetchHandlers.push((url) => {
     if (url === '/api/sessions/node-1') return jsonResponse(overrides.detail || DETAIL);
     if (url.startsWith('/api/sessions/node-1/effective-prompt')) return jsonResponse(overrides.preview || PREVIEW);
-    if (url.endsWith('/runs?limit=100')) return jsonResponse({items: overrides.runs || [], next_cursor: null});
+    // Current-run selection is the server's newest-first page: the rows the
+    // run owner calls the latest. (overrides.runs keeps naming the latest
+    // started run or runs the server would open a descending page with.)
+    if (url.includes('/runs?') && url.includes('order=desc')) {
+      return jsonResponse({items: overrides.runs || [], next_cursor: null});
+    }
     if (url.includes('/runs/') && url.endsWith('/context')) return jsonResponse(overrides.runContext || {snapshot: null, legacy_prompt: null});
     return undefined;
   });
@@ -94,7 +99,8 @@ test('current run vs next run: changed sources are outlined from server facts', 
     ],
   };
   install(context, {
-    runs: [{id: 'run-1', kind: 'manager_turn', state: 'success', prompt_snapshot_ref: '/x/prompt_snapshot.json'}],
+    runs: [{id: 'run-1', kind: 'manager_turn', state: 'success', started_at: '2026-01-01T00:00:00Z',
+            prompt_snapshot_ref: '/x/prompt_snapshot.json'}],
     runContext: {snapshot: currentSnapshot, legacy_prompt: null},
   });
   context.TaskContextPanel.onSessionChanged({id: 'node-1', profile: 'manager'});
@@ -237,18 +243,26 @@ test('editing a rule never promotes chat text and never writes a second store', 
   assert.ok(tab.textContent.includes('Unsaved draft'));
 });
 
-test('the current-run section uses the LATEST run with a snapshot, never the oldest', async () => {
+test('the current-run section is the server-selected latest started run, from one bounded request', async () => {
   const {context, tab} = build();
   context.fetchHandlers.push((url) => {
     if (url === '/api/sessions/node-1') return jsonResponse(DETAIL);
     if (url.startsWith('/api/sessions/node-1/effective-prompt')) return jsonResponse(PREVIEW);
-    if (url.endsWith('/runs?limit=100')) return jsonResponse({
-      // The paged Run API is chronological (queued first): the latest run
-      // closes the page, it does not open it.
+    // The ascending chronological page (the pagination default) holds only
+    // the oldest 100 runs — the panel must never consume it for selection.
+    if (url.includes('/runs?limit=100')) return jsonResponse({
       items: [
-        {id: 'run-old-0001', kind: 'manager_turn', state: 'success', prompt_snapshot_ref: '/x/prompt_snapshot.json'},
-        {id: 'run-new-0002', kind: 'manager_turn', state: 'success', prompt_snapshot_ref: '/y/prompt_snapshot.json'},
+        {id: 'run-old-0001', kind: 'manager_turn', state: 'success', started_at: '2026-01-01T00:00:00Z',
+         prompt_snapshot_ref: '/x/prompt_snapshot.json'},
+        {id: 'run-new-0002', kind: 'manager_turn', state: 'success', started_at: '2026-01-01T00:01:00Z',
+         prompt_snapshot_ref: '/y/prompt_snapshot.json'},
       ],
+      next_cursor: 'cursor-101',
+    });
+    // The run owner's newest-first read opens with the actual latest launch.
+    if (url.includes('/runs?') && url.includes('order=desc')) return jsonResponse({
+      items: [{id: 'run-new-0002', kind: 'manager_turn', state: 'success',
+               started_at: '2026-01-01T00:01:00Z', prompt_snapshot_ref: '/y/prompt_snapshot.json'}],
       next_cursor: null,
     });
     if (url.includes('/runs/run-new-0002/context')) return jsonResponse({snapshot: {
@@ -266,7 +280,10 @@ test('the current-run section uses the LATEST run with a snapshot, never the old
   context.TaskContextPanel.onSessionChanged({id: 'node-1', profile: 'manager'});
   await flush();
   const text = tab.textContent;
-  assert.ok(text.includes('Run run-new'), 'the latest snapshot-carrying run is the current run');
+  assert.ok(text.includes('Run run-new'), 'the latest started run is the current run');
   assert.ok(text.includes('newest snapshot block'), 'its snapshot is the one rendered');
   assert.ok(!text.includes('oldest snapshot block'), 'the oldest run is not presented as current');
+  const runsFetches = context.fetchCalls.filter((c) => c.url.includes('/runs?'));
+  assert.equal(runsFetches.length, 1, 'selection is one server request, not a page walk');
+  assert.ok(runsFetches[0].url.includes('order=desc'), 'the request is the newest-first read');
 });

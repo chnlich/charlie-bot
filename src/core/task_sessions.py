@@ -690,6 +690,15 @@ class TaskTreeManager:
     self._sessions._invalidate_cache(task_id)
     fresh = await self.load_meta(task_id)
     assert fresh is not None
+    # The creation fact is durably published; connected clients learn about it
+    # through the existing best-effort tree-notification seam. The signal goes
+    # out AFTER the publication and the cache/index invalidation, so an
+    # observer receiving it can immediately read the new node, its parent and
+    # the refreshed ancestor counts. A notification failure is logged by the
+    # sink and never fails the creation: the atomic task_created fact remains
+    # the one durable home, and reconnect/reload recovers from it. A replayed
+    # request (returned above) publishes nothing and signals nothing.
+    await self.events.notify_tree_changed(task_id, ET.TASK_CREATED)
     return fresh
 
   async def _authorize_agent_worker_creation(

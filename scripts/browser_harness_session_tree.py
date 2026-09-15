@@ -81,6 +81,7 @@ class CDP:
         self._events: list[dict] = []
         self.console_errors: list[str] = []
         self.tree_fetch_counts: list[str] = []
+        self.runs_fetch_counts: list[str] = []
         self._reader = asyncio.create_task(self._read_loop())
 
     async def _read_loop(self) -> None:
@@ -105,6 +106,8 @@ class CDP:
                         url = msg["params"]["request"]["url"]
                         if "/api/sessions/tree" in url:
                             self.tree_fetch_counts.append(url)
+                        if "/runs?" in url:
+                            self.runs_fetch_counts.append(url)
         except Exception as exc:  # reader exit is fine at shutdown
             log(f"cdp reader stopped: {exc!r}")
 
@@ -122,6 +125,11 @@ class CDP:
     def drain_tree_fetches(self) -> list[str]:
         seen = self.tree_fetch_counts
         self.tree_fetch_counts = []
+        return seen
+
+    def drain_runs_fetches(self) -> list[str]:
+        seen = self.runs_fetch_counts
+        self.runs_fetch_counts = []
         return seen
 
 
@@ -165,7 +173,7 @@ async def seed_scenario(home: Path) -> dict:
     from src.core.config import get_config
     from src.core.sessions import SessionManager
     from src.core.task_sessions import TaskTreeManager
-    from src.core.models import PatchSessionTaskRequest, RunRecord
+    from src.core.models import PatchSessionTaskRequest, RunRecord, TaskSpec
     from src.core.run_token import CallerIdentity
     from src.core import event_types as ET
 
@@ -220,8 +228,58 @@ async def seed_scenario(home: Path) -> dict:
                 note="seed: report accepted", caller=OP)
         await tree.dispatch.admit_input(
             worker2.id, event_type=ET.USER, content="Please also verify the docs page", actor="user")
+        # The root manager carries the real-user takeoff authorization an
+        # agent-scoped creation is judged against (takeoff_gate).
+        await tree.events.append(root.id, {
+            "id": "seed-takeoff-user", "type": ET.USER,
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "content": "take off and run the program rollout"})
+        await tree.completion.acknowledge_inputs(
+            root.id, request_id="seed-ack-takeoff", input_ids=["seed-takeoff-user"],
+            note="seed: operator authorization", caller=OP)
+        # Long-history node: 150 started runs whose committed snapshots are
+        # distinguishable (generation 0001..0150), plus never-launched
+        # reservations. The current-run Context selection must show generation
+        # 0150 — the whole-history latest launch — not the first page's tail.
+        from datetime import datetime, timedelta, timezone
+        from src.core.task_prompts import PromptBlock, PromptSnapshot, PromptSource
+        from src.core.control_events import sha256_hex
+        long_worker = await tree.create_task(
+            request_id="seed-long", task_parent_id=feature.id, profile="worker",
+            task=TaskSpec(goal="carry a long run history", task_type="implement"),
+            name="Long history worker", backend=None, caller=OP)
+        base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        latest_hash = None
+        for i in range(1, 151):
+            run_id = f"run-{i:04d}"
+            await tree.runs.register_run(RunRecord(
+                id=run_id, session_id=long_worker.id, kind="work", backend="fake-scripted",
+                model="scripted-model", started_at=base + timedelta(minutes=i)))
+            text = f"managed instructions generation {i:04d}"
+            block = PromptBlock(
+                sources=(PromptSource(scope="base", source_ref="base:work", source_session_id=None),),
+                body_ref=sha256_hex(text), delivery="full", text=text)
+            snapshot = PromptSnapshot(blocks=(block,))
+            snap_path = tree.runs.run_dir(long_worker.id, run_id) / "prompt_snapshot.json"
+            snap_path.parent.mkdir(parents=True, exist_ok=True)
+            snap_path.write_text(json.dumps(snapshot.to_json_dict()), encoding="utf-8")
+            await tree.runs.record_observation(
+                long_worker.id, run_id, prompt_snapshot_ref=str(snap_path))
+            await tree.dispatch.finish_run(long_worker.id, run_id, outcome="success")
+            if i == 150:
+                latest_hash = snapshot.prompt_hash
+        for q in ("queued-a", "queued-b"):
+            await tree.runs.register_run(RunRecord(id=q, session_id=long_worker.id, kind="work"))
+        # An active Run identity on the root manager: the seeded agent caller's
+        # run token must bind a launched, non-terminal Run (run_identity_refusal).
+        from src.core.runs import read_pid_stat
+        pid_start, _state = read_pid_stat(os.getpid())
+        await tree.runs.register_run(RunRecord(
+            id="agent-auth-run", session_id=root.id, kind="manager_turn",
+            pid=os.getpid(), pid_start=pid_start))
         seed_memory_store(home)
-        return {"root": root.id, "feature": feature.id, "worker1": worker1.id, "worker2": worker2.id}
+        return {"root": root.id, "feature": feature.id, "worker1": worker1.id, "worker2": worker2.id,
+                "long": long_worker.id, "latest_hash": latest_hash}
 
     return await seed()
 
@@ -255,6 +313,31 @@ class Results:
         out = self.evidence_dir / "session_tree_browser_results.json"
         out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         log(f"results written to {out}")
+
+
+def api_request(base: str, access_key: str, method: str, path: str,
+                body: dict | None = None, token: str | None = None) -> tuple[int, dict]:
+    """One real HTTP API call from a SEPARATE authenticated client.
+
+    This is the cross-client creator of the creation-visibility scenarios: the
+    operator access key (or a scoped agent run token) rides the Authorization
+    header; the browser under observation never performs the call.
+    """
+    headers = {"Authorization": "Bearer " + (token or access_key)}
+    data = None
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+
+    def call() -> tuple[int, dict]:
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return resp.status, json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read().decode() or "{}")
+
+    return call()
 
 
 async def evaluate(cdp: CDP, session_id: str, expression: str) -> object:
@@ -971,6 +1054,217 @@ async def run_harness(args: argparse.Namespace) -> None:
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s10_reload_FAILED")
                 results.record("reload agreement", False, repr(exc), shot)
+
+            # ---- S11: long-history current-run context ------------------------
+            try:
+                log("  s11: long-history context")
+                await evaluate(cdp, session_id, f"switchSession('{ids['long']}')")
+                await evaluate(cdp, session_id, "switchTab('task-context')")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('tab-task-context').textContent.includes('generation 0150')",
+                    timeout=15, label="s11 latest snapshot rendered")
+                cdp.drain_runs_fetches()
+                # Force a data-driven refresh (the live-update path) and recount.
+                await evaluate(cdp, session_id, "TaskContextPanel.refresh()")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('tab-task-context').textContent.includes('generation 0150')",
+                    timeout=15, label="s11 latest snapshot after refresh")
+                text = await evaluate(cdp, session_id, "document.getElementById('tab-task-context').textContent")
+                assert_true("generation 0150" in text, "the whole-history latest launch is the current run")
+                assert_true("generation 0100" not in text,
+                            "the ascending first page's tail is never presented as current")
+                assert_true("generation 0149" not in text, "no older generation leaks into the current-run box")
+                assert_true((ids["latest_hash"] or "")[:12] in text,
+                            "the rendered hash is the seeded latest snapshot's hash")
+                assert_true("No run has started yet" not in text, "a 150-launch session is not misreported as idle")
+                runs_fetches = cdp.drain_runs_fetches()
+                desc_fetches = [u for u in runs_fetches if "order=desc" in u]
+                assert_true(len(desc_fetches) >= 1, f"a newest-first runs read happened ({runs_fetches})")
+                assert_true(all("limit=1" in u for u in desc_fetches),
+                            f"each selection read is one row, not a page walk ({desc_fetches})")
+                assert_true(len(runs_fetches) <= 3,
+                            f"selection stays bounded as history grows ({len(runs_fetches)} /runs requests)")
+                shot = await screenshot(cdp, session_id, results, "s11_long_history_context")
+                results.record("long-history current-run context", True,
+                               f"generation 0150 + its hash shown; {len(runs_fetches)} bounded /runs reads", shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s11_long_history_FAILED")
+                results.record("long-history current-run context", False, repr(exc), shot)
+
+            # ---- S12: creation from a separate client reaches the observer ----
+            created: dict[str, str] = {}  # node ids the cross-client scenarios made
+            observer_errors_before = None
+            try:
+                log("  s12: cross-client root creation")
+                await evaluate(cdp, session_id, f"switchSession('{ids['feature']}')")
+                await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
+                cdp.drain_tree_fetches()
+                active_before = await evaluate(cdp, session_id, "SESSION_ID")
+                tree_events_before = await evaluate(cdp, session_id, "window.__treeEvents || 0")
+                status, meta = await asyncio.to_thread(
+                    api_request, base, access_key, "POST", "/api/sessions/",
+                    {"request_id": "harness-x-root-1", "profile": "manager", "name": "Remote root",
+                     "task": {"goal": "created outside the browser", "acceptance": [], "context_refs": []}})
+                assert_true(status == 200, f"the separate client's create succeeded ({status}: {meta})")
+                created["root"] = meta["id"]
+                await wait_for(cdp, session_id, """
+                    [...document.querySelectorAll('#session-list .tree-row .session-name')]
+                      .some(el => el.textContent === 'Remote root')
+                """, timeout=10, label="s12 remote root row appeared from the notification alone")
+                fetches = cdp.drain_tree_fetches()
+                assert_true(1 <= len(fetches) <= 4,
+                            f"bounded affected-level work for the creation ({len(fetches)} tree page fetches)")
+                active_after = await evaluate(cdp, session_id, "SESSION_ID")
+                assert_true(active_after == active_before, "the creation never switches the active session")
+                tree_events_after = await evaluate(cdp, session_id, "window.__treeEvents || 0")
+                assert_true(tree_events_after > tree_events_before,
+                            "the creation rode a real server-originated task_tree_changed event")
+                names = await evaluate(cdp, session_id, """
+                    [...document.querySelectorAll('#session-list .tree-row .session-name')]
+                      .map(el => el.textContent)
+                """)
+                assert_true(names.count("Remote root") == 1, "exactly one row for the new root")
+                shot = await screenshot(cdp, session_id, results, "s12_cross_client_root")
+                results.record("cross-client root creation reaches a connected observer", True,
+                               "row appeared from the publication notification alone; bounded fetches; session unchanged", shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s12_cross_client_FAILED")
+                results.record("cross-client root creation reaches a connected observer", False, repr(exc), shot)
+
+            # ---- S13: deeper-than-one-level creation and collapsed levels -----
+            try:
+                log("  s13: nested creation beyond the observer cache")
+                cdp.drain_tree_fetches()
+                status, mid = await asyncio.to_thread(
+                    api_request, base, access_key, "POST", "/api/sessions/",
+                    {"request_id": "harness-x-mid-1", "task_parent_id": ids["feature"],
+                     "profile": "manager", "name": "Remote mid",
+                     "task": {"goal": "mid manager", "acceptance": [], "context_refs": []}})
+                assert_true(status == 200, f"nested manager create succeeded ({status})")
+                created["mid"] = mid["id"]
+                await wait_for(cdp, session_id, """
+                    [...document.querySelectorAll('#session-list .tree-row .session-name')]
+                      .some(el => el.textContent === 'Remote mid')
+                """, timeout=10, label="s13 remote mid row under the expanded feature")
+                # A worker under the new mid: the mid's children level was never
+                # fetched, so the leaf is absent from the observer cache.
+                cdp.drain_tree_fetches()
+                status, leaf = await asyncio.to_thread(
+                    api_request, base, access_key, "POST", "/api/sessions/",
+                    {"request_id": "harness-x-leaf-1", "task_parent_id": mid["id"],
+                     "profile": "worker", "name": "Remote leaf",
+                     "task": {"goal": "idle leaf worker", "acceptance": [], "context_refs": []}})
+                assert_true(status == 200, f"deep leaf create succeeded ({status})")
+                created["leaf"] = leaf["id"]
+                await wait_for(cdp, session_id, """
+                    [...document.querySelectorAll('#session-list .tree-row')]
+                      .filter(el => el.dataset.nodeId === '%s')
+                      .every(el => el.textContent.includes('1 open'))
+                """ % mid["id"], timeout=10, label="s13 mid row gained the leaf count while collapsed")
+                collapsed_ok = await evaluate(cdp, session_id,
+                    "!document.getElementById('tree-children-%s')" % mid["id"])
+                assert_true(collapsed_ok, "the collapsed level stays collapsed")
+                fetches = cdp.drain_tree_fetches()
+                assert_true(1 <= len(fetches) <= 5,
+                            f"bounded path-level work for the deep creation ({len(fetches)} fetches)")
+                await evaluate(cdp, session_id, f"Sidebar.SessionTree.ensureExpanded('{mid['id']}')")
+                await wait_for(cdp, session_id, """
+                    [...document.querySelectorAll('#session-list .tree-row .session-name')]
+                      .some(el => el.textContent === 'Remote leaf')
+                """, timeout=8, label="s13 leaf visible after expanding the mid")
+                shot = await screenshot(cdp, session_id, results, "s13_deep_creation")
+                results.record("deeper-than-one-level creation from a separate client", True,
+                               "mid appeared under the expanded parent; collapsed mid gained the count; expansion reveals the idle leaf", shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s13_deep_creation_FAILED")
+                results.record("deeper-than-one-level creation from a separate client", False, repr(exc), shot)
+
+            # ---- S14: agent-scoped creation reaches the observer --------------
+            try:
+                log("  s14: scoped-agent creation")
+                from src.core.run_token import RunTokenClaims, sign_run_token
+                agent_token = sign_run_token(
+                    RunTokenClaims(session_id=ids["root"], run_id="agent-auth-run", agent="harness-agent"),
+                    access_key)
+                cdp.drain_tree_fetches()
+                status, worker = await asyncio.to_thread(
+                    api_request, base, access_key, "POST", "/api/sessions/",
+                    {"request_id": "harness-agent-w1", "task_parent_id": ids["root"],
+                     "profile": "worker", "name": "Agent worker",
+                     "task": {"goal": "created by a scoped agent", "acceptance": [], "context_refs": []}},
+                    token=agent_token)
+                assert_true(status == 200, f"agent-scoped create succeeded ({status}: {worker})")
+                await wait_for(cdp, session_id, """
+                    [...document.querySelectorAll('#session-list .tree-row .session-name')]
+                      .some(el => el.textContent === 'Agent worker')
+                """, timeout=10, label="s14 agent-created worker appeared")
+                shot = await screenshot(cdp, session_id, results, "s14_agent_creation")
+                results.record("agent-scoped creation reaches a connected observer", True,
+                               "run-token agent created a worker under its manager; the observer saw it live", shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s14_agent_creation_FAILED")
+                results.record("agent-scoped creation reaches a connected observer", False, repr(exc), shot)
+
+            # ---- S15: replay, refusal, drafts and selection preservation ------
+            try:
+                log("  s15: replay, refusal, drafts")
+                # An unsaved task draft on the open session must survive the
+                # creation traffic.
+                await evaluate(cdp, session_id, "switchTab('task')")
+                await wait_for(cdp, session_id, "!!document.getElementById('task-goal-input')")
+                await evaluate(cdp, session_id, """
+                    (async () => {
+                      const el = document.getElementById('task-goal-input');
+                      el.value = 'unsaved draft during remote creations';
+                      el.dispatchEvent(new Event('input'));
+                    })()
+                """)
+                await evaluate(cdp, session_id, "switchTab('task-context')")
+                # Replay: the same request_id returns the original product; the
+                # tree shows no duplicate.
+                status, replay = await asyncio.to_thread(
+                    api_request, base, access_key, "POST", "/api/sessions/",
+                    {"request_id": "harness-x-root-1", "profile": "manager", "name": "Remote root",
+                     "task": {"goal": "created outside the browser", "acceptance": [], "context_refs": []}})
+                assert_true(status == 200 and replay["id"] == created["root"],
+                            f"the replay returned the original product ({status})")
+                await asyncio.sleep(0.6)
+                names = await evaluate(cdp, session_id, """
+                    [...document.querySelectorAll('#session-list .tree-row .session-name')]
+                      .map(el => el.textContent)
+                """)
+                assert_true(names.count("Remote root") == 1, "the replay never duplicated the row")
+                # A refused (pre-publication) create emits no successful-node
+                # signal: a worker under a worker parent is refused outright.
+                observer_errors_before = await evaluate(cdp, session_id, "(window.__errs || []).length")
+                rows_before = await evaluate(cdp, session_id,
+                    "document.querySelectorAll('#session-list .tree-row').length")
+                status, refusal = await asyncio.to_thread(
+                    api_request, base, access_key, "POST", "/api/sessions/",
+                    {"request_id": "harness-refused-1", "task_parent_id": created["leaf"],
+                     "profile": "worker", "name": "Should not exist",
+                     "task": {"goal": "refused", "acceptance": [], "context_refs": []}})
+                assert_true(status == 400, f"the worker-parent create was refused ({status})")
+                await asyncio.sleep(0.6)
+                rows_after = await evaluate(cdp, session_id,
+                    "document.querySelectorAll('#session-list .tree-row').length")
+                assert_true(rows_after == rows_before, "a refused create changed nothing in the tree")
+                errs_after = await evaluate(cdp, session_id, "(window.__errs || []).length")
+                assert_true(errs_after == observer_errors_before,
+                            f"no unexpected browser error from the refused create ({errs_after} vs {observer_errors_before})")
+                # Drafts and selection survive the whole cross-client sequence.
+                active_now = await evaluate(cdp, session_id, "SESSION_ID")
+                assert_true(active_now == ids["feature"], "selection stayed on the open node")
+                await evaluate(cdp, session_id, "switchTab('task')")
+                await wait_for(cdp, session_id,
+                    "document.getElementById('task-goal-input')?.value === 'unsaved draft during remote creations'",
+                    label="s15 draft preserved")
+                shot = await screenshot(cdp, session_id, results, "s15_replay_refusal_draft")
+                results.record("replay, refusal, draft and selection preservation", True,
+                               "one node one fact after replay; refusal emitted nothing; draft and selection intact", shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s15_replay_refusal_FAILED")
+                results.record("replay, refusal, draft and selection preservation", False, repr(exc), shot)
 
             # The CDP collector records console.error calls and uncaught page
             # exceptions from Runtime.enable onward — this list is the only

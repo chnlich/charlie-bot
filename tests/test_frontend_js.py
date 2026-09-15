@@ -40,6 +40,10 @@ _NODE_TESTS = [
     "session_switch_stale_pagination.test.js",
     # v2 session-tree UI (stage 5): tree navigation, task/context/runs panels.
     "session_tree_render.test.js",
+    # UI follow-ups: whole-history current-Run selection and cross-client
+    # creation notifications.
+    "task_context_latest_run.test.js",
+    "session_tree_creation_notify.test.js",
     "task_panel_actions.test.js",
     "task_context_rules.test.js",
     "task_runs_panel.test.js",

@@ -18,6 +18,7 @@ import pytest
 from conftest import (
     BROADCAST_PATCH_TARGET,
     OPUS_BACKEND_ID,
+    _page_request,
     fake_backends,
     make_home_session,
     recycle_archive_cutoff_events,
@@ -26,7 +27,6 @@ from conftest import append_events as _append_events
 from conftest import assistant_event as _assistant_event
 from conftest import assistant_text_event as _assistant_text_event
 from conftest import queued_user_reorder_events as _reorder_events
-from starlette.requests import Request
 
 from src.api.message_utils import events_to_messages
 from src.core import event_types as ET
@@ -34,14 +34,6 @@ from src.core.config import CharlieBotConfig
 from src.core.message_projection import MessageProjection
 from src.core.models import CreateSessionRequest
 from src.core.sessions import _PROJECTION_LRU_LIMIT, SessionManager
-
-
-def _page_request(accept_encoding: str = "") -> Request:
-  """The events route's request seam with one header: direct calls stand in for
-  FastAPI's injection, and the empty default is the no-gzip client shape."""
-  headers = [(b"accept-encoding", accept_encoding.encode())] if accept_encoding else []
-  return Request({"type": "http", "headers": headers})
-
 
 # ---------------------------------------------------------------------------
 # Fixture event builders

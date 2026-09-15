@@ -778,6 +778,13 @@ def make_page_request(path: str) -> Request:
   return Request(scope)
 
 
+def _page_request(accept_encoding: str = "") -> Request:
+  """The events route's request seam with one header: direct calls stand in for
+  FastAPI's injection, and the empty default is the no-gzip client shape."""
+  headers = [(b"accept-encoding", accept_encoding.encode())] if accept_encoding else []
+  return Request({"type": "http", "headers": headers})
+
+
 def make_transcript(config_dir: Path, cc_session_id: str) -> Path:
   """Write a fake Claude Code session transcript under config_dir and return its path."""
   transcript = config_dir / "projects" / "slug" / f"{cc_session_id}.jsonl"

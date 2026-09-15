@@ -12,12 +12,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from conftest import (
     BROADCAST_PATCH_TARGET,
+    _page_request,
     make_home_session,
     recycle_archive_cutoff_events,
 )
 from conftest import append_events as _append_events
 from conftest import archive_cutoff_events as _archive_cutoff_events
-from starlette.requests import Request
 
 from src.api.message_utils import SessionBootstrapData, build_session_bootstrap_data, build_session_view_data
 from src.api.sessions import _bootstrap_payload, get_session_events_page
@@ -25,13 +25,6 @@ from src.core import event_types as ET
 from src.core.models import SessionMetadata, ThreadMetadata, ThreadStatus
 from src.core.ndjson import count_ndjson_lines
 from src.core.sessions import SessionManager
-
-
-def _page_request(accept_encoding: str = "") -> Request:
-  """The events route's request seam with one header: direct calls stand in for
-  FastAPI's injection, and the empty default is the no-gzip client shape."""
-  headers = [(b"accept-encoding", accept_encoding.encode())] if accept_encoding else []
-  return Request({"type": "http", "headers": headers})
 
 
 def _write_thread(threads_dir: Path, thread_id: str, status: ThreadStatus, completed_at: datetime | None) -> None:

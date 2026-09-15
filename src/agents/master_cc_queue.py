@@ -76,6 +76,22 @@ async def _broadcast_running_changed(
   )
 
 
+async def _enqueue_and_notify(session_id: str, work_item: master_cc_state._WorkItem, *, auto_trigger: bool) -> None:
+  """Queue one work item, then notify the sidebar when this call opened a new busy interval.
+
+  The enqueue is atomic (see _enqueue_work_item); the broadcast is a pure
+  notification — correctness comes from readers deriving the state.
+  """
+  thinking_since, created = _enqueue_work_item(session_id, work_item)
+  if created:
+    await _broadcast_running_changed(
+        session_id,
+        has_running_tasks=True,
+        thinking_since=thinking_since,
+        auto_trigger=auto_trigger,
+    )
+
+
 async def _persist_with_readback(
     callbacks: SessionCallbacks,
     persist: Callable[[str, str], Awaitable[str | None]],
@@ -319,8 +335,6 @@ async def run_message(
     await asyncio.to_thread(snapshot_tex)
 
   # Persist the user message so it survives page refresh (WebSocket catch-up).
-  # All awaits in run_message happen here, BEFORE the atomic enqueue block
-  # below — between mark_busy and put_nowait nothing may yield or raise.
   if not skip_user_event:
     user_event = {
         "type": ET.USER,
@@ -355,22 +369,7 @@ async def run_message(
       uploaded_files=uploaded_files,
   )
 
-  # --- atomic enqueue block: no await, no statement that can raise ---
-  # Busy state is marked before the item enters the queue, so a work item in
-  # the queue always implies busy_since is set; the consumer clears it only at
-  # teardown, in its own await-free sequence.
-  thinking_since, created = _enqueue_work_item(session_meta.id, work_item)
-  # --- end atomic block ---
-
-  # Notify only when this call opened a new busy interval; the broadcast is a
-  # pure notification — correctness comes from readers deriving the state.
-  if created:
-    await _broadcast_running_changed(
-        session_meta.id,
-        has_running_tasks=True,
-        thinking_since=thinking_since,
-        auto_trigger=auto_trigger,
-    )
+  await _enqueue_and_notify(session_meta.id, work_item, auto_trigger=auto_trigger)
 
   # Await until this specific work item completes.
   return await future
@@ -450,16 +449,7 @@ async def enqueue_master_resume(
       resume_record=record,
       resume_is_alive=is_alive,
   )
-  # Atomic (see _enqueue_work_item); the broadcast below is a pure
-  # notification — correctness comes from readers deriving the state.
-  thinking_since, created = _enqueue_work_item(session_meta.id, work_item)
-  if created:
-    await _broadcast_running_changed(
-        session_meta.id,
-        has_running_tasks=True,
-        thinking_since=thinking_since,
-        auto_trigger=False,
-    )
+  await _enqueue_and_notify(session_meta.id, work_item, auto_trigger=False)
   return future
 
 

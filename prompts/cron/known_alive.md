@@ -36,13 +36,16 @@ Known-alive symbols:
   their definitions, so vulture flags each one as an unused function; they must never be deleted on
   that evidence alone. `openai_compatible_messages` above is the same class, kept as its own entry
   because its URL is built inside the Python registry rather than `web/`.
-- `_fresh_credential_read_warning_registry`, `_fresh_unknown_limit_shape_registry` (`tests/test_ext_usage.py`),
+- `_fresh_credential_read_warning_registry`, `_fresh_unknown_limit_shape_registry`, `_fresh_usage_cache`,
+  `_fresh_user_agent_cache` (`tests/test_ext_usage.py`),
   `_fresh_pool_state` (`tests/test_claude_accounts.py`),
   `_reset_config_caches` (`tests/test_charliebot_home.py`), `_clear_once_keys`
   (`tests/test_follow_silence_recheck.py`), `_reset_token_usage_single_flight` (`tests/test_pages.py`),
   `_worktree_paths` (`tests/test_reviewer_model_preference.py`),
   `_fresh_search_read_failure_registry` (`tests/test_session_search_content.py`),
   `_fresh_unhandled_part_type_registry` (`tests/test_opencode_backend.py`),
+  `_fresh_cron_body_cache` (`tests/test_cron_tasks_body_cache.py`), `_fresh_switch_memo`
+  (`tests/test_switch_payload_gzip.py`),
   `_fresh_renderer_singleton` (`tests/core/test_headless_render.py`),
   `_stub_headless_renderer` (`tests/conftest.py`) — the renderer pair: the first resets the
   warm-renderer singleton around `tests/core/test_headless_render.py`, the second is the

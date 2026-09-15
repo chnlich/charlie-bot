@@ -72,6 +72,16 @@ class SessionAliasStore:
     """Register the new-run compatibility thread alias (idempotent, atomic rewrite)."""
     self._put(alias_thread_key(session_id, run_id), {"session_id": session_id, "run_id": run_id})
 
+  def register_owner_thread_alias(self, owner_session_id: str, session_id: str, run_id: str) -> None:
+    """Alias a compat thread entry addressed from *owner_session_id* to the run's REAL owner.
+
+    The delegate path's parent-addressed entry: the delegating session is the
+    address, the child task is where the Run lives. Recording the owner as the
+    target session would resolve to a run that does not exist there.
+    """
+    self._put(
+        alias_thread_key(owner_session_id, run_id), {"session_id": session_id, "run_id": run_id})
+
   def put_old_session(self, old_session_id: str, canonical_session_id: str) -> None:
     """Register one imported old-session mapping (migration-stage entry point)."""
     sessions = self._read()["old_session_ids"]

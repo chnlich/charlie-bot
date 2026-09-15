@@ -119,6 +119,59 @@ def test_unresolved_categories_produce_actionable_output_and_refuse(
     assert _tree_snapshot(home) == before, name
 
 
+def test_corrupt_alias_file_and_missing_targets_are_unresolved_and_refuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Corrupt aliases, a successor with no record, and a cron chain root with no
+  thread: actionable unresolved output, apply refuses with zero mutation."""
+  # (a) A byte-corrupt session_aliases.json is unreadable evidence, never skipped.
+  home = fx.build_full_home(tmp_path / "alias")
+  (home / "sessions" / "session_aliases.json").write_text("{corrupt", encoding="utf-8")
+  point_home(monkeypatch, home)
+  code, manifest, _ = dry_run(monkeypatch, home, tmp_path / "a.json")
+  assert code == 1
+  assert any(u.source_kind == "unreadable_record" and "session_aliases" in u.source_id
+             for u in manifest.unresolved)
+
+  # (b) A successor_session_id naming a session with no record is unresolved.
+  home = fx.build_full_home(tmp_path / "successor")
+  meta_path = home / "sessions" / fx.S_PREDECESSOR / "metadata.json"
+  meta = fx.SessionMetadata.model_validate_json(meta_path.read_text())
+  meta.successor_session_id = "00000000-0000-4000-8000-000000000099"
+  atomic_write_text(meta_path, meta.model_dump_json(indent=2, exclude={
+      "has_running_tasks", "has_pending_trigger", "pending_trigger_count",
+      "next_trigger_at", "has_pending_plan_approval", "schedule_cron", "schedule_enabled",
+      "schedule_next_run", "schedule_timezone", "schedule_project",
+      "schedule_allow_failure", "thinking_since"}))
+  point_home(monkeypatch, home)
+  code, manifest, _ = dry_run(monkeypatch, home, tmp_path / "b.json")
+  assert code == 1
+  assert any(u.source_kind == "elone_chain" and "no session record" in u.reason
+             for u in manifest.unresolved)
+
+  # (c) A cron chain step whose chain_root has no thread record is unresolved
+  # (missing raw evidence, never silently imported as ordinary work).
+  home = fx.build_full_home(tmp_path / "chain")
+  thread_path = (home / "sessions" / fx.S_STEPS / "threads" / fx.T_STEP1 / "metadata.json")
+  thread = fx.ThreadMetadata.model_validate_json(thread_path.read_text())
+  thread.chain_root = "missing-chain-root"
+  atomic_write_text(thread_path, thread.model_dump_json(indent=2))
+  point_home(monkeypatch, home)
+  code, manifest, _ = dry_run(monkeypatch, home, tmp_path / "c.json")
+  assert code == 1
+  assert any(u.source_kind == "cron_chain" and "no thread record" in u.reason
+             for u in manifest.unresolved)
+
+  for name, manifest_name in (("alias", "a.json"), ("successor", "b.json"), ("chain", "c.json")):
+    home = tmp_path / name
+    point_home(monkeypatch, home)
+    before = _tree_snapshot(home)
+    code, _, err = run_cli(monkeypatch, home, "--apply", "--manifest",
+                           str(tmp_path / manifest_name))
+    assert code == 1, name
+    assert "unresolved" in cli_json(err)["error"], name
+    assert _tree_snapshot(home) == before, name
+
+
 def test_corrupt_history_line_is_unresolved(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   home = fx.build_full_home(tmp_path / "home")

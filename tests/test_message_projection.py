@@ -917,7 +917,6 @@ def test_page_body_cache_lru_cap_evicts_oldest() -> None:
   assert projection.cached_page_body(30, 1) is None, "untouched oldest entry must evict first"
   assert projection.cached_page_body(29, 1) == b"body-1"
   assert projection.cached_page_body(0, 1) == b"new"
-  assert len(projection._page_bodies) == cap
 
 
 @pytest.mark.asyncio

@@ -46,6 +46,29 @@ class FastJsonResponse(JSONResponse):
     return fast_json_bytes(content)
 
 
+class PrecompressedGzipResponse(Response):
+  """Response serving gzip bytes the caller compressed itself.
+
+  A route answers an ``Accept-Encoding: gzip`` request with its own memoized
+  deflate (level 1, mtime 0) instead of streaming uncompressed bytes through
+  GZipMiddleware: a response that already carries ``Content-Encoding`` makes
+  the middleware skip its whole-body pass (starlette's ``content_encoding_set``
+  short-circuit), so the deflate runs off the event loop once and every later
+  request replays the stored bytes. ``Vary: Accept-Encoding`` marks the body
+  as negotiated for caches; the middleware does not add it on the skip path.
+  """
+
+  def __init__(self, body: bytes, media_type: str) -> None:
+    super().__init__(
+        content=body,
+        media_type=media_type,
+        headers={
+            "Content-Encoding": "gzip",
+            "Vary": "Accept-Encoding"
+        },
+    )
+
+
 class PreencodedJSONResponse(Response):
   """JSON response serving body bytes a caller already rendered.
 

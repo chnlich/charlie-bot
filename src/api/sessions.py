@@ -28,7 +28,7 @@ from src.api.message_utils import (
     build_session_view_data,
     events_to_messages,
 )
-from src.api.responses import FastJsonResponse, PreencodedJSONResponse, fast_json_bytes
+from src.api.responses import FastJsonResponse, PrecompressedGzipResponse, PreencodedJSONResponse, fast_json_bytes
 from src.api.threads import view_thread_rows
 from src.core import claude_accounts, sidebar_state, thinking_state
 from src.core.chat_events import chat_events_path
@@ -1134,14 +1134,9 @@ async def get_events_jsonl(session_id: str, request: Request) -> Response:
     return FileResponse(path, media_type="application/x-ndjson")
   # The read and the deflate ride one executor hop: FileResponse streams 64 KiB
   # chunks and the gzip middleware compresses every chunk inline on the event
-  # loop (the M101 loop-lag readings), while Content-Encoding set upstream is
-  # what makes the middleware skip its own pass — the M72 listing-serve mechanism.
+  # loop (the M101 loop-lag readings).
   body = await asyncio.to_thread(_events_file_gzip, path)
-  return Response(
-      content=body, media_type="application/x-ndjson", headers={
-          "Content-Encoding": "gzip",
-          "Vary": "Accept-Encoding",
-      })
+  return PrecompressedGzipResponse(body, "application/x-ndjson")
 
 
 @router.get("/{session_id}/threads", response_model=list[ThreadMetadata])

@@ -20,6 +20,9 @@ import uuid
 from typing import TYPE_CHECKING
 
 from src.core import event_types as ET
+from src.core.log_once import LazyStructlogLogger
+
+log = LazyStructlogLogger()
 
 if TYPE_CHECKING:
   from src.core.sessions import SessionManager
@@ -127,6 +130,14 @@ class ControlEventSink:
 
   async def append(self, session_id: str, event: dict) -> None:
     await self._session_mgr.save_chat_event(session_id, event)
+    # The durable fact is written; notify connected UIs best-effort. A
+    # notification failure never fails the operation (the fact is already on
+    # disk and catch-up reconciles the client), it is only logged.
+    try:
+      await self._session_mgr.broadcast_task_tree_changed(session_id, event.get("type"))
+    except Exception:
+      log.exception("task_tree_changed_broadcast_failed", session_id=session_id,
+                    event_type=event.get("type"))
 
   def load_events(self, session_id: str) -> list[dict]:
     """The session's parsed chat events (the durable fact stream control events ride)."""

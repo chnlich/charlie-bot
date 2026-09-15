@@ -708,6 +708,22 @@ class RunStore:
       return self._fact_history_loader(session_id)
     return self._events.load_events(session_id)
 
+  def run_display_state(self, run: RunRecord, events: list[dict], host_boot: datetime) -> str:
+    """One run's UI-facing state, derived only from facts.
+
+    queued: registered, never launched (a durable stop request marks it
+    stopped). running: launched identity still alive. attention: launched but
+    nobody observed the exit. Otherwise the recorded terminal outcome.
+    """
+    outcome = self.terminal_outcome(events, run.id)
+    if outcome is not None:
+      return str(outcome)
+    if run.pid is None:
+      return "stopped" if self.stop_requested(events, run.id) else "queued"
+    if self.run_is_active(run, events, host_boot):
+      return "running"
+    return "attention"
+
   def terminal_outcome(self, events: list[dict], run_id: str) -> str | None:
     """The run's recorded run_finished outcome, or None while it has none."""
     outcome: str | None = None

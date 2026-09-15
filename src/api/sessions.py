@@ -66,6 +66,7 @@ from src.core.models import (
   RetryRunRequest,
   RunCancelResponse,
   RunPage,
+  RunRow,
   SessionMetadata,
   SessionRow,
   SessionStatus,
@@ -1377,12 +1378,28 @@ async def list_session_runs(
     _meta: SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> RunPage:
-  """One keyset page of the session's run records, chronological (queued first)."""
+  """One keyset page of the session's run records, chronological (queued first).
+
+  Each row carries its fact-derived display state and stop-request flag — the
+  same fold the guards consume, so the Runs panel never guesses state from a
+  status badge.
+  """
   try:
     slice_ = await asyncio.to_thread(task_mgr.runs.list_runs_page_sync, session_id, limit, cursor)
   except ValueError as e:
     raise bad_request(e) from e
-  return RunPage(items=slice_.items, next_cursor=slice_.next_cursor)
+  events = task_mgr.runs.load_events_sync(session_id)
+  from src.core.runs import read_host_boot_time
+  host_boot = await asyncio.to_thread(read_host_boot_time)
+  rows = [
+      RunRow(
+          **run.model_dump(),
+          state=task_mgr.runs.run_display_state(run, events, host_boot),
+          stop_requested=task_mgr.runs.stop_requested(events, run.id),
+      )
+      for run in slice_.items
+  ]
+  return RunPage(items=rows, next_cursor=slice_.next_cursor)
 
 
 @router.get("/{session_id}/effective-prompt")

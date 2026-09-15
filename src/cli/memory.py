@@ -58,7 +58,7 @@ def _cmd_query(args: argparse.Namespace) -> None:
         print(f"error: unknown topic: {value}", file=sys.stderr)
     sys.exit(1)
   wanted_topics = set(args.topic)
-  resident_names = {t.name for t in store.topics.values() if t.resident}
+  resident_names = memory.resident_topic_names(store)
   matched = []
   for e in store.entries:
     if e.topic not in wanted_topics:
@@ -68,7 +68,7 @@ def _cmd_query(args: argparse.Namespace) -> None:
     if args.resident and e.topic not in resident_names:
       continue
     matched.append(e)
-  matched.sort(key=lambda e: (e.topic, e.slug))
+  matched.sort(key=memory.entry_order_key)
   if args.index:
     for e in matched:
       print(f"{e.topic}/{e.slug} · {e.title}")

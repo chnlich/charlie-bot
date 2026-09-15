@@ -492,6 +492,24 @@ def _format_block(full_body_entries: list[Entry], index_entries: list[Entry]) ->
   return "\n\n".join(chunks)
 
 
+def entry_order_key(entry: Entry) -> tuple[str | None, str]:
+  """The store's canonical entry order: ``(topic, slug)``.
+
+  Every listing of entries — both spawn assemblers and the CLI query — sorts
+  with this key, so one change moves them all.
+  """
+  return (entry.topic, entry.slug)
+
+
+def resident_topic_names(store: Store) -> set[str]:
+  """Names of the store's resident topics.
+
+  The assemble paths inject resident-topic entries in full and serve the rest
+  as index lines; the CLI query's ``--resident`` filter matches the same set.
+  """
+  return {t.name for t in store.topics.values() if t.resident}
+
+
 def assemble_master(memory_dir: Path) -> str | None:
   """Assemble the master spawn memory block.
 
@@ -508,7 +526,7 @@ def assemble_master(memory_dir: Path) -> str | None:
     log.error("memory_dir_missing", path=str(memory_dir))
     return None
   store = load_store(memory_dir)
-  resident_names = {t.name for t in store.topics.values() if t.resident}
+  resident_names = resident_topic_names(store)
   full_body_entries: list[Entry] = []
   index_entries: list[Entry] = []
   for e in store.entries:
@@ -520,8 +538,8 @@ def assemble_master(memory_dir: Path) -> str | None:
       index_entries.append(e)
   if not full_body_entries and not index_entries:
     return None
-  full_body_entries.sort(key=lambda e: (e.topic, e.slug))
-  index_entries.sort(key=lambda e: (e.topic, e.slug))
+  full_body_entries.sort(key=entry_order_key)
+  index_entries.sort(key=entry_order_key)
   return _format_block(full_body_entries, index_entries)
 
 
@@ -551,8 +569,8 @@ def assemble_worker(memory_dir: Path, repo_basename: str) -> str | None:
       full_body_entries.append(e)
     else:
       index_entries.append(e)
-  full_body_entries.sort(key=lambda e: (e.topic, e.slug))
-  index_entries.sort(key=lambda e: (e.topic, e.slug))
+  full_body_entries.sort(key=entry_order_key)
+  index_entries.sort(key=entry_order_key)
   usage_line = (
       "On-demand knowledge: `charliebot memory query --topic <topic>` (full text) or `--index` "
       "for the index only. Stage a capture with `charliebot memory add [--file F]`: a capture "

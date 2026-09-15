@@ -929,6 +929,15 @@ def get_credentials() -> Credentials:
   return _credentials_cache.get(load_credentials)
 
 
+def configured_access_key() -> str:
+  """Return the ``charliebot.access_key`` credential, or "" when it is unset.
+
+  One home of the read every access-key gate repeats; an empty value means
+  every gate passes unauthenticated readers through.
+  """
+  return str(get_credentials().get("charliebot", "access_key") or "")
+
+
 _cron_snapshot = _CronSnapshot()
 
 

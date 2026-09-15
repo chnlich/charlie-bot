@@ -80,7 +80,8 @@ def internal_api_auth_headers() -> dict[str, str]:
   authenticate against the auth middleware; returns no header when the key is
   empty (the middleware is a no-op in that case).
   """
-  access_key = get_credentials().get("charliebot", "access_key")
+  from src.core.config import configured_access_key
+  access_key = configured_access_key()
   if access_key:
     return {"Authorization": f"Bearer {access_key}"}
   return {}

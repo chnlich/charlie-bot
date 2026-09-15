@@ -108,6 +108,7 @@ from src.core.models import (
     TaskType,
     ThreadMetadata,
     ThreadStatus,
+    ensure_utc,
 )
 from src.core.runs import (
     DATA_DIR_NAME,
@@ -424,10 +425,10 @@ def _scan_manager_turn_logs(home: Path, session: SessionInfo) -> None:
       raw_sha = _sha256_file(raw_path)
       result = _final_result_event(raw_path)
       if result is not None:
-        proven = True
         subtype = result.get("subtype")
         is_error = result.get("is_error")
         outcome = "failed" if (subtype not in (None, "success") or is_error not in (None, False)) else "success"
+        proven = True
     session.manager_turn_logs.append(ManagerTurnLog(
         owner_id=session.id,
         dir_name=child.name,
@@ -437,8 +438,45 @@ def _scan_manager_turn_logs(home: Path, session: SessionInfo) -> None:
         raw_sha256=raw_sha,
         proven=proven,
         outcome=outcome,
-        completed_at=raw_completion_time(raw_path) if raw_path.is_file() else None,
+        completed_at=_log_completion_time(raw_path) if raw_path.is_file() else None,
     ))
+
+
+def _log_completion_time(raw_path: Path) -> datetime | None:
+  """The turn's completion time, from evidence in this order.
+
+  1. The log's own event timestamps (portable across copies).
+  2. The raw file's final mtime — the runtime's own completion contract for
+     raw logs (``src/agents/backends/base.py`` clamps injected event times to
+     it), valid whenever the offline copy preserves mtimes.
+
+  Returns None only when neither is available (no parseable event time and no
+  stat), in which case the turn's end is simply not timestamped.
+  """
+  try:
+    data = raw_path.read_bytes()
+  except OSError:
+    return raw_completion_time(raw_path)
+  last: datetime | None = None
+  for line in data.split(b"\n"):
+    if not line.strip():
+      continue
+    try:
+      event = orjson.loads(line)
+    except ValueError:
+      continue
+    if not isinstance(event, dict):
+      continue
+    ts = event.get("timestamp")
+    if not isinstance(ts, str):
+      continue
+    try:
+      last = ensure_utc(datetime.fromisoformat(ts))
+    except ValueError:
+      continue
+  if last is not None:
+    return last
+  return raw_completion_time(raw_path)
 
 
 def _final_result_event(raw_path: Path) -> dict | None:
@@ -892,7 +930,8 @@ def _turn_log_covering(events_by_id: dict[str, dict], log: ManagerTurnLog,
     return False
 
 
-def _classify_inputs(info: SessionInfo, meta: SessionMetadata, plan_unresolved: list[UnresolvedEntry],
+def _classify_inputs(info: SessionInfo, events: list[dict], meta: SessionMetadata,
+                     plan_unresolved: list[UnresolvedEntry],
                      done_by_input: dict[str, list[dict]],
                      proven_logs: list[ManagerTurnLog],
                      master_run_record: object | None) -> tuple[list[dict], list[dict], list[dict]]:
@@ -907,7 +946,7 @@ def _classify_inputs(info: SessionInfo, meta: SessionMetadata, plan_unresolved: 
   pending: list[dict] = []
   confirmed: list[tuple[str, str]] = []
   uncertain: list[UnresolvedEntry] = []
-  events_by_id = {str(e.get("id")): e for e in info.events if isinstance(e.get("id"), str)}
+  events_by_id = {str(e.get("id")): e for e in events if isinstance(e.get("id"), str)}
   in_flight_named: str | None = None
   in_flight_proven = False
   if isinstance(master_run_record, MasterRunRecord):
@@ -925,7 +964,7 @@ def _classify_inputs(info: SessionInfo, meta: SessionMetadata, plan_unresolved: 
   for log in proven_logs:
     if log.started_at is not None:
       activity_stamps.append(log.started_at)
-  for done in _user_round_activity(info.events)["done_events"]:
+  for done in _user_round_activity(events)["done_events"]:
     ts = done.get("timestamp")
     if isinstance(ts, str):
       try:
@@ -934,7 +973,7 @@ def _classify_inputs(info: SessionInfo, meta: SessionMetadata, plan_unresolved: 
       except ValueError:
         pass
 
-  for event in info.events:
+  for event in events:
     etype = event.get("type")
     if etype not in (ET.USER, ET.AGENT_MESSAGE):
       continue
@@ -994,6 +1033,24 @@ def _classify_inputs(info: SessionInfo, meta: SessionMetadata, plan_unresolved: 
         refs=[info.chat_rel_path or f"sessions/{info.id}/data/chat_events.jsonl"]))
   pending.sort(key=lambda e: e["input_id"])
   return pending, confirmed, uncertain
+
+
+def _migration_appended_event_ids(info: SessionInfo, migrated_run_ids: set[str]) -> set[str]:
+  """Ids of the events this converter itself appended to the node's history.
+
+  Re-deriving a plan over an already-migrated node must classify the ORIGINAL
+  history only: the import boundary's own facts (task_imported and the
+  imported runs' run_finished acknowledgements) are migration products, not
+  old evidence, and post-import inputs belong to the ordinary fold — never to
+  a re-planned manifest's pending list.
+  """
+  appended = {str(uuid.uuid5(TASK_ID_NAMESPACE, f"task-imported:{info.id}"))}
+  for event in info.events:
+    if event.get("type") == ET.RUN_FINISHED and event.get("run_id") in migrated_run_ids:
+      event_id = event.get("id")
+      if isinstance(event_id, str):
+        appended.add(event_id)
+  return appended
 
 
 def _session_kind(meta: SessionMetadata) -> str:
@@ -1667,14 +1724,6 @@ def _plan_manager_conversion(
   sid = info.id
   kind = _session_kind(meta)
   archived = meta.status.value == "archived"
-  pending, confirmed, session_uncertain = _classify_inputs(
-      info, meta, unresolved,
-      _user_round_activity(info.events)["done_by_input"],
-      [log for log in info.manager_turn_logs if log.proven],
-      meta.master_run,
-  )
-  unresolved.extend(session_uncertain)
-
   goal = meta.name
   subtree_ref: str | None = None
   node_ref: str | None = None
@@ -1765,6 +1814,25 @@ def _plan_manager_conversion(
             reason="manager execution log without a provable completed turn; retained at "
                    "its original path as historical evidence, not imported as a Run",
             detail={"raw_log_ref": str(log.raw_path) if log.raw_path else ""}))
+
+  # Re-deriving a plan over an already-migrated node classifies only the
+  # ORIGINAL history: this converter's own appended facts are not old
+  # evidence, and post-import inputs belong to the ordinary fold, never to a
+  # re-planned manifest's pending list. The imported runs' ids are known only
+  # after the turn-run construction above, so classification follows it.
+  if meta.profile is not None:
+    migrated_run_ids = {str(p.record.id) for p in turn_runs}
+    appended_ids = _migration_appended_event_ids(info, migrated_run_ids)
+    classified_events = [e for e in info.events if e.get("id") not in appended_ids]
+  else:
+    classified_events = info.events
+  pending, confirmed, session_uncertain = _classify_inputs(
+      info, classified_events, meta, unresolved,
+      _user_round_activity(classified_events)["done_by_input"],
+      [log for log in info.manager_turn_logs if log.proven],
+      meta.master_run if meta.profile is None else None,
+  )
+  unresolved.extend(session_uncertain)
 
   confirmed_map: dict[str, str] = {}
   for input_id, correlation in confirmed:

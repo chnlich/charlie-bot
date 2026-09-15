@@ -21,7 +21,7 @@ from src.core.models import (
     ThreadMetadata,
     backend_type_allows_missing_model,
 )
-from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events, iter_ndjson_events_from_end
+from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events, iter_ndjson_events_from_end, type_line_filter
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager, thread_events_log_path
@@ -179,9 +179,14 @@ def _worker_summary_from_events_log(worker_log: Path) -> str | None:
   Streams the log from the end and stops at the first event that settles the
   answer — the newest-first contract of the full-parse loop this replaced;
   blank, malformed and missing-file cases follow the shared walk's skip
-  contract (None, never an error).
+  contract (None, never an error). Only result and assistant events can
+  settle the answer, so the walk parses nothing else — the multi-megabyte
+  tool_result lines between the answer and the tail would otherwise parse
+  whole.
   """
-  for event in iter_ndjson_events_from_end(worker_log, log_event=PARSE_SKIP_LOG_EVENT, log_fields={}):
+  summary_types = frozenset({ET.RESULT, ET.ASSISTANT})
+  for event in iter_ndjson_events_from_end(worker_log, log_event=PARSE_SKIP_LOG_EVENT, log_fields={},
+                                           parse_filter=type_line_filter(summary_types)):
     ev_type = event.get("type")
     if ev_type == ET.RESULT:
       val = event.get("result")

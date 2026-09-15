@@ -258,7 +258,7 @@ def test_autonamer_and_recap_defer_the_registry_until_first_use() -> None:
   code = (
       "import json, sys; "
       "import src.core.autonamer, src.core.recap; "
-      "before = sorted(set(sys.modules) & {'src.agents.backends.registry', 'src.agents.backends.opencode', 'src.agents.backends.charlie_code'}); "
+      f"before = sorted(set(sys.modules) & {set(SESSIONS_HEAVY_MODULES)!r}); "
       "resolved = callable(src.core.autonamer.build_backend) and callable(src.core.recap.build_backend); "
       "after = sorted(set(sys.modules) & {'src.agents.backends.registry'}); "
       "sys.stderr.write(json.dumps([before, resolved, after]))")

@@ -351,6 +351,9 @@ class TaskExecutionAdapter:
                 outcome="success" if exit_code == 0 else "failed",
                 exit_code=exit_code,
             )
+            # Inputs admitted during this turn waited for the serialized
+            # consumer; the turn's finish is what dispatches their next run.
+            await self._tree.dispatch.dispatch_pending(session_id)
 
         if option.type == BackendType.TUI_CLI:
             # The master queue refuses TUI backends (tmux sessions take input
@@ -771,6 +774,8 @@ class TaskExecutionAdapter:
                 outcome="success" if exit_code == 0 else "failed",
                 exit_code=exit_code,
             )
+            # Same serialized-input follow-up as a fresh manager turn.
+            await self._tree.dispatch.dispatch_pending(meta.id)
 
         await enqueue_master_resume(
             self._cfg, meta, record, self._sessions.callbacks(),
@@ -831,6 +836,10 @@ class TaskExecutionAdapter:
             return
         if durable_outcome == "failed":
             await self._report_failure_to_parent(session_id, run, durable_outcome)
+        # Inputs admitted during this run waited for the serialized consumer;
+        # the finish chain (review queued/landed, closure, failure report) ran
+        # first, so this dispatch only sees what that chain left pending.
+        await self._tree.dispatch.dispatch_pending(session_id)
 
     async def _after_review_run(self, meta: SessionMetadata, run: RunRecord, durable_outcome: str) -> None:
         from src.core.task_completion import (
@@ -1005,6 +1014,9 @@ class TaskExecutionAdapter:
             result_refs=[f"run:{run.id}"],
             recipient=meta.task_parent_id,
         )
+        # The delivered failure report is the parent's new durable input:
+        # dispatch its next serialized turn (deduped replays included).
+        await self._tree.dispatch.dispatch_pending(meta.task_parent_id)
 
 
     async def _worker_failure_summary(self, session_id: str, run: RunRecord) -> str:

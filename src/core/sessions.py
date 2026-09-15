@@ -1545,7 +1545,10 @@ class SessionManager:
     log.info(event, new_session=meta.id, parent=parent_id, event_index=event_index, backend=meta.backend)
 
   def get_chat_events_path(self, session_id: str) -> Path:
-    """Return the absolute path to a session's chat_events.jsonl."""
+    """Return the absolute path to a session's chat_events.jsonl.
+
+    See ``src/core/chat_events.py`` for the path layout.
+    """
     return self._chat_events.get_chat_events_path(session_id)
 
   def parent_reference_path(self, session_id: str) -> Path:
@@ -1869,7 +1872,10 @@ class SessionManager:
   # ---------------------------------------------------------------------------
 
   async def save_chat_event(self, session_id: str, event: dict) -> None:
-    """Append a single NDJSON event line to chat_events.jsonl."""
+    """Append a single NDJSON event line to chat_events.jsonl.
+
+    See ``src/core/chat_events.py`` for the id/timestamp injection and cache-sync contract.
+    """
     await self._chat_events.save_chat_event(session_id, event)
 
   async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
@@ -2051,7 +2057,10 @@ class SessionManager:
     return self._chat_events.load_chat_events_tail(session_id, limit)
 
   def get_chat_event_count_sync(self, session_id: str, session_meta: SessionMetadata | None = None) -> int:
-    """Return the current global chat event count without parsing event payloads."""
+    """Return the current global chat event count without parsing event payloads.
+
+    See ``src/core/chat_events.py`` for the count's index-space contract.
+    """
     return self._chat_events.get_chat_event_count_sync(session_id, session_meta)
 
   def load_chat_events_range(self, session_id: str, start: int, end: int) -> tuple[list[dict], bool]:

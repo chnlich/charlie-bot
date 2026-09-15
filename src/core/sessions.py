@@ -1,7 +1,6 @@
 """Session management for CharlieBot."""
 
 import asyncio
-import gc
 import io
 import json
 import os
@@ -22,6 +21,7 @@ if TYPE_CHECKING:
 from src.core import plan_paths, sidebar_state
 from src.core.chat_events import ChatEventStore
 from src.core.config import CharlieBotConfig
+from src.core.gc_control import gc_off
 from src.core.init import RUNNING_SCAN_WINDOW, iter_recent_thread_metas
 from src.core.init_worker_recovery import walk_thread_meta_stats
 from src.core.json_utils import (
@@ -1974,15 +1974,11 @@ class SessionManager:
     # the generational passes its dict churn triggers paused the event loop
     # up to ~74 ms at the session's first streamed event after a server start
     # (measured 20534-event worst corpus, 2026-09-15). GC is process-global
-    # and the init runs on server threads, so the disable spans the whole
-    # init and the finally re-enables on every path — the trace_merge build's
-    # shape. The parse's dicts stay referenced by the events cache and the
-    # feed's discards refcount-clear, so no explicit collect is needed.
-    gc.disable()
-    try:
+    # and the init runs on server threads, so the disable spans the whole init.
+    # The parse's dicts stay referenced by the events cache and the feed's
+    # discards refcount-clear, so no collect rides the re-enable.
+    with gc_off(collect=False):
       return await self._catch_up_aggregator(session_id, epoch)
-    finally:
-      gc.enable()
 
   async def _catch_up_aggregator(self, session_id: str, epoch: int) -> MessageAggregator | None:
     """Catch up one aggregator to the on-disk corpus; called under the init's gc boundary."""

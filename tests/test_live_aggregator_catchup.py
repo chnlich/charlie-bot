@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -151,7 +152,7 @@ async def test_catchup_init_reenables_gc_on_success_and_drop(tmp_path: Path) -> 
 
   class SpyGC:
 
-    def __getattr__(self, name: str):
+    def __getattr__(self, name: str) -> Any:
       return getattr(real_gc, name)
 
     def disable(self) -> None:

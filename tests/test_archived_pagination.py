@@ -201,7 +201,7 @@ async def test_warm_list_paths_read_zero_metadata_files(tmp_path: Path, monkeypa
   reads = _count_session_metadata_reads(monkeypatch, mgr._cfg.sessions_dir)
   await mgr.list_archived_page(limit=2)
   await mgr.list_sessions(status=SessionStatus.ACTIVE)
-  await mgr.search_sessions("alpha")
+  await mgr.search_sessions_readonly("alpha")
   assert reads == []
 
 
@@ -284,7 +284,7 @@ async def test_search_names_cover_archived_and_cap_at_200(tmp_path: Path) -> Non
   content_only = await _add_session(mgr, "unrelated-name", minutes=998)
   await mgr.save_chat_event(content_only.id, user_event("needle in the events"))
 
-  results = await mgr.search_sessions("needle")
+  results, _ = await mgr.search_sessions_readonly("needle")
   assert len(results) == 200
   assert results[0].name == "needle-live"  # newest first survives the cap
   statuses = {s.status for s in results}
@@ -311,9 +311,6 @@ async def test_search_cap_keeps_content_hits_above_the_cap_line(tmp_path: Path) 
   assert above.id in ids  # a hit newer than the cap line displaces the oldest match
   assert below.id not in ids  # a hit older than every match cannot enter the top rows
   assert set(derived) == set(ids)
-
-  sessions = await mgr.search_sessions("needle", include_running_status=True, include_pending_trigger_status=True)
-  assert [s.id for s in sessions] == ids  # the copying wrapper serves the same rows
 
 
 @pytest.mark.asyncio

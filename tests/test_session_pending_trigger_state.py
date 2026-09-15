@@ -9,6 +9,7 @@ from conftest import _page_request, make_home_config, make_sessions_client, writ
 from pydantic import TypeAdapter
 
 from src.api import sessions as sessions_api
+from src.core import sessions as sessions_mod
 from src.core import thinking_state
 from src.core.models import (
     CreateSessionRequest,
@@ -66,13 +67,13 @@ async def test_pending_trigger_state_is_derived_without_persisting_metadata(tmp_
   assert listed[0].pending_trigger_count == 2
   assert listed[0].next_trigger_at == now + timedelta(minutes=5)
 
-  searched = await session_mgr.search_sessions(
+  searched_rows, searched_derived = await session_mgr.search_sessions_readonly(
       "Wake later",
       include_pending_trigger_status=True,
   )
-  assert len(searched) == 1
-  assert searched[0].has_pending_trigger is True
-  assert searched[0].pending_trigger_count == 2
+  assert len(searched_rows) == 1
+  assert searched_derived[searched_rows[0].id]["has_pending_trigger"] is True
+  assert searched_derived[searched_rows[0].id]["pending_trigger_count"] == 2
 
   fresh = await session_mgr.get_session(session.id)
   assert fresh is not None
@@ -106,7 +107,10 @@ async def test_search_route_renders_derived_datetimes_through_the_model_scheme(t
     assert len(rows) == 1
     assert rows[0]["next_trigger_at"].endswith("Z")
     assert rows[0]["thinking_since"].endswith("Z")
-    copies = await session_mgr.search_sessions("wake", include_running_status=True, include_pending_trigger_status=True)
+    readonly_rows, derived = await session_mgr.search_sessions_readonly(
+        "wake", include_running_status=True, include_pending_trigger_status=True)
+    copies = [sessions_mod._stamp_thinking_since(meta.model_copy()) for meta in readonly_rows]
+    sessions_mod._apply_sidebar_state(copies, derived, True, True)
     reference = TypeAdapter(list[SessionMetadata]).dump_python(copies, mode="json")
     assert rows == reference
   finally:

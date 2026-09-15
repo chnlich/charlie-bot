@@ -1121,29 +1121,6 @@ class SessionManager:
         "groups": groups,
     }
 
-  async def search_sessions(
-      self,
-      query: str,
-      include_running_status: bool = False,
-      include_pending_trigger_status: bool = False,
-  ) -> list[SessionMetadata]:
-    """Search sessions by name (every status) and chat event content (active only), case-insensitive.
-
-    Returns at most ``_SEARCH_RESULT_LIMIT`` rows, newest first: the cap keeps
-    the render bounded when a short query matches thousands of archived names.
-    The rows are owned copies (thinking-stamped, sidebar-state applied) for
-    callers that mutate or hand them on; read-only consumers call
-    :meth:`search_sessions_readonly`.
-    """
-    rows, derived = await self.search_sessions_readonly(
-        query,
-        include_running_status=include_running_status,
-        include_pending_trigger_status=include_pending_trigger_status,
-    )
-    sessions = [_stamp_thinking_since(row.model_copy()) for row in rows]
-    _apply_sidebar_state(sessions, derived, include_running_status, include_pending_trigger_status)
-    return sessions
-
   async def search_sessions_readonly(
       self,
       query: str,
@@ -2238,7 +2215,7 @@ class SessionManager:
     """Load session metadata, batching disk reads and parses for cache misses.
 
     Performs the listing preamble for the entry points routed through here
-    (``list_sessions``, ``list_group_names``, ``search_sessions``, and
+    (``list_sessions``, ``list_group_names``, ``search_sessions_readonly``, and
     ``list_archived_page``):
     (1) return [] if sessions_dir does not exist, (2) list session directories
     under asyncio.to_thread to avoid blocking the event loop, (3) use fresh

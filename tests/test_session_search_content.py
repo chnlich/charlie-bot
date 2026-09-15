@@ -17,6 +17,11 @@ from src.core.sessions import SessionManager
 _fresh_search_read_failure_registry = fresh_state_fixture(sessions_mod._SEARCH_READ_FAILURES_SEEN.clear)
 
 
+async def _search(session_mgr: SessionManager, query: str) -> list[SessionMetadata]:
+  rows, _ = await session_mgr.search_sessions_readonly(query)
+  return rows
+
+
 async def _session_with_chat_content(session_mgr: SessionManager, body: str, name: str) -> SessionMetadata:
   session = await session_mgr.create_session(CreateSessionRequest(name=name))
   events_path = session_mgr.get_chat_events_path(session.id)
@@ -33,9 +38,9 @@ async def test_content_search_hits_and_misses(tmp_path: Path, monkeypatch: pytes
   hit = await _session_with_chat_content(mgr, '{"type":"user","content":"the Purple Fox jumped"}\n', "hit-session")
   await _session_with_chat_content(mgr, '{"type":"user","content":"nothing relevant"}\n', "miss-session")
 
-  [found_hit] = await mgr.search_sessions("purple fox")
+  [found_hit] = await _search(mgr, "purple fox")
   assert found_hit.id == hit.id
-  assert await mgr.search_sessions("absent needle") == []
+  assert await _search(mgr, "absent needle") == []
 
 
 @pytest.mark.asyncio
@@ -47,7 +52,7 @@ async def test_content_search_matches_across_chunk_boundaries(tmp_path: Path, mo
   needle = "straddleneedle"
   session = await _session_with_chat_content(mgr, "x" * 14 + needle + "y" * 30, "straddle-session")
 
-  [found] = await mgr.search_sessions(needle)
+  [found] = await _search(mgr, needle)
   assert found.id == session.id
 
 
@@ -59,7 +64,7 @@ async def test_content_search_needle_longer_than_one_chunk(tmp_path: Path, monke
   needle = "a" * 5 + "verylongneedlethatoutlivesachunk" + "b" * 5
   session = await _session_with_chat_content(mgr, "z" * 3 + needle + "z" * 3, "long-needle-session")
 
-  [found] = await mgr.search_sessions(needle)
+  [found] = await _search(mgr, needle)
   assert found.id == session.id
 
 
@@ -97,19 +102,19 @@ async def test_content_search_miss_memo_skips_rereads(tmp_path: Path, monkeypatc
   session = await _session_with_chat_content(mgr, '{"type":"user","content":"nothing relevant"}\n', "sess")
   count = _counting_scan(monkeypatch)
 
-  assert await mgr.search_sessions("absent") == []
+  assert await _search(mgr, "absent") == []
   assert count() == 1
   # Repeat of the memoized needle, and a superstring of it (the debounced
   # sidebar's growing query), both serve the proven-absent memo without a read.
-  assert await mgr.search_sessions("absent") == []
-  assert await mgr.search_sessions("ABSENT NEEDLE") == []
+  assert await _search(mgr, "absent") == []
+  assert await _search(mgr, "ABSENT NEEDLE") == []
   assert count() == 1
 
   # A shorter needle is not covered by the longer root: one rescan joins it as
   # its own root, and both families now serve without a read.
-  assert await mgr.search_sessions("abs") == []
+  assert await _search(mgr, "abs") == []
   assert count() == 2
-  assert await mgr.search_sessions("absent needle") == []
+  assert await _search(mgr, "absent needle") == []
   assert count() == 2
 
   # An append moves the (mtime_ns, size, ino) signature; the same-inode growth
@@ -118,7 +123,7 @@ async def test_content_search_miss_memo_skips_rereads(tmp_path: Path, monkeypatc
   events_path = mgr.get_chat_events_path(session.id)
   with events_path.open("a", encoding="utf-8") as stream:
     stream.write('{"type":"user","content":"ABSENT NEEDLE now present"}\n')
-  [found] = await mgr.search_sessions("absent needle")
+  [found] = await _search(mgr, "absent needle")
   assert found.id == session.id
   assert count() == 3
 
@@ -132,14 +137,14 @@ async def test_content_search_miss_memo_serves_independent_needle_families(
   count = _counting_scan(monkeypatch)
 
   # Two unrelated families cold-scan once each.
-  assert await mgr.search_sessions("alpha") == []
-  assert await mgr.search_sessions("omega") == []
+  assert await _search(mgr, "alpha") == []
+  assert await _search(mgr, "omega") == []
   assert count() == 2
   # Repeats of either family serve from their own root: a needle outside the
   # other family's superstrings must never evict it back into full rescans.
   for _ in range(3):
-    assert await mgr.search_sessions("alpha") == []
-    assert await mgr.search_sessions("omega") == []
+    assert await _search(mgr, "alpha") == []
+    assert await _search(mgr, "omega") == []
   assert count() == 2
 
 
@@ -152,19 +157,19 @@ async def test_content_search_miss_memo_root_cap_is_per_file_lru(
   await _session_with_chat_content(mgr, '{"type":"user","content":"nothing relevant"}\n', "sess")
   count = _counting_scan(monkeypatch)
 
-  assert await mgr.search_sessions("one") == []
-  assert await mgr.search_sessions("two") == []
+  assert await _search(mgr, "one") == []
+  assert await _search(mgr, "two") == []
   assert count() == 2
   # A third family evicts the oldest root ("one"); "two" still serves.
-  assert await mgr.search_sessions("three") == []
+  assert await _search(mgr, "three") == []
   assert count() == 3
-  assert await mgr.search_sessions("two") == []
+  assert await _search(mgr, "two") == []
   assert count() == 3
   # The evicted family rescans once, rejoins as the newest root, and serves again.
-  assert await mgr.search_sessions("one") == []
+  assert await _search(mgr, "one") == []
   assert count() == 4
-  assert await mgr.search_sessions("one") == []
-  assert await mgr.search_sessions("three") == []
+  assert await _search(mgr, "one") == []
+  assert await _search(mgr, "three") == []
   assert count() == 4
 
 
@@ -186,8 +191,8 @@ async def test_content_search_memoize_landing_mid_round_does_not_disturb_it(
 
   monkeypatch.setattr(sessions_mod, "_scan_content_for_hit", _concurrent_memorizing_scan)
 
-  assert await mgr.search_sessions("absent") == []
-  assert await mgr.search_sessions("absent") == []
+  assert await _search(mgr, "absent") == []
+  assert await _search(mgr, "absent") == []
 
 
 @pytest.mark.asyncio
@@ -207,12 +212,12 @@ async def test_content_search_errored_scan_is_not_memoized(tmp_path: Path, monke
 
   monkeypatch.setattr(sessions_mod, "_scan_content_for_hit", _flaky)
 
-  assert await mgr.search_sessions("absent") == []
+  assert await _search(mgr, "absent") == []
   # The errored round memoized nothing, so the identical query scans again.
-  assert await mgr.search_sessions("absent") == []
+  assert await _search(mgr, "absent") == []
   assert calls == 2
   # The second scan was clean and memoized: the third query is covered.
-  assert await mgr.search_sessions("absent") == []
+  assert await _search(mgr, "absent") == []
   assert calls == 2
 
 
@@ -223,7 +228,7 @@ async def test_content_search_append_rescans_only_the_tail(tmp_path: Path, monke
   session = await _session_with_chat_content(mgr, '{"type":"user","content":"nothing relevant at all"}\n', "sess")
   starts = _recording_starts(monkeypatch)
 
-  assert await mgr.search_sessions("absent") == []
+  assert await _search(mgr, "absent") == []
   assert starts == [0]
 
   events_path = mgr.get_chat_events_path(session.id)
@@ -232,9 +237,9 @@ async def test_content_search_append_rescans_only_the_tail(tmp_path: Path, monke
     stream.write('{"type":"assistant","content":"still nothing"}\n')
   # Same-inode growth re-proves absence from a window over the appended tail
   # instead of a full reread; the once-proven query is then memo-covered again.
-  assert await mgr.search_sessions("absent") == []
+  assert await _search(mgr, "absent") == []
   assert starts[-1] == size_before - (4 * len("absent") + 8)
-  assert await mgr.search_sessions("absent") == []
+  assert await _search(mgr, "absent") == []
   assert len(starts) == 2
 
 
@@ -246,14 +251,14 @@ async def test_content_search_tail_rescan_finds_hit_straddling_the_append_bounda
   session = await _session_with_chat_content(mgr, '{"type":"user","content":"just abs"}\nabs', "sess")
   starts = _recording_starts(monkeypatch)
 
-  assert await mgr.search_sessions("absent") == []
+  assert await _search(mgr, "absent") == []
   events_path = mgr.get_chat_events_path(session.id)
   size_before = events_path.stat().st_size
   with events_path.open("a", encoding="utf-8") as stream:
     stream.write("ent needle completes here\n")
   # The hit starts three bytes before the old size and ends in the append: the
   # tail window begins at most 4*len(query) bytes back and sees it whole.
-  [found] = await mgr.search_sessions("absent")
+  [found] = await _search(mgr, "absent")
   assert found.id == session.id
   assert starts[-1] == size_before - (4 * len("absent") + 8)
 
@@ -269,14 +274,14 @@ async def test_content_search_missing_chat_file_logs_once_per_failure(
   events: list[str] = []
   monkeypatch.setattr(sessions_mod.log, "debug", lambda event, **kw: events.append(event))
 
-  assert await mgr.search_sessions("absent") == []
+  assert await _search(mgr, "absent") == []
   assert events == ["search_read_failed"]
   for _ in range(3):
-    assert await mgr.search_sessions("absent") == []
+    assert await _search(mgr, "absent") == []
   assert events == ["search_read_failed"]
 
   sessions_mod._SEARCH_READ_FAILURES_SEEN.clear()
-  assert await mgr.search_sessions("absent") == []
+  assert await _search(mgr, "absent") == []
   assert events == ["search_read_failed", "search_read_failed"]
 
 
@@ -288,12 +293,12 @@ async def test_content_search_atomic_rewrite_rescans_the_whole_file(
   session = await _session_with_chat_content(mgr, "p" * 512 + "\n", "sess")
   starts = _recording_starts(monkeypatch)
 
-  assert await mgr.search_sessions("needle") == []
+  assert await _search(mgr, "needle") == []
   events_path = mgr.get_chat_events_path(session.id)
   tmp = events_path.with_name(events_path.name + ".tmp")
   tmp.write_text("needle near the head\n" + "q" * 700 + "\n", encoding="utf-8")
   os.replace(tmp, events_path)  # inode swap, larger size: the old prefix is unproven
-  [found] = await mgr.search_sessions("needle")
+  [found] = await _search(mgr, "needle")
   assert found.id == session.id
   assert starts[-1] == 0
 

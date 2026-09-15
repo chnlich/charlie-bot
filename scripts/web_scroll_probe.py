@@ -99,7 +99,7 @@ if str(_REPO_ROOT) not in sys.path:
 import websockets  # noqa: E402
 from websockets.asyncio import client  # noqa: E402
 
-from src.core.config import CharlieBotConfig, get_config, get_credentials  # noqa: E402
+from src.core.config import CharlieBotConfig, configured_access_key, get_config  # noqa: E402
 
 LIST_SELECTOR = "#session-list"
 CHAT_SELECTOR_CANDIDATES = ("#messages", "#chat-messages", "#message-list", "main .overflow-y-auto")
@@ -418,7 +418,7 @@ async def drive_mode(args: argparse.Namespace) -> int:
   if args.inject_css and not Path(args.inject_css).is_file():
     fail(f"--inject-css file not found: {args.inject_css}")
   base_url = (args.url or f"http://127.0.0.1:{cfg.server.port}").rstrip("/")
-  key = str(get_credentials().get("charliebot", "access_key") or "")
+  key = configured_access_key()
   try:
     with urllib.request.urlopen(f"{base_url}/", timeout=HTTP_GET_TIMEOUT_S) as resp:
       resp.read(1)

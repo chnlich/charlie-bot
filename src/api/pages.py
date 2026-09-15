@@ -26,7 +26,7 @@ from src.api.code_server import is_code_server_available
 from src.api.deps import SESSION_NOT_FOUND_DETAIL, get_config_on_loop, get_session_manager
 from src.api.message_utils import build_session_bootstrap_data
 from src.api.sessions import _bootstrap_payload, _default_backend_id
-from src.core.config import CharlieBotConfig, get_config, get_credentials
+from src.core.config import CharlieBotConfig, configured_access_key, get_config
 from src.core.constants import FILE_SERVER_MOUNTS, REPO_ROOT
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus
@@ -212,7 +212,7 @@ templates = Jinja2Templates(directory=str(REPO_ROOT / "web" / "templates"))
 @router.get("/api/auth/status")
 async def auth_status() -> JSONResponse:
   """Return whether access-key authentication is enabled."""
-  return JSONResponse({"auth_enabled": bool(str(get_credentials().get("charliebot", "access_key") or ""))})
+  return JSONResponse({"auth_enabled": bool(configured_access_key())})
 
 
 @router.get("/sessions/{session_id}/events", response_class=HTMLResponse)
@@ -790,7 +790,7 @@ async def index(
           "active_backend_label": active_backend_label,
           "active_backend_type": active_backend_type,
           "load_errors": load_errors,
-          "auth_enabled": bool(str(get_credentials().get("charliebot", "access_key") or "")),
+          "auth_enabled": bool(configured_access_key()),
           "hostname": socket.gethostname(),
           "sessions_root": str(cfg.sessions_dir),
           "version": _RUNTIME_GIT_VERSION,

@@ -28,6 +28,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from src.agents.backends.deferred_build import build_backend_module_getattr, load_build_backend
+from src.core import claude_accounts
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, default_claude_dir
 from src.core.log_once import LazyStructlogLogger
@@ -273,8 +274,7 @@ async def maybe_auto_name_from_claude_ai_title(
   Group is intentionally left empty for TUI sessions in this version.
   """
   session_id = session_meta.id
-  claude_projects = default_claude_dir() / "projects"
-  matches = list(claude_projects.glob(f"*/{session_id}.jsonl"))
+  matches = claude_accounts.transcript_matches(default_claude_dir(), session_id)
   if not matches:
     return
 

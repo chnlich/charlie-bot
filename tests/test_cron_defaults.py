@@ -584,7 +584,7 @@ def test_list_tasks_omits_resolved_prompt(temp_home: Path) -> None:
 # --- API: create persists the pointer, and the file reloads (round-trip) -----
 
 
-def _assert_pointer_round_trip(home: Path, prompt_path: Path, name: str, cron: str) -> None:
+def _assert_pointer_round_trip(home: Path, prompt_path: Path, name: str) -> None:
   """Both halves of the round-trip regression: the persisted file still carries
   prompt_file (and no prompt), AND it reloads through the loader into the
   resolved body. Asserting only the reload would pass the old inlining behavior
@@ -617,7 +617,7 @@ def test_api_create_round_trips_prompt_file(temp_home: Path) -> None:
     assert response.status_code == 200
     assert response.json()["prompt_file"] == str(prompt_path)
     assert "prompt" not in response.json()
-  _assert_pointer_round_trip(temp_home, prompt_path, "nightly", "0 2 * * *")
+  _assert_pointer_round_trip(temp_home, prompt_path, "nightly")
 
 
 def test_api_put_round_trips_prompt_file(temp_home: Path) -> None:
@@ -638,7 +638,7 @@ def test_api_put_round_trips_prompt_file(temp_home: Path) -> None:
     assert created.status_code == 200
     response = client.put("/api/cron/tasks/nightly", json={"cron": "0 4 * * *", "prompt_file": str(prompt_path)})
     assert response.status_code == 200
-  _assert_pointer_round_trip(temp_home, prompt_path, "nightly", "0 4 * * *")
+  _assert_pointer_round_trip(temp_home, prompt_path, "nightly")
 
 
 # --- single source: an inline-prompt file is the only error, the pointer loads -

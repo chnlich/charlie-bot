@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_OPTION, make_session_mgr
+from conftest import OPUS_BACKEND_OPTION
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.gzip import GZipMiddleware
@@ -17,21 +17,20 @@ from starlette.middleware.gzip import GZipMiddleware
 import src.api.sessions as sessions_api
 from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
-from src.core.sessions import SessionManager
 
 PROBE_EVENTS = "".join(
     '{"id":"e%d","type":"user","message":{"role":"user","content":"probe %d"},"timestamp":"2026-09-01T00:00:%02dZ"}\n' %
     (i, i, i % 60) for i in range(64))
 
 
-def _client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
+def _client(cfg: CharlieBotConfig) -> TestClient:
   app = FastAPI()
   app.include_router(sessions_router, prefix="/api/sessions")
   app.dependency_overrides[sessions_api.get_config] = lambda: cfg
   return TestClient(app)
 
 
-def _gzip_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
+def _gzip_client(cfg: CharlieBotConfig) -> TestClient:
   """The sessions router behind the gzip middleware every production request
   passes through, so the test sees the skip the pre-compressed body buys."""
   app = FastAPI()
@@ -41,22 +40,21 @@ def _gzip_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClie
   return TestClient(app)
 
 
-def _session_with_events(home: Path) -> tuple[CharlieBotConfig, SessionManager, str]:
+def _session_with_events(home: Path) -> tuple[CharlieBotConfig, str]:
   """One session whose live chat file carries the probe events, staged under
   *home* — the profile_home fixture points the route's direct get_config() call
   at the same tree."""
   cfg = CharlieBotConfig(charliebot_home=home, backends={"options": [OPUS_BACKEND_OPTION]})
-  mgr = make_session_mgr(home)
   events_path = home / "sessions" / "s-probe" / "data" / "chat_events.jsonl"
   events_path.parent.mkdir(parents=True)
   events_path.write_text(PROBE_EVENTS, encoding="utf-8")
   (home / "sessions" / "s-probe" / "metadata.json").write_text('{"id": "s-probe", "name": "probe"}', encoding="utf-8")
-  return cfg, mgr, "s-probe"
+  return cfg, "s-probe"
 
 
 def test_gzip_accepted_download_ships_precompressed_body(profile_home: Path) -> None:
-  cfg, mgr, sid = _session_with_events(profile_home)
-  resp = _gzip_client(cfg, mgr).get(f"/api/sessions/{sid}/events.jsonl", headers={"Accept-Encoding": "gzip"})
+  cfg, sid = _session_with_events(profile_home)
+  resp = _gzip_client(cfg).get(f"/api/sessions/{sid}/events.jsonl", headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
   # The route set the encoding upstream — that header is what makes the
   # middleware skip its own per-chunk deflate — and carries the negotiation vary.
@@ -68,24 +66,24 @@ def test_gzip_accepted_download_ships_precompressed_body(profile_home: Path) -> 
 def test_download_without_gzip_accept_serves_plain(profile_home: Path) -> None:
   """A client whose Accept-Encoding names no gzip reads the plain streaming
   body, no encoding set — the FileResponse arm, unchanged."""
-  cfg, mgr, sid = _session_with_events(profile_home)
-  resp = _gzip_client(cfg, mgr).get(f"/api/sessions/{sid}/events.jsonl", headers={"Accept-Encoding": "br"})
+  cfg, sid = _session_with_events(profile_home)
+  resp = _gzip_client(cfg).get(f"/api/sessions/{sid}/events.jsonl", headers={"Accept-Encoding": "br"})
   assert resp.status_code == 200
   assert "content-encoding" not in resp.headers
   assert resp.text == PROBE_EVENTS
 
 
 def test_missing_session_is_404(profile_home: Path) -> None:
-  cfg, mgr, _ = _session_with_events(profile_home)
-  resp = _client(cfg, mgr).get("/api/sessions/s-absent/events.jsonl")
+  cfg, _ = _session_with_events(profile_home)
+  resp = _client(cfg).get("/api/sessions/s-absent/events.jsonl")
   assert resp.status_code == 404
 
 
 def test_repeat_gzip_download_recompresses_nothing(profile_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A repeat gzip download of an unchanged file must serve the stored
   compressed body with zero deflate calls."""
-  cfg, mgr, sid = _session_with_events(profile_home)
-  client = _gzip_client(cfg, mgr)
+  cfg, sid = _session_with_events(profile_home)
+  client = _gzip_client(cfg)
   url = f"/api/sessions/{sid}/events.jsonl"
   first = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert first.status_code == 200
@@ -103,8 +101,8 @@ def test_repeat_gzip_download_recompresses_nothing(profile_home: Path, monkeypat
 def test_gzip_download_recompresses_when_file_appends(profile_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """An append moves the stat pair the memo keys on — the move must re-run the
   deflate over the fresh bytes, never serve the old form."""
-  cfg, mgr, sid = _session_with_events(profile_home)
-  client = _gzip_client(cfg, mgr)
+  cfg, sid = _session_with_events(profile_home)
+  client = _gzip_client(cfg)
   url = f"/api/sessions/{sid}/events.jsonl"
   first = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert first.status_code == 200

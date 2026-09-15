@@ -259,7 +259,7 @@ def _patch_chain_pipes(monkeypatch: pytest.MonkeyPatch, spawns: list[dict[str, A
   monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, _capture_spawn(spawns))
 
 
-async def _make_chain_session(cfg: Any, session_mgr: SessionManager) -> SessionMetadata:
+async def _make_chain_session(session_mgr: SessionManager) -> SessionMetadata:
   return await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: chained", scheduled_task="chained"), backend=OPUS_BACKEND_ID)
 
@@ -300,7 +300,7 @@ async def _completion_rig(
   """
   cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
   thread_mgr = ThreadManager(cfg)
-  session = await _make_chain_session(cfg, session_mgr)
+  session = await _make_chain_session(session_mgr)
   threads: list[ThreadMetadata] = []
   for index, result_text in enumerate(results):
     step_name = "selector" if index == 0 else "reviewer"

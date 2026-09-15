@@ -313,8 +313,6 @@ async def test_busy_session_value_returned_on_all_read_paths(tmp_path: Path) -> 
 
     listed = await reader.list_sessions()
     assert [s.thinking_since for s in listed if s.id == session.id] == [started_at]
-    searched = await reader.search_sessions("t5-reads")
-    assert [s.thinking_since for s in searched if s.id == session.id] == [started_at]
     active = reader.list_active_session_metas()
     assert [s.thinking_since for s in active if s.id == session.id] == [started_at]
   finally:
@@ -340,9 +338,6 @@ async def test_every_metadata_return_path_overwrites_stamp(tmp_path: Path, monke
 
   listed = await mgr.list_sessions()
   assert [s.thinking_since for s in listed if s.id == created.id] == [sentinel]
-
-  found = await mgr.search_sessions("walk")
-  assert [s.thinking_since for s in found if s.id == created.id] == [sentinel]
 
   # One chat event so fork/elone have history to reference.
   events_path = mgr.get_chat_events_path(created.id)

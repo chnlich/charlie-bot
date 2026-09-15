@@ -3066,10 +3066,10 @@ events = []
 orig = sessions_mod.log.debug
 sessions_mod.log.debug = lambda event, **kw: events.append(event)
 try:
-    asyncio.run(mgr.search_sessions("zzq48neverpresent"))  # first sighting, as at a process start; not counted
+    asyncio.run(mgr.search_sessions_readonly("zzq48neverpresent"))  # first sighting, as at a process start; not counted
     events.clear()
     for _ in range(60):  # steady-state repeat content scans of the sidebar search
-        asyncio.run(mgr.search_sessions("zzq48neverpresent"))
+        asyncio.run(mgr.search_sessions_readonly("zzq48neverpresent"))
 finally:
     sessions_mod.log.debug = orig
 n = sum(1 for event in events if event == "search_read_failed")

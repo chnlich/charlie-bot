@@ -55,7 +55,11 @@ function hideAuthOverlay() {
 // SameSite=Strict closes the CSRF surface cookie auth would otherwise open;
 // Secure is appropriate since the server is reached only over HTTPS (Tailscale).
 function writeAccessCookie(key) {
-  document.cookie = 'charliebot_access_key=' + key + '; path=/; SameSite=Strict; Secure';
+  // Secure only on https: a loopback-HTTP deployment (the session-tree preview)
+  // cannot set Secure cookies, and without the cookie every top-level
+  // navigation would 401 back to the login page.
+  const secure = location.protocol === 'https:' ? '; Secure' : '';
+  document.cookie = 'charliebot_access_key=' + key + '; path=/; SameSite=Strict' + secure;
 }
 
 function submitAccessKey() {

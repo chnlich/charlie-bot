@@ -467,14 +467,19 @@ class TranscriptMoveError(RuntimeError):
   """A transcript copy between logins did not land byte-for-byte."""
 
 
-def transcript_path(config_dir: str | Path, cc_session_id: str) -> Path | None:
-  """The conversation transcript for *cc_session_id* under *config_dir*, or None.
+def transcript_matches(config_dir: str | Path, cc_session_id: str) -> list[Path]:
+  """Every top-level conversation transcript for *cc_session_id* under *config_dir*, sorted.
 
   Top-level conversations live at ``projects/<cwd-slug>/<uuid>.jsonl``; the glob
   avoids depending on Claude Code's undocumented cwd-slug rule, and files nested
   deeper are subagent logs named ``agent-*.jsonl`` that cannot collide.
   """
-  matches = sorted((Path(config_dir).expanduser() / "projects").glob(f"*/{cc_session_id}.jsonl"))
+  return sorted((Path(config_dir).expanduser() / "projects").glob(f"*/{cc_session_id}.jsonl"))
+
+
+def transcript_path(config_dir: str | Path, cc_session_id: str) -> Path | None:
+  """The first sorted transcript match from :func:`transcript_matches`, or None."""
+  matches = transcript_matches(config_dir, cc_session_id)
   return matches[0] if matches else None
 
 

@@ -1004,7 +1004,8 @@ def test_source_walk_round_persists_moved_opencode_rows(tmp_path: Path) -> None:
 
   entry = json.loads(cache.read_text())["sources"]["opencode"][str(db)]
   assert entry["sig"] != sig_before
-  rows_in_fresh = sum(row[1][3] for row in entry["rows"].values() if row[1] is not None)
+  sidecar = json.loads((cache.parent / entry["rows_file"]).read_text())
+  rows_in_fresh = sum(row[1][3] for row in sidecar["rows"].values() if row[1] is not None)
   assert rows_in_fresh == 5 + 100  # in_fresh: both rows' inputs
   con.close()
 
@@ -1046,7 +1047,11 @@ def test_entry_served_changed_round_adopts_the_partial(tmp_path: Path, monkeypat
   assert _row(rebuilt, "opencode", "oc-m").total == _row(adopted, "opencode", "oc-m").total
 
   doc = json.loads(cache.read_text())  # an entry without a stored partial (the v1 shape)
-  doc["sources"]["opencode"][str(db)].pop("partial", None)
+  rows = json.loads((cache.parent / doc["sources"]["opencode"][str(db)]["rows_file"]).read_text())["rows"]
+  doc["sources"]["opencode"][str(db)] = {
+      "sig": doc["sources"]["opencode"][str(db)]["sig"],
+      "records": [row[1] for row in rows.values() if row[1] is not None],
+  }
   cache.write_text(json.dumps(doc))
   tt._reset_aggregate_memo()
   tt._aggregate_memo = None
@@ -1493,6 +1498,65 @@ def test_restart_cold_recounts_only_moved_rows(tmp_path: Path, monkeypatch: pyte
   con.close()
 
 
+def test_current_entry_keeps_the_rows_bulk_in_the_sidecar(tmp_path: Path) -> None:
+  # The rows map is the document's bulk (~170k rows on this host's db); the persisted entry
+  # carries only its sidecar name beside the signature and partial, so the main document
+  # parses at the Claude+Codex corpus's size every collect.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  _collect(None, None, db, cache)
+
+  doc = json.loads(cache.read_text())
+  entry = doc["sources"]["opencode"][str(db)]
+  assert set(entry) == {"sig", "rows_file", "partial"}
+  sidecar = json.loads((cache.parent / entry["rows_file"]).read_text())
+  assert set(sidecar) == {"version", "rows"}
+  seeded = sidecar["rows"]
+  assert len(seeded) == 1 and seeded[next(iter(seeded))][1][3] == 5  # the row's in_fresh
+  assert cache.stat().st_size < 10_000  # the document carries no row bulk
+  con.close()
+
+
+def test_zero_movement_restart_never_reads_the_sidecar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # A restart whose db signature still matches the stored entry serves from the stored
+  # partial: neither the sidecar parse nor the db read runs, so the restart-cold collect is
+  # the document parse plus the corpus walk.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+  tt._reset_aggregate_memo()
+
+  reads: list[str] = []
+  monkeypatch.setattr(tt, "_read_rows_sidecar", lambda *args: reads.append(args) or None)
+
+  def boom(*args: Any, **kwargs: Any) -> None:
+    raise AssertionError("matched-signature restart reopened the db")
+
+  monkeypatch.setattr(tt.sqlite3, "connect", boom)
+  second = _collect(None, None, db, cache)
+  assert reads == []
+  assert _tally_snapshot(second) == _tally_snapshot(first)
+  con.close()
+
+
+def test_missing_sidecar_seeds_from_a_full_scan_with_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # A sidecar lost between its write and the seed read (external deletion, a crashed
+  # replace) degrades to the no-seed contract: the full scan re-reads the blobs, the note
+  # surfaces the failure, and the served tally stays exact.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+  entry = json.loads(cache.read_text())["sources"]["opencode"][str(db)]
+  (cache.parent / entry["rows_file"]).unlink()
+  tt._reset_aggregate_memo()
+
+  con.execute("insert into other values ('noise2', 'x')")
+  con.commit()  # the WAL moves, so the seed path runs and must survive the missing sidecar
+
+  second = _collect(None, None, db, cache)
+  assert second.scanned_bytes > 0  # the cold scan re-read the data the seed could not serve
+  assert _tally_snapshot(second)[0] == _tally_snapshot(first)[0]  # the served rows stay exact
+  assert any("rows sidecar" in note and "missing" in note for note in second.notes)
+  con.close()
+
+
 def test_stored_partial_adopts_without_replay(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # The v2 entry's stored partial serves the buckets without folding the records; the replay
   # builder runs only for an entry that carries no partial (the v1 shape).
@@ -1523,17 +1587,17 @@ def test_legacy_records_entry_still_serves(tmp_path: Path) -> None:
   _collect(None, None, db, cache)
 
   entry = json.loads(cache.read_text())["sources"]["opencode"][str(db)]
+  rows = json.loads((cache.parent / entry["rows_file"]).read_text())["rows"]
   legacy = {
       "version": 1,
       "sources":
           {
               "opencode":
                   {
-                      str(db):
-                          {
-                              "sig": entry["sig"],
-                              "records": [row[1] for row in entry["rows"].values() if row[1] is not None]
-                          }
+                      str(db): {
+                          "sig": entry["sig"],
+                          "records": [row[1] for row in rows.values() if row[1] is not None]
+                      }
                   }
           }
   }

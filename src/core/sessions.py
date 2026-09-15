@@ -1950,12 +1950,12 @@ class SessionManager:
   async def broadcast_task_tree_changed(self, session_id: str, event_type: str | None) -> None:
     """Notify connected UIs that one node's durable task facts changed.
 
-    Sidebar-channel shape (``type``/``session_id`` + fields), delivered to every
-    open session socket. The notification carries no task state — clients
-    re-read the affected rows through the tree/read APIs, so a duplicate or
-    out-of-order delivery changes nothing.
+    Sidebar-channel shape (``type``/``session_id`` + ``fact_type``), delivered
+    to every open session socket. The notification carries no task state —
+    clients re-read the affected rows through the tree/read APIs, so a
+    duplicate or out-of-order delivery changes nothing.
     """
-    await self._broadcast_sidebar(session_id, ET.TASK_TREE_CHANGED, event_type=event_type)
+    await self._broadcast_sidebar(session_id, ET.TASK_TREE_CHANGED, fact_type=event_type)
 
   async def broadcast_only(self, session_id: str, event: dict) -> None:
     """Broadcast an event on the session channel without persisting it as a chat event.

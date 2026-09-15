@@ -133,11 +133,15 @@ class ControlEventSink:
     # The durable fact is written; notify connected UIs best-effort. A
     # notification failure never fails the operation (the fact is already on
     # disk and catch-up reconciles the client), it is only logged.
+    await self.notify_tree_changed(session_id, event.get("type"))
+
+  async def notify_tree_changed(self, session_id: str, event_type: str | None) -> None:
+    """Best-effort sidebar notification for one changed node's durable facts."""
     try:
-      await self._session_mgr.broadcast_task_tree_changed(session_id, event.get("type"))
+      await self._session_mgr.broadcast_task_tree_changed(session_id, event_type)
     except Exception:
       log.exception("task_tree_changed_broadcast_failed", session_id=session_id,
-                    event_type=event.get("type"))
+                    event_type=event_type)
 
   def load_events(self, session_id: str) -> list[dict]:
     """The session's parsed chat events (the durable fact stream control events ride)."""

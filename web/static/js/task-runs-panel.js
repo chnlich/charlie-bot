@@ -52,7 +52,7 @@ async function loadPage(flight, cursor) {
   try {
     const params = new URLSearchParams({limit: '50'});
     if (cursor) params.set('cursor', cursor);
-    const res = await fetch('/api/sessions/' + boundSessionId() + '/runs?' + params.toString());
+    const res = await fetch('/api/sessions/' + boundSessionId() + '/runs?' + params.toString(), {cache: 'no-store'});
     if (!res.ok) throw new Error('runs failed: ' + res.status);
     const page = await res.json();
     if (isStale(flight)) { panel.loading = false; return; }
@@ -78,7 +78,7 @@ async function loadMore() {
 
 async function loadChildren(flight) {
   try {
-    const res = await fetch('/api/sessions/tree?parent_id=' + encodeURIComponent(boundSessionId()) + '&include_archived=true&limit=100');
+    const res = await fetch('/api/sessions/tree?parent_id=' + encodeURIComponent(boundSessionId()) + '&include_archived=true&limit=100', {cache: 'no-store'});
     if (!res.ok) throw new Error(String(res.status));
     const page = await res.json();
     if (isStale(flight)) return;

@@ -1281,6 +1281,12 @@ async def patch_session(
     if not req.name:
       raise HTTPException(status_code=400, detail="rename requires a non-empty name")
     meta = require_found(await session_mgr.rename_session(session_id, req.name))
+    if meta.profile:
+      # Task-tree nodes keep the tree projection and the sidebar in the same
+      # loop as every other task mutation; legacy (non-tree) sessions have no
+      # tree to refresh.
+      task_mgr.invalidate_tree_index()
+      await task_mgr.events.notify_tree_changed(session_id, "task_updated")
     return SessionDetailResponse(**meta.model_dump())
   try:
     meta = await task_mgr.patch_task(session_id, req, caller=caller)
@@ -1423,9 +1429,21 @@ async def get_effective_prompt(
   resolved_kind = kind or default_kind
   if resolved_kind not in ("manager_turn", "work", "review", "iteration", "scheduled_step"):
     raise HTTPException(status_code=400, detail=f"unknown run kind: {kind!r}")
+  # The preview must resolve the backend exactly as a launch would
+  # (_resolve_session_default_backend_model): a task without its own backend
+  # previews with the configured default option; a stale pinned id is refused.
   option = cfg.get_backend_option(meta.backend) if meta.backend else None
   if option is None:
-    raise HTTPException(status_code=400, detail=f"task {session_id} has no resolvable backend")
+    if meta.backend:
+      raise HTTPException(
+          status_code=400,
+          detail=(f"session backend {meta.backend!r} is not configured; "
+                  "update the task backend before previewing"))
+    if not cfg.backends.options:
+      raise HTTPException(
+          status_code=400,
+          detail="session backend resolution requires a configured backends.options entry")
+    option = cfg.backends.options[0]
   try:
     snapshot, overlay_error, declared = await assemble_coherent_snapshot(
         cfg, task_mgr, meta, resolved_kind, option)

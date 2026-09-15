@@ -13,11 +13,11 @@ from src.core.config import CharlieBotConfig
 from src.core.latex import get_tex_path, snapshot_tex
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import (
-  BackendOption,
-  BackendType,
-  MasterRunRecord,
-  SessionCallbacks,
-  SessionMetadata,
+    BackendOption,
+    BackendType,
+    MasterRunRecord,
+    SessionCallbacks,
+    SessionMetadata,
 )
 from src.core.process import kill_group_escalating
 from src.core.streaming import SIDEBAR_CHANNEL, streaming_manager
@@ -133,11 +133,14 @@ async def _refresh_anchors_from_disk(
   The read is the bypass-cache fresh read (``read_metadata_fresh``: no cache
   populate, so no second cache). A snapshot anchor that is set is refreshed to
   the disk value, including a disk-cleared one; a snapshot anchor that is None
-  stays None -- a snapshot dequeuing without an anchor declares this round
-  starts without one (a fresh session, or the stale-resume retry's deliberately
-  cleared copy), and must not have a disk anchor resurrected into it. A failed
-  disk read -- raised or missing metadata -- falls back to the enqueue loop's
-  previous behavior: relay the last round's values into empty fields only.
+  is never resurrected from disk -- a snapshot dequeuing without an anchor
+  declares this round starts without one (a fresh session, or the stale-resume
+  retry's deliberately cleared copy). Empty fields fill only from the consumer's
+  own just-finished round (the pre-change ``last_*`` relay): a follow-up
+  enqueued mid-round carries a snapshot taken before that round's anchor persist
+  existed, and the relay -- not disk -- is what resumes the same conversation.
+  On a failed disk read (raised or missing metadata) the relay alone applies,
+  which is exactly the enqueue loop's previous behavior.
   """
   fresh: SessionMetadata | None = None
   try:
@@ -148,16 +151,15 @@ async def _refresh_anchors_from_disk(
   except Exception:
     log.exception("master_cc_dequeue_anchor_refresh_failed", session=session_id)
   meta = item.session_meta
-  if fresh is None:
-    if last_cc_session_id and not meta.cc_session_id:
-      meta.cc_session_id = last_cc_session_id
-    if last_claude_account and not meta.claude_account:
-      meta.claude_account = last_claude_account
-    return
-  if meta.cc_session_id is not None:
-    meta.cc_session_id = fresh.cc_session_id
-  if meta.claude_account is not None:
-    meta.claude_account = fresh.claude_account
+  if fresh is not None:
+    if meta.cc_session_id is not None:
+      meta.cc_session_id = fresh.cc_session_id
+    if meta.claude_account is not None:
+      meta.claude_account = fresh.claude_account
+  if last_cc_session_id and not meta.cc_session_id:
+    meta.cc_session_id = last_cc_session_id
+  if last_claude_account and not meta.claude_account:
+    meta.claude_account = last_claude_account
 
 
 async def _session_consumer(session_id: str) -> None:

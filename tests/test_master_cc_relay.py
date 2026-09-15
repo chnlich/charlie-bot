@@ -9,20 +9,20 @@ from unittest.mock import AsyncMock
 
 import pytest
 from conftest import (
-  BUILD_BACKEND_PATCH_TARGET,
-  FABLE_MODEL,
-  POOLED_FABLE_ID,
-  ScriptedRelayBackend,
-  backend_option,
-  fable_pool_cfg,
-  fresh_state_fixture,
-  install_scripted_backends,
-  make_transcript,
-  make_work_item,
-  mock_session_callbacks,
-  patch_instructions_content,
-  rate_limit_event,
-  write_pool_credentials,
+    BUILD_BACKEND_PATCH_TARGET,
+    FABLE_MODEL,
+    POOLED_FABLE_ID,
+    ScriptedRelayBackend,
+    backend_option,
+    fable_pool_cfg,
+    fresh_state_fixture,
+    install_scripted_backends,
+    make_transcript,
+    make_work_item,
+    mock_session_callbacks,
+    patch_instructions_content,
+    rate_limit_event,
+    write_pool_credentials,
 )
 from structlog.testing import capture_logs
 

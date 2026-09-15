@@ -196,8 +196,9 @@ CLAUDE_SUB_TERMINATE_TIMEOUT = 5.0  # seconds
 # Remote-trigger ssh probes
 # ---------------------------------------------------------------------------
 
-# Per-probe ssh subprocess timeouts (locked, no flag).
-SSH_CONNECT_TIMEOUT = 10  # seconds — ssh -o ConnectTimeout=10
+# Per-probe ssh subprocess timeouts (locked, no flag). SSH_CONNECT_TIMEOUT is shared
+# with the CLI remote-launch wrapper's ssh invocation (src/cli/remote_launch.py).
+SSH_CONNECT_TIMEOUT = 10  # seconds — ssh -o ConnectTimeout
 SSH_OVERALL_TIMEOUT = 60.0  # seconds — asyncio.wait_for timeout wrapping the subprocess
 
 # ---------------------------------------------------------------------------

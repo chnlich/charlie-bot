@@ -17,6 +17,7 @@ import pytest
 from conftest import CLI_COMMON_GET_CONFIG_PATCH_TARGET
 
 from src.cli.remote_launch import main
+from src.core.timeouts import SSH_CONNECT_TIMEOUT
 
 # Import-path patch targets for the remote_launch seams. src/cli/remote_launch.py binds
 # get_config at import scope (`from src.core.config import get_config`) and reaches
@@ -223,7 +224,7 @@ def test_success_path_with_mocked_ssh(tmp_path: Path, capsys: pytest.CaptureFixt
   ssh_argv = mock_run.call_args.args[0]
   assert ssh_argv[0] == "ssh"
   assert "BatchMode=yes" in ssh_argv
-  assert "ConnectTimeout=10" in ssh_argv
+  assert f"ConnectTimeout={SSH_CONNECT_TIMEOUT}" in ssh_argv
   assert "remote.example.com" in ssh_argv
   assert ssh_argv[-3:-1] == ["bash", "-c"]
   # OpenSSH joins argv into a remote command string, so the bash -c payload must be quoted.

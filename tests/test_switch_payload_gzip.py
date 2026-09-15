@@ -12,14 +12,18 @@ from unittest.mock import patch
 
 import pytest
 from conftest import _page_request, make_home_session
+from starlette.responses import Response
 
 from src.api import deps
 from src.api.sessions import get_session_bootstrap, get_session_view
+from src.core.models import SessionMetadata
+from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
 
 
-async def _call(handler, session_id, request, meta, mgr, cfg):
+async def _call(handler, session_id: str, request, meta: SessionMetadata, mgr: SessionManager,
+                cfg) -> Response:
   """One direct handler call with the dependency shape each signature carries."""
   if handler is get_session_view:
     return await handler(session_id, request, meta, mgr, ThreadManager(cfg), cfg)
@@ -27,7 +31,7 @@ async def _call(handler, session_id, request, meta, mgr, cfg):
 
 
 @pytest.fixture(autouse=True)
-def _fresh_switch_memo():
+def _fresh_switch_memo() -> None:
   """The module-level memo persists across tests; every test starts empty."""
   from src.api.sessions import _switch_gzip_memo
 

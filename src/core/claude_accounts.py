@@ -545,9 +545,7 @@ def _sidecar_files(root: Path) -> set[Path]:
   """Relative paths of *root*'s files, staged half-products excluded."""
   if not root.is_dir():
     return set()
-  return {
-      path.relative_to(root) for path in root.rglob("*") if path.is_file() and not _is_staging_name(path.name)
-  }
+  return {path.relative_to(root) for path in root.rglob("*") if path.is_file() and not _is_staging_name(path.name)}
 
 
 def _sidecar_file_diff(sidecar: Path, dst_sidecar: Path) -> str:

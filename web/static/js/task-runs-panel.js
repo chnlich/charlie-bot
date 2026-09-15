@@ -188,8 +188,8 @@ function runCard(run) {
   card.appendChild(head);
 
   const timing = el('div', 'text-[11px] text-slate-500 flex flex-wrap gap-x-3');
-  timing.appendChild(el('span', undefined, 'started ' + (run.started_at ? new Date(run.started_at).toLocaleString() : 'N/A')));
-  timing.appendChild(el('span', undefined, 'ended ' + (run.ended_at ? new Date(run.ended_at).toLocaleString() : 'N/A')));
+  timing.appendChild(el('span', undefined, 'started ' + (run.started_at ? new Date(run.started_at).toLocaleString('en-US') : 'N/A')));
+  timing.appendChild(el('span', undefined, 'ended ' + (run.ended_at ? new Date(run.ended_at).toLocaleString('en-US') : 'N/A')));
   const dur = formatDuration(run);
   timing.appendChild(el('span', undefined, 'duration ' + (dur || 'N/A')));
   timing.appendChild(el('span', undefined, 'exit ' + (run.exit_code === null || run.exit_code === undefined ? 'N/A' : run.exit_code)));

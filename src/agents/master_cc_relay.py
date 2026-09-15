@@ -171,8 +171,7 @@ async def _probe_reconcile_label(
   newest_account, newest_copy = newest
   if not claude_accounts.transcript_lineage_split(label_copy, newest_copy):
     return
-  await adopt_transcript_holder(
-      item, cc_session_id, newest_account, label.label, reason="forked_or_stale_lineage")
+  await adopt_transcript_holder(item, cc_session_id, newest_account, label.label, reason="forked_or_stale_lineage")
 
 
 async def place_turn(
@@ -211,8 +210,7 @@ async def place_turn(
         # kill between a relay's move and its label persist, or an unknown
         # defect). The move layer never redirects -- this consumer reconciles:
         # adopt the newer holder and continue the turn from it with no copy.
-        await adopt_transcript_holder(
-            item, resume_id, chosen, previous.label, reason="guard_refused_newer_transcript")
+        await adopt_transcript_holder(item, resume_id, chosen, previous.label, reason="guard_refused_newer_transcript")
     session_meta.claude_account = chosen.label
     if item.callbacks.persist_claude_account is not None:
       await item.callbacks.persist_claude_account(session_meta.id, chosen.label)

@@ -7,17 +7,17 @@ from typing import TYPE_CHECKING
 
 from src.agents import master_cc_run, master_cc_state
 from src.agents.backends.base import make_error_event, make_master_done_event
-from src.core import claude_accounts, event_types as ET
-from src.core import runs, sidebar_state
+from src.core import claude_accounts, runs, sidebar_state
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.latex import get_tex_path, snapshot_tex
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import (
-    BackendOption,
-    BackendType,
-    MasterRunRecord,
-    SessionCallbacks,
-    SessionMetadata,
+  BackendOption,
+  BackendType,
+  MasterRunRecord,
+  SessionCallbacks,
+  SessionMetadata,
 )
 from src.core.process import kill_group_escalating
 from src.core.streaming import SIDEBAR_CHANNEL, streaming_manager
@@ -141,7 +141,8 @@ async def _refresh_anchors_from_disk(
   """
   fresh: SessionMetadata | None = None
   try:
-    # Local import: sessions sits above this module in the import graph.
+    # Local import, same as the teardown's: the SessionManager class is a patch
+    # seam (tests swap it), so the reference must resolve at call time.
     from src.core.sessions import SessionManager
     fresh = await SessionManager(item.cfg).read_metadata_fresh(session_id)
   except Exception:

@@ -31,7 +31,7 @@ if TYPE_CHECKING:
   from src.core.config import CharlieBotConfig, Credentials
 
 from src.core.constants import SESSION_ID_ENV_VAR
-from src.core.http import load_requests
+from src.core.http import requests_module_getattr
 from src.core.timeouts import (
     CLI_CONNECT_TOTAL_TIMEOUT,
     HTTP_INTERNAL_API_TIMEOUT,
@@ -50,11 +50,8 @@ TASK_SPEC_REQUIRED_HEADINGS = (
 
 
 def __getattr__(name: str) -> Any:
-  # Resolving requests as a module attribute keeps the tests'
-  # "src.cli.common.requests.*" patch targets valid.
-  if name != "requests":
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-  return load_requests(globals())
+  # The "src.cli.common.requests.*" patch targets resolve through this hook.
+  return requests_module_getattr(name, __name__, globals())
 
 
 def get_config() -> CharlieBotConfig:

@@ -1,6 +1,7 @@
 """Session management for CharlieBot."""
 
 import asyncio
+import gc
 import io
 import json
 import os
@@ -1969,6 +1970,22 @@ class SessionManager:
     reached it; a drop instead aborts at the next slice boundary and the
     caller's epoch-moved path reruns.
     """
+    # The init parses and folds the whole live corpus in one bounded span, and
+    # the generational passes its dict churn triggers paused the event loop
+    # up to ~74 ms at the session's first streamed event after a server start
+    # (measured 20534-event worst corpus, 2026-09-15). GC is process-global
+    # and the init runs on server threads, so the disable spans the whole
+    # init and the finally re-enables on every path — the trace_merge build's
+    # shape. The parse's dicts stay referenced by the events cache and the
+    # feed's discards refcount-clear, so no explicit collect is needed.
+    gc.disable()
+    try:
+      return await self._catch_up_aggregator(session_id, epoch)
+    finally:
+      gc.enable()
+
+  async def _catch_up_aggregator(self, session_id: str, epoch: int) -> MessageAggregator | None:
+    """Catch up one aggregator to the on-disk corpus; called under the init's gc boundary."""
     # Live file only holds events from index archive_offset onward; seed the
     # aggregator's offset so the deltas it emits carry the same GLOBAL
     # event_index that persist_and_broadcast stamps on the raw event.

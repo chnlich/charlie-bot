@@ -86,7 +86,7 @@ def test_inject_appends_when_no_body() -> None:
 def test_injected_script_tag_carries_the_cache_bust_version(monkeypatch: pytest.MonkeyPatch) -> None:
   """The artifact tray script is fetched with the same cache-bust query every
   template uses, so an upgrade cannot leave a browser on a stale copy."""
-  monkeypatch.setattr(pages_api, "_RUNTIME_GIT_VERSION", "abc1234 · 03-24")
+  monkeypatch.setattr(pages_api, "_GIT_VERSION", "abc1234 · 03-24")
   version = pages_api._static_asset_version()
   assert version.startswith("abc1234-03-24-")  # the git part, then the served tree's content digest
   out = files_api._inject_artifact_ui("<html><body></body></html>", "S")

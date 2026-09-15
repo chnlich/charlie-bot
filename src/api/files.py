@@ -16,7 +16,6 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from src.api.auth import request_has_access_key
 from src.api.pages import _static_asset_version
-from src.core import plan_diff
 from src.core.config import configured_access_key, get_config
 from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.memo import BoundedMemo
@@ -96,6 +95,10 @@ def _annotated_diff_page(base_path: Path, page_path: Path, inject_ui: bool, sess
   except OSError as e:
     raise HTTPException(status_code=404, detail=_DIFF_BASE_NOT_FOUND_DETAIL.format(base_path)) from e
   page_text = page_path.read_text(encoding="utf-8")
+  # plan_diff drags html.parser and difflib and serves only this compare view;
+  # the server import floor (docs/perf_baseline.md M99) depends on it staying
+  # off the module import.
+  from src.core import plan_diff
   page = plan_diff.annotate(base_text, page_text)
   if inject_ui:
     page = _inject_artifact_ui(page, session_id)

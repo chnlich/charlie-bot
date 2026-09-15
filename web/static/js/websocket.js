@@ -145,6 +145,15 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     return;
   }
 
+  // One node's durable task facts changed (create/move/patch, Run lifecycle,
+  // input acknowledgement, report, close/reopen, prompt change). The tree
+  // re-reads the affected levels from the server; duplicate or out-of-order
+  // notifications change nothing because every refresh repaints from facts.
+  if (t === 'task_tree_changed') {
+    if (globalThis.Sidebar && Sidebar.SessionTree) Sidebar.SessionTree.onTreeChanged(ev.session_id);
+    return;
+  }
+
   // Sidebar unread indicator — handle before catchup guard
   if (t === 'unread_changed') {
     sessionUnread[ev.session_id] = ev.has_unread;

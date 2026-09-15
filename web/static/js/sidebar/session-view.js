@@ -469,8 +469,23 @@ function renderSessionView(data) {
     renderWorkersTabUnknown();
   }
 
+  // v2 task-node chrome: Task/Context/Runs replace Workers; the panels bind to
+  // this session before any tab shows, so a switch cannot leave a prior node's
+  // editor or run list in place.
+  const isTaskNode = !!session.profile;
+  for (const btnId of ['btn-task', 'btn-task-context', 'btn-runs']) {
+    const btn = document.getElementById(btnId);
+    if (btn) btn.classList.toggle('hidden', !isTaskNode);
+  }
+  const workersBtn = document.getElementById('btn-workers');
+  if (workersBtn) workersBtn.classList.toggle('hidden', isTaskNode);
+  if (globalThis.TaskPanel) globalThis.TaskPanel.onSessionChanged(isTaskNode ? session : null);
+  if (globalThis.TaskContextPanel) globalThis.TaskContextPanel.onSessionChanged(isTaskNode ? session : null);
+  if (globalThis.TaskRunsPanel) globalThis.TaskRunsPanel.onSessionChanged(isTaskNode ? session : null);
+  if (globalThis.Sidebar && Sidebar.SessionTree) Sidebar.SessionTree.onSessionShown(session);
+
   // Restore whichever tab was active before the session switch
-  const activeBtn = document.querySelector('#btn-terminal.bg-blue-600\\/20, #btn-chat-tex.bg-blue-600\\/20, #btn-chat.bg-blue-600\\/20, #btn-workers.bg-blue-600\\/20, #btn-chat-backlog.bg-blue-600\\/20');
+  const activeBtn = document.querySelector('#btn-terminal.bg-blue-600\\/20, #btn-chat-tex.bg-blue-600\\/20, #btn-chat.bg-blue-600\\/20, #btn-workers.bg-blue-600\\/20, #btn-task.bg-blue-600\\/20, #btn-task-context.bg-blue-600\\/20, #btn-runs.bg-blue-600\\/20, #btn-chat-backlog.bg-blue-600\\/20');
   const activeTab = activeBtn ? activeBtn.id.replace('btn-', '') : 'chat';
   switchTab(activeTab);
 
@@ -732,6 +747,17 @@ function renderUsageFromData(usage) {
 // ---------------------------------------------------------------------------
 // Session management
 // ---------------------------------------------------------------------------
+// The primary sidebar button: inside the tasks filter it creates a v2 task
+// (root manager when no parent is selected); everywhere else it keeps the
+// legacy session create.
+function createSessionOrTask() {
+  if (currentFilter === 'tasks' && globalThis.TaskPanel) {
+    globalThis.TaskPanel.openChildModal(null);
+    return;
+  }
+  createSession();
+}
+
 async function createSession() {
   try {
     const backendSel = document.getElementById('new-session-backend');
@@ -832,6 +858,7 @@ const API = {
   loadOlderIfNeeded,
   renderUsageFromData,
   createSession,
+  createSessionOrTask,
   renderNoActiveSessionView,
 };
 Sidebar.wire(API);

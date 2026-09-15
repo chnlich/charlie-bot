@@ -18,6 +18,9 @@ function baseSessionContext(overrides = {}) {
 
   const context = {
     SESSION_ID: 'session-a',
+    // The server-embedded initial render payload (index.html); the sidebar's
+    // restore path reads it to detect a v2 task-node deep link.
+    SESSION_BOOTSTRAP: overrides.SESSION_BOOTSTRAP !== undefined ? overrides.SESSION_BOOTSTRAP : null,
     THINKING_SINCE: null,
     DRAFT_KEY: null,
     ACTIVE_BACKEND_ID: overrides.ACTIVE_BACKEND_ID || 'claude-opus-4.6',

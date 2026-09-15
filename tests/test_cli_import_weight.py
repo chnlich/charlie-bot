@@ -127,11 +127,17 @@ def test_plan_constants_match_the_model_literals() -> None:
 
 
 # The artifact chain's ban set: the probe's registry stack (backends.registry →
-# fastapi + sessions, autonamer → sessions + streaming) and the KaTeX
-# fetch's HTTP client serve only the check/wrap verb bodies — the probe imports
-# its stack inside run_probe, and the vendored-KaTeX steady state never fetches.
+# fastapi + sessions, autonamer → sessions + streaming), asyncio (~35 ms —
+# pydantic_core is absent from this chain, so asyncio's import is unshared),
+# the headless renderer (its websockets stack ~60 ms), and the KaTeX fetch's
+# HTTP client serve only the check/wrap verb bodies — the probe imports its
+# stack inside run_probe, the page-height assertion imports the renderer inside
+# _measure_page_height, and the vendored-KaTeX steady state never fetches.
 ARTIFACT_HEAVY_MODULES = HEAVY_MODULES + (
     "fastapi",
+    "asyncio",
+    "websockets",
+    "src.core.headless_render",
     "src.agents.backends.registry",
     "src.agents.backends.base",
     "src.core.autonamer",

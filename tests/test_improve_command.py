@@ -340,6 +340,58 @@ def test_extract_iteration_summary_prefers_newest_result_or_assistant() -> None:
   assert _extract_iteration_summary(iter(reversed(events)), 3, "failed") == "newest words"
 
 
+def test_newest_first_events_prefiltered_parity(tmp_path: Path) -> None:
+  # The raw-line type prefilter must change the judgments' inputs by nothing:
+  # over a log carrying both writer shapes, a multi-window giant tool_result
+  # line, the type-less adopt signal, blank and malformed lines, the filtered
+  # newest-first stream equals the full parse restricted to the candidate
+  # types — so both judgments answer identically.
+  from src.core.ndjson import iter_ndjson_events_from_end
+
+  target = tmp_path / "events.jsonl"
+  giant = {"type": "tool_result", "tool_name": "Bash", "content": "x" * (512 * 1024 + 11)}
+  lines = [
+      json.dumps({
+          "session_id": "abc",
+          "timestamp": "t"
+      }),  # the old adopt-signal shape: no type
+      json.dumps({
+          "type": "rate_limit_event",
+          "rate_limit_info": {
+              "status": "rejected"
+          }
+      }),
+      "",
+      "{not json",
+      json.dumps(giant),
+      json.dumps({
+          "type": "tool_result",
+          "content": "more noise"
+      }),
+      json.dumps({
+          "type": "assistant",
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "iter words"
+              }]
+          }
+      }),
+  ]
+  target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+  from src.core.improve_command import _newest_first_events
+
+  unfiltered = list(iter_ndjson_events_from_end(target, log_event="test_skip", log_fields={}))
+  candidates = {"result", "assistant", "assistant_error", "error", "rate_limit_event"}
+  # Events without a type rode an unproven line (no leading "type"), which
+  # the filter always keeps.
+  expected = [e for e in unfiltered if e.get("type") is None or e.get("type") in candidates]
+  assert list(_newest_first_events(target)) == expected
+  blocker, summary = _failed_iteration_judgments(_newest_first_events(target), 1, "failed")
+  assert blocker is not None and summary == "iter words"
+
+
 class _FakeImproveSessionManager(SuccessorDeliveryShim):
 
   def __init__(self) -> None:

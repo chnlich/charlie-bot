@@ -112,6 +112,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M100 run-start session-adopt signal, worker-log read trip and wire | M100 collector below | broadcast frames per signal; the cold read+transform raw rows and wall over a 51-signal scratch worker log (one signal per production log's head); the chat marker lines the master funnel persists (parity witness — the durable append is the stable-history projection's run-start marker, load-bearing) | 0 broadcast frames per signal; 0 raw rows; read wall median < 0.0005 s; marker persists (1 line per signal, both shapes) | — (introduced with its first history row) |
 | M101 raw events download, gzip-accepted | M101 collector below | seconds of loop lag + wall per full download of the worst on-disk live chat file through the real app stack (the events viewer's fetch and its download link, the browser's Accept-Encoding: gzip shape); the first view (the cold read+compress a fresh open pays, scratch home) | loop-lag median < 0.010 s; steady-state wall median < 0.10 s; first-view wall < 1.0 s | — (introduced with its first history row) |
 | M102 artifact-CLI command wall, wrap verb | M102 collector below | seconds per `charliebot artifact wrap <fragment> --genre plan --output <page>` wall, fresh process, scratch fragment/output (the plan page assembly the master's plan delivery runs; local only — no server round trip, no live-home write; the check verb's probe imports its registry stack inside run_probe, so a check run's wall keeps its work) | median < 0.35 s | — (introduced with its first history row) |
+| M103 config-dependency resolution, remaining sync sites | M103 collector below | seconds per raw-ASGI drive of the diff viewer, the index page, and the repos listing over a scratch empty corpus (the routes' dependency-solve + render floor); 0 routes resolving config through the sync `Depends(get_config)` — enforced by the route-walk guard test, not the collector | /diff median < 0.0015 s; / median < 0.0030 s; /api/git/repos median < 0.0015 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -6420,10 +6421,75 @@ print(f"checkout {os.path.basename(CHECKOUT)}: artifact wrap --genre plan "
 EOF
 ```
 
+M103 — config-dependency resolution on the routes that kept the sync `Depends(get_config)`: a
+sync dependency is one FastAPI threadpool round-trip per request (the M34/M52/M82 rows' 67-104 µs
+no-op hop floor, queueing-amplified under load), which `get_config_on_loop` — the awaited form the
+polled routes already take — removes; the collector drives the three read shapes raw-ASGI over a
+scratch empty corpus (the routes' DI + render floor, no live-corpus variance), and the zero-sync-sites
+half is the route-walk guard test's job:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from fastapi import FastAPI
+import src.api.deps as deps
+from src.api.git import router as git_router
+from src.api.pages import router as pages_router
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+
+home = Path(tempfile.mkdtemp(prefix="m103-cfgdep-", dir="/tmp"))
+(home / "credentials.yaml").write_text("charliebot:\n  access_key: testkey\n")
+cfg = CharlieBotConfig(charliebot_home=home, paths={"workspace_dirs": [str(home)]})
+app = FastAPI()
+app.include_router(pages_router)
+app.include_router(git_router, prefix="/api/git")
+app.dependency_overrides[deps.get_session_manager] = lambda: SessionManager(cfg)
+# The config dependency must serve the scratch cfg too: without this override
+# the routes resolve the live config's workspace_dirs and code-server probe,
+# and the drive reads the live corpus its isolation declares away.
+app.dependency_overrides[deps.get_config_on_loop] = lambda: cfg
+
+async def drive(path, n=120):
+    status = None
+    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "GET",
+             "path": path, "raw_path": path.encode(), "query_string": b"", "headers": [],
+             "server": ("127.0.0.1", 80), "client": ("127.0.0.1", 1), "scheme": "http"}
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+    async def send(message):
+        nonlocal status
+        if message["type"] == "http.response.start":
+            status = message["status"]
+    await app(scope, receive, send)
+    assert status == 200, (path, status)
+    times = []
+    for _ in range(n):
+        t0 = time.perf_counter()
+        await app(scope, receive, send)
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    return times[len(times) // 2] * 1e6, times[int(n * 0.9)] * 1e6
+
+async def main():
+    rows = []
+    for label, path in [("GET /diff", "/diff"), ("GET /", "/"), ("GET /api/git/repos", "/api/git/repos")]:
+        p50, p90 = await drive(path)
+        rows.append(f"{label} median {p50:.0f} us, p90 {p90:.0f} us")
+    shutil.rmtree(home)
+    print("; ".join(rows))
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-14 | this PR | M103 config-dependency resolution, interleaved raw-ASGI drives at load 4.0-6.5 one-minute (main checkout before vs branch worktree after back-to-back, session corpus a scratch home per arm while the config-resolved state — the code-server probe and the repos discovery — was the live config in both arms, the delta arm-differentiated exactly by the dependency form under test; every paired round faster): GET /diff 880.7/933.9 → 764.1/579.5 us (−13 % to −38 %), GET / 1828.9/1860.3 → 1304.0/1298.3 us (−29 % to −30 %), GET /api/git/repos 784.2/778.3 → 646.5/668.0 us (−18 % to −14 %); the committed collector adds the config-dependency override its isolation declares (review finding), and its scratch-corpus band reads /diff 660/679, / 1093/1125, /api/git/repos 367/363 us; component attribution, the isolated dependency-shape drive at load 3.3: one sync `Depends(get_config)` 246.5 us vs a no-dependency route 61.5 us — the per-request threadpool round-trip the sync form pays (the M34/M52/M82 rows' 67-104 us no-op hop floor, queueing-amplified under load) vs the awaited form's dict check; M103 definition, collector, healthy ranges, and the route-walk guard test introduced with this PR | 22 routes across 10 api modules still resolved config through the sync `Depends(get_config)` — one FastAPI threadpool handoff per request on the hottest writes and reads: every user-message POST and chat upload, the OpenAI-compatible proxy POST (every proxied LLM call), the index/home/diff pages and the /diff viewer's three fetches, the delegate/Slack internal POSTs, the slash executor, session create/fork/backend-switch/recap-summarize/tui-stop/elone, cron create/update, and code-server open — although `get_config_on_loop` (the awaited form the polled routes took) already served the same memoized instance; all 22 sites now take the on-loop dependency and the guard test walks `server.app.routes`' dependency trees so no route can reintroduce the hop; the polled routes (sessions/threads status, list, view, events, search, scheduled, cron tasks GET) were already on-loop and their collectors (M35/M44/M46/M56) are untouched |
 | 2026-09-14 | this PR | M7 restart-cold standing reading classified as the stale-document deploy-skew shape, not a regression: the verbatim collector read wall 6.840 s, 19 rows, scanned 2138.1 MB, rows digest 91801ae27a4c (load 4.58-6.01 one-minute) — 3.4x the < 2.0 s line — while the same collect against a document the current code had just rewritten read wall 1.341 s, 0.0 MB scanned, byte-identical rows (digest parity 98e7ab9edd27 == 98e7ab9edd27 on a same-window pair, two fresh processes back-to-back) — under the line; component attribution of the stale pass: the running server (started 2026-09-10 12:42) predates both the charlie-bot corpus source (#1352-era) and the opencode rows-map entry format, so its document carries no charlie-bot entries (0 of 6,571 lookups hit, 2,062.6 MB re-read, ~3.5 s) and stores the opencode db contribution as records without the rows map the seed path reads (prev.get("rows") is None, so the unseeded whole-blob scan runs, 76.5 MB / 2.7 s measured standalone) | the restart-cold collect reads the document the live server last wrote; a server predating a document-format landing makes every fresh-process collect re-read the whole corpus until the next deploy's own collect rewrites the document, then the metric returns to its zero-movement floor — the heal-at-deploy class the M96 row documents; until the restart, hourly rounds re-read this shape and should classify it, not chase it |
 | 2026-09-14 | this PR | M93 standing count 12 AttributeError 500s on GET /api/threads/{sid}/threads/{tid} in the newest server log (healthy 0), spread 2026-09-10 15:21 through 2026-09-14 13:31 local across the 97 h window — the seed's pre-fix AttributeError class still firing because the running server predates the 2026-09-11 cli-binary fix; no code change exists to make, the count heals at the next deploy | re-confirmed deploy skew, recorded so hourly rounds read the growing count as the undeployed fix, not a new failure mode |
 | 2026-09-14 | this PR | M96 standing reading re-confirmed as the 2026-09-13 row's deploy-skew shape: median 402270 B, p90 815424 B, max 1290826 B, total 12378399 B over 29 active sessions (load ~5 one-minute) — above the median < 0.15 MB and max < 0.60 MB lines, median up from 254402 B over 26 sessions the prior day — the undeployed pre-trim body shape serving a corpus that kept growing; the served shape on current code stays inside every line (the 2026-09-13 TestClient sweep's −62 %/−75 % readings) | the growth is the corpus's, the shape's is the deploy skew's; heals at the next restart |

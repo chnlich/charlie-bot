@@ -8,7 +8,8 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from src.core.config import CharlieBotConfig, get_config
+from src.api.deps import get_config_on_loop
+from src.core.config import CharlieBotConfig
 from src.core.memo import BoundedMemo
 from src.core.timeouts import SUBPROCESS_GIT_DIFF_TIMEOUT, SUBPROCESS_GIT_READ_TIMEOUT
 
@@ -370,7 +371,7 @@ async def list_branches(repo: str = Query(..., description="Full path to git rep
 
 
 @router.get("/repos")
-async def list_repos(cfg: CharlieBotConfig = Depends(get_config)) -> list[dict[str, str]]:
+async def list_repos(cfg: CharlieBotConfig = Depends(get_config_on_loop)) -> list[dict[str, str]]:
   """Return the discovered repos as {"label", "path"} for the diff page's datalist."""
   repos = await asyncio.to_thread(cfg.discover_repos)
   return [{"label": repo["name"], "path": repo["path"]} for repo in repos]
@@ -382,7 +383,7 @@ async def diff_files(
     base: str = Query(..., description="Base ref"),
     head: str = Query(..., description="Head ref"),
     mode: Literal["three-dot", "two-dot"] = Query("three-dot", description="Diff range mode"),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   """Return a cheap per-file manifest (status + line counts) for the diff range.
 
@@ -447,7 +448,7 @@ async def diff_file(
     old_path: str | None = Query(
         None, description="Pre-rename path; pass alongside path so a rename/copy renders as a rename, not a re-add"),
     force: bool = Query(False, description="Render even if the diff exceeds the per-file cap"),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   """Return the unified diff for a single file.
 

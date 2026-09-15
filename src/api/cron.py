@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
-from src.api.deps import bad_request, get_session_manager
+from src.api.deps import bad_request, get_config_on_loop, get_session_manager
 from src.api.responses import FastJsonResponse
 from src.core.config import (
     CharlieBotConfig,
@@ -20,7 +20,6 @@ from src.core.config import (
     _validate_cron_body,
     cron_dir,
     cron_path,
-    get_config,
     get_scheduled_task_errors,
     get_scheduled_tasks,
     master_task_project_error,
@@ -265,7 +264,7 @@ async def apply_task_yaml_update(
 async def update_cron_task(
     name: str,
     req: TaskUpdate,
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
     session_mgr: SessionManager = Depends(get_session_manager),
 ) -> dict:
   _validate_cron_name(name)
@@ -274,7 +273,7 @@ async def update_cron_task(
 
 
 @router.post('/tasks')
-async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_config)) -> dict:
+async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_config_on_loop)) -> dict:
   """Add a new scheduled job as its own config.d/cron.d/<name>.yaml file."""
   _validate_cron_name(req.name)
   _validate_backend_id(req.backend, cfg)

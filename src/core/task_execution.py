@@ -635,14 +635,17 @@ class TaskExecutionAdapter:
 
     async def _build_review_prompt(self, session_id: str, run: RunRecord, work_run: RunRecord) -> str:
         """The review Run's prompt: the existing review builder over the exact work context."""
-        assert work_run.branch_name and work_run.worktree_path and work_run.repo_path
+        assert (work_run.branch_name and work_run.worktree_path and work_run.repo_path
+                and work_run.base_branch), (
+            f"review of work run {work_run.id} needs its exact repo/base/branch/worktree "
+            "provenance; an unset base is never silently replaced with main")
         user_request, worker_summary = await review.extract_review_context(
             session_id, work_run.id, self._cfg.sessions_dir,
             worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / "events.jsonl")
         prompt = review.build_review_prompt(
             work_run.branch_name,
             work_run.worktree_path,
-            work_run.base_branch or "main",
+            work_run.base_branch,
             cfg=self._cfg,
             session_id=session_id,
             original_thread_id=work_run.id,

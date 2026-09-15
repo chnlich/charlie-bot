@@ -342,8 +342,11 @@ async def delete_group(req: DeleteGroupRequest, session_mgr: SessionManager = De
   return {"updated": count}
 
 
-@router.get("/scheduled", response_model=list[SessionMetadata])
-async def list_scheduled_sessions(session_mgr: SessionManager = Depends(get_session_manager)) -> list[SessionMetadata]:
+@router.get("/scheduled")
+async def list_scheduled_sessions(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+) -> Response:
   """List sessions with a scheduled task, newest first."""
   sessions = await session_mgr.list_sessions(
       status=SessionStatus.ACTIVE,
@@ -364,7 +367,11 @@ async def list_scheduled_sessions(session_mgr: SessionManager = Depends(get_sess
       s.schedule_next_run = next_run_iso(task.cron, task.timezone, now_utc)
     else:
       s.schedule_enabled = False
-  return sessions
+  # The grouped sidebar render pairs this poll with /api/cron/tasks; the gzip
+  # form rides the body-keyed memo (_switch_payload_response). model_dump's
+  # mode="json" is the encoder-free render the /tasks route's comment
+  # documents; orjson raises loudly on the models themselves.
+  return await _switch_payload_response(request, [s.model_dump(mode="json") for s in sessions])
 
 
 def _parse_session_ids(ids: str) -> list[str]:
@@ -390,10 +397,11 @@ async def _load_requested_sessions(session_mgr: SessionManager, ids: str) -> lis
 
 @router.get('/status', response_model=None)
 async def all_sessions_status(
+    request: Request,
     ids: str = Query(..., description="Comma-separated ids of the sessions the sidebar is rendering"),
     force: bool = False,
     session_mgr: SessionManager = Depends(get_session_manager),
-) -> dict | FastJsonResponse:
+) -> Response:
   """Return derived sidebar state for the requested sessions.
 
   Clean sessions are served from the in-process snapshot with zero disk
@@ -409,7 +417,7 @@ async def all_sessions_status(
   # resolve_sidebar_state so the cache stays untouched.
   sessions = await session_mgr.get_sessions_readonly(_parse_session_ids(ids))
   if not sessions:
-    return {}
+    return await _switch_payload_response(request, {})
   derived = await session_mgr.resolve_sidebar_state(
       sessions,
       include_running_status=True,
@@ -431,9 +439,10 @@ async def all_sessions_status(
         sidebar_state.NEXT_TRIGGER_AT: next_trigger_at.isoformat() if next_trigger_at else None,
         sidebar_state.HAS_PENDING_PLAN_APPROVAL: entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL],
     }
-  # The sidebar's 3 s poll is this host's second-busiest route; FastJsonResponse
-  # for the message-page cost reason in get_session_events_page.
-  return FastJsonResponse(result)
+  # The sidebar's 3 s poll is this host's second-busiest route; the gzip form
+  # rides the body-keyed memo (_switch_payload_response) for the message-page
+  # cost reason in get_session_events_page.
+  return await _switch_payload_response(request, result)
 
 
 @router.get('/tui/status')
@@ -674,21 +683,23 @@ def _search_row_body(meta: SessionMetadata, row_key: tuple) -> bytes:
   return body
 
 
-# The switch fetches (view, bootstrap) rebuild their payload per request, so
-# unlike the events page there is no projection generation to key a gzip form
-# on; the rendered body bytes are their own invalidation ground — a memo hit
-# proves byte equality because the dict key IS the body. Without it every
+# The switch fetches (view, bootstrap) and the sidebar's poll and scheduled
+# list (/status, /scheduled) rebuild their payload per request, so unlike the
+# events page there is no projection generation to key a gzip form on; the
+# rendered body bytes are their own invalidation ground — a memo hit proves
+# byte equality because the dict key IS the body. Without it every
 # gzip-accepting fetch pays the middleware's whole-body level-1 deflate in the
 # send path, the M35 events-page cost the projection fix removed there.
 # Content-Encoding set upstream is what makes that middleware skip its own
 # pass (the M72 listing mechanism), and mtime=0 keeps the bytes deterministic
-# (the M101 serve's rule).
-_SWITCH_GZIP_MEMO_LIMIT = 8
+# (the M101 serve's rule). The limit covers one steady-state body per open
+# tab's id set plus the other callers'.
+_SWITCH_GZIP_MEMO_LIMIT = 16
 _switch_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SWITCH_GZIP_MEMO_LIMIT)
 
 
-async def _switch_payload_response(request: Request, payload: dict) -> Response:
-  """Render a switch-fetch payload once and serve its gzip form from the body-keyed memo."""
+async def _switch_payload_response(request: Request, payload: dict | list) -> Response:
+  """Render a request-path payload once and serve its gzip form from the body-keyed memo."""
   body = fast_json_bytes(payload)
   if "gzip" not in request.headers.get("accept-encoding", ""):
     return PreencodedJSONResponse(body)

@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_ID, make_home_session, plan_doc, user_event
+from conftest import OPUS_BACKEND_ID, _page_request, make_home_session, plan_doc, user_event
 from conftest import append_events as _append_events
 from conftest import write_plans as _write_plans
 from fastapi import FastAPI
@@ -298,7 +298,7 @@ async def test_all_sessions_status_pending_plan_approval(
   if plans is not None:
     _write_plans(cfg, session.id, {"plans": plans})
 
-  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)).body)
+  status = json.loads((await sessions_api.all_sessions_status(_page_request(), ids=session.id, session_mgr=mgr)).body)
   assert status[session.id]["has_pending_plan_approval"] is expected
 
 
@@ -308,7 +308,7 @@ async def test_pending_plan_approval_not_persisted_to_metadata(tmp_path: Path) -
 
   _write_plans(cfg, session.id, {"plans": [plan_doc(1, [_make_version(1, _PLAN_V1_REL, "clean")]),]})
 
-  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)).body)
+  status = json.loads((await sessions_api.all_sessions_status(_page_request(), ids=session.id, session_mgr=mgr)).body)
   assert status[session.id]["has_pending_plan_approval"] is True
 
   raw_metadata = json.loads((cfg.sessions_dir / session.id / "metadata.json").read_text(encoding="utf-8"))
@@ -326,7 +326,7 @@ async def test_pending_plan_approval_archived_session_is_unset(tmp_path: Path) -
   meta.status = SessionStatus.ARCHIVED
   await mgr.save_metadata(meta)
 
-  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)).body)
+  status = json.loads((await sessions_api.all_sessions_status(_page_request(), ids=session.id, session_mgr=mgr)).body)
   assert status[session.id]["has_pending_plan_approval"] is False
 
 
@@ -339,7 +339,7 @@ async def test_pending_plan_approval_no_parse_cost_without_plans_json(tmp_path: 
   assert await asyncio.to_thread(
       has_pending_plan_approval_sync, cfg.sessions_dir / session.id / "plans.json", session.id) is False
 
-  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)).body)
+  status = json.loads((await sessions_api.all_sessions_status(_page_request(), ids=session.id, session_mgr=mgr)).body)
   assert status[session.id]["has_pending_plan_approval"] is False
 
 

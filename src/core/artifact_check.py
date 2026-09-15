@@ -23,7 +23,6 @@ off the page carries a content name at first use.
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import html
 import re
@@ -33,7 +32,6 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.core import headless_render
 from src.core.constants import REPO_ROOT
 from src.core.plan_diff import VOID_TAGS
 from src.core.timeouts import ARTIFACT_PROBE_TIMEOUT
@@ -132,6 +130,10 @@ _PAGE_PROBE_TEMPLATE = """<!doctype html>
 
 def _measure_page_height(chrome_bin: Path, artifact: Path) -> int:
   """Render *artifact* headlessly through a session-unique probe page; return its scroll height."""
+  # The renderer's websockets stack costs ~60 ms of import and serves only this
+  # probe; the artifact chain's import floor (docs/perf_baseline.md M102) depends
+  # on it loading here and nowhere earlier.
+  from src.core import headless_render
   probe = artifact.parent / f".page-height-probe-{uuid.uuid4().hex}.html"
   probe.write_text(
       _PAGE_PROBE_TEMPLATE.format(width=_PAGE_PROBE_WIDTH_PX, src=artifact.resolve().as_uri()), encoding="utf-8")
@@ -799,8 +801,11 @@ def run_probe(cfg: CharlieBotConfig, artifact: Path, trigger: str) -> ProbeResul
   questions = _PROBE_QUESTIONS.replace("<trigger message verbatim>", trigger)
   prompt = f"{artifact.read_text(encoding='utf-8')}\n\n{questions}"
   # The backends registry drags fastapi and the sessions stack (~250 ms of
-  # import) and serves only this probe; the artifact chain's import floor
-  # (docs/perf_baseline.md M102) depends on it loading here and nowhere earlier.
+  # import) and asyncio another ~35 ms; both serve only this probe, and the
+  # artifact chain's import floor (docs/perf_baseline.md M102) depends on them
+  # loading here and nowhere earlier.
+  import asyncio
+
   from src.agents.backends.registry import build_backend
   from src.core.autonamer import iter_light_backends
   options = list(iter_light_backends(cfg))

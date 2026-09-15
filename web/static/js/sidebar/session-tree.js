@@ -22,6 +22,7 @@ const tree = {
   staleNotice: new Map(), // parentId -> human explanation of a 409 refresh
   highlighted: null,      // search-highlighted node id
   gen: 0,                 // view generation: a filter change/reload supersedes in-flight pages
+  levelEpoch: new Map(),  // parentId -> newest fetch epoch; a stale page may never overwrite fresh facts
 };
 
 function loadExpandedSet() {
@@ -47,7 +48,13 @@ function persistExpanded() {
 
 async function fetchLevel(parentId) {
   // Paginate the level to exhaustion: a page boundary must never silently
-  // hide children. Appends are deduped by id at render time.
+  // hide children. Appends are deduped by id at render time. Overlapping
+  // fetches for one level (a live-data refresh racing an earlier pagination
+  // fetch) are ordered by epoch: only the newest may write rows/level state,
+  // so a stale response can never overwrite fresher server facts.
+  const key = parentId || '';
+  const epoch = (tree.levelEpoch.get(key) || 0) + 1;
+  tree.levelEpoch.set(key, epoch);
   const gen = tree.gen;
   let cursor = null;
   let revision = null;
@@ -56,34 +63,40 @@ async function fetchLevel(parentId) {
     const params = new URLSearchParams({include_archived: String(tree.includeArchived), limit: String(TREE_PAGE_LIMIT)});
     if (parentId) params.set('parent_id', parentId);
     if (cursor) params.set('cursor', cursor);
-    const res = await fetch('/api/sessions/tree?' + params.toString());
+    const res = await fetch('/api/sessions/tree?' + params.toString(), {cache: 'no-store'});
+    if (gen !== tree.gen || tree.levelEpoch.get(key) !== epoch) return null; // superseded
     if (res.status === 409) {
       // The tree moved during pagination: refetch this level from fresh facts
       // and keep a visible explanation until the next data-driven refresh or
       // user toggle of the level.
       const detail = await res.json().catch(() => ({}));
-      tree.staleNotice.set(parentId || '', detail.detail?.message || 'Task tree changed while loading');
-      tree.levels.delete(parentId || '');
+      tree.staleNotice.set(key, detail.detail?.message || 'Task tree changed while loading');
+      tree.levels.delete(key);
       return fetchLevel(parentId);
     }
     if (!res.ok) throw new Error('tree fetch failed: ' + res.status);
     const page = await res.json();
+    if (gen !== tree.gen || tree.levelEpoch.get(key) !== epoch) return null; // superseded
     revision = page.tree_revision;
     for (const row of page.items) {
       tree.rows.set(row.id, row);
       if (!ids.includes(row.id)) ids.push(row.id);
     }
     cursor = page.next_cursor;
-    if (gen !== tree.gen) return null; // superseded by a newer view
   } while (cursor);
-  tree.levels.set(parentId || '', {ids, nextCursor: null, revision, fetched: true});
+  tree.levels.set(key, {ids, nextCursor: null, revision, fetched: true});
   return ids;
 }
 
-async function ensureLevel(parentId) {
+async function ensureLevel(parentId, opts = {}) {
   const key = parentId || '';
-  if (tree.levels.get(key)?.fetched) return tree.levels.get(key).ids;
-  if (tree.loading.has(key)) return null;
+  if (!opts.force) {
+    if (tree.levels.get(key)?.fetched) return tree.levels.get(key).ids;
+    if (tree.loading.has(key)) return null;
+  }
+  // A forced refetch (live data-change refresh) bypasses the in-flight guard:
+  // the change landed after the running fetch started, so waiting for it would
+  // drop the fresher page and leave the level empty until the next event.
   tree.loading.add(key);
   try {
     return await fetchLevel(parentId);
@@ -437,14 +450,19 @@ function highlightNode(nodeId) {
 }
 
 // Expand the full path to *nodeId* (server-provided ancestor chain), then
-// highlight it. Used on deep links/reload and by search.
-async function revealNode(nodeId, ancestorRows) {
-  const chain = (ancestorRows || []).slice().reverse().concat(rowOf(nodeId) ? [rowOf(nodeId)] : []);
-  for (const row of chain) {
-    if (!row) continue;
-    tree.rows.set(row.id, row);
-    tree.expanded.add(row.id);
-    await ensureLevel(row.id);
+// highlight it. Used on deep links/reload and by search. The chain entries may
+// be full rows (search hits) or bare refs ({id, name} from the session
+// detail): bare refs are NEVER cached as rows — tree_page fetches are the only
+// row source, so every rendered row carries the server's derived facts.
+async function revealNode(nodeId, ancestorRefs) {
+  const chainIds = (ancestorRefs || [])
+    .map((a) => (typeof a === 'string' ? a : a.id))
+    .reverse();
+  chainIds.push(nodeId);
+  for (const id of chainIds) {
+    if (id === nodeId) break;
+    tree.expanded.add(id);
+    await ensureLevel(id);
   }
   tree.expanded.delete(nodeId); // selecting a node does not force-open it
   persistExpanded();
@@ -464,11 +482,24 @@ function onSessionShown(session) {
     highlightNode(session.id);
     return;
   }
-  // The node is not rendered (fresh deep link or collapsed path): fetch the
-  // ancestor path from the session detail and reveal it.
-  fetch('/api/sessions/' + session.id)
+  // The node is not rendered (fresh deep link or collapsed path): one bounded
+  // detail read learns its place AND its derived visibility — a completed
+  // worker's autoarchive is a row fact on the detail, not session status —
+  // then reveals the full path. A deep link to an archived node implies
+  // archived visibility; the toggle reflects it so the state the user sees is
+  // the state they can change. Cached levels predate the flip: drop them so
+  // the reveal refetches with archived rows included.
+  fetch('/api/sessions/' + session.id, {cache: 'no-store'})
     .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
-    .then((detail) => revealNode(session.id, detail.ancestors || []))
+    .then(async (detail) => {
+      if (detail.archived && !tree.includeArchived) {
+        tree.includeArchived = true;
+        const box = document.getElementById('tree-show-archived');
+        if (box) box.checked = true;
+        tree.levels.clear();
+      }
+      await revealNode(session.id, detail.ancestors || []);
+    })
     .catch((err) => console.error('onSessionShown reveal failed:', err));
 }
 
@@ -509,7 +540,7 @@ async function refreshAffectedLevels(sessionIds) {
       // The node was never rendered: one bounded detail read learns its place
       // (task_parent_id + the ancestor chain), never a whole-tree rescan.
       try {
-        const res = await fetch('/api/sessions/' + encodeURIComponent(sid));
+        const res = await fetch('/api/sessions/' + encodeURIComponent(sid), {cache: 'no-store'});
         if (res.ok) {
           const detail = await res.json();
           const chain = [detail, ...(detail.ancestors || [])]; // nearest-first
@@ -528,7 +559,7 @@ async function refreshAffectedLevels(sessionIds) {
     if (rowOf(sid) && tree.expanded.has(sid)) levels.add(sid);
   }
   for (const level of levels) invalidateLevel(level);
-  for (const level of levels) await ensureLevel(level === '' ? null : level);
+  for (const level of levels) await ensureLevel(level === '' ? null : level, {force: true});
   // Fresh server facts landed: a prior pagination-conflict explanation is
   // obsolete.
   tree.staleNotice.clear();
@@ -551,7 +582,7 @@ async function searchTree(query) {
   }
   renderTreeWithMessage('Searching tasks...');
   try {
-    const res = await fetch('/api/sessions/tree/search?q=' + encodeURIComponent(query.trim()));
+    const res = await fetch('/api/sessions/tree/search?q=' + encodeURIComponent(query.trim()), {cache: 'no-store'});
     if (!res.ok) throw new Error('tree search failed: ' + res.status);
     const body = await res.json();
     if (gen !== tree.gen) return;
@@ -582,8 +613,22 @@ function renderTreeWithMessage(message) {
   nav.appendChild(p);
 }
 
+// Idempotent expansion (unlike toggleTreeNode): used by automation and by
+// reveal paths that must not collapse an already-open level.
+async function ensureExpanded(nodeId) {
+  tree.expanded.add(nodeId);
+  persistExpanded();
+  await ensureLevel(nodeId);
+  const rowEl = document.getElementById('tree-node-' + nodeId);
+  if (rowEl && tree.expanded.has(nodeId)) {
+    document.getElementById(childrenContainerId(nodeId))?.remove();
+    rowEl.after(buildChildrenContainer(nodeId, subtreeDepthOf(nodeId) + 1));
+  }
+}
+
 const API = {
   enterTreeFilter,
+  ensureExpanded,
   onSessionShown,
   onTreeChanged,
   searchTree,

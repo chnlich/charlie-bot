@@ -39,7 +39,7 @@ async function refresh() {
   panel.historical = null;
   panel.historicalError = null;
   try {
-    const res = await fetch('/api/sessions/' + sessionId);
+    const res = await fetch('/api/sessions/' + sessionId, {cache: 'no-store'});
     if (!res.ok) throw new Error('detail failed: ' + res.status);
     const detail = await res.json();
     if (isStale(flight)) return;
@@ -60,7 +60,7 @@ async function refreshPreview(flight) {
   flight = flight || {sessionId, gen: panel.gen};
   const params = panel.kind ? ('?kind=' + encodeURIComponent(panel.kind)) : '';
   try {
-    const res = await fetch('/api/sessions/' + sessionId + '/effective-prompt' + params);
+    const res = await fetch('/api/sessions/' + sessionId + '/effective-prompt' + params, {cache: 'no-store'});
     const body = await res.json().catch(() => ({}));
     if (isStale(flight)) return;
     if (!res.ok) {
@@ -83,7 +83,7 @@ async function refreshCurrentRun(flight) {
   if (!sessionId) return;
   flight = flight || {sessionId, gen: panel.gen};
   try {
-    const res = await fetch('/api/sessions/' + sessionId + '/runs?limit=100');
+    const res = await fetch('/api/sessions/' + sessionId + '/runs?limit=100', {cache: 'no-store'});
     if (!res.ok) throw new Error('runs failed: ' + res.status);
     const page = await res.json();
     if (isStale(flight)) return;
@@ -96,7 +96,7 @@ async function refreshCurrentRun(flight) {
       render();
       return;
     }
-    const ctxRes = await fetch('/api/sessions/' + sessionId + '/runs/' + encodeURIComponent(current.id) + '/context');
+    const ctxRes = await fetch('/api/sessions/' + sessionId + '/runs/' + encodeURIComponent(current.id) + '/context', {cache: 'no-store'});
     const ctxBody = await ctxRes.json().catch(() => ({}));
     if (isStale(flight)) return;
     if (!ctxRes.ok) {
@@ -124,7 +124,7 @@ async function showHistoricalRun(runId) {
   if (!sessionId || !runId) return;
   const flight = {sessionId, gen: ++panel.gen};
   try {
-    const res = await fetch('/api/sessions/' + sessionId + '/runs/' + encodeURIComponent(runId) + '/context');
+    const res = await fetch('/api/sessions/' + sessionId + '/runs/' + encodeURIComponent(runId) + '/context', {cache: 'no-store'});
     const body = await res.json().catch(() => ({}));
     if (isStale(flight)) return;
     if (!res.ok) {
@@ -165,9 +165,11 @@ function sectionTitle(text) {
   return el('h3', 'text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2', text);
 }
 
-function sourceLine(source) {
-  // One source row: scope, readable ref, owning node (local rules only),
-  // delivery (full text vs index). Built with textContent — refs are data.
+function sourceLine(source, blockDelivery) {
+  // One source row: scope, readable ref, owning node (local rules only). The
+  // full-vs-index delivery is a BLOCK-level fact (one block = one injection),
+  // carried by every source row of that block. Built with textContent — refs
+  // are data.
   const row = el('div', 'flex items-center gap-2 flex-wrap text-xs py-0.5');
   const scopeClasses = {
     base: 'border-slate-600 text-slate-300',
@@ -180,7 +182,7 @@ function sourceLine(source) {
   if (source.source_session_id) {
     row.appendChild(el('span', 'text-slate-500', 'owner ' + source.source_session_id.slice(0, 8)));
   }
-  if (source.delivery === 'index') {
+  if (blockDelivery === 'index') {
     row.appendChild(el('span', 'border border-amber-500/50 text-amber-300 rounded px-1 py-px', 'index only'));
   }
   return row;
@@ -190,7 +192,7 @@ function blockCard(block, opts) {
   const card = el('div', 'rounded-lg border border-slate-700 bg-slate-800/60 p-3 space-y-1.5');
   const head = el('div', 'flex items-center justify-between gap-2 flex-wrap');
   const sources = el('div', 'space-y-0.5 min-w-0 flex-1');
-  for (const s of block.sources) sources.appendChild(sourceLine(s));
+  for (const s of block.sources) sources.appendChild(sourceLine(s, block.delivery));
   head.appendChild(sources);
   head.appendChild(el('span', 'text-[11px] text-slate-500 whitespace-nowrap', (opts && opts.chars) ? (opts.chars + ' chars') : (block.text.length + ' chars')));
   card.appendChild(head);

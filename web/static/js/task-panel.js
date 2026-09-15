@@ -113,7 +113,7 @@ async function refresh() {
   if (!sessionId) return;
   const flight = {sessionId: panel.sessionId, gen: ++panel.gen};
   try {
-    const res = await fetch('/api/sessions/' + sessionId);
+    const res = await fetch('/api/sessions/' + sessionId, {cache: 'no-store'});
     if (!res.ok) throw new Error('task detail failed: ' + res.status);
     const detail = await res.json();
     if (isStale(flight)) return; // a late answer never replaces the active node's editor
@@ -121,10 +121,10 @@ async function refresh() {
     render();
     // The runs page and pending inputs feed the completion/acknowledgement
     // pickers; both are read-only projections of server facts.
-    fetch('/api/sessions/' + sessionId + '/runs?limit=100').then((r) => (r.ok ? r.json() : {items: []}))
+    fetch('/api/sessions/' + sessionId + '/runs?limit=100', {cache: 'no-store'}).then((r) => (r.ok ? r.json() : {items: []}))
       .then((page) => { if (!isStale(flight)) { panel.runs = page.items || []; renderRunsPicker(); } })
       .catch((err) => console.error('runs fetch failed:', err));
-    fetch('/api/sessions/' + sessionId + '/task-inputs/pending').then((r) => (r.ok ? r.json() : {items: []}))
+    fetch('/api/sessions/' + sessionId + '/task-inputs/pending', {cache: 'no-store'}).then((r) => (r.ok ? r.json() : {items: []}))
       .then((page) => { if (!isStale(flight)) { panel.pendingInputs = page.items || []; renderPendingInputs(); } })
       .catch((err) => console.error('pending inputs fetch failed:', err));
   } catch (err) {
@@ -345,7 +345,11 @@ async function saveTask() {
     method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify(body),
   });
   if (isStale(flight)) return; // the node changed mid-request: never write its result here
-  await handleMutationResponse(res, 'Save task', () => saveDraft(sessionId, null));
+  await handleMutationResponse(res, 'Save task', () => {
+    // Clear the draft only when the editor still holds exactly what was just
+    // saved; edits typed while the save was in flight stay as the draft.
+    if (JSON.stringify(readEditorDraft()) === JSON.stringify(draft)) saveDraft(sessionId, null);
+  });
 }
 
 // -- actions -----------------------------------------------------------------
@@ -600,7 +604,7 @@ function openMoveModal(detail) {
 
   // Candidates come from the server's own tree rows: open managers only,
   // excluding the moving subtree (which the server also refuses).
-  fetch('/api/sessions/tree?include_archived=false&limit=500').then((r) => (r.ok ? r.json() : {items: []}))
+  fetch('/api/sessions/tree?include_archived=false&limit=500', {cache: 'no-store'}).then((r) => (r.ok ? r.json() : {items: []}))
     .then((page) => {
       const exclude = new Set([detail.id]);
       for (const row of page.items || []) {

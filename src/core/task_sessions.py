@@ -287,6 +287,14 @@ class TaskTreeManager:
     self._index = None
     self._index_generation += 1
 
+  def invalidate_tree_index(self) -> None:
+    """A SessionManager-level write (legacy rename) changed tree inputs.
+
+    Tree-node facts normally mutate through this owner (which invalidates in
+    _save_meta); the legacy rename path writes through the SessionManager and
+    must drop the projection cache here or tree_page serves a stale name."""
+    self._invalidate_index()
+
   def _build_index_sync(self) -> "_TreeIndex":
     sessions_dir = self._cfg.sessions_dir
     root_sig = (0, 0)
@@ -913,6 +921,7 @@ class TaskTreeManager:
           await self._apply_prompt_change(session_id, meta, scope, getattr(req, field))
       meta.schema_version = 2
       await self._save_meta(meta)
+      await self.events.notify_tree_changed(session_id, ET.PROMPT_CHANGED if fs & {"subtree_prompt", "node_prompt"} else "task_updated")
       return meta
 
   async def set_presentation(self, session_id: str, presentation: str) -> SessionMetadata:
@@ -932,6 +941,7 @@ class TaskTreeManager:
       if meta.presentation != presentation:
         meta.presentation = presentation  # type: ignore[assignment]
         await self._save_meta(meta)
+        await self.events.notify_tree_changed(session_id, "presentation_updated")
       return meta
 
   def _children_count(self, session_id: str) -> int:

@@ -25,10 +25,10 @@ const PREVIEW = {
   char_count: 42,
   overlay: null,
   blocks: [
-    {text: 'base template text', sources: [{scope: 'base', source_ref: 'base:manager_turn', source_session_id: null, delivery: 'full'}]},
-    {text: 'memory index text', sources: [{scope: 'memory', source_ref: 'memory:alpha', source_session_id: null, delivery: 'index'}]},
-    {text: 'subtree shared', sources: [{scope: 'subtree', source_ref: 'prompt_bodies/sub-ref-1.md', source_session_id: 'node-1', delivery: 'full'}]},
-    {text: 'node local', sources: [{scope: 'node', source_ref: 'prompt_bodies/node-ref-1.md', source_session_id: 'node-1', delivery: 'full'}]},
+    {text: 'base template text', delivery: 'full', sources: [{scope: 'base', source_ref: 'base:manager_turn', source_session_id: null}]},
+    {text: 'memory index text', delivery: 'index', sources: [{scope: 'memory', source_ref: 'memory:alpha', source_session_id: null}]},
+    {text: 'subtree shared', delivery: 'full', sources: [{scope: 'subtree', source_ref: 'prompt_bodies/sub-ref-1.md', source_session_id: 'node-1'}]},
+    {text: 'node local', delivery: 'full', sources: [{scope: 'node', source_ref: 'prompt_bodies/node-ref-1.md', source_session_id: 'node-1'}]},
   ],
 };
 
@@ -89,8 +89,8 @@ test('current run vs next run: changed sources are outlined from server facts', 
     prompt_hash: 'c'.repeat(64),
     char_count: 30,
     blocks: [
-      {text: 'base template text', sources: [{scope: 'base', source_ref: 'base:manager_turn', source_session_id: null, delivery: 'full'}]},
-      {text: 'old subtree rule', sources: [{scope: 'subtree', source_ref: 'prompt_bodies/old.md', source_session_id: 'node-1', delivery: 'full'}]},
+      {text: 'base template text', delivery: 'full', sources: [{scope: 'base', source_ref: 'base:manager_turn', source_session_id: null}]},
+      {text: 'old subtree rule', delivery: 'full', sources: [{scope: 'subtree', source_ref: 'prompt_bodies/old.md', source_session_id: 'node-1'}]},
     ],
   };
   install(context, {

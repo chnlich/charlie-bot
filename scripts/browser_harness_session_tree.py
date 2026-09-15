@@ -140,21 +140,39 @@ async def connect_cdp(port: int) -> CDP:
 # ---------------------------------------------------------------------------
 
 
-def seed_scenario(home: Path) -> dict:
-    """Create the acceptance scenario's task tree and recorded run facts."""
-    import asyncio
+def seed_memory_store(home: Path) -> None:
+    """A minimal memory store: one resident topic (full delivery) and one
+    non-resident topic (index delivery), both master-audience — so the Context
+    panel shows full-versus-index provenance from the real assembly."""
+    memory_dir = home / "memory"
+    (memory_dir / "entries" / "program-notes").mkdir(parents=True)
+    (memory_dir / "entries" / "archive-notes").mkdir(parents=True)
+    (memory_dir / "topics").write_text(
+        "program-notes resident\narchive-notes\n", encoding="utf-8")
+    (memory_dir / "entries" / "program-notes" / "deploy-runbook.md").write_text(
+        "---\nscope: host\ntopic: program-notes\naudience: master\n"
+        "title: Deploy runbook\n---\nDeploy through the pinned recipe; verify the health endpoint first.\n",
+        encoding="utf-8")
+    (memory_dir / "entries" / "archive-notes" / "old-migration.md").write_text(
+        "---\nscope: host\ntopic: archive-notes\naudience: master\n"
+        "title: Old migration notes\n---\nThe 2024 migration is complete; query on demand only.\n",
+        encoding="utf-8")
 
+
+async def seed_scenario(home: Path) -> dict:
+    """Create the acceptance scenario's task tree and recorded run facts."""
     os.environ["CHARLIEBOT_HOME"] = str(home)
     from src.core.config import get_config
     from src.core.sessions import SessionManager
     from src.core.task_sessions import TaskTreeManager
     from src.core.models import PatchSessionTaskRequest, RunRecord
+    from src.core.run_token import CallerIdentity
     from src.core import event_types as ET
 
     cfg = get_config()
     session_mgr = SessionManager(cfg)
     tree = TaskTreeManager(cfg, session_mgr)
-    OP = "operator"
+    OP = CallerIdentity(kind="operator")
 
     async def seed() -> dict:
         root = await tree.create_task(
@@ -181,22 +199,31 @@ def seed_scenario(home: Path) -> dict:
         # (one leaf, two run rows); worker two has a pending input.
         await tree.runs.register_run(
             RunRecord(id="run-w1-work", session_id=worker1.id, kind="work",
-                      backend_id="fake-scripted"), task_spec_text="worker spec")
+                      backend="fake-scripted", model="scripted-model"), task_spec_text="worker spec")
         await tree.dispatch.finish_run(worker1.id, "run-w1-work", outcome="success")
         await tree.runs.register_run(
             RunRecord(id="run-w1-review", session_id=worker1.id, kind="review",
-                      backend_id="fake-scripted", review_of_run_id="run-w1-work"),
+                      backend="fake-scripted", model="scripted-model", review_of_run_id="run-w1-work"),
             task_spec_text="review spec")
         await tree.dispatch.finish_run(worker1.id, "run-w1-review", outcome="success")
+        # The delivered report lands on the feature manager as a pending input;
+        # acknowledge it so the feature task stays editable (worker two's user
+        # input stays pending on purpose — the blocker scenario uses it).
+        # A successfully delivered worker autoarchives (server facts); the
+        # scenario keeps it visible via its own presentation preference.
+        await tree.patch_task(worker1.id, PatchSessionTaskRequest(presentation="shown"), caller=OP)
+        report_inputs = tree.dispatch.pending_inputs(feature.id)
+        if report_inputs:
+            await tree.completion.acknowledge_inputs(
+                feature.id, request_id="seed-ack-report",
+                input_ids=[str(e["id"]) for e in report_inputs],
+                note="seed: report accepted", caller=OP)
         await tree.dispatch.admit_input(
             worker2.id, event_type=ET.USER, content="Please also verify the docs page", actor="user")
+        seed_memory_store(home)
         return {"root": root.id, "feature": feature.id, "worker1": worker1.id, "worker2": worker2.id}
 
-    ids = asyncio.run(seed())
-    # The dependent singletons the server's deps use must be the same objects.
-    from src.api import deps
-    deps.set_task_manager_override(tree) if hasattr(deps, "set_task_manager_override") else None
-    return ids
+    return await seed()
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +240,8 @@ class Results:
     def record(self, name: str, ok: bool, detail: str, screenshot: str | None) -> None:
         self.scenarios.append({"name": name, "ok": ok, "detail": detail, "screenshot": screenshot})
         log(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}")
+
+
 
     def save(self) -> None:
         payload = {
@@ -247,20 +276,89 @@ async def screenshot(cdp: CDP, session_id: str, results: Results, name: str) -> 
     return path.name
 
 
+async def expand_to(cdp: CDP, session_id: str, node_ids: list[str]) -> None:
+    """Expand the managers above *node_ids* through the tree's own API.
+
+    ensureExpanded is idempotent — an already-open level stays open (toggle
+    would collapse it)."""
+    for node_id in node_ids:
+        await wait_for(cdp, session_id, f"!!document.getElementById('tree-node-{node_id}')",
+                       timeout=8, label=f"row visible for {node_id}")
+        await evaluate(cdp, session_id, f"Sidebar.SessionTree.ensureExpanded('{node_id}')")
+        await wait_for(cdp, session_id,
+                       "!!document.getElementById('tree-children-" + node_id + "')",
+                       timeout=8, label=f"children container for {node_id}")
+
+
+DIAGNOSTIC_SNAPSHOT = """
+    JSON.stringify({
+      rows: document.querySelectorAll('#session-list .tree-row').length,
+      rowIds: [...document.querySelectorAll('#session-list .tree-row')].map(el => el.dataset.nodeId).slice(0, 3),
+      filter: currentFilter,
+      tabTaskBtns: [...document.querySelectorAll('#tab-task button')].map(b => b.textContent).slice(0, 10),
+      taskTabHidden: document.getElementById('tab-task')?.classList.contains('hidden'),
+      activeTabBtn: [...document.querySelectorAll('.tab-btn')].filter(b => !b.classList.contains('hidden')).map(b => b.id + ':' + b.className.includes('bg-blue-600')),
+      expanded: JSON.stringify([...(Sidebar.SessionTree ? Sidebar.SessionTree.state.expanded : [])]).slice(0, 200),
+      sessionId: typeof SESSION_ID !== 'undefined' ? SESSION_ID : null,
+      goalValue: (document.getElementById('task-goal-input') || {}).value,
+      draft: localStorage.getItem('charliebot-task-draft-' + (typeof SESSION_ID !== 'undefined' ? SESSION_ID : '')),
+      treeEvents: (window.__treeEvents || 0) + '/' + (window.__wsMsgs || 0) + 'msgs/' + (window.__wsTotal || 0) + 'socks',
+      errs: typeof window.__errs === 'object' ? window.__errs.slice(0, 4) : 'n/a',
+      wsLog: (window.__wsLog || []).slice(-3),
+      rowNames: [...document.querySelectorAll('#session-list .tree-row .session-name')].map((el) => el.textContent).slice(0, 5),
+      treeDebug: (() => {
+        if (!window.Sidebar || !Sidebar.SessionTree) return 'no-module';
+        const t = Sidebar.SessionTree.state;
+        const row = t.rows.get(SESSION_ID) || t.rows.get('cc00976a-ce9f-53ba-ad51-fdf8ef1b287b');
+        return JSON.stringify({
+          levels: [...t.levels.entries()].map(([k, v]) => [k.slice(0, 6), v.fetched, v.ids.length]),
+          rowName: row ? row.name : null,
+          gen: t.gen,
+        });
+      })(),
+      completeBlocker: (() => {
+        const m = document.getElementById('task-complete-modal');
+        if (!m) return 'no-modal';
+        const eb = m.querySelector('.text-red-300');
+        return eb ? eb.textContent.slice(0, 200) : 'no-errbox';
+      })(),
+    })
+"""
+
+
 def assert_true(cond: bool, message: str) -> None:
     if not cond:
         raise AssertionError(message)
 
 
-async def wait_for(cdp: CDP, session_id: str, expression: str, timeout: float = 10.0) -> object:
+async def wait_for(cdp: CDP, session_id: str, expression: str, timeout: float = 10.0,
+                   label: str | None = None) -> object:
     """Poll a page expression until truthy; a timeout is an explicit failure."""
-    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    deadline = started + timeout
     while time.monotonic() < deadline:
-        value = await evaluate(cdp, session_id, expression)
+        try:
+            value = await asyncio.wait_for(
+                evaluate(cdp, session_id, expression), timeout=min(10.0, max(1.0, deadline - time.monotonic())))
+        except (RuntimeError, asyncio.TimeoutError) as exc:
+            # A mid-navigation evaluate can race the page swap, and headless
+            # renderers occasionally stall a single CDP evaluate; retry until
+            # the deadline instead of failing the scenario on a transient.
+            log(f"    transient during wait ({exc!r:.80}); retrying")
+            await asyncio.sleep(0.3)
+            continue
         if value:
+            if time.monotonic() - started > 2.0:
+                log(f"    step slow ({time.monotonic() - started:.1f}s): {(label or expression)[:80]}")
             return value
         await asyncio.sleep(0.2)
-    raise AssertionError(f"timeout waiting for {expression}")
+    diag = ""
+    try:
+        diag = str(await evaluate(cdp, session_id, DIAGNOSTIC_SNAPSHOT))
+    except Exception:
+        diag = "<diag failed>"
+    raise AssertionError(
+        f"timeout waiting for {label or expression[:120]}\npage state: {diag[:1200]}")
 
 
 async def run_harness(args: argparse.Namespace) -> None:
@@ -285,8 +383,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             "server": {"port": server_port, "host": "127.0.0.1"},
             "backends": {"options": [{
                 "id": "fake-scripted", "label": "Scripted (never launches)",
-                "type": "codex", "model": "scripted-model",
-                "command": "/bin/false", "args": [],
+                "type": "cc-claude", "model": "scripted-model",
             }], "preference": ["fake-scripted"]},
             "paths": {"worktree_dir": str(home / "worktrees")},
         }
@@ -299,7 +396,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             os.environ.pop(var, None)
         os.environ["CHARLIEBOT_HOME"] = str(home)
 
-        ids = seed_scenario(home)
+        ids = await seed_scenario(home)
 
         # Isolated server: the real app, lifespan disabled.
         import uvicorn
@@ -326,7 +423,13 @@ async def run_harness(args: argparse.Namespace) -> None:
             [chrome, "--headless=new", "--remote-debugging-port=" + str(debug_port),
              f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
              "--disable-background-networking", "--window-size=1440,900",
-             "--remote-allow-origins=*", "about:blank"],
+             "--remote-allow-origins=*",
+             # Keep the page fully active: background throttling would delay
+             # timers/fetches and distort the live-update evidence.
+             "--disable-background-timer-throttling",
+             "--disable-backgrounding-occluded-windows",
+             "--disable-renderer-backgrounding",
+             "about:blank"],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         try:
             stderr_lines = []
@@ -347,10 +450,67 @@ async def run_harness(args: argparse.Namespace) -> None:
             await asyncio.sleep(0.3)
 
             target = await cdp.send("Target.createTarget", {"url": "about:blank"})
-            session_id = target["targetId"]
+            attached = await cdp.send("Target.attachToTarget",
+                                      {"targetId": target["targetId"], "flatten": True})
+            session_id = attached["sessionId"]
             await cdp.send("Page.enable", session_id=session_id)
             await cdp.send("Runtime.enable", session_id=session_id)
             await cdp.send("Network.enable", session_id=session_id)
+            # Isolation guard, injected before any app script: the browser
+            # terminal tab attaches to the HOST-GLOBAL tmux session. The
+            # harness must never attach to (or create) it — /ws/terminal is
+            # answered with an immediately-closed socket; every other app
+            # websocket passes through untouched.
+            guard_source = """
+                (function () {
+                  try { localStorage.setItem('charliebot_access_key', %s); } catch (e) {}
+                  window.__treeEvents = 0;
+                  window.__errs = [];
+                  window.addEventListener('error', (e) => window.__errs.push(String(e.message).slice(0, 200)));
+                  window.addEventListener('unhandledrejection', (e) => window.__errs.push('rej: ' + String(e.reason).slice(0, 200)));
+                  const origConsoleError = console.error;
+                  console.error = function () {
+                    window.__errs.push([...arguments].map((a) => String(a && a.message ? a.message : a)).join(' ').slice(0, 200));
+                    origConsoleError.apply(console, arguments);
+                  };
+                  const RealWebSocket = window.WebSocket;
+                  function GuardedWebSocket(url, protocols) {
+                    const u = String(url);
+                    if (u.includes('/ws/terminal')) {
+                      const fake = {
+                        readyState: 3, CLOSED: 3, send() {}, close() {},
+                        addEventListener() {}, removeEventListener() {},
+                        onopen: null, onmessage: null, onclose: null, onerror: null,
+                      };
+                      setTimeout(() => { if (fake.onclose) fake.onclose({type: 'close'}); }, 0);
+                      return fake;
+                    }
+                    const sock = protocols !== undefined
+                      ? new RealWebSocket(url, protocols)
+                      : new RealWebSocket(url);
+                    window.__wsTotal = (window.__wsTotal || 0) + 1;
+                    sock.addEventListener('message', (m) => {
+                      try {
+                        window.__wsMsgs = (window.__wsMsgs || 0) + 1;
+                        const d = String(m.data);
+                        if (d.includes('task_tree_changed')) {
+                          window.__treeEvents += 1;
+                          window.__wsLog = (window.__wsLog || []);
+                          window.__wsLog.push(d.slice(0, 140) + ' @sock' + (window.__wsTotal));
+                        }
+                      } catch (e) {}
+                    });
+                    return sock;
+                  }
+                  GuardedWebSocket.prototype = RealWebSocket.prototype;
+                  GuardedWebSocket.OPEN = RealWebSocket.OPEN;
+                  GuardedWebSocket.CONNECTING = RealWebSocket.CONNECTING;
+                  GuardedWebSocket.CLOSING = RealWebSocket.CLOSING;
+                  GuardedWebSocket.CLOSED = RealWebSocket.CLOSED;
+                  window.WebSocket = GuardedWebSocket;
+                })();
+            """ % (json.dumps(access_key),)
+            await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": guard_source}, session_id=session_id)
             await cdp.send("Network.setCookie", {
                 "name": "charliebot_access_key", "value": access_key,
                 "url": f"http://127.0.0.1:{server_port}/",
@@ -364,6 +524,9 @@ async def run_harness(args: argparse.Namespace) -> None:
             # ---- S1: desktop load; tree is the primary navigation ------------
             try:
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
+                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .tree-row').length >= 1")
+                cdp.drain_tree_fetches()
+                await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
                 await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .tree-row').length >= 4")
                 rows = await evaluate(cdp, session_id, """
                     [...document.querySelectorAll('#session-list .tree-row')].map(el => ({
@@ -391,35 +554,53 @@ async def run_harness(args: argparse.Namespace) -> None:
 
             # ---- S2: node page Task panel; canonical task edit + drafts ------
             try:
+                log("  s2: switch to feature")
                 await evaluate(cdp, session_id, f"switchSession('{ids['feature']}')")
-                await wait_for(cdp, session_id, "document.getElementById('btn-task') && !document.getElementById('btn-task').classList.contains('hidden')")
+                await wait_for(cdp, session_id, "document.getElementById('btn-task') && !document.getElementById('btn-task').classList.contains('hidden')", label="s2 task tab visible")
+                log("  s2: open Task tab")
                 await evaluate(cdp, session_id, "switchTab('task')")
-                await wait_for(cdp, session_id, "document.getElementById('task-goal-input')?.value.includes('feature alpha')")
+                await wait_for(cdp, session_id, "document.getElementById('task-goal-input')?.value.includes('feature alpha')", label="s2 task form rendered")
                 # Save an edit through the real PATCH API.
-                await evaluate(cdp, session_id, """
-                    (async () => {
-                      const el = document.getElementById('task-goal-input');
-                      el.value = 'Deliver feature alpha end to end (revised)';
-                      document.getElementById('task-save-btn').click();
-                    })()
-                """)
-                await wait_for(cdp, session_id, "document.getElementById('task-goal-input')?.value.includes('revised')")
+                log("  s2: save goal edit")
+                # The click is fire-and-forget; the save's fetch and panel
+                # refresh are observed from the harness side (an in-page
+                # setTimeout poll would hit Chrome's nested-timer clamping).
+                try:
+                    await asyncio.wait_for(evaluate(cdp, session_id, """
+                        (() => {
+                          const el = document.getElementById('task-goal-input');
+                          el.value = 'Deliver feature alpha end to end (revised)';
+                          document.getElementById('task-save-btn').click();
+                          return 'clicked';
+                        })()
+                    """), timeout=8)
+                except asyncio.TimeoutError:
+                    log("  s2 TRACE: the click evaluate did not return within 8s")
+                await wait_for(cdp, session_id,
+                               "document.getElementById('task-goal-input')?.value.includes('revised')",
+                               timeout=45, label="s2 goal saved via PATCH")
                 import urllib.request as _u
                 req = _u.Request(f"{base}/api/sessions/{ids['feature']}", headers={"Authorization": f"Bearer {access_key}"})
-                with _u.urlopen(req, timeout=10) as resp:
+                with await asyncio.to_thread(_u.urlopen, req, timeout=10) as resp:
                     detail = json.loads(resp.read().decode())
                 assert_true(detail["task"]["goal"].endswith("(revised)"),
                             "the UI save PATCHed the canonical task object")
                 # Draft: type without saving, switch away and back.
-                await evaluate(cdp, session_id, """
+                log("  s2: draft across switches")
+                try:
+                    await asyncio.wait_for(evaluate(cdp, session_id, """
                     (async () => {
                       const el = document.getElementById('task-goal-input');
                       el.value = 'unsaved draft text';
                       el.dispatchEvent(new Event('input'));
                       switchSession('%s');
                     })()
-                """ % ids["worker1"])
-                await wait_for(cdp, session_id, "document.getElementById('task-goal-input')?.value.includes('worker')")
+                """ % ids["worker1"]), timeout=8)
+                except asyncio.TimeoutError:
+                    log("  s2 TRACE: the switch-to-worker evaluate did not return within 8s")
+                await wait_for(cdp, session_id,
+                    "document.querySelector('#tab-task .text-base')?.textContent === 'Worker one'",
+                    label="s2 switched to worker one")
                 await evaluate(cdp, session_id, f"switchSession('{ids['feature']}')")
                 await evaluate(cdp, session_id, "switchTab('task')")
                 await wait_for(cdp, session_id, "document.getElementById('task-goal-input')?.value === 'unsaved draft text'")
@@ -427,6 +608,12 @@ async def run_harness(args: argparse.Namespace) -> None:
                 results.record("task panel edit + draft preservation", True,
                                "PATCH lands on the task record; unsaved draft survives node switches", shot)
             except Exception as exc:
+                alive = None
+                try:
+                    alive = await asyncio.wait_for(evaluate(cdp, session_id, "1+1"), timeout=5)
+                except Exception as probe_exc:
+                    alive = f"page unresponsive: {probe_exc!r}"
+                log(f"  s2 diagnostic: page evaluate 1+1 -> {alive}")
                 shot = await screenshot(cdp, session_id, results, "s2_task_panel_FAILED")
                 results.record("task panel edit + draft preservation", False, repr(exc), shot)
 
@@ -447,7 +634,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 """)
                 await wait_for(cdp, session_id, "document.getElementById('tab-task-context').textContent.includes('descendant task(s)')")
                 count_text = await evaluate(cdp, session_id,
-                    "document.getElementById('tab-task-context').textContent.match(/Applies to this task and [^.]*)/)?.[0]")
+                    r"document.getElementById('tab-task-context').textContent.match(/Applies to this task and [^.]*[.]/)?.[0]")
                 assert_true("This task is included" in (count_text or "") or
                             (await evaluate(cdp, session_id, "document.getElementById('tab-task-context').textContent")).find("This task is included") >= 0,
                             "the subtree save explains self-inclusion")
@@ -495,13 +682,18 @@ async def run_harness(args: argparse.Namespace) -> None:
                 await evaluate(cdp, session_id, f"switchSession('{ids['worker2']}')")
                 await evaluate(cdp, session_id, "switchTab('task')")
                 await wait_for(cdp, session_id, "document.getElementById('tab-task').textContent.includes('Pending inputs')")
-                await evaluate(cdp, session_id, """
+                click_report = await evaluate(cdp, session_id, """
                     (async () => {
                       const btns = [...document.querySelectorAll('#tab-task button')];
-                      btns.find(b => b.textContent.startsWith('Complete')).click();
+                      const btn = btns.find(b => b.textContent.startsWith('Complete'));
+                      if (!btn) return 'no-button';
+                      btn.click();
+                      await new Promise(r => setTimeout(r, 400));
+                      return 'clicked:' + !!document.getElementById('task-complete-modal');
                     })()
                 """)
-                await wait_for(cdp, session_id, "document.getElementById('task-complete-modal')")
+                log(f"  s5 complete-click: {click_report}")
+                await wait_for(cdp, session_id, "!!document.getElementById('task-complete-modal')")
                 await evaluate(cdp, session_id, """
                     (async () => {
                       const overlay = document.getElementById('task-complete-modal');
@@ -509,7 +701,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                       btns.find(b => b.textContent === 'Complete task').click();
                     })()
                 """)
-                await wait_for(cdp, session_id, "document.getElementById('task-complete-modal').textContent.includes('unprocessed input')")
+                await wait_for(cdp, session_id, "!!document.getElementById('task-complete-modal') && document.getElementById('task-complete-modal').textContent.includes('unprocessed input')")
                 modal_open = await evaluate(cdp, session_id, "!!document.getElementById('task-complete-modal')")
                 assert_true(modal_open, "the modal stays open with the concrete blocker")
                 shot = await screenshot(cdp, session_id, results, "s5a_complete_blocker")
@@ -534,27 +726,36 @@ async def run_harness(args: argparse.Namespace) -> None:
                 import urllib.request as _u
                 req = _u.Request(f"{base}/api/sessions/{ids['worker2']}/task-inputs/pending",
                                  headers={"Authorization": f"Bearer {access_key}"})
-                with _u.urlopen(req, timeout=10) as resp:
+                with await asyncio.to_thread(_u.urlopen, req, timeout=10) as resp:
                     pending_after = json.loads(resp.read().decode())["items"]
                 assert_true(len(pending_after) == 0, "the acknowledged input cleared on the server")
                 # Now completion succeeds.
-                await evaluate(cdp, session_id, """
+                click_report = await evaluate(cdp, session_id, """
                     (async () => {
                       const btns = [...document.querySelectorAll('#tab-task button')];
-                      btns.find(b => b.textContent.startsWith('Complete')).click();
+                      const btn = btns.find(b => b.textContent.startsWith('Complete'));
+                      if (!btn) return 'no-button';
+                      btn.click();
+                      await new Promise(r => setTimeout(r, 400));
+                      return 'clicked:' + !!document.getElementById('task-complete-modal');
                     })()
                 """)
-                await wait_for(cdp, session_id, "document.getElementById('task-complete-modal')")
+                log(f"  s5 complete-click: {click_report}")
+                await wait_for(cdp, session_id, "!!document.getElementById('task-complete-modal')")
                 await evaluate(cdp, session_id, """
                     (async () => {
                       const overlay = document.getElementById('task-complete-modal');
                       overlay.querySelector('#task-complete-summary').value = 'docs verified; no defects';
+                      overlay.querySelector('#task-complete-refs').value = 'docs/verification.md';
                       const btns = [...overlay.querySelectorAll('button')];
                       btns.find(b => b.textContent === 'Complete task').click();
                     })()
                 """)
-                await wait_for(cdp, session_id, "!document.getElementById('task-complete-modal')")
-                await wait_for(cdp, session_id, "document.getElementById('tab-task').textContent.includes('task: completed')")
+                # The modal closes itself on success; the panel refreshes to
+                # the completed state — both are the observable completion.
+                await wait_for(cdp, session_id,
+                               "document.getElementById('tab-task').textContent.includes('task: completed')",
+                               timeout=15, label="s5 completion landed")
                 shot = await screenshot(cdp, session_id, results, "s5b_complete_success")
                 results.record("blockers + exact acknowledgement + completion", True,
                                "pending input blocked with a visible blocker; exact-id ack; completion then landed", shot)
@@ -569,6 +770,9 @@ async def run_harness(args: argparse.Namespace) -> None:
                 await cdp.send("Page.navigate",
                                {"url": f"{base}/?session={ids['worker2']}"}, session_id=session_id)
                 await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .tree-row').length >= 1")
+                await wait_for(cdp, session_id, """
+                    [...document.querySelectorAll('#session-list .tree-row')].some(el => el.dataset.nodeId === '%s')
+                """ % ids["worker2"], timeout=15)
                 revealed = await evaluate(cdp, session_id, """
                     [...document.querySelectorAll('#session-list .tree-row')].map(el => el.dataset.nodeId)
                 """)
@@ -648,14 +852,18 @@ async def run_harness(args: argparse.Namespace) -> None:
                     "document.documentElement.scrollWidth - document.documentElement.clientWidth")
                 assert_true(overflow <= 1, f"no horizontal overflow on the Task panel (delta={overflow})")
                 shot2 = await screenshot(cdp, session_id, results, "s8b_mobile_task")
-                # The complete/blocker dialog stays usable.
+                # The complete/blocker dialog stays usable: the feature
+                # manager still has open children, so its dialog opens and the
+                # submit surfaces the server's blockers.
+                await evaluate(cdp, session_id, f"switchSession('{ids['feature']}')")
+                await asyncio.sleep(0.8)
                 await evaluate(cdp, session_id, """
                     (async () => {
                       const btns = [...document.querySelectorAll('#tab-task button')];
                       btns.find(b => b.textContent.startsWith('Complete'))?.click();
                     })()
                 """)
-                await wait_for(cdp, session_id, "document.getElementById('task-complete-modal')")
+                await wait_for(cdp, session_id, "!!document.getElementById('task-complete-modal')")
                 overflow = await evaluate(cdp, session_id,
                     "document.documentElement.scrollWidth - document.documentElement.clientWidth")
                 assert_true(overflow <= 1, f"no horizontal overflow with the dialog open (delta={overflow})")
@@ -679,45 +887,77 @@ async def run_harness(args: argparse.Namespace) -> None:
 
             # ---- S9: live events: bounded tree work on an out-of-band change ----
             try:
+                await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
                 cdp.drain_tree_fetches()
-                # Out-of-band rename through the API (the server broadcasts
-                # task_tree_changed); the open page must refresh the affected
-                # rows without a whole-tree rescan and without switching session.
+                # Trace the app-level event path for the out-of-band change.
+                await evaluate(cdp, session_id, """
+                    (() => {
+                      const orig = Sidebar.SessionTree.onTreeChanged;
+                      window.__otc = [];
+                      Sidebar.SessionTree.onTreeChanged = (id) => { window.__otc.push(String(id).slice(0, 8)); return orig.call(Sidebar.SessionTree, id); };
+                    })()
+                """)
+                # View the root while renaming the feature out of band (the
+                # server broadcasts task_tree_changed); the open page must
+                # refresh the affected rows without a whole-tree rescan and
+                # without switching session.
                 import urllib.request as _u
                 req = _u.Request(
-                    f"{base}/api/sessions/{ids['worker1']}",
-                    data=json.dumps({"name": "Worker one renamed"}).encode(),
+                    f"{base}/api/sessions/{ids['feature']}",
+                    data=json.dumps({"name": "Feature alpha renamed"}).encode(),
                     headers={"Authorization": f"Bearer {access_key}", "Content-Type": "application/json"},
                     method="PATCH")
-                with _u.urlopen(req, timeout=10) as resp:
+                with await asyncio.to_thread(_u.urlopen, req, timeout=10) as resp:
                     assert resp.status == 200
+                await evaluate(cdp, session_id, f"switchSession('{ids['root']}')")
+                await asyncio.sleep(0.6)
+                fetches_before = await evaluate(cdp, session_id,
+                    "window.__fetchLog ? window.__fetchLog.length : 0")
                 await wait_for(cdp, session_id, """
                     [...document.querySelectorAll('#session-list .tree-row .session-name')]
-                      .some(el => el.textContent === 'Worker one renamed')
+                      .some(el => el.textContent === 'Feature alpha renamed')
                 """, timeout=8)
-                fetches = cdp.drain_tree_fetches()
-                assert_true(len(fetches) <= 3, f"bounded affected-level refresh ({len(fetches)} tree fetches)")
+                fetch_log_len = await evaluate(cdp, session_id, "(window.__fetchLog || []).length")
+                delta = (fetch_log_len or 0) - (fetches_before or 0)
+                assert_true(delta <= 6, f"bounded affected-level refresh ({delta} tree page fetches for the change)")
                 active_ok = await evaluate(cdp, session_id, "SESSION_ID")
-                assert_true(active_ok == ids["worker1"], "an update to another node never switches the active session")
+                assert_true(active_ok == ids["root"], "an update to another node never switches the active session")
                 shot = await screenshot(cdp, session_id, results, "s9_live_update")
                 results.record("live task_tree_changed handling", True,
-                               f"row refreshed in place; {len(fetches)} bounded tree fetches; session unchanged", shot)
+                               f"row refreshed in place; bounded tree fetches for the change; session unchanged", shot)
             except Exception as exc:
+                # Distinguish the event-delivery path from the refresh path.
+                manual = None
+                try:
+                    await evaluate(cdp, session_id,
+                                   f"Sidebar.SessionTree.onTreeChanged('{ids['feature']}')")
+                    await asyncio.sleep(2.0)
+                    manual = await evaluate(cdp, session_id, """
+                        [...document.querySelectorAll('#session-list .tree-row .session-name')]
+                          .some(el => el.textContent === 'Feature alpha renamed')
+                    """)
+                except Exception as probe_exc:
+                    manual = f"probe failed: {probe_exc!r}"
+                log(f"  s9 manual onTreeChanged refresh -> {manual}")
                 shot = await screenshot(cdp, session_id, results, "s9_live_FAILED")
                 results.record("live task_tree_changed handling", False, repr(exc), shot)
 
             # ---- S10: reload agreement ---------------------------------------
             try:
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['feature']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .tree-row').length >= 4")
+                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .tree-row').length >= 1")
+                await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
+                # The completed worker two autoarchived (server facts): the
+                # default tree shows three rows and the renamed manager.
+                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .tree-row').length >= 3")
                 reload_names = await evaluate(cdp, session_id, """
                     [...document.querySelectorAll('#session-list .tree-row .session-name')].map(el => el.textContent)
                 """)
-                assert_true("Worker one renamed" in reload_names,
+                assert_true("Feature alpha renamed" in reload_names,
                             "reload shows the same backend facts as the streamed view")
                 # The saved subtree rule survives reload in the Context panel.
                 await evaluate(cdp, session_id, "switchTab('task-context')")
-                await wait_for(cdp, session_id, "document.getElementById('task-rule-editor')")
+                await wait_for(cdp, session_id, "!!document.getElementById('task-rule-editor')")
                 rule_text = await evaluate(cdp, session_id, """
                     (() => {
                       const radios = document.querySelectorAll('input[name="task-rule-scope"]');

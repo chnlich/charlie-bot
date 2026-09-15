@@ -983,8 +983,7 @@ async def test_events_route_gzip_click_ships_precompressed_body(tmp_path: Path) 
   assert first.headers["vary"] == "Accept-Encoding"
   assert gzip.decompress(first.body) == plain.body
 
-  with patch("src.api.sessions.gzip.compress",
-             gzip_explode_compress("repeat gzip click re-ran the deflate")):
+  with patch("src.api.sessions.gzip.compress", gzip_explode_compress("repeat gzip click re-ran the deflate")):
     second = await get_session_events_page(
         session.id, _page_request("gzip"), before=before, limit=limit, meta=meta, session_mgr=mgr)
   assert second.body == first.body

@@ -19,6 +19,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+from conftest import ROOT
 from conftest import cron_d_dir as _cron_d_dir
 from conftest import dump_yaml as _dump
 from conftest import write_cron_task as _write_task_text
@@ -37,8 +38,6 @@ from src.core.config import (
 )
 from src.core.init import init_charliebot_home, seed_default_cron_tasks
 from src.core.yaml_utils import load_yaml
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # --- helpers -----------------------------------------------------------------
 
@@ -309,7 +308,7 @@ def test_explicit_timezone_untouched(temp_home: Path) -> None:
 
 def test_memory_curator_prompts_no_host_paths() -> None:
   for filename in ("memory_selector.md", "memory_reviewer.md"):
-    body = (REPO_ROOT / "prompts" / "cron" / "memory_curator" / filename).read_text(encoding="utf-8")
+    body = (ROOT / "prompts" / "cron" / "memory_curator" / filename).read_text(encoding="utf-8")
     assert "/home/" not in body
     assert "chaoli" not in body
 

@@ -14,9 +14,8 @@ forgive a missing declaration.
 """
 
 import re
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from conftest import ROOT
 
 _MIRRORS = {
     "web/static/js/chat/artifacts.js": re.compile(r"FILE_SERVER_PREFIXES\s*=\s*\[([^]]*)\]"),

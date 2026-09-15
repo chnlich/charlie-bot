@@ -12,12 +12,13 @@ from types import SimpleNamespace
 
 import pytest
 import requests
+from conftest import ROOT
 
 from src.cli.artifact import main as artifact_main
 from src.core import artifact_check
 from src.core.artifact_wrap import ensure_vendored_katex, wrap_fragment
 
-_DRIVER = Path(__file__).resolve().parents[2] / "scripts" / "prerender_math.js"
+_DRIVER = ROOT / "scripts" / "prerender_math.js"
 
 # The session failure formulas plus the bracket classes: the same sources the
 # chat extension test pins, run here through the wrap driver so the two scanner

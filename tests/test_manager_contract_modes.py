@@ -18,12 +18,11 @@ project trees under ``tmp_path``; no live ``~/.charliebot`` state is touched.
 from pathlib import Path
 from types import SimpleNamespace
 
-from conftest import make_instruction_cfg
+from conftest import ROOT, make_instruction_cfg
 
 from src.agents import master_cc, master_cc_run
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-CONTRACT_TEXT = (REPO_ROOT / "prompts" / "project_manager.md").read_text(encoding="utf-8")
+CONTRACT_TEXT = (ROOT / "prompts" / "project_manager.md").read_text(encoding="utf-8")
 
 # The two mode markers, verbatim: the builder's identity parts carry them and
 # the contract's mode section keys on them.

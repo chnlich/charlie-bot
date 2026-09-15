@@ -15,11 +15,9 @@ constants the argparse layer needs single-home in `src.core.constants` (stdlib-o
 import json
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
+from conftest import ROOT
 
 HEAVY_MODULES = (
     "src.agents.backends.base",
@@ -66,7 +64,7 @@ def _run_probe(code: str) -> subprocess.CompletedProcess[str]:
   # (check=True) instead of parsing an empty stream.
   return subprocess.run(
       [sys.executable, "-c", code],
-      cwd=REPO_ROOT,
+      cwd=ROOT,
       capture_output=True,
       text=True,
       timeout=120,

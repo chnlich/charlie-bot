@@ -9,7 +9,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from conftest import ROOT
+
 SURFACE_DIRS = ("skills", "prompts")
 SURFACE_GLOBS = ("*.md", "*.html")
 FILE_SERVER_SKILL = ROOT / "skills" / "file-server" / "SKILL.md"

@@ -51,6 +51,7 @@ from pathlib import Path
 import pytest
 from conftest import (
     MASTER_RECOVERY_TASK_PREFIXES,
+    ROOT,
     _wait_for,
     await_recovery_tasks,
     patch_instructions_content,
@@ -75,8 +76,6 @@ from src.core.models import (
 from src.core.process import kill_process_group
 from src.core.sessions import SessionManager
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
 
 FAKE_SHIM = r"""#!/bin/sh
 # Fake `claude`: records argv + stdin prompt, emits claude-shaped NDJSON under
@@ -342,7 +341,7 @@ def _launch_driver(
   driver.write_text(DRIVER, encoding="utf-8")
   home.mkdir(exist_ok=True)
   env = dict(os.environ)
-  env["PYTHONPATH"] = str(REPO_ROOT)
+  env["PYTHONPATH"] = str(ROOT)
   env["SHIM_MODE"] = shim_mode
   env["SHIM_STATE"] = str(tmp_path / "shim_state")
   env["SHIM_SLEEP"] = "3"
@@ -367,7 +366,7 @@ def _launch_master_graceful_driver(tmp_path: Path, home: Path, shim: Path) -> tu
   driver.write_text(GRACEFUL_DRIVER, encoding="utf-8")
   home.mkdir(exist_ok=True)
   env = dict(os.environ)
-  env["PYTHONPATH"] = str(REPO_ROOT)
+  env["PYTHONPATH"] = str(ROOT)
   env["SHIM_MODE"] = "sleep_first"
   env["SHIM_STATE"] = str(tmp_path / "shim_state")
   env["SHIM_SLEEP"] = "5"
@@ -749,10 +748,10 @@ async def test_replayed_delegate_readback_lands_on_existing_thread(
         shim_mode="delegate",
         extra_env={
             "SHIM_DELEGATE_SESSION": session_id,
-            "SHIM_DELEGATE_REPO": str(REPO_ROOT),
+            "SHIM_DELEGATE_REPO": str(ROOT),
             "SHIM_DELEGATE_SPEC": str(spec_file),
             "CHARLIEBOT_HOME": str(home),
-            "PYTHONPATH": str(REPO_ROOT),
+            "PYTHONPATH": str(ROOT),
         })
   finally:
     black_hole.close()

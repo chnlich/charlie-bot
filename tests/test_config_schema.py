@@ -9,7 +9,7 @@ from typing import get_args, get_origin
 
 import pytest
 import yaml
-from conftest import backend_option
+from conftest import ROOT, backend_option
 from pydantic import BaseModel
 
 from src.core import config as config_module
@@ -222,7 +222,7 @@ def test_get_credentials_caches_until_the_file_changes(tmp_path: Path, monkeypat
 
 
 def test_credentials_example_covers_every_credentials_legacy_key() -> None:
-  example_path = Path(__file__).resolve().parents[1] / "configs" / "credentials.example.yaml"
+  example_path = ROOT / "configs" / "credentials.example.yaml"
   raw_lines = example_path.read_text(encoding="utf-8").splitlines()
   stripped = "\n".join(line[2:] if line.startswith("# ") else line for line in raw_lines)
   example = yaml.safe_load(stripped)
@@ -235,7 +235,7 @@ def test_credentials_example_covers_every_credentials_legacy_key() -> None:
     assert key in example[section], old_key
 
 
-EXAMPLE_PATH = Path(__file__).resolve().parents[1] / "configs" / "config.example.yaml"
+EXAMPLE_PATH = ROOT / "configs" / "config.example.yaml"
 
 STARTER_BACKEND_IDS = ["claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-tui"]
 

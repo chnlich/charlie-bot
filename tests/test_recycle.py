@@ -17,6 +17,7 @@ from conftest import (
 )
 from conftest import append_events as _append_events
 from conftest import archive_cutoff_events as _archive_cutoff_events
+from starlette.requests import Request
 
 from src.api.message_utils import SessionBootstrapData, build_session_bootstrap_data, build_session_view_data
 from src.api.sessions import _bootstrap_payload, get_session_events_page
@@ -24,6 +25,13 @@ from src.core import event_types as ET
 from src.core.models import SessionMetadata, ThreadMetadata, ThreadStatus
 from src.core.ndjson import count_ndjson_lines
 from src.core.sessions import SessionManager
+
+
+def _page_request(accept_encoding: str = "") -> Request:
+  """The events route's request seam with one header: direct calls stand in for
+  FastAPI's injection, and the empty default is the no-gzip client shape."""
+  headers = [(b"accept-encoding", accept_encoding.encode())] if accept_encoding else []
+  return Request({"type": "http", "headers": headers})
 
 
 def _write_thread(threads_dir: Path, thread_id: str, status: ThreadStatus, completed_at: datetime | None) -> None:
@@ -867,7 +875,7 @@ async def test_events_page_returns_raw_next_before_for_aggregated_messages(tmp_p
   # The 3 events aggregate into a single still-unflushed assistant draft. The
   # draft belongs to the streaming-preview surface, not to the bubble list, so
   # the committed-message ordinal domain is empty and the page is empty.
-  resp = await get_session_events_page(session.id, before=3, limit=3, meta=session, session_mgr=mgr)
+  resp = await get_session_events_page(session.id, _page_request(), before=3, limit=3, meta=session, session_mgr=mgr)
   page = json.loads(resp.body)
 
   assert page["next_before"] == 0

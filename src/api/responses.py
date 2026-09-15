@@ -56,5 +56,5 @@ class PreencodedJSONResponse(Response):
 
   media_type = "application/json"
 
-  def __init__(self, body: bytes) -> None:
-    super().__init__(content=body)
+  def __init__(self, body: bytes, headers: dict[str, str] | None = None) -> None:
+    super().__init__(content=body, headers=headers)

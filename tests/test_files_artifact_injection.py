@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import stub_credentials
+from conftest import gzip_explode_compress, stub_credentials
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.gzip import GZipMiddleware
@@ -295,11 +295,9 @@ def test_serve_file_gzip_repeat_view_recompresses_nothing(sessions_root: Path, m
   def explode_inject(html_text: str, session_id: str) -> str:
     raise AssertionError("repeat gzip view re-ran the artifact injection")
 
-  def explode_compress(*args: object, **kwargs: object) -> bytes:
-    raise AssertionError("repeat gzip view re-ran the deflate")
-
   monkeypatch.setattr(files_api, "_inject_artifact_ui", explode_inject)
-  monkeypatch.setattr(files_api.gzip, "compress", explode_compress)
+  monkeypatch.setattr(files_api.gzip, "compress",
+                      gzip_explode_compress("repeat gzip view re-ran the deflate"))
   resp = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
   assert resp.headers["content-encoding"] == "gzip"

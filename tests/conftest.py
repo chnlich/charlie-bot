@@ -785,6 +785,36 @@ def _page_request(accept_encoding: str = "") -> Request:
   return Request({"type": "http", "headers": headers})
 
 
+def gzip_explode_compress(message: str) -> Callable[..., bytes]:
+  """gzip.compress stand-in failing the test the moment any deflate runs.
+
+  The repeat-fetch tests install it in place of an API module's gzip.compress:
+  the second fetch of an unchanged body must serve the stored compressed form,
+  so the stand-in's raise is how a re-deflate fails the test. *message* names
+  the fetch shape the test drives.
+  """
+
+  def explode_compress(*args: object, **kwargs: object) -> bytes:
+    raise AssertionError(message)
+
+  return explode_compress
+
+
+def gzip_counting_compress(real_compress: Callable[..., bytes], calls: list[bytes]) -> Callable[..., bytes]:
+  """gzip.compress stand-in recording every body it deflates to *calls*.
+
+  The corpus-move tests install it in place of an API module's gzip.compress so
+  the assertion can pin the deflate count and the bytes the fresh pass read,
+  with *real_compress* captured before the install keeps producing true forms.
+  """
+
+  def counting_compress(data: bytes, *args: object, **kwargs: object) -> bytes:
+    calls.append(data)
+    return real_compress(data, *args, **kwargs)
+
+  return counting_compress
+
+
 def make_transcript(config_dir: Path, cc_session_id: str) -> Path:
   """Write a fake Claude Code session transcript under config_dir and return its path."""
   transcript = config_dir / "projects" / "slug" / f"{cc_session_id}.jsonl"

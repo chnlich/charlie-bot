@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from conftest import _page_request, make_home_session
+from conftest import _page_request, gzip_explode_compress, make_home_session
 from starlette.responses import Response
 
 from src.api import deps
@@ -66,10 +66,8 @@ async def test_switch_gzip_repeat_serves_memo_without_recompress(tmp_path: Path)
   with patch.object(deps, "_trigger_manager", TriggerManager(cfg, mgr)):
     first = await _call(get_session_view, session.id, _page_request("gzip"), meta, mgr, cfg)
 
-    def explode(data, compresslevel=9, *, mtime=None):
-      raise AssertionError("repeat switch fetch re-ran the deflate")
-
-    with patch("src.api.sessions.gzip.compress", explode):
+    with patch("src.api.sessions.gzip.compress",
+               gzip_explode_compress("repeat switch fetch re-ran the deflate")):
       second = await _call(get_session_view, session.id, _page_request("gzip"), meta, mgr, cfg)
     assert second.body == first.body
 
@@ -138,10 +136,8 @@ async def test_sidebar_gzip_repeat_serves_memo_without_recompress(tmp_path: Path
     first = await _call(all_sessions_status, session.id, _page_request("gzip"), meta, mgr, cfg)
     first_sched = await _call(list_scheduled_sessions, session.id, _page_request("gzip"), meta, mgr, cfg)
 
-    def explode(data, compresslevel=9, *, mtime=None):
-      raise AssertionError("repeat sidebar fetch re-ran the deflate")
-
-    with patch("src.api.sessions.gzip.compress", explode):
+    with patch("src.api.sessions.gzip.compress",
+               gzip_explode_compress("repeat sidebar fetch re-ran the deflate")):
       second = await _call(all_sessions_status, session.id, _page_request("gzip"), meta, mgr, cfg)
       second_sched = await _call(list_scheduled_sessions, session.id, _page_request("gzip"), meta, mgr, cfg)
     assert second.body == first.body

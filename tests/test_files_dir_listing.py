@@ -19,6 +19,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import pytest
+from conftest import gzip_counting_compress, gzip_explode_compress
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.gzip import GZipMiddleware
@@ -204,10 +205,8 @@ def test_listing_gzip_repeat_view_recompresses_nothing(tmp_path: Path, monkeypat
   first = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert first.status_code == 200
 
-  def explode_compress(*args: object, **kwargs: object) -> bytes:
-    raise AssertionError("repeat gzip view re-ran the deflate")
-
-  monkeypatch.setattr(files_api.gzip, "compress", explode_compress)
+  monkeypatch.setattr(files_api.gzip, "compress",
+                      gzip_explode_compress("repeat gzip view re-ran the deflate"))
   resp = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
   assert resp.headers["content-encoding"] == "gzip"
@@ -223,14 +222,8 @@ def test_listing_gzip_recompresses_when_corpus_moves(tmp_path: Path, monkeypatch
   first = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert first.status_code == 200
 
-  real_compress = files_api.gzip.compress
   calls: list[bytes] = []
-
-  def counting_compress(data: bytes, *args: object, **kwargs: object) -> bytes:
-    calls.append(data)
-    return real_compress(data, *args, **kwargs)
-
-  monkeypatch.setattr(files_api.gzip, "compress", counting_compress)
+  monkeypatch.setattr(files_api.gzip, "compress", gzip_counting_compress(files_api.gzip.compress, calls))
   os.utime(corpus / "alpha.txt", None)
   resp = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200

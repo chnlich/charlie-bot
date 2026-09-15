@@ -45,6 +45,32 @@ def _persist(item: master_cc_state._WorkItem) -> Callable[[dict], Awaitable[None
   return persist
 
 
+async def _compact_session_transcript(
+    item: master_cc_state._WorkItem,
+    cc_session_id: str,
+    cwd: str,
+    config_dir: str,
+    account_label: str,
+    trigger: str,
+    context_tokens: int | None,
+) -> None:
+  """One Sonnet compaction of the session's transcript, attributed to the session.
+
+  Single home of the master-side call shape: the compaction event rides the
+  item's persist hook, the process lands in the session's cgroup, and the log
+  context names the session, the account, and the trigger.
+  """
+  await claude_compaction.compact_with_sonnet(
+      cc_session_id=cc_session_id,
+      cwd=cwd,
+      config_dir=config_dir,
+      pre_tokens=context_tokens,
+      persist_and_broadcast=_persist(item),
+      cgroup_session_id=item.session_meta.id,
+      log_context={"session": item.session_meta.id, "account": account_label, "trigger": trigger},
+  )
+
+
 # ---------------------------------------------------------------------------
 # Turn start
 # ---------------------------------------------------------------------------
@@ -120,19 +146,9 @@ async def place_turn(
   await report_empty_credentials(cfg, item)
   if (resume_id and cold and
       claude_compaction.expired_cache_compaction_wanted(cfg, option.model, context_tokens, last_request_at, now)):
-    await claude_compaction.compact_with_sonnet(
-        cc_session_id=resume_id,
-        cwd=cwd,
-        config_dir=chosen.config_dir,
-        pre_tokens=context_tokens,
-        persist_and_broadcast=_persist(item),
-        cgroup_session_id=session_meta.id,
-        log_context={
-            "session": session_meta.id,
-            "account": chosen.label,
-            "trigger": "expired_cache"
-        },
-    )
+    await _compact_session_transcript(
+        item, cc_session_id=resume_id, cwd=cwd, config_dir=chosen.config_dir,
+        account_label=chosen.label, trigger="expired_cache", context_tokens=context_tokens)
   return chosen, None
 
 
@@ -202,17 +218,7 @@ async def prepare_relay(
   if item.callbacks.claude_context_state is not None:
     context_tokens, _last = await item.callbacks.claude_context_state(session_meta.id, session_meta)
   if claude_compaction.relay_compaction_wanted(cfg, option.model, context_tokens):
-    await claude_compaction.compact_with_sonnet(
-        cc_session_id=cc_session_id,
-        cwd=cwd,
-        config_dir=nxt.config_dir,
-        pre_tokens=context_tokens,
-        persist_and_broadcast=_persist(item),
-        cgroup_session_id=session_meta.id,
-        log_context={
-            "session": session_meta.id,
-            "account": nxt.label,
-            "trigger": "relay"
-        },
-    )
+    await _compact_session_transcript(
+        item, cc_session_id=cc_session_id, cwd=cwd, config_dir=nxt.config_dir,
+        account_label=nxt.label, trigger="relay", context_tokens=context_tokens)
   return nxt, None

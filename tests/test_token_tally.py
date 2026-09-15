@@ -1557,6 +1557,51 @@ def test_missing_sidecar_seeds_from_a_full_scan_with_note(tmp_path: Path, monkey
   con.close()
 
 
+def test_warm_memo_compound_round_skips_the_sidecar_parse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The long-lived server's steady compound round: the row memo is warm, the WAL moved the
+  # entry's signature, and a corpus move ran the source walk. The seed is a cold-memo
+  # device — the warm memo's key diff serves the round — so the sidecar parse must not run.
+  claude = _claude_rig(tmp_path)
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  _collect(claude, None, db, cache)
+
+  tt._aggregate_memo = None
+  tt._tally_memo = None
+  con.execute("insert into other values ('noise3', 'x')")
+  con.commit()
+  claude.write(claude.work, "sess-warm", [_claude_record("m-warm", NAME, "2024-01-03T00:00:00Z", _usage(10, 1))])
+
+  reads: list[str] = []
+  monkeypatch.setattr(tt, "_read_rows_sidecar", lambda *args: reads.append(args) or None)
+  served = _collect(claude, None, db, cache)
+  assert reads == []  # the warm memo's diff served the round; the sidecar stayed unread
+  assert _row(served, "opencode", "oc-m").total == 6
+  assert _row(served, "Claude Code", NAME).in_fresh == 20  # the rig's 10 + sess-warm's 10
+  con.close()
+
+
+def test_dropped_db_leaves_no_orphan_sidecar(tmp_path: Path) -> None:
+  # A db whose entry dropped from the document must not leave its rows bulk behind: the
+  # save that drops the entry sweeps the sidecar its rows_file named.
+  claude = _claude_rig(tmp_path)
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  _collect(claude, None, db, cache)
+  sidecar = next(cache.parent.glob("*.opencode_rows.json"))
+  sidecar_name = sidecar.name
+
+  con.close()
+  db.unlink()
+  Path(f"{db}-wal").unlink(missing_ok=True)
+  tt._aggregate_memo = None
+  tt._tally_memo = None
+  claude.write(claude.work, "sess2", [_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(1000, 2))])
+  _collect(claude, None, db, cache)  # the corpus move ran the save; the db is absent
+
+  assert not (cache.parent / sidecar_name).exists()
+  doc = json.loads(cache.read_text())
+  assert "opencode" not in doc["sources"]
+
+
 def test_stored_partial_adopts_without_replay(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # The v2 entry's stored partial serves the buckets without folding the records; the replay
   # builder runs only for an entry that carries no partial (the v1 shape).

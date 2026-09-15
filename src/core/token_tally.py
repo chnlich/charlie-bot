@@ -340,6 +340,23 @@ class TallyCache:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = orjson.dumps({"version": self.SCHEMA_VERSION, "sources": self._next})
     atomic_write_stream(path, lambda stream: stream.write(payload))
+    self._sweep_rows_sidecars(path.parent)
+
+  def _sweep_rows_sidecars(self, cache_dir: Path) -> None:
+    """Unlink rows sidecars no stored entry references anymore.
+
+    A db whose entry dropped from the document (deleted, moved, unreadable) otherwise
+    leaves its rows bulk — up to tens of MB — on disk forever, breaking the
+    drop-out-without-a-sweep invariant the document's own entries follow."""
+    referenced = {
+        entry["rows_file"]
+        for files in self._next.values()
+        for entry in files.values()
+        if isinstance(entry.get("rows_file"), str)
+    }
+    for candidate in cache_dir.glob("*.opencode_rows.json"):
+      if candidate.name not in referenced:
+        candidate.unlink()
 
   def lookup_sig(self, source: str, key: str, sig: list) -> dict | None:
     """The cached entry for *key* when its stored signature equals *sig*, else None.
@@ -1763,7 +1780,10 @@ def _merge_opencode(
     seed = None
     prev = cache.prev("opencode", key) if cache is not None else None
     if prev is not None:
-      seed = cache.entry_rows(prev, t.notes)
+      # The seed is a cold-memo device: a warm row memo is already at least as fresh as any
+      # stored rows, so reading the multi-MB sidecar here would serve nothing.
+      if not _opencode_row_memos.get(key):
+        seed = cache.entry_rows(prev, t.notes)
       _adopt_stored_partial(key, prev)
     scan = _advance_opencode_rows(db, seed)
   if not scan.ok:

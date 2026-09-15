@@ -349,3 +349,49 @@ def test_search_row_memo_respects_its_cap() -> None:
   # The evicted oldest entry is gone; a recent one survives with its pinned object.
   assert sessions_api._search_row_fragments.get(id(metas[599]))[0] is metas[599]
   sessions_api._search_row_fragments.clear()
+
+
+@pytest.mark.asyncio
+async def test_search_row_body_memo_re_renders_when_derived_state_moves(tmp_path: Path) -> None:
+  cfg = make_home_config(tmp_path)
+  mgr = SessionManager(cfg)
+  session = await _session_with_chat_content(mgr, '{"type":"user","content":"irrelevant"}\n', "needle-idle")
+
+  idle = await sessions_api.search_sessions(q="needle", session_mgr=mgr)
+  assert b'"thinking_since":null' in idle.body
+
+  thinking_state.mark_busy(session.id)
+  busy = await sessions_api.search_sessions(q="needle", session_mgr=mgr)
+  assert busy.body != idle.body
+  assert b'"thinking_since":null' not in busy.body
+
+  thinking_state.clear_busy(session.id)
+  cleared = await sessions_api.search_sessions(q="needle", session_mgr=mgr)
+  assert cleared.body == idle.body
+
+
+@pytest.mark.asyncio
+async def test_search_whole_body_cache_rebuilds_when_the_row_set_changes(tmp_path: Path) -> None:
+  cfg = make_home_config(tmp_path)
+  mgr = SessionManager(cfg)
+  await _session_with_chat_content(mgr, '{"type":"user","content":"irrelevant"}\n', "needle-one")
+  await _session_with_chat_content(mgr, '{"type":"user","content":"irrelevant"}\n', "needle-two")
+
+  both = await sessions_api.search_sessions(q="needle", session_mgr=mgr)
+  assert both.body.count(b"needle-") == 2
+  one = await sessions_api.search_sessions(q="needle-one", session_mgr=mgr)
+  assert one.body.count(b"needle-") == 1
+  again = await sessions_api.search_sessions(q="needle", session_mgr=mgr)
+  assert again.body == both.body
+
+
+def test_search_row_body_memo_respects_its_cap() -> None:
+  sessions_api._search_row_bodies.clear()
+  metas = [SessionMetadata.model_construct(id=f"s{i}", name=f"needle-{i}") for i in range(600)]
+  key: tuple = (None, False, False, 0, None)
+  for i, meta in enumerate(metas):
+    sessions_api._search_row_bodies.store(id(meta), (meta, key, b"{}" if i < 599 else b'{"kept":true}'))
+  assert len(sessions_api._search_row_bodies) == sessions_api._SEARCH_ROW_BODY_CAP
+  # The evicted oldest entry is gone; a recent one survives with its pinned object.
+  assert sessions_api._search_row_bodies.get(id(metas[599]))[0] is metas[599]
+  sessions_api._search_row_bodies.clear()

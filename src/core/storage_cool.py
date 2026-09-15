@@ -439,6 +439,11 @@ def _sweep_claude_transcripts(
   it has been idle past the safety window. Worktree-encoded directories follow the
   same orphan rule once the worktree itself is gone. Any other name encodes a cwd
   CharlieBot never handed a claude process and is never touched.
+
+  The live-session counterpart is claude_accounts.retire_transcript_copies, which
+  trims a still-live session's redundant pool copies to the newest two; the two
+  deletion sets are disjoint (whole cold trees vs individual copies of a live
+  transcript), so neither can delete what the other protects.
   """
   worktree_prefix = claude_project_dir_name(Path(cfg.paths.worktree_dir)) + "-"
   live_worktrees = _live_worktree_dir_names(cfg) if session_id is None else set()

@@ -75,6 +75,7 @@ import hashlib
 import os
 import re
 import shutil
+import subprocess
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -1485,9 +1486,11 @@ def _thread_outcome(meta: ThreadMetadata) -> str | None:
 def _worktree_landing_proven(thread: ThreadInfo) -> tuple[bool, str | None]:
   """Whether the implement work provably landed on its base branch.
 
-  Proven only when the recorded repo, work branch and base branch all exist
-  and git shows the work branch's tip reachable from the base branch tip. A
-  missing repo or branch is missing evidence, never a proven landing.
+  The migration's offline form of the ``landed:`` evidence check the completion
+  owner enforces: the recorded repo, work branch and base branch must all
+  exist and git must show the work branch's tip reachable from the base branch
+  tip. A missing repo or branch is missing evidence, never a proven landing;
+  the check is read-only against the recorded repo.
   """
   repo_path = thread.meta.repo_path
   branch = thread.meta.branch_name
@@ -1497,17 +1500,23 @@ def _worktree_landing_proven(thread: ThreadInfo) -> tuple[bool, str | None]:
   repo = Path(repo_path)
   if not (repo / ".git").exists():
     return False, f"recorded repo {repo_path} is not present; landing cannot be checked"
-  from src.core.git import _git_stdout
+
+  def git(*args: str, check: bool = True) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, timeout=30, check=False)
+    if check and result.returncode != 0:
+      raise ValueError(f"git {' '.join(args[:2])}: {result.stderr.decode('utf-8', 'replace')[:200]}")
+    return result.stdout.decode("utf-8", "replace").strip()
+
   try:
-    tip = _git_stdout(repo, ["rev-parse", "--verify", branch], timeout=20)
-    base_tip = _git_stdout(repo, ["rev-parse", "--verify", base], timeout=20)
-    if not tip or not base_tip:
-      return False, f"branch {branch!r} or base {base!r} not found in {repo_path}"
-    ok = _git_stdout(
-        repo, ["merge-base", "--is-ancestor", tip.strip(), base_tip.strip()], timeout=20)
-  except Exception as e:
+    tip = git("rev-parse", "--verify", branch)
+    git("rev-parse", "--verify", base)
+    landed = subprocess.run(
+        ["git", "-C", str(repo), "merge-base", "--is-ancestor", tip, base],
+        capture_output=True, timeout=30, check=False)
+  except (ValueError, OSError, subprocess.TimeoutExpired) as e:
     return False, f"git landing check failed: {e}"
-  if ok is None:
+  if landed.returncode != 0:
     return False, f"work branch {branch!r} is not reachable from base {base!r}"
   return True, None
 
@@ -3248,7 +3257,8 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
     existing = ctx.receipts.get(log_rel)
     if post is not None and (existing is None or existing.post_sha256 != post):
       _append_receipt(ctx, ProductReceipt(
-          path=log_rel, kind="appended", pre_sha256=None, post_sha256=post))
+          path=log_rel, kind="appended", pre_sha256=_manifest_pre_hash(ctx, log_rel),
+          post_sha256=post, backup=log_rel))
     return 1 if existing_outcome is None else 0
 
   if kind == "task_closed":
@@ -3261,7 +3271,8 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
     existing = ctx.receipts.get(log_rel)
     if existing is None or existing.post_sha256 != post:
       _append_receipt(ctx, ProductReceipt(
-          path=log_rel, kind="appended", pre_sha256=None, post_sha256=post))
+          path=log_rel, kind="appended", pre_sha256=_manifest_pre_hash(ctx, log_rel),
+          post_sha256=post, backup=log_rel))
     return 1 if wrote else 0
 
   if kind == "child_report":
@@ -3274,7 +3285,8 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
     existing = ctx.receipts.get(log_rel)
     if existing is None or existing.post_sha256 != post:
       _append_receipt(ctx, ProductReceipt(
-          path=log_rel, kind="appended", pre_sha256=None, post_sha256=post))
+          path=log_rel, kind="appended", pre_sha256=_manifest_pre_hash(ctx, log_rel),
+          post_sha256=post, backup=log_rel))
     return 1 if wrote else 0
 
   if kind in ("task_imported", "task_imported_worker"):
@@ -3295,7 +3307,8 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
       _append_receipt(ctx, ProductReceipt(path=log_rel, kind="created", post_sha256=post))
     else:
       _append_receipt(ctx, ProductReceipt(
-          path=log_rel, kind="appended", pre_sha256=None, post_sha256=post))
+          path=log_rel, kind="appended", pre_sha256=_manifest_pre_hash(ctx, log_rel),
+          post_sha256=post, backup=log_rel))
     return 1 if wrote else 0
 
   if kind == "aliases":
@@ -3584,17 +3597,18 @@ def rollback_manifest(cfg: CharlieBotConfig, manifest_path: Path,
     for receipt in sorted(receipts.values(), key=lambda r: r.path):
       if receipt.kind in ("created",):
         continue
-      backup_rel = receipt.backup
-      if backup_rel is None:
-        if receipt.pre_sha256 is not None:
-          raise MigrationRefused(
-              f"backup reference missing for {receipt.path}; rollback cannot restore it")
-        # An appended file that did not exist before apply: remove the created file.
+      if receipt.pre_sha256 is None:
+        # The file did not exist before apply (its whole content is this
+        # apply's append, verified unchanged above): remove it.
         path = _confined(cfg, receipt.path)
-        if path.exists() and receipt.post_sha256 == _sha256_file(path):
+        if path.exists():
           path.unlink()
           restored += 1
         continue
+      backup_rel = receipt.backup
+      if backup_rel is None:
+        raise MigrationRefused(
+            f"backup reference missing for {receipt.path}; rollback cannot restore it")
       backup_file = backup_dir / backup_rel
       if not backup_file.is_file():
         raise MigrationRefused(f"backup file missing: {backup_file}")
@@ -3628,6 +3642,10 @@ def rollback_manifest(cfg: CharlieBotConfig, manifest_path: Path,
       _prune_empty_dirs_bottom_up(node_root, stop_at=cfg.sessions_dir)
     manifest.rolled_back_at = datetime.now(UTC)
     atomic_write_text(manifest_path, manifest.model_dump_json(indent=2))
+    # The journal described an apply that no longer exists; the backups stay
+    # for forensics. A later apply of the same source starts fresh.
+    if receipts_path.exists():
+      receipts_path.unlink()
     return {"status": "rolled_back", "restored": restored, "removed": removed,
             "manifest": str(manifest_path)}
   finally:

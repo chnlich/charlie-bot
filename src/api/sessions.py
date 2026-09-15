@@ -610,13 +610,15 @@ async def search_sessions(
       include_pending_trigger_status=True,
   )
   # Each row's bytes splice the memoized static segments with the five derived
-  # values rendered per request. orjson renders a dict context-free, so the
-  # spliced body is byte-identical to the FastJsonResponse render of the merged
-  # dicts: the segments follow the model's own key order, which is the order the
-  # in-place overlay leaves the merged dicts in. Key prefixes ride the prebuilt
-  # bytes in _SEARCH_DERIVED_PREFIXES, and a None datetime field rides its whole
-  # prebuilt null piece (both fields are None on the common idle row), so the
-  # pydantic dump_python call under it never runs.
+  # values, rendered only when the row's state first produces a body (the whole
+  # body serves the steady-state repeat, a churn round re-renders the moved
+  # rows). orjson renders a dict context-free, so the spliced body is
+  # byte-identical to the FastJsonResponse render of the merged dicts: the
+  # segments follow the model's own key order, which is the order the in-place
+  # overlay leaves the merged dicts in. Key prefixes ride the prebuilt bytes in
+  # _SEARCH_DERIVED_PREFIXES, and a None datetime field rides its whole prebuilt
+  # null piece (both fields are None on the common idle row), so the pydantic
+  # dump_python call under it never runs.
   states = []
   for meta in rows:
     entry = derived[meta.id]

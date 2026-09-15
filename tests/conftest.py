@@ -18,6 +18,7 @@ import pytest
 import yaml
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -813,6 +814,18 @@ def gzip_counting_compress(real_compress: Callable[..., bytes], calls: list[byte
     return real_compress(data, *args, **kwargs)
 
   return counting_compress
+
+
+def mount_production_gzip(app: FastAPI) -> None:
+  """Mount the stock gzip middleware with the server's production numbers.
+
+  The precompressed-response tests' served-as-is and zero-deflate assertions pin production
+  behavior only while this pair matches the server's gzip mount — minimum_size=1000,
+  compresslevel=1 on ``_CharlieBotGZipMiddleware`` (server.py). The stock middleware is
+  deliberate: the subclass changes which responder deflates, not whether an already-compressed
+  body deflates, so the skip contract under test is the same.
+  """
+  app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1)
 
 
 def make_transcript(config_dir: Path, cc_session_id: str) -> Path:

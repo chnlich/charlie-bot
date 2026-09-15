@@ -19,10 +19,9 @@ from pathlib import Path
 from urllib.parse import quote
 
 import pytest
-from conftest import gzip_counting_compress, gzip_explode_compress
+from conftest import gzip_counting_compress, gzip_explode_compress, mount_production_gzip
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from starlette.middleware.gzip import GZipMiddleware
 
 import src.api.files as files_api
 from src.api.files import _DIR_LISTING_TEMPLATE, _dir_listing_html, _format_mtime, _listing_memo, _row_memo
@@ -36,11 +35,11 @@ def _client() -> TestClient:
 
 
 def _gzip_client() -> TestClient:
-  """The files router behind the gzip middleware every production request
-  passes through, so the test sees the skip the pre-compressed response buys."""
+  """The files router behind the production gzip mount, so the test sees the
+  skip the pre-compressed response buys."""
   app = FastAPI()
   app.include_router(files_router, prefix="/files")
-  app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1)
+  mount_production_gzip(app)
   return TestClient(app)
 
 

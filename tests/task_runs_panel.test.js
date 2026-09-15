@@ -112,7 +112,7 @@ test('Retry is explicit on a failed run and posts the run-scoped retry', async (
   assert.ok(body.request_id);
 });
 
-test('pagination loads older pages on demand and never duplicates rows', async () => {
+test('pagination loads newer pages on demand and never duplicates rows', async () => {
   const {context, tab} = build();
   const pageOne = [run({id: 'r1'}), run({id: 'r2'})];
   const pageTwo = [run({id: 'r1'}), run({id: 'r3'})]; // r1 repeated across pages
@@ -126,8 +126,8 @@ test('pagination loads older pages on demand and never duplicates rows', async (
   context.TaskRunsPanel.onSessionChanged({id: 'node-1', profile: 'worker'});
   context.TaskRunsPanel.refresh();
   await flush();
-  assert.ok(tab.textContent.includes('Load older runs'), 'the cursor offers older pages');
-  const moreBtn = tab.querySelectorAll('button').find((b) => b.textContent === 'Load older runs');
+  assert.ok(tab.textContent.includes('Load newer runs'), 'the cursor offers the next chronological page');
+  const moreBtn = tab.querySelectorAll('button').find((b) => b.textContent === 'Load newer runs');
   moreBtn.dispatch('click');
   await flush();
   const rowIds = tab.querySelectorAll('span')

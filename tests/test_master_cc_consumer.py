@@ -1087,3 +1087,34 @@ async def test_consumer_retires_transcript_copies_after_a_sound_round(tmp_path: 
 
   assert copies["pool-c"].exists(), "a failed round keeps every copy as its fallback"
   assert copies["pool-b"].exists() and copies["pool-a"].exists()
+
+
+@pytest.mark.asyncio
+async def test_dequeue_relays_the_rounds_anchor_into_a_snapshot_taken_before_the_persist(tmp_path: Path) -> None:
+  """A follow-up enqueued mid-round carries a snapshot taken before the round's
+  anchor persist exists (cc=None); at dequeue the disk read succeeds, but the
+  relay of the consumer's own just-finished round -- not the disk -- owns the
+  empty fields, so the follow-up resumes the same conversation."""
+  from conftest import build_sessions_cfg
+
+  cfg = build_sessions_cfg(tmp_path)
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="follow-up"))
+  first_meta = await mgr.get_session(session.id)
+
+  # The follow-up's snapshot as require_session hands it out mid-round: the
+  # first round's cc persist has not happened yet, so the anchors are empty.
+  pre_persist_snapshot = first_meta.model_copy(deep=True)
+  first = make_work_item(cfg, first_meta, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+  second = make_work_item(cfg, pre_persist_snapshot, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+
+  seen_at_dequeue: list[str | None] = []
+
+  async def first_round(item: master_cc_state._WorkItem):
+    seen_at_dequeue.append(item.session_meta.cc_session_id)
+    return ("cc-new", 0, None, {})
+
+  await run_consumer_over_real_disk(session.id, [first, second], first_round)
+
+  assert seen_at_dequeue == [None, "cc-new"
+                            ], ("the follow-up resumes the conversation the first round started, not a fresh one")

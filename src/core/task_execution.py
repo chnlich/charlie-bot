@@ -161,15 +161,20 @@ def resolve_launch_overlay(option: BackendOption) -> tuple[str | None, bool]:
 def capture_prompt_chain(
     tree: "TaskTreeManager", index: object, meta: SessionMetadata,
 ) -> "tuple[tuple[tuple[str, str | None], ...], str | None]":
-    """Ancestor subtree refs (root → parent) plus this node's own rule ref.
+    """Subtree refs root → this node (inclusive) plus this node's own rule ref.
 
-    Reads the tree index the caller's control-lock hold just built; refs are
-    the metadata-owned fingerprints the recheck compares.
+    The subtree scope is THIS NODE AND ITS DESCENDANTS: the chain ends with
+    ``(meta.id, meta.subtree_prompt_ref)`` so the node's own subtree rule
+    applies to its own next context, not only to its descendants'. Ancestor
+    node rules and sibling rules never enter. Reads the tree index the
+    caller's control-lock hold just built; refs are the metadata-owned
+    fingerprints the recheck compares.
     """
     chain: list[tuple[str, str | None]] = []
     for ancestor in reversed(tree._ancestors(index, meta.id)):  # root → parent
         ancestor_meta = index.metas.get(ancestor.id)
         chain.append((ancestor.id, ancestor_meta.subtree_prompt_ref if ancestor_meta else None))
+    chain.append((meta.id, meta.subtree_prompt_ref))
     return tuple(chain), meta.node_prompt_ref
 
 

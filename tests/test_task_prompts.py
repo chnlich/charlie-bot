@@ -195,10 +195,15 @@ async def test_three_levels_with_both_scopes_prove_inheritance_and_ordering(tmp_
   # Sibling rules never enter.
   assert "sibling goal" not in worker_snapshot.instructions_text
 
-  # The mid manager sees root's subtree rule and its own node rule, not low's.
+  # The mid manager sees root's subtree rule, its OWN subtree rule (the scope
+  # is this node and its descendants), and its own node rule — not low's.
   mid_snapshot = await snapshot_for("mid")
   mid_scopes = [(s[0], s[2]) for s in sources_of(mid_snapshot) if s[0] in ("subtree", "node")]
-  assert mid_scopes == [("subtree", ids["root"]), ("node", ids["mid"])]
+  assert mid_scopes == [
+      ("subtree", ids["root"]), ("subtree", ids["mid"]), ("node", ids["mid"])]
+  mid_subtree_texts = [b.text for b in mid_snapshot.blocks
+                       if any(s.scope == "subtree" for s in b.sources)]
+  assert mid_subtree_texts == ["root subtree rule", "mid subtree rule"]
 
 
 async def test_exact_body_dedup_merges_every_source_at_first_position(tmp_path: Path) -> None:
@@ -459,3 +464,137 @@ async def test_corrupt_local_rule_fails_loudly(tmp_path: Path) -> None:
   body_path.unlink()
   with pytest.raises(TaskPromptError, match="unavailable"):
     preview_snapshot(cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+
+
+# ---------------------------------------------------------------------------
+# Own-subtree scope: THIS NODE AND ITS DESCENDANTS
+# ---------------------------------------------------------------------------
+
+
+async def test_own_subtree_rule_applies_to_self(tmp_path: Path) -> None:
+  """A node's own subtree rule enters its own next context, before its node rule.
+
+  Regression: the launch chain collected ancestor subtree refs only and dropped
+  the current node's own subtree rule, so editing "this task and descendants"
+  changed every descendant's context but never the node's own — the approved
+  scope is THIS NODE AND ITS DESCENDANTS.
+  """
+  cfg, _sm, mgr = build_env(tmp_path)
+  ids = await build_three_levels(mgr)
+  await patched_refs(mgr, ids["mid"], subtree="mid shared rule", node="mid local rule")
+
+  async def snapshot_for(label: str) -> PromptSnapshot:
+    meta = await mgr.load_meta(ids[label])
+    index = await mgr._get_index()
+    from src.core.task_execution import capture_prompt_chain
+    chain, node_ref = capture_prompt_chain(mgr, index, meta)
+    snapshot, _err = preview_snapshot(
+        cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+    return snapshot
+
+  mid_snapshot = await snapshot_for("mid")
+  scopes = [(s[0], s[2]) for s in sources_of(mid_snapshot) if s[0] in ("subtree", "node")]
+  # Own subtree rule, then own node rule: the manager's own context carries both.
+  assert scopes == [("subtree", ids["mid"]), ("node", ids["mid"])]
+  texts = [b.text for b in mid_snapshot.blocks if any(s.scope == "subtree" for s in b.sources)]
+  assert texts == ["mid shared rule"]
+
+  # A descendant still inherits it through the ancestor chain.
+  worker_meta = await mgr.load_meta(ids["worker1"])
+  index = await mgr._get_index()
+  from src.core.task_execution import capture_prompt_chain
+  chain, node_ref = capture_prompt_chain(mgr, index, worker_meta)
+  worker_snapshot, _err = preview_snapshot(
+      cfg, worker_meta, "work", chain=chain, node_ref=node_ref, overlay=None)
+  worker_scopes = [(s[0], s[2]) for s in sources_of(worker_snapshot) if s[0] in ("subtree", "node")]
+  assert worker_scopes == [("subtree", ids["mid"])]
+
+
+async def test_root_own_subtree_rule_applies_with_no_ancestors(tmp_path: Path) -> None:
+  """A root's own subtree rule applies to the root itself (no ancestors needed)."""
+  cfg, _sm, mgr = build_env(tmp_path)
+  ids = await build_three_levels(mgr)
+  await patched_refs(mgr, ids["root"], subtree="root program rule", node=None)
+
+  meta = await mgr.load_meta(ids["root"])
+  index = await mgr._get_index()
+  from src.core.task_execution import capture_prompt_chain
+  chain, node_ref = capture_prompt_chain(mgr, index, meta)
+  assert chain == ((ids["root"], meta.subtree_prompt_ref),) and node_ref is None
+  snapshot, _err = preview_snapshot(
+      cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+  scopes = [(s[0], s[2]) for s in sources_of(snapshot) if s[0] in ("subtree", "node")]
+  assert scopes == [("subtree", ids["root"])]
+  assert [b.text for b in snapshot.blocks if any(s.scope == "subtree" for s in b.sources)] == [
+      "root program rule"]
+
+
+async def test_middle_manager_with_both_scopes_orders_subtree_then_node(tmp_path: Path) -> None:
+  """Both scopes on one node: inherited rule, own subtree rule, own node rule."""
+  cfg, _sm, mgr = build_env(tmp_path)
+  ids = await build_three_levels(mgr)
+  await patched_refs(mgr, ids["root"], subtree="root shared rule", node=None)
+  await patched_refs(mgr, ids["mid"], subtree="mid shared rule", node="mid local rule")
+
+  meta = await mgr.load_meta(ids["mid"])
+  index = await mgr._get_index()
+  from src.core.task_execution import capture_prompt_chain
+  chain, node_ref = capture_prompt_chain(mgr, index, meta)
+  snapshot, _err = preview_snapshot(
+      cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+  scopes = [(s[0], s[2]) for s in sources_of(snapshot) if s[0] in ("subtree", "node")]
+  assert scopes == [
+      ("subtree", ids["root"]), ("subtree", ids["mid"]), ("node", ids["mid"])]
+  subtree_texts = [b.text for b in snapshot.blocks if any(s.scope == "subtree" for s in b.sources)]
+  assert subtree_texts == ["root shared rule", "mid shared rule"]
+
+  # A worker two levels below sees both subtree rules and never the mid node rule.
+  worker_meta = await mgr.load_meta(ids["worker1"])
+  chain, node_ref = capture_prompt_chain(mgr, index, worker_meta)
+  worker_snapshot, _err = preview_snapshot(
+      cfg, worker_meta, "work", chain=chain, node_ref=node_ref, overlay=None)
+  worker_scopes = [(s[0], s[2]) for s in sources_of(worker_snapshot) if s[0] in ("subtree", "node")]
+  assert worker_scopes == [("subtree", ids["root"]), ("subtree", ids["mid"])]
+  assert "mid local rule" not in worker_snapshot.instructions_text
+
+
+async def test_worker_own_subtree_rule_applies_to_itself(tmp_path: Path) -> None:
+  """A worker's own subtree rule (a leaf's rule also applies to itself)."""
+  cfg, _sm, mgr = build_env(tmp_path)
+  ids = await build_three_levels(mgr)
+  await patched_refs(mgr, ids["worker1"], subtree="worker shared rule", node=None)
+  meta = await mgr.load_meta(ids["worker1"])
+  index = await mgr._get_index()
+  from src.core.task_execution import capture_prompt_chain
+  chain, node_ref = capture_prompt_chain(mgr, index, meta)
+  snapshot, _err = preview_snapshot(cfg, meta, "work", chain=chain, node_ref=node_ref, overlay=None)
+  scopes = [(s[0], s[2]) for s in sources_of(snapshot) if s[0] in ("subtree", "node")]
+  assert scopes == [("subtree", ids["worker1"])]
+
+  # Siblings stay isolated: worker2's context never sees worker1's rule.
+  sibling_meta = await mgr.load_meta(ids["worker2"])
+  chain, node_ref = capture_prompt_chain(mgr, index, sibling_meta)
+  sibling_snapshot, _err = preview_snapshot(
+      cfg, sibling_meta, "work", chain=chain, node_ref=node_ref, overlay=None)
+  assert "worker shared rule" not in sibling_snapshot.instructions_text
+
+
+async def test_equal_body_dedup_merges_own_subtree_with_ancestors(tmp_path: Path) -> None:
+  """Identical text on an ancestor subtree and the node's own subtree dedups
+  once at the first position with every source listed."""
+  cfg, _sm, mgr = build_env(tmp_path)
+  ids = await build_three_levels(mgr)
+  same_rule = "deliver with evidence"
+  await patched_refs(mgr, ids["root"], subtree=same_rule, node=None)
+  await patched_refs(mgr, ids["mid"], subtree=same_rule, node=None)
+  await patched_refs(mgr, ids["low"], subtree=same_rule, node=None)
+
+  meta = await mgr.load_meta(ids["low"])
+  index = await mgr._get_index()
+  from src.core.task_execution import capture_prompt_chain
+  chain, node_ref = capture_prompt_chain(mgr, index, meta)
+  snapshot, _err = preview_snapshot(
+      cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+  matching = [b for b in snapshot.blocks if b.text == same_rule]
+  assert len(matching) == 1
+  assert [s.source_session_id for s in matching[0].sources] == [ids["root"], ids["mid"], ids["low"]]

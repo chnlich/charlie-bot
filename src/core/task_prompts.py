@@ -16,7 +16,9 @@ Ordered managed instruction blocks (the contract the snapshot pins):
    (``cfg.claude_md_file``) and declared model overlay;
 2. applicable memory, selected by :mod:`src.core.memory` (the single filter
    owner) — resident/repo full bodies, then the topic index;
-3. each subtree rule from the root through this node's parent;
+3. each subtree rule from the root through this node (the subtree scope is
+   THIS NODE AND ITS DESCENDANTS, so the node's own subtree rule applies to
+   its own context too);
 4. this node's own node rule.
 
 An ancestor node rule and sibling rules never enter. Identical injected text is
@@ -349,12 +351,13 @@ def _local_rule_segments(
     node_ref: str | None,
     node_id: str,
 ) -> list[RuleSegment]:
-  """The inherited subtree rules (root → parent) then this node's own rule.
+  """The subtree rules (root → this node, inclusive) then this node's own rule.
 
   ``chain`` is the launch-time captured [(session_id, subtree_prompt_ref)] from
-  the root down to (and excluding) this node; ``node_ref`` is this node's own
-  node rule. Ancestor node rules and sibling rules never enter. A null ref
-  contributes nothing (default-empty local rules inherit cleanly).
+  the root down to and including this node (the subtree scope is this node and
+  its descendants); ``node_ref`` is this node's own node rule. Ancestor node
+  rules and sibling rules never enter. A null ref contributes nothing
+  (default-empty local rules inherit cleanly).
   """
   segments: list[RuleSegment] = []
   for owner, ref in chain:

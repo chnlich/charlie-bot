@@ -29,8 +29,8 @@ from src.core.json_utils import (
     load_json_meta,
     write_json_atomically,
 )
-from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.locks import lock_for
+from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.message_aggregator import MessageAggregator
 from src.core.message_projection import MessageProjection

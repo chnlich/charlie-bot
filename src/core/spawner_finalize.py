@@ -18,8 +18,8 @@ from src.core import (
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_scheduled_tasks
 from src.core.git import git_worktree_remove_reporting
-from src.core.log_once import LazyStructlogLogger
 from src.core.locks import lock_for
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import LastRunStatus, TaskType, ThreadMetadata, ThreadStatus
 from src.core.notifications import send_telegram
 from src.core.sessions import SessionManager

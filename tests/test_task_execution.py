@@ -319,6 +319,84 @@ async def test_concurrent_dispatch_starts_one_process(
 
 
 # ---------------------------------------------------------------------------
+# Serialized turns: inputs admitted during an active run dispatch on its finish
+# ---------------------------------------------------------------------------
+
+
+class _SpawnFirstBackend(SpawningScriptedBackend):
+    """Records the spawn identity first, then holds the turn open until released."""
+
+    async def run(self, prompt, cwd, env, uploaded_files=None):
+        self.prompt = prompt
+        self.cwd = cwd
+        self.env = dict(env)
+        self._pid += 1
+        if self._on_spawn is not None:
+            await self._on_spawn(self._pid)
+        if self.gate is not None:
+            await asyncio.wait_for(self.gate(), timeout=15)
+        for event in self._events:
+            if self.terminated:
+                return
+            yield event
+
+
+@pytest.mark.asyncio
+async def test_input_admitted_during_active_run_dispatches_after_its_finish(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The later input is consumed by the next serialized turn without a second dispatch call."""
+    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+    manager = await create_task(tree, parent=None, request_id="root")
+    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+    gate_release = asyncio.Event()
+    first = _SpawnFirstBackend([result_event("first")], gate=gate_release.wait)
+    second = _SpawnFirstBackend([result_event("second")])
+    install_backends(
+        monkeypatch, [first, second], "src.agents.backends.registry.build_backend")
+    patch_instructions_content(monkeypatch)
+
+    await tree.dispatch.admit_input(
+        manager.id, event_type=ET.USER, content="Take off. First.", actor="user")
+    decision = await tree.dispatch.dispatch_pending(manager.id)
+    assert decision["launch"] is True
+    run1 = decision["run_id"]
+
+    deadline = asyncio.get_event_loop().time() + 10
+    while asyncio.get_event_loop().time() < deadline:
+        run = await tree.runs.get_run(manager.id, run1)
+        if run is not None and run.pid is not None:
+            break
+        await asyncio.sleep(0.05)
+    else:
+        pytest.fail("the first turn never launched")
+
+    # The later input is durably admitted but never launched under the active run.
+    admitted_later = await tree.dispatch.admit_input(
+        manager.id, event_type=ET.USER, content="Second message.", actor="user")
+    decision_later = await tree.dispatch.dispatch_pending(manager.id)
+    assert decision_later["launch"] is False
+
+    gate_release.set()
+    await wait_for_terminal_run(tree, manager.id, run1)
+
+    # The turn's own finish dispatches the waiting input as the next serialized
+    # turn: no second explicit dispatch call is needed and nothing is dropped.
+    deadline = asyncio.get_event_loop().time() + 15
+    run2_id = None
+    while asyncio.get_event_loop().time() < deadline:
+        others = [r for r in tree.runs.list_run_records_sync(manager.id) if r.id != run1]
+        if others:
+            run2_id = others[0].id
+            break
+        await asyncio.sleep(0.1)
+    assert run2_id is not None, "the later input was never dispatched after the turn finished"
+    run2, outcome2 = await wait_for_terminal_run(tree, manager.id, run2_id)
+    assert outcome2 == "success"
+    assert run2.input_event_ids == [str(admitted_later["id"])]
+    assert tree.dispatch.pending_inputs(manager.id) == []
+
+
+# ---------------------------------------------------------------------------
 # Delegate: one worker child task with its first Run, stable replay identity
 # ---------------------------------------------------------------------------
 
@@ -331,6 +409,18 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
     manager = await create_task(tree, parent=None, request_id="root")
     monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
     stub_credentials(monkeypatch, {"charliebot": {"access_key": "op-secret"}})
+    pm_builds = []
+
+    def pm_build(option, cfg_, **kwargs):
+        # Parent manager turns (the delivered child reports' serialized
+        # consumer) build through the registry on demand.
+        b = SpawningScriptedBackend([result_event("manager turn")])
+        if kwargs.get("on_spawn") is not None:
+            b.set_on_spawn(kwargs["on_spawn"])
+        pm_builds.append(b)
+        return b
+
+    monkeypatch.setattr("src.agents.backends.registry.build_backend", pm_build)
     backend = SpawningScriptedBackend([result_event("phrase")])
     builds = install_backends(
         monkeypatch,
@@ -385,8 +475,10 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
                               headers=OPERATOR)
         assert sibling.json()["session_id"] != first_named.json()["session_id"]
 
-        # The three runs execute through the worker adapter while the API loop
-        # that scheduled them is still alive.
+        # The runs execute through the worker adapter while the API loop that
+        # scheduled them is still alive. Every delivery follow-up — child close,
+        # parent report dispatch, the parent's serialized turns — is scheduled
+        # on that same loop, so it must outlive them all.
         deadline = asyncio.get_event_loop().time() + 30
         while asyncio.get_event_loop().time() < deadline:
             states = [tree.task_state(s) for s in (
@@ -394,9 +486,55 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
             if all(s == "completed" for s in states):
                 break
             await asyncio.sleep(0.1)
+        for cid in (child_id, first_named.json()["session_id"], sibling.json()["session_id"]):
+            assert tree.task_state(cid) == "completed"
 
-    for cid in (child_id, first_named.json()["session_id"], sibling.json()["session_id"]):
-        assert tree.task_state(cid) == "completed"
+        # The completed delivery closed and auto-archived the worker; the
+        # manager remains open and received the completed report.
+        deadline = asyncio.get_event_loop().time() + 20
+        archived = False
+        while asyncio.get_event_loop().time() < deadline:
+            if tree.task_state(child_id) == "completed" and tree.archived_of(
+                    await tree._get_index(), await tree.load_meta(child_id)):
+                archived = True
+                break
+            await asyncio.sleep(0.1)
+        assert archived, "the worker task was not auto-archived after its delivered report"
+        assert tree.task_state(manager.id) == "open"
+        reports = [e for e in tree.events.load_events(manager.id)
+                   if e["type"] == ET.CHILD_REPORT and e["child_session_id"] == child_id]
+        assert reports and reports[-1]["outcome"] == "completed"
+
+        # The parent-addressed compatibility alias (thread_id from the delegate
+        # contract) resolves to the child's Run — not to a run on the parent.
+        resolved = tree.aliases.resolve_thread(manager.id, run_id)
+        assert resolved == {"session_id": child_id, "run_id": run_id}
+        import src.api.deps as deps
+        monkeypatch.setattr(deps, "_task_manager", tree)
+        row = client.get(f"/api/threads/{manager.id}/threads/{run_id}", headers=OPERATOR)
+        assert row.status_code == 200, row.text
+        assert row.json()["id"] == run_id
+        assert row.json()["session_id"] == child_id
+
+        # Every delivered child report triggered the parent's next serialized
+        # turn: all reports were consumed and acknowledged, the parent stays open.
+        deadline = asyncio.get_event_loop().time() + 30
+        while asyncio.get_event_loop().time() < deadline:
+            pm_events = tree.runs.load_events_sync(manager.id)
+            active = [r for r in tree.runs.list_run_records_sync(manager.id)
+                      if tree.runs.terminal_outcome(pm_events, r.id) is None]
+            if not tree.dispatch.pending_inputs(manager.id) and not active:
+                break
+            await asyncio.sleep(0.2)
+        else:
+            pending = [str(e.get("id")) for e in tree.dispatch.pending_inputs(manager.id)]
+            runs_dbg = [(r.id, tree.runs.terminal_outcome(pm_events, r.id), r.pid)
+                        for r in tree.runs.list_run_records_sync(manager.id)]
+            pytest.fail(
+                f"the parent's report turns never settled: pending={pending} runs={runs_dbg}")
+        assert pm_builds, "the delivered child reports never triggered a parent manager turn"
+        assert tree.task_state(manager.id) == "open"
+
     # Three distinct operations, three builds: the replays did not spawn a
     # second process for their operation.
     assert len(builds) == 3
@@ -407,21 +545,9 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
     worker_run = await tree.runs.get_run(child_id, run_id)
     assert worker_run is not None and worker_run.kind == "work"
     assert worker_run.backend == "fake"
-    # The completed delivery closed and auto-archived the worker; the manager
-    # remains open and received the completed report.
-    deadline = asyncio.get_event_loop().time() + 20
-    archived = False
-    while asyncio.get_event_loop().time() < deadline:
-        if tree.task_state(child_id) == "completed" and tree.archived_of(
-                await tree._get_index(), await tree.load_meta(child_id)):
-            archived = True
-            break
-        await asyncio.sleep(0.1)
-    assert archived, "the worker task was not auto-archived after its delivered report"
-    assert tree.task_state(manager.id) == "open"
-    reports = [e for e in tree.events.load_events(manager.id)
-               if e["type"] == ET.CHILD_REPORT and e["child_session_id"] == child_id]
-    assert reports and reports[-1]["outcome"] == "completed"
+    pm_events = tree.runs.load_events_sync(manager.id)
+    for r in tree.runs.list_run_records_sync(manager.id):
+        assert tree.runs.terminal_outcome(pm_events, r.id) == "success"
 
 
 # ---------------------------------------------------------------------------
@@ -517,6 +643,17 @@ async def test_implement_delivery_requires_review_and_real_landing(
     worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
                                task=_task_spec(tree, task_spec))
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+    pm_builds = []
+
+    def pm_build(option, cfg_, **kwargs):
+        b = SpawningScriptedBackend([result_event("manager turn")])
+        if kwargs.get("on_spawn") is not None:
+            b.set_on_spawn(kwargs["on_spawn"])
+        pm_builds.append(b)
+        return b
+
+    monkeypatch.setattr("src.agents.backends.registry.build_backend", pm_build)
+    patch_instructions_content(monkeypatch)
     stub_credentials(monkeypatch, {"charliebot": {"access_key": "op-secret"}})
     # The work-run launch re-judges the nearest-user authorization gate; the
     # manager carries the real user takeoff message the delegation rode in on.
@@ -625,6 +762,21 @@ async def test_implement_delivery_requires_review_and_real_landing(
     assert reports[-1]["outcome"] == "completed"
     finished = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.RUN_FINISHED]
     assert [e["outcome"] for e in finished][-1] == "success"
+
+    # The delivered blocked and completed reports each triggered the parent's
+    # next serialized turn, and the parent consumed them staying open.
+    deadline = asyncio.get_event_loop().time() + 30
+    while asyncio.get_event_loop().time() < deadline:
+        pm_events = tree.runs.load_events_sync(manager.id)
+        active = [r for r in tree.runs.list_run_records_sync(manager.id)
+                  if tree.runs.terminal_outcome(pm_events, r.id) is None]
+        if not tree.dispatch.pending_inputs(manager.id) and not active:
+            break
+        await asyncio.sleep(0.2)
+    else:
+        pytest.fail("the parent's report turns never settled")
+    assert pm_builds, "the delivered reports never triggered a parent manager turn"
+    assert tree.task_state(manager.id) == "open"
 
 
 def _consumers():

@@ -214,8 +214,9 @@ async def _delegate_task_tree(
         await task_mgr.runs.register_run_locked(
             record, task_spec_text=canonical_task_spec_text(task_spec))
         # The parent-entry compatibility alias: legacy thread routes addressed
-        # from the delegating session resolve to the same Run.
-        task_mgr.aliases.register_run_thread(req.session_id, run_id)
+        # from the delegating session resolve to the same Run (whose owner is
+        # the child task).
+        task_mgr.aliases.register_owner_thread_alias(req.session_id, child.id, run_id)
   except TaskNotFoundError as e:
     raise HTTPException(status_code=404, detail=str(e)) from e
   except TaskForbiddenError as e:

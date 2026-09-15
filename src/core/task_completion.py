@@ -577,6 +577,10 @@ class TaskCompletionManager:
         if report_created and parent_epoch is not None:
             await tree.sessions.announce_appended_event(
                 str(fresh_meta.task_parent_id), report, epoch=parent_epoch)
+        if report_created and fresh_meta.task_parent_id:
+            # The delivered report is the parent's new durable input: its next
+            # serialized turn dispatches now (facts-derived, no legacy wake judgment).
+            await tree.dispatch.dispatch_pending(str(fresh_meta.task_parent_id))
         return 200, {"session_id": session_id, "closed_event_id": close_event["id"]}
 
     async def _append_closed(
@@ -843,6 +847,9 @@ class TaskCompletionManager:
         if report_created and parent_epoch is not None:
             await tree.sessions.announce_appended_event(
                 str(meta.task_parent_id), report, epoch=parent_epoch)
+        if report_created and meta.task_parent_id:
+            # Same delivered-report dispatch the completed close performs.
+            await tree.dispatch.dispatch_pending(str(meta.task_parent_id))
         return {"session_id": session_id, "closed_event_id": close_event["id"]}
 
     async def reopen_task(

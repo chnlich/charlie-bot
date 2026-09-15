@@ -110,6 +110,9 @@ async def test_two_reports_one_acknowledged_reload_leaves_only_the_other(tmp_pat
   assert finished and set(finished[-1]["input_event_ids"]) == set(acknowledged)
 
   # Child B closes after the parent's run: a later arrival kept for the next run.
+  # With no executor installed the close-time report dispatch records the
+  # report only (the execution adapter's own tests cover the live dispatch).
+  tree.dispatch.executor = None
   run_b = await tree.runs.register_run(RunRecord(id="run-b", session_id=child_b.id, kind="work"))
   await tree.dispatch.finish_run(child_b.id, run_b.id, outcome="success")
   pending_now = {e["child_session_id"] for e in input_events(tree, parent.id)}
@@ -395,7 +398,10 @@ async def test_closed_node_keeps_input_and_agent_content_never_mints_authorizati
   executor = ScriptedExecutor(tree)
   tree.dispatch.executor = executor
   await tree.dispatch.dispatch_pending(worker.id)
-  assert len(executor.batches) == 1 and len(executor.batches[0][1]) == 2
+  assert len(executor.batches) == 2 and len(executor.batches[0][1]) == 2
+  # The delivered close report is the parent's durable input: the close itself
+  # dispatched the parent's next serialized turn through the same executor.
+  assert executor.batches[1][0] == root.id and len(executor.batches[1][1]) == 1
   index = await tree._get_index()
   assert tree.task_state_of(index, worker.id) == "completed"  # auto-close landed
 
@@ -432,6 +438,42 @@ async def test_stopped_queued_run_is_never_launched_and_releases_its_batch(tmp_p
 
   with pytest.raises(TaskConflictError, match="stop request"):
     await tree.dispatch.claim_input_batch(node.id, "run-queued")
+
+
+@pytest.mark.asyncio
+async def test_legacy_trigger_wake_is_refused_at_v2_nodes(tmp_path: Path) -> None:
+  """A scheduled/iteration wake aimed at a v2 node is explicitly unavailable (next stage):
+  nothing is written through the legacy user-event path and nothing dispatches."""
+  cfg, session_mgr, tree = build_env(tmp_path)
+  manager = await create_task(tree, parent=None, request_id="root", name="Root")
+
+  executor = ScriptedExecutor(tree)
+  tree.dispatch.executor = executor
+  from src.core.master_trigger import trigger_master
+  await trigger_master(manager.id, "a worker result landed", cfg, session_mgr)
+
+  events = tree.events.load_events(manager.id)
+  assert [e for e in events if e["type"] == ET.USER] == []
+  assert executor.batches == []
+  assert tree.runs.list_run_records_sync(manager.id) == []
+
+  # A v1 session keeps the legacy wake path intact during the staged conversion.
+  from src.core.models import CreateSessionRequest
+  v1 = await session_mgr.create_session(CreateSessionRequest(name="legacy"))
+  called: list[bool] = []
+
+  async def _fake_run_message(*args, **kwargs):
+    called.append(True)
+    return "cc-1"
+
+  import src.core.master_trigger as master_trigger_module
+  original = master_trigger_module.run_message
+  master_trigger_module.run_message = _fake_run_message
+  try:
+    await trigger_master(v1.id, "a worker result landed", cfg, session_mgr)
+  finally:
+    master_trigger_module.run_message = original
+  assert called == [True]
 
 
 # ---------------------------------------------------------------------------

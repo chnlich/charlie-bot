@@ -490,8 +490,165 @@ def _format_block(full_body_entries: list[Entry], index_entries: list[Entry]) ->
   return "\n\n".join(chunks)
 
 
+def audience_allows(entry: Entry, audience: str) -> bool:
+  """The one audience predicate every read surface shares (startup, preview, query).
+
+  An entry with no audience header admits nobody; otherwise the audience must
+  be one of the entry's declared elements.
+  """
+  return entry.audience is not None and audience in entry.audience
+
+
+@dataclass(frozen=True)
+class MemoryEntrySource:
+  """One selected entry's provenance and contribution.
+
+  ``source_ref`` names the store origin (``memory:<topic>/<slug>``); the slug
+  identifies the entry file under ``entries/<topic>/``. ``delivery`` is the
+  form actually injected: ``full`` (whole entry text) or ``index`` (its index
+  line).
+  """
+  source_ref: str
+  delivery: str  # "full" | "index"
+  text: str
+
+
+@dataclass(frozen=True)
+class MemorySelection:
+  """The provenance-bearing memory assembly result one audience selection produced.
+
+  ``text`` is the exact block the legacy string interface
+  (:func:`assemble_master` / :func:`assemble_worker`) derives — every caller
+  that needs the string reads it here, never re-filtering. ``segments`` is the
+  ordered (full-then-index) split the block is joined from, so a snapshot can
+  label what the model actually received per delivery mode. ``usage_line``
+  rides only on worker selections.
+  """
+  audience: str
+  repo_basename: str | None
+  segments: tuple[tuple[str, str, tuple[MemoryEntrySource, ...]], ...]  # (delivery, text, sources)
+  usage_line: str | None
+  text: str | None
+
+
+WORKER_USAGE_LINE = (
+    "On-demand knowledge: `charliebot memory query --topic <topic>` (full text) or `--index` "
+    "for the index only. Stage a capture with `charliebot memory add [--file F]`: a capture "
+    "is one file, first line `# <title>`, stating one fact to record or one change to "
+    "propose, naming the target entry in the body when proposing a change (writes staging/, "
+    "never entries/).")
+
+
+def _load_selection_store(memory_dir: Path) -> Store | None:
+  """The store for a selection, or None when the memory dir is missing (logged)."""
+  if not memory_dir.is_dir():
+    log.error("memory_dir_missing", path=str(memory_dir))
+    return None
+  return load_store(memory_dir)
+
+
+def _selection_from_parts(
+    audience: str,
+    repo_basename: str | None,
+    full_body_entries: list[Entry],
+    index_entries: list[Entry],
+    *,
+    usage_line: str | None,
+) -> MemorySelection:
+  """Build the selection: one full segment, one index segment, stable sorts, exact text."""
+  full_body_entries.sort(key=lambda e: (e.topic, e.slug))
+  index_entries.sort(key=lambda e: (e.topic, e.slug))
+  segments: list[tuple[str, str, tuple[MemoryEntrySource, ...]]] = []
+  if full_body_entries:
+    segments.append((
+        "full",
+        "\n\n".join(full_text(e) for e in full_body_entries),
+        tuple(MemoryEntrySource(source_ref=f"memory:{e.id}", delivery="full", text=full_text(e))
+              for e in full_body_entries),
+    ))
+  if index_entries:
+    segments.append((
+        "index",
+        _index_lines(index_entries),
+        tuple(MemoryEntrySource(source_ref=f"memory:{e.id}", delivery="index",
+                                text=f"{e.topic}/{e.slug} · {e.title}")
+              for e in index_entries),
+    ))
+  if usage_line is not None:
+    # The worker usage line rides the index segment (it is query guidance); a
+    # selection with no index entries gets a usage-only segment so the joined
+    # text still equals the legacy string byte for byte.
+    if segments and segments[-1][0] == "index":
+      delivery, text, sources = segments[-1]
+      segments[-1] = (delivery, f"{text}\n\n{usage_line}", sources)
+    else:
+      segments.append(("index", usage_line, ()))
+  return MemorySelection(
+      audience=audience,
+      repo_basename=repo_basename,
+      segments=tuple(segments),
+      usage_line=usage_line,
+      text="\n\n".join(s[1] for s in segments) if segments else None,
+  )
+
+
+def select_master_memory(memory_dir: Path) -> MemorySelection | None:
+  """Select the master-audience memory for a spawn (the provenance-bearing result).
+
+  Full bodies of entries in resident topics whose audience contains ``master``,
+  then the index lines for all other master-audience entries, each group
+  stably sorted by ``(topic, slug)``. Returns None when the memory dir is
+  missing (logged) or when the store has no master-audience entries to inject.
+  A malformed store propagates :class:`MemoryFormatError` (fail-loud); only a
+  missing dir is tolerated.
+  """
+  store = _load_selection_store(memory_dir)
+  if store is None:
+    return None
+  resident_names = {t.name for t in store.topics.values() if t.resident}
+  full_body_entries: list[Entry] = []
+  index_entries: list[Entry] = []
+  for e in store.entries:
+    if not audience_allows(e, "master"):
+      continue
+    if e.topic in resident_names:
+      full_body_entries.append(e)
+    else:
+      index_entries.append(e)
+  if not full_body_entries and not index_entries:
+    return None
+  return _selection_from_parts("master", None, full_body_entries, index_entries, usage_line=None)
+
+
+def select_worker_memory(memory_dir: Path, repo_basename: str) -> MemorySelection | None:
+  """Select the worker-audience memory for *repo_basename* (the provenance-bearing result).
+
+  Full bodies of entries whose topic equals *repo_basename* and whose audience
+  contains ``worker``, then index lines for all other worker-audience entries,
+  then the worker usage line. Returns None when the memory dir is missing
+  (logged); when the store exists the selection is always non-None (the usage
+  line is present). A malformed store propagates :class:`MemoryFormatError`
+  (fail-loud). Staging candidates never enter: :func:`load_store` reads
+  ``entries/`` only.
+  """
+  store = _load_selection_store(memory_dir)
+  if store is None:
+    return None
+  full_body_entries: list[Entry] = []
+  index_entries: list[Entry] = []
+  for e in store.entries:
+    if not audience_allows(e, "worker"):
+      continue
+    if e.topic == repo_basename:
+      full_body_entries.append(e)
+    else:
+      index_entries.append(e)
+  return _selection_from_parts(
+      "worker", repo_basename, full_body_entries, index_entries, usage_line=WORKER_USAGE_LINE)
+
+
 def assemble_master(memory_dir: Path) -> str | None:
-  """Assemble the master spawn memory block.
+  """Assemble the master spawn memory block (derived from :func:`select_master_memory`).
 
   Full bodies of entries in resident topics whose audience contains
   ``master``, then the INDEX_HEADER line and index lines
@@ -502,29 +659,12 @@ def assemble_master(memory_dir: Path) -> str | None:
   no master-audience entries to inject. A malformed store propagates
   :class:`MemoryFormatError` (fail-loud); only a missing dir is tolerated.
   """
-  if not memory_dir.is_dir():
-    log.error("memory_dir_missing", path=str(memory_dir))
-    return None
-  store = load_store(memory_dir)
-  resident_names = {t.name for t in store.topics.values() if t.resident}
-  full_body_entries: list[Entry] = []
-  index_entries: list[Entry] = []
-  for e in store.entries:
-    if e.audience is None or "master" not in e.audience:
-      continue
-    if e.topic in resident_names:
-      full_body_entries.append(e)
-    else:
-      index_entries.append(e)
-  if not full_body_entries and not index_entries:
-    return None
-  full_body_entries.sort(key=lambda e: (e.topic, e.slug))
-  index_entries.sort(key=lambda e: (e.topic, e.slug))
-  return _format_block(full_body_entries, index_entries)
+  selection = select_master_memory(memory_dir)
+  return selection.text if selection is not None else None
 
 
 def assemble_worker(memory_dir: Path, repo_basename: str) -> str | None:
-  """Assemble the worker spawn memory block for *repo_basename*.
+  """Assemble the worker spawn memory block for *repo_basename* (from :func:`select_worker_memory`).
 
   Full bodies of entries whose topic equals *repo_basename* and whose audience
   contains ``worker``, then the INDEX_HEADER line and index lines for all
@@ -536,26 +676,5 @@ def assemble_worker(memory_dir: Path, repo_basename: str) -> str | None:
   the usage line is always present, so the result is non-None. A malformed
   store propagates :class:`MemoryFormatError` (fail-loud).
   """
-  if not memory_dir.is_dir():
-    log.error("memory_dir_missing", path=str(memory_dir))
-    return None
-  store = load_store(memory_dir)
-  full_body_entries: list[Entry] = []
-  index_entries: list[Entry] = []
-  for e in store.entries:
-    if e.audience is None or "worker" not in e.audience:
-      continue
-    if e.topic == repo_basename:
-      full_body_entries.append(e)
-    else:
-      index_entries.append(e)
-  full_body_entries.sort(key=lambda e: (e.topic, e.slug))
-  index_entries.sort(key=lambda e: (e.topic, e.slug))
-  usage_line = (
-      "On-demand knowledge: `charliebot memory query --topic <topic>` (full text) or `--index` "
-      "for the index only. Stage a capture with `charliebot memory add [--file F]`: a capture "
-      "is one file, first line `# <title>`, stating one fact to record or one change to "
-      "propose, naming the target entry in the body when proposing a change (writes staging/, "
-      "never entries/).")
-  block = _format_block(full_body_entries, index_entries)
-  return "\n\n".join(chunk for chunk in (block, usage_line) if chunk)
+  selection = select_worker_memory(memory_dir, repo_basename)
+  return selection.text if selection is not None else None

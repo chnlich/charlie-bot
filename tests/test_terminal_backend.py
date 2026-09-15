@@ -13,9 +13,10 @@ from typing import ClassVar
 
 import pytest
 from conftest import (
-    SERVER_CHECK_WS_AUTH_PATCH_TARGET,
-    TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET,
-    make_fake_run_tmux,
+  SERVER_CHECK_WS_AUTH_PATCH_TARGET,
+  TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET,
+  make_fake_run_tmux,
+  make_home_config,
 )
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -289,10 +290,11 @@ async def test_tui_attachment_still_uses_shared_pty_path(
   monkeypatch.setattr(pty_common, "_pump_pty_to_ws", fake_pump)
   monkeypatch.setattr("src.api.deps.session_manager", lambda: FakeSessionManager())
 
-  await tui.run_tui_attachment(ws, "session-id", tmp_path / "sessions")
+  cfg = make_home_config(tmp_path)
+  await tui.run_tui_attachment(ws, "session-id", cfg)
 
   attachment = _FakeAttachment.instances[0]
-  assert ensured == [("session-id", tmp_path / "sessions" / "session-id")]
+  assert ensured == [("session-id", cfg.sessions_dir / "session-id")]
   assert attachment.session_id == "session-id"
   assert attachment.spawned is True
   assert attachment.writes == [b"help\n"]

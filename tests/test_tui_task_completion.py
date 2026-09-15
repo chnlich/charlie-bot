@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
 import queue
+import subprocess
 import threading
 from contextlib import suppress
 from pathlib import Path
@@ -93,6 +95,11 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   from src.core.task_sessions import TaskTreeManager
 
   home = tmp_path / "charliebot-home"
+  # The terminal boundary is real enough to observe argv/env/instruction
+  # delivery: everything the launched claude would read (jsonl globs, project
+  # trust, CLAUDE.md) resolves under this synthetic HOME, never production
+  # native state.
+  monkeypatch.setenv("HOME", str(home))
   cfg = CharlieBotConfig(
       charliebot_home=home,
       paths={"worktree_dir": str(home / "worktrees")},
@@ -113,14 +120,30 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
   ensured: list[tuple[str, Path]] = []
   tmux_live: set[str] = set()
+  start_calls: list[dict] = []
 
-  async def fake_ensure_tmux_session(session_id: str, working_dir: Path, **kwargs) -> None:
-    ensured.append((session_id, working_dir))
-    working_dir.mkdir(parents=True, exist_ok=True)
-    tmux_live.add(session_id)
+  pane_proc = subprocess.Popen(["/bin/sleep", "300"])
+
+  async def fake_start_tmux_session(session_name: str, working_dir: str, env_args: list[str],
+                                    command_args: list[str], window_name: str | None = None) -> None:
+    # The lowest scripted seam: the real ensure_tmux_session builds the argv and
+    # env pairs above this, so the test observes actual delivery, not call
+    # counts on ensure_tmux_session.
+    start_calls.append({
+        "session_name": session_name,
+        "working_dir": working_dir,
+        "env_args": list(env_args),
+        "command_args": list(command_args),
+    })
+    Path(working_dir).mkdir(parents=True, exist_ok=True)
+    tmux_live.add(session_name.removeprefix("charliebot-"))
+    ensured.append((session_name.removeprefix("charliebot-"), Path(working_dir)))
 
   async def fake_tmux_session_exists(session_id: str) -> bool:
     return session_id in tmux_live
+
+  async def fake_tmux_pane_pid(session_id: str) -> int:
+    return pane_proc.pid
 
   killed: list[str] = []
 
@@ -128,10 +151,14 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     killed.append(session_id)
     tmux_live.discard(session_id)
 
-  monkeypatch.setattr(tui, "ensure_tmux_session", fake_ensure_tmux_session)
+  monkeypatch.setattr(tui, "_start_tmux_session", fake_start_tmux_session)
   monkeypatch.setattr(tui, "tmux_session_exists", fake_tmux_session_exists)
   monkeypatch.setattr(tui, "kill_tmux_session", fake_kill_tmux_session)
   monkeypatch.setattr(tui, "PtyAttachment", ScriptedTtyAttachment)
+  import src.agents.backends.pty_common as pty_common
+  monkeypatch.setattr(pty_common, "tmux_pane_pid", fake_tmux_pane_pid)
+
+
 
   import server as server_module
   from server import session_websocket, streaming_manager
@@ -140,6 +167,7 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return True
   monkeypatch.setattr(server_module, "_check_ws_auth", fake_ws_auth)
   monkeypatch.setattr(server_module, "session_manager", lambda: session_mgr)
+  monkeypatch.setattr(server_module, "task_manager", lambda: tree)
   monkeypatch.setattr(server_module, "get_config", lambda: cfg)
 
   app = FastAPI()
@@ -152,7 +180,7 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   app.dependency_overrides[get_task_manager] = lambda: tree
   app.dependency_overrides[get_run_store] = lambda: tree.runs
 
-  return cfg, session_mgr, tree, TestClient(app), ensured, killed, streaming_manager
+  return cfg, session_mgr, tree, TestClient(app), ensured, killed, streaming_manager, start_calls, pane_proc
 
 
 def _create_tui_task(client: TestClient) -> dict:
@@ -180,7 +208,7 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
   """Create → attach (stable task identity) → status → stop, then the durable
   input, the operator acknowledgement, and the completion through the ordinary
   guards. A second synthetic instance stays untouched throughout."""
-  cfg, session_mgr, tree, client, ensured, killed, streaming = tui_env
+  cfg, session_mgr, tree, client, ensured, killed, streaming, start_calls, pane_proc = tui_env
 
   # A second, isolated synthetic instance: its data must never be touched.
   other_home = cfg.charliebot_home.parent / "second-instance-home"
@@ -229,6 +257,7 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
       pytest.fail("the attach path never spawned the task's own terminal")
     assert ensured and ensured[0][0] == session_id
     assert ensured[0][1] == cfg.sessions_dir / session_id
+
     frames: queue.Queue = queue.Queue()
 
     def _read_frames() -> None:
@@ -266,6 +295,66 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
       await asyncio.sleep(0.05)
     assert bytes(attachment.written) == b"ls\n"
 
+  # One Run per actual terminal launch, observed at the delivery boundary: the
+  # env pairs, the argv, the instruction file, the scoped pid identity, and the
+  # stored snapshot bytes the launched claude read.
+  from src.core.runs import read_pid_stat
+  tui_runs = tree.runs.list_run_records_sync(session_id)
+  assert len(tui_runs) == 1
+  runs_first = tui_runs[0]
+  call = start_calls[0]
+  env = dict(kv.split("=", 1) for kv in call["env_args"] if kv != "-e")
+  argv = call["command_args"]
+  native_id = runs_first.native_session_id
+  assert native_id.startswith(session_id + "-")
+  assert env["CHARLIEBOT_SESSION_ID"] == session_id
+  assert env["CHARLIEBOT_RUN_TOKEN"].count(".") == 1  # a signed run token
+  assert env["CHARLIEBOT_RUN_TOKEN"] != "tui-op-key"  # never the operator key
+  assert env["CHARLIEBOT_HOME"] == str(cfg.charliebot_home)
+  assert argv[argv.index("--session-id") + 1] == native_id
+  working_dir = Path(call["working_dir"])
+  claude_md = (working_dir / "CLAUDE.md").read_text(encoding="utf-8")
+  stored = json.loads(Path(runs_first.prompt_snapshot_ref).read_text(encoding="utf-8"))
+  joined = "\n\n".join(b["text"] for b in stored["blocks"])
+  assert claude_md == joined  # the launched bytes are the saved bytes
+  assert stored["char_count"] == len(joined)
+  assert any(
+      any(s["source_ref"] == "prompts/task_manager.md" for s in b["sources"])
+      for b in stored["blocks"])
+  run_after_attach = await tree.runs.get_run(session_id, runs_first.id)
+  assert run_after_attach is not None
+  assert run_after_attach.pid == pane_proc.pid
+  assert run_after_attach.pid_start == read_pid_stat(pane_proc.pid)[0]
+  assert run_after_attach.native_session_id == native_id
+  # The run credential is a scoped agent caller: its own task, never the
+  # second instance's.
+  agent_headers = {"Authorization": f"Bearer {env['CHARLIEBOT_RUN_TOKEN']}"}
+  scoped = client.get(f"/api/sessions/{session_id}", headers=agent_headers)
+  assert scoped.status_code == 200, scoped.text
+  other = client.get(f"/api/sessions/{other_task.id}", headers=agent_headers)
+  assert other.status_code in (403, 404)
+
+  # Re-attach: no second terminal launch, no second Run — the ongoing terminal
+  # keeps its start snapshot.
+  with client.websocket_connect(f"/ws/sessions/{session_id}?token=x") as ws2:
+    ws2.send_json({"type": "cursor", "index": 0})
+    await asyncio.sleep(0.3)
+  assert len(start_calls) == 1
+  runs_now = tree.runs.list_run_records_sync(session_id)
+  assert len([r for r in runs_now if r.kind == "manager_turn"]) == 1
+
+  # A source edit during the live runtime: the live Run's stored snapshot is
+  # untouched (its bytes stay the evidence of record), and the node's rule ref
+  # moved for the NEXT launch only.
+  from src.core.models import PatchSessionTaskRequest
+  from src.core.run_token import CallerIdentity
+  snapshot_before = Path(runs_first.prompt_snapshot_ref).read_bytes()
+  patched = await tree.patch_task(
+      session_id, PatchSessionTaskRequest(node_prompt="Live edit while attached"),
+      caller=CallerIdentity(kind="operator"))
+  assert patched.node_prompt_ref is not None
+  assert Path(runs_first.prompt_snapshot_ref).read_bytes() == snapshot_before
+
   # Detach leaves the task open with its input pending: silence and detach
   # never complete anything, and no completion fact appeared.
   assert tree.task_state(session_id) == "open"
@@ -281,7 +370,6 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
   stop = client.post(f"/api/sessions/{session_id}/tui/stop")
   assert stop.status_code == 200, stop.text
   assert killed == [session_id]
-
   # The stop is the ordinary explicit stop, not a completion.
   assert tree.task_state(session_id) == "open"
   assert [e for e in tree.events.load_events(session_id) if e.get("type") == ET.TASK_CLOSED] == []
@@ -296,7 +384,6 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
       task=TaskSpec(goal="leaf"), name="AL", backend=None, caller="operator")
   from src.core.models import RunRecord
   await tree.runs.register_run(RunRecord(id="agent-run", session_id=agents_task.id, kind="work"))
-  import subprocess
 
   from src.core.runs import read_pid_stat
   proc = subprocess.Popen(["/bin/sleep", "30"])
@@ -397,9 +484,9 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
     assert ack_remaining.status_code == 200, ack_remaining.text
     assert tree.dispatch.pending_inputs(session_id) == []
 
-    # The explicit operator completion now passes the ordinary guards: no runs
-    # exist on this terminal-driven node, so the operator's own attributed
-    # evidence carries it.
+    # The explicit operator completion now passes the ordinary guards: the
+    # terminal's Runs are terminal facts (the stop landed interrupted), so
+    # nothing is active and the operator's own attributed evidence carries it.
     done = client.post(f"/api/sessions/{session_id}/complete", json={
         "request_id": "complete-3",
         "summary": "feature delivered via the terminal session",
@@ -434,7 +521,7 @@ async def test_acknowledged_input_unblocks_a_structural_operation(
   """The acknowledgement is durable task state: the folded pending set loses
   the acknowledged ids, so the same guard set the tree UI reads reports the
   node unblocked without any second model."""
-  cfg, session_mgr, tree, client, ensured, killed, streaming = tui_env
+  cfg, session_mgr, tree, client, ensured, killed, streaming, start_calls, _pane = tui_env
   task = _create_tui_task(client)
   session_id = task["id"]
   first = _send_input(client, session_id, "the instruction", "input-1")

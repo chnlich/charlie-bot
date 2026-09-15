@@ -36,6 +36,10 @@ class TaskRunBinding:
   session_id: str
   run_id: str
   transport_dir: str
+  # True when this launch deliberately starts a fresh native context (the
+  # effective instruction hash or backend identity changed): the consumer
+  # resumes nothing and clears the stale anchor at spawn.
+  fresh_native_context: bool = False
 
 
 @dataclasses.dataclass
@@ -64,6 +68,11 @@ class _WorkItem:
   # live turn's raw log instead of spawning a new process.
   resume_record: MasterRunRecord | None = None
   resume_is_alive: Callable[[], bool] | None = None
+  # Prebuilt managed instructions (the v2 task snapshot's joined text). When
+  # set, the turn delivers exactly these bytes through the backend's
+  # system-instruction seam and never runs the legacy v1 instruction builder —
+  # no second memory/project/PM injection.
+  task_instructions: str | None = None
   # v2 task-tree binding plus the adapter's spawn/finish hooks. When task_run
   # is set the turn records pid/pid_start and its terminal outcome on the Run
   # (task_execution closures), merges extra_env into the child environment,

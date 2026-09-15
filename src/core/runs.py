@@ -545,6 +545,30 @@ STOP_EXIT_POLL_SECONDS = 0.05
 STOP_EXIT_WAIT_SECONDS = 10.0
 
 
+# The caller-identity refusal reasons shared by the API dependency and the CLI's
+# run-scoped query resolution — one active-Run predicate, never a second.
+RUN_IDENTITY_UNKNOWN_DETAIL = "run token does not reference an active run"
+RUN_IDENTITY_NOT_LAUNCHED_DETAIL = "run token references a run that has not launched"
+
+
+def run_identity_refusal(run: "RunRecord | None", events: list[dict]) -> str | None:
+    """Why *run* is not an active, launched Run for caller identity, or None.
+
+    The one predicate both identity consumers share: the API caller-identity
+    dependency and the CLI's run-scoped query resolution. A run token stands
+    only for a registered Run without a terminal fact whose launch identity
+    (pid, pid_start) is pinned.
+    """
+    if run is None:
+        return RUN_IDENTITY_UNKNOWN_DETAIL
+    for event in events:
+        if event.get("type") == ET.RUN_FINISHED and event.get("run_id") == run.id:
+            return RUN_IDENTITY_UNKNOWN_DETAIL
+    if run.pid is None or run.pid_start is None:
+        return RUN_IDENTITY_NOT_LAUNCHED_DETAIL
+    return None
+
+
 class RunNotFoundError(LookupError):
   """The requested run record does not exist (API: 404)."""
 

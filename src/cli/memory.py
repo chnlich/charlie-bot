@@ -1,21 +1,29 @@
 """CLI: labeled-entry memory store (query / add / lint).
 
-Pure-local; no server dependency. The store lives at ``cfg.memory_dir``
-(``~/.charliebot/memory/``). See ``src/core/memory.py`` for the store contract.
+Pure-local; no server dependency for an operator query. The store lives at
+``cfg.memory_dir`` (``~/.charliebot/memory/``). See ``src/core/memory.py`` for
+the store contract.
 
   charliebot memory query --topic <t> [--audience A] [--index] [--resident]
   charliebot memory add [--file F]
   charliebot memory lint
+
+A present CHARLIEBOT_RUN_TOKEN fixes the query's audience from the verified,
+active owning Run's role: omitted or contradictory --audience cannot broaden
+it, and an invalid, unknown, inactive, not-launched or wrong-instance token
+fails visibly instead of falling back to operator behavior.
 """
 
 import argparse
+import asyncio
 import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
 from src.core import memory
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig, get_config, get_credentials
+from src.core.run_token import load_run_token
 
 
 def main() -> None:
@@ -46,6 +54,16 @@ def main() -> None:
 
 def _cmd_query(args: argparse.Namespace) -> None:
   cfg = get_config()
+  token = load_run_token()
+  if token is not None:
+    audience = _resolve_run_scoped_audience(cfg, token)
+    if args.audience is not None and args.audience != audience:
+      print(
+          f"error: --audience {args.audience} contradicts the run credential's fixed "
+          f"audience {audience!r}; a run token cannot broaden its own query",
+          file=sys.stderr)
+      sys.exit(1)
+    args.audience = audience
   memory_dir = cfg.memory_dir
   store = memory.load_store(memory_dir)
   unknown = [t for t in args.topic if t not in store.topics]
@@ -79,6 +97,49 @@ def _cmd_query(args: argparse.Namespace) -> None:
   # that v2 bodies no longer carry it; legacy bodies keep their own heading.
   for e in matched:
     print(memory.full_text(e))
+
+
+def _resolve_run_scoped_audience(cfg: CharlieBotConfig, token: str) -> str:
+  """The audience the verified, active owning Run of *token* fixes — or a visible exit.
+
+  Reuses the central run-identity pieces (the signature verifier and the one
+  shared active-Run predicate in src.core.runs); no local re-implementation.
+  A wrong-instance token names a session this home's sessions directory has
+  never heard of, which is the same visible unknown-run refusal.
+  """
+  from src.core.control_events import ControlEventSink
+  from src.core.run_token import RunTokenError, verify_run_token
+  from src.core.runs import RunStore, run_identity_refusal
+  from src.core.session_aliases import SessionAliasStore
+  from src.core.sessions import SessionManager
+  from src.core.task_sessions import TaskTreeManager
+
+  key = str(get_credentials().get("charliebot", "access_key") or "")
+  if not key:
+    print("error: run token presented but no signing key is configured", file=sys.stderr)
+    sys.exit(1)
+  try:
+    claims = verify_run_token(token, key)
+  except RunTokenError as e:
+    print(f"error: invalid run token: {e}", file=sys.stderr)
+    sys.exit(1)
+  # A read-only local resolution through the same owners the server uses (the
+  # one shared active-Run predicate), no server process needed.
+  store = RunStore(cfg, asyncio.Lock(), ControlEventSink(SessionManager(cfg)),
+                   SessionAliasStore(cfg.sessions_dir))
+  run = store.read_run_sync(claims.session_id, claims.run_id)
+  refusal = run_identity_refusal(run, store.load_events_sync(claims.session_id))
+  if refusal is not None:
+    print(f"error: {refusal}", file=sys.stderr)
+    sys.exit(1)
+  meta = TaskTreeManager._read_metadata_file(
+      cfg.sessions_dir / claims.session_id / "metadata.json")
+  if meta is None or meta.profile is None:
+    print(
+        f"error: run token references session {claims.session_id}, which is not a "
+        "task-tree node in this instance", file=sys.stderr)
+    sys.exit(1)
+  return "master" if meta.profile == "manager" else "worker"
 
 
 def _cmd_add(args: argparse.Namespace) -> None:

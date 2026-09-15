@@ -126,6 +126,24 @@ async def _start_tmux_session(name: str, cwd: str, env_args: list[str], command_
   await _run_tmux("set-option", "-t", name, "history-limit", str(_HISTORY_LIMIT))
 
 
+async def tmux_pane_pid(session_id: str) -> int | None:
+  """The first pane's process pid of this session's tmux session, or None.
+
+  The TUI Run's process identity: the claude CLI lives in the pane, so its pid
+  (pinned with its /proc start marker by the caller) is what the Run records
+  and the caller-identity checks verify — the same Run/pid owners as a
+  headless launch.
+  """
+  rc, out = await _run_tmux("list-panes", "-t", tmux_session_name(session_id),
+                            "-F", "#{pane_pid}", capture=True)
+  if rc != 0 or not out.strip():
+    return None
+  try:
+    return int(out.strip().split("\n")[0])
+  except ValueError as e:
+    raise RuntimeError(f"tmux pane pid unparsable for {session_id}: {out!r}") from e
+
+
 async def tmux_session_exists(session_id: str) -> bool:
   """Return True if the tmux session for *session_id* exists on the charliebot socket."""
   rc, _ = await _run_tmux("has-session", "-t", tmux_session_name(session_id))

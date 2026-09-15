@@ -34,6 +34,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import orjson
@@ -233,6 +234,11 @@ class TaskTreeManager:
     self._index_generation = 0
     self._facts_memo: dict[str, tuple[list[dict], int, _TaskFacts]] = {}
     self._prompt_bodies_dir = cfg.charliebot_home / PROMPT_BODIES_DIR_NAME
+
+  @property
+  def prompt_bodies_dir(self) -> Path:
+    """The immutable local-rule body store (prompt_bodies/<sha256>.md) in the selected home."""
+    return self._prompt_bodies_dir
 
   @property
   def sessions(self) -> SessionManager:
@@ -538,6 +544,50 @@ class TaskTreeManager:
         attention_descendant_count=attention_count,
     )
 
+  async def record_native_anchor(
+      self, session_id: str, *, prompt_hash: str, backend: str, model: str | None,
+      reset_anchor: bool,
+  ) -> None:
+    """Persist the native-context anchor provenance under the control lock.
+
+    Called from the launch's spawn callback: the anchor is cleared only when
+    this launch deliberately starts a fresh native context (a changed
+    instruction hash or backend identity), and the identity fields always name
+    the snapshot this conversation continues under. A failed preparation never
+    reaches this write, so the usable old anchor survives it.
+    """
+    async with self.control_lock:
+      meta = await self.load_meta(session_id)
+      self._require_task(meta, session_id)
+      assert meta is not None
+      meta.native_prompt_hash = prompt_hash
+      meta.native_backend = backend
+      meta.native_model = model
+      if reset_anchor:
+        meta.cc_session_id = None
+      await self._save_meta(meta)
+
+  def prompt_rule_summaries(self, meta: SessionMetadata, index: "_TreeIndex") -> dict:
+    """The scope/source/current-rule facts the Task/Context UI reads from the detail.
+
+    Body content stays in the immutable store; this names each scope's ref,
+    origin path, measured size, and how many descendants a subtree rule change
+    would affect.
+    """
+
+    def summary(ref: str | None) -> dict:
+      if ref is None:
+        return {"ref": None, "source": None, "chars": 0}
+      path = self._prompt_bodies_dir / f"{ref}.md"
+      body = path.read_text(encoding="utf-8")
+      return {"ref": ref, "source": str(path), "chars": len(body)}
+
+    return {
+        "subtree": summary(meta.subtree_prompt_ref),
+        "node": summary(meta.node_prompt_ref),
+        "affected_descendants": len(self._descendants(index, meta.id)),
+    }
+
   async def session_detail(self, session_id: str) -> dict:
     """The session detail projection: existing metadata plus the derived task fields."""
     meta = await self.load_meta(session_id)
@@ -555,6 +605,7 @@ class TaskTreeManager:
         "work_state": self.work_state_of(index, session_id),
         "archived": self.archived_of(index, indexed),
         "ancestors": [AncestorRef(id=a.id, name=a.name).model_dump() for a in ancestors],
+        "prompt_rules": self.prompt_rule_summaries(indexed, index),
     })
     return payload
 
@@ -932,7 +983,19 @@ class TaskTreeManager:
     return blockers
 
   async def _apply_prompt_change(self, session_id: str, meta: SessionMetadata, scope: str, body: str | None) -> None:
-    """Store the rule body immutable, atomically swap the reference, record prompt_changed."""
+    """Store the rule body immutable, durably swap the reference, land the fact.
+
+    The metadata write and the ``prompt_changed`` fact are two durable writes,
+    and a crash between them is repaired without a workflow state machine: the
+    fact is derived by comparing the metadata's current ref with the last
+    recorded fact for that scope. Before extending the chain, an interrupted
+    earlier edit is landed first (the metadata is ahead of its fact stream), so
+    a retry or a later different edit can never fold two edits into one fact or
+    record a wrong transition. Immutable body storage and the metadata owner
+    stay exactly as they were; body writes are content-addressed, so a retried
+    PATCH re-stores the same bytes and references the same ref.
+    """
+    await self._ensure_prompt_changed_fact(session_id, meta, scope)
     attr = f"{scope}_prompt_ref"
     previous_ref: str | None = getattr(meta, attr)
     new_ref: str | None = None
@@ -942,13 +1005,32 @@ class TaskTreeManager:
       return
     setattr(meta, attr, new_ref)
     await self._save_meta(meta)
+    await self._ensure_prompt_changed_fact(session_id, meta, scope)
+
+  async def _ensure_prompt_changed_fact(self, session_id: str, meta: SessionMetadata, scope: str) -> None:
+    """Land the one ``prompt_changed`` fact the metadata's current ref implies.
+
+    Idempotent across the crash boundary: a landed fact (the last event's
+    ``new_ref`` equals the metadata ref) appends nothing; an interrupted edit
+    (metadata saved, fact lost) appends exactly the missing transition, with
+    ``previous_ref`` taken from the last fact so the chain stays truthful.
+    """
+    events = self.events.load_events(session_id)
+    last = next(
+        (e for e in reversed(events)
+         if e.get("type") == ET.PROMPT_CHANGED and e.get("scope") == scope), None)
+    current: str | None = getattr(meta, f"{scope}_prompt_ref")
+    if last is not None and last.get("new_ref") == current:
+      return
+    if last is None and current is None:
+      return  # no rule was ever set on this scope: nothing to land
     await self.events.append(session_id, build_control_event(
         ET.PROMPT_CHANGED,
         actor=ACTOR_USER,
         source_session_id=session_id,
         scope=scope,
-        previous_ref=previous_ref,
-        new_ref=new_ref,
+        previous_ref=last.get("new_ref") if last is not None else None,
+        new_ref=current,
     ))
 
   def _store_prompt_body(self, body: str) -> str:

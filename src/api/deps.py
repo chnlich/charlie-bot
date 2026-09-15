@@ -22,7 +22,7 @@ from src.core.run_token import (
     bearer_from_authorization,
     verify_run_token,
 )
-from src.core.runs import RunStore
+from src.core.runs import RunStore, run_identity_refusal
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 from src.core.threads import ThreadManager
@@ -167,9 +167,6 @@ def bad_request(exc: Exception) -> HTTPException:
   return HTTPException(status_code=400, detail=str(exc))
 
 
-_RUN_TOKEN_ACTIVE_DETAIL = "run token does not reference an active run"
-
-
 async def require_caller(
     request: Request,
     run_store: RunStore = Depends(get_run_store),
@@ -178,9 +175,11 @@ async def require_caller(
 
   A bearer equal to the operator access key (or no bearer at all — the cookie
   the auth middleware already checked) is an operator caller. Any other bearer
-  is a run token: it must verify against the operator signing key AND reference
-  a Run without a terminal fact, and it never falls back to the cookie or the
-  access key. Run-token use with a missing signing key is an explicit 401.
+  is a run token: it must verify against the operator signing key AND pass the
+  one shared active-Run predicate (registered, no terminal fact, launched
+  identity pinned — src.core.runs.run_identity_refusal), and it never falls
+  back to the cookie or the access key. Run-token use with a missing signing
+  key is an explicit 401.
   """
   bearer = bearer_from_authorization(request.headers.get("authorization"))
   if not bearer:
@@ -199,13 +198,8 @@ async def require_caller(
   except RunTokenError as e:
     raise HTTPException(status_code=401, detail=f"invalid run token: {e}") from e
   run = await run_store.get_run(claims.session_id, claims.run_id)
-  if run is None:
-    raise HTTPException(status_code=401, detail=_RUN_TOKEN_ACTIVE_DETAIL)
-  events = run_store.load_events_sync(claims.session_id)
-  if run_store.run_has_terminal_fact(run, events):
-    raise HTTPException(status_code=401, detail=_RUN_TOKEN_ACTIVE_DETAIL)
-  # The run credential names one process instance: calls are accepted only
-  # after the launch callback persisted (pid, pid_start) on the Run.
-  if run.pid is None or run.pid_start is None:
-    raise HTTPException(status_code=401, detail="run token references a run that has not launched")
+  refusal = run_identity_refusal(run, run_store.load_events_sync(claims.session_id))
+  if refusal is not None:
+    raise HTTPException(status_code=401, detail=refusal)
+  assert run is not None
   return CallerIdentity(kind="agent", claims=claims)

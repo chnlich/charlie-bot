@@ -1,4 +1,11 @@
-"""Worker/verify prompt assembly — template loading, marker-section extraction, token substitution."""
+"""Worker/verify prompt assembly — template loading, marker-section extraction, token substitution.
+
+This is the v1 (legacy session) worker assembly. It stays a compatibility caller during
+the task-tree migration; the v2 task assembly lives in :mod:`src.core.task_prompts`. The
+section sources are shared: the common execution rules moved to ``prompts/task_base.md``
+(their single maintained home) and this loader merges that file's sections with
+``prompts/worker.md``'s, so both assemblies read one set of canonical sections.
+"""
 
 from pathlib import Path
 
@@ -17,9 +24,9 @@ _PROMPT_SECTION_MARKER_SUFFIX = " -->"
 # one complete section. The id set lives only here:
 # _REQUIRED_WORKER_PROMPT_SECTIONS derives it.
 _WORKFLOW_PROMPT_SECTION = {
-    TaskType.IMPLEMENT: ("workflow_steps", "workflow_implement"),
-    TaskType.QUICK_EDIT: ("workflow_steps", "workflow_quick_edit"),
-    TaskType.SCRIPT_RUN: ("workflow_script_run",),
+    TaskType.IMPLEMENT: ("worktree_bindings", "workflow_steps", "workflow_implement"),
+    TaskType.QUICK_EDIT: ("worktree_bindings", "workflow_steps", "workflow_quick_edit"),
+    TaskType.SCRIPT_RUN: ("workflow_script_run_bindings", "workflow_script_run"),
 }
 
 _REQUIRED_WORKER_PROMPT_SECTIONS = (
@@ -30,7 +37,6 @@ _REQUIRED_WORKER_PROMPT_SECTIONS = (
     "role",
     "intro_new",
     "intro_continuation",
-    "worktree_workflow_header",
     *dict.fromkeys(sid for ids in _WORKFLOW_PROMPT_SECTION.values() for sid in ids),
     "task_spec_source_files",
     "task",
@@ -77,10 +83,34 @@ def _load_prompt_sections(path: Path, required: tuple[str, ...], *, extraction: 
   return sections
 
 
+def load_marker_sections(path: Path, required: tuple[str, ...], *, extraction: str) -> dict[str, str]:
+  """The public form of the marker-section loader (shared with the v2 assembly owner)."""
+  return _load_prompt_sections(path, required, extraction=extraction)
+
+
 def load_worker_prompt_sections(cfg: CharlieBotConfig) -> dict[str, str]:
-  """Read prompts/worker.md fresh and split it into its required sections."""
-  return _load_prompt_sections(
-      cfg.charlie_bot_repo / "prompts" / "worker.md", _REQUIRED_WORKER_PROMPT_SECTIONS, extraction="worker-prompt")
+  """Read the shared section sources fresh and split them into their required sections.
+
+  ``prompts/task_base.md`` (the common execution rules' single maintained home) is read
+  first, then ``prompts/worker.md``; a section id defined by both files is a template
+  error, never a silent override.
+  """
+  worker_sections = _load_prompt_sections(
+      cfg.charlie_bot_repo / "prompts" / "worker.md", (), extraction="worker-prompt")
+  base_sections = _load_prompt_sections(
+      cfg.charlie_bot_repo / "prompts" / "task_base.md", (), extraction="task-base-prompt")
+  duplicate = sorted(set(base_sections) & set(worker_sections))
+  if duplicate:
+    raise ValueError(
+        "prompts/task_base.md and prompts/worker.md both define section(s): "
+        + ", ".join(duplicate))
+  merged = {**base_sections, **worker_sections}
+  missing = [sid for sid in _REQUIRED_WORKER_PROMPT_SECTIONS if sid not in merged]
+  if missing:
+    raise ValueError(
+        "the worker prompt sections are missing required section(s): "
+        + ", ".join(missing))
+  return merged
 
 
 def _substitute_tokens(template: str, tokens: dict[str, str]) -> str:
@@ -141,8 +171,7 @@ def _build_worker_prompt(
   task_section = sections["task"].replace("{{description}}", description)
 
   worktree_section = (
-      f"{sections['worktree_workflow_header']}\n{workflow_body}\n\n"
-      f"{sections['task_spec_source_files']}\n{task_section}")
+      f"{workflow_body}\n\n{sections['task_spec_source_files']}\n{task_section}")
 
   iteration_reports_section = ""
   if loop_dir and iteration_number is not None:

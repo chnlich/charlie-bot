@@ -409,6 +409,14 @@ class SessionMetadata(BaseModel):
   # prompt_bodies/<sha256>.md in the selected home.
   subtree_prompt_ref: str | None = None
   node_prompt_ref: str | None = None
+  # The native-backend continuation anchor's provenance: the instruction-hash
+  # and backend identity the current cc_session_id conversation was continued
+  # under. A manager turn resumes the native conversation only when all three
+  # match the launch's own snapshot and backend; any change starts a fresh
+  # native context (earlier history stays on disk, never rewritten).
+  native_prompt_hash: str | None = None
+  native_backend: str | None = None
+  native_model: str | None = None
 
   # Rating
   rating: SessionRating | None = None

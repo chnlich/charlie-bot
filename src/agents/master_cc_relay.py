@@ -67,7 +67,11 @@ async def _compact_session_transcript(
       pre_tokens=context_tokens,
       persist_and_broadcast=_persist(item),
       cgroup_session_id=item.session_meta.id,
-      log_context={"session": item.session_meta.id, "account": account_label, "trigger": trigger},
+      log_context={
+          "session": item.session_meta.id,
+          "account": account_label,
+          "trigger": trigger
+      },
   )
 
 
@@ -147,8 +151,13 @@ async def place_turn(
   if (resume_id and cold and
       claude_compaction.expired_cache_compaction_wanted(cfg, option.model, context_tokens, last_request_at, now)):
     await _compact_session_transcript(
-        item, cc_session_id=resume_id, cwd=cwd, config_dir=chosen.config_dir,
-        account_label=chosen.label, trigger="expired_cache", context_tokens=context_tokens)
+        item,
+        cc_session_id=resume_id,
+        cwd=cwd,
+        config_dir=chosen.config_dir,
+        account_label=chosen.label,
+        trigger="expired_cache",
+        context_tokens=context_tokens)
   return chosen, None
 
 
@@ -219,6 +228,11 @@ async def prepare_relay(
     context_tokens, _last = await item.callbacks.claude_context_state(session_meta.id, session_meta)
   if claude_compaction.relay_compaction_wanted(cfg, option.model, context_tokens):
     await _compact_session_transcript(
-        item, cc_session_id=cc_session_id, cwd=cwd, config_dir=nxt.config_dir,
-        account_label=nxt.label, trigger="relay", context_tokens=context_tokens)
+        item,
+        cc_session_id=cc_session_id,
+        cwd=cwd,
+        config_dir=nxt.config_dir,
+        account_label=nxt.label,
+        trigger="relay",
+        context_tokens=context_tokens)
   return nxt, None

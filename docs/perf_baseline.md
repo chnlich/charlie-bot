@@ -14,7 +14,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M1 host: load + serve CPU | `uptime`; M1 collector below | load 1/5/15; serve count; %CPU total | load < 4 (CPU count); serve CPU total < 300 % | 3.27 / 2.42 / 2.94; 4 serve processes, 237.9 % CPU |
 | M2 UI polls | M2 collector below | polls/h; log MB | < 6000 polls/h | 2755 polls/h; 3.1 MB log |
 | M3 API latency, 401 path | M3 collector below | seconds per request | median < 0.005 s | median 0.002 s, max 0.002 s |
-| M4 turns | M4 collector below | seconds per turn; hung sessions (an archived session is never hung — `_session_archived`'s rule) | median < 600 s (recalibrated from < 300 s: the median tracks the bot's own cron-delegation workload mix, not code health — see the 2026-09-12 history row); hung = 0 | median 53 s, max 1133 s; 0 hung |
+| M4 turns | M4 collector below | seconds per turn; hung sessions (an archived session is never hung — `_session_archived`'s rule; neither is a session whose running threads' own worker logs moved within the hour — a delegation's chat file goes quiet for the delegation's whole run, see the 2026-09-14 history row) | median < 600 s (recalibrated from < 300 s: the median tracks the bot's own cron-delegation workload mix, not code health — see the 2026-09-12 history row); hung = 0 | median 53 s, max 1133 s; 0 hung |
 | M5 threads/list latency | M5 collector below | seconds per request, worst session | median < 0.05 s | — (introduced with its first history row) |
 | M6 session usage latency | M6 collector below | seconds per request, worst session; the append-round repeat (one appended event before each timed resolution — the 3 s usage poll during a streamed turn — scratch home) | median < 0.05 s; append-round median < 0.005 s | — (introduced with its first history row) |
 | M7 token-usage page | M7 collector below | seconds per page load; the changed-round collect (one corpus move since the last collect — the hourly cron's shape, scratch cache doc, live corpus read-only); the restart-cold collect (fresh process, the first page load after a server start — scratch copy of the live document, live corpus read-only; the first round after a deploy measures the one-time document-shape upgrade) | median < 3 s; changed-round median < 0.5 s; restart-cold median < 2.0 s (recalibrated from < 1.2 s: the line sat on the grown corpus's zero-movement fresh-process floor, 1.11-1.18 s at the 2026-09-13 calibration — see that history row) | — (introduced with its first history row) |
@@ -185,11 +185,13 @@ hung = 0
 malformed = 0
 for session_dir in root.iterdir():
     running = False
+    running_threads = []
     threads_dir = session_dir / "threads"
     if threads_dir.is_dir():
         for thread_meta in threads_dir.glob("*/metadata.json"):
             if json.loads(thread_meta.read_text()).get("status") == "running":
                 running = True
+                running_threads.append(thread_meta.parent)
     if running:
         # An archived session's threads are not work to resume: archiving is the
         # user's statement that the session is finished, the rule the boot
@@ -230,7 +232,20 @@ for session_dir in root.iterdir():
                     durations.append((ts - turn_start).total_seconds())
                 turn_start = None
     if running and (last_event is None or last_event < hour_ago):
-        hung += 1
+        # A delegation's chat file goes quiet for the delegation's whole run — the
+        # worker appends only its own events log and the summary lands at
+        # completion — so the chat mtime alone cannot separate an in-flight
+        # delegation from a dead session. A running thread whose own worker log
+        # moved within the window is live work, not a hang; a worker log stale
+        # with the chat file is the stuck shape the tripwire exists for.
+        worker_live = False
+        for thread_dir in running_threads:
+            worker_log = thread_dir / "data" / "events.jsonl"
+            if worker_log.is_file() and worker_log.stat().st_mtime >= hour_ago.timestamp():
+                worker_live = True
+                break
+        if not worker_live:
+            hung += 1
 
 median = statistics.median(durations) if durations else 0.0
 peak = max(durations) if durations else 0.0
@@ -6489,6 +6504,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-14 | this PR | M4 docs-only calibration, collector precision: old form "1 running sessions with last event older than 1h" — session 8a7964a3 (659: Redesign CharlieBot Session Tree), chat file 1.2 h stale while its running thread 75891ee8 (charlie-code-kimi-k3) had appended to its own worker log 0.1-0.9 min before the reading (670-672 KB and growing) — the in-flight-delegation shape, live work; new form on the same live state: 0 hung with the turn stats unchanged (174 turns, median 122 s, max 4834 s both rules); scratch shape checks, the same walk under both rules: an active session with a running thread whose chat file AND worker log are both 2 h stale reads hung 1 under both rules, the same session with a fresh worker log reads hung 1 → 0 (old → new), an archived session with a stale running marker stays 0 (the 2026-09-07 rule); no range change (hung = 0) | the 2026-09-07 archived-rule calibration's sibling class: the hung watch read the session chat file alone, and a delegation's chat file goes quiet for the delegation's whole run — the worker appends only its own events log and the summary lands at completion — so every hourly round during a > 1 h delegation read a false hung = 1 (this round's sweep tripped on exactly that shape); the collector now checks the running threads' own worker logs before counting, so the tripwire keeps catching genuinely stuck runs (chat and worker logs both stale) at zero extra scan cost on the common shape |
 | 2026-09-14 | this PR | M103 config-dependency resolution, interleaved raw-ASGI drives at load 4.0-6.5 one-minute (main checkout before vs branch worktree after back-to-back, session corpus a scratch home per arm while the config-resolved state — the code-server probe and the repos discovery — was the live config in both arms, the delta arm-differentiated exactly by the dependency form under test; every paired round faster): GET /diff 880.7/933.9 → 764.1/579.5 us (−13 % to −38 %), GET / 1828.9/1860.3 → 1304.0/1298.3 us (−29 % to −30 %), GET /api/git/repos 784.2/778.3 → 646.5/668.0 us (−18 % to −14 %); the committed collector adds the config-dependency override its isolation declares (review finding), and its scratch-corpus band reads /diff 660/679, / 1093/1125, /api/git/repos 367/363 us; component attribution, the isolated dependency-shape drive at load 3.3: one sync `Depends(get_config)` 246.5 us vs a no-dependency route 61.5 us — the per-request threadpool round-trip the sync form pays (the M34/M52/M82 rows' 67-104 us no-op hop floor, queueing-amplified under load) vs the awaited form's dict check; M103 definition, collector, healthy ranges, and the route-walk guard test introduced with this PR | 22 routes across 10 api modules still resolved config through the sync `Depends(get_config)` — one FastAPI threadpool handoff per request on the hottest writes and reads: every user-message POST and chat upload, the OpenAI-compatible proxy POST (every proxied LLM call), the index/home/diff pages and the /diff viewer's three fetches, the delegate/Slack internal POSTs, the slash executor, session create/fork/backend-switch/recap-summarize/tui-stop/elone, cron create/update, and code-server open — although `get_config_on_loop` (the awaited form the polled routes took) already served the same memoized instance; all 22 sites now take the on-loop dependency and the guard test walks `server.app.routes`' dependency trees so no route can reintroduce the hop; the polled routes (sessions/threads status, list, view, events, search, scheduled, cron tasks GET) were already on-loop and their collectors (M35/M44/M46/M56) are untouched |
 | 2026-09-14 | this PR | M7 restart-cold standing reading classified as the stale-document deploy-skew shape, not a regression: the verbatim collector read wall 6.840 s, 19 rows, scanned 2138.1 MB, rows digest 91801ae27a4c (load 4.58-6.01 one-minute) — 3.4x the < 2.0 s line — while the same collect against a document the current code had just rewritten read wall 1.341 s, 0.0 MB scanned, byte-identical rows (digest parity 98e7ab9edd27 == 98e7ab9edd27 on a same-window pair, two fresh processes back-to-back) — under the line; component attribution of the stale pass: the running server (started 2026-09-10 12:42) predates both the charlie-bot corpus source (#1352-era) and the opencode rows-map entry format, so its document carries no charlie-bot entries (0 of 6,571 lookups hit, 2,062.6 MB re-read, ~3.5 s) and stores the opencode db contribution as records without the rows map the seed path reads (prev.get("rows") is None, so the unseeded whole-blob scan runs, 76.5 MB / 2.7 s measured standalone) | the restart-cold collect reads the document the live server last wrote; a server predating a document-format landing makes every fresh-process collect re-read the whole corpus until the next deploy's own collect rewrites the document, then the metric returns to its zero-movement floor — the heal-at-deploy class the M96 row documents; until the restart, hourly rounds re-read this shape and should classify it, not chase it |
 | 2026-09-14 | this PR | M93 standing count 12 AttributeError 500s on GET /api/threads/{sid}/threads/{tid} in the newest server log (healthy 0), spread 2026-09-10 15:21 through 2026-09-14 13:31 local across the 97 h window — the seed's pre-fix AttributeError class still firing because the running server predates the 2026-09-11 cli-binary fix; no code change exists to make, the count heals at the next deploy | re-confirmed deploy skew, recorded so hourly rounds read the growing count as the undeployed fix, not a new failure mode |

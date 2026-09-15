@@ -29,6 +29,7 @@ interval may still rewrite.
 
 import bisect
 
+from src.core.memo import BoundedMemo
 from src.core.message_aggregator import MessageAggregator
 from src.core.message_events import _stable_history_projection, stable_closed_prefix_len
 
@@ -88,8 +89,8 @@ class MessageProjection:
     self._committed_final: list[dict] = []
     self._seps_final: list[int] = []
     self._region_events: list[dict] = []
-    self._page_bodies: dict[tuple[int, int], bytes] = {}
-    self._page_body_gzips: dict[tuple[int, int], bytes] = {}
+    self._page_bodies: BoundedMemo[tuple[int, int], bytes] = BoundedMemo(self._PAGE_BODY_LIMIT)
+    self._page_body_gzips: BoundedMemo[tuple[int, int], bytes] = BoundedMemo(self._PAGE_BODY_LIMIT)
     self.event_count = event_index_offset
     self._ingest(events)
 
@@ -106,8 +107,8 @@ class MessageProjection:
     copied._committed_final = list(self._committed_final)
     copied._seps_final = list(self._seps_final)
     copied._region_events = list(self._region_events)
-    copied._page_bodies = {}
-    copied._page_body_gzips = {}
+    copied._page_bodies = BoundedMemo(self._PAGE_BODY_LIMIT)
+    copied._page_body_gzips = BoundedMemo(self._PAGE_BODY_LIMIT)
     copied.event_count = self.event_count
     copied._ingest(events)
     return copied
@@ -200,16 +201,15 @@ class MessageProjection:
     with an empty cache, which is what invalidates the bodies when the
     history grows.
     """
-    body = self._page_bodies.get((before, limit))
-    if body is not None:
-      self._page_bodies[(before, limit)] = self._page_bodies.pop((before, limit))
-    return body
+    return self._page_bodies.get((before, limit))
 
   def store_page_body(self, before: int, limit: int, body: bytes) -> None:
-    """Cache the rendered body of the (``before``, ``limit``) page, LRU-capped."""
-    self._page_bodies[(before, limit)] = body
-    while len(self._page_bodies) > self._PAGE_BODY_LIMIT:
-      del self._page_bodies[next(iter(self._page_bodies))]
+    """Cache the rendered body of the (``before``, ``limit``) page, LRU-capped.
+
+    A store follows a None read of the same key (the route's miss arm), so a
+    stored body is never None — the contract BoundedMemo.get relies on.
+    """
+    self._page_bodies.store((before, limit), body)
 
   def cached_page_body_gzip(self, before: int, limit: int) -> bytes | None:
     """Gzip form of the (``before``, ``limit``) page body, or None.
@@ -218,13 +218,8 @@ class MessageProjection:
     per page per projection generation serves every later repeat click, and
     every ``advanced`` copy starts with an empty cache.
     """
-    gz = self._page_body_gzips.get((before, limit))
-    if gz is not None:
-      self._page_body_gzips[(before, limit)] = self._page_body_gzips.pop((before, limit))
-    return gz
+    return self._page_body_gzips.get((before, limit))
 
   def store_page_body_gzip(self, before: int, limit: int, gz: bytes) -> None:
     """Cache the gzip form of the (``before``, ``limit``) page body, LRU-capped."""
-    self._page_body_gzips[(before, limit)] = gz
-    while len(self._page_body_gzips) > self._PAGE_BODY_LIMIT:
-      del self._page_body_gzips[next(iter(self._page_body_gzips))]
+    self._page_body_gzips.store((before, limit), gz)

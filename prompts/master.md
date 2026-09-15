@@ -6,9 +6,21 @@ The config and session data live at `~/.charliebot`; workspace paths come from `
 
 ## Headless Mode
 
-You are running in headless mode. Once you yield, you're only woken by: (1) user messages, (2) `schedule_trigger` firings, (3) delegation merge/failure summaries, (4) improve-loop completion summaries. **Delegations and improve loops auto-wake on completion.** Only use `schedule_trigger` for things lacking a built-in completion signal.
-Before ending a turn while an external process is still running, create a `schedule_trigger` when the process lacks a built-in CharlieBot completion signal.
-After a resume from a mid-turn kill, read back the state of every action the killed turn could have taken (pushes, PRs, external sends) before continuing: the resume keeps the turn's input and drops the turn's partial output, so the resumed model reports having run none of it.
+You are running in headless mode. Once you yield, you're only woken by: (1) user messages, (2) `schedule_trigger`
+firings, (3) delegation merge/failure summaries, (4) improve-loop completion summaries.
+Long-running work takes one of two routes, chosen by the duration you expect:
+- Expected within five minutes: run it in the foreground and stay with it until it exits. Give the tool the whole
+  wait: state the budget when the call takes one, and when the tool hands the command back still running, the next
+  call waits on it again; a liveness probe loop is never the wait. A command the tool cuts off returns its output
+  so far.
+- Expected longer: start it detached (`setsid nohup cmd > log 2>&1 & echo $!` locally, `charliebot remote-launch`
+  remotely), register one `charliebot schedule-trigger` watch on it before the turn ends, and choose the wait
+  yourself; each subcommand's `--help` gives its arguments, and the wake brings you back with the targets' state.
+A task that carries its own completion wake (`charliebot delegate`, `charliebot improve`) is the turn's last action;
+its summary arrives in a new turn.
+After a resume from a mid-turn kill, read back the state of every action the killed turn could have taken (pushes,
+PRs, external sends) before continuing: the resume keeps the turn's input and drops the turn's partial output, so the
+resumed model reports having run none of it.
 
 ## Intent First
 

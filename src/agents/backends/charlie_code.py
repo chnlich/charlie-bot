@@ -31,6 +31,13 @@ from src.core.log_once import LazyStructlogLogger
 log = LazyStructlogLogger()
 
 
+def _duration_label(seconds: float) -> str:
+  """Progress ticks read in minutes from one minute up ("1 min", "15 min"), else in seconds."""
+  if seconds >= 60:
+    return f"{seconds / 60:g} min"
+  return f"{seconds:g} s"
+
+
 def _context_reading_int(field: str, value: object) -> int | None:
   """Sanitize one numeric ``context_reading`` field.
 
@@ -82,6 +89,9 @@ class CharlieCodeBackend(AgentBackend):
     # Absolute paths of the current run's image attachments; run() fills it
     # before delegating and _build_command reads it while assembling flags.
     self._image_paths: list[str] = []
+    # Command text by command event id, so a command_progress event (which
+    # carries only the id) can name the command it reports on.
+    self._commands_by_id: dict[str, str] = {}
 
   async def run(self,
                 prompt: str,
@@ -169,9 +179,20 @@ class CharlieCodeBackend(AgentBackend):
       return [make_text_event(event["text"])]
 
     if event_type == "command":
+      self._commands_by_id[event["id"]] = event["command"]
       translated = make_tool_use_event("Bash", {"command": event["command"]})
       translated["id"] = event["id"]
       return [translated]
+
+    if event_type == "command_progress":
+      state = "terminated" if event["killed"] else "still running"
+      command = " ".join(self._commands_by_id[event["id"]].split())[:80]
+      return [{
+          "type": ET.SYSTEM,
+          "subtype": ET.COMMAND_PROGRESS,
+          "content": (f"Command {state} after {_duration_label(event['elapsed_seconds'])} "
+                      f"(pid {event['pid']}): {command}"),
+      }]
 
     if event_type == "observation":
       translated = make_tool_result_event("Bash", event.get("output", ""))

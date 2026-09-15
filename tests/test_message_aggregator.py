@@ -377,6 +377,17 @@ def test_format_k_tokens_at_its_boundary(count: int, expected: str) -> None:
         ),
         pytest.param(
             {
+                "type": "system",
+                "subtype": ET.COMMAND_PROGRESS,
+                "content": "Command still running after 1 min (pid 4242): sleep 100",
+                "timestamp": "t",
+            },
+            "Command still running after 1 min (pid 4242): sleep 100",
+            None,
+            id="command_progress",
+        ),
+        pytest.param(
+            {
                 "type": "context_compacted",
                 "trigger": "manual",
                 "compact_metadata": {

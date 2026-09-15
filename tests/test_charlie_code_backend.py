@@ -127,6 +127,34 @@ def test_translate_thought_and_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
   assert not backend.translate_event({"type": "future-event"})
 
 
+def test_translate_command_progress_renders_a_system_note_naming_the_command(
+    monkeypatch: pytest.MonkeyPatch) -> None:
+  backend = _build_backend(monkeypatch)
+  command = "python train.py --epochs 3 &&\n  python eval.py " + "-" * 100
+  backend.translate_event({"type": "command", "step": 3, "id": "s-3-1", "command": command})
+
+  running = backend.translate_event({
+      "type": "command_progress", "step": 3, "id": "s-3-1", "elapsed_seconds": 60,
+      "pid": 4242, "log": "/tmp/s-3-1.log", "killed": False,
+  })
+  terminated = backend.translate_event({
+      "type": "command_progress", "step": 3, "id": "s-3-1", "elapsed_seconds": 900,
+      "pid": 4242, "log": "/tmp/s-3-1.log", "killed": True,
+  })
+
+  head = "python train.py --epochs 3 && python eval.py " + "-" * 100
+  assert running == [{
+      "type": ET.SYSTEM,
+      "subtype": ET.COMMAND_PROGRESS,
+      "content": f"Command still running after 1 min (pid 4242): {head[:80]}",
+  }]
+  assert terminated == [{
+      "type": ET.SYSTEM,
+      "subtype": ET.COMMAND_PROGRESS,
+      "content": f"Command terminated after 15 min (pid 4242): {head[:80]}",
+  }]
+
+
 def test_translate_compact_event_and_unknown_still_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 

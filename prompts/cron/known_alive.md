@@ -7,7 +7,10 @@ string, and land that edit in the same PR. Entries anchor each symbol by name an
 code_health.md Step 1 bans coordinate citations, so no line numbers appear here.
 
 Known-alive symbols:
-- `kill_tmux_session` — documented `# noqa` re-export, reached by string reference.
+- `kill_tmux_session` (`src/agents/backends/pty_common.py`; re-exported with `# noqa` by
+  `src/agents/backends/tui.py`) — reached by string: `TUI_KILL_TMUX_SESSION_PATCH_TARGET`
+  (`tests/conftest.py`) names the `src.agents.backends.tui` path, so the re-export is the
+  path the monkeypatch resolves through.
 - `ScheduledSessionBusyError` — documented re-export (src/api/cron.py imports it from
   src/core/sessions), kept deliberately. Used in-file by `_elone_scheduled_successor`'s
   raise, so the import line carries no `# noqa`.
@@ -51,7 +54,7 @@ Known-alive symbols:
   `_clear_store_memo` (`tests/test_memory_store_memo.py`),
   `_clear_aggregate_memo` (`tests/test_token_tally.py`),
   `_clear_jsonl_memo` (`tests/test_tui_backend.py`),
-  `_clean_memo` (`tests/test_thread_meta_scan_memo.py`),
+  `_clean_memo` (`tests/test_thread_meta_scan_memo.py`, `tests/test_trigger_probe_memo.py`),
   `clear_next_run_memo` (`tests/test_cron_next_run_memo.py`),
   `_clean_probe_state` (`tests/test_probe_single_walk.py`) — pytest `autouse=True` fixtures,
   reached by pytest's fixture-name discovery only: zero whole-repo matches outside their
@@ -133,10 +136,11 @@ Known-alive symbols:
   coroutine), as each site's inline comment states. The condition is the point; nothing to
   delete.
 - `model_config` (the pydantic v2 `ConfigDict` class attribute, assigned on the pydantic
-  `BaseModel` classes of `src/core/config.py`, `src/core/models.py`, `src/core/project_config.py`,
-  `src/api/diag.py`, and `src/api/cron.py`) — `ModelMetaclass` consumes it by attribute name at
-  class-definition time. Every assignment pins `extra='forbid'`, which turns an unknown config or
-  request key into a validation error, except `TaskCreate` in `src/api/cron.py`, which pins
+  `BaseModel` classes of `src/core/backend_models.py`, `src/core/config.py`, `src/core/models.py`,
+  `src/core/project_config.py`, `src/api/diag.py`, and `src/api/cron.py`) — `ModelMetaclass`
+  consumes it by attribute name at class-definition time. Every assignment pins
+  `extra='forbid'`, which turns an unknown config or request key into a validation error, except
+  `TaskCreate` in `src/api/cron.py`, which pins
   `extra='ignore'` (the pydantic default) so the create-request body stays looser than the
   loader's forbid task model, as the comment above the assignment states. The name is read only
   by the schema tests asserting the pin (`tests/test_config_schema.py`,
@@ -379,12 +383,12 @@ Known-alive symbols:
   pinning the codex resolver's default home under tmp_path so the seeded rollout tree
   resolves there. Vulture flags it as an unused function. Same autouse class as
   `_clean_probe_state` above.
-- `require_model` (`src/core/models.py`) — pydantic `@model_validator(mode='after')` method on
-  `BackendBase`, registered with pydantic at class-definition time and invoked during model
-  validation: it rejects a backend config entry whose type requires a `model` but declares
-  none. The method name has exactly zero whole-repo matches outside its definition, so
-  vulture flags it as an unused method. Same framework-registered class as the
-  `check_prompt_or_handler_or_loop` entry above.
+- `require_model` (`src/core/backend_models.py`) — pydantic `@model_validator(mode='after')`
+  method on `BackendBase`, registered with pydantic at class-definition time and invoked during
+  model validation: it rejects a backend config entry whose type requires a `model` but declares
+  none. The only exact-name matches outside the definition are a prose comment in
+  `tests/test_threads_attach_dispatch.py` and this list, so vulture flags it as an unused
+  method. Same framework-registered class as the `check_prompt_or_handler_or_loop` entry above.
 - `_expand_tilde` (`src/core/config.py`, on `PathsConfig`, `UiConfig`, and `PublishConfig`) —
   pydantic `@model_validator(mode='after')` methods, registered with pydantic at
   class-definition time and invoked during model validation: each expands `~` in its
@@ -415,3 +419,16 @@ Known-alive symbols:
   while leaving the annotation unresolved. Vulture flags the import as its only
   production-scope finding (unused import, 90% confidence); never delete it on that
   evidence.
+- `__getattr__` (`src/cli/common.py` and `src/core/artifact_wrap.py`) — the PEP 562
+  lazy-`requests` hooks, one-line delegates to the shared `requests_module_getattr`
+  (`src/core/http.py`), which wraps `load_requests`.
+  Reached by string: the patch targets `src.cli.common.requests.*`
+  (`CLI_COMMON_REQUESTS_POST_PATCH_TARGET` / `CLI_COMMON_REQUESTS_GET_PATCH_TARGET` in
+  `tests/conftest.py`) and `src.core.artifact_wrap.requests.get`
+  (`tests/core/test_artifact_wrap.py`) resolve the module attribute through the hook.
+  Vulture flags each as an unused function at 60% confidence.
+- `split_sse_lines` (`src/core/sse.py`) — kept deliberately as the SSE framing oracle. The
+  property tests in `tests/test_sse.py` drive it through `_split_chunked` and assert the
+  production byte framer (`_ChunkedFramer`, same module) matches its answers on every two-way
+  split and on random chunkings; the framer's docstring names it the semantics home. No
+  production code calls it, so a production-scope vulture scan flags it as an unused function.

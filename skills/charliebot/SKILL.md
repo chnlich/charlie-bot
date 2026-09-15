@@ -142,7 +142,7 @@ One Claude login carries a five-hour and a weekly window, so a long master turn 
 - Claude result-event usage is invocation-cumulative; read live context from the last main-chain assistant usage.
 - `modelUsage` may begin with a haiku submodel, and delegated thread cost is omitted.
 - The panel should divide usage by the enforced ~433K auto-compact ceiling rather than the raw context window.
-- `context_compacted.pre_tokens` in a session's `chat_events.jsonl` is the observable ground truth for where auto-compact fires (trigger is approximate, ~0.7% above nominal); use it to validate any displayed ceiling instead of asserting a literal.
+- `compact_metadata.pre_tokens` on a `context_compacted` event in a session's `chat_events.jsonl` is the observable ground truth for where auto-compact fires (trigger is approximate, ~0.7% above nominal); use it to validate any displayed ceiling instead of asserting a literal. Events persisted before the counts moved into the payload carry a top-level `pre_tokens` instead.
 
 ---
 

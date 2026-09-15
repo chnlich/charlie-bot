@@ -260,7 +260,13 @@ class ChatEventStore:
     return self._chat_events_path(session_id)
 
   async def save_chat_event(self, session_id: str, event: dict) -> None:
-    """Append a single NDJSON event line to chat_events.jsonl."""
+    """Append a single NDJSON event line to chat_events.jsonl.
+
+    An event missing ``id`` or ``timestamp`` gets them injected before the
+    append — the queued-turn reader takes the saved event's ``id`` as its
+    replay-exclusion key. A warm cache entry takes the append in memory and
+    advances its finalize fold; a cold cache stays cold.
+    """
     if 'id' not in event:
       event['id'] = str(uuid.uuid4())
     if 'timestamp' not in event:
@@ -311,7 +317,13 @@ class ChatEventStore:
     return events, total, has_more
 
   def get_chat_event_count_sync(self, session_id: str, session_meta: SessionMetadata | None = None) -> int:
-    """Return the current global chat event count without parsing event payloads."""
+    """Return the current global chat event count without parsing event payloads.
+
+    The count is archive_offset + live-file physical lines — the index space
+    :meth:`load_chat_events_range` numbers. *session_meta*'s stored offset is
+    used when given; otherwise the offset is read fresh. A warm cache serves
+    its list length, a cold one counts the live file's lines.
+    """
     if session_meta is not None:
       archive_offset = session_meta.archive_offset
     else:

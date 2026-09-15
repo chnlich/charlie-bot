@@ -12,6 +12,7 @@ from conftest import queued_user_reorder_events as _reorder_events
 
 from src.api.message_utils import events_to_messages, events_to_view
 from src.core import event_types as ET
+from src.core import message_aggregator
 from src.core.message_aggregator import TOOL_PREVIEW_CHARS, MessageAggregator
 
 VOICE_KEY = "is_" + "voice"
@@ -347,6 +348,20 @@ def test_handler_result_flushes_draft_and_emits_system_message() -> None:
 
 
 @pytest.mark.parametrize(
+    ("count", "expected"),
+    [
+        pytest.param(3_535, "3.5k", id="under_10k"),
+        pytest.param(22_000, "22.0k", id="one_decimal"),
+        pytest.param(99_999, "100.0k", id="below_boundary"),
+        pytest.param(100_000, "100k", id="at_boundary"),
+        pytest.param(1_013_767, "1014k", id="above_boundary"),
+    ],
+)
+def test_format_k_tokens_at_its_boundary(count: int, expected: str) -> None:
+  assert message_aggregator._format_k_tokens(count) == expected
+
+
+@pytest.mark.parametrize(
     ("event", "expected_content", "expected_kind"),
     [
         pytest.param(
@@ -364,12 +379,41 @@ def test_handler_result_flushes_draft_and_emits_system_message() -> None:
             {
                 "type": "context_compacted",
                 "trigger": "manual",
+                "compact_metadata": {
+                    "trigger": "manual",
+                    "pre_tokens": 21988
+                },
+                "timestamp": "t",
+            },
+            "Context compacted (manual) — was 22.0k tokens",
+            "context_compacted",
+            id="context_compacted",
+        ),
+        pytest.param(
+            {
+                "type": "context_compacted",
+                "trigger": "auto",
+                "compact_metadata": {
+                    "trigger": "auto",
+                    "pre_tokens": 1_013_767,
+                    "post_tokens": 15_534,
+                },
+                "timestamp": "t",
+            },
+            "Context compacted (auto) — 1014k → 15.5k tokens",
+            "context_compacted",
+            id="context_compacted_both_counts",
+        ),
+        pytest.param(
+            {
+                "type": "context_compacted",
+                "trigger": "auto",
                 "pre_tokens": 21988,
                 "timestamp": "t",
             },
-            "Context compacted (manual) — was 22k tokens",
+            "Context compacted (auto) — was 22.0k tokens",
             "context_compacted",
-            id="context_compacted",
+            id="context_compacted_history_shape",
         ),
         pytest.param(
             {

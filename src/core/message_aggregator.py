@@ -117,15 +117,38 @@ def _compacting_model_note(ev: dict) -> str:
   return f'by {family.capitalize()}'
 
 
+def _format_k_tokens(count: int | float) -> str:
+  """The one formatter every token figure of the compaction line goes through:
+  one decimal below 100k (15.5k), whole k at or above (1014k)."""
+  return f'{count / 1000:.1f}k' if count < 100_000 else f'{round(count / 1000)}k'
+
+
 def _context_compacted_msg(ev: dict) -> dict:
+  """The compaction line: both counts when the payload carries them, today's
+  wording otherwise.
+
+  The counts live in ``compact_metadata`` — the payload the synthesis passes
+  through whole, the same place a ``compact_boundary`` event carries them.
+  Events persisted before the payload move carry only a top-level
+  ``pre_tokens``; the fallback to it keeps that history rendering.
+  """
   trigger = ev.get('trigger', 'auto')
-  pre_tokens = ev.get(ET.COMPACT_PRE_TOKENS)
+  meta = ev.get(ET.COMPACT_METADATA)
+  if meta:
+    pre_tokens = meta.get(ET.COMPACT_PRE_TOKENS)
+    post_tokens = meta.get(ET.COMPACT_POST_TOKENS)
+  else:
+    pre_tokens = ev.get(ET.COMPACT_PRE_TOKENS)
+    post_tokens = None
   msg = 'Context compacted'
   qualifiers = [part for part in (trigger, _compacting_model_note(ev)) if part]
   if qualifiers:
     msg += f' ({", ".join(qualifiers)})'
   if pre_tokens:
-    msg += f' — was {round(pre_tokens / 1000)}k tokens'
+    if post_tokens:
+      msg += f' — {_format_k_tokens(pre_tokens)} → {_format_k_tokens(post_tokens)} tokens'
+    else:
+      msg += f' — was {_format_k_tokens(pre_tokens)} tokens'
   return {'role': 'system', 'content': msg, 'kind': ET.CONTEXT_COMPACTED}
 
 

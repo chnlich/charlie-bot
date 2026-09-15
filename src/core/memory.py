@@ -259,6 +259,16 @@ def _validate_entry(entry: Entry, topics: dict[str, Topic], *, relaxed: bool, st
   def v(msg: str) -> str:
     return f"{where}/{topic_label}/{entry.slug}.md: {msg}"
 
+  def header_field_violations() -> list[str]:
+    """The scope/audience/created header checks both rule sets share."""
+    out: list[str] = []
+    if entry.scope is not None and entry.scope not in _SCOPES:
+      out.append(v(f"scope {entry.scope!r} not in {{user, host}}"))
+    out.extend(_audience_violations(entry, v))
+    if entry.created is not None and not _CREATED_RE.match(entry.created):
+      out.append(v(f"created {entry.created!r} not YYYY-MM-DD"))
+    return out
+
   violations: list[str] = []
   if not _SLUG_RE.match(entry.slug):
     violations.append(v(f"filename slug {entry.slug!r} does not match slug charset [A-Za-z0-9._-]"))
@@ -267,11 +277,7 @@ def _validate_entry(entry: Entry, topics: dict[str, Topic], *, relaxed: bool, st
   elif not TOPIC_NAME_RE.match(entry.topic):
     violations.append(v(f"topic {entry.topic!r} is not a valid topic name"))
   if relaxed:
-    if entry.scope is not None and entry.scope not in _SCOPES:
-      violations.append(v(f"scope {entry.scope!r} not in {{user, host}}"))
-    violations.extend(_audience_violations(entry, v))
-    if entry.created is not None and not _CREATED_RE.match(entry.created):
-      violations.append(v(f"created {entry.created!r} not YYYY-MM-DD"))
+    violations.extend(header_field_violations())
     if entry.revises is not None and not _SLUG_RE.match(entry.revises):
       violations.append(v(f"revises {entry.revises!r} does not match slug charset"))
   else:
@@ -284,11 +290,7 @@ def _validate_entry(entry: Entry, topics: dict[str, Topic], *, relaxed: bool, st
         v(f"missing required header field {field!r}")
         for field in ("scope", "audience")
         if getattr(entry, field) is None)
-    if entry.scope is not None and entry.scope not in _SCOPES:
-      violations.append(v(f"scope {entry.scope!r} not in {{user, host}}"))
-    violations.extend(_audience_violations(entry, v))
-    if entry.created is not None and not _CREATED_RE.match(entry.created):
-      violations.append(v(f"created {entry.created!r} not YYYY-MM-DD"))
+    violations.extend(header_field_violations())
     if entry.source is not None and not _SLUG_RE.match(entry.source):
       violations.append(v(f"source {entry.source!r} does not match slug charset"))
     if entry.revises is not None:

@@ -168,9 +168,15 @@ async def handle_compaction_events(
   if subtype == ET.COMPACT_BOUNDARY:
     meta = event.get(ET.COMPACT_METADATA, {})
     trigger = meta.get("trigger", "unknown")
-    pre_tokens = meta.get(ET.COMPACT_PRE_TOKENS)
-    log.info("cc_context_compacted", trigger=trigger, pre_tokens=pre_tokens, **log_context)
-    await persist_and_broadcast(make_context_compacted_event(trigger, pre_tokens, model=None))
+    # The payload travels whole: reading the two counts here is for the log line
+    # only, never the wire contract.
+    log.info(
+        "cc_context_compacted",
+        trigger=trigger,
+        pre_tokens=meta.get(ET.COMPACT_PRE_TOKENS),
+        post_tokens=meta.get(ET.COMPACT_POST_TOKENS),
+        **log_context)
+    await persist_and_broadcast(make_context_compacted_event(trigger, meta, model=None))
     return
   if subtype == "status" and event.get("compact_result") == "failed":
     error = event.get("compact_error")

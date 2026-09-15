@@ -119,7 +119,41 @@ def test_compaction_command_and_env_pin_sonnet_and_the_login_dir(
 def test_count_compact_boundaries_reads_on_disk_rows(tmp_path: Path) -> None:
   transcript = _write_transcript(tmp_path / "login", "uuid-2", boundaries=2)
   assert claude_compaction.count_compact_boundaries(transcript) == 2
-  assert claude_compaction._newest_boundary_pre_tokens(transcript) == 150001
+  assert claude_compaction._newest_boundary_compact_metadata(transcript) == {"trigger": "manual", "pre_tokens": 150001}
+
+
+def test_newest_boundary_payload_converts_keys_by_rule_and_carries_both_counts(tmp_path: Path) -> None:
+  transcript = tmp_path / "login" / "projects" / SLUG / "uuid-2b.jsonl"
+  transcript.parent.mkdir(parents=True, exist_ok=True)
+  transcript.write_text(
+      json.dumps(
+          {
+              "type": "system",
+              "subtype": "compact_boundary",
+              "compactMetadata":
+                  {
+                      "trigger": "auto",
+                      "preTokens": 1_013_767,
+                      "postTokens": 15_534,
+                      "preCompactDiscoveredTools": ["Bash"],
+                  }
+          }) + "\n",
+      encoding="utf-8")
+
+  assert claude_compaction._newest_boundary_compact_metadata(transcript) == {
+      "trigger": "auto",
+      "pre_tokens": 1_013_767,
+      "post_tokens": 15_534,
+      "pre_compact_discovered_tools": ["Bash"],
+  }
+
+
+def test_newest_boundary_payload_is_none_without_readable_metadata(tmp_path: Path) -> None:
+  transcript = tmp_path / "login" / "projects" / SLUG / "uuid-2c.jsonl"
+  transcript.parent.mkdir(parents=True, exist_ok=True)
+  transcript.write_text(json.dumps({"type": "system", "subtype": "compact_boundary"}) + "\n", encoding="utf-8")
+
+  assert claude_compaction._newest_boundary_compact_metadata(transcript) is None
 
 
 # ---------------------------------------------------------------------------
@@ -184,18 +218,13 @@ def _install_fake_exec(monkeypatch: pytest.MonkeyPatch, proc: _FakeProc) -> dict
   return captured
 
 
-def _append_boundary(transcript: Path) -> None:
+def _append_boundary(transcript: Path, *, with_metadata: bool = True) -> None:
+  meta = {"trigger": "manual", "preTokens": 123456, "postTokens": 9111} if with_metadata else None
+  row: dict[str, Any] = {"type": "system", "subtype": "compact_boundary"}
+  if meta is not None:
+    row["compactMetadata"] = meta
   with transcript.open("a", encoding="utf-8") as handle:
-    handle.write(
-        json.dumps(
-            {
-                "type": "system",
-                "subtype": "compact_boundary",
-                "compactMetadata": {
-                    "trigger": "manual",
-                    "preTokens": 123456
-                }
-            }) + "\n")
+    handle.write(json.dumps(row) + "\n")
 
 
 async def _run(
@@ -234,7 +263,18 @@ async def test_success_emits_context_compacted_naming_sonnet(tmp_path: Path, mon
   ok, events, captured = await _run(tmp_path, monkeypatch, proc)
 
   assert ok is True
-  assert events == [{"type": ET.CONTEXT_COMPACTED, "trigger": "manual", "pre_tokens": 120_000, "model": SONNET}]
+  assert events == [
+      {
+          "type": ET.CONTEXT_COMPACTED,
+          "trigger": "manual",
+          ET.COMPACT_METADATA: {
+              "trigger": "manual",
+              "pre_tokens": 120_000,
+              "post_tokens": 9111,
+          },
+          "model": SONNET,
+      }
+  ]
   assert proc.stdin_payload == b"/compact\n"
   assert captured["args"][:6] == ["claude", "-p", "--resume", "uuid-3", "--model", SONNET]
   assert captured["kwargs"]["cwd"] == str(tmp_path / "session")
@@ -251,7 +291,46 @@ async def test_success_without_a_caller_reading_uses_the_boundary_row(
   ok, events, _captured = await _run(tmp_path, monkeypatch, proc, pre_tokens=None)
 
   assert ok is True
-  assert events[0]["pre_tokens"] == 123456
+  assert events[0][ET.COMPACT_METADATA] == {
+      "trigger": "manual",
+      "pre_tokens": 123456,
+      "post_tokens": 9111,
+  }
+
+
+@pytest.mark.asyncio
+async def test_unreadable_boundary_row_leaves_the_payload_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A boundary row without compactMetadata yields no payload; the caller's own
+  reading still lands in the payload so the line keeps today's single number."""
+  transcript = tmp_path / "login" / "projects" / SLUG / "uuid-3.jsonl"
+  proc = _FakeProc(
+      returncode=0,
+      stdout=_result_json([SONNET]),
+      on_communicate=lambda: _append_boundary(transcript, with_metadata=False))
+
+  _ok, events, _captured = await _run(tmp_path, monkeypatch, proc, pre_tokens=None)
+  assert events == [{
+      "type": ET.CONTEXT_COMPACTED,
+      "trigger": "manual",
+      "model": SONNET,
+  }]
+
+  proc = _FakeProc(
+      returncode=0,
+      stdout=_result_json([SONNET]),
+      on_communicate=lambda: _append_boundary(transcript, with_metadata=False))
+  _ok, events, _captured = await _run(tmp_path, monkeypatch, proc, pre_tokens=120_000)
+  assert events == [
+      {
+          "type": ET.CONTEXT_COMPACTED,
+          "trigger": "manual",
+          ET.COMPACT_METADATA: {
+              "pre_tokens": 120_000
+          },
+          "model": SONNET,
+      }
+  ]
 
 
 @pytest.mark.parametrize(
@@ -344,17 +423,37 @@ def test_context_compacted_projection_names_the_compacting_model() -> None:
           {
               "type": ET.CONTEXT_COMPACTED,
               "trigger": "manual",
-              "pre_tokens": 120_000,
+              ET.COMPACT_METADATA: {
+                  "trigger": "manual",
+                  "pre_tokens": 120_000,
+                  "post_tokens": 9_111,
+              },
               "model": SONNET,
               "timestamp": "t",
           }))
-  assert deltas[0]["message"]["content"] == "Context compacted (manual, by Sonnet) — was 120k tokens"
+  assert deltas[0]["message"]["content"] == "Context compacted (manual, by Sonnet) — 120k → 9.1k tokens"
 
   failed = list(agg.feed({"type": ET.CONTEXT_COMPACT_FAILED, "error": "timed out", "model": SONNET, "timestamp": "t"}))
   assert failed[0]["message"]["content"] == "Compaction by Sonnet failed — timed out"
 
 
 def test_context_compacted_projection_without_model_is_unchanged() -> None:
+  agg = MessageAggregator()
+  deltas = list(
+      agg.feed(
+          {
+              "type": ET.CONTEXT_COMPACTED,
+              "trigger": "auto",
+              ET.COMPACT_METADATA: {
+                  "trigger": "auto",
+                  "pre_tokens": 400_000
+              },
+              "timestamp": "t"
+          }))
+  assert deltas[0]["message"]["content"] == "Context compacted (auto) — was 400k tokens"
+
+
+def test_context_compacted_projection_still_renders_the_legacy_top_level_shape() -> None:
   agg = MessageAggregator()
   deltas = list(agg.feed({"type": ET.CONTEXT_COMPACTED, "trigger": "auto", "pre_tokens": 400_000, "timestamp": "t"}))
   assert deltas[0]["message"]["content"] == "Context compacted (auto) — was 400k tokens"

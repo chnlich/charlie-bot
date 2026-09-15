@@ -37,7 +37,7 @@ from src.api.auth import AuthMiddleware, _credential_matches
 from src.api.deps import session_manager, set_trigger_manager, task_manager, thread_manager
 from src.core import timeouts
 from src.core.buildinfo import init_build_info
-from src.core.config import CharlieBotConfig, get_config, get_credentials, require_backends
+from src.core.config import CharlieBotConfig, configured_access_key, get_config, get_credentials, require_backends
 from src.core.constants import FILE_SERVER_MOUNTS, REPO_ROOT
 from src.core.http import close_http_client
 from src.core.init import (
@@ -170,7 +170,7 @@ async def _check_ws_auth(websocket: WebSocket) -> bool:
   Returns True if the connection is authorized, False otherwise
   (and closes the socket with code 4401).
   """
-  access_key = str(get_credentials().get("charliebot", "access_key") or "")
+  access_key = configured_access_key()
   if not access_key:
     return True
   token = websocket.query_params.get("token", "")

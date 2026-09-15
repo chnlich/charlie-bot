@@ -361,6 +361,61 @@ def test_iter_ndjson_events_from_end_reads_only_the_tail_window(
   assert 0 < sum(read_bytes) <= _TAIL_WINDOW_SIZE
 
 
+def test_type_line_filter_keeps_candidate_type_lines() -> None:
+  from src.core.ndjson import type_line_filter
+
+  keep = type_line_filter(frozenset({"result", "assistant"}))
+  # Both writer shapes the corpora carry: orjson compact and stdlib spaced.
+  assert keep(b'{"type":"result","result":"done"}')
+  assert keep(b'{"type": "assistant", "message": {}}')
+  assert not keep(b'{"type":"tool_result","content":"x"}')
+  assert not keep(b'{"type": "system", "subtype": "init"}')
+  assert not keep(b'{"type":"assistant_error"}')  # assistant_error not in this set
+  # Every shape the head walk cannot prove parses anyway.
+  assert keep(b'{"session_id": "abc", "timestamp": "2026-09-12T03:57:25.194991+00:00"}')
+  assert keep(b'{"ts": 1, "type": "tool_result"}')
+  assert keep(b'  {"type":"result"}')
+  assert keep(b'{"type":')
+  assert keep(b'{"type": "no closing quote')
+  assert keep(b'[]')
+
+
+def test_iter_ndjson_events_from_end_parse_filter_skips_unparsed(tmp_path: Path) -> None:
+  # The filtered walk yields exactly the candidate events the unfiltered walk
+  # yields, newest first, across both writer shapes, blank lines and a
+  # multi-window giant line the filter must skip without parsing.
+  from src.core.ndjson import type_line_filter
+
+  target = tmp_path / "events.jsonl"
+  giant = {"type": "tool_result", "tool_name": "Bash", "content": "x" * (2 * _TAIL_WINDOW_SIZE + 11)}
+  with target.open("wb") as f:
+    f.write((json.dumps({"type": "tool_result", "content": "head noise"}) + "\n").encode())
+    f.write(b"\n")
+    f.write((json.dumps(giant) + "\n").encode())
+    f.write(b'{"type": "result", "result": "done"}\n')
+    f.write(b'{"session_id": "abc", "timestamp": "t"}\n')
+    f.write(b"{not json\n")
+    f.write(
+        (json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "text",
+                    "text": "hi"
+                }]
+            }
+        }) + "\n").encode())
+
+  keep = type_line_filter(frozenset({"result", "assistant"}))
+  unfiltered = list(iter_ndjson_events_from_end(target, log_event="test_skip", log_fields={}))
+  # A parsed event without a type came from a line the head walk cannot prove
+  # (no leading "type"), which the filter always keeps.
+  expected = [e for e in unfiltered if e.get("type") is None or e.get("type") in ("result", "assistant")]
+  filtered = list(iter_ndjson_events_from_end(target, log_event="test_skip", log_fields={}, parse_filter=keep))
+  assert expected == filtered
+  assert [e["type"] for e in filtered if "type" in e] == ["assistant", "result"]
+
+
 def _spy_opens(monkeypatch: pytest.MonkeyPatch) -> list[str]:
   calls: list[str] = []
   real_open = open

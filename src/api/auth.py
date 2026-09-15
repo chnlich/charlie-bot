@@ -7,7 +7,7 @@ from http.cookies import CookieError, SimpleCookie
 from starlette.requests import Request
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from src.core.config import get_credentials
+from src.core.config import configured_access_key
 from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.run_token import RunTokenError, bearer_from_authorization, verify_run_token
 
@@ -17,22 +17,27 @@ def _credential_matches(candidate: str, key: str) -> bool:
   return hmac.compare_digest(candidate, key)
 
 
+# The cookie the login page sets (see _LOGIN_PAGE); its JS strings below must
+# keep the literal name because they are served HTML.
+_ACCESS_KEY_COOKIE = "charliebot_access_key"
+
+
+def _credential_accepted(bearer: str, cookie: str, key: str) -> bool:
+  """One home of the acceptance decision: bearer or cookie must match *key* in constant time."""
+  return (bool(bearer) and _credential_matches(bearer, key)) or (bool(cookie) and _credential_matches(cookie, key))
+
+
 def request_has_access_key(request: Request, key: str) -> bool:
   """True when *request* carries a valid access key, or when *key* is empty.
 
   An empty configured key means the middleware passes every request through,
   so every reader counts as authenticated. Otherwise the key is accepted from
-  either an ``Authorization: Bearer`` header or a ``charliebot_access_key``
-  cookie, compared with ``hmac.compare_digest``.
+  either an ``Authorization: Bearer`` header or the access-key cookie,
+  compared with ``hmac.compare_digest``.
   """
   if not key:
     return True
-  auth_header = request.headers.get("authorization", "")
-  bearer = auth_header[7:] if auth_header.startswith("Bearer ") else ""
-  if bearer and _credential_matches(bearer, key):
-    return True
-  cookie = request.cookies.get("charliebot_access_key", "")
-  return bool(cookie) and _credential_matches(cookie, key)
+  return _credential_accepted(_bearer_from_scope(request.scope), request.cookies.get(_ACCESS_KEY_COOKIE, ""), key)
 
 
 # Paths that are always public (no auth required). The viewer routes only render
@@ -116,7 +121,7 @@ def _cookie_key_from_scope(scope: Scope) -> str:
     jar.load(raw.decode("latin-1"))
   except CookieError:
     return ""
-  morsel = jar.get("charliebot_access_key")
+  morsel = jar.get(_ACCESS_KEY_COOKIE)
   return morsel.value if morsel else ""
 
 
@@ -145,8 +150,7 @@ def _scope_has_access_key(scope: Scope, key: str) -> bool:
     # A presented non-access-key bearer is run-token use: verified or rejected,
     # the operator cookie is never consulted for it.
     return _scope_bearer_is_run_token(bearer, key)
-  cookie = _cookie_key_from_scope(scope)
-  return bool(cookie) and _credential_matches(cookie, key)
+  return _credential_accepted("", _cookie_key_from_scope(scope), key)
 
 
 async def _send_unauthorized(send: Send, html: bool) -> None:
@@ -182,7 +186,7 @@ class AuthMiddleware:
     if scope["type"] != "http":
       await self.app(scope, receive, send)
       return
-    key = str(get_credentials().get("charliebot", "access_key") or "")
+    key = configured_access_key()
     path = scope["path"]
 
     # Let public paths through without auth.

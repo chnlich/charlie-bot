@@ -270,8 +270,9 @@ def _account_label(path: Path, stem: str) -> str:
 
   The provider default dir (``path.name == stem``) is labelled ``work (default)``; a custom
   dir ``.claude-ext-1`` (stem ``.claude``) reads as ``ext-1``. Parallel to ``src/api/ext_usage.py``'s
-  account labels but not identical -- that one labels the default ``main`` and strips a leading
-  dot from every basename; core must not import the api layer, so the derivation is restated here.
+  account labels but not identical -- that one labels the default ``main`` and takes every other
+  label verbatim from the configured pool; core must not import the api layer, so the derivation
+  is restated here.
   """
   if path.name == stem:
     return "work (default)"
@@ -823,6 +824,16 @@ def _tail_parse(path: str, entry: dict, markers: tuple[bytes, ...]) -> tuple[lis
   return objects, [st.st_mtime_ns, st.st_size], end + consumed
 
 
+def _usage_counts(usage: dict) -> list[int]:
+  """A record row's four usage counts; a missing or null usage key counts as 0."""
+  return [
+      usage.get(ET.USAGE_INPUT_TOKENS, 0) or 0,
+      usage.get(ET.USAGE_CACHE_CREATION_INPUT_TOKENS, 0) or 0,
+      usage.get(ET.USAGE_CACHE_READ_INPUT_TOKENS, 0) or 0,
+      usage.get(ET.USAGE_OUTPUT_TOKENS, 0) or 0,
+  ]
+
+
 def _claude_records(recs: list[dict], seen: set) -> tuple[list[list], int]:
   """Fold prefiltered Claude records into tally rows, deduped against *seen*.
 
@@ -843,15 +854,7 @@ def _claude_records(recs: list[dict], seen: set) -> tuple[list[list], int]:
       dupes += 1
       continue
     seen.add(key)
-    records.append(
-        [
-            key, model,
-            rec.get("timestamp"),
-            usage.get(ET.USAGE_INPUT_TOKENS, 0) or 0,
-            usage.get(ET.USAGE_CACHE_CREATION_INPUT_TOKENS, 0) or 0,
-            usage.get(ET.USAGE_CACHE_READ_INPUT_TOKENS, 0) or 0,
-            usage.get(ET.USAGE_OUTPUT_TOKENS, 0) or 0
-        ])
+    records.append([key, model, rec.get("timestamp"), *_usage_counts(usage)])
   return records, dupes
 
 
@@ -1263,16 +1266,7 @@ def _thread_records(objects: list[dict], meta: dict | None, registry: dict) -> t
   for obj in objects:
     if obj.get("type") == ET.RESULT:
       usage = obj.get("usage") or {}
-      records.append(
-          [
-              model,
-              backend,
-              obj.get("timestamp"),
-              usage.get(ET.USAGE_INPUT_TOKENS, 0) or 0,
-              usage.get(ET.USAGE_CACHE_CREATION_INPUT_TOKENS, 0) or 0,
-              usage.get(ET.USAGE_CACHE_READ_INPUT_TOKENS, 0) or 0,
-              usage.get(ET.USAGE_OUTPUT_TOKENS, 0) or 0,
-          ])
+      records.append([model, backend, obj.get("timestamp"), *_usage_counts(usage)])
     elif obj.get("session_id"):
       sid = obj["session_id"]
       if isinstance(sid, str):
@@ -1341,18 +1335,7 @@ def _master_records(objects: list[dict],
   opt = next((o for o in registry.values() if o.type == BackendType.CHARLIE_CODE and o.model == model), None)
   account = opt.id if opt is not None else _CLC_MASTER_ACCOUNT
   ts = Path(path).parts[-2]  # the master_runs/<started_at> directory name
-  return (
-      [
-          [
-              _bare_model(model),
-              account,
-              ts,
-              usage.get(ET.USAGE_INPUT_TOKENS, 0) or 0,
-              usage.get(ET.USAGE_CACHE_CREATION_INPUT_TOKENS, 0) or 0,
-              usage.get(ET.USAGE_CACHE_READ_INPUT_TOKENS, 0) or 0,
-              usage.get(ET.USAGE_OUTPUT_TOKENS, 0) or 0,
-          ]
-      ], model)
+  return ([[_bare_model(model), account, ts, *_usage_counts(usage)]], model)
 
 
 def _master_contribution(path: str, registry: dict, prev: dict | None = None) -> tuple[dict, int]:

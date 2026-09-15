@@ -29,8 +29,11 @@ curates these captures exactly like every other candidate.
 
 Step 3: curate staging candidates, merge-first.
 Read every file in `~/.charliebot/memory/staging/`. Candidates are free-form captures: for
-each candidate, first test it against
-the admission whitelist in the llm-context-guideline skill and write the proof lines it requires.
+each candidate, first test it against the admission whitelist and home routing in the
+llm-context-guideline skill (retaining durable mechanisms and routing execution artifacts,
+procedures, or discoverable facts to their canonical homes), and write the proof lines it
+requires. Draft each bullet at the category level as a standing reality, bounded to one to
+three lines, and lead with the working action or healthy reading per positive framing.
 For each
 passing candidate, decide and finalize its `topic`, `scope`, `audience`, and `title`; the
 default action is a merge, not a new entry:

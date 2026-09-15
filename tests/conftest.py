@@ -725,8 +725,9 @@ def make_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> 
 
 def make_internal_router_client(cfg: Any, session_mgr: Any) -> TestClient:
   """make_router_client over the internal router, mounted at /api/internal; the internal routes
-  take cfg through their own get_config import (same function object), so the override key in
-  make_router_client covers them. cfg may be a MagicMock when the tested route never reads it."""
+  take cfg through the on-loop dependency (same instance the sync key serves), so the override
+  keys in make_router_client cover them. cfg may be a MagicMock when the tested route never
+  reads it."""
   return make_router_client(cfg, session_mgr, internal_router, "/api/internal")
 
 
@@ -1042,11 +1043,16 @@ CLI_COMMON_REQUESTS_GET_PATCH_TARGET = "src.cli.common.requests.get"
 # runs under. src/agents/master_cc_run.py binds the factory with call-time `from
 # src.agents.backends.registry import build_backend` inside its run/resume helpers, so
 # monkeypatch.setattr on the registry module attribute lands the stand-in where those imports
-# resolve. Module-scope binders of the same function (worker.py, autonamer.py, recap.py, ...)
-# keep their own namespaces and are not intercepted through this route.
+# resolve. The lazy carriers (worker.py, autonamer.py, recap.py — each deferring through the
+# shared load_build_backend in src/agents/backends/deferred_build.py, which returns an existing
+# module binding untouched) resolve the same registry function at first
+# build, so a patch applied before that first build reaches them too; a patch applied after
+# binds their module attribute directly.
 BUILD_BACKEND_PATCH_TARGET = "src.agents.backends.registry.build_backend"
-# The worker reads build_backend off its own module binding (src/agents/worker.py
-# imports it at module scope), so a patched registry binding never reaches it.
+# The worker builds through the shared lazy loader it binds at import scope
+# (src/agents/backends/deferred_build.py load_build_backend),
+# so the worker path's stand-in binds here — an existing binding is returned untouched,
+# exactly the semantics the master-cc registry route relies on.
 WORKER_BUILD_BACKEND_PATCH_TARGET = "src.agents.worker.build_backend"
 
 # Import-path patch target for the /proc stat read the backend start contract pins. src/core/runs.py

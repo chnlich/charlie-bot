@@ -923,7 +923,7 @@ def test_compaction_boundary_emitted_exactly_once_per_message(monkeypatch: pytes
 @pytest.mark.asyncio
 async def test_compaction_boundary_event_wires_into_handle_compaction_events(monkeypatch: pytest.MonkeyPatch) -> None:
   """The synthesized compact_boundary event feeds handle_compaction_events and yields
-  exactly one persisted ET.CONTEXT_COMPACTED event carrying the same trigger/pre_tokens."""
+  exactly one persisted ET.CONTEXT_COMPACTED event carrying the boundary payload whole."""
   backend = _build_backend(monkeypatch)
 
   events = backend._translate_sse_event(_message_updated(_compaction_message_info("msg_wire", completed=False)))
@@ -940,7 +940,7 @@ async def test_compaction_boundary_event_wires_into_handle_compaction_events(mon
   assert len(persisted) == 1
   assert persisted[0]["type"] == ET.CONTEXT_COMPACTED
   assert persisted[0]["trigger"] == boundary_event["compact_metadata"]["trigger"]
-  assert persisted[0]["pre_tokens"] == boundary_event["compact_metadata"]["pre_tokens"]
+  assert persisted[0][ET.COMPACT_METADATA] == boundary_event["compact_metadata"]
 
 
 # ---------------------------------------------------------------------------

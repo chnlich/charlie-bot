@@ -176,6 +176,14 @@ class _InterruptedRun:
   thread_dir: Path
   meta: dict
 
+  @property
+  def thread_id(self) -> str:
+    return self.meta.get("id")
+
+  @property
+  def description(self) -> str:
+    return self.meta.get("description", "")
+
 
 def _session_archived(session_dir: Path) -> bool:
   """Whether *session_dir*'s session is archived.
@@ -309,7 +317,7 @@ async def _reconcile_interrupted_runs(
       ):
         recovered += 1
     except Exception:
-      log.exception("reconcile_run_failed", thread=item.meta.get("id"), session=item.session_id)
+      log.exception("reconcile_run_failed", thread=item.thread_id, session=item.session_id)
   if recovered:
     log.info("interrupted_run_reconcile_done", count=recovered)
   return recovered
@@ -374,9 +382,9 @@ async def _reconcile_one(
 ) -> bool:
   """Dispatch one interrupted thread; returns True when a recovery task started."""
   meta = item.meta
-  thread_id = meta.get("id")
+  thread_id = item.thread_id
   session_id = item.session_id
-  description = meta.get("description", "")
+  description = item.description
 
   if meta.get("status") in TERMINAL_THREAD_STATUSES:
     await _complete_finalize_effects(
@@ -531,9 +539,9 @@ async def _maybe_respawn(
   from src.core.models import SpawnRequest
 
   meta = item.meta
-  thread_id = meta.get("id")
+  thread_id = item.thread_id
   session_id = item.session_id
-  description = meta.get("description", "")
+  description = item.description
   if meta.get("review_of") or description.startswith(runs.IMPROVE_ITERATION_PREFIX):
     return False
 
@@ -595,12 +603,13 @@ async def _complete_finalize_effects(
   thread marked completed/failed with effects pending. Each effect is
   judgment-idempotent (see finalize_effects), so re-running converges to a
   no-op; a thread with all effects present is skipped cheaply here. Improve
-  iterations are excluded (skip_notify semantics died with the loop).
+  iterations are excluded: their workers spawn with skip_notify=True, so the
+  absent notify is by design, and re-complete's notify runs skip_notify=False.
   """
   meta = item.meta
-  thread_id = meta.get("id")
+  thread_id = item.thread_id
   session_id = item.session_id
-  description = meta.get("description", "")
+  description = item.description
   if description.startswith(runs.IMPROVE_ITERATION_PREFIX):
     return
   if not _effects_maybe_missing(meta, chat_events, session_threads):

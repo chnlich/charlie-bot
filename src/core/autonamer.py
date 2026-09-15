@@ -25,17 +25,25 @@ a name the user has already set (matched via is_default_session_name).
 import json
 import re
 from collections.abc import Iterator
+from typing import Any
 
-from src.agents.backends.registry import build_backend
+from src.agents.backends.deferred_build import build_backend_module_getattr, load_build_backend
+from src.core import claude_accounts
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, default_claude_dir
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendOption, SessionMetadata
 from src.core.sessions import SessionManager
 from src.core.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
-from src.core.timeouts import AUTONAMER_TIMEOUT
+from src.core.timeouts import LIGHT_ONESHOT_TIMEOUT
 
 log = LazyStructlogLogger()
+
+
+def __getattr__(name: str) -> Any:
+  # The "src.core.autonamer.build_backend" patch target resolves through this hook.
+  return build_backend_module_getattr(name, __name__, globals())
+
 
 # Matches true defaults ("Session 7") and legacy empty placeholders ("7: ").
 # Does NOT match already-renamed titles like "7: My Topic".
@@ -220,8 +228,9 @@ async def maybe_auto_name(
 
     for option in options:
       try:
-        backend = build_backend(option, cfg, cgroup_session_id=session_meta.id)
-        raw = await backend.one_shot_text(f"{title_instruction}\n\n{prompt}", system_prompt, timeout=AUTONAMER_TIMEOUT)
+        backend = load_build_backend(globals())(option, cfg, cgroup_session_id=session_meta.id)
+        raw = await backend.one_shot_text(
+            f"{title_instruction}\n\n{prompt}", system_prompt, timeout=LIGHT_ONESHOT_TIMEOUT)
       except Exception as e:
         log.warning("autonamer_failed", session_id=session_meta.id, error=str(e))
         continue
@@ -265,8 +274,7 @@ async def maybe_auto_name_from_claude_ai_title(
   Group is intentionally left empty for TUI sessions in this version.
   """
   session_id = session_meta.id
-  claude_projects = default_claude_dir() / "projects"
-  matches = list(claude_projects.glob(f"*/{session_id}.jsonl"))
+  matches = claude_accounts.transcript_matches(default_claude_dir(), session_id)
   if not matches:
     return
 

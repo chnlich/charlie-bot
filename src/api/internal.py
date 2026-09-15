@@ -22,6 +22,7 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config
 from src.core.improve_command import (
   ImproveLoopAlreadyRunningError,
+  ImproveState,
   loop_goal_path,
   loop_plan_path,
   reserve_loop_state,
@@ -437,7 +438,20 @@ async def _start_improve_sequence(
 
   try:
     await task_mgr.check_task_authorization(req.session_id)
-    work_branch = req.work_branch or f"improve/{int(time.time())}"
+  except DelegationBlockedError as e:
+    raise HTTPException(status_code=403, detail=str(e)) from e
+
+  # Backend/model resolution comes BEFORE the reservation (the legacy path's
+  # order): an unknown requested backend must fail the request, never leak a
+  # "running" loop state or the active lock in this live process.
+  try:
+    resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
+        req.session_id, cfg, session_mgr, requested_backend=req.backend)
+  except ValueError as e:
+    raise bad_request(e) from e
+
+  work_branch = req.work_branch or f"improve/{int(time.time())}"
+  try:
     state = await reserve_loop_state(
         req.session_id,
         req.goal,
@@ -447,30 +461,32 @@ async def _start_improve_sequence(
         plan=req.plan,
         base_branch=req.base_branch,
         merge_back=req.merge_back,
-        resolved_backend="",  # the sequence reads the resolved ids from state
-        resolved_model="",
+        resolved_backend=resolved_backend,
+        resolved_model=resolved_model or "",
     )
-    # The backend/model resolution happens against the manager task before the
-    # child is created, so the iteration Runs pin one explicit choice.
-    resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
-        req.session_id, cfg, session_mgr, requested_backend=req.backend)
-    state.backend = resolved_backend
-    state.model = resolved_model
-    await save_loop_state(req.session_id, state, cfg)
+  except ImproveLoopAlreadyRunningError as e:
+    raise HTTPException(status_code=409, detail=str(e)) from e
+
+  try:
     child = await create_improve_child(
         task_mgr, req.session_id, state.loop_id, req.goal,
         repo_path=req.repo_path, base_branch=req.base_branch)
-  except ImproveLoopAlreadyRunningError as e:
-    raise HTTPException(status_code=409, detail=str(e)) from e
-  except TaskNotFoundError as e:
-    raise HTTPException(status_code=404, detail=str(e)) from e
-  except TaskForbiddenError as e:
-    raise HTTPException(status_code=403, detail=str(e)) from e
-  except TaskConflictError as e:
-    blockers = list(getattr(e, "blockers", None) or [])
-    raise HTTPException(status_code=409, detail={"message": str(e), "blockers": blockers}) from e
-  except TaskInvalidError as e:
-    raise HTTPException(status_code=400, detail=str(e)) from e
+  except Exception as e:
+    # The reservation is this live process's: a rejected child creation must
+    # not leave a "running" loop stamped with the live pid — no controller is
+    # ever spawned for it, and its active lock would block every later improve
+    # request until the next restart's dirty-pid reconciliation.
+    await _fail_reserved_loop(req.session_id, state, cfg)
+    if isinstance(e, TaskNotFoundError):
+      raise HTTPException(status_code=404, detail=str(e)) from e
+    if isinstance(e, TaskForbiddenError):
+      raise HTTPException(status_code=403, detail=str(e)) from e
+    if isinstance(e, TaskConflictError):
+      blockers = list(getattr(e, "blockers", None) or [])
+      raise HTTPException(status_code=409, detail={"message": str(e), "blockers": blockers}) from e
+    if isinstance(e, TaskInvalidError):
+      raise HTTPException(status_code=400, detail=str(e)) from e
+    raise
 
   create_logged_task(
       run_improve_sequence(
@@ -491,6 +507,20 @@ async def _start_improve_sequence(
   if req.plan is not None:
     response["plan_path"] = str(loop_plan_path(req.session_id, state.loop_id, cfg))
   return response
+
+
+async def _fail_reserved_loop(session_id: str, state: ImproveState, cfg: CharlieBotConfig) -> None:
+  """Fail a freshly reserved improve loop whose admission failed after the reservation.
+
+  Marks the state failed and clears the active lock, so the rejected request
+  never leaves a permanently blocking active.lock or a "running" loop no
+  controller owns.
+  """
+  from src.core.improve_command import clear_active_loop_lock
+
+  state.status = "failed"
+  await save_loop_state(session_id, state, cfg)
+  await clear_active_loop_lock(session_id, cfg)
 
 
 @router.post("/schedule-trigger")

@@ -17,12 +17,14 @@ const panel = {
   loading: false,
 };
 
-function currentSessionId() {
-  return typeof SESSION_ID !== 'undefined' ? SESSION_ID : null;
+// The panel binds to the session it was shown for; responses for a prior node
+// are dropped.
+function boundSessionId() {
+  return panel.sessionId;
 }
 
 function isStale(flight) {
-  return flight.sessionId !== currentSessionId() || flight.gen !== panel.gen;
+  return flight.gen !== panel.gen || flight.sessionId !== panel.sessionId;
 }
 
 function reset() {
@@ -33,7 +35,7 @@ function reset() {
 }
 
 async function refresh() {
-  const sessionId = currentSessionId();
+  const sessionId = boundSessionId();
   if (!sessionId) return;
   const flight = {sessionId, gen: ++panel.gen};
   reset();
@@ -42,24 +44,26 @@ async function refresh() {
 }
 
 async function loadPage(flight, cursor) {
-  if (panel.loading) return;
+  // Concurrent loads are safe: results are dropped when their flight is stale
+  // (a rapid node switch must never be blocked by the prior node's fetch), and
+  // rows dedupe by id.
   panel.loading = true;
   renderLoadingNotice();
   try {
     const params = new URLSearchParams({limit: '50'});
     if (cursor) params.set('cursor', cursor);
-    const res = await fetch('/api/sessions/' + currentSessionId() + '/runs?' + params.toString());
+    const res = await fetch('/api/sessions/' + boundSessionId() + '/runs?' + params.toString());
     if (!res.ok) throw new Error('runs failed: ' + res.status);
     const page = await res.json();
-    if (isStale(flight)) return;
+    if (isStale(flight)) { panel.loading = false; return; }
     const known = new Set(panel.items.map((r) => r.id));
     for (const run of page.items || []) {
       if (!known.has(run.id)) panel.items.push(run);
     }
     panel.nextCursor = page.next_cursor || null;
   } catch (err) {
-    if (!isStale(flight)) renderError('Failed to load runs: ' + (err && err.message ? err.message : err));
     panel.loading = false;
+    if (!isStale(flight)) renderError('Failed to load runs: ' + (err && err.message ? err.message : err));
     return;
   }
   panel.loading = false;
@@ -68,13 +72,13 @@ async function loadPage(flight, cursor) {
 
 async function loadMore() {
   if (!panel.nextCursor || panel.loading) return;
-  const flight = {sessionId: currentSessionId(), gen: panel.gen};
+  const flight = {sessionId: boundSessionId(), gen: panel.gen};
   await loadPage(flight, panel.nextCursor);
 }
 
 async function loadChildren(flight) {
   try {
-    const res = await fetch('/api/sessions/tree?parent_id=' + encodeURIComponent(currentSessionId()) + '&include_archived=true&limit=100');
+    const res = await fetch('/api/sessions/tree?parent_id=' + encodeURIComponent(boundSessionId()) + '&include_archived=true&limit=100');
     if (!res.ok) throw new Error(String(res.status));
     const page = await res.json();
     if (isStale(flight)) return;
@@ -89,7 +93,7 @@ async function loadChildren(flight) {
 // -- actions -----------------------------------------------------------
 
 async function stopRun(runId) {
-  const sessionId = currentSessionId();
+  const sessionId = boundSessionId();
   if (!sessionId) return;
   const requestId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
   try {
@@ -112,7 +116,7 @@ async function stopRun(runId) {
 }
 
 async function retryRun(runId) {
-  const sessionId = currentSessionId();
+  const sessionId = boundSessionId();
   if (!sessionId) return;
   const requestId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
   try {
@@ -162,7 +166,7 @@ function formatDuration(run) {
 function evidenceLink(label, ref) {
   if (!ref) return null;
   const a = el('a', 'text-blue-400 hover:text-blue-300 underline', label);
-  a.href = '/files' + String(ref).split('/').filter(Boolean).map(encodeURIComponent).join('/');
+  a.href = '/files/' + String(ref).split('/').filter(Boolean).map(encodeURIComponent).join('/');
   a.target = '_blank';
   a.rel = 'noopener';
   return a;
@@ -301,7 +305,7 @@ function onTreeChanged(sessionIds) {
 }
 
 function onTabShown() {
-  if (panel.sessionId !== currentSessionId() || !panel.items.length) refresh();
+  if (panel.sessionId !== boundSessionId() || !panel.items.length) refresh();
 }
 
 globalThis.TaskRunsPanel = {

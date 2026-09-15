@@ -58,8 +58,9 @@ async function fetchLevel(parentId) {
     if (cursor) params.set('cursor', cursor);
     const res = await fetch('/api/sessions/tree?' + params.toString());
     if (res.status === 409) {
-      // The tree moved during pagination: one visible explanation, then a
-      // full refetch of this level from fresh facts.
+      // The tree moved during pagination: refetch this level from fresh facts
+      // and keep a visible explanation until the next data-driven refresh or
+      // user toggle of the level.
       const detail = await res.json().catch(() => ({}));
       tree.staleNotice.set(parentId || '', detail.detail?.message || 'Task tree changed while loading');
       tree.levels.delete(parentId || '');
@@ -76,7 +77,6 @@ async function fetchLevel(parentId) {
     if (gen !== tree.gen) return null; // superseded by a newer view
   } while (cursor);
   tree.levels.set(parentId || '', {ids, nextCursor: null, revision, fetched: true});
-  tree.staleNotice.delete(parentId || '');
   return ids;
 }
 
@@ -126,26 +126,36 @@ function taskStateLabel(state) {
   return state.charAt(0).toUpperCase() + state.slice(1);
 }
 
-function rowBadgesHtml(row) {
+function badgeEl(className, text, title) {
+  const span = document.createElement('span');
+  span.className = className;
+  if (title) span.title = title;
+  span.textContent = text;
+  return span;
+}
+
+function buildRowBadges(container, row) {
   const dot = WORK_STATE_DOT[row.work_state] || 'bg-slate-600';
-  const pulse = row.work_state === 'running' ? ' animate-pulse' : '';
-  const bits = [];
-  bits.push('<span class="text-[10px] uppercase tracking-wide text-slate-400 border border-slate-600 rounded px-1 py-px whitespace-nowrap">' + profileLabel(row.profile) + '</span>');
-  bits.push('<span class="flex items-center gap-1 text-[11px] text-slate-400 whitespace-nowrap" title="Work state">'
-    + '<span class="w-1.5 h-1.5 rounded-full flex-shrink-0 ' + dot + pulse + '"></span>' + escapeHtml(row.work_state) + '</span>');
+  container.appendChild(badgeEl(
+    'text-[10px] uppercase tracking-wide text-slate-400 border border-slate-600 rounded px-1 py-px whitespace-nowrap',
+    profileLabel(row.profile)));
+  const work = badgeEl('flex items-center gap-1 text-[11px] text-slate-400 whitespace-nowrap', row.work_state, 'Work state');
+  const dotSpan = document.createElement('span');
+  dotSpan.className = 'w-1.5 h-1.5 rounded-full flex-shrink-0 ' + dot + (row.work_state === 'running' ? ' animate-pulse' : '');
+  work.prepend(dotSpan);
+  container.appendChild(work);
   if (row.task_state !== 'open') {
-    bits.push('<span class="text-[11px] text-slate-500 whitespace-nowrap">' + escapeHtml(taskStateLabel(row.task_state)) + '</span>');
+    container.appendChild(badgeEl('text-[11px] text-slate-500 whitespace-nowrap', taskStateLabel(row.task_state)));
   }
   if (row.open_descendant_count > 0 || row.attention_descendant_count > 0) {
-    const attention = row.attention_descendant_count > 0
-      ? ' <span class="text-red-400">' + row.attention_descendant_count + ' attention</span>' : '';
-    bits.push('<span class="text-[11px] text-slate-500 whitespace-nowrap" title="Descendant tasks">'
-      + row.open_descendant_count + ' open' + attention + '</span>');
+    const counts = badgeEl('text-[11px] text-slate-500 whitespace-nowrap',
+      row.open_descendant_count + ' open' + (row.attention_descendant_count > 0 ? ' · ' + row.attention_descendant_count + ' attention' : ''),
+      'Descendant tasks');
+    container.appendChild(counts);
   }
   if (row.archived) {
-    bits.push('<span class="text-[10px] text-slate-500 border border-slate-700 rounded px-1 py-px whitespace-nowrap">archived</span>');
+    container.appendChild(badgeEl('text-[10px] text-slate-500 border border-slate-700 rounded px-1 py-px whitespace-nowrap', 'archived'));
   }
-  return bits.join('');
 }
 
 // One tree row. Built with DOM APIs and textContent for every name/state
@@ -183,9 +193,7 @@ function buildRowElement(row, depth) {
 
   const badges = document.createElement('span');
   badges.className = 'flex items-center gap-1.5 flex-shrink-0';
-  // Badge bits are built from server enum values and counts (never user text)
-  // with fixed markup, so innerHTML is safe here.
-  badges.innerHTML = rowBadgesHtml(row);
+  buildRowBadges(badges, row);
   inner.appendChild(badges);
 
   const addBtn = document.createElement('button');
@@ -253,12 +261,24 @@ function buildSubtree(row, depth) {
   return wrap;
 }
 
+function ensureTreeDelegation(nav) {
+  if (nav.dataset.treeDelegated === '1') return;
+  nav.dataset.treeDelegated = '1';
+  nav.addEventListener('click', onTreeRowClick);
+  nav.addEventListener('keydown', onTreeRowKeydown);
+}
+
 function renderTree() {
   const nav = document.getElementById('session-list');
   if (!nav) return;
   nav.textContent = '';
   nav.setAttribute('role', 'tree');
   nav.setAttribute('aria-label', 'Task tree');
+  ensureTreeDelegation(nav);
+  const rootsNotice = tree.staleNotice.get('');
+  if (rootsNotice) {
+    nav.appendChild(badgeEl('text-xs text-amber-300 px-2 py-1', rootsNotice));
+  }
 
   const header = document.createElement('div');
   header.className = 'flex items-center gap-2 px-2 pb-1';
@@ -306,6 +326,7 @@ function renderTree() {
 // -- interactions -----------------------------------------------------------
 
 async function toggleTreeNode(nodeId) {
+  tree.staleNotice.delete(nodeId);
   if (tree.expanded.has(nodeId)) {
     tree.expanded.delete(nodeId);
     persistExpanded();
@@ -469,30 +490,48 @@ function onTreeChanged(sessionId) {
 }
 
 async function refreshAffectedLevels(sessionIds) {
-  // Walk each changed node's cached ancestry; refetch exactly those levels.
+  // Refetch exactly the levels the changed nodes live on, plus each ancestor
+  // level above them (the counts on ancestor rows are server facts).
   const levels = new Set(['']);
   for (const sid of sessionIds) {
-    let cur = sid;
-    const guard = new Set();
-    while (cur && !guard.has(cur)) {
-      guard.add(cur);
-      const row = rowOf(cur);
-      const key = row ? (row.task_parent_id || '') : null;
-      if (key === null) {
-        // Unknown node (never rendered): its level position is a server fact —
-        // refetch the roots and every expanded level rather than guessing.
-        levels.add('');
-        for (const id of tree.expanded) levels.add(id);
-        break;
+    if (rowOf(sid)) {
+      let cur = sid;
+      const guard = new Set();
+      while (cur && !guard.has(cur)) {
+        guard.add(cur);
+        const row = rowOf(cur);
+        const key = row ? (row.task_parent_id || '') : null;
+        if (key === null) break;
+        levels.add(key);
+        cur = key;
       }
-      levels.add(key);
-      cur = key;
+    } else {
+      // The node was never rendered: one bounded detail read learns its place
+      // (task_parent_id + the ancestor chain), never a whole-tree rescan.
+      try {
+        const res = await fetch('/api/sessions/' + encodeURIComponent(sid));
+        if (res.ok) {
+          const detail = await res.json();
+          const chain = [detail, ...(detail.ancestors || [])]; // nearest-first
+          for (let i = 0; i < chain.length; i++) {
+            const parent = chain[i + 1];
+            levels.add(parent ? parent.id : '');
+          }
+        } else {
+          for (const id of tree.expanded) levels.add(id);
+        }
+      } catch (err) {
+        console.error('refreshAffectedLevels detail read failed:', err);
+        for (const id of tree.expanded) levels.add(id);
+      }
     }
-    const changedRow = rowOf(sid);
-    if (changedRow && tree.expanded.has(sid)) levels.add(sid);
+    if (rowOf(sid) && tree.expanded.has(sid)) levels.add(sid);
   }
   for (const level of levels) invalidateLevel(level);
   for (const level of levels) await ensureLevel(level === '' ? null : level);
+  // Fresh server facts landed: a prior pagination-conflict explanation is
+  // obsolete.
+  tree.staleNotice.clear();
   renderTree();
   if (SESSION_ID) highlightNode(SESSION_ID);
   if (globalThis.TaskPanel) globalThis.TaskPanel.onTreeChanged(sessionIds);
@@ -520,9 +559,11 @@ async function searchTree(query) {
       renderTreeWithMessage('No tasks match "' + query.trim() + '".');
       return;
     }
+    await ensureLevel(null); // the path's base level, so the reveal renders
     // Reveal the first hit's path (the server caps hits; every hit carries its
     // own path, and the first is the newest match).
     const hit = body.items[0];
+    tree.rows.set(hit.row.id, hit.row);
     tree.highlighted = hit.row.id;
     await revealNode(hit.row.id, hit.ancestors || []);
   } catch (err) {

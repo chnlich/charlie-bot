@@ -22,16 +22,18 @@ const panel = {
   kind: null,            // preview run kind override
 };
 
-function currentSessionId() {
-  return typeof SESSION_ID !== 'undefined' ? SESSION_ID : null;
+// The panel binds to the session it was shown for; every response is dropped
+// unless that binding and generation still own the view.
+function boundSessionId() {
+  return panel.sessionId;
 }
 
 function isStale(flight) {
-  return flight.sessionId !== currentSessionId() || flight.gen !== panel.gen;
+  return flight.gen !== panel.gen || flight.sessionId !== panel.sessionId;
 }
 
 async function refresh() {
-  const sessionId = currentSessionId();
+  const sessionId = boundSessionId();
   if (!sessionId) return;
   const flight = {sessionId, gen: ++panel.gen};
   panel.historical = null;
@@ -53,7 +55,7 @@ async function refresh() {
 }
 
 async function refreshPreview(flight) {
-  const sessionId = currentSessionId();
+  const sessionId = boundSessionId();
   if (!sessionId) return;
   flight = flight || {sessionId, gen: panel.gen};
   const params = panel.kind ? ('?kind=' + encodeURIComponent(panel.kind)) : '';
@@ -77,7 +79,7 @@ async function refreshPreview(flight) {
 }
 
 async function refreshCurrentRun(flight) {
-  const sessionId = currentSessionId();
+  const sessionId = boundSessionId();
   if (!sessionId) return;
   flight = flight || {sessionId, gen: panel.gen};
   try {
@@ -118,7 +120,7 @@ async function refreshCurrentRun(flight) {
 // -- historical run view ------------------------------------------------
 
 async function showHistoricalRun(runId) {
-  const sessionId = currentSessionId();
+  const sessionId = boundSessionId();
   if (!sessionId || !runId) return;
   const flight = {sessionId, gen: ++panel.gen};
   try {
@@ -342,7 +344,7 @@ function render() {
       const details = el('details');
       details.appendChild(el('summary', 'text-xs text-blue-400 cursor-pointer', 'View raw launch text'));
       const pre = el('pre', 'mt-1 max-h-64 overflow-auto text-xs text-slate-300 whitespace-pre-wrap bg-slate-900 rounded p-2');
-      fetch('/files' + encodePathSegments(payload.legacy_prompt.ref))
+      fetch('/files/' + encodePathSegments(payload.legacy_prompt.ref))
         .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
         .then((text) => { pre.textContent = text; })
         .catch((err) => { pre.textContent = '(raw launch text unavailable: ' + err.message + ')'; });
@@ -414,6 +416,7 @@ function renderRuleEditor(detail) {
   box.appendChild(textarea);
 
   const footer = el('div', 'flex items-center gap-3 flex-wrap text-xs');
+  footer.id = 'task-rule-footer';
   const save = el('button', 'px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium', 'Save ' + (scope === 'node' ? 'this-task rule' : 'subtree rule'));
   save.addEventListener('click', () => saveRule(scope, textarea.value));
   const clear = el('button', 'px-3 py-1.5 rounded-lg border border-red-600/60 text-red-300 hover:bg-red-900/30 text-xs', 'Clear rule');
@@ -437,21 +440,22 @@ function renderRuleEditor(detail) {
 }
 
 function updateRuleFooter(rule, value) {
-  // Drafts are flagged as drafts wherever they appear: the editor footer notes
-  // the unsaved state and whether the text differs from the saved rule.
+  // The unsaved draft is flagged in the editor's own footer; the draft lives
+  // only in panel memory until Save/Clear PATCHes it.
   let note = document.getElementById('task-rule-draft-note');
+  const footer = document.getElementById('task-rule-footer');
+  if (!footer) return;
   if (!note) {
     note = el('span', 'text-amber-300');
     note.id = 'task-rule-draft-note';
-    const footer = document.querySelector('#tab-task-context .text-slate-500');
-    if (footer && footer.parentElement) footer.parentElement.appendChild(note);
+    footer.appendChild(note);
   }
   const differs = value !== (rule.text || '');
   note.textContent = differs ? 'Unsaved draft' : '';
 }
 
 async function saveRule(scope, body) {
-  const sessionId = currentSessionId();
+  const sessionId = boundSessionId();
   if (!sessionId) return;
   const payload = scope === 'node' ? {node_prompt: body} : {subtree_prompt: body};
   const res = await fetch('/api/sessions/' + sessionId, {
@@ -496,7 +500,7 @@ function onTreeChanged(sessionIds) {
 }
 
 function onTabShown() {
-  if (panel.sessionId === currentSessionId() && panel.detail) return;
+  if (panel.sessionId === boundSessionId() && panel.detail) return;
   refresh();
 }
 

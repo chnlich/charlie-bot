@@ -454,6 +454,38 @@ def index_metas(tree: TaskTreeManager):
   return asyncio.run(tree._get_index()).metas.values()
 
 
+def test_archived_scheduled_session_imports_paused_and_hidden(
+    full_home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """An old ARCHIVED scheduled session imports paused (never auto-resumed)."""
+  meta_path = full_home / "sessions" / fx.S_SCHEDULED / "metadata.json"
+  meta = SessionMetadata.model_validate_json(meta_path.read_text())
+  meta.status = SessionStatus.ARCHIVED
+  atomic_write_text(meta_path, meta.model_dump_json(indent=2, exclude={
+      "has_running_tasks", "has_pending_trigger", "pending_trigger_count",
+      "next_trigger_at", "has_pending_plan_approval", "schedule_cron", "schedule_enabled",
+      "schedule_next_run", "schedule_timezone", "schedule_project",
+      "schedule_allow_failure", "thinking_since"}))
+  # Remove the cron config: with the only nightly-sweep session archived its
+  # binding is intentionally ambiguous; this test isolates the paused-import path.
+  (full_home / "config.d" / "cron.d" / "nightly-sweep.yaml").unlink()
+  point_home(monkeypatch, full_home)
+  manifest_path = tmp_path / "m.json"
+  code, manifest, _ = dry_run(monkeypatch, full_home, manifest_path)
+  assert code == 0
+  mapping = next(m for m in manifest.mappings if m.source_kind == "scheduled")
+  assert mapping.detail["import_paused"] is True
+  assert run_cli(monkeypatch, full_home, "--apply", "--manifest", str(manifest_path))[0] == 0
+  tree = tree_of(full_home)
+  index = asyncio.run(tree._get_index(force=True))
+  migrated = index.metas[fx.S_SCHEDULED]
+  assert migrated.automation_paused is True
+  assert migrated.scheduled_task == "nightly-sweep"
+  # Nothing fired: the preserved pending trigger stays pending.
+  kept = json.loads((full_home / "sessions" / fx.S_SCHEDULED / "triggers"
+                     / "22222222-0000-4000-8000-000000000009.json").read_text())
+  assert kept["status"] == "pending"
+
+
 def test_archived_worker_stays_open_but_hidden(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   home = fx.build_full_home(tmp_path / "home")

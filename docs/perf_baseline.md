@@ -6537,12 +6537,11 @@ EOF
 ```
 
 M98 — memory-CLI invocation wall, read verb. Every memory read the cron instructions and master
-turns issue on demand is a `charliebot memory` invocation — a fresh process whose import chain
-used to drag the replay-curation stack (`src.core.memory_replay` runner/compare/experiment) for
-the replay verbs' argparse vocabulary, plus structlog.dev (rich, pygments, the traceback
-formatter) for a module logger the read path never touches. The collector times the real read
-command against the live store (read-only), from the checkout under test resolved cwd-first —
-the same shape as the M97 protocol:
+turns issue on demand is a `charliebot memory` invocation: a fresh process. Its import chain
+must stay off structlog.dev (rich, pygments, the traceback formatter) — the read path emits no
+log line, so the logging stack loads on the first log call, the deferral the memory chain's
+import-weight ban set pins. The collector times the real read command against the live store
+(read-only), from the checkout under test resolved cwd-first — the same shape as the M97 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'

@@ -43,6 +43,16 @@ def _gzip_client() -> TestClient:
   return TestClient(app)
 
 
+# The corpus's expected size text, pinned by value: a mirrored formatter here
+# would be a second copy of _human_size whose drift silently unpins the column.
+_CORPUS_SIZE_TEXT = {
+    "alpha.txt": "5 B",
+    "Beta & Co <beta>.txt": "2.0 KB",
+    "目录.md": "3 B",
+    "note 100%.txt": "1.0 MB",
+}
+
+
 def _reference_listing(dir_path: Path, url_prefix: str) -> str:
   """The pre-scandir builder, byte for byte.
 
@@ -56,7 +66,6 @@ def _reference_listing(dir_path: Path, url_prefix: str) -> str:
         {
             "name": child.name,
             "is_dir": child.is_dir(),
-            "size": stat.st_size,
             "mtime": datetime.fromtimestamp(stat.st_mtime, tz=UTC),
         })
   rows = ""
@@ -70,7 +79,7 @@ def _reference_listing(dir_path: Path, url_prefix: str) -> str:
     icon = "📁" if e["is_dir"] else "📄"
     name = html.escape(e["name"] + ("/" if e["is_dir"] else ""))
     href = html.escape(f"{url_prefix.rstrip('/')}/{quote(e['name'], safe='')}")
-    size = "" if e["is_dir"] else _reference_size(e["size"])
+    size = "" if e["is_dir"] else _CORPUS_SIZE_TEXT[e["name"]]
     mtime = e["mtime"].strftime("%Y-%m-%d %H:%M")
     rows += (
         f'<tr>'
@@ -79,14 +88,6 @@ def _reference_listing(dir_path: Path, url_prefix: str) -> str:
         f'</tr>\n')
   display_path = html.escape("/" + dir_path.as_posix().lstrip("/"))
   return _DIR_LISTING_TEMPLATE.format(display_path=display_path, rows=rows)
-
-
-def _reference_size(size: int) -> str:
-  for unit in ("B", "KB", "MB", "GB", "TB"):
-    if size < 1024:
-      return f"{size:.1f} {unit}" if unit != "B" else f"{size} {unit}"
-    size /= 1024
-  return f"{size:.1f} PB"
 
 
 def _listing_corpus(tmp_path: Path) -> Path:

@@ -725,8 +725,9 @@ def make_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> 
 
 def make_internal_router_client(cfg: Any, session_mgr: Any) -> TestClient:
   """make_router_client over the internal router, mounted at /api/internal; the internal routes
-  take cfg through their own get_config import (same function object), so the override key in
-  make_router_client covers them. cfg may be a MagicMock when the tested route never reads it."""
+  take cfg through the on-loop dependency (same instance the sync key serves), so the override
+  keys in make_router_client cover them. cfg may be a MagicMock when the tested route never
+  reads it."""
   return make_router_client(cfg, session_mgr, internal_router, "/api/internal")
 
 

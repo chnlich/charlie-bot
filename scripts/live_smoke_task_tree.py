@@ -284,7 +284,7 @@ async def smoke(backend_id: str, purge: bool) -> None:
             "Take off. This is a bounded live smoke instruction: reply with exactly the "
             f"fixed synthetic phrase {SMOKE_PHRASE} and nothing else. Do not run any tool "
             "and do not delegate.")
-        status, posted = await arequest(base, "POST", f"/api/sessions/{manager_id}/message", access_key,
+        status, posted = await arequest(base, "POST", f"/api/chat/{manager_id}/message", access_key,
                                  {"content": phrase_instruction})
         if status != 202:
             fail(f"manager input admission failed: {status} {posted}")

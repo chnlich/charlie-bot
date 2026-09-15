@@ -1,6 +1,7 @@
 """Session management for CharlieBot."""
 
 import asyncio
+import contextlib
 import io
 import json
 import os
@@ -138,6 +139,11 @@ _SUCCESSOR_CHAIN_HOP_LIMIT = 100
 # whole-corpus single-span feed parks the loop behind GIL handoffs for its
 # full span (measured 23 ms worst hold per pass).
 _AGGREGATOR_INIT_SLICE_EVENTS = 256
+
+# The resume anchors: the two metadata fields that name where the conversation
+# lives (the cc-id and the pool login holding its transcript). They change only
+# through their authorized channels (see save_metadata's guard).
+_ANCHOR_FIELDS = ("cc_session_id", "claude_account")
 
 _TRANSIENT_METADATA_FIELDS = {
     "has_running_tasks",
@@ -888,7 +894,10 @@ class SessionManager:
     # populate below covers disk loads only; re-stamping a hit's timestamp
     # would wrongly extend its TTL.
     if self._migrate_round_rating_keys(meta):
-      await self.save_metadata(meta)
+      # Never acquires (get_session runs under callers' locks too); the anchor
+      # reconciliation still runs -- the upgrade path never legitimately
+      # changes an anchor, so a stale one is corrected to disk.
+      await self.save_metadata(meta, lock_held=True)
     elif not cache_hit:
       self._metadata_cache[session_id] = (meta, time.monotonic(), sig)
     return _stamp_thinking_since(meta.model_copy())
@@ -1294,7 +1303,7 @@ class SessionManager:
         fresh_parent.rating = "thumbs_down"
         fresh_parent.successor_session_id = meta.id
         fresh_parent.updated_at = utc_now()
-        await self.save_metadata(fresh_parent)
+        await self.save_metadata(fresh_parent, lock_held=True)
     self._drop_session_runtime_state(parent_id)
 
     self._log_spawn("session_eloned", meta, parent_id, event_index)
@@ -1587,7 +1596,7 @@ class SessionManager:
       if not meta or meta.has_unread == has_unread:
         return meta
       meta.has_unread = has_unread
-      await self.save_metadata(meta)
+      await self.save_metadata(meta, lock_held=True)
     await self._broadcast_sidebar(session_id, ET.UNREAD_CHANGED, has_unread=has_unread)
     return meta
 
@@ -1650,7 +1659,7 @@ class SessionManager:
         fresh = await self.get_session(session_id)
         if fresh is not None:
           fresh.archive_offset += events_archived
-          await self.save_metadata(fresh)
+          await self.save_metadata(fresh, lock_held=True)
       self._drop_session_runtime_state(session_id)
 
     log.info(
@@ -1735,7 +1744,7 @@ class SessionManager:
           continue
         fresh.group = new_name
         fresh.updated_at = utc_now()
-        await self.save_metadata(fresh)
+        await self.save_metadata(fresh, lock_held=True)
       count += 1
     return count
 
@@ -1756,7 +1765,7 @@ class SessionManager:
       if fresh.cc_session_id != cc_session_id:
         fresh.cc_session_id = cc_session_id
         fresh.cc_session_started_at = utc_now()
-      await self.save_metadata(fresh)
+      await self.save_metadata(fresh, lock_held=True, anchor_write=True)
       read_back = await self._get_session_bypassing_cache(session_id)
     return read_back.cc_session_id if read_back is not None else None
 
@@ -1772,9 +1781,27 @@ class SessionManager:
         return None
       if fresh.claude_account != claude_account:
         fresh.claude_account = claude_account
-        await self.save_metadata(fresh)
+        await self.save_metadata(fresh, lock_held=True, anchor_write=True)
       read_back = await self._get_session_bypassing_cache(session_id)
     return read_back.claude_account if read_back is not None else None
+
+  async def clear_cc_session_anchor(self, session_id: str) -> None:
+    """Intentionally clear the session's resume anchor; the authorized clear channel.
+
+    Lock-holding read-modify-write semantics identical to the single-field
+    funnels: fresh read under the per-session lock, both anchor fields cleared,
+    saved with anchor authority. The weekly recycle's deliberate fresh start
+    goes through here -- an unchanneled whole-object save would leave the old
+    anchor on disk (the guard corrects it back) and the recycle would silently
+    do nothing behind its suppressed next-round alarm.
+    """
+    async with self._lock_for(session_id):
+      fresh = await self._get_session_bypassing_cache(session_id)
+      if fresh is None:
+        return
+      fresh.cc_session_id = None
+      fresh.cc_session_started_at = None
+      await self.save_metadata(fresh, lock_held=True, anchor_write=True)
 
   async def claude_context_state(self, session_id: str,
                                  session_meta: SessionMetadata) -> tuple[int | None, datetime | None]:
@@ -1819,7 +1846,7 @@ class SessionManager:
       if fresh is None:
         return
       setattr(fresh, field, value)
-      await self.save_metadata(fresh)
+      await self.save_metadata(fresh, lock_held=True)
 
   async def persist_master_run(self, session_id: str, record: MasterRunRecord | None) -> None:
     """Set or clear the session's in-flight master-turn record."""
@@ -2356,7 +2383,8 @@ class SessionManager:
       try:
         migrated = self._migrate_round_rating_keys(meta)
         if migrated:
-          await self.save_metadata(meta)
+          # Same no-acquire, still-checked migrate save as get_session's.
+          await self.save_metadata(meta, lock_held=True)
       except Exception as exc:
         log.warning("session_load_failed", session_id=session_id, error=str(exc))
         continue
@@ -2381,7 +2409,7 @@ class SessionManager:
         return None
       setattr(meta, field, value)
       meta.updated_at = utc_now()
-      await self.save_metadata(meta)
+      await self.save_metadata(meta, lock_held=True)
     log.info(log_event, session_id=session_id, **log_fields)
     return meta
 
@@ -2640,7 +2668,42 @@ class SessionManager:
       return 0
     return sum(1 for d in self._cfg.sessions_dir.iterdir() if d.is_dir())
 
-  async def save_metadata(self, meta: SessionMetadata) -> None:
+  async def _reconcile_anchor_fields(self, meta: SessionMetadata) -> None:
+    """Correct *meta*'s anchor fields back to the on-disk values before a whole-object save.
+
+    The guard behind the authorized-channel model: the two resume anchors change
+    only through their channels (``persist_cc_session_id``, ``persist_claude_account``,
+    ``clear_cc_session_anchor``), so a whole-object save built from a stale cached
+    meta must not roll them back -- the 2026-09-14 incident's whole-object
+    write-back did exactly that. Reads metadata.json fresh (a cached view is the
+    very staleness this guard exists for) and mutates *meta* in place; a
+    correction logs ``session_anchor_write_corrected`` and the save proceeds
+    write-through rather than refusing. Runs under the per-session lock: inside
+    the caller's critical section for the lock-holding save sites, under the
+    acquisition save_metadata performs for everyone else.
+    """
+    disk = await self.read_metadata_fresh(meta.id)
+    if disk is None:
+      return
+    for field in _ANCHOR_FIELDS:
+      on_disk = getattr(disk, field)
+      if getattr(meta, field) != on_disk:
+        log.warning(
+            "session_anchor_write_corrected",
+            session_id=meta.id,
+            field=field,
+            on_disk=on_disk,
+            attempted=getattr(meta, field),
+        )
+        setattr(meta, field, on_disk)
+
+  async def save_metadata(
+      self,
+      meta: SessionMetadata,
+      *,
+      lock_held: bool = False,
+      anchor_write: bool = False,
+  ) -> None:
     """Persist *meta* to metadata.json and refresh the TTL cache from the serialized form.
 
     The write is atomic — a unique-per-call tmp file swapped in by ``os.replace``
@@ -2650,21 +2713,39 @@ class SessionManager:
     (see ``get_session``'s migrate branch). ``updated_at`` is written as given:
     bumping or preserving it is the caller's decision (``_update_field`` bumps,
     ``_set_unread_flag`` does not).
-    """
-    path = self._metadata_path(meta.id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    serialized = meta.model_dump_json(indent=2, exclude=_TRANSIENT_METADATA_FIELDS)
 
-    await asyncio.to_thread(atomic_write_text, path, serialized)
-    # Signature stays None: a write cannot prove the on-disk signature its bytes
-    # carry (a concurrent rename could land before any post-write stat), so the
-    # entry re-reads at its next expiry and re-keys from that read's own stat.
-    self._metadata_cache[meta.id] = (SessionMetadata.model_validate_json(serialized), time.monotonic(), None)
-    # The single funnel for every session-metadata write (35+ call sites, plus
-    # the ScheduledSessionStore delegate): status transitions (archive/unarchive)
-    # land here, so the sidebar snapshot must re-probe this session.
-    sidebar_state.mark_sidebar_dirty(meta.id)
-    self._listings_revision += 1
+    The anchor fields are reconciled against disk on every save that may carry
+    them (``_reconcile_anchor_fields``), always under the per-session lock:
+
+    * ``lock_held`` — the caller already holds the per-session lock (the in-class
+      read-modify-write sites, and the migrate branches whose get_session runs
+      both under callers' locks and lock-free, so their save can never acquire).
+      The lock is never reentrant; the reconciliation then runs inside the
+      caller's own critical section. Lock-free callers get the acquisition here.
+    * ``anchor_write`` — this save is an authorized anchor channel
+      (``persist_cc_session_id``, ``persist_claude_account``,
+      ``clear_cc_session_anchor``) and legitimately changes an anchor field; the
+      reconciliation is skipped, because its whole purpose would revert the
+      intended write. Every other caller is reconciled: a stale anchor is
+      corrected back to the disk value and the correction is logged.
+    """
+    async with self._lock_for(meta.id) if not lock_held else contextlib.nullcontext():
+      if not anchor_write:
+        await self._reconcile_anchor_fields(meta)
+      path = self._metadata_path(meta.id)
+      path.parent.mkdir(parents=True, exist_ok=True)
+      serialized = meta.model_dump_json(indent=2, exclude=_TRANSIENT_METADATA_FIELDS)
+
+      await asyncio.to_thread(atomic_write_text, path, serialized)
+      # Signature stays None: a write cannot prove the on-disk signature its bytes
+      # carry (a concurrent rename could land before any post-write stat), so the
+      # entry re-reads at its next expiry and re-keys from that read's own stat.
+      self._metadata_cache[meta.id] = (SessionMetadata.model_validate_json(serialized), time.monotonic(), None)
+      # The single funnel for every session-metadata write (35+ call sites, plus
+      # the ScheduledSessionStore delegate): status transitions (archive/unarchive)
+      # land here, so the sidebar snapshot must re-probe this session.
+      sidebar_state.mark_sidebar_dirty(meta.id)
+      self._listings_revision += 1
 
   def _session_dir(self, session_id: str) -> Path:
     return self._cfg.sessions_dir / session_id

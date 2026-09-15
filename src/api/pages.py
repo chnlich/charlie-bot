@@ -41,7 +41,7 @@ from src.core.ncu_parsing import NcuParseError, parse_ncu_report
 from src.core.sessions import SessionManager
 from src.core.timeouts import HOME_SERVICE_PROBE_TIMEOUT, SUBPROCESS_GIT_VERSION_TIMEOUT
 from src.core.token_tally import TokenTally, collect_token_usage
-from src.core.trace_merge import _MERGE_COMPRESSLEVEL, merge_traces
+from src.core.trace_merge import _MERGE_COMPRESSLEVEL, _gzip_exit_or_raise, _kill_gzip_run, merge_traces
 
 log = LazyStructlogLogger()
 
@@ -448,12 +448,9 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
     try:
       with path.open("rb") as validate_file:
         orjson.loads(validate_file.read())
-      if gzip_proc.wait() != 0:
-        detail = gzip_proc.stderr.read().decode(errors="replace").strip()
-        raise RuntimeError(f"gzip -{_MERGE_COMPRESSLEVEL} failed for {path}: {detail}")
+      _gzip_exit_or_raise(gzip_proc, str(path))
     except BaseException:
-      gzip_proc.kill()
-      gzip_proc.wait()
+      _kill_gzip_run(gzip_proc)
       raise
 
 

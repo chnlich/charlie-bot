@@ -29,6 +29,19 @@ _MERGE_BATCH_EVENTS = 512
 _MERGE_PIPE_BYTES = 1 << 20
 
 
+def _gzip_exit_or_raise(gzip_proc: subprocess.Popen, context: str) -> None:
+  """Reap the gzip run's exit; a nonzero exit raises with the stderr the run wrote."""
+  if gzip_proc.wait() != 0:
+    detail = gzip_proc.stderr.read().decode(errors="replace").strip()
+    raise RuntimeError(f"gzip -{_MERGE_COMPRESSLEVEL} failed ({context}): {detail}")
+
+
+def _kill_gzip_run(gzip_proc: subprocess.Popen) -> None:
+  """Kill an abandoned gzip run and reap it; kill alone leaves a zombie."""
+  gzip_proc.kill()
+  gzip_proc.wait()
+
+
 def _rank_label(path: Path) -> str:
   match = re.search(r"rank(\d+)", path.name, flags=re.IGNORECASE)
   if match:
@@ -249,9 +262,7 @@ def _merge_all(paths: list[Path], out_path: Path, slim: bool) -> None:
       batcher.flush()
       output.write(b"]}")
       output.close()
-      if gzip_proc.wait() != 0:
-        detail = gzip_proc.stderr.read().decode(errors="replace").strip()
-        raise RuntimeError(f"gzip -{_MERGE_COMPRESSLEVEL} failed: {detail}")
+      _gzip_exit_or_raise(gzip_proc, "trace merge")
     except BaseException:
       # __exit__ closes stdin again; a killed child makes that flush raise EPIPE,
       # so close the write end here first (idempotent once closed) or the walk's
@@ -260,6 +271,5 @@ def _merge_all(paths: list[Path], out_path: Path, slim: bool) -> None:
         output.close()
       except BrokenPipeError:
         pass
-      gzip_proc.kill()
-      gzip_proc.wait()
+      _kill_gzip_run(gzip_proc)
       raise

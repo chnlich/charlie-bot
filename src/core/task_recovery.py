@@ -125,7 +125,16 @@ async def _reconcile_node(
         if runs.is_run_alive(run.pid, run.pid_start, run.started_at, runs.read_host_boot_time()):
             counters["resumed"] += 1
             log.info("task_recovery_resume", session=session_id, run_id=run.id)
-            await adapter.resume_run(session_id, run.id)
+            # The follow MUST NOT be awaited inline: a live run's tail-follow
+            # ends only when its process ends, so awaiting it here would hold
+            # the whole server startup (the lifespan awaits this pass) until
+            # every live v2 run finished. Scheduling it attaches the follow
+            # before any door opens, and the recorded pid keeps holding the
+            # node's serialized slot (no competing dispatch) until the follow
+            # converges and lands the run's durable terminal fact.
+            from src.core.tasks import create_logged_task
+            create_logged_task(adapter.resume_run(session_id, run.id),
+                               name=f"task-resume-{run.id[:8]}")
         else:
             # The process ended before its terminal fact landed (crash in the
             # follow). The drain converges to the durable result — raw-stream
@@ -225,6 +234,13 @@ async def _replay_followups(
         if run.kind == "work":
             counters["followups"] += 1
             if outcome == "success":
+                # The completion owner's post-success follow-up replays exactly
+                # as the dispatcher's finish path ran it: the own close-request
+                # recheck and the non-implement automatic completion (close +
+                # parent report). Everything inside is idempotent by stable
+                # request/close/report ids, so a crash in the finish→follow-up
+                # window is repaired and a repeated pass lands nothing twice.
+                await tree.completion.after_run_finished(session_id, run.id)
                 task_type = meta.task.task_type if meta.task is not None else None
                 if task_type is not None and task_type == "implement" and run.repo_path:
                     await adapter._maybe_spawn_review(session_id, run)

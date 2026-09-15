@@ -397,3 +397,70 @@ async def test_recovery_scopes_to_this_instance_only(
     await reconcile_task_tree(other_cfg, other_tree, other_session_mgr)
     other_run2 = await other_tree.runs.get_run(other_manager.id, other_run_id)
     assert other_run2 is not None and other_run2.pid is not None
+
+
+@pytest.mark.asyncio
+async def test_terminal_append_crash_replays_automatic_completion_once(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A successful non-implement work run whose terminal fact landed while the
+    completion follow-up (close + parent report) was lost to a crash: recovery
+    replays it exactly once — the task closes and the parent gets one report."""
+    from src.core.task_recovery import reconcile_task_tree
+    cfg, session_mgr, tree, manager, worker = await _manager_and_worker(
+        tmp_path, monkeypatch, task_type=TaskType.QUICK_EDIT)
+    run_id = "run-quickedit"
+    await tree.runs.register_run(
+        RunRecord(id=run_id, session_id=worker.id, kind="work",
+                  backend="fake", model="fake-model"))
+    # The crash window: the durable terminal fact exists; after_run_finished
+    # (the automatic completion and the parent report) never ran.
+    async with tree.control_lock:
+        await tree.runs.record_finish_locked(worker.id, run_id, "success", exit_code=0)
+    assert tree.task_state(worker.id) == "open"
+    assert not [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+
+    await reconcile_task_tree(cfg, tree, session_mgr)
+    assert tree.task_state(worker.id) == "completed"
+    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+    assert len(reports) == 1
+    assert reports[0].get("outcome") == "completed"
+    # A repeated pass lands nothing twice: one close, one report.
+    await reconcile_task_tree(cfg, tree, session_mgr)
+    closed = [e for e in tree.events.load_events(worker.id) if e.get("type") == ET.TASK_CLOSED]
+    assert len(closed) == 1
+    reports2 = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+    assert len(reports2) == 1
+
+
+@pytest.mark.asyncio
+async def test_live_resume_attaches_without_blocking_the_startup_pass(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A recorded live run's resume follow must not hold the recovery pass
+    (the server lifespan awaits it): the pass returns with the follow
+    attached, and the follow converges when the process actually ends."""
+    from src.core.task_recovery import reconcile_task_tree
+    cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+    builds = install_resume_ready_backends(monkeypatch, [])
+    gate = asyncio.Event()  # the recorded process stays "alive" until released
+    import src.core.runs as runs_mod
+    monkeypatch.setattr(runs_mod, "is_run_alive", lambda *a, **k: not gate.is_set())
+    run_id = "run-live-block"
+    await tree.runs.register_run(
+        RunRecord(id=run_id, session_id=worker.id, kind="work",
+                  backend="fake", model="fake-model"))
+    await tree.runs.record_launch(worker.id, run_id, pid=424888, pid_start="1-424000")
+
+    # The pass returns even though the recorded process is still alive — an
+    # inline await would hold startup until the run's process ends.
+    await asyncio.wait_for(reconcile_task_tree(cfg, tree, session_mgr), timeout=10)
+    run = await tree.runs.get_run(worker.id, run_id)
+    assert run is not None
+    assert tree.runs.terminal_outcome(
+        tree.runs.load_events_sync(worker.id), run_id) is None
+    # No competing process: the recorded identity holds the serialized slot.
+    assert builds == []
+
+    # The attached follow converges in the background when the process ends.
+    gate.set()
+    run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
+    assert outcome in ("failed", "interrupted")

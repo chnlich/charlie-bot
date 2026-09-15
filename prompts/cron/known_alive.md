@@ -54,7 +54,7 @@ Known-alive symbols:
   `_clear_store_memo` (`tests/test_memory_store_memo.py`),
   `_clear_aggregate_memo` (`tests/test_token_tally.py`),
   `_clear_jsonl_memo` (`tests/test_tui_backend.py`),
-  `_clean_memo` (`tests/test_thread_meta_scan_memo.py`),
+  `_clean_memo` (`tests/test_thread_meta_scan_memo.py`, `tests/test_trigger_probe_memo.py`),
   `clear_next_run_memo` (`tests/test_cron_next_run_memo.py`),
   `_clean_probe_state` (`tests/test_probe_single_walk.py`) — pytest `autouse=True` fixtures,
   reached by pytest's fixture-name discovery only: zero whole-repo matches outside their
@@ -427,3 +427,8 @@ Known-alive symbols:
   `tests/conftest.py`) and `src.core.artifact_wrap.requests.get`
   (`tests/core/test_artifact_wrap.py`) resolve the module attribute through the hook.
   Vulture flags each as an unused function at 60% confidence.
+- `split_sse_lines` (`src/core/sse.py`) — kept deliberately as the SSE framing oracle. The
+  property tests in `tests/test_sse.py` drive it through `_split_chunked` and assert the
+  production byte framer (`_ChunkedFramer`, same module) matches its answers on every two-way
+  split and on random chunkings; the framer's docstring names it the semantics home. No
+  production code calls it, so a production-scope vulture scan flags it as an unused function.

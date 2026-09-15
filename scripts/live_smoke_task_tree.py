@@ -220,6 +220,13 @@ async def wait_for_dispatch_run(session_id: str, label: str) -> str:
     fail(f"{label}: the dispatcher never reserved a run for the admitted input")
 
 
+async def arequest(base: str, method: str, path: str, key: str, payload: dict | None = None,
+                   timeout: float = 30.0) -> tuple[int, dict | list]:
+    """request() off the loop thread: the isolated uvicorn server lives on this same
+    loop, so a blocking urlopen here would deadlock the server that must answer it."""
+    return await asyncio.to_thread(request, base, method, path, key, payload, timeout)
+
+
 async def smoke(backend_id: str, purge: bool) -> None:
     preflight(backend_id)
     entry = load_production_backend_entry(backend_id)
@@ -239,7 +246,7 @@ async def smoke(backend_id: str, purge: bool) -> None:
     await start_server(port)
     try:
         # -- the manager task and its real manager turn ----------------------
-        status, manager = request(base, "POST", "/api/sessions/", access_key, {
+        status, manager = await arequest(base, "POST", "/api/sessions/", access_key, {
             "request_id": "smoke-manager-create",
             "profile": "manager",
             "name": "smoke-manager",
@@ -253,7 +260,7 @@ async def smoke(backend_id: str, purge: bool) -> None:
             "Take off. This is a bounded live smoke instruction: reply with exactly the "
             f"fixed synthetic phrase {SMOKE_PHRASE} and nothing else. Do not run any tool "
             "and do not delegate.")
-        status, posted = request(base, "POST", f"/api/sessions/{manager_id}/message", access_key,
+        status, posted = await arequest(base, "POST", f"/api/sessions/{manager_id}/message", access_key,
                                  {"content": phrase_instruction})
         if status != 202:
             fail(f"manager input admission failed: {status} {posted}")
@@ -298,7 +305,7 @@ async def smoke(backend_id: str, purge: bool) -> None:
             "## Acceptance Tests\n\nThe final report contains the exact phrase.\n"
             "## Out of Scope\n\nEverything else.\n",
             encoding="utf-8")
-        status, delegated = request(base, "POST", "/api/internal/delegate", access_key, {
+        status, delegated = await arequest(base, "POST", "/api/internal/delegate", access_key, {
             "session_id": manager_id,
             "description": spec_path.read_text(encoding="utf-8"),
             "repo_path": str(repo),
@@ -353,9 +360,38 @@ async def smoke(backend_id: str, purge: bool) -> None:
         if SMOKE_PHRASE not in raw_tail and SMOKE_PHRASE not in json.dumps(reports[-1]):
             fail("the worker's real output did not contain the synthetic phrase")
 
+        # -- the delivered report triggers the parent's serialized turn ---------
+        # The manager consumes the report in its next real turn; the smoke waits
+        # for every launched process to reach its terminal fact, so teardown
+        # leaves no live CLC process behind.
+        deadline = time.monotonic() + RUN_TIMEOUT_SECONDS
+        settled = False
+        store = deps_tree().runs
+        while time.monotonic() < deadline:
+            events = await asyncio.to_thread(store.load_events_sync, manager_id)
+            active = [r for r in await asyncio.to_thread(store.list_run_records_sync, manager_id)
+                      if store.terminal_outcome(events, r.id) is None]
+            pending = deps_tree().dispatch.pending_inputs(manager_id)
+            if not active and not pending:
+                settled = True
+                break
+            await asyncio.sleep(2.0)
+        if not settled:
+            fail(f"the manager's report turn never settled: pending="
+                 f"{[str(e.get('id')) for e in deps_tree().dispatch.pending_inputs(manager_id)]}")
+        manager_runs = await asyncio.to_thread(store.list_run_records_sync, manager_id)
+        if len(manager_runs) < 2:
+            fail("the delivered child report never triggered the manager's next turn")
+        events = await asyncio.to_thread(store.load_events_sync, manager_id)
+        for r in manager_runs[1:]:
+            if store.terminal_outcome(events, r.id) != "success":
+                fail(f"the manager's report turn {r.id} did not succeed "
+                     f"(raw_log={r.raw_log_ref})")
+        log(f"manager report turn {manager_runs[-1].id}: report consumed, outcome=success")
+
         # -- the compatibility aliases resolve to the same Run ---------------
         for owner in (child_id, manager_id):
-            status, row = request(base, "GET", f"/api/threads/{owner}/threads/{worker_run_id}", access_key)
+            status, row = await arequest(base, "GET", f"/api/threads/{owner}/threads/{worker_run_id}", access_key)
             if status != 200 or row.get("id") != worker_run_id:
                 fail(f"alias {owner}/{worker_run_id} did not resolve to the run: {status} {row}")
 

@@ -41,23 +41,8 @@ const platform = (function() {
   }
 
   return {
-    /** 'cover' | 'mobile' | 'desktop' */
-    get mode() { return _currentMode; },
-
     /** true on phones / tablets / foldables (any non-desktop) */
     get isMobile() { return _currentMode !== 'desktop'; },
-
-    /** true only on Z Fold cover screen (<=320px) */
-    get isCover() { return _currentMode === 'cover'; },
-
-    /** true when hardware is touch-capable */
-    get isTouch() { return isTouchDevice; },
-
-    /** 'overlay' on mobile/cover, 'pinned' on desktop */
-    get sidebarMode() { return _currentMode === 'desktop' ? 'pinned' : 'overlay'; },
-
-    /** 'fullscreen' on mobile/cover, 'side' on desktop */
-    get panelMode() { return _currentMode === 'desktop' ? 'side' : 'fullscreen'; },
 
     /** Register callback: fn(newMode, prevMode) */
     onChange(fn) { _callbacks.push(fn); },

@@ -215,6 +215,13 @@ async def test_bound_steps_one_leaf_ordered_runs_one_report(
   assert [r.sequence_ref.position for r in records] == [0, 1]
   assert [r.sequence_ref.kind for r in records] == ["cron_steps", "cron_steps"]
   assert all(r.sequence_ref.owner_ref == f"cron:chained:{firing}" for r in records)
+  # Every scheduled step launch carries the assembler's durable snapshot: the
+  # step prompt override no longer bypasses the assembly.
+  for r in records:
+    assert r.prompt_snapshot_ref is not None and Path(r.prompt_snapshot_ref).is_file()
+    stored = _json.loads(Path(r.prompt_snapshot_ref).read_text(encoding="utf-8"))
+    refs = [s["source_ref"] for b in stored["blocks"] for s in b["sources"]]
+    assert "prompts/worker.md" in refs
   # Per-step backends honored: step 0 rode the task backend, step 1 its own.
   assert records[0].backend == "fake"
   assert records[1].backend == "codex-o3"

@@ -11,6 +11,7 @@ honestly without resuming the loop or leaving a permanently blocking lock.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -122,6 +123,12 @@ async def test_two_iterations_stay_one_child_with_ordered_runs(
 
     records = tree.runs.list_run_records_sync(child_id)
     assert [r.kind for r in records] == ["iteration", "iteration"]
+    # Every launched iteration carries the assembler's durable snapshot evidence.
+    for r in records:
+        assert r.prompt_snapshot_ref is not None and Path(r.prompt_snapshot_ref).is_file()
+        stored = json.loads(Path(r.prompt_snapshot_ref).read_text(encoding="utf-8"))
+        refs = [s["source_ref"] for b in stored["blocks"] for s in b["sources"]]
+        assert "prompts/worker.md" in refs  # the iteration's applicable contract
     positions = [r.sequence_ref.position for r in records]
     kinds = [r.sequence_ref.kind for r in records]
     assert positions == [1, 2] and kinds == ["improve", "improve"]

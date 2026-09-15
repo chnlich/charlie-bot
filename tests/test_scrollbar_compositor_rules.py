@@ -11,8 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from conftest import ROOT
 
-ROOT = Path(__file__).resolve().parents[1]
 STYLES_CSS = ROOT / 'web' / 'static' / 'css' / 'styles.css'
 EVENTS_VIEWER = ROOT / 'web' / 'templates' / 'events_viewer.html'
 

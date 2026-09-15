@@ -869,7 +869,6 @@ async def ack_messages(
   skipped = [ts for ts in sorted(eligible) if (watermark is None or ts > watermark) and ts <= ceiling and ts not in ids]
   if skipped:
     raise SlackReplyError(422, f"Skipped eligible message id at or below {ceiling}: {skipped[0]}")
-  watermark = meta.slack_watermark_ts
   if watermark is None or ceiling > watermark:
     watermark = ceiling
     meta.slack_watermark_ts = watermark

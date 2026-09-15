@@ -102,12 +102,27 @@ def _delegate_invocation_event_payload(req: DelegateRequest) -> dict:
 async def _authorize_spawn_request(
     req: DelegateRequest | ImproveRequest,
     session_mgr: SessionManager,
+    task_mgr: TaskTreeManager,
 ) -> tuple[SessionMetadata, CharlieBotConfig, str | None, str | None]:
-  """Validate session, enforce takeoff gate, and resolve backend/model for spawn-style endpoints."""
+  """Validate session, enforce the takeoff gate, and resolve backend/model for spawn-style endpoints.
+
+  A v2 task-tree node takes the one central v2 authorization owner —
+  ``TaskTreeManager.check_task_authorization``, the nearest-real-user-ancestor
+  gate (re-judged by the v2 helper below and again at the actual launch).
+  The session-local legacy gate must not pre-gate a node that legitimately
+  inherits an ancestor's authorization: that split would force every sub-task
+  manager to carry its own take-off before the real CLI route works. The
+  read-only verify exemption is preserved for both v1 and v2.
+  """
   meta = require_found(await session_mgr.get_session(req.session_id))
 
   if isinstance(req, DelegateRequest) and req.task_type == TaskType.VERIFY:
-    pass
+    pass  # the read-only verify exemption (v1 and v2 alike)
+  elif meta.profile is not None:
+    try:
+      await task_mgr.check_task_authorization(req.session_id)
+    except DelegationBlockedError as e:
+      raise HTTPException(status_code=403, detail=str(e)) from e
   else:
     try:
       await asyncio.to_thread(check_takeoff_gate, req.session_id, session_mgr)
@@ -171,8 +186,11 @@ async def _delegate_task_tree(
 
   try:
     # The nearest-user-ancestor gate re-judges at delegation and again at the
-    # child run's actual launch, whatever credential carries the request.
-    await task_mgr.check_task_authorization(req.session_id)
+    # child run's actual launch, whatever credential carries the request. The
+    # read-only verify exemption rides the same task-type judgment here and at
+    # the launch; the structural create checks still apply to a verify child.
+    if req.task_type != TaskType.VERIFY:
+      await task_mgr.check_task_authorization(req.session_id)
     request_id = delegate_request_id(req)
     task_spec = TaskSpec(
         goal=req.description,
@@ -219,6 +237,11 @@ async def _delegate_task_tree(
         # from the delegating session resolve to the same Run (whose owner is
         # the child task).
         task_mgr.aliases.register_owner_thread_alias(req.session_id, child.id, run_id)
+  except DelegationBlockedError as e:
+    # The central ancestor gate's refusal (worker caller, closed ancestor,
+    # shadowing local instruction, expired window) is an authorization
+    # rejection, never a server error.
+    raise HTTPException(status_code=403, detail=str(e)) from e
   except TaskNotFoundError as e:
     raise HTTPException(status_code=404, detail=str(e)) from e
   except TaskForbiddenError as e:
@@ -288,10 +311,12 @@ async def delegate_task(
           status_code=400, detail=f"{req.task_type.value} delegations require base_branch")
   target = require_found(await session_mgr.get_session(req.session_id))
   if target.profile is not None:
-    meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr)
+    meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(
+        req, session_mgr, task_mgr)
     return await _delegate_task_tree(
         req, meta, cfg, task_mgr, session_mgr, caller, resolved_backend, resolved_model)
-  meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr)
+  meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(
+      req, session_mgr, task_mgr)
 
   require_review = req.task_type == TaskType.IMPLEMENT  # noqa: F841  (legacy shape unchanged)
 
@@ -363,7 +388,8 @@ async def start_improve_loop(
   if target.profile is not None:
     return await _start_improve_sequence(req, cfg, task_mgr, session_mgr)
 
-  _meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr)
+  _meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(
+      req, session_mgr, task_mgr)
 
   work_branch = req.work_branch or f"improve/{int(time.time())}"
   try:

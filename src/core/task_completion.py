@@ -42,6 +42,7 @@ from src.core.control_events import (
     build_control_event,
     stable_close_event_id,
     stable_close_request_event_id,
+    stable_input_ack_event_id,
     stable_reopen_event_id,
 )
 from src.core.log_once import LazyStructlogLogger
@@ -222,7 +223,15 @@ class TaskCompletionManager:
                     + (" (a bare exit code is not evidence)" if run.exit_code == 0 else ""))
         if evidence.run_ids and not claimed:
             blockers.append("completion evidence names no delivery Run of this task")
-        if not evidence.run_ids:
+        if not evidence.run_ids and any(
+                outcome == "success" for outcome in outcomes.values()):
+            # Delivery run evidence is required while the delivery universe has
+            # a successful Run to cite. A task whose executed work never
+            # succeeded through Runs (the terminal-driven node's explicit
+            # operator completion; cancelled-only child work) closes on the
+            # operator's own attributed evidence; every closure blocker still
+            # applies, and a failed-only subtree still refuses to be called
+            # completed on a bare claim.
             blockers.append("completion requires delivery run evidence (run_ids)")
         for ref in evidence.result_refs:
             blockers.extend(self._structured_ref_blockers(meta, ref, runs, outcomes, facts, evidence))
@@ -767,6 +776,118 @@ class TaskCompletionManager:
         except TaskConflictError as e:
             log.info("automatic_worker_completion_blocked",
                      session_id=session_id, run_id=run_id, blockers=getattr(e, "blockers", None))
+
+    # ------------------------------------------------------------------
+    # Input acknowledgement (the terminal-driven node's explicit resolution)
+    # ------------------------------------------------------------------
+
+    async def acknowledge_inputs(
+        self,
+        session_id: str,
+        *,
+        request_id: str,
+        input_ids: list[str],
+        note: str,
+        caller: "object",
+    ) -> dict:
+        """The operator's durable confirmation that exact task inputs were handled.
+
+        The terminal-driven node takes input through its terminal; the durable
+        input facts it handled out-of-band stay pending until this explicit
+        resolution names them. Guards (all shared with the ordinary closure
+        path): operator credentials only — a run-token agent can never confirm
+        on behalf of the operator; each id must be an exact currently-pending
+        input of this task (later arrivals and other Runs' claims are not
+        acknowledgable, and unknown ids refuse); the fact is durable,
+        attributable (actor=user, request id, note), and idempotent — a
+        replayed request id returns the original acknowledgement and
+        re-acking an already-acknowledged id is a no-op. Nothing here
+        completes anything: closure still runs the ordinary guards, so
+        active Runs, open children, and any input that arrived after the
+        acknowledgement keep blocking.
+        """
+        from src.core.run_token import CallerIdentity
+        from src.core.task_sessions import (
+            TaskConflictError,
+            TaskForbiddenError,
+            TaskInvalidError,
+        )
+
+        if not isinstance(caller, CallerIdentity) or not caller.is_operator:
+            raise TaskForbiddenError("acknowledging task input requires operator credentials")
+        if not request_id:
+            raise TaskInvalidError("request_id is required for input acknowledgement")
+        if not input_ids:
+            raise TaskInvalidError("input_ids is required and must name at least one input")
+        if len(set(input_ids)) != len(input_ids):
+            raise TaskInvalidError("input_ids must not repeat an id")
+        tree = self._tree
+        replay = self._replay_input_ack(session_id, request_id)
+        if replay is not None:
+            return replay
+        epoch = await tree.sessions.prime_aggregator(session_id)
+        async with tree.control_lock:
+            index = await tree._get_index()
+            # 404 on an unknown task before any acknowledgement text.
+            tree._index_meta(index, session_id)
+            replay = self._replay_input_ack(session_id, request_id)
+            if replay is not None:
+                return replay
+            pending = {str(e.get("id")): e for e in tree.dispatch.pending_inputs(session_id)}
+            acknowledged = self._acknowledged_input_ids(session_id)
+            unknown = [i for i in input_ids if i not in pending and i not in acknowledged]
+            if unknown:
+                raise TaskConflictError(
+                    [f"input(s) not pending for {session_id}: {', '.join(unknown)}"])
+            acked_now = [i for i in input_ids if i in pending]
+            if not acked_now:
+                # Every named id was already acknowledged: the replay of that
+                # resolution is the same no-op, not a second fact.
+                return {
+                    "session_id": session_id,
+                    "acknowledged_event_id": None,
+                    "input_ids": [],
+                    "already_acknowledged": list(input_ids),
+                }
+            event = build_control_event(
+                ET.TASK_INPUT_ACKNOWLEDGED,
+                actor=ACTOR_USER,
+                source_session_id=session_id,
+                event_id=stable_input_ack_event_id(session_id, request_id),
+                request_id=request_id,
+                input_ids=acked_now,
+                note=note,
+            )
+            await tree.events.append(session_id, event)
+            tree._invalidate_index()
+        await tree.sessions.announce_appended_event(session_id, event, epoch=epoch)
+        return {
+            "session_id": session_id,
+            "acknowledged_event_id": str(event["id"]),
+            "input_ids": acked_now,
+            "already_acknowledged": [i for i in input_ids if i not in acked_now],
+        }
+
+    def _acknowledged_input_ids(self, session_id: str) -> set[str]:
+        """The input ids this task's facts already acknowledge."""
+        tree = self._tree
+        facts = tree.facts_of(session_id)
+        return set(facts.confirmed_input_ids)
+
+    def _replay_input_ack(self, session_id: str, request_id: str) -> "dict | None":
+        """The original outcome of an already-recorded acknowledgement id."""
+        tree = self._tree
+        event_id = stable_input_ack_event_id(session_id, request_id)
+        for event in tree.fact_history(session_id):
+            if (event.get("type") == ET.TASK_INPUT_ACKNOWLEDGED
+                    and event.get("id") == event_id):
+                return {
+                    "session_id": session_id,
+                    "acknowledged_event_id": event_id,
+                    "input_ids": list(event.get("input_ids") or []),
+                    "already_acknowledged": [],
+                }
+        return None
 
     # ------------------------------------------------------------------
     # Cancel and reopen

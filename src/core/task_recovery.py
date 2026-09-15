@@ -155,39 +155,19 @@ async def _reconcile_node(
     await tree.dispatch.dispatch_pending(session_id)
 
 
-def _parse_firing_ref(owner_ref: str) -> "tuple[str, str] | None":
-    """(task name, firing) from a cron_steps owner_ref, or None when malformed."""
-    from src.core.cron_sequence import firing_ref_prefix
-    return firing_ref_prefix(owner_ref)
-
-
 async def _replay_cron_firing(
     session_id: str,
     tree: "TaskTreeManager",
     run: "object",
     cfg: "CharlieBotConfig",
 ) -> None:
+    """Re-drive one firing's chain/boundary through its owning module."""
     from src.core import cron_sequence
 
     seq = run.sequence_ref
     if seq is None or not seq.owner_ref.startswith("cron:"):
         return
-    parsed = _parse_firing_ref(seq.owner_ref)
-    if parsed is None:
-        log.warning("task_recovery_firing_ref_unparsable", session=session_id, owner_ref=seq.owner_ref)
-        return
-    task_name, firing = parsed
-    task_cfg = cron_sequence.load_bound_task(task_name, cfg)
-    if task_cfg is None:
-        log.warning("task_recovery_firing_task_missing", session=session_id, task=task_name)
-        return
-    leaf_meta = await tree.load_meta(session_id)
-    if leaf_meta is None or not leaf_meta.task_parent_id:
-        return
-    parent_meta = await tree.load_meta(leaf_meta.task_parent_id)
-    if parent_meta is None:
-        return
-    await cron_sequence.reconcile_bound_firings(task_cfg, parent_meta, tree, firing, session_id)
+    await cron_sequence.redrive_firing(session_id, tree, cfg)
 
 
 async def _replay_followups(
@@ -211,16 +191,20 @@ async def _replay_followups(
     run_records = tree.runs.list_run_records_sync(session_id)
     for run in run_records:
         outcome = tree.runs.terminal_outcome(events, run.id)
-        if outcome is None:
-            continue
         if run.kind == "iteration":
             continue  # the improve loop is never resumed (the restart boundary)
         if run.kind == "scheduled_step":
-            # The cron firing's chain advances from durable facts only: the
-            # next position launches through the same launch checks, or the
-            # ONE boundary report re-delivers (both idempotent by stable ids).
-            counters["followups"] += 1
-            await _replay_cron_firing(session_id, tree, run, cfg)
+            # The cron firing's chain advances from durable facts only — for a
+            # terminal step the next position launches or the ONE boundary
+            # report re-delivers; for a registered-but-unlaunched frontier step
+            # (a controller that settled withheld or died before its launch)
+            # the same redrive replays that admitted step. Both idempotent by
+            # stable ids; a live process is followed, never relaunched.
+            if outcome is not None or run.pid is None:
+                counters["followups"] += 1
+                await _replay_cron_firing(session_id, tree, run, cfg)
+            continue
+        if outcome is None:
             continue
         if meta.profile != "worker" and run.kind != "manager_turn":
             continue

@@ -172,15 +172,6 @@ async def terminal_outcome(tree: "TaskTreeManager", child_id: str, run_id: str) 
     return tree.runs.terminal_outcome(tree.runs.load_events_sync(child_id), run_id)
 
 
-async def wait_for_terminal(tree: "TaskTreeManager", child_id: str, run_id: str) -> str:
-    """Await one Run's durable terminal fact; returns its outcome."""
-    while True:
-        outcome = await terminal_outcome(tree, child_id, run_id)
-        if outcome is not None:
-            return outcome
-        await asyncio.sleep(0.2)
-
-
 async def _iteration_blocker(
     tree: "TaskTreeManager", child_id: str, run_id: str, iteration: int, outcome: str,
 ) -> tuple[str | None, str]:
@@ -277,11 +268,24 @@ async def run_improve_sequence(
             outcome = await terminal_outcome(tree, child_id, run.id)
             if outcome is None:
                 # This controller's work: launch the iteration with its
-                # composed description and await the durable terminal fact.
+                # composed description and await the launch/wait settlement.
                 # (A replayed registration of an already-terminal Run keeps
-                # its recorded outcome above.)
-                adapter.launch(child_id, run.id, prompt=description)
-                outcome = await wait_for_terminal(tree, child_id, run.id)
+                # its recorded outcome above; a live process from a replayed
+                # registration is followed, never relaunched.)
+                observation = await adapter.launch_and_settle(child_id, run.id, prompt=description)
+                if observation.withheld is not None:
+                    # No process started and no terminal fact will arrive: the
+                    # loop cannot continue. Settle honestly — blocked state,
+                    # released active lock, the actual reason reported — and
+                    # leave the queued iteration Run standing as the retained
+                    # pending request (resume/retry uses the existing policy;
+                    # the whole loop is never automatically restarted).
+                    await _settle_withheld_iteration(
+                        tree, session_id, cfg, loop_id, child_id, goal, i, run.id,
+                        observation.withheld, previous_summaries, iterations)
+                    return
+                outcome = observation.outcome
+                assert outcome is not None
             completed_iterations = i
 
             if outcome != "success":
@@ -382,6 +386,49 @@ async def run_improve_sequence(
                 f"Improve loop controller failed: {exc}", previous_summaries)
         except Exception:
             log.exception("improve_sequence_failure_report_failed", session=session_id, loop_id=loop_id)
+
+
+async def _settle_withheld_iteration(
+    tree: "TaskTreeManager",
+    session_id: str,
+    cfg: CharlieBotConfig,
+    loop_id: int,
+    child_id: str,
+    goal: str,
+    iteration: int,
+    run_id: str,
+    reason: str,
+    previous_summaries: list[str],
+    iterations: int,
+) -> None:
+    """Settle a loop whose iteration launch was withheld (no terminal fact will arrive).
+
+    The loop state cannot keep saying "running": the controller marks it
+    blocked with the actual reason, releases the active lock, and delivers the
+    ONE sequence report carrying that reason. No side effect ran and none is
+    retried automatically; the queued iteration Run stays as the retained
+    pending request for the existing explicit resume/retry policy.
+    """
+    state = await improve_command.require_loop_state(session_id, loop_id, cfg)
+    state.status = "blocked"
+    await improve_command.save_loop_state(session_id, state, cfg)
+    await improve_command.clear_active_loop_lock(session_id, cfg)
+    log.warning("improve_sequence_launch_withheld", session=session_id, loop_id=loop_id,
+                iteration=iteration, run_id=run_id, reason=reason)
+    summary = (
+        f"Improve loop stopped before iteration {iteration}: its launch was withheld and no "
+        f"process started ({reason}). Iteration run {run_id} stays queued on the loop's task as "
+        "the retained pending request; no side effects ran and none will be retried "
+        "automatically. Resume the withheld precondition and retry the run, or restart the "
+        "loop explicitly.")
+    payload = improve_command._build_summary_payload(ET.IMPROVE_FAILED, goal, previous_summaries)
+    payload["blocked_iteration"] = iteration
+    payload["reason"] = reason
+    payload["withheld_run_id"] = run_id
+    payload["iterations_requested"] = iterations
+    await tree.sessions.deliver_to_successor(session_id, payload)
+    await _deliver_sequence_report(
+        tree, child_id, session_id, loop_id, "blocked", summary, previous_summaries)
 
 
 async def _judge_iteration(

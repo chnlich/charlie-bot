@@ -350,6 +350,14 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
             "role": "system",
             "content": f"Task reopened: {ev.get('reason') or ''}".rstrip(),
         },
+    ET.TASK_INPUT_ACKNOWLEDGED:
+        lambda ev: {
+            "role": "system",
+            "content": (
+                f"Task input(s) acknowledged as handled: {', '.join(ev.get('input_ids') or [])}"
+                + (f" — {ev['note']}" if ev.get("note") else "")
+            ).rstrip(),
+        },
 }
 
 

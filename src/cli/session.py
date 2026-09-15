@@ -22,6 +22,10 @@ closure (202 pending_run_finish). ``cancel`` explicitly cancels an open task
 with a reason; ``reopen`` reopens one closed task and refuses closed
 ancestors.
 
+``acknowledge`` durably resolves exact task inputs the operator handled
+out-of-band (the terminal-driven node's resolution step): operator scope,
+exact input ids, idempotent replay; later arrivals keep blocking closure.
+
 ``send`` relays a message into the target session as an ``agent_message``
 event (never a ``user`` event), so it neither mints nor revokes a takeoff
 authorization window. The caller session comes from the server-written
@@ -93,6 +97,19 @@ def _build_parser() -> argparse.ArgumentParser:
            "optional and defaults to a fresh UUID)")
   complete.add_argument(
       "--request-id", default=None, help="Request id binding the close (defaults to a fresh UUID)")
+
+  ack = sub.add_parser(
+      "acknowledge", help="Acknowledge exact task inputs the operator handled out-of-band "
+                          "(the terminal-driven node's resolution step)")
+  ack.add_argument("session_id", help="Task id")
+  ack.add_argument(
+      "--input-ids", required=True,
+      help="Comma-separated input event ids being resolved (each must currently be pending)")
+  ack.add_argument("--note", default="", help="Optional note recorded with the acknowledgement")
+  ack.add_argument(
+      "--request-id", default=None,
+      help="Request id binding the acknowledgement (defaults to a fresh UUID; replays return "
+           "the original acknowledgement)")
 
   cancel = sub.add_parser("cancel", help="Explicitly cancel one open task")
   cancel.add_argument("session_id", help="Task id")
@@ -173,6 +190,19 @@ def _cmd_complete(args: argparse.Namespace) -> None:
   print(json.dumps(post_internal_api(f"/api/sessions/{args.session_id}/complete", body), indent=2))
 
 
+def _cmd_acknowledge(args: argparse.Namespace) -> None:
+  input_ids = [part.strip() for part in args.input_ids.split(",") if part.strip()]
+  if not input_ids:
+    exit_usage_error("--input-ids must name at least one input event id")
+  body = {
+      "request_id": args.request_id or str(uuid.uuid4()),
+      "input_ids": input_ids,
+      "note": args.note,
+  }
+  print(json.dumps(
+      post_internal_api(f"/api/sessions/{args.session_id}/task-inputs/acknowledge", body), indent=2))
+
+
 def _cmd_cancel(args: argparse.Namespace) -> None:
   payload = {
       "request_id": args.request_id or str(uuid.uuid4()),
@@ -221,6 +251,8 @@ def main() -> None:
     _set_paused(args.session_id, False)
   elif args.session_command == "retry":
     _cmd_retry(args)
+  elif args.session_command == "acknowledge":
+    _cmd_acknowledge(args)
   elif args.session_command == "complete":
     _cmd_complete(args)
   elif args.session_command == "cancel":

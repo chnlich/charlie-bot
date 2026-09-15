@@ -66,6 +66,12 @@ def stable_reopen_event_id(session_id: str, request_id: str) -> str:
   return str(uuid.uuid5(TASK_ID_NAMESPACE, f"task-reopened:{session_id}:{request_id}"))
 
 
+def stable_input_ack_event_id(session_id: str, request_id: str) -> str:
+  """The event id one (session, request_id) input acknowledgement binds to: a
+  replayed acknowledgement returns the original fact, never a second one."""
+  return str(uuid.uuid5(TASK_ID_NAMESPACE, f"input-ack:{session_id}:{request_id}"))
+
+
 def stable_child_report_id(child_session_id: str, source_event_id: str, recipient_session_id: str) -> str:
   """The child_report id one (child event, fixed recipient) pair derives to.
 

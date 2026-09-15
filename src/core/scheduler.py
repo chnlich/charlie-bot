@@ -377,21 +377,39 @@ class Scheduler:
     cfg = self._reload_config()
     tree = task_manager()
     meta = await check_fireable_binding(task_cfg, tree)
-    await self._record_bound_fire(meta, task_cfg, cfg)
 
     if task_cfg.mode == 'master':
-      return await fire_bound_master(task_cfg, meta, tree, firing)
+      # The durable input IS the admission: the checkpoint advances only once
+      # the firing's product exists durably, so a crash or admission failure
+      # in between leaves the occurrence unconsumed and the replay re-admits
+      # the SAME input (stable firing identity), never a duplicate.
+      await fire_bound_master(task_cfg, meta, tree, firing)
+      await self._record_bound_fire(meta, task_cfg, cfg)
+      return {"session_id": meta.id, "firing": firing}
 
     if task_cfg.handler:
-      # The system handler keeps its inline execution; only its bookkeeping
-      # borrows the bound node.
+      # The system handler keeps its inline execution (its side effects were
+      # never exactly-once); its bookkeeping borrows the bound node in the
+      # legacy order — recorded before the handler runs, so a handler crash
+      # consumes the occurrence rather than re-running the side effect.
+      await self._record_bound_fire(meta, task_cfg, cfg)
       return await self._execute_handler_on_bound(task_cfg, meta, tree)
 
+    # Backend resolution fails before anything durable exists: the occurrence
+    # stays unconsumed and the tick error is visible.
     backend, model = self._resolve_bound_backend_model(task_cfg, tree)
 
     if task_cfg.steps:
       leaf = await self._bound_leaf(task_cfg, meta, tree, firing,
                                     goal=f"{task_cfg.name} steps", backend=backend, model=model)
+      from src.core.cron_sequence import register_leaf_run
+      # The firing's first durable product is the leaf's first step Run: the
+      # checkpoint advances only after it exists, so a replayed occurrence
+      # re-admits the same leaf/Run (stable firing identity).
+      await register_leaf_run(
+          tree, leaf.id, task_cfg, firing, kind="scheduled_step", position=0,
+          backend=backend, model=model)
+      await self._record_bound_fire(meta, task_cfg, cfg)
       handle = create_logged_task(
           run_firing_steps(task_cfg, meta, tree, firing, leaf.id),
           name=f"bound_steps_{task_cfg.name}_{firing}")
@@ -401,9 +419,18 @@ class Scheduler:
 
     prompt, event_description, action = await self._resolve_bound_prompt(task_cfg, meta, cfg)
     if prompt is None:
+      # The loop decided nothing to do: the occurrence is consumed by that
+      # decision (the no-op loop semantics, preserved — the checkpoint still
+      # advances, or the same occurrence would refire every tick).
+      await self._record_bound_fire(meta, task_cfg, cfg)
       return {"session_id": meta.id, "firing": firing, "skipped": action}
     leaf = await self._bound_leaf(
         task_cfg, meta, tree, firing, goal=prompt, backend=backend, model=model)
+    from src.core.cron_sequence import register_leaf_run
+    await register_leaf_run(
+        tree, leaf.id, task_cfg, firing, kind="work", position=None,
+        backend=backend, model=model)
+    await self._record_bound_fire(meta, task_cfg, cfg)
     handle = await self._launch_bound_round(
         task_cfg, meta, tree, firing, leaf.id, backend=backend, model=model,
         event_description=event_description, record_handle=record_handle)
@@ -412,13 +439,18 @@ class Scheduler:
   async def _record_bound_fire(
       self, meta: SessionMetadata, task_cfg: ScheduledTaskConfig, cfg: CharlieBotConfig,
   ) -> None:
-    """The scheduler's per-fire bookkeeping on the bound node (same fields as legacy)."""
+    """The scheduler's per-fire bookkeeping on the bound node (same fields as legacy).
+
+    The write goes through the tree metadata owner, which re-reads the node
+    under the control lock: a concurrent task edit between the caller's load
+    and this write is preserved instead of being overwritten by the stale
+    SessionMetadata snapshot.
+    """
     tz = ZoneInfo(task_cfg.timezone)
     now = datetime.now(tz)
-    meta.last_scheduled_run = now.isoformat()
-    meta.last_scheduled_cron = task_cfg.cron
-    meta.updated_at = datetime.now(UTC)
-    await self._session_mgr.save_metadata(meta)
+    from src.api.deps import task_manager
+    await task_manager().record_scheduled_fire(
+        meta.id, last_scheduled_run=now.isoformat(), cron=task_cfg.cron)
 
   def _resolve_bound_backend_model(
       self, task_cfg: ScheduledTaskConfig, tree,
@@ -441,9 +473,9 @@ class Scheduler:
         raise ValueError(f"loop task '{task_cfg.name}' requires 'repo'")
       action_type, prompt = await determine_action(repo_path / task_cfg.loop.backlog, task_cfg.loop, repo_path)
       if action_type in ('noop', 'stale_reset'):
-        meta.last_run_status = LastRunStatus.SUCCESS
-        meta.updated_at = datetime.now(UTC)
-        await self._session_mgr.save_metadata(meta)
+        from src.api.deps import task_manager
+        await task_manager().record_scheduled_fire(
+            meta.id, last_run_status=LastRunStatus.SUCCESS)
         log.info("bound_loop_task_noop", task=task_cfg.name, action=action_type, session=meta.id)
         return None, "", action_type
       return prompt, f"[{action_type}] {prompt[:200]}", action_type
@@ -461,17 +493,32 @@ class Scheduler:
       firing: str, leaf_id: str, *, backend: str, model: str | None,
       event_description: str, record_handle: bool,
   ) -> asyncio.Task:
-    """One firing's work round: register, launch (scheduler-owned), await the
-    terminal fact for the overlap registry. The ordinary work-Run delivery
-    chain owns the report/close follow-ups."""
-    from src.core.cron_sequence import launch, register_leaf_run, wait_for_terminal
+    """One firing's work round: launch (scheduler-owned) and settle for the
+    overlap registry. The ordinary work-Run delivery chain owns the success
+    and failure follow-ups; a launch withheld by its preconditions settles
+    this round with the actual reason through the same report owner, and the
+    queued Run stays as the retained pending request."""
+    from src.core.cron_sequence import (
+      deliver_boundary_report,
+      launch_and_settle,
+      register_leaf_run,
+    )
 
     async def _round() -> None:
       run = await register_leaf_run(
           tree, leaf_id, task_cfg, firing, kind="work", position=None,
           backend=backend, model=model)
-      launch(tree, leaf_id, run.id, prompt=None)
-      await wait_for_terminal(tree, leaf_id, run.id)
+      observation = await launch_and_settle(tree, leaf_id, run.id, prompt=None)
+      if observation.withheld is not None:
+        # No process started and no terminal fact will arrive: release the
+        # overlap handle with the actual reason reported (the fresh/recovered
+        # boundary policy), never a fabricated result.
+        summary = (
+            f"Scheduled task '{task_cfg.name}' fired but its round's launch was withheld and no "
+            f"process started ({observation.withheld}). The run stays queued on the firing's "
+            "leaf as the retained pending request; no side effects ran.")
+        await deliver_boundary_report(
+            tree, leaf_id, meta.id, task_cfg, firing, "blocked", summary)
 
     handle = create_logged_task(_round(), name=f"bound_worker_{task_cfg.name}_{firing}")
     if record_handle:
@@ -488,6 +535,7 @@ class Scheduler:
       raise ValueError(f"Unknown handler: {task_cfg.handler!r}")
     session = meta
     log.info('handler_task_firing', task=task_cfg.name, handler=task_cfg.handler)
+    from src.api.deps import task_manager
     try:
       result = await handler()
       event = {
@@ -496,7 +544,7 @@ class Scheduler:
           'status': 'ok',
           'message': str(result) if result is not None else 'done',
       }
-      session.last_run_status = LastRunStatus.SUCCESS
+      status = LastRunStatus.SUCCESS
     except Exception as e:
       log.warning('handler_task_error', task=task_cfg.name, error=str(e), traceback=traceback.format_exc())
       event = {
@@ -505,9 +553,8 @@ class Scheduler:
           'status': 'error',
           'message': str(e),
       }
-      session.last_run_status = LastRunStatus.FAILED
-    session.updated_at = datetime.now(UTC)
-    await self._session_mgr.save_metadata(session)
+      status = LastRunStatus.FAILED
+    await task_manager().record_scheduled_fire(session.id, last_run_status=status)
     await self._session_mgr.persist_and_broadcast(session.id, event)
     return {'session_id': session.id, 'thread_id': None}
 

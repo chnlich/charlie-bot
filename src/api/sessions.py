@@ -46,6 +46,7 @@ from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo
 from src.core.message_aggregator import tool_preview
 from src.core.models import (
+  AcknowledgeTaskInputsRequest,
   AncestorRef,
   BackendOption,
   BackendType,
@@ -1338,6 +1339,31 @@ async def retry_session_run(
   except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
     raise _task_http_error(e) from e
   return result
+
+
+@router.post("/{session_id}/task-inputs/acknowledge")
+async def acknowledge_task_inputs(
+    session_id: str,
+    req: AcknowledgeTaskInputsRequest,
+    _meta: SessionMetadata = Depends(require_session),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    caller: CallerIdentity = Depends(require_caller),
+) -> dict:
+  """Resolve exact task inputs the operator handled out-of-band (the terminal-driven
+  node's normal case), durably and idempotently.
+
+  Operator credentials only; every id must be a currently-pending input of this
+  task (already-acknowledged ids replay as a no-op, unknown or claimed ids
+  refuse with 409). The acknowledgement is a durable attributable fact naming
+  the exact ids; it unblocks only those ids — later arrivals, active Runs, and
+  open children keep blocking completion through the ordinary guards.
+  """
+  try:
+    return await task_mgr.completion.acknowledge_inputs(
+        session_id, request_id=req.request_id, input_ids=req.input_ids, note=req.note,
+        caller=caller)
+  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+    raise _task_http_error(e) from e
 
 
 @router.post("/{session_id}/complete")

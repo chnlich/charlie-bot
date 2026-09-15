@@ -556,6 +556,18 @@ class CancelTaskRequest(BaseModel):
   reason: str
 
 
+class AcknowledgeTaskInputsRequest(BaseModel):
+  # POST /api/sessions/{id}/task-inputs/acknowledge body: the operator's
+  # durable confirmation that exact task inputs were handled out-of-band
+  # (the terminal-driven node's normal case). Never a skip-all guard: every
+  # id is acknowledged individually, later arrivals still block closure.
+  model_config = ConfigDict(extra="forbid")
+
+  request_id: str
+  input_ids: list[str]
+  note: str = ""
+
+
 class ReopenTaskRequest(BaseModel):
   # POST /api/sessions/{id}/reopen body: explicit operator reopen.
   model_config = ConfigDict(extra="forbid")

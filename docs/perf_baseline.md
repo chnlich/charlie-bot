@@ -77,7 +77,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M65 big-page gzip event-loop stall, whole-body JSON response | M65 collector below | seconds of loop lag + wall per 200-message events-page fetch through the real app stack (gzip + auth middleware), worst on-disk live chat corpus (loop lag reads the 5 ms ticker floor like M14; a drive faster than the ticker cadence records no tick and reports its own wall — the M14 never-yields rule) | loop-lag median < 0.010 s; wall median < 0.012 s | — (introduced with its first history row) |
 | M66 perfetto merged-trace build wall, worst on-disk trace corpus | M66 collector below | seconds per `merge_traces` build, largest Chrome-JSON trace under the documented trace roots (~/data, ~/scripts) | median < 8 s | — (introduced with its first history row) |
 | M67 sidebar deep-probe trigger scan, steady state | M67 collector below | seconds per `pending_trigger_state_sync` call, worst on-disk trigger corpus | median < 0.00005 s | — (introduced with its first history row) |
-| M68 worker-list marked changed-poll rebuild | M68 collector below | seconds per body rebuild after one writer mark, worst on-disk thread-metadata corpus; the unchanged poll and its conditional are M36's shapes | median < 0.005 s | — (introduced with its first history row) |
+| M68 worker-list marked changed-poll rebuild | M68 collector below | seconds per body rebuild after one writer mark, worst on-disk thread-metadata corpus; the unchanged poll and its conditional are M36's shapes | median < 0.003 s (recalibrated from < 0.005 s: the old line sat on the TestClient/httpx harness floor the 2026-09-15 repairs removed — the served path reads 1.9-2.0 ms across the repair round's loads 0.8, the cron-collision bias the M56 history documents; see that history row) | — (introduced with its first history row) |
 | M69 opencode SSE unhandled-event debug stream, steady state | M69 collector below | debug lines per 60 steady-state `_translate_sse_event` calls of one unhandled event type | 0 lines after the first sighting per event type per process | — (introduced with its first history row) |
 | M70 artifact clean-view serve, steady state | M70 collector below | seconds per repeat credentialed view of the worst on-disk artifact page, scratch home | repeat-view median < 0.003 s (recalibrated from < 0.010 s: the old line sat on the TestClient/httpx harness floor the 2026-09-15 repair removed — the served path reads 0.7-2.7 ms across the repair round's loads 3.6-3.9, the cron-collision bias the M56 history documents; see that history row) | — (introduced with its first history row) |
 | M71 sidebar search capped name-match response | M71 collector below | seconds per request, worst capped name-match shape (a one-character query matching the cap), snapshot corpus | median < 0.006 s | — (introduced with its first history row) |
@@ -4326,11 +4326,11 @@ M36 owns it.
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import os, shutil, sys, tempfile, time
+import asyncio, gzip, hashlib, json, os, shutil, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from server import _CharlieBotGZipMiddleware
 from src.api.deps import get_config, get_config_on_loop, get_thread_manager, get_trigger_manager
 from src.api.threads import router as threads_router
 from src.core.config import CharlieBotConfig
@@ -4340,7 +4340,8 @@ from src.core.triggers import TriggerManager
 from src.core.sidebar_state import mark_sidebar_dirty
 
 # Worst worker-list corpus: the session whose threads carry the most metadata
-# bytes; live home read once for the copy, never written.
+# bytes; live home read once for the copy, never written; the marked rewrites
+# land on the scratch copy only.
 root = Path.home() / ".charliebot" / "sessions"
 best, best_n = None, -1
 for d in root.iterdir():
@@ -4361,35 +4362,83 @@ app.dependency_overrides[get_thread_manager] = lambda: thread_mgr
 app.dependency_overrides[get_trigger_manager] = lambda: trigger_mgr
 app.dependency_overrides[get_config] = lambda: cfg
 app.dependency_overrides[get_config_on_loop] = lambda: cfg
-client = TestClient(app)
-url = f"/api/threads/{SID}/list"
+# The production middleware chain, so the drive reads the shape the serve
+# path runs. For this route the endpoint's body-keyed gzip memo serves
+# Content-Encoding set upstream and the middleware skips its own pass — the
+# mount keeps the drive honest against a route change rather than adding
+# deflate work.
+app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
 
-client.get(url)  # cold build, as at first panel paint after a server start; not timed
-client.get(url)  # memo hit; not timed
 
-metas = sorted((home / "sessions" / SID / "threads").glob("*/metadata.json"), key=lambda p: p.stat().st_mtime_ns)
+def scope(url, query=b""):
+    return {
+        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1", "method": "GET", "scheme": "http",
+        "path": url, "raw_path": url.encode(), "query_string": query, "root_path": "",
+        "headers": [(b"host", b"test"), (b"accept-encoding", b"gzip")],
+        "client": ("test", 123), "server": ("test", 80),
+    }
 
-def dirty(i):
-    victim = metas[i % len(metas)]
-    tmp = victim.with_name("metadata.json.m68probe")
-    tmp.write_text(victim.read_text(encoding="utf-8"), encoding="utf-8")
-    os.replace(tmp, victim)
-    mark_sidebar_dirty(SID, str(victim))  # the writer funnel's mark: the published path rides it
 
-dirty(0)
-times = []
-bodies = []
-for i in range(8):
+async def drive(url, query=b""):
+    body = b""
+    out = {"status": 0, "encoding": b""}
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        nonlocal body
+        if msg["type"] == "http.response.start":
+            out["status"] = msg["status"]
+            out["encoding"] = dict(msg.get("headers", [])).get(b"content-encoding", b"")
+        elif msg["type"] == "http.response.body":
+            body += msg.get("body", b"")
+
     t0 = time.perf_counter()
-    r = client.get(url)
-    times.append(time.perf_counter() - t0)
-    bodies.append(len(r.content))
-    dirty(i + 1)
-times.sort()
-assert len(set(bodies)) == 1, "rebuild bodies differed across rounds"
-print(f"{best_n / 1e3:.0f} KB thread metadata; marked changed-poll rebuild median "
-      f"{times[4] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms over 8, body {bodies[0]} B")
-shutil.rmtree(home)
+    await app(scope(url, query), receive, send)
+    return time.perf_counter() - t0, body, out
+
+
+def digest(decoded):
+    return hashlib.sha256(json.dumps(json.loads(decoded), sort_keys=True).encode()).hexdigest()[:12]
+
+
+async def main():
+    url = f"/api/threads/{SID}/list"
+    session_dir = home / "sessions" / SID
+    metas = sorted((session_dir / "threads").glob("*/metadata.json"), key=lambda p: p.stat().st_mtime_ns)
+
+    def dirty(i):
+        victim = metas[i % len(metas)]
+        tmp = victim.with_name("metadata.json.m68probe")
+        tmp.write_text(victim.read_text(encoding="utf-8"), encoding="utf-8")
+        os.replace(tmp, victim)
+        mark_sidebar_dirty(SID, str(victim))  # the writer funnel's mark: the published path rides it
+
+    await drive(url)  # cold build, as at first panel paint after a server start; not timed
+    await drive(url)  # memo hit; not timed
+    dirty(0)
+    times, decoded_size, wire_size, digests = [], 0, 0, set()
+    for i in range(8):
+        t0 = time.perf_counter()
+        dt, body, out = await drive(url)
+        assert out["status"] == 200, out["status"]
+        d = gzip.decompress(body) if out["encoding"] == b"gzip" else body
+        times.append(dt)
+        decoded_size = len(d)
+        wire_size = len(body)
+        digests.add(digest(d))
+        dirty(i + 1)
+    times.sort()
+    assert len(digests) == 1, f"rebuild bodies differed: {digests}"
+    print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {best_n / 1e3:.0f} KB thread metadata in session {SID} "
+          f"({len(metas)} rows); marked changed-poll rebuild median {times[4] * 1000:.2f} ms, "
+          f"max {times[-1] * 1000:.2f} ms over 8, decoded {decoded_size} B wire {wire_size} B, digest {digests.pop()}")
+    shutil.rmtree(home)
+
+
+asyncio.run(main())
 EOF
 ```
 
@@ -6879,6 +6928,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-15 | this PR | M68 marked changed-poll rebuild, repaired collector: standing TestClient reading 3.47 ms median; interleaved rounds old drive 3.50/3.44/3.47 → new drive 1.83/1.94/1.92 ms medians, −44 % to −47 %, maxima 3.81-4.28 → 2.16-2.31 ms, every paired round faster (three interleaved rounds of old TestClient drive vs new raw-ASGI drive back-to-back, same main-checkout code and worst corpus in all arms, load 1.46-1.54 one-minute, 2551 KB thread metadata over 339 rows in session 3b91d606, live state read-only; decoded body 106314 B and parsed digest 8946dac083ec identical across every arm, wire 15077 B; the probe's content-preserving rewrite makes every rebuilt body byte-identical, so all timed rounds serve the endpoint's body-keyed gzip memo form — a production changed poll whose body genuinely moves pays the endpoint's off-loop deflate instead, the 0.66 ms the M36 row measured); component attribution, same app + overrides, fresh drives at load ~1.5: TestClient repeat 3.47 ms vs raw-ASGI 1.92 ms — the httpx layer is ~1.6 ms of harness per request; M68 healthy range recalibrated < 0.005 s → < 0.003 s with this PR | the standing collector timed the harness, not the served path — the vacuous-read class the M36/M56/M57/M59/M70/M72 repairs called out; the raw-ASGI drive (the M101/M36 pattern) reads the served path the middleware and route actually run, with the production middleware mounted so the drive tracks the serve chain |
 | 2026-09-15 | this PR | M94 streamed-replay dumps wall 71/74 ms medians over two runs of the verbatim collector (16.8 MB serialized, 1553 deltas, largest delta 64456 B, page body 0.24 MB, build 4.6-5.1 ms — every other sub-metric inside its line) against the < 0.060 s line; classified as corpus growth, not a product regression: the dumps wall is the collector's own stdlib json.dumps re-serialization of the emitted deltas — the same bytes the serialized sub-metric counts — and its throughput is unchanged since the landing (16.8 MB / 71 ms ≈ 237 MB/s vs the 2026-09-12 landing's 6.3 MB / 24-25 ms ≈ 250 MB/s), while the corpus's largest tool_result grew 1.11 → 13.77 MB and its event count 693 → 2314; serialized 16.8 MB sits inside its 30 MB line, so the dumps line is recalibrated to that line's own implied floor, median < 0.130 s (30 MB at the measured throughput), with this PR | the two sub-metrics are one measurement — bytes and the time to re-serialize them — and the 60 ms line sat below the serialized line's own 30 MB bound's implied cost, so a corpus growing inside the serialized line could still trip the dumps line; the pair now bound the same quantity |
 | 2026-09-15 | this PR | M74 collector repaired: standing reading classified as corpus-gate drift, not a product regression — the selector took the largest on-disk raw log regardless of session family, and the worst log drifted to a charlie-code session (16.3 MB carrying one 15.0 MB observation line; component floor measured standalone over three rounds: read 2.1-9.5 ms, parse 35.7-43.4 ms, project 0.1-0.3 ms), a family the turn-end model-attribution gate (`_CLAUDE_RESUME_FLAG_BACKEND_TYPES`, the live call site's own check) never scans — the standing 0.0363 s loop-lag median, max 0.0455 s (wall 0.0385 s) priced a shape the live turn-end path cannot run; repaired selector gates the corpus to the gate's own session set (the set imported from master_cc_run, so collector and call site cannot drift) and builds the scan's translate from the corpus session's own resolved option; the worst claude-family corpus is the 9.9 MB / 391-line log of session 4fcd4c43 (largest line 1.06 MB) — the 2026-09-09 landing's calibration corpus, a smaller file than the 10.1 MB / 64-line charlie-code log the 2026-09-13 landing's row names as its own corpus (that landing's readings were already on a drifted, mis-shaped corpus): loop-lag median 0.0073/0.0072 s, maxima 0.0110/0.0103 s; wall median 0.0074/0.0073 s over two runs of the repaired collector (load 3.0-3.7 and 2.4-2.8 one-minute) — inside the unchanged < 0.030 s line; collector command only, no product code | the definition's own first sentence scopes the metric to claude-family turns ("every claude-family master turn ends with the model-attribution rescan"); without the gate the worst-corpus resolution tracks whichever backend happens to write the biggest tool output, and the line trips on a path the server does not run |
 | 2026-09-15 | #1647 (row recorded in this docs-only follow-up per the #1046 precedent, the landing PR shipped without it) | M99 server import floor, `import server` (fresh process) median 0.643/0.634/0.635/0.635/0.645/0.637 → 0.618/0.612/0.626/0.599/0.597/0.596 s, −9 to −48 ms (−1.4 % to −7.5 %, mean ≈ −30 ms), every paired round faster (six interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, five fresh processes per arm per round, load 2.58-2.69 one-minute; an earlier trio at load 3.56-4.86 — a sibling worktree's full-suite pytest on the host, the cron-collision bias the M56 history documents — read two of three paired rounds faster and is excluded from the paired claim); component attribution: pages.py's module-level `_get_git_version()` ran two git subprocesses measured standalone at 25.0/25.1/25.5 ms over three interleaved pairs, and files.py's top-level `plan_diff` import read cum 7.0 ms in the server's `-X importtime` tree — after the change, pages' import carries zero git children and files' import zero plan_diff children; no-regression witness: the verbatim M103 collector against the branch (the `/` render is the path the lazy git moved onto; its cost lands on the untimed cold pass) reads GET /diff median 684 us, GET / median 1129 us, GET /api/git/repos median 502 us against the standing same-day readings 896/1199/404 us — all inside their healthy ranges; 5458-passed suite, ruff clean | the server import floor still carried two one-time init costs with no startup user: the page-render-only git version subprocesses (the same shape buildinfo already defers to its `init_build_info()` startup call) and a diff-view-only module import; both now load on first use — the version memoizes on the first render that reads it, plan_diff imports inside `_annotated_diff_page` — the #1643 deferral shape, and the < 0.75 s line keeps ~10 % headroom at the after medians (0.596-0.626 s) |

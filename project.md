@@ -61,7 +61,9 @@ thread branch — the directory name is the branch name with `/` replaced by `-`
 ```
 
 **Notes:**
-- Individual Worker logs are in `threads/{uuid}/data/` (`stdout.log`, `stderr.log`, `events.jsonl`).
+- Individual Worker logs are in `threads/{uuid}/data/`: the raw-log spawn writes `agent.raw.ndjson` (the
+  CLI's stream) plus `agent.stderr.log`; the pipe transports write `stdout.log` plus `stderr.log`;
+  `events.jsonl` holds the translated events.
 - `workspace_dirs`: Config option (`config.yaml`) listing workspace directories to scan for git projects. The `GET /api/sessions/projects` endpoint returns discovered projects for the UI project picker.
 
 ### 3.2 Repository Code Structure (Stateless)
@@ -198,14 +200,16 @@ A local git repo at `~/.charliebot/memory/` holds one durable fact or rule set p
 - **Persistence**: Worker state is flushed to disk in real-time; Master can resume after restart
 
 ### 8.2 JSON Stream Monitoring
-Workers run with `--output-format stream-json --verbose`:
-```json
-{"type": "thinking", "content": "Analyzing..."}
-{"type": "file_write", "path": "src/auth.py", "lines_added": 45}
-{"type": "error", "message": "ImportError..."}
-{"type": "complete", "status": "success"}
-```
-Master parses this to distinguish "thinking" from "stuck" and track progress precisely.
+Workers run with `--output-format stream-json --verbose`, so the raw NDJSON log (`agent.raw.ndjson`)
+holds the CLI's stream. The lines are `assistant` events carrying `message.content` blocks
+(`text`, `thinking`, `tool_use`), `user` tool-result wrappers, and a final `result`.
+`AgentBackend.translate_event` (`src/agents/backends/base.py`) turns each line into the events that
+land in `events.jsonl` and the WebSocket stream: the Anthropic-endpoint backends (cc-claude,
+cc-kimi, cc-openai-compatible) pass lines through unchanged; the other backends translate their
+native streams into CC-compatible events with per-backend vocabularies (codex, for one, emits
+`thinking` and `file_write`).
+A raw log that stops growing while the process is still alive is what the server reports as stuck
+(the no-output silence report); thinking in progress is the `thinking` content.
 
 ---
 

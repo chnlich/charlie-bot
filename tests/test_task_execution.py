@@ -516,6 +516,18 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
         assert row.json()["id"] == run_id
         assert row.json()["session_id"] == child_id
 
+        # The legacy list route exposes the same Run as a compatibility row:
+        # its real id, backend and finished status — no ThreadMetadata exists.
+        listed = client.get(f"/api/threads/{child_id}/list", headers=OPERATOR)
+        assert listed.status_code == 200, listed.text
+        rows = listed.json()
+        assert isinstance(rows, list)
+        compat = [r for r in rows if r.get("id") == run_id]
+        assert compat, f"the worker run did not surface in the legacy list: {listed.text[:400]}"
+        assert compat[0]["backend"] == "fake" and compat[0]["status"] == "completed"
+        legacy_dir = cfg.sessions_dir / child_id / "threads"
+        assert not list(legacy_dir.iterdir()) if legacy_dir.is_dir() else True
+
         # Every delivered child report triggered the parent's next serialized
         # turn: all reports were consumed and acknowledged, the parent stays open.
         deadline = asyncio.get_event_loop().time() + 30

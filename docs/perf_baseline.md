@@ -79,9 +79,9 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M67 sidebar deep-probe trigger scan, steady state | M67 collector below | seconds per `pending_trigger_state_sync` call, worst on-disk trigger corpus | median < 0.00005 s | — (introduced with its first history row) |
 | M68 worker-list marked changed-poll rebuild | M68 collector below | seconds per body rebuild after one writer mark, worst on-disk thread-metadata corpus; the unchanged poll and its conditional are M36's shapes | median < 0.005 s | — (introduced with its first history row) |
 | M69 opencode SSE unhandled-event debug stream, steady state | M69 collector below | debug lines per 60 steady-state `_translate_sse_event` calls of one unhandled event type | 0 lines after the first sighting per event type per process | — (introduced with its first history row) |
-| M70 artifact clean-view serve, steady state | M70 collector below | seconds per repeat credentialed view of the worst on-disk artifact page, scratch home | repeat-view median < 0.010 s | — (introduced with its first history row) |
+| M70 artifact clean-view serve, steady state | M70 collector below | seconds per repeat credentialed view of the worst on-disk artifact page, scratch home | repeat-view median < 0.003 s (recalibrated from < 0.010 s: the old line sat on the TestClient/httpx harness floor the 2026-09-15 repair removed — the served path reads 0.7-2.7 ms across the repair round's loads 3.6-3.9, the cron-collision bias the M56 history documents; see that history row) | — (introduced with its first history row) |
 | M71 sidebar search capped name-match response | M71 collector below | seconds per request, worst capped name-match shape (a one-character query matching the cap), snapshot corpus | median < 0.006 s | — (introduced with its first history row) |
-| M72 file-browser directory listing | M72 collector below | seconds per `GET /files/<dir>` request, worst on-disk listing corpus (the sessions root), the served path (the production gzip middleware mounted, Accept-Encoding: gzip — the browser shape; a bare app without the middleware reads the walk's floor alone, the vacuous-read class the M70 repair called out); the changed-round rebuild (one corpus move since the stored page keyed — a metadata rename into a session dir; the harness drops the page memo per timed round, row memo warm, builder level) | repeat-view median < 0.008 s; changed-round median < 0.007 s | — (introduced with its first history row) |
+| M72 file-browser directory listing | M72 collector below | seconds per `GET /files/<dir>` request, worst on-disk listing corpus (the sessions root), the served path (the production gzip middleware mounted, Accept-Encoding: gzip — the browser shape; a bare app without the middleware reads the walk's floor alone, the vacuous-read class the M70 repair called out); the changed-round rebuild (one corpus move since the stored page keyed — a metadata rename into a session dir; the harness drops the page memo per timed round, row memo warm, builder level) | repeat-view median < 0.008 s (a tripped reading is read as host load and corpus growth first — the walk scales with the listed entry count, the cron-collision bias the M56 history documents; the 2026-09-15 repair split the TestClient harness floor out of the reading); changed-round median < 0.007 s | — (introduced with its first history row) |
 | M73 plan-verb validation event-loop lag | M73 collector below | seconds of loop lag + wall per amend validation (the registration gate: the DOM assertion set plus the headless-Chrome page-height render), scratch home, copied passing plan page (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 0.2 s (warm steady state; the first validation after a process start pays the one-time browser launch) | — (introduced with its first history row) |
 | M74 master turn-end raw-log rescan | M74 collector below | seconds of loop lag + wall per fallback-notice projection (whole read+parse+project of the turn's raw log), worst on-disk master-run raw log, fresh cc-claude translate (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.030 s | — (introduced with its first history row) |
 | M75 live-aggregator catch-up, first streamed event | M75 collector below | seconds of loop lag + wall per first-`persist_and_broadcast` catch-up (whole read+feed of the live corpus), worst on-disk live chat corpus, scratch home (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.020 s | — (introduced with its first history row) |
@@ -4128,12 +4128,15 @@ report pages that are re-opened repeatedly (794 of the 823 artifact views in the
 sampled 2026-09-06 were repeats of an already-viewed file), so each repeat paid the full-file read
 (~4.8 ms on the 1.08 MB worst artifact) plus the injection for identical bytes. The collector
 copies the largest on-disk artifact page into a scratch `CHARLIEBOT_HOME` under /tmp (live home
-read once for the copy, never written) and drives the files router through TestClient in each
-checkout's process with the production gzip middleware mounted and the browser's
-`Accept-Encoding: gzip` header set — the whole-body deflate the server adds to every artifact
-response is part of the served path, and a bare-app client times a shape production never runs
-(the pre-gzip-middleware reading, 0.0026 s, is the vacuous-read class the M68 repair called out):
-one cold pass, as at first artifact view, then nine timed requests, with the snapshot's empty
+read once for the copy, never written) and drives the files router raw-ASGI in each checkout's
+process with the production gzip middleware mounted and the browser's `Accept-Encoding: gzip`
+header set — the whole-body deflate the server adds to every artifact response is part of the
+served path, and a bare-app client times a shape production never runs (the pre-gzip-middleware
+reading, 0.0026 s, is the vacuous-read class the M68 repair called out). The drive is raw-ASGI
+(the M101 pattern) because the TestClient/httpx layer reads ~9 ms of harness per request on this
+~0.8 MB wire body — 9.0 of the standing collector's 9.9 ms at the 2026-09-14 round, a floor that
+drowned both the served path and the M70 landing's own fix — so one cold pass, as at first
+artifact view, then nine timed requests, with the snapshot's empty
 access key credentialing every reader (the injection gate reads the process home's credentials,
 so the run points ``CHARLIEBOT_HOME`` at the snapshot). Snapshot once:
 
@@ -4165,11 +4168,10 @@ Then run per checkout (``eval`` the snapshot export first):
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import hashlib, os, sys, time
+import asyncio, gzip, hashlib, os, sys, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from src.api.files import router as files_router
 from src.core.config import CharlieBotConfig
 import src.api.files as files_mod
@@ -4193,29 +4195,55 @@ app.include_router(files_router, prefix="/files")
 # The production middleware chain: every served response passes the whole-body
 # gzip whose deflate is part of the view's cost.
 app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
-client = TestClient(app)
 url = f"/files/{home}/sessions/{SID}/artifacts/{NAME}"
-HEADERS = {"Accept-Encoding": "gzip"}  # the browser shape
+HEADERS = [(b"host", b"test"), (b"accept-encoding", b"gzip")]  # the browser shape
+SCOPE = {
+    "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+    "http_version": "1.1", "method": "GET", "scheme": "http",
+    "path": url, "raw_path": url.encode(), "query_string": b"", "root_path": "",
+    "headers": HEADERS, "client": ("test", 123), "server": ("test", 80),
+}
 
-t0 = time.perf_counter()
-r = client.get(url, headers=HEADERS)  # cold pass, as at first artifact view; not timed
-cold = time.perf_counter() - t0
-assert r.status_code == 200, (r.status_code, r.text[:200])
-assert "comment_post.js" in r.text, "artifact-comments injection missing"
-assert r.headers.get("content-encoding") == "gzip", "browser shape served without gzip"
-times = []
-bodies = set()
-digest = ""
-for _ in range(9):
+
+async def drive():
+    body = b""
+    encoding = b""
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        nonlocal body, encoding
+        if msg["type"] == "http.response.start":
+            encoding = dict(msg.get("headers", [])).get(b"content-encoding", b"")
+        elif msg["type"] == "http.response.body":
+            body += msg.get("body", b"")
+
     t0 = time.perf_counter()
-    r = client.get(url, headers=HEADERS)
-    times.append(time.perf_counter() - t0)
-    bodies.add(len(r.content))
-    digest = hashlib.sha256(r.content).hexdigest()[:12]
-times.sort()
-assert len(bodies) == 1, f"repeat bodies differ: {bodies}"
-print(f"{NAME} ({os.environ['M70_SIZE']} B); first view {cold:.4f} s; repeat-view median {times[4]:.4f} s, "
-      f"max {times[-1]:.4f} s over 9, gzip body {bodies.pop()} B, digest {digest}")
+    await app(SCOPE, receive, send)
+    return time.perf_counter() - t0, body, encoding
+
+
+async def main():
+    cold, body, encoding = await drive()  # cold pass, as at first artifact view; not timed
+    assert encoding == b"gzip", f"browser shape served without gzip: {encoding!r}"
+    decoded = gzip.decompress(body)
+    assert b"comment_post.js" in decoded, "artifact-comments injection missing"
+    times = []
+    bodies = set()
+    digest = ""
+    for _ in range(9):
+        dt, body, _ = await drive()
+        times.append(dt)
+        bodies.add(len(body))
+        digest = hashlib.sha256(body).hexdigest()[:12]
+    times.sort()
+    assert len(bodies) == 1, f"repeat bodies differ: {bodies}"
+    print(f"{NAME} ({os.environ['M70_SIZE']} B); first view {cold:.4f} s; repeat-view median {times[4]:.4f} s, "
+          f"max {times[-1]:.4f} s over 9, gzip body {bodies.pop()} B, digest {digest}")
+
+
+asyncio.run(main())
 EOF
 ```
 
@@ -4336,22 +4364,25 @@ serve as strings and only the moved entries re-render. The cost is a
 navigation click, invisible to the standing HTTP probes (the chat log's
 file-server traffic is artifact pages, the M70 shape; directory listings are
 rare — 16 in the 78.85 h live log sampled 2026-09-07), so the collector drives
-the files router through TestClient behind the production gzip middleware over
-the sessions root — the file browser's own starting directory and the largest
+the files router raw-ASGI behind the production gzip middleware over the
+sessions root — the file browser's own starting directory and the largest
 entry count the UI navigates on this host, read-only — from the checkout under
 test, with the browser's Accept-Encoding: gzip request shape and a fail-loud
 negotiation assert (a bare app reads the walk floor alone; the M70 repair's
-vacuous-read class): one cold pass, as at the first
+vacuous-read class). The drive is raw-ASGI (the M101 pattern) because the
+TestClient/httpx layer reads ~2-3 ms of harness per request on this wire body —
+2.2-2.9 ms of the standing collector's 8.1-9.0 ms at the 2026-09-14 round, the
+floor that false-tripped the line while the served path sat inside it — so one
+cold pass, as at the first
 browser open, then nine timed requests, with the served-body sha1 so a corpus
 difference between arms cannot masquerade as a payload difference.
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import hashlib, os, sys, time
+import asyncio, gzip, hashlib, os, sys, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from src.api.files import router as files_router
 from server import _CharlieBotGZipMiddleware
 
@@ -4366,22 +4397,49 @@ app.include_router(files_router, prefix="/files")
 # gzip whose deflate is part of the view's cost — a bare app reads the walk
 # floor alone.
 app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
-client = TestClient(app)
 url = f"/files{corpus}"
-HEADERS = {"Accept-Encoding": "gzip"}  # the browser shape
+SCOPE = {
+    "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+    "http_version": "1.1", "method": "GET", "scheme": "http",
+    "path": url, "raw_path": url.encode(), "query_string": b"", "root_path": "",
+    "headers": [(b"host", b"test"), (b"accept-encoding", b"gzip")],
+    "client": ("test", 123), "server": ("test", 80),
+}
 
-r = client.get(url, headers=HEADERS)  # cold pass, as at the first browser open; not timed
-assert r.status_code == 200, (r.status_code, r.text[:200])
-assert r.headers.get("content-encoding") == "gzip", "browser shape served without gzip"
-times, body = [], None
-for _ in range(9):
+
+async def drive():
+    body = b""
+    encoding = b""
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        nonlocal body, encoding
+        if msg["type"] == "http.response.start":
+            encoding = dict(msg.get("headers", [])).get(b"content-encoding", b"")
+        elif msg["type"] == "http.response.body":
+            body += msg.get("body", b"")
+
     t0 = time.perf_counter()
-    r = client.get(url, headers=HEADERS)
-    times.append(time.perf_counter() - t0)
-    body = r.content
-times.sort()
-print(f"{n} entries; served-path listing repeat median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms, "
-      f"decoded body {len(body)} B, sha1 {hashlib.sha1(body).hexdigest()[:12]}")
+    await app(SCOPE, receive, send)
+    return time.perf_counter() - t0, body, encoding
+
+
+async def main():
+    _, body, encoding = await drive()  # cold pass, as at the first browser open; not timed
+    assert encoding == b"gzip", f"browser shape served without gzip: {encoding!r}"
+    decoded = gzip.decompress(body)
+    times = []
+    for _ in range(9):
+        dt, _, _ = await drive()
+        times.append(dt)
+    times.sort()
+    print(f"{n} entries; served-path listing repeat median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms, "
+          f"decoded body {len(decoded)} B, sha1 {hashlib.sha1(decoded).hexdigest()[:12]}")
+
+
+asyncio.run(main())
 EOF
 ```
 
@@ -6504,6 +6562,8 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-15 | this PR | M70 artifact clean-view serve, repaired collector: 0.0079/0.0081/0.0147 → 0.0008/0.0027/0.0007 s medians over three interleaved rounds (old TestClient drive vs new raw-ASGI drive back-to-back, same main-checkout code and snapshot in all six arms, load 3.61-3.92 one-minute; the old collector's "gzip body 1084806 B" was the httpx-decoded size — the wire body the raw drive reads is 809814 B, and the per-collector digests stand stable across all rounds: decoded c3352d6e6277, wire b8ff4b1735f0); component attribution, same app + middleware, fresh drives at load ~3: TestClient repeat 10.16 ms vs raw-ASGI 1.16 ms — the httpx layer is ~9.0 ms of harness per request on the ~0.8 MB wire body, and the old line sat entirely on that floor; M70 healthy range recalibrated < 0.010 s → < 0.003 s with this PR | the standing collector timed the harness, not the served path — the vacuous-read class the M68/M89/M90/M72 repairs called out — and the M70 landing's own −76 % fix had been invisible under that floor since 2026-09-13; the raw-ASGI drive (the M101 pattern) reads the served path the middleware and route actually run, whose served floor is 0.7-1.2 ms with the round's host-load spike reading 2.7 ms (the reading discipline the recalibrated range's note pins) |
+| 2026-09-15 | this PR | M72 file-browser directory listing, repaired collector: 8.43/15.86/27.74 → 6.54/8.72/14.48 ms medians over the same three interleaved rounds (same main-checkout code, live sessions root read-only, 1186 entries, decoded body 260291 B with the sha1 identical within every round pair across both collectors — 4ca49b8b75d2 rounds 1-2, bb8b030a7d87 round 3 after a corpus move — so the collectors provably read the same pages); component attribution at load ~3: TestClient repeat 8.29 ms vs raw-ASGI 6.08 ms on the same app + middleware — ~2.2 ms of harness per request, which also amplifies host-load noise ~2x (the round-3 pair 27.74 vs 14.48); the standing 8.13-9.04 ms readings that tripped the < 0.008 s line at this round's start were harness + load bias over a served path whose walk floor is 4.1 ms of the 6.1-6.5 ms steady reading; M72 healthy-range cell gains the load-and-corpus reading note, value unchanged | the same harness disease as the M70 repair in the same PR: the httpx/TestClient layer rode every timed request with 2-3 ms of decode and header work that the served path never pays, and the floor grew with host load faster than the walk itself — the false trip this round opened with (8.13 ms standing vs the 6.1 ms served truth) |
 | 2026-09-14 | this PR | M4 docs-only calibration, collector precision: old form "1 running sessions with last event older than 1h" — session 8a7964a3 (659: Redesign CharlieBot Session Tree), chat file 1.2 h stale while its running thread 75891ee8 (charlie-code-kimi-k3) had appended to its own worker log 0.1-0.9 min before the reading (670-672 KB and growing) — the in-flight-delegation shape, live work; new form on the same live state: 0 hung with the turn stats unchanged (174 turns, median 122 s, max 4834 s both rules); scratch shape checks, the same walk under both rules: an active session with a running thread whose chat file AND worker log are both 2 h stale reads hung 1 under both rules, the same session with a fresh worker log reads hung 1 → 0 (old → new), an archived session with a stale running marker stays 0 (the 2026-09-07 rule); no range change (hung = 0) | the 2026-09-07 archived-rule calibration's sibling class: the hung watch read the session chat file alone, and a delegation's chat file goes quiet for the delegation's whole run — the worker appends only its own events log and the summary lands at completion — so every hourly round during a > 1 h delegation read a false hung = 1 (this round's sweep tripped on exactly that shape); the collector now checks the running threads' own worker logs before counting, so the tripwire keeps catching genuinely stuck runs (chat and worker logs both stale) at zero extra scan cost on the common shape |
 | 2026-09-14 | this PR | M103 config-dependency resolution, interleaved raw-ASGI drives at load 4.0-6.5 one-minute (main checkout before vs branch worktree after back-to-back, session corpus a scratch home per arm while the config-resolved state — the code-server probe and the repos discovery — was the live config in both arms, the delta arm-differentiated exactly by the dependency form under test; every paired round faster): GET /diff 880.7/933.9 → 764.1/579.5 us (−13 % to −38 %), GET / 1828.9/1860.3 → 1304.0/1298.3 us (−29 % to −30 %), GET /api/git/repos 784.2/778.3 → 646.5/668.0 us (−18 % to −14 %); the committed collector adds the config-dependency override its isolation declares (review finding), and its scratch-corpus band reads /diff 660/679, / 1093/1125, /api/git/repos 367/363 us; component attribution, the isolated dependency-shape drive at load 3.3: one sync `Depends(get_config)` 246.5 us vs a no-dependency route 61.5 us — the per-request threadpool round-trip the sync form pays (the M34/M52/M82 rows' 67-104 us no-op hop floor, queueing-amplified under load) vs the awaited form's dict check; M103 definition, collector, healthy ranges, and the route-walk guard test introduced with this PR | 22 routes across 10 api modules still resolved config through the sync `Depends(get_config)` — one FastAPI threadpool handoff per request on the hottest writes and reads: every user-message POST and chat upload, the OpenAI-compatible proxy POST (every proxied LLM call), the index/home/diff pages and the /diff viewer's three fetches, the delegate/Slack internal POSTs, the slash executor, session create/fork/backend-switch/recap-summarize/tui-stop/elone, cron create/update, and code-server open — although `get_config_on_loop` (the awaited form the polled routes took) already served the same memoized instance; all 22 sites now take the on-loop dependency and the guard test walks `server.app.routes`' dependency trees so no route can reintroduce the hop; the polled routes (sessions/threads status, list, view, events, search, scheduled, cron tasks GET) were already on-loop and their collectors (M35/M44/M46/M56) are untouched |
 | 2026-09-14 | this PR | M7 restart-cold standing reading classified as the stale-document deploy-skew shape, not a regression: the verbatim collector read wall 6.840 s, 19 rows, scanned 2138.1 MB, rows digest 91801ae27a4c (load 4.58-6.01 one-minute) — 3.4x the < 2.0 s line — while the same collect against a document the current code had just rewritten read wall 1.341 s, 0.0 MB scanned, byte-identical rows (digest parity 98e7ab9edd27 == 98e7ab9edd27 on a same-window pair, two fresh processes back-to-back) — under the line; component attribution of the stale pass: the running server (started 2026-09-10 12:42) predates both the charlie-bot corpus source (#1352-era) and the opencode rows-map entry format, so its document carries no charlie-bot entries (0 of 6,571 lookups hit, 2,062.6 MB re-read, ~3.5 s) and stores the opencode db contribution as records without the rows map the seed path reads (prev.get("rows") is None, so the unseeded whole-blob scan runs, 76.5 MB / 2.7 s measured standalone) | the restart-cold collect reads the document the live server last wrote; a server predating a document-format landing makes every fresh-process collect re-read the whole corpus until the next deploy's own collect rewrites the document, then the metric returns to its zero-movement floor — the heal-at-deploy class the M96 row documents; until the restart, hourly rounds re-read this shape and should classify it, not chase it |

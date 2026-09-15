@@ -117,7 +117,10 @@ metadata alone.
 structure (the same rule its stable-history projection applies): a run-start
 adoption marker — a `session_attached` event or the bare `session_id`-only
 pre-typed spelling — opens one turn's interval, and the round's MASTER_DONE
-closes it. A MASTER_DONE names the exact input its round consumed.
+closes the latest open interval; a turn whose marker is superseded before its
+MASTER_DONE landed died unsettled, and the close belongs to the resumed turn,
+never to the dead one. A MASTER_DONE names the exact input its round
+consumed.
 
 **Successful handling.** A MASTER_DONE acknowledges its input only when the
 round it closes provably succeeded: `exit_code == 0` without the zero-output
@@ -150,8 +153,9 @@ confirms the input without erasing the failed attempt.
 
 **Scheduled inputs.** The old producer admits a scheduled wake without a
 named input, so a wake is proven handled only by an identity-backed launch:
-the first completed unnamed round after the trigger whose bound raw log
-echoes the wake text as its launch prompt. A wake whose round never started
+the first completed unnamed round that began after the trigger (a round that
+straddles the wake belongs to an earlier wake and proves nothing for it)
+whose bound raw log echoes the wake text as its launch prompt. A wake whose round never started
 is a proven unhandled input and enters `pending_inputs` (the trigger file
 itself is moved with its status); an interrupted round or an unprovable
 unnamed round leaves the wake unresolved. Old worker summaries stay

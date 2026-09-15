@@ -966,41 +966,30 @@ function installHtmlArtifactListener() {
 }
 installHtmlArtifactListener();
 
-Chat.embedLinkedHtmlArtifacts = embedLinkedHtmlArtifacts;
-Chat.resolveHtmlArtifactLink = resolveHtmlArtifactLink;
-Chat.findArtifactLinkInCode = findArtifactLinkInCode;
-Chat.toggleHtmlArtifactSource = toggleHtmlArtifactSource;
-Chat.startHtmlArtifactResize = startHtmlArtifactResize;
-Chat.expandHtmlArtifact = expandHtmlArtifact;
-Chat.toggleHtmlArtifactEmbed = toggleHtmlArtifactEmbed;
-Chat.expandArtifactCard = expandArtifactCard;
-Chat.collapseArtifactCard = collapseArtifactCard;
-Chat.fetchHtmlArtifact = fetchHtmlArtifact;
-Chat.htmlArtifactFetchCache = htmlArtifactFetchCache;
-Chat.expandedArtifactCards = expandedArtifactCards;
-Chat.injectLinkBehavior = injectLinkBehavior;
-Chat.lookupRegisteredPlanVersion = lookupRegisteredPlanVersion;
-Chat.decidePlanCardRender = decidePlanCardRender;
-Chat.lookupPlanVersionState = lookupPlanVersionState;
-Chat.buildPlanCompactCardHtml = buildPlanCompactCardHtml;
-Chat.updatePlanCardBadges = updatePlanCardBadges;
-Chat.openPlanFromCard = openPlanFromCard;
-Chat._planStateLabel = _planStateLabel;
-Chat.expose([
-  'resolveHtmlArtifactLink',
-  'findArtifactLinkInCode',
-  'toggleHtmlArtifactSource',
-  'startHtmlArtifactResize',
-  'expandHtmlArtifact',
-  'toggleHtmlArtifactEmbed',
-  'injectLinkBehavior',
-  'lookupRegisteredPlanVersion',
-  'decidePlanCardRender',
-  'lookupPlanVersionState',
-  'buildPlanCompactCardHtml',
-  'updatePlanCardBadges',
-  'openPlanFromCard',
-  '_planStateLabel',
-]);
+const GLOBALS = {
+  resolveHtmlArtifactLink,
+  findArtifactLinkInCode,
+  toggleHtmlArtifactSource,
+  startHtmlArtifactResize,
+  expandHtmlArtifact,
+  toggleHtmlArtifactEmbed,
+  injectLinkBehavior,
+  lookupRegisteredPlanVersion,
+  decidePlanCardRender,
+  lookupPlanVersionState,
+  buildPlanCompactCardHtml,
+  updatePlanCardBadges,
+  openPlanFromCard,
+  _planStateLabel,
+};
+const CHAT_ONLY = {
+  embedLinkedHtmlArtifacts,
+  expandArtifactCard,
+  collapseArtifactCard,
+  fetchHtmlArtifact,
+  htmlArtifactFetchCache,
+  expandedArtifactCards,
+};
+Chat.wire(GLOBALS, CHAT_ONLY);
 
 })();

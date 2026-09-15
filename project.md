@@ -202,12 +202,14 @@ A local git repo at `~/.charliebot/memory/` holds one durable fact or rule set p
 ### 8.2 JSON Stream Monitoring
 Workers run with `--output-format stream-json --verbose`, so the raw NDJSON log (`agent.raw.ndjson`)
 holds the CLI's stream. The lines are `assistant` events carrying `message.content` blocks
-(`text`, `thinking`, `tool_use`) plus a final `result`.
+(`text`, `thinking`, `tool_use`), `user` tool-result wrappers, and a final `result`.
 `AgentBackend.translate_event` (`src/agents/backends/base.py`) turns each line into the events that
-land in `events.jsonl` and the WebSocket stream: the cc-claude backend passes lines through unchanged;
-the other backends translate into the shared flat vocabulary (`thinking`, `file_write`, `error`, ...).
+land in `events.jsonl` and the WebSocket stream: the Anthropic-endpoint backends (cc-claude,
+cc-kimi, cc-openai-compatible) pass lines through unchanged; the other backends translate their
+native streams into CC-compatible events with per-backend vocabularies (codex, for one, emits
+`thinking` and `file_write`).
 A raw log that stops growing while the process is still alive is what the server reports as stuck
-(the no-output silence report); thinking in progress rides the `thinking` events.
+(the no-output silence report); thinking in progress is the `thinking` content.
 
 ---
 

@@ -569,3 +569,106 @@ def test_unverifiable_external_watch_target_blocks_apply(
   assert code == 1
   payload = cli_json(err)
   assert any("unverifiable_watch_target" in d for d in payload.get("details", []))
+
+def test_interrupted_apply_inside_worker_product_resume_and_rollback_exact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A crash between a worker node's receipts: resume tops them up, rollback
+  still removes the whole node (no migration-owned residue)."""
+  home = fx.build_full_home(tmp_path / "home")
+  point_home(monkeypatch, home)
+  before = _tree_snapshot(home)
+  manifest_path = tmp_path / "m.json"
+  dry_run(monkeypatch, home, manifest_path)
+  manifest = migration.MigrationManifest.model_validate_json(manifest_path.read_text())
+  cfg = home_config_of(monkeypatch, home)
+
+  legacy_ids = {fx.S_ORDINARY, fx.S_PENDING, fx.S_PM, fx.S_ARCHIVED, fx.S_FORK,
+                fx.S_PREDECESSOR, fx.S_TAIL, fx.S_SCHEDULED, fx.S_STEPS,
+                fx.S_IMPROVE, fx.S_WORKERS, fx.S_V2}
+
+  def is_worker_run_receipt(path: str) -> bool:
+    parts = path.split("/")
+    return (len(parts) == 6 and parts[0] == "sessions" and parts[1] not in legacy_ids
+            and parts[2] == "data" and parts[3] == "runs")
+
+  original_append = migration._append_receipt
+
+  def flaky_append(ctx, receipt):
+    if is_worker_run_receipt(receipt.path):
+      raise migration.MigrationRefused("SIMULATED CRASH inside worker_node receipts")
+    return original_append(ctx, receipt)
+
+  migration._append_receipt = flaky_append
+  try:
+    with pytest.raises(migration.MigrationRefused, match="SIMULATED CRASH"):
+      migration.apply_manifest(cfg, manifest_path)
+  finally:
+    migration._append_receipt = original_append
+
+  # A fresh CLI process resumes the same manifest and verifies.
+  code, out, err = run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))
+  assert code == 0, err
+  assert cli_json(out)["verification"] == "ok"
+
+  # Every migration-owned run record is now receipted, so rollback owns the node.
+  state_dir = (home / "state" / "session_tree_migration" / manifest.source_sha[:16])
+  receipted = {json.loads(line)["path"]
+               for line in (state_dir / "receipts.ndjson").read_text().splitlines()
+               if line.strip()}
+  unreceipted_products = [
+      p.relative_to(home).as_posix()
+      for p in home.glob("sessions/*/data/runs/*/metadata.json")
+      if p.relative_to(home).as_posix().split("/")[1] != fx.S_V2
+      and p.relative_to(home).as_posix() not in receipted]
+  assert unreceipted_products == []
+
+  code, out, err = run_cli(monkeypatch, home, "--rollback", "--manifest", str(manifest_path))
+  assert code == 0, err
+  assert _tree_snapshot(home) == before
+
+
+def test_rollback_verifies_every_backup_before_restoring(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A corrupted backup aborts rollback BEFORE the first restore (no partial restore)."""
+  home = fx.build_full_home(tmp_path / "home")
+  point_home(monkeypatch, home)
+  manifest_path = tmp_path / "m.json"
+  dry_run(monkeypatch, home, manifest_path)
+  assert run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))[0] == 0
+  after_apply = _tree_snapshot(home)
+  manifest = migration.MigrationManifest.model_validate_json(manifest_path.read_text())
+  backup_dir = (home / "state" / "session_tree_migration" / manifest.source_sha[:16] / "backup")
+  victim = backup_dir / "sessions" / fx.S_WORKERS / "metadata.json"
+  assert victim.is_file()
+  original_backup = victim.read_bytes()
+  victim.write_text("tampered bytes", encoding="utf-8")
+  code, _, err = run_cli(monkeypatch, home, "--rollback", "--manifest", str(manifest_path))
+  assert code == 1
+  payload = cli_json(err)
+  assert "backup verification failed" in payload["error"]
+  # Nothing was restored: the post-apply home is byte-identical.
+  assert _tree_snapshot(home) == after_apply
+  # After the backup is fixed, the same manifest rolls back completely.
+  victim.write_bytes(original_backup)
+  code, out, err = run_cli(monkeypatch, home, "--rollback", "--manifest", str(manifest_path))
+  assert code == 0, err
+  assert cli_json(out)["status"] == "rolled_back"
+
+
+def test_apply_wraps_a_raced_fence_acquisition_as_refusal(
+    full_home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """Fence acquired between probe and acquire reports through the JSON refusal."""
+  from src.core.home_writer_fence import HomeWriterActiveError
+  manifest_path = tmp_path / "m.json"
+  dry_run(monkeypatch, full_home, manifest_path)
+
+  def raced_acquire(home: Path, *, purpose: str):
+    raise HomeWriterActiveError(None, home, purpose)
+
+  monkeypatch.setattr(migration, "acquire_home_writer_fence", raced_acquire)
+  before = _tree_snapshot(full_home)
+  code, _, err = run_cli(monkeypatch, full_home, "--apply", "--manifest", str(manifest_path))
+  assert code == 1
+  assert "writer fence" in cli_json(err)["error"]
+  assert _tree_snapshot(full_home) == before
+

@@ -34,7 +34,9 @@ source-derived task/Run identities and the same `source_sha`.
   the home, recorded worker/master/loop process identities, leftover raw-log
   holders, and pending triggers' watch targets. Anything live or of unknown
   ownership is a named blocker; nothing is signalled. A server starting during
-  an apply refuses to start.
+  an apply refuses to start. The live-process scan re-runs under the fence at
+  the mutation boundary, so a legacy writer that started between the preflight
+  check and fence acquisition also blocks the apply.
 - **No silent drift.** Apply refuses when the source no longer matches the
   manifest's hash binding, when the converter code changed since the manifest
   was built, or when a rebuilt plan would differ — and re-checks at the
@@ -51,7 +53,8 @@ source-derived task/Run identities and the same `source_sha`.
 - **Receipt-guarded rollback.** Rollback restores originals and removes only
   migration-owned, unchanged products. Once any product changed (a
   new-system write, an edit, added unrelated data) rollback refuses instead of
-  erasing it.
+  erasing it, and every backup is hash-verified before the first restore — a
+  missing or corrupted backup aborts with nothing restored.
 
 ## What it does not do (remaining integration boundaries)
 

@@ -96,6 +96,7 @@ from src.core.control_events import (
 )
 from src.core.home_writer_fence import (
     FenceHolder,
+    HomeWriterActiveError,
     acquire_home_writer_fence,
     probe_writer_fence,
 )
@@ -3106,7 +3107,10 @@ def apply_manifest(cfg: CharlieBotConfig, manifest_path: Path, *, manifest: Migr
         + "; ".join(str(b.get("detail") or b) for b in blockers[:10]),
         details=[orjson.dumps(b).decode() for b in blockers])
 
-  fence = acquire_home_writer_fence(cfg.charliebot_home, purpose="session-tree migrate --apply")
+  try:
+    fence = acquire_home_writer_fence(cfg.charliebot_home, purpose="session-tree migrate --apply")
+  except HomeWriterActiveError as e:
+    raise MigrationRefused(str(e)) from e
   try:
     return asyncio.run(_apply_locked(cfg, manifest_path, ctx))
   finally:
@@ -3191,6 +3195,13 @@ async def _apply_locked(cfg: CharlieBotConfig, manifest_path: Path, ctx: _ApplyC
   # under the fence. The same acceptance rule as preflight applies — a file
   # must match its manifest hash, a receipt, or this plan's own product — so
   # the manifest's own applied products are not "drift" but anything else is.
+  late = scan_live_home_processes(cfg.charliebot_home)
+  if late:
+    raise MigrationRefused(
+        "quiescence lost at the mutation boundary: live process(es) bound to this home "
+        "appeared after the preflight check: "
+        + "; ".join(f"pid {h['pid']} ({h['cmdline'] or 'unknown'})" for h in late[:8]),
+        details=[orjson.dumps(h).decode() for h in late])
   fresh_snap = scan_source(cfg)
   fresh_plan = build_conversion_plan(cfg, fresh_snap)
   _plan_matches_manifest(fresh_plan, manifest)
@@ -3255,7 +3266,15 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
     assert isinstance(product, WorkerNodeProduct)
     node_rel = f"sessions/{product.target_id}"
     if ctx.receipts.get(f"{node_rel}/metadata.json") is not None:
-      return 0  # published (and receipted) by a previous run
+      # Published by a previous (interrupted) run: top up any run-record
+      # receipts that crash never wrote, so rollback still owns the whole node.
+      for run in product.runs:
+        run_rel = f"{node_rel}/data/runs/{run.record.id}/metadata.json"
+        receipt = ctx.receipts.get(run_rel)
+        if receipt is None and _hash_rel(cfg, run_rel) is not None:
+          _append_receipt(ctx, ProductReceipt(
+              path=run_rel, kind="created", post_sha256=_hash_rel(cfg, run_rel)))
+      return 0
     _publish_worker_node(cfg, product)
     post = _hash_rel(cfg, f"{node_rel}/metadata.json")
     assert post is not None
@@ -3658,7 +3677,34 @@ def rollback_manifest(cfg: CharlieBotConfig, manifest_path: Path,
         + "; ".join(broken[:10]),
         details=broken)
 
-  fence = acquire_home_writer_fence(cfg.charliebot_home, purpose="session-tree migrate --rollback")
+  # Backup verification pass BEFORE the first restore: a missing or corrupted
+  # backup aborts with every product and original still in place, never a
+  # partially restored home.
+  backup_problems: list[str] = []
+  for receipt in sorted(receipts.values(), key=lambda r: r.path):
+    if receipt.kind == "created" or receipt.pre_sha256 is None:
+      continue
+    if receipt.backup is None:
+      backup_problems.append(f"{receipt.path}: backup reference missing")
+      continue
+    backup_file = backup_dir / receipt.backup
+    if not backup_file.is_file():
+      backup_problems.append(f"{receipt.path}: backup file missing ({backup_file})")
+      continue
+    backed = _sha256_file(backup_file)
+    if backed != receipt.pre_sha256:
+      backup_problems.append(
+          f"{receipt.path}: backup hash {backed[:12]} != pre-apply hash {receipt.pre_sha256[:12]}")
+  if backup_problems:
+    raise MigrationRefused(
+        "rollback refused: backup verification failed; nothing was restored, evidence is "
+        "intact: " + "; ".join(backup_problems[:10]),
+        details=backup_problems)
+
+  try:
+    fence = acquire_home_writer_fence(cfg.charliebot_home, purpose="session-tree migrate --rollback")
+  except HomeWriterActiveError as e:
+    raise MigrationRefused(str(e)) from e
   try:
     restored, removed = 0, 0
     # Restore replaced/appended/removed products from their verified backups.

@@ -10,10 +10,10 @@ an unchanged divider costs nothing.
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 import structlog
 
-from src.agents.backends.registry import build_backend
 from src.api.message_utils import events_to_messages
 from src.core.autonamer import iter_light_backends
 from src.core.config import CharlieBotConfig
@@ -28,6 +28,33 @@ from src.core.sessions import (
 from src.core.timeouts import AUTONAMER_TIMEOUT
 
 log = structlog.get_logger()
+
+
+def load_build_backend() -> Any:
+  """Return this module's ``build_backend``, importing the registry on first use.
+
+  The registry stack (src.agents.backends.registry and every backend module it
+  imports, ~35 ms of the M99 server import floor) serves only the summarize
+  path's one build; the module attribute stays the tests' patch target
+  (tests/test_recap.py) and an existing binding — a test's stand-in — is
+  returned untouched, exactly as ``load_requests`` does for requests.
+  """
+  bound = globals().get("build_backend")
+  if bound is not None:
+    return bound
+  from src.agents.backends.registry import build_backend
+
+  globals()["build_backend"] = build_backend
+  return build_backend
+
+
+def __getattr__(name: str) -> Any:
+  # The "src.core.recap.build_backend" patch target resolves through this
+  # hook; any other name was never a module attribute.
+  if name == "build_backend":
+    return load_build_backend()
+  raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 _ASK_CHARS = 80
 _LAST_CHARS = 250
@@ -293,7 +320,7 @@ async def generate_and_cache_summary(
   last_exception: Exception | None = None
   for option in options:
     try:
-      backend = build_backend(option, cfg, cgroup_session_id=session_id)
+      backend = load_build_backend()(option, cfg, cgroup_session_id=session_id)
       summary = await backend.one_shot_text(prompt, _SUMMARY_SYSTEM_PROMPT, timeout=AUTONAMER_TIMEOUT)
     except Exception as e:
       last_exception = e

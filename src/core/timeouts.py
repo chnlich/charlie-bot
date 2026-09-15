@@ -38,11 +38,13 @@ LATEX_COMPILE_TIMEOUT = 60  # seconds
 SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT = 120  # seconds
 
 # ---------------------------------------------------------------------------
-# Autonamer (session title generation)
+# Light one-shot backend calls (autonamer session naming, recap divider summary)
 # ---------------------------------------------------------------------------
 
-# Claude CLI subprocess that generates a 3-6 word title.
-AUTONAMER_TIMEOUT = 30.0  # seconds
+# One one_shot_text call to a resolved light backend (config backends.preference):
+# the autonamer's {name, group} ask and the recap's divider-summary ask ride the
+# same 30 s budget.
+LIGHT_ONESHOT_TIMEOUT = 30.0  # seconds
 
 # ---------------------------------------------------------------------------
 # Artifact cold-read probe
@@ -50,7 +52,7 @@ AUTONAMER_TIMEOUT = 30.0  # seconds
 
 # One-shot model pass over an entire artifact page (sitrep / debug / explain
 # cold-read gate); the page text alone dwarfs a naming prompt, so the 30 s
-# autonamer budget does not apply.
+# light one-shot budget does not apply.
 ARTIFACT_PROBE_TIMEOUT = 300.0  # seconds
 
 # ---------------------------------------------------------------------------

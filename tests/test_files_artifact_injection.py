@@ -295,8 +295,7 @@ def test_serve_file_gzip_repeat_view_recompresses_nothing(sessions_root: Path, m
     raise AssertionError("repeat gzip view re-ran the artifact injection")
 
   monkeypatch.setattr(files_api, "_inject_artifact_ui", explode_inject)
-  monkeypatch.setattr(files_api.gzip, "compress",
-                      gzip_explode_compress("repeat gzip view re-ran the deflate"))
+  monkeypatch.setattr(files_api.gzip, "compress", gzip_explode_compress("repeat gzip view re-ran the deflate"))
   resp = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
   assert resp.headers["content-encoding"] == "gzip"

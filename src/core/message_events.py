@@ -70,19 +70,34 @@ def normalize_user_message_event(ev: dict) -> dict:
   return {"content": stripped_content, "uploaded_files": legacy_files}
 
 
-def _stable_history_projection(events: list[dict]) -> list[tuple[int, dict]]:
-  """Move queued users behind completed runs without changing source events."""
+def _interval_scan(events: list[dict]) -> tuple[list[tuple[int, int]], int]:
+  """Single walk of the run-interval rule the two consumers below share.
+
+  Returns (complete_intervals, closed_prefix_len): one (latest adoption signal,
+  closing MASTER_DONE) index pair per completed run interval, and the largest
+  prefix length that ends outside every interval, open ones included. The
+  run-start adoption signal is SESSION_ATTACHED — or a missing type, the
+  pre-typed corpus's spelling — carrying a session_id. Deferral stays inside
+  completed intervals, so once a prefix ends outside every open interval no
+  later append can reorder it; that boundary is closed_prefix_len.
+  """
   complete_intervals: list[tuple[int, int]] = []
   interval_start: int | None = None
+  closed = 0
   for idx, event in enumerate(events):
-    # The run-start adoption signal marks an interval's first event; the bare
-    # session_id-only shape is the pre-typed corpus's spelling of the same
-    # signal, so histories written before the type existed keep ordering.
     if event.get("type") in (None, ET.SESSION_ATTACHED) and event.get("session_id"):
       interval_start = idx
     elif event.get("type") == ET.MASTER_DONE and interval_start is not None:
       complete_intervals.append((interval_start, idx))
       interval_start = None
+    if interval_start is None:
+      closed = idx + 1
+  return complete_intervals, closed
+
+
+def _stable_history_projection(events: list[dict]) -> list[tuple[int, dict]]:
+  """Move queued users behind completed runs without changing source events."""
+  complete_intervals, _ = _interval_scan(events)
 
   deferred_indices: set[int] = set()
   deferred_by_end: dict[int, list[tuple[int, dict]]] = {}
@@ -112,20 +127,8 @@ def _stable_history_projection(events: list[dict]) -> list[tuple[int, dict]]:
 def stable_closed_prefix_len(events: list[dict]) -> int:
   """Largest prefix length whose stable-history order is final under appends.
 
-  ``_stable_history_projection`` defers queued users only within one completed
-  run interval, so once the prefix ends outside every open interval no later
-  append can reorder it; the interval rule mirrors that function's own
-  ``interval_start``/``MASTER_DONE`` scan and both must move together.
+  The append-incremental message projection (``src.core.message_projection``)
+  commits events before this boundary exactly once and re-evaluates only the
+  open region after it.
   """
-  interval_open = False
-  closed = 0
-  for idx, event in enumerate(events):
-    # Mirrors _stable_history_projection's interval-open test (both shapes of
-    # the adoption signal) — the two must move together.
-    if event.get("type") in (None, ET.SESSION_ATTACHED) and event.get("session_id"):
-      interval_open = True
-    elif event.get("type") == ET.MASTER_DONE and interval_open:
-      interval_open = False
-    if not interval_open:
-      closed = idx + 1
-  return closed
+  return _interval_scan(events)[1]

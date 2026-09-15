@@ -20,6 +20,7 @@ from conftest import (
     drain_session_consumer,
     fresh_master_state,
     make_work_item,
+    manager_backed_callbacks,
     mock_session_callbacks,
     mocked_callback_fields,
     patch_instructions_content,
@@ -847,20 +848,6 @@ async def test_handle_event_keeps_an_already_adopted_session_id_over_the_signal(
 # ---------------------------------------------------------------------------
 
 
-def _manager_backed_callbacks(mgr: SessionManager) -> SessionCallbacks:
-  """Mocked broadcast bundle whose anchor funnels are the real manager's."""
-  return SessionCallbacks(
-      persist_and_broadcast=AsyncMock(),
-      update_thinking_state=AsyncMock(),
-      mark_unread=AsyncMock(),
-      persist_cc_session_id=mgr.persist_cc_session_id,
-      has_completed_round=mgr.has_completed_round,
-      persist_master_run=mgr.persist_master_run,
-      persist_claude_account=mgr.persist_claude_account,
-      claude_context_state=AsyncMock(return_value=(None, None)),
-  )
-
-
 class _RealManagerSilentTeardown(SessionManager):
   """The real SessionManager with only the teardown probe silenced: the dequeue
   refresh reads disk through the real class while the consumer run stays hermetic."""
@@ -934,7 +921,7 @@ async def test_stale_enqueue_snapshot_wakes_after_move_and_persist_and_does_not_
     snapshot = SessionMetadata(id=session.id, name="incident-replay", backend=cfg.backends.options[0].id)
     snapshot.cc_session_id = cc_id
     snapshot.claude_account = "pool-a"
-    return make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+    return make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
 
   from src.core import claude_accounts as claude_accounts_mod
   claude_accounts_mod.reset_for_tests()
@@ -973,7 +960,7 @@ async def test_dequeue_refresh_keeps_a_deliberately_empty_anchor(tmp_path: Path)
 
   snapshot = SessionMetadata(id=session.id, name="retry", backend=cfg.backends.options[0].id)
   snapshot.cc_session_id = None
-  item = make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+  item = make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
   seen_at_dequeue: list[str | None] = []
 
   async def retry_round(work_item: master_cc_state._WorkItem):
@@ -1002,7 +989,7 @@ async def test_consumer_refreshes_a_stale_label_and_cc_id_from_disk(tmp_path: Pa
   snapshot = SessionMetadata(id=session.id, name="refresh", backend=cfg.backends.options[0].id)
   snapshot.cc_session_id = "cc-old"
   snapshot.claude_account = "pool-a"
-  item = make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+  item = make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
 
   await run_consumer_over_real_disk(session.id, [item], _sound_round("cc-new"))
 
@@ -1027,9 +1014,9 @@ async def test_consumer_disk_read_failure_falls_back_to_fill_empty_only(tmp_path
   snapshot.cc_session_id = None
   snapshot.claude_account = None
   first = make_work_item(
-      cfg, snapshot.model_copy(deep=True), cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+      cfg, snapshot.model_copy(deep=True), cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
   second_snapshot = snapshot.model_copy(deep=True)
-  second = make_work_item(cfg, second_snapshot, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+  second = make_work_item(cfg, second_snapshot, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
 
   async def fake_run_cc(item: master_cc_state._WorkItem):
     return ("cc-1", 0, None, {})
@@ -1073,7 +1060,7 @@ async def test_consumer_retires_transcript_copies_after_a_sound_round(tmp_path: 
   await mgr.persist_claude_account(session.id, "pool-a")
 
   item = make_work_item(
-      cfg, (await mgr.get_session(session.id)), cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+      cfg, (await mgr.get_session(session.id)), cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
   await run_consumer_over_real_disk(session.id, [item], _sound_round(cc_id))
 
   assert not copies["pool-c"].exists(), "the oldest copy retired"
@@ -1081,7 +1068,7 @@ async def test_consumer_retires_transcript_copies_after_a_sound_round(tmp_path: 
 
   # A failed round deletes nothing.
   failed = make_work_item(
-      cfg, (await mgr.get_session(session.id)), cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+      cfg, (await mgr.get_session(session.id)), cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
   make_transcript(tmp_path / "claude-pool-c", cc_id)
   await run_consumer_over_real_disk(session.id, [failed], _failed_round(cc_id))
 
@@ -1105,8 +1092,8 @@ async def test_dequeue_relays_the_rounds_anchor_into_a_snapshot_taken_before_the
   # The follow-up's snapshot as require_session hands it out mid-round: the
   # first round's cc persist has not happened yet, so the anchors are empty.
   pre_persist_snapshot = first_meta.model_copy(deep=True)
-  first = make_work_item(cfg, first_meta, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
-  second = make_work_item(cfg, pre_persist_snapshot, cfg.backends.options[0], callbacks=_manager_backed_callbacks(mgr))
+  first = make_work_item(cfg, first_meta, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
+  second = make_work_item(cfg, pre_persist_snapshot, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
 
   seen_at_dequeue: list[str | None] = []
 

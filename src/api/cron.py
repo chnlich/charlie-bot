@@ -2,15 +2,18 @@
 
 import asyncio
 import copy
+import gzip
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
+from starlette.requests import Request
+from starlette.responses import Response
 
 from src.api.deps import bad_request, get_config_on_loop, get_session_manager
-from src.api.responses import FastJsonResponse
+from src.api.responses import PreencodedJSONResponse, fast_json_bytes
 from src.core.config import (
     CharlieBotConfig,
     ScheduledTaskConfig,
@@ -167,7 +170,7 @@ class TaskCreate(ScheduledTaskFields):
 
 
 @router.get('/tasks')
-async def list_cron_tasks() -> FastJsonResponse:
+async def list_cron_tasks(request: Request) -> Response:
   """Return all scheduled tasks plus one error entry per broken file, never 500.
 
   Valid jobs are sorted by name, followed by one entry per error record shaped
@@ -186,16 +189,32 @@ async def list_cron_tasks() -> FastJsonResponse:
   # is already a primitive, so the bytes equal the encoder-rendered output).
   # Returning the mapped list instead would pay jsonable_encoder's dict
   # recursion per request for the same bytes.
-  valid = [
-      t.model_dump(mode="json", exclude={
-          'prompt': True,
-          'steps': {
-              '__all__': {
-                  'prompt': True
-              }
-          }
-      }) for t in get_scheduled_tasks()
-  ]
+  body, gz = _cron_tasks_body()
+  if "gzip" not in request.headers.get("accept-encoding", ""):
+    return PreencodedJSONResponse(body)
+  return PreencodedJSONResponse(gz, headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
+
+
+# The grouped sidebar render pairs this poll with /api/sessions/scheduled every
+# 3 s, and the browser's fetch always accepts gzip. The rendered bytes and
+# their level-1 gzip form cache on the snapshot's own generation: the identity
+# of the tasks list get_scheduled_tasks returns — stable between config
+# changes, rebuilt by any reload, and pinned by the cache's own reference so a
+# freed list's address can never be reused for a new one. One config change
+# re-renders and re-compresses once; every poll in between serves both bodies
+# with zero render and zero deflate, and Content-Encoding set upstream makes
+# the middleware skip its own pass (the M72 mechanism).
+_CRON_TASKS_BODY_CACHE: tuple[list, bytes, bytes] | None = None
+
+
+def _cron_tasks_body() -> tuple[bytes, bytes]:
+  """Return (plain body, gzip body) for the current cron snapshot, rendering once per generation."""
+  global _CRON_TASKS_BODY_CACHE
+  tasks = get_scheduled_tasks()
+  cache = _CRON_TASKS_BODY_CACHE
+  if cache is not None and cache[0] is tasks:
+    return cache[1], cache[2]
+  valid = [t.model_dump(mode="json", exclude={'prompt': True, 'steps': {'__all__': {'prompt': True}}}) for t in tasks]
   broken = [
       {
           'name': e.name,
@@ -205,7 +224,10 @@ async def list_cron_tasks() -> FastJsonResponse:
           'enabled': e.enabled
       } for e in get_scheduled_task_errors()
   ]
-  return FastJsonResponse(valid + broken)
+  body = fast_json_bytes(valid + broken)
+  gz = gzip.compress(body, 1, mtime=0)
+  _CRON_TASKS_BODY_CACHE = (tasks, body, gz)
+  return body, gz
 
 
 async def apply_task_yaml_update(

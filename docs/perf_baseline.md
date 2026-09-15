@@ -2943,46 +2943,84 @@ content only the in-process scheduler/master reads (the UI edits
 ``prompt_file``) — plus the client pays a same-size JSON.parse per render. The
 fixed dump excludes ``prompt``, mirroring the POST/PUT responses which never
 carried it. The cost rides the sidebar render path, so the collector drives the
-endpoint through TestClient over the live cron corpus (read-only:
+endpoint raw-ASGI — the served path the middleware and route actually run; a
+TestClient drive adds ~1.5 ms of httpx harness per request and skips the gzip
+middleware whose deflate the browser's fetch always pays (the vacuous-read
+class the M44/M56 repair called out) — over the live cron corpus (read-only:
 ``get_scheduled_tasks`` serves the fingerprint-cached snapshot; nothing is
 written), one cold pass, as at first sidebar render after a server start, then
-nine timed requests, re-running rather than comparing noise when the live
-config drifts mid-measurement. Evidence while the live server runs older code
-points the same collector at the branch checkout (``CHECKOUT`` at the worktree
-root), the same shape as the M36 protocol:
+nine timed requests, with a parsed-body digest so a corpus change between arms
+cannot masquerade as a payload difference (a digest changing between repeats is
+the live config's own churn — re-run rather than compare noise, the M44
+guard's shape). Evidence while the live server runs older code points the same
+collector at the branch checkout (``CHECKOUT`` at the worktree root), the same
+shape as the M44 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import os, sys, time
+import asyncio, gzip, hashlib, json, os, sys, time
 sys.path.insert(0, os.environ["CHECKOUT"])
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from server import _CharlieBotGZipMiddleware
 from src.api.cron import router as cron_router
 
 # Live cron corpus read-only: get_scheduled_tasks resolves the process config's
-# fingerprint-cached snapshot; nothing here writes.
+# fingerprint-cached snapshot; nothing here writes. The production middleware
+# chain: the browser's fetch always sends Accept-Encoding: gzip, so the body's
+# deflate is part of the served shape — a bare app reads the handler floor alone.
 app = FastAPI()
 app.include_router(cron_router, prefix="/api/cron")
-client = TestClient(app)
+app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
 url = "/api/cron/tasks"
+SCOPE = {
+    "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+    "http_version": "1.1", "method": "GET", "scheme": "http",
+    "path": url, "raw_path": url.encode(), "query_string": b"", "root_path": "",
+    "headers": [(b"host", b"test"), (b"accept-encoding", b"gzip")],
+    "client": ("test", 123), "server": ("test", 80),
+}
 
-r = client.get(url)  # cold pass, as at first sidebar render after a server start; not timed
-assert r.status_code == 200, (r.status_code, r.text[:200])
+
+async def drive():
+    body = b""
+    out = {"status": 0, "encoding": b""}
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        nonlocal body
+        if msg["type"] == "http.response.start":
+            out["status"] = msg["status"]
+            out["encoding"] = dict(msg.get("headers", [])).get(b"content-encoding", b"")
+        elif msg["type"] == "http.response.body":
+            body += msg.get("body", b"")
+
+    t0 = time.perf_counter()
+    await app(SCOPE, receive, send)
+    return time.perf_counter() - t0, body, out
+
+
+_, cold_body, cold_out = asyncio.run(drive())  # cold pass, as at first sidebar render after a server start; not timed
+assert cold_out["status"] == 200, cold_out["status"]
 times = []
 bodies = set()
+digests = set()
 for _ in range(9):
-    t0 = time.perf_counter()
-    r = client.get(url)
-    times.append(time.perf_counter() - t0)
-    bodies.add(r.content)
+    dt, body, out = asyncio.run(drive())
+    times.append(dt)
+    bodies.add(len(body))
+    decoded = gzip.decompress(body) if out["encoding"] == b"gzip" else body
+    digests.add(hashlib.sha256(json.dumps(json.loads(decoded), sort_keys=True).encode()).hexdigest()[:12])
 times.sort()
-if len(bodies) != 1:
+if len(bodies) != 1 or len(digests) != 1:
     raise SystemExit("live churn during measurement; re-run")
-rows = r.json()
+rows = json.loads(decoded)
 prompt_bytes = sum(len(row.get("prompt") or "") for row in rows)
 step_prompt_bytes = sum(len(s.get("prompt") or "") for row in rows for s in (row.get("steps") or []))
-print(f"{len(rows)} task rows, body {len(r.content)} B, prompt bytes {prompt_bytes}, step prompt bytes {step_prompt_bytes}; "
-      f"steady-state GET /api/cron/tasks median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms")
+print(f"{len(rows)} task rows, wire {len(body)} B, decoded {len(decoded)} B, digest {digests.pop()}, "
+      f"prompt bytes {prompt_bytes}, step prompt bytes {step_prompt_bytes}; "
+      f"served GET /api/cron/tasks median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms over 9")
 EOF
 ```
 
@@ -6838,6 +6876,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-15 | this PR | M46 cron tasks poll, repaired collector + generation-keyed body cache: served poll median 0.53/0.50/0.50 → 0.28/0.26/0.28 ms, −44 % to −49 %, maxima 0.61-0.78 → 0.35-0.44 ms, every paired round faster (three interleaved rounds of the repaired collector — main checkout before vs branch worktree after back-to-back, live cron corpus read-only, 13 task rows, wire 701 B, decoded 4153 B, parsed digest 2fd420e5a059 identical across all six arms, load 1.49-1.53 one-minute); component attribution, same app + middleware, fresh drives: bare handler 0.37 ms — the 13 model_dumps + orjson render 0.275 ms median standalone (15 rounds), the middleware's inline deflate + responder hop of the 4153 B body ~0.13 ms — both removed from a cache-hit poll, which now pays one identity check and the response construction; no-regression witnesses interleaved ×2: M56 /status 0.53/0.58 → 0.56/0.55 ms with digest 4dce7902d0f3 identical and M44 /scheduled 1.05/0.92 → 0.92/1.16 ms with digest f6b853387918 identical (the body-keyed memo's other tenants, unchanged — the cron route rides its own generation cache beside them); 5443-passed suite + 11 skipped, ruff and yapf clean, plus 4 new cache-contract tests (precompressed serve with decompressed parity, repeat zero re-render, generation change re-renders, plain request uncompressed) | the grouped sidebar render's paired fetch still paid the full body rebuild per request — 13 model_dumps + the orjson render (0.275 ms measured) plus the middleware's whole-body deflate — although the rendered bytes are a pure function of the fingerprint-cached cron snapshot, whose tasks list keeps one identity between config changes; the poll now caches (plain body, gzip body) on that identity, re-rendering and re-compressing once per generation, and Content-Encoding set upstream makes the middleware skip its own pass; the standing collector rode the TestClient harness floor (~1.5 ms) and skipped the middleware, so the repaired drive reads the served raw-ASGI path the M44/M56 repairs standardized |
 | 2026-09-15 | this PR | M36 worker list poll, served gzip memo: full poll median 1.30/1.35/1.34 → 0.64/0.62/0.69 ms, −50 % to −54 %, maxima 1.57-1.72 → 1.00-1.02 ms, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, shared snapshot of the 2551 KB / 339-row worst threads corpus of session 3b91d606, decoded 106314 B wire 15077 B with parsed digest 8946dac083ec identical across all six arms, load 0.98-1.07 one-minute; the conditional 204 poll unchanged 0.58-0.60 → 0.57-0.60 ms); no-regression witnesses interleaved ×2: M63 /view handler 0.45/0.51 → 0.49/0.47 ms with body 116873 B both arms, M68 marked changed-poll rebuild 3.19/3.29 → 3.46/3.48 ms — the after arm now deflates each changed body inside the handler where the bare-app harness's missing middleware hid it, the deflate the served path pays in both shapes on a changed body; 5439-passed suite + 11 skipped, ruff and yapf clean, plus 4 new gzip-contract tests (precompressed serve with decompressed parity and the tag unchanged, repeat-poll zero re-compress, changed-body recompress, plain-request no memo entry) | the 3 s workers-panel list poll served the memoized plain body and let the gzip middleware deflate the whole 106 KB inside every served request — the same per-request cost the M44/M56 landing removed from the sidebar poll and scheduled list; the gzip form rides the body-keyed memo beside the plain one (a memo hit proves byte equality because the dict key IS the body), one off-loop level-1 deflate per distinct body replaces the middleware's per-request pass, Content-Encoding set upstream makes the middleware skip (the M72 mechanism), and the ETag conditional stays bodyless; M36 healthy range recalibrated median < 0.004 s → < 0.002 s with this PR |
 | 2026-09-15 | this PR | M56 sidebar status poll, repaired collector + served gzip memo: standing TestClient reading 2.00 ms median; repaired-collector interleaved rounds main 0.63/0.64/0.67 → branch 0.49/0.48/0.50 ms, −22 % to −26 %, maxima 1.35-1.49 → 0.93-0.99 ms, every paired round faster (three interleaved rounds of the repaired collector — main checkout before vs branch worktree after back-to-back, 40 sidebar ids over the live corpus read-only, wire 1347 B, decoded 8860 B, parsed digest ee549e4d7b7f identical across all six arms, load 1.85-1.91 one-minute); component attribution, same app + overrides, fresh drives at load ~1.9: TestClient repeat 2.03 ms vs raw-ASGI bare 0.45 ms — the httpx layer is ~1.6 ms of harness per request — and raw-ASGI+gzip 0.78 ms, the 8860 B body's middleware deflate + responder hop 0.33 ms, which the body-keyed memo removes; M56 healthy range recalibrated < 0.004 s → < 0.002 s with this PR; no-regression witnesses interleaved: M46 /api/cron/tasks 1.53 ms on the branch (standing 1.56/1.53) and the M35 switch fetches events 1.15 ms / view 1.61 ms / bootstrap 1.08 ms with parsed digests 2b451eddaa4c / 7b56cc98190e / 4193328a2e6f identical (the memo's other tenants share the widened limit-16 slot set without thrash); ruff and yapf clean | the standing collector timed the harness, not the served path — the vacuous-read class the M36/M57/M59/M70/M72 repairs called out — and skipped the gzip middleware whose deflate the browser's 3 s poll always pays; the raw-ASGI drive (the M101/M72 pattern) reads the served path the middleware and route actually run, and the poll's gzip form now rides the body-keyed memo (the M35 switch-fetch mechanism), Content-Encoding set upstream making the middleware skip its pass |
 | 2026-09-15 | this PR | M44 scheduled-list, repaired collector + served gzip memo: standing TestClient reading 2.14 ms median; repaired-collector interleaved rounds main 1.12/1.11/1.00 → branch 0.83/0.87/0.95 ms, −17 % to −26 %, maxima 1.43-1.52 → 1.14-1.31 ms, every paired round faster (three interleaved rounds of the repaired collector — main checkout before vs branch worktree after back-to-back, live session + cron corpus read-only, 13 scheduled rows, wire 2644 B, decoded 14577 B, parsed digest 32d4f658bd98 identical across all six arms, load 1.85-1.91 one-minute); component attribution, same app + overrides, fresh drives at load ~1.9: TestClient repeat 2.00 ms vs raw-ASGI bare 0.68 ms — the httpx layer is ~1.3-1.5 ms of harness per request — and raw-ASGI+gzip 1.33 ms, the 14577 B body's middleware deflate + responder hop 0.65 ms, which the body-keyed memo removes; the route's render moved to the /tasks route's encoder-free shape (model_dump(mode="json") feeding orjson, response_model dropped per the M59 thread-detail precedent, parsed content unchanged — digest identical across arms); M44 healthy range recalibrated < 0.004 s → < 0.002 s with this PR; ruff and yapf clean | the same harness disease as the M56 repair in the same PR, on the grouped sidebar render's paired fetch; the serve now ships the memoized gzip form, and the repaired collector keeps the live-churn guard (repeat bodies must match) the TestClient drive carried |

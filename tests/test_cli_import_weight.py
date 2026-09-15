@@ -201,8 +201,23 @@ def test_module_defers_structlog_until_the_first_log_call(module_name: str, impo
 # path never emits); httpx (~60 ms with rich) rides src.core.http and the
 # backends' outbound clients, which load it on first use; croniter rides its
 # two next-run resolutions (the scheduler tick, the /scheduled handler, ~21 ms
-# with dateutil) and websockets rides the Slack listener's connect loop (~13 ms).
-SERVER_HEAVY_MODULES = ("numpy", "src.agents.transcriber", "structlog", "httpx", "croniter", "dateutil", "websockets")
+# with dateutil) and websockets rides the Slack listener's connect loop (~13 ms);
+# the backends stack rides its two spawn-path builds (the autonamer naming round
+# and the recap summarize, ~65 ms through src.agents.backends.registry and the
+# opencode/charlie_code module bodies), which load it on first use via each
+# module's load_build_backend.
+SERVER_HEAVY_MODULES = (
+    "numpy",
+    "src.agents.transcriber",
+    "structlog",
+    "httpx",
+    "croniter",
+    "dateutil",
+    "websockets",
+    "src.agents.backends.registry",
+    "src.agents.backends.opencode",
+    "src.agents.backends.charlie_code",
+)
 
 
 def test_server_import_defers_the_speech_stack() -> None:
@@ -218,3 +233,40 @@ def test_server_import_defers_the_speech_stack() -> None:
       "print('numpy' in sys.modules or 'src.agents.transcriber' in sys.modules)")
   pulled = _run_probe(code).stdout.strip()
   assert pulled == "False", "importing the voice route pulled the speech stack at module import"
+
+
+# The sessions chain's extra bans: session_usage's usage math reads the opencode
+# compaction reserve from src.core.constants (the #1412 stdlib-only home), so the
+# chain imports no backend module for it.
+SESSIONS_HEAVY_MODULES = (
+    "src.agents.backends.registry", "src.agents.backends.opencode", "src.agents.backends.charlie_code")
+
+
+def test_sessions_chain_imports_without_the_backends_stack() -> None:
+  loaded = _modules_loaded_after_import("import src.core.sessions", SESSIONS_HEAVY_MODULES)
+  assert loaded == [], (
+      "the sessions chain pulled the backends stack into the server process: "
+      f"{loaded}; the M99 server import floor (docs/perf_baseline.md) depends on "
+      "src.core.session_usage reading the compaction reserve from src.core.constants "
+      "— import backends lazily at the use site that builds one")
+
+
+def test_autonamer_and_recap_defer_the_registry_until_first_use() -> None:
+  # The naming round and the summarize path each build one backend; the import
+  # binds nothing and the module attribute resolves (and patch-pins) lazily
+  # through each module's load_build_backend.
+  code = (
+      "import json, sys; "
+      "import src.core.autonamer, src.core.recap; "
+      f"before = sorted(set(sys.modules) & {set(SESSIONS_HEAVY_MODULES)!r}); "
+      "resolved = callable(src.core.autonamer.build_backend) and callable(src.core.recap.build_backend); "
+      "after = sorted(set(sys.modules) & {'src.agents.backends.registry'}); "
+      "sys.stderr.write(json.dumps([before, resolved, after]))")
+  proc = _run_probe(code)
+  before, resolved, after = json.loads(proc.stderr)
+  assert before == [], (
+      "autonamer or recap pulled the backends stack at module import: {before}; "
+      "the M99 server import floor (docs/perf_baseline.md) depends on the naming "
+      "round and the summarize path loading it at their one build".format(before=before))
+  assert resolved is True, "the lazy build_backend binding did not resolve through the module attribute"
+  assert after == ["src.agents.backends.registry"], (f"the lazy binding loaded unexpected modules: {after}")

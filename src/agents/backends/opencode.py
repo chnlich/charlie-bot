@@ -49,10 +49,11 @@ log = LazyStructlogLogger()
 
 
 def __getattr__(name: str) -> Any:
-  # httpx imports on first use: the server import floor (docs/perf_baseline.md
-  # M99) reaches this module through session_usage, and must not pay httpx's
-  # import chain (~60 ms with rich) for a client only opencode runs touch. The
-  # PEP 562 hook serves the external patch target
+  # httpx imports on first use: this module sits on no eager server import
+  # chain (the M99 deferrals keep every carrier off it — the import-weight
+  # contract pins the ban set), so only opencode runs pay httpx's import
+  # chain (~60 ms with rich) for its outbound client. The PEP 562 hook serves
+  # the external patch target
   # `src.agents.backends.opencode.httpx.*`; the module's own runtime sites
   # import httpx locally, which internal global lookups cannot route here.
   if name == "httpx":
@@ -86,10 +87,12 @@ _IGNORED_SSE_EVENT_TYPES = {
     "session.status",
     "session.updated",
 }
-# opencode's own compaction output-reserve default ($d = 20000 in the opencode binary,
+# opencode's compaction output-reserve default ($d = 20000 in the opencode binary,
 # applied as `compaction.reserved ?? min($d, maxOutputTokens)`; checkable via
-# `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`).
-OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
+# `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`) single-homes in
+# src.core.constants, whose only reader is the usage chain's compact-point math
+# (src.core.session_usage) — importing it here would drag this module onto the
+# usage chain (the M99 server import floor).
 
 # opencode's SQLite store locking (e.g. the boot-time `insert into "project"`
 # collision observed in production) surfaces as an HTTP 500 or session.error

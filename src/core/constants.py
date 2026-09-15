@@ -39,6 +39,14 @@ PLAN_CLOSE_ABANDONED = "abandoned"
 PLAN_CLOSE_COMPLETED = "completed"
 PLAN_CLOSE_MODES = (PLAN_CLOSE_SUPERSEDED, PLAN_CLOSE_ABANDONED, PLAN_CLOSE_COMPLETED)
 
+# opencode's own compaction output-reserve default ($d = 20000 in the opencode binary,
+# applied as `compaction.reserved ?? min($d, maxOutputTokens)`; checkable via
+# `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`). The opencode backend
+# (src.agents.backends.opencode) and the usage resolver's compact-point math
+# (src.core.session_usage) share one spelling, so the usage chain imports no backend
+# module for it (the M99 server import floor).
+OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
+
 # File-server URL prefixes: server.py mounts the one files router under each, so both
 # spellings reach the same handler. The first entry is the canonical form the UI builds
 # and older links carry; the second is the form written into chat text to name absolute

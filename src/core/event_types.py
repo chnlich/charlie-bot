@@ -120,6 +120,10 @@ RUNNING_CHANGED = "running_changed"
 UNREAD_CHANGED = "unread_changed"
 SESSION_RENAMED = "session_renamed"
 SESSION_GROUP_CHANGED = "session_group_changed"
+# Sidebar-channel notification that one node's durable task facts changed. The
+# payload names the node and the fact type only; clients re-read the affected
+# rows, never trusting the notification itself.
+TASK_TREE_CHANGED = "task_tree_changed"
 
 # -- Task tree control events (schema_version=2) -----------------------------
 # Durable task facts appended to a session's chat_events.jsonl through the

@@ -519,11 +519,19 @@ class SessionRow(BaseModel):
   attention_descendant_count: int
 
 
+class RunRow(RunRecord):
+  # One /runs row: the record plus the fact-derived display state
+  # (queued|running|attention|stopped|success|failed|interrupted) and whether a
+  # durable stop request stands. Derived per request by the run owner.
+  state: str = "queued"
+  stop_requested: bool = False
+
+
 class RunPage(BaseModel):
   # GET /api/sessions/{id}/runs response: one keyset page plus its cursor.
   model_config = ConfigDict(extra="forbid")
 
-  items: list[RunRecord]
+  items: list[RunRow]
   next_cursor: str | None = None
 
 

@@ -4362,9 +4362,11 @@ app.dependency_overrides[get_thread_manager] = lambda: thread_mgr
 app.dependency_overrides[get_trigger_manager] = lambda: trigger_mgr
 app.dependency_overrides[get_config] = lambda: cfg
 app.dependency_overrides[get_config_on_loop] = lambda: cfg
-# The production middleware chain: the browser's poll always sends
-# Accept-Encoding: gzip, so the changed poll's served deflate is part of the
-# shape — a bare app reads the handler floor alone.
+# The production middleware chain, so the drive reads the shape the serve
+# path runs. For this route the endpoint's body-keyed gzip memo serves
+# Content-Encoding set upstream and the middleware skips its own pass — the
+# mount keeps the drive honest against a route change rather than adding
+# deflate work.
 app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
 
 
@@ -4417,25 +4419,22 @@ async def main():
     await drive(url)  # cold build, as at first panel paint after a server start; not timed
     await drive(url)  # memo hit; not timed
     dirty(0)
-    first = None
     times, decoded_size, wire_size, digests = [], 0, 0, set()
     for i in range(8):
-        dirty(i + 1)
+        t0 = time.perf_counter()
         dt, body, out = await drive(url)
         assert out["status"] == 200, out["status"]
         d = gzip.decompress(body) if out["encoding"] == b"gzip" else body
-        if first is None:
-            first = dt
         times.append(dt)
         decoded_size = len(d)
         wire_size = len(body)
         digests.add(digest(d))
+        dirty(i + 1)
     times.sort()
     assert len(digests) == 1, f"rebuild bodies differed: {digests}"
     print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {best_n / 1e3:.0f} KB thread metadata in session {SID} "
           f"({len(metas)} rows); marked changed-poll rebuild median {times[4] * 1000:.2f} ms, "
-          f"max {times[-1] * 1000:.2f} ms over 8, first changed round {first * 1000:.2f} ms, "
-          f"decoded {decoded_size} B wire {wire_size} B, digest {digests.pop()}")
+          f"max {times[-1] * 1000:.2f} ms over 8, decoded {decoded_size} B wire {wire_size} B, digest {digests.pop()}")
     shutil.rmtree(home)
 
 
@@ -6929,7 +6928,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
-| 2026-09-15 | this PR | M68 marked changed-poll rebuild, repaired collector: standing TestClient reading 3.47 ms median; interleaved rounds old drive 3.66/3.59/3.59 → new drive 1.91/2.00/1.93 ms medians, −45 % to −48 %, maxima 4.06-4.46 → 2.07-2.45 ms, every paired round faster (three interleaved rounds of old TestClient drive vs new raw-ASGI drive back-to-back, same main-checkout code and worst corpus in all arms, load 0.79-0.82 one-minute, 2551 KB thread metadata over 339 rows in session 3b91d606, live state read-only; decoded body 106314 B and parsed digest 8946dac083ec identical across every arm, wire 15077 B under the mounted middleware; the first changed round — the one body the endpoint's gzip memo has not seen — reads 2.03-2.45 ms, the deflate the production changed poll pays on every genuinely moved body); component attribution, same app + overrides, fresh drives at load ~0.8: TestClient repeat 3.59 ms vs raw-ASGI 1.93 ms — the httpx layer is ~1.7 ms of harness per request; M68 healthy range recalibrated < 0.005 s → < 0.003 s with this PR | the standing collector timed the harness, not the served path — the vacuous-read class the M36/M56/M57/M59/M70/M72 repairs called out — and skipped the production middleware chain whose served deflate the browser's 3 s poll always pays; the raw-ASGI drive (the M101/M36 pattern) reads the served path the middleware and route actually run |
+| 2026-09-15 | this PR | M68 marked changed-poll rebuild, repaired collector: standing TestClient reading 3.47 ms median; interleaved rounds old drive 3.50/3.44/3.47 → new drive 1.83/1.94/1.92 ms medians, −44 % to −47 %, maxima 3.81-4.28 → 2.16-2.31 ms, every paired round faster (three interleaved rounds of old TestClient drive vs new raw-ASGI drive back-to-back, same main-checkout code and worst corpus in all arms, load 1.46-1.54 one-minute, 2551 KB thread metadata over 339 rows in session 3b91d606, live state read-only; decoded body 106314 B and parsed digest 8946dac083ec identical across every arm, wire 15077 B; the probe's content-preserving rewrite makes every rebuilt body byte-identical, so all timed rounds serve the endpoint's body-keyed gzip memo form — a production changed poll whose body genuinely moves pays the endpoint's off-loop deflate instead, the 0.66 ms the M36 row measured); component attribution, same app + overrides, fresh drives at load ~1.5: TestClient repeat 3.47 ms vs raw-ASGI 1.92 ms — the httpx layer is ~1.6 ms of harness per request; M68 healthy range recalibrated < 0.005 s → < 0.003 s with this PR | the standing collector timed the harness, not the served path — the vacuous-read class the M36/M56/M57/M59/M70/M72 repairs called out; the raw-ASGI drive (the M101/M36 pattern) reads the served path the middleware and route actually run, with the production middleware mounted so the drive tracks the serve chain |
 | 2026-09-15 | this PR | M94 streamed-replay dumps wall 71/74 ms medians over two runs of the verbatim collector (16.8 MB serialized, 1553 deltas, largest delta 64456 B, page body 0.24 MB, build 4.6-5.1 ms — every other sub-metric inside its line) against the < 0.060 s line; classified as corpus growth, not a product regression: the dumps wall is the collector's own stdlib json.dumps re-serialization of the emitted deltas — the same bytes the serialized sub-metric counts — and its throughput is unchanged since the landing (16.8 MB / 71 ms ≈ 237 MB/s vs the 2026-09-12 landing's 6.3 MB / 24-25 ms ≈ 250 MB/s), while the corpus's largest tool_result grew 1.11 → 13.77 MB and its event count 693 → 2314; serialized 16.8 MB sits inside its 30 MB line, so the dumps line is recalibrated to that line's own implied floor, median < 0.130 s (30 MB at the measured throughput), with this PR | the two sub-metrics are one measurement — bytes and the time to re-serialize them — and the 60 ms line sat below the serialized line's own 30 MB bound's implied cost, so a corpus growing inside the serialized line could still trip the dumps line; the pair now bound the same quantity |
 | 2026-09-15 | this PR | M74 collector repaired: standing reading classified as corpus-gate drift, not a product regression — the selector took the largest on-disk raw log regardless of session family, and the worst log drifted to a charlie-code session (16.3 MB carrying one 15.0 MB observation line; component floor measured standalone over three rounds: read 2.1-9.5 ms, parse 35.7-43.4 ms, project 0.1-0.3 ms), a family the turn-end model-attribution gate (`_CLAUDE_RESUME_FLAG_BACKEND_TYPES`, the live call site's own check) never scans — the standing 0.0363 s loop-lag median, max 0.0455 s (wall 0.0385 s) priced a shape the live turn-end path cannot run; repaired selector gates the corpus to the gate's own session set (the set imported from master_cc_run, so collector and call site cannot drift) and builds the scan's translate from the corpus session's own resolved option; the worst claude-family corpus is the 9.9 MB / 391-line log of session 4fcd4c43 (largest line 1.06 MB) — the 2026-09-09 landing's calibration corpus, a smaller file than the 10.1 MB / 64-line charlie-code log the 2026-09-13 landing's row names as its own corpus (that landing's readings were already on a drifted, mis-shaped corpus): loop-lag median 0.0073/0.0072 s, maxima 0.0110/0.0103 s; wall median 0.0074/0.0073 s over two runs of the repaired collector (load 3.0-3.7 and 2.4-2.8 one-minute) — inside the unchanged < 0.030 s line; collector command only, no product code | the definition's own first sentence scopes the metric to claude-family turns ("every claude-family master turn ends with the model-attribution rescan"); without the gate the worst-corpus resolution tracks whichever backend happens to write the biggest tool output, and the line trips on a path the server does not run |
 | 2026-09-15 | #1647 (row recorded in this docs-only follow-up per the #1046 precedent, the landing PR shipped without it) | M99 server import floor, `import server` (fresh process) median 0.643/0.634/0.635/0.635/0.645/0.637 → 0.618/0.612/0.626/0.599/0.597/0.596 s, −9 to −48 ms (−1.4 % to −7.5 %, mean ≈ −30 ms), every paired round faster (six interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, five fresh processes per arm per round, load 2.58-2.69 one-minute; an earlier trio at load 3.56-4.86 — a sibling worktree's full-suite pytest on the host, the cron-collision bias the M56 history documents — read two of three paired rounds faster and is excluded from the paired claim); component attribution: pages.py's module-level `_get_git_version()` ran two git subprocesses measured standalone at 25.0/25.1/25.5 ms over three interleaved pairs, and files.py's top-level `plan_diff` import read cum 7.0 ms in the server's `-X importtime` tree — after the change, pages' import carries zero git children and files' import zero plan_diff children; no-regression witness: the verbatim M103 collector against the branch (the `/` render is the path the lazy git moved onto; its cost lands on the untimed cold pass) reads GET /diff median 684 us, GET / median 1129 us, GET /api/git/repos median 502 us against the standing same-day readings 896/1199/404 us — all inside their healthy ranges; 5458-passed suite, ruff clean | the server import floor still carried two one-time init costs with no startup user: the page-render-only git version subprocesses (the same shape buildinfo already defers to its `init_build_info()` startup call) and a diff-view-only module import; both now load on first use — the version memoizes on the first render that reads it, plan_diff imports inside `_annotated_diff_page` — the #1643 deferral shape, and the < 0.75 s line keeps ~10 % headroom at the after medians (0.596-0.626 s) |

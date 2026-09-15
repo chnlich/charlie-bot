@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -137,3 +138,58 @@ async def test_drop_mid_feed_discards_and_reruns(tmp_path: Path, monkeypatch: py
   assert feeds >= 3  # the dropped run's feeds plus the rerun's
   assert mgr._aggregators[sid] is aggregator
   assert aggregator.emit_stream_deltas is True
+
+
+@pytest.mark.asyncio
+async def test_catchup_init_reenables_gc_on_success_and_drop(tmp_path: Path) -> None:
+  """The init's gc.disable is process-wide (the init runs on server threads), so an init
+  that leaves GC disabled — the success path or the drop path's rerun — would silently
+  turn off collection for the server's remaining lifetime."""
+  import gc
+
+  real_gc = sessions_module.gc
+  states: list[str] = []
+
+  class SpyGC:
+
+    def __getattr__(self, name: str) -> Any:
+      return getattr(real_gc, name)
+
+    def disable(self) -> None:
+      states.append("off")
+      real_gc.disable()
+
+    def enable(self) -> None:
+      states.append("on")
+      real_gc.enable()
+
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
+  mgr = SessionManager(cfg)
+  sid = await _seed_session(mgr)
+
+  with patch.object(sessions_module, "gc", SpyGC()):
+    aggregator = await mgr._get_or_init_aggregator(sid)
+  assert states == ["off", "on"]
+  assert gc.isenabled()
+  assert mgr._aggregators[sid] is aggregator
+
+  original = SessionManager._load_aggregator_init_inputs
+  loads = 0
+
+  def dropping_load(self: SessionManager, session_id: str) -> tuple[list[dict], int]:
+    nonlocal loads
+    loads += 1
+    inputs = original(self, session_id)
+    if loads == 1:
+      self._drop_session_runtime_state(session_id)
+    return inputs
+
+  states.clear()
+  mgr._aggregators.pop(sid, None)
+  with patch.object(sessions_module, "gc", SpyGC()):
+    with patch.object(SessionManager, "_load_aggregator_init_inputs", dropping_load):
+      rerun = await mgr._get_or_init_aggregator(sid)
+  assert loads == 2  # the dropped init plus the rerun
+  assert states == ["off", "on", "off", "on"]
+  assert gc.isenabled()
+  assert mgr._aggregators[sid] is rerun

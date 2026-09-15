@@ -45,7 +45,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M32 memory-store assemble, steady state | M32 collector below | seconds per `assemble_master` call, live memory corpus | median < 0.005 s | — (introduced with its first history row) |
 | M33 assistant-stream draft render, full-turn replay | M33 collector below | seconds per replay of the largest on-disk assistant draft, 200 B deltas at 40 ms virtual cadence | median < 0.1 s | — (introduced with its first history row) |
 | M34 worker-events poll fetch at rendered count | M34 collector below | seconds + response bytes per events fetch, worst on-disk worker log | after=total median < 0.02 s; empty-tail body < 200 B; full fetch body < 200 KB (recalibrated from < 300 KB: each projected tool_result row's output is trimmed to TOOL_PREVIEW_CHARS — 500 chars, the client's inline-render bound — so the body scales with oversized-row count, not corpus bytes; see the 2026-09-14 history row) | — (introduced with its first history row) |
-| M35 chat message-page responses, steady state | M35 collector below | seconds per request, worst projection corpus | events page median < 0.03 s | — (introduced with its first history row) |
+| M35 chat message-page responses, steady state | M35 collector below | seconds per request, worst projection corpus | events page median < 0.004 s (recalibrated from < 0.03 s: the old line sat on the TestClient harness floor and never saw the middleware's deflate — the repaired raw-ASGI drive reads the served path at 1.0-1.4 ms across the landing round's loads 2.4-3.0, the cron-collision bias the M56 history documents) | — (introduced with its first history row) |
 | M36 worker list poll payload and handler time, steady state | M36 collector below | seconds per list request + response body bytes, worst thread-metadata corpus; the conditional repeat (?etag=) of an unchanged poll | full median < 0.004 s (recalibrated from < 0.02 s: the old line sat on the TestClient/httpx harness floor the 2026-09-15 repair removed — the served path reads 1.3-1.6 ms across the repair round's loads 3.1-3.7, the cron-collision bias the M56 history documents; see that history row); full decoded body < 200 KB; conditional body 0 B (204) | — (introduced with its first history row) |
 | M37 archived-session chat tail page, steady state | M37 collector below | seconds per `parse_ndjson_tail(200)` call, worst on-disk archived live file | median < 0.005 s | — (introduced with its first history row) |
 | M38 session stream-broadcast fan-out, worst on-disk turn replay | M38 collector below | stream frames and wire-serialize calls/seconds per turn replay, instant feed, one subscriber | serialize total < 0.02 s; final-frame parity true | — (introduced with its first history row) |
@@ -1973,24 +1973,28 @@ EOF
 
 M35 — chat message-page responses (events/view/bootstrap), steady state. The chat
 pagination endpoint (``GET /api/sessions/{id}/events``), the SPA-switch session view,
-and the bootstrap payload return their message pages through FastAPI's default
-response path, whose jsonable_encoder walk measures ~3x a plain json.dumps on the
-211-message / 559 KB worst projection page (9 ms vs 3 ms) — the same gap the M34
-envelope documented on mapped pydantic lists — while the memoized projection behind
-the page serves O(page) (M26), so the encoder pass is the endpoint's dominant
-server-side cost. The fixed handlers return a JSONResponse over the payload
-directly; every field is already a plain parsed-JSON type or
-``model_dump(mode="json")`` output, so the dumped body is byte-identical. The cost
+and the bootstrap payload return their message pages through FastJSON renders whose
+bodies ride the production gzip middleware — the browser's page fetch always sends
+``Accept-Encoding: gzip``, so each response's deflate is part of the served shape.
+The events page serves its rendered body from the projection's own cache (M26); the
+fixed form memoizes the page's gzip form beside the plain one and ships it with
+``Content-Encoding`` set upstream, which is what makes the middleware skip its own
+per-request pass (the M72 listing-serve mechanism) — one level-1 deflate per page
+per projection generation, in the executor, instead of one per click. The cost
 is per page click / SPA switch, invisible to the standing HTTP probes, so the
 collector snapshots the worst projection corpus (the session with the most live
 chat events) into one shared scratch ``CHARLIEBOT_HOME`` (live home read once for
-the copy, never written) and drives the three endpoints through TestClient in each
-checkout's process: one cold pass per endpoint, as at first view after a server
-start, then five timed requests, with digests read off the last timed response so
-the view/bootstrap mark_read write-once cannot skew the cross-checkout comparison.
-Evidence points the same collector at the before and after checkouts (``CHECKOUT``
-at each root, shared ``M35_HOME`` snapshot), asserting byte-identical bodies, the
-same shape as the M7 protocol. Snapshot once:
+the copy, never written) and drives the three endpoints raw-ASGI behind the
+production gzip middleware in each checkout's process — the served path the
+middleware and route actually run; a TestClient drive adds ~1.5-2 ms of httpx
+harness per request and skips the middleware whose deflate the browser's fetch
+always pays, the vacuous-read class the M36/M59 repairs called out: one cold pass
+per endpoint, as at first view after a server start, then five timed requests, with
+digests read off the decoded last timed response so the view/bootstrap mark_read
+write-once cannot skew the cross-checkout comparison. Evidence points the same
+collector at the before and after checkouts (``CHECKOUT`` at each root, shared
+``M35_HOME`` snapshot), asserting identical decoded bodies, the same shape as the
+M7 protocol. Snapshot once:
 
 ```bash
 /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
@@ -2016,15 +2020,15 @@ Then run per checkout (``eval`` the snapshot export first):
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import hashlib, os, sys, time
+import asyncio, gzip, hashlib, json, os, sys, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from server import _CharlieBotGZipMiddleware
 import src.api.deps as deps
-from src.api.deps import get_session_manager, get_thread_manager
+from src.api.deps import get_config, get_session_manager, get_thread_manager
 from src.api.sessions import router as sessions_router
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
@@ -2043,28 +2047,76 @@ app.include_router(sessions_router, prefix="/api/sessions")
 app.dependency_overrides[get_session_manager] = lambda: mgr
 app.dependency_overrides[get_thread_manager] = lambda: ThreadManager(cfg)
 app.dependency_overrides[get_config] = lambda: cfg
-client = TestClient(app)
+# The production middleware chain: the browser's page fetch always sends
+# Accept-Encoding: gzip, so the body's deflate is part of the served shape —
+# a bare app reads the render floor alone.
+app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
 
-def timed(url, params):
-    client.get(url, params=params)  # cold pass, as at first view after a server start; not timed
-    times = []
-    body = None
+
+def scope(url, query=b""):
+    return {
+        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1", "method": "GET", "scheme": "http",
+        "path": url, "raw_path": (url + ("?" + query.decode() if query else "")).encode(),
+        "query_string": query, "root_path": "",
+        "headers": [(b"host", b"test"), (b"accept-encoding", b"gzip")],
+        "client": ("test", 123), "server": ("test", 80),
+    }
+
+
+async def drive(url, query=b""):
+    body = b""
+    out = {"status": 0, "encoding": b""}
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        nonlocal body
+        if msg["type"] == "http.response.start":
+            out["status"] = msg["status"]
+            out["encoding"] = dict(msg.get("headers", [])).get(b"content-encoding", b"")
+        elif msg["type"] == "http.response.body":
+            body += msg.get("body", b"")
+
+    t0 = time.perf_counter()
+    await app(scope(url, query), receive, send)
+    return time.perf_counter() - t0, body, out
+
+
+def digest(decoded):
+    return hashlib.sha256(json.dumps(json.loads(decoded), sort_keys=True).encode()).hexdigest()[:12]
+
+
+async def timed(url, query=b""):
+    _, _, out = await drive(url, query)  # cold pass, as at first view after a server start; not timed
+    encoding = out["encoding"]
+    times, wire, decoded_size, digests = [], 0, 0, set()
     for _ in range(5):
-        t0 = time.perf_counter()
-        r = client.get(url, params=params)
-        times.append(time.perf_counter() - t0)
-        body = r.content
+        dt, body, out = await drive(url, query)
+        assert out["status"] == 200, (url, out["status"])
+        decoded = gzip.decompress(body) if out["encoding"] == b"gzip" else body
+        times.append(dt)
+        wire = len(body)
+        decoded_size = len(decoded)
+        digests.add(digest(decoded))
     times.sort()
-    return times, body
+    assert len(digests) == 1, f"repeat bodies differ: {digests}"
+    return times, wire, decoded_size, digests.pop(), encoding
 
-ev_t, ev_b = timed(f"/api/sessions/{SID}/events", {"before": BEFORE_N, "limit": 200})
-vw_t, vw_b = timed(f"/api/sessions/{SID}/view", None)
-bt_t, bt_b = timed(f"/api/sessions/{SID}/bootstrap", None)
-d = lambda b: hashlib.sha256(b).hexdigest()[:12]
-print(f"events page median {ev_t[2] * 1000:.2f} ms, max {ev_t[-1] * 1000:.2f} ms ({len(ev_b)} B); "
-      f"view median {vw_t[2] * 1000:.2f} ms, max {vw_t[-1] * 1000:.2f} ms ({len(vw_b)} B); "
-      f"bootstrap median {bt_t[2] * 1000:.2f} ms, max {bt_t[-1] * 1000:.2f} ms ({len(bt_b)} B); "
-      f"digests events {d(ev_b)} view {d(vw_b)} bootstrap {d(bt_b)}")
+
+async def main():
+    ev_t, ev_wire, ev_dec, ev_d, ev_enc = await timed(
+        f"/api/sessions/{SID}/events", f"before={BEFORE_N}&limit=200".encode())
+    vw_t, vw_wire, vw_dec, vw_d, vw_enc = await timed(f"/api/sessions/{SID}/view")
+    bt_t, bt_wire, bt_dec, bt_d, bt_enc = await timed(f"/api/sessions/{SID}/bootstrap")
+    print(f"checkout {os.path.basename(os.environ['CHECKOUT'])}: events median {ev_t[2]*1000:.2f} ms, "
+          f"max {ev_t[-1]*1000:.2f} ms (wire {ev_wire} B, decoded {ev_dec} B, enc {ev_enc.decode() or 'none'}, digest {ev_d}); "
+          f"view median {vw_t[2]*1000:.2f} ms, max {vw_t[-1]*1000:.2f} ms (wire {vw_wire} B, decoded {vw_dec} B, digest {vw_d}); "
+          f"bootstrap median {bt_t[2]*1000:.2f} ms, max {bt_t[-1]*1000:.2f} ms (wire {bt_wire} B, decoded {bt_dec} B, digest {bt_d})")
+
+
+asyncio.run(main())
 EOF
 ```
 
@@ -6688,6 +6740,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-15 | this PR | M35 events page, repaired collector: 4.27/4.55/4.55/4.51/4.71 → 1.08/0.98/1.12/1.14/1.42 ms medians, −73 % to −79 %, maxima 4.66-5.28 → 1.43-1.72 ms, every paired round faster (five interleaved rounds of the repaired collector — main checkout before vs branch worktree after back-to-back, shared snapshot of the 20534-event worst projection corpus, wire 104697 B and decoded 293374 B with parsed digest 2b451eddaa4c identical across all ten arms, load 2.4-3.0 one-minute); component attribution: the replaced middleware pass's level-1 deflate of the 293374 B page measures 2.94 ms median standalone (wire 104697 B) — the served click's dominant slice, which the middleware re-ran inside the send path on every request; no-regression witnesses on the same snapshot, interleaved ×5: view 3.36/3.11/3.31/3.30/3.22 → 3.17/3.12/3.96/3.59/3.36 ms and bootstrap 2.19/2.36/2.39/2.50/2.33 → 2.27/2.07/2.74/2.20/2.33 ms (both handlers untouched, their middleware deflate remains), digests 7b56cc98190e / 4193328a2e6f identical across all ten arms; M26 projection advance 0.20/0.17/0.16 → 0.21/0.22/0.13 ms with parity True digest e94c56635194 and M63 /view handler 0.54/0.62/0.43 → 0.59/0.41/0.44 ms interleaved ×3; 5422-passed suite + 11 skipped, ruff and yapf clean, plus 3 new tests (precompressed serve with decompressed parity and the vary header, repeat-click zero re-compress, advance-recompress); M35 events-page healthy range recalibrated < 0.03 s → < 0.004 s with this PR | the chat pagination endpoint served its memoized page body plain, so the browser's gzip-accepting fetch paid the middleware's whole-body level-1 deflate on every page click — 2.94 ms of the 4.27-4.71 ms served request on the 293374 B worst page — although the published projection is immutable and the page body is already memoized; the page's gzip form now rides the same projection generation as the plain body (one off-loop deflate per page per generation, mtime=0 deterministic, Content-Encoding set upstream makes the middleware skip its own pass — the M72 listing-serve mechanism, the M101 serve's mtime rule), and the standing collector was repaired to the raw-ASGI+gzip drive in the same PR because the TestClient drive had never seen the middleware's deflate — the vacuous-read class the M36/M59 repairs called out |
 | 2026-09-15 | this PR | M59 worker thread-detail poll, repaired collector: full row 1.91/1.81/1.78 → 1.31/1.38/1.52 ms medians, −15 % to −31 %, maxima 2.43/2.25/2.29 → 1.45/1.71/2.86 ms; attach mode 1.72/1.71/1.67 → 0.44/0.45/0.44 ms medians, −74 % to −75 %, maxima 1.98/1.88/1.78 → 0.47/0.51/0.56 ms, body 48 B both arms (three interleaved rounds of old TestClient drive vs new raw-ASGI drive back-to-back, same main-checkout code and worst corpus in all arms, load 3.1-3.7 one-minute, 99.9 KB metadata.json, live state read-only; decoded body 50206 B and parsed digest 7184f3458354 identical across every arm, wire 22140 B under the mounted middleware); component attribution, same app + overrides, fresh drives at load ~2.4: TestClient repeat 1.92 ms vs raw-ASGI bare 0.42 ms (harness ~1.5 ms) and raw-ASGI+gzip 1.27 ms (the 50206 B row's deflate + middleware hop 0.85 ms); M59 healthy ranges recalibrated < 0.005 s → full row < 0.003 s, attach < 0.001 s with this PR | the same harness disease as the M36 repair in the same PR: the TestClient drive paid ~1.5 ms of httpx harness per request and skipped the middleware's deflate, reading the 5 s attach poll at 1.7 ms against a 0.44 ms served truth |
 | 2026-09-15 | this PR | M36 worker list poll, repaired collector: full poll 2.02/2.15/2.10 → 1.58/1.35/1.34 ms medians, −22 % to −37 %, maxima 2.79/2.92/2.71 → 1.70/1.85/1.77 ms; conditional poll 1.96/1.96/1.98 → 1.44/0.59/0.61 ms medians, body 0 B (204) both arms (three interleaved rounds of old TestClient drive vs new raw-ASGI drive back-to-back, same main-checkout code and worst corpus in all arms, load 3.1-3.7 one-minute, 2551 KB thread metadata over 339 rows in session 3b91d606, live state read-only; decoded body 106314 B and parsed digest 8946dac083ec identical across every arm — the old drive's body bytes are the new drive's decoded bytes; wire 15077 B under the mounted middleware); component attribution, same app + overrides, fresh drives at load ~2.4: TestClient repeat 2.01 ms vs raw-ASGI bare 0.51 ms — the httpx layer is ~1.5 ms of harness per request — and raw-ASGI+gzip 1.17 ms, the 106314 B body's deflate + middleware hop 0.66 ms; M36 full median healthy range recalibrated < 0.02 s → < 0.004 s with this PR | the standing collector timed the harness, not the served path — the vacuous-read class the M57/M70/M72 repairs called out — and skipped the gzip middleware whose deflate the browser's 3 s poll always pays; the raw-ASGI drive (the M101/M72 pattern) reads the served path the middleware and route actually run |
 | 2026-09-15 | this PR | M95 failed-iteration judgment pair median 40.52/40.97/41.17 → 6.65/8.87/6.48 ms, −78 % to −84 %, maxima 44.06-46.03 → 6.61-9.33 ms, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, 9.8 MB / 232-line worst on-disk worker log carrying one 9.5 MB tool_result line, live home read-only, resolved blocker/summary identical across all six arms, load 1.67-2.37 one-minute); component attribution: the prefilter-only draft read 27.7-30.8 ms (the parse gone, the 9.5 MB line's window walk + one 9.5 MB join left — a reject-all walk measures 14.2 ms standalone), the head-fragment join-skip removed the join; review-scan parity witnessed with five paired rounds at the elevated load: 1.07-1.15 → 1.09-1.39 ms medians (the early-stop shape the filter cannot slow; the morning's standing 0.60-0.64 ms read the lower load); no-regression witnesses on the branch: M31 steady-state events-summary read 0.0009 s (standing 0.0008 s) and M78 whole-file parse 51.1 ms chat / 42.6 ms worker log (standing 52.7/43.8 ms) — both ride the changed walk unfiltered; 5420-passed suite + 11 skipped, ruff and yapf clean, plus 3 new tests (the filter's keep/skip matrix over both writer shapes, the from-the-end filtered parity over a multi-window giant line, the `_newest_first_events` prefiltered parity with the judgments); M95 judgment-pair healthy range recalibrated < 0.050 s → < 0.012 s with this PR | the failed-iteration judgment pair's no-match exhaustion parsed the whole worst log — the ~35 ms orjson floor on its one 9.5 MB tool_result line — although both judgments match on five event types alone; the newest-first walk now takes a raw-line parse filter: a line whose head opens `{"type"` with a value outside the candidate set is skipped unparsed, and the walker extends the filter to a multi-window line's head fragment so a rejected head skips the 9.5 MB join too; the filter skips only what it can prove (every writer leads with `type`, one key per line), so any other shape parses — the walk's answers are identical, pinned by parity tests |

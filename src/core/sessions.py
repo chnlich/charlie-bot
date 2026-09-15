@@ -229,21 +229,18 @@ def has_running_tasks_sync(threads_dir: Path, walked: list | None = None) -> boo
 # that follows any write to the session, and re-reading every trigger file
 # dominated the probe (~3.6 ms per probe on the 101-file worst corpus); a repeat
 # scan pays one scandir + stat per file and reads only files whose signature
-# moved. Every trigger-file write (_save_trigger, recover_pending's schema
-# migration) publishes through the atomic tmp-file rename, so any content change
-# moves mtime_ns and an unchanged (mtime_ns, size) proves the content current
-# (the stat-before-read race contract is StatSignatureMemo's). Stored dicts are
-# shared across calls — consumers must treat them as read-only.
+# moved — the same rename-publish ground TriggerManager.list_triggers
+# (src/core/triggers.py) states once for both memos (the stat-before-read race
+# contract is StatSignatureMemo's). Stored dicts are shared across calls —
+# consumers must treat them as read-only.
 _TRIGGER_META_MEMO_LIMIT = 1024
 _trigger_meta_memo: StatSignatureMemo[str, dict] = StatSignatureMemo(_TRIGGER_META_MEMO_LIMIT)
 
 # The trigger scan's directory verdict: dir path -> (dir (mtime_ns, size),
-# pending count, earliest fire). Every trigger-file write publishes through the
-# atomic rename INTO the triggers directory, and a rename that creates,
-# replaces, or removes a directory entry moves the directory's own mtime_ns —
-# so an unchanged directory signature proves the derived state current, and the
-# steady-state scan serves it for one directory stat without the scandir+stat
-# walk or the per-file memo loop.
+# pending count, earliest fire). Signed on the directory's (mtime_ns, size) on
+# the rename-publish ground TriggerManager.list_triggers (src/core/triggers.py)
+# states once; the steady-state scan serves it for one directory stat without
+# the scandir+stat walk or the per-file memo loop.
 _TRIGGER_STATE_VERDICT_LIMIT = 1024
 _trigger_state_verdicts: BoundedMemo[str, tuple[tuple[int, int], int,
                                                 datetime | None]] = BoundedMemo(_TRIGGER_STATE_VERDICT_LIMIT)
@@ -264,14 +261,11 @@ def pending_trigger_state_sync(
 
   Steady state pays one directory stat: an unchanged (mtime_ns, size) of the
   directory serves the stored verdict without the scandir+stat walk or the
-  per-file memo loop. Every trigger-file write publishes through the atomic
-  rename into the directory — a rename that creates, replaces, or removes an
-  entry moves the directory's own mtime_ns — the same ground the per-file
-  memo's key stands on; a file edited in place (no rename) would evade the
-  directory proof. The signature is taken before the walk, so a write landing
-  mid-walk moves the directory past the stored signature and the next call
-  re-walks; within one proved directory state, a file that fails to parse
-  re-reads and re-warns once for that state, not once per call.
+  per-file memo loop, on the rename-publish ground TriggerManager.list_triggers
+  (src/core/triggers.py) states once. The signature is taken before the walk,
+  so a write landing mid-walk moves the directory past the stored signature and
+  the next call re-walks; within one proved directory state, a file that fails
+  to parse re-reads and re-warns once for that state, not once per call.
 
   *walked* supplies (path, stat) pairs a caller already walked, replacing this
   scan's own scandir+stat phase; *dir_sig* must then be the directory's

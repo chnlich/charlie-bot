@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from src.agents.backends.openai_compatible_claude import OpenAICompatibleClaudeBackend
 from src.agents.backends.registry import build_backend
 from src.api.anthropic_proxy import router as proxy_router
+from src.api.deps import get_config_on_loop
 from src.core.config import CharlieBotConfig, get_config
 
 _PROXY_PREFIX = "/api/anthropic-proxy"
@@ -91,6 +92,9 @@ def _build_client(cfg: CharlieBotConfig) -> TestClient:
   app = FastAPI()
   app.include_router(proxy_router, prefix=_PROXY_PREFIX)
   app.dependency_overrides[get_config] = lambda: cfg
+  # The route resolves cfg through the on-loop dependency (same instance the
+  # sync key serves), so both keys carry the override.
+  app.dependency_overrides[get_config_on_loop] = lambda: cfg
   return TestClient(app)
 
 

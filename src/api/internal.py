@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import (
     bad_request,
+    get_config_on_loop,
     get_plan_manager,
     get_session_manager,
     get_thread_manager,
@@ -316,7 +317,7 @@ async def cancel_trigger(
 async def session_message(
     req: SessionMessageRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   """Relay an agent message into another session's event log and wake its master.
 
@@ -362,7 +363,7 @@ async def session_message(
 async def slack_reply(
     req: SlackReplyRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   """Post the calling session's reply to its own Slack thread and return the readback.
 
@@ -386,7 +387,7 @@ async def slack_reply(
 async def slack_ack(
     req: SlackAckRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   """Mark the calling session's read thread messages as consumed and return the readback.
 

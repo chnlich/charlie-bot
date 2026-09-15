@@ -23,7 +23,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.responses import Response
 
 from src.api.code_server import is_code_server_available
-from src.api.deps import SESSION_NOT_FOUND_DETAIL, get_session_manager
+from src.api.deps import SESSION_NOT_FOUND_DETAIL, get_config_on_loop, get_session_manager
 from src.api.message_utils import build_session_bootstrap_data
 from src.api.sessions import _bootstrap_payload, _default_backend_id
 from src.core.config import CharlieBotConfig, get_config, get_credentials
@@ -684,7 +684,7 @@ async def token_usage_viewer(request: Request) -> HTMLResponse:
 
 
 @router.get("/diff", response_class=HTMLResponse)
-async def diff_viewer(request: Request, cfg: CharlieBotConfig = Depends(get_config)) -> HTMLResponse:
+async def diff_viewer(request: Request, cfg: CharlieBotConfig = Depends(get_config_on_loop)) -> HTMLResponse:
   """Render the GitHub-style diff viewer page."""
   return templates.TemplateResponse(
       request,
@@ -697,7 +697,7 @@ async def diff_viewer(request: Request, cfg: CharlieBotConfig = Depends(get_conf
 
 
 @router.get("/home", response_class=HTMLResponse)
-async def home_page(request: Request, cfg: CharlieBotConfig = Depends(get_config)) -> HTMLResponse:
+async def home_page(request: Request, cfg: CharlieBotConfig = Depends(get_config_on_loop)) -> HTMLResponse:
   """Render the home page: this server's destinations plus the per-host external services.
 
   Each external service is probed by TCP-connecting to the host and port parsed out of
@@ -729,7 +729,7 @@ async def index(
     request: Request,
     session: str | None = None,
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> Response:
   """Render the full page with only critical active-session data."""
   load_errors: list[str] = []

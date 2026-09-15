@@ -513,12 +513,15 @@ def _client(cfg: CharlieBotConfig) -> TestClient:
   from fastapi import FastAPI
 
   from src.api import cron as api_cron
-  from src.api.deps import get_session_manager
+  from src.api.deps import get_config_on_loop, get_session_manager
   from src.core.sessions import SessionManager
   session_mgr = SessionManager(cfg)
   app = FastAPI()
   app.include_router(api_cron.router, prefix="/api/cron")
   app.dependency_overrides[get_config] = lambda: cfg
+  # The create/update routes resolve cfg through the on-loop dependency (same
+  # instance the sync key serves), so both keys carry the override.
+  app.dependency_overrides[get_config_on_loop] = lambda: cfg
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   return TestClient(app)
 

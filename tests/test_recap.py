@@ -25,9 +25,10 @@ from src.core.config import CharlieBotConfig
 from src.core.models import SessionMetadata
 from src.core.recap import generate_and_cache_summary
 
-# Import-path patch targets for the recap seams. src/core/recap.py binds build_backend at
-# import scope (`from src.agents.backends.registry import build_backend`) and defines
-# extract_recap, _write_cache_entry, and log at module scope, so patch() lands the stand-in
+# Import-path patch targets for the recap seams. src/core/recap.py binds build_backend
+# lazily through the shared loader (src/agents/backends/deferred_build.py load_build_backend,
+# reached via the module __getattr__) and defines extract_recap, _write_cache_entry, and log
+# at module scope, so patch() lands the stand-in
 # on the src.core.recap module attribute and generate_and_cache_summary reads it at call
 # time; a drifted string copy would patch a name nothing reads.
 _BUILD_BACKEND_PATCH_TARGET = "src.core.recap.build_backend"

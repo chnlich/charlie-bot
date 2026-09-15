@@ -3913,8 +3913,10 @@ whose threads directory carries the most metadata files (the M5 resolution rule)
 that session (metadata.json, data/, threads/) into a scratch `CHARLIEBOT_HOME` under /tmp
 (live home read once for the copy, never written), and times the handler function from the
 checkout under test: one cold pass, as at first view after a server start, then nine timed
-calls. The TestClient-level request cost rides the same harness floor on both arms and
-travels in the PR's Evidence section, not in this row.
+calls. The request seam carries no Accept-Encoding header — the no-gzip client shape — so
+the timed call reads the handler's plain-path work; the served gzip-negotiated request
+rides the M35 collector's view row. The TestClient-level request cost rides the same
+harness floor on both arms and travels in the PR's Evidence section, not in this row.
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
@@ -3955,12 +3957,18 @@ tm = ThreadManager(cfg)
 deps_api._trigger_manager = None
 
 async def main():
+    from starlette.requests import Request
+    # The handler's request seam with no Accept-Encoding header (the no-gzip
+    # client shape): the timed call reads the plain-path handler work.
+    request = Request({"type": "http", "method": "GET",
+                       "path": f"/api/sessions/{SID}/view", "headers": [],
+                       "query_string": b""})
     meta = await mgr.get_session(SID)
-    await sessions_api.get_session_view(SID, meta, mgr, tm, cfg)  # cold pass, as at first view after a server start; not timed
+    await sessions_api.get_session_view(SID, request, meta, mgr, tm, cfg)  # cold pass, as at first view after a server start; not timed
     times, bodies = [], []
     for _ in range(9):
         t0 = time.perf_counter()
-        resp = await sessions_api.get_session_view(SID, meta, mgr, tm, cfg)
+        resp = await sessions_api.get_session_view(SID, request, meta, mgr, tm, cfg)
         times.append(time.perf_counter() - t0)
         bodies.append(len(resp.body))
     times.sort()

@@ -296,6 +296,35 @@ async def _finalize_worker_safely(
       log.warning("spawn_worker_finalize_broadcast_failed", session=ctx.session_id, exc_info=True)
 
 
+async def finalize_thread(
+    session_id: str,
+    description: str,
+    thread: ThreadMetadata,
+    outcome: _WorkerRunOutcome,
+    thread_mgr: ThreadManager,
+    session_mgr: SessionManager,
+    cfg: CharlieBotConfig,
+    *,
+    skip_notify: bool,
+    task_type: TaskType,
+) -> None:
+  """Build the finalize context from one finished run's inputs and run the guarded finalize.
+
+  The spawn and resume paths pass the run's seven context values here instead of
+  assembling ``_FinalizeCtx`` themselves; the context's shape stays the owner's alone.
+  """
+  ctx = _FinalizeCtx(
+      session_id=session_id,
+      description=description,
+      thread=thread,
+      outcome=outcome,
+      thread_mgr=thread_mgr,
+      session_mgr=session_mgr,
+      cfg=cfg,
+  )
+  await _finalize_worker_safely(ctx, skip_notify=skip_notify, task_type=task_type)
+
+
 async def recomplete_finalize_effects(
     session_id: str,
     description: str,

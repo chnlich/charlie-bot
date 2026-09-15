@@ -151,16 +151,16 @@ async def spawn_worker(
     outcome = spawner_finalize._WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error=str(e))
   finally:
     if thread is not None and not cancelled:
-      ctx = spawner_finalize._FinalizeCtx(
-          session_id=session_id,
-          description=description,
-          thread=thread,
-          outcome=outcome,
-          thread_mgr=thread_mgr,
-          session_mgr=session_mgr,
-          cfg=cfg,
-      )
-      await spawner_finalize._finalize_worker_safely(ctx, skip_notify=request.skip_notify, task_type=request.task_type)
+      await spawner_finalize.finalize_thread(
+          session_id,
+          description,
+          thread,
+          outcome,
+          thread_mgr,
+          session_mgr,
+          cfg,
+          skip_notify=request.skip_notify,
+          task_type=request.task_type)
 
 
 # Recovery-event reason recorded when the finalize liveness gate keeps a run
@@ -251,14 +251,13 @@ async def resume_worker(
             f"dead ({RESUME_EXCEPTION_ALIVE_REASON}). It is NOT being killed — left running "
             "and judged again on the next restart.")
       else:
-        ctx = spawner_finalize._FinalizeCtx(
-            session_id=session_id,
-            description=description,
-            thread=thread,
-            outcome=outcome,
-            thread_mgr=thread_mgr,
-            session_mgr=session_mgr,
-            cfg=cfg,
-        )
-        await spawner_finalize._finalize_worker_safely(
-            ctx, skip_notify=False, task_type=thread.task_type or TaskType.IMPLEMENT)
+        await spawner_finalize.finalize_thread(
+            session_id,
+            description,
+            thread,
+            outcome,
+            thread_mgr,
+            session_mgr,
+            cfg,
+            skip_notify=False,
+            task_type=thread.task_type or TaskType.IMPLEMENT)

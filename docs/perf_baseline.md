@@ -2805,15 +2805,17 @@ async def main():
   _, cold_body, cold_out = await drive()  # cold pass, as at first scheduled-tab open after a server start; not timed
   assert cold_out["status"] == 200, (cold_out["status"],)
   times = []
-  bodies = set()
+  digests = set()
   for _ in range(9):
     dt, body, out = await drive()
     times.append(dt)
-    bodies.add(len(decoded_body(body, out["encoding"])))
+    decoded = decoded_body(body, out["encoding"])
+    digests.add(hashlib.sha256(json.dumps(json.loads(decoded), sort_keys=True).encode()).hexdigest()[:12])
   times.sort()
-  # A body changing between repeats is live churn, not determinism: re-measure
-  # rather than compare noise across arms.
-  if len(bodies) != 1:
+  # A body changing between repeats is live churn, not determinism (a next-fire
+  # rollover changes content at the same length): re-measure rather than
+  # compare noise across arms.
+  if len(digests) != 1:
     print("live churn during measurement; re-run")
     raise SystemExit(1)
   wire = len(body)

@@ -85,7 +85,7 @@
       <!-- New session -->
       <div class="p-3 border-b border-slate-700">
         <div class="flex gap-2">
-          <button onclick="createSession()" class="flex-1 flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium transition-colors min-w-0">
+          <button onclick="createSessionOrTask()" class="flex-1 flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium transition-colors min-w-0">
             <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
             <span class="truncate">New Session</span>
           </button>
@@ -205,7 +205,16 @@
           <button onclick="switchTab('chat-backlog')" id="btn-chat-backlog" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Backlog</button>
           <button onclick="switchTab('chat-plans')" id="btn-chat-plans" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Plans</button>
           <button onclick="switchTab('chat')" id="btn-chat" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors bg-blue-600/20 text-blue-300">Chat</button>
-          <button onclick="switchTab('workers')" id="btn-workers" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">
+          <button onclick="switchTab('task')" id="btn-task" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200 {% if not (active_session and active_session.profile) %}hidden{% endif %}">
+            Task
+          </button>
+          <button onclick="switchTab('task-context')" id="btn-task-context" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200 {% if not (active_session and active_session.profile) %}hidden{% endif %}">
+            Context
+          </button>
+          <button onclick="switchTab('runs')" id="btn-runs" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200 {% if not (active_session and active_session.profile) %}hidden{% endif %}">
+            Runs
+          </button>
+          <button onclick="switchTab('workers')" id="btn-workers" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200 {% if active_session and active_session.profile %}hidden{% endif %}">
             Workers
           </button>
         </div>
@@ -303,6 +312,15 @@
       <div id="tab-workers" class="flex-1 overflow-y-auto p-4 space-y-3 hidden">
         <div id="no-workers-placeholder" class="flex items-center justify-center h-full text-slate-500 text-sm">No worker threads</div>
       </div>
+
+      <!-- ===== TASK TAB (v2 task nodes; task-panel.js owns the contents) ===== -->
+      <div id="tab-task" class="flex-1 overflow-y-auto p-4 space-y-3 hidden"></div>
+
+      <!-- ===== CONTEXT TAB (v2 task nodes; task-context.js owns the contents) ===== -->
+      <div id="tab-task-context" class="flex-1 overflow-y-auto p-4 space-y-3 hidden"></div>
+
+      <!-- ===== RUNS TAB (v2 task nodes; task-runs-panel.js owns the contents) ===== -->
+      <div id="tab-runs" class="flex-1 overflow-y-auto p-4 space-y-3 hidden"></div>
 
       <div id="latex-resize-handle" class="resize-handle" style="display:none"></div>
 
@@ -495,6 +513,10 @@
   <script src="/static/js/sidebar/archived.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/session-view.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/modals.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/sidebar/session-tree.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/task-panel.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/task-context.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/task-runs-panel.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/workers.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/voice-input.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/latex-panel.js?v={{ static_asset_version|urlencode }}"></script>

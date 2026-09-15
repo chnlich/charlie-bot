@@ -14,20 +14,21 @@ from typing import Any
 import aiofiles
 
 from src.api.message_utils import build_scheduled_trigger_event
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config
 from src.core.json_utils import write_model_json_atomically
 from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.models import (
-    LocalPid,
-    PendingTrigger,
-    RemotePid,
-    SessionStatus,
-    SlurmJob,
-    TriggerStatus,
-    WatchKind,
-    WatchTarget,
+  LocalPid,
+  PendingTrigger,
+  RemotePid,
+  SessionStatus,
+  SlurmJob,
+  TriggerStatus,
+  WatchKind,
+  WatchTarget,
 )
 from src.core.sessions import SessionManager
 from src.core.sidebar_state import mark_sidebar_dirty
@@ -795,26 +796,47 @@ class TriggerManager:
     else:
       trigger_message = f"[Scheduled trigger fired] {fresh.message}"
 
+    # Established aliases resolve to the canonical task without changing its
+    # ownership: a trigger recorded against a pre-tree (imported) session id
+    # delivers to the same node. The trigger file stays where it was written;
+    # only the delivery target resolves.
+    deliver_to = self._tree_alias_target(fresh.session_id) or fresh.session_id
+
     # Fresh chain read, and the fire path's missing-metadata guard: a
     # metadata.json deleted or blanked mid-wait cancels here instead of
     # delivering into a vanished session. The archived-no-successor call and
     # the redirect live below (_is_dormant_target, deliver_to_successor).
-    resolved_tail = await self._session_mgr.resolve_successor_chain(fresh.session_id)
+    resolved_tail = await self._session_mgr.resolve_successor_chain(deliver_to)
     if resolved_tail is None:
       await self._cancel_undeliverable(fresh, reason="metadata_unavailable")
       return
 
     # Race backstop: the watchdog covers the wait, so this fire-time re-check of
     # the same predicate catches an archive landing in the final stretch.
-    if await self._is_dormant_target(fresh.session_id):
+    if await self._is_dormant_target(deliver_to):
       await self._cancel_undeliverable(fresh, reason="archived")
+      return
+
+    # A v2 task-tree node takes the durable dispatcher route: the trigger's
+    # own id is the input's stable identity, so a crash after the durable
+    # admission but before the FIRED stamp replays into the SAME input (a
+    # recovered trigger re-fires, admission dedups, FIRED lands) instead of
+    # duplicating the task input or its process. No second append/wake path
+    # exists on this route.
+    if await self._fire_task_tree(fresh, trigger_message, deliver_to):
+      fresh.status = TriggerStatus.FIRED
+      fresh.fired_at = datetime.now(UTC)
+      fresh.fire_reason = reason
+      await self._save_trigger(fresh)
+      self._tasks.pop(trigger.id, None)
+      log.info("trigger_fired", trigger_id=trigger.id, session=fresh.session_id, reason=reason)
       return
 
     # Deliver the scheduled-trigger event through the succession-aware primitive:
     # it persists into the chain end (stamping origin_session_id when redirected)
     # and returns None only when the chain end no longer exists.
     delivered = await self._session_mgr.deliver_to_successor(
-        fresh.session_id,
+        deliver_to,
         build_scheduled_trigger_event(trigger_message),
     )
     if delivered is None:
@@ -825,7 +847,7 @@ class TriggerManager:
     # captured at construction: backends added to or renamed in config.yaml after
     # server start are invisible to that snapshot.
     await trigger_master(
-        fresh.session_id,
+        deliver_to,
         trigger_message,
         get_config(),
         self._session_mgr,
@@ -841,6 +863,56 @@ class TriggerManager:
     await self._save_trigger(fresh)
     self._tasks.pop(trigger.id, None)
     log.info("trigger_fired", trigger_id=trigger.id, session=fresh.session_id, reason=reason)
+
+  def _tree_alias_target(self, session_id: str) -> str | None:
+    """The canonical task id an established alias maps to, or None."""
+    try:
+      return self._task_tree_provider().aliases.resolve_session(session_id)
+    except Exception:
+      log.exception("trigger_alias_resolution_failed", session=session_id)
+      return None
+
+  async def _fire_task_tree(self, trigger: PendingTrigger, trigger_message: str,
+                            session_id: str | None = None) -> bool:
+    """The v2 delivery: durable scheduled input to the stable node + dispatch.
+
+    Returns False when the target is not a task-tree node (the legacy route
+    serves it). *session_id* is the alias-resolved delivery target. A missing
+    canonical node is a visible refusal, not a legacy fallback.
+    """
+    from src.core.task_sessions import TaskForbiddenError, TaskInvalidError, TaskNotFoundError
+
+    task_mgr = self._task_tree_provider()
+    session_id = session_id or trigger.session_id
+    meta = await task_mgr.load_meta(session_id)
+    if meta is None or meta.profile is None:
+      if session_id != trigger.session_id:
+        # An alias resolved but its node is gone: refuse visibly, never fall
+        # back to writing a legacy wake against a dead mapping.
+        log.error("trigger_task_tree_target_missing", trigger_id=trigger.id, session=session_id)
+        await self._cancel_undeliverable(trigger, reason="task_tree_target_missing")
+        return True
+      return False
+    try:
+      await task_mgr.dispatch.admit_input(
+          session_id,
+          event_type=ET.SCHEDULED_TRIGGER,
+          content=trigger_message,
+          actor="system",
+          input_id=trigger.id,
+      )
+      await task_mgr.dispatch.dispatch_pending(session_id)
+    except (TaskNotFoundError, TaskForbiddenError, TaskInvalidError) as e:
+      log.error("trigger_task_tree_delivery_failed", trigger_id=trigger.id,
+                session=session_id, error=str(e))
+      raise
+    log.info("trigger_delivered_to_task_tree", trigger_id=trigger.id, session=session_id)
+    return True
+
+  def _task_tree_provider(self):
+    """The task-tree owner singleton (lazy import keeps the API layering)."""
+    from src.api.deps import task_manager
+    return task_manager()
 
   async def _wait_with_pidfd(
       self,

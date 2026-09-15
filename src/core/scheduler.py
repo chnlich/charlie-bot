@@ -193,7 +193,9 @@ class Scheduler:
     task_cfg = task_map.get(task_name)
     if task_cfg is None:
       raise ValueError(f"No scheduled task named '{task_name}'")
-    return await self._execute_task(task_cfg)
+    # A manual run is an intentional new firing: its identity (the fire time)
+    # is distinct from every cron occurrence's due-time identity.
+    return await self._execute_task(task_cfg, firing=datetime.now(UTC).isoformat())
 
   # ---------------------------------------------------------------------------
   # Main loop
@@ -225,7 +227,7 @@ class Scheduler:
       session_cache.setdefault(s.scheduled_task, []).append(s)
 
     for task_cfg in tasks:
-      if task_cfg.enabled:
+      if task_cfg.enabled and not task_cfg.session_id:
         await self._get_or_create_session(task_cfg, cfg, session_mgr, session_cache)
 
     for task_cfg in tasks:
@@ -247,7 +249,15 @@ class Scheduler:
     tz = ZoneInfo(task_cfg.timezone)
     now = datetime.now(tz)
 
-    session = await self._get_or_create_session(task_cfg, cfg, session_mgr, session_cache)
+    if task_cfg.session_id:
+      # A bound task fires against its stable task-tree node: the binding is
+      # validated here (a missing/legacy node fails the tick visibly), never
+      # discovered or replaced.
+      from src.api.deps import task_manager
+      from src.core.cron_sequence import check_fireable_binding
+      session = await check_fireable_binding(task_cfg, task_manager())
+    else:
+      session = await self._get_or_create_session(task_cfg, cfg, session_mgr, session_cache)
     if session is None:
       return
 
@@ -295,7 +305,7 @@ class Scheduler:
         )
         return
       log.info("scheduler_firing", task=task_cfg.name, next_fire=next_fire.isoformat())
-      await self._execute_task(task_cfg, record_handle=True)
+      await self._execute_task(task_cfg, record_handle=True, firing=next_fire.isoformat())
 
   # ---------------------------------------------------------------------------
   # Task execution
@@ -322,14 +332,23 @@ class Scheduler:
     await session_mgr.save_metadata(session)
     return cfg, session_mgr, session
 
-  async def _execute_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
+  async def _execute_task(
+      self, task_cfg: ScheduledTaskConfig, record_handle: bool = False,
+      firing: str | None = None,
+  ) -> dict:
     """Route to handler, loop, prompt, or master execution based on task config.
 
     ``record_handle`` gates whether the background round spawned by this fire is
     registered in the overlap-skip registry. The scheduled path records it via
     ``_maybe_run``; manual ``run_task_now`` leaves it off so manual rounds stay
-    outside the skip judgment.
+    outside the skip judgment. A task bound to a task-tree node (``session_id``)
+    takes the v2 path — the binding is the session, the firing identity is
+    durable, and executions land on Runs; ``firing`` carries the due
+    occurrence's time (an explicit manual fire passes its own).
     """
+    if task_cfg.session_id:
+      return await self._execute_bound_task(
+          task_cfg, record_handle=record_handle, firing=firing or datetime.now(UTC).isoformat())
     if task_cfg.mode == 'master':
       return await self._execute_master_task(task_cfg, record_handle=record_handle)
     if task_cfg.handler:
@@ -339,6 +358,158 @@ class Scheduler:
     if task_cfg.steps:
       return await self._execute_steps_task(task_cfg, record_handle=record_handle)
     return await self._execute_prompt_task(task_cfg, record_handle=record_handle)
+
+  # ---------------------------------------------------------------------------
+  # Bound (task-tree) execution — the v2 path
+  # ---------------------------------------------------------------------------
+
+  async def _execute_bound_task(
+      self, task_cfg: ScheduledTaskConfig, *, record_handle: bool, firing: str,
+  ) -> dict:
+    """Fire one bound task against its stable node (src.core.cron_sequence owns the shapes)."""
+    from src.api.deps import task_manager
+    from src.core.cron_sequence import (
+      check_fireable_binding,
+      fire_bound_master,
+      run_firing_steps,
+    )
+
+    cfg = self._reload_config()
+    tree = task_manager()
+    meta = await check_fireable_binding(task_cfg, tree)
+    await self._record_bound_fire(meta, task_cfg, cfg)
+
+    if task_cfg.mode == 'master':
+      return await fire_bound_master(task_cfg, meta, tree, firing)
+
+    if task_cfg.handler:
+      # The system handler keeps its inline execution; only its bookkeeping
+      # borrows the bound node.
+      return await self._execute_handler_on_bound(task_cfg, meta, tree)
+
+    backend, model = self._resolve_bound_backend_model(task_cfg, tree)
+
+    if task_cfg.steps:
+      leaf = await self._bound_leaf(task_cfg, meta, tree, firing,
+                                    goal=f"{task_cfg.name} steps", backend=backend, model=model)
+      handle = create_logged_task(
+          run_firing_steps(task_cfg, meta, tree, firing, leaf.id),
+          name=f"bound_steps_{task_cfg.name}_{firing}")
+      if record_handle:
+        self._handles[task_cfg.name] = handle
+      return {"session_id": meta.id, "leaf_session_id": leaf.id, "firing": firing}
+
+    prompt, event_description, action = await self._resolve_bound_prompt(task_cfg, meta, cfg)
+    if prompt is None:
+      return {"session_id": meta.id, "firing": firing, "skipped": action}
+    leaf = await self._bound_leaf(
+        task_cfg, meta, tree, firing, goal=prompt, backend=backend, model=model)
+    handle = await self._launch_bound_round(
+        task_cfg, meta, tree, firing, leaf.id, backend=backend, model=model,
+        event_description=event_description, record_handle=record_handle)
+    return {"session_id": meta.id, "leaf_session_id": leaf.id, "firing": firing}
+
+  async def _record_bound_fire(
+      self, meta: SessionMetadata, task_cfg: ScheduledTaskConfig, cfg: CharlieBotConfig,
+  ) -> None:
+    """The scheduler's per-fire bookkeeping on the bound node (same fields as legacy)."""
+    tz = ZoneInfo(task_cfg.timezone)
+    now = datetime.now(tz)
+    meta.last_scheduled_run = now.isoformat()
+    meta.last_scheduled_cron = task_cfg.cron
+    meta.updated_at = datetime.now(UTC)
+    await self._session_mgr.save_metadata(meta)
+
+  def _resolve_bound_backend_model(
+      self, task_cfg: ScheduledTaskConfig, tree,
+  ) -> tuple[str, str | None]:
+    from src.core.cron_sequence import resolved_backend_model
+    return resolved_backend_model(task_cfg, tree, task_cfg.backend)
+
+  async def _resolve_bound_prompt(
+      self, task_cfg: ScheduledTaskConfig, meta: SessionMetadata, cfg: CharlieBotConfig,
+  ) -> tuple[str | None, str, str | None]:
+    """The fire's prompt: the loop action's decision, or the task prompt verbatim.
+
+    Returns (prompt, event_description, action); prompt None means the loop
+    decided nothing to do (noop/stale_reset) and the fire is recorded as such.
+    """
+    if task_cfg.loop:
+      from src.core.backlog_loop import determine_action
+      repo_path = Path(task_cfg.repo) if task_cfg.repo else None
+      if repo_path is None:
+        raise ValueError(f"loop task '{task_cfg.name}' requires 'repo'")
+      action_type, prompt = await determine_action(repo_path / task_cfg.loop.backlog, task_cfg.loop, repo_path)
+      if action_type in ('noop', 'stale_reset'):
+        meta.last_run_status = LastRunStatus.SUCCESS
+        meta.updated_at = datetime.now(UTC)
+        await self._session_mgr.save_metadata(meta)
+        log.info("bound_loop_task_noop", task=task_cfg.name, action=action_type, session=meta.id)
+        return None, "", action_type
+      return prompt, f"[{action_type}] {prompt[:200]}", action_type
+    return task_cfg.prompt or "", "scheduled_task_fired", None
+
+  async def _bound_leaf(
+      self, task_cfg: ScheduledTaskConfig, meta: SessionMetadata, tree,
+      firing: str, *, goal: str, backend: str, model: str | None,
+  ):
+    from src.core.cron_sequence import ensure_firing_leaf
+    return await ensure_firing_leaf(task_cfg, meta, tree, firing, goal, backend, model)
+
+  async def _launch_bound_round(
+      self, task_cfg: ScheduledTaskConfig, meta: SessionMetadata, tree,
+      firing: str, leaf_id: str, *, backend: str, model: str | None,
+      event_description: str, record_handle: bool,
+  ) -> asyncio.Task:
+    """One firing's work round: register, launch (scheduler-owned), await the
+    terminal fact for the overlap registry. The ordinary work-Run delivery
+    chain owns the report/close follow-ups."""
+    from src.core.cron_sequence import launch, register_leaf_run, wait_for_terminal
+
+    async def _round() -> None:
+      run = await register_leaf_run(
+          tree, leaf_id, task_cfg, firing, kind="work", position=None,
+          backend=backend, model=model)
+      launch(tree, leaf_id, run.id, prompt=None)
+      await wait_for_terminal(tree, leaf_id, run.id)
+
+    handle = create_logged_task(_round(), name=f"bound_worker_{task_cfg.name}_{firing}")
+    if record_handle:
+      self._handles[task_cfg.name] = handle
+    log.info("bound_task_fired", task=task_cfg.name, session=meta.id, leaf=leaf_id, firing=firing)
+    return handle
+
+  async def _execute_handler_on_bound(
+      self, task_cfg: ScheduledTaskConfig, meta: SessionMetadata, tree,
+  ) -> dict:
+    """The built-in handler modes on a bound node: inline execution, bound bookkeeping."""
+    handler = TASK_HANDLERS.get(task_cfg.handler)
+    if handler is None:
+      raise ValueError(f"Unknown handler: {task_cfg.handler!r}")
+    session = meta
+    log.info('handler_task_firing', task=task_cfg.name, handler=task_cfg.handler)
+    try:
+      result = await handler()
+      event = {
+          'type': ET.HANDLER_RESULT,
+          'task': task_cfg.name,
+          'status': 'ok',
+          'message': str(result) if result is not None else 'done',
+      }
+      session.last_run_status = LastRunStatus.SUCCESS
+    except Exception as e:
+      log.warning('handler_task_error', task=task_cfg.name, error=str(e), traceback=traceback.format_exc())
+      event = {
+          'type': ET.HANDLER_RESULT,
+          'task': task_cfg.name,
+          'status': 'error',
+          'message': str(e),
+      }
+      session.last_run_status = LastRunStatus.FAILED
+    session.updated_at = datetime.now(UTC)
+    await self._session_mgr.save_metadata(session)
+    await self._session_mgr.persist_and_broadcast(session.id, event)
+    return {'session_id': session.id, 'thread_id': None}
 
   async def _execute_master_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
     """Wake the dedicated session's master with the task prompt plus its group.

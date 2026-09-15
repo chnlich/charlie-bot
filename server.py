@@ -34,7 +34,7 @@ from src.api import (
     voice,
 )
 from src.api.auth import AuthMiddleware, _credential_matches
-from src.api.deps import session_manager, set_trigger_manager, thread_manager
+from src.api.deps import session_manager, set_trigger_manager, task_manager, thread_manager
 from src.core import timeouts
 from src.core.buildinfo import init_build_info
 from src.core.config import CharlieBotConfig, get_config, get_credentials, require_backends
@@ -289,6 +289,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   app.state.recovery_task = asyncio.create_task(_run_crash_recovery(cfg, boot_time, identity))
   app.state.speech_model_task = create_logged_task(
       asyncio.to_thread(_provision_speech_models, cfg), name="speech-model-provisioning")
+
+  # Task-tree (v2) reconciliation is the startup owner's own pass and belongs
+  # BEFORE any door that can start a competing process: a new chat input, a
+  # cron fire, or a recovered trigger must not launch while a recorded live
+  # run is still unattached, a pending batch unclaimed, or a sequence
+  # boundary unreconciled. The scan is bounded to this configured instance's
+  # own sessions directory and its owned records. The legacy (v1) scan stays
+  # on the background task above for unmigrated v1 sessions only.
+  try:
+    from src.core.task_recovery import reconcile_task_tree
+    task_tree_stats = await reconcile_task_tree(cfg, task_manager(), session_mgr)
+    log.info("task_tree_recovery_done", **task_tree_stats)
+  except Exception:
+    log.exception("task_tree_recovery_failed")
 
   scheduler = Scheduler(cfg, session_mgr)
   app.state.scheduler = scheduler

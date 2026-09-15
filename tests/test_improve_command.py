@@ -119,6 +119,7 @@ async def test_loop_state_serialization_includes_all_fields(tmp_path: Path) -> N
       "backend",
       "model",
       "created_at",
+      "server_pid",
   }
 
 

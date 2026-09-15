@@ -174,7 +174,7 @@ async def test_improve_endpoint_creates_background_task(tmp_path: Path) -> None:
   )
 
   session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = MagicMock()  # session exists
+  session_mgr.get_session.return_value = MagicMock(profile=None)  # v1 session exists
 
   thread_mgr = AsyncMock()
 
@@ -205,7 +205,7 @@ async def test_improve_endpoint_creates_background_task(tmp_path: Path) -> None:
        patch("src.api.internal.create_logged_task",
              side_effect=capture_create_logged_task(captured)) as mock_create_task:
     mock_cfg.return_value = cfg
-    result = await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
+    result = await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr, task_mgr=MagicMock())
 
   assert result["status"] == "started"
   assert result["session_id"] == "s1"
@@ -248,7 +248,7 @@ async def test_improve_endpoint_returns_400_for_invalid_backend() -> None:
   req = ImproveRequest(session_id="s1", repo_path="/tmp/repo", base_branch="main", backend="missing", goal="fix")
 
   session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = MagicMock()
+  session_mgr.get_session.return_value = MagicMock(profile=None)
   thread_mgr = AsyncMock()
 
   async def fake_resolve_requested_subagent_backend_model(*args: object, **kwargs: object) -> tuple[str, str]:
@@ -260,7 +260,7 @@ async def test_improve_endpoint_returns_400_for_invalid_backend() -> None:
            _INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
            side_effect=fake_resolve_requested_subagent_backend_model), \
        pytest.raises(HTTPException) as exc_info:
-    await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
+    await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr, task_mgr=MagicMock())
 
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == "requested backend 'missing' is not in backends.options"
@@ -284,7 +284,7 @@ async def test_improve_endpoint_returns_409_for_running_loop() -> None:
   )
 
   session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = MagicMock()
+  session_mgr.get_session.return_value = MagicMock(profile=None)
   thread_mgr = AsyncMock()
 
   with patch(_INTERNAL_GET_CONFIG_PATCH_TARGET, return_value=MagicMock()), \
@@ -294,7 +294,7 @@ async def test_improve_endpoint_returns_409_for_running_loop() -> None:
            _INTERNAL_RESERVE_LOOP_STATE_PATCH_TARGET,
            side_effect=ImproveLoopAlreadyRunningError(7)), \
        pytest.raises(HTTPException) as exc_info:
-    await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
+    await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr, task_mgr=MagicMock())
 
   assert exc_info.value.status_code == 409
   assert exc_info.value.detail == "Loop 7 is already running for this session. Use /stop-improve first."

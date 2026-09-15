@@ -15,6 +15,7 @@ specific wrong implementation.
 import asyncio
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -28,6 +29,7 @@ from conftest import (
 from conftest import make_session_mgr as _make_session_mgr
 
 from src.core.models import SessionMetadata
+from src.core.sessions import SessionManager
 
 _REAL_REPLACE = REAL_OS_REPLACE
 
@@ -114,9 +116,13 @@ async def test_two_concurrent_writes_both_return_and_target_stays_complete(tmp_p
   With a shared temp name the delayed first replacer would raise
   FileNotFoundError because its source was moved away by the second write, so
   ``both return normally`` is the discriminating assertion -- a mere "target is
-  complete" check would not catch it.
+  complete" check would not catch it. The writers are two SessionManager
+  instances: one manager's per-session save lock (the anchor guard) serializes
+  its own writers, so the defect window the unique temp name covers is between
+  independent writers sharing the sessions directory.
   """
   mgr = _make_session_mgr(tmp_path)
+  other_mgr = SessionManager(SimpleNamespace(sessions_dir=tmp_path / "sessions"))
   meta = SessionMetadata(name="seed", backend=OPUS_BACKEND_ID)
   await mgr.save_metadata(meta)
   target = mgr._metadata_path(meta.id)
@@ -134,7 +140,7 @@ async def test_two_concurrent_writes_both_return_and_target_stays_complete(tmp_p
   with patch(JSON_UTILS_OS_REPLACE_PATCH_TARGET, side_effect=_coordinated_replace):
     results = await asyncio.gather(
         mgr.save_metadata(first),
-        mgr.save_metadata(second),
+        other_mgr.save_metadata(second),
         return_exceptions=True,
     )
 

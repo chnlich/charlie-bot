@@ -53,8 +53,8 @@ from conftest import (
 
 from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import event_types as ET
+from src.core import finalize_effects, runs
 from src.core import init as init_module
-from src.core import runs
 from src.core import spawner as spawner_module
 from src.core.config import CharlieBotConfig
 from src.core.git import git_create_worktree, git_worktree_dir_name
@@ -373,18 +373,25 @@ def _thread_metas(home: Path, session_id: str) -> list[dict]:
 
 async def _settle_finalize_window(home: Path, session_id: str, original_id: str) -> None:
   """Drain the named recovery tasks, then wait for the (idempotently, at most
-  once) spawned reviewer thread's own completion. The reviewer's own spawn_worker
-  task is unnamed (dispatched from spawn_review_worker), so _await_recovery_tasks()
-  alone cannot see it — only the disk state can.
+  once) spawned reviewer thread's own completion AND the master wake its
+  finalize fires. The reviewer's own spawn_worker task is unnamed (dispatched
+  from spawn_review_worker), so _await_recovery_tasks() alone cannot see it —
+  only the disk state can. The wake rides that same unnamed task, after the
+  terminal status write the loop above waits on, so the settle must also cover
+  the wake window: the next round's reconcile judges the wake by
+  finalize_effects.master_woke_after_summary over the chat events, and a round
+  starting before the ack lands would judge it missing and re-fire it.
   """
   await _await_recovery_tasks()
   deadline = time.monotonic() + 20.0
   while time.monotonic() < deadline:
     reviewers = [m for m in _thread_metas(home, session_id) if m.get("review_of") == original_id]
-    if reviewers and all(m.get("status") in ("completed", "failed", "cancelled") for m in reviewers):
+    reviewers_settled = reviewers and all(m.get("status") in ("completed", "failed", "cancelled") for m in reviewers)
+    woke = finalize_effects.master_woke_after_summary(read_chat_events(home, session_id), original_id)
+    if reviewers_settled and woke:
       return
     await asyncio.sleep(0.05)
-  raise TimeoutError("reviewer thread never settled")
+  raise TimeoutError("reviewer thread or its master wake never settled")
 
 
 @pytest.mark.asyncio

@@ -536,39 +536,57 @@ function stashDialogSelection(sessionId) {
 }
 
 // -- direct root create -------------------------------------------------------
-// The primary New Task action's create call: one root manager with empty task
-// instructions and the server's default backend resolution — no form, no
-// blocking model call. Name/Goal/Profile/Backend stay editable later on the
-// Task tab. One pending create action keeps one request id across rapid clicks
-// and retries: the server binds (parent, request_id) to one stable node, so a
-// replayed request returns the original product and can never mint a second
-// node. The id clears on success — the next New Task click starts a fresh
-// action; a failed attempt keeps it, making the retry a replay of the same
-// operation (visible failure, current view and drafts untouched).
+// The primary New Session action's create call: one root manager with empty task
+// instructions and no form, no blocking model call. Name/Goal/Profile/Backend
+// stay editable later on the Task tab. The sidebar's model dropdown is the
+// creation toolbar's choice: when a create action starts, the selected backend
+// is captured together with the request id, so every retry of that pending
+// action replays the identical body — a retried create can never silently
+// switch models. One pending create action keeps one request id across rapid
+// clicks and retries: the server binds (parent, request_id) to one stable
+// node, so a replayed request returns the original product and can never mint
+// a second node. The id clears on success — the next click starts a fresh
+// action with the dropdown's current value; a failed attempt keeps it, making
+// the retry a replay of the same operation (visible failure, current view and
+// drafts untouched). With no dropdown in the page (a home without backend
+// options) the field stays absent and the server's default resolution applies.
 let rootCreateRequestId = null;
+let rootCreateBackend = null;
 
 function newCreateRequestId() {
   return crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + '-' + Math.random();
 }
 
+function selectedNewSessionBackend() {
+  const select = document.getElementById('new-session-backend');
+  return select && select.value ? select.value : null;
+}
+
 async function createRootTask() {
-  if (!rootCreateRequestId) rootCreateRequestId = newCreateRequestId();
+  if (!rootCreateRequestId) {
+    rootCreateRequestId = newCreateRequestId();
+    rootCreateBackend = selectedNewSessionBackend();
+  }
   const requestId = rootCreateRequestId;
+  const backend = rootCreateBackend;
+  const body = {
+    request_id: requestId,
+    task_parent_id: null,
+    profile: 'manager',
+    task: {goal: '', acceptance: [], context_refs: []},
+  };
+  if (backend) body.backend = backend;
   const res = await fetch('/api/sessions/', {
     method: 'POST', headers: JSON_HEADERS,
-    body: JSON.stringify({
-      request_id: requestId,
-      task_parent_id: null,
-      profile: 'manager',
-      task: {goal: '', acceptance: [], context_refs: []},
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    const detail = body.detail && (body.detail.message || body.detail);
+    const errBody = await res.json().catch(() => ({}));
+    const detail = errBody.detail && (errBody.detail.message || errBody.detail);
     throw new Error(typeof detail === 'string' ? detail : ('HTTP ' + res.status));
   }
   rootCreateRequestId = null;
+  rootCreateBackend = null;
   return await res.json();
 }
 

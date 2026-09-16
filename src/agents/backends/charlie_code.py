@@ -62,6 +62,8 @@ class CharlieCodeBackend(AgentBackend):
       image_input: bool = False,
       stream: bool = True,
       timeout_seconds: int | None = None,
+      top_p: float | None = None,
+      temperature: float | None = None,
       proxy_url: str | None = None,
       api_key: str | None = None,
       **kwargs: object,
@@ -75,6 +77,8 @@ class CharlieCodeBackend(AgentBackend):
     self._image_input = image_input
     self._stream = stream
     self._timeout_seconds = timeout_seconds
+    self._top_p = top_p
+    self._temperature = temperature
     self._proxy_url = proxy_url
     self._api_key = api_key
     self._bin = resolve_binary("charlie-code", USER_LOCAL_BIN)
@@ -143,6 +147,10 @@ class CharlieCodeBackend(AgentBackend):
       cmd += ["--no-stream"]
     if self._timeout_seconds is not None:
       cmd += ["--timeout-seconds", str(self._timeout_seconds)]
+    if self._top_p is not None:
+      cmd += ["--top-p", str(self._top_p)]
+    if self._temperature is not None:
+      cmd += ["--temperature", str(self._temperature)]
     if self._resume_session_id:
       cmd += ["--resume", self._resume_session_id]
     cmd += self._extra_flags

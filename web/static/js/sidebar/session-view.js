@@ -747,9 +747,11 @@ function renderUsageFromData(usage) {
 // ---------------------------------------------------------------------------
 // Session management
 // ---------------------------------------------------------------------------
-// The primary sidebar button: inside the tasks filter and in preview mode it
-// directly creates one root manager and opens Chat — one click, zero form
-// fields; everywhere else it keeps the legacy session create.
+// The primary sidebar button (the creation toolbar's wide blue "New Session"):
+// inside the tasks filter and in preview mode it directly creates one root
+// manager — carrying the dropdown's selected model — and opens Chat in one
+// click with zero form fields; everywhere else it keeps the legacy session
+// create, which reads the same dropdown itself.
 function createSessionOrTask() {
   if (globalThis.TaskPanel && (currentFilter === 'tasks' || globalThis.__CHARLIEBOT_PREVIEW__)) {
     // In preview mode every create action is a v2 task (root manager when no

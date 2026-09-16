@@ -12,6 +12,17 @@ Contract:
   websockets) serves the trial; only the application lifetime and the reachable
   mechanism surface differ from production. The normal production startup path is
   untouched and remains available to the old runtime.
+- **Backend selection.** ``--backend`` names the trial's default charlie-code
+  entry (required for a fresh home; a restart must match the home's stored
+  default). ``--add-backend`` (repeatable) adds further explicitly selected
+  charlie-code entries: on a fresh home they extend the initial seed; on an
+  existing validated preview home every requested entry and its referenced
+  credential are validated from the source profile before anything is written,
+  then appended under the home writer fence. A restart without the flag keeps
+  the stored catalog, credentials, default, tasks, native history, paths and
+  access key untouched. Non-charlie-code entries, duplicates, entries the
+  schema cannot interpret, missing provider credentials and a live fence
+  holder all refuse before any persistent change.
 - **Home isolation.** ``--home`` resolves to a path outside and nonoverlapping
   with the production home, the production workspace dirs, and the running
   checkout. A fresh path is seeded with minimal private instance config and its
@@ -61,6 +72,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from src.core.buildinfo import init_build_info
 from src.core.config import (
@@ -335,6 +348,35 @@ def read_source_backend(backend_id: str) -> tuple[dict, tuple[str, str] | None]:
   if not backend_id:
     raise PreviewRefused(
         "a fresh preview home requires --backend ID: name the backend this trial instance will run")
+  return _read_source_backend_option(backend_id)
+
+
+def read_source_backend_additions(
+    add_ids: list[str] | None, *, exclude_ids: set[str],
+) -> list[tuple[dict, tuple[str, str] | None]]:
+  """Read and validate the explicitly requested additional backend entries, in request order.
+
+  Every requested id must resolve to an isolated charlie-code entry in the
+  source profile with its referenced credential present; anything the schema
+  cannot interpret already refuses inside ``load_config`` with the entry's own
+  id and field named. A repeated request or an id already chosen for the trial
+  refuses instead of silently deduplicating.
+  """
+  resolved: list[tuple[dict, tuple[str, str] | None]] = []
+  seen: set[str] = set()
+  for backend_id in (add_ids or []):
+    if backend_id in seen:
+      raise PreviewRefused(f"--add-backend {backend_id!r} is requested more than once")
+    if backend_id in exclude_ids:
+      raise PreviewRefused(
+          f"--add-backend {backend_id!r} is already part of this trial's backend selection")
+    resolved.append(_read_source_backend_option(backend_id))
+    seen.add(backend_id)
+  return resolved
+
+
+def _read_source_backend_option(backend_id: str) -> tuple[dict, tuple[str, str] | None]:
+  """One validated source entry: isolated type, runnable settings, referenced credential."""
   cfg = load_config()
   option = cfg.get_backend_option(backend_id)
   if option is None:
@@ -344,7 +386,10 @@ def read_source_backend(backend_id: str) -> tuple[dict, tuple[str, str] | None]:
         f"backend {backend_id!r} has type {option.type.value!r}; the preview isolates native "
         "session state only for charlie-code (its --session-dir override), so other backend "
         "types are refused until their isolation is proven")
-  check_launcher()
+  if not option.api_base:
+    raise PreviewRefused(
+        f"backend {backend_id!r} declares no api_base; the charlie-code adapter cannot run "
+        "without one, so the entry is refused instead of seeded broken")
   entry = json.loads(option.model_dump_json())
   credential: tuple[str, str] | None = None
   if getattr(option, "credential", None):
@@ -372,6 +417,10 @@ class PreviewSetup:
   url: str
   backend_id: str
   backend_entry: dict
+  # Explicitly requested additional entries (validated source reads): seeded on
+  # a fresh home, appended to an existing validated home's catalog under the
+  # fence. Empty unless the caller asked for them.
+  backend_additions: list[tuple[dict, tuple[str, str] | None]]
   credential_section: tuple[str, str] | None
   fresh_hint: bool
   source_branch: str
@@ -402,16 +451,17 @@ def _new_access_key() -> str:
   return "preview-key-" + secrets.token_hex(16)
 
 
-def prepare_preview(home_raw: str, port: int, backend_id: str | None) -> PreviewSetup:
+def prepare_preview(home_raw: str, port: int, backend_id: str | None,
+                    add_backend_ids: list[str] | None = None) -> PreviewSetup:
   """Validate every launch precondition and resolve the instance's identity; no writes.
 
-  The environment still selects the source profile here: the backend entry and
-  its credential material are read from it, the overlap and port checks judge
+  The environment still selects the source profile here: the backend entries and
+  their credential material are read from it, the overlap and port checks judge
   the preview path against it, and the environment switch happens later in
   :func:`activate_preview_environment`.
   """
   try:
-    return _prepare_preview(home_raw, port, backend_id)
+    return _prepare_preview(home_raw, port, backend_id, add_backend_ids)
   except PreviewRefused:
     raise
   except (ValueError, OSError) as e:
@@ -420,7 +470,8 @@ def prepare_preview(home_raw: str, port: int, backend_id: str | None) -> Preview
     raise PreviewRefused(f"preview preparation could not read the source profile: {e}") from e
 
 
-def _prepare_preview(home_raw: str, port: int, backend_id: str | None) -> PreviewSetup:
+def _prepare_preview(home_raw: str, port: int, backend_id: str | None,
+                     add_backend_ids: list[str] | None) -> PreviewSetup:
   home = resolve_preview_home(home_raw)
   source_cfg = load_config()
   check_home_location(home, source_home=charliebot_home_dir(),
@@ -429,15 +480,18 @@ def _prepare_preview(home_raw: str, port: int, backend_id: str | None) -> Previe
   fresh = classify_home(home)
   if fresh:
     entry, credential = read_source_backend(backend_id or "")
+    additions = read_source_backend_additions(add_backend_ids, exclude_ids={backend_id} if backend_id else set())
   else:
-    entry, stored_backend_id, credential = _stored_backend(home)
+    entries, stored_backend_id, credential = _stored_backend_catalog(home)
     if backend_id and backend_id != stored_backend_id:
       raise PreviewRefused(
           f"--backend {backend_id!r} does not match the preview home's configured backend "
           f"{stored_backend_id!r}; restart either without --backend or with the home's own backend")
     backend_id = stored_backend_id
-    check_launcher()
+    entry = entries[0]
+    additions = read_source_backend_additions(add_backend_ids, exclude_ids={e["id"] for e in entries})
   assert backend_id is not None
+  check_launcher()
   check_ui_assets()
   branch, sha = _read_source_identity()
   access_key = _existing_access_key(home) if not fresh else _new_access_key()
@@ -447,6 +501,7 @@ def _prepare_preview(home_raw: str, port: int, backend_id: str | None) -> Previe
       url=f"http://127.0.0.1:{port}",
       backend_id=backend_id,
       backend_entry=entry,
+      backend_additions=additions,
       credential_section=credential,
       fresh_hint=fresh,
       source_branch=branch,
@@ -483,14 +538,21 @@ def validate_existing_config(home: Path) -> dict:
   except Exception as e:
     raise PreviewRefused(f"{path} does not validate against the config schema: {e}") from e
   options = data["backends"].get("options")
-  if not isinstance(options, list) or len(options) != 1:
+  if not isinstance(options, list) or not options:
     count = len(options) if isinstance(options, list) else "non-list"
-    raise PreviewRefused(f"{path} must configure exactly one backend for the trial; found {count}")
-  entry = options[0]
-  if not isinstance(entry, dict) or entry.get("type") != BackendType.CHARLIE_CODE.value:
-    raise PreviewRefused(
-        f"{path} configures a non-charlie-code backend; the preview isolates native state only "
-        "for charlie-code")
+    raise PreviewRefused(f"{path} must configure at least one backend for the trial; found {count}")
+  seen_ids: set[str] = set()
+  for entry in options:
+    if not isinstance(entry, dict) or entry.get("type") != BackendType.CHARLIE_CODE.value:
+      raise PreviewRefused(
+          f"{path} configures a non-charlie-code backend; the preview isolates native state only "
+          "for charlie-code")
+    entry_id = entry.get("id")
+    if not entry_id:
+      raise PreviewRefused(f"{path} configures a backend without an id")
+    if entry_id in seen_ids:
+      raise PreviewRefused(f"{path} configures backend id {entry_id!r} more than once")
+    seen_ids.add(str(entry_id))
   for raw_dir in data["paths"].get("workspace_dirs", []):
     workspace = _resolved(raw_dir)
     if not _contains(home, workspace):
@@ -502,29 +564,31 @@ def validate_existing_config(home: Path) -> dict:
     raise PreviewRefused(
         f"{path} points paths.worktree_dir outside the preview home ({worktree_dir}); worker "
         "worktrees must stay inside the home")
-  referenced = entry.get("credential")
-  if referenced:
-    creds = load_yaml(home / "credentials.yaml", default={})
-    if not isinstance(creds, dict) or not (creds.get(str(referenced)) or {}).get("api_key"):
-      raise PreviewRefused(
-          f"the preview home's credentials.yaml has no {referenced}.api_key for the configured "
-          "backend; the provider credential is required to run the trial")
+  creds = load_yaml(home / "credentials.yaml", default={})
+  for entry in options:
+    referenced = entry.get("credential")
+    if referenced:
+      if not isinstance(creds, dict) or not (creds.get(str(referenced)) or {}).get("api_key"):
+        raise PreviewRefused(
+            f"the preview home's credentials.yaml has no {referenced}.api_key for the configured "
+            "backend; the provider credential is required to run the trial")
   return data
 
 
-def _stored_backend(home: Path) -> tuple[dict, str, tuple[str, str] | None]:
-  """The existing preview home's one backend entry, its id and its credential section."""
-  entry = dict(validate_existing_config(home)["backends"]["options"][0])
-  backend_id = entry.get("id")
+def _stored_backend_catalog(home: Path) -> tuple[list[dict], str, tuple[str, str] | None]:
+  """The existing preview home's backend catalog, its default id and the default's credential."""
+  options = validate_existing_config(home)["backends"]["options"]
+  entries = [dict(entry) for entry in options]
+  backend_id = entries[0].get("id")
   if not backend_id:
     raise PreviewRefused(f"{home / 'config.yaml'} configures a backend without an id")
   credential: tuple[str, str] | None = None
-  referenced = entry.get("credential")
+  referenced = entries[0].get("credential")
   if referenced:
     creds = load_yaml(home / "credentials.yaml", default={})
     key = (creds or {}).get(str(referenced), {}).get("api_key") if isinstance(creds, dict) else None
     credential = (str(referenced), {"api_key": str(key)})
-  return entry, str(backend_id), credential
+  return entries, str(backend_id), credential
 
 
 def _existing_access_key(home: Path) -> str:
@@ -544,7 +608,13 @@ def _existing_access_key(home: Path) -> str:
 
 
 def _preview_config_data(setup: PreviewSetup) -> dict:
-  """The minimal private trial config: bind address, scoped paths, the one backend."""
+  """The minimal private trial config: bind address, scoped paths, the selected backends.
+
+  The explicitly requested default stays the first option (the resolution every
+  default-backend reader uses) and the only preference entry, so no Run ever
+  falls over to another model silently; the additional selected entries sit
+  after it as explicit choices only.
+  """
   return {
       "server": {"host": "127.0.0.1", "port": setup.port},
       "paths": {
@@ -552,7 +622,7 @@ def _preview_config_data(setup: PreviewSetup) -> dict:
           "worktree_dir": str(setup.home / PREVIEW_WORKTREES_DIRNAME),
       },
       "backends": {
-          "options": [setup.backend_entry],
+          "options": [setup.backend_entry, *[entry for entry, _ in setup.backend_additions]],
           "preference": [setup.backend_id],
       },
   }
@@ -560,8 +630,14 @@ def _preview_config_data(setup: PreviewSetup) -> dict:
 
 def _credentials_text(setup: PreviewSetup) -> str:
   lines = [f"charliebot:\n  access_key: {setup.access_key}\n"]
-  if setup.credential_section is not None:
-    section, keys = setup.credential_section
+  written: set[str] = set()
+  for credential in (setup.credential_section, *[cred for _, cred in setup.backend_additions]):
+    if credential is None:
+      continue
+    section, keys = credential
+    if section in written:
+      continue
+    written.add(section)
     lines.append(f"{section}:\n  api_key: {keys['api_key']}\n")
   return "".join(lines)
 
@@ -592,6 +668,51 @@ def write_instance_record(setup: PreviewSetup, *, ready: bool, stopped: bool = F
   atomic_write_text(record_path, json.dumps(record, indent=2, sort_keys=True))
 
 
+def _extend_existing_home_catalog(setup: PreviewSetup) -> None:
+  """Append the validated requested entries to an existing home's catalog; the fence is held.
+
+  The authoritative duplicate check runs here, under the fence, against the
+  home's current config (a caller between preparation and fence acquisition
+  could have changed it). Only the options list and missing referenced
+  credential sections are written: the default, its order, the bind address,
+  the paths, the stored access key and every existing section stay as they are.
+  """
+  config_path = setup.home / "config.yaml"
+  data = validate_existing_config(setup.home)
+  options = data["backends"]["options"]
+  existing_ids = {str(entry["id"]) for entry in options}
+  new_credentials: dict[str, str] = {}
+  for entry, credential in setup.backend_additions:
+    if entry["id"] in existing_ids:
+      raise PreviewRefused(
+          f"--add-backend {entry['id']!r} is already in the preview home's catalog; "
+          "nothing to add")
+    options.append(entry)
+    if credential is not None:
+      section, keys = credential
+      new_credentials.setdefault(section, keys["api_key"])
+  save_yaml(config_path, data)
+  credentials_path = setup.home / "credentials.yaml"
+  creds = load_yaml(credentials_path, default={})
+  if not isinstance(creds, dict):
+    raise PreviewRefused(f"{credentials_path} is not a credentials mapping; refusing to extend it")
+  added_sections = []
+  for section, api_key in new_credentials.items():
+    if (creds.get(section) or {}).get("api_key"):
+      continue  # the home already holds this provider credential; never overwrite a stored secret
+    creds[section] = {"api_key": api_key}
+    added_sections.append(section)
+  if added_sections:
+    atomic_write_text(
+        credentials_path,
+        yaml.safe_dump(creds, allow_unicode=True, default_flow_style=False),
+        private=True)
+  log.info(
+      "preview_catalog_extended", home=str(setup.home),
+      added=[entry["id"] for entry, _ in setup.backend_additions],
+      credential_sections_added=sorted(added_sections))
+
+
 def seed_or_validate_preview_home(setup: PreviewSetup) -> None:
   """Seed a fresh preview home or validate the existing one; the caller holds the writer fence.
 
@@ -617,6 +738,8 @@ def seed_or_validate_preview_home(setup: PreviewSetup) -> None:
       data["server"] = server
       save_yaml(setup.home / "config.yaml", data)
       log.info("preview_bind_address_updated", home=str(setup.home), port=setup.port)
+    if setup.backend_additions:
+      _extend_existing_home_catalog(setup)
     # A restart never rekeys the instance: the stored key stays authoritative.
     setup.access_key = _existing_access_key(setup.home)
     for dirname in (PREVIEW_NATIVE_DIRNAME, PREVIEW_WORKSPACES_DIRNAME, PREVIEW_WORKTREES_DIRNAME,
@@ -880,14 +1003,17 @@ def install_log_capture(log_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run_preview_command(home_raw: str, port: int, backend_id: str | None) -> None:
+def run_preview_command(home_raw: str, port: int, backend_id: str | None,
+                        add_backend_ids: list[str] | None = None) -> None:
   """Prepare, validate and run one foreground preview instance; returns after clean shutdown.
 
   Every refusal exits through :class:`PreviewRefused` before any write; the
   writer fence is held for the whole run and released on every exit, including
-  startup and shutdown failures.
+  startup and shutdown failures. ``add_backend_ids`` are extra explicitly
+  selected charlie-code entries: seeded on a fresh home, appended to an
+  existing validated home's catalog once the fence is held.
   """
-  setup = prepare_preview(home_raw, port, backend_id)
+  setup = prepare_preview(home_raw, port, backend_id, add_backend_ids)
   fence: HomeWriterFence = acquire_home_writer_fence(setup.home, purpose="session-tree preview")
   try:
     seed_or_validate_preview_home(setup)

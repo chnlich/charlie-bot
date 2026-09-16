@@ -3,7 +3,8 @@
   charliebot session-tree migrate --dry-run --output FILE
   charliebot session-tree migrate --apply --manifest FILE
   charliebot session-tree migrate --rollback --manifest FILE
-  charliebot session-tree preview --home DIR --port PORT [--backend ID]
+  charliebot session-tree preview --home DIR --port PORT [--backend ID] \
+      [--add-backend ID ...]
 
 The migrate commands target the current explicitly selected CHARLIEBOT_HOME and
 touch nothing else: no HTTP delegation, no server startup, no external messages.
@@ -22,7 +23,12 @@ binding and receipts.
 ``preview`` prepares, validates and runs one isolated trial instance of the
 real application in the foreground (src/core/session_tree_preview.py owns the
 contract); it never reads or writes the source profile's sessions, memory,
-schedules, triggers, native sessions or operator key.
+schedules, triggers, native sessions or operator key. ``--add-backend``
+(repeatable) extends the trial's explicitly selected charlie-code catalog:
+fresh homes seed with all requested entries, an existing validated preview
+home gains the requested entries under its writer fence after every requested
+entry and referenced credential validates, and a restart without the flag
+keeps the stored catalog and everything else exactly as it is.
 
 Every refusal exits 1 with a structured JSON diagnostic on stderr — never an
 uncaught traceback. Exit code 0 success, 1 refusal/conflict, 2 usage.
@@ -92,6 +98,14 @@ def _build_parser() -> argparse.ArgumentParser:
   preview.add_argument("--backend", default=None, metavar="ID",
                        help="Backend id for initial setup (required for a fresh home; "
                             "on restart it must match the home's configured backend)")
+  preview.add_argument("--add-backend", dest="add_backend", action="append", default=None,
+                       metavar="ID",
+                       help="Additional charlie-code backend id to add to this trial's "
+                            "explicitly selected catalog (repeatable). Fresh homes seed "
+                            "with every requested entry; an existing preview home gains "
+                            "the requested entries after they and their credentials "
+                            "validate, under the home writer fence. A restart without "
+                            "the flag keeps the stored catalog unchanged.")
   return parser
 
 
@@ -173,12 +187,18 @@ def _cmd_migrate(args: argparse.Namespace) -> None:
 
 
 def _cmd_preview(args: argparse.Namespace) -> None:
+  from src.core.home_writer_fence import HomeWriterActiveError
   from src.core.session_tree_preview import PreviewRefused, run_preview_command
 
   try:
-    run_preview_command(args.home, args.port, args.backend)
+    run_preview_command(args.home, args.port, args.backend, args.add_backend or [])
   except PreviewRefused as e:
     _fail(str(e), e.details)
+  except HomeWriterActiveError as e:
+    # A live holder (the running preview instance itself) refuses the whole
+    # launch, additions included, as one structured diagnostic: never a
+    # traceback, never a partial mutation.
+    _fail(str(e))
 
 
 def main() -> None:

@@ -887,6 +887,61 @@ test('createRootTask posts the direct root create: empty task, default name and 
   assert.equal(second.id, 'root-2');
 });
 
+test('the creation toolbar selected model is captured with the request id and never switches on retry', async () => {
+  const {context, doc} = build();
+  const backendSelect = doc.createElement('select');
+  backendSelect.id = 'new-session-backend';
+  backendSelect.value = 'clc-second';
+  doc.register(backendSelect);
+  let attempts = 0;
+  context.fetchHandlers.push((url, opts) => {
+    if (url === '/api/sessions/' && opts.method === 'POST') {
+      attempts++;
+      if (attempts === 1) {
+        return {ok: false, status: 500, json: async () => ({detail: 'provider down'})};
+      }
+      if (attempts === 2) {
+        return jsonResponse({id: 'root-chosen', profile: 'manager', backend: 'clc-second'});
+      }
+      return jsonResponse({id: 'root-next', profile: 'manager', backend: 'clc-third'});
+    }
+    return undefined;
+  });
+  await assert.rejects(() => context.TaskPanel.createRootTask(), /provider down/);
+  // The user drags the dropdown elsewhere while the failed action is pending.
+  backendSelect.value = 'clc-third';
+  const meta = await context.TaskPanel.createRootTask();
+  const posts = context.fetchCalls.filter((c) => c.url === '/api/sessions/' && c.opts.method === 'POST');
+  assert.equal(posts.length, 2);
+  const b1 = JSON.parse(posts[0].opts.body);
+  const b2 = JSON.parse(posts[1].opts.body);
+  assert.equal(b1.backend, "clc-second", "the dropdown value rides the create");
+  assert.equal(b2.backend, "clc-second", "the retry replays the captured choice, not the dropdown current one");
+  assert.equal(b2.request_id, b1.request_id, 'one pending action, one request id');
+  assert.equal(meta.backend, 'clc-second');
+  // The next action starts fresh with the dropdown's current value.
+  const next = await context.TaskPanel.createRootTask();
+  const third = JSON.parse(
+    context.fetchCalls.filter((c) => c.url === '/api/sessions/' && c.opts.method === 'POST')[2].opts.body);
+  assert.equal(third.backend, 'clc-third', 'a completed action starts a fresh capture');
+  assert.notEqual(third.request_id, b1.request_id);
+  assert.equal(next.backend, 'clc-third');
+});
+
+test('without the dropdown in the page the create carries no backend field', async () => {
+  const {context} = build();
+  context.fetchHandlers.push((url, opts) => {
+    if (url === '/api/sessions/' && opts.method === 'POST') {
+      return jsonResponse({id: 'root-plain', profile: 'manager'});
+    }
+    return undefined;
+  });
+  await context.TaskPanel.createRootTask();
+  const body = JSON.parse(
+    context.fetchCalls.filter((c) => c.url === '/api/sessions/' && c.opts.method === 'POST')[0].opts.body);
+  assert.equal(body.backend, undefined, "the server default resolution applies");
+});
+
 test('rapid create calls share one request id while the first is in flight', async () => {
   const {context} = build();
   const resolvers = [];

@@ -3,10 +3,10 @@ readback determinism, incl. the two readback scenarios that nothing else in
 the tree constructs.
 
 All tests here are in-process: no CLI subprocess, no real CharlieBot server.
-Network-shaped tests either mock ``requests.post``/``requests.get`` directly
-(gaps 1, 2, and the local-file readbacks) or run a tiny stub HTTP listener on
-127.0.0.1 (the `plan` readback, which needs a real GET response) — never a
-real port scan, process name, or pgrep.
+Network-shaped tests either mock the ``_request_post``/``_request_get``
+transport adapters directly (gaps 1, 2, and the local-file readbacks) or run a
+tiny stub HTTP listener on 127.0.0.1 (the `plan` readback, which needs a real
+GET response) — never a real port scan, process name, or pgrep.
 """
 
 from __future__ import annotations
@@ -20,10 +20,10 @@ import threading
 import time
 from pathlib import Path
 from types import ModuleType
+from unittest.mock import MagicMock
 
 import pytest
-import requests
-from conftest import write_trigger
+from conftest import make_json_response, write_trigger
 
 from src.cli import common
 from src.cli import improve as improve_module
@@ -61,16 +61,13 @@ class _FakeClock:
     self.now += seconds
 
 
-def _connect_refused() -> requests.exceptions.ConnectionError:
-  return requests.exceptions.ConnectionError(
-      "HTTPConnectionPool(host='localhost', port=1): Failed to establish a new connection: "
-      "[Errno 111] Connection refused")
+def _connect_refused() -> common._ConnectPhaseError:
+  return common._ConnectPhaseError("[Errno 111] Connection refused")
 
 
-def _reset_after_send() -> requests.exceptions.ConnectionError:
+def _reset_after_send() -> common._SentButLostError:
   """A connection that completed its handshake before dying: sent-but-lost, never a retry class."""
-  return requests.exceptions.ConnectionError(
-      "('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer'))")
+  return common._SentButLostError("[Errno 104] Connection reset by peer")
 
 
 def _patch_readback_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cli_module: ModuleType) -> CharlieBotConfig:
@@ -78,12 +75,13 @@ def _patch_readback_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cli_mod
   sent-but-lost reset, and return the config.
 
   Each CLI module calls the ``get_config`` name it captured at import, so both that name and
-  ``common``'s must be patched or the readback would read the host's profile.
+  ``common``'s must be patched or the readback would read the host's profile. The transport
+  patch lands on ``common``'s adapter, which ``_request_with_contract`` reads at call time.
   """
   cfg = _cfg(tmp_path)
   monkeypatch.setattr(common, "get_config", lambda: cfg)
   monkeypatch.setattr(cli_module, "get_config", lambda: cfg)
-  monkeypatch.setattr(common.requests, "post", lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
+  monkeypatch.setattr(common, "_request_post", lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
   return cfg
 
 
@@ -107,7 +105,7 @@ def test_connect_never_established_retries_with_backoff_then_exhausts(
     call_count += 1
     raise _connect_refused()
 
-  monkeypatch.setattr(common.requests, "post", fake_post)
+  monkeypatch.setattr(common, "_request_post", fake_post)
 
   with pytest.raises(SystemExit) as exc_info:
     common.post_internal_api("/api/internal/x", {"a": 1})
@@ -133,7 +131,7 @@ def test_connect_never_established_bounded_wall_clock_with_real_clock(
   cfg = _cfg(tmp_path)
   monkeypatch.setattr(common, "get_config", lambda: cfg)
   monkeypatch.setattr(common, "CLI_CONNECT_TOTAL_TIMEOUT", 0.3)
-  monkeypatch.setattr(common.requests, "post", lambda *a, **k: (_ for _ in ()).throw(_connect_refused()))
+  monkeypatch.setattr(common, "_request_post", lambda *a, **k: (_ for _ in ()).throw(_connect_refused()))
 
   started = time.monotonic()
   with pytest.raises(SystemExit) as exc_info:
@@ -155,17 +153,14 @@ def test_listener_absent_then_appears_mid_budget_succeeds(tmp_path: Path, monkey
 
   attempts = 0
 
-  def fake_post(*args: object, **kwargs: object) -> requests.Response:
+  def fake_post(*args: object, **kwargs: object) -> common._CliResponse:
     nonlocal attempts
     attempts += 1
     if attempts < 3:
       raise _connect_refused()
-    resp = requests.Response()
-    resp.status_code = 200
-    resp._content = json.dumps({"ok": True}).encode()
-    return resp
+    return common._CliResponse(200, "OK", json.dumps({"ok": True}).encode())
 
-  monkeypatch.setattr(common.requests, "post", fake_post)
+  monkeypatch.setattr(common, "_request_post", fake_post)
 
   result = common.post_internal_api("/api/internal/x", {"a": 1})
 
@@ -180,18 +175,15 @@ def test_listener_absent_then_appears_mid_budget_succeeds(tmp_path: Path, monkey
 # ---------------------------------------------------------------------------
 
 
-def _rejection(status_code: int, detail: str) -> requests.exceptions.HTTPError:
-  resp = requests.Response()
-  resp.status_code = status_code
-  resp._content = json.dumps({"detail": detail}).encode()
-  return requests.exceptions.HTTPError(response=resp)
+def _rejection(status_code: int, detail: str) -> MagicMock:
+  return make_json_response({"detail": detail}, status_code=status_code)
 
 
 def test_server_rejection_reports_full_triple_and_hint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _cfg(tmp_path)
   monkeypatch.setattr(common, "get_config", lambda: cfg)
-  monkeypatch.setattr(common.requests, "post", lambda *a, **k: (_ for _ in ()).throw(_rejection(409, "stale version")))
+  monkeypatch.setattr(common, "_request_post", lambda *a, **k: _rejection(409, "stale version"))
   monkeypatch.setattr(
       common, "_maybe_version_skew_hint",
       lambda cfg: "server running abc123, repo at def456 — server restart may be required")
@@ -215,7 +207,7 @@ def test_server_rejection_exit_code_override_keeps_code_and_effect(
   """schedule-trigger's 422 -> 2 contract: the override changes only the exit code."""
   cfg = _cfg(tmp_path)
   monkeypatch.setattr(common, "get_config", lambda: cfg)
-  monkeypatch.setattr(common.requests, "post", lambda *a, **k: (_ for _ in ()).throw(_rejection(422, "no such target")))
+  monkeypatch.setattr(common, "_request_post", lambda *a, **k: _rejection(422, "no such target"))
   monkeypatch.setattr(common, "_maybe_version_skew_hint", lambda cfg: None)
 
   with pytest.raises(SystemExit) as exc_info:
@@ -484,6 +476,62 @@ def test_plan_readback_reports_outcome_unknown_when_nothing_matches(
     error = json.loads(capsys.readouterr().err)
     assert error["code"] == "outcome_unknown"
     assert error["effect"] == "unknown"
+  finally:
+    stub.close()
+
+
+class _CapturePostListener:
+  """A stub that answers 200 to POST and records the wire request: the real
+  http.client client's serialization (Content-Type, body bytes, query string)
+  is this module's own code now, so it needs a real-socket pin."""
+
+  def __init__(self) -> None:
+    received: dict = {}
+    self.received = received
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+
+      def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        received["path"] = self.path
+        received["content_type"] = self.headers.get("Content-Type")
+        received["authorization"] = self.headers.get("Authorization")
+        received["body"] = json.loads(self.rfile.read(length)) if length else None
+        body = json.dumps({"ok": True}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+      def log_message(self, format: str, *args: object) -> None:
+        pass
+
+    self._httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    self.port = self._httpd.server_address[1]
+    self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+    self._thread.start()
+
+  def close(self) -> None:
+    self._httpd.shutdown()
+    self._httpd.server_close()
+
+
+def test_post_sends_json_body_content_type_and_auth_header_over_the_real_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  stub = _CapturePostListener()
+  try:
+    cfg = _cfg(tmp_path, server={"port": stub.port})
+    monkeypatch.setattr(common, "get_config", lambda: cfg)
+
+    result = common._request_with_contract(
+        "POST", "/api/internal/x", payload={"a": 1}, params={"k": "v"}, unknown_effect="none")
+
+    assert result == {"ok": True}
+    assert stub.received["path"] == "/api/internal/x?k=v"
+    assert stub.received["content_type"] == "application/json"
+    assert stub.received["authorization"] is None  # scratch config carries no access key
+    assert stub.received["body"] == {"a": 1}
   finally:
     stub.close()
 

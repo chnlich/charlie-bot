@@ -6,11 +6,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-import requests
 from conftest import (
     CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-    CLI_COMMON_REQUESTS_GET_PATCH_TARGET,
-    CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+    CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
+    CLI_COMMON_TRANSPORT_GET_PATCH_TARGET,
+    CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
     make_json_response,
     patched_cli_get,
     patched_cli_post,
@@ -197,15 +197,6 @@ def test_plan_server_rejection_exits_nonzero_with_detail_on_stderr(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
 
-  class FakeRequestException(requests.RequestException):
-
-    def __init__(self) -> None:
-      super().__init__("bad")
-      self.response = MagicMock()
-      self.response.json.return_value = {
-          "detail": "file 'artifacts/missing.html' not found inside the session directory"
-      }
-
   with (
       patched_cli_post(cfg, [
           "plan",
@@ -214,7 +205,9 @@ def test_plan_server_rejection_exits_nonzero_with_detail_on_stderr(
           "artifacts/missing.html",
           "--title",
           "P1",
-      ], side_effect=FakeRequestException()),
+      ], return_value=make_json_response(
+          {"detail": "file 'artifacts/missing.html' not found inside the session directory"}, status_code=422)),
+      patch(CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET, return_value=None),
       pytest.raises(SystemExit) as exc_info,
   ):
     main()
@@ -325,8 +318,8 @@ def test_plan_diff_prints_five_keys_computed_locally(
   resp = make_json_response(_two_version_listing())
   with patch("sys.argv", ["plan", "diff"]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_GET_PATCH_TARGET, return_value=resp) as get_mock, \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock:
+       patch(CLI_COMMON_TRANSPORT_GET_PATCH_TARGET, return_value=resp) as get_mock, \
+       patch(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET) as post_mock:
     main()
 
   assert get_mock.call_args.args[0].endswith("/api/sessions/abc/plans")

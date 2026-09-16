@@ -62,7 +62,7 @@ markers = [
 # FLY002 stays out: the one flagged join lists its disallowed tools one per line.
 select = [
     "E4", "E7", "E9", "F", "I",
-    "B009", "B905",
+    "B007", "B009", "B905",
     "C409", "C416", "C420",
     "PIE807",
     "PLR0402",

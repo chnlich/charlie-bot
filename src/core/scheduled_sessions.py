@@ -163,40 +163,34 @@ class ScheduledSessionStore:
   async def write_scheduled_task_backend(self, task_name: str, backend: str) -> None:
     """Write only the ``backend`` key of *task_name*'s cron yaml, preserving every other key.
 
-    Full-file rewrite via save_yaml — the same persistence form as the cron
-    editor's whole-record update. Path resolution comes from the canonical
-    helper (src.core.config.cron_path); a missing, empty, or non-mapping task
-    file fails loud instead of silently recreating one.
+    The rotation write-back: persistence rides :meth:`_write_cron_key`'s contract.
     """
-    await asyncio.to_thread(self._write_scheduled_task_backend_sync, task_name, backend)
-
-  @staticmethod
-  def _write_scheduled_task_backend_sync(task_name: str, backend: str) -> None:
-    path = cron_path(task_name)
-    data = load_yaml(path)
-    if not isinstance(data, dict):
-      raise FileNotFoundError(f"scheduled task '{task_name}' has no readable cron yaml at {path}")
-    data["backend"] = backend
-    save_yaml(path, data)
+    await asyncio.to_thread(self._write_cron_key, task_name, "backend", backend)
 
   async def write_scheduled_task_enabled(self, task_name: str, enabled: bool) -> None:
     """Write only the ``enabled`` key of *task_name*'s cron yaml, preserving every other key.
 
     The PM lifecycle's self-disable write (dead-group shutdown and the
     manual-archive stop): the run gate flips while every other field — cron,
-    prompt_file pointer, project, backend — stays on disk untouched. Same
-    persistence contract as :meth:`write_scheduled_task_backend`: full-file
-    rewrite via save_yaml, canonical path resolution (src.core.config.cron_path),
-    and a missing, empty, or non-mapping task file fails loud instead of
-    silently recreating one.
+    prompt_file pointer, project, backend — stays on disk untouched. Persistence
+    rides :meth:`_write_cron_key`'s contract, the same as
+    :meth:`write_scheduled_task_backend`.
     """
-    await asyncio.to_thread(self._write_scheduled_task_enabled_sync, task_name, enabled)
+    await asyncio.to_thread(self._write_cron_key, task_name, "enabled", enabled)
 
   @staticmethod
-  def _write_scheduled_task_enabled_sync(task_name: str, enabled: bool) -> None:
+  def _write_cron_key(task_name: str, key: str, value: str | bool) -> None:
+    """Write one key of *task_name*'s cron yaml, preserving every other key.
+
+    Single home of the single-key write rule: full-file rewrite via save_yaml —
+    the same persistence form as the cron editor's whole-record update. Path
+    resolution comes from the canonical helper (src.core.config.cron_path); a
+    missing, empty, or non-mapping task file fails loud instead of silently
+    recreating one.
+    """
     path = cron_path(task_name)
     data = load_yaml(path)
     if not isinstance(data, dict):
       raise FileNotFoundError(f"scheduled task '{task_name}' has no readable cron yaml at {path}")
-    data["enabled"] = enabled
+    data[key] = value
     save_yaml(path, data)

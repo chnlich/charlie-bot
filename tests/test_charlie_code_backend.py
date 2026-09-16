@@ -706,8 +706,10 @@ async def _drive_run_halted_at_spawn_with_attachments(
   backend._on_spawn = on_spawn
   events: list[dict] = []
   with pytest.raises(_HaltAtSpawn):
+    # Per-item append is load-bearing: events yielded before the raise must stay
+    # in the list, which a collect-then-extend form drops.
     async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin:/bin"}, uploaded_files=uploaded_files):
-      events.append(event)
+      events.append(event)  # noqa: PERF401  (see comment above)
   return events, spawn
 
 

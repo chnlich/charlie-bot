@@ -63,14 +63,19 @@ markers = [
 # PLW0108 stays out: the flagged lambdas defer evaluation on purpose (stub seams).
 # SIM300 stays out: the subset assertions read best with the named constant left.
 # SLOT000 stays out: _Instructions assigns instance attributes, so __slots__ = () breaks it.
+# UP046/UP047 stay out: yapf's pinned lib2to3 parser rejects PEP 695 type-parameter
+#   lists, which would make the whole tree unparseable to `yapf -r`
+#   (the same constraint src/core/process.py records on its TypeVar).
 select = [
     "E4", "E7", "E9", "F", "I",
     "B007", "B009", "B905",
     "C409", "C416", "C420",
     "FURB110", "FURB167", "FURB188",
     "ISC004",
+    "PERF401",
+    "PGH003",
     "PIE807",
-    "PLR0402", "PLR1714",
+    "PLR0402", "PLR1714", "PLR1716",
     "RET501",
     "RUF005", "RUF007", "RUF023", "RUF043", "RUF059",
     "SIM102", "SIM105", "SIM108", "SIM109", "SIM117",

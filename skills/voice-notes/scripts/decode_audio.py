@@ -43,11 +43,12 @@ def load_pcm(path: Path) -> bytes:
     import av
 
     resampler = av.audio.resampler.AudioResampler(format="s16", layout="mono", rate=16000)
-    chunks = []
     with av.open(str(path)) as container:
-        for frame in container.decode(audio=0):
-            for out in resampler.resample(frame):
-                chunks.append(out.to_ndarray().astype("<i2").tobytes())
+        chunks = [
+            out.to_ndarray().astype("<i2").tobytes()
+            for frame in container.decode(audio=0)
+            for out in resampler.resample(frame)
+        ]
     return b"".join(chunks)
 
 
@@ -57,8 +58,8 @@ def main() -> int:
     root = repo_root()
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
-    from src.core.config import get_config
     from src.agents.transcriber import create_transcription_session, ensure_models_cached
+    from src.core.config import get_config
 
     cfg = get_config()
     ensure_models_cached(cfg)

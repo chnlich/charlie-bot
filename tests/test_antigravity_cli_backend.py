@@ -49,7 +49,7 @@ async def _consume_raising(backend: AntigravityCliBackend, cwd: Path, events: li
   # stay in the caller's list, which a collected-then-extended form drops, and
   # an async generator cannot feed list.extend directly.
   async for event in backend.run("hello from CharlieBot", str(cwd), {"PATH": "/usr/bin:/bin"}):
-    events.append(event)
+    events.append(event)  # noqa: PERF401  (per-item append keeps pre-raise events; see above)
 
 
 def test_build_command_passes_prompt_as_print_flag_value(monkeypatch: pytest.MonkeyPatch) -> None:

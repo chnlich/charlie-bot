@@ -169,7 +169,7 @@ def _load_ncu_report_module() -> ModuleType | None:
     sys.path.append(python_dir)
 
   try:
-    import ncu_report  # type: ignore
+    import ncu_report  # type: ignore[import-not-found, import-untyped]
 
     _ncu_report_module = ncu_report
   except Exception:

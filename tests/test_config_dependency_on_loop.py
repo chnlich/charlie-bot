@@ -27,13 +27,10 @@ def _dependency_calls(dependant: Dependant) -> Iterator[Callable[..., Any]]:
 
 
 def test_no_route_depends_on_sync_get_config() -> None:
-  offenders: list[str] = []
-  for route in server.app.routes:
-    if not isinstance(route, APIRoute):
-      continue
-    for call in _dependency_calls(route.dependant):
-      if call is get_config:
-        offenders.append(f"{sorted(route.methods)} {route.path}")
+  offenders = [
+      f"{sorted(route.methods)} {route.path}" for route in server.app.routes if isinstance(route, APIRoute)
+      for call in _dependency_calls(route.dependant) if call is get_config
+  ]
   assert offenders == [], (
       "routes resolving config through the sync dependency (threadpool hop per "
       f"request); switch them to Depends(get_config_on_loop): {offenders}")

@@ -848,14 +848,6 @@ async def test_handle_event_keeps_an_already_adopted_session_id_over_the_signal(
 # ---------------------------------------------------------------------------
 
 
-class _RealManagerSilentTeardown(SessionManager):
-  """The real SessionManager with only the teardown probe silenced: the dequeue
-  refresh reads disk through the real class while the consumer run stays hermetic."""
-
-  async def _has_running_tasks(self, session_id: str) -> bool:
-    return False
-
-
 async def run_consumer_over_real_disk(
     session_id: str,
     work_items: list[master_cc_state._WorkItem],
@@ -1006,9 +998,6 @@ async def test_consumer_disk_read_failure_falls_back_to_fill_empty_only(tmp_path
   cfg = build_sessions_cfg(tmp_path)
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="fallback"))
-
-  def broken_read(session_id: str):
-    raise OSError("disk gone")
 
   snapshot = SessionMetadata(id=session.id, name="fallback", backend=cfg.backends.options[0].id)
   snapshot.cc_session_id = None

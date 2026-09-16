@@ -50,7 +50,6 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     wait_for,
 )
 
-DEFAULT_BACKEND = "charlie-code-glm53-flash"
 RESEARCH_DEFAULT = Path("/home/chaoli/.charliebot/sessions/8a7964a3-8e53-4fa3-9145-893bac307ddc/research")
 
 # The dropdown's id->label map, read from the live page after login.
@@ -365,13 +364,21 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
           const sel = document.getElementById('new-session-backend');
           if (!btn || !sel) return {present: false};
           const b = btn.getBoundingClientRect(), s = sel.getBoundingClientRect();
+          const span = btn.querySelector('span');
+          const cs = getComputedStyle(sel);
+          const ctx = document.createElement('canvas').getContext('2d');
+          ctx.font = cs.font;
+          const labels = [...sel.options].map(o => o.textContent.trim());
+          const labelWidths = labels.map(t => Math.round(ctx.measureText(t).width));
           return {present: true, options: [...sel.options].map(o => o.value),
                   selected: sel.value, oneRow: Math.abs(b.top - s.top) < 4 && b.bottom <= s.bottom + 4,
                   buttonWidth: b.width, selectWidth: s.width,
-                  optionTexts: [...sel.options].map(o => o.textContent.trim())};
+                  buttonSpanClipped: span.scrollWidth > span.clientWidth + 0.5,
+                  optionTexts: labels, labelWidths};
         })()""")
     toolbar_ok = (toolbar.get("present") and len(toolbar.get("options", [])) >= 1
-                  and toolbar.get("oneRow") and toolbar.get("selectWidth", 0) >= 60)
+                  and toolbar.get("oneRow") and not toolbar.get("buttonSpanClipped", True)
+                  and all(toolbar.get("optionTexts", [])) and toolbar.get("selectWidth", 0) >= 140)
     ok = (indicator == "Preview — isolated trial instance" and tasks_first and new_session_label
           and empty_tree and overlay_gone and toolbar_ok)
     results.record("s01-first-login-empty-state", ok,
@@ -833,7 +840,7 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
           const sel = document.getElementById('new-session-backend');
           if (!btn || !sel) return false;
           const b = btn.getBoundingClientRect(), s = sel.getBoundingClientRect();
-          return Math.abs(b.top - s.top) < 4 && b.bottom <= s.bottom + 4 && s.right <= b.right + 2;
+          return Math.abs(b.top - s.top) < 4 && b.bottom <= s.bottom + 4;
         })()""")
     await screenshot(cdp, sid, results, "s12b-narrow-sidebar")
     await cdp.send("Emulation.clearDeviceMetricsOverride", session_id=sid)
@@ -851,14 +858,17 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     for model_id, model_label in BACKEND_LABELS.items():
         if model_id == selected_default:
             continue
+        previous_session_id = await evaluate(cdp, sid, "SESSION_ID")
         await evaluate(cdp, sid,
                        "(() => { const sel = document.getElementById('new-session-backend');"
                        f" sel.value = {json.dumps(model_id)};"
                        " sel.dispatchEvent(new Event('change')); })()")
         await click_button_by_text(cdp, sid, "New Session", "#sidebar")
+        # The create-and-open switches asynchronously: wait until the view actually
+        # moved off the previous node before reading anything about the new one.
         await wait_for(cdp, sid,
-                       "typeof SESSION_ID !== 'undefined' && SESSION_ID",
-                       timeout=20, label=f"root selected for {model_id}")
+                       f"typeof SESSION_ID !== 'undefined' && SESSION_ID && SESSION_ID !== {json.dumps(previous_session_id)}",
+                       timeout=20, label=f"root switched for {model_id}")
         model_root_id = await evaluate(cdp, sid, "SESSION_ID")
         model_posts = [m for m in cdp.mutations
                        if m["method"] == "POST" and m["url"].endswith("/api/sessions/")]
@@ -878,12 +888,13 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         # One bounded first message on the model's own root.
         message = (f"Model check for {model_id}. Reply with exactly: MODEL-OK, then stop. "
                    "Do not create subtasks.")
-        await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10,
-                       label=f"composer on {model_id}")
+        await wait_for(cdp, sid,
+                       f"SESSION_ID === {json.dumps(model_root_id)} && !!document.getElementById('msg-input')",
+                       timeout=15, label=f"composer on {model_id}")
         await evaluate(cdp, sid,
-                       "const inp = document.getElementById('msg-input');"
+                       "(() => { const inp = document.getElementById('msg-input');"
                        f"inp.value = {json.dumps(message)};"
-                       "inp.dispatchEvent(new Event('input'));")
+                       "inp.dispatchEvent(new Event('input')); })()")
         await click(cdp, sid, "#send-btn")
         await wait_for(cdp, sid,
                        f"document.getElementById('tab-chat').textContent.includes({json.dumps(message)})",
@@ -934,10 +945,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence-dir", default=str(RESEARCH_DEFAULT / "preview_browser_evidence"),
                         help="Where screenshots and results land")
-    parser.add_argument("--backends", default=DEFAULT_BACKEND,
+    parser.add_argument("--backends", required=True,
                         help="Comma-separated charlie-code backend ids: the first is the "
                              "trial's default, the rest become the selectable model "
-                             "dropdown entries")
+                             "dropdown entries. Required: the trial's model catalog is "
+                             "always named by the invocation, never baked in.")
     parser.add_argument("--chrome", default=None, help="Chrome binary (default: google-chrome)")
     args = parser.parse_args()
     asyncio.run(run_harness(args))

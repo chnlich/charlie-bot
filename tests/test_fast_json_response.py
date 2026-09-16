@@ -35,7 +35,7 @@ def test_body_is_raw_utf8() -> None:
   body = bytes(FastJsonResponse(_CJK_PAYLOAD).body)
   # The non-ASCII text rides raw UTF-8, not \uXXXX escapes — the wire bytes
   # shrink on CJK-bearing payloads and the parsed content is unchanged.
-  assert "问候语".encode("utf-8") in body
+  assert "问候语".encode() in body
   assert json.loads(body) == _CJK_PAYLOAD
 
 

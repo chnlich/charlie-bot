@@ -20,12 +20,12 @@ Source code: `~/workspace/charlie-bot/src/core/`
 1. Worker runs in isolated git worktree (`~/worktrees/`)
 2. Branch naming: `charliebot/task-{timestamp}-{id}`
 3. On worker success → reviewer auto-spawned (may use different backend via `backends.preference`)
-4. Reviewer: checks diff, fixes issues, rebases, merges `--ff-only`
-5. On merge → master agent gets summary
+4. Reviewer: checks diff, fixes issues, rebases onto the remote base, pushes `HEAD:{base_branch}` (git rejects a non-fast-forward push)
+5. On push → master agent gets summary
 
 ### Merge-back failover
 
-If the reviewer's ff-merge fails (base moved), the work branch and worktree are kept. Rebase and push from the kept worktree yourself (mechanical, no re-delegate). On a genuine conflict, stop and surface it to the user or delegate the resolution.
+If the reviewer's push fails (base moved), the work branch and worktree are kept. Rebase and push from the kept worktree yourself (mechanical, no re-delegate). On a genuine conflict, stop and surface it to the user or delegate the resolution.
 
 Reviewer merge-back is a prompt-level instruction with no server-side backstop. After every implement delivery, self-check `git rev-parse <branch> origin/<branch>`: ff-merge and push origin when behind; when already merged, ff the local worktree to origin — the reviewer push updates the remote only, and the server and delegation both run from the local worktree.
 

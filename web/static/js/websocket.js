@@ -63,6 +63,9 @@ function connectWS() {
     // Re-sync plan panel state on (re)connect.
     if (typeof planPanel !== 'undefined') planPanel.invalidate();
     if (typeof planPanel !== 'undefined') planPanel.onReconnect();
+    // The catch-up cursor replays chat events but not sidebar notifications:
+    // the task tree reconciles its rendered levels once against current facts.
+    if (globalThis.Sidebar && Sidebar.SessionTree) Sidebar.SessionTree.onReconnected();
   };
 
   socket.onmessage = (e) => {

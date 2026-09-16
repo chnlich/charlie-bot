@@ -13,7 +13,8 @@ function build(overrides = {}) {
   context.hideStreaming = () => {};
   context.appendMessageObject = () => {};
   context.pollActiveSessionView = () => {};
-  loadModules(context, ['sidebar/session-tree.js', 'websocket.js']);
+  // Page order: status.js (the indicator owner the tree shares) precedes the tree owner.
+  loadModules(context, ['sidebar/status.js', 'sidebar/session-tree.js', 'websocket.js']);
   const doc = context.__doc;
   doc.register(doc.createElement('div')); // ensure body exists
   const sessionList = doc.createElement('nav');
@@ -85,11 +86,12 @@ test('expansion lazily fetches a level and appends without duplicates on re-togg
   const featureRow = findRow(sessionList, 'feat-1');
   assert.ok(featureRow, 'child row rendered after expansion');
 
-  // Collapse and re-expand: no duplicate rows, no refetch (level cached).
+  // Collapse and re-expand: each expansion force-refreshes the level it opens
+  // (activity may have moved while it was collapsed) and never duplicates rows.
   await context.Sidebar.SessionTree.toggleTreeNode('root-1');
   await context.Sidebar.SessionTree.toggleTreeNode('root-1');
   const afterReexpand = context.fetchCalls.filter((c) => c.url.includes('/tree?')).length;
-  assert.equal(afterReexpand, afterFirst, 'cached level is not refetched');
+  assert.equal(afterReexpand, afterFirst + 1, 're-expansion re-reads the level exactly once');
   assert.equal(treeRows(sessionList).filter((el) => el.dataset.nodeId === 'feat-1').length, 1,
     're-expansion never duplicates the child row');
 });

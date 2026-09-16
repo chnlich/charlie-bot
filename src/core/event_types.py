@@ -127,6 +127,11 @@ SESSION_GROUP_CHANGED = "session_group_changed"
 # payload names the node and the fact type only; clients re-read the affected
 # rows, never trusting the notification itself.
 TASK_TREE_CHANGED = "task_tree_changed"
+# fact_type label carried by the tree notification a Run launch emits after its
+# durable process identity lands (src/core/runs.py record_launch). Launch is a
+# metadata write, not a control event, so this label exists only on the wire —
+# it is never an appended chat_events fact type.
+RUN_LAUNCHED = "run_launched"
 
 # -- Task tree control events (schema_version=2) -----------------------------
 # Durable task facts appended to a session's chat_events.jsonl through the

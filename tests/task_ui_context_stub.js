@@ -181,6 +181,7 @@ class FakeElement {
   get parentElement() { return this.parent; }
   set textContent(v) {
     this._text = String(v === null || v === undefined ? '' : v);
+    detachSubtree(this._doc, this.children);
     this.children = [];
     this._html = escapeHtmlText(this._text);
   }
@@ -188,7 +189,11 @@ class FakeElement {
     return this._text + this.children.map((c) => c.textContent).join('');
   }
   get innerHTML() { return this._html + this.children.map((c) => c.innerHTML).join(''); }
-  set innerHTML(html) { this._html = String(html); this.children = []; }
+  set innerHTML(html) {
+    detachSubtree(this._doc, this.children);
+    this._html = String(html);
+    this.children = [];
+  }
   addEventListener(type, handler) { (this._listeners[type] = this._listeners[type] || []).push(handler); }
   removeEventListener(type, handler) {
     this._listeners[type] = (this._listeners[type] || []).filter((h) => h !== handler);
@@ -217,6 +222,17 @@ class FakeElement {
   click() { this.dispatch('click', {target: this, closest: (s) => this.closest(s), stopPropagation: () => {}}); }
 }
 
+// Repaint-by-replacement (textContent/innerHTML) orphans the old subtree: the
+// byId registry must drop it, or getElementById answers with detached elements
+// and id-targeted updates (setSessionIndicator) would toggle dead nodes.
+function detachSubtree(doc, children) {
+  const walk = (el) => {
+    doc.deregister(el);
+    for (const child of el.children) walk(child);
+  };
+  for (const child of children) walk(child);
+}
+
 class FakeDocument {
   constructor() {
     this.byId = new Map();
@@ -229,6 +245,9 @@ class FakeDocument {
     if (this.byId.get(el.id) === el) this.byId.delete(el.id);
   }
   createElement(tag) { return new FakeElement(tag, this); }
+  // SVG construction in the page goes through createElementNS; the fake keeps
+  // one element class (class/attr/id behavior is what the modules exercise).
+  createElementNS(_ns, tag) { return new FakeElement(tag, this); }
   createDocumentFragment() {
     const frag = new FakeElement('div', this);
     frag._isFragment = true;

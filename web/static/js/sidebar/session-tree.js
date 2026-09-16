@@ -25,6 +25,26 @@ const tree = {
   levelEpoch: new Map(),  // parentId -> newest fetch epoch; a stale page may never overwrite fresh facts
 };
 
+// -- activity indicators ----------------------------------------------------
+// Tree rows render the sidebar's shared spinner/gear (status.js is the single
+// SVG + element-id owner) from THIS view's server facts: work_state running is
+// the node's own spinner; running descendants are the delegated-work gear so a
+// collapsed subtree cannot hide ongoing work; waiting/attention/idle stay with
+// the existing work-state dot + label. Registering the provider with
+// status.js routes every setSessionIndicator call for a tree node through
+// these facts, so a legacy thinking/thread probe can never clear a true task
+// Run spinner (worker Runs are invisible to the legacy thread walk).
+function treeIndicatorState(row) {
+  if (row.work_state === 'running') return 'thinking';
+  if ((row.running_descendant_count || 0) > 0) return 'worker_only';
+  return 'idle';
+}
+
+Sidebar.setTreeIndicatorStateProvider((sid) => {
+  const row = tree.rows.get(sid);
+  return row ? treeIndicatorState(row) : null;
+});
+
 function loadExpandedSet() {
   // A corrupt stored blob degrades to no saved expansion rather than breaking
   // the render path, so the catch stays.
@@ -205,6 +225,11 @@ function buildRowElement(row, depth) {
     + '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>';
   inner.appendChild(chevron);
 
+  const activity = document.createElement('span');
+  activity.className = 'flex items-center gap-1 flex-shrink-0 tree-activity';
+  Sidebar.buildSessionActivityIndicators(activity, row.id, treeIndicatorState(row));
+  inner.appendChild(activity);
+
   const name = document.createElement('span');
   name.className = 'flex-1 min-w-[55%] truncate text-sm session-name';
   name.textContent = row.name;
@@ -367,7 +392,9 @@ async function toggleTreeNode(nodeId) {
     const chevron = rowEl.querySelector('button[data-action="toggle"] svg');
     if (chevron) chevron.classList.add('rotate-90');
   }
-  await ensureLevel(nodeId);
+  // Forced: cached rows predate any notification this client missed while the
+  // level was collapsed, and an expanding user must see current activity.
+  await ensureLevel(nodeId, {force: true});
   if (rowEl && tree.expanded.has(nodeId)) {
     // Insert (or refresh) the children container right after the row.
     document.getElementById(childrenContainerId(nodeId))?.remove();
@@ -435,10 +462,12 @@ function enterTreeFilter() {
     tree._restored = true;
   }
   renderTree();
-  ensureLevel(null).then((ids) => {
+  // Forced: a filter switch must show current activity, not an earlier visit's
+  // cached rows (a run may have started and finished since).
+  ensureLevel(null, {force: true}).then((ids) => {
     if (ids === null) return;
     // Restore expansion: fetch each expanded node's children, then paint once.
-    const jobs = [...tree.expanded].map((id) => ensureLevel(id));
+    const jobs = [...tree.expanded].map((id) => ensureLevel(id, {force: true}));
     return Promise.all(jobs);
   }).then(() => {
     renderTree();
@@ -574,6 +603,14 @@ async function refreshAffectedLevels(sessionIds, opts = {}) {
     }
     if (rowOf(sid) && tree.expanded.has(sid)) levels.add(sid);
   }
+  await refetchLevelsAndPaint(levels, sessionIds, opts);
+}
+
+// The one repaint seam for a set of levels: forced refetch, stale-notice reset,
+// on-screen paint, panel hooks. Every caller (fact notifications, filter entry,
+// reconnect, drift reconciliation) converges here, so duplicate or concurrent
+// refreshes repaint the same server facts.
+async function refetchLevelsAndPaint(levels, sessionIds, opts = {}) {
   for (const level of levels) invalidateLevel(level);
   for (const level of levels) await ensureLevel(level === '' ? null : level, {force: true});
   // Fresh server facts landed: a prior pagination-conflict explanation is
@@ -586,6 +623,60 @@ async function refreshAffectedLevels(sessionIds, opts = {}) {
   if (globalThis.TaskPanel) globalThis.TaskPanel.onTreeChanged(sessionIds);
   if (globalThis.TaskRunsPanel) globalThis.TaskRunsPanel.onTreeChanged(sessionIds);
   if (globalThis.TaskContextPanel) globalThis.TaskContextPanel.onTreeChanged(sessionIds);
+}
+
+// -- drift reconciliation ----------------------------------------------------
+// Tree notifications are best-effort: a missed one (dropped frame, server-side
+// broadcast failure, a reconnect gap the catch-up cursor cannot replay) would
+// otherwise keep a stale spinner until an unrelated later fact. This pass
+// re-reads exactly the rendered levels — the roots page plus the expanded
+// levels on screen, never a whole-tree scan — and repaints only when a
+// rendered row fact actually moved, so steady-state polls never rebuild the
+// tree under the user's cursor or focus.
+let reconcileInFlight = false;
+
+function renderedLevelSignature(levelKey) {
+  const level = tree.levels.get(levelKey);
+  if (!level) return null;
+  return JSON.stringify(level.ids) + '|' + level.ids.map((id) => {
+    const row = rowOf(id);
+    return row ? JSON.stringify([
+      row.name, row.profile, row.task_state, row.work_state, row.running_descendant_count,
+      row.archived, row.child_count, row.open_descendant_count, row.attention_descendant_count,
+    ]) : 'missing';
+  }).join('|');
+}
+
+async function reconcileRenderedActivity() {
+  if (currentFilter !== 'tasks' || reconcileInFlight) return;
+  if (!tree.levels.get('')) return; // the view never loaded; filter entry owns the first paint
+  reconcileInFlight = true;
+  try {
+    const levels = ['', ...tree.expanded];
+    const before = levels.map(renderedLevelSignature);
+    for (const level of levels) invalidateLevel(level);
+    for (const level of levels) await ensureLevel(level === '' ? null : level, {force: true});
+    const after = levels.map(renderedLevelSignature);
+    // An incomplete pass (a failed level fetch) must not repaint from partial
+    // data; the DOM keeps the last complete paint and the next pass retries.
+    const complete = levels.every((key) => tree.levels.get(key));
+    if (complete && before.some((sig, i) => sig !== after[i])) {
+      tree.staleNotice.clear();
+      renderTree();
+      if (SESSION_ID) highlightNode(SESSION_ID);
+    }
+  } catch (err) {
+    console.error('reconcileRenderedActivity failed:', err);
+  } finally {
+    reconcileInFlight = false;
+  }
+}
+
+// One bounded reconciliation pass after a (re)connect: the server replays chat
+// events past the cursor but not sidebar notifications, so anything missed
+// while the socket was down is picked up here.
+function onReconnected() {
+  void reconcileRenderedActivity();
 }
 
 // Search inside the tasks filter: hits arrive with their server-built ancestor
@@ -636,7 +727,7 @@ function renderTreeWithMessage(message) {
 async function ensureExpanded(nodeId) {
   tree.expanded.add(nodeId);
   persistExpanded();
-  await ensureLevel(nodeId);
+  await ensureLevel(nodeId, {force: true});
   const rowEl = document.getElementById('tree-node-' + nodeId);
   if (rowEl && tree.expanded.has(nodeId)) {
     document.getElementById(childrenContainerId(nodeId))?.remove();
@@ -649,6 +740,8 @@ const API = {
   ensureExpanded,
   onSessionShown,
   onTreeChanged,
+  onReconnected,
+  reconcileRenderedActivity,
   searchTree,
   revealNode,
   highlightNode,

@@ -895,12 +895,21 @@ class RunStore:
         raise RunIdentityConflictError(
             f"run {run_id} already records process identity "
             f"({run.pid}, {run.pid_start!r}); refusing to overwrite with ({pid}, {pid_start!r})")
+      first_launch = run.pid is None
       if run.started_at is None:
         run.started_at = utc_now()
       run.pid = pid
       run.pid_start = pid_start
       await asyncio.to_thread(
           atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+      if first_launch:
+        # The durable identity flipped the node's derived work state (queued ->
+        # running): tell connected trees now, or a queued row painted while the
+        # child process was still starting stays stale until an unrelated later
+        # fact. Same best-effort seam and lock discipline as the terminal fact:
+        # a notification failure is logged, never fails the durable launch, and
+        # a repeated callback for the same process changes nothing.
+        await self._events.notify_tree_changed(session_id, ET.RUN_LAUNCHED)
       return run
 
   async def record_observation(

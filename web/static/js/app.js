@@ -88,6 +88,12 @@ document.addEventListener('DOMContentLoaded', () => {
           scheduleStatusPoll();
         }
       });
+      // The task tree's drift correction rides the same cadence: its
+      // notifications are best-effort, so a missed start/finish is healed by
+      // this bounded re-read of the rendered levels.
+      if (currentFilter === 'tasks' && globalThis.Sidebar && Sidebar.SessionTree) {
+        Sidebar.SessionTree.reconcileRenderedActivity();
+      }
     }, statusPollMs);
   }
   scheduleStatusPoll();

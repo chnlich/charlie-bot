@@ -537,8 +537,10 @@ class TaskTreeManager:
     meta = self._index_meta(index, session_id)
     child_ids = self._children_of(index, session_id)
     descendants = self._descendants(index, session_id)
+    descendant_work = [self.work_state_of(index, d) for d in descendants]
     open_count = sum(1 for d in descendants if self.task_state_of(index, d) == "open")
-    attention_count = sum(1 for d in descendants if self.work_state_of(index, d) == "attention")
+    attention_count = sum(1 for state in descendant_work if state == "attention")
+    running_count = sum(1 for state in descendant_work if state == "running")
     return SessionRow(
         id=meta.id,
         name=meta.name,
@@ -550,6 +552,7 @@ class TaskTreeManager:
         child_count=len(child_ids),
         open_descendant_count=open_count,
         attention_descendant_count=attention_count,
+        running_descendant_count=running_count,
     )
 
   async def record_native_anchor(

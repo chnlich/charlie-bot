@@ -97,13 +97,15 @@ async def _collect_staged_tail(partial: bytes, completion: bytes) -> list[dict]:
     events: list[dict] = []
 
     async def consume() -> None:
+      # Per-item append is load-bearing: the mid-flight `assert events == []` below
+      # probes incremental delivery, which a collect-then-extend defers to the end.
       async for event in tail_follow_events(
           raw,
           translate=lambda event: [event],
           is_alive=lambda: True,
           post_result_timeout=9999.0,
       ):
-        events.append(event)
+        events.append(event)  # noqa: PERF401  (see comment above)
 
     task = asyncio.create_task(consume())
     try:

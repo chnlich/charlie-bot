@@ -208,9 +208,7 @@ def _walk_refs_dirs(root: Path, sig: list[tuple[str, int, int]]) -> None:
       entries = list(os.scandir(current))
     except OSError:
       continue
-    for entry in entries:
-      if entry.is_dir(follow_symlinks=False):
-        stack.append(Path(entry.path))
+    stack.extend(Path(entry.path) for entry in entries if entry.is_dir(follow_symlinks=False))
 
 
 def _refs_signature(repo_path: Path) -> _RefSignature:

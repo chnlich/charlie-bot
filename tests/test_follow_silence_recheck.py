@@ -57,7 +57,7 @@ async def _consume(raw: Path, sink: list[dict], on_silence: Callable[[], Awaitab
       poll_interval=0.05,
       on_silence=on_silence,
   ):
-    sink.append(ev)
+    sink.append(ev)  # noqa: PERF401  (per-item append is load-bearing; see comment above)
 
 
 @pytest.mark.asyncio

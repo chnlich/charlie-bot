@@ -114,18 +114,19 @@ def _marks(html: str) -> list[tuple[str, re.Match[str]]]:
   def in_ignored(match: re.Match[str]) -> bool:
     return any(start <= match.start() < end for start, end in ignored)
 
-  for match in re.finditer(r"<ins\b[^>]*\bcbd-ins\b[^>]*>.*?</ins\s*>", html, re.IGNORECASE | re.DOTALL):
-    if not in_ignored(match):
-      marks.append(("ins", match))
-  for match in re.finditer(
-      r"<([A-Za-z][\w:-]*)\b(?=[^>]*\bcbd-del\b)(?=[^>]*\bdata-del\s*=\s*\"[^\"]*\")[^>]*>.*?</\1\s*>", html,
-      re.IGNORECASE | re.DOTALL):
-    if not in_ignored(match):
-      marks.append(("del", match))
-  for match in re.finditer(r"<([A-Za-z][\w:-]*)\b(?=[^>]*\bcbd-new\b)[^>]*>.*?</\1\s*>", html,
-                           re.IGNORECASE | re.DOTALL):
-    if not in_ignored(match):
-      marks.append(("new", match))
+  marks.extend(
+      ("ins", match)
+      for match in re.finditer(r"<ins\b[^>]*\bcbd-ins\b[^>]*>.*?</ins\s*>", html, re.IGNORECASE | re.DOTALL)
+      if not in_ignored(match))
+  marks.extend(
+      ("del", match) for match in re.finditer(
+          r"<([A-Za-z][\w:-]*)\b(?=[^>]*\bcbd-del\b)(?=[^>]*\bdata-del\s*=\s*\"[^\"]*\")[^>]*>.*?</\1\s*>", html,
+          re.IGNORECASE | re.DOTALL) if not in_ignored(match))
+  marks.extend(
+      ("new", match)
+      for match in re.finditer(
+          r"<([A-Za-z][\w:-]*)\b(?=[^>]*\bcbd-new\b)[^>]*>.*?</\1\s*>", html, re.IGNORECASE | re.DOTALL)
+      if not in_ignored(match))
   return sorted(marks, key=lambda item: item[1].start())
 
 
@@ -600,9 +601,7 @@ def _fuzz_document(rng: random.Random) -> str:
       pieces.append(f"<{tag}{_fuzz_attrs(rng)}>")
       if tag not in _VOID_TAGS:
         stack.append(tag)
-  for tag in reversed(stack):
-    if rng.random() < 0.7:
-      pieces.append(f"</{tag}>")
+  pieces.extend(f"</{tag}>" for tag in reversed(stack) if rng.random() < 0.7)
   return "".join(pieces)
 
 

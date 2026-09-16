@@ -44,6 +44,9 @@ _NODE_TESTS = [
     # creation notifications.
     "task_context_latest_run.test.js",
     "session_tree_creation_notify.test.js",
+    # Running-feedback corrective work: shared spinner/gear cues on tree rows,
+    # live Run updates, legacy-probe protection, bounded reconciliation.
+    "session_tree_running_feedback.test.js",
     "task_panel_actions.test.js",
     "task_context_rules.test.js",
     "task_runs_panel.test.js",

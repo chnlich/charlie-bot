@@ -17,7 +17,7 @@ from src.core.ndjson import (
     _TAIL_WINDOW_SIZE,
     append_ndjson,
     count_ndjson_lines,
-    iter_ndjson_events,
+    parse_ndjson_events,
     parse_ndjson_file,
     parse_ndjson_line,
     parse_ndjson_range,
@@ -453,8 +453,7 @@ class ChatEventStore:
     if events is not None:
       return events
     try:
-      with open(path, encoding="utf-8") as f:
-        events = list(iter_ndjson_events(f, log_event="archive_parse_skip", log_fields={"session_id": session_id}))
+      events = parse_ndjson_events(path, log_event="archive_parse_skip", log_fields={"session_id": session_id})
     except OSError as e:
       log.debug("archive_read_failed", path=str(path), error=str(e))
       return []

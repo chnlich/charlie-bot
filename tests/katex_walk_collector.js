@@ -13,6 +13,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const {
   fetchUrl,
@@ -59,9 +60,18 @@ try {
   const rawWalk = w.renderMathInElement;
 
   // Page shape: the checkout's renderer, then its postProcess step
-  // (querySelectorAll('.prose-msg') -> renderChatMath).
+  // (querySelectorAll('.prose-msg') -> renderChatMath). The checkout's page
+  // load order: math-scanner.js defines the mathSpan global the renderer's
+  // math tokenizer reads. Both ride the jsdom vm context with script
+  // semantics: w.eval would be an indirect eval, and math-scanner.js's
+  // 'use strict' confines a strict eval's function declarations to the eval
+  // instead of the window global the renderer reads.
   w.platform = {};
-  w.eval(fs.readFileSync(path.join(CHECKOUT, 'web/static/js/markdown-renderer.js'), 'utf8'));
+  const domContext = dom.getInternalVMContext();
+  vm.runInContext(fs.readFileSync(path.join(CHECKOUT, 'web/static/js/math-scanner.js'), 'utf8'), domContext,
+      { filename: 'math-scanner.js' });
+  vm.runInContext(fs.readFileSync(path.join(CHECKOUT, 'web/static/js/markdown-renderer.js'), 'utf8'), domContext,
+      { filename: 'markdown-renderer.js' });
   let pageWalks = 0;
   w.renderMathInElement = (el, opts) => {
     pageWalks += 1;

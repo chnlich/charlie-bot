@@ -54,6 +54,9 @@ async function loadRendererContext(hljs) {
   };
   vm.createContext(context);
   vm.runInContext(markedSrc, context, { filename: 'marked.min.js' });
+  // The page's load order: math-scanner.js defines the mathSpan global the
+  // renderer's math tokenizer reads.
+  vm.runInContext(readStatic('math-scanner.js'), context, { filename: 'math-scanner.js' });
   const src = readStatic('markdown-renderer.js');
   vm.runInContext(src, context, { filename: 'markdown-renderer.js' });
   return context;

@@ -9,16 +9,16 @@
 // The vendored katex.min.js (UMD build) is resolved by the caller
 // (src/core/artifact_wrap.py) and passed explicitly.
 //
-// The scanner rules below are duplicated from web/static/js/markdown-renderer.js
-// (the chat math extension): two copies of one definition, kept in sync by this
-// comment and by the matching case lists in tests/chat_math_extension.test.js
-// (chat parse) and tests/core/test_artifact_wrap.py (this driver). The delimiter
-// classes are $...$, $$...$$, \(...\), \[...\] with
-// the same dollar skip heuristics: open next char non-whitespace non-$, close
-// prev char non-whitespace non-$ and next char non-digit, backslash-escaped $
-// never opens or closes, and a \] immediately followed by ']' is not a close.
+// The delimiter scan is web/static/js/math-scanner.js's mathSpan — the same
+// scanner the chat markdown extension tokenizes with. This driver adds the
+// protected-range walk (which regions the scan never enters) and the
+// katex.renderToString call; the matching case lists in
+// tests/chat_math_extension.test.js (chat parse) and
+// tests/core/test_artifact_wrap.py (this driver) pin both consumers to one
+// behavior.
 
 const fs = require('node:fs');
+const { mathSpan } = require('../web/static/js/math-scanner.js');
 
 const [fragmentPath, katexPath] = process.argv.slice(2);
 if (!fragmentPath || !katexPath) {
@@ -27,75 +27,16 @@ if (!fragmentPath || !katexPath) {
 }
 const katex = require(katexPath);
 
-function isWs(c) {
-  return c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f' || c === '\v';
-}
-
-function isDigit(c) {
-  return c >= '0' && c <= '9';
-}
-
-// Inline $...$: single line. Returns the raw span or undefined.
-function inlineDollar(src) {
-  if (src[1] === undefined || isWs(src[1])) return undefined;
-  for (let j = 1; j < src.length; j++) {
-    const c = src[j];
-    if (c === '\\') { j++; continue; }  // \$ never closes; \x pairs skip as content
-    if (c === '\n') return undefined;
-    if (c !== '$') continue;
-    if (isWs(src[j - 1]) || src[j - 1] === '$') continue;
-    if (isDigit(src[j + 1])) continue;
-    return src.slice(0, j + 1);
-  }
-  return undefined;
-}
-
-// Display $$...$$: multi-line; the first $$ closes; any $ inside declines.
-function displayDollar(src) {
-  for (let j = 2; j < src.length; j++) {
-    if (src[j] !== '$') continue;
-    if (src[j + 1] !== '$') return undefined;
-    if (j === 2) return undefined;  // empty content
-    return src.slice(0, j + 2);
-  }
-  return undefined;
-}
-
-// \(...\) inline single-line, \[...\] display multi-line. The close check runs
-// before the escape skip; a \] followed by ']' is not a close.
-function bracket(src, close, singleLine) {
-  for (let j = 2; j < src.length; j++) {
-    if (src.startsWith(close, j)) {
-      if (close.endsWith(']') && src[j + 2] === ']') { j++; continue; }
-      if (j === 2) return undefined;  // empty content
-      return src.slice(0, j + 2);
-    }
-    if (src[j] === '\\') { j++; continue; }
-    if (src[j] === '\n' && singleLine) return undefined;
-  }
-  return undefined;
-}
-
-// One scan step at a position: (raw span, display mode) or undefined.
-function mathSpanAt(src) {
-  if (src.startsWith('$$')) return { raw: displayDollar(src), display: true };
-  if (src.startsWith('$')) return { raw: inlineDollar(src), display: false };
-  if (src.startsWith('\\[')) return { raw: bracket(src, '\\]', false), display: true };
-  if (src.startsWith('\\(')) return { raw: bracket(src, '\\)', true), display: false };
-  return { raw: undefined, display: false };
-}
-
 function scanMathSpans(text) {
   const spans = [];
   let i = 0;
   while (i < text.length) {
     // Only a position that could open a span pays for the tail slice; prose
     // positions advance without copying.
-    const hit = (text[i] === '$' || text[i] === '\\') ? mathSpanAt(text.slice(i)) : { raw: undefined, display: false };
-    const { raw, display } = hit;
-    if (raw) {
-      spans.push({ start: i, end: i + raw.length, raw, display });
-      i += raw.length;
+    const hit = (text[i] === '$' || text[i] === '\\') ? mathSpan(text.slice(i)) : undefined;
+    if (hit) {
+      spans.push({ start: i, end: i + hit.raw.length, raw: hit.raw, display: hit.display });
+      i += hit.raw.length;
     } else if (text[i] === '\\') {
       // Escape pair: the char after a backslash never opens a span (marked's
       // escape tokenizer does this on the chat path): \$ stays literal,

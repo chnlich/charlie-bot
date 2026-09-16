@@ -76,6 +76,9 @@ function buildStreamHarness(markedSource, options = {}) {
     vm.runInContext(options.hljsSource, context, { filename: 'highlight.min.js' });
   }
   vm.runInContext(markedSource, context, { filename: 'marked.js' });
+  // The checkout's page load order: math-scanner.js defines the mathSpan
+  // global the renderer's math tokenizer reads.
+  vm.runInContext(read('math-scanner.js'), context, { filename: 'math-scanner.js' });
   vm.runInContext(read('markdown-renderer.js'), context, { filename: 'markdown-renderer.js' });
   vm.runInContext(read('usage.js'), context, { filename: 'usage.js' });
 

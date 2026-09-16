@@ -534,61 +534,10 @@ function recordCodeTokens(tokens) {
   // wraps _{subscripts} in <em> — KaTeX receives the bytes the model wrote.
   // Rendering itself stays with renderChatMath's auto-render walk on the DOM
   // text node; this extension only decides what survives the parse. The
-  // scanner rules are duplicated in scripts/prerender_math.js (the wrap
-  // pre-render driver, which scans HTML fragments instead of markdown); the
-  // two copies are kept behavior-identical by tests/chat_math_extension.test.js.
-  function mathRaw(src) {
-    const isWs = (c) => c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f' || c === '\v';
-    const isDigit = (c) => c >= '0' && c <= '9';
-    // $...$: single line. Open: next char non-whitespace and non-$ (blocks
-    // "$5 and $10" currency, whose close candidate sits next to whitespace).
-    // Close: prev char non-whitespace non-$, next char non-digit.
-    if (src.startsWith('$') && !src.startsWith('$$')) {
-      if (src[1] === undefined || isWs(src[1])) return undefined;
-      for (let j = 1; j < src.length; j++) {
-        const c = src[j];
-        if (c === '\\') { j++; continue; }  // \$ never closes; \x pairs skip as content
-        if (c === '\n') return undefined;
-        if (c !== '$') continue;
-        if (isWs(src[j - 1]) || src[j - 1] === '$') continue;
-        if (isDigit(src[j + 1])) continue;
-        return src.slice(0, j + 1);
-      }
-      return undefined;
-    }
-    // $$...$$: multi-line; the first $$ closes; any $ inside the content
-    // declines the token (no nested $ — a relaxed rule only adds misreads).
-    if (src.startsWith('$$')) {
-      for (let j = 2; j < src.length; j++) {
-        if (src[j] !== '$') continue;
-        if (src[j + 1] !== '$') return undefined;
-        if (j === 2) return undefined;  // empty content
-        return src.slice(0, j + 2);
-      }
-      return undefined;
-    }
-    // \(...\) inline single-line, \[...\] display multi-line. The close check
-    // runs before the escape skip so the delimiter's own backslash is not
-    // consumed as an escape pair; \[ inside the content never re-opens. A \]
-    // immediately followed by ']' is not a close (display math with [N, 32]
-    // style trailing brackets).
-    const bracket = src.startsWith('\\[') ? { close: '\\]', singleLine: false }
-      : src.startsWith('\\(') ? { close: '\\)', singleLine: true }
-      : null;
-    if (bracket) {
-      for (let j = 2; j < src.length; j++) {
-        if (src.startsWith(bracket.close, j)) {
-          if (bracket.close.endsWith(']') && src[j + 2] === ']') { j++; continue; }
-          if (j === 2) return undefined;  // empty content
-          return src.slice(0, j + 2);
-        }
-        if (src[j] === '\\') { j++; continue; }
-        if (src[j] === '\n' && bracket.singleLine) return undefined;
-      }
-      return undefined;
-    }
-    return undefined;
-  }
+  // delimiter scan is math-scanner.js's mathSpan (loaded just before this
+  // file), shared with the wrap pre-render driver; tests/chat_math_extension.test.js
+  // and tests/core/test_artifact_wrap.py run the same case list against the
+  // two consumers.
   const mathExtension = {
     name: 'math',
     level: 'inline',
@@ -604,8 +553,8 @@ function recordCodeTokens(tokens) {
       return cut;
     },
     tokenizer(src) {
-      const raw = mathRaw(src);
-      return raw && { type: 'math', raw, text: raw };
+      const hit = mathSpan(src);
+      return hit && { type: 'math', raw: hit.raw, text: hit.raw };
     },
     // Same invariant as renderer.html: the span renders as literal text, so a
     // < or & inside the formula can never become a DOM node.

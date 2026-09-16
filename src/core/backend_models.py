@@ -90,6 +90,8 @@ class CharlieCodeBackend(BackendBase):
   timeout_seconds: int | None = Field(
       default=None,
       gt=0)  # call budget: silence bound when streaming, whole-call bound when not (None = charlie-code default)
+  top_p: float | None = Field(default=None, gt=0.0, le=1.0)  # nucleus cutoff (None = charlie-code default)
+  temperature: float | None = Field(default=None, ge=0.0)  # sampling temperature (None = charlie-code default)
 
 
 class GeminiBackend(BackendBase):

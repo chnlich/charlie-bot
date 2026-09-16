@@ -79,6 +79,8 @@ def build_backend(
         image_input=option.image_input,
         stream=option.stream,
         timeout_seconds=option.timeout_seconds,
+        top_p=option.top_p,
+        temperature=option.temperature,
         proxy_url=option.proxy_url,
         api_key=str(get_credentials().require(option.credential, "api_key")) if option.credential else None,
         **kwargs)

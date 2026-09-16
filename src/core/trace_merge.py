@@ -1,5 +1,6 @@
 """Streaming merge support for Chrome-format JSON traces."""
 
+import contextlib
 import fcntl
 import re
 import subprocess
@@ -278,9 +279,7 @@ def _merge_all(paths: list[Path], out_path: Path, slim: bool) -> None:
       # __exit__ closes stdin again; a killed child makes that flush raise EPIPE,
       # so close the write end here first (idempotent once closed) or the walk's
       # own error would be replaced by it.
-      try:
+      with contextlib.suppress(BrokenPipeError):
         output.close()
-      except BrokenPipeError:
-        pass
       _kill_gzip_run(gzip_proc)
       raise

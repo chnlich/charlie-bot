@@ -251,14 +251,13 @@ def iter_ndjson_events_from_end(
         # The whole window sits inside the line spanning pos: keep its bytes
         # and walk older; the join happens once at the line's closing newline.
         pending.insert(0, window)
-        if start == 0:
-          # The file's first line closes at the file start — no older segment
-          # follows, so the pending pieces are the whole line, and its head is
-          # pending[0]'s head (the window starting at byte 0): a rejected head
-          # skips the join, same contract as the closing-newline branch below.
-          if head_filter is None or head_filter(pending[0]):
-            yield from iter_ndjson_events(
-                [b"".join(pending)], log_event=log_event, log_fields=log_fields, parse_filter=parse_filter)
+        # The file's first line closes at the file start — no older segment
+        # follows, so the pending pieces are the whole line, and its head is
+        # pending[0]'s head (the window starting at byte 0): a rejected head
+        # skips the join, same contract as the closing-newline branch below.
+        if start == 0 and (head_filter is None or head_filter(pending[0])):
+          yield from iter_ndjson_events(
+              [b"".join(pending)], log_event=log_event, log_fields=log_fields, parse_filter=parse_filter)
         pos = start
         continue
       lines = window[:nl].split(b"\n")

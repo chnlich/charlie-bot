@@ -167,8 +167,9 @@ async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(
   chunks = [
       b'data: {"type": "server.connected", "properties": {}}\n',
       b"\n",
-      b'data: {"type": "message.updated", "properties": {"sessionID": "session-1", '
-      b'"info": {"id": "m1", "role": "assistant"}}}\n',
+      (
+          b'data: {"type": "message.updated", "properties": {"sessionID": "session-1", '
+          b'"info": {"id": "m1", "role": "assistant"}}}\n'),
       b"\n",
       *frame_chunks,
       b'data: {"type": "session.idle", "properties": {"sessionID": "session-1"}}\n',

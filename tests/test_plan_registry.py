@@ -789,7 +789,7 @@ async def test_present_rejects_open_trade_off_with_bodyless_explainer(tmp_path: 
   bodyless = open_fork_html().replace("</div>", '<details class="details-layer"><summary>Why</summary></details></div>')
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content=_plan_doc_with_open_fork(bodyless))
-  with pytest.raises(ValueError, match="fork-explainer.*explainer has no body"):
+  with pytest.raises(ValueError, match=r"fork-explainer.*explainer has no body"):
     await plan_mgr.present(meta.id, file=file_rel, title="P1")
 
 

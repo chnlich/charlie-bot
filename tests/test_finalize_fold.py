@@ -45,7 +45,7 @@ async def test_fold_matches_pure_scans_over_randomized_appends(tmp_path: Path) -
   sid = session.id
   rng = random.Random(20260907)
   threads = ("t1", "t2")
-  kinds = [_MASTER_OUTPUT_TYPES + (ET.WORKER_SUMMARY, ET.USER, "error")]
+  kinds = [(*_MASTER_OUTPUT_TYPES, ET.WORKER_SUMMARY, ET.USER, "error")]
   for i in range(400):
     kind = rng.choice(kinds[0])
     if kind == ET.WORKER_SUMMARY:
@@ -122,7 +122,7 @@ def test_fold_unit_answers_match_pure_functions() -> None:
   rng = random.Random(7)
   threads = ("t1", "t2")
   for _ in range(300):
-    kind = rng.choice(_MASTER_OUTPUT_TYPES + (ET.WORKER_SUMMARY, ET.USER))
+    kind = rng.choice((*_MASTER_OUTPUT_TYPES, ET.WORKER_SUMMARY, ET.USER))
     if kind == ET.WORKER_SUMMARY:
       event = _summary(rng.choice(threads), status=rng.choice(["completed", "running"]))
     else:

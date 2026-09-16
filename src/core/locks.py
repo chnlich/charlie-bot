@@ -6,7 +6,8 @@ and then serialize on different ones.
 """
 
 import asyncio
-from typing import Hashable, TypeVar
+from collections.abc import Hashable
+from typing import TypeVar
 
 K = TypeVar("K", bound=Hashable)
 

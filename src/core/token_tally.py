@@ -1519,9 +1519,9 @@ def collect_charliebot(
         verdict = _classify_backend(backend, registry)
         # The recovered id is the records' account; relabel the fold's copies (never the
         # cached entry's lists).
-        records = [rec[:1] + [backend] + rec[2:] for rec in records]
+        records = [[*rec[:1], backend, *rec[2:]] for rec in records]
     if verdict is None:
-      label = backend if backend else f"thread {Path(path).parts[-3]} (no backend id)"
+      label = backend or f"thread {Path(path).parts[-3]} (no backend id)"
       undetermined[label] = undetermined.get(label, 0) + len(records)
       continue
     if verdict == "skip":

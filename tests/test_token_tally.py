@@ -797,7 +797,8 @@ def test_opencode_row_data_matches_the_scan_projection() -> None:
       (["oc-nocache", "prov", None, 5, 0, 0, 1], True),
   ]
   # strict=True fails loud when the admitted corpus and its expected projections drift apart.
-  shapes = list(zip(_ADMITTED_OPENCODE_ROWS, projections, strict=True)) + [
+  shapes = [
+      *zip(_ADMITTED_OPENCODE_ROWS, projections, strict=True),
       # skipped rows below: non-assistant role counted 0 bytes; zero counters and
       # string tokens pass the filters but project to None with bytes counted
       ({

@@ -405,7 +405,7 @@ def select(
   if not available:
     return None
   idle = [(account, hr) for account, hr in available if busy_accounts is None or account.label not in busy_accounts]
-  contenders = idle if idle else available
+  contenders = idle or available
   scored = [(hr + _reset_bonus(account.label, model, moment, hr), account) for account, hr in contenders]
   best = max(score for score, _account in scored)
   tied = [account for score, account in scored if best - score <= _SCORE_TIE]

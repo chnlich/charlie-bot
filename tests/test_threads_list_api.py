@@ -335,7 +335,7 @@ def test_rebuild_tolerates_file_vanished_between_walk_and_read(tmp_path: Path) -
   pairs = list(core_threads.iter_thread_meta_stats(str(threads_dir)))
   # A pair from the signature's walk whose file the session GC removed before
   # the rebuild's parse-merge read it.
-  stale = pairs + [(str(threads_dir / "vanished" / "metadata.json"), pairs[0][1])]
+  stale = [*pairs, (str(threads_dir / "vanished" / "metadata.json"), pairs[0][1])]
 
   metas = mgr.list_threads_from_stats(stale)
   assert metas[1] is None

@@ -76,7 +76,7 @@ async def test_session_default_raises_when_no_backend_options() -> None:
   session = SessionMetadata(name="s", backend="claude-opus-4.6")
   mgr = _mock_session_mgr(session)
 
-  with pytest.raises(ValueError, match="configured backends.options entry"):
+  with pytest.raises(ValueError, match=r"configured backends.options entry"):
     await resolve_requested_subagent_backend_model(session.id, cfg, mgr, requested_backend=None)
 
 
@@ -89,7 +89,7 @@ async def test_requested_backend_raises_for_unknown_typo() -> None:
   session = SessionMetadata(name="s", backend="claude-opus-4.7")
   mgr = _mock_session_mgr(session)
 
-  with pytest.raises(ValueError, match="is not in backends.options"):
+  with pytest.raises(ValueError, match=r"is not in backends.options"):
     await resolve_requested_subagent_backend_model(session.id, cfg, mgr, requested_backend="missing-backend")
 
 

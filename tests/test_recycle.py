@@ -344,7 +344,7 @@ async def test_live_range_append_extends_memo_without_full_reparse(tmp_path: Pat
     def seek(self, *args: Any, **kwargs: Any) -> int:
       return self._inner.seek(*args, **kwargs)
 
-    def __enter__(self) -> "_CountingReader":
+    def __enter__(self) -> _CountingReader:
       self._inner.__enter__()
       return self
 
@@ -450,7 +450,7 @@ class _CountingByteReader:
   def seek(self, *args: Any, **kwargs: Any) -> int:
     return self._inner.seek(*args, **kwargs)
 
-  def __enter__(self) -> "_CountingByteReader":
+  def __enter__(self) -> _CountingByteReader:
     self._inner.__enter__()
     return self
 

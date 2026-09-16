@@ -10,8 +10,8 @@ move_to_end.
 import os
 import threading
 from collections import OrderedDict
-from collections.abc import Callable, Iterator
-from typing import Generic, Hashable, TypeVar
+from collections.abc import Callable, Hashable, Iterator
+from typing import Generic, TypeVar
 
 K = TypeVar("K", bound=Hashable)
 V = TypeVar("V")

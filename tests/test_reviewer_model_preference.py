@@ -87,7 +87,7 @@ def test_resolve_preference_option_valid() -> None:
 
 def test_resolve_preference_option_missing_id() -> None:
   cfg = _build_cfg()
-  with pytest.raises(ValueError, match="not in backends.options"):
+  with pytest.raises(ValueError, match=r"not in backends.options"):
     review._resolve_preference_option(cfg, "nonexistent")
 
 

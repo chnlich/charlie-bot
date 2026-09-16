@@ -567,7 +567,7 @@ async def test_tick_elone_successor_does_not_trigger_stop_or_dead_group_terminat
 async def test_fork_of_pm_session_inherits_group_but_strips_role_and_task(tmp_path: Path) -> None:
   """A fork of the PM dedicated session is an exploratory user session: it keeps the
   project group but never inherits role: project or the scheduled_task binding."""
-  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
+  _cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
   pm = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: pm_bp_eval", scheduled_task="pm_bp_eval", role=PROJECT_ROLE),
       backend=OPUS_BACKEND_ID)
@@ -594,7 +594,7 @@ async def test_elone_of_pm_session_takes_inheriting_succession(
   the scheduler bookkeeping; the task yaml backend is written back, and the parent is
   archived with the successor pointer set."""
   yaml_path = _write_pm_yaml(pm_home)
-  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
+  _cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
   pm = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: pm_bp_eval", scheduled_task="pm_bp_eval", role=PROJECT_ROLE),
       backend=OPUS_BACKEND_ID)

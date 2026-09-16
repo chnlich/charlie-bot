@@ -94,7 +94,7 @@ def test_enabled_manager_gets_contract_common_rules_and_enabled_marker(tmp_path:
   out = master_cc._build_instructions_content(_meta("group-alpha"), cfg, None)
 
   assert out is not None
-  assert getattr(out, "project_error") is None
+  assert out.project_error is None
   assert out.count(CONTRACT_TEXT) == 1
   assert out.count(COMMON_TEXT) == 1
   assert out.count(SUPPLEMENT_TEXT) == 1
@@ -130,7 +130,7 @@ def test_unconfigured_manager_gets_pointer_with_not_enabled_marker_and_no_contra
   out = master_cc._build_instructions_content(_meta("group-beta"), cfg, None)
 
   assert out is not None
-  assert getattr(out, "project_error") is None
+  assert out.project_error is None
   assert MARKER_UNCONFIGURED in out
   assert MARKER_ENABLED not in out
   assert "your ledger duties stand" in out
@@ -191,10 +191,10 @@ def test_missing_repo_contract_fails_only_enabled_manager(tmp_path: Path) -> Non
 
   enabled = master_cc._build_instructions_content(_meta("group-alpha"), cfg, None)
   assert enabled is not None
-  error = getattr(enabled, "project_error")
+  error = enabled.project_error
   assert error is not None and "repo manager contract unreadable" in str(error)
 
   unconfigured = master_cc._build_instructions_content(_meta("group-beta"), cfg, None)
   assert unconfigured is not None
-  assert getattr(unconfigured, "project_error") is None
+  assert unconfigured.project_error is None
   assert MARKER_UNCONFIGURED in unconfigured

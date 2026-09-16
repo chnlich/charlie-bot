@@ -30,7 +30,7 @@ async def test_cron_tasks_gzip_ships_precompressed_body(monkeypatch: pytest.Monk
       ScheduledTaskConfig(name="nightly", cron="* * * * *", type="normal", prompt="nightly prompt", backend="codex-o3")
   ]
   monkeypatch.setattr(cron_mod, "get_scheduled_tasks", lambda: tasks)
-  monkeypatch.setattr(cron_mod, "get_scheduled_task_errors", lambda: [])
+  monkeypatch.setattr(cron_mod, "get_scheduled_task_errors", list)
 
   gz = await list_cron_tasks(_page_request("gzip"))
   plain = await list_cron_tasks(_page_request())
@@ -49,7 +49,7 @@ async def test_cron_tasks_repeat_serves_cache_without_rerender(monkeypatch: pyte
   re-renders nothing."""
   tasks = [ScheduledTaskConfig(name="nightly", cron="* * * * *", type="normal", prompt="p", backend="codex-o3")]
   monkeypatch.setattr(cron_mod, "get_scheduled_tasks", lambda: tasks)
-  monkeypatch.setattr(cron_mod, "get_scheduled_task_errors", lambda: [])
+  monkeypatch.setattr(cron_mod, "get_scheduled_task_errors", list)
   first = await list_cron_tasks(_page_request("gzip"))
 
   def explode(content: object) -> bytes:
@@ -67,7 +67,7 @@ async def test_cron_tasks_generation_change_rerenders(monkeypatch: pytest.Monkey
   current = [ScheduledTaskConfig(name="old", cron="* * * * *", type="normal", prompt="p", backend="codex-o3")]
   fresh = [ScheduledTaskConfig(name="new", cron="* * * * *", type="normal", prompt="p", backend="codex-o3")]
   monkeypatch.setattr(cron_mod, "get_scheduled_tasks", lambda: current)
-  monkeypatch.setattr(cron_mod, "get_scheduled_task_errors", lambda: [])
+  monkeypatch.setattr(cron_mod, "get_scheduled_task_errors", list)
   first = await list_cron_tasks(_page_request("gzip"))
 
   current = fresh
@@ -81,8 +81,8 @@ async def test_cron_tasks_generation_change_rerenders(monkeypatch: pytest.Monkey
 async def test_cron_tasks_plain_request_stays_uncompressed(monkeypatch: pytest.MonkeyPatch) -> None:
   """A client sending no Accept-Encoding reads the plain body: no
   Content-Encoding header."""
-  monkeypatch.setattr(cron_mod, "get_scheduled_tasks", lambda: [])
-  monkeypatch.setattr(cron_mod, "get_scheduled_task_errors", lambda: [])
+  monkeypatch.setattr(cron_mod, "get_scheduled_tasks", list)
+  monkeypatch.setattr(cron_mod, "get_scheduled_task_errors", list)
 
   plain = await list_cron_tasks(_page_request())
 

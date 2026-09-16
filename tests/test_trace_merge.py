@@ -379,12 +379,17 @@ def test_walk_failure_raises_and_reaps_the_compressor(tmp_path: Path, monkeypatc
 def test_json_object_without_trace_events_fails_the_build(tmp_path: Path) -> None:
   # A JSON object with no traceEvents array (an analysis manifest, a config dump)
   # parses cleanly yet carries zero events; merging it must raise, not silently
-  # ship an empty artifact, and a real trace among the inputs must not mute it.
+  # ship an empty artifact — including when it rides beside a real trace, whose
+  # presence must not mute the rejection.
   manifest = tmp_path / "analysis_manifest.json"
   manifest.write_text(json.dumps({"A": [{"rank": 0, "path": "/data/trace.json"}]}), encoding="utf-8")
+  real = tmp_path / "trace_rank0.json"
+  _write_trace(real, _rank_events(0))
   output = tmp_path / "merged.json.gz"
   with pytest.raises(ValueError, match="no traceEvents array"):
     merge_traces([manifest], output, slim=False)
+  with pytest.raises(ValueError, match="no traceEvents array"):
+    merge_traces([real, manifest], output, slim=False)
 
 
 def test_trace_events_helper_accepts_trace_shapes_and_rejects_the_rest(tmp_path: Path) -> None:

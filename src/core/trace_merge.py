@@ -29,6 +29,22 @@ _MERGE_BATCH_EVENTS = 512
 _MERGE_PIPE_BYTES = 1 << 20
 
 
+def _trace_events_or_raise(trace: object, path: Path) -> list[dict]:
+  """Return a Chrome trace's event list; raise on JSON that parses but is not a trace.
+
+  A Chrome-JSON trace is a bare event array or an object carrying a ``traceEvents``
+  array (profiler exports keep metadata siblings such as ``deviceProperties`` beside
+  it). Any other JSON object — an analysis manifest, a config dump — parses cleanly
+  yet carries zero events, so accepting it would merge silence into the output and
+  ship an empty artifact.
+  """
+  if isinstance(trace, list):
+    return trace
+  if isinstance(trace, dict) and isinstance(trace.get("traceEvents"), list):
+    return trace["traceEvents"]
+  raise ValueError(f"Not a Chrome-JSON trace (no traceEvents array): {path}")
+
+
 def _gzip_exit_or_raise(gzip_proc: subprocess.Popen, context: str) -> None:
   """Reap the gzip run's exit; a nonzero exit raises with the stderr the run wrote."""
   if gzip_proc.wait() != 0:
@@ -121,12 +137,7 @@ def _merge_one_trace(
     slim: bool,
 ) -> None:
   trace = orjson.loads(path.read_bytes())
-  if isinstance(trace, dict):
-    events = trace.get("traceEvents") or []
-  elif isinstance(trace, list):
-    events = trace
-  else:
-    raise ValueError(f"Trace root must be an object or array: {path}")
+  events = _trace_events_or_raise(trace, path)
   rank_label = _rank_label(path)
   tid_seq.start_trace()
   flow_seq.start_trace()

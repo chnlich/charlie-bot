@@ -374,3 +374,34 @@ def test_walk_failure_raises_and_reaps_the_compressor(tmp_path: Path, monkeypatc
     raise AssertionError("unparseable trace must fail the build")
 
   assert calls[0] == "kill" and "wait" in calls
+
+
+def test_json_object_without_trace_events_fails_the_build(tmp_path: Path) -> None:
+  # A JSON object with no traceEvents array (an analysis manifest, a config dump)
+  # parses cleanly yet carries zero events; merging it must raise, not silently
+  # ship an empty artifact, and a real trace among the inputs must not mute it.
+  manifest = tmp_path / "analysis_manifest.json"
+  manifest.write_text(json.dumps({"A": [{"rank": 0, "path": "/data/trace.json"}]}), encoding="utf-8")
+  output = tmp_path / "merged.json.gz"
+  with pytest.raises(ValueError, match="no traceEvents array"):
+    merge_traces([manifest], output, slim=False)
+
+
+def test_trace_events_helper_accepts_trace_shapes_and_rejects_the_rest(tmp_path: Path) -> None:
+  from src.core.trace_merge import _trace_events_or_raise
+
+  wrapped = tmp_path / "wrapped.json"
+  bare = tmp_path / "bare.json"
+  _write_trace(wrapped, [{"ph": "X", "pid": 1, "tid": 1}])
+  _write_trace(bare, [{"ph": "X", "pid": 1, "tid": 1}], bare=True)
+  assert _trace_events_or_raise(orjson.loads(wrapped.read_bytes()), wrapped) == [{"ph": "X", "pid": 1, "tid": 1}]
+  assert _trace_events_or_raise(orjson.loads(bare.read_bytes()), bare) == [{"ph": "X", "pid": 1, "tid": 1}]
+
+  profiler_shape = {"schemaVersion": 1, "deviceProperties": [{"id": 0}], "traceEvents": []}
+  assert _trace_events_or_raise(profiler_shape, wrapped) == []
+
+  for body in ('{"A": [{"rank": 0}]}', '{"traceEvents": null}', '{"traceEvents": {"0": {}}}', '"text"', "12"):
+    not_a_trace = tmp_path / "not-a-trace.json"
+    not_a_trace.write_text(body, encoding="utf-8")
+    with pytest.raises(ValueError, match="no traceEvents array"):
+      _trace_events_or_raise(orjson.loads(not_a_trace.read_bytes()), not_a_trace)

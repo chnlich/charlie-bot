@@ -28,7 +28,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from collections.abc import Iterable, Set
+from collections.abc import Iterable
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -375,7 +376,7 @@ def select(
     cfg: CharlieBotConfig,
     model: str | None,
     exclude: Iterable[str] = (),
-    busy_accounts: Set[str] | None = None,
+    busy_accounts: AbstractSet[str] | None = None,
     now: datetime | None = None,
 ) -> ClaudeAccount | None:
   """The healthy account with the most headroom for *model*, ranked statelessly.

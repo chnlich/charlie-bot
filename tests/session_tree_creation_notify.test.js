@@ -11,7 +11,8 @@ function build(overrides = {}) {
   context.hideStreaming = () => {};
   context.appendMessageObject = () => {};
   context.pollActiveSessionView = () => {};
-  loadModules(context, ['sidebar/session-tree.js', 'websocket.js']);
+  // Page order: status.js (the indicator owner the tree shares) precedes the tree owner.
+  loadModules(context, ['sidebar/status.js', 'sidebar/session-tree.js', 'websocket.js']);
   const doc = context.__doc;
   const sessionList = doc.createElement('nav');
   sessionList.id = 'session-list';
@@ -139,14 +140,16 @@ test('a creation deeper than one level works for nodes absent from the cache', a
   assert.ok(rootRow.textContent.includes('3 open'), 'the root row counts the deep creations');
   const m1Row = findRows(sessionList, 'm1')[0];
   assert.ok(m1Row.textContent.includes('2 open'), 'the middle manager counts its new subtree');
-  // The whole new chain is reachable by expansion, from already-fetched levels.
+  // The whole new chain is reachable by expansion. Expansion force-refreshes
+  // the level it opens (one fetch each), so what it renders is the current
+  // server truth even if a notification was missed while collapsed.
   const fetchesBeforeExpand = context.fetchCalls.filter((c) => c.url.includes('/tree?')).length;
   await context.Sidebar.SessionTree.toggleTreeNode('m1');
   assert.equal(findRows(sessionList, 'm2').length, 1, 'the new middle manager renders');
   await context.Sidebar.SessionTree.toggleTreeNode('m2');
   assert.equal(findRows(sessionList, 'w1').length, 1, 'the deep new worker renders');
-  assert.equal(context.fetchCalls.filter((c) => c.url.includes('/tree?')).length - fetchesBeforeExpand, 0,
-    'expansion renders from the refreshed levels without new fetches');
+  const expandFetches = context.fetchCalls.filter((c) => c.url.includes('/tree?')).length - fetchesBeforeExpand;
+  assert.equal(expandFetches, 2, 'each expansion re-reads exactly the level it opens');
 });
 
 test('duplicate creation notifications never duplicate rows or levels', async () => {

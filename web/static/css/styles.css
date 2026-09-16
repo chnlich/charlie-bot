@@ -501,3 +501,9 @@ body { overscroll-behavior: none; }
   #ext-usage-strip div:has(> [data-field^="7d-"]) { display: none; }
   #ext-usage-strip .w-24 { width: 3rem; }
 }
+
+/* Reduced motion: the activity cues keep their static meaning — the spinner and
+   gear hold their glyph, the work-state label carries the state. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-spin, .animate-\[spin_3s_linear_infinite\], .animate-pulse-dot { animation: none; }
+}

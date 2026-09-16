@@ -517,6 +517,10 @@ class SessionRow(BaseModel):
   child_count: int
   open_descendant_count: int
   attention_descendant_count: int
+  # Descendants whose work_state is currently running — the collapsed-row
+  # delegated-work cue (a manager with only active descendants must not hide
+  # ongoing work). Derived in the same projection pass as the other counts.
+  running_descendant_count: int
 
 
 class RunRow(RunRecord):

@@ -546,6 +546,22 @@ def test_seed_existing_home_extends_catalog_and_keeps_everything_else(tmp_path: 
   assert (home / "clc-sessions" / "native-run-1").is_dir()
 
 
+def test_seed_existing_home_refuses_a_non_mapping_credentials_store_untouched(tmp_path: Path) -> None:
+  """Every validation fires before the first write: a credentials store the extension cannot
+  read refuses the addition and leaves the home byte-identical (a half-extended config with
+  no credential would be a silent broken entry)."""
+  home, _task_dir = _existing_home_with_task(tmp_path)
+  (home / "credentials.yaml").write_text("- not\n- a\n- mapping\n", encoding="utf-8")
+  config_before = (home / "config.yaml").read_text()
+  creds_before = (home / "credentials.yaml").read_text()
+  setup = _setup_for(home, 18500, fresh=False)
+  setup.backend_additions = _two_additions()
+  with pytest.raises(PreviewRefused, match="not a credentials mapping"):
+    seed_or_validate_preview_home(setup)
+  assert (home / "config.yaml").read_text() == config_before
+  assert (home / "credentials.yaml").read_text() == creds_before
+
+
 def test_seed_existing_home_refuses_an_already_present_addition_untouched(tmp_path: Path) -> None:
   home, _task_dir = _existing_home_with_task(tmp_path)
   config_before = (home / "config.yaml").read_text()

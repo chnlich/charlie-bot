@@ -346,7 +346,7 @@ def test_walk_failure_raises_and_reaps_the_compressor(tmp_path: Path, monkeypatc
   # pipe, and the child must be killed and reaped, not left running.
   import subprocess
 
-  import src.core.trace_merge as trace_merge
+  from src.core import trace_merge
 
   calls = []
 

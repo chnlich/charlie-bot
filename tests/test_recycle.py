@@ -818,7 +818,7 @@ async def test_bootstrap_payload_trims_tool_previews_over_cap(tmp_path: Path) ->
   _append_events(mgr.get_chat_events_path(session.id), events)
 
   projection_messages_before = projection_messages(mgr, session.id)
-  messages, payload_messages = _switch_payload_messages(mgr, session)
+  _messages, payload_messages = _switch_payload_messages(mgr, session)
   tools = payload_messages[0]["tools"]
 
   assert tools[0]["output"] == big_output[:500]

@@ -523,10 +523,7 @@ def _add_attr(source: str, node: _Node, name: str, value: str | None, insertions
   close = raw.rfind("/>")
   if close < 0:
     close = raw.rfind(">")
-  if value is None:
-    addition = f" {name}"
-  else:
-    addition = f' {name}="{_html.escape(value, quote=True)}"'
+  addition = f" {name}" if value is None else f' {name}="{_html.escape(value, quote=True)}"'
   _add_insertion(insertions, node.start + close, addition)
 
 

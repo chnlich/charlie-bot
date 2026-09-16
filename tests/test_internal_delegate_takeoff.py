@@ -59,10 +59,7 @@ def _reference_takeoff_gate(
         except ValueError:
           issued_at = None
         if issued_at is not None:
-          if issued_at.tzinfo is None:
-            issued_at = None
-          else:
-            issued_at = issued_at.astimezone(UTC)
+          issued_at = None if issued_at.tzinfo is None else issued_at.astimezone(UTC)
         if issued_at is not None:
           latest_pre_takeoff_at = issued_at
   pre_takeoff_active = (

@@ -96,9 +96,8 @@ async def test_401_response_logs_one_event_with_status_401() -> None:
 
 @pytest.mark.asyncio
 async def test_inner_app_exception_logs_500_and_reraises() -> None:
-  with pytest.raises(ValueError, match="boom"):
-    with capture_logs() as events:
-      await _drive(_raising_app, _http_scope(method="POST"))
+  with pytest.raises(ValueError, match="boom"), capture_logs() as events:
+    await _drive(_raising_app, _http_scope(method="POST"))
 
   assert len(events) == 1
   event = events[0]

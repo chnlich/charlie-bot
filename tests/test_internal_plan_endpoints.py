@@ -191,7 +191,7 @@ async def test_get_plans_endpoint_returns_registry(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_plan_present_rejects_unknown_session_404(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, _meta = await _setup(tmp_path)
+  _cfg, _session_mgr, thread_mgr, plan_mgr, _meta = await _setup(tmp_path)
   app = _build_app(_session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post(
@@ -206,7 +206,7 @@ async def test_plan_present_rejects_unknown_session_404(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_plan_present_rejects_missing_file_400(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  _cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   app = _build_app(_session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post(
@@ -254,7 +254,7 @@ async def test_plan_close_rejects_already_closed_400(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_plan_reverify_endpoint_removed(tmp_path: Path) -> None:
   """The /plan/reverify endpoint is gone; FastAPI returns 404 (or 405) for the old path."""
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  _cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   app = _build_app(_session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post(
@@ -364,7 +364,7 @@ async def test_delegate_sets_task_type_on_thread(tmp_path: Path, monkeypatch: py
 
 @pytest.mark.asyncio
 async def test_get_plans_endpoint_unknown_session_404(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, _meta = await _setup(tmp_path)
+  _cfg, _session_mgr, thread_mgr, plan_mgr, _meta = await _setup(tmp_path)
   app = _build_app(_session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.get("/api/sessions/nonexistent/plans")

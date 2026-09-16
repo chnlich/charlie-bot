@@ -57,10 +57,7 @@ def _home_cached(raw: str) -> tuple[Path, str]:
   key = (raw, os.environ.get("HOME", ""))
   cached = _home_cache.get(key)
   if cached is None:
-    if raw:
-      home = Path(raw).expanduser().resolve()
-    else:
-      home = Path.home() / ".charliebot"
+    home = Path(raw).expanduser().resolve() if raw else Path.home() / ".charliebot"
     cached = (home, str(home))
     _home_cache[key] = cached
   return cached
@@ -1354,10 +1351,7 @@ def _fire_cron_error_alert(error_names: list[str]) -> None:
     log.info("cron_alert_skipped_no_event_loop", names=sorted(new_set))
     return
   names = sorted(new_set)
-  if names:
-    message = "⚠️ cron tasks failed to load: " + ", ".join(names)
-  else:
-    message = "✅ all cron load failures resolved"
+  message = "⚠️ cron tasks failed to load: " + ", ".join(names) if names else "✅ all cron load failures resolved"
   try:
     # Lazy: notifications imports this module.
     from src.core.notifications import send_telegram

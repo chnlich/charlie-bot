@@ -453,10 +453,7 @@ class OpenCodeBackend(AgentBackend):
     also accepted for robustness. Returns the model's ``limit`` dict, or ``None``
     when the provider or model is absent or the payload shape is not recognised.
     """
-    if isinstance(providers_payload, dict):
-      providers = providers_payload.get("providers")
-    else:
-      providers = providers_payload
+    providers = providers_payload.get("providers") if isinstance(providers_payload, dict) else providers_payload
     if not isinstance(providers, list):
       return None
     for provider in providers:

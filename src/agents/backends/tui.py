@@ -106,10 +106,7 @@ def _ensure_claude_project_trusted(working_dir: Path) -> None:
   """Mark CharlieBot's generated Claude TUI cwd trusted before interactive startup."""
   project_path = str(working_dir.resolve())
   config_path = _claude_config_path()
-  if config_path.exists():
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-  else:
-    config = {}
+  config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
   if not mark_project_trusted(config, project_path):
     return
   config_path.parent.mkdir(parents=True, exist_ok=True)

@@ -409,7 +409,7 @@ def _absence_rescan_start(
     if not query_lower.startswith(needle):
       continue
     old_size, old_ino = root_sig[1], root_sig[2]
-    if old_ino == sig[2] and sig[1] > old_size and old_size > best_size:
+    if old_ino == sig[2] and sig[1] > old_size > best_size:
       best_size = old_size
   if best_size < 0:
     return 0

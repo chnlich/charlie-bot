@@ -721,10 +721,11 @@ def retire_transcript_copies(cfg: CharlieBotConfig, cc_session_id: str, keep: in
   are the ones the label names; a failed round keeps every copy as its
   fallback.
   """
-  copies: list[tuple[int, Path]] = []
-  for account in pool(cfg):
-    for path in transcript_matches(account.config_dir, cc_session_id):
-      copies.append((path.stat().st_mtime_ns, path))
+  copies = [
+      (path.stat().st_mtime_ns, path)
+      for account in pool(cfg)
+      for path in transcript_matches(account.config_dir, cc_session_id)
+  ]
   newest_first = sorted(copies, key=lambda entry: entry[0], reverse=True)
   for _mtime_ns, path in newest_first[keep:]:
     sidecar = path.with_suffix("")

@@ -21,6 +21,7 @@ from src.core.config import get_config
 from src.core.http import get_http_client
 from src.core.json_utils import write_json_atomically
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
+from src.core.memo import StatSignatureMemo
 from src.core.models import ClaudeAccount
 from src.core.streaming import SIDEBAR_CHANNEL, streaming_manager
 from src.core.timeouts import (
@@ -51,6 +52,10 @@ _USAGE_TAIL_BYTES = 1 << 20
 # Scan-set bound for plan-pool readings: time-bounded, not count-bounded, so
 # concurrent sessions can never cut a fresh plan event out of the scan set.
 _CODEX_USAGE_SCAN_WINDOW_HOURS = 6
+# Cap for the per-account spend memo. The live sweep drops files outside the
+# 7-day window each round, so the resident set is the live rollout count; this
+# bound only stops a pathological dir from growing the memo without bound.
+_SPEND_CACHE_LIMIT = 512
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 TOKEN_REFRESH_URL = "https://platform.claude.com/v1/oauth/token"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -207,19 +212,21 @@ class ClaudeUsageProvider:
 class CodexUsageProvider:
   """Reads usage from <home_dir>/sessions/ JSONL files for one account.
 
-  ``_spend_cache`` holds resolved spend events per rollout file keyed on the
-  file's (mtime_ns, size). ``_usage_cache`` holds each scanned file's newest
-  plan-pool token_count event under the same key; an unchanged file costs no
-  read, and a changed one is read from its tail window. The poll loop fetches
-  one account at a time and awaits each fetch, so one instance's cache never
-  sees concurrent access.
+  ``_spend_cache`` is a StatSignatureMemo holding resolved spend events per
+  rollout file, fresh while the file's (mtime_ns, size) stands. ``_usage_cache``
+  holds each scanned file's newest plan-pool token_count event under the same
+  stat signature (hand-rolled because the cached verdict can be None, which
+  StatSignatureMemo cannot store); an unchanged file costs no read, and a
+  changed one is read from its tail window. The poll loop fetches one account
+  at a time and awaits each fetch, so one instance's cache never sees
+  concurrent access.
   """
 
   def __init__(self, label: str, home_dir: str) -> None:
     self.label = label
     self.sessions_dir = Path(home_dir) / "sessions"
     self.last_error = "no sessions found"
-    self._spend_cache: dict[Path, tuple[int, int, list[_SpendEvent]]] = {}
+    self._spend_cache: StatSignatureMemo[Path, list[_SpendEvent]] = StatSignatureMemo(_SPEND_CACHE_LIMIT)
     self._usage_cache: dict[Path, tuple[int, int, dict[str, Any] | None]] = {}
 
   async def fetch(self) -> dict[str, Any] | None:
@@ -305,18 +312,16 @@ class CodexUsageProvider:
       if stat.st_mtime < min_mtime:
         continue
       live.add(path)
-      cached = self._spend_cache.get(path)
-      if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
-        events_by_file.append(cached[2])
+      cached = self._spend_cache.fresh(path, stat)
+      if cached is not None:
+        events_by_file.append(cached)
         continue
       events = _extract_codex_spend_events(path)
       # An unreadable file (None) is skipped, not cached, so the next round retries it.
       if events is not None:
-        self._spend_cache[path] = (stat.st_mtime_ns, stat.st_size, events)
+        self._spend_cache.record(path, stat, events)
         events_by_file.append(events)
-    for path in list(self._spend_cache):
-      if path not in live:
-        del self._spend_cache[path]
+    self._spend_cache.drop_where(lambda path: path not in live)
     return _sum_codex_spend_events(events_by_file, now=now)
 
 

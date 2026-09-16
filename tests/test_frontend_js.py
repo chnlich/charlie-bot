@@ -47,6 +47,7 @@ _NODE_TESTS = [
     "task_panel_actions.test.js",
     "task_context_rules.test.js",
     "task_runs_panel.test.js",
+    "session_view_new_task.test.js",
     "session_view_sentinel.test.js",
     "show_more_toggle.test.js",
     "sidebar_rename_prefill.test.js",

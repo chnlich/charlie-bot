@@ -59,8 +59,6 @@ UtcDatetime = Annotated[datetime, BeforeValidator(ensure_utc)]
 # Aliased types
 # ---------------------------------------------------------------------------
 
-SessionRating = Literal['thumbs_up', 'neutral', 'thumbs_down']
-
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
@@ -277,8 +275,6 @@ class SessionMetadata(BaseModel):
   # Newest consumed thread ts for a followed Slack thread; None = nothing
   # consumed yet. Advanced by summon creation (mention ts) and ack only.
   slack_watermark_ts: str | None = None
-  # Rating
-  rating: SessionRating | None = None
   # Key is the round event id (UUID generated at event write time, or
   # "legacy:<event_index>" for events predating the UUID migration).
   round_ratings: dict[str, Literal['thumbs_up', 'thumbs_down']] = Field(default_factory=dict)

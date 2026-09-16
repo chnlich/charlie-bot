@@ -342,7 +342,7 @@ function eloneSession(sessionId, eventIndex) {
     sessionId,
     eventIndex,
     title: 'Elon-e Session',
-    bodyText: 'Start a fresh takeover session from this point. Warning: the current session will be archived and rated thumbs down.',
+    bodyText: 'Start a fresh takeover session from this point. Warning: the current session will be archived.',
     confirmLabel: 'Elon-e',
     failureLabel: 'Elon-e',
   });

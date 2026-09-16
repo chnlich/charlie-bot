@@ -1261,7 +1261,7 @@ class SessionManager:
       event_index: int,
       backend: str | None = None,
   ) -> SessionMetadata:
-    """Create an Elon-e session: reference handoff, archive + thumbs-down parent.
+    """Create an Elon-e session: reference handoff, archive the parent.
 
     Runs the succession rejection BEFORE any child session is created, so a
     refused call mutates nothing on disk. The per-parent invariant: each elone
@@ -1286,7 +1286,7 @@ class SessionManager:
     else:
       meta = await self._spawn_with_reference(parent_id, event_index, backend, "E")
 
-    # Auto-archive and thumbs-down the parent, and record the elone successor
+    # Auto-archive the parent, and record the elone successor
     # pointer (re-read under lock so concurrent mutations to the parent aren't
     # clobbered). Latest-wins: an ordinary parent's pointer is overwritten to
     # name each new child, so the pointer always names the most recent elone.
@@ -1295,7 +1295,6 @@ class SessionManager:
       fresh_parent = await self.get_session(parent_id)
       if fresh_parent:
         fresh_parent.status = SessionStatus.ARCHIVED
-        fresh_parent.rating = "thumbs_down"
         fresh_parent.successor_session_id = meta.id
         fresh_parent.updated_at = utc_now()
         await self.save_metadata(fresh_parent, lock_held=True)

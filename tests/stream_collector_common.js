@@ -43,6 +43,57 @@ function liveChatFiles() {
   return files;
 }
 
+// One line of *p per yield, read in bounded chunks: a live chat file can outgrow
+// the engine's max string length (a whole-file readFileSync throws
+// ERR_STRING_TOO_LONG long before that), so the corpus scan never holds a whole
+// file. A single line larger than MAX_LINE_BYTES is outside every collector's
+// corpus by definition — one that size either cannot be materialized as a
+// string at all or cannot replay through the per-200-bytes paint harness in
+// bounded time — so it is skipped with one loud warning instead of failing
+// every corpus read on the host.
+function* readLines(p) {
+  const CHUNK_BYTES = 16 * 1024 * 1024;
+  const MAX_LINE_BYTES = 256 * 1024 * 1024;
+  const fd = fs.openSync(p, 'r');
+  try {
+    let pending = Buffer.alloc(0);
+    let skipping = false;
+    const buf = Buffer.alloc(CHUNK_BYTES);
+    let read;
+    while ((read = fs.readSync(fd, buf, 0, CHUNK_BYTES, null)) > 0) {
+      const chunk = buf.subarray(0, read);
+      let start = 0;
+      for (;;) {
+        const idx = chunk.indexOf(10, start);
+        if (idx === -1) break;
+        if (!skipping) {
+          pending = Buffer.concat([pending, chunk.subarray(start, idx)]);
+          if (pending.length > MAX_LINE_BYTES) {
+            process.emitWarning(`readLines: skipping an unmaterializable ${pending.length}-byte line in ${p}`);
+            skipping = true;
+          } else {
+            yield pending.toString('utf8');
+          }
+        }
+        skipping = false;
+        pending = Buffer.alloc(0);
+        start = idx + 1;
+      }
+      if (!skipping) {
+        pending = Buffer.concat([pending, chunk.subarray(start)]);
+        if (pending.length > MAX_LINE_BYTES) {
+          process.emitWarning(`readLines: skipping an unmaterializable ${pending.length}-byte line in ${p}`);
+          skipping = true;
+          pending = Buffer.alloc(0);
+        }
+      }
+    }
+    if (!skipping && pending.length) yield pending.toString('utf8');
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 // The largest single assistant text block across live chat files that accept()
 // passes; '' when none does. A block cannot exceed its file's size, so files no
 // larger than the current best are skipped.
@@ -51,7 +102,7 @@ function largestAssistantDraft(accept) {
   let best = '';
   for (const f of files) {
     if (f.size <= best.length) continue;
-    for (const line of fs.readFileSync(f.p, 'utf8').split('\n')) {
+    for (const line of readLines(f.p)) {
       if (!line || line.indexOf('"assistant"') === -1) continue;
       let ev;
       try { ev = JSON.parse(line); } catch { continue; }
@@ -96,7 +147,7 @@ function worstPageCorpus(bodyTexts, pageMessages) {
   if (!worst) throw new Error('no on-disk live chat file');
   const { p: best, size: bestSize } = worst;
   const texts = [];
-  for (const line of fs.readFileSync(best, 'utf8').split('\n')) {
+  for (const line of readLines(best)) {
     if (!line) continue;
     let ev;
     try {

@@ -779,6 +779,42 @@ def test_wrapped_registry_build_backend_builds_real_charlie_code_argv(tmp_path: 
     registry.build_backend = original
 
 
+def test_every_catalog_entry_builds_with_the_preview_native_session_dir(tmp_path: Path,
+                                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+  """All selectable models' constructions (manager turns, workers, reviews,
+  retries and continuations all resolve through the registry) carry the
+  preview-owned --session-dir, and only charlie-code entries do."""
+  import shutil as real_shutil
+
+  fake_binary = tmp_path / "fake-charlie-code"
+  fake_binary.write_text("#!/bin/sh\nexit 0\n")
+  fake_binary.chmod(0o755)
+  monkeypatch.setattr(real_shutil, "which",
+                      lambda name, *a, **k: str(fake_binary) if name == "charlie-code" else None)
+  home = tmp_path / "fresh-home"
+  setup = _setup_for(home, 18501, fresh=True)
+  setup.backend_additions = _two_additions()
+  seed_or_validate_preview_home(setup)
+  from src.core.config import load_config
+
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
+  cfg = load_config()
+  assert [option.id for option in cfg.backends.options] == ["clc-test", "clc-add-1", "clc-add-2"], \
+      "the seeded catalog is what the constructions resolve"
+  clc_sessions = home / "clc-sessions"
+  registry = __import__("src.agents.backends.registry", fromlist=["build_backend"])
+  original = registry.build_backend
+  registry.build_backend = wrap_build_backend(original, clc_sessions)
+  try:
+    for option in cfg.backends.options:
+      built = registry.build_backend(option, cfg)
+      built._prepare_transport(tmp_path)
+      argv = built._build_command("prompt")
+      assert f"--session-dir {clc_sessions}" in " ".join(argv), option.id
+  finally:
+    registry.build_backend = original
+
+
 def test_install_native_session_isolation_patches_both_build_targets(tmp_path: Path) -> None:
   registry = __import__("src.agents.backends.registry", fromlist=["build_backend"])
   worker_module = __import__("src.agents.worker", fromlist=["build_backend"])

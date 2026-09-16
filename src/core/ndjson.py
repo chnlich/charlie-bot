@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import mmap
 import os
 from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from itertools import islice
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -135,10 +137,82 @@ def iter_ndjson_events(
 
 def parse_ndjson_file(path: Path) -> list[dict]:
   """Sync read+parse an NDJSON file. Skips blank/malformed lines."""
+  return parse_ndjson_events(path, log_event=PARSE_SKIP_LOG_EVENT, log_fields={})
+
+
+def parse_ndjson_events(path: Path, *, log_event: str, log_fields: dict[str, Any]) -> list[dict]:
+  """Whole-file read+parse with the caller's skip label and fields.
+
+  One zero-copy mmap pass: lines are memoryview slices of the mapping riding
+  :func:`parse_ndjson_line`'s memoryview contract, so a cold whole-file parse
+  pays no per-line decode or re-encode copy. The line domain is ``\n`` — the
+  same domain :func:`count_ndjson_lines` and the tail readers count, so the
+  whole-file parse and the windowed readers disagree on nothing. The mapping
+  is safe against the writers because they only ever append (an archive
+  rewrite publishes through ``os.replace`` onto a new inode); a writer that
+  truncated a mapped file would SIGBUS the parse instead.
+  """
   if not path.exists():
     return []
-  with open(path, encoding="utf-8") as f:
-    return list(iter_ndjson_events(f, log_event=PARSE_SKIP_LOG_EVENT, log_fields={}))
+  with open(path, "rb") as f, _mapped_lines(path, f) as (mm, size):
+    if mm is None:
+      return []
+    events: list[dict] = []
+    append = events.append
+    pos = 0
+    find = mm.find
+    while True:
+      nl = find(b"\n", pos)
+      if nl < 0:
+        if pos < size:
+          event = parse_ndjson_line(memoryview(mm)[pos:], log_event=log_event, log_fields=log_fields)
+          if event is not None:
+            append(event)
+        return events
+      if nl > pos:
+        event = parse_ndjson_line(memoryview(mm)[pos:nl], log_event=log_event, log_fields=log_fields)
+        if event is not None:
+          append(event)
+      pos = nl + 1
+
+
+@contextmanager
+def _mapped_lines(path: Path, f: BinaryIO) -> Iterator[tuple[mmap.mmap | None, int]]:
+  """Map *f* read-only and yield (mapping, size), closing the mapping on exit.
+
+  An empty file yields (None, 0) — mmap refuses a zero-length mapping. An
+  aborting parse can leave its last line view in an unwinding traceback's
+  frames; the buffer protocol frees the mapping when that frame dies, so the
+  explicit close is best-effort and the deferred case is logged, not fatal.
+  """
+  size = os.fstat(f.fileno()).st_size
+  mm = None if size == 0 else mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+  try:
+    yield mm, size
+  finally:
+    if mm is not None:
+      try:
+        mm.close()
+      except BufferError:
+        log.debug("ndjson_mmap_close_deferred", path=str(path))
+
+
+def _iter_mmap_lines(mm: mmap.mmap, size: int) -> Iterator[memoryview]:
+  """Yield the mapping's physical lines as zero-copy views, in file order.
+
+  Lines split on ``\n`` (a final line without its trailing newline still
+  yields), the same domain the count and tail readers count.
+  """
+  pos = 0
+  find = mm.find
+  while True:
+    nl = find(b"\n", pos)
+    if nl < 0:
+      if pos < size:
+        yield memoryview(mm)[pos:]
+      return
+    yield memoryview(mm)[pos:nl]
+    pos = nl + 1
 
 
 def count_ndjson_lines(path: Path) -> int:
@@ -361,8 +435,15 @@ def parse_ndjson_range(path: Path, start: int, end: int) -> tuple[list[dict], bo
   """
   if not path.exists():
     return [], False
-  with open(path, encoding="utf-8") as f:
-    events = list(iter_ndjson_events(islice(f, start, end), log_event="ndjson_range_parse_skip", log_fields={}))
+  with open(path, "rb") as f, _mapped_lines(path, f) as (mm, size):
+    if mm is None:
+      return [], start > 0
+    events = list(
+        iter_ndjson_events(
+            islice(_iter_mmap_lines(mm, size), start, end),
+            log_event="ndjson_range_parse_skip",
+            log_fields={},
+        ))
   return events, start > 0
 
 

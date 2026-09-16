@@ -11,7 +11,6 @@ consume the tolerant read in ``read_plans_tolerant`` — the single authority fo
 
 from __future__ import annotations
 
-import asyncio
 import json
 import posixpath
 from enum import IntEnum
@@ -26,11 +25,12 @@ from src.core.constants import (
     PLAN_CLOSE_MODES,
     PLAN_CLOSE_SUPERSEDED,
 )
-from src.core.locks import lock_for
 from src.core.memo import StatSignatureMemo
 from src.core.sidebar_state import mark_sidebar_dirty
 
 if TYPE_CHECKING:
+  import asyncio
+
   from src.core.artifact_check import AssertionOutcome
   from src.core.config import CharlieBotConfig
   from src.core.sessions import SessionManager
@@ -290,6 +290,8 @@ class PlanRegistryManager:
   # -- locking ------------------------------------------------------------
 
   def _lock_for(self, session_id: str) -> asyncio.Lock:
+    # Deferred with asyncio itself: the sync CLI read path never reaches the locked verbs.
+    from src.core.locks import lock_for
     return lock_for(self._locks, session_id)
 
   # -- persistence --------------------------------------------------------
@@ -307,6 +309,9 @@ class PlanRegistryManager:
     path = self._plans_path(session_id)
     if not path.exists():
       return {"plans": []}
+    # Deferred: the sync CLI read path (the M97 import floor) never reaches the async
+    # registry methods.
+    import asyncio
     raw = await asyncio.to_thread(path.read_text, "utf-8")
     return json.loads(raw)
 
@@ -314,8 +319,9 @@ class PlanRegistryManager:
     # Every save path first reads plans.json or a bound artifact out of the
     # session dir, so the dir exists; no mkdir here — a deleted dir must fail
     # this write, not resurrect.
-    from src.core.json_utils import write_json_atomically
+    import asyncio
 
+    from src.core.json_utils import write_json_atomically
     await asyncio.to_thread(write_json_atomically, self._plans_path(session_id), _project_registry(data), indent=2)
     # Single funnel for every registry verb (present/amend/approve/close):
     # an awaiting-approval change must reach the sidebar snapshot.
@@ -366,6 +372,7 @@ class PlanRegistryManager:
     # The assertion run measures page height through a headless-Chrome
     # subprocess — hundreds of ms of wall time per page. Inline it would freeze
     # the event loop for every concurrent request and WebSocket.
+    import asyncio
     outcomes = await asyncio.to_thread(run_assertions, "plan", artifact, self._cfg)
     failures = [o for o in outcomes if not o.passed]
     if failures:
@@ -516,4 +523,5 @@ class PlanRegistryManager:
     hit = tolerant_memo_hit(plans_path)
     if hit is not None:
       return hit
+    import asyncio
     return await asyncio.to_thread(read_plans_tolerant, plans_path, session_id)

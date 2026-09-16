@@ -26,12 +26,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:
-  import requests
-
   from src.core.config import CharlieBotConfig, Credentials
 
 from src.core.constants import SESSION_ID_ENV_VAR
-from src.core.http import requests_module_getattr
 from src.core.timeouts import (
     CLI_CONNECT_TOTAL_TIMEOUT,
     HTTP_INTERNAL_API_TIMEOUT,
@@ -49,9 +46,106 @@ TASK_SPEC_REQUIRED_HEADINGS = (
 )
 
 
-def __getattr__(name: str) -> Any:
-  # The "src.cli.common.requests.*" patch targets resolve through this hook.
-  return requests_module_getattr(name, __name__, globals())
+class _ConnectPhaseError(Exception):
+  """The TCP connection never established: the request provably was not sent, so a retry is safe."""
+
+
+class _SentButLostError(Exception):
+  """The connection broke after the request was sent: the outcome is unknown."""
+
+
+class _CliResponse:
+  """One internal-API response: the status the contract's rejection check reads, and the parsed-JSON accessor."""
+
+  def __init__(self, status_code: int, reason: str, body: bytes) -> None:
+    self.status_code = status_code
+    self._reason = reason
+    self._body = body
+
+  def __str__(self) -> str:
+    return f"HTTP {self.status_code} {self._reason}".strip()
+
+  def json(self) -> Any:
+    return json.loads(self._body)
+
+
+def _send_request(
+    method: str,
+    url: str,
+    *,
+    payload: dict[str, Any] | None,
+    params: dict[str, Any] | None,
+    headers: dict[str, str],
+    timeout: float,
+) -> _CliResponse:
+  """One request over http.client with the restart-crossing contract's phase separation.
+
+  The connect phase raises _ConnectPhaseError (nothing was sent — a retry is safe); every
+  failure after it raises _SentButLostError (the request may have landed — never retried).
+  http.client raises separately per phase; requests folds connect and read failures into one
+  ConnectionError class, which cannot drive this contract.
+  """
+  import http.client
+  import ssl
+  import urllib.parse
+
+  parts = urllib.parse.urlsplit(url)
+  path = parts.path or "/"
+  query = urllib.parse.urlencode(params) if params is not None else ""
+  if parts.query:
+    query = f"{parts.query}&{query}" if query else parts.query
+  if query:
+    path = f"{path}?{query}"
+  body = json.dumps(payload).encode("utf-8") if payload is not None else None
+  send_headers = dict(headers)
+  if body is not None:
+    send_headers["Content-Type"] = "application/json"
+  if parts.scheme == "https":
+    # verify=False parity: the base URL is the config-owned internal server.
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    conn: http.client.HTTPConnection = http.client.HTTPSConnection(
+        parts.hostname, parts.port, timeout=timeout, context=context)
+  else:
+    conn = http.client.HTTPConnection(parts.hostname, parts.port, timeout=timeout)
+  try:
+    try:
+      conn.connect()
+    except (OSError, TimeoutError) as e:
+      raise _ConnectPhaseError(str(e)) from e
+    try:
+      conn.request(method, path, body=body, headers=send_headers)
+      raw = conn.getresponse()
+      resp_body = raw.read()
+    except (OSError, TimeoutError, http.client.HTTPException) as e:
+      raise _SentButLostError(str(e)) from e
+  finally:
+    conn.close()
+  return _CliResponse(raw.status, raw.reason, resp_body)
+
+
+def _request_post(
+    url: str,
+    *,
+    json: dict[str, Any] | None,
+    params: dict[str, Any] | None,
+    headers: dict[str, str],
+    timeout: float,
+) -> _CliResponse:
+  """The POST transport seam; requests' call shape kept so the tests' patch target and call-args assertions hold."""
+  return _send_request("POST", url, payload=json, params=params, headers=headers, timeout=timeout)
+
+
+def _request_get(
+    url: str,
+    *,
+    params: dict[str, Any] | None,
+    headers: dict[str, str],
+    timeout: float,
+) -> _CliResponse:
+  """The GET transport seam; same contract as _request_post."""
+  return _send_request("GET", url, payload=None, params=params, headers=headers, timeout=timeout)
 
 
 def get_config() -> CharlieBotConfig:
@@ -186,17 +280,16 @@ def _best_effort_server_version(cfg: CharlieBotConfig) -> tuple[str | None, str 
   Swallows every failure (network, non-200, non-JSON) so the CLI error path never raises
   from the hint computation. Bounded by HTTP_VERSION_SKEW_TIMEOUT.
   """
-  import requests  # module-local: the module __getattr__ serves only attribute access
   try:
-    resp = requests.get(
+    resp = _request_get(
         f"{cfg.server_base_url}/api/internal/version",
+        params=None,
         headers=internal_api_auth_headers(),
-        timeout=HTTP_VERSION_SKEW_TIMEOUT,
-        verify=False,
-    )
-    resp.raise_for_status()
+        timeout=HTTP_VERSION_SKEW_TIMEOUT)
+    if resp.status_code >= 400:
+      return None, None
     info = resp.json()
-  except (requests.RequestException, ValueError):
+  except (_ConnectPhaseError, _SentButLostError, ValueError):
     return None, None
   return info.get("sha"), info.get("started_at")
 
@@ -216,26 +309,6 @@ _CONNECT_RETRY_BASE_DELAY = 0.25  # seconds; doubles per attempt
 _CONNECT_RETRY_MAX_DELAY = 5.0  # seconds
 
 
-def _is_connect_failure(exc: requests.RequestException) -> bool:
-  """True only when the request provably never reached the server.
-
-  TCP connect refused/timed out means zero bytes were sent, so the requested
-  effect did not happen and a retry is safe. Connection resets are excluded:
-  a reset may arrive after the server accepted (and possibly processed) the
-  request — that is the outcome_unknown class instead.
-  """
-  import requests  # module-local: the module __getattr__ serves only attribute access
-  if isinstance(exc, requests.exceptions.ConnectTimeout):
-    return True
-  if isinstance(exc, requests.exceptions.ConnectionError):
-    msg = str(exc)
-    return (
-        "Failed to establish a new connection" in msg or "Connection refused" in msg or
-        "NameResolutionError" in msg  # DNS never resolved — nothing was sent
-    )
-  return False
-
-
 def _exit_with_error(error_obj: dict[str, Any], exit_code: int = 1) -> NoReturn:
   print(json.dumps(error_obj), file=sys.stderr)
   sys.exit(exit_code)
@@ -243,20 +316,20 @@ def _exit_with_error(error_obj: dict[str, Any], exit_code: int = 1) -> NoReturn:
 
 def _exit_server_rejection(
     cfg: CharlieBotConfig,
-    exc: requests.RequestException,
+    resp: Any,
     rejection_exit_codes: dict[int, int] | None,
 ) -> NoReturn:
   """Handle a server that explicitly answered with an error status."""
-  msg = str(exc)
+  msg = str(resp)
   with contextlib.suppress(ValueError, KeyError):
-    msg = exc.response.json()["detail"]  # type: ignore[union-attr]
+    msg = resp.json()["detail"]
   error_obj: dict[str, Any] = {"error": msg, "code": "server_error", "effect": "none"}
   hint = _maybe_version_skew_hint(cfg)
   if hint is not None:
     error_obj["hint"] = hint
   exit_code = 1
-  if rejection_exit_codes is not None and exc.response is not None:
-    exit_code = rejection_exit_codes.get(exc.response.status_code, 1)
+  if rejection_exit_codes is not None:
+    exit_code = rejection_exit_codes.get(resp.status_code, 1)
   _exit_with_error(error_obj, exit_code)
 
 
@@ -271,34 +344,26 @@ def _request_with_contract(
     unknown_effect: str,
 ) -> dict[str, Any]:
   """Issue one internal-API call under the restart-crossing contract."""
-  import requests  # module-local: the module __getattr__ serves only attribute access
   cfg = get_config()
   url = f"{cfg.server_base_url}{endpoint}"
-  request_fn = requests.post if method == "POST" else requests.get
   deadline = time.monotonic() + CLI_CONNECT_TOTAL_TIMEOUT
   attempt = 0
   while True:
     try:
-      resp = request_fn(
-          url,
-          json=payload,
-          params=params,
-          headers=internal_api_auth_headers(),
-          timeout=HTTP_INTERNAL_API_TIMEOUT,
-          verify=False)
-      resp.raise_for_status()
-      return resp.json()
-    except requests.RequestException as e:
-      if e.response is not None:
-        _exit_server_rejection(cfg, e, rejection_exit_codes)
-      if _is_connect_failure(e):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-          _exit_with_error({"error": str(e), "code": "server_unavailable", "effect": "none"})
-        delay = min(_CONNECT_RETRY_BASE_DELAY * (2**attempt), _CONNECT_RETRY_MAX_DELAY, remaining)
-        attempt += 1
-        time.sleep(delay)
-        continue
+      if method == "POST":
+        resp = _request_post(
+            url, json=payload, params=params, headers=internal_api_auth_headers(), timeout=HTTP_INTERNAL_API_TIMEOUT)
+      else:
+        resp = _request_get(url, params=params, headers=internal_api_auth_headers(), timeout=HTTP_INTERNAL_API_TIMEOUT)
+    except _ConnectPhaseError as e:
+      remaining = deadline - time.monotonic()
+      if remaining <= 0:
+        _exit_with_error({"error": str(e), "code": "server_unavailable", "effect": "none"})
+      delay = min(_CONNECT_RETRY_BASE_DELAY * (2**attempt), _CONNECT_RETRY_MAX_DELAY, remaining)
+      attempt += 1
+      time.sleep(delay)
+      continue
+    except _SentButLostError as e:
       # Sent but the response was lost — never re-issue the call (its effect
       # may have landed). Read back this call's own on-disk artifact instead.
       if readback is not None:
@@ -306,6 +371,9 @@ def _request_with_contract(
         if artifact is not None:
           return artifact
       _exit_with_error({"error": str(e), "code": "outcome_unknown", "effect": unknown_effect})
+    if resp.status_code >= 400:
+      _exit_server_rejection(cfg, resp, rejection_exit_codes)
+    return resp.json()
 
 
 def post_internal_api(

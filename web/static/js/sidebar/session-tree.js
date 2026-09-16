@@ -507,11 +507,17 @@ async function revealNode(nodeId, ancestorRefs) {
   }
   tree.expanded.delete(nodeId); // selecting a node does not force-open it
   persistExpanded();
-  renderTree();
-  const el = document.getElementById('tree-node-' + nodeId);
-  if (el) {
-    el.scrollIntoView({block: 'nearest'});
-    highlightNode(nodeId);
+  // A read that returned null (an in-flight or superseded fetch owns the
+  // level) is not data: painting the tree without its base level replaces a
+  // good DOM with a whole-sidebar "Loading tasks...". The owning fetch paints
+  // when its data lands.
+  if (tree.levels.get('')?.fetched) {
+    renderTree();
+    const el = document.getElementById('tree-node-' + nodeId);
+    if (el) {
+      el.scrollIntoView({block: 'nearest'});
+      highlightNode(nodeId);
+    }
   }
 }
 
@@ -654,7 +660,11 @@ async function reconcileRenderedActivity() {
   try {
     const levels = ['', ...tree.expanded];
     const before = levels.map(renderedLevelSignature);
-    for (const level of levels) invalidateLevel(level);
+    // Forced re-reads WITHOUT tearing the levels down first: a torn level turns
+    // any concurrent render (a deep-link reveal, an expansion) into a
+    // whole-sidebar "Loading tasks..." painted over a good DOM, and this pass
+    // repaints only on change, so nothing would repair it. The in-place swap
+    // at fetchLevel's end keeps the last paint valid while the read runs.
     for (const level of levels) await ensureLevel(level === '' ? null : level, {force: true});
     const after = levels.map(renderedLevelSignature);
     // An incomplete pass (a failed level fetch) must not repaint from partial

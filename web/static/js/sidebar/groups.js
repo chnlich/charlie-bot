@@ -465,7 +465,7 @@ function projectManagerSlug(group) {
   return group.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+/, '');
 }
 
-// Live role=project sessions keyed by group, and mode:master cron tasks keyed
+// Live role=project sessions keyed by group, and type:pm cron tasks keyed
 // by project. At most one each per group (server-enforced); first match wins.
 // brokenTasks carries the cron load-failure entries in the API's name order;
 // the scheduled tab derives its global error badge from them.
@@ -484,7 +484,7 @@ async function fetchProjectManagerState() {
   });
   const taskByGroup = {};
   tasks.forEach(t => {
-    if (!t.broken && t.mode === 'master' && t.project && !taskByGroup[t.project]) taskByGroup[t.project] = t;
+    if (!t.broken && t.type === 'pm' && t.project && !taskByGroup[t.project]) taskByGroup[t.project] = t;
   });
   const brokenTasks = tasks.filter(t => t.broken).sort((a, b) => a.name.localeCompare(b.name));
   return {pmByGroup, taskByGroup, brokenTasks};
@@ -525,7 +525,7 @@ function renderProjectManagerSlotRow(group) {
   </button>`;
 }
 
-// Enable flow from a gray slot row: reuse the existing mode:master task for the
+// Enable flow from a gray slot row: reuse the existing type:pm task for the
 // group when one exists, otherwise materialize pm_<slug> with
 // prompt_file: 'prompts/project_manager.md' (the yaml is the single control
 // point for the wake text); either way the cron editor opens on the task.
@@ -539,7 +539,7 @@ async function openPmSlotEditor(group) {
     console.error('PM slot: failed to load cron tasks:', err);
     return;
   }
-  const existing = tasks.find(t => !t.broken && t.mode === 'master' && t.project === group);
+  const existing = tasks.find(t => !t.broken && t.type === 'pm' && t.project === group);
   if (existing) {
     openCronEditor(existing.name);
     return;
@@ -553,7 +553,7 @@ async function openPmSlotEditor(group) {
         name,
         cron: '30 8 * * *',
         prompt_file: 'prompts/project_manager.md',
-        mode: 'master',
+        type: 'pm',
         project: group,
         enabled: true,
       }),

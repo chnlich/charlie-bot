@@ -848,6 +848,13 @@ class SessionManager:
     """
     return await self._scheduled_sessions.archive_sessions_for_task(task_name)
 
+  async def write_scheduled_task_enabled(self, task_name: str, enabled: bool) -> None:
+    """Write the ``enabled`` run gate of task_name's cron yaml, preserving every other key.
+
+    See ``src/core/scheduled_sessions.py`` for the persistence contract.
+    """
+    await self._scheduled_sessions.write_scheduled_task_enabled(task_name, enabled)
+
   def _tui_cli_option(self, backend_id: str) -> BackendOption | None:
     # Only tui-cli backends carry tmux lifecycle state, and the create and
     # destroy hooks must agree on which sessions that covers.

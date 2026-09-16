@@ -317,7 +317,7 @@ async def test_switch_missing_session_returns_404(tmp_path: Path, monkeypatch: p
 
 
 def _seed_pm_task(home: Path, name: str) -> Path:
-  """Write a mode: master cron yaml plus the env-rooted cron dir it loads from.
+  """Write a type: pm cron yaml plus the env-rooted cron dir it loads from.
 
   The host file carries the path to its prompt source under ``prompt_file``;
   the pointed file owns the body and the loader reads it on every load.
@@ -329,9 +329,9 @@ def _seed_pm_task(home: Path, name: str) -> Path:
   prompt_path.write_text("review and report", encoding="utf-8")
   path = cron_dir / f"{name}.yaml"
   body = {
+      "type": "pm",
       "cron": "0 2 * * *",
       "prompt_file": str(prompt_path),
-      "mode": "master",
       "project": "the-group",
       "timezone": "America/Los_Angeles",
       "enabled": True,

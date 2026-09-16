@@ -197,7 +197,7 @@ class PendingTrigger(BaseModel):
 # Session Models
 # ---------------------------------------------------------------------------
 
-# Role carried by the dedicated session of a mode: master cron task — the
+# Role carried by the dedicated session of a type: pm cron task — the
 # Project Manager for the task's ``project`` (group) value.
 PROJECT_ROLE = "project"
 

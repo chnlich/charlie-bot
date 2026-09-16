@@ -79,6 +79,7 @@ def _seed_scheduled_task(
   path.write_text(
       yaml.safe_dump(
           {
+              "type": "normal",
               "cron": cron,
               "prompt_file": str(prompt),
               "timezone": "America/Los_Angeles",
@@ -737,7 +738,8 @@ async def _make_recently_run_cadence_parent(mgr: SessionManager) -> SessionMetad
 
 
 def _cadence_task_cfg() -> ScheduledTaskConfig:
-  return ScheduledTaskConfig(name="nightly", cron=_CADENCE_CRON, prompt="run nightly", backend="codex-o3")
+  return ScheduledTaskConfig(
+      name="nightly", cron=_CADENCE_CRON, type="normal", prompt="run nightly", backend="codex-o3")
 
 
 @pytest.mark.asyncio

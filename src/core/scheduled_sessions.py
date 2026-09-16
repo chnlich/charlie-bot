@@ -53,7 +53,7 @@ class ScheduledSessionStore:
 
     Backend changes are generation changes: the old active session is archived and a new
     scheduled session is created with only scheduler bookkeeping copied over. ``role`` and
-    ``group`` (passed for mode: master PM tasks) ride along on both creation paths — first
+    ``group`` (passed for type: pm tasks) ride along on both creation paths — first
     creation and generation rotation alike.
     """
     active_sessions = await self._active_scheduled_sessions(task_name, session_cache)
@@ -177,4 +177,26 @@ class ScheduledSessionStore:
     if not isinstance(data, dict):
       raise FileNotFoundError(f"scheduled task '{task_name}' has no readable cron yaml at {path}")
     data["backend"] = backend
+    save_yaml(path, data)
+
+  async def write_scheduled_task_enabled(self, task_name: str, enabled: bool) -> None:
+    """Write only the ``enabled`` key of *task_name*'s cron yaml, preserving every other key.
+
+    The PM lifecycle's self-disable write (dead-group shutdown and the
+    manual-archive stop): the run gate flips while every other field — cron,
+    prompt_file pointer, project, backend — stays on disk untouched. Same
+    persistence contract as :meth:`write_scheduled_task_backend`: full-file
+    rewrite via save_yaml, canonical path resolution (src.core.config.cron_path),
+    and a missing, empty, or non-mapping task file fails loud instead of
+    silently recreating one.
+    """
+    await asyncio.to_thread(self._write_scheduled_task_enabled_sync, task_name, enabled)
+
+  @staticmethod
+  def _write_scheduled_task_enabled_sync(task_name: str, enabled: bool) -> None:
+    path = cron_path(task_name)
+    data = load_yaml(path)
+    if not isinstance(data, dict):
+      raise FileNotFoundError(f"scheduled task '{task_name}' has no readable cron yaml at {path}")
+    data["enabled"] = enabled
     save_yaml(path, data)

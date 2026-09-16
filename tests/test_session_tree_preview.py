@@ -485,12 +485,25 @@ def test_activate_preview_environment_switches_and_clears(tmp_path: Path, source
 
 
 def test_assert_no_bound_singletons(monkeypatch: pytest.MonkeyPatch) -> None:
+  """The guard accepts an explicitly unbound deps module and refuses any bound singleton.
+
+  The deps singletons are process-global and the suite legitimately binds them before this
+  test runs (a fired trigger resolves its task-tree provider through ``deps.task_manager``,
+  which constructs and caches the real managers), so the clean case is arranged explicitly
+  here instead of assuming an untouched module; monkeypatch restores the previous state, so
+  the assertion stays independent of the tests that precede it.
+  """
   from src.api import deps
 
+  singleton_names = ("_session_manager", "_thread_manager", "_trigger_manager", "_task_manager")
+  for name in singleton_names:
+    monkeypatch.setattr(deps, name, None, raising=False)
   assert_no_bound_singletons()
-  monkeypatch.setattr(deps, "_session_manager", object(), raising=False)
-  with pytest.raises(PreviewRefused, match="bound before the preview environment"):
-    assert_no_bound_singletons()
+  for name in singleton_names:
+    monkeypatch.setattr(deps, name, object())
+    with pytest.raises(PreviewRefused, match="bound before the preview environment") as excinfo:
+      assert_no_bound_singletons()
+    assert name in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------

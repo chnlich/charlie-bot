@@ -642,7 +642,7 @@ class _HotReloadCache(Generic[T]):
   def get(self, loader: Callable[[], T]) -> T:
     """Return the cached value, reloading through *loader* when the fingerprint moves."""
     fingerprint = self._fingerprint()
-    if self.value is None or (fingerprint != self._mtime and fingerprint != self.failed_mtime):
+    if self.value is None or fingerprint not in (self._mtime, self.failed_mtime):
       try:
         fresh = loader()
       except Exception as error:

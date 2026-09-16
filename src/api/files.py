@@ -228,7 +228,7 @@ def _format_mtime(epoch: float) -> str:
   y += m <= 2
   # The year renders unpadded: the C reference's %Y carries no width, so year
   # 999 is "999", not "0999".
-  return "%s-%02d-%02d %02d:%02d" % (y, m, d, hh, rem // 60)
+  return f"{y}-{m:02d}-{d:02d} {hh:02d}:{rem // 60:02d}"
 
 
 # Bound on _listing_memo: one browser tab lists one directory at a time, so the

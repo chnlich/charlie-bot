@@ -534,15 +534,17 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         timeout=10, label="chat open with a cursor-ready composer from a non-Chat tab")
     await wait_for(cdp, sid, f"!!document.getElementById('tree-node-{fresh_root_id}')", timeout=15,
                    label="new root row in tree")
-    # Both drafts come back with the worker.
+    # Both drafts come back with the worker. The wait is value-based: a stale
+    # editor from the previous node stays in the DOM until this node's own
+    # render replaces it, so element existence alone would read the wrong node.
     await evaluate(cdp, sid, f"switchSession({json.dumps(worker_id)})")
+    await open_task_tab(cdp, sid, "task")
     await wait_for(cdp, sid,
                    "SESSION_ID === " + json.dumps(worker_id)
-                   + " && !!document.getElementById('task-goal-input')", timeout=15,
-                   label="worker selected again")
-    await open_task_tab(cdp, sid, "task")
-    await wait_for(cdp, sid, "!!document.getElementById('task-goal-input')", timeout=10,
-                   label="worker task editor")
+                   + " && (document.getElementById('task-goal-input')?.value === 'unsaved before create'"
+                   " || document.getElementById('task-goal-input')?.value === "
+                   "'Execute a small trial step (edited)')", timeout=15,
+                   label="worker task editor with its own value")
     goal_draft_back = await evaluate(cdp, sid, "document.getElementById('task-goal-input').value")
     composer_back = await evaluate(cdp, sid, "document.getElementById('msg-input').value")
     await evaluate(cdp, sid,

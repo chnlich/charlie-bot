@@ -274,8 +274,8 @@ def test_autonamer_and_recap_defer_the_registry_until_first_use() -> None:
   proc = _run_probe(code)
   before, resolved, after = json.loads(proc.stderr)
   assert before == [], (
-      "autonamer or recap pulled the backends stack at module import: {before}; "
+      f"autonamer or recap pulled the backends stack at module import: {before}; "
       "the M99 server import floor (docs/perf_baseline.md) depends on the naming "
-      "round and the summarize path loading it at their one build".format(before=before))
+      "round and the summarize path loading it at their one build")
   assert resolved is True, "the lazy build_backend binding did not resolve through the module attribute"
   assert after == ["src.agents.backends.registry"], (f"the lazy binding loaded unexpected modules: {after}")

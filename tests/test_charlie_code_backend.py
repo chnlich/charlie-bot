@@ -310,7 +310,7 @@ def test_build_command_writes_task_file_and_flags(monkeypatch: pytest.MonkeyPatc
   # Master instructions ride the cwd AGENTS.md system channel, byte-identical
   # to the assembled instructions string.
   agents_md = session_cwd / "AGENTS.md"
-  assert agents_md.read_bytes() == "Use concise answers.".encode("utf-8")
+  assert agents_md.read_bytes() == b"Use concise answers."
   # task.md carries the bare prompt: no <system-instructions> frame anywhere.
   task_md = tmp_path / "task.md"
   assert task_md.read_bytes() == FLAG_LIKE_PROMPT.encode("utf-8")

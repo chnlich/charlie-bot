@@ -18,8 +18,8 @@ from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
 
 PROBE_EVENTS = "".join(
-    '{"id":"e%d","type":"user","message":{"role":"user","content":"probe %d"},"timestamp":"2026-09-01T00:00:%02dZ"}\n' %
-    (i, i, i % 60) for i in range(64))
+    f'{{"id":"e{i}","type":"user","message":{{"role":"user","content":"probe {i}"}},'
+    f'"timestamp":"2026-09-01T00:00:{i % 60:02d}Z"}}\n' for i in range(64))
 
 
 def _client(cfg: CharlieBotConfig) -> TestClient:

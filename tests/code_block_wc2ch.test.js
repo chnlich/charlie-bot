@@ -64,6 +64,7 @@ function loadChatSurfaceContext() {
   vm.createContext(context);
   vm.runInContext('Math.random = () => 0.5', context);
   vm.runInContext(FAKE_MARKED_SRC, context, { filename: 'marked-fake.js' });
+  vm.runInContext(readStatic('math-scanner.js'), context, { filename: 'math-scanner.js' });
   vm.runInContext(readStatic('markdown-renderer.js'), context, { filename: 'markdown-renderer.js' });
   loadChatRenderingModules(context);
   return context;
@@ -217,6 +218,7 @@ globalThis.marked = {
   const context = buildRendererContext({ withTimers: true });
   vm.createContext(context);
   vm.runInContext(markedSrc, context, { filename: 'marked-code-fake.js' });
+  vm.runInContext(readStatic('math-scanner.js'), context, { filename: 'math-scanner.js' });
   vm.runInContext(readStatic('markdown-renderer.js'), context, { filename: 'markdown-renderer.js' });
   const els = [];
   context.document = {

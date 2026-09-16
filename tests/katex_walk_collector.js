@@ -59,8 +59,11 @@ try {
   const rawWalk = w.renderMathInElement;
 
   // Page shape: the checkout's renderer, then its postProcess step
-  // (querySelectorAll('.prose-msg') -> renderChatMath).
+  // (querySelectorAll('.prose-msg') -> renderChatMath). The checkout's page
+  // load order: math-scanner.js defines the mathSpan global the renderer's
+  // math tokenizer reads.
   w.platform = {};
+  w.eval(fs.readFileSync(path.join(CHECKOUT, 'web/static/js/math-scanner.js'), 'utf8'));
   w.eval(fs.readFileSync(path.join(CHECKOUT, 'web/static/js/markdown-renderer.js'), 'utf8'));
   let pageWalks = 0;
   w.renderMathInElement = (el, opts) => {

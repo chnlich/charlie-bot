@@ -23,6 +23,7 @@ function loadRenderer() {
     },
   };
   vm.createContext(context);
+  vm.runInContext(readStatic('math-scanner.js'), context, { filename: 'math-scanner.js' });
   const src = readStatic('markdown-renderer.js');
   vm.runInContext(src, context, { filename: 'markdown-renderer.js' });
   return { renderer: captured, context };

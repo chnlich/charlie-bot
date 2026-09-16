@@ -163,7 +163,7 @@ class ScheduledSessionStore:
   async def write_scheduled_task_backend(self, task_name: str, backend: str) -> None:
     """Write only the ``backend`` key of *task_name*'s cron yaml, preserving every other key.
 
-    The rotation write-back: persistence rides :meth:`_write_cron_key`'s contract.
+    Persistence rides :meth:`_write_cron_key`'s contract.
     """
     await asyncio.to_thread(self._write_cron_key, task_name, "backend", backend)
 

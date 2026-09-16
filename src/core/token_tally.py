@@ -124,6 +124,7 @@ The merged Claude+Codex buckets are themselves incremental per file (source part
 
 from __future__ import annotations
 
+import bisect
 import datetime as dt
 import hashlib
 import json
@@ -766,34 +767,53 @@ def _parse_lines(fh: BinaryIO, markers: tuple[bytes, ...]) -> tuple[list[dict], 
   """Parse the marker lines from *fh*'s current position to EOF.
 
   Returns (objects, consumed byte offset), objects in file order. Only complete lines parse:
-  a trailing fragment without its newline is left for the round whose read covers it whole.
-  The consumed offset is every complete line's byte span — which is what the read paid. A
-  marker hit in the trailing fragment waits in the remainder for the next chunk; an
+  a trailing fragment without its newline is left for the carry until the round whose read
+  covers it whole. The consumed offset is every complete line's byte span — which is what the
+  read paid. A marker hit in the trailing fragment waits in the carry for the next chunk; an
   unparseable marker line is dropped.
   """
   objects: list[dict] = []
   consumed = 0
-  remainder = b""
+  # The carry holds exactly the current unterminated line between rounds: the chunk append
+  # copies only the fresh bytes and the consumed prefix drops once per round, so a
+  # multi-hundred-MB line costs one append pass per chunk instead of the per-round
+  # re-concat and from-zero re-scan that paid O(line^2 / chunk) on the gigabyte raw logs
+  # (a ~500 MB line read 96 s where the same bytes pass once in ~1 s). The newline scans
+  # ride the fresh region; the marker pass runs once per newline round over the round's
+  # complete region, carried partial included — once per line's life, still linear.
+  carry = bytearray()
+  hits: list[int] = []
   while True:
     chunk = fh.read(_PARSE_CHUNK)
     if not chunk:
       break
-    data = remainder + chunk
-    cut = data.rfind(b"\n")
+    plen = len(carry)
+    carry += chunk
+    cut = carry.rfind(b"\n", plen)
     if cut == -1:
-      remainder = data
       continue
-    remainder = data[cut + 1:]
-    consumed += cut + 1
-    starts = set()
+    hits.clear()
     for marker in markers:
-      i = data.find(marker)
+      i = carry.find(marker, 0, cut + 1)
       while i != -1:
-        if i <= cut:
-          starts.add(data.rfind(b"\n", 0, i) + 1)
-        i = data.find(marker, i + 1)
+        hits.append(i)
+        i = carry.find(marker, i + 1, cut + 1)
+    starts: set[int] = set()
+    if hits:
+      # A hit's line start is the partial's own first byte (the carry holds no newline
+      # before the fresh region) or the last fresh newline before it — both from one
+      # ascending newline walk, never a from-zero rfind per hit.
+      fresh_nls: list[int] = []
+      pos = carry.find(b"\n", plen)
+      while pos != -1 and pos <= cut:
+        fresh_nls.append(pos)
+        pos = carry.find(b"\n", pos + 1)
+      for i in hits:
+        j = bisect.bisect_left(fresh_nls, i)
+        starts.add(0 if j == 0 else fresh_nls[j - 1] + 1)
     for start in sorted(starts):
-      line = data[start:data.find(b"\n", start) + 1]
+      end = carry.find(b"\n", start)
+      line = bytes(carry[start:end + 1])
       try:
         objects.append(orjson.loads(line))
       except ValueError:
@@ -803,6 +823,8 @@ def _parse_lines(fh: BinaryIO, markers: tuple[bytes, ...]) -> tuple[list[dict], 
           objects.append(json.loads(line.decode("utf-8", errors="replace")))
         except ValueError:
           continue
+    consumed += cut + 1
+    del carry[:cut + 1]
   return objects, consumed
 
 

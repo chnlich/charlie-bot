@@ -662,8 +662,11 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                        await screenshot(cdp, sid, results, "s08-glm-run"))
         # --- S9: Run history and stored Context on the launched run --------
         await open_task_tab(cdp, sid, "runs")
-        run_visible = await evaluate(
-            cdp, sid, f"document.getElementById('tab-runs').textContent.includes({json.dumps(run['id'][:8])})")
+        # The panel renders after its own fetch; an immediate textContent read
+        # races that fetch and would report a false empty history.
+        run_visible = await wait_for(
+            cdp, sid, f"document.getElementById('tab-runs').textContent.includes({json.dumps(run['id'][:8])})",
+            timeout=10, label="run row in the runs panel")
         status, ctx = api_request(base, access_key, "GET",
                                   f"/api/sessions/{root_id}/runs/{run['id']}/context")
         has_snapshot = status == 200 and bool((ctx or {}).get("snapshot"))

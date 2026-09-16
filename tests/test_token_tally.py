@@ -7,6 +7,7 @@ hard-coded total.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
@@ -1413,6 +1414,59 @@ def test_append_tail_parses_a_completed_partial_line_once(tmp_path: Path) -> Non
   reference = _collect(claude, None, db)
   assert after.rows == reference.rows
   assert _row(after, "Claude Code", NAME).total == 117
+
+
+def test_parse_lines_multi_chunk_giant_line_parity(monkeypatch: pytest.MonkeyPatch) -> None:
+  """A no-marker observation line spanning many chunks parses once: objects, order and the
+  consumed offset match the shapes the per-round re-concat read (the gigabyte raw-log shape
+  whose re-concat paid O(line^2 / chunk))."""
+  monkeypatch.setattr(tt, "_PARSE_CHUNK", 64)
+  lines = [
+      b'{"type": "context", "model": "clc-x"}',
+      b'{"pad": "' + b"q" * 500 + b'"}',  # no marker, spans ~8 chunks
+      b'{"type": "result", "usage": {"input_tokens": 3, "output_tokens": 4}}',
+      b'{"pad2": "' + b"r" * 130 + b'"}',  # no marker, spans 2-3 chunks
+      b'{"type": "result", "usage": {"input_tokens": 5, "output_tokens": 6}}',
+  ]
+  blob = b"\n".join(lines) + b"\n" + b'{"trailing": "fragment"}'
+  objects, consumed = tt._parse_lines(io.BytesIO(blob), tt._CHARLIEBOT_MASTER_MARKERS)
+  assert consumed == blob.rfind(b"\n") + 1  # the trailing fragment stays unconsumed
+  assert [(o.get("type"), o.get("usage", {}).get("input_tokens")) for o in objects] == [
+      ("context", None), ("result", 3), ("result", 5)
+  ]
+
+
+def test_charliebot_master_tail_spans_a_giant_observation_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The changed round's tail parse crosses a multi-chunk no-marker line appended since the
+  document's end offset and lands on the trailing result: the entry matches a cacheless
+  re-parse and the row bills the new result once."""
+  monkeypatch.setattr(tt, "_PARSE_CHUNK", 64)
+  _stub_registry(monkeypatch, _CLC_GLM)
+  cb = Charliebot(tmp_path)
+  log_file = cb.master(
+      "s1", "2026-09-16T19:42:20+00:00", [
+          {
+              "type": "session",
+              "session_id": "clc-1"
+          },
+          _master_context(10, "openai/zai-org/GLM-5.3-Flash"),
+          _master_result(500, 25),
+      ])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  first = _collect(None, None, db, cache, sessions=cb.root)
+  assert _row(first, "charlie-bot", "GLM-5.3-Flash").total == 525
+  with log_file.open("a") as fh:  # the streamed-turn shape: a giant observation line, then the result
+    fh.write('{"pad": "' + "q" * 500 + '"}\n')
+    fh.write(json.dumps(_master_result(700, 30)) + "\n")
+  after = _collect(None, None, db, cache, sessions=cb.root)
+  reference = _collect(None, None, db, sessions=cb.root)
+  assert after.rows == reference.rows
+  assert _row(after, "charlie-bot", "GLM-5.3-Flash").total == 730
+  assert after.scanned_bytes < log_file.stat().st_size  # the tail round read only the appended lines
+  entry = json.loads(cache.read_text())["sources"]["charlie-bot"][str(log_file)]
+  full = tt._master_contribution(str(log_file), tt._backend_registry())[0]
+  assert entry["records"] == full["records"]
+  assert entry["end"] == full["end"] == log_file.stat().st_size
 
 
 def test_append_tail_rejects_a_replaced_or_shrunk_file(tmp_path: Path) -> None:

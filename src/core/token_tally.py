@@ -131,6 +131,7 @@ import os
 import re
 import sqlite3
 import time
+from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -773,27 +774,44 @@ def _parse_lines(fh: BinaryIO, markers: tuple[bytes, ...]) -> tuple[list[dict], 
   """
   objects: list[dict] = []
   consumed = 0
-  remainder = b""
+  # The carry holds exactly the current unterminated line between rounds: the chunk append
+  # copies only the fresh bytes, the consumed prefix is dropped once per round, and every
+  # scan rides the fresh region. Re-concatenating a bytes remainder per round plus the
+  # from-zero rfind per hit paid O(line^2 / chunk) on the gigabyte raw logs (a ~500 MB
+  # line read 96 s where the same bytes pass once in ~1 s).
+  carry = bytearray()
+  hits: list[int] = []
   while True:
     chunk = fh.read(_PARSE_CHUNK)
     if not chunk:
       break
-    data = remainder + chunk
-    cut = data.rfind(b"\n")
+    plen = len(carry)
+    carry += chunk
+    cut = carry.rfind(b"\n", plen)
     if cut == -1:
-      remainder = data
       continue
-    remainder = data[cut + 1:]
-    consumed += cut + 1
-    starts = set()
+    hits.clear()
     for marker in markers:
-      i = data.find(marker)
+      i = carry.find(marker, 0, cut + 1)
       while i != -1:
-        if i <= cut:
-          starts.add(data.rfind(b"\n", 0, i) + 1)
-        i = data.find(marker, i + 1)
+        hits.append(i)
+        i = carry.find(marker, i + 1, cut + 1)
+    starts: set[int] = set()
+    if hits:
+      # A hit's line start is the partial's own first byte (the carry holds no newline
+      # before the fresh region) or the last fresh newline before it — both from one
+      # ascending newline walk, never a from-zero rfind per hit.
+      fresh_nls: list[int] = []
+      pos = carry.find(b"\n", plen)
+      while pos != -1 and pos <= cut:
+        fresh_nls.append(pos)
+        pos = carry.find(b"\n", pos + 1)
+      for i in hits:
+        j = bisect_left(fresh_nls, i)
+        starts.add(0 if j == 0 else fresh_nls[j - 1] + 1)
     for start in sorted(starts):
-      line = data[start:data.find(b"\n", start) + 1]
+      end = carry.find(b"\n", start)
+      line = bytes(carry[start:end + 1])
       try:
         objects.append(orjson.loads(line))
       except ValueError:
@@ -803,6 +821,8 @@ def _parse_lines(fh: BinaryIO, markers: tuple[bytes, ...]) -> tuple[list[dict], 
           objects.append(json.loads(line.decode("utf-8", errors="replace")))
         except ValueError:
           continue
+    consumed += cut + 1
+    del carry[:cut + 1]
   return objects, consumed
 
 

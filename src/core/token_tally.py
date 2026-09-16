@@ -124,6 +124,7 @@ The merged Claude+Codex buckets are themselves incremental per file (source part
 
 from __future__ import annotations
 
+import bisect
 import datetime as dt
 import hashlib
 import json
@@ -131,7 +132,6 @@ import os
 import re
 import sqlite3
 import time
-from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -767,18 +767,20 @@ def _parse_lines(fh: BinaryIO, markers: tuple[bytes, ...]) -> tuple[list[dict], 
   """Parse the marker lines from *fh*'s current position to EOF.
 
   Returns (objects, consumed byte offset), objects in file order. Only complete lines parse:
-  a trailing fragment without its newline is left for the round whose read covers it whole.
-  The consumed offset is every complete line's byte span — which is what the read paid. A
-  marker hit in the trailing fragment waits in the remainder for the next chunk; an
+  a trailing fragment without its newline is left for the carry until the round whose read
+  covers it whole. The consumed offset is every complete line's byte span — which is what the
+  read paid. A marker hit in the trailing fragment waits in the carry for the next chunk; an
   unparseable marker line is dropped.
   """
   objects: list[dict] = []
   consumed = 0
   # The carry holds exactly the current unterminated line between rounds: the chunk append
-  # copies only the fresh bytes, the consumed prefix is dropped once per round, and every
-  # scan rides the fresh region. Re-concatenating a bytes remainder per round plus the
-  # from-zero rfind per hit paid O(line^2 / chunk) on the gigabyte raw logs (a ~500 MB
-  # line read 96 s where the same bytes pass once in ~1 s).
+  # copies only the fresh bytes and the consumed prefix drops once per round, so a
+  # multi-hundred-MB line costs one append pass per chunk instead of the per-round
+  # re-concat and from-zero re-scan that paid O(line^2 / chunk) on the gigabyte raw logs
+  # (a ~500 MB line read 96 s where the same bytes pass once in ~1 s). The newline scans
+  # ride the fresh region; the marker pass runs once per newline round over the round's
+  # complete region, carried partial included — once per line's life, still linear.
   carry = bytearray()
   hits: list[int] = []
   while True:
@@ -807,7 +809,7 @@ def _parse_lines(fh: BinaryIO, markers: tuple[bytes, ...]) -> tuple[list[dict], 
         fresh_nls.append(pos)
         pos = carry.find(b"\n", pos + 1)
       for i in hits:
-        j = bisect_left(fresh_nls, i)
+        j = bisect.bisect_left(fresh_nls, i)
         starts.add(0 if j == 0 else fresh_nls[j - 1] + 1)
     for start in sorted(starts):
       end = carry.find(b"\n", start)

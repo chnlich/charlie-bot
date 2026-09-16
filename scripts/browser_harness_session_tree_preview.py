@@ -11,11 +11,15 @@ action, the dropdown's selected model carried on the create), explicit
 child/worker creation through the existing modal, goal and rule editing, node
 switching with draft preservation, the real GLM manager turn from the first
 message, Context and run history, the completion/refusal/reopen and move/pause
-controls, a reload with selection, a narrow viewport, and — for every backend
-listed in --backends — one task created through a real dropdown selection of
-that model with its own bounded first message and Run evidence (backend, model
-and native location matching the selection). Every refusal is a recorded
-failure; no scenario is scripted to pass.
+controls, a reload with selection, a narrow viewport, the live activity
+feedback on real Run paths (a manager turn spinning its own row, a worker turn
+spinning its row plus its ancestors' delegated-work gear while collapsed, a
+stop clearing both — observed through the tree's WebSocket updates, never a
+painted fake row), and — for every backend listed in --backends — one task
+created through a real dropdown selection of that model with its own bounded
+first message and Run evidence (backend, model and native location matching
+the selection). Every refusal is a recorded failure; no scenario is scripted
+to pass.
 
 Evidence: per-scenario screenshots and session_tree_preview_browser_results.json
 with the exact tested commit, the invocation and the console-error list.
@@ -116,6 +120,55 @@ async def click_button_by_text(cdp: CDP, session_id: str, text: str, scope: str 
             f" {json.dumps(text)}); if (!btn) throw new Error('missing button ' + {json.dumps(text)});"
             " btn.click(); })()")
     await evaluate(cdp, session_id, expr)
+
+
+TREE_ROW_ACTIVITY_SNIPPET = """
+    (() => {
+      const id = "__NODE_ID__";
+      const row = document.getElementById('tree-node-' + id);
+      if (!row) return null;
+      const spin = row.querySelector('svg[id="spinner-' + id + '"]');
+      const gear = row.querySelector('svg[id="worker-indicator-' + id + '"]');
+      const visible = (el) => !!el && !el.classList.contains('hidden') && el.getBoundingClientRect().width > 0;
+      return {spinner: visible(spin), gear: visible(gear), label: row.textContent || ''};
+    })()
+"""
+
+
+async def tree_row_activity(cdp: CDP, session_id: str, node_id: str) -> dict:
+    """One tree row's live activity facts: which shared cue is visible and its state label."""
+    expr = TREE_ROW_ACTIVITY_SNIPPET.replace("__NODE_ID__", node_id)
+    value = await evaluate(cdp, session_id, expr)
+    if value is None:
+        raise RuntimeError(f"tree row for {node_id} is not rendered")
+    return value
+
+
+async def tree_row_activity_tolerant(cdp: CDP, session_id: str, node_id: str) -> dict | None:
+    """Like tree_row_activity, but a node whose task left the open tree (its
+    automation completed it mid-scenario) reads as None instead of aborting."""
+    try:
+        return await tree_row_activity(cdp, session_id, node_id)
+    except RuntimeError:
+        return None
+
+
+async def wait_row_activity(cdp: CDP, session_id: str, node_id: str, want: dict,
+                            timeout: float, label: str, samples: list[str] | None = None) -> dict:
+    """Bounded wait for one row's cue state; every distinct state label seen on the
+    way is kept so the observed transition sequence is reported, not assumed."""
+    deadline = time.monotonic() + timeout
+    last = {}
+    while time.monotonic() < deadline:
+        last = await tree_row_activity(cdp, session_id, node_id)
+        if samples is not None:
+            state = last.get("label", "")
+            if not samples or samples[-1] != state:
+                samples.append(state)
+        if all(last.get(k) == v for k, v in want.items()):
+            return last
+        await asyncio.sleep(0.4)
+    raise TimeoutError(f"{label}: last row state {last}")
 
 
 async def open_task_tab(cdp: CDP, session_id: str, tab: str) -> None:
@@ -472,6 +525,22 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                    f"events-page={events_status} user-message-admitted={admitted}",
                    await screenshot(cdp, sid, results, "s02b-first-message"))
 
+    # --- S2c: the manager turn spins its own tree row live -----------------
+    # The dispatched manager_turn Run is real: the row must move queued/idle ->
+    # running through the tree's WebSocket updates alone (no reload, no other
+    # input). Every distinct state label seen on the way is reported.
+    row_states: list[str] = []
+    try:
+        await wait_row_activity(cdp, sid, root_id, {"spinner": True}, 120,
+                                "root row spinner during the manager turn", row_states)
+        during_shot = await screenshot(cdp, sid, results, "s02c-running-row-desktop")
+        results.record("s02c-manager-turn-row-spinner", True,
+                       f"root row spinner visible without reload; observed label sequence: "
+                       f"{[t[:28] for t in row_states]}",
+                       during_shot)
+    except TimeoutError as exc:
+        results.record("s02c-manager-turn-row-spinner", False, str(exc)[:300],
+                       await screenshot(cdp, sid, results, "s02c-fail"))
     # --- S3: child manager under the root ----------------------------------
     await open_task_tab(cdp, sid, "task")
     await wait_for(cdp, sid, "!!document.getElementById('task-action-child')", timeout=10,
@@ -711,6 +780,19 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         results.record("s08-real-glm-manager-turn",
                        run.get("state") == "success" and bool(native_entries), detail,
                        await screenshot(cdp, sid, results, "s08-glm-run"))
+        # Success must clear the row's spinner through the same live path: an
+        # open task whose Run finished reads idle, never perpetually running.
+        try:
+            after = await wait_row_activity(cdp, sid, root_id,
+                                            {"spinner": False, "gear": False}, 30,
+                                            "root row cleared after the manager turn")
+            results.record("s08b-manager-turn-row-cleared",
+                           "idle" in after.get("label", ""),
+                           f"spinner cleared; row label reads: {after.get('label', '')[:60]!r}",
+                           await screenshot(cdp, sid, results, "s08b-row-idle"))
+        except TimeoutError as exc:
+            results.record("s08b-manager-turn-row-cleared", False, str(exc)[:300],
+                           await screenshot(cdp, sid, results, "s08b-fail"))
         # --- S9: Run history and stored Context on the launched run --------
         await open_task_tab(cdp, sid, "runs")
         # The panel renders after its own fetch; an immediate textContent read
@@ -847,6 +929,179 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     results.record("s12-narrow-viewport", bool(narrow_ok and narrow_toolbar),
                    f"task tree renders inside a 390px viewport; toolbar one-row={narrow_toolbar}",
                    None)
+
+    # --- S14: delegated-work activity on real Run paths ---------------------
+    # The trial's own controls resume the worker; real work turns run. Observed
+    # live through the tree's WebSocket updates: a running node spins its own
+    # row, its running ancestors show the delegated gear, and a real stop
+    # clears the cues. Nothing paints a fake running row.
+    await evaluate(cdp, sid, f"switchSession({json.dumps(worker_id)})")
+    await wait_for(cdp, sid, f"SESSION_ID === {json.dumps(worker_id)}", timeout=15,
+                   label="worker selected for the activity scenario")
+    status, _meta = api_request(base, access_key, "PATCH", f"/api/sessions/{worker_id}",
+                                {"automation_paused": False})
+    resumed = status == 200
+    results.record("s14a-worker-resumed", resumed, f"PATCH automation_paused=false -> {status}", None)
+
+    toolbar_intact = await evaluate(cdp, sid, """
+        (() => {
+          const btn = [...document.querySelectorAll('#sidebar button')].find(b => b.textContent.trim() === 'New Session');
+          const sel = document.getElementById('new-session-backend');
+          if (!btn || !sel) return false;
+          const b = btn.getBoundingClientRect(), s = sel.getBoundingClientRect();
+          return Math.abs(b.top - s.top) < 4 && sel.options.length >= 1;
+        })()""")
+
+    # The worker's own real turn: one bounded first message through the
+    # composer. The reply asks for real generated text so the Run stays
+    # inspectable; the stop below preempts it before it can finish.
+    worker_message = ("Trial activity step. Write a 60-word story about a lighthouse, then reply "
+                      "with exactly WORK-OK on the last line. Do not create subtasks.")
+    await open_task_tab(cdp, sid, "chat")
+    await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10, label="worker composer")
+    await evaluate(cdp, sid,
+                   "(() => { const inp = document.getElementById('msg-input');"
+                   f"inp.value = {json.dumps(worker_message)};"
+                   "inp.dispatchEvent(new Event('input')); })()")
+    await click(cdp, sid, "#send-btn")
+    await wait_for(cdp, sid,
+                   f"document.getElementById('tab-chat').textContent.includes({json.dumps(worker_message)})",
+                   timeout=15, label="worker message rendered")
+
+    # The worker's row must move to a live spinner on its own; the manager
+    # ancestors (child, root) show the delegated gear while a descendant runs.
+    worker_states: list[str] = []
+    active_run_id = None
+    try:
+        await wait_row_activity(cdp, sid, worker_id, {"spinner": True}, 120,
+                                "worker row spinner during its work Run", worker_states)
+        root_during = await tree_row_activity(cdp, sid, root_id)
+        child_during = await tree_row_activity(cdp, sid, child_id)
+        # Pin the exact Run this visible spinner belongs to (never a fake row).
+        status, runs_page = api_request(base, access_key, "GET",
+                                        f"/api/sessions/{worker_id}/runs?order=desc&limit=1")
+        runs = (runs_page.get("items") or []) if isinstance(runs_page, dict) else []
+        if runs and runs[0].get("state") in ("running", "queued"):
+            active_run_id = runs[0]["id"]
+        geometry = await evaluate(cdp, sid, f"""
+            (() => {{
+              const row = document.getElementById('tree-node-{worker_id}');
+              if (!row) return null;
+              const inner = row.firstElementChild;
+              const spin = row.querySelector('svg[id="spinner-{worker_id}"]');
+              const name = row.querySelector('.session-name');
+              if (!spin || !name) return null;
+              const r = inner.getBoundingClientRect(), s = spin.getBoundingClientRect(),
+                    n = name.getBoundingClientRect();
+              return {{
+                spinnerInRow: s.top >= r.top && s.bottom <= r.bottom + 1 && s.width > 8 && s.height > 8,
+                spinnerLeftOfName: s.right <= n.left + 2,
+                nameWidthFloor: n.width >= 0.5 * r.width,
+                spinnerAnimation: getComputedStyle(spin).animationName,
+              }};
+            }})()""")
+        geo_ok = bool(geometry) and (geometry.get("spinnerInRow") and geometry.get("spinnerLeftOfName")
+                                     and geometry.get("nameWidthFloor")
+                                     and "spin" in str(geometry.get("spinnerAnimation")))
+        results.record("s14b-worker-run-activity-cues",
+                       bool(active_run_id and root_during.get("gear") and toolbar_intact),
+                       f"worker spinner live; root delegated gear={root_during.get('gear')} "
+                       f"toolbar-intact={toolbar_intact} child state={child_during} "
+                       f"active run={str(active_run_id)[:8]} "
+                       f"run-state-at-check={runs[0].get('state') if runs else 'none'} "
+                       f"worker labels={[t[:20] for t in worker_states]}",
+                       await screenshot(cdp, sid, results, "s14b-during-desktop"))
+        results.record("s14c-activity-geometry", geo_ok,
+                       f"spinner inside the row, adjacent to a readable name, animated: {geometry}",
+                       None)
+    except TimeoutError as exc:
+        results.record("s14b-worker-run-activity-cues", False, str(exc)[:300],
+                       await screenshot(cdp, sid, results, "s14b-fail"))
+        results.record("s14c-activity-geometry", False, "skipped: no running row observed", None)
+
+    # Narrow viewport: the same live cues at 390px, names still readable.
+    await cdp.send("Emulation.setDeviceMetricsOverride",
+                   {"width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": True},
+                   session_id=sid)
+    await asyncio.sleep(0.6)
+    # The drawer may have been left open by S12: open it only when closed, so
+    # the scenario asserts the sidebar state it needs instead of a toggle parity.
+    await evaluate(cdp, sid,
+                   "(() => { const sb = document.getElementById('sidebar');"
+                   " if (sb && !sb.classList.contains('open')) toggleMobileSidebar(); })()")
+    await asyncio.sleep(0.4)
+    narrow_worker = await tree_row_activity_tolerant(cdp, sid, worker_id)
+    narrow_root = await tree_row_activity_tolerant(cdp, sid, root_id)
+    if narrow_worker is None:
+        results.record("s14d-narrow-during-activity", False,
+                       "the worker row left the open tree before the narrow check (its "
+                       "automation completed the task); not painted as a pass",
+                       await screenshot(cdp, sid, results, "s14d-worker-row-gone"))
+    else:
+        narrow_readability = await evaluate(cdp, sid, f"""
+            (() => {{
+              const row = document.getElementById('tree-node-{worker_id}');
+              const inner = row.firstElementChild;
+              const name = row.querySelector('.session-name');
+              const r = inner.getBoundingClientRect(), n = name.getBoundingClientRect();
+              return {{rowWidth: r.width, nameWidth: n.width,
+                       nameVisible: n.width > 60 && n.left >= r.left && n.right <= r.right + 1}};
+            }})()""")
+        results.record("s14d-narrow-during-activity",
+                       bool(narrow_worker.get("spinner") and narrow_readability.get("nameVisible")),
+                       f"narrow during: worker spinner={narrow_worker.get('spinner')} "
+                       f"root gear={None if narrow_root is None else narrow_root.get('gear')} "
+                       f"readability={narrow_readability}",
+                       await screenshot(cdp, sid, results, "s14d-during-narrow"))
+
+    # The real stop: durable request, signal, observed exit -> interrupted. The
+    # bounded turn may finish first (small fast model); then the clearing
+    # evidence comes from whatever run is still active, and the finished-turn
+    # case is recorded honestly instead of being made to look like a stop.
+    async def active_run_of(session_id: str) -> str | None:
+        status, page = api_request(base, access_key, "GET",
+                                   f"/api/sessions/{session_id}/runs?order=desc&limit=1")
+        items = (page.get("items") or []) if isinstance(page, dict) else []
+        return items[0]["id"] if items and items[0].get("state") in ("running", "queued") else None
+
+    stop_target = active_run_id
+    stop_owner = worker_id
+    if stop_target is None:
+        stop_target = await active_run_of(worker_id)
+    if stop_target is None:
+        # The worker turn finished and its automation may have completed the
+        # task; the child manager's own delegation Run is the remaining live
+        # evidence for the stop path.
+        stop_target = await active_run_of(child_id)
+        stop_owner = child_id
+    if stop_target is None:
+        results.record("s14e-stop-clears-activity", False,
+                       "no active run remained to stop (the bounded turn reached a terminal "
+                       "state first); stop clearing not evidenced this round", None)
+    else:
+        status, cancel = api_request(base, access_key, "POST",
+                                     f"/api/sessions/{stop_owner}/runs/{stop_target}/cancel",
+                                     {"request_id": "trial-stop-" + stop_target[:8]})
+        try:
+            after = await wait_row_activity(cdp, sid, stop_owner,
+                                            {"spinner": False, "gear": False}, 60,
+                                            "row cleared after the stop")
+            root_after = await tree_row_activity_tolerant(cdp, sid, root_id)
+            label = after.get("label", "")
+            results.record("s14e-stop-clears-activity",
+                           bool(cancel.get("stop_requested")) and "attention" in label,
+                           f"stopped run of {stop_owner[:8]}: cancel={dict(cancel)} "
+                           f"row label={label[:40]!r} "
+                           f"root gear after={None if root_after is None else root_after.get('gear')}",
+                           await screenshot(cdp, sid, results, "s14e-after-stop-narrow"))
+        except TimeoutError as exc:
+            results.record("s14e-stop-clears-activity", False, str(exc)[:300],
+                           await screenshot(cdp, sid, results, "s14e-fail"))
+    await cdp.send("Emulation.clearDeviceMetricsOverride", session_id=sid)
+    await asyncio.sleep(0.4)
+    results.record("s14f-desktop-after-stop",
+                   True, "cleared device override; final desktop state recorded",
+                   await screenshot(cdp, sid, results, "s14f-after-desktop"))
 
     # --- S13: every selected model is a real choice with a real Run ---------
     # For each non-default dropdown entry: a real selection change, a real New

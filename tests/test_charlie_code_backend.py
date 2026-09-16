@@ -7,6 +7,8 @@ from conftest import (
     BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
     CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
     FLAG_LIKE_PROMPT,
+    LITELLM_503_ERROR_MESSAGE,
+    LITELLM_FEEDBACK_BANNER_STDERR,
     RUNS_READ_PID_STAT_PATCH_TARGET,
     assistant_text_event,
     backend_option,
@@ -20,6 +22,7 @@ from src.agents.backends.base import USER_LOCAL_BIN, AgentBackend
 from src.agents.backends.charlie_code import CharlieCodeBackend
 from src.agents.backends.registry import build_backend
 from src.core import event_types as ET
+from src.core import runs
 from src.core.config import CharlieBotConfig
 
 
@@ -114,6 +117,23 @@ def test_translate_failure_stream_preserves_error_message(monkeypatch: pytest.Mo
           "content": "rate limit: retry later",
       }
   ]
+
+
+def test_translated_error_event_feeds_the_end_of_run_hint_selection(
+    monkeypatch: pytest.MonkeyPatch) -> None:
+  """The Gemini-503 adaptation, in-process: the CLC backend's raw error row
+  translates to exactly the ET.ERROR event the hint selection reads, and the
+  selection prefers it over the stderr help banner."""
+  backend = _build_backend(monkeypatch)
+
+  translated = backend.translate_event({"type": "error", "message": LITELLM_503_ERROR_MESSAGE})
+
+  assert [event["type"] for event in translated] == [ET.ERROR]
+  hint = runs.select_error_hint(
+      [event.get("message", "") for event in translated if event.get("type") == ET.ERROR],
+      LITELLM_FEEDBACK_BANNER_STDERR)
+  assert hint == LITELLM_503_ERROR_MESSAGE
+  assert "Give Feedback" not in hint
 
 
 def test_translate_thought_and_unknown(monkeypatch: pytest.MonkeyPatch) -> None:

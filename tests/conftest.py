@@ -25,6 +25,19 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
   sys.path.insert(0, str(ROOT))
 
+# The Gemini 503 incident's two error channels, verbatim shapes: the failed
+# invocation's structured error event (the real failure) and the stderr tail
+# (the LiteLLM help banner that used to mask it in chat). Shared by the suites
+# covering the error-hint selection, the live exit, and the restart re-attach.
+LITELLM_503_ERROR_MESSAGE = (
+    "litellm.ServiceUnavailableError: ServiceUnavailableError: OpenAIException - "
+    "Error code: 503 - [{'error': {'code': 503, 'message': 'The service is currently "
+    "unavailable.', 'status': 'UNAVAILABLE'}}]")
+LITELLM_FEEDBACK_BANNER_STDERR = (
+    "\x1b[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\x1b[0m\n"
+    "LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'.\n"
+    "\nCommand logs retained at: /home/chaoli/.charlie-code/sessions/example.d/20260915T232823Z")
+
 # Imports must follow the sys.path bootstrap above.
 import src.core.config as core_config  # noqa: E402,I001
 from src.agents import master_cc_queue, master_cc_run, master_cc_state, worker as worker_module  # noqa: E402

@@ -50,6 +50,7 @@ from pathlib import Path
 
 import pytest
 from conftest import (
+    LITELLM_503_ERROR_MESSAGE,
     MASTER_RECOVERY_TASK_PREFIXES,
     ROOT,
     _wait_for,
@@ -89,6 +90,13 @@ while [ -e "$state/inv-$n.argv" ]; do
 done
 printf '%s\n' "$@" > "$state/inv-$n.argv"
 cat > "$state/inv-$n.prompt"
+if [ "$mode" = "error_hang" ]; then
+  echo "{\"type\":\"error\",\"message\":\"__LITELLM_503_ERROR_MESSAGE__\"}"
+  printf '\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m\n' >&2
+  printf "LiteLLM.Info: If you need to debug this error, use \`litellm._turn_on_debug()'.\n" >&2
+  echo "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"ASSISTANT-INV-$n\"}]}}"
+  while :; do sleep 60; done
+fi
 echo "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":"\
 "[{\"type\":\"text\",\"text\":\"ASSISTANT-INV-$n\"}]}}"
 case "$mode" in
@@ -109,6 +117,8 @@ echo "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\"
 "\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"
 exit 0
 """
+
+FAKE_SHIM = FAKE_SHIM.replace("__LITELLM_503_ERROR_MESSAGE__", LITELLM_503_ERROR_MESSAGE)
 
 DRIVER = """import asyncio
 import json
@@ -649,6 +659,58 @@ async def test_master_reattach_after_server_kill(tmp_path: Path, monkeypatch: py
   assert master_done[0].get(
       "thinking_seconds",
       0) >= 600, (f"interval must count the backdated start; got {master_done[0].get('thinking_seconds')}s")
+
+
+@pytest.mark.asyncio
+async def test_reattached_failed_turn_hints_from_the_precursor_error_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Re-attach onto a failed turn whose persisted cursor already sits past the
+  invocation's error event: the whole-file projection still finds it, and the
+  failure hint is the structured error (the real 503), never the stderr help
+  banner. The manual-compaction recovery pattern, applied to error hints."""
+  home = tmp_path / "home"
+  shim, state = _install_shim(tmp_path)
+  proc, session_id = _launch_driver(tmp_path, home, shim, "chat", "error_hang")
+
+  # The driver consumed the error row and the assistant line, so the persisted
+  # cursor sits past the error event before the server dies; the agent hangs on.
+  _wait_turn_started(home, session_id, what="turn A did not start/persist identity and first output")
+  raw = _raw_logs(home, session_id)[0]
+  cursor = raw.parent / runs.CURSOR_NAME
+  _wait_for(
+      lambda: runs.read_raw_cursor(cursor) == raw.stat().st_size and b"ASSISTANT-INV-1" in raw.read_bytes(),
+      timeout=20.0,
+      what="cursor never drained the error_hang raw log")
+  first_line = raw.read_bytes().split(b"\n")[0]
+  assert first_line.startswith(b'{"type":"error"'), "the error row must be the raw log's first line"
+  assert runs.read_raw_cursor(cursor) >= len(first_line) + 1, "cursor must sit past the error event"
+  raw_before = raw.read_bytes()
+  proc.kill()
+  proc.wait(timeout=10)
+
+  # Recovery re-attaches to the still-hanging agent. The re-attach task stays
+  # pending while the producer lives, so like the stalled-turn scenario recovery
+  # runs un-awaited here; the producer's death is what closes the round.
+  patch_instructions_content(monkeypatch)
+  monkeypatch.setenv("SHIM_MODE", "immediate")
+  monkeypatch.setenv("SHIM_STATE", str(state))
+  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(UTC))
+
+  # Re-attached, not respawned, and the raw log is read-only ground truth.
+  assert _session_meta(home, session_id)["master_run"] is not None
+  assert not (state / "inv-2.argv").exists(), "a re-attached failed turn must not respawn"
+  assert raw.read_bytes() == raw_before, "the raw log is read-only ground truth"
+
+  # The producer dies; the re-attached follower then closes the round.
+  _kill_agent_only(home, session_id)
+  await _await_recovery_tasks()
+  events = read_chat_events(home, session_id)
+  assert len([e for e in events if e.get("type") == "user"]) == 1
+  hints = [e for e in events if e.get("type") == "assistant_error"]
+  assert len(hints) == 1
+  assert hints[0]["content"] == f"Agent error: {LITELLM_503_ERROR_MESSAGE}"
+  assert "Give Feedback" not in hints[0]["content"]
+  _assert_round_closed_once(events, home, session_id, exit_code=-1)
 
 
 @pytest.mark.asyncio

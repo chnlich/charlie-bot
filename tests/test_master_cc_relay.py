@@ -1,6 +1,7 @@
 """Master account relay: turn placement, the in-run watch, and _run_cc continuing a turn on another pool account."""
 
 import dataclasses
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,8 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     FABLE_MODEL,
+    LITELLM_503_ERROR_MESSAGE,
+    LITELLM_FEEDBACK_BANNER_STDERR,
     POOLED_FABLE_ID,
     ScriptedRelayBackend,
     backend_option,
@@ -713,3 +716,137 @@ async def test_run_cc_mid_turn_refusal_adopts_the_destination_and_continues(
   assert (live_after.st_mtime_ns,
           live_after.st_size) == (live_before.st_mtime_ns,
                                   live_before.st_size), ("the adopted copy was not overwritten")
+
+
+# ---------------------------------------------------------------------------
+# End-of-run error hint on the live exit path
+# ---------------------------------------------------------------------------
+
+
+def _solo_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """A non-pooled cc-claude config: no relay watch, the plain exit path."""
+  return CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backends={"options": [backend_option(id="solo", label="Solo", type="cc-claude", model=FABLE_MODEL)]},
+  )
+
+
+class _StoppedMidStreamBackend:
+  """A backend the user stopped mid-stream: the error event had already
+  streamed, then the stop landed and the transport ended terminated."""
+
+  exit_code = -15
+  stderr_text = LITELLM_FEEDBACK_BANNER_STDERR
+  terminated = True
+  hang_diagnostics = None
+
+  def cgroup_exit_report(self) -> str | None:
+    return None
+
+  async def terminate(self) -> None:
+    self.terminated = True
+
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
+    yield backend_base.make_error_event(LITELLM_503_ERROR_MESSAGE)
+
+
+class _OomReportBackend(ScriptedRelayBackend):
+  """Scripted backend whose cgroup attribution fires (session memory cap)."""
+
+  def __init__(self, events: list[dict], exit_code: int, stderr_text: str, report: str) -> None:
+    super().__init__(events, exit_code, stderr_text=stderr_text)
+    self._report = report
+
+  def cgroup_exit_report(self) -> str | None:
+    return self._report
+
+
+@pytest.mark.asyncio
+async def test_run_cc_error_event_beats_the_stderr_banner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The Gemini-503 shape on the live exit path: the invocation's structured
+  error event is the hint, not the stderr help banner."""
+  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "login"))
+  cfg = _solo_cfg(tmp_path)
+  meta = SessionMetadata(id="s1", name="t", backend="solo")
+  backend = ScriptedRelayBackend(
+      [backend_base.make_error_event(LITELLM_503_ERROR_MESSAGE), backend_base.make_result_event()],
+      exit_code=1,
+      stderr_text=LITELLM_FEEDBACK_BANNER_STDERR)
+  _install_backends(monkeypatch, [backend])
+  item = make_work_item(cfg, meta, cfg.backends.options[0])
+
+  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
+
+  assert exit_code == 1
+  assert error_msg == LITELLM_503_ERROR_MESSAGE
+  errors = _events_of(item.callbacks, ET.ASSISTANT_ERROR)
+  assert len(errors) == 1
+  assert errors[0]["content"] == f"Agent error: {LITELLM_503_ERROR_MESSAGE}"
+
+
+@pytest.mark.asyncio
+async def test_run_cc_terminated_stays_hint_free(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An explicit user stop keeps today's no-hint behavior: the stop's own kill
+  is not a failure the invocation's error events or stderr should explain."""
+  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "login"))
+  cfg = _solo_cfg(tmp_path)
+  meta = SessionMetadata(id="s1", name="t", backend="solo")
+  _install_backends(monkeypatch, [_StoppedMidStreamBackend()])
+  item = make_work_item(cfg, meta, cfg.backends.options[0])
+
+  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
+
+  assert exit_code == -15
+  assert error_msg is None
+  assert _events_of(item.callbacks, ET.ASSISTANT_ERROR) == []
+
+
+@pytest.mark.asyncio
+async def test_run_cc_success_stays_hint_free(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Exit 0 emits no error even when the stream carried an error event (the
+  invocation recovered from it) and the stderr tail is non-empty."""
+  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "login"))
+  cfg = _solo_cfg(tmp_path)
+  meta = SessionMetadata(id="s1", name="t", backend="solo")
+  backend = ScriptedRelayBackend(
+      [backend_base.make_error_event(LITELLM_503_ERROR_MESSAGE), backend_base.make_result_event()],
+      exit_code=0,
+      stderr_text=LITELLM_FEEDBACK_BANNER_STDERR)
+  _install_backends(monkeypatch, [backend])
+  item = make_work_item(cfg, meta, cfg.backends.options[0])
+
+  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
+
+  assert exit_code == 0
+  assert error_msg is None
+  assert _events_of(item.callbacks, ET.ASSISTANT_ERROR) == []
+
+
+@pytest.mark.asyncio
+async def test_run_cc_cgroup_report_wins_over_error_event_and_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The session memory-cap / host-OOM attribution still outranks both the
+  invocation's error events and the stderr tail."""
+  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "login"))
+  cfg = _solo_cfg(tmp_path)
+  meta = SessionMetadata(id="s1", name="t", backend="solo")
+  report = "Session memory cap hit: the run was killed by its cgroup (oom_kill 1)."
+  backend = _OomReportBackend(
+      [backend_base.make_error_event(LITELLM_503_ERROR_MESSAGE)],
+      137,
+      LITELLM_FEEDBACK_BANNER_STDERR,
+      report)
+  _install_backends(monkeypatch, [backend])
+  item = make_work_item(cfg, meta, cfg.backends.options[0])
+
+  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
+
+  assert exit_code == 137
+  assert error_msg == report
+  errors = _events_of(item.callbacks, ET.ASSISTANT_ERROR)
+  assert len(errors) == 1 and errors[0]["content"] == f"Agent error: {report}"

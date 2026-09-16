@@ -16,10 +16,13 @@ This module owns the pure/queryable parts of that contract:
 - the outcome table mapping on-disk facts to a ``RunOutcome``;
 - the pure raw-line -> translated-event projection shared by the live read
   loop, the re-attach path, and tests;
+- the end-of-run error-hint selection for a failed invocation (the
+  invocation's own error events over the stderr tail);
 - reading the run's true completion time (the raw log's final mtime).
 """
 
 import os
+import re
 import stat
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -337,6 +340,42 @@ def summarize_result(events: Iterable[dict]) -> dict | None:
 def result_success(result: dict) -> bool:
   """Terminal-status judgment from a result event (matches spawner semantics)."""
   return result.get("subtype") in (None, "success") and result.get("is_error") in (None, False)
+
+
+# The stderr fallback hint keeps the stderr-first slice's 500-character bound
+# (the behavior it replaces); the structured error event passes through whole.
+_STDERR_HINT_MAX_CHARS = 500
+
+# ANSI escape sequences (CSI parameters/intermediates/final byte, OSC up to its
+# BEL or ST terminator) render as garbage in a chat hint; the control-character
+# class sweeps whatever escape forms remain. Newlines and tabs survive: they
+# are stderr formatting, not noise.
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+_CONTROL_CHAR = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def clean_control_characters(text: str) -> str:
+  """Strip ANSI escapes and control characters, keeping newlines and tabs."""
+  return _CONTROL_CHAR.sub("", _ANSI_ESCAPE.sub("", text))
+
+
+def select_error_hint(error_messages: list[str], stderr_text: str) -> str | None:
+  """End-of-run error hint for one failed invocation: its own error events first.
+
+  A failed invocation's translated ``error`` events carry the real failure (an
+  HTTP status and reason); the stderr tail usually carries only the client
+  library's generic help banner. The last non-empty error message wins; when
+  the invocation emitted none, the stderr tail is the fallback — control
+  characters cleaned, capped at the bound the stderr-first slice it replaces
+  used. None when neither channel says anything. Pure: both end paths (live
+  tracking and restart re-attach) feed it from what they already hold, and the
+  raw log itself is never touched.
+  """
+  for message in reversed(error_messages):
+    if message.strip():
+      return message
+  cleaned = clean_control_characters(stderr_text).strip()
+  return cleaned[:_STDERR_HINT_MAX_CHARS] or None
 
 
 def project_raw_file(raw_path: Path, translate: Callable[[dict], list[dict]]) -> list[dict]:

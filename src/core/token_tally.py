@@ -1418,7 +1418,7 @@ def _rollout_session_ids(codex_homes: dict[str, Path], t: _Tally) -> set[str]:
   can see."""
   ids: set[str] = set()
   for label, home in codex_homes.items():
-    for path, st, error in _iter_jsonl_stats(home / "sessions", t, "charlie-bot", f"{label} rollouts"):
+    for path, _st, _error in _iter_jsonl_stats(home / "sessions", t, "charlie-bot", f"{label} rollouts"):
       name = os.path.basename(path)
       if not name.startswith("rollout-") or not name.endswith(".jsonl"):
         continue
@@ -1862,7 +1862,7 @@ def _adjust_opencode_partial(
         lo, hi = span.get(("opencode", model), (None, None))
         if sign > 0:
           span[("opencode", model)] = (ts if lo is None or ts < lo else lo, ts if hi is None or ts > hi else hi)
-        elif ts == lo or ts == hi:
+        elif ts in (lo, hi):
           rederive.add(("opencode", model))
   for span_key in rederive:
     lo = hi = None
@@ -1896,7 +1896,7 @@ def _scan_opencode_rows(
   memo write, so a failure mid-scan leaves the memo — and the partial keyed to it —
   untouched.
   """
-  live = {mid: tu for mid, tu in con.execute(_OPENCODE_KEYS_SQL)}
+  live = dict(con.execute(_OPENCODE_KEYS_SQL))
   nbytes = 0
   if not memo:
     fresh: dict[str, tuple[int, list | None]] = {}

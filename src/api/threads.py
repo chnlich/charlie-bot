@@ -1,6 +1,7 @@
 """Thread management API routes."""
 
 import asyncio
+import contextlib
 import gzip
 import hashlib
 import json
@@ -229,10 +230,8 @@ def _row_source_stats(threads_dir: str,
   OSError swallow gives it.
   """
   thread_pairs: list[tuple[str, os.stat_result]] = []
-  try:
+  with contextlib.suppress(OSError):
     thread_pairs.extend(iter_thread_meta_stats(threads_dir))
-  except OSError:
-    pass
   trigger_pairs: list[tuple[str, os.stat_result]] = []
   try:
     for entry in os.scandir(triggers_dir):

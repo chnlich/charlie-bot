@@ -168,7 +168,7 @@ class _Element:
 
   __slots__ = ("attrs", "children", "classes", "parent", "tag")
 
-  def __init__(self, tag: str, attrs: dict, parent: "_Element | None") -> None:
+  def __init__(self, tag: str, attrs: dict, parent: _Element | None) -> None:
     self.tag = tag
     self.attrs = attrs
     self.classes = frozenset((attrs.get("class") or "").split())
@@ -787,8 +787,8 @@ class ProbeResult:
   backend's id and its verbatim answer — both None when every backend failed."""
 
   attempts: list[tuple[str, str]]
-  backend_id: "str | None"
-  answer: "str | None"
+  backend_id: str | None
+  answer: str | None
 
 
 def run_probe(cfg: CharlieBotConfig, artifact: Path, trigger: str) -> ProbeResult:

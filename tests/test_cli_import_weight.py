@@ -38,7 +38,8 @@ HEAVY_MODULES = (
 # touches it before its request — and asyncio (~38 ms, unshared in this chain):
 # plans.py's async registry methods are server-side, the sync CLI read path never
 # reaches them, and every lock and to_thread site imports it locally.
-PLAN_HEAVY_MODULES = HEAVY_MODULES + (
+PLAN_HEAVY_MODULES = (
+    *HEAVY_MODULES,
     "fastapi",
     "asyncio",
     "src.core.artifact_check",
@@ -134,7 +135,8 @@ def test_plan_constants_match_the_model_literals() -> None:
 # HTTP client serve only the check/wrap verb bodies — the probe imports its
 # stack inside run_probe, the page-height assertion imports the renderer inside
 # _measure_page_height, and the vendored-KaTeX steady state never fetches.
-ARTIFACT_HEAVY_MODULES = HEAVY_MODULES + (
+ARTIFACT_HEAVY_MODULES = (
+    *HEAVY_MODULES,
     "fastapi",
     "asyncio",
     "websockets",

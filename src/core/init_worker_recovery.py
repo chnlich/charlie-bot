@@ -82,7 +82,7 @@ def _reset_thread_meta_memo_for_tests() -> None:
 _silence_reported_thread_ids: set[str] = set()
 
 
-def _iter_thread_meta_stats(threads_dir: Path, log_event: str) -> Iterator[tuple[str, str, "os.stat_result"]]:
+def _iter_thread_meta_stats(threads_dir: Path, log_event: str) -> Iterator[tuple[str, str, os.stat_result]]:
   """Yield ``(thread_dir, metadata.json path, stat)`` for every thread dir under *threads_dir*.
 
   The one scandir+stat walk both stat-first consumers take: the signature walk
@@ -110,7 +110,7 @@ def _iter_thread_meta_stats(threads_dir: Path, log_event: str) -> Iterator[tuple
       yield entry.path, meta_path, st
 
 
-def walk_thread_meta_stats(threads_dir: Path, log_event: str) -> list[tuple[str, str, "os.stat_result"]]:
+def walk_thread_meta_stats(threads_dir: Path, log_event: str) -> list[tuple[str, str, os.stat_result]]:
   """``(thread_dir, metadata.json path, stat)`` for every thread dir under *threads_dir*.
 
   The scandir+stat phase the sidebar probe's signature walk takes once and
@@ -124,7 +124,7 @@ def iter_recent_thread_metas(
     now: datetime,
     log_event: str,
     window: timedelta = RUNNING_SCAN_WINDOW,
-    walked: list[tuple[str, str, "os.stat_result"]] | None = None,
+    walked: list[tuple[str, str, os.stat_result]] | None = None,
 ) -> Iterator[tuple[str, str, dict]]:
   """Yield ``(thread_dir, meta_path, meta)`` for threads modified within *window*.
 

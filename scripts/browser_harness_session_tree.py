@@ -451,7 +451,12 @@ async def evaluate(cdp: CDP, session_id: str, expression: str) -> object:
         "expression": expression, "returnByValue": True, "awaitPromise": True,
     }, session_id=session_id)
     if res.get("exceptionDetails"):
-        raise RuntimeError(f"page evaluate failed: {res['exceptionDetails'].get('exception', {}).get('description', res['exceptionDetails'])}")
+        detail = res["exceptionDetails"]
+        # Full details plus the expression head: a bare description hides whether
+        # the failure is a parse error of the sent text or a throw inside it.
+        raise RuntimeError(
+            "page evaluate failed: " + json.dumps(detail)[:600]
+            + " | expression head: " + expression[:160].replace("\n", " "))
     return res.get("result", {}).get("value")
 
 

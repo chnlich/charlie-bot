@@ -26,11 +26,12 @@ const tree = {
 };
 
 // -- activity indicators ----------------------------------------------------
-// Tree rows render the sidebar's shared spinner/gear (status.js is the single
-// SVG + element-id owner) from THIS view's server facts: work_state running is
-// the node's own spinner; running descendants are the delegated-work gear so a
-// collapsed subtree cannot hide ongoing work; waiting/attention/idle stay with
-// the existing work-state dot + label. Registering the provider with
+// Tree rows render the sidebar's shared spinner/gear/unread dot (status.js is
+// the single SVG + element-id owner) from THIS view's server facts: work_state
+// running is the node's own spinner; running descendants are the delegated-work
+// gear so a collapsed subtree cannot hide ongoing work; an unread reply shows
+// the familiar dot whenever no activity cue does; waiting/attention/idle stay
+// with the existing work-state dot + label. Registering the provider with
 // status.js routes every setSessionIndicator call for a tree node through
 // these facts, so a legacy thinking/thread probe can never clear a true task
 // Run spinner (worker Runs are invisible to the legacy thread walk).
@@ -83,6 +84,10 @@ async function fetchLevel(parentId) {
     const params = new URLSearchParams({include_archived: String(tree.includeArchived), limit: String(TREE_PAGE_LIMIT)});
     if (parentId) params.set('parent_id', parentId);
     if (cursor) params.set('cursor', cursor);
+    // The page's unread facts apply through the shared ordering gate (a page
+    // read issued before a newer unread_changed broadcast must not overwrite
+    // it — the projection this page was read from may predate the flip).
+    const requestSeq = unreadSeqAtRequest();
     const res = await fetch('/api/sessions/tree?' + params.toString(), {cache: 'no-store'});
     if (gen !== tree.gen || tree.levelEpoch.get(key) !== epoch) return null; // superseded
     if (res.status === 409) {
@@ -99,6 +104,7 @@ async function fetchLevel(parentId) {
     if (gen !== tree.gen || tree.levelEpoch.get(key) !== epoch) return null; // superseded
     revision = page.tree_revision;
     for (const row of page.items) {
+      if (unreadReplyIsCurrent(row.id, requestSeq)) recordUnreadFact(row.id, row.has_unread);
       tree.rows.set(row.id, row);
       if (!ids.includes(row.id)) ids.push(row.id);
     }
@@ -227,7 +233,8 @@ function buildRowElement(row, depth) {
 
   const activity = document.createElement('span');
   activity.className = 'flex items-center gap-1 flex-shrink-0 tree-activity';
-  Sidebar.buildSessionActivityIndicators(activity, row.id, treeIndicatorState(row));
+  Sidebar.buildSessionActivityIndicators(
+      activity, row.id, treeIndicatorState(row), rowUnreadState(row.id, row.has_unread));
   inner.appendChild(activity);
 
   const name = document.createElement('span');
@@ -649,6 +656,7 @@ function renderedLevelSignature(levelKey) {
     return row ? JSON.stringify([
       row.name, row.profile, row.task_state, row.work_state, row.running_descendant_count,
       row.archived, row.child_count, row.open_descendant_count, row.attention_descendant_count,
+      row.has_unread,
     ]) : 'missing';
   }).join('|');
 }
@@ -700,6 +708,7 @@ async function searchTree(query) {
     return;
   }
   renderTreeWithMessage('Searching tasks...');
+  const requestSeq = unreadSeqAtRequest();
   try {
     const res = await fetch('/api/sessions/tree/search?q=' + encodeURIComponent(query.trim()), {cache: 'no-store'});
     if (!res.ok) throw new Error('tree search failed: ' + res.status);
@@ -713,6 +722,7 @@ async function searchTree(query) {
     // Reveal the first hit's path (the server caps hits; every hit carries its
     // own path, and the first is the newest match).
     const hit = body.items[0];
+    if (unreadReplyIsCurrent(hit.row.id, requestSeq)) recordUnreadFact(hit.row.id, hit.row.has_unread);
     tree.rows.set(hit.row.id, hit.row);
     tree.highlighted = hit.row.id;
     await revealNode(hit.row.id, hit.ancestors || []);

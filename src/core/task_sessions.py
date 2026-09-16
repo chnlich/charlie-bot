@@ -230,6 +230,12 @@ class TaskTreeManager:
     # The pending-input blockers of one session ([] when none): the structural
     # guard seam the input dispatcher answers.
     self.pending_input_blockers: Callable[[str], list[str]] | None = self.dispatch.pending_input_blockers
+    # SessionManager-level writes that move a tree-projection input (the unread
+    # flag in _set_unread_flag) drop this tree's rebuildable index through the
+    # hook registered here — the same policy _save_meta applies to its own
+    # metadata writes — so a tree page read after the flip never serves the
+    # stale flag a missed broadcast would have left standing.
+    session_mgr.tree_index_invalidator = self.invalidate_tree_index
     self._index: tuple[_TreeIndex, float] | None = None
     self._index_generation = 0
     self._facts_memo: dict[str, tuple[list[dict], int, _TaskFacts]] = {}
@@ -553,6 +559,7 @@ class TaskTreeManager:
         open_descendant_count=open_count,
         attention_descendant_count=attention_count,
         running_descendant_count=running_count,
+        has_unread=bool(meta.has_unread),
     )
 
   async def record_native_anchor(

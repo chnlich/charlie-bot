@@ -43,6 +43,7 @@ import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
+import traceback  # noqa: E402
 import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 
@@ -134,6 +135,7 @@ TREE_ROW_ACTIVITY_SNIPPET = """
       row.scrollIntoView({block: 'nearest'});
       const spin = row.querySelector('svg[id="spinner-' + id + '"]');
       const gear = row.querySelector('svg[id="worker-indicator-' + id + '"]');
+      const unread = row.querySelector('span[id="unread-' + id + '"]');
       const scroller = row.closest('.overflow-y-auto, .overflow-auto, #session-list');
       const visible = (el) => {
         if (!el || el.classList.contains('hidden')) return false;
@@ -145,7 +147,8 @@ TREE_ROW_ACTIVITY_SNIPPET = """
         const bottom = Math.min(r.bottom, scroller ? scroller.getBoundingClientRect().bottom : innerHeight, innerHeight);
         return right - left > 2 && bottom - top > 2;
       };
-      return {spinner: visible(spin), gear: visible(gear), label: row.textContent || ''};
+      return {spinner: visible(spin), gear: visible(gear), unread: visible(unread),
+              label: row.textContent || ''};
     })()
 """
 
@@ -343,7 +346,9 @@ async def run_harness(args: argparse.Namespace) -> None:
                                     access_key=access_key, results=results, args=args, home=home)
             except Exception as exc:
                 # A harness error must stay visible in the evidence, not be
-                # masked by the failed-scenario exit below.
+                # masked by the failed-scenario exit below; the finally block's
+                # SystemExit would otherwise swallow this traceback.
+                log("harness exception traceback: " + traceback.format_exc())
                 results.record("harness-error", False, f"{type(exc).__name__}: {exc}", None)
                 raise
             finally:
@@ -1117,6 +1122,218 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     results.record("s14f-desktop-after-stop",
                    True, "cleared device override; final desktop state recorded",
                    await screenshot(cdp, sid, results, "s14f-after-desktop"))
+
+    # --- S15: unread-reply feedback on the real writer path -----------------
+    # The unread writer is the finalize chain's summary delivery
+    # (SessionManager.mark_unread inside _persist_worker_summary_once). The two
+    # pristine roots from S6b/S6c (no history, no pending automation, root rows
+    # always rendered) each get one real bounded manager turn: the row spins
+    # while the run is live, shows the familiar unread dot once the summary
+    # lands on the idle row, clears in BOTH clients when the task is opened
+    # (the mark-read broadcast) while the other root stays unread. Manager
+    # turns never auto-complete their task and the second client deep-links to
+    # the neutral worker (a full page load marks the deep-linked session read
+    # through the SSR bootstrap), so neither unread root is ever opened by the
+    # rig. No model catalog is re-validated here.
+    async def screenshot_tolerant(cdp_session: str, name: str) -> str | None:
+        try:
+            return await screenshot(cdp, cdp_session, results, name)
+        except Exception as exc:  # a dead tab must not mask the scenario's own failure
+            log(f"screenshot {name} failed: {exc!r}")
+            return None
+
+    await wait_for(cdp, sid,
+                   f"!!document.getElementById('tree-node-{fresh_root_id}')"
+                   f" && !!document.getElementById('tree-node-{rapid_root_id}')", timeout=15,
+                   label="both trial root rows rendered")
+    one_before = await tree_row_activity(cdp, sid, fresh_root_id)
+    two_before = await tree_row_activity(cdp, sid, rapid_root_id)
+    results.record("s15a-before-unread",
+                   bool(one_before.get("unread") is False and two_before.get("unread") is False),
+                   f"before any reply both dots are hidden: root6b unread={one_before.get('unread')} "
+                   f"({one_before.get('label', '')[:24]!r}), root6c unread={two_before.get('unread')} "
+                   f"({two_before.get('label', '')[:24]!r})",
+                   await screenshot(cdp, sid, results, "s15a-before-unread"))
+
+    trial_message = ("Trial unread step. Reply with exactly UNREAD-OK, then stop. "
+                     "Do not create subtasks. Do not complete or close the task.")
+
+    async def send_manager_turn(node_id: str) -> None:
+        await evaluate(cdp, sid, f"switchSession({json.dumps(node_id)})")
+        await wait_for(cdp, sid, f"SESSION_ID === {json.dumps(node_id)}", timeout=15,
+                       label="trial root selected for its turn")
+        await open_task_tab(cdp, sid, "chat")
+        await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10, label="composer")
+        await evaluate(cdp, sid,
+                       "(() => { const inp = document.getElementById('msg-input');"
+                       f"inp.value = {json.dumps(trial_message)};"
+                       "inp.dispatchEvent(new Event('input')); })()")
+        await click(cdp, sid, "#send-btn")
+
+    await send_manager_turn(fresh_root_id)
+
+    # The row spins live; its own dot stays hidden behind the activity.
+    try:
+        await wait_row_activity(cdp, sid, fresh_root_id, {"spinner": True, "unread": False}, 120,
+                                "trial root spinner during its manager turn")
+        results.record("s15b-spinner-hides-unread",
+                       True,
+                       "the trial row spins live; the dot stays hidden while work runs",
+                       await screenshot(cdp, sid, results, "s15b-during-spinner"))
+    except TimeoutError as exc:
+        results.record("s15b-spinner-hides-unread", False, str(exc)[:300],
+                       await screenshot_tolerant(sid, "s15b-fail"))
+
+    # Reduced motion: with the OS preference emulated every activity animation
+    # in these rows stops (spinner, delegated gear, running badge pulse, unread
+    # dot pulse); without the emulation the same elements really animate. The
+    # badge pulse only exists while the row runs, so its unemulated value is
+    # accepted as pulse-or-idle (the label decides), never as a silent skip.
+    probe_template = """
+        (() => {
+          const out = {};
+          const anim = (rowId, selector) => {
+            const row = document.getElementById('tree-node-' + rowId);
+            if (!row) return null;
+            const el = row.querySelector(selector);
+            return el ? getComputedStyle(el).animationName : null;
+          };
+          out.spinner = anim('__SPIN__', 'svg[id^="spinner-"]');
+          out.unreadDot = anim('__UNREAD__', 'span[id^="unread-"]');
+          out.gear = anim('__GEAR__', 'svg[id^="worker-indicator-"]');
+          out.badgeDot = null;
+          const metaEl = document.getElementById('tree-node-' + '__SPIN__');
+          const meta = metaEl ? metaEl.querySelector('.tree-meta-row') : null;
+          const work = meta && meta.children[1] ? meta.children[1] : null;
+          out.badgeDot = work && work.firstElementChild
+            ? getComputedStyle(work.firstElementChild).animationName : null;
+          out.spinLabel = metaEl ? (metaEl.textContent || '') : '';
+          return out;
+        })()
+    """
+    animation_probe = await evaluate(cdp, sid, probe_template
+                                     .replace("__SPIN__", fresh_root_id)
+                                     .replace("__UNREAD__", rapid_root_id)
+                                     .replace("__GEAR__", rapid_root_id))
+    badge_live = (animation_probe or {}).get("badgeDot") == "pulse" or (
+        "idle" in str((animation_probe or {}).get("spinLabel", "")))
+    results.record("s15b2-motion-present-unemulated",
+                   bool(animation_probe) and animation_probe.get("spinner") == "spin"
+                   and animation_probe.get("unreadDot") == "pulse-dot"
+                   and animation_probe.get("gear") == "spin" and badge_live,
+                   f"computed animations without emulation: {animation_probe}", None)
+    await cdp.send("Emulation.setEmulatedMedia",
+                   {"features": [{"name": "prefers-reduced-motion", "value": "reduce"}]}, session_id=sid)
+    await asyncio.sleep(0.3)
+    reduced = await evaluate(cdp, sid, probe_template
+                             .replace("__SPIN__", fresh_root_id)
+                             .replace("__UNREAD__", rapid_root_id)
+                             .replace("__GEAR__", rapid_root_id))
+    await cdp.send("Emulation.setEmulatedMedia", {"features": []}, session_id=sid)
+    anim_values = [v for k, v in (reduced or {}).items() if k != "spinLabel"]
+    results.record("s15h-reduced-motion-animations-stopped",
+                   bool(anim_values) and all(v == "none" for v in anim_values),
+                   f"computed animations under prefers-reduced-motion: reduce -> {reduced}",
+                   await screenshot_tolerant(sid, "s15h-reduced-motion"))
+
+    async def wait_terminal_run(node_id: str, bound: float = 240.0) -> dict | None:
+        deadline = time.monotonic() + bound
+        while time.monotonic() < deadline:
+            status, page = api_request(base, access_key, "GET",
+                                       f"/api/sessions/{node_id}/runs?order=desc&limit=1")
+            runs = (page.get("items") or []) if isinstance(page, dict) else []
+            if runs and runs[0].get("state") in ("success", "failed", "stopped", "interrupted"):
+                return runs[0]
+            await asyncio.sleep(2)
+        return None
+
+    one_run = await wait_terminal_run(fresh_root_id)
+    try:
+        await wait_row_activity(cdp, sid, fresh_root_id, {"spinner": False, "unread": True}, 90,
+                                "trial root idle with its unread dot after the summary landed")
+        one_state = await tree_row_activity(cdp, sid, fresh_root_id)
+        results.record("s15c-unread-dot-after-turn",
+                       bool(one_run and one_run.get("state") == "success"
+                            and "idle" in one_state.get("label", "")),
+                       f"turn run {str(one_run and one_run.get('id'))[:8]} "
+                       f"({one_run and one_run.get('state')}): the summary writer marked the "
+                       f"session unread and the idle row shows the dot ({one_state.get('label', '')[:32]!r})",
+                       await screenshot(cdp, sid, results, "s15c-unread"))
+    except TimeoutError as exc:
+        results.record("s15c-unread-dot-after-turn", False,
+                       f"{str(exc)[:240]}; run terminal: {one_run and one_run.get('state')}",
+                       await screenshot_tolerant(sid, "s15c-fail"))
+
+    # The second trial root gets its own real reply: two unread tasks at once.
+    await send_manager_turn(rapid_root_id)
+    two_run = await wait_terminal_run(rapid_root_id)
+    try:
+        await wait_row_activity(cdp, sid, rapid_root_id, {"spinner": False, "unread": True}, 90,
+                                "second trial root idle with its unread dot")
+        await wait_row_activity(cdp, sid, fresh_root_id, {"unread": True}, 20,
+                                "the first root's dot is still visible")
+        results.record("s15d-two-unread-tasks",
+                       bool(two_run and two_run.get("state") == "success"),
+                       f"second turn run {str(two_run and two_run.get('id'))[:8]} "
+                       f"({two_run and two_run.get('state')}): two idle rows, two unread dots",
+                       await screenshot(cdp, sid, results, "s15d-two-unread"))
+    except TimeoutError as exc:
+        results.record("s15d-two-unread-tasks", False,
+                       f"{str(exc)[:240]}; run terminal: {two_run and two_run.get('state')}",
+                       await screenshot_tolerant(sid, "s15d-fail"))
+
+    # Second client: a real second tab on the same profile (its own WebSocket).
+    # It deep-links to the neutral worker: the deep link marks THAT session
+    # read (the SSR bootstrap's mark-read), never the two unread roots.
+    target2 = await cdp.send("Target.createTarget", {"url": f"{base}/?session={worker_id}"})
+    attached2 = await cdp.send("Target.attachToTarget", {"targetId": target2["targetId"], "flatten": True})
+    sid2 = attached2["sessionId"]
+    await cdp.send("Page.enable", session_id=sid2)
+    await cdp.send("Runtime.enable", session_id=sid2)
+    await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": GUARD_SOURCE}, session_id=sid2)
+    try:
+        await wait_for(cdp, sid2, "!!document.getElementById('preview-indicator')", timeout=25,
+                       label="second client logged in")
+        await wait_for(cdp, sid2,
+                       f"!!document.getElementById('tree-node-{fresh_root_id}')"
+                       f" && !!document.getElementById('tree-node-{rapid_root_id}')", timeout=20,
+                       label="second client renders both trial rows")
+        two_one = await tree_row_activity(cdp, sid2, fresh_root_id)
+        two_two = await tree_row_activity(cdp, sid2, rapid_root_id)
+        results.record("s15e-second-client-unread",
+                       bool(two_one.get("unread") and two_two.get("unread")),
+                       f"second client rows: root6b unread={two_one.get('unread')} "
+                       f"({two_one.get('label', '')[:24]!r}), root6c unread={two_two.get('unread')} "
+                       f"({two_two.get('label', '')[:24]!r})",
+                       await screenshot(cdp, sid2, results, "s15e-second-client-unread"))
+    except (TimeoutError, AssertionError) as exc:
+        results.record("s15e-second-client-unread", False, str(exc)[:300],
+                       await screenshot_tolerant(sid2, "s15e-fail"))
+
+    # Opening one trial root clears exactly its dot everywhere; the other
+    # root's dot survives (another task remaining unread).
+    try:
+        await evaluate(cdp, sid, f"switchSession({json.dumps(fresh_root_id)})")
+        await wait_for(cdp, sid, f"SESSION_ID === {json.dumps(fresh_root_id)}", timeout=15,
+                       label="first client opened the first trial root")
+        await wait_row_activity(cdp, sid, fresh_root_id, {"unread": False}, 20,
+                                "opened task's dot cleared in the first client")
+        await wait_row_activity(cdp, sid2, fresh_root_id, {"unread": False}, 20,
+                                "opened task's dot cleared in the second client (read broadcast)")
+        await wait_row_activity(cdp, sid2, rapid_root_id, {"unread": True}, 20,
+                                "the other root remains unread in the second client")
+        results.record("s15f-open-clears-one-keeps-other",
+                       True,
+                       "opening the first trial root cleared its dot in both clients; "
+                       "the second root remains unread",
+                       await screenshot(cdp, sid2, results, "s15f-opened-read"))
+    except TimeoutError as exc:
+        results.record("s15f-open-clears-one-keeps-other", False, str(exc)[:300],
+                       await screenshot_tolerant(sid, "s15f-fail"))
+    finally:
+        tab2_errs = await evaluate(cdp, sid2, "window.__errs || []")
+        cdp.console_errors = list(cdp.console_errors or []) + [f"tab2: {e}" for e in (tab2_errs or [])]
+        await cdp.send("Target.closeTarget", {"targetId": target2["targetId"]})
 
     # --- S13: every selected model is a real choice with a real Run ---------
     # For each non-default dropdown entry: a real selection change, a real New

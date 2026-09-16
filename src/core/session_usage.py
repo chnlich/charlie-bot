@@ -129,8 +129,16 @@ class _UsageFold:
   """
 
   __slots__ = (
-      "chosen_prompt_tokens", "chosen_model", "post_compact_tokens", "model_windows", "snapshot", "reading_kind",
-      "reading", "total_cost", "unknown_cost")
+      "chosen_model",
+      "chosen_prompt_tokens",
+      "model_windows",
+      "post_compact_tokens",
+      "reading",
+      "reading_kind",
+      "snapshot",
+      "total_cost",
+      "unknown_cost",
+  )
 
   def __init__(self) -> None:
     self.chosen_prompt_tokens = 0

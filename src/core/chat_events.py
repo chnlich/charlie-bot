@@ -171,7 +171,7 @@ class _FinalizeFold:
   drift; the parity test pins equivalence over randomized appends.
   """
 
-  __slots__ = ("summary_marks", "master_outputs")
+  __slots__ = ("master_outputs", "summary_marks")
 
   def __init__(self) -> None:
     self.summary_marks: dict[str, int] = {}

@@ -40,7 +40,7 @@ class _LineReader:
     self._lines = lines
     self._i = 0
 
-  def __aiter__(self) -> "_LineReader":
+  def __aiter__(self) -> _LineReader:
     return self
 
   async def __anext__(self) -> bytes:

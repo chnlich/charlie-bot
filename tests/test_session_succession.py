@@ -112,7 +112,7 @@ async def _make_scheduled_parent(
 
 
 @pytest.mark.asyncio
-async def test_elone_writes_successor_pointer_and_archives_thumbs_down_parent(tmp_path: Path) -> None:
+async def test_elone_writes_successor_pointer_and_archives_parent(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)
   parent_id = await _make_parent(mgr)
@@ -123,7 +123,8 @@ async def test_elone_writes_successor_pointer_and_archives_thumbs_down_parent(tm
   assert fresh_parent is not None
   assert fresh_parent.successor_session_id == child.id
   assert fresh_parent.status == SessionStatus.ARCHIVED
-  assert fresh_parent.rating == "thumbs_down"
+  # Session-level rating is gone: the persisted metadata carries no rating key.
+  assert "rating" not in json.loads(mgr._metadata_path(parent_id).read_text())
 
 
 @pytest.mark.asyncio
@@ -148,7 +149,6 @@ async def test_second_elone_of_ordinary_parent_overwrites_successor_and_leaves_f
   fresh_parent = await mgr.read_metadata_fresh(parent_id)
   assert fresh_parent is not None
   assert fresh_parent.status == SessionStatus.ARCHIVED
-  assert fresh_parent.rating == "thumbs_down"
   assert fresh_parent.successor_session_id == second_child.id
 
   # The first child's metadata is untouched by the second elone.
@@ -204,7 +204,6 @@ async def test_elone_of_scheduler_owned_session_succeeds_with_full_inheritance(
   fresh_parent = await mgr.read_metadata_fresh(parent.id)
   assert fresh_parent is not None
   assert fresh_parent.status == SessionStatus.ARCHIVED
-  assert fresh_parent.rating == "thumbs_down"
   assert fresh_parent.successor_session_id == child.id
   # The archived parent keeps its scheduled_task field; the alignment scan
   # only considers active sessions, so it stays inert.
@@ -240,7 +239,6 @@ async def test_second_elone_of_scheduler_owned_parent_refuses_and_mutates_nothin
   assert fresh_parent is not None
   assert fresh_parent.successor_session_id == first_child.id
   assert fresh_parent.status == SessionStatus.ARCHIVED
-  assert fresh_parent.rating == "thumbs_down"
 
 
 @pytest.mark.asyncio

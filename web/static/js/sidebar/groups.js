@@ -776,12 +776,7 @@ function renderSessionItem(s, filter, options = {}) {
     </button>`;
   let actions = '';
   if (isArchivedRow) {
-    const ratingBadge = s.rating === 'thumbs_up' ? '<span class="text-xs flex-shrink-0" title="Rated: thumbs up">👍</span>'
-      : s.rating === 'neutral' ? '<span class="text-xs flex-shrink-0" title="Rated: neutral">—</span>'
-      : s.rating === 'thumbs_down' ? '<span class="text-xs flex-shrink-0" title="Rated: thumbs down">👎</span>'
-      : '';
     actions = `
-      ${ratingBadge}
       ${renderStarButton(s, activeBtnClass)}
       ${groupBtn}
       ${renderRowActionButton(

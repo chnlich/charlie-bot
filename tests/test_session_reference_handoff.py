@@ -81,7 +81,6 @@ async def test_elone_session_writes_reference_and_archives_parent(tmp_path: Path
   updated_parent = await mgr.get_session(parent)
   assert updated_parent is not None
   assert updated_parent.status == SessionStatus.ARCHIVED
-  assert updated_parent.rating == "thumbs_down"
 
 
 @pytest.mark.asyncio
@@ -194,7 +193,6 @@ async def test_reference_handoff_errors_write_no_reference(tmp_path: Path) -> No
   updated_parent = await mgr.get_session(parent.id)
   assert updated_parent is not None
   assert updated_parent.status == SessionStatus.ACTIVE
-  assert updated_parent.rating is None
 
 
 @pytest.mark.asyncio

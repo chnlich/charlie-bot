@@ -127,9 +127,24 @@ TREE_ROW_ACTIVITY_SNIPPET = """
       const id = "__NODE_ID__";
       const row = document.getElementById('tree-node-' + id);
       if (!row) return null;
+      // A cue with a nonzero rect can still be scrolled out of the sidebar's
+      // clip: bring the row into view first, then require the cue's rect to
+      // intersect both the viewport and the scroll container, so "visible"
+      // means actually on screen.
+      row.scrollIntoView({block: 'nearest'});
       const spin = row.querySelector('svg[id="spinner-' + id + '"]');
       const gear = row.querySelector('svg[id="worker-indicator-' + id + '"]');
-      const visible = (el) => !!el && !el.classList.contains('hidden') && el.getBoundingClientRect().width > 0;
+      const scroller = row.closest('.overflow-y-auto, .overflow-auto, #session-list');
+      const visible = (el) => {
+        if (!el || el.classList.contains('hidden')) return false;
+        const r = el.getBoundingClientRect();
+        if (r.width <= 2 || r.height <= 2) return false;
+        const left = Math.max(r.left, scroller ? scroller.getBoundingClientRect().left : 0, 0);
+        const top = Math.max(r.top, scroller ? scroller.getBoundingClientRect().top : 0, 0);
+        const right = Math.min(r.right, scroller ? scroller.getBoundingClientRect().right : innerWidth, innerWidth);
+        const bottom = Math.min(r.bottom, scroller ? scroller.getBoundingClientRect().bottom : innerHeight, innerHeight);
+        return right - left > 2 && bottom - top > 2;
+      };
       return {spinner: visible(spin), gear: visible(gear), label: row.textContent || ''};
     })()
 """

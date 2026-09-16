@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from conftest import LITELLM_503_ERROR_MESSAGE, LITELLM_FEEDBACK_BANNER_STDERR
 
 from src.core import event_types as ET
 from src.core import finalize_effects, runs
@@ -155,6 +156,47 @@ def test_result_success_matrix() -> None:
   assert runs.result_success({"subtype": "success", "is_error": False}) is True
   assert runs.result_success({"subtype": "error_max_turns"}) is False
   assert runs.result_success({"is_error": True}) is False
+
+
+# ---------------------------------------------------------------------------
+# End-of-run error hint selection (pure)
+# ---------------------------------------------------------------------------
+
+
+def test_select_error_hint_prefers_the_invocation_error_event_over_stderr() -> None:
+  """The Gemini-503 shape: the structured error event is the hint, the stderr
+  help banner is not."""
+  hint = runs.select_error_hint([LITELLM_503_ERROR_MESSAGE], LITELLM_FEEDBACK_BANNER_STDERR)
+  assert hint == LITELLM_503_ERROR_MESSAGE
+  assert "Error code: 503" in hint and "UNAVAILABLE" in hint
+  assert "Give Feedback" not in hint
+  # The banner alone never masks the event, and an event alone still shows.
+  assert runs.select_error_hint([LITELLM_503_ERROR_MESSAGE], "") == LITELLM_503_ERROR_MESSAGE
+
+
+def test_select_error_hint_takes_the_last_non_empty_error_event() -> None:
+  messages = ["first failure", "", "   ", LITELLM_503_ERROR_MESSAGE]
+  assert runs.select_error_hint(messages, LITELLM_FEEDBACK_BANNER_STDERR) == LITELLM_503_ERROR_MESSAGE
+  assert runs.select_error_hint(["first failure", "", "   "], "") == "first failure"
+
+
+def test_select_error_hint_falls_back_to_cleaned_stderr() -> None:
+  """No error event: the stderr tail is the fallback, control characters
+  (the banner's ANSI color codes) cleaned away."""
+  hint = runs.select_error_hint([], LITELLM_FEEDBACK_BANNER_STDERR)
+  assert hint == runs.clean_control_characters(LITELLM_FEEDBACK_BANNER_STDERR).strip()
+  assert "\x1b" not in hint and chr(27) not in hint
+  assert hint.startswith("Give Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new")
+  assert "LiteLLM.Info" in hint
+  # A stderr of nothing but control characters is no hint at all.
+  assert runs.select_error_hint([], "\x1b[1;31m\x1b[0m\n\n") is None
+  assert runs.select_error_hint([], "") is None
+
+
+def test_select_error_hint_keeps_the_stderr_fallback_500_char_bound() -> None:
+  assert len(runs.select_error_hint([], "x" * 900)) == 500
+  # The structured error event is not capped: it is the complete failure.
+  assert runs.select_error_hint(["y" * 900], "") == "y" * 900
 
 
 # ---------------------------------------------------------------------------

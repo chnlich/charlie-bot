@@ -250,8 +250,14 @@ class Scheduler:
     stopped_pm_tasks: set[str] = set()
     for task_cfg in tasks:
       if task_cfg.enabled and task_cfg.type == 'pm' and pm_manually_archived(task_cfg, session_cache):
-        await session_mgr.write_scheduled_task_enabled(task_cfg.name, False)
-        log.info("pm_disabled_manual_archive", task=task_cfg.name)
+        try:
+          await session_mgr.write_scheduled_task_enabled(task_cfg.name, False)
+        except Exception as e:
+          # The stop stands for this tick either way (no generation is
+          # resurrected); a failed yaml write is loud and retried next tick.
+          log.error("pm_manual_archive_disable_failed", task=task_cfg.name, error=str(e))
+        else:
+          log.info("pm_disabled_manual_archive", task=task_cfg.name)
         stopped_pm_tasks.add(task_cfg.name)
 
     for task_cfg in tasks:

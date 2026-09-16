@@ -564,12 +564,12 @@ def queued_user_reorder_events() -> list[dict]:
   ]
 
 
-def make_json_response(payload: dict[str, Any]) -> MagicMock:
-  """A `requests.Response` stand-in for patched CLI `requests.post` calls: `.json()` returns payload,
-  `raise_for_status()` is a configured no-op so the CLI's success path runs straight through."""
+def make_json_response(payload: dict[str, Any], status_code: int = 200) -> MagicMock:
+  """A transport-response stand-in for patched CLI transport calls: `.status_code` is 200 (or the
+  given code) and `.json()` returns payload, so the CLI's success path runs straight through."""
   resp = MagicMock()
+  resp.status_code = status_code
   resp.json.return_value = payload
-  resp.raise_for_status.return_value = None
   return resp
 
 
@@ -1116,14 +1116,13 @@ CHAT_RUN_AND_FINALIZE_PATCH_TARGET = "src.api.chat.run_and_finalize"
 CHAT_CREATE_LOGGED_TASK_PATCH_TARGET = "src.api.chat.create_logged_task"
 CHAT_CANCEL_MASTER_PATCH_TARGET = "src.api.chat.cancel_master"
 
-# Import-path patch targets for the CLI HTTP layer's transport. src/cli/common.py resolves
-# `requests` lazily (a module __getattr__ that imports-and-caches on first access), and its
-# helpers read requests.get at call time and pick requests.post inside _request_with_contract's
-# `request_fn = requests.post if ... else ...`, so mock and monkeypatch.setattr land the
-# stand-in on the requests module through the src.cli.common route and every helper defined
-# there picks it up at call time.
-CLI_COMMON_REQUESTS_POST_PATCH_TARGET = "src.cli.common.requests.post"
-CLI_COMMON_REQUESTS_GET_PATCH_TARGET = "src.cli.common.requests.get"
+# Import-path patch targets for the CLI HTTP layer's transport. src/cli/common.py exposes one
+# adapter per verb (`_request_post`/`_request_get`, both over the phase-separated http.client
+# client `_send_request`), and `_request_with_contract` reads the adapter as a module global at
+# call time, so mock and monkeypatch.setattr land the stand-in on the src.cli.common module
+# attribute and every helper defined there picks it up at call time.
+CLI_COMMON_TRANSPORT_POST_PATCH_TARGET = "src.cli.common._request_post"
+CLI_COMMON_TRANSPORT_GET_PATCH_TARGET = "src.cli.common._request_get"
 
 # Import-path patch target shared by every test that swaps the backend factory a master session
 # runs under. src/agents/master_cc_run.py binds the factory with call-time `from
@@ -1637,26 +1636,29 @@ def fake_cli_cfg(monkeypatch: pytest.MonkeyPatch, sessions_dir: Path) -> None:
 def _patched_cli_transport(transport_target: str, cfg: object, argv: list[str],
                            **transport_kw: object) -> Iterator[MagicMock]:
   """The externals a CLI main() call touches: sys.argv becomes argv, get_config returns cfg, and the
-  transport verb at transport_target is a MagicMock built from transport_kw (bare when empty, so a
-  test can set the response after entering). The mock is yielded for that and for call assertions."""
+  transport verb at transport_target is a MagicMock built from transport_kw (a default 200/{} success
+  response when no return_value is given, so the CLI's success path runs; a test can set the response
+  after entering). The mock is yielded for that and for call assertions."""
   with patch("sys.argv", argv), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch(transport_target, **transport_kw) as transport_mock:
+    if "return_value" not in transport_kw:
+      transport_mock.return_value = make_json_response({})
     yield transport_mock
 
 
 @contextlib.contextmanager
 def patched_cli_post(cfg: object, argv: list[str], **post_kw: object) -> Iterator[MagicMock]:
-  """_patched_cli_transport with requests.post as the patched verb (the POST path every CLI command
+  """_patched_cli_transport with _request_post as the patched verb (the POST path every CLI command
   shares)."""
-  yield from _patched_cli_transport(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, cfg, argv, **post_kw)
+  yield from _patched_cli_transport(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, cfg, argv, **post_kw)
 
 
 @contextlib.contextmanager
 def patched_cli_get(cfg: object, argv: list[str], **get_kw: object) -> Iterator[MagicMock]:
-  """_patched_cli_transport with requests.get as the patched verb (the GET-only commands, e.g.
+  """_patched_cli_transport with _request_get as the patched verb (the GET-only commands, e.g.
   plan list/diff)."""
-  yield from _patched_cli_transport(CLI_COMMON_REQUESTS_GET_PATCH_TARGET, cfg, argv, **get_kw)
+  yield from _patched_cli_transport(CLI_COMMON_TRANSPORT_GET_PATCH_TARGET, cfg, argv, **get_kw)
 
 
 def schedule_trigger_argv(message: str, *extra: str) -> list[str]:

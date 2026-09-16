@@ -122,10 +122,6 @@ Known-alive symbols:
   `http.server.BaseHTTPRequestHandler` overrides: the stdlib handler dispatches to them by
   string (`'do_' + self.command` through `getattr`, `log_message` by name). Each name has
   exactly one whole-repo match (its definition), so vulture flags them as unused methods.
-- `_content` (two writes in `tests/test_cli_restart_contract.py`) — attribute writes on stdlib
-  `requests.Response` stand-ins; `Response.json()` reads `self._content` when the fake
-  response is consumed. Nothing in the repo reads the name back, so vulture flags the writes
-  as unused attributes.
 - `chrome`, `art` (`tests/core/test_artifact_check.py`, the lambda in `_patch_height`) — the
   two parameters of the stub installed for `artifact_check._measure_page_height(chrome_bin,
   artifact)` via `monkeypatch.setattr`; the replaced signature fixes the arity, so deleting
@@ -422,14 +418,14 @@ Known-alive symbols:
   while leaving the annotation unresolved. Vulture flags the import as its only
   production-scope finding (unused import, 90% confidence); never delete it on that
   evidence.
-- `__getattr__` (`src/cli/common.py` and `src/core/artifact_wrap.py`) — the PEP 562
-  lazy-`requests` hooks, one-line delegates to the shared `requests_module_getattr`
-  (`src/core/http.py`), which wraps `load_requests`.
-  Reached by string: the patch targets `src.cli.common.requests.*`
-  (`CLI_COMMON_REQUESTS_POST_PATCH_TARGET` / `CLI_COMMON_REQUESTS_GET_PATCH_TARGET` in
-  `tests/conftest.py`) and `src.core.artifact_wrap.requests.get`
-  (`tests/core/test_artifact_wrap.py`) resolve the module attribute through the hook.
-  Vulture flags each as an unused function at 60% confidence.
+- `__getattr__` (`src/core/artifact_wrap.py`) — the PEP 562 lazy-`requests` hook, a one-line
+  delegate to the shared `requests_module_getattr` (`src/core/http.py`), which wraps
+  `load_requests`. (The former `src/cli/common.py` hook left with the phase-separated
+  http.client transport; its conftest patch targets now name the `_request_post`/`_request_get`
+  adapters directly.)
+  Reached by string: the patch target `src.core.artifact_wrap.requests.get`
+  (`tests/core/test_artifact_wrap.py`) resolves the module attribute through the hook.
+  Vulture flags it as an unused function at 60% confidence.
 - `split_sse_lines` (`src/core/sse.py`) — kept deliberately as the SSE framing oracle. The
   property tests in `tests/test_sse.py` drive it through `_split_chunked` and assert the
   production byte framer (`_ChunkedFramer`, same module) matches its answers on every two-way

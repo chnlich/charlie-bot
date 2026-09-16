@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from conftest import (
     CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-    CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+    CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
     assert_cli_reject_exit2,
     make_json_response,
     stub_credentials,
@@ -236,7 +236,7 @@ def test_post_internal_api_bearer_header(access_key: str, expect_header: bool) -
 
   with (
       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),
-      patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=make_json_response({"ok": True})) as mock_post,
+      patch(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, return_value=make_json_response({"ok": True})) as mock_post,
   ):
     assert common.post_internal_api("/api/internal/x", {"a": 1}) == {"ok": True}
 

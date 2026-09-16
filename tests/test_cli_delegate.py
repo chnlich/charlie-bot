@@ -2,14 +2,15 @@
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-import requests
 from conftest import (
+    CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
     assert_cli_reject,
     assert_cli_reject_exit2,
     delegate_invocation,
+    make_json_response,
     make_sessions_dir_config,
     patched_cli_post,
 )
@@ -411,16 +412,12 @@ def test_main_uses_error_detail_from_response(tmp_path: Path, monkeypatch: pytes
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
-  class FakeRequestException(requests.RequestException):
-
-    def __init__(self) -> None:
-      super().__init__("bad request")
-      self.response = MagicMock()
-      self.response.json.return_value = {"detail": "requested backend 'missing' is not in backends.options"}
-
   with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "missing",
-                                        session="s1")) as post_mock:
-    post_mock.side_effect = FakeRequestException()
+                                        session="s1"),
+                        return_value=make_json_response(
+                            {"detail": "requested backend 'missing' is not in backends.options"},
+                            status_code=422)), \
+       patch(CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET, return_value=None):
     with pytest.raises(SystemExit) as exc_info:
       main()
 

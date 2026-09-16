@@ -33,11 +33,14 @@ HEAVY_MODULES = (
 )
 
 # The plan chain's extra bans: the validation gate's registry stack, the web
-# framework, and plan_diff — its difflib + html subtree (~10 ms net of the pydantic
+# framework, plan_diff — its difflib + html subtree (~10 ms net of the pydantic
 # shared chain) serves only the diff verb's text render, and no sync plan command
-# touches it before its request.
+# touches it before its request — and asyncio (~38 ms, unshared in this chain):
+# plans.py's async registry methods are server-side, the sync CLI read path never
+# reaches them, and every lock and to_thread site imports it locally.
 PLAN_HEAVY_MODULES = HEAVY_MODULES + (
     "fastapi",
+    "asyncio",
     "src.core.artifact_check",
     "src.agents.backends.registry",
     "src.core.plan_diff",

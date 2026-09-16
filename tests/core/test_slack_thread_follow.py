@@ -9,7 +9,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import requests
 from conftest import (
     CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
     SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET,
@@ -610,7 +609,6 @@ def test_cli_reply_412_refusal_exits_nonzero_with_the_payload_on_stderr(
   refusal = MagicMock()
   refusal.status_code = 412
   refusal.json.return_value = {"detail": refusal_payload}
-  refusal.raise_for_status.side_effect = requests.HTTPError(response=refusal)
   with (
       patched_cli_post(cfg, ["slack", "reply", "--file", str(reply_file)], return_value=refusal),
       patch(CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET, return_value=None),

@@ -253,34 +253,32 @@ def test_main_repo_task_types_require_repo_and_base_branch(
   assert_cli_reject(exc_info, capsys, missing_flag, "required")
 
 
-def test_main_rejects_relative_repo_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+@pytest.mark.parametrize(
+    ("repo", "extra_argv", "err_fragments"),
+    [
+        pytest.param("meshy-research", (), ("must be an absolute path", "meshy-research"), id="relative-repo"),
+        pytest.param("/no/such/repo", (), ("does not exist", "/no/such/repo"), id="nonexistent-repo"),
+        pytest.param(None, ("--description", "task"), ("--description",), id="removed-legacy-description"),
+        pytest.param(None, ("--context", "review hint"), ("--context",), id="removed-legacy-context"),
+    ],
+)
+def test_main_rejects_bad_invocation_before_post(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], repo: str | None,
+    extra_argv: tuple[str, ...], err_fragments: tuple[str, ...]) -> None:
+  """Each malformed invocation names its cause on stderr and rejects before any POST: a relative
+  --repo, a nonexistent --repo, and the removed --description/--context flags."""
+  cfg = make_sessions_dir_config(tmp_path)
+  monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
+  repo_value = repo if repo is not None else str(tmp_path)
 
   with (
-      patched_cli_post(cfg, _repo_argv("meshy-research", task_spec_file, session="s1")) as post_mock,
+      patched_cli_post(cfg, _repo_argv(repo_value, task_spec_file, *extra_argv, session="s1")) as post_mock,
       pytest.raises(SystemExit) as exc_info,
   ):
     main()
 
-  assert_cli_reject(exc_info, capsys, "must be an absolute path", "meshy-research")
-  post_mock.assert_not_called()
-
-
-def test_main_rejects_nonexistent_repo_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  task_spec_file = _write_task_spec(tmp_path)
-  nonexistent = str(tmp_path / "nonexistent")
-
-  with (
-      patched_cli_post(cfg, _repo_argv(nonexistent, task_spec_file, session="s1")) as post_mock,
-      pytest.raises(SystemExit) as exc_info,
-  ):
-    main()
-
-  assert_cli_reject(exc_info, capsys, "does not exist", nonexistent)
+  assert_cli_reject(exc_info, capsys, *err_fragments)
   post_mock.assert_not_called()
 
 
@@ -347,32 +345,6 @@ def test_main_rejects_omitted_required_flag(
     main()
 
   assert_cli_reject(exc_info, capsys, required_flag)
-
-
-@pytest.mark.parametrize(
-    ("legacy_flag", "legacy_value"),
-    [
-        ("--description", "task"),
-        ("--context", "review hint"),
-    ],
-    ids=["legacy-description", "legacy-context"],
-)
-def test_main_rejects_removed_legacy_flag(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], legacy_flag: str,
-    legacy_value: str) -> None:
-  cfg = make_sessions_dir_config(tmp_path)
-  monkeypatch.chdir(tmp_path)
-  task_spec_file = _write_task_spec(tmp_path)
-
-  with (
-      patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, legacy_flag, legacy_value, session="s1")) as
-      post_mock,
-      pytest.raises(SystemExit) as exc_info,
-  ):
-    main()
-
-  assert_cli_reject(exc_info, capsys, legacy_flag)
-  post_mock.assert_not_called()
 
 
 def test_main_rejects_invalid_task_type(

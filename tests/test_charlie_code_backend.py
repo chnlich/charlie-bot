@@ -14,6 +14,7 @@ from conftest import (
     stub_credentials,
     stub_subprocess_spawn,
 )
+from pydantic import ValidationError
 
 import src.agents.backends.charlie_code as charlie_code_mod
 from src.agents.backends.base import USER_LOCAL_BIN, AgentBackend
@@ -319,6 +320,46 @@ def test_build_command_emits_no_stream_and_timeout_seconds_when_declared(
   assert timeout_idx < task_idx
 
 
+def test_build_command_emits_top_p_and_temperature_when_declared(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """Declared sampling knobs land as --top-p/--temperature carrying their values, before --task-file."""
+  backend = _build_backend(monkeypatch, top_p=0.95, temperature=0.7)
+  backend._prepare_transport(tmp_path)
+
+  cmd = backend._build_command(FLAG_LIKE_PROMPT)
+
+  top_p_idx = cmd.index("--top-p")
+  temperature_idx = cmd.index("--temperature")
+  assert cmd[top_p_idx + 1] == "0.95"
+  assert cmd[temperature_idx + 1] == "0.7"
+  task_idx = cmd.index("--task-file")
+  assert top_p_idx < task_idx
+  assert temperature_idx < task_idx
+
+
+def test_build_command_without_sampling_fields_emits_neither_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """Neither knob set: neither flag is emitted, keeping the argv byte-identical to the
+  command built before the fields existed, so older charlie-code builds keep working."""
+  backend = _build_backend(monkeypatch)
+  backend._prepare_transport(tmp_path)
+
+  cmd = backend._build_command(FLAG_LIKE_PROMPT)
+
+  assert "--top-p" not in cmd
+  assert "--temperature" not in cmd
+  assert cmd == [
+      "/usr/bin/charlie-code",
+      "--json",
+      "--model",
+      "charlie-code-test-model",
+      "--api-base",
+      "http://test.invalid/v1",
+      "--task-file",
+      str(tmp_path / "task.md"),
+  ]
+
+
 def test_build_command_without_call_strategy_fields_keeps_pre_change_command(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """An entry setting neither field emits neither flag: the argv is byte-identical to the
@@ -457,6 +498,54 @@ def test_backend_option_proxy_url_defaults_to_none() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CharlieCodeBackend option sampling knobs: defaults, explicit values, and
+# pydantic range validation on the config entry.
+# ---------------------------------------------------------------------------
+
+
+def test_backend_option_sampling_fields_default_none_and_keep_explicit_values() -> None:
+  default_option = backend_option(id="cc-k3-test", label="t", type="charlie-code", model="test-model")
+  assert default_option.top_p is None
+  assert default_option.temperature is None
+  option = backend_option(
+      id="cc-k3-test",
+      label="t",
+      type="charlie-code",
+      model="test-model",
+      top_p=0.95,
+      temperature=0.7,
+  )
+  assert option.top_p == 0.95
+  assert option.temperature == 0.7
+
+
+@pytest.mark.parametrize("bad_top_p", [0.0, -0.5, 1.0001])
+def test_backend_option_rejects_top_p_outside_interval(bad_top_p: float) -> None:
+  """top_p validates on (0.0, 1.0]: zero, negative, and above-one entries are rejected."""
+  with pytest.raises(ValidationError):
+    backend_option(id="cc-k3-test", label="t", type="charlie-code", model="test-model", top_p=bad_top_p)
+
+
+@pytest.mark.parametrize("bad_temperature", [-0.1, -1.0])
+def test_backend_option_rejects_negative_temperature(bad_temperature: float) -> None:
+  with pytest.raises(ValidationError):
+    backend_option(id="cc-k3-test", label="t", type="charlie-code", model="test-model", temperature=bad_temperature)
+
+
+def test_backend_option_accepts_boundary_sampling_values() -> None:
+  option = backend_option(
+      id="cc-k3-test",
+      label="t",
+      type="charlie-code",
+      model="test-model",
+      top_p=1.0,
+      temperature=0.0,
+  )
+  assert option.top_p == 1.0
+  assert option.temperature == 0.0
+
+
+# ---------------------------------------------------------------------------
 # registry wiring
 # ---------------------------------------------------------------------------
 
@@ -468,6 +557,8 @@ def test_backend_option_proxy_url_defaults_to_none() -> None:
         ("stream", False, "_stream"),
         ("timeout_seconds", 600, "_timeout_seconds"),
         ("proxy_url", "http://proxy.test:8080", "_proxy_url"),
+        ("top_p", 0.95, "_top_p"),
+        ("temperature", 0.7, "_temperature"),
     ])
 def test_registry_propagates_option_fields_into_charlie_code_backend(
     monkeypatch: pytest.MonkeyPatch, field: str, value: object, attr: str) -> None:

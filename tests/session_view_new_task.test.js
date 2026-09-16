@@ -27,6 +27,10 @@ function buildHarness(overrides = {}) {
     ['input-model-badge', createElement()],
     ['msg-input', input],
   ]);
+  if (overrides.backendSelectValue !== undefined) {
+    elements.set('new-session-backend',
+      createElement({tagName: 'SELECT', id: 'new-session-backend', value: overrides.backendSelectValue}));
+  }
   const h = {
     input,
     messages,
@@ -156,6 +160,59 @@ test('a create from the welcome screen navigates to the new task and leaves the 
     'the welcome screen has no composer DOM: the landing is the existing full-page load');
   assert.equal(h.context.sessionStorage.getItem('charliebot-focus-composer'), '1');
   assert.equal(h.context.SESSION_ID, null, 'no SPA switch ran');
+});
+
+test('the toolbar selected model rides the one-click create and survives a retry unchanged', async () => {
+  let attempts = 0;
+  // The retry body carries the captured choice even though the first attempt failed and
+  // the dropdown moved meanwhile: the create and its request id were captured together.
+  const h = buildHarness({
+    backendSelectValue: 'clc-second',
+    createResponse: (n) => {
+      attempts = n;
+      if (n === 1) return {ok: false, status: 500, json: async () => ({detail: 'provider down'})};
+      return {ok: true, status: 200, json: async () => (
+        {id: 'task-chosen', name: 'New manager task', profile: 'manager', schema_version: 2,
+         backend: 'clc-second'})};
+    },
+  });
+  h.context.createSessionOrTask();
+  await settle();
+  assert.equal(attempts, 1);
+  assert.equal(h.toasts.length, 1, 'the failure surfaced');
+  h.elements.get('new-session-backend').value = 'clc-third';
+  h.context.createSessionOrTask(); // the retry
+  await settle();
+  assert.equal(h.posts.length, 2);
+  assert.equal(h.posts[0].body.backend, 'clc-second', 'the dropdown value rides the create');
+  assert.equal(h.posts[1].body.backend, 'clc-second',
+    'the retry replays the captured model, not the dropdown current one');
+  assert.equal(h.posts[1].body.request_id, h.posts[0].body.request_id,
+    'the retry is the same pending action');
+  assert.equal(h.context.SESSION_ID, 'task-chosen');
+});
+
+test('a completed create starts the next action fresh with the dropdown current value', async () => {
+  const h = buildHarness({backendSelectValue: 'clc-a'});
+  h.context.createSessionOrTask();
+  await settle();
+  assert.equal(h.posts.length, 1);
+  assert.equal(h.posts[0].body.backend, 'clc-a');
+  h.elements.get('new-session-backend').value = 'clc-b';
+  h.context.createSessionOrTask();
+  await settle();
+  assert.equal(h.posts.length, 2);
+  assert.equal(h.posts[1].body.backend, 'clc-b', 'the new action captures the current selection');
+  assert.notEqual(h.posts[1].body.request_id, h.posts[0].body.request_id,
+    'a completed create never leaks its id into the next action');
+});
+
+test('without the dropdown in the page the create posts no backend field', async () => {
+  const h = buildHarness({});
+  h.context.createSessionOrTask();
+  await settle();
+  assert.equal(h.posts.length, 1);
+  assert.equal(h.posts[0].body.backend, undefined, 'the server default resolution applies');
 });
 
 test('outside the tasks filter and preview, the primary button keeps the legacy session create', async () => {

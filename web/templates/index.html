@@ -87,17 +87,20 @@
         {% endif %}
       </div>
 
-      <!-- New session -->
+      <!-- New session: the wide blue button with the compact model dropdown
+           immediately to its right in the same row (the trial's creation
+           toolbar). The dropdown is the model choice the create action
+           captures; one click still creates the new task and opens Chat. -->
       <div class="p-3 border-b border-slate-700">
         <div class="flex gap-2">
           <button onclick="createSessionOrTask()" class="flex-1 flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium transition-colors min-w-0">
             <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-            <span class="truncate">{% if preview_mode %}New Task{% else %}New Session{% endif %}</span>
+            <span class="truncate">New Session</span>
           </button>
-          {% if backend_options and not preview_mode %}
+          {% if backend_options %}
           <select id="new-session-backend"
                   class="text-xs bg-slate-800 border border-slate-600 rounded-lg px-2 py-2 text-slate-300 focus:outline-none focus:border-blue-500 cursor-pointer hover:border-slate-500 transition-colors"
-                  style="max-width: 110px;"
+                  style="max-width: 150px;"
                   title="Select backend for new session">
             {% for opt in backend_options %}
             <option value="{{ opt.id }}" {% if opt.id == active_backend %}selected{% endif %}>{{ opt.label }}</option>

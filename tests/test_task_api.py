@@ -140,6 +140,45 @@ async def test_one_click_root_create_empty_goal_is_a_valid_task(task_env) -> Non
 
 
 @pytest.mark.asyncio
+async def test_explicit_backend_create_records_the_choice_and_replays_keep_it(tmp_path: Path) -> None:
+  """The toolbar's model choice: the create POST carries the selected backend, the node
+  records it, a replayed request returns the original product even when the retried body
+  names another model (no silent switch, no second node), and an unknown id is a 400."""
+  from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION
+
+  from src.core.config import CharlieBotConfig
+
+  cfg = CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home",
+      backends={"options": [OPUS_BACKEND_OPTION, CODEX_BACKEND_OPTION],
+                "preference": [OPUS_BACKEND_ID]})
+  session_mgr = SessionManager(cfg)
+  task_mgr = TaskTreeManager(cfg, session_mgr)
+  with make_client(cfg, session_mgr, task_mgr) as client:
+    body = {
+        "request_id": "toolbar-choice",
+        "task_parent_id": None,
+        "profile": "manager",
+        "task": {"goal": "", "acceptance": [], "context_refs": []},
+        "backend": "codex-o3",
+    }
+    created = client.post("/api/sessions/", json=body)
+    assert created.status_code == 200
+    assert created.json()["backend"] == "codex-o3", "the selected backend lands on the node"
+
+    replay = client.post("/api/sessions/", json={**body, "backend": OPUS_BACKEND_ID})
+    assert replay.status_code == 200
+    assert replay.json()["id"] == created.json()["id"]
+    assert replay.json()["backend"] == "codex-o3", \
+        "the replayed action returns its original product; the choice never silently switches"
+
+    refused = client.post("/api/sessions/", json={**body, "request_id": "other-choice",
+                                                  "backend": "no-such-model"})
+    assert refused.status_code == 400
+    assert "not a recognized backend id" in refused.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_stale_tree_pagination_returns_409(task_env) -> None:
   cfg, session_mgr, task_mgr = task_env
   await seed_tree(task_mgr)

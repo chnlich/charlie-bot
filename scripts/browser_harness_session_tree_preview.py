@@ -3,14 +3,19 @@
 Starts ``charliebot session-tree preview`` as its own foreground process on a
 disposable home (the actual CLI, never a lifespan-off in-process server), then
 drives a real headless Chrome with an isolated browser profile through the
-first-login/empty state, the one-click New Task flow (real control click from
-the welcome screen and from a non-Chat tab: no creation form, Chat with a
-focused composer, drafts kept, one node per pending action), explicit
+first-login/empty state, the creation toolbar (the wide blue New Session button
+with the compact model dropdown beside it in one row), the one-click New Session
+flow (real control click from the welcome screen and from a non-Chat tab: no
+creation form, Chat with a focused composer, drafts kept, one node per pending
+action, the dropdown's selected model carried on the create), explicit
 child/worker creation through the existing modal, goal and rule editing, node
 switching with draft preservation, the real GLM manager turn from the first
 message, Context and run history, the completion/refusal/reopen and move/pause
-controls, a reload with selection, and a narrow viewport. Every refusal is a
-recorded failure; no scenario is scripted to pass.
+controls, a reload with selection, a narrow viewport, and — for every backend
+listed in --backends — one task created through a real dropdown selection of
+that model with its own bounded first message and Run evidence (backend, model
+and native location matching the selection). Every refusal is a recorded
+failure; no scenario is scripted to pass.
 
 Evidence: per-scenario screenshots and session_tree_preview_browser_results.json
 with the exact tested commit, the invocation and the console-error list.
@@ -47,6 +52,9 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
 
 DEFAULT_BACKEND = "charlie-code-glm53-flash"
 RESEARCH_DEFAULT = Path("/home/chaoli/.charliebot/sessions/8a7964a3-8e53-4fa3-9145-893bac307ddc/research")
+
+# The dropdown's id->label map, read from the live page after login.
+BACKEND_LABELS: dict[str, str] = {}
 
 GUARD_SOURCE = """
     (function () {
@@ -132,16 +140,17 @@ def api_request(base: str, key: str, method: str, path: str, body: dict | None =
         return e.code, json.loads(e.read().decode() or "{}")
 
 
-def build_source_home(source: Path, backend_id: str) -> None:
-    """The trial's private configuration source: one backend entry of the current profile.
+def build_source_home(source: Path, backend_ids: list[str]) -> None:
+    """The trial's private configuration source: the selected backend entries of the current profile.
 
-    The source read is scoped to the entry the trial consumes: the profile's raw
-    YAML is parsed here and only the selected entry is validated against this
+    The source read is scoped to the entries the trial consumes: the profile's raw
+    YAML is parsed here and only the selected entries are validated against this
     branch's schema. A sibling entry carrying a field from a newer schema (the
     live profile is user-owned state that moves independently of this branch)
-    must not block the trial; the entry actually copied still refuses loudly on
+    must not block the trial; an entry actually copied still refuses loudly on
     anything this branch cannot interpret, and the seeded trial home validates
-    strictly.
+    strictly. The first entry is the trial's default; the rest are the
+    explicitly selectable additions.
     """
     import yaml
 
@@ -149,37 +158,43 @@ def build_source_home(source: Path, backend_id: str) -> None:
 
     config_path = charliebot_home_dir() / "config.yaml"
     raw_options = (yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}).get("backends", {}).get("options") or []
-    raw_entry = next((e for e in raw_options if isinstance(e, dict) and e.get("id") == backend_id), None)
-    if raw_entry is None:
-        raise SystemExit(f"backend {backend_id!r} is not configured in the current profile {config_path}")
-    try:
-        # Schema-strict validation of exactly the entry the trial copies.
-        option = CharlieBotConfig(backends={"options": [raw_entry]}).get_backend_option(backend_id)
-    except Exception as e:
-        raise SystemExit(
-            f"backend {backend_id!r} in {config_path} is not interpretable by this branch's "
-            f"config schema: {e}") from e
-    assert option is not None
-    if option.type.value != "charlie-code":
-        raise SystemExit(
-            f"backend {backend_id!r} has type {option.type.value!r}; the preview isolates native "
-            "state only for charlie-code")
+    entries = []
+    written_sections: set[str] = set()
+    credential_lines: list[str] = []
+    for backend_id in backend_ids:
+        raw_entry = next((e for e in raw_options if isinstance(e, dict) and e.get("id") == backend_id), None)
+        if raw_entry is None:
+            raise SystemExit(f"backend {backend_id!r} is not configured in the current profile {config_path}")
+        try:
+            # Schema-strict validation of exactly the entry the trial copies.
+            option = CharlieBotConfig(backends={"options": [raw_entry]}).get_backend_option(backend_id)
+        except Exception as e:
+            raise SystemExit(
+                f"backend {backend_id!r} in {config_path} is not interpretable by this branch's "
+                f"config schema: {e}") from e
+        assert option is not None
+        if option.type.value != "charlie-code":
+            raise SystemExit(
+                f"backend {backend_id!r} has type {option.type.value!r}; the preview isolates native "
+                "state only for charlie-code")
+        entries.append(json.loads(option.model_dump_json()))
+        if getattr(option, "credential", None):
+            section = str(option.credential)
+            api_key = load_credentials().get(section, "api_key")
+            if api_key is None:
+                raise SystemExit(f"backend {backend_id!r} needs credentials.{section}.api_key; it is unset")
+            if section not in written_sections:
+                written_sections.add(section)
+                credential_lines.append(f"{section}:\n  api_key: {api_key}\n")
     source.mkdir(parents=True, exist_ok=True)
-    entry = json.loads(option.model_dump_json())
     config = {
         "server": {"host": "127.0.0.1", "port": 18498},
         "paths": {"workspace_dirs": [str(source / "workspaces")],
                   "worktree_dir": str(source / "worktrees")},
-        "backends": {"options": [entry], "preference": [backend_id]},
+        "backends": {"options": entries, "preference": [backend_ids[0]]},
     }
     (source / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
-    creds = "charliebot:\n  access_key: source-operator-key-not-used\n"
-    if getattr(option, "credential", None):
-        section = str(option.credential)
-        api_key = load_credentials().get(section, "api_key")
-        if api_key is None:
-            raise SystemExit(f"backend {backend_id!r} needs credentials.{section}.api_key; it is unset")
-        creds += f"{section}:\n  api_key: {api_key}\n"
+    creds = "charliebot:\n  access_key: source-operator-key-not-used\n" + "".join(credential_lines)
     (source / "credentials.yaml").write_text(creds, encoding="utf-8")
 
 
@@ -208,7 +223,10 @@ async def run_harness(args: argparse.Namespace) -> None:
     with tempfile.TemporaryDirectory(prefix="charliebot-preview-harness-") as tmp:
         tmp_path = Path(tmp)
         source = tmp_path / "source-home"
-        build_source_home(source, args.backend)
+        backends = [b.strip() for b in args.backends.split(",") if b.strip()]
+        if not backends:
+            raise SystemExit("--backends names at least one backend id")
+        build_source_home(source, backends)
         # The harness process itself must keep production identities out of any
         # child it spawns; the preview CLI clears its own in addition.
         for var in ("CHARLIEBOT_SESSION_ID", "CHARLIEBOT_RUN_TOKEN",
@@ -216,8 +234,12 @@ async def run_harness(args: argparse.Namespace) -> None:
             os.environ.pop(var, None)
         home = tmp_path / "preview-home"
         port = pick_free_port()
+        # The fresh multi-entry setup rides the real CLI flags: --backend names the
+        # trial's default, every further selected entry arrives as --add-backend.
         invocation = [sys.executable, "-m", "src.cli.main", "session-tree", "preview",
-                      "--home", str(home), "--port", str(port), "--backend", args.backend]
+                      "--home", str(home), "--port", str(port), "--backend", backends[0]]
+        for extra_id in backends[1:]:
+            invocation += ["--add-backend", extra_id]
         env = dict(os.environ)
         env["CHARLIEBOT_HOME"] = str(source)
         env["PYTHONUNBUFFERED"] = "1"
@@ -328,34 +350,52 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                    label="main page after login")
     indicator = await evaluate(cdp, sid, "document.getElementById('preview-indicator').textContent")
     tasks_first = await evaluate(cdp, sid, "currentFilter === 'tasks'")
-    new_task_label = await evaluate(
+    new_session_label = await evaluate(
         cdp, sid,
-        "[...document.querySelectorAll('button span')].some(s => s.textContent.trim() === 'New Task')")
+        "[...document.querySelectorAll('button span')].some(s => s.textContent.trim() === 'New Session')")
     empty_tree = await evaluate(
         cdp, sid,
         "(() => { const t = document.getElementById('session-list');"
-        " return t ? /No task trees yet|Use .New task/i.test(t.textContent) : false; })()")
+        " return t ? /No task trees yet|Use .New [Ss]ession/i.test(t.textContent) : false; })()")
     overlay_gone = await evaluate(cdp, sid,
                                   "document.getElementById('auth-overlay').style.display === 'none'")
-    ok = (indicator == "Preview — isolated trial instance" and tasks_first and new_task_label
-          and empty_tree and overlay_gone)
+    toolbar = await evaluate(cdp, sid, """
+        (() => {
+          const btn = [...document.querySelectorAll('#sidebar button')].find(b => b.textContent.trim() === 'New Session');
+          const sel = document.getElementById('new-session-backend');
+          if (!btn || !sel) return {present: false};
+          const b = btn.getBoundingClientRect(), s = sel.getBoundingClientRect();
+          return {present: true, options: [...sel.options].map(o => o.value),
+                  selected: sel.value, oneRow: Math.abs(b.top - s.top) < 4 && b.bottom <= s.bottom + 4,
+                  buttonWidth: b.width, selectWidth: s.width,
+                  optionTexts: [...sel.options].map(o => o.textContent.trim())};
+        })()""")
+    toolbar_ok = (toolbar.get("present") and len(toolbar.get("options", [])) >= 1
+                  and toolbar.get("oneRow") and toolbar.get("selectWidth", 0) >= 60)
+    ok = (indicator == "Preview — isolated trial instance" and tasks_first and new_session_label
+          and empty_tree and overlay_gone and toolbar_ok)
     results.record("s01-first-login-empty-state", ok,
-                   f"indicator={indicator!r} tasks-first={tasks_first} new-task-label={new_task_label} "
-                   f"empty-tree={empty_tree} overlay-gone={overlay_gone}",
+                   f"indicator={indicator!r} tasks-first={tasks_first} new-session-label={new_session_label} "
+                   f"empty-tree={empty_tree} overlay-gone={overlay_gone} toolbar={toolbar}",
                    await screenshot(cdp, sid, results, "s01b-empty-preview") + "," + login_shot)
     # The unauthenticated first load logs one expected 401 from the sidebar's
     # initial fetch (the shipped app's pre-login behavior); the no-console-error
     # contract covers the authenticated flow from here on.
     cdp.console_errors = []
     await evaluate(cdp, sid, "window.__errs = [];")
+    BACKEND_LABELS.update(await evaluate(cdp, sid,
+        "(() => { const sel = document.getElementById('new-session-backend');"
+        " const m = {}; for (const o of sel.options) m[o.value] = o.textContent.trim(); return m; })()"))
+    log(f"  model dropdown entries: {list(BACKEND_LABELS)}")
 
-    # --- S2: the user-facing New Task control creates the root in one click ---
-    # A real click of the welcome screen's New Task button (never a direct
+    # --- S2: the user-facing New Session control creates the root in one click ---
+    # A real click of the welcome screen's New Session button (never a direct
     # helper call): no creation form may appear, Chat must open with the
-    # composer holding the cursor, and the first typed message must be admitted
-    # through the normal durable input path. The sidebar's control takes the
-    # same path (S5b/S5c click it from an existing session).
-    await click_button_by_text(cdp, sid, "New Task", "main")
+    # composer holding the cursor, the dropdown's selected model rides the
+    # create, and the first typed message must be admitted through the normal
+    # durable input path. The sidebar's control takes the same path (S6b/S6c
+    # click it from an existing session).
+    await click_button_by_text(cdp, sid, "New Session", "main")
     await wait_for(cdp, sid, "typeof SESSION_ID !== 'undefined' && SESSION_ID", timeout=20,
                    label="new root task selected")
     root_id = await evaluate(cdp, sid, "SESSION_ID")
@@ -378,13 +418,17 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                                 "!document.getElementById('btn-task').classList.contains('hidden')")
     create_posts = [m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")]
     create_body = json.loads(create_posts[-1]["body"]) if create_posts else {}
+    selected_default = await evaluate(cdp, sid, "document.getElementById('new-session-backend').value")
     create_ok = (create_body.get("profile") == "manager" and create_body.get("task_parent_id") is None
-                 and (create_body.get("task") or {}).get("goal") == "" and bool(create_body.get("request_id")))
+                 and (create_body.get("task") or {}).get("goal") == "" and bool(create_body.get("request_id"))
+                 and create_body.get("backend") == selected_default)
+    badge_label = await evaluate(cdp, sid, "document.getElementById('backend-badge').textContent")
+    badge_ok = badge_label == (BACKEND_LABELS.get(selected_default) or selected_default)
     results.record("s02-one-click-root-create",
-                   bool(root_id and composer_ready and panel_open and create_ok),
+                   bool(root_id and composer_ready and panel_open and create_ok and badge_ok),
                    f"root={root_id[:8]} composer-ready={composer_ready} "
                    f"task-panel-open={panel_open} create-body-ok={create_ok} "
-                   f"create-posts={len(create_posts)}",
+                   f"selected={selected_default} badge={badge_label!r} create-posts={len(create_posts)}",
                    await screenshot(cdp, sid, results, "s02-one-click-root-chat"))
     # A welcome-screen create lands through a full page load; re-mark the
     # authenticated flow as the no-console-error baseline from here.
@@ -518,7 +562,7 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                    "goal.value = 'unsaved before create';"
                    "goal.dispatchEvent(new Event('input')); })()")
     await asyncio.sleep(0.7)  # the editor's draft persistence window
-    await click_button_by_text(cdp, sid, "New Task", "#sidebar")
+    await click_button_by_text(cdp, sid, "New Session", "#sidebar")
     await wait_for(cdp, sid,
                    "typeof SESSION_ID !== 'undefined' && SESSION_ID !== "
                    + json.dumps(worker_id),
@@ -565,8 +609,8 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     posts_before = len([m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")])
     await evaluate(cdp, sid,
                    "(() => { const btn = [...document.querySelectorAll('#sidebar button')]"
-                   ".find(b => b.textContent.trim() === 'New Task');"
-                   " if (!btn) throw new Error('missing New Task button'); btn.click(); btn.click(); })()")
+                   ".find(b => b.textContent.trim() === 'New Session');"
+                   " if (!btn) throw new Error('missing New Session button'); btn.click(); btn.click(); })()")
     await wait_for(cdp, sid,
                    "typeof SESSION_ID !== 'undefined' && SESSION_ID !== "
                    + json.dumps(worker_id),
@@ -781,10 +825,98 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                                "(() => { const list = document.getElementById('session-list');"
                                " if (!list) return false; const r = list.getBoundingClientRect();"
                                " return r.width > 100 && r.width <= window.innerWidth + 2; })()")
+    # The creation toolbar keeps the button and the dropdown in one row when the
+    # narrow sidebar is open.
+    narrow_toolbar = await evaluate(cdp, sid, """
+        (() => {
+          const btn = [...document.querySelectorAll('#sidebar button')].find(b => b.textContent.trim() === 'New Session');
+          const sel = document.getElementById('new-session-backend');
+          if (!btn || !sel) return false;
+          const b = btn.getBoundingClientRect(), s = sel.getBoundingClientRect();
+          return Math.abs(b.top - s.top) < 4 && b.bottom <= s.bottom + 4 && s.right <= b.right + 2;
+        })()""")
     await screenshot(cdp, sid, results, "s12b-narrow-sidebar")
     await cdp.send("Emulation.clearDeviceMetricsOverride", session_id=sid)
-    results.record("s12-narrow-viewport", bool(narrow_ok),
-                   "task tree renders inside a 390px viewport", None)
+    results.record("s12-narrow-viewport", bool(narrow_ok and narrow_toolbar),
+                   f"task tree renders inside a 390px viewport; toolbar one-row={narrow_toolbar}",
+                   None)
+
+    # --- S13: every selected model is a real choice with a real Run ---------
+    # For each non-default dropdown entry: a real selection change, a real New
+    # Session click, the create carrying that backend, the node metadata and
+    # the header badge agreeing, and one bounded first message whose
+    # manager_turn Run records the same backend and a native session inside the
+    # preview home. Provider/network failures are recorded, never retried
+    # forever and never scripted into a pass.
+    for model_id, model_label in BACKEND_LABELS.items():
+        if model_id == selected_default:
+            continue
+        await evaluate(cdp, sid,
+                       "(() => { const sel = document.getElementById('new-session-backend');"
+                       f" sel.value = {json.dumps(model_id)};"
+                       " sel.dispatchEvent(new Event('change')); })()")
+        await click_button_by_text(cdp, sid, "New Session", "#sidebar")
+        await wait_for(cdp, sid,
+                       "typeof SESSION_ID !== 'undefined' && SESSION_ID",
+                       timeout=20, label=f"root selected for {model_id}")
+        model_root_id = await evaluate(cdp, sid, "SESSION_ID")
+        model_posts = [m for m in cdp.mutations
+                       if m["method"] == "POST" and m["url"].endswith("/api/sessions/")]
+        model_body = json.loads(model_posts[-1]["body"]) if model_posts else {}
+        meta = await evaluate(cdp, sid,
+                              "fetch('/api/sessions/' + SESSION_ID, {cache: 'no-store'})"
+                              ".then(r => r.json())")
+        badge_label = await evaluate(cdp, sid, "document.getElementById('backend-badge').textContent")
+        selection_ok = (model_body.get("backend") == model_id
+                        and (meta or {}).get("backend") == model_id
+                        and badge_label == model_label)
+        results.record(f"s13-select-{model_id}",
+                       bool(model_root_id and selection_ok),
+                       f"root={str(model_root_id)[:8]} create-backend={model_body.get('backend')!r} "
+                       f"metadata-backend={(meta or {}).get('backend')!r} badge={badge_label!r}",
+                       await screenshot(cdp, sid, results, f"s13-select-{model_id}"))
+        # One bounded first message on the model's own root.
+        message = (f"Model check for {model_id}. Reply with exactly: MODEL-OK, then stop. "
+                   "Do not create subtasks.")
+        await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10,
+                       label=f"composer on {model_id}")
+        await evaluate(cdp, sid,
+                       "const inp = document.getElementById('msg-input');"
+                       f"inp.value = {json.dumps(message)};"
+                       "inp.dispatchEvent(new Event('input'));")
+        await click(cdp, sid, "#send-btn")
+        await wait_for(cdp, sid,
+                       f"document.getElementById('tab-chat').textContent.includes({json.dumps(message)})",
+                       timeout=15, label=f"first message rendered on {model_id}")
+        log(f"  waiting for the real {model_label} manager turn (bounded)")
+        run_deadline = time.monotonic() + 180
+        model_run = None
+        while time.monotonic() < run_deadline:
+            status, page = api_request(base, access_key,
+                                       "GET", f"/api/sessions/{model_root_id}/runs?limit=5")
+            runs = (page.get("items") or []) if isinstance(page, dict) else (page or [])
+            terminal = [r for r in runs if r.get("kind") == "manager_turn" and r.get("state") in
+                        ("success", "failed", "stopped", "interrupted")]
+            if terminal:
+                model_run = terminal[0]
+                break
+            await asyncio.sleep(2)
+        native_entries = sorted(p.name for p in (home / "clc-sessions").iterdir())
+        if model_run is None:
+            results.record(f"s13-live-{model_id}", False,
+                           "no terminal manager_turn run within 180s (provider/network failure "
+                           "is an explicit failed live check)",
+                           await screenshot(cdp, sid, results, f"s13-fail-{model_id}"))
+        else:
+            run_ok = (model_run.get("backend") == model_id
+                      and bool(model_run.get("native_session_id"))
+                      and len(native_entries) > 0)
+            results.record(f"s13-live-{model_id}", run_ok,
+                           f"run={model_run['id'][:8]} state={model_run.get('state')} "
+                           f"backend={model_run.get('backend')!r} "
+                           f"native={model_run.get('native_session_id')} "
+                           f"native-dir-entries={len(native_entries)}",
+                           await screenshot(cdp, sid, results, f"s13-live-{model_id}"))
 
     # --- console errors -----------------------------------------------------
     errs = await evaluate(cdp, sid, "window.__errs || []")
@@ -802,8 +934,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence-dir", default=str(RESEARCH_DEFAULT / "preview_browser_evidence"),
                         help="Where screenshots and results land")
-    parser.add_argument("--backend", default=DEFAULT_BACKEND,
-                        help="The charlie-code backend id the trial instance runs")
+    parser.add_argument("--backends", default=DEFAULT_BACKEND,
+                        help="Comma-separated charlie-code backend ids: the first is the "
+                             "trial's default, the rest become the selectable model "
+                             "dropdown entries")
     parser.add_argument("--chrome", default=None, help="Chrome binary (default: google-chrome)")
     args = parser.parse_args()
     asyncio.run(run_harness(args))

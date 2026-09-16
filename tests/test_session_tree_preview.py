@@ -43,6 +43,7 @@ from src.core.session_tree_preview import (
   prepare_preview,
   preview_record_path,
   read_source_backend,
+  read_source_backend_additions,
   refusal_reason,
   resolve_preview_home,
   seed_or_validate_preview_home,
@@ -309,10 +310,11 @@ def test_validate_existing_config_accepts_the_seeded_shape(tmp_path: Path) -> No
 @pytest.mark.parametrize("mutate,match", [
     (lambda d: d.update(slack={"allowed_user_ids": [1]}), "outside the preview trial contract"),
     (lambda d: d.pop("paths"), "missing the preview trial sections"),
+    (lambda d: d["backends"].update(options=[]), "at least one backend"),
     (lambda d: d["backends"].update(options=[
         {"id": "a", "label": "A", "type": "charlie-code", "model": "m", "api_base": "http://x"},
-        {"id": "b", "label": "B", "type": "charlie-code", "model": "m", "api_base": "http://x"}]),
-     "exactly one backend"),
+        {"id": "a", "label": "A2", "type": "charlie-code", "model": "m", "api_base": "http://x"}]),
+     "more than once"),
     (lambda d: d["backends"].update(options=[
         {"id": "cc", "label": "CC", "type": "cc-claude", "model": "m"}]), "non-charlie-code backend"),
     (lambda d: d["paths"].update(workspace_dirs=["/usr/share"]), "workspace_dirs outside"),
@@ -345,9 +347,10 @@ def _setup_for(home: Path, port: int, *, fresh: bool) -> "preview_module.Preview
       home=home, port=port, url=f"http://127.0.0.1:{port}", backend_id="clc-test",
       backend_entry={"id": "clc-test", "label": "CLC", "type": "charlie-code",
                      "model": "openai/fake", "api_base": "http://127.0.0.1:9/v1"},
-      credential_section=None, fresh_hint=fresh, source_branch="b", source_sha="s" * 40,
-      started_at="2026-01-01T00:00:00+00:00", log_path=home / "logs" / "preview.log",
-      native_sessions_dir=home / "clc-sessions", access_key=_new_access_key())
+      backend_additions=[], credential_section=None, fresh_hint=fresh, source_branch="b",
+      source_sha="s" * 40, started_at="2026-01-01T00:00:00+00:00",
+      log_path=home / "logs" / "preview.log", native_sessions_dir=home / "clc-sessions",
+      access_key=_new_access_key())
 
 
 def test_seed_fresh_home_writes_private_minimal_config(tmp_path: Path) -> None:
@@ -402,6 +405,219 @@ def test_restart_updates_only_the_bind_address(tmp_path: Path) -> None:
   assert data["server"] == {"host": "127.0.0.1", "port": 18600}
   assert data["paths"]["workspace_dirs"] == [str(home / "workspaces")]
   assert data["backends"]["options"][0]["id"] == "clc-test"
+
+
+# ---------------------------------------------------------------------------
+# Multi-entry catalog: explicitly selected additions
+# ---------------------------------------------------------------------------
+
+
+def _write_multi_source_home(home: Path, *, entries: list[dict], port: int = 18498) -> None:
+  """A synthetic source profile with several charlie-code entries."""
+  home.mkdir(parents=True, exist_ok=True)
+  config = {
+      "server": {"host": "127.0.0.1", "port": port},
+      "paths": {"workspace_dirs": [str(home / "workspaces")], "worktree_dir": str(home / "worktrees")},
+      "backends": {"options": entries, "preference": [entries[0]["id"]]},
+  }
+  (home / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+  creds = f"charliebot:\n  access_key: {OPERATOR_KEY}\n"
+  for entry in entries:
+    if entry.get("credential") and entry["credential"] != "missing-section":
+      creds += f"{entry['credential']}:\n  api_key: {PROVIDER_KEY}\n"
+  (home / "credentials.yaml").write_text(creds, encoding="utf-8")
+
+
+@pytest.fixture
+def multi_source_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+  home = tmp_path / "source-home"
+  _write_multi_source_home(home, entries=[
+      {"id": "clc-default", "label": "CLC Default", "type": "charlie-code",
+       "model": "openai/default-model", "api_base": "http://127.0.0.1:9/v1"},
+      {"id": "clc-second", "label": "CLC Second", "type": "charlie-code",
+       "model": "openai/second-model", "api_base": "http://127.0.0.1:9/v1", "top_p": 0.95},
+      {"id": "clc-cred", "label": "CLC Cred", "type": "charlie-code",
+       "model": "openai/cred-model", "api_base": "http://127.0.0.1:9/v1", "credential": "provider"},
+  ])
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
+  monkeypatch.setattr(preview_module, "check_launcher", lambda: None)
+  return home
+
+
+def test_read_source_backend_additions_read_entries_and_credentials_in_order(
+    multi_source_home: Path) -> None:
+  additions = read_source_backend_additions(["clc-second", "clc-cred"], exclude_ids={"clc-default"})
+  assert [entry["id"] for entry, _ in additions] == ["clc-second", "clc-cred"]
+  assert additions[0][0]["top_p"] == 0.95, "declared sampling settings travel with the entry"
+  assert additions[0][1] is None
+  assert additions[1][1] == ("provider", {"api_key": PROVIDER_KEY})
+
+
+def test_read_source_backend_additions_refusals(multi_source_home: Path) -> None:
+  with pytest.raises(PreviewRefused, match="requested more than once"):
+    read_source_backend_additions(["clc-second", "clc-second"], exclude_ids=set())
+  with pytest.raises(PreviewRefused, match="already part of this trial's backend selection"):
+    read_source_backend_additions(["clc-default"], exclude_ids={"clc-default"})
+  with pytest.raises(PreviewRefused, match="not configured in the source profile"):
+    read_source_backend_additions(["no-such"], exclude_ids=set())
+
+
+def test_read_source_backend_additions_refuse_unisolated_type_missing_credential_and_unrunnable_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  home = tmp_path / "source"
+  _write_multi_source_home(home, entries=[
+      {"id": "clc-base", "label": "Base", "type": "charlie-code",
+       "model": "openai/m", "api_base": "http://127.0.0.1:9/v1"},
+      {"id": "other-family", "label": "Other", "type": "codex", "model": "m"},
+      {"id": "clc-cred", "label": "Cred", "type": "charlie-code",
+       "model": "openai/m", "api_base": "http://127.0.0.1:9/v1", "credential": "missing-section"},
+      {"id": "clc-noapi", "label": "NoApi", "type": "charlie-code", "model": "openai/m"},
+  ])
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
+  with pytest.raises(PreviewRefused, match="only for charlie-code"):
+    read_source_backend_additions(["other-family"], exclude_ids=set())
+  with pytest.raises(PreviewRefused, match="credentials.missing-section.api_key"):
+    read_source_backend_additions(["clc-cred"], exclude_ids=set())
+  with pytest.raises(PreviewRefused, match="declares no api_base"):
+    read_source_backend_additions(["clc-noapi"], exclude_ids=set())
+
+
+def test_seed_fresh_home_writes_all_requested_entries(tmp_path: Path) -> None:
+  home = tmp_path / "fresh-home"
+  setup = _setup_for(home, 18501, fresh=True)
+  setup.backend_additions = [
+      ({"id": "clc-second", "label": "CLC Second", "type": "charlie-code",
+        "model": "openai/second", "api_base": "http://127.0.0.1:9/v1", "top_p": 0.95}, None),
+      ({"id": "clc-cred", "label": "CLC Cred", "type": "charlie-code",
+        "model": "openai/cred", "api_base": "http://127.0.0.1:9/v1"}, ("provider", {"api_key": PROVIDER_KEY})),
+  ]
+  seed_or_validate_preview_home(setup)
+  data = yaml.safe_load((home / "config.yaml").read_text())
+  assert [entry["id"] for entry in data["backends"]["options"]] == ["clc-test", "clc-second", "clc-cred"]
+  assert data["backends"]["preference"] == ["clc-test"], "the explicitly requested default never moves"
+  creds = yaml.safe_load((home / "credentials.yaml").read_text())
+  assert creds["provider"] == {"api_key": PROVIDER_KEY}
+  assert creds["charliebot"]["access_key"] == setup.access_key
+  record = json.loads(preview_record_path(home).read_text())
+  assert record["backend"] == "clc-test"
+
+
+def _existing_home_with_task(tmp_path: Path) -> tuple[Path, Path]:
+  home = _existing_preview_home(tmp_path)
+  task_dir = home / "sessions" / "task-1"
+  task_dir.mkdir(parents=True)
+  (task_dir / "metadata.json").write_text(
+      json.dumps({"id": "task-1", "profile": "manager", "schema_version": 2}))
+  (task_dir / "data").mkdir()
+  (task_dir / "data" / "chat_events.jsonl").write_text('{"type": "task_created"}\n')
+  native = home / "clc-sessions"
+  native.mkdir(exist_ok=True)
+  (native / "native-run-1").mkdir()
+  return home, task_dir
+
+
+def _two_additions() -> list[tuple[dict, tuple[str, str] | None]]:
+  return [
+      ({"id": "clc-add-1", "label": "CLC Add 1", "type": "charlie-code",
+        "model": "openai/add-1", "api_base": "http://127.0.0.1:9/v1"}, None),
+      ({"id": "clc-add-2", "label": "CLC Add 2", "type": "charlie-code",
+        "model": "openai/add-2", "api_base": "http://127.0.0.1:9/v1"},
+       ("provider", {"api_key": PROVIDER_KEY})),
+  ]
+
+
+def test_seed_existing_home_extends_catalog_and_keeps_everything_else(tmp_path: Path) -> None:
+  home, task_dir = _existing_home_with_task(tmp_path)
+  config_before = (home / "config.yaml").read_text()
+  key_before = yaml.safe_load((home / "credentials.yaml").read_text())["charliebot"]["access_key"]
+  setup = _setup_for(home, 18500, fresh=False)
+  setup.backend_additions = _two_additions()
+  seed_or_validate_preview_home(setup)
+  data = yaml.safe_load((home / "config.yaml").read_text())
+  assert [entry["id"] for entry in data["backends"]["options"]] == ["clc-test", "clc-add-1", "clc-add-2"]
+  assert data["backends"]["preference"] == ["clc-test"], "the stored default stays the default"
+  assert data["server"] == {"host": "127.0.0.1", "port": 18500}
+  assert data["paths"] == yaml.safe_load(config_before)["paths"]
+  creds = yaml.safe_load((home / "credentials.yaml").read_text())
+  assert creds["charliebot"]["access_key"] == key_before, "the access key is never rekeyed"
+  assert creds["provider"] == {"api_key": PROVIDER_KEY}
+  assert (task_dir / "metadata.json").is_file()
+  assert (task_dir / "data" / "chat_events.jsonl").is_file()
+  assert (home / "clc-sessions" / "native-run-1").is_dir()
+
+
+def test_seed_existing_home_refuses_an_already_present_addition_untouched(tmp_path: Path) -> None:
+  home, _task_dir = _existing_home_with_task(tmp_path)
+  config_before = (home / "config.yaml").read_text()
+  creds_before = (home / "credentials.yaml").read_text()
+  setup = _setup_for(home, 18500, fresh=False)
+  setup.backend_additions = [
+      ({"id": "clc-test", "label": "CLC", "type": "charlie-code",
+        "model": "openai/fake", "api_base": "http://127.0.0.1:9/v1"}, None),
+  ]
+  with pytest.raises(PreviewRefused, match="already in the preview home's catalog"):
+    seed_or_validate_preview_home(setup)
+  assert (home / "config.yaml").read_text() == config_before
+  assert (home / "credentials.yaml").read_text() == creds_before
+
+
+def test_existing_multi_entry_home_restarts_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setattr(preview_module, "check_ui_assets", lambda: None)
+  home = _existing_preview_home(tmp_path)
+  data = yaml.safe_load((home / "config.yaml").read_text())
+  data["backends"]["options"] = [
+      {"id": "clc-a", "label": "A", "type": "charlie-code", "model": "openai/a", "api_base": "http://x"},
+      {"id": "clc-b", "label": "B", "type": "charlie-code", "model": "openai/b", "api_base": "http://x"},
+      {"id": "clc-c", "label": "C", "type": "charlie-code", "model": "openai/c", "api_base": "http://x",
+       "credential": "provider", "top_p": 0.9},
+  ]
+  data["backends"]["preference"] = ["clc-a"]
+  (home / "config.yaml").write_text(yaml.safe_dump(data), encoding="utf-8")
+  (home / "credentials.yaml").write_text(
+      "charliebot:\n  access_key: preview-key-old\nprovider:\n  api_key: provider-key-1111\n",
+      encoding="utf-8")
+  config_before = (home / "config.yaml").read_text()
+  setup = prepare_preview(str(home), 18500, None)
+  assert setup.backend_id == "clc-a"
+  assert setup.backend_additions == []
+  assert setup.access_key == "preview-key-old"
+  seed_or_validate_preview_home(setup)
+  assert (home / "config.yaml").read_text() == config_before, "a no-flag restart rewrites nothing"
+
+
+def test_seeded_sampling_entry_keeps_top_p_through_the_real_argv(tmp_path: Path,
+                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+  """The declared sampling setting survives the seed and reaches the real backend argv."""
+  home = tmp_path / "fresh-home"
+  setup = _setup_for(home, 18501, fresh=True)
+  setup.backend_entry = {"id": "clc-test", "label": "CLC", "type": "charlie-code",
+                         "model": "openai/fake", "api_base": "http://127.0.0.1:9/v1", "top_p": 0.95}
+  seed_or_validate_preview_home(setup)
+  seeded = yaml.safe_load((home / "config.yaml").read_text())["backends"]["options"][0]
+  assert seeded["top_p"] == 0.95, "the consumed setting is never stripped from the copied entry"
+
+  import shutil as real_shutil
+
+  fake_binary = tmp_path / "fake-charlie-code"
+  fake_binary.write_text("#!/bin/sh\nexit 0\n")
+  fake_binary.chmod(0o755)
+  monkeypatch.setattr(real_shutil, "which",
+                      lambda name, *a, **k: str(fake_binary) if name == "charlie-code" else None)
+  registry = __import__("src.agents.backends.registry", fromlist=["build_backend"])
+  original = registry.build_backend
+  registry.build_backend = wrap_build_backend(original, home / "clc-sessions")
+  try:
+    option = backend_option(**seeded)
+    from src.core.config import CharlieBotConfig
+
+    backend_obj = registry.build_backend(option, CharlieBotConfig(charliebot_home=home))
+    backend_obj._prepare_transport(tmp_path)
+    argv = backend_obj._build_command("prompt")
+    top_p_idx = argv.index("--top-p")
+    assert argv[top_p_idx + 1] == "0.95"
+    assert f"--session-dir {home / 'clc-sessions'}" in " ".join(argv)
+  finally:
+    registry.build_backend = original
 
 
 # ---------------------------------------------------------------------------
@@ -866,6 +1082,106 @@ def test_cli_refuses_missing_provider_credential(tmp_path: Path, source_home: Pa
   assert not (tmp_path / "trial").exists()
 
 
+def test_cli_refuses_non_clc_addition_before_side_effects(tmp_path: Path, source_home: Path) -> None:
+  other = tmp_path / "source-codex"
+  _write_multi_source_home(other, entries=[
+      {"id": "clc-test", "label": "CLC", "type": "charlie-code",
+       "model": "openai/fake", "api_base": "http://127.0.0.1:9/v1"},
+      {"id": "codex-entry", "label": "Codex", "type": "codex", "model": "m"},
+  ])
+  trial = tmp_path / "trial"
+  _refusal(tmp_path, other,
+           ["--home", str(trial), "--port", str(_free_port()), "--backend", "clc-test",
+            "--add-backend", "codex-entry"],
+           "only for charlie-code")
+  assert not trial.exists()
+
+
+def test_cli_refuses_addition_with_missing_credential_before_side_effects(
+    tmp_path: Path, source_home: Path) -> None:
+  other = tmp_path / "source-cred"
+  _write_multi_source_home(other, entries=[
+      {"id": "clc-test", "label": "CLC", "type": "charlie-code",
+       "model": "openai/fake", "api_base": "http://127.0.0.1:9/v1"},
+      {"id": "clc-cred", "label": "Cred", "type": "charlie-code",
+       "model": "openai/m", "api_base": "http://127.0.0.1:9/v1", "credential": "missing-section"},
+  ])
+  trial = tmp_path / "trial"
+  _refusal(tmp_path, other,
+           ["--home", str(trial), "--port", str(_free_port()), "--backend", "clc-test",
+            "--add-backend", "clc-cred"],
+           "credentials.missing-section.api_key")
+  assert not trial.exists()
+
+
+def test_cli_refuses_duplicate_addition_of_the_requested_default(tmp_path: Path, source_home: Path) -> None:
+  trial = tmp_path / "trial"
+  _refusal(tmp_path, source_home,
+           ["--home", str(trial), "--port", str(_free_port()), "--backend", "clc-test",
+            "--add-backend", "clc-test"],
+           "already part of this trial's backend selection")
+  assert not trial.exists()
+
+
+def test_cli_addition_to_a_live_holder_refuses_structured_and_untouched(
+    tmp_path: Path, source_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A live fence holder (the running preview instance) refuses additions before any change."""
+  from src.core.home_writer_fence import acquire_home_writer_fence
+
+  monkeypatch.setattr(preview_module, "check_ui_assets", lambda: None)
+  home = _existing_preview_home(tmp_path)
+  config_before = (home / "config.yaml").read_text()
+  creds_before = (home / "credentials.yaml").read_text()
+  other = tmp_path / "source-two"
+  _write_multi_source_home(other, entries=[
+      {"id": "clc-test", "label": "CLC", "type": "charlie-code",
+       "model": "openai/fake", "api_base": "http://127.0.0.1:9/v1"},
+      {"id": "clc-add", "label": "Add", "type": "charlie-code",
+       "model": "openai/add", "api_base": "http://127.0.0.1:9/v1"},
+  ])
+  fence = acquire_home_writer_fence(home, purpose="running preview instance")
+  try:
+    proc = _run_cli(["--home", str(home), "--port", str(_free_port()),
+                     "--add-backend", "clc-add"], other)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    diagnostic = json.loads(proc.stderr.strip())
+    assert "refused for home" in diagnostic["error"]
+    assert "running preview instance" in diagnostic["error"]
+    assert (home / "config.yaml").read_text() == config_before
+    assert (home / "credentials.yaml").read_text() == creds_before
+  finally:
+    fence.release()
+
+
+def test_cli_addition_refusals_leave_an_existing_home_byte_identical(
+    tmp_path: Path, source_home: Path) -> None:
+  home = _existing_preview_home(tmp_path)
+  config_before = (home / "config.yaml").read_text()
+  creds_before = (home / "credentials.yaml").read_text()
+  other = tmp_path / "source-codex"
+  _write_multi_source_home(other, entries=[
+      {"id": "clc-test", "label": "CLC", "type": "charlie-code",
+       "model": "openai/fake", "api_base": "http://127.0.0.1:9/v1"},
+      {"id": "clc-new", "label": "New", "type": "charlie-code",
+       "model": "openai/new", "api_base": "http://127.0.0.1:9/v1"},
+      {"id": "codex-entry", "label": "Codex", "type": "codex", "model": "m"},
+  ])
+  _refusal(tmp_path, other,
+           ["--home", str(home), "--port", str(_free_port()),
+            "--add-backend", "clc-new", "--add-backend", "clc-new"],
+           "requested more than once")
+  _refusal(tmp_path, other,
+           ["--home", str(home), "--port", str(_free_port()),
+            "--add-backend", "no-such-backend"],
+           "not configured in the source profile")
+  _refusal(tmp_path, other,
+           ["--home", str(home), "--port", str(_free_port()),
+            "--add-backend", "clc-test"],
+           "already part of this trial's backend selection")
+  assert (home / "config.yaml").read_text() == config_before
+  assert (home / "credentials.yaml").read_text() == creds_before
+
+
 # ---------------------------------------------------------------------------
 # Full behavioral case through the real CLI (needs the installed launcher)
 # ---------------------------------------------------------------------------
@@ -1031,3 +1347,100 @@ def test_cli_fresh_start_two_instances_and_restart(tmp_path: Path) -> None:
     assert _snapshot_tree(independent) == independent_before
   finally:
     independent_fence.release()
+
+
+@pytest.mark.local_only
+def test_cli_adds_backends_to_existing_home_and_restarts_preserved(tmp_path: Path) -> None:
+  """The real add flow: a one-model preview gains two entries without losing anything.
+
+  Runs the actual CLI: a fresh one-model start, a refused addition while the
+  instance holds the fence, the successful two-entry addition after a clean
+  stop, and a no-flag restart that preserves the extended catalog.
+  """
+  from src.core.home_writer_fence import probe_writer_fence
+
+  source = tmp_path / "source-home"
+  _write_multi_source_home(source, entries=[
+      {"id": "clc-default", "label": "CLC Default", "type": "charlie-code",
+       "model": "openai/default-model", "api_base": "http://127.0.0.1:9/v1"},
+      {"id": "clc-add-1", "label": "CLC Add 1", "type": "charlie-code",
+       "model": "openai/add-1", "api_base": "http://127.0.0.1:9/v1", "top_p": 0.95},
+      {"id": "clc-add-2", "label": "CLC Add 2", "type": "charlie-code",
+       "model": "openai/add-2", "api_base": "http://127.0.0.1:9/v1", "credential": "provider"},
+  ])
+  port = _free_port()
+  home = tmp_path / "trial-home"
+  env = _cli_env(source)
+
+  def start(*extra: str) -> subprocess.Popen:
+    return subprocess.Popen(
+        [sys.executable, "-m", "src.cli.main", "session-tree", "preview",
+         "--home", str(home), "--port", str(port), *extra],
+        cwd=str(REPO_ROOT), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+  def stop(proc: subprocess.Popen) -> None:
+    proc.terminate()
+    proc.wait(timeout=60)
+
+  proc = start("--backend", "clc-default")
+  try:
+    record = _wait_ready(home)
+    assert record["backend"] == "clc-default"
+    key = yaml.safe_load((home / "credentials.yaml").read_text())["charliebot"]["access_key"]
+    # One real task plus one native run dir: the things a later addition must keep.
+    status, created = _http(record["url"], "POST", "/api/sessions/", key, {
+        "request_id": "add-root-1", "profile": "manager",
+        "name": "pre-add task", "task": {"goal": "before the catalog grew"}})
+    assert status == 200, (status, created)
+    root_id = created["id"]
+    native = home / "clc-sessions"
+    (native / "pre-add-native-dir").mkdir(exist_ok=True)
+    config_before_add = (home / "config.yaml").read_text()
+
+    # While the instance holds the fence, an addition refuses structurally and changes nothing.
+    live = _run_cli(["--home", str(home), "--port", str(_free_port()),
+                     "--add-backend", "clc-add-1"], source)
+    assert live.returncode == 1
+    assert "refused for home" in live.stderr
+    assert (home / "config.yaml").read_text() == config_before_add
+  finally:
+    stop(proc)
+  assert probe_writer_fence(home)["exclusive_holder_alive"] is False
+
+  proc = start("--add-backend", "clc-add-1", "--add-backend", "clc-add-2")
+  try:
+    _wait_ready(home)
+    data = yaml.safe_load((home / "config.yaml").read_text())
+    assert [e["id"] for e in data["backends"]["options"]] == ["clc-default", "clc-add-1", "clc-add-2"]
+    assert data["backends"]["preference"] == ["clc-default"]
+    assert data["server"] == {"host": "127.0.0.1", "port": port}
+    assert [e["id"] for e in yaml.safe_load(config_before_add)["backends"]["options"]] == ["clc-default"]
+    creds = yaml.safe_load((home / "credentials.yaml").read_text())
+    assert creds["charliebot"]["access_key"] == key, "the access key survives the addition"
+    assert creds["provider"] == {"api_key": PROVIDER_KEY}
+    assert (home / "sessions" / root_id / "metadata.json").is_file(), "the task survives"
+    assert (home / "clc-sessions" / "pre-add-native-dir").is_dir(), "native history survives"
+    status, tree = _http(f"http://127.0.0.1:{port}", "GET", "/api/sessions/tree", key)
+    assert status == 200 and root_id in [row["id"] for row in tree["items"]]
+    # An already-selected id refuses on a later run instead of re-adding (the
+    # preparation reads the home's own catalog for the exclusion set).
+    dup = _run_cli(["--home", str(home), "--port", str(_free_port()),
+                    "--add-backend", "clc-add-1"], source)
+    assert dup.returncode == 1 and "already part of this trial's backend selection" in dup.stderr
+  finally:
+    stop(proc)
+  assert probe_writer_fence(home)["exclusive_holder_alive"] is False
+
+  # A no-flag restart keeps the extended catalog byte-identically.
+  config_before_restart = (home / "config.yaml").read_text()
+  proc = start()
+  try:
+    _wait_ready(home)
+    assert (home / "config.yaml").read_text() == config_before_restart
+    creds = yaml.safe_load((home / "credentials.yaml").read_text())
+    assert creds["charliebot"]["access_key"] == key
+    status, tree = _http(f"http://127.0.0.1:{port}", "GET", "/api/sessions/tree", key)
+    assert status == 200 and root_id in [row["id"] for row in tree["items"]]
+  finally:
+    stop(proc)
+  assert probe_writer_fence(home)["exclusive_holder_alive"] is False

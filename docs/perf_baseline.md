@@ -4228,11 +4228,17 @@ CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/
 import os, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
-from src.core.trace_merge import merge_traces
+import orjson
+from src.core.trace_merge import _trace_events_or_raise, merge_traces
 
 # Worst build corpus: the largest Chrome-JSON *.json trace under the documented
-# trace roots (~/data, ~/scripts); no qualifying file prints nothing.
-best, best_n = None, -1
+# trace roots (~/data, ~/scripts); no qualifying file prints nothing. The shape
+# contract is the build's own (_trace_events_or_raise): a size-ranked walk alone
+# cannot tell a trace whose traceEvents sits behind deviceProperties from a JSON
+# body that parses cleanly yet carries no events (an analysis manifest measured
+# as the worst corpus on 2026-09-15 and built an empty artifact), so candidates
+# qualify largest-first by parse+shape, stopping at the first passing file.
+candidates = []
 for root in (Path.home() / "data", Path.home() / "scripts"):
     if not root.is_dir():
         continue
@@ -4241,12 +4247,20 @@ for root in (Path.home() / "data", Path.home() / "scripts"):
             n = p.stat().st_size
         except OSError:
             continue
-        if n <= best_n:
-            continue
         with p.open("rb") as f:
             prefix = f.read(64).lstrip(b" \t\n\r")
         if prefix[:1] in (b"{", b"["):
-            best, best_n = p, n
+            candidates.append((n, p))
+candidates.sort(reverse=True)
+best, best_n = None, -1
+for n, p in candidates:
+    try:
+        with p.open("rb") as f:
+            _trace_events_or_raise(orjson.loads(f.read()), p)
+    except ValueError:  # orjson.JSONDecodeError subclasses ValueError; so does the shape rejection
+        continue
+    best, best_n = p, n
+    break
 if best is None:
     raise SystemExit(0)
 print(f"worst build corpus: {best}, {best_n / 1e6:.1f} MB")
@@ -6035,12 +6049,16 @@ CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/
 import os, subprocess, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
+import orjson
 from src.api.pages import _build_direct_pass_gzip
+from src.core.trace_merge import _trace_events_or_raise
 
 # Worst direct-pass corpus: the largest Chrome-JSON *.json trace under the documented
 # trace roots (~/data, ~/scripts) — the M66 resolution rule; the single-trace first-view
-# build reads and validates exactly this file.
-best, best_n = None, -1
+# build reads and validates exactly this file. Qualification is the build's own shape
+# contract applied largest-first by parse (the M66 repair: a size-ranked walk alone
+# cannot tell a trace from a JSON body that parses cleanly yet carries no events).
+candidates = []
 for root in (Path.home() / "data", Path.home() / "scripts"):
     if not root.is_dir():
         continue
@@ -6049,12 +6067,20 @@ for root in (Path.home() / "data", Path.home() / "scripts"):
             n = p.stat().st_size
         except OSError:
             continue
-        if n <= best_n:
-            continue
         with p.open("rb") as f:
             prefix = f.read(64).lstrip(b" \t\n\r")
         if prefix[:1] in (b"{", b"["):
-            best, best_n = p, n
+            candidates.append((n, p))
+candidates.sort(reverse=True)
+best, best_n = None, -1
+for n, p in candidates:
+    try:
+        with p.open("rb") as f:
+            _trace_events_or_raise(orjson.loads(f.read()), p)
+    except ValueError:  # orjson.JSONDecodeError subclasses ValueError; so does the shape rejection
+        continue
+    best, best_n = p, n
+    break
 if best is None:
     raise SystemExit(0)
 print(f"worst direct-pass corpus: {best}, {best_n / 1e6:.1f} MB")
@@ -6927,6 +6953,8 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-15 | this PR | M66 standing corpus re-qualified: the size-ranked probe had picked a 373.8 MB analysis manifest (job114279_runtime_targeted_analysis.json — a JSON object of per-rank analysis entries, no traceEvents) as the worst corpus; the merged build parsed it, merged zero events, and shipped a 0.0 MB.gz artifact in 1.77 s — a vacuous reading that would have hidden any real regression on the true corpus. The repaired collector qualifies candidates largest-first through the build's own shape contract and resolves the 307.3 MB hayden profiler trace: merged build median 4.27 s, max 4.32 s over 3, artifact 21.5 MB.gz (load 3.46/3.14/2.63 one-minute) — inside the < 8 s line; first true reading since the corpus moved | the corpus test read only the first 64 bytes (starts with { or [), which every JSON body passes; the same defect sat in the M88 probe and in the served path's gate, where a traceEvents-less object reached merge_traces and silently produced an empty trace — the build now fails loud on the shape and both collectors qualify through it |
+| 2026-09-15 | this PR | M88 standing corpus re-qualified to the same 307.3 MB hayden profiler trace the repaired M66 probe resolves (the manifest the old probe picked validated as parseable JSON and compressed to a 24.4 MB.gz artifact in 1.84 s — a first-view build of a file no trace view can render): direct-pass build median 2.72 s, max 2.75 s over 3, artifact 23.8 MB.gz (load 3.93/3.25/2.68 one-minute) — inside the < 3.5 s line | the direct-pass validation parse accepted any parseable JSON; the gate now applies the merge path's own shape contract, so a traceEvents-less object fails the build loudly (a clear 500, no cache entry) instead of serving a gzip the viewer cannot render |
 | 2026-09-15 | this PR | M7 restart-cold, fresh-doc interleaved A/B (each arm's cold pass writes its own document shape from the live state into a scratch cache, then a fresh process re-collects against it, timed): main 534/573/646 → branch 289/288/314 ms medians, −46 % to −50 %, every corpus-stable paired round faster; the trio's round 2 pair straddled a live log append (digests 75432d24482e vs 0dc8db190ea4 differ within the pair) and a second trio's rounds 1-2 read the same within-pair drift at the elevated load 1.14-1.44 one-minute — all excluded from the paired claim; the second trio's corpus-stable round 3 pair reads main 1294 → branch 293 ms (digest d99aaa566520 both arms, −77 %); rows digest identical within every paired round claimed; component: the persisted document the collect parses dropped 30.6 → 5.8 MB — the ~170k-row opencode rows map moved to a sidecar document beside the cache (24.8 MB, one stable name per db path), its parse measured standalone 246 → 18 ms, and a zero-movement restart now serves from the stored partial without touching the sidecar or the db (new tests pin: the sidecar and db both unread on a matched-signature restart; a missing sidecar degrades to the full-scan contract with the note); the rows map itself is load-bearing — the unseeded cold scan reads 692 MB of message blobs for 2.25 s standalone, so it persists, only elsewhere; no-regression witnesses interleaved ×3: the verbatim changed-round collector main 133/136/143 → branch 138/134/134 ms medians (par, maxima 275-278 → 146-171 ms — the branch never pays the 30.6 MB dump spike) and the verbatim restart-cold collector against the live stale-format document (the deploy-skew class the 2026-09-14 row documents) main 6.81-7.11 → branch 6.54-6.85 s — the 2.3 GB stale-document re-read dominates both arms; load 1.14-1.44 one-minute across the rounds; 5500-passed suite + 11 skipped, ruff and yapf clean, plus 3 new sidecar-contract tests and the two rows-reading tests moved to the sidecar; M7 restart-cold healthy range recalibrated < 2.0 s → < 0.5 s with this PR | the rows map is the row memo's persisted seed and the document's bulk at once; its only reader is the restart seed, so the bulk now parses only when a signature miss demands a seed, and the document every changed round parses, diffs, and re-dumps carries the Claude+Codex corpus's size alone |
 | 2026-09-15 | this PR | M68 marked changed-poll rebuild, repaired collector: standing TestClient reading 3.47 ms median; interleaved rounds old drive 3.50/3.44/3.47 → new drive 1.83/1.94/1.92 ms medians, −44 % to −47 %, maxima 3.81-4.28 → 2.16-2.31 ms, every paired round faster (three interleaved rounds of old TestClient drive vs new raw-ASGI drive back-to-back, same main-checkout code and worst corpus in all arms, load 1.46-1.54 one-minute, 2551 KB thread metadata over 339 rows in session 3b91d606, live state read-only; decoded body 106314 B and parsed digest 8946dac083ec identical across every arm, wire 15077 B; the probe's content-preserving rewrite makes every rebuilt body byte-identical, so all timed rounds serve the endpoint's body-keyed gzip memo form — a production changed poll whose body genuinely moves pays the endpoint's off-loop deflate instead, the 0.66 ms the M36 row measured); component attribution, same app + overrides, fresh drives at load ~1.5: TestClient repeat 3.47 ms vs raw-ASGI 1.92 ms — the httpx layer is ~1.6 ms of harness per request; M68 healthy range recalibrated < 0.005 s → < 0.003 s with this PR | the standing collector timed the harness, not the served path — the vacuous-read class the M36/M56/M57/M59/M70/M72 repairs called out; the raw-ASGI drive (the M101/M36 pattern) reads the served path the middleware and route actually run, with the production middleware mounted so the drive tracks the serve chain |
 | 2026-09-15 | this PR | M94 streamed-replay dumps wall 71/74 ms medians over two runs of the verbatim collector (16.8 MB serialized, 1553 deltas, largest delta 64456 B, page body 0.24 MB, build 4.6-5.1 ms — every other sub-metric inside its line) against the < 0.060 s line; classified as corpus growth, not a product regression: the dumps wall is the collector's own stdlib json.dumps re-serialization of the emitted deltas — the same bytes the serialized sub-metric counts — and its throughput is unchanged since the landing (16.8 MB / 71 ms ≈ 237 MB/s vs the 2026-09-12 landing's 6.3 MB / 24-25 ms ≈ 250 MB/s), while the corpus's largest tool_result grew 1.11 → 13.77 MB and its event count 693 → 2314; serialized 16.8 MB sits inside its 30 MB line, so the dumps line is recalibrated to that line's own implied floor, median < 0.130 s (30 MB at the measured throughput), with this PR | the two sub-metrics are one measurement — bytes and the time to re-serialize them — and the 60 ms line sat below the serialized line's own 30 MB bound's implied cost, so a corpus growing inside the serialized line could still trip the dumps line; the pair now bound the same quantity |

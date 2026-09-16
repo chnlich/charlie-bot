@@ -160,8 +160,9 @@ Prefer stateless solutions over state machines. Using a state machine requires e
 A recipe consumed by execution (submit, deploy, recovery, preflight sequences) lives as one
 executable entry point in its owning repo: invoking it runs the complete recipe on every use.
 Documents state the invocation and the reason the entry point exists; prose step lists elsewhere
-point to it. The second execution of a prose step list starts by converting it into an entry
-point.
+point to it. The second execution of a prose step list raises its conversion into an entry point
+as a deliverable of its own: the task at hand runs the steps as written, and the conversion
+reaches the user as a Trade-off in that task's plan or as a plan of its own.
 
 A preflight check asserts the mechanisms the task depends on (a resolvable launcher, present
 credentials, an inherited environment), so one check covers the whole fault class.

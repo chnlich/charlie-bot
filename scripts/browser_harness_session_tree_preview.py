@@ -919,7 +919,11 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                            "is an explicit failed live check)",
                            await screenshot(cdp, sid, results, f"s13-fail-{model_id}"))
         else:
-            run_ok = (model_run.get("backend") == model_id
+            # Same live-claim bar as the default model's s08: only a successful
+            # turn with the selected backend and a native session inside the
+            # preview home passes; a failed terminal run is a failed check.
+            run_ok = (model_run.get("state") == "success"
+                      and model_run.get("backend") == model_id
                       and bool(model_run.get("native_session_id"))
                       and len(native_entries) > 0)
             results.record(f"s13-live-{model_id}", run_ok,

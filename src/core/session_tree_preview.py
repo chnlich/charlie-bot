@@ -691,11 +691,13 @@ def _extend_existing_home_catalog(setup: PreviewSetup) -> None:
     if credential is not None:
       section, keys = credential
       new_credentials.setdefault(section, keys["api_key"])
-  save_yaml(config_path, data)
+  # The credentials store's shape validates before the first write too: a
+  # refusal here must leave the home untouched, not half-extended.
   credentials_path = setup.home / "credentials.yaml"
   creds = load_yaml(credentials_path, default={})
   if not isinstance(creds, dict):
     raise PreviewRefused(f"{credentials_path} is not a credentials mapping; refusing to extend it")
+  save_yaml(config_path, data)
   added_sections = []
   for section, api_key in new_credentials.items():
     if (creds.get(section) or {}).get("api_key"):

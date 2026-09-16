@@ -85,7 +85,7 @@ charlie-bot/
 |------|------|------------------|
 | **Master Agent** | Claude Code session (`src/agents/master_cc.py`) | User interaction, high-level planning, delegating coding tasks to Workers, reviewing combined worker+reviewer results. Runs as a persistent Claude Code subprocess with `--resume` support across messages. Can use any configured backend. |
 | **Worker Agent** | Claude Code CLI (`src/agents/worker.py`) | Code analysis, implementation, file editing, git operations, testing. Runs in an isolated git worktree on a dedicated branch. Told NOT to rebase/merge/remove the worktree — a reviewer handles that. |
-| **Review Agent** | Claude Code CLI (same Worker class) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto base branch, merges (ff-only), and cleans up the worktree. Intentionally uses a DIFFERENT backend than the Worker (cross-backend review via `backends.preference` config). |
+| **Review Agent** | Claude Code CLI (same Worker class) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto the remote base, pushes the branch to the base (git rejects a non-fast-forward push), and cleans up the worktree. Intentionally uses a DIFFERENT backend than the Worker (cross-backend review via `backends.preference` config). |
 
 **Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/agents/backends/base.py`). The `BackendType` vocabulary (`src/core/backend_models.py`) names the backends, and `src/agents/backends/registry.py` dispatches each `BackendOption.type` to its implementation. Backend selection is configured via `backends.options` and `backends.preference` in `config.yaml`.
 
@@ -102,8 +102,8 @@ charlie-bot/
 
 ### 4.3 Git Isolation Strategy
 - **Thread Branch Isolation**: Each Worker operates on its own branch in an isolated git worktree to prevent conflicts
-- **Reviewer Merge**: The review agent rebases the worker's branch onto the base branch and merges with `--ff-only`
-- **Worktree Cleanup**: The reviewer removes the worktree after successful merge
+- **Reviewer Merge-Back**: The review agent rebases the worker's branch onto the remote base branch and pushes it there; git rejects a non-fast-forward push, so the base only fast-forwards
+- **Worktree Cleanup**: The reviewer removes the worktree after the branch lands on the base
 
 ---
 
@@ -132,7 +132,7 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
      - Reviews `git diff base_branch...branch_name`
      - Fixes any issues found, commits fixes
      - Rebases the branch onto the base branch
-     - Merges back to main with `--ff-only`
+     - Pushes the rebased branch to the remote base (`git push origin HEAD:{base_branch}`); git rejects a non-fast-forward push
      - Cleans up the worktree
    - If the reviewer **fails**, it retries with the next untried backend from `backends.preference`. Max retries = `len(backends.preference)`
 
@@ -188,7 +188,7 @@ A local git repo at `~/.charliebot/memory/` holds one durable fact or rule set p
 3. Audio uploaded to backend
 4. **Local sherpa-onnx Qwen3-ASR** transcribes (VAD + simulated-streaming partials; supports Chinese, English, mixed, and ~30 languages)
 5. Transcription displayed in UI first
-6. Passed to Master with disclaimer: *"This is a voice-transcribed message and may not be exactly accurate. Please ask clarifying questions if anything is unclear."*
+6. Passed to Master with a disclaimer prefix: the displayed message stays verbatim, and the prompt the agent receives carries the fixed voice note from `_VOICE_DISCLAIMER` (`src/agents/master_cc_run.py`)
 
 ---
 

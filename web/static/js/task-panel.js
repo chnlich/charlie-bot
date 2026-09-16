@@ -535,17 +535,54 @@ function stashDialogSelection(sessionId) {
   dialogDrafts.set(sessionId, Object.assign({}, previous, snapshotSelection()));
 }
 
+// -- direct root create -------------------------------------------------------
+// The primary New Task action's create call: one root manager with empty task
+// instructions and the server's default backend resolution — no form, no
+// blocking model call. Name/Goal/Profile/Backend stay editable later on the
+// Task tab. One pending create action keeps one request id across rapid clicks
+// and retries: the server binds (parent, request_id) to one stable node, so a
+// replayed request returns the original product and can never mint a second
+// node. The id clears on success — the next New Task click starts a fresh
+// action; a failed attempt keeps it, making the retry a replay of the same
+// operation (visible failure, current view and drafts untouched).
+let rootCreateRequestId = null;
+
+function newCreateRequestId() {
+  return crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + '-' + Math.random();
+}
+
+async function createRootTask() {
+  if (!rootCreateRequestId) rootCreateRequestId = newCreateRequestId();
+  const requestId = rootCreateRequestId;
+  const res = await fetch('/api/sessions/', {
+    method: 'POST', headers: JSON_HEADERS,
+    body: JSON.stringify({
+      request_id: requestId,
+      task_parent_id: null,
+      profile: 'manager',
+      task: {goal: '', acceptance: [], context_refs: []},
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const detail = body.detail && (body.detail.message || body.detail);
+    throw new Error(typeof detail === 'string' ? detail : ('HTTP ' + res.status));
+  }
+  rootCreateRequestId = null;
+  return await res.json();
+}
+
 // -- child creation ----------------------------------------------------------
 
 function openChildModal(parentId) {
-  const isRoot = !parentId;
+  // The explicit child-creation form. A root manager has no form: the primary
+  // New Task action creates it directly (createRootTask) and every field stays
+  // editable on the Task tab afterwards.
   const originSession = panel.sessionId;
-  const {overlay, dialog} = modalShell('task-child-modal', isRoot ? 'New task' : 'New subtask', 'max-w-md');
+  const {overlay, dialog} = modalShell('task-child-modal', 'New subtask', 'max-w-md');
 
   const parentLabel = el('p', 'text-xs text-slate-400');
-  parentLabel.textContent = isRoot
-    ? 'Root task (no parent). A v2 manager is created with empty local rules.'
-    : 'Under: ' + ((panel.detail && panel.detail.id === parentId && panel.detail.name) || parentId);
+  parentLabel.textContent = 'Under: ' + ((panel.detail && panel.detail.id === parentId && panel.detail.name) || parentId);
   dialog.appendChild(parentLabel);
 
   const profileSelect = el('select');
@@ -1437,6 +1474,7 @@ globalThis.TaskPanel = {
   onTabShown,
   onTreeChanged,
   openChildModal,
+  createRootTask,
   refresh,
 };
 })();

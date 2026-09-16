@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from conftest import stub_credentials
+from conftest import OPUS_BACKEND_ID, stub_credentials
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -107,6 +107,36 @@ async def test_v2_create_tree_detail_and_runs(task_env) -> None:
 
     missing = client.get("/api/sessions/no-such/runs")
     assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_one_click_root_create_empty_goal_is_a_valid_task(task_env) -> None:
+    """The primary New Task action's exact body: one root manager, empty task
+    instructions, no name/backend override — the server's default title and
+    backend resolution apply, the empty goal is accepted, and a replayed
+    request returns the same node."""
+    cfg, session_mgr, task_mgr = task_env
+    with make_client(cfg, session_mgr, task_mgr) as client:
+        body = {
+            "request_id": "one-click-root",
+            "task_parent_id": None,
+            "profile": "manager",
+            "task": {"goal": "", "acceptance": [], "context_refs": []},
+        }
+        created = client.post("/api/sessions/", json=body)
+        assert created.status_code == 200
+        meta = created.json()
+        assert meta["schema_version"] == 2 and meta["profile"] == "manager"
+        assert meta["task_parent_id"] is None
+        assert meta["task"]["goal"] == ""
+        assert meta["name"] == "New manager task", "the server default title, renameable later"
+        assert meta["backend"] == OPUS_BACKEND_ID, "the existing default backend resolution"
+        replay = client.post("/api/sessions/", json=body)
+        assert replay.status_code == 200
+        assert replay.json()["id"] == meta["id"], "the replay contract keeps one node per action"
+        detail = client.get(f"/api/sessions/{meta['id']}")
+        assert detail.status_code == 200
+        assert detail.json()["task_state"] == "open"
 
 
 @pytest.mark.asyncio

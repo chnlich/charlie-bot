@@ -104,6 +104,18 @@ def test_direct_pass_rejects_non_finite_literals(client: TestClient, tmp_path: P
   assert not list(pages._perfetto_merge_cache_dir().glob("*.json.gz"))
 
 
+def test_direct_pass_rejects_json_without_trace_events(client: TestClient, tmp_path: Path) -> None:
+  """The build gate's shape contract: a JSON object with no traceEvents array (an analysis
+  manifest) parses cleanly but is not a trace — it must fail the build loudly instead of
+  compressing into the cache and reaching the viewer as a trace that renders nothing."""
+  manifest = tmp_path / "analysis_manifest.json"
+  manifest.write_text(json.dumps({"A": [{"rank": 0, "path": "/data/trace.json"}]}), encoding="utf-8")
+  response = client.get("/perfetto/merged", params={"trace": str(manifest)})
+  assert response.status_code == 500
+  assert "no traceEvents array" in response.json()["detail"]
+  assert not list(pages._perfetto_merge_cache_dir().glob("*.json.gz"))
+
+
 def test_direct_pass_gzip_decompresses_to_identical_bytes(client: TestClient, tmp_path: Path) -> None:
   trace = tmp_path / "rank0.json"
   _write_trace(trace)

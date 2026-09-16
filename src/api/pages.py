@@ -41,7 +41,13 @@ from src.core.ncu_parsing import NcuParseError, parse_ncu_report
 from src.core.sessions import SessionManager
 from src.core.timeouts import HOME_SERVICE_PROBE_TIMEOUT, SUBPROCESS_GIT_VERSION_TIMEOUT
 from src.core.token_tally import TokenTally, collect_token_usage
-from src.core.trace_merge import _MERGE_COMPRESSLEVEL, _gzip_exit_or_raise, _kill_gzip_run, merge_traces
+from src.core.trace_merge import (
+    _MERGE_COMPRESSLEVEL,
+    _gzip_exit_or_raise,
+    _kill_gzip_run,
+    _trace_events_or_raise,
+    merge_traces,
+)
 
 log = LazyStructlogLogger()
 
@@ -439,7 +445,7 @@ async def _cached_merge(paths: list[Path], slim: bool) -> Path:
 
 
 def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
-  """Validate the trace is parseable JSON while a gzip process stream-compresses the original bytes.
+  """Validate the input is a parseable Chrome-JSON trace while a gzip process stream-compresses the original bytes.
 
   The artifact is the original bytes compressed and the parse result is discarded, so the two
   passes are independent; the parse holds the GIL for its whole run (measured: a concurrent
@@ -459,7 +465,10 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
     # cyclic leftovers.
     try:
       with path.open("rb") as validate_file:
-        orjson.loads(validate_file.read())
+        # Parseable JSON is not enough: a JSON object with no traceEvents array
+        # (an analysis manifest) would otherwise compress into the cache and
+        # reach the viewer as a trace that renders nothing.
+        _trace_events_or_raise(orjson.loads(validate_file.read()), path)
       _gzip_exit_or_raise(gzip_proc, str(path))
     except BaseException:
       _kill_gzip_run(gzip_proc)

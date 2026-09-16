@@ -91,10 +91,11 @@ Known-alive symbols:
   `for attr in ("slack_listener_task", "slack_backfill_task")` and fetches each via
   `getattr(app.state, attr, None)`. Vulture flags the `slack_backfill_task` assignment as an unused
   attribute; the names appear only at the write and inside the string tuple.
-- `check_prompt_or_handler_or_loop` — pydantic `@model_validator` method on `ScheduledTaskConfig`
+- `check_type_and_sources` — pydantic `@model_validator` method on `ScheduledTaskConfig`
   in `src/core/config.py`, registered with pydantic at class-definition time and invoked during
-  model validation. The method name has exactly zero whole-repo matches outside its definition,
-  so vulture flags it as an unused method.
+  model validation (it enforces the type pm/normal prompt-source rules). The method name has
+  exactly zero whole-repo matches outside its definition, so vulture flags it as an unused
+  method.
 - `seed_default_cron_tasks` (`src/core/init_seed.py`) — production-scope vulture (`src/ server.py`)
   flags it as an unused function because its only production caller is the Python heredoc embedded
   in `scripts/setup.sh` (a shell script, invisible to Python dead-code tools). The absence from the
@@ -342,7 +343,7 @@ Known-alive symbols:
   pydantic `@field_validator` / `@model_validator` methods on `ProjectConfig`, registered with
   pydantic at class-definition time and invoked during model validation. The method names have
   exactly zero whole-repo matches outside their definitions, so vulture flags them as unused
-  methods. Same framework-registered class as the `check_prompt_or_handler_or_loop` entry above.
+  methods. Same framework-registered class as the `check_type_and_sources` entry above.
 - `inline_merge_executor` (`tests/test_perfetto_pages.py`) — pytest fixture (monkeypatches
   `pages._merge_executor` to yield None so the merge runs inline), requested by name in four
   tests' parameter lists; the bodies never reference the parameter, so vulture flags it as an
@@ -387,13 +388,13 @@ Known-alive symbols:
   model validation: it rejects a backend config entry whose type requires a `model` but declares
   none. The only exact-name matches outside the definition are a prose comment in
   `tests/test_threads_attach_dispatch.py` and this list, so vulture flags it as an unused
-  method. Same framework-registered class as the `check_prompt_or_handler_or_loop` entry above.
+  method. Same framework-registered class as the `check_type_and_sources` entry above.
 - `_expand_tilde` (`src/core/config.py`, on `PathsConfig`, `UiConfig`, and `PublishConfig`) —
   pydantic `@model_validator(mode='after')` methods, registered with pydantic at
   class-definition time and invoked during model validation: each expands `~` in its
   section's path settings against the process HOME. The method name has exactly zero
   whole-repo matches outside the three definitions, so vulture flags each as an unused
-  method. Same framework-registered class as the `check_prompt_or_handler_or_loop` entry
+  method. Same framework-registered class as the `check_type_and_sources` entry
   above.
 - `drain`, `wait_closed` (the stdin mocks of `stub_subprocess_spawn` in `tests/conftest.py`)
   — attribute writes on the MagicMock asyncio subprocess the helper installs on a spawn

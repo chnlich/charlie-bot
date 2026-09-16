@@ -354,6 +354,8 @@ function row(overrides = {}) {
     child_count: 0,
     open_descendant_count: 0,
     attention_descendant_count: 0,
+    running_descendant_count: 0,
+    has_unread: false,
   }, overrides);
 }
 

@@ -375,8 +375,9 @@ async function switchSession(sessionId) {
     throw err;
   }
 
-  // Mark switched-to session as read (WS was closed so broadcast is lost)
-  sessionUnread[sessionId] = false;
+  // Mark switched-to session as read (WS was closed so broadcast is lost);
+  // stamped through the shared seam so any in-flight older reply is refused.
+  recordUnreadFact(sessionId, false);
   const unreadDot = document.getElementById('unread-' + sessionId);
   if (unreadDot) unreadDot.classList.add('hidden');
 

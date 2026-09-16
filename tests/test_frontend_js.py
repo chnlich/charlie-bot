@@ -47,6 +47,9 @@ _NODE_TESTS = [
     # Running-feedback corrective work: shared spinner/gear cues on tree rows,
     # live Run updates, legacy-probe protection, bounded reconciliation.
     "session_tree_running_feedback.test.js",
+    # Unread-feedback corrective work: the shared unread dot on tree rows,
+    # read/unread ordering protection, bounded reconciliation coverage.
+    "session_tree_unread_feedback.test.js",
     "task_panel_actions.test.js",
     "task_context_rules.test.js",
     "task_runs_panel.test.js",

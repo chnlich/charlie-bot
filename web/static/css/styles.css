@@ -503,7 +503,10 @@ body { overscroll-behavior: none; }
 }
 
 /* Reduced motion: the activity cues keep their static meaning — the spinner and
-   gear hold their glyph, the work-state label carries the state. */
+   gear hold their glyph, the work-state label carries the state, and the running
+   badge's pulse and the unread dot stop. !important is load-bearing: this file
+   loads before tailwind.css, whose .animate-spin/.animate-pulse utility
+   declarations would otherwise win the cascade and keep the cues animating. */
 @media (prefers-reduced-motion: reduce) {
-  .animate-spin, .animate-\[spin_3s_linear_infinite\], .animate-pulse-dot { animation: none; }
+  .animate-spin, .animate-\[spin_3s_linear_infinite\], .animate-pulse, .animate-pulse-dot { animation: none !important; }
 }

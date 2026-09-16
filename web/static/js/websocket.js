@@ -157,14 +157,20 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     return;
   }
 
-  // Sidebar unread indicator — handle before catchup guard
+  // Sidebar unread indicator — handle before catchup guard. Broadcasts are
+  // socket-ordered and always apply (they stamp the newest fact, so any
+  // in-flight poll or tree-page reply captured earlier is refused by the
+  // shared gate). The dot is an idle-state cue for both row kinds: activity
+  // (spinner or delegated gear) hides it without discarding the flag.
   if (t === 'unread_changed') {
-    sessionUnread[ev.session_id] = ev.has_unread;
+    recordUnreadFact(ev.session_id, ev.has_unread);
     if (ev.session_id === SESSION_ID) return;
     const spinner = document.getElementById('spinner-' + ev.session_id);
-    const spinnerVisible = spinner && !spinner.classList.contains('hidden');
+    const gear = document.getElementById('worker-indicator-' + ev.session_id);
+    const activityVisible = (spinner && !spinner.classList.contains('hidden'))
+      || (gear && !gear.classList.contains('hidden'));
     const dot = document.getElementById('unread-' + ev.session_id);
-    if (dot) dot.classList.toggle('hidden', !ev.has_unread || spinnerVisible);
+    if (dot) dot.classList.toggle('hidden', !ev.has_unread || activityVisible);
     return;
   }
 

@@ -521,6 +521,11 @@ class SessionRow(BaseModel):
   # delegated-work cue (a manager with only active descendants must not hide
   # ongoing work). Derived in the same projection pass as the other counts.
   running_descendant_count: int
+  # The SessionManager-owned unread-reply flag (mark_unread on a delivered
+  # reply, mark_read on opening). Independent of work_state: an idle task can
+  # carry an unread reply, and a running one hides the dot without discarding
+  # the flag.
+  has_unread: bool
 
 
 class RunRow(RunRecord):

@@ -173,6 +173,40 @@ function getSessionIndicatorState(status) {
 }
 
 // ---------------------------------------------------------------------------
+// Unread facts — one application seam with response-ordering protection
+// ---------------------------------------------------------------------------
+// sessionUnread holds the client's unread truth per session. Server facts land
+// through three channels — unread_changed broadcasts, the scoped status poll,
+// and the task tree's row fetches — and a reply can carry a snapshot older
+// than a fact this client already applied (a poll issued before the flip, a
+// tree page read from a pre-flip projection). Every applied fact is stamped
+// with a per-session sequence; a reply captured before the newest stamp is
+// refused, so a stale reply can neither erase a newer unread nor resurrect a
+// cleared one. Broadcasts are ordered by the socket and always apply.
+let unreadFactSeq = 0;
+const unreadFactSeqBySession = {};
+
+function recordUnreadFact(sessionId, hasUnread) {
+  sessionUnread[sessionId] = !!hasUnread;
+  unreadFactSeqBySession[sessionId] = ++unreadFactSeq;
+}
+
+function unreadSeqAtRequest() {
+  return unreadFactSeq;
+}
+
+function unreadReplyIsCurrent(sessionId, requestSeq) {
+  return requestSeq >= (unreadFactSeqBySession[sessionId] || 0);
+}
+
+// The unread state a row renders: the map when this client knows the session
+// (a broadcast, a polled fact, or a fetched row), otherwise the row's own
+// server fact (a search hit that has not been through a level fetch yet).
+function rowUnreadState(sessionId, serverValue) {
+  return typeof sessionUnread[sessionId] === 'boolean' ? sessionUnread[sessionId] : !!serverValue;
+}
+
+// ---------------------------------------------------------------------------
 // Activity indicators — one owner, one visual language
 // ---------------------------------------------------------------------------
 // The thinking spinner and the delegated-work gear are this module's SVGs and
@@ -213,10 +247,11 @@ function buildActivitySvg(id, spec, visible) {
   return svg;
 }
 
-// The tree rows' activity pair: the same spinner and gear the legacy rows
-// render, as DOM nodes with the pinned ids. `state` is a setSessionIndicator
-// state ('thinking' shows the spinner, 'worker_only' the gear).
-function buildSessionActivityIndicators(container, sid, state) {
+// The tree rows' activity triple: the same spinner, gear and unread dot the
+// legacy rows render, as DOM nodes with the pinned ids. `state` is a
+// setSessionIndicator state ('thinking' shows the spinner, 'worker_only' the
+// gear); `hasUnread` is the row's server unread fact.
+function buildSessionActivityIndicators(container, sid, state, hasUnread) {
   container.appendChild(buildActivitySvg('spinner-' + sid, {
     classes: 'w-4 h-4 animate-spin text-yellow-400 flex-shrink-0',
     stroked: false,
@@ -229,7 +264,23 @@ function buildSessionActivityIndicators(container, sid, state) {
     title: GEAR_TITLE,
     content: gearSvgContent,
   }, state === 'worker_only'));
+  container.appendChild(buildUnreadDot(sid, !!hasUnread, !!hasUnread && state === 'idle'));
   return container;
+}
+
+// The unread dot: the legacy rows' familiar yellow pulse, pinned to the
+// unread-<id> element id the row re-render path and the unread_changed
+// handler both address. Hidden while any activity cue shows (the dot is an
+// idle-state cue; activity hides it without discarding the flag).
+const UNREAD_TITLE = 'Unread reply';
+
+function buildUnreadDot(sid, hasUnread, visible) {
+  const dot = document.createElement('span');
+  dot.id = 'unread-' + sid;
+  dot.setAttribute('data-has-unread', hasUnread ? '1' : '0');
+  dot.title = UNREAD_TITLE;
+  dot.className = 'w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0' + (visible ? '' : ' hidden');
+  return dot;
 }
 
 // Thinking spinner, worker gear, unread dot: one session row's header indicators.
@@ -238,7 +289,7 @@ function renderSessionIndicators(session) {
   const indicatorState = getSessionIndicatorState(session);
   return `<svg id="spinner-${session.id}" title="${escapeHtmlAttr(SPINNER_TITLE)}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24">${SPINNER_SVG_INNER}</svg>
     <svg id="worker-indicator-${session.id}" title="${escapeHtmlAttr(GEAR_TITLE)}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">${gearSvgContent()}</svg>
-    <span id="unread-${session.id}" data-has-unread="${session.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${session.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>`;
+    <span id="unread-${session.id}" data-has-unread="${session.has_unread ? 1 : 0}" title="${escapeHtmlAttr(UNREAD_TITLE)}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${session.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>`;
 }
 
 function pendingTriggerTitle(count) {
@@ -379,8 +430,10 @@ let statusPollInflight = false;
 let statusPollPromise = Promise.resolve(false);
 let statusPollQueued = false;
 
-function applySessionStatus(sid, status) {
-  sessionUnread[sid] = status.has_unread;
+function applySessionStatus(sid, status, requestSeq) {
+  // A reply captured before a newer applied fact may not overwrite it: the
+  // poll's snapshot can predate an unread_changed broadcast already rendered.
+  if (unreadReplyIsCurrent(sid, requestSeq)) recordUnreadFact(sid, status.has_unread);
   globalThis.setSessionIndicator(sid, getSessionIndicatorState(status));
   globalThis.setSessionPendingTriggerIndicator(sid, status);
   globalThis.setSessionPendingPlanApprovalIndicator(sid, status);
@@ -401,12 +454,13 @@ function refreshSessionStatusNow(opts) {
 function pollSessionStatus() {
   if (statusPollInflight) return statusPollPromise;
   statusPollInflight = true;
+  const requestSeq = unreadSeqAtRequest();
   statusPollPromise = fetchScopedStatus('/api/sessions/status', sidebarSessionIds())
     .then(data => {
       if (!data) return false;
       let anyRunning = false;
       for (const [sid, st] of Object.entries(data)) {
-        applySessionStatus(sid, st);
+        applySessionStatus(sid, st, requestSeq);
         if (st.has_running_tasks) anyRunning = true;
       }
       return anyRunning;
@@ -505,6 +559,10 @@ const API = {
   getSessionIndicatorState,
   renderSessionIndicators,
   buildSessionActivityIndicators,
+  recordUnreadFact,
+  unreadSeqAtRequest,
+  unreadReplyIsCurrent,
+  rowUnreadState,
   setTreeIndicatorStateProvider,
   renderPendingTriggerIndicator,
   renderPendingPlanApprovalIndicator,

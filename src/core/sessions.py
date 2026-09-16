@@ -8,6 +8,7 @@ import shutil
 import stat
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO, NamedTuple
@@ -742,6 +743,12 @@ class SessionManager:
     # update_thinking_state), which both load meta, mutate disjoint fields, and
     # save back — without a lock the second save overwrites the first's change.
     self._metadata_locks: dict[str, asyncio.Lock] = {}
+    # The task-tree owner registers its projection invalidator here at wiring
+    # time (TaskTreeManager.__init__). SessionManager-level writes that move a
+    # tree-projection input must drop the tree's rebuildable index — the same
+    # policy the task owner applies to its own metadata writes; None only
+    # before that wiring exists (no tree consumer constructed in this process).
+    self.tree_index_invalidator: Callable[[], None] | None = None
     # Listing-preamble memo: ((mtime_ns, size) of the sessions root, its subdirectory names).
     # The root's own mtime moves exactly when a session entry is created or removed (metadata
     # writes land one level below), so an unchanged signature proves the name set current.
@@ -1588,6 +1595,11 @@ class SessionManager:
         return meta
       meta.has_unread = has_unread
       await self.save_metadata(meta)
+      # The unread flag is a tree-row projection input (SessionRow.has_unread):
+      # drop the rebuildable index so a tree page read after this flip is built
+      # from the fresh flag, not from a pre-flip index snapshot.
+      if self.tree_index_invalidator is not None:
+        self.tree_index_invalidator()
     await self._broadcast_sidebar(session_id, ET.UNREAD_CHANGED, has_unread=has_unread)
     return meta
 

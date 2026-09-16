@@ -15,7 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // and SPA switches share the same renderer without a duplicate /view fetch.
   if (SESSION_ID && SESSION_BOOTSTRAP) {
     renderSessionView(SESSION_BOOTSTRAP);
-    sessionUnread[SESSION_ID] = false;
+    recordUnreadFact(SESSION_ID, false);
     const unreadDot = document.getElementById('unread-' + SESSION_ID);
     if (unreadDot) unreadDot.classList.add('hidden');
   }

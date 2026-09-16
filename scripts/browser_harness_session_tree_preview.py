@@ -3,10 +3,13 @@
 Starts ``charliebot session-tree preview`` as its own foreground process on a
 disposable home (the actual CLI, never a lifespan-off in-process server), then
 drives a real headless Chrome with an isolated browser profile through the
-first-login/empty state, the ordinary create flow (root/child/worker), goal and
-rule editing, node switching with draft preservation, the real GLM manager turn
-from a sent message, Context and run history, the completion/refusal/reopen and
-move/pause controls, a reload, and a narrow viewport. Every refusal is a
+first-login/empty state, the one-click New Task flow (real control click from
+the welcome screen and from a non-Chat tab: no creation form, Chat with a
+focused composer, drafts kept, one node per pending action), explicit
+child/worker creation through the existing modal, goal and rule editing, node
+switching with draft preservation, the real GLM manager turn from the first
+message, Context and run history, the completion/refusal/reopen and move/pause
+controls, a reload with selection, and a narrow viewport. Every refusal is a
 recorded failure; no scenario is scripted to pass.
 
 Evidence: per-scenario screenshots and session_tree_preview_browser_results.json
@@ -329,28 +332,66 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     cdp.console_errors = []
     await evaluate(cdp, sid, "window.__errs = [];")
 
-    # --- S2: create the root manager through the ordinary create flow ------
-    await evaluate(cdp, sid, "createSessionOrTask()")
-    await wait_for(cdp, sid, "!!document.getElementById('task-child-modal')", timeout=10,
-                   label="root create modal")
-    root_profile = await evaluate(cdp, sid, "document.getElementById('task-child-profile').value")
-    await evaluate(cdp, sid,
-                   "document.getElementById('task-child-name').value = 'Trial program';"
-                   "document.getElementById('task-child-goal').value = "
-                   "'Try the session tree end to end';")
-    shot = await screenshot(cdp, sid, results, "s02a-root-create-modal")
-    await click_button_by_text(cdp, sid, "Create subtask", "#task-child-modal")
-    await wait_for(cdp, sid, "typeof SESSION_ID !== 'undefined' && SESSION_ID", timeout=15,
-                   label="root task selected")
+    # --- S2: the user-facing New Task control creates the root in one click ---
+    # A real click of the welcome screen's New Task button (never a direct
+    # helper call): no creation form may appear, Chat must open with the
+    # composer holding the cursor, and the first typed message must be admitted
+    # through the normal durable input path. The sidebar's control takes the
+    # same path (S5b/S5c click it from an existing session).
+    await click_button_by_text(cdp, sid, "New Task", "main")
+    await wait_for(cdp, sid, "typeof SESSION_ID !== 'undefined' && SESSION_ID", timeout=20,
+                   label="new root task selected")
     root_id = await evaluate(cdp, sid, "SESSION_ID")
+    await wait_for(cdp, sid,
+                   "(() => { const m = document.getElementById('task-child-modal');"
+                   " const f = ['task-child-name', 'task-child-goal', 'task-child-profile',"
+                   " 'task-child-backend'].map((id) => document.getElementById(id));"
+                   " return !m && f.every((x) => !x); })()",
+                   timeout=8, label="no creation form fields")
+    chat_open = await evaluate(cdp, sid, "!document.getElementById('tab-chat').classList.contains('hidden')")
+    composer_ready = await evaluate(
+        cdp, sid,
+        "document.activeElement === document.getElementById('msg-input')"
+        " && document.getElementById('msg-input').value === ''")
     await wait_for(cdp, sid,
                    f"!!document.getElementById('tree-node-{root_id}')", timeout=15,
                    label="root row in tree")
     panel_open = await evaluate(cdp, sid,
                                 "!document.getElementById('btn-task').classList.contains('hidden')")
-    results.record("s02-create-root-manager", bool(root_id) and root_profile == "manager" and panel_open,
-                   f"root={root_id[:8]} profile={root_profile} task-panel-open={panel_open}",
-                   await screenshot(cdp, sid, results, "s02b-root-created"))
+    create_posts = [m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")]
+    create_body = json.loads(create_posts[-1]["body"]) if create_posts else {}
+    create_ok = (create_body.get("profile") == "manager" and create_body.get("task_parent_id") is None
+                 and (create_body.get("task") or {}).get("goal") == "" and bool(create_body.get("request_id")))
+    results.record("s02-one-click-root-create",
+                   bool(root_id and chat_open and composer_ready and panel_open and create_ok),
+                   f"root={root_id[:8]} chat={chat_open} composer-ready={composer_ready} "
+                   f"task-panel-open={panel_open} create-body-ok={create_ok} "
+                   f"create-posts={len(create_posts)}",
+                   await screenshot(cdp, sid, results, "s02-one-click-root-chat"))
+    # A welcome-screen create lands through a full page load; re-mark the
+    # authenticated flow as the no-console-error baseline from here.
+    cdp.console_errors = []
+    await evaluate(cdp, sid, "window.__errs = [];")
+
+    # --- S2b: the first message on the empty-goal root (durable admission) ---
+    first_message = "Take off. Reply with exactly: TRIAL-OK, then stop. Do not create subtasks."
+    await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10, label="composer")
+    await evaluate(cdp, sid,
+                   "const inp = document.getElementById('msg-input');"
+                   f"inp.value = {json.dumps(first_message)};"
+                   "inp.dispatchEvent(new Event('input'));")
+    await click(cdp, sid, "#send-btn")
+    await wait_for(cdp, sid,
+                   f"document.getElementById('tab-chat').textContent.includes({json.dumps(first_message)})",
+                   timeout=15, label="first message rendered")
+    status, page = api_request(base, access_key, "GET",
+                               f"/api/sessions/{root_id}/events?before=999999&limit=40")
+    admitted = status == 200 and any(
+        m.get("role") == "user" and first_message in str(m.get("content", ""))
+        for m in (page.get("messages") or [])) if isinstance(page, dict) else False
+    results.record("s02b-first-message-admitted-empty-goal", bool(admitted),
+                   f"events-page={status} user-message-admitted={admitted}",
+                   await screenshot(cdp, sid, results, "s02b-first-message"))
 
     # --- S3: child manager under the root ----------------------------------
     await open_task_tab(cdp, sid, "task")
@@ -407,6 +448,7 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     results.record("s05-edit-goal", True, "goal edited and persisted through the Task tab",
                    await screenshot(cdp, sid, results, "s05-goal-edited"))
 
+
     # --- S6: node switching preserves the unsaved draft --------------------
     await evaluate(cdp, sid,
                    "document.getElementById('task-goal-input').value = 'unsaved draft text';"
@@ -433,6 +475,84 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     results.record("s06-draft-preservation", ok,
                    f"draft after switching away and back: {draft_back!r}",
                    await screenshot(cdp, sid, results, "s06-draft-preserved"))
+
+    # --- S5b: New Task from a non-Chat tab keeps the drafts and opens Chat ---
+    # The Task tab is displaying; the operator has an unsaved message draft and
+    # an unsaved task-edit draft on this node. One click of the user-facing
+    # control creates a root, lands in Chat with the cursor ready, and both
+    # drafts survive the switch.
+    posts_before = len([m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")])
+    await evaluate(cdp, sid,
+                   "const inp = document.getElementById('msg-input');"
+                   "inp.value = 'worker message draft';"
+                   "inp.dispatchEvent(new Event('input'));"
+                   "const goal = document.getElementById('task-goal-input');"
+                   "goal.value = 'unsaved before create';"
+                   "goal.dispatchEvent(new Event('input'));")
+    await asyncio.sleep(0.7)  # the editor's draft persistence window
+    await click_button_by_text(cdp, sid, "New Task", "#sidebar")
+    await wait_for(cdp, sid,
+                   "typeof SESSION_ID !== 'undefined' && SESSION_ID !== "
+                   + json.dumps(worker_id),
+                   timeout=20, label="new root selected from a non-Chat tab")
+    fresh_root_id = await evaluate(cdp, sid, "SESSION_ID")
+    fresh_posts = [m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")]
+    create_delta = len(fresh_posts) - posts_before
+    chat_open = await evaluate(cdp, sid, "!document.getElementById('tab-chat').classList.contains('hidden')")
+    composer_ready = await evaluate(
+        cdp, sid,
+        "document.activeElement === document.getElementById('msg-input')"
+        " && document.getElementById('msg-input').value === ''")
+    await wait_for(cdp, sid, f"!!document.getElementById('tree-node-{fresh_root_id}')", timeout=15,
+                   label="new root row in tree")
+    # Both drafts come back with the worker.
+    await evaluate(cdp, sid, f"switchSession({json.dumps(worker_id)})")
+    await wait_for(cdp, sid,
+                   "SESSION_ID === " + json.dumps(worker_id)
+                   + " && !!document.getElementById('task-goal-input')", timeout=15,
+                   label="worker selected again")
+    await open_task_tab(cdp, sid, "task")
+    await wait_for(cdp, sid, "!!document.getElementById('task-goal-input')", timeout=10,
+                   label="worker task editor")
+    goal_draft_back = await evaluate(cdp, sid, "document.getElementById('task-goal-input').value")
+    composer_back = await evaluate(cdp, sid, "document.getElementById('msg-input').value")
+    await evaluate(cdp, sid,
+                   "document.getElementById('task-goal-input').value = 'Execute a small trial step (edited)';"
+                   "document.getElementById('task-goal-input').dispatchEvent(new Event('input'));")
+    results.record("s05b-new-task-from-non-chat-tab",
+                   bool(fresh_root_id and create_delta == 1 and chat_open and composer_ready
+                        and goal_draft_back == "unsaved before create"
+                        and composer_back == "worker message draft"),
+                   f"root={fresh_root_id[:8]} create-posts={create_delta} chat={chat_open} "
+                   f"composer-ready={composer_ready} goal-draft={goal_draft_back!r} "
+                   f"composer-draft={composer_back!r}",
+                   await screenshot(cdp, sid, results, "s05b-new-task-from-task-tab"))
+
+    # --- S5c: one pending create action absorbs rapid clicks -----------------
+    # Two synchronous clicks of the real control in one JS tick: the second
+    # lands while the first create-and-open is in flight.
+    posts_before = len([m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")])
+    await evaluate(cdp, sid,
+                   "(() => { const btn = [...document.querySelectorAll('#sidebar button')]"
+                   ".find(b => b.textContent.trim() === 'New Task');"
+                   " if (!btn) throw new Error('missing New Task button'); btn.click(); btn.click(); })()")
+    await wait_for(cdp, sid,
+                   "typeof SESSION_ID !== 'undefined' && SESSION_ID !== "
+                   + json.dumps(worker_id),
+                   timeout=20, label="one new task from the double click")
+    rapid_root_id = await evaluate(cdp, sid, "SESSION_ID")
+    rapid_posts = [m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")]
+    rapid_delta = len(rapid_posts) - posts_before
+    rapid_ready = await evaluate(
+        cdp, sid,
+        "document.activeElement === document.getElementById('msg-input')")
+    await wait_for(cdp, sid, f"!!document.getElementById('tree-node-{rapid_root_id}')", timeout=15,
+                   label="rapid root row in tree")
+    results.record("s05c-rapid-clicks-one-create",
+                   bool(rapid_root_id and rapid_delta == 1 and rapid_ready
+                        and rapid_root_id != fresh_root_id),
+                   f"root={rapid_root_id[:8]} create-posts={rapid_delta} composer-ready={rapid_ready}",
+                   await screenshot(cdp, sid, results, "s05c-rapid-clicks"))
 
     # --- S7: local + subtree rules in the Context tab ----------------------
     await open_task_tab(cdp, sid, "task-context")
@@ -477,20 +597,12 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                    f"local rule on worker, subtree rule on child (scope radio={has_scope_radio})",
                    await screenshot(cdp, sid, results, "s07-rules"))
 
-    # --- S8: send a real message to the root manager (real GLM turn) -------
+    # --- S8: the real GLM manager turn from the first message --------------
+    # S2b's first message already rode the normal durable input path on the
+    # empty-goal root; the dispatched manager_turn Run is this scenario's
+    # real-CLC evidence (one real turn, no second send).
     await evaluate(cdp, sid, f"switchSession({json.dumps(root_id)})")
     await wait_for(cdp, sid, "SESSION_ID === " + json.dumps(root_id), timeout=15, label="root selected")
-    await evaluate(cdp, sid, "switchTab('chat')")
-    await wait_for(cdp, sid, "!document.getElementById('tab-chat').classList.contains('hidden')",
-                   timeout=10, label="chat tab")
-    await evaluate(cdp, sid,
-                   "const inp = document.getElementById('msg-input');"
-                   "inp.value = 'Take off. Reply with exactly: TRIAL-OK, then stop. Do not create subtasks.';"
-                   "inp.dispatchEvent(new Event('input'));")
-    await click(cdp, sid, "#send-btn")
-    await wait_for(cdp, sid,
-                   "document.getElementById('tab-chat').textContent.includes('Take off. Reply with exactly')",
-                   timeout=15, label="user message rendered")
     log("  waiting for the real GLM manager turn (bounded)")
     run_wait_deadline = time.monotonic() + 180
     run = None
@@ -589,8 +701,8 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                    f"complete/reopen applied; move chooser loaded={chooser_ok}; pause applied={pause_btn}",
                    await screenshot(cdp, sid, results, "s10b-controls"))
 
-    # --- S11: reload preserves the trial state -----------------------------
-    await cdp.send("Page.navigate", {"url": base}, session_id=sid)
+    # --- S11: reload preserves the trial state and the selected node --------
+    await cdp.send("Page.navigate", {"url": f"{base}/?session={root_id}"}, session_id=sid)
     await wait_for(cdp, sid, "!!document.getElementById('preview-indicator')", timeout=20,
                    label="reloaded main page")
     await wait_for(cdp, sid,
@@ -601,8 +713,13 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         f"[{json.dumps(root_id)}, {json.dumps(child_id)}, {json.dumps(worker_id)}]"
         ".every(id => { const el = document.getElementById('tree-node-' + id);"
         " if (el) return true; return false; })")
-    results.record("s11-reload-persistence", bool(still_there),
-                   "root/child/worker rows survive a reload (cookie login intact)",
+    reloaded_session = await evaluate(cdp, sid, "SESSION_ID")
+    selected = await evaluate(
+        cdp, sid,
+        f"(() => {{ const row = document.getElementById('tree-node-{root_id}');"
+        " return !!row && row.firstElementChild.classList.contains('bg-blue-600/20'); })()")
+    results.record("s11-reload-persistence", bool(still_there and reloaded_session == root_id and selected),
+                   f"rows survive a reload (cookie login intact); selected-after-reload={selected}",
                    await screenshot(cdp, sid, results, "s11-after-reload"))
 
     # --- S12: narrow viewport ----------------------------------------------

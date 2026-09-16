@@ -16,6 +16,7 @@ function baseSessionContext(overrides = {}) {
   const elements = overrides.elements || new Map();
   const localStorageData = new Map(Object.entries(overrides.localStorageItems || {}));
 
+  const sessionStorageData = new Map();
   const context = {
     SESSION_ID: 'session-a',
     // The server-embedded initial render payload (index.html); the sidebar's
@@ -37,6 +38,11 @@ function baseSessionContext(overrides = {}) {
       getItem: (key) => localStorageData.has(key) ? localStorageData.get(key) : null,
       setItem: (key, value) => { localStorageData.set(key, String(value)); },
       removeItem: (key) => { localStorageData.delete(key); },
+    },
+    sessionStorage: {
+      getItem: (key) => sessionStorageData.has(key) ? sessionStorageData.get(key) : null,
+      setItem: (key, value) => { sessionStorageData.set(key, String(value)); },
+      removeItem: (key) => { sessionStorageData.delete(key); },
     },
     location: {href: '', protocol: 'http:', host: 'localhost:8000', search: ''},
     history: {pushState: () => {}},
@@ -93,7 +99,7 @@ function baseSessionContext(overrides = {}) {
   context.window = {addEventListener: () => {}, innerHeight: 800};
   context.CSS = {escape: (value) => String(value)};
 
-  return {context, elements, localStorageData};
+  return {context, elements, localStorageData, sessionStorageData};
 }
 
 // page-timers before the chat and sidebar modules, matching the script order

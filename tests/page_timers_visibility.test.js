@@ -274,6 +274,7 @@ function buildAppContext() {
     pollSessionStatus: async () => { calls.push('pollSessionStatus'); return false; },
     platform: {onChange() {}},
     localStorage: {getItem: () => null, setItem() {}},
+    sessionStorage: {getItem: () => null, setItem() {}, removeItem() {}},
   };
   context.window = {addEventListener() {}};
   vm.createContext(context);

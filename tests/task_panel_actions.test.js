@@ -855,3 +855,81 @@ test('a queued stale evidence page issues no cross-session read or render after 
   assert.equal(runsAfter, runsBefore, 'the queued stale page issued no read after the switch');
   assert.ok(!context.__doc.getElementById('task-complete-modal'), 'the old dialog stays dismissed');
 });
+
+// ---------------------------------------------------------------------------
+// The primary New Task action's direct root create (no form)
+// ---------------------------------------------------------------------------
+
+test('createRootTask posts the direct root create: empty task, default name and backend', async () => {
+  const {context} = build();
+  let created = 0;
+  context.fetchHandlers.push((url, opts) => {
+    if (url === '/api/sessions/' && opts.method === 'POST') {
+      created++;
+      return jsonResponse({id: 'root-' + created, name: 'New manager task', profile: 'manager'});
+    }
+    return undefined;
+  });
+  const first = await context.TaskPanel.createRootTask();
+  const second = await context.TaskPanel.createRootTask();
+  const posts = context.fetchCalls.filter((c) => c.url === '/api/sessions/' && c.opts.method === 'POST');
+  assert.equal(posts.length, 2);
+  const b1 = JSON.parse(posts[0].opts.body);
+  const b2 = JSON.parse(posts[1].opts.body);
+  assert.equal(b1.task_parent_id, null, 'the primary action creates one root manager');
+  assert.equal(b1.profile, 'manager');
+  assert.deepEqual(b1.task, {goal: '', acceptance: [], context_refs: []}, 'empty task instructions');
+  assert.equal(b1.name, undefined, 'no name override: the server default title applies');
+  assert.equal(b1.backend, undefined, 'no backend override: the server default resolution applies');
+  assert.ok(b1.request_id, 'the create carries a request id');
+  assert.notEqual(b2.request_id, b1.request_id, 'a completed create never leaks its id into the next action');
+  assert.equal(first.id, 'root-1');
+  assert.equal(second.id, 'root-2');
+});
+
+test('rapid create calls share one request id while the first is in flight', async () => {
+  const {context} = build();
+  const resolvers = [];
+  context.fetchHandlers.push((url, opts) => {
+    if (url === '/api/sessions/' && opts.method === 'POST') {
+      return new Promise((resolve) => resolvers.push(() => resolve(jsonResponse({id: 'root-shared', profile: 'manager'}))));
+    }
+    return undefined;
+  });
+  const first = context.TaskPanel.createRootTask();
+  const second = context.TaskPanel.createRootTask(); // fires before the first resolves
+  await flush(2);
+  const posts = context.fetchCalls.filter((c) => c.url === '/api/sessions/' && c.opts.method === 'POST');
+  assert.equal(posts.length, 2);
+  const b1 = JSON.parse(posts[0].opts.body);
+  const b2 = JSON.parse(posts[1].opts.body);
+  assert.equal(b2.request_id, b1.request_id,
+    'the pending action keeps one request id: the server binds (parent, request_id) to one node');
+  for (const resolve of resolvers) resolve();
+  const [r1, r2] = await Promise.all([first, second]);
+  assert.equal(r1.id, 'root-shared');
+  assert.equal(r2.id, 'root-shared', 'the replay returns the original product');
+});
+
+test('a failed create keeps the request id and surfaces the server detail; the retry replays it', async () => {
+  const {context} = build();
+  let attempts = 0;
+  context.fetchHandlers.push((url, opts) => {
+    if (url === '/api/sessions/' && opts.method === 'POST') {
+      attempts++;
+      if (attempts === 1) {
+        return {ok: false, status: 409, json: async () => ({detail: {message: 'task tree changed', blockers: ['b1']}})};
+      }
+      return jsonResponse({id: 'root-retry', profile: 'manager'});
+    }
+    return undefined;
+  });
+  await assert.rejects(() => context.TaskPanel.createRootTask(), /task tree changed/);
+  const meta = await context.TaskPanel.createRootTask();
+  const posts = context.fetchCalls.filter((c) => c.url === '/api/sessions/' && c.opts.method === 'POST');
+  assert.equal(posts.length, 2);
+  const b1 = JSON.parse(posts[0].opts.body);
+  const b2 = JSON.parse(posts[1].opts.body);
+  assert.equal(b2.request_id, b1.request_id, 'the retry replays the failed attempt\u2019s request id');
+  assert.equal(meta.id, 'root-retry');
+});

@@ -295,6 +295,40 @@ async def _async_noop(*args, **kwargs) -> None:
 
 
 @pytest.mark.asyncio
+async def test_first_message_on_empty_goal_task_dispatches_a_manager_turn(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The one-click New Task product (empty goal, no acceptance, no refs) takes
+    the user's first message through the normal durable input path: the message
+    is admitted, one manager_turn Run claims exactly that batch, and the turn
+    executes — no Goal-required obstacle anywhere in the dispatch."""
+    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+    manager = await create_task(
+        tree, parent=None, request_id="one-click-root", profile="manager",
+        task=TaskSpec(goal="", acceptance=[], context_refs=[]), name=None)
+    assert manager.task is not None and manager.task.goal == ""
+    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+    backend = SpawningScriptedBackend([result_event("SMOKE reply")])
+    install_backends(monkeypatch, [backend], "src.agents.backends.registry.build_backend")
+    patch_instructions_content(monkeypatch)
+
+    admitted = await tree.dispatch.admit_input(
+        manager.id, event_type=ET.USER, content="First message on a brand-new task.",
+        actor="user")
+    decision = await tree.dispatch.dispatch_pending(manager.id)
+    assert decision["launch"] is True
+    run_id = decision["run_id"]
+
+    run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
+    assert outcome == "success"
+    assert run.kind == "manager_turn"
+    assert run.input_event_ids == [str(admitted["id"])]
+    assert tree.dispatch.pending_inputs(manager.id) == []
+    events = tree.events.load_events(manager.id)
+    user_events = [e for e in events if e["type"] == ET.USER]
+    assert [e["content"] for e in user_events] == ["First message on a brand-new task."]
+
+
+@pytest.mark.asyncio
 async def test_concurrent_dispatch_starts_one_process(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)

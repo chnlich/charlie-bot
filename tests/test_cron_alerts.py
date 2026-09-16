@@ -112,6 +112,8 @@ def test_alert_fires_through_loader_refresh(
       temp_home, "memory-curator",
       _dump(
           {
+              "type":
+                  "normal",
               "cron":
                   "27 6 * * *",
               "steps":

@@ -116,13 +116,13 @@ class ImprovementLoopConfig(BaseModel):
   extra_rules: list[str] = []  # module-specific rules appended to prompt
 
 
-# Single home of the mode:'master' project invariant: the cron create route
+# Single home of the type: pm project invariant: the cron create route
 # reports the violation as a 400 while the model validator raises it, so the
 # condition and message must not be restated per layer.
-def master_task_project_error(mode: str | None, project: str | None) -> str | None:
-  """Return the error text when a mode: master task lacks a project, else None."""
-  if mode == 'master' and not project:
-    return "mode 'master' requires 'project' (the group the PM session is bound to)"
+def pm_task_project_error(task_type: str | None, project: str | None) -> str | None:
+  """Return the error text when a type: pm task lacks a project, else None."""
+  if task_type == 'pm' and not project:
+    return "type 'pm' requires 'project' (the group the PM session is bound to)"
   return None
 
 
@@ -155,6 +155,12 @@ class ScheduledTaskFields(BaseModel):
 
   name: str
   cron: str
+  # Execution type, required on every task: 'pm' wakes the project manager's
+  # dedicated session with the task's prompt plus an appended Group line
+  # (requires 'project' and a prompt source); 'normal' runs one worker /
+  # handler / loop / steps fire. A missing or unknown value fails the file's
+  # load loudly instead of silently defaulting.
+  type: Literal['pm', 'normal']
   # Pre-resolution path string a host cron.d file declared. It is an in-process
   # field for transport to the API and UI only; no write path persists it.
   prompt_file: str | None = None
@@ -163,12 +169,6 @@ class ScheduledTaskFields(BaseModel):
   timezone: str = DEFAULT_TIMEZONE
   enabled: bool = True
   project: str | None = None
-  # Fire mode: absent or 'worker' spawns a worker per fire (existing behavior);
-  # 'master' wakes the dedicated session's master with the task's prompt: the
-  # pointed file owns the body, the host cron file carries only its path, and
-  # the loader reads the file on every load. An appended Group line follows the
-  # prompt.
-  mode: Literal['worker', 'master'] | None = None
   allow_failure: bool = False
 
 
@@ -192,10 +192,19 @@ class ScheduledTaskConfig(ScheduledTaskFields):
   notify: str | None = None  # 'telegram' or None
 
   @model_validator(mode='after')
-  def check_prompt_or_handler_or_loop(self) -> 'ScheduledTaskConfig':
-    sources = sum([bool(self.prompt), bool(self.steps), bool(self.handler), bool(self.loop)])
-    if sources != 1:
-      raise ValueError("task must have exactly one of 'prompt', 'prompt_file', 'steps', 'handler', or 'loop'")
+  def check_type_and_sources(self) -> 'ScheduledTaskConfig':
+    if self.type == 'pm':
+      if self.steps is not None or self.handler or self.loop:
+        raise ValueError("type 'pm' forbids 'steps', 'handler', and 'loop'; the PM wake is a prompt")
+      # A prompt_file-style entry is resolved into prompt before model
+      # validation, so an empty prompt here means the PM would wake up with no
+      # message at all.
+      if not self.prompt:
+        raise ValueError("type 'pm' requires a prompt source ('prompt' or 'prompt_file')")
+    else:
+      sources = sum([bool(self.prompt), bool(self.steps), bool(self.handler), bool(self.loop)])
+      if sources != 1:
+        raise ValueError("task must have exactly one of 'prompt', 'prompt_file', 'steps', 'handler', or 'loop'")
     if self.steps is not None and not self.steps:
       raise ValueError("steps must be a non-empty list")
     if self.steps:
@@ -208,17 +217,9 @@ class ScheduledTaskConfig(ScheduledTaskFields):
           raise ValueError(
               f"step '{step.name}' has no prompt body; the loader resolves each step's "
               "'prompt_file' before validation")
-    # A prompt_file-style entry is resolved into prompt before model
-    # validation, so an empty prompt here means master woke up with no message
-    # at all — including the master+handler and master+loop combinations the
-    # exactly-one rule allows.
-    if self.mode == 'master' and self.steps:
-      raise ValueError("mode 'master' requires a prompt source ('prompt' or 'prompt_file'), not 'steps'")
-    if self.mode == 'master' and not self.prompt:
-      raise ValueError("mode 'master' requires a prompt source ('prompt' or 'prompt_file')")
     if self.notify and self.notify != 'telegram':
       raise ValueError(f"notify must be 'telegram' or None, got '{self.notify}'")
-    if project_error := master_task_project_error(self.mode, self.project):
+    if project_error := pm_task_project_error(self.type, self.project):
       raise ValueError(project_error)
     return self
 

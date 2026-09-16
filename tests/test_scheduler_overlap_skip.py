@@ -90,7 +90,7 @@ def _install_clock(monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> None:
 
 
 def _task(name: str = "code-health", cron: str = "* * * * *", **kw: Any) -> ScheduledTaskConfig:
-  base: dict = {"name": name, "cron": cron, "timezone": "UTC", "prompt": "run the round"}
+  base: dict = {"name": name, "cron": cron, "timezone": "UTC", "type": "normal", "prompt": "run the round"}
   base.update(kw)
   return ScheduledTaskConfig(**base)
 
@@ -353,12 +353,12 @@ async def test_manual_run_is_outside_and_leaves_handle_unchanged(
 
 
 # ---------------------------------------------------------------------------
-# 6. Master mode is skipped by the same rule, not queued for a second wake
+# 6. A PM fire is skipped by the same rule, not queued for a second wake
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_master_mode_skips_rather_than_queuing_a_second_wake(
+async def test_pm_fire_skips_rather_than_queuing_a_second_wake(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -376,7 +376,7 @@ async def test_master_mode_skips_rather_than_queuing_a_second_wake(
   session.last_scheduled_run = clock.now().isoformat()  # 00:00
   monkeypatch.setattr(scheduler, "_get_or_create_session", AsyncMock(return_value=session))
   session_mgr = AsyncMock()
-  task_cfg = _task("pm", mode="master", project="bp-eval", prompt="plan the day")
+  task_cfg = _task("pm", type="pm", project="bp-eval", prompt="plan the day")
 
   woken = asyncio.Event()
   wake_count = {"n": 0}

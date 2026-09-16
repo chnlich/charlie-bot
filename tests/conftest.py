@@ -1065,7 +1065,7 @@ SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.core.slack_listener._bot_client"
 # Import-path patch target for the background-task spawner a scheduled task fires through.
 # src/core/scheduler.py binds the name at import scope (`from src.core.tasks import
 # create_logged_task`), so monkeypatch.setattr lands the stand-in on the src.core.scheduler
-# module attribute and _execute_master_task/_spawn_scheduled_worker read it at call time; the
+# module attribute and _execute_pm_task/_spawn_scheduled_worker read it at call time; the
 # src.core.slack_listener route above reaches a different namespace.
 SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.scheduler.create_logged_task"
 
@@ -1074,7 +1074,7 @@ SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.scheduler.create_logged_ta
 # src.core.master_trigger import trigger_master`, `from src.core.spawner import
 # resolve_requested_subagent_backend_model, spawn_worker`, `from src.core.threads import
 # ThreadManager`), so monkeypatch.setattr lands the stand-in on the src.core.scheduler module
-# attribute and _reload_config, _execute_master_task, and _spawn_scheduled_worker read it at
+# attribute and _reload_config, _execute_pm_task, and _spawn_scheduled_worker read it at
 # call time; sibling modules binding the same functions keep their own routes.
 SCHEDULER_GET_CONFIG_PATCH_TARGET = "src.core.scheduler.get_config"
 SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = ("src.core.scheduler.resolve_requested_subagent_backend_model")

@@ -63,7 +63,7 @@ async def test_scheduled_prompt_task_hands_injected_session_manager_to_worker(
       backend=OPUS_BACKEND_ID,
   )
   scheduler = Scheduler(cfg, session_mgr)
-  task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt")
+  task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", type="normal", prompt="nightly prompt")
 
   captured: dict[str, Any] = {}
 
@@ -104,7 +104,7 @@ async def test_scheduled_round_events_reach_shared_read_cache(
   scheduler = Scheduler(cfg, session_mgr)
   monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setitem(TASK_HANDLERS, "probe", AsyncMock(return_value="done"))
-  task_cfg = ScheduledTaskConfig(name="probe", cron="* * * * *", handler="probe")
+  task_cfg = ScheduledTaskConfig(name="probe", cron="* * * * *", type="normal", handler="probe")
 
   await scheduler._execute_task(task_cfg)
 
@@ -118,7 +118,7 @@ async def test_scheduled_round_events_reach_shared_read_cache(
 
 
 @pytest.mark.asyncio
-async def test_cron_master_wake_leaves_an_archived_session_archived(
+async def test_cron_pm_wake_leaves_an_archived_session_archived(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -135,7 +135,8 @@ async def test_cron_master_wake_leaves_an_archived_session_archived(
   archived = await session_mgr.get_session(meta.id)
   assert archived is not None
   scheduler = Scheduler(cfg, session_mgr)
-  task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt")
+  task_cfg = ScheduledTaskConfig(
+      name="nightly", cron="* * * * *", type="pm", project="nightly-group", prompt="nightly prompt")
 
   spawned: list[asyncio.Task] = []
 
@@ -146,7 +147,7 @@ async def test_cron_master_wake_leaves_an_archived_session_archived(
   monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, make_task_spawner(spawned))
 
   with patch(MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET, new=AsyncMock()) as mock_run:
-    await scheduler._execute_master_task(task_cfg)
+    await scheduler._execute_pm_task(task_cfg)
     await asyncio.wait_for(spawned[0], timeout=5)
 
   mock_run.assert_not_awaited()

@@ -12,7 +12,18 @@ before any production cutover — existing session data is never imported.
 # First start (initial setup): the backend comes from the current profile's config
 charliebot session-tree preview --home /path/to/preview-home --port 18598 --backend <backend-id>
 
-# Restart the same instance (config and tasks are preserved; --backend optional)
+# First start with more than one explicitly selected model: --backend names the
+# default, every further entry arrives as a repeatable --add-backend
+charliebot session-tree preview --home /path/to/preview-home --port 18598 \
+    --backend <backend-id> --add-backend <second-id> --add-backend <third-id>
+
+# Add further selected entries to an existing preview home (validated from the
+# source profile first, applied under the home writer fence)
+charliebot session-tree preview --home /path/to/preview-home --port 18598 \
+    --add-backend <another-id>
+
+# Restart the same instance (config, catalog and tasks are preserved; --backend
+# optional and must match the home's stored default when given)
 charliebot session-tree preview --home /path/to/preview-home --port 18598
 ```
 
@@ -22,16 +33,26 @@ actual home, the source branch and the full source SHA — never a secret or a
 provider endpoint. The instance's browser access key lives in
 `<home>/credentials.yaml` (`charliebot.access_key`); enter it on the login page.
 
+`--add-backend` entries must all be `charlie-code` entries of the current
+profile, must not already be in the home's catalog, and must reference
+resolvable settings and credentials; every requested entry validates before
+anything is written. A restart without `--add-backend` keeps the stored
+catalog, credentials, default, tasks, native history, paths and access key
+exactly as they are. The home's configured default (its first option and the
+only `backends.preference` entry) never moves, so no Run falls over to another
+model silently; the additional entries are explicit choices only.
+
 Because the login cookie's name is shared across ports, open the trial in a
 separate browser profile or a private window — a production tab's cookie would
 otherwise collide.
 
-The selected backend must be a `charlie-code` entry of the current profile's
-`config.yaml`; the preview reads only that entry and its referenced provider
-credential, writes them into the preview home's private config, and routes
-every native session to `<home>/clc-sessions` through the CLI's own
-`--session-dir` override. Other backends refuse until their native isolation is
-proven.
+The selected backends must be `charlie-code` entries of the current profile's
+`config.yaml`; the preview reads only those entries and their referenced
+provider credentials, writes them into the preview home's private config, and
+routes every native session to `<home>/clc-sessions` through the CLI's own
+`--session-dir` override. Other backend families refuse until their native
+isolation is proven. A live fence holder (the running instance itself) refuses
+the whole launch, additions included, as one structured diagnostic.
 
 ## What the entry point guarantees
 

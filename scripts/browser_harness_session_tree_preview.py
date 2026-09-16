@@ -133,16 +133,33 @@ def api_request(base: str, key: str, method: str, path: str, body: dict | None =
 
 
 def build_source_home(source: Path, backend_id: str) -> None:
-    """The trial's private configuration source: one backend entry of the current profile."""
+    """The trial's private configuration source: one backend entry of the current profile.
+
+    The source read is scoped to the entry the trial consumes: the profile's raw
+    YAML is parsed here and only the selected entry is validated against this
+    branch's schema. A sibling entry carrying a field from a newer schema (the
+    live profile is user-owned state that moves independently of this branch)
+    must not block the trial; the entry actually copied still refuses loudly on
+    anything this branch cannot interpret, and the seeded trial home validates
+    strictly.
+    """
     import yaml
 
-    from src.core.config import load_config, load_credentials
+    from src.core.config import CharlieBotConfig, charliebot_home_dir, load_credentials
 
-    cfg = load_config()
-    option = cfg.get_backend_option(backend_id)
-    if option is None:
+    config_path = charliebot_home_dir() / "config.yaml"
+    raw_options = (yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}).get("backends", {}).get("options") or []
+    raw_entry = next((e for e in raw_options if isinstance(e, dict) and e.get("id") == backend_id), None)
+    if raw_entry is None:
+        raise SystemExit(f"backend {backend_id!r} is not configured in the current profile {config_path}")
+    try:
+        # Schema-strict validation of exactly the entry the trial copies.
+        option = CharlieBotConfig(backends={"options": [raw_entry]}).get_backend_option(backend_id)
+    except Exception as e:
         raise SystemExit(
-            f"backend {backend_id!r} is not configured in the current profile {cfg.config_file}")
+            f"backend {backend_id!r} in {config_path} is not interpretable by this branch's "
+            f"config schema: {e}") from e
+    assert option is not None
     if option.type.value != "charlie-code":
         raise SystemExit(
             f"backend {backend_id!r} has type {option.type.value!r}; the preview isolates native "

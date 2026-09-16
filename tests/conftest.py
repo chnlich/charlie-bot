@@ -69,7 +69,7 @@ from src.core.spawner import resume_worker as _real_resume_worker  # noqa: E402
 from src.core.threads import ThreadManager  # noqa: E402
 from src.core.triggers import TriggerManager  # noqa: E402
 
-import src.core.headless_render as headless_render  # noqa: E402
+from src.core import headless_render  # noqa: E402
 
 
 def backend_option(**kwargs: Any) -> models.BackendBase:
@@ -2745,7 +2745,7 @@ async def fake_spawn_worker(
 
 async def _noop() -> None:
   """Awaitable stand-in returned by fakes patched over coroutine-returning helpers."""
-  return None
+  return
 
 
 async def _ok_asgi_downstream(scope: Any, receive: Any, send: Any) -> None:

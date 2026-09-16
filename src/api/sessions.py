@@ -90,10 +90,7 @@ def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dic
   # payload offers every backend option and flags that switching rotates.
   # Same trigger condition as the write-through guard in switch_session_backend.
   rotates = bool(meta.scheduled_task and meta.role is not None)
-  if rotates:
-    switchable = [opt.id for opt in cfg.backends.options]
-  else:
-    switchable = _switchable_backend_ids(active_backend, cfg)
+  switchable = [opt.id for opt in cfg.backends.options] if rotates else _switchable_backend_ids(active_backend, cfg)
   return {
       "active_backend": active_backend,
       "active_backend_type": active_backend_opt.type if active_backend_opt else "",
@@ -119,7 +116,7 @@ def _bootstrap_tool_previews(messages: list[dict]) -> list[dict]:
       out.append(msg)
       continue
     previews = [tool_preview(tool) if isinstance(tool, dict) else tool for tool in tools]
-    if all(new is old for new, old in zip(previews, tools)):
+    if all(new is old for new, old in zip(previews, tools, strict=True)):
       out.append(msg)
       continue
     trimmed = dict(msg)

@@ -75,12 +75,14 @@ async def test_concurrent_first_persists_catch_up_once(tmp_path: Path) -> None:
     inits += 1
     return await original(self, session_id, epoch)
 
-  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
-    with patch.object(SessionManager, "_init_live_aggregator", counting_init):
-      first, second = await asyncio.gather(
-          mgr._get_or_init_aggregator(sid),
-          mgr._get_or_init_aggregator(sid),
-      )
+  with (
+      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
+      patch.object(SessionManager, "_init_live_aggregator", counting_init),
+  ):
+    first, second = await asyncio.gather(
+        mgr._get_or_init_aggregator(sid),
+        mgr._get_or_init_aggregator(sid),
+    )
 
   assert inits == 1
   assert first is second
@@ -188,9 +190,11 @@ async def test_catchup_init_reenables_gc_on_success_and_drop(tmp_path: Path) -> 
 
   states.clear()
   mgr._aggregators.pop(sid, None)
-  with patch.object(gc_control, "gc", SpyGC()):
-    with patch.object(SessionManager, "_load_aggregator_init_inputs", dropping_load):
-      rerun = await mgr._get_or_init_aggregator(sid)
+  with (
+      patch.object(gc_control, "gc", SpyGC()),
+      patch.object(SessionManager, "_load_aggregator_init_inputs", dropping_load),
+  ):
+    rerun = await mgr._get_or_init_aggregator(sid)
   assert load_count() == 2  # the dropped init plus the rerun
   assert states == ["off", "on", "off", "on"]
   assert gc.isenabled()

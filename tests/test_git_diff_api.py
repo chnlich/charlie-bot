@@ -189,17 +189,19 @@ def test_diff_files_keeps_event_loop_responsive(tmp_path: Path, monkeypatch: pyt
   monkeypatch.setattr(git_api.subprocess, "run", stall_before_call(0.25, subprocess.run))
 
   async def scenario() -> tuple[httpx.Response, list[float]]:
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-      async with loop_stall_gaps() as gaps:
-        resp = await client.get(
-            "/api/git/diff/files",
-            params={
-                "repo": str(repo),
-                "base": "main",
-                "head": "feature",
-                "mode": "three-dot"
-            },
-        )
+    async with (
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client,
+        loop_stall_gaps() as gaps,
+    ):
+      resp = await client.get(
+          "/api/git/diff/files",
+          params={
+              "repo": str(repo),
+              "base": "main",
+              "head": "feature",
+              "mode": "three-dot"
+          },
+      )
     return resp, gaps
 
   resp, gaps = asyncio.run(scenario())

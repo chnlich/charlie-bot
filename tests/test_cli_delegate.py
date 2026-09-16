@@ -417,9 +417,8 @@ def test_main_uses_error_detail_from_response(tmp_path: Path, monkeypatch: pytes
                         return_value=make_json_response(
                             {"detail": "requested backend 'missing' is not in backends.options"},
                             status_code=422)), \
-       patch(CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET, return_value=None):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+       patch(CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET, return_value=None), pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert exc_info.value.code == 1
 

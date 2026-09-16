@@ -114,6 +114,24 @@ _WALK_SKIP_ENDPOINTS = [
 ]
 
 
+def _count_walks(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+  """Install a counting wrapper over ``threads_api._row_source_stats``.
+
+  Returns the counter dict: ``walks["n"]`` is how many full source walks the
+  polled routes ran since the install.
+  """
+  walks = {"n": 0}
+  real = threads_api._row_source_stats
+
+  def counting(threads_dir: str,
+               triggers_dir: str) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]]]:
+    walks["n"] += 1
+    return real(threads_dir, triggers_dir)
+
+  monkeypatch.setattr(threads_api, "_row_source_stats", counting)
+  return walks
+
+
 @pytest.mark.parametrize(("memos", "url_pattern", "rows_key"), _WALK_SKIP_ENDPOINTS)
 def test_rows_skip_the_walk_until_a_mark_or_the_sweep(
     tmp_path: Path,
@@ -131,15 +149,7 @@ def test_rows_skip_the_walk_until_a_mark_or_the_sweep(
     body = response.json()
     return body if rows_key is None else body[rows_key]
 
-  walks = {"n": 0}
-  real = threads_api._row_source_stats
-
-  def counting(threads_dir: str,
-               triggers_dir: str) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]]]:
-    walks["n"] += 1
-    return real(threads_dir, triggers_dir)
-
-  monkeypatch.setattr(threads_api, "_row_source_stats", counting)
+  walks = _count_walks(monkeypatch)
 
   client.get(url)
   assert walks["n"] == 1
@@ -422,15 +432,7 @@ def test_sweep_survives_continuous_marked_polls(tmp_path: Path, monkeypatch: pyt
   _cleared_memos()
   url = f"/api/threads/{session_id}/list"
 
-  walks = {"n": 0}
-  real = threads_api._row_source_stats
-
-  def counting(threads_dir: str,
-               triggers_dir: str) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]]]:
-    walks["n"] += 1
-    return real(threads_dir, triggers_dir)
-
-  monkeypatch.setattr(threads_api, "_row_source_stats", counting)
+  walks = _count_walks(monkeypatch)
   client.get(url)
   rows = {row["id"] for row in client.get(url).json()}
   any_id = next(iter(rows))

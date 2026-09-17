@@ -287,7 +287,7 @@ class TallyCache:
   """Per-file tally contributions keyed by file signature, persisted as one JSON document.
 
   ``lookup_sig`` serves an entry only while the caller's signature matches and copies the hit
-  into the next document; ``store``/``store_sig`` add fresh scans there. The saved document
+  into the next document; ``store_sig`` adds fresh scans there. The saved document
   therefore holds only files seen this run — deleted logs drop out without a separate sweep.
   The opencode db's rows map (the document's bulk at ~170k rows) lives in a sidecar document
   beside the cache instead: its only reader is the restart seed, which parses the sidecar
@@ -382,12 +382,8 @@ class TallyCache:
     """
     return self._sources.get(source, {}).get(key)
 
-  def store(self, source: str, path: Path, entry: dict) -> None:
-    """Record one freshly scanned contribution for the next document."""
-    self._next[source][str(path)] = entry
-
   def store_sig(self, source: str, key: str, entry: dict) -> None:
-    """``store``'s sibling for a caller that already carries the str key (``lookup_sig``)."""
+    """Record one freshly scanned contribution for the next document (``lookup_sig``'s key)."""
     self._next[source][key] = entry
 
 
@@ -1826,12 +1822,12 @@ def _merge_opencode(
   # store below persists it, so it lands before the entry is built.
   _opencode_partials[key] = _snapshot_opencode_partial(t, count)
   if cache is not None and sig is not None:
-    entry = cache._sources.get("opencode", {}).get(str(db))
+    entry = cache.prev("opencode", key)
     if entry is not None and _opencode_doc_synced.get(key):
       # The probe proved the rows unchanged since this entry was stored: its signature is
       # stale only by WAL writes to rows the tally never reads, and re-signing it would
       # rewrite the multi-MB sidecar for a signature the next WAL write stales anyway.
-      cache.store("opencode", db, entry)
+      cache.store_sig("opencode", key, entry)
     else:
       stored = {
           "sig": sig,
@@ -1847,7 +1843,7 @@ def _merge_opencode(
           stored["rows_file"] = name
       else:
         stored["rows_file"] = prev_rows_file
-      cache.store("opencode", db, stored)
+      cache.store_sig("opencode", key, stored)
       _opencode_doc_synced[key] = True
   t.notes.append(f"opencode: {count:,} assistant messages with token counts")
   return sig, epoch, from_scan

@@ -37,18 +37,19 @@ _LITERAL_SOURCES = ["costs $5 and $10 today", "price $5 later", "between $5 and$
 
 @pytest.fixture(scope="session")
 def vendored_katex(tmp_path_factory: pytest.TempPathFactory) -> Path:
-  """One CDN fetch per session; the wrap runs point at the fetched copy."""
-  return ensure_vendored_katex(tmp_path_factory.mktemp("katex-vendor") / "katex.min.js")
+  """One CDN fetch per session, at the vendor path the CLI's home resolution derives."""
+  home = tmp_path_factory.mktemp("katex-home")
+  return ensure_vendored_katex(home / "vendor" / "katex" / "katex.min.js")
 
 
 @pytest.fixture
 def cli_katex(monkeypatch: pytest.MonkeyPatch, vendored_katex: Path) -> Path:
-  """Point the CLI verb's home resolution at a dir whose vendor copy is the session-fetched one.
+  """Point the CLI verb's home resolution at the fetched vendor copy's home.
 
   The wrap verb resolves the home off the env (src.core.home), not the config —
   the M98 seam shape; the module-level name is the patch target.
   """
-  monkeypatch.setattr("src.cli.artifact.charliebot_home_dir", lambda: vendored_katex.parent.parent)
+  monkeypatch.setattr("src.cli.artifact.charliebot_home_dir", lambda: vendored_katex.parents[2])
   return vendored_katex
 
 

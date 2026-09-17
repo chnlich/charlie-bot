@@ -122,7 +122,7 @@ function makeSidebarRow(sessionId, name) {
 
 // One session-metadata fixture as the sidebar wire format carries it. Only the
 // fields every sidebar harness shares live here: a harness whose fixture must
-// leave a field undefined (usage_poll reads no status/rating) or default it
+// leave a field undefined (usage_poll reads no status) or default it
 // differently (delete_backfill's Work group) passes that field in overrides —
 // it is never added to this base.
 function makeSessionMeta(id, overrides = {}) {

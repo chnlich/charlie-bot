@@ -28,7 +28,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 ### Web UI
 
 - Streaming chat over WebSockets
-- Sessions sidebar with groups, filters, and search; star / archive / fork / rate sessions
+- Sessions sidebar with groups, filters, and search; star / archive / fork sessions
 - Worker (thread), plan, backlog, and context panels
 - HTML artifact viewer with line-anchored comments
 - GitHub-style diff viewer with diff comments

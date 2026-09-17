@@ -326,11 +326,11 @@ async def create_session(
     log.info("task_created", session_id=meta.id, task_parent_id=req.task_parent_id, profile=req.profile)
     return meta
   if not caller.is_operator:
-    # Run credentials create only their own worker child (the v2 path above);
-    # the legacy create shape is operator scope.
+    # Run credentials create only their own child tasks under their own manager
+    # node (the v2 path above); the legacy create shape is operator scope.
     raise HTTPException(
         status_code=403,
-        detail="an agent may only create a worker task directly under its own open manager task")
+        detail="an agent may only create a task directly under its own open manager task")
   backend = _resolve_requested_backend(req.backend, cfg, fallback_backend=_default_backend_id(cfg))
   log.info("creating_session", backend=backend, name=req.name)
   return await session_mgr.create_session(req, backend=backend)

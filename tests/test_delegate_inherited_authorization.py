@@ -251,7 +251,7 @@ async def test_foreign_run_token_cannot_delegate(
             headers={"Authorization": f"Bearer {token}"})
     proc.terminate()
     assert resp.status_code == 403
-    assert "worker task directly under its own" in resp.json()["detail"]
+    assert "task directly under its own" in resp.json()["detail"]
     assert builds == []
 
 

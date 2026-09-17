@@ -660,11 +660,15 @@ class TaskTreeManager:
       if existing is not None:
         # A replayed operation returns its original product only to a caller
         # authorized for that same create — the replay is never an
-        # authorization bypass.
+        # authorization bypass. The judgment reads the ORIGINAL product's
+        # profile, never the replay's requested one: re-labeling a replayed
+        # request must not turn a worker create (a gated implementation
+        # delegation) into an ungated manager create.
         if isinstance(caller, CallerIdentity) and not caller.is_operator:
           parent_meta = await self.load_meta(task_parent_id) if task_parent_id is not None else None
           parent_meta = parent_meta if parent_meta is not None and parent_meta.profile is not None else None
-          await self._authorize_agent_worker_creation(caller, profile, task_parent_id, parent_meta)
+          assert existing.profile is not None  # a (parent, request_id)-bound id only exists via this create
+          await self._authorize_agent_creation(caller, existing.profile, task_parent_id, parent_meta)
         return existing
       parent_meta: SessionMetadata | None = None
       # Caller scope first: an agent's 403 must not depend on the target's shape.
@@ -672,7 +676,7 @@ class TaskTreeManager:
         if task_parent_id is not None:
           parent_meta = await self.load_meta(task_parent_id)
           parent_meta = parent_meta if parent_meta is not None and parent_meta.profile is not None else None
-        await self._authorize_agent_worker_creation(caller, profile, task_parent_id, parent_meta)
+        await self._authorize_agent_creation(caller, profile, task_parent_id, parent_meta)
       if task_parent_id is not None:
         parent_meta = await self.load_meta(task_parent_id)
         self._require_task(parent_meta, task_parent_id)
@@ -711,24 +715,32 @@ class TaskTreeManager:
     await self.events.notify_tree_changed(task_id, ET.TASK_CREATED)
     return fresh
 
-  async def _authorize_agent_worker_creation(
+  async def _authorize_agent_creation(
       self,
       caller: "object",
       profile: str,
       task_parent_id: str | None,
       parent_meta: SessionMetadata | None,
   ) -> None:
-    """An agent caller may create only a worker directly under its own open manager task."""
+    """An agent caller may organize only its own open manager task.
+
+    A logical manager child directly under the caller's own manager task is
+    coordination work and needs no user authorization; a worker child is
+    implementation delegation and still rides the nearest-real-user-ancestor
+    gate (takeoff_gate). Any other shape — an unrelated root, a foreign
+    parent, a non-manager parent — is outside an agent's scope.
+    """
     assert isinstance(caller, CallerIdentity)
     claims = caller.claims
     assert claims is not None
-    if (profile != "worker" or task_parent_id != claims.session_id or parent_meta is None or
+    if (task_parent_id != claims.session_id or parent_meta is None or
             parent_meta.profile != "manager"):
       raise TaskForbiddenError(
-          "an agent may only create a worker task directly under its own open manager task")
-    # The caller's own manager task must carry the authorization: the
-    # nearest-real-user-ancestor gate (takeoff_gate) decides.
-    await self.check_task_authorization(claims.session_id)
+          "an agent may only create a task directly under its own open manager task")
+    if profile == "worker":
+      # Implementation authorization stays with the caller's own manager task:
+      # the nearest-real-user-ancestor gate (takeoff_gate) decides.
+      await self.check_task_authorization(claims.session_id)
 
   async def _require_open_ancestry_from_index(self, index: "_TreeIndex", session_id: str) -> None:
     chain = self._ancestors(index, session_id)

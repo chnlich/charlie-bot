@@ -1,10 +1,11 @@
 """The profile-home resolution: the one place that reads ``CHARLIEBOT_HOME``.
 
-Every state path derives from :func:`charliebot_home_dir`. Local-only verbs
-(the memory CLI, the backup paths, slash-command loading) import from here
-directly: their directories are pure derivations of the home, so resolving
-them must not drag the config model stack (src.core.config's pydantic chain,
-~180 ms of the M98 CLI wall) into a fresh process.
+Every state path derives from :func:`charliebot_home_dir`. The memory CLI
+imports from here directly: its store root is a pure derivation of the home,
+so resolving it must not drag the config model stack (src.core.config's
+pydantic chain, ~180 ms of the M98 CLI wall) into a fresh process. Other
+config-importing readers reach these names through the src.core.config
+re-export.
 """
 
 import os

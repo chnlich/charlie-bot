@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from src.api.auth import request_has_access_key
 from src.api.pages import _static_asset_version
+from src.api.responses import GZIP_RESPONSE_HEADERS, request_wants_gzip
 from src.core.config import configured_access_key, get_config
 from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.memo import BoundedMemo
@@ -456,15 +457,9 @@ async def serve_file(path: str, request: Request) -> Response:
     raise HTTPException(status_code=404, detail="Not found")
   if page is not None:
     listing, listing_key = page
-    if "gzip" in request.headers.get("accept-encoding", ""):
-      # The same check the gzip middleware makes on the way in; answering with
-      # the pre-compressed body and the header set is what skips its deflate.
+    if request_wants_gzip(request):
       body = await asyncio.to_thread(_listing_page_gzip, listing_key, listing)
-      return Response(
-          content=body, media_type="text/html", headers={
-              "Content-Encoding": "gzip",
-              "Vary": "Accept-Encoding"
-          })
+      return Response(content=body, media_type="text/html", headers=GZIP_RESPONSE_HEADERS)
     return HTMLResponse(listing)
 
   # Standalone artifact HTML gets the review UI injected here — the single chokepoint
@@ -481,30 +476,18 @@ async def serve_file(path: str, request: Request) -> Response:
       raise HTTPException(status_code=400, detail=_DIFF_TARGET_DETAIL.format(fs_path))
     base_path = _resolve_diff_base(session_id, diff_param)
     inject_ui = request_has_access_key(request, configured_access_key())
-    if "gzip" in request.headers.get("accept-encoding", ""):
-      # The same check the gzip middleware makes on the way in; answering with
-      # the pre-compressed body and the header set is what skips its deflate.
+    if request_wants_gzip(request):
       body = await asyncio.to_thread(_annotated_diff_page_gzip, base_path, fs_path, inject_ui, session_id)
-      return Response(
-          content=body, media_type="text/html", headers={
-              "Content-Encoding": "gzip",
-              "Vary": "Accept-Encoding"
-          })
+      return Response(content=body, media_type="text/html", headers=GZIP_RESPONSE_HEADERS)
     # A cold annotate parses both pages whole (~0.25 s on a 1 MB pair), so the
     # build runs off the event loop; a memo hit answers with zero file bytes.
     html_text = await asyncio.to_thread(_annotated_diff_page, base_path, fs_path, inject_ui, session_id)
     return HTMLResponse(html_text, media_type="text/html")
 
   if session_id is not None and request_has_access_key(request, configured_access_key()):
-    if "gzip" in request.headers.get("accept-encoding", ""):
-      # The same check the gzip middleware makes on the way in; answering with
-      # the pre-compressed body and the header set is what skips its deflate.
+    if request_wants_gzip(request):
       body = await asyncio.to_thread(_injected_artifact_page_gzip, fs_path, session_id)
-      return Response(
-          content=body, media_type="text/html", headers={
-              "Content-Encoding": "gzip",
-              "Vary": "Accept-Encoding"
-          })
+      return Response(content=body, media_type="text/html", headers=GZIP_RESPONSE_HEADERS)
     # One executor hop: signature, memo hit, and on a miss the read+inject+store.
     body = await asyncio.to_thread(_injected_artifact_page, fs_path, session_id)
     return HTMLResponse(body, media_type="text/html")

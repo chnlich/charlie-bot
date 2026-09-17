@@ -64,6 +64,19 @@ def _meta(group: str) -> SimpleNamespace:
   return SimpleNamespace(id="s1", role=PROJECT_ROLE, group=group)
 
 
+def _two_group_cfg(tmp_path: Path, contract: str | None) -> SimpleNamespace:
+  """One cfg whose repo contract file serves both an enabled (lean) group-alpha
+  and an unconfigured group-beta — the one-repo-one-contract shape the
+  shared-contract tests assert on, unlike the per-test cfgs the helpers above build."""
+  cfg = make_instruction_cfg(tmp_path, manager_contract=contract)
+  enabled_dir = cfg.charliebot_home / "projects" / "group-alpha"
+  enabled_dir.mkdir(parents=True)
+  (enabled_dir / "project.yaml").write_text("prompt_file: project.md\n", encoding="utf-8")
+  (enabled_dir / "project.md").write_text(COMMON_TEXT, encoding="utf-8")
+  (cfg.charliebot_home / "projects" / "group-beta").mkdir(parents=True)
+  return cfg
+
+
 # ---------------------------------------------------------------------------
 # The builder markers and the contract's mode section stay in lockstep
 # ---------------------------------------------------------------------------
@@ -154,13 +167,7 @@ def test_unconfigured_manager_gets_pointer_with_not_enabled_marker_and_no_contra
 
 def test_both_managers_share_one_contract_with_nonconflicting_respective_duties(tmp_path: Path) -> None:
   """The same repo contract file serves both managers; each binds its own mode."""
-  # One repo, one contract file: both groups read it.
-  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_TEXT)
-  enabled_dir = cfg.charliebot_home / "projects" / "group-alpha"
-  enabled_dir.mkdir(parents=True)
-  (enabled_dir / "project.yaml").write_text("prompt_file: project.md\n", encoding="utf-8")
-  (enabled_dir / "project.md").write_text(COMMON_TEXT, encoding="utf-8")
-  (cfg.charliebot_home / "projects" / "group-beta").mkdir(parents=True)
+  cfg = _two_group_cfg(tmp_path, contract=CONTRACT_TEXT)
 
   enabled = master_cc._build_instructions_content(_meta("group-alpha"), cfg, None)
   unconfigured = master_cc._build_instructions_content(_meta("group-beta"), cfg, None)
@@ -182,12 +189,7 @@ def test_both_managers_share_one_contract_with_nonconflicting_respective_duties(
 
 def test_missing_repo_contract_fails_only_enabled_manager(tmp_path: Path) -> None:
   """An unconfigured manager never needs the repo file at build time; an enabled one does."""
-  cfg = make_instruction_cfg(tmp_path, manager_contract=None)
-  enabled_dir = cfg.charliebot_home / "projects" / "group-alpha"
-  enabled_dir.mkdir(parents=True)
-  (enabled_dir / "project.yaml").write_text("prompt_file: project.md\n", encoding="utf-8")
-  (enabled_dir / "project.md").write_text(COMMON_TEXT, encoding="utf-8")
-  (cfg.charliebot_home / "projects" / "group-beta").mkdir(parents=True)
+  cfg = _two_group_cfg(tmp_path, contract=None)
 
   enabled = master_cc._build_instructions_content(_meta("group-alpha"), cfg, None)
   assert enabled is not None

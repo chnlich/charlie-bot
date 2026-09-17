@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -32,9 +32,11 @@ from conftest import (
 from src.api import sessions as sessions_api
 from src.core import sessions as sessions_core
 from src.core import sidebar_state
+from src.core.config import CharlieBotConfig
 from src.core.models import (
     CreateSessionRequest,
     PendingTrigger,
+    SessionMetadata,
     SessionStatus,
     ThreadStatus,
 )
@@ -75,77 +77,74 @@ def _counting_probes(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
 
 
 # ---------------------------------------------------------------------------
-# (a) dirty-mark propagation — one test per transition class
+# (a) dirty-mark propagation — one parametrized case per transition class
 # ---------------------------------------------------------------------------
 
+_DirtyCase = Callable[[CharlieBotConfig, sessions_core.SessionManager, SessionMetadata], Awaitable[None]]
 
-@pytest.mark.asyncio
-async def test_save_metadata_marks_session_dirty(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="Meta")
+
+async def _mark_by_save_metadata(
+    cfg: CharlieBotConfig, mgr: sessions_core.SessionManager, session: SessionMetadata) -> None:
   meta = await mgr.get_session(session.id)
   assert meta is not None
   sidebar_state.reset_for_tests()
-
   await mgr.save_metadata(meta)
 
-  assert sidebar_state.is_dirty(session.id)
 
-
-@pytest.mark.asyncio
-async def test_thread_create_marks_session_dirty(tmp_path: Path) -> None:
-  _cfg, _mgr, session = await make_home_session(tmp_path, name="ThreadCreate")
-  thread_mgr = ThreadManager(_cfg)
+async def _mark_by_thread_create(
+    cfg: CharlieBotConfig, mgr: sessions_core.SessionManager, session: SessionMetadata) -> None:
   sidebar_state.reset_for_tests()
-
-  await thread_mgr.create_thread(session, "work")
-
-  assert sidebar_state.is_dirty(session.id)
+  await ThreadManager(cfg).create_thread(session, "work")
 
 
-@pytest.mark.asyncio
-async def test_thread_update_status_marks_session_dirty(tmp_path: Path) -> None:
-  _cfg, _mgr, session = await make_home_session(tmp_path, name="ThreadStatus")
-  thread_mgr = ThreadManager(_cfg)
+async def _mark_by_thread_update_status(
+    cfg: CharlieBotConfig, mgr: sessions_core.SessionManager, session: SessionMetadata) -> None:
+  thread_mgr = ThreadManager(cfg)
   thread = await thread_mgr.create_thread(session, "work")
   sidebar_state.reset_for_tests()
-
   await thread_mgr.update_status(session.id, thread.id, ThreadStatus.RUNNING)
 
-  assert sidebar_state.is_dirty(session.id)
 
-
-@pytest.mark.asyncio
-async def test_thread_save_metadata_marks_session_dirty(tmp_path: Path) -> None:
-  _cfg, _mgr, session = await make_home_session(tmp_path, name="ThreadSave")
-  thread_mgr = ThreadManager(_cfg)
+async def _mark_by_thread_save_metadata(
+    cfg: CharlieBotConfig, mgr: sessions_core.SessionManager, session: SessionMetadata) -> None:
+  thread_mgr = ThreadManager(cfg)
   thread = await thread_mgr.create_thread(session, "work")
   sidebar_state.reset_for_tests()
-
   await thread_mgr.save_metadata(thread)
 
-  assert sidebar_state.is_dirty(session.id)
 
-
-@pytest.mark.asyncio
-async def test_trigger_save_marks_session_dirty(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="Trigger")
-  trigger_mgr = TriggerManager(_cfg, mgr)
+async def _mark_by_trigger_save(
+    cfg: CharlieBotConfig, mgr: sessions_core.SessionManager, session: SessionMetadata) -> None:
   trigger = PendingTrigger(
       id="pending-dirty", session_id=session.id, fire_at=datetime.now(UTC) + timedelta(minutes=5), message="wake")
   sidebar_state.reset_for_tests()
+  await TriggerManager(cfg, mgr)._save_trigger(trigger)
 
-  await trigger_mgr._save_trigger(trigger)
 
-  assert sidebar_state.is_dirty(session.id)
+async def _mark_by_plan_save(
+    cfg: CharlieBotConfig, mgr: sessions_core.SessionManager, session: SessionMetadata) -> None:
+  sidebar_state.reset_for_tests()
+  await PlanRegistryManager(cfg, mgr)._save(session.id, {"plans": []})
 
 
 @pytest.mark.asyncio
-async def test_plan_save_marks_session_dirty(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="Plans")
-  plans_mgr = PlanRegistryManager(_cfg, mgr)
-  sidebar_state.reset_for_tests()
+@pytest.mark.parametrize(
+    "mark_dirty",
+    [
+        _mark_by_save_metadata,
+        _mark_by_thread_create,
+        _mark_by_thread_update_status,
+        _mark_by_thread_save_metadata,
+        _mark_by_trigger_save,
+        _mark_by_plan_save,
+    ],
+    ids=["save_metadata", "thread_create", "thread_update_status", "thread_save_metadata", "trigger_save", "plan_save"],
+)
+async def test_writer_marks_session_dirty(tmp_path: Path, mark_dirty: _DirtyCase) -> None:
+  """Each probed-state writer marks its session dirty at the transition."""
+  cfg, mgr, session = await make_home_session(tmp_path, name="DirtyMark")
 
-  await plans_mgr._save(session.id, {"plans": []})
+  await mark_dirty(cfg=cfg, mgr=mgr, session=session)
 
   assert sidebar_state.is_dirty(session.id)
 

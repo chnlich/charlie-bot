@@ -31,12 +31,17 @@ page, under emulated prefers-reduced-motion (the user-restored behavior: the
 spinner and the delegated gear keep rotating under reduce too; only the
 pulse cues stop), on desktop and at the narrow viewport, and across an
 ordinary mid-run reload. The windows ride real Runs: the unemulated and
-reduced windows on the worker Run; the narrow window, the reload window and
-the stop each ride a fresh bounded child-manager turn (managers never
-auto-complete, so the row and the interrupted-state label stay observable,
-and each window starts seconds after a confirmed live spinner). A short
-clipped frame sequence of the live row is kept beside the samples for visual
-glyph inspection.
+reduced windows on the worker Run (desktop); the reload window on a bounded
+child-manager turn, still at desktop width because a reload at the narrow
+width reboots the page with the mobile drawer closed and display:none hides
+the whole tree (cues and animations included); then the narrow window and
+the stop on the child manager's runs - managers never auto-complete, so the
+row and the interrupted-state label stay observable. A message admitted
+while the node's current run has not settled stays durable and pending and
+launches the moment the node settles, so every send is followed by a bounded
+wait for the live spinner rather than an idle-node gate. A short clipped
+frame sequence of the live row is kept beside the samples for visual glyph
+inspection.
 
 Evidence: per-scenario screenshots and session_tree_preview_browser_results.json
 with the exact tested commit, the invocation and the console-error list.
@@ -1282,15 +1287,19 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         results.record("s14h-motion-timeline-reduced-motion", False,
                        "skipped: the desktop window failed", None)
 
-    # --- Late live windows and the stop ride bounded child-manager turns -----
+    # --- Late live windows and the stop ride the child manager's runs ---------
     # The worker Run's lifetime is the model's own (observed ~17-45s for a
     # bounded turn) and its task auto-completes on run success, removing the
-    # row. A manager never auto-completes, so child-manager turns carry the
-    # remaining windows and the stop; each window gets its own fresh bounded
-    # message, sent only while the node is idle (the composer's send button is
-    # disabled while the session's thinking indicator is active, and a click
-    # on it would be silently dropped), so every window starts seconds after a
-    # confirmed live spinner on a run that was launched for it.
+    # row. A manager never auto-completes, so the child manager's runs carry
+    # the remaining windows and the stop. A message admitted while the node's
+    # current run has not settled stays durable and pending; the dispatch
+    # launches it the moment the node settles (the predecessor's terminal fact
+    # lands only after its finish chain), so every send is followed by a
+    # bounded wait for the live spinner instead of an idle-node gate. The
+    # reload window stays at DESKTOP width: a reload at the narrow width
+    # reboots the page with the mobile drawer closed, and the closed drawer is
+    # display:none - the whole tree, cues and animation instances included,
+    # disappears and would fake a dead row.
     spin_el = f"spinner-{child_id}"
     gear_el = f"worker-indicator-{root_id}"
 
@@ -1308,23 +1317,44 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         log(f"  {label} child message: HTTP {status}, launch={decision.get('launch')}, reason={reason}")
         return launched, f"send={status} launch={decision.get('launch')} reason={reason[:80]}"
 
-    child_run_id = None
-    late_label = "child turn"
-    narrow_send = ""
-    try:
-        _launched, narrow_send = await send_child_message(
-            "Trial narrow step. Write a 40-word note about a harbor, then reply with exactly "
-            "NARROW-OK on the last line. Do not create subtasks.", "narrow-window")
-        await wait_row_activity(cdp, sid, child_id, {"spinner": True}, 120,
-                                "child manager turn live for the narrow window")
-        child_run_id = await active_run_of(child_id)
-        late_label = f"child run {str(child_run_id)[:8]}" if child_run_id else "child turn (live spinner)"
-    except (TimeoutError, RuntimeError) as exc:
-        # Logged only: the narrow scenarios below record the row state they
-        # actually observed, exactly once each.
-        log(f"narrow-window child turn did not go live: {exc!r}; {narrow_send}")
+    async def wait_child_spinner(timeout: float, label: str) -> None:
+        await wait_row_activity(cdp, sid, child_id, {"spinner": True}, timeout, label)
 
-    # Narrow viewport: the same live cues at 390px, names still readable.
+    async def pin_child_run(narrow_send: str) -> str:
+        child_run = await active_run_of(child_id)
+        return f"child run {str(child_run)[:8]}" if child_run else f"child turn ({narrow_send})"
+
+    # Reload window (desktop): the message's run launches when the node
+    # settles; the reload lands while it is live and the post-reload wait
+    # re-locks onto it.
+    reload_send = ""
+    late_label = "child turn"
+    try:
+        _launched, reload_send = await send_child_message(
+            "Trial reload step. Write a 60-word story about a storm, then reply with exactly "
+            "RELOAD-OK on the last line. Do not create subtasks.", "reload-window")
+        await wait_child_spinner(240, "reload-window child turn live")
+        late_label = await pin_child_run(reload_send)
+        await cdp.send("Page.reload", {}, session_id=sid)
+        await wait_for(cdp, sid,
+                       f"!!document.getElementById('tree-node-{child_id}')"
+                       f" && !document.getElementById('spinner-{child_id}')"
+                       ".classList.contains('hidden')",
+                       timeout=90, label="live spinner re-rendered after reload")
+        reload_verdicts = await motion_pass(1.2, RELOAD_INTERVALS_S, readiness=30.0)
+        results.record(
+            "s14i-motion-timeline-after-reload",
+            all(ok for ok, _ in reload_verdicts.values()),
+            f"{late_label} ({reload_send}) across an ordinary mid-run reload: "
+            + "; ".join(detail for _, detail in reload_verdicts.values()),
+            await screenshot(cdp, sid, results, "s14i-motion-after-reload"))
+    except (TimeoutError, RuntimeError) as exc:
+        results.record("s14i-motion-timeline-after-reload", False,
+                       f"{late_label} ({reload_send}): {str(exc)[:280]}", None)
+
+    # Narrow viewport: the same live cues at 390px, names still readable. The
+    # drawer is opened here and NO reload follows, so the tree stays rendered
+    # for the narrow window and the stop below.
     await cdp.send("Emulation.setDeviceMetricsOverride",
                    {"width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": True},
                    session_id=sid)
@@ -1359,8 +1389,20 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                        f"readability={narrow_readability}",
                        await screenshot(cdp, sid, results, "s14d-during-narrow"))
 
-    # The same live cues keep their timeline at the narrow viewport too.
+    # The same live cues keep their timeline at the narrow viewport too: the
+    # reload turn is usually still live here; when it is not, one bounded
+    # message launches through the same pending dispatch.
+    narrow_send = ""
     try:
+        try:
+            await wait_child_spinner(30, "live child spinner for the narrow window")
+            narrow_send = "rode the still-live reload turn"
+        except TimeoutError:
+            _launched, narrow_send = await send_child_message(
+                "Trial narrow step. Write a 40-word note about a harbor, then reply with exactly "
+                "NARROW-OK on the last line. Do not create subtasks.", "narrow-window")
+            await wait_child_spinner(240, "narrow-window child turn live")
+        late_label = await pin_child_run(narrow_send)
         narrow_verdicts = await motion_pass(2.1)
         results.record(
             "s14j-motion-timeline-narrow",
@@ -1369,40 +1411,13 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
             + "; ".join(detail for _, detail in narrow_verdicts.values()),
             await screenshot(cdp, sid, results, "s14j-motion-narrow"))
     except (TimeoutError, RuntimeError) as exc:
-        results.record("s14j-motion-timeline-narrow", False, f"{late_label}: {str(exc)[:280]}", None)
-
-    # Reload window on its own bounded message. A message admitted while the
-    # node's current run has not settled stays durable and pending; the
-    # dispatch launches it the moment the node settles, so the reload lands
-    # first and the post-reload wait (90s) re-locks onto whichever run is live
-    # - the settling predecessor or the freshly launched message's run - and
-    # the readiness wait (30s) starts the window on a running animation.
-    try:
-        _launched, reload_send = await send_child_message(
-            "Trial reload step. Write a 60-word story about a storm, then reply with exactly "
-            "RELOAD-OK on the last line. Do not create subtasks.", "reload-window")
-        await cdp.send("Page.reload", {}, session_id=sid)
-        await wait_for(cdp, sid,
-                       f"!!document.getElementById('tree-node-{child_id}')"
-                       f" && !document.getElementById('spinner-{child_id}')"
-                       ".classList.contains('hidden')",
-                       timeout=90, label="live spinner re-rendered after reload")
-        reload_verdicts = await motion_pass(1.2, RELOAD_INTERVALS_S, readiness=30.0)
-        results.record(
-            "s14i-motion-timeline-after-reload",
-            all(ok for ok, _ in reload_verdicts.values()),
-            f"{late_label} ({reload_send}) across an ordinary mid-run reload: "
-            + "; ".join(detail for _, detail in reload_verdicts.values()),
-            await screenshot(cdp, sid, results, "s14i-motion-after-reload"))
-    except (TimeoutError, RuntimeError) as exc:
-        results.record("s14i-motion-timeline-after-reload", False,
-                       f"{late_label} ({reload_send}): {str(exc)[:280]}", None)
+        results.record("s14j-motion-timeline-narrow", False,
+                       f"({narrow_send}): {str(exc)[:280]}", None)
 
     # The real stop: durable request, signal, observed exit -> interrupted, on
     # the child manager's own bounded turn. The stop message rides the same
-    # durable-pending dispatch (it launches the moment the node settles, so
-    # the 180s spinner wait covers the predecessor's finish chain), and the
-    # fresh live run is then stopped mid-flight.
+    # durable-pending dispatch (the 240s spinner wait covers the predecessor's
+    # finish chain), and the fresh live run is then stopped mid-flight.
     stop_target = None
     stop_stage = "stop message"
     stop_send = ""
@@ -1410,8 +1425,8 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         _launched, stop_send = await send_child_message(
             "Trial stop step. Reply with exactly STOP-OK on the last line. "
             "Do not create subtasks.", "stop-window")
-        await wait_row_activity(cdp, sid, child_id, {"spinner": True}, 180,
-                                "stop-window child turn live")
+        await wait_child_spinner(240, "stop-window child turn live")
+        late_label = await pin_child_run(stop_send)
         stop_stage = "stop request"
         stop_target = await active_run_of(child_id)
         if stop_target is None:
@@ -1443,7 +1458,7 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
             worker_row_after = await tree_row_activity_tolerant(cdp, sid, worker_id)
             results.record("s14e-stop-clears-activity",
                            bool(cancel.get("stop_requested")) and "attention" in label,
-                           f"stopped child run {stop_target[:8]}: cancel={dict(cancel)} "
+                           f"stopped child run {stop_target[:8]} ({stop_send}): cancel={dict(cancel)} "
                            f"row label={label[:40]!r} "
                            f"root gear after={None if root_after is None else root_after.get('gear')}; "
                            f"worker run now={w_runs[0].get('state') if w_runs else 'none'}, "

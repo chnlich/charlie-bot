@@ -47,23 +47,21 @@ def test_build_command_uses_double_dash_separator_for_prompt(
     assert resume_session_id in cmd
 
 
-def test_build_command_defaults_to_xhigh_reasoning_effort(monkeypatch: pytest.MonkeyPatch) -> None:
-  backend = _build_backend(monkeypatch, model="codex-test-model")
+@pytest.mark.parametrize(
+    ("model_reasoning_effort", "expected"),
+    [
+        pytest.param(None, "xhigh", id="default-xhigh"),
+        pytest.param("ultra", "ultra", id="custom-effort"),
+    ],
+)
+def test_build_command_carries_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch, model_reasoning_effort: str | None, expected: str) -> None:
+  backend = _build_backend(monkeypatch, model="codex-test-model", model_reasoning_effort=model_reasoning_effort)
 
   cmd = backend._build_command("do the thing")
 
-  assert 'model_reasoning_effort="xhigh"' in cmd
-  idx = cmd.index('model_reasoning_effort="xhigh"')
-  assert cmd[idx - 1] == "--config"
-
-
-def test_build_command_uses_custom_reasoning_effort(monkeypatch: pytest.MonkeyPatch) -> None:
-  backend = _build_backend(monkeypatch, model="codex-test-model", model_reasoning_effort="ultra")
-
-  cmd = backend._build_command("do the thing")
-
-  assert 'model_reasoning_effort="ultra"' in cmd
-  idx = cmd.index('model_reasoning_effort="ultra"')
+  assert f'model_reasoning_effort="{expected}"' in cmd
+  idx = cmd.index(f'model_reasoning_effort="{expected}"')
   assert cmd[idx - 1] == "--config"
 
 

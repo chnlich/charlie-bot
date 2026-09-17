@@ -66,8 +66,9 @@ Known-alive symbols:
   same name) rather than `def` fixtures; vulture flags those assignments as unused variables
   the same way, and name discovery still reaches them. Vulture also flags
   `pidfd_open_available` (`tests/conftest.py`, shared skip gate for the pid/slurm watch
-  tests), but it is named in the parameter lists of the tests that use it, so the Step 3
-  grep already finds its references; no list entry needed.
+  tests, requested by name in `tests/test_trigger_pid_watch.py`, `tests/test_trigger_slurm_watch.py`,
+  and `tests/test_trigger_succession.py`), but it is named in the parameter lists of the tests
+  that use it, so the Step 3 grep already finds its references; no list entry needed.
 - `reset_bundle_cache` (`tests/test_voice_engine.py` and `tests/test_voice_qwen3_hf.py`, one
   `fresh_state_fixture(transcriber.reset_bundle_cache_for_tests)` assignment in each file) —
   reached by fixture-name discovery
@@ -460,3 +461,74 @@ Known-alive symbols:
   outside its definition. It is load-bearing: the module's plain-request test asserts
   `len(_search_gzip_memo) == 0`, which holds only because the autouse reset cleared the entry the
   module's earlier gzip tests stored. Same autouse class as `_fresh_detail_memo` above.
+- `open_connection`, `post_message`, `add_reaction`, `get_permalink`, `get_thread_replies` (the
+  Slack-client doubles in `tests/test_slack_listener.py`, `tests/test_slack_delivery.py`, and
+  `tests/core/test_slack_thread_follow.py`) — the summon, reply, follow, and ack paths in
+  `src/core/slack_listener.py` dispatch every Slack Web API call on the injected client
+  (`client.post_message(...)`, `client.get_permalink(...)`, `client.get_thread_replies(...)`,
+  `client.add_reaction(...)`, `client.open_connection()`), so each double's method is reached
+  only through that dynamic dispatch. The doubles' docstrings pin the surface ("implements only
+  what the summon path may call"), so a missing method fails with an AttributeError by
+  construction, never silently. Vulture flags each method as unused (60% confidence); the names
+  match only the doubles and the real `SlackClient` in `src/core/slack_listener.py`.
+- `raise_for_status`, `aclose`, `aiter_bytes` (the httpx response doubles: `FakeChunkedResponse`
+  in `tests/conftest.py`, `_FakeDelayedStreamResponse`/`_StubHttpResponse`/
+  `_StubEventStreamResponse` in `tests/test_opencode_backend.py`, `_FakeResponse` in
+  `tests/test_ext_usage.py`, `_StubSlackResponse` in `tests/test_slack_delivery.py`,
+  `_StubResp` in `tests/test_slack_listener.py`) — production reads each through the duck-typed
+  response surface: the SSE consumers iterate `response.aiter_bytes()` (`src/core/sse.py`), the
+  fetch and Web-API paths call `response.raise_for_status()`, and the proxy paths await
+  `response.aclose()`. Each double name matches only its own definition, so vulture flags the
+  methods as unused.
+- `receive_text`, `send_json`, `resize` (the WebSocket and attachment doubles: `_ScriptedWebSocket`
+  and `_FakeAttachment` in `tests/test_terminal_backend.py`, `FakeWebSocket` in
+  `tests/conftest.py`) — `pty_common`'s attachment loop awaits `websocket.receive_text()` and
+  sends through `websocket.send_json(...)`, the resize path calls `attachment.resize(cols, rows)`,
+  and the server catchup/replay producers send through `FakeWebSocket.send_json`; every call
+  dispatches on the injected double. Vulture flags each method as unused.
+- `front`, `current_segment`, `is_speech_detected` (the VAD doubles `_ClosedVad` and `_LiveVad` in
+  `tests/test_transcriber_sampling.py`) — `_drain_closed_segments` and
+  `_decode_live_segment_if_due` (`src/agents/transcriber.py`) read the VAD's `front`/
+  `current_segment` and call `is_speech_detected()` on whatever the test installed. The same
+  file's `_session_with_pcm` builds the real session object via `__new__`, so its
+  `_vad`/`_fed_samples`/`_last_partial`/`_last_live_text`/`_finished` writes are that instance's
+  initialization and the decode paths read them back; vulture flags both the stub methods and
+  those writes as unused. (`empty` and `pop`, the other two `_ClosedVad` methods, escape the
+  tests-scope flag through cross-file name matches but belong to the same surface.)
+- `_proc`, `_ws` (backend and warm-renderer doubles in `tests/test_backend_logging.py`,
+  `tests/test_opencode_backend.py`, and the fake `_launch` in `tests/core/test_headless_render.py`)
+  — the stderr/stdout pumps read `self._proc.stderr`/`self._proc.stdout`
+  (`src/agents/backends/base.py`), and `_WarmRenderer._render_once`/`close` read
+  `self._proc`/`self._ws` (`src/core/headless_render.py`); the tests install both by attribute
+  write on the double, which vulture flags as an unused attribute.
+- `_sleep` (`tests/test_opencode_backend.py`, installed as `backend._sleep = _record_sleep`) —
+  the opencode lock-retry loop awaits `self._sleep(_LOCK_RETRY_BACKOFF_SECONDS)`
+  (`src/agents/backends/opencode.py`); the write replaces the instance's `asyncio.sleep` seam
+  with a recorder, and vulture flags the write as an unused attribute.
+- `cgroup_exit_report` (the backend doubles `ScriptedRelayBackend`, `TerminateFlagBackend`,
+  `_StoppedMidStreamBackend`, `_OomReportBackend` in `tests/conftest.py` and
+  `tests/test_master_cc_relay.py`) — the worker finalize path
+  (`self._backend.cgroup_exit_report()`, `src/agents/worker.py`) and the master round's error
+  path (`backend.cgroup_exit_report()`, `src/agents/master_cc_run.py`) read the session
+  memory-cap attribution off whatever backend the test installed. Each double returns `None`
+  because doubles never run inside a cgroup; vulture flags the methods as unused.
+- `add_done_callback` (`DummyTask` in `tests/conftest.py`'s `capture_create_logged_task`) —
+  `create_logged_task` (`src/core/tasks.py`) calls `task.add_done_callback(_task_done_callback)`
+  on whatever task-like object the patched stand-in returned; the `DummyTask` override accepts
+  the callback and drops it. Vulture flags the method as unused.
+- `_cron_snapshot`, `_user_agent_cache`, `_token_usage_task` — production module-global caches
+  reset through bare module-attribute writes inside test setup
+  (`core_config._cron_snapshot = core_config._CronSnapshot()` in `tests/conftest.py`,
+  `ext_usage_mod._user_agent_cache = None` in `tests/test_ext_usage.py`'s probe-arm helper,
+  `pages._token_usage_task = None` in `tests/test_pages.py`'s autouse fixture). The reads live
+  in `src/core/config.py`, `src/api/ext_usage.py`, and `src/api/pages.py`, so vulture flags
+  each write as an unused attribute. Same class as the registry-reset fixtures above, minus the
+  named-fixture wrapper.
+- `broadcast_only`, `expect_fresh_session` — instance-level writes production reads back.
+  `session_mgr.broadcast_only = _fake_broadcast` (`tests/test_plan_registry.py`,
+  `tests/test_internal_plan_endpoints.py`) replaces the real `SessionManager` method the plan
+  present path awaits (`self._session_mgr.broadcast_only(...)`, `src/core/plans.py`), and
+  `item.expect_fresh_session = True` (`tests/test_master_cc_relay.py`) sets the `_WorkItem`
+  field whose read gates the resume-capable path (`src/agents/master_cc_run.py`,
+  `src/agents/master_cc_relay.py`). No test reads either name back, so vulture flags each
+  write as an unused attribute.

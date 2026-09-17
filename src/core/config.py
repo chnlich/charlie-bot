@@ -28,6 +28,10 @@ log = LazyStructlogLogger()
 
 CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
 
+# The profile's secrets file, named once so the backup's exclusion
+# (src/core/backup.py) cannot drift from the loader's path.
+CREDENTIALS_FILENAME = "credentials.yaml"
+
 # Fixed house wall clock pinned by chart timestamps (src/api/pages.py), Slack timestamp
 # prefixes (src/core/slack_listener.py), worker-summary timestamps
 # (src/core/spawner_events.py), and the Saturday-1AM weekly-recycle anchor
@@ -546,7 +550,7 @@ class CharlieBotConfig(BaseModel):
   @property
   def credentials_file(self) -> Path:
     """The profile's credentials.yaml: the secrets split out of config.yaml."""
-    return self.charliebot_home / "credentials.yaml"
+    return self.charliebot_home / CREDENTIALS_FILENAME
 
   @property
   def config_d_dir(self) -> Path:

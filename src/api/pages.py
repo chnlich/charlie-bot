@@ -1,4 +1,5 @@
-"""Server-rendered pages — single Jinja2 template for the entire UI."""
+"""Server-rendered pages — one Jinja2 template per page under web/templates/: the chat
+UI, home, diff, events viewer, token usage, NCU, and Perfetto."""
 
 import asyncio
 import concurrent.futures

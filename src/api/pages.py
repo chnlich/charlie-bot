@@ -237,9 +237,8 @@ router = APIRouter()
 
 # jinja2 + fastapi.templating ride every page render (~19 ms of the M99 server
 # import floor, marginal over the already-loaded fastapi) and no import-time
-# path touches a template, so the engine builds on first render (the #1647
-# plan_diff deferral shape); the test that pins this is
-# tests/test_cli_import_weight.py's server ban set.
+# path touches a template, so the engine builds on first render; the test that
+# pins this is tests/test_cli_import_weight.py's server ban set.
 _templates_instance: "Jinja2Templates | None" = None
 
 

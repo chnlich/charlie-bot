@@ -172,6 +172,32 @@ def make_work_item(
   )
 
 
+async def _run_seeded_consumer(
+    session_id: str,
+    work_items: list[master_cc_state._WorkItem],
+    fake_run_cc: Callable[[master_cc_state._WorkItem], Awaitable[tuple[str | None, int, str | None, dict]]],
+    manager_patch: Any,
+) -> None:
+  """Run _session_consumer over a seeded queue with _run_cc replaced by *fake_run_cc* and
+  broadcasts silenced; *manager_patch* is the context manager silencing the dequeue refresh's
+  running-tasks probe. The session's queue and consumer registry entries are dropped on exit;
+  the consumer run is bounded at 5s."""
+  master_cc_state._session_queues.pop(session_id, None)
+  master_cc_state._session_queues[session_id] = asyncio.Queue()
+  for item in work_items:
+    master_cc_state._session_queues[session_id].put_nowait(item)
+  try:
+    with (
+        patch.object(master_cc_run, "_run_cc", side_effect=fake_run_cc),
+        patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
+        manager_patch,
+    ):
+      await asyncio.wait_for(master_cc_queue._session_consumer(session_id), timeout=5)
+  finally:
+    master_cc_state._session_queues.pop(session_id, None)
+    master_cc_state._session_consumers.pop(session_id, None)
+
+
 async def run_session_consumer(
     session_id: str,
     work_items: list[master_cc_state._WorkItem],
@@ -180,22 +206,30 @@ async def run_session_consumer(
   """Run _session_consumer over a seeded queue with a fake CC: _run_cc is replaced by fake_run_cc,
   broadcasts are silenced, and the SessionManager double reports no running tasks. The session's
   queue and consumer registry entries are dropped on exit; the consumer run is bounded at 5s."""
-  master_cc_state._session_queues.pop(session_id, None)
-  master_cc_state._session_queues[session_id] = asyncio.Queue()
-  for item in work_items:
-    master_cc_state._session_queues[session_id].put_nowait(item)
   workers_mock = MagicMock()
   workers_mock._has_running_tasks = AsyncMock(return_value=False)
-  try:
-    with (
-        patch.object(master_cc_run, "_run_cc", side_effect=fake_run_cc),
-        patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
-        patch(SESSIONS_SESSION_MANAGER_PATCH_TARGET, return_value=workers_mock),
-    ):
-      await asyncio.wait_for(master_cc_queue._session_consumer(session_id), timeout=5)
-  finally:
-    master_cc_state._session_queues.pop(session_id, None)
-    master_cc_state._session_consumers.pop(session_id, None)
+  await _run_seeded_consumer(
+      session_id,
+      work_items,
+      fake_run_cc,
+      patch(SESSIONS_SESSION_MANAGER_PATCH_TARGET, return_value=workers_mock),
+  )
+
+
+async def run_consumer_over_real_disk(
+    session_id: str,
+    work_items: list[master_cc_state._WorkItem],
+    fake_run_cc: Callable[[master_cc_state._WorkItem], Awaitable[tuple[str | None, int, str | None, dict]]],
+) -> None:
+  """run_session_consumer with the SessionManager class kept real: the dequeue refresh reads disk
+  through it, the teardown probe is silenced at the method, and no class-level patch can shadow
+  the refresh's own local import."""
+  await _run_seeded_consumer(
+      session_id,
+      work_items,
+      fake_run_cc,
+      patch.object(SessionManager, "_has_running_tasks", AsyncMock(return_value=False)),
+  )
 
 
 def reset_master_state(session_id: str) -> None:

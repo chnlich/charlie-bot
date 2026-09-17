@@ -25,6 +25,7 @@ from conftest import (
     mocked_callback_fields,
     patch_instructions_content,
     patch_resume_seams,
+    run_consumer_over_real_disk,
     run_resume_round,
     run_session_consumer,
     user_event,
@@ -846,30 +847,6 @@ async def test_handle_event_keeps_an_already_adopted_session_id_over_the_signal(
 # ---------------------------------------------------------------------------
 # Dequeue anchor refresh, post-round copy retirement, and the 9-14 incident shape
 # ---------------------------------------------------------------------------
-
-
-async def run_consumer_over_real_disk(
-    session_id: str,
-    work_items: list[master_cc_state._WorkItem],
-    fake_run_cc,
-) -> None:
-  """run_session_consumer with the SessionManager class kept real: the dequeue
-  refresh reads disk through it, the teardown probe is silenced at the method, and
-  no class-level patch can shadow the refresh's own local import."""
-  master_cc_state._session_queues.pop(session_id, None)
-  master_cc_state._session_queues[session_id] = asyncio.Queue()
-  for work_item in work_items:
-    master_cc_state._session_queues[session_id].put_nowait(work_item)
-  try:
-    with (
-        patch.object(master_cc_run, "_run_cc", side_effect=fake_run_cc),
-        patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
-        patch.object(SessionManager, "_has_running_tasks", AsyncMock(return_value=False)),
-    ):
-      await asyncio.wait_for(master_cc_queue._session_consumer(session_id), timeout=5)
-  finally:
-    master_cc_state._session_queues.pop(session_id, None)
-    master_cc_state._session_consumers.pop(session_id, None)
 
 
 def _sound_round(cc_session_id: str):

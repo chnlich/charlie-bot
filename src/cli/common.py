@@ -20,15 +20,18 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:
-  from src.core.config import CharlieBotConfig, Credentials
+  from src.core.config import CharlieBotConfig
+  from src.core.credentials import Credentials
 
 from src.core.constants import SESSION_ID_ENV_VAR
+from src.core.home import charliebot_home_dir
 from src.core.timeouts import (
     CLI_CONNECT_TOTAL_TIMEOUT,
     HTTP_INTERNAL_API_TIMEOUT,
@@ -152,17 +155,96 @@ def get_config() -> CharlieBotConfig:
   """Resolve the process config, importing its module on first call.
 
   config's import chain (pydantic models + yaml, ~180 ms of the M92 CLI import
-  floor) serves only paths that read config; --help never does. The module
-  attribute stays the tests' patch target (conftest
+  floor) serves only paths that read config; --help never does, and the
+  request path reads only the server port through the fingerprint-keyed
+  document below. The module attribute stays the tests' patch target (conftest
   CLI_COMMON_GET_CONFIG_PATCH_TARGET setattrs this name).
   """
   from src.core.config import get_config
   return get_config()
 
 
+# The request contract's server port, cached under the profile home as a
+# fingerprint-keyed document. The key pairs config.yaml's (mtime, size) — the
+# reload key the server's own config cache uses — with config.py's, so a deploy
+# that moved a default re-prices the cache with one full read. The document is
+# written only by a full get_config() resolution, so a hit answers with a value
+# the real loader produced; a config edit moves the fingerprint and the next
+# call pays the full read and rewrites. An unreadable or foreign-shaped
+# document is a miss: the full read below is the recovery and the rewrite
+# replaces the document.
+_BASE_URL_CACHE_RELPATH = os.path.join("cache", "cli_base_url.json")
+
+
+def _config_module_fingerprint() -> tuple[float, int]:
+  """The (mtime, size) of the checkout's own config.py — the defaults' source."""
+  path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "core", "config.py")
+  try:
+    st = os.stat(path)
+  except OSError:
+    return (0.0, 0)
+  return (st.st_mtime, st.st_size)
+
+
+def _cached_server_port() -> int | None:
+  """Return the cached server port, or None when the document is absent, stale, or unreadable."""
+  from src.core.credentials import _file_fingerprint
+
+  fingerprint = [list(_file_fingerprint("config.yaml")), list(_config_module_fingerprint())]
+  try:
+    doc = json.loads((Path(charliebot_home_dir()) / _BASE_URL_CACHE_RELPATH).read_text(encoding="utf-8"))
+  except (OSError, ValueError):
+    return None
+  if not isinstance(doc, dict) or doc.get("fingerprint") != fingerprint:
+    return None
+  port = doc.get("port")
+  return port if isinstance(port, int) else None
+
+
+def _store_base_url_cache(port: int) -> None:
+  """Write the fingerprint-keyed port document atomically (a torn write never publishes)."""
+  from src.core.credentials import _file_fingerprint
+
+  doc = {"fingerprint": [_file_fingerprint("config.yaml"), _config_module_fingerprint()], "port": port}
+  cache_path = Path(charliebot_home_dir()) / _BASE_URL_CACHE_RELPATH
+  cache_path.parent.mkdir(parents=True, exist_ok=True)
+  descriptor, temp_name = tempfile.mkstemp(dir=cache_path.parent, suffix=".tmp")
+  try:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as f:
+      json.dump(doc, f)
+    os.replace(temp_name, cache_path)
+  except BaseException:
+    with contextlib.suppress(OSError):
+      os.unlink(temp_name)
+    raise
+
+
+def _internal_base_url() -> str:
+  """The internal API base URL: the cached port when fresh, one full config read otherwise.
+
+  The heavy config import (pydantic + yaml models, ~150 ms of the M97 wall)
+  rides only the miss path; the module attribute stays the tests' patch target
+  (conftest CLI_COMMON_BASE_URL_PATCH_TARGET setattrs this name).
+  """
+  port = _cached_server_port()
+  if port is None:
+    port = get_config().server.port
+    _store_base_url_cache(port)
+  return f"http://localhost:{port}"
+
+
+def _sessions_dir() -> Path:
+  """The sessions root, derived from the env-resolved home (the same value the config model
+  carries; the M102 wrap-verb precedent). The module attribute stays the tests' patch target
+  (conftest CLI_COMMON_SESSIONS_DIR_PATCH_TARGET setattrs this name)."""
+  from src.core.home import charliebot_home_dir
+
+  return (charliebot_home_dir() / "sessions").resolve()
+
+
 def get_credentials() -> Credentials:
-  """Resolve the process credentials, importing config's module on first call (same M92 floor rule as get_config)."""
-  from src.core.config import get_credentials
+  """Resolve the process credentials (the light secrets module; config's model stack stays out)."""
+  from src.core.credentials import get_credentials
   return get_credentials()
 
 
@@ -174,7 +256,7 @@ def internal_api_auth_headers() -> dict[str, str]:
   authenticate against the auth middleware; returns no header when the key is
   empty (the middleware is a no-op in that case).
   """
-  from src.core.config import configured_access_key
+  from src.core.credentials import configured_access_key
   access_key = configured_access_key()
   if access_key:
     return {"Authorization": f"Bearer {access_key}"}
@@ -274,7 +356,7 @@ def compose_version_skew_hint(
           f"— server restart may be required")
 
 
-def _best_effort_server_version(cfg: CharlieBotConfig) -> tuple[str | None, str | None]:
+def _best_effort_server_version(base_url: str) -> tuple[str | None, str | None]:
   """Best-effort fetch of /api/internal/version. Returns (sha, started_at) or (None, None).
 
   Swallows every failure (network, non-200, non-JSON) so the CLI error path never raises
@@ -282,7 +364,7 @@ def _best_effort_server_version(cfg: CharlieBotConfig) -> tuple[str | None, str 
   """
   try:
     resp = _request_get(
-        f"{cfg.server_base_url}/api/internal/version",
+        f"{base_url}/api/internal/version",
         params=None,
         headers=internal_api_auth_headers(),
         timeout=HTTP_VERSION_SKEW_TIMEOUT)
@@ -294,13 +376,13 @@ def _best_effort_server_version(cfg: CharlieBotConfig) -> tuple[str | None, str 
   return info.get("sha"), info.get("started_at")
 
 
-def _maybe_version_skew_hint(cfg: CharlieBotConfig) -> str | None:
+def _maybe_version_skew_hint(base_url: str) -> str | None:
   """Gather server + local SHAs and compose the hint. Pure-failure-safe (never raises)."""
   # buildinfo pulls subprocess (measured ~4 ms of the M92 floor) and serves
   # only the version-skew failure path; the parser-build path never reads a SHA.
   from src.core.buildinfo import read_repo_head_sha
 
-  server_sha, started_at = _best_effort_server_version(cfg)
+  server_sha, started_at = _best_effort_server_version(base_url)
   local_sha = read_repo_head_sha(SUBPROCESS_GIT_SHA_TIMEOUT)
   return compose_version_skew_hint(server_sha, started_at, local_sha)
 
@@ -315,7 +397,7 @@ def _exit_with_error(error_obj: dict[str, Any], exit_code: int = 1) -> NoReturn:
 
 
 def _exit_server_rejection(
-    cfg: CharlieBotConfig,
+    base_url: str,
     resp: Any,
     rejection_exit_codes: dict[int, int] | None,
 ) -> NoReturn:
@@ -324,7 +406,7 @@ def _exit_server_rejection(
   with contextlib.suppress(ValueError, KeyError):
     msg = resp.json()["detail"]
   error_obj: dict[str, Any] = {"error": msg, "code": "server_error", "effect": "none"}
-  hint = _maybe_version_skew_hint(cfg)
+  hint = _maybe_version_skew_hint(base_url)
   if hint is not None:
     error_obj["hint"] = hint
   exit_code = 1
@@ -344,8 +426,8 @@ def _request_with_contract(
     unknown_effect: str,
 ) -> dict[str, Any]:
   """Issue one internal-API call under the restart-crossing contract."""
-  cfg = get_config()
-  url = f"{cfg.server_base_url}{endpoint}"
+  base_url = _internal_base_url()
+  url = f"{base_url}{endpoint}"
   deadline = time.monotonic() + CLI_CONNECT_TOTAL_TIMEOUT
   attempt = 0
   while True:
@@ -372,7 +454,7 @@ def _request_with_contract(
           return artifact
       _exit_with_error({"error": str(e), "code": "outcome_unknown", "effect": unknown_effect})
     if resp.status_code >= 400:
-      _exit_server_rejection(cfg, resp, rejection_exit_codes)
+      _exit_server_rejection(base_url, resp, rejection_exit_codes)
     return resp.json()
 
 
@@ -485,7 +567,7 @@ def resolve_session_id(arg_session: str | None) -> str:
   (reading a sibling session's artifacts, entering a worktree) keeps working.
   """
   cwd = Path.cwd().resolve()
-  sessions_dir = get_config().sessions_dir.resolve()
+  sessions_dir = _sessions_dir()
   cwd_session = cwd.name if cwd.parent == sessions_dir else None
 
   # An empty value carries no identity, so it reads as absent and the cwd

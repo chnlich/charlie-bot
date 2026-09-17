@@ -7,7 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from conftest import (
-    CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+    CLI_COMMON_BASE_URL_PATCH_TARGET,
+    CLI_COMMON_SESSIONS_DIR_PATCH_TARGET,
     CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
     assert_cli_reject_exit2,
     make_json_response,
@@ -15,12 +16,6 @@ from conftest import (
 )
 
 from src.cli import common
-
-
-def _mock_config(sessions_dir: Path) -> MagicMock:
-  cfg = MagicMock()
-  cfg.sessions_dir = sessions_dir
-  return cfg
 
 
 def _set_cwd(
@@ -60,7 +55,7 @@ def test_resolve_session_id_sources_without_env(
   _set_cwd(tmp_path, monkeypatch, sessions_dir, cwd_session)
   monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
 
-  with patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)):
+  with patch(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir):
     assert common.resolve_session_id(arg_session) == expected
 
 
@@ -84,7 +79,7 @@ def test_resolve_session_id_rejects_mismatches_without_env(
   monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
 
   with (
-      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)),
+      patch(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir),
       pytest.raises(SystemExit) as exc_info,
   ):
     common.resolve_session_id(arg_session)
@@ -122,7 +117,7 @@ def test_resolve_session_id_without_deriving_cwd_exits_2(
   monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
 
   with (
-      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)),
+      patch(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir),
       pytest.raises(SystemExit) as exc_info,
   ):
     common.resolve_session_id(None)
@@ -155,7 +150,7 @@ def test_resolve_session_id_env_outranks_cwd(
   _set_cwd(tmp_path, monkeypatch, sessions_dir, cwd_session)
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "env-session")
 
-  with patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)):
+  with patch(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir):
     assert common.resolve_session_id(arg_session) == "env-session"
 
   err = capsys.readouterr().err
@@ -179,7 +174,7 @@ def test_resolve_session_id_rejects_explicit_session_against_env(
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "env-session")
 
   with (
-      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)),
+      patch(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir),
       pytest.raises(SystemExit) as exc_info,
   ):
     common.resolve_session_id("arg-session")
@@ -201,7 +196,7 @@ def test_resolve_session_id_reads_empty_env_as_absent(
   _set_cwd(tmp_path, monkeypatch, sessions_dir, "cwd-session")
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "")
 
-  with patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)):
+  with patch(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir):
     assert common.resolve_session_id(None) == "cwd-session"
 
 
@@ -235,7 +230,7 @@ def test_post_internal_api_bearer_header(access_key: str, expect_header: bool) -
   stub_credentials({"charliebot": {"access_key": access_key}})
 
   with (
-      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),
+      patch(CLI_COMMON_BASE_URL_PATCH_TARGET, return_value=cfg.server_base_url),
       patch(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, return_value=make_json_response({"ok": True})) as mock_post,
   ):
     assert common.post_internal_api("/api/internal/x", {"a": 1}) == {"ok": True}

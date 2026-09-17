@@ -326,23 +326,16 @@ _DIR_LISTING_TEMPLATE = """<!DOCTYPE html>
 </html>"""
 
 
-def _dir_listing_html(dir_path: Path, url_prefix: str, diff_param: str | None) -> str | None:
-  """Return the HTML listing of *dir_path*, or None when it is not a directory.
-
-  Carries the route's dir contract: the ``?diff=`` 400 (a diff target must be a
-  session artifact page, never a directory) and the unreadable-directory 403.
-  One scandir pass answers is_dir from the directory record and stats each
-  entry once; a repeat view of unchanged state serves the memo and pays only
-  that walk.
-  """
-  return _dir_listing_page(dir_path, url_prefix, diff_param)[0]
-
-
 def _dir_listing_page(dir_path: Path, url_prefix: str, diff_param: str | None) -> tuple[str | None, _ListingKey | None]:
   """The listing page and its memo key, or (None, None) when *dir_path* is not a directory.
 
   The key is the walked state the page is a pure function of; the route's gzip
   arm memoizes the page's compressed form under it (``_listing_page_gzip``).
+  Carries the route's dir contract: the ``?diff=`` 400 (a diff target must be a
+  session artifact page, never a directory) and the unreadable-directory 403.
+  One scandir pass answers is_dir from the directory record and stats each
+  entry once; a repeat view of unchanged state serves the memo and pays only
+  that walk.
   """
   try:
     scandir_iter = os.scandir(os.fspath(dir_path))

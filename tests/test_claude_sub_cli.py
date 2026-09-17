@@ -375,8 +375,8 @@ async def test_hook_bridge_accepts_fake_hook_source_and_emits_events(tmp_path: P
         claude_sub_hook._send_request,
         str(bridge.socket_path),
         bridge.token,
-        False,
-        _payload("SessionStart", source="startup"),
+        gate=False,
+        payload=_payload("SessionStart", source="startup"),
     )
     assert session_start == {"ok": True}
     assert (await bridge.events.get())["subtype"] == "init"
@@ -385,16 +385,16 @@ async def test_hook_bridge_accepts_fake_hook_source_and_emits_events(tmp_path: P
         claude_sub_hook._send_request,
         str(bridge.socket_path),
         bridge.token,
-        True,
-        _payload("UserPromptSubmit", prompt=PROMPT, turn_id="turn-1"),
+        gate=True,
+        payload=_payload("UserPromptSubmit", prompt=PROMPT, turn_id="turn-1"),
     )
     assert user_submit == {"ok": True}
     message = await asyncio.to_thread(
         claude_sub_hook._send_request,
         str(bridge.socket_path),
         bridge.token,
-        False,
-        _payload(
+        gate=False,
+        payload=_payload(
             "MessageDisplay",
             turn_id="turn-1",
             message_id="message-1",
@@ -679,7 +679,7 @@ async def test_respawn_passes_one_prompt_directly_and_does_not_use_a_shell(
       disallowed_tools=["AskUserQuestion,ExitPlanMode"],
   )
 
-  await claude_sub._respawn_claude(args, SESSION_ID, True, tmp_path / "plugin", Path.cwd())
+  await claude_sub._respawn_claude(args, SESSION_ID, resume=True, plugin_dir=tmp_path / "plugin", cwd=Path.cwd())
 
   assert len(calls) == 1
   command = calls[0]
@@ -710,7 +710,7 @@ async def test_respawn_passes_auto_compact_window_default_to_the_pane(
       disallowed_tools=["AskUserQuestion,ExitPlanMode"],
   )
 
-  await claude_sub._respawn_claude(args, SESSION_ID, True, tmp_path / "plugin", Path.cwd())
+  await claude_sub._respawn_claude(args, SESSION_ID, resume=True, plugin_dir=tmp_path / "plugin", cwd=Path.cwd())
 
   command = calls[0]
   assert "CLAUDE_CODE_AUTO_COMPACT_WINDOW=433000" in command

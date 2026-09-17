@@ -228,7 +228,7 @@ def test_merge_core_id_contract(tmp_path: Path) -> None:
           ]}),
       encoding="utf-8")
   out = tmp_path / "merged.json.gz"
-  real_merge_traces([first, second], out, False)
+  real_merge_traces([first, second], out, slim=False)
   with gzip.open(out) as merged_file:
     events = json.load(merged_file)["traceEvents"]
 
@@ -521,9 +521,9 @@ def test_single_flight_one_build_per_key(
 
   async def run() -> None:
     paths = [first, second]
-    leader = asyncio.create_task(pages._cached_merge(paths, False))
+    leader = asyncio.create_task(pages._cached_merge(paths, slim=False))
     assert await _wait_until(started.is_set)
-    followers = [asyncio.create_task(pages._cached_merge(paths, False)) for _ in range(4)]
+    followers = [asyncio.create_task(pages._cached_merge(paths, slim=False)) for _ in range(4)]
     release.set()
     results = await asyncio.gather(leader, *followers)
     assert len(calls) == 1
@@ -554,7 +554,8 @@ def test_single_flight_progress_independently(
   monkeypatch.setattr(pages, "merge_traces", counting_merge)
 
   async def run() -> None:
-    result_a, result_b = await asyncio.gather(pages._cached_merge(key_a, False), pages._cached_merge(key_b, False))
+    result_a, result_b = await asyncio.gather(
+        pages._cached_merge(key_a, slim=False), pages._cached_merge(key_b, slim=False))
     assert result_a.is_file() and result_b.is_file()
     assert result_a != result_b
     assert len(calls) == 2
@@ -580,7 +581,7 @@ def test_disconnect_does_not_lose_work(
   monkeypatch.setattr(pages, "merge_traces", _make_blocking_merge(calls, started, release))
 
   async def run() -> None:
-    waiter = asyncio.create_task(pages._cached_merge(key, False))
+    waiter = asyncio.create_task(pages._cached_merge(key, slim=False))
     assert await _wait_until(started.is_set)
     waiter.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -590,7 +591,7 @@ def test_disconnect_does_not_lose_work(
     assert await _wait_until(lambda: len(list(merge_cache.glob("*.json.gz"))) == 1)
     # A following request for the same key hits the now-cached entry, no second build.
     second_calls = len(calls)
-    hit = await pages._cached_merge(key, False)
+    hit = await pages._cached_merge(key, slim=False)
     assert hit.is_file()
     assert len(calls) == second_calls
 

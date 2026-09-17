@@ -565,7 +565,8 @@ def test_annotated_diff_page_gzip_is_deterministic_and_round_trips(sessions_root
   """mtime=0 keeps the compressed bytes identical across processes, and the form
   decompresses to exactly the plain body the plain memo serves."""
   base, new = _write_pages(sessions_root)
-  first = files_api._annotated_diff_page_gzip(base, new, True, "S")
-  second = files_api._annotated_diff_page_gzip(base, new, True, "S")
+  first = files_api._annotated_diff_page_gzip(base, new, inject_ui=True, session_id="S")
+  second = files_api._annotated_diff_page_gzip(base, new, inject_ui=True, session_id="S")
   assert first == second
-  assert gzip.decompress(first) == files_api._annotated_diff_page(base, new, True, "S").encode("utf-8")
+  assert gzip.decompress(first) == files_api._annotated_diff_page(
+      base, new, inject_ui=True, session_id="S").encode("utf-8")

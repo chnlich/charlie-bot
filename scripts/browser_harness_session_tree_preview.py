@@ -1293,45 +1293,36 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     spin_el = f"spinner-{child_id}"
     gear_el = f"worker-indicator-{root_id}"
 
-    async def send_child_message(message: str, label: str) -> None:
-        # The composer's send button is disabled while the session's thinking
-        # indicator is active, and a programmatic click on a disabled button is
-        # silently dropped (observed: a message sent while the node's own turn
-        # was live never shipped, and no run ever launched). Wait for the
-        # button to be enabled - the node's current turn finished - then send
-        # and verify the click fired by the message text landing in the chat
-        # tab before waiting on the run.
-        await evaluate(cdp, sid, f"switchSession({json.dumps(child_id)})")
-        await wait_for(cdp, sid, f"SESSION_ID === {json.dumps(child_id)}", timeout=15,
-                       label=f"{label} child manager selected")
-        await open_task_tab(cdp, sid, "chat")
-        await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10,
-                       label=f"{label} child composer")
-        await wait_for(cdp, sid, "!document.getElementById('send-btn').disabled", timeout=120,
-                       label=f"{label} send button enabled (node idle)")
-        await evaluate(cdp, sid,
-                       "(() => { const inp = document.getElementById('msg-input');"
-                       f"inp.value = {json.dumps(message)};"
-                       "inp.dispatchEvent(new Event('input')); })()")
-        await click(cdp, sid, "#send-btn")
-        await wait_for(cdp, sid,
-                       f"document.getElementById('tab-chat').textContent.includes({json.dumps(message)})",
-                       timeout=15, label=f"{label} message clicked through to the chat tab")
+    async def send_child_message(message: str, label: str) -> tuple[bool, str]:
+        """Send one bounded child-manager turn through the same admission and
+        dispatch route the composer posts to, and return the server's launch
+        decision (launch flag + reason) so the scenario evidence shows WHY a
+        run did or did not launch instead of leaving a silent idle row."""
+        status, body = api_request(base, access_key, "POST", f"/api/chat/{child_id}/message",
+                                   {"content": message})
+        decision = body if isinstance(body, dict) else {}
+        launched = status == 202 and bool(decision.get("launch"))
+        reason = str(decision.get("reason") or ("launched " + str(decision.get("run_id", ""))[:8]
+                                               if launched else f"HTTP {status}"))
+        log(f"  {label} child message: HTTP {status}, launch={decision.get('launch')}, reason={reason}")
+        return launched, f"send={status} launch={decision.get('launch')} reason={reason[:80]}"
 
     child_run_id = None
     late_label = "child turn"
+    narrow_send = ""
     try:
-        await send_child_message(
+        _launched, narrow_send = await send_child_message(
             "Trial narrow step. Write a 40-word note about a harbor, then reply with exactly "
             "NARROW-OK on the last line. Do not create subtasks.", "narrow-window")
         await wait_row_activity(cdp, sid, child_id, {"spinner": True}, 120,
                                 "child manager turn live for the narrow window")
         child_run_id = await active_run_of(child_id)
-        late_label = f"child run {str(child_run_id)[:8]}" if child_run_id else "child turn (live spinner)"
+        late_label = (f"child run {str(child_run_id)[:8]} ({narrow_send})"
+                      if child_run_id else f"child turn (live spinner; {narrow_send})")
     except (TimeoutError, RuntimeError) as exc:
         # Logged only: the narrow scenarios below record the row state they
         # actually observed, exactly once each.
-        log(f"narrow-window child turn did not go live: {exc!r}")
+        log(f"narrow-window child turn did not go live: {exc!r}; {narrow_send}")
 
     # Narrow viewport: the same live cues at 390px, names still readable.
     await cdp.send("Emulation.setDeviceMetricsOverride",
@@ -1384,7 +1375,7 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     # (45s bound), so the window observes a genuinely live Run across the
     # refresh.
     try:
-        await send_child_message(
+        _launched, reload_send = await send_child_message(
             "Trial reload step. Write a 60-word story about a storm, then reply with exactly "
             "RELOAD-OK on the last line. Do not create subtasks.", "reload-window")
         await cdp.send("Page.reload", {}, session_id=sid)
@@ -1398,12 +1389,12 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         results.record(
             "s14i-motion-timeline-after-reload",
             all(ok for ok, _ in reload_verdicts.values()),
-            f"{late_label} across an ordinary mid-run reload: "
+            f"{late_label} ({reload_send}) across an ordinary mid-run reload: "
             + "; ".join(detail for _, detail in reload_verdicts.values()),
             await screenshot(cdp, sid, results, "s14i-motion-after-reload"))
     except (TimeoutError, RuntimeError) as exc:
         results.record("s14i-motion-timeline-after-reload", False,
-                       f"{late_label}: {str(exc)[:280]}", None)
+                       f"{late_label} ({reload_send}): {str(exc)[:280]}", None)
 
     # The real stop: durable request, signal, observed exit -> interrupted, on
     # the child manager's own bounded turn. The reload turn is first waited out
@@ -1419,8 +1410,9 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     else:
         stop_target = None
         stop_stage = "stop message"
+        stop_send = ""
         try:
-            await send_child_message(
+            _launched, stop_send = await send_child_message(
                 "Trial stop step. Reply with exactly STOP-OK on the last line. "
                 "Do not create subtasks.", "stop-window")
             await wait_row_activity(cdp, sid, child_id, {"spinner": True}, 120,
@@ -1462,16 +1454,18 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                                f"worker run now={w_runs[0].get('state') if w_runs else 'none'}, "
                                f"worker row={'gone (auto-completed on its own success)' if worker_row_after is None else 'rendered'}",
                                await screenshot(cdp, sid, results, "s14e-after-stop-narrow"))
-        except TimeoutError as exc:
+        except (TimeoutError, RuntimeError) as exc:
+            # The child's last runs ride in the detail: a lingering run record
+            # (pid set, no terminal fact) or a refused launch must be visible
+            # in the evidence, not guessed at.
+            _s, runs_page = api_request(base, access_key, "GET",
+                                        f"/api/sessions/{child_id}/runs?order=desc&limit=5")
+            runs = (runs_page.get("items") or []) if isinstance(runs_page, dict) else []
+            run_summary = "; ".join(f"{r.get('id', '')[:8]}={r.get('state')}/pid={r.get('pid')}"
+                                    for r in runs[:5])
             results.record("s14e-stop-clears-activity", False,
-                           f"stop stage {stop_stage}: {str(exc)[:260]}",
-                           await screenshot(cdp, sid, results, "s14e-fail"))
-        except RuntimeError as exc:
-            # The row left the open tree before the cleared state could be
-            # read: recorded honestly, never painted as a pass.
-            results.record("s14e-stop-clears-activity", False,
-                           f"stop stage {stop_stage}: the row left the open tree before the "
-                           f"cleared state could be observed: {str(exc)[:200]}",
+                           f"stop stage {stop_stage} ({stop_send}): {str(exc)[:220]}; "
+                           f"child runs last5: {run_summary}",
                            await screenshot(cdp, sid, results, "s14e-fail"))
     await cdp.send("Emulation.clearDeviceMetricsOverride", session_id=sid)
     await asyncio.sleep(0.4)

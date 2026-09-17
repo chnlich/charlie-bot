@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import io
 import json
+import mmap
 import os
 import shutil
 import stat
@@ -625,7 +626,17 @@ def _reference_newlines(arr: "np.ndarray") -> "np.ndarray":
   return parts[0] if len(parts) == 1 else np.concatenate(parts)
 
 
-def _fast_reference_frames(data: bytes, take: int) -> tuple[int, int, int, bool] | None:
+def _mapping_ascii(data: "mmap.mmap") -> bool:
+  """Whole-mapping ASCII sweep, chunked so the compare's scratch stays in cache."""
+  import numpy as np
+  arr = np.frombuffer(data, dtype=np.uint8)
+  for offset in range(0, arr.size, _REFERENCE_SCAN_CHUNK):
+    if arr[offset:min(offset + _REFERENCE_SCAN_CHUNK, arr.size)].max() > 0x7F:
+      return False
+  return True
+
+
+def _fast_reference_frames(data: "bytes | mmap.mmap", take: int) -> tuple[int, int, int, bool] | None:
   """Vectorized frame check for the first ``take`` raw lines of ``data``.
 
   Returns ``(raw, start, end, needs_newline)`` when every in-budget frame is a
@@ -662,7 +673,7 @@ def _fast_reference_frames(data: bytes, take: int) -> tuple[int, int, int, bool]
   return (raw, int(starts[0]), end, needs_newline)
 
 
-def _stream_reference_lines(out: BinaryIO, data: bytes, take: int) -> tuple[int, int]:
+def _stream_reference_lines(out: BinaryIO, data: "bytes | mmap.mmap", take: int) -> tuple[int, int]:
   """Copy the non-blank lines among the first ``take`` raw line frames of ``data`` into ``out``.
 
   Returns ``(raw, appended)``: raw frames spent against the budget (blank
@@ -676,20 +687,30 @@ def _stream_reference_lines(out: BinaryIO, data: bytes, take: int) -> tuple[int,
   """
   # Validity parity with the text-mode read this replaces: it raised the same
   # UnicodeDecodeError on undecodable bytes, so the decoded result is unused.
-  # ASCII bytes are always valid UTF-8, so the isascii() scan proves validity
-  # and only a non-ASCII corpus pays the full decode.
-  if not data.isascii():
+  # ASCII bytes are always valid UTF-8, so an ASCII proof passes validity and
+  # only a non-ASCII corpus pays the full decode. An mmap lacks isascii(); the
+  # numpy sweep answers for the whole mapping, and a non-ASCII mapping
+  # materializes once so the decode raises the identical error.
+  ascii_ok = _mapping_ascii(data) if isinstance(data, mmap.mmap) else data.isascii()
+  if not ascii_ok:
+    if isinstance(data, mmap.mmap):
+      data = bytes(data)
     data.decode("utf-8")
   fast = _fast_reference_frames(data, take)
   if fast is not None:
     raw, start, end, needs_newline = fast
     if end > start:
-      out.write(memoryview(data)[start:end])
+      # The window's exported pointer must not outlive the write: the source's
+      # mmap closes after this call, and closing refuses while a view exists.
+      window = memoryview(data)[start:end]
+      try:
+        out.write(window)
+      finally:
+        window.release()
       if needs_newline:
         out.write(b"\n")
     return raw, raw
 
-  view = memoryview(data)
   pos = 0
   raw = 0
   appended = 0
@@ -710,13 +731,36 @@ def _stream_reference_lines(out: BinaryIO, data: bytes, take: int) -> tuple[int,
         raise ValueError(f"parent event line is not a serialized event object: {snippet!r}")
       # The CR of a CRLF pair folds before the write, matching the
       # universal-newline translation of the text-mode read; every other
-      # original byte (edge whitespace included) is kept.
+      # original byte (edge whitespace included) is kept. The per-line slice
+      # keeps no pointer exported past the write (an mmap closes after this
+      # stream returns, and closing refuses while a view exists).
       write_end = end - 1 if end > pos and data[end - 1] == 0x0D else end
-      out.write(view[pos:write_end])
+      out.write(data[pos:write_end])
       out.write(b"\n")
       appended += 1
     pos = end + 1
   return raw, appended
+
+
+def _stream_reference_file(out: BinaryIO, source: Path, take: int) -> tuple[int, int]:
+  """Stream one reference source's first ``take`` raw line frames into ``out``.
+
+  The source rides an mmap: the frame scan and the window write read the
+  mapping directly, so the corpus never enters the Python heap as one object —
+  the gigabyte-class live files pay the scan's memory bandwidth, not a
+  whole-file memcpy. Chat files mutate only by append between archive rewrites
+  and rewrites publish through ``os.replace`` (the ChatEventStore's stated
+  rule), so the mapping holds an append-only or already-unlinked inode and
+  never truncates under it.
+  """
+  with source.open("rb") as handle:
+    if os.fstat(handle.fileno()).st_size == 0:
+      return _stream_reference_lines(out, b"", take)  # mmap refuses an empty file
+    mapping = mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ)
+    try:
+      return _stream_reference_lines(out, mapping, take)
+    finally:
+      mapping.close()
 
 
 class SuccessionRefused(ValueError):
@@ -1513,9 +1557,9 @@ class SessionManager:
           if raw_left <= 0:
             break
           # A full-corpus budget spans nearly the whole file (only an archive
-          # pass mid-fork shrinks a take below the line count), so read_bytes
-          # over-reads no bytes worth chunk-accumulating against.
-          raw, appended = _stream_reference_lines(out, source.read_bytes(), raw_left)
+          # pass mid-fork shrinks a take below the line count), so the mapping
+          # over-covers no bytes worth chunk-accumulating against.
+          raw, appended = _stream_reference_file(out, source, raw_left)
           raw_left -= raw
           archived += appended
       if archived != archive_take:
@@ -1524,7 +1568,7 @@ class SessionManager:
       live_path = self.get_chat_events_path(parent_id)
       live = 0
       if live_take and live_path.exists():
-        _, live = _stream_reference_lines(out, live_path.read_bytes(), live_take)
+        _, live = _stream_reference_file(out, live_path, live_take)
       if live != live_take:
         raise ValueError(f"loaded {live} live parent events for requested range [0, {live_take})")
 

@@ -2,9 +2,9 @@
 
 The task text reaches the child through a `task.md` file in the run's
 transport directory, passed via `--task-file`; it never rides argv. Image
-attachments reach the child as repeated `--image` flags when the endpoint
-declares ``image_input`` (its config option); without it, a message carrying
-images is refused with one error event and nothing is sent.
+attachments reach the child as repeated `--image` flags by default; an
+endpoint whose config entry sets ``image_input: false`` refuses them with
+one error event and nothing is sent.
 """
 
 from collections.abc import AsyncIterator
@@ -66,7 +66,7 @@ class CharlieCodeBackend(AgentBackend):
       model: str,
       api_base: str | None = None,
       context_window: int | None = None,
-      image_input: bool = False,
+      image_input: bool = True,
       stream: bool = True,
       timeout_seconds: int | None = None,
       top_p: float | None = None,
@@ -102,11 +102,11 @@ class CharlieCodeBackend(AgentBackend):
                 cwd: str,
                 env: dict,
                 uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
-    """Refuse image attachments on endpoints without image input; otherwise hand them to the CLI as --image flags.
+    """Refuse image attachments on endpoints declaring ``image_input: false``; otherwise hand them to the CLI as --image flags.
 
     Image refs are picked out of ``uploaded_files`` by filename extension
-    (the ``IMAGE_MIME_BY_EXT`` keys). An endpoint whose option does not
-    declare ``image_input`` gets exactly one error event and nothing else — no
+    (the ``IMAGE_MIME_BY_EXT`` keys). An endpoint whose option sets
+    ``image_input: false`` gets exactly one error event and nothing else — no
     subprocess, no result. Non-image refs never produce flags; they keep
     riding the [Attached files] path text inside the task.
     """
@@ -118,7 +118,7 @@ class CharlieCodeBackend(AgentBackend):
       names = ", ".join(Path(str(ref.get("filename", ""))).name for ref in image_refs)
       yield make_error_event(
           f"refused: image attachments not sent — this endpoint declares no image input "
-          f"(image_input not set): {names}")
+          f"(image_input: false): {names}")
       return
     self._image_paths = [str(ref.get("path", "")) for ref in image_refs]
     # No try/finally on the clear: every run() overwrites the attribute before

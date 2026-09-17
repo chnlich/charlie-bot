@@ -72,7 +72,7 @@ def test_model_optional_only_for_routing_types(cls: type[BackendBase]) -> None:
 
 @pytest.mark.parametrize(
     ("field", "default", "explicit"),
-    [("image_input", False, True), ("stream", True, False), ("timeout_seconds", None, 600)],
+    [("image_input", True, False), ("stream", True, False), ("timeout_seconds", None, 600)],
     ids=["image_input", "stream", "timeout_seconds"],
 )
 def test_charlie_code_only_option_defaults_then_accepts_explicit(field: str, default: object, explicit: object) -> None:

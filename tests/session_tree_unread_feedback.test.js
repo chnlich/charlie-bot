@@ -327,13 +327,19 @@ test('a broadcast for the selected session updates the shared map without touchi
             'the broadcast handler left the selected row untouched');
 });
 
-test('reduced-motion styles stop every activity animation in the row', () => {
+test('reduced-motion styles stop the pulse cues but keep the spinner and gear animating', () => {
+  // User correction (icon-motion restore): the session spinner and the
+  // delegated-work gear are the row's established running cue and must keep
+  // their original continuous rotation even when the browser reports
+  // prefers-reduced-motion: reduce. The prior rule that suppressed them is
+  // superseded; only the pulse cues (running badge, unread dot) stay stopped.
   const css = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'css', 'styles.css'), 'utf8');
   const rule = css.split('@media (prefers-reduced-motion: reduce)')[1] || '';
-  assert.ok(rule.includes('.animate-spin'), 'the spinner is covered');
-  assert.ok(rule.includes('.animate-\\[spin_3s_linear_infinite\\]'), 'the delegated gear is covered');
-  assert.ok(rule.includes('.animate-pulse'), 'the running badge pulse is covered');
-  assert.ok(rule.includes('.animate-pulse-dot'), 'the unread dot pulse is covered');
+  assert.ok(rule, 'the reduced-motion block exists');
+  assert.ok(!rule.includes('.animate-spin'), 'the spinner keeps its rotation under reduce');
+  assert.ok(!rule.includes('spin_3s_linear_infinite'), 'the delegated gear keeps its rotation under reduce');
+  assert.ok(rule.includes('.animate-pulse'), 'the running badge pulse stays covered');
+  assert.ok(rule.includes('.animate-pulse-dot'), 'the unread dot pulse stays covered');
   assert.ok(/animation:\s*none\s*!important/.test(rule),
             'the rule beats tailwind.css, which loads after styles.css');
 });

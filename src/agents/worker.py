@@ -17,10 +17,11 @@ from src.agents.backends.base import (
     tail_follow_events,
 )
 from src.agents.backends.claude_code import ClaudeCodeBackend, claude_supervisor_env
-from src.agents.backends.deferred_build import build_backend_module_getattr, load_build_backend
+from src.agents.backends.deferred_build import load_build_backend
 from src.core import claude_accounts, claude_compaction, claude_relay, runs
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.deferred import deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendOption, BackendType, ClaudeAccount, ThreadMetadata
 from src.core.ndjson import append_ndjson
@@ -34,7 +35,7 @@ log = LazyStructlogLogger()
 
 def __getattr__(name: str) -> Any:
   # The "src.agents.worker.build_backend" patch target resolves through this hook.
-  return build_backend_module_getattr(name, __name__, globals())
+  return deferred_module_getattr(name, __name__, globals(), "build_backend", load_build_backend)
 
 
 QUOTA_ERROR_PATTERNS = [

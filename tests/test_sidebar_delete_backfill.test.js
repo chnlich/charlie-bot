@@ -17,7 +17,7 @@ const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext
   makeSessionMeta } = require('./session_context_stub');
 
 function makeSession(id, overrides = {}) {
-  return makeSessionMeta(id, {group: 'Work', status: 'active', rating: null, ...overrides});
+  return makeSessionMeta(id, {group: 'Work', status: 'active', ...overrides});
 }
 
 function makeCronSession(id, overrides = {}) {

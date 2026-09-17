@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlencode, urlparse
 
 import orjson
@@ -47,6 +48,9 @@ from src.core.trace_merge import (
     _trace_events_or_raise,
     merge_traces,
 )
+
+if TYPE_CHECKING:
+  from fastapi.templating import Jinja2Templates
 
 log = LazyStructlogLogger()
 
@@ -231,20 +235,21 @@ def _static_asset_version() -> str:
 
 router = APIRouter()
 
-# jinja2 + fastapi.templating ride every page render (~35 ms of the M99 server
-# import floor) and no import-time path touches a template, so the engine
-# builds on first render (the #1647 plan_diff deferral shape); the test that
-# pins this is tests/test_cli_import_weight.py's server ban set.
-_templates_instance = None
+# jinja2 + fastapi.templating ride every page render (~19 ms of the M99 server
+# import floor, marginal over the already-loaded fastapi) and no import-time
+# path touches a template, so the engine builds on first render (the #1647
+# plan_diff deferral shape); the test that pins this is
+# tests/test_cli_import_weight.py's server ban set.
+_templates_instance: "Jinja2Templates | None" = None
 
 
-def _templates():
+def _templates() -> "Jinja2Templates":
   """The request-time template engine, built on first use and reused after."""
   global _templates_instance
   if _templates_instance is None:
-    from fastapi.templating import Jinja2Templates
+    from fastapi import templating
 
-    _templates_instance = Jinja2Templates(directory=str(REPO_ROOT / "web" / "templates"))
+    _templates_instance = templating.Jinja2Templates(directory=str(REPO_ROOT / "web" / "templates"))
   return _templates_instance
 
 

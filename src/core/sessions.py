@@ -1579,11 +1579,11 @@ class SessionManager:
 
   async def mark_read(self, session_id: str) -> SessionMetadata | None:
     """Clear the unread flag for a session."""
-    return await self._set_unread_flag(session_id, False)
+    return await self._set_unread_flag(session_id, has_unread=False)
 
   async def mark_unread(self, session_id: str) -> None:
     """Set the unread flag for a session (called when master/workers produce output)."""
-    await self._set_unread_flag(session_id, True)
+    await self._set_unread_flag(session_id, has_unread=True)
 
   async def _set_unread_flag(self, session_id: str, has_unread: bool) -> SessionMetadata | None:
     """Write the unread flag and broadcast only when it actually flips.
@@ -1703,11 +1703,11 @@ class SessionManager:
 
   async def star_session(self, session_id: str) -> SessionMetadata | None:
     """Star a session."""
-    return await self._update_field(session_id, "starred", True, "session_starred")
+    return await self._update_field(session_id, "starred", value=True, log_event="session_starred")
 
   async def unstar_session(self, session_id: str) -> SessionMetadata | None:
     """Unstar a session."""
-    return await self._update_field(session_id, "starred", False, "session_unstarred")
+    return await self._update_field(session_id, "starred", value=False, log_event="session_unstarred")
 
   async def set_group(self, session_id: str, group: str | None) -> SessionMetadata | None:
     """Set or clear the group for a session."""

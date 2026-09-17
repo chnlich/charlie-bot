@@ -445,7 +445,7 @@ async def diff_file(
     path: str = Query(..., description="Repo-relative path of the file to diff"),
     old_path: str | None = Query(
         None, description="Pre-rename path; pass alongside path so a rename/copy renders as a rename, not a re-add"),
-    force: bool = Query(False, description="Render even if the diff exceeds the per-file cap"),
+    force: bool = Query(default=False, description="Render even if the diff exceeds the per-file cap"),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   """Return the unified diff for a single file.

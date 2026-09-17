@@ -433,11 +433,6 @@ def read_raw_cursor(cursor: Path) -> int:
     return 0
 
 
-def write_raw_cursor(cursor: Path, offset: int) -> None:
-  cursor.parent.mkdir(parents=True, exist_ok=True)
-  cursor.write_text(str(offset), encoding="utf-8")
-
-
 CURSOR_FIELD_BYTES = 20
 
 

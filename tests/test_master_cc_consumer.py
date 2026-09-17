@@ -750,7 +750,7 @@ async def test_zero_output_guard_resume_exempts_manual_compact(tmp_path: Path, m
   result_line = json.dumps(make_result_event()) + "\n"
   raw_path.write_text(boundary_line + result_line, encoding="utf-8")
   cursor_path = log_dir / runs.CURSOR_NAME
-  runs.write_raw_cursor(cursor_path, len(boundary_line.encode("utf-8")))
+  cursor_path.write_text(str(len(boundary_line.encode("utf-8"))), encoding="utf-8")
 
   # pid=None: no liveness probe and no kill path; is_alive=False makes the
   # follower drain the file and stop instead of waiting out the post-result

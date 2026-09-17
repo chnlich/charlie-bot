@@ -79,6 +79,9 @@ def test_merge_endpoint_errors_and_gzip_response(client: TestClient, tmp_path: P
 
   trace = tmp_path / "rank0.json"
   _write_trace(trace)
+  # A dir holding a real trace must merge: pins the route parameter's alias on the 'dir' query
+  # key — a broken alias leaves the parameter None and lands in the 400 above instead.
+  assert client.get("/perfetto/merged", params={"dir": str(tmp_path)}).status_code == 200
   response = client.get("/perfetto/merged", params={"trace": str(trace)})
   assert response.status_code == 200
   assert response.content[:2] == b"\x1f\x8b"
@@ -92,6 +95,25 @@ def test_merge_endpoint_surfaces_corrupt_json_error(client: TestClient, tmp_path
   response = client.get("/perfetto/merged", params={"trace": str(corrupt)})
   assert response.status_code == 500
   assert "unexpected character" in response.json()["detail"]
+
+
+def test_viewer_dir_query_reaches_the_route_through_the_alias(client: TestClient, tmp_path: Path) -> None:
+  """The viewer's 'dir' query key rides the route parameter's alias: with the key accepted the
+  page discovers the directory's traces; a broken alias leaves the parameter None and lands in
+  the no-inputs 400 instead."""
+  _write_trace(tmp_path / "rank0.json")
+  response = client.get("/perfetto", params={"dir": str(tmp_path), "pattern": "rank*.json"})
+  assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_viewer_dir_path_builds_merged_link_with_the_dir_key(tmp_path: Path) -> None:
+  """The merged-trace link the page builds carries the 'dir' query key perfetto_merged reads."""
+  _write_trace(tmp_path / "rank0.json")
+  response = await pages.perfetto_viewer(
+      make_page_request("/perfetto"), trace=[], dir_path=str(tmp_path), pattern="rank*.json", title=None, slim=None)
+  query = parse_qs(urlsplit(response.context["trace_url"]).query)
+  assert query["dir"] == [str(tmp_path)]
 
 
 def test_direct_pass_rejects_non_finite_literals(client: TestClient, tmp_path: Path) -> None:
@@ -321,7 +343,7 @@ async def test_perfetto_page_single_local_trace_uses_merged_url(tmp_path: Path) 
   trace = tmp_path / "rank0.json"
   _write_trace(trace)
   response = await pages.perfetto_viewer(
-      make_page_request("/perfetto"), trace=[str(trace)], dir=None, pattern="*.json", title=None, slim=None)
+      make_page_request("/perfetto"), trace=[str(trace)], dir_path=None, pattern="*.json", title=None, slim=None)
 
   merged_url = response.context["trace_url"]
   assert urlsplit(merged_url).path == "/perfetto/merged"
@@ -336,7 +358,7 @@ async def test_perfetto_page_single_remote_trace_has_no_warning() -> None:
   response = await pages.perfetto_viewer(
       make_page_request("/perfetto"),
       trace=["https://example.com/rank0.json"],
-      dir=None,
+      dir_path=None,
       pattern="*.json",
       title=None,
       slim=None,
@@ -351,7 +373,7 @@ async def test_perfetto_page_directory_single_match_uses_merged_url(tmp_path: Pa
   trace_dir.mkdir()
   _write_trace(trace_dir / "rank0.json")
   response = await pages.perfetto_viewer(
-      make_page_request("/perfetto"), trace=[], dir=str(trace_dir), pattern="rank*.json", title=None, slim=None)
+      make_page_request("/perfetto"), trace=[], dir_path=str(trace_dir), pattern="rank*.json", title=None, slim=None)
 
   assert urlsplit(response.context["trace_url"]).path == "/perfetto/merged"
   assert response.context["warn"] is None
@@ -365,7 +387,7 @@ async def test_perfetto_page_multiple_local_json_uses_one_merged_url(tmp_path: P
   response = await pages.perfetto_viewer(
       make_page_request("/perfetto"),
       trace=[str(path) for path in traces],
-      dir=None,
+      dir_path=None,
       pattern="*.json",
       title="Ranks",
       slim=1,
@@ -388,7 +410,7 @@ async def test_perfetto_page_directory_forwards_discovery_params(tmp_path: Path)
   _write_trace(trace_dir / "rank1.json")
   _write_trace(trace_dir / "rank0.json")
   response = await pages.perfetto_viewer(
-      make_page_request("/perfetto"), trace=[], dir=str(trace_dir), pattern="rank*.json", title=None, slim=None)
+      make_page_request("/perfetto"), trace=[], dir_path=str(trace_dir), pattern="rank*.json", title=None, slim=None)
 
   query = parse_qs(urlsplit(response.context["trace_url"]).query)
   assert query == {"dir": [str(trace_dir)], "pattern": ["rank*.json"]}
@@ -401,7 +423,7 @@ async def test_perfetto_page_mixed_inputs_warns_and_uses_first(tmp_path: Path) -
   response = await pages.perfetto_viewer(
       make_page_request("/perfetto"),
       trace=[str(local), "https://example.com/rank1.json"],
-      dir=None,
+      dir_path=None,
       pattern="*.json",
       title=None,
       slim=None,
@@ -414,7 +436,7 @@ async def test_perfetto_page_mixed_inputs_warns_and_uses_first(tmp_path: Path) -
 async def test_perfetto_page_rejects_empty_input() -> None:
   with pytest.raises(HTTPException) as error:
     await pages.perfetto_viewer(
-        make_page_request("/perfetto"), trace=[], dir=None, pattern="*.json", title=None, slim=None)
+        make_page_request("/perfetto"), trace=[], dir_path=None, pattern="*.json", title=None, slim=None)
   assert error.value.status_code == 400
 
 
@@ -488,7 +510,7 @@ async def test_two_phase_status_strings_are_present(tmp_path: Path) -> None:
   response = await pages.perfetto_viewer(
       make_page_request("/perfetto"),
       trace=[str(trace) for trace in traces],
-      dir=None,
+      dir_path=None,
       pattern="*.json",
       title=None,
       slim=None,

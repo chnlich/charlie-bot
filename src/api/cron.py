@@ -135,13 +135,13 @@ async def _ensure_backend_update_session(
     raise HTTPException(status_code=409, detail=str(e)) from e
 
 
-def _check_pm_project_unique(name: str, type: str | None, project: str | None) -> None:
+def _check_pm_project_unique(name: str, task_type: str | None, project: str | None) -> None:
   """Reject when another type: pm task already carries the same project (group).
 
   At most one type: pm task per group, so at most one live role=project
   session per group. The check names the conflicting task.
   """
-  if type != 'pm':
+  if task_type != 'pm':
     return
   for other in get_scheduled_tasks():
     if other.name != name and other.type == 'pm' and other.project == project:

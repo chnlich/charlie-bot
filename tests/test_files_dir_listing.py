@@ -24,7 +24,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import src.api.files as files_api
-from src.api.files import _DIR_LISTING_TEMPLATE, _dir_listing_html, _format_mtime, _listing_memo, _row_memo
+from src.api.files import _DIR_LISTING_TEMPLATE, _dir_listing_page, _format_mtime, _listing_memo, _row_memo
 from src.api.files import router as files_router
 
 
@@ -102,7 +102,7 @@ def _listing_corpus(tmp_path: Path) -> Path:
 
 def test_listing_matches_the_reference_walk_bytes(tmp_path: Path) -> None:
   corpus = _listing_corpus(tmp_path)
-  served = _dir_listing_html(corpus, f"/files{corpus}", None)
+  served = _dir_listing_page(corpus, f"/files{corpus}", None)[0]
   assert served is not None
   assert served == _reference_listing(corpus, f"/files{corpus}")
 
@@ -119,14 +119,14 @@ def test_a_changed_corpus_rebuild_serves_the_cold_builds_bytes(tmp_path: Path) -
   prefix = f"/files{corpus}"
   _row_memo.clear()
   _listing_memo.clear()
-  assert _dir_listing_html(corpus, prefix, None) is not None
+  assert _dir_listing_page(corpus, prefix, None)[0] is not None
   assert len(_row_memo) == 5
   _listing_memo.clear()
   os.utime(corpus / "alpha.txt", None)
-  rebuilt = _dir_listing_html(corpus, prefix, None)
+  rebuilt = _dir_listing_page(corpus, prefix, None)[0]
   _row_memo.clear()
   _listing_memo.clear()
-  cold = _dir_listing_html(corpus, prefix, None)
+  cold = _dir_listing_page(corpus, prefix, None)[0]
   assert rebuilt is not None and cold is not None
   assert rebuilt == cold
 
@@ -134,7 +134,7 @@ def test_a_changed_corpus_rebuild_serves_the_cold_builds_bytes(tmp_path: Path) -
 def test_a_non_directory_returns_none_and_the_route_falls_through(tmp_path: Path) -> None:
   page = tmp_path / "page.txt"
   page.write_text("plain", encoding="utf-8")
-  assert _dir_listing_html(page, "/files", None) is None
+  assert _dir_listing_page(page, "/files", None)[0] is None
   response = _client().get(f"/files{page}")
   assert response.status_code == 200
   assert response.text == "plain"
@@ -236,7 +236,7 @@ def test_mtime_text_is_utc(tmp_path: Path) -> None:
   target = tmp_path / "when.txt"
   target.write_bytes(b"x")
   stamp = time.strftime("%Y-%m-%d %H:%M", time.gmtime(target.stat().st_mtime))
-  served = _dir_listing_html(tmp_path, "/files", None)
+  served = _dir_listing_page(tmp_path, "/files", None)[0]
   assert served is not None and stamp in served
 
 

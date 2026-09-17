@@ -117,7 +117,7 @@ def _compacting_model_note(ev: dict) -> str:
   return f'by {family.capitalize()}'
 
 
-def _format_k_tokens(count: int | float) -> str:
+def _format_k_tokens(count: float) -> str:
   """The one formatter every token figure of the compaction line goes through:
   one decimal below 100k (15.5k), whole k at or above (1014k)."""
   return f'{count / 1000:.1f}k' if count < 100_000 else f'{round(count / 1000)}k'

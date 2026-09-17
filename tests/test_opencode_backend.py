@@ -5,7 +5,7 @@ import re
 import sys
 from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -1084,7 +1084,7 @@ class _FakeRunHttpClient:
   def __init__(self, response: _FakeDelayedStreamResponse) -> None:
     self._response = response
 
-  async def __aenter__(self) -> "_FakeRunHttpClient":
+  async def __aenter__(self) -> Self:
     return self
 
   async def __aexit__(self, *exc: object) -> bool:
@@ -1272,7 +1272,7 @@ class _StubServeHttpClient:
   def __init__(self, script: _StubServeScript) -> None:
     self._script = script
 
-  async def __aenter__(self) -> "_StubServeHttpClient":
+  async def __aenter__(self) -> Self:
     return self
 
   async def __aexit__(self, *exc: object) -> bool:
@@ -1632,7 +1632,7 @@ async def test_per_call_clients_carry_shared_ssl_context(monkeypatch: pytest.Mon
     def __init__(self, **kwargs: object) -> None:
       captured.append(kwargs)
 
-    async def __aenter__(self) -> "_KwargsClient":
+    async def __aenter__(self) -> Self:
       return self
 
     async def __aexit__(self, *exc: object) -> bool:

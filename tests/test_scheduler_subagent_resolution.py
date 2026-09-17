@@ -39,22 +39,6 @@ async def test_session_default_returns_configured_backend() -> None:
 
 
 @pytest.mark.asyncio
-async def test_session_default_raises_for_stale_backend() -> None:
-  """A session pinned to an id config no longer defines must fail loudly, never substitute."""
-  cfg = _build_cfg(
-      [
-          backend_option(id="claude-opus-4.7", label="Opus 4.7", type="cc-claude", model="claude-opus-4-7"),
-          CODEX_BACKEND_OPTION,
-      ])
-  # Stored id no longer exists (e.g. renamed from claude-opus-4.6 to claude-opus-4.7).
-  session = SessionMetadata(name="s", backend="claude-opus-4.6")
-  mgr = _mock_session_mgr(session)
-
-  with pytest.raises(ValueError, match="refusing to substitute"):
-    await resolve_requested_subagent_backend_model(session.id, cfg, mgr, requested_backend=None)
-
-
-@pytest.mark.asyncio
 async def test_session_default_uses_first_option_when_no_backend_pinned() -> None:
   """An empty session backend is the documented default, not a substitution."""
   cfg = _build_cfg(
@@ -71,35 +55,50 @@ async def test_session_default_uses_first_option_when_no_backend_pinned() -> Non
 
 
 @pytest.mark.asyncio
-async def test_session_default_raises_when_no_backend_options() -> None:
-  cfg = _build_cfg([])
-  session = SessionMetadata(name="s", backend="claude-opus-4.6")
+@pytest.mark.parametrize(
+    ("options", "session_backend", "requested_backend", "match"),
+    [
+        pytest.param(
+            [
+                backend_option(id="claude-opus-4.7", label="Opus 4.7", type="cc-claude", model="claude-opus-4-7"),
+                CODEX_BACKEND_OPTION,
+            ],
+            "claude-opus-4.6",
+            None,
+            "refusing to substitute",
+            id="stale-pinned-id",
+        ),
+        pytest.param([], "claude-opus-4.6", None, "requires a configured backends.options entry", id="no-options"),
+        pytest.param(
+            [backend_option(id="claude-opus-4.7", label="Opus", type="cc-claude", model="claude-opus-4-7")],
+            "claude-opus-4.7",
+            "missing-backend",
+            "is not in backends.options",
+            id="unknown-typo",
+        ),
+        pytest.param(
+            [backend_option(id="claude-opus-4.7", label="Opus", type="cc-claude", model="")],
+            "claude-opus-4.7",
+            None,
+            "has no default model",
+            id="option-without-model",
+        ),
+    ],
+)
+async def test_unresolvable_backend_resolution_raises(
+    options: list[BackendOption],
+    session_backend: str,
+    requested_backend: str | None,
+    match: str,
+) -> None:
+  """Every unresolvable backend resolution raises with its own reason and never substitutes:
+  a session pinned to an id config no longer defines (e.g. renamed from claude-opus-4.6 to
+  claude-opus-4.7; the second configured option is the substitute being refused), an empty
+  backends.options, an explicit --backend typo, and a selected option whose type needs a
+  model it does not declare."""
+  cfg = _build_cfg(options)
+  session = SessionMetadata(name="s", backend=session_backend)
   mgr = _mock_session_mgr(session)
 
-  with pytest.raises(ValueError, match=r"configured backends.options entry"):
-    await resolve_requested_subagent_backend_model(session.id, cfg, mgr, requested_backend=None)
-
-
-@pytest.mark.asyncio
-async def test_requested_backend_raises_for_unknown_typo() -> None:
-  """Explicit --backend typos must still fail fast."""
-  cfg = _build_cfg([
-      backend_option(id="claude-opus-4.7", label="Opus", type="cc-claude", model="claude-opus-4-7"),
-  ])
-  session = SessionMetadata(name="s", backend="claude-opus-4.7")
-  mgr = _mock_session_mgr(session)
-
-  with pytest.raises(ValueError, match=r"is not in backends.options"):
-    await resolve_requested_subagent_backend_model(session.id, cfg, mgr, requested_backend="missing-backend")
-
-
-@pytest.mark.asyncio
-async def test_session_default_raises_when_option_has_no_model() -> None:
-  cfg = _build_cfg([
-      backend_option(id="claude-opus-4.7", label="Opus", type="cc-claude", model=""),
-  ])
-  session = SessionMetadata(name="s", backend="claude-opus-4.7")
-  mgr = _mock_session_mgr(session)
-
-  with pytest.raises(ValueError, match="has no default model"):
-    await resolve_requested_subagent_backend_model(session.id, cfg, mgr, requested_backend=None)
+  with pytest.raises(ValueError, match=match):
+    await resolve_requested_subagent_backend_model(session.id, cfg, mgr, requested_backend=requested_backend)

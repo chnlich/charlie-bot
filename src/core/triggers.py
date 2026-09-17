@@ -317,7 +317,7 @@ async def _probe_remaining_remote_pids(
 async def _probe_sacct(
     job_ids: list[int],
     trigger_id: str,
-    host: str | None = None,
+    host: str | None,
 ) -> tuple[dict[int, tuple[str, str]], str | None]:
   """Run ``sacct`` once for the given job ids, locally or over ssh.
 

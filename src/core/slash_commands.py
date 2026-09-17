@@ -132,7 +132,7 @@ class SlashDispatchResult:
 async def dispatch_slash_command(
     name: str,
     args: str,
-    session_dir: str = '',
+    session_dir: str,
 ) -> SlashDispatchResult:
   """Look up a YAML slash command by name and execute/prepare it.
 

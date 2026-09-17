@@ -1207,8 +1207,8 @@ class SessionManager:
   async def search_sessions_readonly(
       self,
       query: str,
-      include_running_status: bool = False,
-      include_pending_trigger_status: bool = False,
+      include_running_status: bool,
+      include_pending_trigger_status: bool,
   ) -> tuple[list[SessionMetadata], dict[str, dict]]:
     """Search sessions by name (every status) and chat event content (active only), case-insensitive.
 
@@ -2479,9 +2479,9 @@ class SessionManager:
   async def _enrich_and_sort(
       self,
       sessions: list[SessionMetadata],
-      include_running_status: bool = False,
-      include_pending_trigger_status: bool = False,
-      include_pending_plan_approval: bool = False,
+      include_running_status: bool,
+      include_pending_trigger_status: bool,
+      include_pending_plan_approval: bool,
   ) -> list[SessionMetadata]:
     """Populate sidebar state and sort newest first."""
     await self.populate_sidebar_state(
@@ -2496,8 +2496,8 @@ class SessionManager:
   async def resolve_sidebar_state(
       self,
       sessions: list[SessionMetadata],
-      include_running_status: bool = False,
-      include_pending_trigger_status: bool = False,
+      include_running_status: bool,
+      include_pending_trigger_status: bool,
       include_pending_plan_approval: bool = False,
       force: bool = False,
   ) -> dict[str, dict]:
@@ -2646,8 +2646,8 @@ class SessionManager:
   async def populate_sidebar_state(
       self,
       sessions: list[SessionMetadata],
-      include_running_status: bool = False,
-      include_pending_trigger_status: bool = False,
+      include_running_status: bool,
+      include_pending_trigger_status: bool,
       include_pending_plan_approval: bool = False,
       force: bool = False,
   ) -> None:

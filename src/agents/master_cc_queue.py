@@ -429,8 +429,8 @@ async def run_message(
 async def cancel_master(
     session_id: str,
     *,
-    meta: SessionMetadata | None = None,
-    session_mgr: "SessionManager | None" = None,
+    meta: SessionMetadata | None,
+    session_mgr: "SessionManager | None",
 ) -> bool:
   """Terminate the running master CC turn for this session.
 
@@ -439,8 +439,8 @@ async def cancel_master(
   back to the on-disk master_run record — an irreversible kill goes out only
   when ``runs.is_run_alive`` proves the recorded (pid, pid_start, started_at)
   triple still names a live process; an unprovable record gets no signal at
-  all and the endpoint keeps its 404. Callers that pass neither optional keep
-  the in-memory-only behavior.
+  all and the endpoint keeps its 404. A None pair keeps the in-memory-only
+  behavior.
 
   Returns True if a turn was found and signalled, False otherwise.
   """

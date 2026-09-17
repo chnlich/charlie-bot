@@ -113,6 +113,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M101 raw events download, gzip-accepted | M101 collector below | seconds of loop lag + wall per full download of the worst on-disk live chat file through the real app stack (the events viewer's fetch and its download link, the browser's Accept-Encoding: gzip shape); the first view (the cold read+compress a fresh open pays, scratch home) | loop-lag median < 0.010 s; steady-state wall median < 0.10 s; first-view wall < max(1.0 s, bytes ÷ 200 MB/s) (recalibrated from < 1.0 s: the line was set on the 36.3 MB / 5519-event corpus the 2026-09-14 landing measured — first views 741-811 ms; the worst corpus is now the 1051.3 MB runaway-turn capture whose first view is the memo's one executor hop — read + level-1 gzip of the whole corpus — at 3930-4030 ms, 261-267 MB/s end-to-end, the compress floor the same class the M84 tail-follow line tracks — see the 2026-09-16 history row; a corpus reversion re-tightens the line automatically) | — (introduced with its first history row) |
 | M102 artifact-CLI command wall, wrap verb | M102 collector below | seconds per `charliebot artifact wrap <fragment> --genre plan --output <page>` wall, fresh process, scratch fragment/output (the plan page assembly the master's plan delivery runs; local only — no server round trip, no live-home write; the check verb's probe imports its registry stack inside run_probe, so a check run's wall keeps its work) | median < 0.35 s | — (introduced with its first history row) |
 | M103 config-dependency resolution, remaining sync sites | M103 collector below | seconds per raw-ASGI drive of the diff viewer, the index page, and the repos listing over a scratch empty corpus (the routes' dependency-solve + render floor); 0 routes resolving config through the sync `Depends(get_config)` — enforced by the route-walk guard test, not the collector | /diff median < 0.0015 s; / median < 0.0030 s; /api/git/repos median < 0.0015 s | — (introduced with its first history row) |
+| M104 backend tail-follow cursor checkpoint, per line | M104 collector below | seconds per consumed line of a scripted 2000-line stream checkpointed to a real cursor file (scratch storage, the mount's held-fd shape) | median < 0.00005 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -7005,6 +7006,73 @@ async def main():
     print("; ".join(rows))
 
 asyncio.run(main())
+EOF
+```
+
+M104 — backend tail-follow cursor checkpoint, per line. Every consumed line of the
+tail-follow loop checkpoints the byte offset to the mount's ``agent.raw.cursor`` so a
+server restart re-attaches without replaying delivered lines; the per-line write is
+invisible to the standing parse metric (M84's replay disables the cursor) and its cost
+is storage-shaped, so the collector drives the real ``tail_follow_events`` over a
+scripted 2000-line scratch stream with a real cursor file under /tmp (live home
+untouched), one warm pass, as at a first mount, then five timed drains, asserting the
+recorded offset equals the consumed bytes. Evidence points the same collector at the
+before and after checkouts (``CHECKOUT`` at each root), the same shape as the M89
+protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, sys, tempfile, time
+sys.path.insert(0, os.environ["CHECKOUT"])
+from pathlib import Path
+from src.agents.backends.base import tail_follow_events
+from src.core.runs import CURSOR_NAME, read_raw_cursor
+
+LINES = 2000
+
+work = Path(tempfile.mkdtemp(prefix="m104-cursor-", dir="/tmp"))
+raw = work / "agent.raw.ndjson"
+raw.write_bytes(b"".join(
+    b'{"type": "assistant", "seq": %d, "pad": "%s"}\n' % (i, b"y" * 60) for i in range(LINES)
+))
+cursor = work / CURSOR_NAME
+total_bytes = raw.stat().st_size
+
+
+async def drain():
+    count = 0
+
+    def translate(event):
+        nonlocal count
+        count += 1
+        return [event]
+
+    async for _ in tail_follow_events(
+        raw, translate=translate, is_alive=lambda: False,
+        cursor=cursor, start_offset=0, post_result_timeout=60.0,
+    ):
+        pass
+    return count
+
+
+async def main():
+    await drain()  # warm, as at a first mount; not timed
+    times = []
+    count = 0
+    for _ in range(5):
+        t0 = time.perf_counter()
+        count = await drain()
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    assert count == LINES, count
+    assert read_raw_cursor(cursor) == total_bytes, (read_raw_cursor(cursor), total_bytes)
+    print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {LINES}-line stream, cursor {total_bytes} B "
+          f"recorded; per-line cursor checkpoint wall median {times[2] / LINES * 1e6:.1f} us, "
+          f"max {times[-1] / LINES * 1e6:.1f} us over 5 drains")
+
+asyncio.run(main())
+import shutil
+shutil.rmtree(work)
 EOF
 ```
 

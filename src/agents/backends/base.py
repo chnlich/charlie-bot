@@ -487,109 +487,115 @@ async def tail_follow_events(
     last_output_at = last_growth
   silence_reported = False
   pending_tool_calls: set[str] = set()
+  cursor_writer = runs.RawCursorWriter(cursor) if cursor is not None else None
 
-  with open(raw_path, "rb") as f:
-    f.seek(offset)
-    # The drain reads to EOF once per round and carries only the trailing
-    # partial line into the next round, so a completed backlog costs one
-    # C-level readall plus one slice per line; the chunked bytearray carry
-    # re-grew and compacted the whole accumulated buffer per 64 KB round, and
-    # a 10 MB backlog measured ~14 ms of that churn against a ~13 ms parse
-    # floor (the live read side of every covered backend's streamed turn).
-    carry = b""
-    while True:
-      fresh = f.read()
-      if fresh:
-        last_growth = time.monotonic()
-        # The producer's last write, anchored to the monotonic clock (the
-        # file's mtime — reading pre-mount backlog must not count as output).
-        last_output_at = last_growth - max(0.0, time.time() - os.fstat(f.fileno()).st_mtime)
-        data = carry + fresh if carry else fresh
-        carry = b""
-        view = memoryview(data)
-        start = 0
-        while True:
-          nl = data.find(b"\n", start)
-          if nl < 0:
-            carry = data[start:]
-            break
-          # The line rides a zero-copy view: orjson parses straight from the
-          # read buffer, where a bytes slice paid a full copy per line (the
-          # 10 MB worst line measured ~5 ms of copy plus ~8 ms of parse
-          # inflation from the copy's cold cache).
-          raw_line = view[start:nl]
-          start = nl + 1
-          offset += len(raw_line) + 1
-          event = parse_ndjson_line(raw_line, log_event="backend_line_not_json", log_fields={})
-          if event is None:
-            continue
-          mtime = os.fstat(f.fileno()).st_mtime
-          for translated in translate(event):
-            evt_type = translated.get("type")
+  try:
+    with open(raw_path, "rb") as f:
+      f.seek(offset)
+      # The drain reads to EOF once per round and carries only the trailing
+      # partial line into the next round, so a completed backlog costs one
+      # C-level readall plus one slice per line; the chunked bytearray carry
+      # re-grew and compacted the whole accumulated buffer per 64 KB round, and
+      # a 10 MB backlog measured ~14 ms of that churn against a ~13 ms parse
+      # floor (the live read side of every covered backend's streamed turn).
+      carry = b""
+      while True:
+        fresh = f.read()
+        if fresh:
+          last_growth = time.monotonic()
+          # The producer's last write, anchored to the monotonic clock (the
+          # file's mtime — reading pre-mount backlog must not count as output).
+          last_output_at = last_growth - max(0.0, time.time() - os.fstat(f.fileno()).st_mtime)
+          data = carry + fresh if carry else fresh
+          carry = b""
+          view = memoryview(data)
+          start = 0
+          while True:
+            nl = data.find(b"\n", start)
+            if nl < 0:
+              carry = data[start:]
+              break
+            # The line rides a zero-copy view: orjson parses straight from the
+            # read buffer, where a bytes slice paid a full copy per line (the
+            # 10 MB worst line measured ~5 ms of copy plus ~8 ms of parse
+            # inflation from the copy's cold cache).
+            raw_line = view[start:nl]
+            start = nl + 1
+            offset += len(raw_line) + 1
+            event = parse_ndjson_line(raw_line, log_event="backend_line_not_json", log_fields={})
+            if event is None:
+              continue
+            mtime = os.fstat(f.fileno()).st_mtime
+            for translated in translate(event):
+              evt_type = translated.get("type")
 
-            # Track pending tool calls — wrapped format (OpenCode/GLM-5):
-            # {type: 'assistant', message: {content: [{type: 'tool_use', id: '...'}]}}
-            if evt_type == ET.ASSISTANT:
-              for item in translated.get("message", {}).get("content", []):
-                if isinstance(item, dict) and item.get("type") == ET.TOOL_USE:
-                  tool_id = item.get("id", "")
-                  if tool_id:
-                    pending_tool_calls.add(tool_id)
+              # Track pending tool calls — wrapped format (OpenCode/GLM-5):
+              # {type: 'assistant', message: {content: [{type: 'tool_use', id: '...'}]}}
+              if evt_type == ET.ASSISTANT:
+                for item in translated.get("message", {}).get("content", []):
+                  if isinstance(item, dict) and item.get("type") == ET.TOOL_USE:
+                    tool_id = item.get("id", "")
+                    if tool_id:
+                      pending_tool_calls.add(tool_id)
 
-            # Track pending tool calls — flat format (Codex/Gemini):
-            # {type: 'tool_use', id: '...', name: '...'}
-            if evt_type == ET.TOOL_USE:
-              tool_id = translated.get("id", "")
-              if tool_id:
-                pending_tool_calls.add(tool_id)
+              # Track pending tool calls — flat format (Codex/Gemini):
+              # {type: 'tool_use', id: '...', name: '...'}
+              if evt_type == ET.TOOL_USE:
+                tool_id = translated.get("id", "")
+                if tool_id:
+                  pending_tool_calls.add(tool_id)
 
-            # Clear pending tool calls on tool_result events — flat format.
-            if evt_type == ET.TOOL_RESULT:
-              tool_use_id = translated.get("tool_use_id", "")
-              if tool_use_id:
-                pending_tool_calls.discard(tool_use_id)
+              # Clear pending tool calls on tool_result events — flat format.
+              if evt_type == ET.TOOL_RESULT:
+                tool_use_id = translated.get("tool_use_id", "")
+                if tool_use_id:
+                  pending_tool_calls.discard(tool_use_id)
 
-            # Clear pending tool calls — wrapped format (Claude Code):
-            # {type: 'user', message: {content: [{type: 'tool_result', tool_use_id: '...'}]}}
-            if evt_type == ET.USER:
-              for item in translated.get("message", {}).get("content", []):
-                if isinstance(item, dict) and item.get("type") == ET.TOOL_RESULT:
-                  tool_use_id = item.get("tool_use_id", "")
-                  if tool_use_id:
-                    pending_tool_calls.discard(tool_use_id)
+              # Clear pending tool calls — wrapped format (Claude Code):
+              # {type: 'user', message: {content: [{type: 'tool_result', tool_use_id: '...'}]}}
+              if evt_type == ET.USER:
+                for item in translated.get("message", {}).get("content", []):
+                  if isinstance(item, dict) and item.get("type") == ET.TOOL_RESULT:
+                    tool_use_id = item.get("tool_use_id", "")
+                    if tool_use_id:
+                      pending_tool_calls.discard(tool_use_id)
 
-            _clamp_event_timestamp(translated, mtime)
-            yield translated
+              _clamp_event_timestamp(translated, mtime)
+              yield translated
 
-            if not saw_result and evt_type == ET.RESULT:
-              if pending_tool_calls:
-                log.debug(
-                    "backend_result_suppressed_pending_tools",
-                    pending=len(pending_tool_calls),
-                    tool_ids=list(pending_tool_calls),
-                )
-              else:
-                saw_result = True
-                last_growth = time.monotonic()
-          if cursor is not None:
-            runs.write_raw_cursor(cursor, offset)
-        continue
+              if not saw_result and evt_type == ET.RESULT:
+                if pending_tool_calls:
+                  log.debug(
+                      "backend_result_suppressed_pending_tools",
+                      pending=len(pending_tool_calls),
+                      tool_ids=list(pending_tool_calls),
+                  )
+                else:
+                  saw_result = True
+                  last_growth = time.monotonic()
+            if cursor_writer is not None:
+              cursor_writer.write(offset)
+          continue
 
-      if saw_result and time.monotonic() - last_growth > post_result_timeout:
-        log.warning("backend_post_result_timeout", timeout=post_result_timeout)
-        break
-      if not is_alive():
-        break  # producer gone and fully drained
-      if (on_silence is not None and not silence_reported and
-          time.monotonic() - last_output_at > NO_OUTPUT_REPORT_THRESHOLD):
-        silence_reported = True
-        await on_silence()
-      await asyncio.sleep(poll_interval)
+        if saw_result and time.monotonic() - last_growth > post_result_timeout:
+          log.warning("backend_post_result_timeout", timeout=post_result_timeout)
+          break
+        if not is_alive():
+          break  # producer gone and fully drained
+        if (on_silence is not None and not silence_reported and
+            time.monotonic() - last_output_at > NO_OUTPUT_REPORT_THRESHOLD):
+          silence_reported = True
+          await on_silence()
+        await asyncio.sleep(poll_interval)
 
-    if carry.strip():
-      # Dropping it makes a restart replay the run's tail as at most a
-      # duplicate — never a loss.
-      log.warning("raw_trailing_torn_line_dropped", bytes=len(carry))
+      if carry.strip():
+        # Dropping it makes a restart replay the run's tail as at most a
+        # duplicate — never a loss.
+        log.warning("raw_trailing_torn_line_dropped", bytes=len(carry))
+
+  finally:
+    if cursor_writer is not None:
+      cursor_writer.close()
 
 
 def _rotate_stale_transport(log_dir: Path, raw_path: Path, stderr_path: Path, cursor_path: Path) -> None:

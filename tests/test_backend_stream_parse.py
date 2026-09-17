@@ -140,6 +140,43 @@ async def test_tail_follow_events_replays_from_offset() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tail_follow_events_checkpoints_cursor_at_consumed_offset() -> None:
+  """A mount with a cursor file leaves it at the consumed byte offset —
+  including the skipped lines' bytes (blank and malformed consume index), so
+  a re-attach at the recorded offset replays nothing already delivered."""
+  from src.core.runs import CURSOR_NAME, read_raw_cursor
+
+  raw_bytes = b"".join(_LINES)
+  with tempfile.TemporaryDirectory() as work:
+    raw = Path(work) / "agent.raw.ndjson"
+    raw.write_bytes(raw_bytes)
+    cursor = Path(work) / CURSOR_NAME
+    events = [
+        event async for event in tail_follow_events(
+            raw,
+            translate=lambda event: [event],
+            is_alive=lambda: False,
+            cursor=cursor,
+            post_result_timeout=60.0,
+        )
+    ]
+    assert [event["seq"] for event in events] == [1, 3]
+    assert read_raw_cursor(cursor) == len(raw_bytes)
+    # A re-attach at the recorded offset replays nothing.
+    events = [
+        event async for event in tail_follow_events(
+            raw,
+            translate=lambda event: [event],
+            is_alive=lambda: False,
+            cursor=cursor,
+            start_offset=read_raw_cursor(cursor),
+            post_result_timeout=60.0,
+        )
+    ]
+    assert events == []
+
+
+@pytest.mark.asyncio
 async def test_tail_follow_events_carries_partial_line_across_read_rounds() -> None:
   """A line written in two appends yields exactly once: the first round's
   trailing partial rides the carry into the next round's read, never

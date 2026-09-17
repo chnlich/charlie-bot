@@ -399,40 +399,22 @@ def test_build_command_emits_top_p_and_temperature_when_declared(
   assert temperature_idx < task_idx
 
 
-def test_build_command_without_sampling_fields_emits_neither_flag(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """Neither knob set: neither flag is emitted, keeping the argv byte-identical to the
-  command built before the fields existed, so older charlie-code builds keep working."""
+@pytest.mark.parametrize(
+    "absent_flags",
+    [("--top-p", "--temperature"), ("--no-stream", "--timeout-seconds")],
+    ids=["sampling-fields", "call-strategy-fields"],
+)
+def test_build_command_without_optional_fields_emits_neither_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, absent_flags: tuple[str, str]) -> None:
+  """Neither field of the axis set: neither flag is emitted, keeping the argv byte-identical
+  to the command built before the fields existed, so older charlie-code builds keep working."""
   backend = _build_backend(monkeypatch)
   backend._prepare_transport(tmp_path)
 
   cmd = backend._build_command(FLAG_LIKE_PROMPT)
 
-  assert "--top-p" not in cmd
-  assert "--temperature" not in cmd
-  assert cmd == [
-      "/usr/bin/charlie-code",
-      "--json",
-      "--model",
-      "charlie-code-test-model",
-      "--api-base",
-      "http://test.invalid/v1",
-      "--task-file",
-      str(tmp_path / "task.md"),
-  ]
-
-
-def test_build_command_without_call_strategy_fields_keeps_pre_change_command(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """An entry setting neither field emits neither flag: the argv is byte-identical to the
-  command built before the fields existed, so older charlie-code builds keep working."""
-  backend = _build_backend(monkeypatch)
-  backend._prepare_transport(tmp_path)
-
-  cmd = backend._build_command(FLAG_LIKE_PROMPT)
-
-  assert "--no-stream" not in cmd
-  assert "--timeout-seconds" not in cmd
+  for flag in absent_flags:
+    assert flag not in cmd
   assert cmd == [
       "/usr/bin/charlie-code",
       "--json",

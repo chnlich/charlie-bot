@@ -1694,7 +1694,8 @@ def reset_config_caches() -> None:
   """
   core_config._config_cache.reset()
   core_config._credentials_cache.reset()
-  core_config._home_cache.clear()
+  from src.core import home as core_home
+  core_home._home_cache.clear()
   core_config._cron_snapshot = core_config._CronSnapshot()
 
 

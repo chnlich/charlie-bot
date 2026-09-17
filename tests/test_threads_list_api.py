@@ -372,6 +372,23 @@ def test_list_body_splice_matches_whole_dump() -> None:
           "completed_at": None,
           "backend": None
       },
+      {
+          "type": "thread",
+          "id": "t4",
+          "description": "nested",
+          "status": "running",
+          "created_at": 1697,
+          "completed_at": None,
+          "backend": "cc-claude",
+          "extra": {
+              "watch": ["a", "b"],
+              "deep": {
+                  "k": [1, {
+                      "x": None
+                  }]
+              }
+          }
+      },
   ]
   pairs = [(row, threads_api._row_fragment(row)) for row in rows]
   trigger = PendingTrigger(

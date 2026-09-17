@@ -65,7 +65,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M52 chat-event append, per event | M52 collector below | seconds per `save_chat_event` append of one probe event, worst on-disk live-events corpus, scratch home | median < 0.005 s (the fdatasync-durable append's flush floor is ~2.8 ms on this host's storage) | — (introduced with its first history row) |
 | M53 config reload failure re-fire, broken steady state | M53 collector below | warnings + re-parses per 60 steady-state `get_config` calls of a persistently-broken config corpus | 0 warnings after the first sighting per (event, error) per process; 0 re-parses (one fingerprint stat set per call) | — (introduced with its first history row) |
 | M54 stream-draft paint work, code-bearing draft, real highlight.js | M54 collector below | seconds of paint work per full-turn replay of the largest fence-bearing on-disk assistant draft, 200 B deltas at 40 ms virtual cadence, page-pinned marked + hljs 11.9.0 common builds | median < 0.2 s | — (introduced with its first history row) |
-| M55 artifact compare-view serve, steady state | M55 collector below | seconds per repeat `?diff=` compare-view request over the worst on-disk artifact pair, plus the request's worst event-loop gap (the 5 ms ticker floor like M14); the cold first compare of a pair (the annotate the repeat memo serves from — the collector's first-view line) | repeat-view median < 0.010 s; loop-lag median < 0.010 s; first-view median < 0.25 s | — (introduced with its first history row) |
+| M55 artifact compare-view serve, steady state | M55 collector below | seconds per repeat `?diff=` compare-view request over the worst on-disk artifact pair, plus the request's worst event-loop gap (the 5 ms ticker floor like M14); the cold first compare of a pair (the annotate the repeat memo serves from — the collector's first-view line) | repeat-view median < 0.003 s (recalibrated from < 0.010 s: the old line sat on the TestClient/httpx harness floor the M70/M72 repairs called out — the repaired raw-ASGI drive reads the served path at 1.0-1.3 ms across the landing round's loads 3.4-3.5, and the served path's own per-click deflate the middleware re-ran moves into a served gzip memo; see the 2026-09-16 history row); loop-lag median < 0.010 s; first-view median < 0.25 s | — (introduced with its first history row) |
 | M56 sidebar status poll, steady state | M56 collector below | seconds per `GET /api/sessions/status` request over the active-session id set | median < 0.002 s (recalibrated from < 0.004 s: the old line sat on the TestClient/httpx harness floor the 2026-09-15 repair removed — the served path reads 0.48-0.50 ms across the repair round's loads 1.85-1.91; a tripped reading is read as host load first — the cron-collision bias the M56 history documents) | — (introduced with its first history row) |
 | M57 plan-registry poll, steady state | M57 collector below | seconds per `GET /api/sessions/{id}/plans` request, worst on-disk plans corpus | median < 0.0020 s (recalibrated from < 0.0030 s: the old line sat on the TestClient/httpx harness floor the 2026-09-15 repair removed — the served path reads 0.8-1.7 ms across the repair round's loads 2.0-2.7, the cron-collision bias the M56 history documents; see that history row) | — (introduced with its first history row) |
 | M58 per-request config read, steady state | M58 collector below | seconds per `get_config` call, live config corpus | median < 0.0001 s | — (introduced with its first history row) |
@@ -3447,13 +3447,20 @@ view (the toggle flip, a plan update re-render, a refresh). The fixed handler
 builds the page in one thread hop and memoizes it on both files' (path,
 mtime_ns, size) signatures plus the injection flag — the marks are a pure
 function of the two files' bytes and artifact pages are only ever written
-whole, so a repeat view re-runs zero annotate. The cost is a per-click latency
+whole, so a repeat view re-runs zero annotate. The compare view's repeat also
+ships its pre-compressed gzip form from a memo beside the plain one, the M70
+mechanism: one off-loop deflate per distinct annotated body replaces the
+middleware's per-request pass, Content-Encoding set upstream making the
+middleware skip. The cost is a per-click latency
 no standing probe covers, so the collector snapshots the worst artifact pair
 (the session whose artifacts dir carries the most .html bytes; target =
 biggest page, base = runner-up) into a scratch `CHARLIEBOT_HOME` under /tmp
-(live home read once for the copy, never written) and drives the route through
-TestClient in each checkout's process: one cold pass, as at first compare-view
-open, then nine timed repeats, asserting byte-identical bodies. The cold pass
+(live home read once for the copy, never written) and drives the route raw-ASGI
+— the served path the middleware and route actually run, the production gzip
+middleware mounted and the browser's Accept-Encoding shape — in each checkout's
+process: one cold pass, as at first compare-view
+open, then nine timed repeats, asserting byte-identical wire bodies, with a
+concurrent 5 ms ticker reporting the request's worst event-loop gap. The cold pass
 is the first-view sub-metric (the annotate the repeat memo serves from); the
 nine timed repeats are the steady state. Evidence
 points the same collector at the before and after checkouts (``CHECKOUT`` at
@@ -3498,14 +3505,14 @@ Then run per checkout (``eval`` the snapshot export first):
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import hashlib, os, sys, time
+import asyncio, gzip, hashlib, os, sys, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from src.api.files import router as files_router
 from src.core.config import CharlieBotConfig
 import src.api.files as files_mod
+from server import _CharlieBotGZipMiddleware
 
 home = Path(os.environ["M55_HOME"])
 SID = os.environ["M55_SID"]
@@ -3519,30 +3526,80 @@ cfg = CharlieBotConfig(charliebot_home=home)
 files_mod.get_config = lambda: cfg
 app = FastAPI()
 app.include_router(files_router, prefix="/files")
-client = TestClient(app)
+# The production middleware chain: every served response passes the whole-body
+# gzip whose deflate is part of the view's cost.
+app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
 # The file server addresses pages by absolute filesystem path (the /files and
 # /absolute_filepath prefixes are aliases); ?diff= stays session-relative.
-url = f"/files/{home}/sessions/{SID}/artifacts/{TARGET}?diff=artifacts/{BASE}"
+PATH = f"/files/{home}/sessions/{SID}/artifacts/{TARGET}"
+QS = f"diff=artifacts/{BASE}".encode()
+HEADERS = [(b"host", b"test"), (b"accept-encoding", b"gzip")]  # the browser shape
+SCOPE = {
+    "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+    "http_version": "1.1", "method": "GET", "scheme": "http",
+    "path": PATH, "raw_path": (PATH + "?" + QS.decode()).encode(),
+    "query_string": QS,
+    "root_path": "", "headers": HEADERS,
+    "client": ("test", 123), "server": ("test", 80),
+}
 
-t0 = time.perf_counter()
-r = client.get(url)  # cold pass, as at first compare-view open; not timed
-cold = time.perf_counter() - t0
-assert r.status_code == 200, (r.status_code, r.text[:200])
-assert "This version · vs previous" in r.text, "annotated page missing the compare header"
 
-times = []
-bodies = set()
-digest = ""
-for _ in range(9):
+async def drive():
+    body = b""
+    encoding = b""
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        nonlocal body, encoding
+        if msg["type"] == "http.response.start":
+            encoding = dict(msg.get("headers", [])).get(b"content-encoding", b"")
+        elif msg["type"] == "http.response.body":
+            body += msg.get("body", b"")
+
     t0 = time.perf_counter()
-    r = client.get(url)
-    times.append(time.perf_counter() - t0)
-    bodies.add(len(r.content))
-    digest = hashlib.sha256(r.content).hexdigest()[:12]
-times.sort()
-assert len(bodies) == 1, f"repeat bodies differ: {bodies}"
-print(f"{TARGET} vs {BASE}; first view {cold:.4f} s; repeat-view median {times[4]:.4f} s, "
-      f"max {times[-1]:.4f} s over 9, body {bodies.pop()} B, digest {digest}")
+    await app(SCOPE, receive, send)
+    return time.perf_counter() - t0, body, encoding
+
+
+async def main():
+    cold, body, encoding = await drive()  # cold pass, as at first compare-view open; not timed
+    assert encoding == b"gzip", f"browser shape served without gzip: {encoding!r}"
+    assert "This version · vs previous" in gzip.decompress(body).decode("utf-8", "replace"), \
+        "annotated page missing the compare header"
+    worst, walls = [], []
+    bodies = set()
+    digest = ""
+    for _ in range(9):
+        stop = False
+        gaps = []
+
+        async def ticker():
+            prev = time.perf_counter()
+            while not stop:
+                await asyncio.sleep(0.005)
+                now = time.perf_counter()
+                gaps.append(now - prev)
+                prev = now
+
+        t = asyncio.create_task(ticker())
+        dt, body, _ = await drive()
+        stop = True
+        await t
+        worst.append(max(gaps) if gaps else dt)
+        walls.append(dt)
+        bodies.add(len(body))
+        digest = hashlib.sha256(body).hexdigest()[:12]
+    worst.sort()
+    walls.sort()
+    assert len(bodies) == 1, f"repeat bodies differ: {bodies}"
+    print(f"{TARGET} vs {BASE}; first view {cold:.4f} s; repeat-view median {walls[4]:.4f} s, "
+          f"max {walls[-1]:.4f} s over 9, gzip wire {bodies.pop()} B, digest {digest}; "
+          f"loop-lag median {worst[4]:.4f} s, max {worst[-1]:.4f} s")
+
+
+asyncio.run(main())
 EOF
 ```
 
@@ -6953,6 +7010,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-16 | this PR | M55 compare-view repeat, repaired collector + served gzip memo: standing TestClient reading 0.0101 s median (the round-opening trip, decoded body 4017223 B); interleaved rounds main 0.1073/0.1060/0.1061 → branch 0.0013/0.0011/0.0010 s medians, −98 % to −99 %, maxima 0.1078-0.1111 → 0.0013-0.0014 s, every paired round faster (three interleaved rounds of the repaired collector — main checkout before vs branch worktree after back-to-back, shared scratch snapshot of the 6.0 MB worst artifact pair presentation_a2a_deadlock_gallery.html vs test_s4_eval.html of session 5446ddf7, live state read-only, gzip wire 3058673 B identical across all six arms, decoded-body sha16 bf085e6e87e48cab identical across arms, load 3.38-3.51 one-minute; before-arm wire digests move per round — the middleware's dated gzip header — the after arm's mtime=0 form stable at d27d4dff33e9); loop-lag medians 0.0055-0.0061 s both arms at the 5 ms ticker floor, inside the unchanged < 0.010 s line; first view unchanged 0.2214-0.2300 → 0.2233-0.2318 s (the cold annotate dominates both arms; the one-time route compress replaces the middleware's first-view deflate), inside the unchanged < 0.25 s line; component attribution: the removed per-click slice is the middleware's level-1 deflate of the 4017223 B annotated page — the before arm's raw-ASGI drive pays ~106 ms per repeat where the after arm's precompressed serve reads 1.0-1.3 ms, matching the M70 landing's measured ~27 ms per MB of level-1 deflate; the old standing 0.0101 s reading additionally sat on the TestClient/httpx harness the repair drops (the ~9 ms-of-harness class the M70 repair measured on the 0.8 MB body, larger on this 4 MB one); no-regression witnesses on the branch: M70 clean-view repeat 0.0006 s median with wire digest 237de31d3f6f identical to the standing reading, M72 served-path listing repeat 5.34 ms (standing 4.81 ms, both inside the < 0.008 s line at the round's higher load 3.4-3.5); 37-passed route test file (32 + 5 new tests), ruff and yapf clean; M55 repeat-view healthy range recalibrated < 0.010 s → < 0.003 s with this PR | the compare view served its memoized annotate body plain, so the browser's gzip-accepting click paid the middleware's whole-body level-1 deflate on every request — ~105 ms of the 107 ms served repeat on the 4 MB worst pair — although the published annotate is immutable and already memoized; the gzip form rides the same annotate memo key (a memo hit proves byte equality because the key IS the two files' signatures plus the injection flag), one off-loop deflate per distinct body replaces the middleware's per-request pass, and Content-Encoding set upstream makes the middleware skip (the M70 mechanism); the standing collector also rode the TestClient harness and never mounted the middleware — the vacuous-read class the M68/M89/M90/M70/M72 repairs called out — and had lost the loop-lag leg its definition promised, so the repair mounts the production gzip middleware, drives raw-ASGI with the browser's Accept-Encoding shape, and restores the ticker |
 | 2026-09-16 | this PR | M78 chat-file leg 5050-5107 → 3634-3734 ms median (−26 % to −29 %), maxima 5090-5148 → 3644-3917 ms, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, the 1051.3 MB / 307-event worst on-disk live chat file of archived session 489e7c31, live home read-only, load 2.53-4.40 one-minute; event counts 307 identical across all six arms); worker-log leg 52.3-54.5 → 38.9-42.3 ms (−23 % to −28 %, counts 232 identical); component attribution: raw orjson.loads over pre-split lines 2.746 s on the same corpus — the 383 MB/s parse floor — vs 282-290 MB/s through the landed funnel; no-regression witnesses re-measured on the branch at load 4.1-4.6: M6 append-round 0.07 ms parity True, M26 advance 0.19 ms parity True digest e94c56635194 identical, M30 steady 0.0002 / append-round 0.0004 s, M20 repeat 0.0000 s / cold per-divider 0.9 ms, M23 steady 0.0004 s, M28 tail+count 0.01 ms, M37 tail 0.01 ms, M77 re-entry 0.09 ms with 0/36 rebuilt, M101 steady 0.8 ms / loop-lag 5.47 ms, M17 fork 1.3257 s (the 1 GB copy dominates, unchanged), M35 events/view/bootstrap medians 1.27/2.13/1.31 ms with wire bytes and decoded digests identical (2b451eddaa4c / 52e7ee739e38 / 6622b6f73143 — the warm pages never parse; the medians ride the load the M56 history documents); 5614-passed suite (5608 + 6 new tests, 11 skipped), ruff and yapf clean; healthy range recalibrated chat file median < max(0.080 s, bytes ÷ 250 MB/s) with this PR | the whole-file funnel decoded every line to str through text-mode iteration and re-encoded it inside orjson before the parse — 128,331 incremental decode calls plus one full re-encode per line on the 1 GB corpus, ~1.7 s of the 5.1 s reading; the parse now maps the file once and hands orjson memoryview slices (zero-copy, the parse_ndjson_line memoryview contract), the line domain unifies on the \n domain the count and tail readers already counted (the text-mode universal-newline split was the one reader that could disagree), and the archive whole-read and parse_ndjson_range share the same funnel; the reading stays corpus-bound — the line now tracks bytes ÷ 250 MB/s like M84's, with the raw parse floor at 383 MB/s |
 | 2026-09-16 | this PR | M7 standing reading's max 102.987 s (one of five /token-usage requests, median 0.133 s inside the line) diagnosed and fixed: the parse the changed round runs on a grown master-run raw log — `token_tally._parse_lines`, the function both the full parse and the append-tail round read every source through — re-concatenated a bytes remainder per 4 MB chunk and mapped every marker hit with a from-zero rfind, both O(line² / chunk); the interleaved A/B on the corpus that paid it (three back-to-back rounds, main checkout before vs branch worktree after, 1051.1 MB / 186-line raw master-run capture of session 489e7c31's finished runaway turn, live home read-only, load 1.77-3.32 one-minute): full parse 97.7/97.0/98.3 → 1.4/1.4/1.4 s median (−98.6 %), tail round from a recorded end near the file head 97.3/96.2/98.6 → 1.4/1.4/1.3 s (−98.6 %), maxima 96.4-101.9 → 1.4 s, every paired round faster, objects (61) and consumed offset (1051067581) identical across all twelve arms; no-regression witnesses interleaved ×2: M7 changed-round 0.134/0.136 → 0.143/0.134 s, restart-cold 1.125/1.264 → 1.132/1.081 s, M80 churn 0.1197/0.1240 → 0.1281/0.1232 s (rows digests move with live traffic only), M78 worker-log leg 52.7/50.5 → 41.2/39.8 ms (the dense small-line path unchanged to slightly faster); 300-trial randomized parity fuzz against the old implementation (marker/no-marker/empty/unparseable lines, trailing fragments, multi-chunk giant lines) 0 mismatches plus the 1 GB corpus byte-identical; 5601-passed suite (5599 + 2 new tests, the pre-existing `stream_incremental_parse.test.js` red on main deselected) | the 12:43 hourly load recorded a ~14 MB end for the then-streaming capture; by 13:49 the runaway turn had appended a gigabyte of multi-hundred-MB no-marker observation lines, so the changed round's tail read paid the quadratic on every chunk — the same shape the M84 landing (2026-09-11) fixed in the raw-log funnel, in the tally's own splitter; the carry now holds exactly the current unterminated line, compacted once per round with the newline scans riding the fresh region and the marker pass covering the carried partial only once the line completes |
 | 2026-09-16 | this PR | M84 standing reading classified as corpus growth, not a product regression: tail-follow replay median 3455.5 ms, max 3650.2 ms; stdout-stream replay median 2874.2 ms, max 3026.9 ms (150/150 events, parity divergences 0) over 7 (verbatim collector, 1050.9 MB / 150-line worst on-disk raw master-run log — session 489e7c31's live charlie-code-gemini-3.8-flash turn, still streaming at measurement time, scratch copy, live home read-only, load 1.89-2.59 one-minute) against lines < 0.060/0.040 s calibrated on the 10.1 MB / 64-line corpus the 2026-09-11/09-13 landings measured (14.1/13.0 ms); the replay's cost is the per-byte orjson+translate floor — measured throughput 304 MB/s tail-follow / 366 MB/s stdout-stream on this corpus vs 706/777 MB/s on the 10.1 MB single-giant-line corpus — so no code change parses the corpus materially cheaper; the same collector on the prior 16.3 MB / 638-line corpus read 36.4/27.0 ms the same hour (inside the old lines), pairing the corpus move with the reading on one code state; healthy ranges recalibrated to max(0.060 s, bytes ÷ 200 MB/s) tail-follow and max(0.040 s, bytes ÷ 250 MB/s) stdout-stream — the 1 GB reading sits 1.5x inside both, the 16.3 MB reading keeps 2.2x/2.4x, and a corpus reversion re-tightens the line automatically | the collector's worst-log selector is honest — the funnel streams exactly this log live, line by line, the per-line cost M91 prices at its floor — and the whole-file replay shape is the measurement's, not a production pass; the runaway turn itself is a host-state finding, reported in the round summary, not a perf topic |

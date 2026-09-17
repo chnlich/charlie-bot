@@ -43,6 +43,11 @@ _AnnotateKey = tuple[str, int, int, str, int, int, bool]
 
 _annotate_memo: BoundedMemo[_AnnotateKey, str] = BoundedMemo(_DIFF_ANNOTATE_MEMO_LIMIT)
 
+# The gzip form of the same annotated page, keyed and bounded alike. It lives in
+# its own memo so a client that sends no Accept-Encoding: gzip never pays the
+# deflate.
+_annotate_gzip_memo: BoundedMemo[_AnnotateKey, bytes] = BoundedMemo(_DIFF_ANNOTATE_MEMO_LIMIT)
+
 # Memo key for one clean artifact view: the resolved path plus the page's
 # (mtime_ns, size) taken before its read. The injection is a pure function of
 # the page bytes — the session id derives from the path and the static asset
@@ -74,6 +79,20 @@ def _file_signature(path: Path) -> tuple[int, int]:
   return (st.st_mtime_ns, st.st_size)
 
 
+def _annotate_key(base_path: Path, page_path: Path, inject_ui: bool) -> _AnnotateKey:
+  """Both resolved paths plus each file's (mtime_ns, size) taken before its read.
+
+  The base's missing file is the same 404 the annotate raises, so the key's one
+  caller contract holds for both memos.
+  """
+  try:
+    base_sig = (str(base_path), *_file_signature(base_path))
+  except OSError as e:
+    raise HTTPException(status_code=404, detail=_DIFF_BASE_NOT_FOUND_DETAIL.format(base_path)) from e
+  page_sig = (str(page_path), *_file_signature(page_path))
+  return (*base_sig, *page_sig, inject_ui)
+
+
 def _annotated_diff_page(base_path: Path, page_path: Path, inject_ui: bool, session_id: str) -> str:
   """The diff page's target annotated against its base, repeats served from the memo.
 
@@ -81,12 +100,7 @@ def _annotated_diff_page(base_path: Path, page_path: Path, inject_ui: bool, sess
   measured) — work per request no repeat view must re-run, since neither bytes
   nor marks can change between views.
   """
-  try:
-    base_sig = (str(base_path), *_file_signature(base_path))
-  except OSError as e:
-    raise HTTPException(status_code=404, detail=_DIFF_BASE_NOT_FOUND_DETAIL.format(base_path)) from e
-  page_sig = (str(page_path), *_file_signature(page_path))
-  key: _AnnotateKey = (*base_sig, *page_sig, inject_ui)
+  key = _annotate_key(base_path, page_path, inject_ui)
   hit = _annotate_memo.get(key)
   if hit is not None:
     return hit
@@ -104,6 +118,24 @@ def _annotated_diff_page(base_path: Path, page_path: Path, inject_ui: bool, sess
     page = _inject_artifact_ui(page, session_id)
   _annotate_memo.store(key, page)
   return page
+
+
+def _annotated_diff_page_gzip(base_path: Path, page_path: Path, inject_ui: bool, session_id: str) -> bytes:
+  """The annotated diff page's gzip form, memoized beside the plain body.
+
+  The route ships these bytes with Content-Encoding: gzip set upstream, which
+  is what makes the server's gzip middleware skip its own whole-body deflate —
+  level 1 over the multi-MB worst compare view is the per-click cost the memo
+  removes. mtime=0 keeps the compressed bytes deterministic across processes.
+  """
+  key = _annotate_key(base_path, page_path, inject_ui)
+  hit = _annotate_gzip_memo.get(key)
+  if hit is not None:
+    return hit
+  compressed = gzip.compress(
+      _annotated_diff_page(base_path, page_path, inject_ui, session_id).encode("utf-8"), compresslevel=1, mtime=0)
+  _annotate_gzip_memo.store(key, compressed)
+  return compressed
 
 
 def _injected_artifact_page(fs_path: Path, session_id: str) -> bytes:
@@ -456,6 +488,15 @@ async def serve_file(path: str, request: Request) -> Response:
       raise HTTPException(status_code=400, detail=_DIFF_TARGET_DETAIL.format(fs_path))
     base_path = _resolve_diff_base(session_id, diff_param)
     inject_ui = request_has_access_key(request, configured_access_key())
+    if "gzip" in request.headers.get("accept-encoding", ""):
+      # The same check the gzip middleware makes on the way in; answering with
+      # the pre-compressed body and the header set is what skips its deflate.
+      body = await asyncio.to_thread(_annotated_diff_page_gzip, base_path, fs_path, inject_ui, session_id)
+      return Response(
+          content=body, media_type="text/html", headers={
+              "Content-Encoding": "gzip",
+              "Vary": "Accept-Encoding"
+          })
     # A cold annotate parses both pages whole (~0.25 s on a 1 MB pair), so the
     # build runs off the event loop; a memo hit answers with zero file bytes.
     html_text = await asyncio.to_thread(_annotated_diff_page, base_path, fs_path, inject_ui, session_id)

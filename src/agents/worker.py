@@ -47,7 +47,7 @@ QUOTA_ERROR_PATTERNS = [
 ]
 
 
-class QuotaExhaustedException(Exception):
+class QuotaExhaustedError(Exception):
   pass
 
 
@@ -488,7 +488,7 @@ class Worker:
             account=self._claude_account.label if self._claude_account is not None else None)
         if self._relay_watch is None:
           await _append_event_line(fd, _event_line(event_data))
-          raise QuotaExhaustedException(f"Rate limited ({rate_type}), resets at {resets_at}")
+          raise QuotaExhaustedError(f"Rate limited ({rate_type}), resets at {resets_at}")
 
     if event_type == ET.ASSISTANT:
       message = event_data.get("message")
@@ -498,7 +498,7 @@ class Worker:
 
     if event_type == ET.ERROR and any(p in event_message or p in event_content for p in QUOTA_ERROR_PATTERNS):
       await _append_event_line(fd, _event_line(event_data))
-      raise QuotaExhaustedException(event_data.get("message", "Quota exhausted"))
+      raise QuotaExhaustedError(event_data.get("message", "Quota exhausted"))
 
     # Write to disk
     await _append_event_line(fd, _event_line(event_data))

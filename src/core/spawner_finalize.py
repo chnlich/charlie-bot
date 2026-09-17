@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
-from src.agents.worker import QuotaExhaustedException, Worker
+from src.agents.worker import QuotaExhaustedError, Worker
 from src.core import (
     claude_relay,
     review,
@@ -99,7 +99,7 @@ async def _stream_worker_events(
     await worker.terminate()
     log.warning("worker_pool_exhausted", thread_id=thread.id, error=str(e))
     return _pool_exhausted_outcome(e)
-  except QuotaExhaustedException:
+  except QuotaExhaustedError:
     await worker.terminate()
     log.warning("worker_quota_exhausted", thread_id=thread.id)
     return _QUOTA_EXHAUSTED_OUTCOME

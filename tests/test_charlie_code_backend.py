@@ -468,7 +468,7 @@ def test_build_command_overwrites_task_file_on_retry(monkeypatch: pytest.MonkeyP
 # ---------------------------------------------------------------------------
 
 
-class _HaltAtSpawn(Exception):
+class _HaltAtSpawnError(Exception):
   """Control-flow sentinel: on_spawn raises it so the run halts at spawn time."""
 
 
@@ -493,11 +493,11 @@ async def _drive_run_halted_at_spawn(backend: AgentBackend, monkeypatch: pytest.
   stub_subprocess_spawn(monkeypatch, BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, 4242)
 
   async def on_spawn(pid: int) -> None:
-    raise _HaltAtSpawn
+    raise _HaltAtSpawnError
 
   backend._on_spawn = on_spawn
 
-  with pytest.raises(_HaltAtSpawn):
+  with pytest.raises(_HaltAtSpawnError):
     async for _event in backend.run("ordering prompt", str(tmp_path), {"PATH": "/usr/bin:/bin"}):
       pass
 
@@ -688,7 +688,7 @@ async def _drive_run_halted_at_spawn_with_attachments(
 ) -> tuple[list[dict], object]:
   """Drive backend.run() with the conftest stub spawn; return (events, spawn mock).
 
-  on_spawn raises the file's _HaltAtSpawn sentinel so the run halts right after
+  on_spawn raises the file's _HaltAtSpawnError sentinel so the run halts right after
   the (stubbed) spawn — the spawn call's argv is the contract surface.
   """
   monkeypatch.setattr(RUNS_READ_PID_STAT_PATCH_TARGET, lambda pid: ("image-test-start", "R"))
@@ -700,11 +700,11 @@ async def _drive_run_halted_at_spawn_with_attachments(
   monkeypatch.setattr(BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, spawn)
 
   async def on_spawn(pid: int) -> None:
-    raise _HaltAtSpawn
+    raise _HaltAtSpawnError
 
   backend._on_spawn = on_spawn
   events: list[dict] = []
-  with pytest.raises(_HaltAtSpawn):
+  with pytest.raises(_HaltAtSpawnError):
     # Per-item append is load-bearing: events yielded before the raise must stay
     # in the list, which a collect-then-extend form drops.
     async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin:/bin"}, uploaded_files=uploaded_files):

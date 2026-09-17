@@ -44,7 +44,7 @@ from src.core.scheduler import Scheduler
 from src.core.sessions import (
     ScheduledSessionBusyError,
     SessionManager,
-    SuccessionRefused,
+    SuccessionRefusedError,
 )
 from src.core.thinking_state import clear_busy, mark_busy
 from src.core.triggers import TriggerManager
@@ -228,7 +228,7 @@ async def test_second_elone_of_scheduler_owned_parent_refuses_and_mutates_nothin
   first_child = await mgr.elone_session(parent.id, event_index=1, backend="codex-o3")
   before = _session_dir_names(cfg)
 
-  with pytest.raises(SuccessionRefused):
+  with pytest.raises(SuccessionRefusedError):
     await mgr.elone_session(parent.id, event_index=1, backend="codex-o3")
 
   # No new session directory appears.

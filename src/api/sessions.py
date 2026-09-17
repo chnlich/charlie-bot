@@ -72,7 +72,7 @@ from src.core.sessions import (
     FORK_BOOTSTRAP_OPENER,
     ScheduledSessionBusyError,
     SessionManager,
-    SuccessionRefused,
+    SuccessionRefusedError,
 )
 from src.core.threads import ThreadManager
 
@@ -970,7 +970,7 @@ async def elone_session(
     raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL) from e
   except ScheduledSessionBusyError as e:
     raise HTTPException(status_code=409, detail=str(e)) from e
-  except SuccessionRefused as e:
+  except SuccessionRefusedError as e:
     raise HTTPException(status_code=409, detail=str(e)) from e
   except ValueError as e:
     raise bad_request(e) from e

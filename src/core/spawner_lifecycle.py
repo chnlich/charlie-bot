@@ -7,7 +7,7 @@ import traceback
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from src.agents.worker import QuotaExhaustedException, Worker
+from src.agents.worker import QuotaExhaustedError, Worker
 from src.core import (
     claude_relay,
     runs,
@@ -227,7 +227,7 @@ async def resume_worker(
     worker = Worker(thread, working_dir, events_log, description, cfg, backend_option=backend_option)
     outcome = spawner_finalize._WorkerRunOutcome(
         exit_code=await worker.resume(is_alive=is_alive, on_silence=on_silence), quota_exhausted=False, error="")
-  except QuotaExhaustedException:
+  except QuotaExhaustedError:
     log.warning("resume_worker_quota_exhausted", thread_id=thread_id)
     if is_alive() and thread is not None and thread.pid is not None:
       kill_process_group(thread.pid, signal.SIGTERM)

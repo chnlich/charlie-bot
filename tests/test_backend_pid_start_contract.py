@@ -89,7 +89,7 @@ _BASE_CTOR_KWARGS: dict[type[AgentBackend], dict] = {
 _BASE_PATH_CLASSES: tuple[type[AgentBackend], ...] = tuple(_BASE_CTOR_KWARGS)
 
 
-class _SpawnObserved(Exception):
+class _SpawnObservedError(Exception):
   """Control-flow marker: the on_spawn probe raises it to halt base.run() exactly at notification."""
 
 
@@ -114,7 +114,7 @@ async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
   """Shared-path harness: drive the inherited base.run() with a mocked subprocess.
 
   The on_spawn probe records backend.pid_start at notification time and then
-  raises _SpawnObserved, so the run halts before the tail-follow loop — the
+  raises _SpawnObservedError, so the run halts before the tail-follow loop — the
   notification point is the contract surface, everything after it is shared
   machinery already covered by base.run's own tests.
   """
@@ -127,12 +127,12 @@ async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
   async def on_spawn(pid: int) -> None:
     observed.append((pid, backend.pid_start))
-    raise _SpawnObserved
+    raise _SpawnObservedError
 
   backend = cls(on_spawn=on_spawn, log_dir=tmp_path / "logs", **_BASE_CTOR_KWARGS[cls])
   stub_subprocess_spawn(monkeypatch, BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, 31337)
 
-  with pytest.raises(_SpawnObserved):
+  with pytest.raises(_SpawnObservedError):
     async for _event in backend.run("contract prompt", str(tmp_path), {"PATH": "/usr/bin:/bin"}):
       pass
 

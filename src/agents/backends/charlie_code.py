@@ -102,7 +102,8 @@ class CharlieCodeBackend(AgentBackend):
                 cwd: str,
                 env: dict,
                 uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
-    """Refuse image attachments on endpoints declaring ``image_input: false``; otherwise hand them to the CLI as --image flags.
+    """Refuse image attachments on endpoints declaring ``image_input: false``;
+    otherwise hand them to the CLI as --image flags.
 
     Image refs are picked out of ``uploaded_files`` by filename extension
     (the ``IMAGE_MIME_BY_EXT`` keys). An endpoint whose option sets

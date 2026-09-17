@@ -22,6 +22,7 @@ from pathlib import Path
 
 from src.cli import common as cli_common
 from src.core import artifact_check, artifact_wrap
+from src.core.home import charliebot_home_dir
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -94,7 +95,7 @@ def _run_wrap(args: argparse.Namespace) -> int:
         fragment=fragment,
         output=Path(args.output).resolve(),
         math=math,
-        vendor_path=artifact_wrap.vendor_katex_path(cli_common.get_config().charliebot_home),
+        vendor_path=artifact_wrap.vendor_katex_path(charliebot_home_dir()),
     )
   except (RuntimeError, ValueError) as e:
     cli_common.exit_error(str(e))

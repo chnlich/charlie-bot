@@ -1,7 +1,10 @@
 """CLI: labeled-entry memory store (query / add / lint).
 
-Pure-local; no server dependency. The store lives at ``cfg.memory_dir``
-(``~/.charliebot/memory/``). See ``src/core/memory.py`` for the store contract.
+Pure-local; no server dependency. The store lives at
+``charliebot_home_dir() / "memory"`` (``~/.charliebot/memory/``); the home is
+env-resolved (src.core.home) and no config key can move it, so the verbs read
+no config file — a broken config.yaml must not block the store's own verbs.
+See ``src/core/memory.py`` for the store contract.
 
   charliebot memory query --topic <t> [--audience A] [--index] [--resident]
   charliebot memory add [--file F]
@@ -15,7 +18,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from src.core import memory
-from src.core.config import CharlieBotConfig, get_config
+from src.core.home import charliebot_home_dir
+
+
+def _memory_dir() -> Path:
+  """The store root: ``<home>/memory`` (the CharlieBotConfig.memory_dir derivation)."""
+  return charliebot_home_dir() / "memory"
 
 
 def main() -> None:
@@ -45,9 +53,7 @@ def main() -> None:
 
 
 def _cmd_query(args: argparse.Namespace) -> None:
-  cfg = get_config()
-  memory_dir = cfg.memory_dir
-  store = memory.load_store(memory_dir)
+  store = memory.load_store(_memory_dir())
   unknown = [t for t in args.topic if t not in store.topics]
   if unknown:
     for value in unknown:
@@ -94,11 +100,11 @@ def _cmd_add(args: argparse.Namespace) -> None:
   # A title with no slug-charset character (pure CJK, for example) falls back
   # to the fixed ``capture`` segment; the write still proceeds.
   slug = _slugify(title) or "capture"
-  cfg = get_config()
-  sess8 = _session_slug8(cfg)
+  home = charliebot_home_dir()
+  sess8 = _session_slug8(home / "sessions")
   ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
   filename = f"{ts}-{sess8}-{slug}.md"
-  staging_dir = cfg.memory_dir / "staging"
+  staging_dir = home / "memory" / "staging"
   staging_dir.mkdir(parents=True, exist_ok=True)
   target = staging_dir / filename
   target.write_text(body, encoding="utf-8")
@@ -106,8 +112,7 @@ def _cmd_add(args: argparse.Namespace) -> None:
 
 
 def _cmd_lint() -> None:
-  cfg = get_config()
-  violations = memory.lint(cfg.memory_dir)
+  violations = memory.lint(_memory_dir())
   if violations:
     for v in violations:
       print(v)
@@ -122,11 +127,10 @@ def _slugify(text: str) -> str:
   return s.strip("-")
 
 
-def _session_slug8(cfg: CharlieBotConfig) -> str:
+def _session_slug8(sessions_dir: Path) -> str:
   """First 8 chars of the CharlieBot session id derived from cwd, else 'nosess'."""
   cwd = Path.cwd().resolve()
-  sessions_dir = cfg.sessions_dir.resolve()
-  if cwd.parent == sessions_dir:
+  if cwd.parent == sessions_dir.resolve():
     return cwd.name[:8]
   return "nosess"
 

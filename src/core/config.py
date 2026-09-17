@@ -21,12 +21,17 @@ from pydantic import (
 
 from src.core.backend_models import BackendOption, ClaudeAccount, ClaudeCompactionConfig
 from src.core.constants import REPO_ROOT
+from src.core.home import (  # noqa: F401  (re-export: the established src.core.config import path)
+    CHARLIEBOT_HOME_ENV,
+    _home_cache,
+    _resolve_home,
+    charliebot_home_dir,
+    default_charliebot_home,
+)
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.yaml_utils import load_yaml
 
 log = LazyStructlogLogger()
-
-CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
 
 # The profile's secrets file, named once so the backup's exclusion
 # (src/core/backup.py) cannot drift from the loader's path.
@@ -45,59 +50,6 @@ HOUSE_TIMEZONE = "America/Los_Angeles"
 # (templates/index.html, two fallbacks in sidebar/modals.js) that cannot import
 # from Python — a change moves all three sites.
 DEFAULT_TIMEZONE = HOUSE_TIMEZONE
-
-# The resolved home and its string form, per raw ``CHARLIEBOT_HOME`` value plus
-# ``HOME`` (``""`` raw is the default home, and a ``~`` value derives from
-# HOME). The env values are the process's profile identity, fixed for the
-# process life, while resolve() is a per-component symlink walk and
-# ``Path.home()``/``str(Path)`` re-parse the path — per-request-fingerprint
-# work on every call if repeated. Both public readers serve the same cached
-# entry, so a caller comparing its home against the default sees one answer.
-_home_cache: dict[tuple[str, str], tuple[Path, str]] = {}
-
-
-def _home_cached(raw: str) -> tuple[Path, str]:
-  """The home for *raw* (``""`` is the default) as ``(Path, str)``, resolved once per env pair."""
-  key = (raw, os.environ.get("HOME", ""))
-  cached = _home_cache.get(key)
-  if cached is None:
-    home = Path(raw).expanduser().resolve() if raw else Path.home() / ".charliebot"
-    cached = (home, str(home))
-    _home_cache[key] = cached
-  return cached
-
-
-def _resolve_home() -> tuple[Path, str]:
-  """The validated profile home as ``(Path, str)``."""
-  raw = os.environ.get(CHARLIEBOT_HOME_ENV, "").strip()
-  if raw and not raw.startswith(("~", "/")):
-    raise ValueError(f"{CHARLIEBOT_HOME_ENV} must be an absolute path or start with '~'; got {raw!r}")
-  return _home_cached(raw)
-
-
-def default_charliebot_home() -> Path:
-  """The state directory used when ``CHARLIEBOT_HOME`` is unset."""
-  return _home_cached("")[0]
-
-
-def charliebot_home_dir() -> Path:
-  """Return the state directory this process belongs to (its profile).
-
-  ``CHARLIEBOT_HOME`` selects the profile: unset or empty gives the default
-  ``~/.charliebot``, so an untouched host behaves exactly as before. This is the
-  only place that resolves the home path; every other path is derived
-  from :attr:`CharlieBotConfig.charliebot_home`. The one raw read of the variable
-  outside this function is the web terminal's profile check
-  (``src/agents/backends/terminal.py``): a tmux pane inherits the tmux server's
-  environment rather than this process's, so the terminal checks whether a
-  profile is set and passes the resolved home to new panes explicitly.
-
-  A set value must be absolute or start with ``~``. A relative value would be
-  resolved against each process's own working directory, silently handing the
-  server, the CLI and every worker a different home, so it is rejected here
-  instead of surfacing later as a write into the wrong profile.
-  """
-  return _resolve_home()[0]
 
 
 class ImprovementLoopConfig(BaseModel):

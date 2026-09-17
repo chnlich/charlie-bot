@@ -47,15 +47,18 @@ PLAN_HEAVY_MODULES = (
     "src.core.plan_diff",
 )
 
-# The memory chain's ban set: structlog (the log proxy defers it to first use).
-# config + models + pydantic stay out of the ban set: the get_config
-# module-attribute contract (tests/test_memory_store.py) and every verb's config read
-# bind them at import.
+# The memory chain's ban set: structlog (the log proxy defers it to first use)
+# and the config stack (src.core.config + its pydantic/models chains, ~180 ms of
+# the M98 wall) — the verbs read no config file: the store root derives from the
+# env-resolved home (src.core.home), which no config key can move.
 MEMORY_HEAVY_MODULES = (
     "src.agents.backends.base",
     "src.core.threads",
     "src.core.sessions",
     "src.core.runs",
+    "src.core.config",
+    "src.core.models",
+    "pydantic",
     "numpy",
     "structlog",
     "requests",
@@ -165,7 +168,8 @@ def test_memory_chain_imports_without_the_heavy_chains() -> None:
   assert loaded == [], (
       "the memory command chain pulled a heavy chain or structlog into the CLI "
       f"process: {loaded}; the M98 invocation wall (docs/perf_baseline.md) depends "
-      "on these staying out — src.core.memory's log proxy defers structlog to first use")
+      "on these staying out — src.core.memory's log proxy defers structlog to first "
+      "use, and the verbs resolve the store root from src.core.home, not the config")
 
 
 # Modules whose log proxy defers structlog to first use. Each imports on an

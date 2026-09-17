@@ -73,6 +73,28 @@ def _events_of(callbacks: SessionCallbacks, event_type: str) -> list[dict]:
   ]
 
 
+async def _seed_relay_session(
+    cfg: CharlieBotConfig,
+    name: str,
+    persist_pair: bool = True,
+) -> tuple[SessionManager, SessionMetadata, SessionMetadata, master_cc_state._WorkItem]:
+  """One seeded session for the placement and _run_cc tests: create it, persist the
+  relay pair (cc_session_id + claude_account="main") unless *persist_pair* is False,
+  read the metadata back, and wrap it in the manager-backed work item.
+
+  Returns (mgr, session, meta, item); every test needs at least two of the four.
+  Only the no-resume-id probe test passes persist_pair=False.
+  """
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name=name))
+  if persist_pair:
+    await mgr.persist_cc_session_id(session.id, UUID)
+    await mgr.persist_claude_account(session.id, "main")
+  meta = await mgr.get_session(session.id)
+  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
+  return mgr, session, meta, item
+
+
 # ---------------------------------------------------------------------------
 # Turn placement
 # ---------------------------------------------------------------------------
@@ -492,12 +514,7 @@ async def test_place_turn_persists_the_label_when_the_move_lands(tmp_path: Path)
   cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", UUID)
   claude_accounts.observe_rate_limit("main", rate_limit_event("allowed_warning", 0.95)["rate_limit_info"], now=NOW)
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="disk-true"))
-  await mgr.persist_cc_session_id(session.id, UUID)
-  await mgr.persist_claude_account(session.id, "main")
-  meta = await mgr.get_session(session.id)
-  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
+  mgr, session, _meta, item = await _seed_relay_session(cfg, "disk-true")
 
   account, error = await master_cc_relay.place_turn(
       cfg, item, cfg.backends.options[0], UUID, str(tmp_path), None, None, now=NOW)
@@ -521,12 +538,7 @@ async def test_place_turn_probe_adopts_the_newest_holder_after_a_kill_between_mo
   stale = seed_transcript_copy(tmp_path / "claude-main", UUID, seed_line, mtime_ns=1_000)
   live = seed_transcript_copy(tmp_path / "claude-ext-1", UUID, seed_line + grown_tail, mtime_ns=2_000)
   live_before = live.stat()
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="kill-window"))
-  await mgr.persist_cc_session_id(session.id, UUID)
-  await mgr.persist_claude_account(session.id, "main")
-  meta = await mgr.get_session(session.id)
-  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
+  mgr, session, meta, item = await _seed_relay_session(cfg, "kill-window")
 
   with capture_logs() as logs:
     account, error = await master_cc_relay.place_turn(
@@ -553,12 +565,7 @@ async def test_place_turn_probe_skips_with_at_most_the_labels_own_copy(tmp_path:
   """One pool copy (the label's own) is nothing to reconcile: no adoption, no warn."""
   cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", UUID)
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="single-copy"))
-  await mgr.persist_cc_session_id(session.id, UUID)
-  await mgr.persist_claude_account(session.id, "main")
-  meta = await mgr.get_session(session.id)
-  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
+  mgr, session, _meta, item = await _seed_relay_session(cfg, "single-copy")
 
   with capture_logs() as logs:
     account, error = await master_cc_relay.place_turn(
@@ -574,10 +581,7 @@ async def test_place_turn_probe_skips_with_at_most_the_labels_own_copy(tmp_path:
 @pytest.mark.asyncio
 async def test_place_turn_probe_skips_without_a_resume_id(tmp_path: Path) -> None:
   cfg = fable_pool_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="fresh"))
-  meta = await mgr.get_session(session.id)
-  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
+  _mgr, _session, _meta, item = await _seed_relay_session(cfg, "fresh", persist_pair=False)
 
   with capture_logs() as logs:
     account, error = await master_cc_relay.place_turn(
@@ -597,12 +601,7 @@ async def test_place_turn_probe_skips_for_a_declared_fresh_start(tmp_path: Path)
   grown_tail = '{"type": "assistant", "content": "' + "x" * (claude_accounts.PROBE_TAIL_BYTES * 2) + '"}\n'
   seed_transcript_copy(tmp_path / "claude-main", UUID, seed_line, mtime_ns=1_000)
   seed_transcript_copy(tmp_path / "claude-ext-1", UUID, seed_line + grown_tail, mtime_ns=2_000)
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="recycled"))
-  await mgr.persist_cc_session_id(session.id, UUID)
-  await mgr.persist_claude_account(session.id, "main")
-  meta = await mgr.get_session(session.id)
-  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
+  _mgr, _session, meta, item = await _seed_relay_session(cfg, "recycled")
   item.expect_fresh_session = True
 
   with capture_logs() as logs:
@@ -624,12 +623,7 @@ async def test_place_turn_adopts_the_refused_destination_and_continues_from_it(t
   live = seed_transcript_copy(tmp_path / "claude-ext-1", UUID, '{"stale": true}\n{"live": true}\n', mtime_ns=2_000)
   claude_accounts.observe_rate_limit("main", rate_limit_event("allowed_warning", 0.95)["rate_limit_info"], now=NOW)
   live_before = live.stat()
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="refused"))
-  await mgr.persist_cc_session_id(session.id, UUID)
-  await mgr.persist_claude_account(session.id, "main")
-  meta = await mgr.get_session(session.id)
-  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
+  mgr, session, meta, item = await _seed_relay_session(cfg, "refused")
 
   with capture_logs() as logs:
     account, error = await master_cc_relay.place_turn(
@@ -652,15 +646,10 @@ async def test_run_cc_persists_the_label_when_the_mid_turn_relay_lands(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", UUID)
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="mid-relay"))
-  await mgr.persist_cc_session_id(session.id, UUID)
-  await mgr.persist_claude_account(session.id, "main")
-  meta = await mgr.get_session(session.id)
+  mgr, session, _meta, item = await _seed_relay_session(cfg, "mid-relay")
   first = ScriptedRelayBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
   second = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   _install_backends(monkeypatch, [first, second])
-  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
 
   cc_session_id, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
 
@@ -688,16 +677,11 @@ async def test_run_cc_mid_turn_refusal_adopts_the_destination_and_continues(
       seed_line + '{"type": "assistant", "content": "grew a little"}\n',
       mtime_ns=9_000)
   live_before = live.stat()
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="mid-refusal"))
-  await mgr.persist_cc_session_id(session.id, UUID)
-  await mgr.persist_claude_account(session.id, "main")
-  meta = await mgr.get_session(session.id)
+  mgr, session, _meta, item = await _seed_relay_session(cfg, "mid-refusal")
   first = ScriptedRelayBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
   second = ScriptedRelayBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
   third = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second, third])
-  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
 
   with capture_logs() as logs:
     cc_session_id, exit_code, error_msg, extras = await master_cc_run._run_cc(item)

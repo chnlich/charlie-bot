@@ -157,6 +157,32 @@ def _spy_row_blobs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
   return projected
 
 
+def _spy_opencode_scans(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+  """Install a counting spy on tt._scan_opencode_rows; returns the per-collect scan list."""
+  scans: list[int] = []
+  orig = tt._scan_opencode_rows
+
+  def spy(con: sqlite3.Connection, memo: dict) -> tuple:
+    scans.append(1)
+    return orig(con, memo)
+
+  monkeypatch.setattr(tt, "_scan_opencode_rows", spy)
+  return scans
+
+
+def _spy_cache_loads(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+  """Install a counting spy on TallyCache.load; returns the loaded cache paths."""
+  loads: list[Path] = []
+  orig = tt.TallyCache.load
+
+  def spy(path: Path, notes: list) -> tt.TallyCache:
+    loads.append(path)
+    return orig(path, notes)
+
+  monkeypatch.setattr(tt.TallyCache, "load", staticmethod(spy))
+  return loads
+
+
 def _collect(
     claude: Claude | None,
     codex: Codex | None,
@@ -1224,14 +1250,7 @@ def test_cache_document_parses_once_per_process(tmp_path: Path, monkeypatch: pyt
   _write_opencode(db, [_oc_row()])
   _collect(claude, None, db, cache)
 
-  loads = []
-  orig = tt.TallyCache.load
-
-  def spy(path: Path, notes: list) -> tt.TallyCache:
-    loads.append(path)
-    return orig(path, notes)
-
-  monkeypatch.setattr(tt.TallyCache, "load", staticmethod(spy))
+  loads = _spy_cache_loads(monkeypatch)
   os.utime(claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl", None)  # signature moves
   second = _collect(claude, None, db, cache)
   assert loads == []  # the memoized document served the changed round
@@ -1249,20 +1268,8 @@ def test_reset_drops_the_probe_and_document_memos(tmp_path: Path, monkeypatch: p
   assert tt._opencode_doc_synced == {}
   _append_opencode(db, [_padded_opencode_row(100)])
 
-  scans, loads = [], []
-  orig_scan = tt._scan_opencode_rows
-  orig_load = tt.TallyCache.load
-
-  def spy_scan(con: sqlite3.Connection, memo: dict) -> tuple:
-    scans.append(1)
-    return orig_scan(con, memo)
-
-  def spy_load(path: Path, notes: list) -> tt.TallyCache:
-    loads.append(path)
-    return orig_load(path, notes)
-
-  monkeypatch.setattr(tt, "_scan_opencode_rows", spy_scan)
-  monkeypatch.setattr(tt.TallyCache, "load", staticmethod(spy_load))
+  scans = _spy_opencode_scans(monkeypatch)
+  loads = _spy_cache_loads(monkeypatch)
   _collect(None, None, db, cache)
   assert scans == [1]  # empty row memo: the cold scan ran
   assert loads == [cache]  # empty document memo: the document re-parsed
@@ -1560,14 +1567,7 @@ def test_seeded_restart_scans_when_the_stored_probe_misses(tmp_path: Path, monke
   _insert_opencode_raw(con, [({}, _padded_opencode_row(500))])
   con.commit()
 
-  scans: list[int] = []
-  orig_scan = tt._scan_opencode_rows
-
-  def spy_scan(scan_con: sqlite3.Connection, memo: dict) -> tuple:
-    scans.append(1)
-    return orig_scan(scan_con, memo)
-
-  monkeypatch.setattr(tt, "_scan_opencode_rows", spy_scan)
+  scans = _spy_opencode_scans(monkeypatch)
   projected = _spy_row_blobs(monkeypatch)
   second = _collect(None, None, db, cache)
   assert scans == [1]  # the proof miss sent the restart down the key diff
@@ -1594,14 +1594,7 @@ def test_legacy_entry_without_probe_seeds_and_scans(tmp_path: Path, monkeypatch:
   con.execute("insert into other values ('noise2', 'x')")
   con.commit()
 
-  scans: list[int] = []
-  orig_scan = tt._scan_opencode_rows
-
-  def spy_scan(scan_con: sqlite3.Connection, memo: dict) -> tuple:
-    scans.append(1)
-    return orig_scan(scan_con, memo)
-
-  monkeypatch.setattr(tt, "_scan_opencode_rows", spy_scan)
+  scans = _spy_opencode_scans(monkeypatch)
   projected = _spy_row_blobs(monkeypatch)
   second = _collect(None, None, db, cache)
   assert scans == [1]  # no stored proof: the key diff runs, the legacy contract

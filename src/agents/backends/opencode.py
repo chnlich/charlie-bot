@@ -487,7 +487,7 @@ class OpenCodeBackend(AgentBackend):
     raise RuntimeError("OpenCode SSE stream closed before server.connected")
 
   async def _send_prompt(
-      self, client: httpx.AsyncClient, session_id: str, prompt: str, uploaded_files: list[dict] | None = None) -> None:
+      self, client: httpx.AsyncClient, session_id: str, prompt: str, uploaded_files: list[dict] | None) -> None:
     if not self._model:
       raise ValueError("opencode backend requires a model")
     provider_id, model_id = self._model.split("/", 1)

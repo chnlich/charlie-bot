@@ -769,10 +769,10 @@ async def run_improve_loop(
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
     work_branch: str,
-    base_branch: str | None = None,
+    base_branch: str | None,
+    resolved_backend: str,
+    resolved_model: str,
     merge_back: bool = False,
-    resolved_backend: str = "",
-    resolved_model: str = "",
     loop_id: int | None = None,
     plan: str | None = None,
 ) -> None:

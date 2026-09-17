@@ -274,7 +274,8 @@ async def events_viewer(
 async def perfetto_viewer(
     request: Request,
     trace: list[str] = Query(default=[]),
-    dir: str | None = None,
+    # alias keeps the URL query key 'dir': the page's own merged-trace link builds it.
+    dir_path: str | None = Query(default=None, alias="dir"),
     pattern: str = "*.json",
     title: str | None = None,
     slim: bool | None = None,
@@ -284,8 +285,8 @@ async def perfetto_viewer(
   Supports single trace, multiple traces, and directory auto-discovery.
   """
   inputs = [_trace_input(value) for value in trace]
-  if dir is not None:
-    discovered = await asyncio.to_thread(_discover_trace_paths, dir, pattern)
+  if dir_path is not None:
+    discovered = await asyncio.to_thread(_discover_trace_paths, dir_path, pattern)
     inputs.extend((f"{FILE_SERVER_MOUNTS[0]}{path}", path) for path in discovered)
 
   if not inputs:
@@ -294,8 +295,8 @@ async def perfetto_viewer(
   warn = None
   if await asyncio.to_thread(_all_local_json_traces, inputs):
     query: list[tuple[str, str]] = [("trace", str(path)) for _, path in inputs[:len(trace)]]
-    if dir is not None:
-      query.extend((("dir", dir), ("pattern", pattern)))
+    if dir_path is not None:
+      query.extend((("dir", dir_path), ("pattern", pattern)))
     if slim is not None:
       query.append(("slim", str(slim)))
     trace_url = f"{PERFETTO_MERGED_PATH}?{urlencode(query)}"
@@ -304,7 +305,7 @@ async def perfetto_viewer(
     if len(inputs) > 1:
       warn = "⚠ Remote or non-JSON traces cannot be merged, showing first trace only"
 
-  display_title = title or dir or inputs[0][0].rsplit("/", 1)[-1]
+  display_title = title or dir_path or inputs[0][0].rsplit("/", 1)[-1]
   is_merge = trace_url.startswith(PERFETTO_MERGED_PATH) and (len(inputs) > 1 or bool(slim))
 
   return templates.TemplateResponse(
@@ -486,17 +487,18 @@ async def _cached_direct_pass(path: Path) -> Path:
 @router.get(PERFETTO_MERGED_PATH)
 async def perfetto_merged(
     trace: list[str] = Query(default=[]),
-    dir: str | None = None,
+    # alias keeps the URL query key 'dir': perfetto_viewer's merged-trace link builds it.
+    dir_path: str | None = Query(default=None, alias="dir"),
     pattern: str = "*.json",
     slim: bool = False,
 ) -> FileResponse:
   """Merge local Chrome JSON traces and serve the cached gzip output."""
-  if not trace and dir is None:
+  if not trace and dir_path is None:
     raise HTTPException(status_code=400, detail="Provide at least one trace path with 'trace' or 'dir'.")
 
   paths = [Path(value) for value in trace]
-  if dir is not None:
-    discovered = await asyncio.to_thread(_discover_trace_paths, dir, pattern)
+  if dir_path is not None:
+    discovered = await asyncio.to_thread(_discover_trace_paths, dir_path, pattern)
     if not discovered:
       raise HTTPException(status_code=400, detail="Provide at least one trace path; 'dir' matched no files.")
     paths.extend(discovered)

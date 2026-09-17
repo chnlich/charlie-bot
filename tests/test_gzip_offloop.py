@@ -109,3 +109,49 @@ def test_streaming_body_compresses_per_chunk() -> None:
   assert headers["content-encoding"] == "gzip"
   assert _strip_mtime(body) == _strip_mtime(baseline_body)
   assert gzip.decompress(body) == BODY
+
+
+def test_already_compressed_media_types_ride_identity() -> None:
+
+  def page() -> Response:
+    return Response(content=BODY, media_type="image/png")
+
+  headers, body = _drive(_build(page, server._CharlieBotGZipMiddleware))
+  assert "content-encoding" not in headers
+  assert body == BODY
+
+  def deck() -> StreamingResponse:
+
+    async def chunks() -> AsyncIterator[bytes]:
+      for i in range(0, len(BODY), 100_000):
+        yield BODY[i:i + 100_000]
+
+    return StreamingResponse(
+        chunks(), media_type="application/vnd.openxmlformats-officedocument"
+        ".presentationml.presentation")
+
+  headers, body = _drive(_build(deck, server._CharlieBotGZipMiddleware))
+  assert "content-encoding" not in headers
+  assert body == BODY
+
+
+def test_text_media_types_keep_compressing() -> None:
+
+  def svg() -> Response:
+    return Response(content=BODY, media_type="image/svg+xml")
+
+  headers, body = _drive(_build(svg, server._CharlieBotGZipMiddleware))
+  assert headers["content-encoding"] == "gzip"
+  assert gzip.decompress(body) == BODY
+
+  def events() -> StreamingResponse:
+
+    async def chunks() -> AsyncIterator[bytes]:
+      yield BODY
+      yield b""
+
+    return StreamingResponse(chunks(), media_type="text/event-stream")
+
+  headers, body = _drive(_build(events, server._CharlieBotGZipMiddleware))
+  assert "content-encoding" not in headers
+  assert body == BODY + b""

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from html import unescape
 from html.parser import HTMLParser
 
+import pytest
 from conftest import ROOT
 
 from src.core import plan_diff
@@ -467,25 +468,22 @@ def test_header_splices_inside_the_wrap_column() -> None:
   assert annotated.index('<p>alpha beta</p>') > annotated.index('<div class="cbd-header"')
 
 
-def test_header_splices_inside_main_when_wrap_is_absent() -> None:
-  new = '<html><body><main><p>alpha beta</p></main></body></html>'
+@pytest.mark.parametrize(
+    "new, anchor",
+    [
+        ('<html><body><main><p>alpha beta</p></main></body></html>', '<main>'),
+        ('<html><body><p>alpha beta</p></body></html>', '<body>'),
+        ('<html><body><div class="unwrap"><div class="re-wrap"><p>alpha beta</p></div></div></body></html>', '<body>'),
+    ],
+    ids=[
+        "splices-inside-main-when-wrap-absent",
+        "body-start-fallback-without-wrap-or-main",
+        "class-names-merely-containing-wrap-are-not-anchors",
+    ])
+def test_header_lands_after_the_anchor_the_fallback_chain_selects(new: str, anchor: str) -> None:
   annotated = annotate(new, new)
   assert annotated.count('<div class="cbd-header"') == 1
-  assert annotated.index('<div class="cbd-header"') == annotated.index('<main>') + len('<main>')
-
-
-def test_header_keeps_the_body_start_fallback_without_wrap_or_main() -> None:
-  new = '<html><body><p>alpha beta</p></body></html>'
-  annotated = annotate(new, new)
-  assert annotated.count('<div class="cbd-header"') == 1
-  assert annotated.index('<div class="cbd-header"') == annotated.index('<body>') + len('<body>')
-
-
-def test_header_ignores_class_names_that_merely_contain_wrap() -> None:
-  new = '<html><body><div class="unwrap"><div class="re-wrap"><p>alpha beta</p></div></div></body></html>'
-  annotated = annotate(new, new)
-  assert annotated.count('<div class="cbd-header"') == 1
-  assert annotated.index('<div class="cbd-header"') == annotated.index('<body>') + len('<body>')
+  assert annotated.index('<div class="cbd-header"') == annotated.index(anchor) + len(anchor)
 
 
 def test_header_offset_matches_a_full_reparse_of_the_spliced_page() -> None:

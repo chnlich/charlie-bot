@@ -539,6 +539,13 @@ _search_row_bodies: BoundedMemo[int, tuple[SessionMetadata, tuple, bytes]] = Bou
 # another object; the render runs synchronously on the event loop between
 # awaits, so the single slot needs no lock.
 _search_whole_body: tuple[tuple[SessionMetadata, ...], tuple, bytes] | None = None
+# The body's gzip form rides the same pure-function ground as the plain bytes
+# above, so the served shape (the browser's search fetch always sends
+# Accept-Encoding: gzip) reads the stored compressed bytes instead of paying
+# the gzip middleware's per-request deflate. Two slots cover the alternating
+# queries a correction keystroke re-fires; each slot holds one ~32 KB wire body.
+_SEARCH_GZIP_MEMO_LIMIT = 2
+_search_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SEARCH_GZIP_MEMO_LIMIT)
 
 
 def _search_row_static_segments(meta: SessionMetadata) -> tuple[bytes | str, ...]:
@@ -601,9 +608,10 @@ def _json_scalar_bytes(value: object) -> bytes:
 
 @router.get('/search', response_model=list[SessionMetadata])
 async def search_sessions(
+    request: Request,
     q: str = '',
     session_mgr: SessionManager = Depends(get_session_manager),
-) -> list[SessionMetadata] | PreencodedJSONResponse:
+) -> list[SessionMetadata] | Response:
   """Full-text search across session names and chat content."""
   global _search_whole_body
   if not q.strip():
@@ -643,7 +651,7 @@ async def search_sessions(
   cached = _search_whole_body
   if (cached is not None and len(cached[0]) == len(rows) and
       all(c is m for c, m in zip(cached[0], rows, strict=True)) and cached[1] == tuple(states)):
-    return PreencodedJSONResponse(cached[2])
+    return await gzip_body_response(request, cached[2], {}, _search_gzip_memo)
   parts: list[bytes] = []
   for meta, state in zip(rows, states, strict=True):
     thinking_since, has_running, has_pending, pending_count, next_trigger_at = state
@@ -652,7 +660,7 @@ async def search_sessions(
     parts.append(body)
   body = b"[" + b",".join(parts) + b"]"
   _search_whole_body = (tuple(rows), tuple(states), body)
-  return PreencodedJSONResponse(body)
+  return await gzip_body_response(request, body, {}, _search_gzip_memo)
 
 
 def _search_row_body(meta: SessionMetadata, row_key: tuple) -> bytes:

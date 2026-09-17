@@ -4,7 +4,7 @@ import io
 import json
 import os
 import threading
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -16,6 +16,8 @@ from fastapi.testclient import TestClient
 import server
 from src.api import pages
 from src.core.trace_merge import merge_traces as real_merge_traces
+
+real_multi_trace_merge = pages._build_multi_trace_merge
 
 
 def _write_trace(path: Path, marker: str = "event") -> None:
@@ -30,16 +32,16 @@ def _write_trace(path: Path, marker: str = "event") -> None:
   )
 
 
-def _make_blocking_merge(calls: list[int], started: threading.Event,
-                         release: threading.Event) -> Callable[[list[Path], Path, bool], None]:
+def _make_blocking_multi_build(calls: list[int], started: threading.Event,
+                               release: threading.Event) -> Callable[[list[Path], Path, bool], Awaitable[None]]:
 
-  def blocking_merge(paths: list[Path], out_path: Path, slim: bool) -> None:
+  async def blocking_build(paths: list[Path], out_path: Path, slim: bool) -> None:
     calls.append(1)
-    real_merge_traces(paths, out_path, slim)
     started.set()
     release.wait(10.0)
+    await real_multi_trace_merge(paths, out_path, slim)
 
-  return blocking_merge
+  return blocking_build
 
 
 @pytest.fixture
@@ -284,14 +286,14 @@ def test_merge_cache_hits_invalidates_on_mtime_and_prunes(
 ) -> None:
   merge_calls = 0
 
-  def counting_merge(paths: list[Path], out_path: Path, slim: bool) -> None:
+  async def counting_merge(paths: list[Path], out_path: Path, slim: bool) -> None:
     nonlocal merge_calls
     merge_calls += 1
-    real_merge_traces(paths, out_path, slim)
+    await real_multi_trace_merge(paths, out_path, slim)
 
-  monkeypatch.setattr(pages, "merge_traces", counting_merge)
+  monkeypatch.setattr(pages, "_build_multi_trace_merge", counting_merge)
 
-  # Merge leg: multiple inputs still go through merge_traces.
+  # Merge leg: multiple inputs go through the multi-trace build.
   first = tmp_path / "rank0.json"
   second = tmp_path / "rank1.json"
   _write_trace(first, "first")
@@ -539,7 +541,7 @@ def test_single_flight_one_build_per_key(
   release = threading.Event()
   calls: list[int] = []
 
-  monkeypatch.setattr(pages, "merge_traces", _make_blocking_merge(calls, started, release))
+  monkeypatch.setattr(pages, "_build_multi_trace_merge", _make_blocking_multi_build(calls, started, release))
 
   async def run() -> None:
     paths = [first, second]
@@ -569,11 +571,11 @@ def test_single_flight_progress_independently(
 
   calls: list[int] = []
 
-  def counting_merge(paths: list[Path], out_path: Path, slim: bool) -> None:
+  async def counting_merge(paths: list[Path], out_path: Path, slim: bool) -> None:
     calls.append(1)
-    real_merge_traces(paths, out_path, slim)
+    await real_multi_trace_merge(paths, out_path, slim)
 
-  monkeypatch.setattr(pages, "merge_traces", counting_merge)
+  monkeypatch.setattr(pages, "_build_multi_trace_merge", counting_merge)
 
   async def run() -> None:
     result_a, result_b = await asyncio.gather(
@@ -600,7 +602,7 @@ def test_disconnect_does_not_lose_work(
   release = threading.Event()
   calls: list[int] = []
 
-  monkeypatch.setattr(pages, "merge_traces", _make_blocking_merge(calls, started, release))
+  monkeypatch.setattr(pages, "_build_multi_trace_merge", _make_blocking_multi_build(calls, started, release))
 
   async def run() -> None:
     waiter = asyncio.create_task(pages._cached_merge(key, slim=False))

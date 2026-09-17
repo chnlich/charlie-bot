@@ -1,11 +1,12 @@
 import gzip
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import orjson
 import pytest
 
-from src.core.trace_merge import merge_traces
+from src.core.trace_merge import build_multi_trace_merge, build_trace_member, merge_traces
 
 
 def _write_trace(path: Path, events: list[dict], *, bare: bool = False) -> None:
@@ -410,3 +411,85 @@ def test_trace_events_helper_accepts_trace_shapes_and_rejects_the_rest(tmp_path:
     not_a_trace.write_text(body, encoding="utf-8")
     with pytest.raises(ValueError, match="no traceEvents array"):
       _trace_events_or_raise(orjson.loads(not_a_trace.read_bytes()), not_a_trace)
+
+
+def _member_form_output(paths: list[Path], tmp_path: Path, slim: bool) -> list[dict]:
+  """Build through the member form exactly as the production multi-trace path does."""
+  output = tmp_path / "member-merged.json.gz"
+  with ThreadPoolExecutor(max_workers=len(paths)) as executor:
+    build_multi_trace_merge(paths, output, slim, executor)
+  return _read_merged(output)
+
+
+def test_member_form_matches_the_single_stream_form(tmp_path: Path) -> None:
+  # The parallel member form is the production multi-trace path; the sequential
+  # form stays the tests' and the M66 collector's reference. Both must merge the
+  # same event sequence in the same order — thread ids differ only by each
+  # member's id stride, so identity is pinned name-keyed, never by absolute tid.
+  rank0 = tmp_path / "trace_rank0.json"
+  rank1 = tmp_path / "trace_rank1.json"
+  _write_trace(rank0, _rank_events(0))
+  _write_trace(rank1, _rank_events(1))
+
+  sequential_output = tmp_path / "sequential.json.gz"
+  merge_traces([rank0, rank1], sequential_output, slim=False)
+  sequential = _read_merged(sequential_output)
+  member = _member_form_output([rank0, rank1], tmp_path, slim=False)
+
+  assert [event.get("name") for event in member] == [event.get("name") for event in sequential]
+  by_name_member = {event.get("name"): event for event in member if event.get("name")}
+  by_name_sequential = {event.get("name"): event for event in sequential if event.get("name")}
+  for name, event in by_name_member.items():
+    # pid values must agree exactly: they are labels, not allocated ids; the
+    # allocated tid/id ride each form's own counter.
+    assert {k: v for k, v in event.items() if k not in {"tid", "id"}} == \
+        {k: v for k, v in by_name_sequential[name].items() if k not in {"tid", "id"}}
+
+  thread_names = {event["args"]["name"]: event["tid"] for event in member if event.get("name") == "thread_name"}
+  assert set(thread_names) == {"rank0/7", "rank0/8", "rank1/7", "rank1/8"}
+  assert len(set(thread_names.values())) == 4
+  assert by_name_member["cpu-0"]["tid"] == thread_names["rank0/7"]
+  assert by_name_member["cpu-1"]["tid"] == thread_names["rank1/7"]
+  flow_ids = [event["id"] for event in member if "id" in event]
+  assert by_name_member["flow-start-0"]["id"] == by_name_member["flow-end-0"]["id"]
+  assert by_name_member["flow-start-0"]["id"] != by_name_member["flow-start-1"]["id"]
+  assert len(set(flow_ids)) == 2
+
+  sort_indices = {
+      event["pid"]: event["args"]["sort_index"] for event in member if event.get("name") == "process_sort_index"
+  }
+  assert sort_indices == {
+      "rank0": 0,
+      "rank0/GPU 0": 1000,
+      "rank1": 10000,
+      "rank1/GPU 0": 11000,
+  }
+
+
+def test_member_form_handles_empty_members(tmp_path: Path) -> None:
+  # An empty member (a slim filter that dropped a trace's every event) must
+  # stay invisible to the JSON: no leading comma after the header, no trailing
+  # comma before the footer, and an all-empty merge still yields a valid array.
+  real = tmp_path / "trace_rank0.json"
+  _write_trace(real, _rank_events(0))
+  empty = tmp_path / "trace_rank1.json"
+  _write_trace(empty, [{"ph": "i", "pid": 1, "tid": 1, "cat": "cpu_instant_event", "name": "drop"}])
+
+  leading = _member_form_output([empty, real], tmp_path, slim=True)
+  assert [event["name"] for event in leading if event.get("name", "").startswith("cpu")] == ["cpu-0"]
+
+  trailing = _member_form_output([real, empty], tmp_path, slim=True)
+  assert [event["name"] for event in trailing if event.get("name", "").startswith("cpu")] == ["cpu-0"]
+
+  all_empty = _member_form_output([empty, empty], tmp_path, slim=True)
+  assert all_empty == []
+
+
+def test_build_trace_member_raises_when_ids_exhaust_the_stride(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  import src.core.trace_merge as trace_merge_module
+
+  monkeypatch.setattr(trace_merge_module, "_MERGE_MEMBER_ID_STRIDE", 2)
+  trace = tmp_path / "trace_rank0.json"
+  _write_trace(trace, _batch_events(3))
+  with pytest.raises(ValueError, match="id stride"):
+    build_trace_member(trace, tmp_path / "member.jsonl", 0, slim=False)

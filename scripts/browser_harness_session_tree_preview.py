@@ -1389,30 +1389,44 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                        f"readability={narrow_readability}",
                        await screenshot(cdp, sid, results, "s14d-during-narrow"))
 
-    # The same live cues keep their timeline at the narrow viewport too: the
-    # reload turn is usually still live here; when it is not, one bounded
-    # message launches through the same pending dispatch.
+    # The same live cues keep their timeline at the narrow viewport too. The
+    # still-live reload turn is tried first; a borrowed turn can finish inside
+    # the window (observed: it died 1.4s in), so one retry rides a fresh
+    # bounded message through the same pending dispatch. Exactly one s14j
+    # record is produced, carrying every attempt's detail.
     narrow_send = ""
-    try:
+    narrow_details: list[str] = []
+    narrow_recorded = False
+    for narrow_attempt in ("still-live", "fresh"):
         try:
-            await wait_child_spinner(30, "live child spinner for the narrow window")
-            narrow_send = "rode the still-live reload turn"
-        except TimeoutError:
-            _launched, narrow_send = await send_child_message(
-                "Trial narrow step. Write a 40-word note about a harbor, then reply with exactly "
-                "NARROW-OK on the last line. Do not create subtasks.", "narrow-window")
-            await wait_child_spinner(240, "narrow-window child turn live")
-        late_label = await pin_child_run(narrow_send)
-        narrow_verdicts = await motion_pass(2.1)
-        results.record(
-            "s14j-motion-timeline-narrow",
-            all(ok for ok, _ in narrow_verdicts.values()),
-            f"{late_label} ({narrow_send}) at 390px: "
-            + "; ".join(detail for _, detail in narrow_verdicts.values()),
-            await screenshot(cdp, sid, results, "s14j-motion-narrow"))
-    except (TimeoutError, RuntimeError) as exc:
+            if narrow_attempt == "still-live":
+                try:
+                    await wait_child_spinner(30, "live child spinner for the narrow window")
+                    narrow_send = "rode the still-live reload turn"
+                except TimeoutError:
+                    continue
+            else:
+                _launched, narrow_send = await send_child_message(
+                    "Trial narrow step. Write a 40-word note about a harbor, then reply with exactly "
+                    "NARROW-OK on the last line. Do not create subtasks.", "narrow-window")
+                await wait_child_spinner(240, "narrow-window child turn live")
+            late_label = await pin_child_run(narrow_send)
+            narrow_verdicts = await motion_pass(2.1)
+            narrow_ok = all(ok for ok, _ in narrow_verdicts.values())
+            narrow_details.append(f"{late_label} ({narrow_send}) at 390px: "
+                                  + "; ".join(detail for _, detail in narrow_verdicts.values()))
+            results.record("s14j-motion-timeline-narrow", narrow_ok,
+                           " | ".join(narrow_details)[:700],
+                           await screenshot(cdp, sid, results, "s14j-motion-narrow"))
+            narrow_recorded = True
+            if narrow_ok:
+                break
+        except (TimeoutError, RuntimeError) as exc:
+            narrow_details.append(f"attempt {narrow_attempt} ({narrow_send}): {str(exc)[:220]}")
+    if not narrow_recorded:
         results.record("s14j-motion-timeline-narrow", False,
-                       f"({narrow_send}): {str(exc)[:280]}", None)
+                       " | ".join(narrow_details)[:700],
+                       await screenshot(cdp, sid, results, "s14j-motion-narrow"))
 
     # The real stop: durable request, signal, observed exit -> interrupted, on
     # the child manager's own bounded turn. The stop message rides the same

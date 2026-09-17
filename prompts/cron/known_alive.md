@@ -155,14 +155,16 @@ Known-alive symbols:
   writes as unused attributes. The same two names also appear as
   `AsyncMock(return_value=...)`/`patch(..., side_effect=...)` keyword arguments, which vulture
   does not flag.
-- `speedup` (`tests/test_ncu_page.py`, attribute of the `_Speedup` stub in
-  `test_extract_rules_reads_swig_attribute_objects`) — stand-in for ncu_report's SWIG
-  speedup object, read by string: `_object_field(obj, name)` in `src/core/ncu_parsing.py`
-  does `getattr(obj, name)` with the literal `"speedup"`
-  (line building `entry["speedup_pct"]`). No `.speedup` attribute read exists anywhere in
-  the repo, so vulture flags the stub's attribute write as an unused variable; the sibling
-  stub attributes (`title`, `message`, `type`) go unflagged only because those names are
-  attribute-read elsewhere.
+- `name`, `section_identifier`, `has_rule_message`, `rule_message`,
+  `has_speedup_estimation`, `speedup_estimation`, `rule_results` (the `_FakeRule` and
+  `_FakeAction` stub methods of `tests/test_ncu_page.py`) — the rule surface
+  `_extract_rules` (src/core/ncu_parsing.py) calls on whatever object the test feeds it:
+  `rule_result.name()` through `speedup_estimation()` on each rule result and
+  `action.rule_results()` on the action. The call sites type those parameters `Any`, so
+  nothing in the repo reads the method names statically and a file-scope vulture run
+  flags each stub method as unused (60% confidence). The same function also reaches
+  payload fields by string: `_object_field(obj, name)` does `getattr(obj, name)` with the
+  literal `"speedup"` when building `entry["speedup_pct"]`.
 - `handle_starttag`, `handle_startendtag`, `handle_endtag`, `handle_data` (`_TreeBuilder`
   in `src/core/artifact_check.py`) — template-method overrides of stdlib
   `html.parser.HTMLParser`: `feed()` drives the base class's scanner, which invokes these

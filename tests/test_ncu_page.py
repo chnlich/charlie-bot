@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -146,86 +147,100 @@ def test_ncu_renders_full_report_roofline_tab(client: TestClient) -> None:
   assert '"available": true' in body
 
 
-def test_extract_rules_reads_swig_attribute_objects() -> None:
-  """rule_message()/speedup_estimation() return attribute objects, not dicts.
+class _SwigPayload:
+  """Stand-in for a SWIG payload object: its fields read as attributes, not keys."""
 
-  The narrow sample report carries zero rules, so this guards the --set path:
-  reading the message/speedup as attributes (not `.get(...)`) must yield a
-  populated, colour-labelled rule rather than silently dropping it.
+  def __init__(self, **fields: Any) -> None:
+    self.__dict__.update(fields)
+
+
+class _FakeRule:
+  """The SWIG rule surface: method calls either way; only the payload objects differ."""
+
+  def __init__(self, name: str, section: str, msg: Any, speedup: Any) -> None:
+    self._name = name
+    self._section = section
+    self._msg = msg
+    self._speedup = speedup
+
+  def name(self) -> str:
+    return self._name
+
+  def section_identifier(self) -> str:
+    return self._section
+
+  def has_rule_message(self) -> bool:
+    return True
+
+  def rule_message(self) -> Any:
+    return self._msg
+
+  def has_speedup_estimation(self) -> bool:
+    return True
+
+  def speedup_estimation(self) -> Any:
+    return self._speedup
+
+
+class _FakeAction:
+
+  def __init__(self, rule: _FakeRule) -> None:
+    self._rule = rule
+
+  def rule_results(self) -> list[_FakeRule]:
+    return [self._rule]
+
+
+@pytest.mark.parametrize(
+    ("msg", "speedup", "expected"),
+    [
+        pytest.param(
+            _SwigPayload(
+                title="Long Scoreboard Stalls",
+                message="On average each warp spends cycles stalled.",
+                type=3,  # warning
+            ),
+            _SwigPayload(speedup=12.5, type=1),
+            {
+                "name": "IssueEfficiency",
+                "section": "WarpStateStats",
+                "title": "Long Scoreboard Stalls",
+                "message": "On average each warp spends cycles stalled.",
+                "type": 3,
+                "type_label": "warning",
+                "speedup_pct": 12.5,
+            },
+            id="swig_attribute_payloads",
+        ),
+        pytest.param(
+            {
+                "title": "Latency Issue",
+                "message": "Eligible warps are low.",
+                "type": 2
+            },
+            {
+                "type": 1,
+                "speedup": 63.8354
+            },
+            {
+                "name": "Issue Slot Utilization",
+                "section": "SchedulerStats",
+                "title": "Latency Issue",
+                "message": "Eligible warps are low.",
+                "type": 2,
+                "type_label": "optimization",
+                "speedup_pct": 63.8354,
+            },
+            id="dict_payloads",
+        ),
+    ],
+)
+def test_extract_rules_reads_payload_objects(msg: Any, speedup: Any, expected: dict) -> None:
+  """Both payload shapes _object_field branches on normalize to the same populated, colour-labelled rule.
+
+  The narrow sample report carries zero rules, so the stubs stand in for the
+  SWIG rule objects: the attribute-object row is the real SWIG payload shape,
+  the dict row what newer ncu_report builds return.
   """
-
-  class _Msg:
-    title = "Long Scoreboard Stalls"
-    message = "On average each warp spends cycles stalled."
-    type = 3  # warning
-
-  class _Speedup:
-    speedup = 12.5
-    type = 1
-
-  class _Rule:
-
-    def name(self) -> str:
-      return "IssueEfficiency"
-
-    def section_identifier(self) -> str:
-      return "WarpStateStats"
-
-    def has_rule_message(self) -> bool:
-      return True
-
-    def rule_message(self) -> _Msg:
-      return _Msg()
-
-    def has_speedup_estimation(self) -> bool:
-      return True
-
-    def speedup_estimation(self) -> _Speedup:
-      return _Speedup()
-
-  class _Action:
-
-    def rule_results(self) -> list[_Rule]:
-      return [_Rule()]
-
-  rules = _extract_rules(_Action())
-  assert len(rules) == 1
-  assert rules[0]["title"] == "Long Scoreboard Stalls"
-  assert rules[0]["type_label"] == "warning"
-  assert rules[0]["speedup_pct"] == 12.5
-  assert rules[0]["section"] == "WarpStateStats"
-
-
-def test_extract_rules_reads_dict_objects() -> None:
-  """Newer ncu_report builds return dicts for message/speedup payloads."""
-
-  class _Rule:
-
-    def name(self) -> str:
-      return "Issue Slot Utilization"
-
-    def section_identifier(self) -> str:
-      return "SchedulerStats"
-
-    def has_rule_message(self) -> bool:
-      return True
-
-    def rule_message(self) -> dict:
-      return {"title": "Latency Issue", "message": "Eligible warps are low.", "type": 2}
-
-    def has_speedup_estimation(self) -> bool:
-      return True
-
-    def speedup_estimation(self) -> dict:
-      return {"type": 1, "speedup": 63.8354}
-
-  class _Action:
-
-    def rule_results(self) -> list[_Rule]:
-      return [_Rule()]
-
-  rules = _extract_rules(_Action())
-  assert len(rules) == 1
-  assert rules[0]["title"] == "Latency Issue"
-  assert rules[0]["type_label"] == "optimization"
-  assert rules[0]["speedup_pct"] == 63.8354
+  rules = _extract_rules(_FakeAction(_FakeRule(expected["name"], expected["section"], msg, speedup)))
+  assert rules == [expected]

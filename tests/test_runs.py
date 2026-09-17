@@ -214,10 +214,14 @@ def test_raw_completion_time_missing_and_present(tmp_path: Path) -> None:
   assert abs((datetime.now(UTC) - completion).total_seconds() - 60) < 5
 
 
-def test_raw_cursor_roundtrip_and_fallbacks(tmp_path: Path) -> None:
+def test_raw_cursor_read_parses_plain_decimal_and_fallbacks(tmp_path: Path) -> None:
   cursor = tmp_path / "sub" / runs.CURSOR_NAME
   assert runs.read_raw_cursor(cursor) == 0  # missing -> replay
-  runs.write_raw_cursor(cursor, 1234)
+  # The reader must keep parsing the plain unpadded decimal the pre-M104
+  # writer left on existing profiles' disks; the writer itself now lays down
+  # the fixed-width form only.
+  cursor.parent.mkdir(parents=True)
+  cursor.write_text("1234", encoding="utf-8")
   assert runs.read_raw_cursor(cursor) == 1234
   cursor.write_text("garbage", encoding="utf-8")
   assert runs.read_raw_cursor(cursor) == 0  # unparseable -> replay
@@ -242,7 +246,9 @@ def test_raw_cursor_writer_roundtrip_and_monotonic_overwrite(tmp_path: Path) -> 
 
 def test_raw_cursor_writer_overwrites_seeded_variable_width_cursor(tmp_path: Path) -> None:
   cursor = tmp_path / runs.CURSOR_NAME
-  runs.write_raw_cursor(cursor, 1051067581)
+  # A shorter-than-fixed-width seed (the pre-M104 writer's shape) must not
+  # leave stale bytes under the fixed-width rewrite.
+  cursor.write_text("1051067581", encoding="utf-8")
   writer = runs.RawCursorWriter(cursor)
   try:
     writer.write(42)

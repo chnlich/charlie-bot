@@ -21,7 +21,7 @@ from src.agents.backends.pty_common import (
     tmux_session_name,
 )
 from src.api.deps import get_config_on_loop, get_thread_manager, get_trigger_manager
-from src.api.responses import FastJsonResponse
+from src.api.responses import FastJsonResponse, PreencodedJSONResponse, fast_json_bytes
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.log_once import LazyStructlogLogger
@@ -209,6 +209,27 @@ _list_body_memo: BoundedMemo[str, tuple[tuple[tuple[str, int, int], ...], bytes,
 _LIST_GZIP_MEMO_LIMIT = 8
 _list_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_LIST_GZIP_MEMO_LIMIT)
 
+# The thread-detail poll's gzip form rides the same body-keyed memo: the full
+# row's 50 KB body re-deflates inside the middleware on every served request
+# although the rendered bytes are their own invalidation ground. One off-loop
+# level-1 deflate per distinct body replaces it; Content-Encoding set upstream
+# makes the middleware skip (the M72 mechanism).
+_DETAIL_GZIP_MEMO_LIMIT = 8
+_detail_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_DETAIL_GZIP_MEMO_LIMIT)
+
+
+async def _gzip_body_response(
+    request: Request, body: bytes, headers: dict[str, str], memo: BoundedMemo[bytes, bytes]) -> Response:
+  """Serve *body* plain or from its gzip memo (keyed on the bytes themselves)."""
+  if "gzip" not in request.headers.get("accept-encoding", ""):
+    return PreencodedJSONResponse(body, headers=headers)
+  gz = memo.get(body)
+  if gz is None:
+    gz = await asyncio.to_thread(gzip.compress, body, 1, mtime=0)
+    memo.store(body, gz)
+  return PreencodedJSONResponse(gz, headers={**headers, "Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
+
+
 # Polls between signature walks, per session. Every writer of a row-source
 # file (thread metadata via _save_metadata, triggers via _save_trigger) marks
 # through mark_sidebar_dirty, so an unchanged session_revision proves the
@@ -382,16 +403,7 @@ async def _list_response(request: Request, body: bytes, etag_value: str, etag: s
   """The list body's answer: a bodyless 204 when the poll repeats the rendered tag."""
   if etag == etag_value:
     return Response(status_code=204, headers={"ETag": etag_value, "Cache-Control": "no-store"})
-  headers = {"ETag": etag_value, "Cache-Control": "no-store"}
-  if "gzip" in request.headers.get("accept-encoding", ""):
-    gz = _list_gzip_memo.get(body)
-    if gz is None:
-      gz = await asyncio.to_thread(gzip.compress, body, 1, mtime=0)
-      _list_gzip_memo.store(body, gz)
-    headers["Content-Encoding"] = "gzip"
-    headers["Vary"] = "Accept-Encoding"
-    return Response(content=gz, media_type="application/json", headers=headers)
-  return Response(content=body, media_type="application/json", headers=headers)
+  return await _gzip_body_response(request, body, {"ETag": etag_value, "Cache-Control": "no-store"}, _list_gzip_memo)
 
 
 # The session view's threads array rides the same row proof as the list body:
@@ -506,10 +518,11 @@ async def list_threads(
 async def get_thread(
     session_id: str,
     thread_id: str,
+    request: Request,
     thread_mgr: ThreadManager = Depends(get_thread_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     attach: bool = Query(default=False),
-) -> FastJsonResponse:
+) -> Response:
   """Return a thread's metadata plus the derived attach pair.
 
   With ``attach`` the response is only ``{"attach_command", "attach_available"}``
@@ -532,7 +545,7 @@ async def get_thread(
   del payload["context"]
   payload["attach_command"] = attach_command
   payload["attach_available"] = attach_available
-  return FastJsonResponse(payload)
+  return await _gzip_body_response(request, fast_json_bytes(payload), {}, _detail_gzip_memo)
 
 
 # Reads from read_thread_worker_events, per events-log path. The workers-panel

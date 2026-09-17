@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import gzip
 import hashlib
 import json
 import os
@@ -22,11 +21,9 @@ from src.agents.backends.pty_common import (
 )
 from src.api.deps import get_config_on_loop, get_thread_manager, get_trigger_manager
 from src.api.responses import (
-    GZIP_RESPONSE_HEADERS,
     FastJsonResponse,
-    PreencodedJSONResponse,
     fast_json_bytes,
-    request_wants_gzip,
+    gzip_body_response,
 )
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
@@ -223,19 +220,6 @@ _list_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_LIST_GZIP_MEMO_LIMIT)
 _DETAIL_GZIP_MEMO_LIMIT = 8
 _detail_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_DETAIL_GZIP_MEMO_LIMIT)
 
-
-async def _gzip_body_response(
-    request: Request, body: bytes, headers: dict[str, str], memo: BoundedMemo[bytes, bytes]) -> Response:
-  """Serve *body* plain or from its gzip memo (keyed on the bytes themselves)."""
-  if not request_wants_gzip(request):
-    return PreencodedJSONResponse(body, headers=headers)
-  gz = memo.get(body)
-  if gz is None:
-    gz = await asyncio.to_thread(gzip.compress, body, 1, mtime=0)
-    memo.store(body, gz)
-  return PreencodedJSONResponse(gz, headers={**headers, **GZIP_RESPONSE_HEADERS})
-
-
 # Polls between signature walks, per session. Every writer of a row-source
 # file (thread metadata via _save_metadata, triggers via _save_trigger) marks
 # through mark_sidebar_dirty, so an unchanged session_revision proves the
@@ -409,7 +393,7 @@ async def _list_response(request: Request, body: bytes, etag_value: str, etag: s
   """The list body's answer: a bodyless 204 when the poll repeats the rendered tag."""
   if etag == etag_value:
     return Response(status_code=204, headers={"ETag": etag_value, "Cache-Control": "no-store"})
-  return await _gzip_body_response(request, body, {"ETag": etag_value, "Cache-Control": "no-store"}, _list_gzip_memo)
+  return await gzip_body_response(request, body, {"ETag": etag_value, "Cache-Control": "no-store"}, _list_gzip_memo)
 
 
 # The session view's threads array rides the same row proof as the list body:
@@ -551,7 +535,7 @@ async def get_thread(
   del payload["context"]
   payload["attach_command"] = attach_command
   payload["attach_available"] = attach_available
-  return await _gzip_body_response(request, fast_json_bytes(payload), {}, _detail_gzip_memo)
+  return await gzip_body_response(request, fast_json_bytes(payload), {}, _detail_gzip_memo)
 
 
 # Reads from read_thread_worker_events, per events-log path. The workers-panel

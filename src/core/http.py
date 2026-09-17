@@ -45,4 +45,3 @@ def load_requests(namespace: dict[str, Any]) -> Any:
 
   namespace["requests"] = requests
   return requests
-

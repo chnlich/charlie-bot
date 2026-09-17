@@ -245,7 +245,7 @@ def test_server_import_defers_the_speech_stack() -> None:
 
 
 # The sessions chain's extra bans: session_usage's usage math reads the opencode
-# compaction reserve from src.core.constants (the #1412 stdlib-only home), so the
+# compaction reserve from src.core.constants (the stdlib-only home), so the
 # chain imports no backend module for it.
 SESSIONS_HEAVY_MODULES = (
     "src.agents.backends.registry", "src.agents.backends.opencode", "src.agents.backends.charlie_code")

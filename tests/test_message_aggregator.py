@@ -15,7 +15,7 @@ from src.core import event_types as ET
 from src.core import message_aggregator
 from src.core.message_aggregator import TOOL_PREVIEW_CHARS, MessageAggregator
 
-VOICE_KEY = "is_" + "voice"
+VOICE_KEY = "is_voice"
 
 # An oversized tool output, comfortably past TOOL_PREVIEW_CHARS; the exact
 # size is arbitrary, the over-bound shape is the point.

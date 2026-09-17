@@ -223,6 +223,35 @@ def test_raw_cursor_roundtrip_and_fallbacks(tmp_path: Path) -> None:
   assert runs.read_raw_cursor(cursor) == 0  # unparseable -> replay
 
 
+def test_raw_cursor_writer_roundtrip_and_monotonic_overwrite(tmp_path: Path) -> None:
+  cursor = tmp_path / "sub" / runs.CURSOR_NAME
+  writer = runs.RawCursorWriter(cursor)
+  try:
+    writer.write(1234)
+    assert runs.read_raw_cursor(cursor) == 1234
+    # The offset only shrinks across a mount's restart-of-scan shapes; the
+    # fixed-width rewrite must leave no stale tail of the longer value.
+    writer.write(987)
+    assert runs.read_raw_cursor(cursor) == 987
+    writer.write(0)
+    assert runs.read_raw_cursor(cursor) == 0
+  finally:
+    writer.close()
+  assert len(cursor.read_bytes()) == runs.CURSOR_FIELD_BYTES
+
+
+def test_raw_cursor_writer_overwrites_seeded_variable_width_cursor(tmp_path: Path) -> None:
+  cursor = tmp_path / runs.CURSOR_NAME
+  runs.write_raw_cursor(cursor, 1051067581)
+  writer = runs.RawCursorWriter(cursor)
+  try:
+    writer.write(42)
+  finally:
+    writer.close()
+  assert runs.read_raw_cursor(cursor) == 42
+  assert len(cursor.read_bytes()) == runs.CURSOR_FIELD_BYTES
+
+
 # ---------------------------------------------------------------------------
 # resolve_run: the outcome rows
 # ---------------------------------------------------------------------------

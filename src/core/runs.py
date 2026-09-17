@@ -438,6 +438,37 @@ def write_raw_cursor(cursor: Path, offset: int) -> None:
   cursor.write_text(str(offset), encoding="utf-8")
 
 
+CURSOR_FIELD_BYTES = 20
+
+
+class RawCursorWriter:
+  """Held-fd checkpoint writer for one tail-follow mount's cursor file.
+
+  The follow checkpoints once per consumed line, so the write must not pay an
+  open+truncate+close cycle per call (~0.9 ms on this host's storage): the
+  mount holds one fd and rewrites the offset as one fixed-width zero-padded
+  decimal in place. The fixed width keeps every rewrite a single pwrite, so a
+  read can only observe the full old or the full new value; a torn read
+  between two monotonic offsets parses to the older one and replays
+  duplicates, never loss (the read_raw_cursor contract).
+  """
+
+  def __init__(self, path: Path) -> None:
+    self._path = path
+    self._fd: int | None = None
+
+  def write(self, offset: int) -> None:
+    if self._fd is None:
+      self._path.parent.mkdir(parents=True, exist_ok=True)
+      self._fd = os.open(self._path, os.O_WRONLY | os.O_CREAT, 0o666)
+    os.pwrite(self._fd, b"%0*d" % (CURSOR_FIELD_BYTES, offset), 0)
+
+  def close(self) -> None:
+    if self._fd is not None:
+      os.close(self._fd)
+      self._fd = None
+
+
 # ---------------------------------------------------------------------------
 # Outcome resolution
 # ---------------------------------------------------------------------------

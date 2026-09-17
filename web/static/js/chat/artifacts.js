@@ -534,23 +534,30 @@ function _planVersionRecord(plan, ver) {
   return {planId: plan.id, v: ver.v, title: plan.title, state: _planStateLabel(plan), file: ver.file};
 }
 
-function lookupRegisteredPlanVersion(snapshot, absPath, sessionId, sessionsRoot) {
+// Single walk of the registry's plans→versions: the record for the first
+// version whose (plan, ver) pair satisfies *match*, else null. Both lookups
+// below differ only in their *match*.
+function _findPlanVersionRecord(snapshot, match) {
   var plans = (snapshot && snapshot.plans) || [];
-  var sessionDir = buildSessionDir(sessionId, sessionsRoot);
-  if (!sessionDir) return null;
   for (var i = 0; i < plans.length; i++) {
     var plan = plans[i];
     var versions = (plan && plan.versions) || [];
     for (var j = 0; j < versions.length; j++) {
       var ver = versions[j];
-      if (!ver || !ver.file) continue;
-      var expected = sessionDir + '/' + ver.file;
-      if (absPath === expected) {
+      if (match(plan, ver)) {
         return _planVersionRecord(plan, ver);
       }
     }
   }
   return null;
+}
+
+function lookupRegisteredPlanVersion(snapshot, absPath, sessionId, sessionsRoot) {
+  var sessionDir = buildSessionDir(sessionId, sessionsRoot);
+  if (!sessionDir) return null;
+  return _findPlanVersionRecord(snapshot, function(plan, ver) {
+    return !!ver && !!ver.file && absPath === sessionDir + '/' + ver.file;
+  });
 }
 
 function decidePlanCardRender(snapshot, absPath, sessionId, sessionsRoot) {
@@ -558,19 +565,9 @@ function decidePlanCardRender(snapshot, absPath, sessionId, sessionsRoot) {
 }
 
 function lookupPlanVersionState(snapshot, planId, v) {
-  var plans = (snapshot && snapshot.plans) || [];
-  for (var i = 0; i < plans.length; i++) {
-    var plan = plans[i];
-    if (String(plan && plan.id) !== String(planId)) continue;
-    var versions = (plan && plan.versions) || [];
-    for (var j = 0; j < versions.length; j++) {
-      var ver = versions[j];
-      if (Number(ver && ver.v) === Number(v)) {
-        return _planVersionRecord(plan, ver);
-      }
-    }
-  }
-  return null;
+  return _findPlanVersionRecord(snapshot, function(plan, ver) {
+    return String(plan && plan.id) === String(planId) && Number(ver && ver.v) === Number(v);
+  });
 }
 
 var ARTIFACT_EXPAND_CONTROL = '<button type="button" onclick="toggleHtmlArtifactEmbed(this)">Expand</button>';

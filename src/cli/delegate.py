@@ -1,6 +1,6 @@
 """CLI script for master CC to delegate tasks to worker agents.
 
-Called by the master Claude Code instance via its run_command tool:
+Called by the master Claude Code instance as a shell command:
 
   # --session is optional; the server-written CHARLIEBOT_SESSION_ID supplies it
   # in normal master use (see ``resolve_session_id``).

@@ -253,7 +253,8 @@ def _resolve_claude_tier(facts: _UsageFacts) -> dict | None:
   the assistant event's ``message.model``. context_full is ``min(contextWindow of
   modelUsage[model], declared_window)``; when the assistant model is absent from
   ``modelUsage`` the declared window alone is used. context_compact_at is
-  ``context_full - OUTPUT_RESERVE - CONTEXT_RESERVE``; it is ``None`` when the
+  ``context_full - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE``; it is
+  ``None`` when the
   declared window is degraded (a forwarded-but-unmodelled override is present).
   Returns ``None`` when no qualifying assistant event exists.
   """

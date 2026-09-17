@@ -76,7 +76,7 @@ select = [
     "PGH003",
     "PIE807",
     "PLR0402", "PLR1714", "PLR1716",
-    "PYI025", "PYI034", "PYI041",
+    "PYI025", "PYI034", "PYI036", "PYI041",
     "RET501",
     "RUF005", "RUF007", "RUF023", "RUF043", "RUF059",
     "SIM102", "SIM105", "SIM108", "SIM109", "SIM117",

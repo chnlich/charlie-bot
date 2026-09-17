@@ -137,7 +137,7 @@ class _OffLoopWholeBodyGZipResponder(GZipResponder):
 
 
 class _CharlieBotGZipMiddleware(GZipMiddleware):
-  """Skips transport compression where it cannot pay: the merged-trace path outright, already-compressed media types by prefix."""
+  """Skips transport compression where it cannot pay: the merged-trace path, and media types by prefix."""
 
   async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
     if scope["type"] == "http" and scope["path"] == PERFETTO_MERGED_PATH:

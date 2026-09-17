@@ -7136,7 +7136,7 @@ bodies whose format is already entropy-coded — measured on the served shapes: 
 at 10.6-11.4 ms per view against 2.5-2.8 ms identity, a 727 KB pptx at ~19 ms against
 ~3.7 ms, the deflate buying 1.7-2.1 % of wire (random-data bodies only grow). The fix skips
 transport compression for that media-type prefix list; text formats (html, json, svg, csv)
-and SSE keep compressing. The cost is per-view serve time invisible to the standing HTTP
+keep compressing and SSE stays excluded. The cost is per-view serve time invisible to the standing HTTP
 probes, so the collector drives the real app stack raw-ASGI (`import server`, the production
 middleware chain over the file server's FileResponse arm, no credentials — the uncredentialed
 arm is the one the middleware compresses) over the worst on-disk `.png` and `.pptx` under the

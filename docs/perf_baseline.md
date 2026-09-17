@@ -80,7 +80,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M68 worker-list marked changed-poll rebuild | M68 collector below | seconds per body rebuild after one writer mark, worst on-disk thread-metadata corpus; the unchanged poll and its conditional are M36's shapes | median < 0.003 s (recalibrated from < 0.005 s: the old line sat on the TestClient/httpx harness floor the 2026-09-15 repairs removed — the served path reads 1.9-2.0 ms across the repair round's loads 0.8, the cron-collision bias the M56 history documents; see that history row) | — (introduced with its first history row) |
 | M69 opencode SSE unhandled-event debug stream, steady state | M69 collector below | debug lines per 60 steady-state `_translate_sse_event` calls of one unhandled event type | 0 lines after the first sighting per event type per process | — (introduced with its first history row) |
 | M70 artifact clean-view serve, steady state | M70 collector below | seconds per repeat credentialed view of the worst on-disk artifact page, scratch home | repeat-view median < 0.003 s (recalibrated from < 0.010 s: the old line sat on the TestClient/httpx harness floor the 2026-09-15 repair removed — the served path reads 0.7-2.7 ms across the repair round's loads 3.6-3.9, the cron-collision bias the M56 history documents; see that history row) | — (introduced with its first history row) |
-| M71 sidebar search capped name-match response | M71 collector below | seconds per request, worst capped name-match shape (a one-character query matching the cap), snapshot corpus | median < 0.006 s | — (introduced with its first history row) |
+| M71 sidebar search capped name-match response | M71 collector below | seconds per request, worst capped name-match shape (a one-character query matching the cap), snapshot corpus | median < 0.003 s (recalibrated from < 0.006 s: the old line sat on the TestClient harness floor the 2026-09-17 repair removed — the repaired raw-ASGI+middleware drive reads the served path at 1.66-1.89 ms with the body-keyed gzip memo, 2.99-3.13 ms before it; see the 2026-09-17 history row) | — (introduced with its first history row) |
 | M72 file-browser directory listing | M72 collector below | seconds per `GET /files/<dir>` request, worst on-disk listing corpus (the sessions root), the served path (the production gzip middleware mounted, Accept-Encoding: gzip — the browser shape; a bare app without the middleware reads the walk's floor alone, the vacuous-read class the M70 repair called out); the changed-round rebuild (one corpus move since the stored page keyed — a metadata rename into a session dir; the harness drops the page memo per timed round, row memo warm, builder level) | repeat-view median < 0.008 s (a tripped reading is read as host load and corpus growth first — the walk scales with the listed entry count, the cron-collision bias the M56 history documents; the 2026-09-15 repair split the TestClient harness floor out of the reading); changed-round median < 0.007 s | — (introduced with its first history row) |
 | M73 plan-verb validation event-loop lag | M73 collector below | seconds of loop lag + wall per amend validation (the registration gate: the DOM assertion set plus the headless-Chrome page-height render), scratch home, copied passing plan page (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 0.2 s (warm steady state; the first validation after a process start pays the one-time browser launch) | — (introduced with its first history row) |
 | M74 master turn-end raw-log rescan | M74 collector below | seconds of loop lag + wall per fallback-notice projection (whole read+parse+project of the turn's raw log), worst on-disk master-run raw log among the sessions the turn-end gate scans (backend option claude-family — the `_CLAUDE_RESUME_FLAG_BACKEND_TYPES` check the live call site runs), that session's own fresh translate (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.030 s | — (introduced with its first history row) |
@@ -4691,7 +4691,8 @@ shape, whose result rows are zero), so the collector snapshots the search corpus
 session's triggers/ — the derived trigger fields ride the response) into a
 scratch `CHARLIEBOT_HOME` under /tmp (live home read once for the copy, never
 written), resolves the single character matching the most session names, and
-drives the route through TestClient in each checkout's process: one cold pass,
+drives the route raw-ASGI behind the production gzip middleware in each
+checkout's process: one cold pass,
 as at the first capped search after a server start, then nine timed requests,
 with a parsed-body digest so a corpus difference between arms cannot masquerade
 as a payload difference. Evidence points the same collector at the before and
@@ -4746,42 +4747,91 @@ print(f"export M71_HOME={home} M71_Q={best_q}")
 EOF
 ```
 
-Then run per checkout (``eval`` the snapshot export first):
+Then run per checkout (``eval`` the snapshot export first). The drive reads the
+served path raw-ASGI behind the production gzip middleware — the browser's
+search fetch always sends ``Accept-Encoding: gzip``, so the body's deflate is
+part of the served shape; a TestClient drive adds ~1.5-2 ms of httpx harness
+per request and skips the middleware whose deflate the browser's fetch always
+pays, the vacuous-read class the M36/M56/M59/M70/M72 repairs called out:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import hashlib, json, os, sys, time
+import asyncio, hashlib, json, os, sys, time
 sys.path.insert(0, os.environ["CHECKOUT"])
 from pathlib import Path
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from server import _CharlieBotGZipMiddleware
+import src.api.deps as deps
 from src.api.deps import get_session_manager
 from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
 from src.core.sessions import SessionManager
+from src.core.triggers import TriggerManager
 
 home = Path(os.environ["M71_HOME"])
+Q = os.environ["M71_Q"]
 cfg = CharlieBotConfig(charliebot_home=home)
 mgr = SessionManager(cfg)
+deps._trigger_manager = TriggerManager(cfg, mgr)
 app = FastAPI()
 app.include_router(sessions_router, prefix="/api/sessions")
 app.dependency_overrides[get_session_manager] = lambda: mgr
-client = TestClient(app)
-url = f"/api/sessions/search?q={os.environ['M71_Q']}"
+# The production middleware chain: the browser's search fetch always sends
+# Accept-Encoding: gzip, so the body's deflate is part of the served shape —
+# a bare app reads the render floor alone.
+app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
 
-def digest(body):
-    return hashlib.sha256(json.dumps(json.loads(body), sort_keys=True).encode()).hexdigest()[:12]
+def scope():
+    return {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1", "method": "GET", "scheme": "http",
+            "path": "/api/sessions/search", "raw_path": f"/api/sessions/search?q={Q}".encode(),
+            "query_string": f"q={Q}".encode(), "root_path": "",
+            "headers": [(b"host", b"test"), (b"accept-encoding", b"gzip")],
+            "client": ("test", 123), "server": ("test", 80)}
 
-client.get(url)  # cold pass, as at the first capped search after a server start; not timed
-times, body = [], None
-for _ in range(9):
+async def drive():
+    body = b""
+    out = {"status": 0, "enc": b""}
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        nonlocal body
+        if msg["type"] == "http.response.start":
+            out["status"] = msg["status"]
+            out["enc"] = dict(msg.get("headers", [])).get(b"content-encoding", b"")
+        elif msg["type"] == "http.response.body":
+            body += msg.get("body", b"")
+
     t0 = time.perf_counter()
-    r = client.get(url)
-    times.append(time.perf_counter() - t0)
-    body = r.content
-times.sort()
-print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {len(json.loads(body))} rows, body {len(body)} B, "
-      f"digest {digest(body)}; capped search median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms")
+    await app(scope(), receive, send)
+    return time.perf_counter() - t0, body, out
+
+def digest(decoded):
+    return hashlib.sha256(json.dumps(json.loads(decoded), sort_keys=True).encode()).hexdigest()[:12]
+
+async def main():
+    _, _, cold = await drive()  # cold pass, as at the first capped search after a server start; not timed
+    if cold["status"] != 200:
+        raise SystemExit(f"M71 FAILED, cold status {cold['status']}")
+    times = []
+    decoded = wire_body = out = None
+    for _ in range(9):
+        dt, wire_body, out = await drive()
+        times.append(dt)
+        if out["status"] != 200:
+            raise SystemExit(f"M71 FAILED, status {out['status']}")
+    times.sort()
+    decoded, wire, enc = wire_body, len(wire_body), out["enc"]
+    if enc == b"gzip":
+        import gzip
+        decoded = gzip.decompress(decoded)
+    print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {len(json.loads(decoded))} rows, "
+          f"decoded {len(decoded)} B, wire {wire} B, enc {enc.decode() or 'identity'}, digest {digest(decoded)}; "
+          f"capped search median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms")
+
+asyncio.run(main())
 EOF
 ```
 
@@ -7080,6 +7130,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-17 | this PR | M71 capped search served median 3.13/2.99/3.08 → 1.89/1.66/1.74 ms, −40 % to −46 %, maxima 4.15-4.31 → 2.52-2.93 ms, every paired round faster (three interleaved rounds of the repaired collector — main checkout before vs branch worktree after back-to-back, shared snapshot of 1235 metas + 170.5 MB active live chat files + triggers dirs, 200 rows, decoded 205960 B / wire 32030 B with parsed digest ad2b74df9d9a identical across all six arms, load 0.81-0.87 one-minute); component attribution: the removed per-request slice is the middleware's level-1 deflate of the 205960 B body — 1.36 ms measured standalone (bare-app raw-ASGI repeat 2.05 ms vs middleware-mounted 3.41 ms over the same snapshot at load ~1.0) — replaced by the body-keyed memo read; no-regression witnesses interleaved: M56 /status 0.56 → 0.51 ms with digest deb187c4071e identical and M8 absent-needle manager 0.98 → 1.04 ms (within noise); 5647-passed suite + 11 skipped, ruff and yapf clean, plus 3 new gzip-contract tests (precompressed serve with decompressed parity, repeat zero re-compress, plain request no memo entry) and the route's four direct test calls moved to the _page_request seam; M71 healthy range recalibrated < 0.006 s → < 0.003 s with this PR | the standing collector rode the TestClient harness (~1.5-2 ms) and skipped the gzip middleware whose deflate the browser's search fetch always pays — the vacuous-read class the M36/M56/M59/M70/M72 repairs called out; the repaired raw-ASGI drive (the M35/M72 pattern) reads the served path the middleware and route actually run, and the search response's gzip form now rides the single-homed body-keyed memo (the #1698 serve rule), one off-loop level-1 deflate per distinct body replacing the middleware's per-request pass, Content-Encoding set upstream making the middleware skip |
 | 2026-09-16 | this PR | M7 restart-cold standing reading classified as shape drift, not a product regression and not corpus growth: wall 0.961-1.111 s, 21 rows, scanned 0.0-1.1 MB over seven fresh-process runs (verbatim collector, live cache document copied per run, load 1.4-3.1 one-minute across the readings) against the < 0.5 s line the 2026-09-15 landing set on the matched-signature shape (readings 0.29-0.31 s, the landing's pinned contract: db file+WAL signature unchanged since the document was written, the stored partial serves with the sidecar and db both unread); the standing collector's copy of the live document is signature-stale whenever an opencode turn ran since the server's last token-usage collect — instrumented proof: a fresh-process collect reads the sidecar once and runs the per-id key scan once, and an immediate re-collect of a just-synced document (fresh-process semantics, in-process memos cleared) still reads the sidecar and runs the key scan (1.118 s, scanned 0.0 MB), because the db's file+WAL signature moves with every streamed turn's writes and the seeded cold memo never takes the probe gate (`probe = None if seeded`, the scan function's own comment); no-regression proof: interleaved fresh-process A/B against the pre-#1676 checkout 9f6e8526, back-to-back rounds main 1.092/1.022/0.961 vs pre 1.089/0.982/0.952 s at load 1.4-2.0 one-minute — every paired round within 4 %, so neither #1676's parse carry nor #1690's cache-store single-homing moved the restart path; corpus check: document 6.1 MB + sidecar 25.6 MB / 175,227 rows today vs 5.8 MB + 24.8 MB / ~170k rows at the landing — ~4 % growth, and the component floor (cProfile, fresh-process shape) was the same shape at the landing corpus: sidecar orjson parse 0.21 s, the seeded per-id key diff 0.55 s (~3.1 µs/row), the memoized sessions walk 0.17 s, the sidecar rewrite 0.08 s; healthy range recalibrated to median < max(0.5 s, (document + sidecar bytes) ÷ 25 MB/s) with this PR — the churned reading sits 1.15-1.35x inside (31.7 MB ÷ 25 MB/s = 1.27 s) while the matched-signature quiet-db shape keeps the landing's 0.29-0.31 s contract under the 0.5 s floor; the collector now prints the document+sidecar bytes the formula reads | the two restart shapes ride one db file+WAL signature the opencode db's own writes move; the follow-up code lever, once the M7 topic's one-day skip window from #1676 passes: persist the post-scan probe beside the rows map so the seeded restart can take the same aggregate-gate skip the warm memo takes — a churned restart whose rows themselves did not move (WAL-only noise, the steady state the warm gate exists for) would drop the 175k-row key diff to a probe read, the weaker-proof trade the warm path's docstring already documents |
 | 2026-09-16 | this PR | M104 per-line tail-follow cursor checkpoint 956.6/959.0/965.1 → 7.2/7.2/7.3 µs (−99.3 %, ~134x), maxima 963.7-968.8 → 7.2-8.0 µs, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, scripted 2000-line scratch stream with a real cursor file under /tmp, live home untouched, cursor offset 210890 B byte-identical across all six arms, load 0.69-0.97 one-minute); real-corpus witness on the branch: the M84 corpus (1051.1 MB / 186-line worst raw master-run log, scratch copy, live home read-only) replayed with the cursor ON records offset 1051067581 = file size exactly, wall median 3410.8 ms — inside the cursor-off band the same hour (interleaved M84 rounds: main 3500.3/3460.3, branch 3505.2/3519.6 ms, parity divergences 0 both arms); component attribution: the per-line open(O_TRUNC)+write+close cycle measured standalone 933.8 µs on this host's storage (a held-fd pwrite of the same payload 1.5 µs, pwrite+ftruncate 10.9 µs); 5644-passed suite + 11 skipped, ruff and yapf clean; M104 definition, collector, healthy range, and history row introduced with this PR | the loop checkpointed the consumed byte offset once per streamed line through a full open+truncate+write+close cycle — ~0.9 ms of synchronous event-loop time per line riding every live master/worker turn (a 2000-line turn ≈ 1.9 s of cumulative loop stall) — invisible to M84, whose replay passes cursor=None; the mount now holds one fd and rewrites a fixed-width zero-padded decimal in place, so a read observes the full old or full new value and the read_raw_cursor replay contract keeps at-most-duplicates-never-loss |
 | 2026-09-16 | this PR | M17 fork median 1.1600/1.1633/1.1698 s → 0.4253/0.4794/0.5031 s, −57 % to −63 %, maxima 1.2172-1.2305 → 0.5162-0.5787 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, the 1051.3 MB / 307-event heaviest fork corpus of session 489e7c31, scratch CHARLIEBOT_HOME, live home read once per arm for the copy, load 0.88-0.95 one-minute; parent_reference.jsonl sha256 digest fcb5de4df91f identical across all six arms); component attribution on the before wall (cProfile): source read_bytes 0.555 s (the whole-corpus memcpy), isascii 0.085 s, numpy newline scan 0.118 s, window write 0.237 s; 5637-passed suite plus a new chunk-boundary test (a 1600-line / >3-chunk corpus forks byte-identically), ruff clean | the full-corpus fork read each source file into one Python bytes object before streaming it — a whole-corpus memcpy that dominated the fork of the gigabyte-class live files — although the fast frame path only reads the mapping through a uint8 view and one window write; the source now rides an mmap (the corpus never enters the Python heap: the scan's memory bandwidth and the kernel's window copy replace the read's memcpy), with the non-ASCII and undecodable-byte error contracts raising identically through a materialized fallback and the per-frame path's memoryviews released before the mapping closes (BufferError-safe teardown); chat files are append-only between atomic os.replace rewrites (the ChatEventStore's stated rule), so the mapping holds an append-only or already-unlinked inode and never truncates under it |

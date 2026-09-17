@@ -52,7 +52,7 @@ from conftest import (
     read_chat_events,
 )
 
-from src.agents.worker import QuotaExhaustedException, Worker
+from src.agents.worker import QuotaExhaustedError, Worker
 from src.core import event_types as ET
 from src.core import finalize_effects, runs
 from src.core import init as init_module
@@ -92,7 +92,7 @@ exit 0
 
 # Attempt 1 of a VERIFY quota-retry pair: emits a rate_limit_event the way Claude
 # Code does on a rejected quota check, then dies -- the exact shape Worker._process_event
-# (src/agents/worker.py) turns into QuotaExhaustedException.
+# (src/agents/worker.py) turns into QuotaExhaustedError.
 QUOTA_SHIM = """#!/bin/sh
 cat >/dev/null
 echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ATTEMPT-1-MARKER"}]}}'
@@ -568,7 +568,7 @@ async def test_fresh_spawn_rotates_stale_raw_log_so_verify_retry_quota_not_repla
       task_description="do the thing",
       cfg=cfg,
   )
-  with pytest.raises(QuotaExhaustedException):
+  with pytest.raises(QuotaExhaustedError):
     await worker1.run()
 
   raw_path = data_dir / runs.RAW_LOG_NAME

@@ -125,7 +125,7 @@ async def _await_reattach(future: asyncio.Future) -> None:
   await future
 
 
-class _MasterScanFailed(Exception):
+class _MasterScanFailedError(Exception):
   """The active-session listing at the head of the identity pass failed.
 
   A distinct type so callers can tell "no records were judged at all" apart
@@ -171,7 +171,7 @@ async def reconcile_master_identity(cfg: CharlieBotConfig, session_mgr: SessionM
 
   The returned map is ``excluded``: session id -> user event ids the replay
   pass must not re-answer. A session-listing failure raises
-  ``_MasterScanFailed``: no records were judged, so a replay pass run on the
+  ``_MasterScanFailedError``: no records were judged, so a replay pass run on the
   empty map would double-answer turns — every caller skips replay on it.
   """
   from src.agents import master_cc  # lazy: mirrors the spawner import's cycle guard
@@ -180,7 +180,7 @@ async def reconcile_master_identity(cfg: CharlieBotConfig, session_mgr: SessionM
     sessions = await asyncio.to_thread(session_mgr.list_active_session_metas)
   except Exception as e:
     log.exception("master_reconcile_scan_failed")
-    raise _MasterScanFailed(str(e)) from e
+    raise _MasterScanFailedError(str(e)) from e
   host_boot = await asyncio.to_thread(runs.read_host_boot_time)
   excluded: dict[str, set[str]] = {}
 
@@ -318,7 +318,7 @@ async def _reconcile_master_runs(cfg: CharlieBotConfig, session_mgr: SessionMana
   """
   try:
     excluded = await reconcile_master_identity(cfg, session_mgr, boot_time)
-  except _MasterScanFailed:
+  except _MasterScanFailedError:
     # Already logged: no records were judged, and replaying on an empty
     # exclusion map would double-answer turns — skip replay as before.
     return

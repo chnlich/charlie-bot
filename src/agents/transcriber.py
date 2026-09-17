@@ -56,7 +56,7 @@ SILERO_VAD_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-mo
 SILERO_VAD_SHA256 = "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
 
 
-class SpeechModelsNotReady(RuntimeError):
+class SpeechModelsNotReadyError(RuntimeError):
   """Raised when a voice stream starts before model provisioning is complete."""
 
 
@@ -163,8 +163,8 @@ def get_ready_model_paths() -> VoiceModelPaths:
   if paths is not None:
     return paths
   if error:
-    raise SpeechModelsNotReady(f"speech models are not ready: {error}")
-  raise SpeechModelsNotReady("speech models are still downloading")
+    raise SpeechModelsNotReadyError(f"speech models are not ready: {error}")
+  raise SpeechModelsNotReadyError("speech models are still downloading")
 
 
 def ensure_models_cached(cfg: CharlieBotConfig) -> VoiceModelPaths:
@@ -186,7 +186,7 @@ def ensure_qwen3_hf_snapshot(cfg: CharlieBotConfig) -> Path:
 
   Uses huggingface_hub (ships with transformers in the gpu-voice group), so the import
   stays inside the qwen3_hf paths. Download failures raise into the provisioning error
-  path, preserving the SpeechModelsNotReady behavior while weights are on their way.
+  path, preserving the SpeechModelsNotReadyError behavior while weights are on their way.
   """
   from huggingface_hub import snapshot_download
 

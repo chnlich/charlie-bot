@@ -76,6 +76,7 @@ select = [
     "FBT003",
     "FURB110", "FURB167", "FURB188",
     "ISC004",
+    "N818",
     "PERF401",
     "PGH003",
     "PIE807",

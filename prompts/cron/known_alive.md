@@ -432,3 +432,13 @@ Known-alive symbols:
   production byte framer (`_ChunkedFramer`, same module) matches its answers on every two-way
   split and on random chunkings; the framer's docstring names it the semantics home. No
   production code calls it, so a production-scope vulture scan flags it as an unused function.
+- `__getattr__` (`src/agents/backends/opencode.py`, `src/agents/worker.py`, `src/api/cron.py`,
+  `src/core/autonamer.py`, `src/core/recap.py`) — the PEP 562 lazy-import hooks, one-line
+  delegates to the shared `deferred_module_getattr` (`src/core/deferred.py`); same class as the
+  `src/core/artifact_wrap.py` hook entry above. Each serves one external string patch target:
+  `src.agents.backends.opencode.httpx.*` (`tests/test_opencode_backend.py`), the
+  `WORKER_BUILD_BACKEND_PATCH_TARGET` spelling `src.agents.worker.build_backend`
+  (`tests/conftest.py`), `src.api.cron.croniter` (`tests/test_cron_next_run_memo.py`),
+  `src.core.autonamer.build_backend` (`tests/test_autonamer.py`), and
+  `src.core.recap.build_backend` (`tests/test_recap.py`). Vulture flags each hook as an unused
+  function at 60% confidence.

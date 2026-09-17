@@ -2857,6 +2857,20 @@ def _cfg(home: Path) -> CharlieBotConfig:
   )
 
 
+def _pid_alive(pid: int) -> bool:
+  """True while *pid* is signalable, False when the kernel reports it gone.
+
+  Catches only ProcessLookupError — the one failure os.kill(pid, 0) gives on a
+  process the test spawned itself; anything else (e.g. PermissionError) means
+  the probe cannot answer and propagates.
+  """
+  try:
+    os.kill(pid, 0)
+  except ProcessLookupError:
+    return False
+  return True
+
+
 def _wait_for(predicate: Callable[[], bool], timeout: float, what: str) -> None:
   deadline = time.monotonic() + timeout
   while time.monotonic() < deadline:

@@ -44,6 +44,7 @@ from conftest import (
     _await_recovery_tasks,
     _cfg,
     _kill_driver_mid_run,
+    _pid_alive,
     _read_meta,
     _recover,
     _terminal_summaries,
@@ -700,14 +701,6 @@ def _launch_graceful_driver(tmp_path: Path,
   proc.wait(timeout=10)
   ids = json.loads((home / "driver_ids.json").read_text(encoding="utf-8"))
   return proc, ids
-
-
-def _pid_alive(pid: int) -> bool:
-  try:
-    os.kill(pid, 0)
-    return True
-  except OSError:
-    return False
 
 
 @pytest.mark.asyncio

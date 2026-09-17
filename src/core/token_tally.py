@@ -87,15 +87,18 @@ Vocabulary:
               "check", "model_ctx", "is_root", "final_total", "walked", "end", "guard"}`` for a
               Codex file (check is the root-session self-check pair ``[walked, final_total]``
               or None; the tail round carries the model context, rootness and self-check state
-              the prefix settled), ``{"sig", "rows_file", "partial"}`` for the opencode db
+              the prefix settled), ``{"sig", "rows_file", "partial", "probe"}`` for the opencode db
    rows       the opencode db's per-row map, ``{message id: [time_updated, record or None]}`` —
               the row memo's persisted form, held in the sidecar document the entry's
               ``rows_file`` names (beside the cache, one stable name per db path) so the main
               document stays at the Claude+Codex corpus's size. A process restart parses the
               sidecar only when a signature miss demands a seed, rebuilds the row memo from
-              it, and diffs one key pass against the live table, so the restart-cold collect
-              fetches only rows that moved since the sidecar was written instead of
-              re-reading every data blob
+              it, and gates the key diff on the entry's ``probe`` aggregates: a matching
+              ``(count, sum(time_updated))`` pair proves the rows unchanged and the key pass
+              skips, so only a proof miss or a moved row fetches rows that moved since the
+              sidecar was written instead of re-reading every data blob
+   probe      the opencode db's proof aggregates ``[count, sum(time_updated)]`` at the time
+              the entry's rows were stored — the seeded restart's gate input (see ``rows``)
    records    Claude: ``[key, model, ts, in_fresh, cache_write, cache_read, output]`` per
                response, replay-deduped within the file; Codex: ``[model, ts, in_fresh,
                cache_read, output]`` per token_count event, model resolved by file position;
@@ -1692,7 +1695,11 @@ def _write_rows_sidecar(cache_dir: Path, name: str, rows: dict, notes: list[str]
   return True
 
 
-def _advance_opencode_rows(db: Path, seed: dict | None = None) -> _OpencodeScan:
+def _advance_opencode_rows(
+    db: Path,
+    seed: dict | None = None,
+    seed_probe: tuple[int, int] | None = None,
+) -> _OpencodeScan:
   """Advance the db's row memo to its message table's current rows, bumping the epoch when any
   row moved. Read-only: the scan never writes. Absent or unreadable dbs advance nothing and
   return ``ok=False``. A warm memo first checks the proof aggregates: unchanged (count, sum)
@@ -1702,7 +1709,10 @@ def _advance_opencode_rows(db: Path, seed: dict | None = None) -> _OpencodeScan:
 
   *seed* is the persisted document's ``rows`` map for this db. A cold memo seeded from it
   skips the whole-blob cold scan: the memo starts at the document's rows and the warm key
-  diff fetches only rows that moved since the document was written.
+  diff fetches only rows that moved since the document was written. *seed_probe* is the
+  proof aggregates stored beside that seed; when it matches the live snapshot the seeded
+  memo takes the same gate the warm memo takes and the key scan skips (the stored proof's
+  own caveat: a multi-row coincidence whose count and sum both net to zero dodges it).
   """
   key = str(db)
   sig = _opencode_db_signature(db)
@@ -1710,14 +1720,16 @@ def _advance_opencode_rows(db: Path, seed: dict | None = None) -> _OpencodeScan:
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
       memo = _opencode_row_memos.setdefault(key, {})
-      # A seeded cold memo has no stored probe to check against, so it skips the gate's probe
-      # read and takes the same post-scan probe the cold-memo path computes.
       seeded = not memo and seed is not None
       if seeded:
         memo.update({mid: (row[0], row[1]) for mid, row in seed.items()})
       con.execute("begin")  # one snapshot: the stored proof must describe the scanned state
-      probe = None if seeded else (tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone()) if memo else None)
-      if probe is not None and _opencode_probes.get(key) == probe:
+      probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone()) if memo else None
+      gate = seed_probe if seeded else _opencode_probes.get(key)
+      if probe is not None and gate is not None and tuple(gate) == probe:
+        # The stored proof matches the snapshot: the seeded memo describes the live rows
+        # and the key scan skips, the same trade the warm gate makes.
+        _opencode_probes[key] = probe
         con.commit()
         return _OpencodeScan(sig, _opencode_row_epochs.get(key, 0), 0, ok=True, error=None, deltas=[])
       nbytes, deltas = _scan_opencode_rows(con, memo)
@@ -1796,14 +1808,18 @@ def _merge_opencode(
     return sig, epoch, from_scan
   if scan is None:
     seed = None
+    seed_probe = None
     prev = cache.prev("opencode", key) if cache is not None else None
     if prev is not None:
       # The seed is a cold-memo device: a warm row memo is already at least as fresh as any
       # stored rows, so reading the multi-MB sidecar here would serve nothing.
       if not _opencode_row_memos.get(key):
         seed = cache.entry_rows(prev, t.notes)
+        stored_probe = prev.get("probe")
+        if isinstance(stored_probe, list) and len(stored_probe) == 2:
+          seed_probe = (stored_probe[0], stored_probe[1])
       _adopt_stored_partial(key, prev)
-    scan = _advance_opencode_rows(db, seed)
+    scan = _advance_opencode_rows(db, seed, seed_probe)
   if not scan.ok:
     t.notes.append(f"opencode: unreadable db: {scan.error}")
     return None, scan.epoch, False
@@ -1833,6 +1849,11 @@ def _merge_opencode(
           "sig": sig,
           "partial": _partial_to_doc(_opencode_partials[key]),
       }
+      # The proof aggregates ride the entry beside the rows they describe: the restart seed
+      # gates its key diff on them, so a restart whose rows did not move skips the scan.
+      probe = _opencode_probes.get(key)
+      if probe is not None:
+        stored["probe"] = list(probe)
       prev_rows_file = entry.get("rows_file") if entry is not None else None
       # The sidecar rewrites only when the rows moved under it (a cold scan rebuilds them
       # whole): a scan with no row move leaves the stored rows exact, so the stored name

@@ -497,10 +497,11 @@ Known-alive symbols:
   tests-scope flag through cross-file name matches but belong to the same surface.)
 - `_proc`, `_ws` (backend and warm-renderer doubles in `tests/test_backend_logging.py`,
   `tests/test_opencode_backend.py`, and the fake `_launch` in `tests/core/test_headless_render.py`)
-  — the stderr/stdout pumps read `self._proc.stderr`/`self._proc.stdout`
-  (`src/agents/backends/base.py`), and `_WarmRenderer._render_once`/`close` read
-  `self._proc`/`self._ws` (`src/core/headless_render.py`); the tests install both by attribute
-  write on the double, which vulture flags as an unused attribute.
+  — the stderr pump reads `self._proc.stderr` (`src/agents/backends/base.py`), the opencode
+  stdout pump reads `self._proc.stdout` (`src/agents/backends/opencode.py`), and
+  `_WarmRenderer._render_once`/`close` read `self._proc`/`self._ws`
+  (`src/core/headless_render.py`); the tests install each by attribute write on the double,
+  which vulture flags as an unused attribute.
 - `_sleep` (`tests/test_opencode_backend.py`, installed as `backend._sleep = _record_sleep`) —
   the opencode lock-retry loop awaits `self._sleep(_LOCK_RETRY_BACKOFF_SECONDS)`
   (`src/agents/backends/opencode.py`); the write replaces the instance's `asyncio.sleep` seam
@@ -510,8 +511,9 @@ Known-alive symbols:
   `tests/test_master_cc_relay.py`) — the worker finalize path
   (`self._backend.cgroup_exit_report()`, `src/agents/worker.py`) and the master round's error
   path (`backend.cgroup_exit_report()`, `src/agents/master_cc_run.py`) read the session
-  memory-cap attribution off whatever backend the test installed. Each double returns `None`
-  because doubles never run inside a cgroup; vulture flags the methods as unused.
+  memory-cap attribution off whatever backend the test installed. Most doubles return `None`
+  (doubles never run inside a cgroup); `_OomReportBackend` returns its scripted report string.
+  Vulture flags the methods as unused.
 - `add_done_callback` (`DummyTask` in `tests/conftest.py`'s `capture_create_logged_task`) —
   `create_logged_task` (`src/core/tasks.py`) calls `task.add_done_callback(_task_done_callback)`
   on whatever task-like object the patched stand-in returned; the `DummyTask` override accepts
@@ -525,10 +527,10 @@ Known-alive symbols:
   each write as an unused attribute. Same class as the registry-reset fixtures above, minus the
   named-fixture wrapper.
 - `broadcast_only`, `expect_fresh_session` — instance-level writes production reads back.
-  `session_mgr.broadcast_only = _fake_broadcast` (`tests/test_plan_registry.py`,
-  `tests/test_internal_plan_endpoints.py`) replaces the real `SessionManager` method the plan
-  present path awaits (`self._session_mgr.broadcast_only(...)`, `src/core/plans.py`), and
-  `item.expect_fresh_session = True` (`tests/test_master_cc_relay.py`) sets the `_WorkItem`
-  field whose read gates the resume-capable path (`src/agents/master_cc_run.py`,
-  `src/agents/master_cc_relay.py`). No test reads either name back, so vulture flags each
-  write as an unused attribute.
+  `session_mgr.broadcast_only = <recorder>` (`_fake_broadcast` in `tests/test_plan_registry.py`,
+  `_capture_broadcast` in `tests/test_internal_plan_endpoints.py`) replaces the real
+  `SessionManager` method the plan present path awaits (`self._session_mgr.broadcast_only(...)`,
+  `src/core/plans.py`), and `item.expect_fresh_session = True` (`tests/test_master_cc_relay.py`)
+  sets the `_WorkItem` field whose read gates the resume-capable path
+  (`src/agents/master_cc_run.py`, `src/agents/master_cc_relay.py`). No test reads either name
+  back, so vulture flags each write as an unused attribute.

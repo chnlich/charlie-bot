@@ -1523,9 +1523,93 @@ def test_restart_cold_seeds_the_row_memo_from_the_document(tmp_path: Path, monke
 
   projected = _spy_row_blobs(monkeypatch)
   second = _collect(None, None, db, cache)
-  assert projected == []  # the seeded key diff proved every row unchanged without a blob read
+  assert projected == []  # the stored proof gate proved every row unchanged without a blob read
   assert second.scanned_bytes == 0
   assert _tally_snapshot(second) == _tally_snapshot(first)
+  con.close()
+
+
+def test_seeded_restart_probe_skips_the_key_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The seeded memo gates on the entry's stored proof aggregates: a signature-stale restart
+  # whose rows did not move matches the stored (count, sum) and never runs the key scan —
+  # the same weaker-proof trade the warm memo's gate makes on the WAL-noise rounds.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+  tt._reset_aggregate_memo()
+
+  con.execute("insert into other values ('noise2', 'x')")
+  con.commit()  # the WAL moves; the message table sits unchanged
+
+  def boom(*args: Any, **kwargs: Any) -> None:
+    raise AssertionError("key scan ran although the stored proof matched the live snapshot")
+
+  monkeypatch.setattr(tt, "_scan_opencode_rows", boom)
+  second = _collect(None, None, db, cache)
+  assert second.scanned_bytes == 0
+  assert _tally_snapshot(second) == _tally_snapshot(first)
+  con.close()
+
+
+def test_seeded_restart_scans_when_the_stored_probe_misses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # A row move between the document's write and the restart changes count and sum, so the
+  # stored proof misses and the seeded key diff runs — fetching only the moved row's blob.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+  tt._reset_aggregate_memo()
+
+  _insert_opencode_raw(con, [({}, _padded_opencode_row(500))])
+  con.commit()
+
+  scans: list[int] = []
+  orig_scan = tt._scan_opencode_rows
+
+  def spy_scan(scan_con: sqlite3.Connection, memo: dict) -> tuple:
+    scans.append(1)
+    return orig_scan(scan_con, memo)
+
+  monkeypatch.setattr(tt, "_scan_opencode_rows", spy_scan)
+  projected = _spy_row_blobs(monkeypatch)
+  second = _collect(None, None, db, cache)
+  assert scans == [1]  # the proof miss sent the restart down the key diff
+  assert len(projected) == 1  # the moved row only
+  after = _row(second, "opencode", "oc-m")
+  assert after.calls == 2 and after.total == _row(first, "opencode", "oc-m").total + 102
+  con.close()
+
+
+def test_legacy_entry_without_probe_seeds_and_scans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # An entry stored before the probe field existed (a document from the prior deploy)
+  # seeds without a gate: the key diff runs, the served tally stays exact, and the round's
+  # own store writes the proof back for the next restart.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+  tt._reset_aggregate_memo()
+
+  doc = json.loads(cache.read_text())
+  entry = doc["sources"]["opencode"][str(db)]
+  assert "probe" in entry
+  del entry["probe"]
+  cache.write_text(json.dumps(doc))
+
+  con.execute("insert into other values ('noise2', 'x')")
+  con.commit()
+
+  scans: list[int] = []
+  orig_scan = tt._scan_opencode_rows
+
+  def spy_scan(scan_con: sqlite3.Connection, memo: dict) -> tuple:
+    scans.append(1)
+    return orig_scan(scan_con, memo)
+
+  monkeypatch.setattr(tt, "_scan_opencode_rows", spy_scan)
+  projected = _spy_row_blobs(monkeypatch)
+  second = _collect(None, None, db, cache)
+  assert scans == [1]  # no stored proof: the key diff runs, the legacy contract
+  assert projected == []  # and still proves the rows unchanged without a blob read
+  assert _tally_snapshot(second) == _tally_snapshot(first)
+
+  doc = json.loads(cache.read_text())
+  assert len(doc["sources"]["opencode"][str(db)]["probe"]) == 2  # the store wrote the proof back
   con.close()
 
 
@@ -1562,7 +1646,8 @@ def test_current_entry_keeps_the_rows_bulk_in_the_sidecar(tmp_path: Path) -> Non
 
   doc = json.loads(cache.read_text())
   entry = doc["sources"]["opencode"][str(db)]
-  assert set(entry) == {"sig", "rows_file", "partial"}
+  assert set(entry) == {"sig", "rows_file", "partial", "probe"}
+  assert isinstance(entry["probe"], list) and len(entry["probe"]) == 2
   sidecar = json.loads((cache.parent / entry["rows_file"]).read_text())
   assert set(sidecar) == {"version", "rows"}
   seeded = sidecar["rows"]

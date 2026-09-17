@@ -88,9 +88,9 @@ def build_review_prompt(
     session_id: str,
     original_thread_id: str,
     sessions_dir: Path,
-    context: str | None = None,
-    user_request: str | None = None,
-    worker_summary: str | None = None,
+    context: str | None,
+    user_request: str | None,
+    worker_summary: str | None,
 ) -> str:
   """Build the prompt for a review worker."""
   from src.core.spawner import load_worker_prompt_sections

@@ -417,7 +417,7 @@ class _StubPlanListener:
         self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
         self.connection.close()
 
-      def log_message(self, format: str, *args: object) -> None:
+      def log_message(self, format: str, *args: object) -> None:  # noqa: A002  stdlib signature mirror
         pass
 
     self._httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
@@ -504,7 +504,7 @@ class _CapturePostListener:
         self.end_headers()
         self.wfile.write(body)
 
-      def log_message(self, format: str, *args: object) -> None:
+      def log_message(self, format: str, *args: object) -> None:  # noqa: A002  stdlib signature mirror
         pass
 
     self._httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)

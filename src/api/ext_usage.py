@@ -673,7 +673,7 @@ def _codex_windows(rate_limits: dict[str, Any], *, account: str) -> list[dict[st
   return windows
 
 
-def _codex_credits(credits: Any, *, account: str) -> dict[str, Any] | None:
+def _codex_credits(raw_credits: Any, *, account: str) -> dict[str, Any] | None:
   """The credits reading to emit, or None when the wire shape is unrecognized.
 
   ``unlimited`` is forwarded only as the strict bool the wire carries; the
@@ -681,16 +681,16 @@ def _codex_credits(credits: Any, *, account: str) -> dict[str, Any] | None:
   emits nothing and warns through the unknown-limit-shape path, mirroring how
   unknown window shapes are handled.
   """
-  if not isinstance(credits, dict):
+  if not isinstance(raw_credits, dict):
     _warn_unknown_limit_shape(provider="codex", account=account, slot="credits", reason="credits is not an object")
     return None
-  unlimited = credits.get("unlimited")
+  unlimited = raw_credits.get("unlimited")
   if not isinstance(unlimited, bool):
     _warn_unknown_limit_shape(provider="codex", account=account, slot="credits", reason="unlimited is not a bool")
     return None
   emitted: dict[str, Any] = {"unlimited": unlimited}
   try:
-    emitted["balance"] = float(credits.get("balance"))
+    emitted["balance"] = float(raw_credits.get("balance"))
   except (TypeError, ValueError):
     _warn_unknown_limit_shape(
         provider="codex", account=account, slot="credits", reason="missing or unparseable balance")
@@ -711,7 +711,7 @@ def _transform_codex_response(
   # An absent credits key (older CLI events) and a present-but-unreadable one
   # are different states: only the latter warns, and only the former keeps the
   # plan_type fallback below in play.
-  credits = _codex_credits(rate_limits["credits"], account=account) if "credits" in rate_limits else None
+  credits_reading = _codex_credits(rate_limits["credits"], account=account) if "credits" in rate_limits else None
 
   usage = {
       "windows": _codex_windows(rate_limits, account=account),
@@ -719,10 +719,10 @@ def _transform_codex_response(
       "provider": "codex",
       "token_count_observed_at": event.get("timestamp", ""),
   }
-  if credits is not None:
-    usage["credits"] = credits
+  if credits_reading is not None:
+    usage["credits"] = credits_reading
   if ("primary" in rate_limits and "secondary" in rate_limits and primary is None and secondary is None and
-      ((credits is not None and credits["unlimited"] is True) or
+      ((credits_reading is not None and credits_reading["unlimited"] is True) or
        ("credits" not in rate_limits and rate_limits.get("plan_type") == "business"))):
     usage["rate_limits_state"] = "business-unlimited"
   return usage

@@ -1732,8 +1732,8 @@ def test_document_with_nan_literal_rebuilds_with_note(tmp_path: Path) -> None:
 class _Option:
   """One config.yaml backend option's shape the tally reads (id / type / model)."""
 
-  def __init__(self, id: str, type: str, model: str | None = None) -> None:
-    self.id, self.type, self.model = id, type, model
+  def __init__(self, option_id: str, option_type: str, model: str | None = None) -> None:
+    self.id, self.type, self.model = option_id, option_type, model
 
 
 class _Backends:

@@ -484,3 +484,88 @@ def test_serve_file_diff_credential_and_anonymous_variants_are_served_separately
   assert SCRIPT not in anonymous.text
   assert _build_client("secret").get(url).text == credentialed.text
   assert _build_client(None).get(url).text == anonymous.text
+
+
+# --- diff requests: the gzip form ships pre-compressed so the server's gzip
+# middleware skips its own whole-body deflate ---
+
+
+def test_serve_file_diff_gzip_ships_precompressed_annotated_page(sessions_root: Path) -> None:
+  base, new = _write_pages(sessions_root)
+
+  resp = _build_gzip_client("secret").get(
+      "/files" + str(new) + "?diff=artifacts/plan_01.html", headers={"Accept-Encoding": "gzip"})
+  assert resp.status_code == 200
+  # The route set the encoding upstream — that header is what makes the
+  # middleware skip its own deflate — and carries the negotiation vary.
+  assert resp.headers["content-encoding"] == "gzip"
+  assert resp.headers["vary"] == "Accept-Encoding"
+  assert resp.headers["content-type"].startswith("text/html")
+  # What ships is the annotated page, compressed: the decoded body is byte-exact
+  # against the plain form, marks and comment layer included.
+  expected = files_api._inject_artifact_ui(
+      plan_diff.annotate(base.read_text(encoding="utf-8"), new.read_text(encoding="utf-8")), "S")
+  assert resp.text == expected
+  assert "cbd-ins" in resp.text
+
+
+def test_serve_file_diff_without_gzip_accept_gets_plain_body(sessions_root: Path) -> None:
+  """The compressed form is memoized per encoding negotiation: a client whose
+  Accept-Encoding names no gzip reads the plain annotated page, no encoding set."""
+  _base, new = _write_pages(sessions_root)
+
+  resp = _build_client("secret").get(
+      "/files" + str(new) + "?diff=artifacts/plan_01.html", headers={"Accept-Encoding": "br"})
+  assert resp.status_code == 200
+  assert "content-encoding" not in resp.headers
+  assert "cbd-ins" in resp.text
+
+
+def test_serve_file_diff_gzip_repeat_view_recompresses_nothing(
+    sessions_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A repeat gzip compare view of an unchanged pair must serve the stored
+  compressed body with zero annotate and zero deflate calls."""
+  _base, new = _write_pages(sessions_root)
+  client = _build_client("secret")
+  url = "/files" + str(new) + "?diff=artifacts/plan_01.html"
+  first = client.get(url, headers={"Accept-Encoding": "gzip"})
+  assert first.status_code == 200
+
+  def explode(base_html: str, new_html: str) -> str:
+    raise AssertionError("repeat gzip view re-ran plan_diff.annotate")
+
+  monkeypatch.setattr(plan_diff, "annotate", explode)
+  monkeypatch.setattr(files_api.gzip, "compress", gzip_explode_compress("repeat gzip view re-ran the deflate"))
+  resp = client.get(url, headers={"Accept-Encoding": "gzip"})
+  assert resp.status_code == 200
+  assert resp.headers["content-encoding"] == "gzip"
+  assert resp.text == first.text
+
+
+def test_serve_file_diff_gzip_reannotates_when_target_is_rewritten(sessions_root: Path) -> None:
+  """A rewrite moves the signature both memos key on — the compressed form must
+  never serve bytes of the page it was not built from."""
+  _base, new = _write_pages(sessions_root)
+  client = _build_client("secret")
+  url = "/files" + str(new) + "?diff=artifacts/plan_01.html"
+  before = client.get(url, headers={"Accept-Encoding": "gzip"})
+  assert before.status_code == 200
+
+  new.write_text("<html><body><p>rewritten plan</p></body></html>", encoding="utf-8")
+  after = client.get(url, headers={"Accept-Encoding": "gzip"})
+  assert after.status_code == 200
+  assert after.text != before.text
+  # The rewritten words are present under word-level marks.
+  assert "cbd-ins" in after.text
+  assert "rewritten" in after.text
+  assert after.headers["vary"] == "Accept-Encoding"
+
+
+def test_annotated_diff_page_gzip_is_deterministic_and_round_trips(sessions_root: Path) -> None:
+  """mtime=0 keeps the compressed bytes identical across processes, and the form
+  decompresses to exactly the plain body the plain memo serves."""
+  base, new = _write_pages(sessions_root)
+  first = files_api._annotated_diff_page_gzip(base, new, True, "S")
+  second = files_api._annotated_diff_page_gzip(base, new, True, "S")
+  assert first == second
+  assert gzip.decompress(first) == files_api._annotated_diff_page(base, new, True, "S").encode("utf-8")

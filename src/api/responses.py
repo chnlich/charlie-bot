@@ -21,12 +21,16 @@ the dict's own key order, and the splice sites' hand-rolled scalar pieces
 code-fixed types (None, bool, int, ASCII strings).
 """
 
+import asyncio
+import gzip
 from typing import Any
 
 import orjson
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 from starlette.responses import Response
+
+from src.core.memo import BoundedMemo
 
 
 def fast_json_bytes(content: Any) -> bytes:
@@ -73,3 +77,20 @@ def request_wants_gzip(request: Request) -> bool:
   middleware skip its per-request deflate.
   """
   return "gzip" in request.headers.get("accept-encoding", "")
+
+
+async def gzip_body_response(
+    request: Request, body: bytes, headers: dict[str, str], memo: BoundedMemo[bytes, bytes]) -> Response:
+  """Serve *body* plain or from *memo*'s gzip form (keyed on the bytes themselves).
+
+  One off-loop level-1 deflate per distinct body, stored so a repeat serves
+  the stored bytes; the gzip headers make the middleware skip (see
+  :func:`request_wants_gzip`).
+  """
+  if not request_wants_gzip(request):
+    return PreencodedJSONResponse(body, headers=headers)
+  gz = memo.get(body)
+  if gz is None:
+    gz = await asyncio.to_thread(gzip.compress, body, 1, mtime=0)
+    memo.store(body, gz)
+  return PreencodedJSONResponse(gz, headers={**headers, **GZIP_RESPONSE_HEADERS})

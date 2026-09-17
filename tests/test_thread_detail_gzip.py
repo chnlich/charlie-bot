@@ -1,5 +1,5 @@
-"""The thread-detail full row's body-keyed gzip memo (src/api/threads.py
-_gzip_body_response): the served gzip form is byte-identical to the plain
+"""The thread-detail full row's body-keyed gzip memo (served through
+src/api/responses.py gzip_body_response): the served gzip form is byte-identical to the plain
 render, a repeat of the same body re-compresses nothing, a changed body
 re-compresses, the no-Accept-Encoding shape stays uncompressed, and the attach
 mode keeps its bodyless slim pair."""
@@ -72,7 +72,7 @@ async def test_detail_gzip_repeat_serves_memo_without_recompress(tmp_path: Path)
   cfg, thread_mgr, thread, _ = await _saved_thread(tmp_path)
   first = await get_thread(thread.session_id, thread.id, _page_request("gzip"), thread_mgr, cfg, attach=False)
 
-  with patch("src.api.threads.gzip.compress", gzip_explode_compress("repeat detail fetch re-ran the deflate")):
+  with patch("src.api.responses.gzip.compress", gzip_explode_compress("repeat detail fetch re-ran the deflate")):
     second = await get_thread(thread.session_id, thread.id, _page_request("gzip"), thread_mgr, cfg, attach=False)
   assert second.body == first.body
 

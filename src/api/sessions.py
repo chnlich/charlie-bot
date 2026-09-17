@@ -33,6 +33,7 @@ from src.api.responses import (
     FastJsonResponse,
     PreencodedJSONResponse,
     fast_json_bytes,
+    gzip_body_response,
     request_wants_gzip,
 )
 from src.api.threads import view_thread_rows
@@ -703,14 +704,7 @@ _switch_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SWITCH_GZIP_MEMO_LIM
 
 async def _switch_payload_response(request: Request, payload: dict | list) -> Response:
   """Render a request-path payload once and serve its gzip form from the body-keyed memo."""
-  body = fast_json_bytes(payload)
-  if not request_wants_gzip(request):
-    return PreencodedJSONResponse(body)
-  gz = _switch_gzip_memo.get(body)
-  if gz is None:
-    gz = await asyncio.to_thread(gzip.compress, body, 1, mtime=0)
-    _switch_gzip_memo.store(body, gz)
-  return PreencodedJSONResponse(gz, headers=GZIP_RESPONSE_HEADERS)
+  return await gzip_body_response(request, fast_json_bytes(payload), {}, _switch_gzip_memo)
 
 
 @router.get('/{session_id}/view')

@@ -60,6 +60,21 @@ def _seeded_client(tmp_path: Path) -> tuple[TestClient, str, str]:
   return TestClient(app), session_id, long_thread_id
 
 
+def _seeded_thread_dir(tmp_path: Path, name: str, *thread_texts: str) -> tuple[CharlieBotConfig, str, Path]:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
+  sessions = SessionManager(cfg)
+
+  async def seed() -> str:
+    session = await sessions.create_session(CreateSessionRequest(name=name))
+    threads = ThreadManager(cfg)
+    for text in thread_texts:
+      await threads.create_thread(session, text)
+    return session.id
+
+  session_id = asyncio.run(seed())
+  return cfg, session_id, cfg.sessions_dir / session_id / "threads"
+
+
 def test_list_caps_long_descriptions_and_marks_truncation(tmp_path: Path) -> None:
   client, session_id, _ = _seeded_client(tmp_path)
 
@@ -296,17 +311,7 @@ def test_list_rows_ship_epoch_ms_timestamps(tmp_path: Path) -> None:
 
 def test_list_body_sorts_thread_and_trigger_rows_by_one_epoch_ms_key(tmp_path: Path) -> None:
   """The mixed body sort compares int against int: both row kinds convert their timestamps."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
-  sessions = SessionManager(cfg)
-
-  async def seed() -> str:
-    session = await sessions.create_session(CreateSessionRequest(name="mixed-sort"))
-    threads = ThreadManager(cfg)
-    await threads.create_thread(session, "the thread row")
-    return session.id
-
-  session_id = asyncio.run(seed())
-  threads_dir = cfg.sessions_dir / session_id / "threads"
+  cfg, session_id, threads_dir = _seeded_thread_dir(tmp_path, "mixed-sort", "the thread row")
   mgr = ThreadManager(cfg)
   pairs = list(core_threads.iter_thread_meta_stats(str(threads_dir)))
   metas = mgr.list_threads_from_stats(iter(pairs))
@@ -402,17 +407,7 @@ def test_list_body_splice_matches_whole_dump() -> None:
 
 def test_rebuild_tolerates_file_vanished_between_walk_and_read(tmp_path: Path) -> None:
   """A pair the walk statted but whose file vanished before its read parses as no row, not a crash."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
-  sessions = SessionManager(cfg)
-
-  async def seed() -> str:
-    session = await sessions.create_session(CreateSessionRequest(name="vanished"))
-    threads = ThreadManager(cfg)
-    await threads.create_thread(session, "survivor")
-    return session.id
-
-  session_id = asyncio.run(seed())
-  threads_dir = cfg.sessions_dir / session_id / "threads"
+  cfg, session_id, threads_dir = _seeded_thread_dir(tmp_path, "vanished", "survivor")
   mgr = ThreadManager(cfg)
   pairs = list(core_threads.iter_thread_meta_stats(str(threads_dir)))
   # A pair from the signature's walk whose file the session GC removed before
@@ -428,18 +423,7 @@ def test_rebuild_tolerates_file_vanished_between_walk_and_read(tmp_path: Path) -
 
 def test_list_threads_from_stats_matches_list_threads(tmp_path: Path) -> None:
   """The shared parse-merge serves the same metas from pre-walked pairs as from its own scan."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
-  sessions = SessionManager(cfg)
-
-  async def seed() -> str:
-    session = await sessions.create_session(CreateSessionRequest(name="from-stats"))
-    threads = ThreadManager(cfg)
-    await threads.create_thread(session, "one")
-    await threads.create_thread(session, "two")
-    return session.id
-
-  session_id = asyncio.run(seed())
-  threads_dir = cfg.sessions_dir / session_id / "threads"
+  cfg, session_id, threads_dir = _seeded_thread_dir(tmp_path, "from-stats", "one", "two")
   mgr = ThreadManager(cfg)
   scanned = asyncio.run(mgr.list_threads(session_id))
 

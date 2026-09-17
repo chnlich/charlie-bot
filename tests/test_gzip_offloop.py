@@ -1,6 +1,6 @@
 import asyncio
 import gzip
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from conftest import make_http_scope
@@ -29,6 +29,22 @@ def _build(handler: Any, middleware: Any) -> FastAPI:
   app.get("/big")(handler)
   app.add_middleware(middleware, minimum_size=1000, compresslevel=6)
   return app
+
+
+def _sliced_stream(media_type: str) -> Callable[[], StreamingResponse]:
+  """A handler streaming BODY in 100 KB slices. Each call builds a fresh
+  response and generator: the same handler is driven through two middlewares,
+  and a second drive over an exhausted generator would read an empty body."""
+
+  def stream() -> StreamingResponse:
+
+    async def chunks() -> AsyncIterator[bytes]:
+      for i in range(0, len(BODY), 100_000):
+        yield BODY[i:i + 100_000]
+
+    return StreamingResponse(chunks(), media_type=media_type)
+
+  return stream
 
 
 def _drive(app: FastAPI) -> tuple[dict[str, str], bytes]:
@@ -94,14 +110,7 @@ def test_small_body_and_preset_encoding_stay_identity() -> None:
 
 
 def test_streaming_body_compresses_per_chunk() -> None:
-
-  def stream() -> StreamingResponse:
-
-    async def chunks() -> AsyncIterator[bytes]:
-      for i in range(0, len(BODY), 100_000):
-        yield BODY[i:i + 100_000]
-
-    return StreamingResponse(chunks(), media_type="application/json")
+  stream = _sliced_stream("application/json")
 
   headers, body = _drive(_build(stream, server._CharlieBotGZipMiddleware))
   _, baseline_body = _drive(_build(stream, GZipMiddleware))
@@ -120,15 +129,7 @@ def test_already_compressed_media_types_ride_identity() -> None:
   assert "content-encoding" not in headers
   assert body == BODY
 
-  def deck() -> StreamingResponse:
-
-    async def chunks() -> AsyncIterator[bytes]:
-      for i in range(0, len(BODY), 100_000):
-        yield BODY[i:i + 100_000]
-
-    return StreamingResponse(
-        chunks(), media_type="application/vnd.openxmlformats-officedocument"
-        ".presentationml.presentation")
+  deck = _sliced_stream("application/vnd.openxmlformats-officedocument.presentationml.presentation")
 
   headers, body = _drive(_build(deck, server._CharlieBotGZipMiddleware))
   assert "content-encoding" not in headers

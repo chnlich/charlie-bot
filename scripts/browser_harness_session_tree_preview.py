@@ -1101,8 +1101,8 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     # temporal motion windows below (explicitly labeled prolongation through
     # the real Run owner; the stop below still preempts it).
     worker_message = ("Trial activity step. Write a 60-word story about a lighthouse, then a second "
-                      "60-word paragraph about the sea, then reply with exactly WORK-OK on the last "
-                      "line. Do not create subtasks.")
+                      "60-word paragraph about the sea, then a third 60-word paragraph about the sky, "
+                      "then reply with exactly WORK-OK on the last line. Do not create subtasks.")
     await open_task_tab(cdp, sid, "chat")
     await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10, label="worker composer")
     await evaluate(cdp, sid,
@@ -1317,10 +1317,13 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         items = (page.get("items") or []) if isinstance(page, dict) else []
         return items[0]["id"] if items and items[0].get("state") in ("running", "queued") else None
 
-    stop_target = active_run_id
+    stop_target = await active_run_of(worker_id)
     stop_owner = worker_id
-    if stop_target is None:
-        stop_target = await active_run_of(worker_id)
+    if stop_target is None and active_run_id is not None:
+        # The pinned run was observed at spinner time; if it went terminal while
+        # the motion windows ran, the cancel below honestly reports the existing
+        # outcome instead of a fresh stop.
+        stop_target = active_run_id
     if stop_target is None:
         # The worker turn finished and its automation may have completed the
         # task; the child manager's own delegation Run is the remaining live
@@ -1349,6 +1352,15 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                            await screenshot(cdp, sid, results, "s14e-after-stop-narrow"))
         except TimeoutError as exc:
             results.record("s14e-stop-clears-activity", False, str(exc)[:300],
+                           await screenshot(cdp, sid, results, "s14e-fail"))
+        except RuntimeError as exc:
+            # The row left the open tree before the cleared state could be read
+            # (the stopped task auto-completed on an already-successful run):
+            # recorded honestly, never painted as a pass.
+            results.record("s14e-stop-clears-activity", False,
+                           f"stop request sent to {stop_owner[:8]} ({dict(cancel)}), but the row "
+                           f"left the open tree before the cleared state could be observed: "
+                           f"{str(exc)[:200]}",
                            await screenshot(cdp, sid, results, "s14e-fail"))
     await cdp.send("Emulation.clearDeviceMetricsOverride", session_id=sid)
     await asyncio.sleep(0.4)

@@ -32,7 +32,7 @@ def install_byte_counting_open(monkeypatch: pytest.MonkeyPatch) -> list[int]:
       def __enter__(self) -> Any:
         return self
 
-      def __exit__(self, *exc: Any) -> Any:
+      def __exit__(self, *exc: object) -> Any:
         return real.__exit__(*exc)
 
       def read(self, size: int = -1) -> bytes:

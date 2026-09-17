@@ -160,7 +160,7 @@ class _Parser(_OffsetParser):
     end = start + len(data)
     if self.source[start:end] != data:
       raise ValueError(f"could not locate text data at offset {start}")
-    self._append_part(start, end, data, True)
+    self._append_part(start, end, data, text_is_raw=True)
 
   def handle_entityref(self, name: str) -> None:
     self._append_ref(name, ("&" + name + ";",), 1)
@@ -179,7 +179,7 @@ class _Parser(_OffsetParser):
     if any(raw.startswith(ref) for ref in refs):
       length += 1
     text = _html.unescape(self.source[start:start + length])
-    self._append_part(start, start + length, text, False)
+    self._append_part(start, start + length, text, text_is_raw=False)
 
 
 class _BoundaryParser(_OffsetParser):
@@ -307,18 +307,18 @@ def _collect_leaves(root: _Node) -> list[_Leaf]:
     # its ghost carry one full-width cell.  The cells themselves remain in
     # the DOM, so the browser's TD fallback commentability is preserved.
     if node.tag == "tr":
-      leaves.append(_Leaf(node, all_parts, True))
+      leaves.append(_Leaf(node, all_parts, whole=True))
       return
     direct_parts = [child for child in node.children if isinstance(child, _TextPart)]
     block_children = [child for child in node.children if isinstance(child, _Node) and _is_boundary(child)]
     if block_children:
       if _has_visible_text(direct_parts):
-        leaves.append(_Leaf(node, direct_parts, False))
+        leaves.append(_Leaf(node, direct_parts, whole=False))
       for child in node.children:
         if isinstance(child, _Node):
           visit(child)
       return
-    leaves.append(_Leaf(node, all_parts, True))
+    leaves.append(_Leaf(node, all_parts, whole=True))
 
   visit(root)
   return [leaf for leaf in leaves if _has_visible_text(leaf.parts)]

@@ -480,7 +480,7 @@ async def _cached_direct_pass(path: Path) -> Path:
   async def build(temp_path: Path) -> None:
     await asyncio.get_running_loop().run_in_executor(None, _build_direct_pass_gzip, path, temp_path)
 
-  return await _cached_gzip_build(_merge_cache_key([path], False, "gzip"), build)
+  return await _cached_gzip_build(_merge_cache_key([path], slim=False, mode="gzip"), build)
 
 
 @router.get(PERFETTO_MERGED_PATH)

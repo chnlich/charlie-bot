@@ -251,7 +251,7 @@ class Scheduler:
     for task_cfg in tasks:
       if task_cfg.enabled and task_cfg.type == 'pm' and pm_manually_archived(task_cfg, session_cache):
         try:
-          await session_mgr.write_scheduled_task_enabled(task_cfg.name, False)
+          await session_mgr.write_scheduled_task_enabled(task_cfg.name, enabled=False)
         except Exception as e:
           # The stop stands for this tick either way (no generation is
           # resurrected); a failed yaml write is loud and retried next tick.
@@ -396,7 +396,7 @@ class Scheduler:
     """
     cfg, session_mgr, session = await self._prepare_task_execution(task_cfg)
     if await self._pm_project_is_dead(task_cfg, session_mgr):
-      await session_mgr.write_scheduled_task_enabled(task_cfg.name, False)
+      await session_mgr.write_scheduled_task_enabled(task_cfg.name, enabled=False)
       # The SUCCESS save lands before the archive on purpose: save_metadata
       # persists the whole meta it is handed, so saving the in-hand active copy
       # after archive_session would flip the status back to active on disk.

@@ -1719,7 +1719,7 @@ def _advance_opencode_rows(db: Path, seed: dict | None = None) -> _OpencodeScan:
       probe = None if seeded else (tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone()) if memo else None)
       if probe is not None and _opencode_probes.get(key) == probe:
         con.commit()
-        return _OpencodeScan(sig, _opencode_row_epochs.get(key, 0), 0, True, None, [])
+        return _OpencodeScan(sig, _opencode_row_epochs.get(key, 0), 0, ok=True, error=None, deltas=[])
       nbytes, deltas = _scan_opencode_rows(con, memo)
       if probe is None:  # cold memo: the scan's snapshot is the state the memo now describes
         probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone())
@@ -1738,12 +1738,12 @@ def _advance_opencode_rows(db: Path, seed: dict | None = None) -> _OpencodeScan:
     # The stored proof describes a state the failed scan never reached, so it drops too.
     _opencode_probes.pop(key, None)
     _opencode_partials[key] = None
-    return _OpencodeScan(sig, 0, 0, False, str(exc))
+    return _OpencodeScan(sig, 0, 0, ok=False, error=str(exc))
   epoch = _opencode_row_epochs.get(key, 0)
   if deltas:
     epoch += 1
     _opencode_row_epochs[key] = epoch
-  return _OpencodeScan(sig, epoch, nbytes, True, None, deltas)
+  return _OpencodeScan(sig, epoch, nbytes, ok=True, error=None, deltas=deltas)
 
 
 def _replay_opencode_records(t: _Tally, records: list) -> None:

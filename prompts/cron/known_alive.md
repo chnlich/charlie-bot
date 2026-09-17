@@ -115,10 +115,10 @@ Known-alive symbols:
   `SlashCommandParam`, `fired_at` on `PendingTrigger`) as unused variables/attributes, but every
   one of those names is grep-findable in repo (`_TRANSIENT_METADATA_FIELDS`, tests, web JS,
   Jinja templates), so the Step 3 grep already protects them and they get no entries.
-- `pytestmark` (`tests/test_voice_sherpa_streaming.py`) — module-level
-  `pytest.mark.local_only` assignment that pytest's collection reads by attribute name (the
-  marker is registered in `pyproject.toml`). Exactly one whole-repo match (the assignment
-  itself), so vulture flags it as an unused variable.
+- `pytestmark` (`tests/test_voice_sherpa_streaming.py`, `tests/test_voice_qwen3_hf.py`) —
+  module-level `pytest.mark.local_only` assignments that pytest's collection reads by
+  attribute name (the marker is registered in `pyproject.toml`). The name appears only at
+  those assignment sites, so vulture flags each as an unused variable.
 - `do_GET`, `do_POST`, `log_message` (`tests/test_cli_restart_contract.py`) —
   `http.server.BaseHTTPRequestHandler` overrides: the stdlib handler dispatches to them by
   string (`'do_' + self.command` through `getattr`, `log_message` by name). Each name has
@@ -186,13 +186,13 @@ Known-alive symbols:
   to receive the identity task; deleting the parameter makes the stub raise TypeError.
   Vulture flags it at 100% confidence as an unused variable. Same class as the `art`
   stub-parameter entry above.
-- `dir_path` (ten `create_provider(provider, label, dir_path)` stubs in
+- `dir_path` (the `create_provider(provider, label, dir_path)` stubs in
   `tests/test_ext_usage.py`, installed for `ext_usage_mod._create_provider` via
   `monkeypatch.setattr`) — the real `_create_provider` (src/api/ext_usage.py) is called
   with three positional arguments, so the stubs' replaced
   signature fixes the arity and `dir_path` must stay to receive it; deleting the parameter
   makes each stub raise TypeError when the poll loop calls it. Vulture flags it at 100%
-  confidence as an unused variable at all ten sites in `tests/test_ext_usage.py`. Same class as the `chrome`/`art` stub-parameter entry above.
+  confidence as an unused variable at every stub site in `tests/test_ext_usage.py`. Same class as the `chrome`/`art` stub-parameter entry above.
 - `rollout_paths` (`tests/test_ext_usage.py`, parameter of the `_broken_compute`
   stub installed for `CodexUsageProvider._compute_spend` via `monkeypatch.setattr`) —
   the real `_compute_spend` (src/api/ext_usage.py) is called with one positional
@@ -239,8 +239,8 @@ Known-alive symbols:
   stub-parameter entries above.
 - `interrupt_reason` (`tests/test_worktree_quarantine.py`, keyword parameter of the
   `fake_resume_worker` stub installed for `spawner.resume_worker` via `monkeypatch.setattr`)
-  — all three production call sites in `src/core/init_worker_recovery.py`
-  pass `interrupt_reason=` by keyword, and the stalled-run test asserts the fake ran
+  — every production call site (`src/core/init_worker_recovery.py`)
+  passes `interrupt_reason=` by keyword, and the stalled-run test asserts the fake ran
   (`resume_calls == [True]`), so deleting the parameter makes the stub raise TypeError on
   the unexpected keyword. Vulture flags it at 100% confidence as an unused variable. Same
   class as the `verify_report` keyword-fixed stub-parameter entry above.
@@ -308,17 +308,19 @@ Known-alive symbols:
   that names unrelated methods. Same class as the `do_GET`/`do_POST`/`log_message`
   stdlib-dispatch entry.
 - `handle_starttag`, `handle_startendtag`, `handle_endtag`, `handle_data`, `handle_entityref`,
-  `handle_charref` (`_Parser` in `src/core/plan_diff.py`, `handle_starttag`/
-  `handle_startendtag`/`handle_endtag`/`handle_data` also on `_DomParser` in
+  `handle_charref` (`_Parser` — all six — and `handle_starttag`/`handle_startendtag`/
+  `handle_endtag` on `_BoundaryParser`, both in `src/core/plan_diff.py`;
+  `handle_starttag`/`handle_startendtag`/`handle_endtag`/`handle_data` also on `_DomParser` in
   `tests/test_plan_diff.py`) — template-method overrides of stdlib `html.parser.HTMLParser`,
   same class as the `_TreeBuilder` entry above; `feed()` drives the base scanner, which
   invokes these under their contract-fixed names while each parser builds its DOM. The
-  `_TreeBuilder` entry covers only artifact_check's class; each name still has zero
-  whole-repo matches outside the three parser definitions, so vulture flags each as an
-  unused method. `handle_entityref`/`handle_charref` exist only on `_Parser` and fire
-  because it is constructed with `convert_charrefs=False`; the other two parsers pass the
-  `True` default, under which the stdlib folds references into `handle_data` and never
-  calls those two.
+  `_TreeBuilder` entry covers only artifact_check's class; each name matches only the parser
+  classes' own definitions, so vulture flags each as an unused method. `_OffsetParser`, the
+  shared base of both plan_diff parsers, pins `convert_charrefs=False` because its offset
+  math must address raw source spans, so `_Parser`'s `handle_entityref`/`handle_charref` —
+  the only overrides of that pair — fire there; parsers without the pair either pin
+  `convert_charrefs=True` (`_TreeBuilder`, `_DomParser`), under which the stdlib folds
+  references into `handle_data`, or inherit the stdlib no-op defaults (`_BoundaryParser`).
 - `isolation_level` (`src/core/storage_cool.py`) — attribute write on a stdlib
   `sqlite3.Connection`; the sqlite3 C module reads it back when executing statements
   (`None` switches the connection to per-statement autocommit transactions, which the
@@ -356,9 +358,9 @@ Known-alive symbols:
   fixture-name-discovery class as `inline_merge_executor` above.
 - `pages_config` (`tests/test_pages.py`) — pytest fixture (monkeypatches the pages routes'
   `get_config` to a tmp home, so the token-usage route's cache path stays off the host profile),
-  requested by name in four tests' parameter lists; the bodies never reference the parameter, so
-  vulture flags it as an unused variable at each request site. Same fixture-name-discovery class
-  as `inline_merge_executor` above.
+  requested by name in the module's tests' parameter lists; the bodies never reference
+  the parameter, so vulture flags it as an unused variable at each request site. Same
+  fixture-name-discovery class as `inline_merge_executor` above.
 - `cli_katex` (`tests/core/test_artifact_wrap.py`) — pytest fixture (monkeypatches
   `src.cli.common.get_config` so the wrap verb's config home lands under the pytest tmp tree
   instead of the host profile), requested by name in five tests' parameter lists; the bodies

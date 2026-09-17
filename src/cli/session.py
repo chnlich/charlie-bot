@@ -11,7 +11,10 @@
 it becomes the v2 task create: the task-file carries the ``task`` object
 (goal/acceptance/context_refs/repo_path/base_branch/task_type/keep_worktree),
 the server binds (parent, request_id) to one stable node, and a replayed
-request returns the original product. ``tree`` pages the task tree. ``pause``/
+request returns the original product. A run-token agent organizes only its own
+task: logical manager children under its own open task need no user
+authorization, while worker children ride the implementation takeoff gate; any
+parent other than the caller's own task is refused. ``tree`` pages the task tree. ``pause``/
 ``resume`` flip ``automation_paused`` (pausing never terminates a live run).
 ``retry`` creates the request-bound retry run of one recorded run.
 

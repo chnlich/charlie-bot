@@ -301,7 +301,10 @@ async def register_agent_run(task_mgr: TaskTreeManager, claims: RunTokenClaims) 
 
 
 @pytest.mark.asyncio
-async def test_agent_run_token_can_only_create_own_worker_child(task_env) -> None:
+async def test_agent_run_token_creates_own_children_under_its_own_task(task_env) -> None:
+  """A valid active-Run token organizes its own manager task: a logical manager
+  child needs no user authorization, a worker child rides the takeoff gate
+  (present here), and any foreign parent is refused."""
   cfg, session_mgr, task_mgr = task_env
   ids = await seed_tree(task_mgr)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
@@ -322,18 +325,26 @@ async def test_agent_run_token_can_only_create_own_worker_child(task_env) -> Non
     assert ok.status_code == 200, ok.text
     assert ok.json()["profile"] == "worker"
 
-    # ...but not a manager, and not under somebody else's task.
+    # ...and a logical manager child under its own task (no extra approval),
+    # but not under somebody else's task.
     manager_try = client.post(
         "/api/sessions/",
         json={"request_id": "agent-m", "task_parent_id": ids["root"], "profile": "manager"},
         headers=agent_headers(claims))
-    assert manager_try.status_code == 403
+    assert manager_try.status_code == 200, manager_try.text
+    assert manager_try.json()["profile"] == "manager"
 
     foreign_try = client.post(
         "/api/sessions/",
         json={"request_id": "agent-f", "task_parent_id": ids["worker"], "profile": "worker"},
         headers=agent_headers(claims))
     assert foreign_try.status_code == 403
+
+    foreign_manager_try = client.post(
+        "/api/sessions/",
+        json={"request_id": "agent-fm", "task_parent_id": ids["worker"], "profile": "manager"},
+        headers=agent_headers(claims))
+    assert foreign_manager_try.status_code == 403
 
     # User-only structural mutations are 403 for an agent caller.
     patch_try = client.patch(

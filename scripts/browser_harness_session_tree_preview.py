@@ -245,6 +245,28 @@ MOTION_TIMELINE_SNIPPET = """
 """
 
 
+async def wait_motion_live(cdp: CDP, session_id: str, spinner_id: str, gear_id: str,
+                           timeout: float = 15.0) -> None:
+    """Bounded wait until both cues' first animation instance is actually running.
+
+    A freshly rendered row reports its animationName before any animation
+    instance exists (the first sample after a reload can predate the animation
+    start, reading transform none with an empty getAnimations()); a timeline
+    window must begin on a running animation or its first sample would
+    misread a not-yet-started animation as a restart.
+    """
+    expr = ("((ids) => ids.every(id => { const el = document.getElementById(id);"
+            " return !!el && !el.classList.contains('hidden') && el.getAnimations().length > 0"
+            " && el.getAnimations()[0].playState === 'running'; }))("
+            + json.dumps([spinner_id, gear_id]) + ")")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if await evaluate(cdp, session_id, expr):
+            return
+        await asyncio.sleep(0.2)
+    raise TimeoutError(f"animation not running on {spinner_id}/{gear_id} within {timeout}s")
+
+
 async def sample_motion_timeline(cdp: CDP, session_id: str, spinner_id: str, gear_id: str,
                                  intervals: list[float]) -> list[list[dict]]:
     """Sample two cues' animation timelines at the given unequal spacing.
@@ -1189,6 +1211,7 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     run_label = f"run {str(active_run_id)[:8]}" if active_run_id else "run already terminal"
 
     async def motion_pass(min_span: float, intervals: list[float] | None = None) -> dict[str, tuple[bool, str]]:
+        await wait_motion_live(cdp, sid, spin_el, gear_el)
         samples = await sample_motion_timeline(cdp, sid, spin_el, gear_el, intervals or MOTION_INTERVALS_S)
         return {kind: motion_timeline_verdict(samples, kind, min_span) for kind in ("spinner", "gear")}
 
@@ -1369,48 +1392,72 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                        f"{late_label}: {str(exc)[:280]}", None)
 
     # The real stop: durable request, signal, observed exit -> interrupted, on
-    # the child manager's own bounded turn (a finished run would honestly
-    # report stop_requested=False; a manager never auto-completes, so the
-    # interrupted row and its label stay observable).
-    stop_target = await active_run_of(child_id)
-    if stop_target is None and child_run_id is not None:
-        stop_target = child_run_id
-    if stop_target is None:
-        results.record("s14e-stop-clears-activity", False,
-                       "no active child run remained to stop (the bounded turn reached a "
-                       "terminal state first); stop clearing not evidenced this round", None)
+    # the child manager's own bounded turn. The reload turn is first waited out
+    # (a message left queued would redrive a fresh run right after the cancel
+    # and race the interrupted-state observation), then one fresh bounded
+    # message is started and stopped mid-flight.
+    try:
+        await wait_row_activity(cdp, sid, child_id, {"spinner": False}, 120,
+                                "child turn finished before the stop message")
+    except TimeoutError as exc:
+        results.record("s14e-stop-clears-activity", False, str(exc)[:300],
+                       await screenshot(cdp, sid, results, "s14e-fail"))
     else:
-        status, cancel = api_request(base, access_key, "POST",
-                                     f"/api/sessions/{child_id}/runs/{stop_target}/cancel",
-                                     {"request_id": "trial-stop-" + stop_target[:8]})
+        stop_target = None
+        stop_stage = "stop message"
         try:
-            after = await wait_row_activity(cdp, sid, child_id,
-                                            {"spinner": False, "gear": False}, 60,
-                                            "row cleared after the stop")
-            root_after = await tree_row_activity_tolerant(cdp, sid, root_id)
-            label = after.get("label", "")
-            w_status, w_page = api_request(base, access_key, "GET",
-                                           f"/api/sessions/{worker_id}/runs?order=desc&limit=1")
-            w_runs = (w_page.get("items") or []) if isinstance(w_page, dict) else []
-            worker_row_after = await tree_row_activity_tolerant(cdp, sid, worker_id)
-            results.record("s14e-stop-clears-activity",
-                           bool(cancel.get("stop_requested")) and "attention" in label,
-                           f"stopped child run {stop_target[:8]}: cancel={dict(cancel)} "
-                           f"row label={label[:40]!r} "
-                           f"root gear after={None if root_after is None else root_after.get('gear')}; "
-                           f"worker run now={w_runs[0].get('state') if w_runs else 'none'}, "
-                           f"worker row={'gone (auto-completed on its own success)' if worker_row_after is None else 'rendered'}",
-                           await screenshot(cdp, sid, results, "s14e-after-stop-narrow"))
+            await send_child_message(
+                "Trial stop step. Reply with exactly STOP-OK on the last line. "
+                "Do not create subtasks.", "stop-window")
+            await wait_row_activity(cdp, sid, child_id, {"spinner": True}, 120,
+                                    "stop-window child turn live")
+            stop_stage = "stop request"
+            stop_target = await active_run_of(child_id)
+            if stop_target is None:
+                results.record("s14e-stop-clears-activity", False,
+                               "no active child run remained to stop (the bounded turn reached a "
+                               "terminal state first); stop clearing not evidenced this round", None)
+            else:
+                status, cancel = api_request(base, access_key, "POST",
+                                             f"/api/sessions/{child_id}/runs/{stop_target}/cancel",
+                                             {"request_id": "trial-stop-" + stop_target[:8]})
+                stop_stage = "cleared-row observation"
+                after = await wait_row_activity(cdp, sid, child_id,
+                                                {"spinner": False, "gear": False}, 60,
+                                                "row cleared after the stop")
+                # The shared-cue clearing can land one status poll ahead of the
+                # tree's own repaint (the poll toggles the pinned cue elements,
+                # the label follows with the tree refresh): bounded-wait for the
+                # interrupted state label instead of reading the stale beat.
+                deadline = time.monotonic() + 30
+                label = after.get("label", "")
+                while "attention" not in label and time.monotonic() < deadline:
+                    await asyncio.sleep(0.4)
+                    after = await tree_row_activity(cdp, sid, child_id)
+                    label = after.get("label", "")
+                root_after = await tree_row_activity_tolerant(cdp, sid, root_id)
+                w_status, w_page = api_request(base, access_key, "GET",
+                                               f"/api/sessions/{worker_id}/runs?order=desc&limit=1")
+                w_runs = (w_page.get("items") or []) if isinstance(w_page, dict) else []
+                worker_row_after = await tree_row_activity_tolerant(cdp, sid, worker_id)
+                results.record("s14e-stop-clears-activity",
+                               bool(cancel.get("stop_requested")) and "attention" in label,
+                               f"stopped child run {stop_target[:8]}: cancel={dict(cancel)} "
+                               f"row label={label[:40]!r} "
+                               f"root gear after={None if root_after is None else root_after.get('gear')}; "
+                               f"worker run now={w_runs[0].get('state') if w_runs else 'none'}, "
+                               f"worker row={'gone (auto-completed on its own success)' if worker_row_after is None else 'rendered'}",
+                               await screenshot(cdp, sid, results, "s14e-after-stop-narrow"))
         except TimeoutError as exc:
-            results.record("s14e-stop-clears-activity", False, str(exc)[:300],
+            results.record("s14e-stop-clears-activity", False,
+                           f"stop stage {stop_stage}: {str(exc)[:260]}",
                            await screenshot(cdp, sid, results, "s14e-fail"))
         except RuntimeError as exc:
             # The row left the open tree before the cleared state could be
             # read: recorded honestly, never painted as a pass.
             results.record("s14e-stop-clears-activity", False,
-                           f"stop request sent to {child_id[:8]} ({dict(cancel)}), but the row "
-                           f"left the open tree before the cleared state could be observed: "
-                           f"{str(exc)[:200]}",
+                           f"stop stage {stop_stage}: the row left the open tree before the "
+                           f"cleared state could be observed: {str(exc)[:200]}",
                            await screenshot(cdp, sid, results, "s14e-fail"))
     await cdp.send("Emulation.clearDeviceMetricsOverride", session_id=sid)
     await asyncio.sleep(0.4)

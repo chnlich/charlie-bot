@@ -68,6 +68,37 @@ _CATCHUP_RENDER_SLICE = 4
 # round-trip (~104 µs measured on this host); above it the thread hop wins.
 _OFFLOOP_GZIP_MIN_BODY = 8192
 
+# Content types whose format is already entropy-coded: transport gzip spends
+# serve CPU per view to shrink the wire by at most a few percent (or to grow
+# it), so these answers ride identity. text/event-stream stays excluded —
+# starlette's responder defers to this list once the start message is seen,
+# so the SSE exclusion must live here. Text formats (html, json, svg, csv)
+# stay outside the list and keep compressing.
+_TRANSPORT_GZIP_SKIP_MEDIA_PREFIXES = (
+    "text/event-stream",
+    "image/gif",
+    "image/heic",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/x-icon",
+    "image/vnd.microsoft.icon",
+    "video/",
+    "audio/",
+    "application/pdf",
+    "application/zip",
+    "application/x-zip-compressed",
+    "application/x-7z-compressed",
+    "application/gzip",
+    "application/x-gzip",
+    "application/vnd.openxmlformats-officedocument",
+    "application/vnd.ms-powerpoint",
+    "application/msword",
+    "font/woff",
+    "font/woff2",
+    "application/font-woff",
+)
+
 
 class _OffLoopWholeBodyGZipResponder(GZipResponder):
   """Whole-body responses deflate in a worker thread; streaming chunks stay inline.
@@ -81,6 +112,14 @@ class _OffLoopWholeBodyGZipResponder(GZipResponder):
   """
 
   async def send_with_compression(self, message: Message) -> None:
+    if message["type"] == "http.response.start":
+      # The superclass sets content_type_is_excluded from its own one-entry
+      # constant at the start message; this responder's body branches read the
+      # flag only after that point, so recompute it here from the wider list.
+      await super().send_with_compression(message)
+      content_type = Headers(raw=self.initial_message["headers"]).get("content-type", "")
+      self.content_type_is_excluded = content_type.startswith(_TRANSPORT_GZIP_SKIP_MEDIA_PREFIXES)
+      return
     if (message["type"] == "http.response.body" and not self.started and not self.content_encoding_set and
         not self.content_type_is_excluded and not message.get("more_body", False) and
         len(message.get("body", b"")) >= _OFFLOOP_GZIP_MIN_BODY):
@@ -98,7 +137,7 @@ class _OffLoopWholeBodyGZipResponder(GZipResponder):
 
 
 class _CharlieBotGZipMiddleware(GZipMiddleware):
-  """Skip HTTP transport compression for already-compressed trace files."""
+  """Skips transport compression where it cannot pay: the merged-trace path outright, already-compressed media types by prefix."""
 
   async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
     if scope["type"] == "http" and scope["path"] == PERFETTO_MERGED_PATH:

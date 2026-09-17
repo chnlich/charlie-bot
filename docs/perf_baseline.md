@@ -114,6 +114,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M102 artifact-CLI command wall, wrap verb | M102 collector below | seconds per `charliebot artifact wrap <fragment> --genre plan --output <page>` wall, fresh process, scratch fragment/output (the plan page assembly the master's plan delivery runs; local only — no server round trip, no live-home write; the check verb's probe imports its registry stack inside run_probe, so a check run's wall keeps its work) | median < 0.35 s | — (introduced with its first history row) |
 | M103 config-dependency resolution, remaining sync sites | M103 collector below | seconds per raw-ASGI drive of the diff viewer, the index page, and the repos listing over a scratch empty corpus (the routes' dependency-solve + render floor); 0 routes resolving config through the sync `Depends(get_config)` — enforced by the route-walk guard test, not the collector | /diff median < 0.0015 s; / median < 0.0030 s; /api/git/repos median < 0.0015 s | — (introduced with its first history row) |
 | M104 backend tail-follow cursor checkpoint, per line | M104 collector below | seconds per consumed line of a scripted 2000-line stream checkpointed to a real cursor file (scratch storage, the mount's held-fd shape) | median < 0.00005 s | — (introduced with its first history row) |
+| M105 binary-file transport serve, gzip-accepted | M105 collector below | seconds per served request over the worst on-disk artifact `.png` and `.pptx` (the already-compressed media the middleware must skip), plus the worst artifact `.html` page (the keep-compressing witness); the transport header each answer carries | skipped-family median < max(0.005 s, bytes ÷ 250 MB/s), transport identity (no `Content-Encoding`, wire == raw bytes); html witness median < max(0.05 s, bytes ÷ 25 MB/s), transport `Content-Encoding: gzip` | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -7128,10 +7129,109 @@ shutil.rmtree(work)
 EOF
 ```
 
+M105 — binary-file transport serve, gzip-accepted. The file server's plain FileResponse arm
+serves any host file, and every gzip-accepting client (the browser's image loads and deck
+downloads ride it) paid the middleware's inline per-chunk deflate on the event loop for
+bodies whose format is already entropy-coded — measured on the served shapes: a 336 KB PNG
+at 10.6-11.4 ms per view against 2.5-2.8 ms identity, a 727 KB pptx at ~19 ms against
+~3.7 ms, the deflate buying 1.7-2.1 % of wire (random-data bodies only grow). The fix skips
+transport compression for that media-type prefix list; text formats (html, json, svg, csv)
+and SSE keep compressing. The cost is per-view serve time invisible to the standing HTTP
+probes, so the collector drives the real app stack raw-ASGI (`import server`, the production
+middleware chain over the file server's FileResponse arm, no credentials — the uncredentialed
+arm is the one the middleware compresses) over the worst on-disk `.png` and `.pptx` under the
+sessions tree plus the worst artifact page as the witness: one cold pass per corpus, then five
+timed requests, reporting the serve wall, the wire bytes, and the transport header each answer
+carried. Evidence points the same collector at the before and after checkouts (`CHECKOUT` at
+each root; the middleware lives in server.py, so the arms differ exactly by the fix), the same
+shape as the M35 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+import server  # the real app stack: the transport-gzip middleware over the file server
+
+# Worst served corpora per family: the largest .png and .pptx under the live
+# sessions tree's artifact dirs, plus the largest artifact page (the
+# keep-compressing witness). Read-only; the URL shape is the /files mount's.
+root = Path.home() / ".charliebot" / "sessions"
+best = {}
+for p in root.glob("*/artifacts/*"):
+    if not p.is_file():
+        continue
+    suffix = p.suffix.lower()
+    n = p.stat().st_size
+    if suffix in (".png", ".pptx", ".html") and n > best.get(suffix, (0,))[0]:
+        best[suffix] = (n, p)
+for p in root.glob("*/artifacts/*/*"):
+    if not p.is_file():
+        continue
+    suffix = p.suffix.lower()
+    n = p.stat().st_size
+    if suffix in (".png", ".pptx") and n > best.get(suffix, (0,))[0]:
+        best[suffix] = (n, p)
+
+def scope(url):
+    return {
+        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1", "method": "GET", "scheme": "http",
+        "path": url, "raw_path": url.encode(), "query_string": b"", "root_path": "",
+        "headers": [(b"host", b"test"), (b"accept-encoding", b"gzip")],
+        "client": ("test", 123), "server": ("test", 80),
+    }
+
+async def drive(url):
+    body = b""
+    out = {"status": 0, "encoding": b""}
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        nonlocal body
+        if msg["type"] == "http.response.start":
+            out["status"] = msg["status"]
+            out["encoding"] = dict(msg.get("headers", [])).get(b"content-encoding", b"")
+        elif msg["type"] == "http.response.body":
+            body += msg.get("body", b"")
+
+    t0 = time.perf_counter()
+    await server.app(scope(url), receive, send)
+    return time.perf_counter() - t0, body, out
+
+async def main():
+    for suffix in (".png", ".pptx", ".html"):
+        entry = best.get(suffix)
+        if entry is None:
+            print(f"{suffix}: no corpus under the sessions tree; unmeasured")
+            continue
+        n, p = entry
+        url = f"/files{p}"
+        _, _, cold_out = await drive(url)  # cold pass; not timed
+        assert cold_out["status"] == 200, (url, cold_out["status"])
+        times, wire, enc = [], 0, b""
+        for _ in range(5):
+            dt, body, out = await drive(url)
+            assert out["status"] == 200, (url, out["status"])
+            times.append(dt)
+            wire = len(body)
+            enc = out["encoding"]
+        times.sort()
+        transport = "identity" if not enc else f"gzip ({wire} B wire)"
+        print(f"{suffix} {n} B raw: serve median {times[2] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms, "
+              f"wire {wire} B, transport {transport}")
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-17 | this PR | M105 binary-file transport serve, introduced with this PR: png serve median 34.67/33.05/34.29/33.94 → 4.82/4.94/5.07/5.13 ms (−85 % to −87 %), maxima 34.72-41.85 → 6.26-6.65 ms, every paired round faster; pptx 24.91/23.54/23.66/22.92 → 3.19/3.69/3.65/3.44 ms (−84 % to −87 %), maxima 24.68-27.03 → 4.03-5.26 ms; the transport header flips gzip → identity with wire == raw bytes on both corpora (the before arm's deflate bought 0.03 % wire on the png, 1.2 % on the pptx); html witness unchanged 119.58/121.26/118.87/120.68 → 120.40/124.70/119.56/121.74 ms medians (overlapping bands) with wire 3136064 B byte-identical across all arms and transport gzip kept (three interleaved rounds plus a solo opening reading of the verbatim collector — main checkout before vs branch worktree after back-to-back, the worst on-disk artifact corpora of the live sessions tree (1,344,367 B png of d4fd4549, 968,921 B pptx of e4074308, 4,111,380 B html of e4074308), no-credential raw-ASGI drives of the real app stack, live files read-only, load 1.32-1.46 one-minute); component attribution: the removed slice is the middleware's inline per-chunk deflate of the FileResponse stream — the identity arm's 4.8-5.1 ms is the read+send the serve keeps; no-regression witness interleaved: M56 /status 0.50 → 0.50 ms with wire 1386 B and parsed digest d849e6400063 identical across arms; 5656-passed suite (5654 + 2 new middleware-contract tests) + 11 skipped, ruff and yapf clean; M105 definition, collector, healthy ranges, and history row introduced with this PR | the file server's plain FileResponse arm deflated every gzip-accepting answer per chunk on the event loop although the body's format is already entropy-coded — the browser's image loads and deck downloads paid ~8-31 ms of serve CPU per view to shrink the wire 0.03-1.2 % (and incompressible bodies only grow); the middleware's exclusion is now the skip list's prefix check, text/event-stream stays excluded (the SSE cadence starlette's one-entry constant protected lives in the list now), and text formats keep compressing |
 | 2026-09-17 | this PR | M102 artifact wrap wall median 0.230/0.227/0.220 → 0.064/0.066/0.065 s, −70 % to −72 %, maxima 0.238-0.241 → 0.067-0.071 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, scratch fragment/output per round, load 1.83-1.94 one-minute); component attribution, fresh-process subprocess medians over 3: `import src.cli.artifact` 0.062-0.066 s wall alone, +`get_config()` 0.206-0.217 s — the config model stack is ~150 ms of the wrap wall, the M98 attribution's 180 ms cumulative chain read against this chain's lighter import floor; no-regression witnesses interleaved ×2 on the branch: M92 schedule-trigger --help 0.040/0.041 s, M98 memory query 0.055/0.056 s, M97 plan list 0.217/0.233 s, M99 import server 0.574/0.581 s (standing main readings the same hour 0.040/0.055/0.215/0.558 s); 5654-passed suite + 11 skipped, ruff and yapf clean, plus 1 new contract test (a fresh-process wrap verb leaves src.core.config, src.core.models, and pydantic unloaded) | the wrap verb's only config read is the profile home for the vendored-KaTeX path — `Field(default_factory=charliebot_home_dir)` and a yaml charliebot_home key is a hard error, so the env derivation (`charliebot_home_dir()`, the M98 owner module imported directly) is the same value without the config stack; the check verb keeps `get_config` (the probe resolves backends from it), and the wrap tests' seam moved with the verb (`cli_katex` patches the module-level `charliebot_home_dir` name, the M98 seam shape); M102 healthy range unchanged |
 | 2026-09-17 | this PR | M98 memory-CLI invocation wall median 0.211/0.207/0.209 → 0.053/0.052/0.052 s, −75 %, maxima 0.218-0.211 → 0.056-0.053 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, live store read-only, load 1.56-1.60 one-minute); component attribution: `-X importtime` puts src.core.config at 180 ms cumulative of the 221 ms fresh-process wall (pydantic 52 ms + backend_models 34 ms + yaml 14 ms), and the after arm's `import src.cli.memory` measures 20 ms with none of the heavy chains loaded; no-regression witnesses interleaved ×2: M92 schedule-trigger --help 0.039/0.041 → 0.039/0.041 s medians (standing band), M97 plan list 0.215/0.223 → 0.212/0.214 s, M99 import server 0.529/0.568 → 0.526/0.562 s, M102 artifact wrap 0.221/0.226 → 0.225/0.225 s; 5653-passed suite + 11 skipped, ruff and yapf clean, plus the memory chain's import-weight ban set extended with src.core.config + src.core.models + pydantic (the read verbs no longer bind them at import) | the query/add/lint verbs read no config file — the store root is `charliebot_home_dir() / "memory"`, a pure derivation of the env-resolved home that no config key can move (a yaml charliebot_home key is a hard error), so a fresh invocation no longer pays the config model stack to parse a file the verb never reads; the home-resolution block moved verbatim to src/core/home.py (config re-exports the names for its existing import path; the _home_cache reset/patch sites in conftest and the hardening test re-pointed to the owner module; the hardcoded-path guard's exemption follows the owner), and the memory CLI's test seam patched get_config → charliebot_home_dir; a broken config.yaml no longer blocks the store's own verbs — the store is independent infrastructure whose root the env alone determines |
 | 2026-09-17 | this PR | M68 marked changed-poll rebuild median 1.70/1.83/1.72 → 1.23/1.24/1.27 ms, −26 % to −32 %, maxima 1.90-2.35 → 1.30-1.65 ms, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, 2628 KB / 299-row worst thread-metadata corpus of session dfe393f7, scratch copy, live state read-only, decoded 95083 B wire 12757 B with digest c3c19bb391cf identical across all six arms, load 0.70-0.81 one-minute); no-regression witnesses interleaved ×2: M36 full poll 0.63-0.66 → 0.61-0.64 ms and conditional 0.57-0.59 → 0.58-0.60 ms (204, 0 B) with digest c3c19bb391cf identical — the unchanged-poll paths serve the body memo and never re-render; M63 /view handler 0.51-0.53 → 0.51 ms with body 116859 B identical (the view rows share the row memo's dicts); 5653-passed suite + 11 skipped, ruff and yapf clean, plus 1 new byte-parity test (the joined fragments equal the whole-array dump they replaced across nested/unicode/None/float row shapes); M68 healthy range recalibrated < 0.003 s → < 0.002 s with this PR | the marked rebuild re-rendered only the moved row but `_list_body` still re-dumped all 299 rows through stdlib json — 0.60 ms of the ~1.7 ms rebuild measured standalone on the 339-row corpus against 0.01 ms of fragment join; the row memo now carries each row's rendered JSON fragment beside its dict (the M72 files-listing row-memo shape) and the body assembles by sorting the (row, fragment) pairs and joining fragments — the encoder's per-element text is context-free, so the join is byte-identical (pinned by the new test and by the collector's digest across all six arms); trigger rows ride the same per-request fragment render |

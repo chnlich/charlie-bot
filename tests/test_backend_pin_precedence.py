@@ -25,7 +25,7 @@ from src.api.chat import run_and_finalize
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.master_trigger import trigger_master
-from src.core.models import CreateSessionRequest
+from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
 
 
@@ -57,9 +57,28 @@ async def _expect_pin_hard_fail(
 
 
 @pytest.mark.asyncio
-async def test_message_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """No backends.options entry starts with codex — the pin still must not be
-  substituted onto anything."""
+@pytest.mark.parametrize(
+    "drive",
+    [
+        pytest.param(
+            lambda cfg, session, session_mgr: run_and_finalize(cfg, session, "hello", session_mgr),
+            id="message-path",
+        ),
+        pytest.param(
+            lambda cfg, session, session_mgr: trigger_master(session.id, "worker summary", cfg, session_mgr),
+            id="wake-path",
+        ),
+    ],
+)
+async def test_unresolvable_codex_pin_hard_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    drive: Callable[[CharlieBotConfig, SessionMetadata, SessionManager], Awaitable[object]],
+) -> None:
+  """No backends.options entry starts with codex — the pin still must not be substituted onto
+  anything, on either entry path that drives a turn: the chat message path, and the async-wake
+  path that guards delegation merge / improve completion / schedule triggers / review wakes
+  (all funnel through trigger_master)."""
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backends={"options": [OPUS_BACKEND_OPTION]},
@@ -69,27 +88,7 @@ async def test_message_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, mo
   await _expect_pin_hard_fail(
       session_mgr,
       session.id,
-      lambda: run_and_finalize(cfg, session, "hello", session_mgr),
-      monkeypatch,
-      error_substring="codex-ghost-9",
-  )
-
-
-@pytest.mark.asyncio
-async def test_wake_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Same session/pin as above, driven through the async-wake entry instead
-  of the message path — guards delegation merge / improve completion /
-  schedule triggers / review wakes, which all funnel through trigger_master."""
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backends={"options": [OPUS_BACKEND_OPTION]},
-  )
-  session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"), backend="codex-ghost-9")
-  await _expect_pin_hard_fail(
-      session_mgr,
-      session.id,
-      lambda: trigger_master(session.id, "worker summary", cfg, session_mgr),
+      lambda: drive(cfg, session, session_mgr),
       monkeypatch,
       error_substring="codex-ghost-9",
   )

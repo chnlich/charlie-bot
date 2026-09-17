@@ -214,7 +214,9 @@ def test_module_defers_structlog_until_the_first_log_call(module_name: str, impo
 # the backends stack rides its two spawn-path builds (the autonamer naming round
 # and the recap summarize, ~65 ms through src.agents.backends.registry and the
 # opencode/charlie_code module bodies), which load it on first use via the shared
-# load_build_backend (src/agents/backends/deferred_build.py).
+# load_build_backend (src/agents/backends/deferred_build.py); jinja2 +
+# fastapi.templating (~35 ms) ride the page renders, which build the engine on
+# first render (src/api/pages.py::_templates).
 SERVER_HEAVY_MODULES = (
     "numpy",
     "src.agents.transcriber",
@@ -226,6 +228,8 @@ SERVER_HEAVY_MODULES = (
     "src.agents.backends.registry",
     "src.agents.backends.opencode",
     "src.agents.backends.charlie_code",
+    "jinja2",
+    "fastapi.templating",
 )
 
 

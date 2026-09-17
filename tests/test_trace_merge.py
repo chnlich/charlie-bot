@@ -1,6 +1,6 @@
+import concurrent.futures
 import gzip
 import json
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import orjson
@@ -416,7 +416,7 @@ def test_trace_events_helper_accepts_trace_shapes_and_rejects_the_rest(tmp_path:
 def _member_form_output(paths: list[Path], tmp_path: Path, slim: bool) -> list[dict]:
   """Build through the member form exactly as the production multi-trace path does."""
   output = tmp_path / "member-merged.json.gz"
-  with ThreadPoolExecutor(max_workers=len(paths)) as executor:
+  with concurrent.futures.ThreadPoolExecutor(max_workers=len(paths)) as executor:
     build_multi_trace_merge(paths, output, slim, executor)
   return _read_merged(output)
 

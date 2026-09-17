@@ -38,7 +38,9 @@ def _make_blocking_multi_build(calls: list[int], started: threading.Event,
   async def blocking_build(paths: list[Path], out_path: Path, slim: bool) -> None:
     calls.append(1)
     started.set()
-    release.wait(10.0)
+    # The fake runs on the event loop (the build is awaited directly), so the
+    # gate must block in a thread — a blocking wait here would freeze the loop.
+    await asyncio.to_thread(release.wait, 10.0)
     await real_multi_trace_merge(paths, out_path, slim)
 
   return blocking_build

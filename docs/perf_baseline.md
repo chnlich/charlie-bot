@@ -7273,9 +7273,6 @@ sys.path.insert(0, os.environ["CHECKOUT"])
 from pathlib import Path
 from src.api import pages
 
-# Scratch cache home: the merge cache lands under /tmp, the live home read-only.
-os.environ["CHARLIEBOT_HOME"] = tempfile.mkdtemp(prefix="m107-home-")
-
 
 def find_corpus() -> tuple[Path, int]:
     # Worst trace dir: the directory under the documented roots (~/data, ~/scripts)
@@ -7286,7 +7283,7 @@ def find_corpus() -> tuple[Path, int]:
     return best, sum(p.stat().st_size for p in best.glob("*.json"))
 
 
-async def main(paths: list[Path], best_n: int) -> None:
+async def main(paths: list[Path], best_n: int, home: str) -> None:
     def event_identity(path: Path) -> tuple[str, int]:
         events = json.loads(gzip.decompress(path.read_bytes()))["traceEvents"]
         ident = [[e.get("ph"), e.get("name"), e.get("pid"), e.get("ts")] for e in events]
@@ -7308,15 +7305,17 @@ async def main(paths: list[Path], best_n: int) -> None:
     print(f"{len(paths)} traces {best_n / 1e6:.1f} MB, {count} events; multi-trace merge build "
           f"median {times[1]:.2f} s, max {times[-1]:.2f} s over 3; artifact "
           f"{artifact.stat().st_size / 1e6:.1f} MB, event-identity digest {digests.pop()}")
-    shutil.rmtree(os.environ["CHARLIEBOT_HOME"], ignore_errors=True)
+    shutil.rmtree(home, ignore_errors=True)
 
 
 if __name__ == "__main__":
     # The spawn pool's workers re-import this file as __main__; everything with
     # side effects stays under the guard so a worker import is defs only.
+    home = tempfile.mkdtemp(prefix="m107-home-")
+    os.environ["CHARLIEBOT_HOME"] = home  # scratch cache home; the live home read-only
     best_dir, best_n = find_corpus()
     print(f"worst multi-trace dir: {best_dir}, {best_n / 1e6:.1f} MB")
-    asyncio.run(main(sorted(best_dir.glob("*.json")), best_n))
+    asyncio.run(main(sorted(best_dir.glob("*.json")), best_n, home))
 PYEOF
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python /tmp/opencode/m107_collector.py
 ```

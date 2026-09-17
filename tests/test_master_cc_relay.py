@@ -82,7 +82,7 @@ async def _seed_relay_session(
   relay pair (cc_session_id + claude_account="main") unless *persist_pair* is False,
   read the metadata back, and wrap it in the manager-backed work item.
 
-  Returns (mgr, session, meta, item); every test needs at least two of the four.
+  Returns (mgr, session, meta, item); callers bind what they use.
   Only the no-resume-id probe test passes persist_pair=False.
   """
   mgr = SessionManager(cfg)

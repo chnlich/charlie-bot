@@ -73,9 +73,10 @@ function hideStreaming() {
     streamRenderTimer = null;
   }
   streamPendingDraft = null;
-  // The incremental parse state is bound to one streamed draft; the next
-  // stream starts from a fresh full parse.
-  streamParseState = null;
+  // The incremental parse state survives the hide: parseStreamDraft reuses it
+  // only when the next draft's fixed text extends the parsed prefix and parses
+  // fresh otherwise, so a switch's re-show of the same pending draft re-parses
+  // only the appended tail instead of the whole accumulated draft.
   document.getElementById('streaming-msg').classList.add('hidden');
   document.getElementById('streaming-content').innerHTML = '';
 }

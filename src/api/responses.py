@@ -25,6 +25,7 @@ from typing import Any
 
 import orjson
 from fastapi.responses import JSONResponse
+from starlette.requests import Request
 from starlette.responses import Response
 
 
@@ -59,3 +60,16 @@ class PreencodedJSONResponse(Response):
 
   def __init__(self, body: bytes, headers: dict[str, str] | None = None) -> None:
     super().__init__(content=body, headers=headers)
+
+
+GZIP_RESPONSE_HEADERS: dict[str, str] = {"Content-Encoding": "gzip", "Vary": "Accept-Encoding"}
+
+
+def request_wants_gzip(request: Request) -> bool:
+  """Whether the client's Accept-Encoding admits gzip.
+
+  The same check the gzip middleware makes on the way in; answering with the
+  pre-compressed body and :data:`GZIP_RESPONSE_HEADERS` set is what makes that
+  middleware skip its per-request deflate.
+  """
+  return "gzip" in request.headers.get("accept-encoding", "")

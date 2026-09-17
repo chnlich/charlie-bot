@@ -13,7 +13,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from src.api.deps import bad_request, get_config_on_loop, get_session_manager
-from src.api.responses import PreencodedJSONResponse, fast_json_bytes
+from src.api.responses import GZIP_RESPONSE_HEADERS, PreencodedJSONResponse, fast_json_bytes, request_wants_gzip
 from src.core.config import (
     CharlieBotConfig,
     ScheduledTaskConfig,
@@ -193,9 +193,9 @@ async def list_cron_tasks(request: Request) -> Response:
   # Returning the mapped list instead would pay jsonable_encoder's dict
   # recursion per request for the same bytes.
   body, gz = _cron_tasks_body()
-  if "gzip" not in request.headers.get("accept-encoding", ""):
+  if not request_wants_gzip(request):
     return PreencodedJSONResponse(body)
-  return PreencodedJSONResponse(gz, headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
+  return PreencodedJSONResponse(gz, headers=GZIP_RESPONSE_HEADERS)
 
 
 # The grouped sidebar render pairs this poll with /api/sessions/scheduled every

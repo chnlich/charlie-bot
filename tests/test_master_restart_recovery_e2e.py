@@ -94,7 +94,8 @@ if [ "$mode" = "error_hang" ]; then
   echo "{\"type\":\"error\",\"message\":\"__LITELLM_503_ERROR_MESSAGE__\"}"
   printf '\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m\n' >&2
   printf "LiteLLM.Info: If you need to debug this error, use \`litellm._turn_on_debug()'.\n" >&2
-  echo "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"ASSISTANT-INV-$n\"}]}}"
+  echo "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":"\
+"[{\"type\":\"text\",\"text\":\"ASSISTANT-INV-$n\"}]}}"
   while :; do sleep 60; done
 fi
 echo "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":"\

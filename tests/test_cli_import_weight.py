@@ -163,6 +163,30 @@ def test_artifact_chain_imports_without_the_heavy_chains() -> None:
       "requests on the CDN-fetch path only")
 
 
+def test_artifact_wrap_verb_runs_off_the_config_stack() -> None:
+  # The wrap verb's only config read is the profile home (the vendored-KaTeX
+  # path), a pure derivation of the env-resolved home (src.core.home) that no
+  # config key can move — so a fresh wrap invocation must not load the config
+  # model stack (~150 ms of the M102 wall).
+  code = (
+      "import argparse, json, sys, tempfile; "
+      "from pathlib import Path; "
+      "from src.cli.artifact import _run_wrap; "
+      "work = Path(tempfile.mkdtemp()); "
+      "(work / 'fragment.html').write_text('<p>probe</p>', encoding='utf-8'); "
+      "code = _run_wrap(argparse.Namespace(fragment=str(work / 'fragment.html'), genre='plan', "
+      "math=False, output=str(work / 'page.html'))); "
+      "loaded = sorted(set(sys.modules) & {'src.core.config', 'src.core.models', 'pydantic'}); "
+      "sys.stderr.write(json.dumps([code, loaded]))")
+  proc = _run_probe(code)
+  wrap_code, loaded = json.loads(proc.stderr)
+  assert wrap_code == 0, f"the wrap probe failed: {wrap_code}"
+  assert loaded == [], (
+      "the artifact wrap verb loaded the config stack at call time: "
+      f"{loaded}; the M102 command wall (docs/perf_baseline.md) depends on the "
+      "wrap verb resolving its home from src.core.home, not the config")
+
+
 def test_memory_chain_imports_without_the_heavy_chains() -> None:
   loaded = _modules_loaded_after_import("import src.cli.memory", MEMORY_HEAVY_MODULES)
   assert loaded == [], (

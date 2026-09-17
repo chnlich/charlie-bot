@@ -31,11 +31,12 @@ page, under emulated prefers-reduced-motion (the user-restored behavior: the
 spinner and the delegated gear keep rotating under reduce too; only the
 pulse cues stop), on desktop and at the narrow viewport, and across an
 ordinary mid-run reload. The windows ride real Runs: the unemulated and
-reduced windows on the worker Run, the reload and narrow windows plus the
-stop on a fresh bounded child-manager turn (managers never auto-complete, so
-the row and the interrupted-state label stay observable). A short clipped
-frame sequence of the live row is kept beside the samples for visual glyph
-inspection.
+reduced windows on the worker Run; the narrow window, the reload window and
+the stop each ride a fresh bounded child-manager turn (managers never
+auto-complete, so the row and the interrupted-state label stay observable,
+and each window starts seconds after a confirmed live spinner). A short
+clipped frame sequence of the live row is kept beside the samples for visual
+glyph inspection.
 
 Evidence: per-scenario screenshots and session_tree_preview_browser_results.json
 with the exact tested commit, the invocation and the console-error list.
@@ -1257,54 +1258,44 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         results.record("s14h-motion-timeline-reduced-motion", False,
                        "skipped: the desktop window failed", None)
 
-    # --- Late live windows and the stop ride a bounded child-manager turn ----
+    # --- Late live windows and the stop ride bounded child-manager turns -----
     # The worker Run's lifetime is the model's own (observed ~17-45s for a
     # bounded turn) and its task auto-completes on run success, removing the
-    # row. A fresh bounded manager turn never auto-completes, so the reload
-    # window, the narrow window and the stop stay observable on it.
+    # row. A manager never auto-completes, so child-manager turns carry the
+    # remaining windows and the stop; each window gets its own fresh bounded
+    # message so it starts seconds after a confirmed live spinner, and the
+    # post-reload wait self-heals onto whichever run is live after the reload
+    # (a message sent while a run is live queues and redrives).
     spin_el = f"spinner-{child_id}"
     gear_el = f"worker-indicator-{root_id}"
-    await evaluate(cdp, sid, f"switchSession({json.dumps(child_id)})")
-    await wait_for(cdp, sid, f"SESSION_ID === {json.dumps(child_id)}", timeout=15,
-                   label="child manager selected for the late motion windows")
-    await open_task_tab(cdp, sid, "chat")
-    await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10, label="child composer")
-    child_message = ("Trial stop step. Write a 60-word story about a harbor, then a second 60-word "
-                     "paragraph about a storm, then reply with exactly STOP-OK on the last line. "
-                     "Do not create subtasks.")
-    await evaluate(cdp, sid,
-                   "(() => { const inp = document.getElementById('msg-input');"
-                   f"inp.value = {json.dumps(child_message)};"
-                   "inp.dispatchEvent(new Event('input')); })()")
-    await click(cdp, sid, "#send-btn")
+
+    async def send_child_message(message: str, label: str) -> None:
+        await evaluate(cdp, sid, f"switchSession({json.dumps(child_id)})")
+        await wait_for(cdp, sid, f"SESSION_ID === {json.dumps(child_id)}", timeout=15,
+                       label=f"{label} child manager selected")
+        await open_task_tab(cdp, sid, "chat")
+        await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10,
+                       label=f"{label} child composer")
+        await evaluate(cdp, sid,
+                       "(() => { const inp = document.getElementById('msg-input');"
+                       f"inp.value = {json.dumps(message)};"
+                       "inp.dispatchEvent(new Event('input')); })()")
+        await click(cdp, sid, "#send-btn")
+
     child_run_id = None
     late_label = "child turn"
     try:
+        await send_child_message(
+            "Trial narrow step. Write a 40-word note about a harbor, then reply with exactly "
+            "NARROW-OK on the last line. Do not create subtasks.", "narrow-window")
         await wait_row_activity(cdp, sid, child_id, {"spinner": True}, 120,
-                                "child manager turn live for the late motion windows")
+                                "child manager turn live for the narrow window")
         child_run_id = await active_run_of(child_id)
         late_label = f"child run {str(child_run_id)[:8]}" if child_run_id else "child turn (live spinner)"
-
-        # Ordinary refresh mid-run: a real reload re-renders the tree from
-        # server facts over the reconnect path; the same live Run must still
-        # animate afterwards (launch through ongoing work across a refresh).
-        await cdp.send("Page.reload", {}, session_id=sid)
-        await wait_for(cdp, sid,
-                       f"!!document.getElementById('tree-node-{child_id}')"
-                       f" && !document.getElementById('spinner-{child_id}')"
-                       ".classList.contains('hidden')",
-                       timeout=45, label="live spinner re-rendered after reload")
-        await asyncio.sleep(0.3)
-        reload_verdicts = await motion_pass(1.2, RELOAD_INTERVALS_S)
-        results.record(
-            "s14i-motion-timeline-after-reload",
-            all(ok for ok, _ in reload_verdicts.values()),
-            f"{late_label} across an ordinary mid-run reload: "
-            + "; ".join(detail for _, detail in reload_verdicts.values()),
-            await screenshot(cdp, sid, results, "s14i-motion-after-reload"))
     except (TimeoutError, RuntimeError) as exc:
-        results.record("s14i-motion-timeline-after-reload", False,
-                       f"{late_label}: {str(exc)[:280]}", None)
+        # Logged only: the narrow scenarios below record the row state they
+        # actually observed, exactly once each.
+        log(f"narrow-window child turn did not go live: {exc!r}")
 
     # Narrow viewport: the same live cues at 390px, names still readable.
     await cdp.send("Emulation.setDeviceMetricsOverride",
@@ -1352,10 +1343,35 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     except (TimeoutError, RuntimeError) as exc:
         results.record("s14j-motion-timeline-narrow", False, f"{late_label}: {str(exc)[:280]}", None)
 
+    # Reload window on its own bounded message: the post-reload wait self-heals
+    # onto whichever run is live after the reload (a queued message redrives),
+    # so the window observes a genuinely live Run across the refresh.
+    try:
+        await send_child_message(
+            "Trial reload step. Write a 60-word story about a storm, then reply with exactly "
+            "RELOAD-OK on the last line. Do not create subtasks.", "reload-window")
+        await cdp.send("Page.reload", {}, session_id=sid)
+        await wait_for(cdp, sid,
+                       f"!!document.getElementById('tree-node-{child_id}')"
+                       f" && !document.getElementById('spinner-{child_id}')"
+                       ".classList.contains('hidden')",
+                       timeout=45, label="live spinner re-rendered after reload")
+        await asyncio.sleep(0.3)
+        reload_verdicts = await motion_pass(1.2, RELOAD_INTERVALS_S)
+        results.record(
+            "s14i-motion-timeline-after-reload",
+            all(ok for ok, _ in reload_verdicts.values()),
+            f"{late_label} across an ordinary mid-run reload: "
+            + "; ".join(detail for _, detail in reload_verdicts.values()),
+            await screenshot(cdp, sid, results, "s14i-motion-after-reload"))
+    except (TimeoutError, RuntimeError) as exc:
+        results.record("s14i-motion-timeline-after-reload", False,
+                       f"{late_label}: {str(exc)[:280]}", None)
+
     # The real stop: durable request, signal, observed exit -> interrupted, on
-    # the child manager's own bounded turn (a finished worker run would
-    # honestly report stop_requested=False; a manager never auto-completes, so
-    # the interrupted row and its label stay observable).
+    # the child manager's own bounded turn (a finished run would honestly
+    # report stop_requested=False; a manager never auto-completes, so the
+    # interrupted row and its label stay observable).
     stop_target = await active_run_of(child_id)
     if stop_target is None and child_run_id is not None:
         stop_target = child_run_id

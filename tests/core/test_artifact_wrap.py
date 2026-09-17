@@ -8,7 +8,6 @@ and the render-path assertion come from src/core/artifact_check.py.
 import re
 import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 import requests
@@ -44,9 +43,12 @@ def vendored_katex(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture
 def cli_katex(monkeypatch: pytest.MonkeyPatch, vendored_katex: Path) -> Path:
-  """Point the CLI verb's config home at a dir whose vendor copy is the session-fetched one."""
-  monkeypatch.setattr(
-      "src.cli.common.get_config", lambda: SimpleNamespace(charliebot_home=vendored_katex.parent.parent))
+  """Point the CLI verb's home resolution at a dir whose vendor copy is the session-fetched one.
+
+  The wrap verb resolves the home off the env (src.core.home), not the config —
+  the M98 seam shape; the module-level name is the patch target.
+  """
+  monkeypatch.setattr("src.cli.artifact.charliebot_home_dir", lambda: vendored_katex.parent.parent)
   return vendored_katex
 
 

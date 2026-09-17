@@ -284,7 +284,16 @@ async def test_worker_finish_summary_is_locator_without_task_description(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_resolve_requested_subagent_backend_model_uses_requested_backend() -> None:
+@pytest.mark.parametrize(
+    "requested_backend, expected_backend, expected_model",
+    [
+        ("codex-o3", "codex-o3", "o3"),
+        (None, OPUS_BACKEND_ID, "claude-opus-4-6"),
+    ],
+    ids=["requested_backend_wins", "falls_back_to_session_backend"],
+)
+async def test_resolve_requested_subagent_backend_model(
+    requested_backend: str | None, expected_backend: str, expected_model: str) -> None:
   cfg = _build_cfg()
 
   class FakeSessionManager(JudgmentShim):
@@ -294,27 +303,10 @@ async def test_resolve_requested_subagent_backend_model_uses_requested_backend()
       return SessionMetadata(id=session_id, name="Test", backend=OPUS_BACKEND_ID)
 
   backend, model = await spawner.resolve_requested_subagent_backend_model(
-      "session-id", cfg, FakeSessionManager(), requested_backend="codex-o3")
+      "session-id", cfg, FakeSessionManager(), requested_backend=requested_backend)
 
-  assert backend == "codex-o3"
-  assert model == "o3"
-
-
-@pytest.mark.asyncio
-async def test_resolve_requested_subagent_backend_model_defaults_to_session_backend() -> None:
-  cfg = _build_cfg()
-
-  class FakeSessionManager(JudgmentShim):
-
-    async def get_session(self, session_id: str) -> SessionMetadata:
-      assert session_id == "session-id"
-      return SessionMetadata(id=session_id, name="Test", backend=OPUS_BACKEND_ID)
-
-  backend, model = await spawner.resolve_requested_subagent_backend_model(
-      "session-id", cfg, FakeSessionManager(), requested_backend=None)
-
-  assert backend == OPUS_BACKEND_ID
-  assert model == "claude-opus-4-6"
+  assert backend == expected_backend
+  assert model == expected_model
 
 
 @pytest.mark.asyncio

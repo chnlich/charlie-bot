@@ -478,3 +478,53 @@ test('incident fixture: per-line box-width sums (1ch/2ch) render exactly the aut
       'line ' + i + ': the fix regains exactly wideCount/3 columns');
   }
 });
+
+test('the U+1100 probe floor passes everything below it verbatim and boxes the floor char', async () => {
+  const context = await loadRendererContext();
+  const w = context.wrapWideChars;
+  // U+10FF (Georgian, East_Asian_Width=N) sits below the lowest W/F range:
+  // the probe misses, the bytes pass through, no box appears.
+  assert.equal(w('a\u10FFb'), 'a\u10FFb');
+  // U+1100 is the first W/F range's opening char and boxes as before.
+  assert.equal(w('\u1100'), '<span class="wc2ch">\u1100</span>');
+});
+
+test('wrapWideCharsCached serves one wrap per distinct input and stays byte-identical to the direct wrap', async () => {
+  const context = await loadRendererContext();
+  const samples = [
+    'plain ascii only',
+    '<span class="hljs-keyword">const</span> \u4e2d\u6587 tail',
+    '\u{1F600} astral + \u4e2d\u0301\uFE0F marks',
+  ];
+  for (const s of samples) {
+    const direct = context.wrapWideChars(s);
+    const first = context.wrapWideCharsCached(s);
+    assert.equal(first, direct, 'the cached wrap stays byte-identical');
+    // A fresh string build per call is the uncached shape; the memo returns
+    // one shared result, so strict identity pins that the second call served
+    // the cache instead of re-wrapping.
+    assert.ok(context.wrapWideCharsCached(s) === first, 'the repeat served the cached wrap');
+  }
+  // The growing tail's shape: a per-paint append re-wraps (miss) and the
+  // result still matches the direct wrap's bytes.
+  var grown = '';
+  for (let i = 0; i < 5; i++) {
+    grown += 'x';
+    assert.equal(context.wrapWideCharsCached(grown), context.wrapWideChars(grown));
+  }
+});
+
+test('the wrap cache stays bounded and evicted entries still wrap correctly', async () => {
+  const context = await loadRendererContext();
+  const inputs = [];
+  for (let i = 0; i < 80; i++) inputs.push('block-' + i + ' \u4e2d');
+  const outputs = inputs.map((s) => context.wrapWideCharsCached(s));
+  for (let i = 0; i < inputs.length; i++) {
+    assert.equal(outputs[i], context.wrapWideChars(inputs[i]), 'entry ' + i + ' bytes');
+  }
+  // The cap bounds the retained entries; the oldest input evicted, so its
+  // re-request re-wraps (bytes unchanged) while the newest entry is still a
+  // served hit.
+  assert.equal(context.wrapWideCharsCached(inputs[0]), outputs[0]);
+  assert.ok(context.wrapWideCharsCached(inputs[79]) === outputs[79], 'the newest entry is still cached');
+});

@@ -120,7 +120,7 @@ function codeBlockHtml(displayLang, isMarkdown, innerHtml, markerId) {
     ? '<button class="copy-btn" onclick="renderMarkdown(this)">Render</button>'
     : '';
   const marker = markerId === null ? '' : ` data-hl="${markerId}"`;
-  return `<div class="code-block"><div class="code-header"><span class="code-lang">${displayLang}</span>${renderBtn}<button class="copy-btn" onclick="copyCode(this)">Copy</button></div><pre><code class="hljs"${marker}>${wrapWideChars(innerHtml)}</code></pre></div>`;
+  return `<div class="code-block"><div class="code-header"><span class="code-lang">${displayLang}</span>${renderBtn}<button class="copy-btn" onclick="copyCode(this)">Copy</button></div><pre><code class="hljs"${marker}>${wrapWideCharsCached(innerHtml)}</code></pre></div>`;
 }
 // ---------------------------------------------------------------------------
 // Wide-character 2ch boxes. The code font stack ('Fira Code', ui-monospace,
@@ -247,6 +247,12 @@ function wc2chIsWide(cp) {
 // entities around escaped text, so wide chars only ever appear in text
 // segments.
 var WC2CH_TAG_SPLIT_RE = /(<[^>]*>)/g;
+// Any character below U+1100 — the lowest W/F range's floor in WC2CH_RANGES —
+// is never wrappable, so a text segment the probe misses skips the per-char
+// scan whole. The probe is conservative in the safe direction: a non-W/F char
+// at or above U+1100 still takes the scan, and astral characters arrive as
+// surrogate units (≥ U+1100) that the scan already consumes as pairs.
+var WC2CH_PRESENT_RE = /[\u1100-\uFFFF]/;
 // Trailing marks that render inside the wide char's glyph run and share its
 // box: General_Category=Mark (a legal \p escape, unlike East_Asian_Width).
 // U+FE0F is itself Mn, so the class already carries it; the explicit check
@@ -288,9 +294,36 @@ function wrapWideChars(html) {
   var out = [];
   for (var i = 0; i < parts.length; i++) {
     if (i % 2 === 1) out.push(parts[i]);  // odd segments are the captured tags
-    else wc2chWrapText(parts[i], out);
+    else if (WC2CH_PRESENT_RE.test(parts[i])) wc2chWrapText(parts[i], out);
+    else out.push(parts[i]);
   }
   return out.join('');
+}
+
+// Re-wraps of one inner HTML are pure repeats: a streamed draft re-renders its
+// completed blocks from the highlight cache on every paint, and the flush's
+// marker swap re-wraps the bytes its settled block just wrapped. The wrap is a
+// pure function of the input string, so a bounded LRU serves the repeats; the
+// cap bounds retained outputs to one wrapped block per entry, keyed by bytes
+// the highlight cache already holds. The tool-preview mounts (workers.js,
+// chat/rendering.js) stay on the direct wrap: their re-renders carry new
+// truncated bodies, so caching them would only evict the block entries.
+var WRAP_CACHE_CAP = 64;
+var wrapWideCharsCache = new Map();
+
+function wrapWideCharsCached(html) {
+  var cached = wrapWideCharsCache.get(html);
+  if (cached !== undefined) {
+    wrapWideCharsCache.delete(html);
+    wrapWideCharsCache.set(html, cached);
+    return cached;
+  }
+  cached = wrapWideChars(html);
+  if (wrapWideCharsCache.size >= WRAP_CACHE_CAP) {
+    wrapWideCharsCache.delete(wrapWideCharsCache.keys().next().value);
+  }
+  wrapWideCharsCache.set(html, cached);
+  return cached;
 }
 
 function highlightKey(lang, code) {
@@ -747,13 +780,13 @@ function flushDeferredCodeHighlights() {
     for (const el of document.querySelectorAll(selector)) {
       // Same wrap codeBlockHtml applied to the settled memo bytes: the DOM
       // write and the memo entry stay byte-identical.
-      el.innerHTML = wrapWideChars(rec.highlighted);
+      el.innerHTML = wrapWideCharsCached(rec.highlighted);
       el.removeAttribute('data-hl');
       found = true;
     }
     for (const root of roots) {
       for (const el of root.querySelectorAll(selector)) {
-        el.innerHTML = wrapWideChars(rec.highlighted);
+        el.innerHTML = wrapWideCharsCached(rec.highlighted);
         el.removeAttribute('data-hl');
         found = true;
       }

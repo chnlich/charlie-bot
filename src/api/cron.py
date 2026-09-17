@@ -28,6 +28,7 @@ from src.core.config import (
     pm_task_project_error,
     require_backend_option,
 )
+from src.core.deferred import deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionMetadata
 from src.core.scheduler import load_croniter, scheduled_task_session_binding
@@ -51,9 +52,8 @@ _NEXT_RUN_MEMO: dict[tuple[str, str], tuple[datetime, str]] = {}
 
 
 def __getattr__(name: str) -> Any:
-  if name == "croniter":
-    return load_croniter(globals())
-  raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+  # The "src.api.cron.croniter" patch target (tests/test_cron_next_run_memo.py) resolves through this hook.
+  return deferred_module_getattr(name, __name__, globals(), "croniter", load_croniter)
 
 
 def next_run_iso(cron_expr: str, timezone: str, now_utc: datetime) -> str:

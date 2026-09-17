@@ -27,10 +27,11 @@ import re
 from collections.abc import Iterator
 from typing import Any
 
-from src.agents.backends.deferred_build import build_backend_module_getattr, load_build_backend
+from src.agents.backends.deferred_build import load_build_backend
 from src.core import claude_accounts
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, default_claude_dir
+from src.core.deferred import deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendOption, SessionMetadata
 from src.core.sessions import SessionManager
@@ -42,7 +43,7 @@ log = LazyStructlogLogger()
 
 def __getattr__(name: str) -> Any:
   # The "src.core.autonamer.build_backend" patch target resolves through this hook.
-  return build_backend_module_getattr(name, __name__, globals())
+  return deferred_module_getattr(name, __name__, globals(), "build_backend", load_build_backend)
 
 
 # Matches true defaults ("Session 7") and legacy empty placeholders ("7: ").

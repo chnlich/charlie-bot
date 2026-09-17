@@ -766,15 +766,15 @@ class _OomReportBackend(ScriptedRelayBackend):
 
 
 @pytest.mark.asyncio
-async def test_run_cc_error_event_beats_the_stderr_banner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_cc_error_event_beats_the_stderr_banner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The Gemini-503 shape on the live exit path: the invocation's structured
   error event is the hint, not the stderr help banner."""
   monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "login"))
   cfg = _solo_cfg(tmp_path)
   meta = SessionMetadata(id="s1", name="t", backend="solo")
   backend = ScriptedRelayBackend(
-      [backend_base.make_error_event(LITELLM_503_ERROR_MESSAGE), backend_base.make_result_event()],
+      [backend_base.make_error_event(LITELLM_503_ERROR_MESSAGE),
+       backend_base.make_result_event()],
       exit_code=1,
       stderr_text=LITELLM_FEEDBACK_BANNER_STDERR)
   _install_backends(monkeypatch, [backend])
@@ -814,7 +814,8 @@ async def test_run_cc_success_stays_hint_free(tmp_path: Path, monkeypatch: pytes
   cfg = _solo_cfg(tmp_path)
   meta = SessionMetadata(id="s1", name="t", backend="solo")
   backend = ScriptedRelayBackend(
-      [backend_base.make_error_event(LITELLM_503_ERROR_MESSAGE), backend_base.make_result_event()],
+      [backend_base.make_error_event(LITELLM_503_ERROR_MESSAGE),
+       backend_base.make_result_event()],
       exit_code=0,
       stderr_text=LITELLM_FEEDBACK_BANNER_STDERR)
   _install_backends(monkeypatch, [backend])
@@ -837,10 +838,7 @@ async def test_run_cc_cgroup_report_wins_over_error_event_and_stderr(
   meta = SessionMetadata(id="s1", name="t", backend="solo")
   report = "Session memory cap hit: the run was killed by its cgroup (oom_kill 1)."
   backend = _OomReportBackend(
-      [backend_base.make_error_event(LITELLM_503_ERROR_MESSAGE)],
-      137,
-      LITELLM_FEEDBACK_BANNER_STDERR,
-      report)
+      [backend_base.make_error_event(LITELLM_503_ERROR_MESSAGE)], 137, LITELLM_FEEDBACK_BANNER_STDERR, report)
   _install_backends(monkeypatch, [backend])
   item = make_work_item(cfg, meta, cfg.backends.options[0])
 

@@ -24,4 +24,3 @@ def load_build_backend(namespace: dict[str, Any]) -> Any:
 
   namespace["build_backend"] = build_backend
   return build_backend
-

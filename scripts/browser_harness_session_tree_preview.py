@@ -21,6 +21,18 @@ first message and Run evidence (backend, model and native location matching
 the selection). Every refusal is a recorded failure; no scenario is scripted
 to pass.
 
+The cues' motion itself is proven temporally on the live rows: each window
+samples the animation timeline at unequal intervals for longer than the
+gear's 3s rotation and requires distinct transforms, currentTime advancing
+at the page's own wall-clock pace and a constant startTime (element
+generations are counted, so a legal fact-driven repaint is distinguishable
+from constant restarts) in the unemulated page, under emulated
+prefers-reduced-motion (the user-restored behavior: the spinner and the
+delegated gear keep rotating under reduce too; only the pulse cues stop),
+on desktop and at the narrow viewport, and across an ordinary mid-run
+reload. A short clipped frame sequence of the live row is kept beside the
+samples for visual glyph inspection.
+
 Evidence: per-scenario screenshots and session_tree_preview_browser_results.json
 with the exact tested commit, the invocation and the console-error list.
 """
@@ -194,6 +206,116 @@ async def open_task_tab(cdp: CDP, session_id: str, tab: str) -> None:
     await wait_for(cdp, session_id,
                    f"!document.getElementById('tab-{tab}').classList.contains('hidden')",
                    timeout=10, label=f"tab {tab} visible")
+
+
+# Motion observation: one temporal window proves a cue actually moves. The
+# intervals are unequal on purpose (a uniform cadence could alias with the
+# animation period) and the desktop window is longer than the gear's 3s
+# rotation, so a restart at a period boundary cannot hide.
+MOTION_INTERVALS_S = [0.05, 0.55, 0.20, 0.85, 0.35, 1.25, 1.05]
+RELOAD_INTERVALS_S = [0.05, 0.50, 0.90, 0.70]
+
+MOTION_TIMELINE_SNIPPET = """
+    (() => {
+      globalThis.__motionProbeSeq = globalThis.__motionProbeSeq || 0;
+      const sample = (kind, id) => {
+        const el = document.getElementById(id);
+        const pageNow = performance.now();
+        if (!el) return {kind, id, pageNow, missing: true};
+        const hidden = el.classList.contains('hidden');
+        if (!hidden && !el.dataset.motionProbe) {
+          el.dataset.motionProbe = String(++globalThis.__motionProbeSeq);
+        }
+        const anims = hidden ? [] : el.getAnimations();
+        const a = anims[0] || null;
+        const s = getComputedStyle(el);
+        return {kind, id, pageNow, hidden, stamp: el.dataset.motionProbe || null,
+                transform: s.transform, animationName: s.animationName,
+                time: a ? a.currentTime : null, start: a ? a.startTime : null,
+                state: a ? a.playState : null};
+      };
+      return [sample('spinner', __SPIN_ID__), sample('gear', __GEAR_ID__)];
+    })()
+"""
+
+
+async def sample_motion_timeline(cdp: CDP, session_id: str, spinner_id: str, gear_id: str,
+                                 intervals: list[float]) -> list[list[dict]]:
+    """Sample two cues' animation timelines at the given unequal spacing.
+
+    pageNow is read inside the page so CDP latency cancels in the
+    advance-versus-wall comparison; the dataset stamp marks element identity so
+    a tree repaint (which rebuilds the row) is observable as a generation
+    change.
+    """
+    expr = (MOTION_TIMELINE_SNIPPET
+            .replace('__SPIN_ID__', json.dumps(spinner_id))
+            .replace('__GEAR_ID__', json.dumps(gear_id)))
+    samples: list[list[dict]] = []
+    for delay in intervals:
+        await asyncio.sleep(delay)
+        samples.append(await evaluate(cdp, session_id, expr))
+    return samples
+
+
+def motion_timeline_verdict(samples: list[list[dict]], kind: str,
+                            min_span_s: float, max_generations: int = 2) -> tuple[bool, str]:
+    """Temporal motion proof for one cue across a sampled window.
+
+    Passing requires: the cue rendered and live from the window's start; one
+    element generation (at most one rebuild, the legal fact-driven repaint)
+    spanning at least min_span_s; within it a constant startTime (an animation
+    restart moves it), strictly advancing currentTime that matches the page's
+    own wall clock (a restart or stall falls behind), running playState, and
+    at least two distinct transforms.
+    """
+    rows = [entry for sample in samples for entry in sample if entry.get('kind') == kind]
+    if len(rows) < 3:
+        return False, f'{kind}: fewer than 3 samples: {rows}'
+    if rows[0].get('missing') or rows[0].get('hidden'):
+        return False, f'{kind}: cue not live at window start: {rows[0]}'
+    generations: list[list[dict]] = []
+    current: list[dict] = []
+    for r in rows:
+        if r.get('missing') or r.get('hidden'):
+            if current:
+                generations.append(current)
+                current = []
+            continue
+        if current and current[-1].get('stamp') != r.get('stamp'):
+            generations.append(current)
+            current = []
+        current.append(r)
+    if current:
+        generations.append(current)
+    if len(generations) > max_generations:
+        return False, (f'{kind}: {len(generations)} element generations in one window '
+                       f'(constant restarts): {[g[0].get("stamp") for g in generations]}')
+    best = max(generations, key=lambda g: g[-1]['pageNow'] - g[0]['pageNow'])
+    wall = best[-1]['pageNow'] - best[0]['pageNow']
+    if wall < min_span_s * 1000:
+        return False, f'{kind}: continuous window {wall:.0f}ms < {min_span_s}s: {best}'
+    starts = {g.get('start') for g in best}
+    if len(starts) != 1 or None in starts:
+        return False, f'{kind}: startTime moved inside one generation (animation restart): {best}'
+    times = [g.get('time') for g in best]
+    if (any(not isinstance(t, (int, float)) for t in times)
+            or any(times[i + 1] <= times[i] for i in range(len(times) - 1))):
+        return False, f'{kind}: currentTime not strictly advancing: {times}'
+    advance = times[-1] - times[0]
+    if abs(advance - wall) > 350:
+        return False, (f'{kind}: animation advanced {advance:.0f}ms while the page clock moved '
+                       f'{wall:.0f}ms (restart or stall)')
+    if any(g.get('state') != 'running' for g in best):
+        return False, f'{kind}: playState not running throughout: {[g.get("state") for g in best]}'
+    if any('spin' not in str(g.get('animationName')) for g in best):
+        return False, f'{kind}: animationName lost mid-window: {[g.get("animationName") for g in best]}'
+    transforms = {g.get('transform') for g in best}
+    if len(transforms) < 2:
+        return False, f'{kind}: transform never changed: {transforms}'
+    return True, (f'{kind}: {len(best)} samples over {wall:.0f}ms, advance {advance:.0f}ms, '
+                  f'{len(transforms)} transforms, startTime constant, '
+                  f'{len(generations)} generation(s)')
 
 
 def api_request(base: str, key: str, method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
@@ -975,8 +1097,12 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     # The worker's own real turn: one bounded first message through the
     # composer. The reply asks for real generated text so the Run stays
     # inspectable; the stop below preempts it before it can finish.
-    worker_message = ("Trial activity step. Write a 60-word story about a lighthouse, then reply "
-                      "with exactly WORK-OK on the last line. Do not create subtasks.")
+    # The generated text keeps the real Run alive long enough to hold the
+    # temporal motion windows below (explicitly labeled prolongation through
+    # the real Run owner; the stop below still preempts it).
+    worker_message = ("Trial activity step. Write a 60-word story about a lighthouse, then a second "
+                      "60-word paragraph about the sea, then reply with exactly WORK-OK on the last "
+                      "line. Do not create subtasks.")
     await open_task_tab(cdp, sid, "chat")
     await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10, label="worker composer")
     await evaluate(cdp, sid,
@@ -1039,6 +1165,102 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                        await screenshot(cdp, sid, results, "s14b-fail"))
         results.record("s14c-activity-geometry", False, "skipped: no running row observed", None)
 
+    # --- Temporal motion proof on the live cues (the user-restored animation) ---
+    # The worker row's spinner and the root row's delegated gear are genuinely
+    # visible on a real Run here (never a painted fake row). Each window is
+    # verdict-checked by motion_timeline_verdict; see that helper for what
+    # counts as continuous motion versus constant restarts. The window runs
+    # unemulated, then under emulated prefers-reduced-motion (the user-restored
+    # behavior: the cues keep rotating under reduce too, while the pulse cues
+    # stay stopped), then after an ordinary mid-run reload.
+    spin_el = f"spinner-{worker_id}"
+    gear_el = f"worker-indicator-{root_id}"
+    run_label = f"run {str(active_run_id)[:8]}" if active_run_id else "run already terminal"
+
+    async def motion_pass(min_span: float, intervals: list[float] | None = None) -> dict[str, tuple[bool, str]]:
+        samples = await sample_motion_timeline(cdp, sid, spin_el, gear_el, intervals or MOTION_INTERVALS_S)
+        return {kind: motion_timeline_verdict(samples, kind, min_span) for kind in ("spinner", "gear")}
+
+    try:
+        desktop_verdicts = await motion_pass(3.5)
+        frame_rect = await evaluate(cdp, sid, f"""
+            (() => {{
+              const row = document.getElementById('tree-node-{worker_id}');
+              if (!row) return null;
+              row.scrollIntoView({{block: 'nearest'}});
+              const r = row.getBoundingClientRect();
+              return {{x: Math.max(0, r.x), y: Math.max(0, r.y),
+                      width: Math.min(r.width, 340), height: r.height}};
+            }})()""")
+        frame_names: list[str] = []
+        if frame_rect:
+            for i in range(6):
+                shot = await cdp.send("Page.captureScreenshot",
+                                      {"format": "png", "clip": dict(frame_rect, scale=3)},
+                                      session_id=sid)
+                fname = f"s14g-motion-frame-{i}.png"
+                (results.evidence_dir / fname).write_bytes(base64.b64decode(shot["data"]))
+                frame_names.append(fname)
+                await asyncio.sleep(0.15)
+        results.record(
+            "s14g-motion-timeline-desktop",
+            all(ok for ok, _ in desktop_verdicts.values()),
+            f"{run_label}: " + "; ".join(detail for _, detail in desktop_verdicts.values())
+            + f"; frames={frame_names}",
+            await screenshot(cdp, sid, results, "s14g-motion-desktop"))
+
+        await cdp.send("Emulation.setEmulatedMedia",
+                       {"features": [{"name": "prefers-reduced-motion", "value": "reduce"}]},
+                       session_id=sid)
+        await asyncio.sleep(0.3)
+        reduced_verdicts = await motion_pass(3.5)
+        reduced_scoped = await evaluate(cdp, sid, f"""
+            (() => {{
+              const row = document.getElementById('tree-node-{worker_id}');
+              if (!row) return null;
+              const dot = row.querySelector('span[id^="unread-"]');
+              const meta = row.querySelector('.tree-meta-row');
+              const work = meta && meta.children[1] ? meta.children[1] : null;
+              const badge = work && work.firstElementChild;
+              return {{unreadDot: dot ? getComputedStyle(dot).animationName : null,
+                       badgeDot: badge ? getComputedStyle(badge).animationName : null}};
+            }})()""")
+        await cdp.send("Emulation.setEmulatedMedia", {"features": []}, session_id=sid)
+        reduced_ok = (all(ok for ok, _ in reduced_verdicts.values())
+                      and bool(reduced_scoped)
+                      and reduced_scoped.get("unreadDot") == "none"
+                      and reduced_scoped.get("badgeDot") == "none")
+        results.record(
+            "s14h-motion-timeline-reduced-motion", reduced_ok,
+            f"{run_label} under prefers-reduced-motion: reduce: "
+            + "; ".join(detail for _, detail in reduced_verdicts.values())
+            + f"; pulse cues under reduce: {reduced_scoped}",
+            await screenshot(cdp, sid, results, "s14h-motion-reduced"))
+
+        # Ordinary refresh mid-run: a real reload re-renders the tree from
+        # server facts over the reconnect path; the same live Run must still
+        # animate afterwards (launch through ongoing work across a refresh).
+        await cdp.send("Page.reload", {}, session_id=sid)
+        await wait_for(cdp, sid,
+                       f"!!document.getElementById('tree-node-{worker_id}')"
+                       f" && !document.getElementById('spinner-{worker_id}')"
+                       ".classList.contains('hidden')",
+                       timeout=45, label="live spinner re-rendered after reload")
+        await asyncio.sleep(0.3)
+        reload_verdicts = await motion_pass(2.0, RELOAD_INTERVALS_S)
+        results.record(
+            "s14i-motion-timeline-after-reload",
+            all(ok for ok, _ in reload_verdicts.values()),
+            f"{run_label} across an ordinary mid-run reload: "
+            + "; ".join(detail for _, detail in reload_verdicts.values()),
+            await screenshot(cdp, sid, results, "s14i-motion-after-reload"))
+    except (TimeoutError, RuntimeError) as exc:
+        results.record("s14g-motion-timeline-desktop", False, f"{run_label}: {str(exc)[:280]}", None)
+        results.record("s14h-motion-timeline-reduced-motion", False,
+                       "skipped: the desktop window failed", None)
+        results.record("s14i-motion-timeline-after-reload", False,
+                       "skipped: the desktop window failed", None)
+
     # Narrow viewport: the same live cues at 390px, names still readable.
     await cdp.send("Emulation.setDeviceMetricsOverride",
                    {"width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": True},
@@ -1073,6 +1295,17 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                        f"root gear={None if narrow_root is None else narrow_root.get('gear')} "
                        f"readability={narrow_readability}",
                        await screenshot(cdp, sid, results, "s14d-during-narrow"))
+
+    # The same live cues keep their timeline at the narrow viewport too.
+    try:
+        narrow_verdicts = await motion_pass(3.5)
+        results.record(
+            "s14j-motion-timeline-narrow",
+            all(ok for ok, _ in narrow_verdicts.values()),
+            f"{run_label} at 390px: " + "; ".join(detail for _, detail in narrow_verdicts.values()),
+            await screenshot(cdp, sid, results, "s14j-motion-narrow"))
+    except (TimeoutError, RuntimeError) as exc:
+        results.record("s14j-motion-timeline-narrow", False, f"{run_label}: {str(exc)[:280]}", None)
 
     # The real stop: durable request, signal, observed exit -> interrupted. The
     # bounded turn may finish first (small fast model); then the clearing
@@ -1184,11 +1417,14 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         results.record("s15b-spinner-hides-unread", False, str(exc)[:300],
                        await screenshot_tolerant(sid, "s15b-fail"))
 
-    # Reduced motion: with the OS preference emulated every activity animation
-    # in these rows stops (spinner, delegated gear, running badge pulse, unread
-    # dot pulse); without the emulation the same elements really animate. The
-    # badge pulse only exists while the row runs, so its unemulated value is
-    # accepted as pulse-or-idle (the label decides), never as a silent skip.
+    # Reduced-motion scope after the user's icon-motion correction: with the
+    # OS preference emulated the running badge pulse and the unread dot pulse
+    # stop, while the spinner and the delegated gear keep their original
+    # rotation (the temporal motion proof under reduce lives in S14 on
+    # genuinely visible cues; this row-level read pins the computed cascade on
+    # a second real run). The badge pulse only exists while the row runs, so
+    # its unemulated value is accepted as pulse-or-idle (the label decides),
+    # never as a silent skip.
     probe_template = """
         (() => {
           const out = {};
@@ -1230,9 +1466,10 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                              .replace("__UNREAD__", rapid_root_id)
                              .replace("__GEAR__", rapid_root_id))
     await cdp.send("Emulation.setEmulatedMedia", {"features": []}, session_id=sid)
-    anim_values = [v for k, v in (reduced or {}).items() if k != "spinLabel"]
-    results.record("s15h-reduced-motion-animations-stopped",
-                   bool(anim_values) and all(v == "none" for v in anim_values),
+    reduced_ok = (bool(reduced) and reduced.get("spinner") == "spin" and reduced.get("gear") == "spin"
+                  and reduced.get("unreadDot") == "none" and reduced.get("badgeDot") == "none")
+    results.record("s15h-reduced-motion-spinners-keep-motion-pulses-stop",
+                   reduced_ok,
                    f"computed animations under prefers-reduced-motion: reduce -> {reduced}",
                    await screenshot_tolerant(sid, "s15h-reduced-motion"))
 
@@ -1252,12 +1489,18 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         await wait_row_activity(cdp, sid, fresh_root_id, {"spinner": False, "unread": True}, 90,
                                 "trial root idle with its unread dot after the summary landed")
         one_state = await tree_row_activity(cdp, sid, fresh_root_id)
+        # Terminal transition of the activity cue: the spinner is gone and the
+        # unread dot is the row's live pulse again.
+        dot_anim = await evaluate(cdp, sid,
+                                  f"(() => {{ const d = document.getElementById('unread-{fresh_root_id}');"
+                                  " return d ? getComputedStyle(d).animationName : null; })()")
         results.record("s15c-unread-dot-after-turn",
                        bool(one_run and one_run.get("state") == "success"
-                            and "idle" in one_state.get("label", "")),
+                            and "idle" in one_state.get("label", "") and dot_anim == "pulse-dot"),
                        f"turn run {str(one_run and one_run.get('id'))[:8]} "
                        f"({one_run and one_run.get('state')}): the summary writer marked the "
-                       f"session unread and the idle row shows the dot ({one_state.get('label', '')[:32]!r})",
+                       f"session unread and the idle row shows the dot ({one_state.get('label', '')[:32]!r}, "
+                       f"dot animation {dot_anim!r})",
                        await screenshot(cdp, sid, results, "s15c-unread"))
     except TimeoutError as exc:
         results.record("s15c-unread-dot-after-turn", False,

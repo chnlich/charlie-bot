@@ -4,17 +4,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import (
-  BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
-  CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
-  FLAG_LIKE_PROMPT,
-  LITELLM_503_ERROR_MESSAGE,
-  LITELLM_FEEDBACK_BANNER_STDERR,
-  RUNS_READ_PID_STAT_PATCH_TARGET,
-  assistant_text_event,
-  backend_option,
-  build_cli_backend,
-  stub_credentials,
-  stub_subprocess_spawn,
+    BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
+    CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
+    FLAG_LIKE_PROMPT,
+    LITELLM_503_ERROR_MESSAGE,
+    LITELLM_FEEDBACK_BANNER_STDERR,
+    RUNS_READ_PID_STAT_PATCH_TARGET,
+    assistant_text_event,
+    backend_option,
+    build_cli_backend,
+    stub_credentials,
+    stub_subprocess_spawn,
 )
 from pydantic import ValidationError
 
@@ -120,8 +120,7 @@ def test_translate_failure_stream_preserves_error_message(monkeypatch: pytest.Mo
   ]
 
 
-def test_translated_error_event_feeds_the_end_of_run_hint_selection(
-    monkeypatch: pytest.MonkeyPatch) -> None:
+def test_translated_error_event_feeds_the_end_of_run_hint_selection(monkeypatch: pytest.MonkeyPatch) -> None:
   """The Gemini-503 adaptation, in-process: the CLC backend's raw error row
   translates to exactly the ET.ERROR event the hint selection reads, and the
   selection prefers it over the stderr help banner."""

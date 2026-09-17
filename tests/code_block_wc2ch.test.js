@@ -87,9 +87,13 @@ function textContent(html) {
 
 function unwrapForBaseline(context) {
   // Global lookup at call time: codeBlockHtml and the flush re-read
-  // wrapWideChars from the context, so an identity stub reconstructs
-  // today's (pre-change) bytes for comparison.
+  // wrapWideChars from the context, so an identity stub reconstructs the
+  // unwrapped bytes for comparison. wrapWideCharsCached consults the stub
+  // only on a miss, so the wrap memo clears with the stub — a parse already
+  // served before the swap would otherwise ride its cached bytes and the
+  // comparison would pin parse determinism instead of the wrap.
   context.wrapWideChars = (html) => html;
+  context.wrapWideCharsCache.clear();
 }
 
 test('markdown-renderer.js parses whole with the inline W/F range table', async () => {

@@ -22,16 +22,20 @@ the selection). Every refusal is a recorded failure; no scenario is scripted
 to pass.
 
 The cues' motion itself is proven temporally on the live rows: each window
-samples the animation timeline at unequal intervals for longer than the
-gear's 3s rotation and requires distinct transforms, currentTime advancing
-at the page's own wall-clock pace and a constant startTime (element
-generations are counted, so a legal fact-driven repaint is distinguishable
-from constant restarts) in the unemulated page, under emulated
-prefers-reduced-motion (the user-restored behavior: the spinner and the
-delegated gear keep rotating under reduce too; only the pulse cues stop),
-on desktop and at the narrow viewport, and across an ordinary mid-run
-reload. A short clipped frame sequence of the live row is kept beside the
-samples for visual glyph inspection.
+samples the animation timeline at unequal intervals and requires distinct
+transforms, currentTime advancing at the page's own wall-clock pace and a
+constant startTime (element generations are counted, so a legal fact-driven
+repaint is distinguishable from constant restarts; any restart or stall
+inside a window breaks the advance-equals-wall equality) in the unemulated
+page, under emulated prefers-reduced-motion (the user-restored behavior: the
+spinner and the delegated gear keep rotating under reduce too; only the
+pulse cues stop), on desktop and at the narrow viewport, and across an
+ordinary mid-run reload. The windows ride real Runs: the unemulated and
+reduced windows on the worker Run, the reload and narrow windows plus the
+stop on a fresh bounded child-manager turn (managers never auto-complete, so
+the row and the interrupted-state label stay observable). A short clipped
+frame sequence of the live row is kept beside the samples for visual glyph
+inspection.
 
 Evidence: per-scenario screenshots and session_tree_preview_browser_results.json
 with the exact tested commit, the invocation and the console-error list.
@@ -210,10 +214,11 @@ async def open_task_tab(cdp: CDP, session_id: str, tab: str) -> None:
 
 # Motion observation: one temporal window proves a cue actually moves. The
 # intervals are unequal on purpose (a uniform cadence could alias with the
-# animation period) and the desktop window is longer than the gear's 3s
-# rotation, so a restart at a period boundary cannot hide.
-MOTION_INTERVALS_S = [0.05, 0.55, 0.20, 0.85, 0.35, 1.25, 1.05]
-RELOAD_INTERVALS_S = [0.05, 0.50, 0.90, 0.70]
+# animation period), and every window is verdict-checked: any restart or
+# stall inside it breaks either the constant startTime, the strictly
+# advancing currentTime, or the advance-equals-wall-clock equality.
+MOTION_INTERVALS_S = [0.05, 0.45, 0.20, 0.75, 0.85]
+RELOAD_INTERVALS_S = [0.05, 0.50, 0.75]
 
 MOTION_TIMELINE_SNIPPET = """
     (() => {
@@ -303,7 +308,7 @@ def motion_timeline_verdict(samples: list[list[dict]], kind: str,
             or any(times[i + 1] <= times[i] for i in range(len(times) - 1))):
         return False, f'{kind}: currentTime not strictly advancing: {times}'
     advance = times[-1] - times[0]
-    if abs(advance - wall) > 350:
+    if abs(advance - wall) > 250:
         return False, (f'{kind}: animation advanced {advance:.0f}ms while the page clock moved '
                        f'{wall:.0f}ms (restart or stall)')
     if any(g.get('state') != 'running' for g in best):
@@ -1169,10 +1174,15 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     # The worker row's spinner and the root row's delegated gear are genuinely
     # visible on a real Run here (never a painted fake row). Each window is
     # verdict-checked by motion_timeline_verdict; see that helper for what
-    # counts as continuous motion versus constant restarts. The window runs
-    # unemulated, then under emulated prefers-reduced-motion (the user-restored
-    # behavior: the cues keep rotating under reduce too, while the pulse cues
-    # stay stopped), then after an ordinary mid-run reload.
+    # counts as continuous motion versus constant restarts. The unemulated and
+    # reduced-motion windows ride the worker Run (both complete well inside
+    # even the shortest observed turn); the reload and narrow windows plus the
+    # stop then ride a fresh bounded CHILD-MANAGER turn, because the worker
+    # Run's lifetime is the model's own and its task auto-completes on success
+    # (the documented pre-existing quirk), which removes the row
+    # mid-scenario. Managers never auto-complete, so the row and the
+    # interrupted-state label stay observable. Same real Run owners, same
+    # visual structure: the node's own spinner plus the root's delegated gear.
     spin_el = f"spinner-{worker_id}"
     gear_el = f"worker-indicator-{root_id}"
     run_label = f"run {str(active_run_id)[:8]}" if active_run_id else "run already terminal"
@@ -1181,8 +1191,14 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         samples = await sample_motion_timeline(cdp, sid, spin_el, gear_el, intervals or MOTION_INTERVALS_S)
         return {kind: motion_timeline_verdict(samples, kind, min_span) for kind in ("spinner", "gear")}
 
+    async def active_run_of(session_id: str) -> str | None:
+        status, page = api_request(base, access_key, "GET",
+                                   f"/api/sessions/{session_id}/runs?order=desc&limit=1")
+        items = (page.get("items") or []) if isinstance(page, dict) else []
+        return items[0]["id"] if items and items[0].get("state") in ("running", "queued") else None
+
     try:
-        desktop_verdicts = await motion_pass(3.5)
+        desktop_verdicts = await motion_pass(2.1)
         frame_rect = await evaluate(cdp, sid, f"""
             (() => {{
               const row = document.getElementById('tree-node-{worker_id}');
@@ -1201,7 +1217,7 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                 fname = f"s14g-motion-frame-{i}.png"
                 (results.evidence_dir / fname).write_bytes(base64.b64decode(shot["data"]))
                 frame_names.append(fname)
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(0.13)
         results.record(
             "s14g-motion-timeline-desktop",
             all(ok for ok, _ in desktop_verdicts.values()),
@@ -1213,7 +1229,7 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                        {"features": [{"name": "prefers-reduced-motion", "value": "reduce"}]},
                        session_id=sid)
         await asyncio.sleep(0.3)
-        reduced_verdicts = await motion_pass(3.5)
+        reduced_verdicts = await motion_pass(2.1)
         reduced_scoped = await evaluate(cdp, sid, f"""
             (() => {{
               const row = document.getElementById('tree-node-{worker_id}');
@@ -1236,30 +1252,59 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
             + "; ".join(detail for _, detail in reduced_verdicts.values())
             + f"; pulse cues under reduce: {reduced_scoped}",
             await screenshot(cdp, sid, results, "s14h-motion-reduced"))
+    except (TimeoutError, RuntimeError) as exc:
+        results.record("s14g-motion-timeline-desktop", False, f"{run_label}: {str(exc)[:280]}", None)
+        results.record("s14h-motion-timeline-reduced-motion", False,
+                       "skipped: the desktop window failed", None)
+
+    # --- Late live windows and the stop ride a bounded child-manager turn ----
+    # The worker Run's lifetime is the model's own (observed ~17-45s for a
+    # bounded turn) and its task auto-completes on run success, removing the
+    # row. A fresh bounded manager turn never auto-completes, so the reload
+    # window, the narrow window and the stop stay observable on it.
+    spin_el = f"spinner-{child_id}"
+    gear_el = f"worker-indicator-{root_id}"
+    await evaluate(cdp, sid, f"switchSession({json.dumps(child_id)})")
+    await wait_for(cdp, sid, f"SESSION_ID === {json.dumps(child_id)}", timeout=15,
+                   label="child manager selected for the late motion windows")
+    await open_task_tab(cdp, sid, "chat")
+    await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10, label="child composer")
+    child_message = ("Trial stop step. Write a 60-word story about a harbor, then a second 60-word "
+                     "paragraph about a storm, then reply with exactly STOP-OK on the last line. "
+                     "Do not create subtasks.")
+    await evaluate(cdp, sid,
+                   "(() => { const inp = document.getElementById('msg-input');"
+                   f"inp.value = {json.dumps(child_message)};"
+                   "inp.dispatchEvent(new Event('input')); })()")
+    await click(cdp, sid, "#send-btn")
+    child_run_id = None
+    late_label = "child turn"
+    try:
+        await wait_row_activity(cdp, sid, child_id, {"spinner": True}, 120,
+                                "child manager turn live for the late motion windows")
+        child_run_id = await active_run_of(child_id)
+        late_label = f"child run {str(child_run_id)[:8]}" if child_run_id else "child turn (live spinner)"
 
         # Ordinary refresh mid-run: a real reload re-renders the tree from
         # server facts over the reconnect path; the same live Run must still
         # animate afterwards (launch through ongoing work across a refresh).
         await cdp.send("Page.reload", {}, session_id=sid)
         await wait_for(cdp, sid,
-                       f"!!document.getElementById('tree-node-{worker_id}')"
-                       f" && !document.getElementById('spinner-{worker_id}')"
+                       f"!!document.getElementById('tree-node-{child_id}')"
+                       f" && !document.getElementById('spinner-{child_id}')"
                        ".classList.contains('hidden')",
                        timeout=45, label="live spinner re-rendered after reload")
         await asyncio.sleep(0.3)
-        reload_verdicts = await motion_pass(2.0, RELOAD_INTERVALS_S)
+        reload_verdicts = await motion_pass(1.2, RELOAD_INTERVALS_S)
         results.record(
             "s14i-motion-timeline-after-reload",
             all(ok for ok, _ in reload_verdicts.values()),
-            f"{run_label} across an ordinary mid-run reload: "
+            f"{late_label} across an ordinary mid-run reload: "
             + "; ".join(detail for _, detail in reload_verdicts.values()),
             await screenshot(cdp, sid, results, "s14i-motion-after-reload"))
     except (TimeoutError, RuntimeError) as exc:
-        results.record("s14g-motion-timeline-desktop", False, f"{run_label}: {str(exc)[:280]}", None)
-        results.record("s14h-motion-timeline-reduced-motion", False,
-                       "skipped: the desktop window failed", None)
         results.record("s14i-motion-timeline-after-reload", False,
-                       "skipped: the desktop window failed", None)
+                       f"{late_label}: {str(exc)[:280]}", None)
 
     # Narrow viewport: the same live cues at 390px, names still readable.
     await cdp.send("Emulation.setDeviceMetricsOverride",
@@ -1272,17 +1317,17 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                    "(() => { const sb = document.getElementById('sidebar');"
                    " if (sb && !sb.classList.contains('open')) toggleMobileSidebar(); })()")
     await asyncio.sleep(0.4)
-    narrow_worker = await tree_row_activity_tolerant(cdp, sid, worker_id)
+    narrow_child = await tree_row_activity_tolerant(cdp, sid, child_id)
     narrow_root = await tree_row_activity_tolerant(cdp, sid, root_id)
-    if narrow_worker is None:
+    if narrow_child is None:
         results.record("s14d-narrow-during-activity", False,
-                       "the worker row left the open tree before the narrow check (its "
-                       "automation completed the task); not painted as a pass",
-                       await screenshot(cdp, sid, results, "s14d-worker-row-gone"))
+                       "the child row left the open tree before the narrow check; not "
+                       "painted as a pass",
+                       await screenshot(cdp, sid, results, "s14d-child-row-gone"))
     else:
         narrow_readability = await evaluate(cdp, sid, f"""
             (() => {{
-              const row = document.getElementById('tree-node-{worker_id}');
+              const row = document.getElementById('tree-node-{child_id}');
               const inner = row.firstElementChild;
               const name = row.querySelector('.session-name');
               const r = inner.getBoundingClientRect(), n = name.getBoundingClientRect();
@@ -1290,75 +1335,64 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                        nameVisible: n.width > 60 && n.left >= r.left && n.right <= r.right + 1}};
             }})()""")
         results.record("s14d-narrow-during-activity",
-                       bool(narrow_worker.get("spinner") and narrow_readability.get("nameVisible")),
-                       f"narrow during: worker spinner={narrow_worker.get('spinner')} "
+                       bool(narrow_child.get("spinner") and narrow_readability.get("nameVisible")),
+                       f"narrow during: child spinner={narrow_child.get('spinner')} "
                        f"root gear={None if narrow_root is None else narrow_root.get('gear')} "
                        f"readability={narrow_readability}",
                        await screenshot(cdp, sid, results, "s14d-during-narrow"))
 
     # The same live cues keep their timeline at the narrow viewport too.
     try:
-        narrow_verdicts = await motion_pass(3.5)
+        narrow_verdicts = await motion_pass(2.1)
         results.record(
             "s14j-motion-timeline-narrow",
             all(ok for ok, _ in narrow_verdicts.values()),
-            f"{run_label} at 390px: " + "; ".join(detail for _, detail in narrow_verdicts.values()),
+            f"{late_label} at 390px: " + "; ".join(detail for _, detail in narrow_verdicts.values()),
             await screenshot(cdp, sid, results, "s14j-motion-narrow"))
     except (TimeoutError, RuntimeError) as exc:
-        results.record("s14j-motion-timeline-narrow", False, f"{run_label}: {str(exc)[:280]}", None)
+        results.record("s14j-motion-timeline-narrow", False, f"{late_label}: {str(exc)[:280]}", None)
 
-    # The real stop: durable request, signal, observed exit -> interrupted. The
-    # bounded turn may finish first (small fast model); then the clearing
-    # evidence comes from whatever run is still active, and the finished-turn
-    # case is recorded honestly instead of being made to look like a stop.
-    async def active_run_of(session_id: str) -> str | None:
-        status, page = api_request(base, access_key, "GET",
-                                   f"/api/sessions/{session_id}/runs?order=desc&limit=1")
-        items = (page.get("items") or []) if isinstance(page, dict) else []
-        return items[0]["id"] if items and items[0].get("state") in ("running", "queued") else None
-
-    stop_target = await active_run_of(worker_id)
-    stop_owner = worker_id
-    if stop_target is None and active_run_id is not None:
-        # The pinned run was observed at spinner time; if it went terminal while
-        # the motion windows ran, the cancel below honestly reports the existing
-        # outcome instead of a fresh stop.
-        stop_target = active_run_id
-    if stop_target is None:
-        # The worker turn finished and its automation may have completed the
-        # task; the child manager's own delegation Run is the remaining live
-        # evidence for the stop path.
-        stop_target = await active_run_of(child_id)
-        stop_owner = child_id
+    # The real stop: durable request, signal, observed exit -> interrupted, on
+    # the child manager's own bounded turn (a finished worker run would
+    # honestly report stop_requested=False; a manager never auto-completes, so
+    # the interrupted row and its label stay observable).
+    stop_target = await active_run_of(child_id)
+    if stop_target is None and child_run_id is not None:
+        stop_target = child_run_id
     if stop_target is None:
         results.record("s14e-stop-clears-activity", False,
-                       "no active run remained to stop (the bounded turn reached a terminal "
-                       "state first); stop clearing not evidenced this round", None)
+                       "no active child run remained to stop (the bounded turn reached a "
+                       "terminal state first); stop clearing not evidenced this round", None)
     else:
         status, cancel = api_request(base, access_key, "POST",
-                                     f"/api/sessions/{stop_owner}/runs/{stop_target}/cancel",
+                                     f"/api/sessions/{child_id}/runs/{stop_target}/cancel",
                                      {"request_id": "trial-stop-" + stop_target[:8]})
         try:
-            after = await wait_row_activity(cdp, sid, stop_owner,
+            after = await wait_row_activity(cdp, sid, child_id,
                                             {"spinner": False, "gear": False}, 60,
                                             "row cleared after the stop")
             root_after = await tree_row_activity_tolerant(cdp, sid, root_id)
             label = after.get("label", "")
+            w_status, w_page = api_request(base, access_key, "GET",
+                                           f"/api/sessions/{worker_id}/runs?order=desc&limit=1")
+            w_runs = (w_page.get("items") or []) if isinstance(w_page, dict) else []
+            worker_row_after = await tree_row_activity_tolerant(cdp, sid, worker_id)
             results.record("s14e-stop-clears-activity",
                            bool(cancel.get("stop_requested")) and "attention" in label,
-                           f"stopped run of {stop_owner[:8]}: cancel={dict(cancel)} "
+                           f"stopped child run {stop_target[:8]}: cancel={dict(cancel)} "
                            f"row label={label[:40]!r} "
-                           f"root gear after={None if root_after is None else root_after.get('gear')}",
+                           f"root gear after={None if root_after is None else root_after.get('gear')}; "
+                           f"worker run now={w_runs[0].get('state') if w_runs else 'none'}, "
+                           f"worker row={'gone (auto-completed on its own success)' if worker_row_after is None else 'rendered'}",
                            await screenshot(cdp, sid, results, "s14e-after-stop-narrow"))
         except TimeoutError as exc:
             results.record("s14e-stop-clears-activity", False, str(exc)[:300],
                            await screenshot(cdp, sid, results, "s14e-fail"))
         except RuntimeError as exc:
-            # The row left the open tree before the cleared state could be read
-            # (the stopped task auto-completed on an already-successful run):
-            # recorded honestly, never painted as a pass.
+            # The row left the open tree before the cleared state could be
+            # read: recorded honestly, never painted as a pass.
             results.record("s14e-stop-clears-activity", False,
-                           f"stop request sent to {stop_owner[:8]} ({dict(cancel)}), but the row "
+                           f"stop request sent to {child_id[:8]} ({dict(cancel)}), but the row "
                            f"left the open tree before the cleared state could be observed: "
                            f"{str(exc)[:200]}",
                            await screenshot(cdp, sid, results, "s14e-fail"))

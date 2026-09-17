@@ -93,9 +93,9 @@ async def test_unresolvable_backend_resolution_raises(
 ) -> None:
   """Every unresolvable backend resolution raises with its own reason and never substitutes:
   a session pinned to an id config no longer defines (e.g. renamed from claude-opus-4.6 to
-  claude-opus-4.7; the second configured option is the substitute being refused), an empty
-  backends.options, an explicit --backend typo, and a selected option whose type needs a
-  model it does not declare."""
+  claude-opus-4.7; the refusal names backends.options[0] as the substitute it refuses even
+  with a second option configured), an empty backends.options, an explicit --backend typo,
+  and a selected option whose type needs a model it does not declare."""
   cfg = _build_cfg(options)
   session = SessionMetadata(name="s", backend=session_backend)
   mgr = _mock_session_mgr(session)

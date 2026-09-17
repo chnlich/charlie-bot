@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 import pytest
-from conftest import ROOT
+from conftest import ROOT, _pid_alive
 
 from src.core import process as core_process
 
@@ -54,14 +54,6 @@ asyncio.run(main())
 _DISAPPEAR_TIMEOUT = 2.0
 
 linux_only = pytest.mark.skipif(sys.platform != "linux", reason="PR_SET_PDEATHSIG is Linux-only")
-
-
-def _pid_alive(pid: int) -> bool:
-  try:
-    os.kill(pid, 0)
-  except ProcessLookupError:
-    return False
-  return True
 
 
 def _spawn_intermediate(tmp_path: Path, *, use_helper: bool) -> tuple[subprocess.Popen, int]:

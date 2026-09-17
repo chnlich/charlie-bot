@@ -889,7 +889,7 @@ def load_credentials() -> Credentials:
   ``credentials.<section>.<key>``. Section and key names are never validated:
   any name loads.
   """
-  path = charliebot_home_dir() / "credentials.yaml"
+  path = charliebot_home_dir() / CREDENTIALS_FILENAME
   data = load_yaml(path, default={})
   if data is None:
     data = {}
@@ -912,7 +912,7 @@ def load_credentials() -> Credentials:
 
 def _credentials_fingerprint() -> tuple[float, int]:
   """The reload cache key over ``credentials.yaml``: :func:`_file_fingerprint` on it."""
-  return _file_fingerprint("credentials.yaml")
+  return _file_fingerprint(CREDENTIALS_FILENAME)
 
 
 _credentials_cache = _HotReloadCache(

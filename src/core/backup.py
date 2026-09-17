@@ -60,7 +60,7 @@ def _parse_backup_date(name: str) -> datetime | None:
 def create_backup() -> Path:
   """Create a compressed backup of this profile's state directory.
 
-  Excludes: .git, credentials.yaml, sessions/*/threads, *.pyc, __pycache__.
+  Excludes: .git, .claude, credentials.yaml, sessions/*/threads, *.pyc, __pycache__.
 
   Returns:
     Path to the created archive.

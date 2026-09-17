@@ -45,3 +45,44 @@ test('deltas spaced past the cadence each paint at the leading edge', () => {
   assert.equal(h.frames.length, 4);
   assert.match(h.lastHtml(), /draft 3/);
 });
+
+test('a switch-shaped hide+re-show of the same draft reuses the parse state', () => {
+  // A line-cutting fake marked: lexer emits a space token per newline so
+  // streamSafeCut freezes cuts at line ends and the incremental path engages
+  // (the default fake's single paragraph token never cuts).
+  const cuttingMarked =
+    'globalThis.marked = { Renderer: function() { return {}; }, use() {}, ' +
+    'parse: (s) => s.split("\\n").filter(Boolean).map((l) => `<p>${l}</p>`).join(""), ' +
+    'lexer: (s) => s.split("\\n").flatMap((l) => l ? ' +
+    '[{ type: "paragraph", raw: l + "\\n", text: l }, { type: "space", raw: "\\n" }] : []), ' +
+    'parser: (tokens) => tokens.map((t) => t.type === "space" ? "" : `<p>${t.text}</p>`).join("") };';
+  const h0 = buildStreamHarness(cuttingMarked);
+  const h = { ...h0, frames: h0.stats().frames, lastHtml: () => h0.stats().frames.at(-1) || '' };
+  let parses = 0;
+  const realParse = h.context.marked.parse;
+  h.context.marked.parse = (s) => { parses += 1; return realParse(s); };
+  h.showStreaming({ content: 'one\ntwo\nthree\n' });
+  h.advance(250);
+  const parsesAfterTurn = parses;
+  // The switch shape: teardown hides the stream, the render re-shows the same
+  // pending draft past the coalesce window (the synchronous-paint branch).
+  h.context.hideStreaming();
+  h.advance(250);
+  h.showStreaming({ content: 'one\ntwo\nthree\n' });
+  h.context.hideStreaming();
+  h.advance(250);
+  h.showStreaming({ content: 'one\ntwo\nthree\nfour\n' });
+  assert.equal(parses, parsesAfterTurn,
+      'the re-shows re-parsed the draft instead of serving the frozen prefix');
+  assert.match(h.lastHtml(), /four/);
+});
+
+test('a hide followed by a different draft parses fresh', () => {
+  const h = loadUsage();
+  h.showStreaming({ content: 'first session draft' });
+  h.advance(250);
+  h.context.hideStreaming();
+  h.showStreaming({ content: 'other session draft' });
+  assert.match(h.lastHtml(), /other session draft/);
+  assert.ok(!h.lastHtml().includes('first session'), 'stale draft content leaked into the new stream');
+});

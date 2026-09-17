@@ -210,7 +210,7 @@ def _resolve_requested_backend(
     requested_backend: str | None,
     cfg: CharlieBotConfig,
     *,
-    fallback_backend: str | None = None,
+    fallback_backend: str | None,
 ) -> str:
   """Resolve a backend override with codex-family alias support.
 

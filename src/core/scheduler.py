@@ -533,7 +533,7 @@ class Scheduler:
       log_event: str,
       cfg: CharlieBotConfig,
       session_mgr: SessionManager,
-      require_review: bool = True,
+      require_review: bool,
       record_handle: bool = False,
       **log_extra: str,
   ) -> dict:

@@ -18,7 +18,6 @@ from urllib.parse import urlencode, urlparse
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from starlette.responses import Response
 
 from src.api.code_server import is_code_server_available
@@ -231,7 +230,22 @@ def _static_asset_version() -> str:
 
 
 router = APIRouter()
-templates = Jinja2Templates(directory=str(REPO_ROOT / "web" / "templates"))
+
+# jinja2 + fastapi.templating ride every page render (~35 ms of the M99 server
+# import floor) and no import-time path touches a template, so the engine
+# builds on first render (the #1647 plan_diff deferral shape); the test that
+# pins this is tests/test_cli_import_weight.py's server ban set.
+_templates_instance = None
+
+
+def _templates():
+  """The request-time template engine, built on first use and reused after."""
+  global _templates_instance
+  if _templates_instance is None:
+    from fastapi.templating import Jinja2Templates
+
+    _templates_instance = Jinja2Templates(directory=str(REPO_ROOT / "web" / "templates"))
+  return _templates_instance
 
 
 @router.get(AUTH_STATUS_PATH)
@@ -258,7 +272,7 @@ async def events_viewer(
   if not session:
     raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
 
-  return templates.TemplateResponse(
+  return _templates().TemplateResponse(
       request,
       "events_viewer.html",
       context={
@@ -308,7 +322,7 @@ async def perfetto_viewer(
   display_title = title or dir_path or inputs[0][0].rsplit("/", 1)[-1]
   is_merge = trace_url.startswith(PERFETTO_MERGED_PATH) and (len(inputs) > 1 or bool(slim))
 
-  return templates.TemplateResponse(
+  return _templates().TemplateResponse(
       request,
       "perfetto.html",
       context={
@@ -525,7 +539,7 @@ async def perfetto_merged(
 
 def _ncu_error_page(request: Request, message: str, status_code: int) -> HTMLResponse:
   """Render ncu.html with a clean error message and a 4xx status."""
-  return templates.TemplateResponse(
+  return _templates().TemplateResponse(
       request,
       "ncu.html",
       context={
@@ -567,7 +581,7 @@ async def ncu_viewer(
     return _ncu_error_page(request, str(exc), 422)
 
   download_url = FILE_SERVER_MOUNTS[0] + str(path)
-  return templates.TemplateResponse(
+  return _templates().TemplateResponse(
       request,
       "ncu.html",
       context={
@@ -700,7 +714,7 @@ async def token_usage_viewer(request: Request) -> HTMLResponse:
     # Only the last joiner to observe its own task still installed clears it; a joiner that
     # resumes after a newer task has already replaced it must not clobber that newer task.
     _token_usage_task = None
-  return templates.TemplateResponse(
+  return _templates().TemplateResponse(
       request,
       "token_usage.html",
       context=_token_usage_context(tally),
@@ -710,7 +724,7 @@ async def token_usage_viewer(request: Request) -> HTMLResponse:
 @router.get("/diff", response_class=HTMLResponse)
 async def diff_viewer(request: Request, cfg: CharlieBotConfig = Depends(get_config_on_loop)) -> HTMLResponse:
   """Render the GitHub-style diff viewer page."""
-  return templates.TemplateResponse(
+  return _templates().TemplateResponse(
       request,
       "diff.html",
       context={
@@ -738,7 +752,7 @@ async def home_page(request: Request, cfg: CharlieBotConfig = Depends(get_config
           "status": "up" if up else "down",
       } for service, up in zip(cfg.ui.home_services, statuses, strict=True)
   ]
-  return templates.TemplateResponse(
+  return _templates().TemplateResponse(
       request,
       "home.html",
       context={
@@ -800,7 +814,7 @@ async def index(
   active_backend_label = active_backend_opt.label if active_backend_opt else active_backend
   active_backend_type = active_backend_opt.type if active_backend_opt else ""
 
-  return templates.TemplateResponse(
+  return _templates().TemplateResponse(
       request,
       "index.html",
       context={

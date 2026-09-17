@@ -21,7 +21,13 @@ from src.agents.backends.pty_common import (
     tmux_session_name,
 )
 from src.api.deps import get_config_on_loop, get_thread_manager, get_trigger_manager
-from src.api.responses import FastJsonResponse, PreencodedJSONResponse, fast_json_bytes
+from src.api.responses import (
+    GZIP_RESPONSE_HEADERS,
+    FastJsonResponse,
+    PreencodedJSONResponse,
+    fast_json_bytes,
+    request_wants_gzip,
+)
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.log_once import LazyStructlogLogger
@@ -221,13 +227,13 @@ _detail_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_DETAIL_GZIP_MEMO_LIM
 async def _gzip_body_response(
     request: Request, body: bytes, headers: dict[str, str], memo: BoundedMemo[bytes, bytes]) -> Response:
   """Serve *body* plain or from its gzip memo (keyed on the bytes themselves)."""
-  if "gzip" not in request.headers.get("accept-encoding", ""):
+  if not request_wants_gzip(request):
     return PreencodedJSONResponse(body, headers=headers)
   gz = memo.get(body)
   if gz is None:
     gz = await asyncio.to_thread(gzip.compress, body, 1, mtime=0)
     memo.store(body, gz)
-  return PreencodedJSONResponse(gz, headers={**headers, "Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
+  return PreencodedJSONResponse(gz, headers={**headers, **GZIP_RESPONSE_HEADERS})
 
 
 # Polls between signature walks, per session. Every writer of a row-source

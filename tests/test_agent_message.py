@@ -120,21 +120,21 @@ def _payload(session_id: str = "caller", target: str = "target") -> dict[str, st
   return {"session_id": session_id, "target_session_id": target, "content": "status please"}
 
 
-def test_session_message_404_when_caller_missing() -> None:
-  session_mgr = RouteSessionManager({})
+@pytest.mark.parametrize(
+    "caller_present, expected_detail",
+    [
+        (False, "Session not found"),
+        (True, "Target session not found"),
+    ],
+    ids=["caller_missing", "target_missing"],
+)
+def test_session_message_404_when_session_missing(caller_present: bool, expected_detail: str) -> None:
+  sessions = {"caller": SessionMetadata(id="caller", name="Caller")} if caller_present else {}
+  session_mgr = RouteSessionManager(sessions)
   with make_internal_router_client(MagicMock(), session_mgr) as client:
     resp = client.post("/api/internal/session-message", json=_payload())
   assert resp.status_code == 404
-  assert resp.json()["detail"] == "Session not found"
-  assert not session_mgr.persisted
-
-
-def test_session_message_404_when_target_missing() -> None:
-  session_mgr = RouteSessionManager({"caller": SessionMetadata(id="caller", name="Caller")})
-  with make_internal_router_client(MagicMock(), session_mgr) as client:
-    resp = client.post("/api/internal/session-message", json=_payload())
-  assert resp.status_code == 404
-  assert resp.json()["detail"] == "Target session not found"
+  assert resp.json()["detail"] == expected_detail
   assert not session_mgr.persisted
 
 
@@ -294,16 +294,16 @@ def test_cli_session_send_reads_message_file(tmp_path: Path) -> None:
   assert post_mock.call_args[1]["json"]["content"] == "file content relay"
 
 
-def test_cli_session_send_rejects_message_and_file_together() -> None:
-  with patch("sys.argv", ["session", "send", "t", "--message", "m", "--file", "f"]), \
-       pytest.raises(SystemExit) as exc_info:
-    session_cli_main()
-  assert exc_info.value.code == 2
-
-
-def test_cli_session_send_requires_a_message_source() -> None:
-  with patch("sys.argv", ["session", "send", "t", "--session", "caller"]), \
-       pytest.raises(SystemExit) as exc_info:
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["session", "send", "t", "--message", "m", "--file", "f"],
+        ["session", "send", "t", "--session", "caller"],
+    ],
+    ids=["message_and_file_together", "no_message_source"],
+)
+def test_cli_session_send_usage_error(argv: list[str]) -> None:
+  with patch("sys.argv", argv), pytest.raises(SystemExit) as exc_info:
     session_cli_main()
   assert exc_info.value.code == 2
 

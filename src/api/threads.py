@@ -267,24 +267,41 @@ def _signature_from_stats(
   return tuple(sig)
 
 
-# Built list rows per session: metadata.json path -> (mtime_ns, size, row).
+# Built list rows per session: metadata.json path -> (mtime_ns, size, row, fragment).
 # _thread_list_item is a pure function of the parsed metadata and the parse
 # memo keys the same (mtime_ns, size) identity every atomic rename moves, so
 # an unchanged stat proves the stored row current and a marked rebuild rebuilds
-# only the moved files' rows. Rows are shared read-only into the body payload.
+# only the moved files' rows. Rows are shared read-only into the body payload,
+# and the fragment is the row's rendered JSON: the list body assembles from
+# fragments (the M72 files-listing row-memo shape) because a changed poll would
+# otherwise re-dump every unmoved row — 0.60 ms of stdlib dumps per rebuild on
+# the 339-row worst corpus against 0.01 ms of join.
 _THREAD_ROW_MEMO_LIMIT = 8
-_thread_row_memo: BoundedMemo[str, dict[str, tuple[int, int, dict]]] = BoundedMemo(_THREAD_ROW_MEMO_LIMIT)
+_thread_row_memo: BoundedMemo[str, dict[str, tuple[int, int, dict, bytes]]] = BoundedMemo(_THREAD_ROW_MEMO_LIMIT)
+
+# The one home of the list body's JSON options. The encoder's per-element text
+# is context-free, so a row's standalone rendering is byte-identical to its
+# rendering inside the whole-body array dump (the _EventBatcher property in
+# trace_merge); the joined fragments and the whole dump are pinned equal by
+# test_list_body_splice_matches_whole_dump.
+_ROW_DUMPS_OPTS = {"ensure_ascii": False, "allow_nan": False, "separators": (",", ":")}
+
+
+def _row_fragment(row: dict) -> bytes:
+  """Render one row's JSON fragment with the list body's options."""
+  return json.dumps(row, **_ROW_DUMPS_OPTS).encode("utf-8")
 
 
 def _thread_list_items(
-    session_id: str, thread_pairs: list[tuple[str, os.stat_result]], metas: list[ThreadMetadata | None]) -> list[dict]:
-  """List rows for the walked pairs, served from the row memo where the file stands.
+    session_id: str, thread_pairs: list[tuple[str, os.stat_result]],
+    metas: list[ThreadMetadata | None]) -> list[tuple[dict, bytes]]:
+  """List (row, fragment) pairs for the walked pairs, served from the row memo where the file stands.
 
   *metas* aligns position-for-position with *thread_pairs*; a ``None`` entry is
   the parse-miss verdict for a file that vanished between the walk and its
   read, so it gets no row — exactly as if the walk's stat had failed.
   """
-  refreshed: dict[str, tuple[int, int, dict]] = {}
+  refreshed: dict[str, tuple[int, int, dict, bytes]] = {}
   items = []
   for (meta_path, st), meta in zip(thread_pairs, metas, strict=True):
     if meta is None:
@@ -292,11 +309,12 @@ def _thread_list_items(
     hit = _thread_row_memo.get(session_id)
     cached = hit.get(meta_path) if hit is not None else None
     if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-      item = cached[2]
+      item, fragment = cached[2], cached[3]
     else:
       item = _thread_list_item(meta)
-    refreshed[meta_path] = (st.st_mtime_ns, st.st_size, item)
-    items.append(item)
+      fragment = _row_fragment(item)
+    refreshed[meta_path] = (st.st_mtime_ns, st.st_size, item, fragment)
+    items.append((item, fragment))
   _thread_row_memo.store(session_id, refreshed)
   return items
 
@@ -321,11 +339,20 @@ def _trigger_list_item(tr: PendingTrigger) -> dict:
   }
 
 
-def _list_body(items: list[dict], triggers: list[PendingTrigger]) -> bytes:
-  """The list body from thread rows plus trigger rows: the combined sort, then the dumps."""
-  combined = items + [_trigger_list_item(tr) for tr in triggers]
-  combined.sort(key=lambda x: x["created_at"], reverse=True)
-  return json.dumps(combined, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+def _list_body(rows: list[tuple[dict, bytes]], triggers: list[PendingTrigger]) -> bytes:
+  """The list body from (row, fragment) pairs plus trigger rows: the combined sort, then the fragment join.
+
+  The body is the fragments joined inside array brackets, not a whole-array
+  dumps — a changed poll would otherwise re-encode every unmoved row (the
+  encoder's per-element text is context-free, so the join is byte-identical;
+  pinned by test_list_body_splice_matches_whole_dump).
+  """
+  combined = list(rows)
+  for tr in triggers:
+    item = _trigger_list_item(tr)
+    combined.append((item, _row_fragment(item)))
+  combined.sort(key=lambda pair: pair[0]["created_at"], reverse=True)
+  return b"[" + b",".join(fragment for _item, fragment in combined) + b"]"
 
 
 async def _marked_rebuild(
@@ -349,7 +376,7 @@ async def _marked_rebuild(
     return None
   threads_prefix = str(session_dir / THREADS_DIR_NAME) + "/"
   sig_entries = {path: (mtime, size) for path, mtime, size in hit[0]}
-  refreshed = dict(rows)
+  refreshed: dict[str, tuple[int, int, dict, bytes]] = dict(rows)
   moved = False
   for path in marked:
     try:
@@ -374,7 +401,8 @@ async def _marked_rebuild(
       refreshed.pop(path, None)
       moved = True
       continue
-    refreshed[path] = (st.st_mtime_ns, st.st_size, _thread_list_item(meta))
+    item = _thread_list_item(meta)
+    refreshed[path] = (st.st_mtime_ns, st.st_size, item, _row_fragment(item))
     sig_entries[path] = (st.st_mtime_ns, st.st_size)
     moved = True
   sig = tuple(sorted((path, mtime, size) for path, (mtime, size) in sig_entries.items()))
@@ -384,7 +412,7 @@ async def _marked_rebuild(
     # stored body is current, serve it instead of rebuilding the same bytes.
     return hit
   triggers = await trigger_mgr.list_triggers(session_id)
-  body = _list_body([entry[2] for entry in refreshed.values()], triggers)
+  body = _list_body([(entry[2], entry[3]) for entry in refreshed.values()], triggers)
   etag_value = '"' + hashlib.sha1(body).hexdigest() + '"'
   return sig, body, etag_value
 
@@ -432,7 +460,7 @@ async def view_thread_rows(
     return thread_pairs, thread_mgr.list_threads_from_stats(thread_pairs)
 
   thread_pairs, metas = await asyncio.to_thread(walk_and_parse)
-  rows = _thread_list_items(session_id, thread_pairs, metas)
+  rows = [row for row, _fragment in _thread_list_items(session_id, thread_pairs, metas)]
   rows.sort(key=lambda row: row["created_at"], reverse=True)
   _view_rows_memo.store(session_id, rows)
   _view_rows_gate.mark_proven(session_id, rev)

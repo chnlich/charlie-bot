@@ -310,7 +310,7 @@ def test_list_body_sorts_thread_and_trigger_rows_by_one_epoch_ms_key(tmp_path: P
   mgr = ThreadManager(cfg)
   pairs = list(core_threads.iter_thread_meta_stats(str(threads_dir)))
   metas = mgr.list_threads_from_stats(iter(pairs))
-  thread_item = threads_api._thread_list_items(session_id, pairs, metas)[0]
+  thread_item, thread_fragment = threads_api._thread_list_items(session_id, pairs, metas)[0]
   trigger = PendingTrigger(
       session_id=session_id,
       fire_at=datetime.now(UTC) + timedelta(hours=1),
@@ -318,7 +318,7 @@ def test_list_body_sorts_thread_and_trigger_rows_by_one_epoch_ms_key(tmp_path: P
       watch_targets=[],
   )
 
-  body = json.loads(threads_api._list_body([thread_item], [trigger]))
+  body = json.loads(threads_api._list_body([(thread_item, thread_fragment)], [trigger]))
 
   stamps = [row["created_at"] for row in body]
   assert stamps == sorted(stamps, reverse=True)
@@ -326,6 +326,78 @@ def test_list_body_sorts_thread_and_trigger_rows_by_one_epoch_ms_key(tmp_path: P
   trigger_row = next(row for row in body if row["type"] == "trigger")
   assert isinstance(trigger_row["fire_at"], int)
   assert trigger_row["fire_at"] == int(trigger.fire_at.timestamp() * 1000)
+
+
+def test_list_body_splice_matches_whole_dump() -> None:
+  """The joined per-row fragments are byte-identical to the whole-array dump they replaced.
+
+  The splice is only safe because the encoder's per-element text is context-free;
+  this pins that property for the list body's options across the row shapes the
+  payload carries (nested dicts, None, unicode, float timestamps, escapes).
+  """
+  rows: list[dict] = [
+      {
+          "type": "thread",
+          "id": "t1",
+          "description": "plain ascii",
+          "status": "running",
+          "created_at": 1700,
+          "completed_at": None,
+          "backend": "cc-claude"
+      },
+      {
+          "type": "thread",
+          "id": "t2",
+          "description": "üñïçødé 与中文 \"quoted\" back\\slash",
+          "status": "completed",
+          "created_at": 1699.5,
+          "completed_at": 1701,
+          "backend": "opencode",
+          "description_full_len": 42
+      },
+      {
+          "type": "trigger",
+          "id": "tr1",
+          "message": "multi\nline\ttab",
+          "status": "pending",
+          "fire_at": 1702,
+          "created_at": 1702
+      },
+      {
+          "type": "thread",
+          "id": "t3",
+          "description": "",
+          "status": "pending",
+          "created_at": 1698,
+          "completed_at": None,
+          "backend": None
+      },
+      {
+          "type": "thread",
+          "id": "t4",
+          "description": "nested",
+          "status": "running",
+          "created_at": 1697,
+          "completed_at": None,
+          "backend": "cc-claude",
+          "extra": {
+              "watch": ["a", "b"],
+              "deep": {
+                  "k": [1, {
+                      "x": None
+                  }]
+              }
+          }
+      },
+  ]
+  pairs = [(row, threads_api._row_fragment(row)) for row in rows]
+  trigger = PendingTrigger(
+      session_id="s", fire_at=datetime.now(UTC) + timedelta(hours=1), message="the trigger row", watch_targets=[])
+  spliced = threads_api._list_body(pairs, [trigger])
+  dicts = [pair[0] for pair in pairs] + [threads_api._trigger_list_item(trigger)]
+  dicts.sort(key=lambda row: row["created_at"], reverse=True)
+  whole = json.dumps(dicts, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+  assert spliced == whole
 
 
 def test_rebuild_tolerates_file_vanished_between_walk_and_read(tmp_path: Path) -> None:

@@ -1286,24 +1286,37 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     # bounded turn) and its task auto-completes on run success, removing the
     # row. A manager never auto-completes, so child-manager turns carry the
     # remaining windows and the stop; each window gets its own fresh bounded
-    # message so it starts seconds after a confirmed live spinner, and the
-    # post-reload wait self-heals onto whichever run is live after the reload
-    # (a message sent while a run is live queues and redrives).
+    # message, sent only while the node is idle (the composer's send button is
+    # disabled while the session's thinking indicator is active, and a click
+    # on it would be silently dropped), so every window starts seconds after a
+    # confirmed live spinner on a run that was launched for it.
     spin_el = f"spinner-{child_id}"
     gear_el = f"worker-indicator-{root_id}"
 
     async def send_child_message(message: str, label: str) -> None:
+        # The composer's send button is disabled while the session's thinking
+        # indicator is active, and a programmatic click on a disabled button is
+        # silently dropped (observed: a message sent while the node's own turn
+        # was live never shipped, and no run ever launched). Wait for the
+        # button to be enabled - the node's current turn finished - then send
+        # and verify the click fired by the message text landing in the chat
+        # tab before waiting on the run.
         await evaluate(cdp, sid, f"switchSession({json.dumps(child_id)})")
         await wait_for(cdp, sid, f"SESSION_ID === {json.dumps(child_id)}", timeout=15,
                        label=f"{label} child manager selected")
         await open_task_tab(cdp, sid, "chat")
         await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10,
                        label=f"{label} child composer")
+        await wait_for(cdp, sid, "!document.getElementById('send-btn').disabled", timeout=120,
+                       label=f"{label} send button enabled (node idle)")
         await evaluate(cdp, sid,
                        "(() => { const inp = document.getElementById('msg-input');"
                        f"inp.value = {json.dumps(message)};"
                        "inp.dispatchEvent(new Event('input')); })()")
         await click(cdp, sid, "#send-btn")
+        await wait_for(cdp, sid,
+                       f"document.getElementById('tab-chat').textContent.includes({json.dumps(message)})",
+                       timeout=15, label=f"{label} message clicked through to the chat tab")
 
     child_run_id = None
     late_label = "child turn"
@@ -1366,9 +1379,10 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     except (TimeoutError, RuntimeError) as exc:
         results.record("s14j-motion-timeline-narrow", False, f"{late_label}: {str(exc)[:280]}", None)
 
-    # Reload window on its own bounded message: the post-reload wait self-heals
-    # onto whichever run is live after the reload (a queued message redrives),
-    # so the window observes a genuinely live Run across the refresh.
+    # Reload window on its own bounded message: the message's run is already
+    # live when the reload lands, and the post-reload wait re-locks onto it
+    # (45s bound), so the window observes a genuinely live Run across the
+    # refresh.
     try:
         await send_child_message(
             "Trial reload step. Write a 60-word story about a storm, then reply with exactly "

@@ -857,31 +857,47 @@ async def test_read_loop_plan_returns_none_when_missing(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_improve_loop_rereads_edited_goal_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Editing goal.md mid-loop steers iteration N>1's worker prompt."""
+@pytest.mark.parametrize(
+    ("plan", "edited_name", "edited_body", "first_marker", "second_marker"),
+    [
+        pytest.param(None, "goal.md", "edited goal", "Goal: original goal", "Goal: edited goal", id="goal"),
+        pytest.param(
+            "1. initial lever",
+            "plan.md",
+            "2. edited lever",
+            "Plan:\n1. initial lever",
+            "Plan:\n2. edited lever",
+            id="plan"),
+    ],
+)
+async def test_run_improve_loop_rereads_edited_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, plan: str | None, edited_name: str, edited_body: str,
+    first_marker: str, second_marker: str) -> None:
+  """Editing goal.md or plan.md mid-loop steers iteration N>1's worker prompt."""
 
-  def edit_goal_after_iter1(request: SpawnRequest) -> None:
-    # Simulate the user editing the live goal between iterations.
+  def edit_file_after_iter1(request: SpawnRequest) -> None:
+    # Simulate the user editing the live file between iterations.
     if request.iteration_number == 1:
-      (Path(request.loop_dir) / "goal.md").write_text("edited goal")
+      (Path(request.loop_dir) / edited_name).write_text(edited_body)
 
   cfg, session_mgr, thread_mgr, descriptions = _description_rig(
-      tmp_path, monkeypatch, 2, on_spawn=edit_goal_after_iter1)
+      tmp_path, monkeypatch, 2, on_spawn=edit_file_after_iter1)
 
   await _run_loop(
-      session_id="edit-session",
+      session_id="edit-file-session",
       iterations=2,
       goal="original goal",
+      plan=plan,
       cfg=cfg,
       session_mgr=session_mgr,
       thread_mgr=thread_mgr,
   )
 
   assert len(descriptions) == 2
-  assert "Goal: original goal" in descriptions[0]
-  assert "Goal: edited goal" in descriptions[1]
+  assert first_marker in descriptions[0]
+  assert second_marker in descriptions[1]
   # state.json's goal field stays the startup snapshot.
-  state = await load_loop_state("edit-session", 1, cfg)
+  state = await load_loop_state("edit-file-session", 1, cfg)
   assert state is not None
   assert state.goal == "original goal"
 
@@ -960,32 +976,6 @@ async def test_run_improve_loop_works_without_plan_file(tmp_path: Path, monkeypa
   assert "Goal: original goal" in descriptions[0]
   assert "Plan:" not in descriptions[0]
   assert await read_loop_plan(cfg.sessions_dir / "no-plan-session" / "loops" / "1") is None
-
-
-@pytest.mark.asyncio
-async def test_run_improve_loop_rereads_edited_plan_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Editing plan.md mid-loop steers iteration N>1's worker prompt."""
-
-  def edit_plan_after_iter1(request: SpawnRequest) -> None:
-    if request.iteration_number == 1:
-      (Path(request.loop_dir) / "plan.md").write_text("2. edited lever")
-
-  cfg, session_mgr, thread_mgr, descriptions = _description_rig(
-      tmp_path, monkeypatch, 2, on_spawn=edit_plan_after_iter1)
-
-  await _run_loop(
-      session_id="edit-plan-session",
-      iterations=2,
-      goal="original goal",
-      plan="1. initial lever",
-      cfg=cfg,
-      session_mgr=session_mgr,
-      thread_mgr=thread_mgr,
-  )
-
-  assert len(descriptions) == 2
-  assert "Plan:\n1. initial lever" in descriptions[0]
-  assert "Plan:\n2. edited lever" in descriptions[1]
 
 
 @pytest.mark.asyncio

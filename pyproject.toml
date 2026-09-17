@@ -68,6 +68,10 @@ markers = [
 # UP046/UP047 stay out: yapf's pinned lib2to3 parser rejects PEP 695 type-parameter
 #   lists, which would make the whole tree unparseable to `yapf -r`
 #   (the same constraint src/core/process.py records on its TypeVar).
+# RUF100 stays out: its unused-noqa verdicts are false here. Every directive it flags
+#   suppresses a rule that fires the moment the directive is stripped — the facade
+#   re-export F401s, conftest's imports after the sys.path bootstrap, the PERF401 and
+#   A002 signature mirrors. Strip one and run `ruff check <file>` to re-check any of them.
 select = [
     "E4", "E7", "E9", "F", "I",
     "A001", "A002",

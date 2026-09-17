@@ -348,7 +348,7 @@ async def test_live_range_append_extends_memo_without_full_reparse(tmp_path: Pat
       self._inner.__enter__()
       return self
 
-    def __exit__(self, *args: Any, **kwargs: Any) -> bool:
+    def __exit__(self, *args: object, **kwargs: Any) -> bool:
       return bool(self._inner.__exit__(*args, **kwargs))
 
   real_open = open
@@ -454,7 +454,7 @@ class _CountingByteReader:
     self._inner.__enter__()
     return self
 
-  def __exit__(self, *args: Any, **kwargs: Any) -> bool:
+  def __exit__(self, *args: object, **kwargs: Any) -> bool:
     return bool(self._inner.__exit__(*args, **kwargs))
 
 

@@ -1,6 +1,6 @@
 """CLI script for master CC to start an iterative improvement loop.
 
-Called by the master Claude Code instance via its run_command tool:
+Called by the master Claude Code instance as a shell command:
 
   # --session is optional; the server-written CHARLIEBOT_SESSION_ID supplies it
   # in normal master use (see ``resolve_session_id``).
@@ -14,7 +14,7 @@ Called by the master Claude Code instance via its run_command tool:
 The CLI reads the goal file, optionally reads the plan file, and sends their
 content in the API payload. It posts to the server-side /api/internal/improve
 endpoint and returns immediately. The iteration loop runs as a background async
-task on the server. Master CC will be notified via _trigger_master when the loop
+task on the server. Master CC will be notified via trigger_master when the loop
 completes.
 """
 

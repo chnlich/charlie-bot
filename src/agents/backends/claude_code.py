@@ -149,7 +149,8 @@ def headless_claude_declared_window() -> tuple[int, int | None]:
   constant — because the host environment can change between calls.
 
   ``declared_window`` is the auto-compact window the CLI advertises. ``compact_point``
-  is ``declared_window − OUTPUT_RESERVE − CONTEXT_RESERVE`` (with the 433000 default
+  is ``declared_window − CLAUDE_COMPACT_OUTPUT_RESERVE − CLAUDE_COMPACT_CONTEXT_RESERVE``
+  (with the 433000 default
   this is 400000); the caller derives the real compaction point from the effective
   ``context_full`` (``min(model contextWindow, declared_window)``) using the same
   constants. Degrades loudly, never silently:

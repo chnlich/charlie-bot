@@ -28,6 +28,10 @@ log = LazyStructlogLogger()
 
 CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
 
+# The profile's secrets file, named once so the backup's exclusion
+# (src/core/backup.py) cannot drift from the loader's path.
+CREDENTIALS_FILENAME = "credentials.yaml"
+
 # Fixed house wall clock pinned by chart timestamps (src/api/pages.py), Slack timestamp
 # prefixes (src/core/slack_listener.py), worker-summary timestamps
 # (src/core/spawner_events.py), and the Saturday-1AM weekly-recycle anchor
@@ -546,7 +550,7 @@ class CharlieBotConfig(BaseModel):
   @property
   def credentials_file(self) -> Path:
     """The profile's credentials.yaml: the secrets split out of config.yaml."""
-    return self.charliebot_home / "credentials.yaml"
+    return self.charliebot_home / CREDENTIALS_FILENAME
 
   @property
   def config_d_dir(self) -> Path:
@@ -885,7 +889,7 @@ def load_credentials() -> Credentials:
   ``credentials.<section>.<key>``. Section and key names are never validated:
   any name loads.
   """
-  path = charliebot_home_dir() / "credentials.yaml"
+  path = charliebot_home_dir() / CREDENTIALS_FILENAME
   data = load_yaml(path, default={})
   if data is None:
     data = {}
@@ -908,7 +912,7 @@ def load_credentials() -> Credentials:
 
 def _credentials_fingerprint() -> tuple[float, int]:
   """The reload cache key over ``credentials.yaml``: :func:`_file_fingerprint` on it."""
-  return _file_fingerprint("credentials.yaml")
+  return _file_fingerprint(CREDENTIALS_FILENAME)
 
 
 _credentials_cache = _HotReloadCache(

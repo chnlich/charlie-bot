@@ -677,7 +677,7 @@ def test_api_base_required(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Image attachments: refusal without image_input, --image command assembly.
+# Image attachments: refusal on image_input: false, --image command assembly.
 # ---------------------------------------------------------------------------
 
 
@@ -714,9 +714,9 @@ async def _drive_run_halted_at_spawn_with_attachments(
 
 
 @pytest.mark.asyncio
-async def test_run_refuses_images_without_image_input(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """image_input unset + an image ref: exactly one error event, no spawn, no result."""
-  backend = _build_backend(monkeypatch, log_dir=tmp_path / "logs")
+async def test_run_refuses_images_with_image_input_false(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """image_input: false + an image ref: exactly one error event, no spawn, no result."""
+  backend = _build_backend(monkeypatch, image_input=False, log_dir=tmp_path / "logs")
   monkeypatch.setattr(RUNS_READ_PID_STAT_PATCH_TARGET, lambda pid: ("refusal-test-start", "R"))
   process = MagicMock()
   process.pid = 4242
@@ -737,7 +737,7 @@ async def test_run_refuses_images_without_image_input(monkeypatch: pytest.Monkey
 
   expected = (
       "refused: image attachments not sent — this endpoint declares no image input "
-      "(image_input not set): error-shot.png")
+      "(image_input: false): error-shot.png")
   assert events == [{"type": ET.ERROR, "message": expected, "content": expected}]
   # Nothing is sent: no subprocess spawn and no result event.
   assert spawn.await_count == 0

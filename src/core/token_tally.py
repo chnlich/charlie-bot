@@ -435,18 +435,19 @@ def _iter_jsonl_stats(
 
 
 # The charlie-bot walk's per-directory listing memo: dirpath -> ((mtime_ns, size),
-# [(path, is_dir, is_symlink)]). One stat validates a remembered listing, since an entry's
-# create, delete or rename moves the containing directory's own mtime_ns, while a file
-# append moves only the file's mtime, which the walk's per-file stat takes every round.
-# Entry paths are absolute so a memo hit joins nothing. Entries are bounded by the
-# historical directory set of the sessions tree; a subtree that stops being listed leaves
-# its entries until the process restarts.
-_charliebot_dir_memo: dict[str, tuple[tuple[int, int], list[tuple[str, bool, bool]]]] = {}
+# [subdir path]). One stat validates a remembered listing, since an entry's create, delete
+# or rename moves the containing directory's own mtime_ns, while a file append moves only
+# the file's mtime, which the walk's per-file stat takes every round. Only subdirectories
+# are listed: the walk's sole consumer stats candidate files one level below these
+# directories, and an entry's dir-ness changes only through a parent-directory rename the
+# stat pair catches. Paths are absolute so a memo hit joins nothing. Entries are bounded by
+# the historical directory set of the sessions tree; a subtree that stops being listed
+# leaves its entries until the process restarts.
+_charliebot_dir_memo: dict[str, tuple[tuple[int, int], list[str]]] = {}
 
 
-def _charliebot_listing(dirpath: str) -> list[tuple[str, bool, bool]]:
-  """The directory's entries as (path, is_dir, is_symlink), memoized on the directory's own
-  stat pair.
+def _charliebot_listing(dirpath: str) -> list[str]:
+  """The directory's subdirectory paths, memoized on the directory's own stat pair.
 
   A remembered listing costs one stat to validate; a miss re-scandirs. A vanished directory
   drops its memo entry and raises FileNotFoundError; any other read failure raises OSError
@@ -462,12 +463,25 @@ def _charliebot_listing(dirpath: str) -> list[tuple[str, bool, bool]]:
     return memo[1]
   try:
     with os.scandir(dirpath) as scandir:
-      listing = [(entry.path, entry.is_dir(), entry.is_symlink()) for entry in scandir]
+      listing = [entry.path for entry in scandir if entry.is_dir() and not entry.is_symlink()]
   except OSError:
     _charliebot_dir_memo.pop(dirpath, None)
     raise
   _charliebot_dir_memo[dirpath] = (key, listing)
   return listing
+
+
+# The walk's per-kind (kind, container under the session dir, candidate file name), built
+# once at import: the per-session loop re-entered it ~1k times per collect, re-joining the
+# two constant paths each time. Candidate and container paths are entry.path (os.scandir's
+# absolute form, never ending in the separator) plus one separator plus a relative
+# constant, so concatenation replaces os.path.join's case analysis at the walk's ~19k
+# per-collect call sites — the walk's largest Python slice after the stat syscalls.
+_WALK_SEP = os.sep
+_WALK_KINDS = (
+    ("thread", THREADS_DIR_NAME, os.path.join(DATA_DIR_NAME, EVENTS_LOG_NAME)),
+    ("master", os.path.join(DATA_DIR_NAME, MASTER_RUNS_DIR_NAME), RAW_LOG_NAME),
+)
 
 
 def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str, os.stat_result | None, str | None]]:
@@ -495,23 +509,16 @@ def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str,
     if not isinstance(exc, FileNotFoundError):
       t.notes.append(f"charlie-bot: unreadable {sessions}: {exc}")
     return
-  for session_path, session_is_dir, session_is_symlink in session_listing:
-    if not session_is_dir or session_is_symlink:
-      continue
-    for kind, container, name in (
-        ("thread", THREADS_DIR_NAME, os.path.join(DATA_DIR_NAME, EVENTS_LOG_NAME)),
-        ("master", os.path.join(DATA_DIR_NAME, MASTER_RUNS_DIR_NAME), RAW_LOG_NAME),
-    ):
+  for session_path in session_listing:
+    for kind, container, name in _WALK_KINDS:
       try:
-        listing = _charliebot_listing(os.path.join(session_path, container))
+        listing = _charliebot_listing(session_path + _WALK_SEP + container)
       except OSError as exc:
         if not isinstance(exc, FileNotFoundError):
           t.notes.append(f"charlie-bot: unreadable {session_path}/{container}: {exc}")
         continue
-      for entry_path, entry_is_dir, entry_is_symlink in listing:
-        if not entry_is_dir or entry_is_symlink:
-          continue
-        path = os.path.join(entry_path, name)
+      for entry_path in listing:
+        path = entry_path + _WALK_SEP + name
         try:
           yield kind, path, os.stat(path), None
         except FileNotFoundError:

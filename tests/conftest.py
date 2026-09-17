@@ -673,13 +673,16 @@ def make_sessions_dir_config(tmp_path: Path) -> MagicMock:
 
 def setup_session_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sid: str) -> MagicMock:
   """Build a session dir tree at <tmp_path>/sessions/<sid> and chdir into it; the returned mock cfg is
-  what the tests patch into src.cli.common.get_config."""
+  what the tests patch into src.cli.common.get_config (the readback/diff readers). The sessions
+  root itself rides the light seam resolve_session_id reads, so the cwd derivation answers from
+  the built tree."""
   cfg = MagicMock()
   cfg.server.port = 9443
   cfg.sessions_dir = tmp_path / "sessions"
   session_dir = cfg.sessions_dir / sid
   session_dir.mkdir(parents=True, exist_ok=True)
   monkeypatch.chdir(session_dir)
+  monkeypatch.setattr(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, lambda: cfg.sessions_dir)
   return cfg
 
 
@@ -1061,8 +1064,23 @@ TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET = "src.core.triggers._SACCT_AVAILABLE"
 # Import-path patch target for the CLI HTTP layer's config read. src/cli/common.py defines a
 # get_config forwarder (config's module imports lazily on first call, the M92 floor rule), so
 # mock setattrs the stand-in on the src.cli.common module attribute and every helper defined
-# there reads it as a module global at call time.
+# there reads it as a module global at call time. The request path itself reads only the
+# server port through the fingerprint-keyed document (_internal_base_url), so the transport
+# harness patches the base-url seam below and this target covers the remaining direct readers
+# (the sent-but-lost readback, plan diff's version files).
 CLI_COMMON_GET_CONFIG_PATCH_TARGET = "src.cli.common.get_config"
+
+# Import-path patch target for the CLI request path's server base URL. src/cli/common.py
+# resolves it through the fingerprint-keyed port document (_internal_base_url; a hit keeps
+# config's model stack out of the verb process), so mock setattrs the stand-in on the
+# src.cli.common module attribute and _request_with_contract reads it as a module global.
+CLI_COMMON_BASE_URL_PATCH_TARGET = "src.cli.common._internal_base_url"
+
+# Import-path patch target for the CLI's sessions root. src/cli/common.py derives it from the
+# env-resolved home (_sessions_dir, the M102 wrap-verb light path), so mock setattrs the
+# stand-in on the src.cli.common module attribute and resolve_session_id reads it as a module
+# global at call time.
+CLI_COMMON_SESSIONS_DIR_PATCH_TARGET = "src.cli.common._sessions_dir"
 
 # Import-path patch target for the version-skew hint the CLI error paths append. src/cli/common.py
 # defines _maybe_version_skew_hint and _exit_server_rejection reads it as a module global at call
@@ -1665,16 +1683,22 @@ def fake_cli_cfg(monkeypatch: pytest.MonkeyPatch, sessions_dir: Path) -> None:
   monkeypatch.setattr(
       CLI_COMMON_GET_CONFIG_PATCH_TARGET,
       lambda: SimpleNamespace(server_base_url="https://server", sessions_dir=sessions_dir))
+  monkeypatch.setattr(CLI_COMMON_BASE_URL_PATCH_TARGET, lambda: "https://server")
 
 
 def _patched_cli_transport(transport_target: str, cfg: object, argv: list[str],
                            **transport_kw: object) -> Iterator[MagicMock]:
-  """The externals a CLI main() call touches: sys.argv becomes argv, get_config returns cfg, and the
-  transport verb at transport_target is a MagicMock built from transport_kw (a default 200/{} success
-  response when no return_value is given, so the CLI's success path runs; a test can set the response
-  after entering). The mock is yielded for that and for call assertions."""
+  """The externals a CLI main() call touches: sys.argv becomes argv, get_config returns cfg (the
+  readback/diff paths still read it), the request path's base URL derives from cfg's
+  server_base_url when it is a plain attribute (MagicMock auto-attrs stringify harmlessly — the
+  transport verb is patched, nothing dials), and the transport verb at transport_target is a
+  MagicMock built from transport_kw (a default 200/{} success response when no return_value is
+  given, so the CLI's success path runs; a test can set the response after entering). The mock is
+  yielded for that and for call assertions."""
+  base_url = str(getattr(cfg, "server_base_url", "http://localhost:18498"))
   with patch("sys.argv", argv), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
+       patch(CLI_COMMON_BASE_URL_PATCH_TARGET, return_value=base_url), \
        patch(transport_target, **transport_kw) as transport_mock:
     if "return_value" not in transport_kw:
       transport_mock.return_value = make_json_response({})

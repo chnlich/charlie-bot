@@ -47,6 +47,7 @@ from src.core.trace_merge import (
     _gzip_exit_or_raise,
     _kill_gzip_run,
     _trace_events_or_raise,
+    build_multi_trace_merge,
     merge_traces,
 )
 
@@ -118,9 +119,11 @@ _token_usage_task: asyncio.Task | None = None
 # failure, so a later request retries rather than inheriting a stale failure.
 _merge_tasks: dict[str, asyncio.Task] = {}
 # Bounded process pool for the CPU-bound merge body, created lazily on first use and shut down
-# from the server lifespan's shutdown half.
+# from the server lifespan's shutdown half. Sized to the CPUs: a multi-trace merge runs one
+# member per trace on this pool and the wall is parse-bound, so more workers than the CPUs
+# only add contention; a single-trace merge uses one worker regardless.
 _merge_executor_instance: concurrent.futures.ProcessPoolExecutor | None = None
-_MERGE_POOL_WORKERS = 2
+_MERGE_POOL_WORKERS = min(4, os.cpu_count() or 2)
 
 
 def _perfetto_merge_cache_dir() -> Path:
@@ -459,9 +462,21 @@ async def _cached_gzip_build(cache_key: str, build: Callable[[Path], Awaitable[N
 async def _cached_merge(paths: list[Path], slim: bool) -> Path:
 
   async def build(temp_path: Path) -> None:
-    await asyncio.get_running_loop().run_in_executor(_merge_executor(), merge_traces, paths, temp_path, slim)
+    if len(paths) == 1:
+      await asyncio.get_running_loop().run_in_executor(_merge_executor(), merge_traces, paths, temp_path, slim)
+      return
+    await _build_multi_trace_merge(paths, slim, temp_path)
 
   return await _cached_gzip_build(_merge_cache_key(paths, slim, "merge"), build)
+
+
+async def _build_multi_trace_merge(paths: list[Path], slim: bool, out_path: Path) -> None:
+  """Build the multi-trace merged artifact off the event loop: member tasks on
+  the merge pool, the parent thread streaming each fragment into the single
+  gzip subprocess as its member completes (``build_multi_trace_merge`` owns
+  the member temp space; the caller owns artifact atomicity)."""
+  await asyncio.get_running_loop().run_in_executor(
+      None, build_multi_trace_merge, paths, out_path, slim, _merge_executor())
 
 
 def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:

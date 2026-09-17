@@ -116,6 +116,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M104 backend tail-follow cursor checkpoint, per line | M104 collector below | seconds per consumed line of a scripted 2000-line stream checkpointed to a real cursor file (scratch storage, the mount's held-fd shape) | median < 0.00005 s | — (introduced with its first history row) |
 | M105 binary-file transport serve, gzip-accepted | M105 collector below | seconds per served request over the worst on-disk artifact `.png` and `.pptx` (the already-compressed media the middleware must skip), plus the worst artifact `.html` page (the keep-compressing witness); the transport header each answer carries | skipped-family median < max(0.005 s, bytes ÷ 250 MB/s), transport identity (no `Content-Encoding`, wire == raw bytes); html witness median < max(0.05 s, bytes ÷ 25 MB/s), transport `Content-Encoding: gzip` | — (introduced with its first history row) |
 | M106 switch-during-stream repaint | M106 collector below | ms per synchronous paint of the hide+re-show a session switch performs on a mid-stream pending draft (the largest on-disk assistant draft grown one 200 B delta per switch, the page's marked build, node vm harness — live state read-only); the painted frame's parity against a direct full-draft parse rides every reading | median < 0.005 s | — (introduced with its first history row) |
+| M107 multi-trace merged-trace build wall, worst on-disk trace dir | M107 collector below | seconds per `_cached_merge` build over the worst on-disk multi-trace dir (the merged view's dir shape: one merge-pool task per trace, the single gzip run streaming each member's fragment as it completes; scratch cache home, live home read-only) | median < max(14 s, bytes ÷ 150 MB/s) (the member wall is parse-bound and the corpus grows with the training steps' rank counts — 2.09 GB / 12 traces measured 11.6-12.1 s, 180 MB/s effective, at the 2026-09-17 landing; the bytes line tracks the corpus the way M78/M84/M101 track theirs) | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -7246,10 +7247,84 @@ protocol:
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} node /home/chaoli/workspace/charlie-bot/tests/switch_stream_repaint_collector.js
 ```
 
+M107 — multi-trace merged-trace build wall. The merged view's dir shape
+(`GET /perfetto/merged?dir=…`) merges every `*.json` trace of a directory: the
+pre-parallel form walked all traces sequentially inside one pool worker, so
+the wall was the sum of N traces' parse+remap walks. The fixed form submits
+one merge-pool task per trace and streams each member's fragment into the
+single gzip run as its task completes — the wall becomes the slowest wave of
+members, ids allocate inside per-member strides so parallel members never
+collide, and the artifact stays the single-member deterministic gzip. The
+cost is the first merged view of a trace dir (repeats serve the cache),
+invisible to the standing HTTP probes, so the collector writes only to a
+scratch `CHARLIEBOT_HOME` under /tmp (traces read in place, read-only) and
+drives `_cached_merge` from the checkout under test: one cold pass, then
+three timed builds, each round's cache entry dropped so every round pays the
+build; the decompressed event identity (ph, name, pid, ts — the fields the
+member form does not re-number) must match across rounds. The harness
+materializes itself as a file because the spawn pool's workers re-import
+`__main__`, which a stdin heredoc cannot provide.
+
+```bash
+mkdir -p /tmp/opencode && cat > /tmp/opencode/m107_collector.py <<'PYEOF'
+import asyncio, gzip, hashlib, json, os, shutil, sys, tempfile, time
+
+sys.path.insert(0, os.environ["CHECKOUT"])
+from pathlib import Path
+from src.api import pages
+
+
+def find_corpus() -> tuple[Path, int]:
+    # Worst trace dir: the directory under the documented roots (~/data, ~/scripts)
+    # whose *.json traces carry the most bytes; the merged view's dir-merge shape.
+    dirs = [d for root in ("data", "scripts") if (Path.home() / root).is_dir()
+            for d in (Path.home() / root).rglob("*") if d.is_dir() and len(list(d.glob("*.json"))) > 1]
+    best = max(dirs, key=lambda d: sum(p.stat().st_size for p in d.glob("*.json")))
+    return best, sum(p.stat().st_size for p in best.glob("*.json"))
+
+
+async def main(paths: list[Path], best_n: int, home: str) -> None:
+    def event_identity(path: Path) -> tuple[str, int]:
+        events = json.loads(gzip.decompress(path.read_bytes()))["traceEvents"]
+        ident = [[e.get("ph"), e.get("name"), e.get("pid"), e.get("ts")] for e in events]
+        return hashlib.sha1(json.dumps(ident).encode()).hexdigest()[:12], len(events)
+
+    cache_dir = pages._perfetto_merge_cache_dir()
+    await pages._cached_merge(paths, slim=False)  # cold pass, as at the first merged view; not timed
+    times, digests, count = [], set(), 0
+    for _ in range(3):
+        for stale in cache_dir.glob("*.json.gz"):
+            stale.unlink()
+        t0 = time.perf_counter()
+        artifact = await pages._cached_merge(paths, slim=False)
+        times.append(time.perf_counter() - t0)
+        digest, count = event_identity(artifact)
+        digests.add(digest)
+    times.sort()
+    assert len(digests) == 1, f"unstable artifact across rounds: {digests}"
+    print(f"{len(paths)} traces {best_n / 1e6:.1f} MB, {count} events; multi-trace merge build "
+          f"median {times[1]:.2f} s, max {times[-1]:.2f} s over 3; artifact "
+          f"{artifact.stat().st_size / 1e6:.1f} MB, event-identity digest {digests.pop()}")
+    shutil.rmtree(home, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    # The spawn pool's workers re-import this file as __main__; everything with
+    # side effects stays under the guard so a worker import is defs only.
+    home = tempfile.mkdtemp(prefix="m107-home-")
+    os.environ["CHARLIEBOT_HOME"] = home  # scratch cache home; the live home read-only
+    best_dir, best_n = find_corpus()
+    print(f"worst multi-trace dir: {best_dir}, {best_n / 1e6:.1f} MB")
+    asyncio.run(main(sorted(best_dir.glob("*.json")), best_n, home))
+PYEOF
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python /tmp/opencode/m107_collector.py
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-17 | this PR | M107 multi-trace merged-trace build, introduced with this PR: 12 traces / 2089.8 MB / 5,279,591 events (the worst on-disk multi-trace dir, ~/data/hayden_243809_traces/step002110) → merged build median 26.25/25.56/25.37 → 11.62/12.11/11.58 s, −54 % to −57 %, maxima 26.93-26.83 → 11.66-12.34 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, scratch cache home per arm, live traces read in place read-only, load 1.73-2.39 one-minute with the full test suite running on the host; artifact 169.7 → 170.3 MB with the event-identity digest d73f1c00bfd3 identical across all six arms — the +0.6 MB is the members' re-numbered tid digits); component attribution on the pre-fix build: the wall is the twelve members' sequential parse+remap walks (~2.6 s per ~174 MB member measured on the after arm's per-member fragments) while the merge pool's second worker idles; no-regression witnesses on the branch: M66 single-trace merged build 3.85 s median (the sweep's main-checkout reading the same hour 4.41 s; the sequential single-stream path is untouched) and M88 direct-pass 2.47 s (standing 2.69 s), both inside their lines; 5666-passed suite + 11 skipped, ruff and yapf clean; M107 definition, collector, healthy range, and history row introduced with this PR | the dir-merge shape walked every trace inside one pool worker — an N-trace merge paid the sum of N parse+remap walks (the gzip run trailing them) while the pool's other workers idled; each trace's walk now runs as its own merge-pool task and the parent streams each member's fragment into the single gzip subprocess the moment its task returns, so the wall is the slowest wave of members (12 traces over 4 workers = 3 waves ≈ 8 s) plus the gzip tail the streaming already overlaps; the members allocate sequencer ids inside per-member strides (16.7M ids, the largest observed trace 1.07M events) with a loud overflow raise, the artifact stays the single-member deterministic gzip it always was, and the round's real click — yesterday's 11.15 s /perfetto/merged request in the server log — is the production shape this collector prices |
 | 2026-09-17 | this PR | M106 switch-during-stream repaint, introduced with this PR: 98.0 KB draft (sha1 6e0cb6e8f159, the M33 corpus), +200 B delta per switch, 7 rounds — main checkout before vs branch worktree after, five interleaved back-to-back rounds of the verbatim collector: before medians 12.97/13.47/13.58/15.77/19.29 ms (maxima 19.17-27.07 ms), after medians 0.39/0.40/0.41/0.46/0.56 ms (maxima 0.47-0.69 ms), every paired round 30-40x faster, frame parity true in all ten arms; real-Chrome corroboration, the same hide+re-show probe over a 63 KB mixed-CJK draft driven against the live server's pre-fix assets 62.7-71.4 ms per paint vs the branch tree's served assets 0-2.6 ms; served-path context: the dashboard's diag_switch client telemetry read 119-144 ms hourly medians across yesterday's streamed-turn workload (n=364) and 64-231 ms per switch this morning pre-reload, while instrumented drives of the same sessions on current assets read 13-16 ms; no-regression witnesses on the branch: M33 replay wall median 0.038 s (standing 0.037 s), M54 paint-work median 0.094 s (standing 0.080 s, band), the 21-case stream parse/render suites plus the 619-passed node suite and the 5660-passed python suite + 11 skipped, ruff and yapf clean (no Python files touched); M106 definition, collector, healthy range, and history row introduced with this PR | hideStreaming reset the incremental stream parse state unconditionally, so every switch's re-show of the same pending draft re-parsed the whole accumulated draft (the parse ~13-20 ms of the collector's before reading on the 98 KB corpus, the wrap and DOM the rest) although parseStreamDraft already gates state reuse on the next draft extending the parsed prefix — the gate is the validator, so the state now survives the hide and a mid-stream switch re-parses only the appended tail; a different session's draft fails startsWith and parses fresh (pinned by the new hide+re-show tests) |
 | 2026-09-17 | this PR | M80 changed round under append churn, three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back at load 1.89-2.50 one-minute: wall 0.1268/0.1161/0.1228 → 0.1032/0.1074/0.1070 s, −7.5 % to −18.6 %, every paired round faster, rows digest 682aad2534e3 identical across all six arms, scanned 2.06 MB per arm (the worst claude transcript grew ~10 KB between the round-1 arms — the digest pins the payload); component attribution: the corpus walk standalone 78.7 → 67.0 ms median, 92.7 → 77.3 ms max over 7 warm passes with 7267 candidate rows identical — the walk's ~19k stat syscalls (~63 ms at the measured 3.2-3.9 µs/stat on this host) are the corpus floor the trim leaves untouched; no-regression witness: M7 changed-round harness pairs read 0.106/0.173 s branch vs 0.186/0.179 s main with the live opencode db's per-arm churn dominating the pair (0 vs 2 sqlite executes per round, the 61 ms probe+key-diff lands only when the WAL moved since the stored entry) — the branch never slower with the db's contribution equal, and the M80 line keeps < 0.30 s; 5656-passed suite + 11 skipped (worktree code verified under test via the cwd-first import), ruff and yapf clean, the walk's four contract tests (late candidate file, silent absent candidates, the never-listed deep dirs, symlinked entries) pinning the changed memo's behavior | the collect's corpus walk re-built its per-kind (kind, container, name) tuple per session (~1k re-joins of two constants per collect) and os.path.join'ed every candidate path through posixpath's case analysis (~16.5k candidate joins + 2.5k container joins, ~24 ms of profile time, the walk's largest Python slice after the stat syscalls) although os.scandir's entry.path is absolute and never ends in the separator, so the path is entry.path + os.sep + a relative constant; the directory-listing memo now stores subdirectory paths only — its sole consumer descends directories and stats candidates one level down, an entry's dir-ness changes only through a parent rename the stat pair catches, and the per-round iteration over ~21.5k (path, is_dir, is_symlink) tuples with two DirEntry probes each became ~13.2k plain-string entries |
 | 2026-09-17 | this PR | M54 stream-draft paint work, three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back at load 1.10-1.73 one-minute: paint-work median 0.122/0.118/0.131 → 0.086/0.086/0.095 s, −27 % to −30 %, maxima 0.173-0.178 → 0.105-0.127 s, −15 % to −41 %, every paired round faster, final-frame parity true all six arms; component attribution, wrapped-stage probes over one replay of the same corpus (11.4 KB draft, 12 paints): wrapWideChars 44.0 ms of the 184.1 ms replay pre-fix — the per-character 291-range binary search re-running over every re-emitted block on every paint, with cachedHighlight's 12 highlightAuto runs (115.6 ms) and the incremental tail re-lex making up the rest; no-regression witnesses interleaved ×3: M33 replay wall median 0.040/0.037/0.040 → 0.038/0.037/0.038 s, every paired round equal or faster, parity true all arms; 5656-passed suite + 11 skipped plus the 57-case frontend sweep, ruff and yapf clean (no Python files touched), plus 3 new wc2ch tests (the U+1100 probe floor's both sides, the memo's byte-identity and served-hit identity, the cap's eviction); healthy range unchanged | the wrap is a pure function of the input string, so a bounded LRU now serves every re-render of a completed block's identical bytes (the flush's marker swap re-uses the settled block's entry), and a text segment carrying no character at or above U+1100 — the lowest W/F range's floor — skips the per-character scan whole (the probe is conservative: a non-W/F char at or above the floor still scans, and astral chars arrive as surrogates the scan already consumes); the tool-preview mounts stay on the direct wrap because their re-renders carry new truncated bodies that would only evict block entries |

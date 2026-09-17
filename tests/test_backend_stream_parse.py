@@ -144,13 +144,13 @@ async def test_tail_follow_events_checkpoints_cursor_at_consumed_offset() -> Non
   """A mount with a cursor file leaves it at the consumed byte offset —
   including the skipped lines' bytes (blank and malformed consume index), so
   a re-attach at the recorded offset replays nothing already delivered."""
-  from src.core.runs import CURSOR_NAME, read_raw_cursor
+  from src.core import runs
 
   raw_bytes = b"".join(_LINES)
   with tempfile.TemporaryDirectory() as work:
     raw = Path(work) / "agent.raw.ndjson"
     raw.write_bytes(raw_bytes)
-    cursor = Path(work) / CURSOR_NAME
+    cursor = Path(work) / runs.CURSOR_NAME
     events = [
         event async for event in tail_follow_events(
             raw,
@@ -161,7 +161,7 @@ async def test_tail_follow_events_checkpoints_cursor_at_consumed_offset() -> Non
         )
     ]
     assert [event["seq"] for event in events] == [1, 3]
-    assert read_raw_cursor(cursor) == len(raw_bytes)
+    assert runs.read_raw_cursor(cursor) == len(raw_bytes)
     # A re-attach at the recorded offset replays nothing.
     events = [
         event async for event in tail_follow_events(
@@ -169,7 +169,7 @@ async def test_tail_follow_events_checkpoints_cursor_at_consumed_offset() -> Non
             translate=lambda event: [event],
             is_alive=lambda: False,
             cursor=cursor,
-            start_offset=read_raw_cursor(cursor),
+            start_offset=runs.read_raw_cursor(cursor),
             post_result_timeout=60.0,
         )
     ]

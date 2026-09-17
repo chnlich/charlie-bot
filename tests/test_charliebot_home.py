@@ -155,9 +155,9 @@ def test_no_new_hardcoded_state_paths() -> None:
 
   The isolation test catches any spelling but only on paths it reaches; this catches
   any path but only the two spellings that build one from the user's home directory.
-  ``src/core/config.py`` owns the resolution and is the single exemption.
+  ``src/core/home.py`` owns the resolution and is the single exemption.
   """
-  exempt = {ROOT / "src" / "core" / "config.py"}
+  exempt = {ROOT / "src" / "core" / "home.py"}
   offenders: list[str] = []
 
   python_files = [ROOT / "server.py", *sorted((ROOT / "src").rglob("*.py"))]

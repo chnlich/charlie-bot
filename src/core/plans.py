@@ -433,10 +433,10 @@ class PlanRegistryManager:
       self,
       session_id: str,
       file: str,
+      note: str,
       plan_id: int | None = None,
       trigger: str = "feedback",
       base: dict | None = None,
-      note: str | None = None,
   ) -> dict:
     if trigger not in PLAN_AMEND_TRIGGERS:
       raise ValueError(f"trigger must be one of {'|'.join(PLAN_AMEND_TRIGGERS)}, got {trigger!r}")

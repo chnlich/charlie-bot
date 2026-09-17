@@ -12,7 +12,7 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 # The cross-layer constants single-home in src/core.constants (stdlib-only, the
 # CLI import floor's contract); the names stay importable from here for every
 # model-layer importer.
-# The config-field models moved to backend_models so the config chain (every CLI
+# The config-field models live in backend_models so the config chain (every CLI
 # invocation's get_config) skips constructing the session/API models; these
 # re-exports keep the established src.core.models import path working.
 from src.core.backend_models import (  # noqa: F401  (re-export)

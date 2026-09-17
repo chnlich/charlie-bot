@@ -130,7 +130,7 @@ async def test_verify_on_create_rejects_failed_probe(tmp_path: Path) -> None:
   cfg, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
 
   with (
-      patch(TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET, False),
+      patch(TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET, new=False),
       patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(side_effect=_failing_sacct_factory)),
       pytest.raises(RemoteVerifyError),
   ):

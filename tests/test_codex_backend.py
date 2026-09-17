@@ -439,31 +439,31 @@ def test_registry_propagates_auto_compact_limit_into_codex_backend(monkeypatch: 
   assert cmd.count("model_auto_compact_token_limit=50000") == 1
 
 
+@pytest.mark.parametrize(
+    ("event_line", "expected_message"),
+    [
+        pytest.param(
+            b'{"type":"error","error":{"message":"unsupported reasoning effort: ultra"}}\n',
+            "unsupported reasoning effort: ultra",
+            id="top-level-error",
+        ),
+        pytest.param(
+            b'{"type":"turn.failed","error":{"message":"context window exceeded"}}\n',
+            "context window exceeded",
+            id="turn-failed",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_one_shot_text_raises_structured_error(monkeypatch: pytest.MonkeyPatch) -> None:
-  proc = fake_one_shot_proc(
-      [
-          b'{"type":"error","error":{"message":"unsupported reasoning effort: ultra"}}\n',
-      ], stderr=b"generic stderr")
-
-  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
-    backend = _build_backend(monkeypatch, model_reasoning_effort="ultra")
-    with pytest.raises(RuntimeError, match="unsupported reasoning effort: ultra") as exc_info:
-      await backend.one_shot_text("prompt", "system", timeout=5.0)
-
-  assert "generic stderr" not in str(exc_info.value)
-
-
-@pytest.mark.asyncio
-async def test_one_shot_text_raises_turn_failed_diagnostic(monkeypatch: pytest.MonkeyPatch) -> None:
-  proc = fake_one_shot_proc(
-      [
-          b'{"type":"turn.failed","error":{"message":"context window exceeded"}}\n',
-      ], stderr=b"generic stderr")
+async def test_one_shot_text_raises_structured_error(
+    monkeypatch: pytest.MonkeyPatch, event_line: bytes, expected_message: str) -> None:
+  """Both structured-error spellings share one translate_event branch; each must
+  raise carrying the error message, never the captured stderr."""
+  proc = fake_one_shot_proc([event_line], stderr=b"generic stderr")
 
   with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = _build_backend(monkeypatch)
-    with pytest.raises(RuntimeError, match="context window exceeded") as exc_info:
+    with pytest.raises(RuntimeError, match=expected_message) as exc_info:
       await backend.one_shot_text("prompt", "system", timeout=5.0)
 
   assert "generic stderr" not in str(exc_info.value)

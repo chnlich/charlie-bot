@@ -420,7 +420,7 @@ Known-alive symbols:
   production-scope finding (unused import, 90% confidence); never delete it on that
   evidence.
 - `__getattr__` (`src/core/artifact_wrap.py`) — the PEP 562 lazy-`requests` hook, a one-line
-  delegate to the shared `requests_module_getattr` (`src/core/http.py`), which wraps
+  delegate to the shared `deferred_module_getattr` (`src/core/deferred.py`), which serves
   `load_requests`. (The former `src/cli/common.py` hook left with the phase-separated
   http.client transport; its conftest patch targets now name the `_request_post`/`_request_get`
   adapters directly.)

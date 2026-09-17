@@ -763,7 +763,7 @@ def _stream_reference_file(out: BinaryIO, source: Path, take: int) -> tuple[int,
       mapping.close()
 
 
-class SuccessionRefused(ValueError):
+class SuccessionRefusedError(ValueError):
   """An elone was refused because a scheduler-owned parent cannot take a new successor.
 
   Only a scheduler-owned parent (``scheduled_task`` set) that already has a
@@ -1329,7 +1329,7 @@ class SessionManager:
     if fresh_parent is None:
       raise FileNotFoundError(f"parent session not found: {parent_id}")
     if fresh_parent.successor_session_id is not None and fresh_parent.scheduled_task is not None:
-      raise SuccessionRefused(
+      raise SuccessionRefusedError(
           f"session {parent_id} already has a successor "
           f"({fresh_parent.successor_session_id}); elone that successor or fork for a separate branch")
     if fresh_parent.scheduled_task is not None:

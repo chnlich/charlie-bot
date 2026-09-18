@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 from src.core import event_types as ET
 from src.core import finalize_effects, runs
 from src.core.git import git_quarantine_worktree, git_worktree_dir_name
+from src.core.human_size import format_size
 from src.core.json_utils import load_json_meta
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import StatSignatureMemo
@@ -35,7 +36,7 @@ from src.core.process import kill_process_group
 from src.core.tasks import create_logged_task
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
-from src.core.worktree_trash import dir_size_bytes, format_size, trash_dir
+from src.core.worktree_trash import dir_size_bytes, trash_dir
 
 log = LazyStructlogLogger()
 

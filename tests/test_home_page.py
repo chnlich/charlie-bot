@@ -184,9 +184,10 @@ async def test_home_viewers_are_not_dead_links(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_home_lists_the_four_server_destinations(tmp_path: Path) -> None:
+async def test_home_lists_the_server_destinations(tmp_path: Path) -> None:
   body = (await pages.home_page(make_page_request("/home"), _cfg(tmp_path / "h", []))).body.decode("utf-8")
   assert 'href="/"' in body
   assert 'href="/token-usage"' in body
+  assert 'href="/host-auth"' in body
   assert 'href="/diff"' in body
   assert 'href="/absolute_filepath/"' in body

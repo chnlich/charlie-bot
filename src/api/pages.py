@@ -74,6 +74,11 @@ _HOME_DESTINATIONS: tuple[dict[str, str], ...] = (
         "description": "Tokens per model across every agent log on this host."
     },
     {
+        "name": "Host login authorization",
+        "url": "/host-auth",
+        "description": "Per-host ssh login state and the estimated Okta renewal deadline."
+    },
+    {
         "name": "Diff viewer",
         "url": "/diff",
         "description": "Browse a repository diff between two refs."

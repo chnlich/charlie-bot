@@ -27,6 +27,7 @@ from src.api import (
     ext_usage,
     files,
     git,
+    host_auth,
     internal,
     latex,
     pages,
@@ -371,6 +372,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   await trigger_mgr.recover_pending()
 
   await ext_usage.start_poller()
+  await host_auth.start_poller()
 
   slack_listener_task = None
   creds = get_credentials()
@@ -402,6 +404,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
       with suppress(asyncio.CancelledError):
         await task
   await ext_usage.stop_poller()
+  await host_auth.stop_poller()
   await close_http_client()
   await scheduler.stop()
   await streaming_manager.close_all()
@@ -427,6 +430,7 @@ app.add_middleware(_RequestLogMiddleware)
 
 # Page router (GET / — Jinja2 rendered)
 app.include_router(pages.router, tags=["pages"])
+app.include_router(host_auth.router, tags=["host-auth"])
 
 # API routers
 app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])

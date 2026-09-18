@@ -157,23 +157,7 @@ def parse_ndjson_events(path: Path, *, log_event: str, log_fields: dict[str, Any
   with open(path, "rb") as f, _mapped_lines(path, f) as (mm, size):
     if mm is None:
       return []
-    events: list[dict] = []
-    append = events.append
-    pos = 0
-    find = mm.find
-    while True:
-      nl = find(b"\n", pos)
-      if nl < 0:
-        if pos < size:
-          event = parse_ndjson_line(memoryview(mm)[pos:], log_event=log_event, log_fields=log_fields)
-          if event is not None:
-            append(event)
-        return events
-      if nl > pos:
-        event = parse_ndjson_line(memoryview(mm)[pos:nl], log_event=log_event, log_fields=log_fields)
-        if event is not None:
-          append(event)
-      pos = nl + 1
+    return list(iter_ndjson_events(_iter_mmap_lines(mm, size), log_event=log_event, log_fields=log_fields))
 
 
 @contextmanager

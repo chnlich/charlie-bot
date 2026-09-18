@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
-import mmap
 from pathlib import Path
 
 import pytest
-from conftest import assistant_text_event
+from conftest import assistant_text_event, recording_mmap_shim
 
 import src.core.ndjson as verify_trailer_ndjson
 from src.core.message_aggregator import extract_text_from_message
@@ -149,19 +148,7 @@ def test_resolve_final_report_reads_only_the_tail_window_on_the_fallback_path(
     f.write((json.dumps({"type": "result", "result": ""}) + "\n").encode())
 
   extents: list[tuple[int, int]] = []
-  real_rfind = mmap.mmap.rfind
-
-  class RecordingMmap(mmap.mmap):
-
-    def rfind(self, sub, start=0, end=None):  # noqa: ANN001, ANN202
-      extents.append((start, len(self) if end is None else end))
-      return real_rfind(self, sub, start, end)
-
-  class Shim:
-    ACCESS_READ = mmap.ACCESS_READ
-    mmap = RecordingMmap
-
-  monkeypatch.setattr(verify_trailer_ndjson, "mmap", Shim)
+  monkeypatch.setattr(verify_trailer_ndjson, "mmap", recording_mmap_shim(extents))
   assert _resolve_final_report(target) == "the report\nRESULT: clean"
   file_size = target.stat().st_size
   assert extents, "the walk never scanned"

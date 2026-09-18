@@ -421,6 +421,27 @@ def _member_form_output(paths: list[Path], tmp_path: Path, slim: bool) -> list[d
   return _read_merged(output)
 
 
+def test_build_trace_member_count_matches_the_fragment(tmp_path: Path) -> None:
+  # The returned count gates the multi-trace join's empty-member skip, so it
+  # must equal the events the fragment carries — dropped process_ rows excluded,
+  # thread_name inserts and the trailing process_ metadata included, across
+  # several batch flushes.
+  trace = tmp_path / "trace_rank0.json"
+  _write_trace(trace, _batch_events(2 * 512 + 3))
+  fragment = tmp_path / "member.jsonl"
+
+  count = build_trace_member(trace, fragment, 0, slim=False)
+
+  events = json.loads("[" + fragment.read_text(encoding="utf-8") + "]")
+  assert count == len(events)
+  # _batch_events carries no process_labels row, so no synthetic pid or
+  # process_ metadata exists; the fragment adds one thread_name per distinct
+  # tid (index % 3 → 3 threads) to the input's events.
+  assert len([e for e in events if e.get("name") == "thread_name"]) == 3
+  assert len([e for e in events if e.get("name", "").startswith("process_")]) == 0
+  assert count == len(_batch_events(2 * 512 + 3)) + 3
+
+
 def test_member_form_matches_the_single_stream_form(tmp_path: Path) -> None:
   # The parallel member form is the production multi-trace path; the sequential
   # form stays the tests' and the M66 collector's reference. Both must merge the

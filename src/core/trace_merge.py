@@ -71,9 +71,23 @@ def _gzip_exit_or_raise(gzip_proc: subprocess.Popen, context: str) -> None:
 
 
 def _kill_gzip_run(gzip_proc: subprocess.Popen) -> None:
-  """Kill an abandoned gzip run and reap it; kill alone leaves a zombie."""
+  """Kill an abandoned compressor run and reap it; kill alone leaves a zombie."""
   gzip_proc.kill()
   gzip_proc.wait()
+
+
+def igzip_command(*extra_args: str) -> list[str]:
+  """The merge family's one compressor invocation: the isal igzip CLI at the merge level.
+
+  Level-1 ISA-L reads ~800 MB/s against gzip's ~200 MB/s on this host's trace
+  JSON, and a caller's producer must keep pace with it or the compressor
+  becomes the wall. ``sys.executable`` is the process's own interpreter, whose
+  site has the declared isal dependency. ``-n`` zeroes the gzip header's name
+  and mtime fields — the CLI stamps the wall clock into a stdin-fed stream
+  otherwise, so without the flag the artifact bytes are not deterministic run
+  to run.
+  """
+  return [sys.executable, "-m", "isal.igzip", f"-{_MERGE_COMPRESSLEVEL}", "-n", *extra_args]
 
 
 def _rank_label(path: Path) -> str:
@@ -270,22 +284,15 @@ def _merge_one_trace(
 
 @contextlib.contextmanager
 def _gzip_output_stream(out_path: Path) -> Iterator[BinaryIO]:
-  """Yield the stdin of an ISA-L igzip run compressing into ``out_path``.
+  """Yield the stdin of an igzip run (igzip_command) compressing into ``out_path``.
 
   The compress must leave the process to overlap the GIL-bound walk; the pipe
   capacity is _MERGE_PIPE_BYTES so a flush completes without blocking. A writer
   failure kills the run and a nonzero wait raises with the compressor stderr.
-  The compressor is the isal igzip CLI, not ``gzip``: level-1 ISA-L reads
-  ~800 MB/s against gzip's ~200 MB/s on this host's trace JSON, and the
-  multi-trace merge's ordered fragment stream must keep pace with each 4-member
-  wave or the stream becomes the wall. ``sys.executable`` is the process's own
-  interpreter, whose site has the declared isal dependency. ``-n`` zeroes the
-  header's name and mtime fields — the CLI stamps the wall clock into a
-  stdin-fed stream otherwise, so without the flag the artifact bytes are not
-  deterministic run to run.
+  The multi-trace merge's ordered fragment stream must keep pace with each
+  4-member wave or the stream becomes the wall.
   """
-  command = [sys.executable, "-m", "isal.igzip", f"-{_MERGE_COMPRESSLEVEL}", "-n"]
-  with out_path.open("wb") as compressed, subprocess.Popen(command, stdin=subprocess.PIPE, stdout=compressed,
+  with out_path.open("wb") as compressed, subprocess.Popen(igzip_command(), stdin=subprocess.PIPE, stdout=compressed,
                                                            stderr=subprocess.PIPE) as gzip_proc:
     output = gzip_proc.stdin
     fcntl.fcntl(output.fileno(), fcntl.F_SETPIPE_SZ, _MERGE_PIPE_BYTES)

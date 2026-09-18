@@ -71,6 +71,23 @@ _STOP_FAILURE_TYPES = frozenset(
         "unknown",
     })
 _CORRELATION_FIELDS = ("turn_id", "prompt_id", "turnId", "promptId")
+# The hook events this bridge interprets. Every name needs a branch in HookTurnState.handle,
+# and every handle branch needs an entry here: claude_sub registers one hook per entry, so an
+# event absent here is never delivered and a branch absent here fails loudly at delivery.
+HOOK_EVENTS: tuple[str, ...] = (
+    "SessionStart",
+    "UserPromptSubmit",
+    "MessageDisplay",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PostCompact",
+    "Stop",
+    "StopFailure",
+    "Notification",
+    "PermissionRequest",
+    "SessionEnd",
+)
 
 
 def _required(payload: dict[str, Any], field_name: str, expected_type: type[Any]) -> Any:

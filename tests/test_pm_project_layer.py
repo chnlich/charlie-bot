@@ -13,7 +13,6 @@ instructions; at most one pm task per project; the task yaml is the single
 control point for the bound session's backend and wake text.
 """
 
-from collections.abc import Coroutine
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,6 +44,7 @@ from pydantic import ValidationError
 
 from src.agents import master_cc
 from src.core.config import (
+    CharlieBotConfig,
     ImprovementLoopConfig,
     ScheduledTaskConfig,
     ScheduledTaskError,
@@ -246,6 +246,31 @@ async def _create_member(
   return member
 
 
+def _wire_pm_fire(
+    monkeypatch: pytest.MonkeyPatch,
+    cfg: CharlieBotConfig,
+    *,
+    triggered: list[Any],
+    create_logged: list[str] | None = None,
+    spawned: list[Any] | None = None,
+) -> None:
+  """Wire the scheduler module seams one PM fire crosses.
+
+  get_config resolves to *cfg* and the master wake is recorded into *triggered*.
+  The fire-and-forget task is recorded into *create_logged* when given, else closed.
+  The worker spawn is recorded into *spawned* when given — the PM fire spawns no
+  worker, so a site asserting that passes a list and asserts it stays empty.
+  """
+  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(SCHEDULER_TRIGGER_MASTER_PATCH_TARGET, lambda *args, **kwargs: triggered.append(args) or _noop())
+  if create_logged is None:
+    monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
+  else:
+    monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, record_create_logged_task(create_logged))
+  if spawned is not None:
+    monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, lambda **kwargs: spawned.append(kwargs) or _noop())
+
+
 @pytest.mark.asyncio
 async def test_pm_task_fire_wakes_master_with_prompt_plus_group_line(
     tmp_path: Path,
@@ -257,15 +282,7 @@ async def test_pm_task_fire_wakes_master_with_prompt_plus_group_line(
   triggered: list[tuple[Any, ...]] = []
   task_names: list[str] = []
   spawned: list[Any] = []
-
-  def fake_trigger_master(*args: Any, **kwargs: Any) -> Coroutine[Any, Any, None]:
-    triggered.append(args)
-    return _noop()
-
-  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr(SCHEDULER_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
-  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, record_create_logged_task(task_names))
-  monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, lambda **kwargs: spawned.append(kwargs) or _noop())
+  _wire_pm_fire(monkeypatch, cfg, triggered=triggered, create_logged=task_names, spawned=spawned)
 
   result = await scheduler._execute_task(task_cfg)
 
@@ -297,9 +314,8 @@ async def test_pm_task_fire_reuses_live_session_across_fires(
   cfg, _session_mgr, scheduler = make_scheduler_setup(tmp_path)
   task_cfg = _pm_task()
 
-  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
-  monkeypatch.setattr(SCHEDULER_TRIGGER_MASTER_PATCH_TARGET, lambda *args, **kwargs: _noop())
+  triggered: list[tuple[Any, ...]] = []
+  _wire_pm_fire(monkeypatch, cfg, triggered=triggered)
 
   first = await scheduler._execute_task(task_cfg)
   second = await scheduler._execute_task(task_cfg)
@@ -315,9 +331,8 @@ async def test_pm_task_backend_rotation_carries_role_and_group(
   """Generation rotation (backend change) archives the old PM and carries role/group forward."""
   cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
 
-  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
-  monkeypatch.setattr(SCHEDULER_TRIGGER_MASTER_PATCH_TARGET, lambda *args, **kwargs: _noop())
+  triggered: list[tuple[Any, ...]] = []
+  _wire_pm_fire(monkeypatch, cfg, triggered=triggered)
 
   first = await scheduler._execute_task(_pm_task())
   rotated = await scheduler._execute_task(_pm_task(backend="codex-o3"))
@@ -352,10 +367,7 @@ async def test_pm_dead_group_disables_task_archives_session_and_skips_wake(
 
   triggered: list[Any] = []
   spawned: list[Any] = []
-  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr(SCHEDULER_TRIGGER_MASTER_PATCH_TARGET, lambda *args, **kwargs: triggered.append(args) or _noop())
-  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
-  monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, lambda **kwargs: spawned.append(kwargs) or _noop())
+  _wire_pm_fire(monkeypatch, cfg, triggered=triggered, spawned=spawned)
 
   result = await scheduler._execute_task(task_cfg)
 
@@ -396,9 +408,7 @@ async def test_pm_new_project_with_zero_sessions_does_not_terminate(
   task_cfg = _pm_task()
 
   triggered: list[tuple[Any, ...]] = []
-  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr(SCHEDULER_TRIGGER_MASTER_PATCH_TARGET, lambda *a, **k: triggered.append(a) or _noop())
-  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
+  _wire_pm_fire(monkeypatch, cfg, triggered=triggered)
 
   result = await scheduler._execute_task(task_cfg)
 
@@ -426,9 +436,7 @@ async def test_pm_active_member_session_wakes_master(
   active_member = await _create_member(session_mgr, name="live")
 
   triggered: list[tuple[Any, ...]] = []
-  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr(SCHEDULER_TRIGGER_MASTER_PATCH_TARGET, lambda *a, **k: triggered.append(a) or _noop())
-  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
+  _wire_pm_fire(monkeypatch, cfg, triggered=triggered)
 
   result = await scheduler._execute_task(task_cfg)
 

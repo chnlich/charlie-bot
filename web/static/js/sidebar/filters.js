@@ -20,10 +20,6 @@ function registerSidebarFilter(filter) {
   sidebarFiltersByName[normalized.name] = normalized;
 }
 
-// The task tree is the primary v2 navigation: first pill, restorable from the
-// URL like the other registry entries. Its fetch/render lifecycle lives in
-// sidebar/session-tree.js (the archived tab keeps the same pattern).
-registerSidebarFilter({name: 'tasks', label: 'Tasks', url: '/api/sessions/tree'});
 registerSidebarFilter({name: 'all', label: 'All', url: '/api/sessions/', restoreFromUrl: false});
 registerSidebarFilter({name: 'starred', label: 'Starred', url: '/api/sessions/starred'});
 registerSidebarFilter({name: 'archived', label: 'Archived', url: '/api/sessions/archived'});
@@ -214,11 +210,6 @@ function setSidebarFilterPill(filter) {
 
 function switchSidebarFilter(filter) {
   setSidebarFilterPill(filter);
-  if (filter === 'tasks') {
-    // The task tree owns its fetch/render lifecycle (session-tree.js).
-    Sidebar.SessionTree.enterTreeFilter();
-    return;
-  }
   if (filter === 'archived') {
     // The archived view owns its fetch: keyset pagination with a group filter
     // strip (archived.js) instead of the one-shot array the other tabs use.
@@ -262,13 +253,6 @@ function restoreSidebarFromUrl() {
     if (searchInput) { searchInput.value = urlQuery; handleSidebarSearch(urlQuery); }
   } else if (getRestorableSidebarFilters().includes(urlFilter)) {
     switchSidebarFilter(urlFilter);
-  } else if (SESSION_BOOTSTRAP && SESSION_BOOTSTRAP.session && SESSION_BOOTSTRAP.session.profile) {
-    // A v2 task node (deep link or reload): the task tree is its navigation.
-    switchSidebarFilter('tasks');
-  } else if (globalThis.__CHARLIEBOT_PREVIEW__) {
-    // Preview instance: the task tree is the only navigation and the only
-    // create flow; the legacy session list is not a preview surface.
-    switchSidebarFilter('tasks');
   } else {
     setSidebarFilterPill('all');
     if (INITIAL_LOAD_ERRORS.length) {
@@ -288,18 +272,6 @@ function handleSidebarSearch(query) {
   clearTimeout(searchDebounceTimer);
   const pills = document.querySelector('.filter-pill')?.parentElement;
   const addBtn = document.getElementById('cron-add-btn');
-  // Inside the tasks filter, search rides the tree's own search endpoint so a
-  // hit reveals and expands its complete server-built ancestor path.
-  if (currentFilter === 'tasks' && globalThis.Sidebar.SessionTree) {
-    if (query.trim()) {
-      if (pills) pills.style.display = 'none';
-      searchDebounceTimer = setTimeout(() => Sidebar.SessionTree.searchTree(query), 300);
-    } else {
-      if (pills) pills.style.display = '';
-      Sidebar.SessionTree.searchTree('');
-    }
-    return;
-  }
   if (query.trim()) {
     // Hide filter pills while searching
     if (pills) pills.style.display = 'none';

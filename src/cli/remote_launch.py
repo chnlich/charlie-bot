@@ -25,7 +25,8 @@ import sys
 from src.cli.common import add_session_arg, resolve_session_id
 from src.core.config import get_config
 from src.core.models import utc_now
-from src.core.timeouts import SSH_CONNECT_TIMEOUT, SSH_LAUNCH_TIMEOUT
+from src.core.ssh import ssh_cmd
+from src.core.timeouts import SSH_LAUNCH_TIMEOUT
 
 
 def _ssh_launch_remote(host: str, cwd: str, cmd: str, launch_id: str) -> int:
@@ -44,10 +45,7 @@ def _ssh_launch_remote(host: str, cwd: str, cmd: str, launch_id: str) -> int:
 
   try:
     proc = subprocess.run(
-        [
-            "ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={SSH_CONNECT_TIMEOUT}", host, "bash", "-c",
-            shlex.quote(wrapper)
-        ],
+        ssh_cmd(host, "bash", "-c", shlex.quote(wrapper)),
         capture_output=True,
         text=True,
         check=False,

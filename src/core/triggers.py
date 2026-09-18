@@ -31,8 +31,9 @@ from src.core.models import (
 )
 from src.core.sessions import SessionManager
 from src.core.sidebar_state import mark_sidebar_dirty
+from src.core.ssh import ssh_cmd
 from src.core.tasks import create_logged_task
-from src.core.timeouts import SSH_CONNECT_TIMEOUT, SSH_OVERALL_TIMEOUT
+from src.core.timeouts import SSH_OVERALL_TIMEOUT
 
 log = LazyStructlogLogger()
 
@@ -195,19 +196,6 @@ _SACCT_AVAILABLE = shutil.which("sacct") is not None
 # ---------------------------------------------------------------------------
 # Probe subprocess plumbing (remote probes go over ssh; local sacct does not)
 # ---------------------------------------------------------------------------
-def _ssh_cmd(host: str, remote_cmd: str) -> list[str]:
-  """Wrap a remote command in the batch-mode ssh invocation every remote probe uses."""
-  return [
-      "ssh",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      f"ConnectTimeout={SSH_CONNECT_TIMEOUT}",
-      host,
-      remote_cmd,
-  ]
-
-
 async def _run_probe_cmd(
     cmd: list[str],
     *,
@@ -256,7 +244,7 @@ async def _ssh_probe_pid(host: str, pid: int) -> tuple[str, str]:
     - "ERROR": ssh failed / timed out / unexpected output (transient)
   """
   run = await _run_probe_cmd(
-      _ssh_cmd(host, f"kill -0 {pid} 2>&1 && echo ALIVE || echo DEAD"),
+      ssh_cmd(host, f"kill -0 {pid} 2>&1 && echo ALIVE || echo DEAD"),
       timeout=SSH_OVERALL_TIMEOUT,
       kill_wait_log_event="ssh_probe_wait_after_kill_failed",
       host=host,
@@ -337,7 +325,7 @@ async def _probe_sacct(
     cmd = sacct_args
     timeout = None
   else:
-    cmd = _ssh_cmd(host, " ".join(sacct_args))
+    cmd = ssh_cmd(host, " ".join(sacct_args))
     timeout = SSH_OVERALL_TIMEOUT
 
   run = await _run_probe_cmd(

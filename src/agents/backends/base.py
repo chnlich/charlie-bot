@@ -659,8 +659,9 @@ class AgentBackend(ABC):
   underlying execution mechanism.
 
   Template-method pattern: subclasses override ``_build_command()`` (required),
-  and optionally ``_prepare_cwd()``, ``_prepare_transport()``, ``_prepare_env()``,
-  and ``translate_event()``.
+  and optionally declare ``_INSTRUCTIONS_TARGET`` (what ``_prepare_cwd()`` writes
+  into the run cwd), ``_prepare_transport()``, ``_prepare_env()``, and
+  ``translate_event()``.
 
   Event schema contract:
     All events yielded by run() must be JSON-serializable dicts with at
@@ -729,8 +730,18 @@ class AgentBackend(ABC):
     """
     ...
 
+  # (filename, log_event) of the instructions file _prepare_cwd writes into the
+  # run cwd; None keeps the hook a no-op for backends with no file channel.
+  _INSTRUCTIONS_TARGET: tuple[str, str] | None = None
+
   def _prepare_cwd(self, cwd: str) -> None:
-    """Hook to prepare the working directory before subprocess spawn. No-op default."""
+    """Hook to prepare the working directory before subprocess spawn.
+
+    The base implementation writes the file named by ``_INSTRUCTIONS_TARGET``
+    into the cwd (a no-op when no target is declared).
+    """
+    if self._INSTRUCTIONS_TARGET is not None:
+      self._write_instructions_file(cwd, *self._INSTRUCTIONS_TARGET)
 
   def _prepare_transport(self, log_dir: Path) -> None:
     """Hook to prepare the transport directory before ``_build_command()`` runs.

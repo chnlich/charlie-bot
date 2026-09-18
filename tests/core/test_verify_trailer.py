@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import mmap
 from pathlib import Path
 
 import pytest
 from conftest import assistant_text_event
 
-from core import byte_count_open
+import src.core.ndjson as verify_trailer_ndjson
 from src.core.message_aggregator import extract_text_from_message
 from src.core.verify_trailer import _resolve_final_report, verify_result_trailer_error
 
@@ -138,7 +139,8 @@ def test_resolve_final_report_reads_only_the_tail_window_on_the_fallback_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # The empty-payload fallback shape — the reviewer's finding: the newest
   # non-empty assistant sits behind the tail result event, so both judgments
-  # settle inside one window and the walk must not read the older bytes.
+  # settle inside one window and the mapped backward scan must not reach the
+  # older bytes — every rfind extent stays inside the newest window.
   target = tmp_path / "events.jsonl"
   with target.open("wb") as f:
     for i in range(2000):  # ~14 KB per event: the early corpus spans several windows
@@ -146,6 +148,21 @@ def test_resolve_final_report_reads_only_the_tail_window_on_the_fallback_path(
     f.write((json.dumps(assistant_text_event("the report\nRESULT: clean")) + "\n").encode())
     f.write((json.dumps({"type": "result", "result": ""}) + "\n").encode())
 
-  read_bytes = byte_count_open.install_byte_counting_open(monkeypatch)
+  extents: list[tuple[int, int]] = []
+  real_rfind = mmap.mmap.rfind
+
+  class RecordingMmap(mmap.mmap):
+
+    def rfind(self, sub, start=0, end=None):  # noqa: ANN001, ANN202
+      extents.append((start, len(self) if end is None else end))
+      return real_rfind(self, sub, start, end)
+
+  class Shim:
+    ACCESS_READ = mmap.ACCESS_READ
+    mmap = RecordingMmap
+
+  monkeypatch.setattr(verify_trailer_ndjson, "mmap", Shim)
   assert _resolve_final_report(target) == "the report\nRESULT: clean"
-  assert 0 < sum(read_bytes) <= 2 * 512 * 1024  # the newest window plus the fallback's one older window
+  file_size = target.stat().st_size
+  assert extents, "the walk never scanned"
+  assert min(end for _, end in extents) >= file_size - 2 * 512 * 1024  # the newest window plus the fallback's one older window

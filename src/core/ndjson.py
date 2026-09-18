@@ -272,6 +272,23 @@ def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bo
   return events, total, has_more
 
 
+# Bound, in bytes, on the head probe a head-provable filter reads in the
+# from-the-end walk. Every event type the repo writes proves within it; a
+# longer name defeats the proof and parses, the conservative direction the
+# filter's contract already takes for every shape it cannot read.
+_HEAD_PROOF_BYTES = 256
+
+
+def _parse_mapped_line(
+    mm: mmap.mmap, start: int, end: int, *, log_event: str, log_fields: dict[str, Any]) -> dict | None:
+  """Parse the mapping's [start, end) bytes under the reader skip contract.
+
+  The view lives only in this frame, so a walk that stops early never leaves
+  a mapping-pinning view in the walker's own frame and the mapping closes.
+  """
+  return parse_ndjson_line(memoryview(mm)[start:end], log_event=log_event, log_fields=log_fields)
+
+
 def iter_ndjson_events_from_end(
     path: Path,
     *,
@@ -283,61 +300,52 @@ def iter_ndjson_events_from_end(
   Same skip contract as :func:`iter_ndjson_events` (an empty or
   whitespace-only line is invisible, a line the parser rejects logs and
   yields nothing); *parse_filter* rides it with the same raw-line contract.
-  _TAIL_WINDOW_SIZE segments from the end walk lines backwards, so a consumer
-  that stops early never reads the bytes past its answer. A line longer than
-  the window accumulates one window-piece per walk step and joins them once
-  at the line's closing newline — O(line) total, where a re-concatenated
-  carry would pay O(line x segments) on multi-megabyte lines. A missing file
+  One backward scan over a read-only mapping: each line is the zero-copy view
+  between the newlines :func:`mmap.mmap.rfind` finds, so a consumer that
+  stops early never scans the bytes past its answer, and a line a
+  head-provable filter rejects costs one bounded head probe instead of the
+  line's bytes. The mapping is safe against the writers because they only
+  ever append (an archive rewrite publishes through ``os.replace`` onto a new
+  inode); a writer that truncated a mapped file would SIGBUS the walk — the
+  same ground :func:`parse_ndjson_events`' mapping stands on. A missing file
   yields nothing.
   """
   if not path.exists():
     return
   # A head fragment decides only a head-provable filter: a plain callable
-  # keyed on bytes beyond the head would misread the fragment, so the walker
-  # feeds it whole lines only.
+  # keyed on bytes beyond the head would misread a bounded probe, so the walk
+  # hands it whole lines only.
   head_filter = parse_filter if isinstance(parse_filter, HeadProvableFilter) else None
-  with open(path, "rb") as f:
-    f.seek(0, 2)
-    pos = f.tell()
-    pending: list[bytes] = []  # the line spanning pos, one window-piece per step, oldest piece first
+  with open(path, "rb") as f, _mapped_lines(path, f) as (mm, size):
+    if mm is None:
+      return
+    rfind = mm.rfind
+    pos = size
     while pos > 0:
-      start = max(0, pos - _TAIL_WINDOW_SIZE)
-      f.seek(start)
-      window = f.read(pos - start)
-      nl = window.rfind(b"\n")
-      if nl < 0:
-        # The whole window sits inside the line spanning pos: keep its bytes
-        # and walk older; the join happens once at the line's closing newline.
-        pending.insert(0, window)
-        # The file's first line closes at the file start — no older segment
-        # follows, so the pending pieces are the whole line, and its head is
-        # pending[0]'s head (the window starting at byte 0): a rejected head
-        # skips the join, same contract as the closing-newline branch below.
-        if start == 0 and (head_filter is None or head_filter(pending[0])):
-          yield from iter_ndjson_events(
-              [b"".join(pending)], log_event=log_event, log_fields=log_fields, parse_filter=parse_filter)
-        pos = start
+      nl = rfind(b"\n", 0, pos)
+      start = 0 if nl < 0 else nl + 1
+      if start == pos:
+        # The empty segment a trailing (or doubled) newline leaves: invisible
+        # under the skip contract, so no filter verdict can change it.
+        pos = 0 if nl < 0 else nl
         continue
-      lines = window[:nl].split(b"\n")
-      spanning = window[nl + 1:]
-      if pending:
-        # The joined line's head is *spanning* (the bytes from its opening
-        # newline to the window end), and a head-provable filter reads only
-        # that head — so a rejected head skips the join and the parse of the
-        # whole line, the multi-megabyte shape a no-match newest-first scan
-        # would otherwise carry and join. A head too short to prove parses.
-        if head_filter is None or head_filter(spanning):
-          lines.append(b"".join([spanning, *pending]))
-      elif spanning:
-        lines.append(spanning)
-      if start > 0:
-        pending = [lines[0]]  # this segment's left-truncated first line, completed by the next older segment
-        lines = lines[1:]
+      if parse_filter is None:
+        event = _parse_mapped_line(mm, start, pos, log_event=log_event, log_fields=log_fields)
+        if event is not None:
+          yield event
+      elif head_filter is not None:
+        head = bytes(memoryview(mm)[start:min(start + _HEAD_PROOF_BYTES, pos)])
+        if head_filter(head):
+          event = _parse_mapped_line(mm, start, pos, log_event=log_event, log_fields=log_fields)
+          if event is not None:
+            yield event
       else:
-        pending = []
-      yield from iter_ndjson_events(
-          reversed(lines), log_event=log_event, log_fields=log_fields, parse_filter=parse_filter)
-      pos = start
+        line = bytes(memoryview(mm)[start:pos])
+        if parse_filter(line):
+          event = parse_ndjson_line(line, log_event=log_event, log_fields=log_fields)
+          if event is not None:
+            yield event
+      pos = 0 if nl < 0 else nl
 
 
 class HeadProvableFilter:

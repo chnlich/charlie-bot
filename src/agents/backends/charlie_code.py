@@ -142,9 +142,8 @@ class CharlieCodeBackend(AgentBackend):
       apply_proxy_env(charlie_code_env, self._proxy_url)
     return charlie_code_env
 
-  def _prepare_cwd(self, cwd: str) -> None:
-    """Write AGENTS.md into the cwd so charlie-code appends it to its system message."""
-    self._write_instructions_file(cwd, "AGENTS.md", "charlie_code_wrote_agents_md")
+  # charlie-code appends the cwd AGENTS.md to its system message.
+  _INSTRUCTIONS_TARGET: tuple[str, str] = ("AGENTS.md", "charlie_code_wrote_agents_md")
 
   def _build_command(self, prompt: str) -> list[str]:
     if self._transport_dir is None:

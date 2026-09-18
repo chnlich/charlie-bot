@@ -4,13 +4,37 @@ set -euo pipefail
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
+# The host-auth panel files: the panel parses ~/.ssh/config at run time, so the
+# leak guard scans these four from birth. The list is literal on purpose -- the
+# panel's tests assert it, and adding a file here is a review-visible act.
+host_auth_scan=(
+  "src/core/host_auth.py"
+  "src/api/host_auth.py"
+  "web/templates/host_auth.html"
+  "tests/test_host_auth.py"
+)
+
 files=()
 if [[ $# -eq 0 ]]; then
   while IFS= read -r -d '' file; do
     files+=("$file")
   done < <(find skills prompts -type f -name '*.md' -print0)
+  for scan_file in "${host_auth_scan[@]}"; do
+    if [[ -f "$scan_file" ]]; then
+      files+=("$scan_file")
+    fi
+  done
 else
   for input in "$@"; do
+    rel=${input#./}
+    rel=${rel#"$repo_root"/}
+    for scan_file in "${host_auth_scan[@]}"; do
+      if [[ "$rel" == "$scan_file" ]]; then
+        files+=("$rel")
+        continue 2
+      fi
+    done
+
     [[ "$input" == *.md ]] || continue
 
     if [[ "$input" = /* ]]; then

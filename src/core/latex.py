@@ -4,6 +4,7 @@ import asyncio
 import signal
 from pathlib import Path
 
+from src.core.git import _git_proc_bytes
 from src.core.log_once import LazyStructlogLogger
 from src.core.process import kill_process_group
 from src.core.timeouts import LATEX_COMPILE_TIMEOUT, SUBPROCESS_GIT_READ_TIMEOUT_ASYNC
@@ -87,30 +88,20 @@ def clear_snapshot() -> None:
 
 
 async def _git_rev_parse(project_dir: str, *args: str) -> str | None:
-  """Run `git -C <project_dir> rev-parse <args>` and return stripped stdout.
+  """Run `git rev-parse <args>` in the project dir; return stripped stdout.
 
   Returns None when git exits nonzero. A timeout kills the process, logs
   ``get_git_info_timeout``, and re-raises, so the caller aborts instead of
   mistaking an unreadable repo for a failed ref.
   """
-  proc = await asyncio.create_subprocess_exec(
-      'git',
-      '-C',
-      project_dir,
-      'rev-parse',
-      *args,
-      stdout=asyncio.subprocess.PIPE,
-      stderr=asyncio.subprocess.DEVNULL,
-  )
   try:
-    out, _ = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
+    proc, stdout, _ = await _git_proc_bytes(project_dir, 'rev-parse', *args, timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
   except TimeoutError:
-    proc.kill()
     log.warning('get_git_info_timeout', cmd='rev-parse ' + ' '.join(args))
     raise
   if proc.returncode != 0:
     return None
-  return out.decode().strip()
+  return stdout.decode().strip()
 
 
 async def get_git_info() -> dict | None:

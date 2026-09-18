@@ -7335,9 +7335,12 @@ import os, subprocess, sys, time
 checkout = os.environ["CHECKOUT"]
 # The console script resolves src through the editable finder pinned to the main
 # checkout, so the checkout under test rides PYTHONPATH (cwd-first import is the
-# `python -c` shape, not the launch shape).
+# The console script resolves src through the editable finder pinned to the main
+# checkout, so the checkout under test rides PYTHONPATH (cwd-first import is the
+# `python -c` shape, not the launch shape); the script itself lives in the venv
+# that owns this interpreter — worktree checkouts carry no .venv of their own.
 env = {**os.environ, "PYTHONPATH": checkout}
-script = os.path.join(checkout, ".venv", "bin", "claude-sub")
+script = os.path.join(os.path.dirname(sys.executable), "claude-sub")
 
 times = []
 for _ in range(7):
@@ -7345,8 +7348,11 @@ for _ in range(7):
     proc = subprocess.run([sys.executable, script, "--m108-unsupported-probe-flag"],
                           capture_output=True, env=env)
     times.append(time.perf_counter() - t0)
-    if proc.returncode == 0:
-        raise SystemExit("the probe flag was accepted; the launch parsed it as real argv")
+    # The expected exit is the argv-parse rejection; a crash before the parse
+    # also exits non-zero, so the message is the pass condition.
+    if proc.returncode == 0 or b"unsupported claude-sub flag" not in proc.stderr:
+        raise SystemExit(f"probe did not parse-and-reject: rc={proc.returncode} "
+                         f"stderr={proc.stderr.decode(errors='replace')[:200]!r}")
 times.sort()
 print(f"claude-sub launch floor median {times[3]:.3f} s, max {times[-1]:.3f} s over 7 (checkout {checkout})")
 EOF

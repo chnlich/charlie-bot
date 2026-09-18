@@ -59,11 +59,19 @@ _PASS_THROUGH_ROWS = [
     pytest.param("secret", "GET", "/api/chat", None, {"charliebot_access_key": "secret"}, id="cookie-accepted"),
     pytest.param("secret", "GET", "/api/chat", {"authorization": "Bearer secret"}, None, id="bearer-header-accepted"),
     pytest.param("secret", "GET", "/api/auth/status", {"accept": "text/html"}, None, id="public-path-no-credential"),
-    pytest.param("secret", "GET", "/absolute_filepath/tmp/trace.json", None,
-                 {"charliebot_access_key": "secret"}, id="file-server-cookie-accepted"),
+    pytest.param(
+        "secret",
+        "GET",
+        "/absolute_filepath/tmp/trace.json",
+        None, {"charliebot_access_key": "secret"},
+        id="file-server-cookie-accepted"),
     pytest.param("secret", "GET", "/perfetto", None, {"charliebot_access_key": "secret"}, id="viewer-page-perfetto"),
-    pytest.param("secret", "GET", "/perfetto/merged", None, {"charliebot_access_key": "secret"},
-                 id="viewer-page-perfetto-merged"),
+    pytest.param(
+        "secret",
+        "GET",
+        "/perfetto/merged",
+        None, {"charliebot_access_key": "secret"},
+        id="viewer-page-perfetto-merged"),
     pytest.param("secret", "GET", "/ncu", None, {"charliebot_access_key": "secret"}, id="viewer-page-ncu"),
 ]
 

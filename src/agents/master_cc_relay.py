@@ -247,7 +247,11 @@ async def place_turn(
 
 
 async def _report_login_required(item: master_cc_state._WorkItem, account: ClaudeAccount, reason: str) -> None:
-  """Emit the login-required operator notice once: the log line keeps the chat event's type as its label, and the chat event rides the item's persist hook."""
+  """Emit the login-required operator notice once.
+
+  The log line keeps the chat event's type as its label, and the chat event
+  rides the item's persist hook.
+  """
   log.error(
       ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED,
       session=item.session_meta.id,

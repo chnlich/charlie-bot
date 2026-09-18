@@ -12,8 +12,9 @@ record of what was measured and why it changed. Before writing code, read
 `skills/writing-style/genres/code.md` and follow it: comments carry constraints only; provenance
 lives in blame.
 
-Isolation rule: any validation that runs charliebot components uses a scratch `CHARLIEBOT_HOME`
-holding synthetic sessions only (fresh random ids, no `cc_session_id`), because `CHARLIEBOT_HOME`
+Isolation rule: any validation that runs charliebot components — the config loader, cron task
+loading, any worker spawn — uses a scratch `CHARLIEBOT_HOME` holding synthetic sessions only
+(fresh random ids, no `cc_session_id`), because `CHARLIEBOT_HOME`
 relocates the state directory alone: Claude Code transcripts live under the login directory
 (`CLAUDE_CONFIG_DIR`, default `~/.claude`), so a copied live session carries a `cc_session_id` that
 the real `claude` CLI resumes as the live master's own conversation, and the second master turn that

@@ -763,13 +763,8 @@ def _resolve_prompt_file(entry: dict, repo_root: Path) -> Path | None:
   return path
 
 
-# Claude Code's login-directory env var, a cross-process wire contract: the server
-# writes it onto a cc-claude child (claude_code._prepare_env, the tmux spawn in
-# src/cli/claude_sub.py), the pool strips any inherited value where it pinned the
-# directory itself (master_cc_run, claude_compaction.compaction_env), and the
-# in-process readers below and in tui/_claude_config_path and claude_sub read it
-# back. One spelling everywhere; the names single-home in src.core.home so the
-# worker binary's launch path imports them without this module.
+# The CLAUDE_CONFIG_DIR cross-process wire contract (writers, pool strips,
+# readers) is stated once, on CLAUDE_CONFIG_DIR_ENV_VAR in src.core.home.
 
 
 def claude_config_dir(account: ClaudeAccount | None = None) -> Path:

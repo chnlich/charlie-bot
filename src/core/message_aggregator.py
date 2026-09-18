@@ -451,17 +451,18 @@ class MessageAggregator:
     row = {**self._tools_buf[-1], "output": output, "is_error": bool(is_error)}
     self._tools_buf[-1] = tool_preview(row)
 
-  def _stream_delta(self) -> dict | None:
+  def _stream_delta(self) -> Iterator[dict]:
+    """Yield the buffered draft's stream delta, or nothing when none is due."""
     if not self.emit_stream_deltas:
-      return None
+      return
     msg = self.pending_draft_message()
     if msg is None:
-      return None
+      return
     # The streaming bubble paints content and thinking only (paintStreamDraft);
     # each tool row rides the preview shape its renderer reads.
     if msg.get("tools"):
       msg["tools"] = [tool_preview(t) for t in msg["tools"]]
-    return {"type": "stream", "message": msg}
+    yield {"type": "stream", "message": msg}
 
   def _feed(self, ev: dict, idx: int) -> Iterator[dict]:
     t = ev.get("type")
@@ -473,9 +474,7 @@ class MessageAggregator:
         for block in (ev.get("message") or {}).get("content", []):
           if isinstance(block, dict) and block.get("type") == "tool_result" and self._tools_buf:
             self._attach_tool_output(extract_tool_result_text(block), block.get("is_error", False))
-        delta = self._stream_delta()
-        if delta is not None:
-          yield delta
+        yield from self._stream_delta()
         return
       yield from self._flush_to_message_delta()
       normalized = normalize_user_message_event(ev)
@@ -546,9 +545,7 @@ class MessageAggregator:
       if self._assistant_buf or self._tools_buf or self._thinking_buf:
         self._last_event_id = ev_id
 
-      delta = self._stream_delta()
-      if delta is not None:
-        yield delta
+      yield from self._stream_delta()
       return
 
     if t == ET.TOOL_USE:
@@ -557,9 +554,7 @@ class MessageAggregator:
       self._last_event_id = ev_id
       if self._last_assistant_ts is None:
         self._last_assistant_ts = ev.get('timestamp')
-      delta = self._stream_delta()
-      if delta is not None:
-        yield delta
+      yield from self._stream_delta()
       return
 
     if t == ET.TOOL_RESULT:
@@ -567,9 +562,7 @@ class MessageAggregator:
         return
       self._attach_tool_output(ev.get('content', ''), ev.get('is_error', False))
       self._last_event_idx = idx
-      delta = self._stream_delta()
-      if delta is not None:
-        yield delta
+      yield from self._stream_delta()
       return
 
     if t == ET.THINKING:
@@ -579,9 +572,7 @@ class MessageAggregator:
         self._last_assistant_ts = ev.get("timestamp")
       if self._assistant_buf or self._tools_buf or self._thinking_buf:
         self._last_event_id = ev_id
-      delta = self._stream_delta()
-      if delta is not None:
-        yield delta
+      yield from self._stream_delta()
       return
 
     handler = _SIMPLE_HANDLERS.get(t)

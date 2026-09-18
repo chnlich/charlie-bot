@@ -687,7 +687,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
         session_meta.id, {
             "type": ET.BACKEND_OVERLAY_INACTIVE,
             "backend": option.id,
-            "reason": "undeclared",
+            "reason": ET.OVERLAY_REASON_UNDECLARED,
         })
   elif prompt_overlay == "none":
     prompt_overlay = None
@@ -708,7 +708,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
         session_meta.id, {
             "type": ET.BACKEND_OVERLAY_INACTIVE,
             "backend": option.id,
-            "reason": "unreadable",
+            "reason": ET.OVERLAY_REASON_UNREADABLE,
             "overlay": prompt_overlay,
             "error": type(overlay_error).__name__,
         })
@@ -751,7 +751,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   if (option.type in _RESUME_CAPABLE_BACKEND_TYPES and not resume_id and not item.expect_fresh_session):
     anchor_on_disk = session_meta.cc_session_id
     if anchor_on_disk or await item.callbacks.has_completed_round(session_meta.id):
-      reason = "transcript_missing" if anchor_on_disk else "anchor_missing"
+      reason = ET.RESUME_REASON_TRANSCRIPT_MISSING if anchor_on_disk else ET.RESUME_REASON_ANCHOR_MISSING
       log.error(
           "master_cc_resume_anchor_missing",
           session=session_meta.id,

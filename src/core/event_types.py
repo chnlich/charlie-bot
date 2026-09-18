@@ -75,6 +75,12 @@ SLACK_REPLY = "slack_reply"
 CONTEXT_COMPACTED = "context_compacted"
 CONTEXT_COMPACT_FAILED = "context_compact_failed"
 RESUME_CONTEXT_DROPPED = "resume_context_dropped"
+# The resume_context_dropped event's reason field: the resume pre-flight found
+# no anchor at all, or an anchor whose transcript is gone. The producer
+# (src/agents/master_cc_run.py) and the renderer (src/core/message_aggregator.py)
+# share this one spelling, so a one-site edit cannot fork the pair.
+RESUME_REASON_ANCHOR_MISSING = "anchor_missing"
+RESUME_REASON_TRANSCRIPT_MISSING = "transcript_missing"
 # A backend emits this ``subtype`` on a ``system`` event when the conversation
 # crosses a compaction boundary; the event carries its ``trigger`` and token
 # counts under the ``compact_metadata`` key.  Both are persisted wire values:
@@ -176,10 +182,14 @@ MODEL_FALLBACK_NOTICE = "model_fallback_notice"
 # -- Overlay declaration -----------------------------------------------------
 # One alert for every fenceless run: undeclared prompt_overlay and
 # declared-but-unreadable emit the same backend_overlay_inactive event, told
-# apart by its reason field ("undeclared" | "unreadable"). An unreadable
-# overlay degrades to a fenceless run — the read failure does NOT raise and
-# never kills the wake.
+# apart by its reason field. An unreadable overlay degrades to a fenceless run
+# — the read failure does NOT raise and never kills the wake.
 BACKEND_OVERLAY_INACTIVE = "backend_overlay_inactive"
+# The reason field's two values; the producer (src/agents/master_cc_run.py) and
+# the renderer (src/core/message_aggregator.py) share this one spelling, so a
+# one-site edit cannot fork the pair.
+OVERLAY_REASON_UNDECLARED = "undeclared"
+OVERLAY_REASON_UNREADABLE = "unreadable"
 # Legacy render-only constant: history events carry no reason field and render
 # as undeclared. New code never emits it.
 BACKEND_OVERLAY_UNDECLARED = "backend_overlay_undeclared"

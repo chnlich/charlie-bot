@@ -126,8 +126,8 @@
         with evidence, and teaching begins at that step. When the reader points out a
         contradiction, the first sentence rules who is right.
       2 mechanism: the missing mechanism, why before what. Every mechanism claim seats three
-        things together, the reader's own premises included: the real code (path and line),
-        its position in the larger call chain, and a hand-checkable example.
+        things together, the reader's own premises included: the real code (path and named
+        symbol), its position in the larger call chain, and a hand-checkable example.
       3 worked example: every variable dimension the question names, enumerated. Each opens
         with what pipeline part it is and why it varies, then its real sampled value; each
         name is glossed per the Vocabulary rule (prompts/master.md) before its first use in a table.
@@ -163,7 +163,7 @@
       <h2><span class="n">2</span> The missing mechanism: the frame cache keys on the joint state, not the bin<span class="slot">mechanism</span></h2>
       <p>When the compiler builds one frame, it records every int, shape, and branch result it touched as a guard. The next call re-checks each guard against the raw values that step actually carried; if any guard fails, the whole frame recompiles. The check happens before binning, so it compares not "is the bin the same" but "is the raw value still in the recorded band".</p>
       <p><b>The real code, its place in the chain, and a hand-checkable case:</b></p>
-      <pre># ~/workspace/photonfarm/shade_ops.py:141-155, the binner the reader names
+      <pre># ~/workspace/photonfarm/shade_ops.py, the binner the reader names
 _BINS = (16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384,
          32768, 65536, 131072, 262144, 524288)   # sixteen bins
 
@@ -174,7 +174,7 @@ def bin_radius(r: int) -> int:
             return b
     return _BINS[-1]
 
-# call site :204-205, inside the glow pass
+# call site, inside the glow pass
 S_bucket = bin_radius(max_radius)   # returns a python constant
 # S_bucket enters the shader cache key</pre>
       <p>For a hand check, <code>max_radius = 300</code> maps to <code>S_bucket = 512</code>; <code>max_radius = 400</code> maps to the same shader bin, while a changed row count can still fail the frame guard before the bin is used.</p>

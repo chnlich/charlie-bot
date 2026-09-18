@@ -81,7 +81,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M69 opencode SSE unhandled-event debug stream, steady state | M69 collector below | debug lines per 60 steady-state `_translate_sse_event` calls of one unhandled event type | 0 lines after the first sighting per event type per process | — (introduced with its first history row) |
 | M70 artifact clean-view serve, steady state | M70 collector below | seconds per repeat credentialed view of the worst on-disk artifact page, scratch home | repeat-view median < 0.003 s (recalibrated from < 0.010 s: the old line sat on the TestClient/httpx harness floor the 2026-09-15 repair removed — the served path reads 0.7-2.7 ms across the repair round's loads 3.6-3.9, the cron-collision bias the M56 history documents; see that history row) | — (introduced with its first history row) |
 | M71 sidebar search capped name-match response | M71 collector below | seconds per request, worst capped name-match shape (a one-character query matching the cap), snapshot corpus | median < 0.003 s (recalibrated from < 0.006 s: the old line sat on the TestClient harness floor the 2026-09-17 repair removed — the repaired raw-ASGI+middleware drive reads the served path at 1.66-1.89 ms with the body-keyed gzip memo, 2.99-3.13 ms before it; see the 2026-09-17 history row) | — (introduced with its first history row) |
-| M72 file-browser directory listing | M72 collector below | seconds per `GET /files/<dir>` request, worst on-disk listing corpus (the sessions root), the served path (the production gzip middleware mounted, Accept-Encoding: gzip — the browser shape; a bare app without the middleware reads the walk's floor alone, the vacuous-read class the M70 repair called out); the changed-round rebuild (one corpus move since the stored page keyed — a metadata rename into a session dir; the harness drops the page memo per timed round, row memo warm, builder level) | repeat-view median < 0.008 s (a tripped reading is read as host load and corpus growth first — the walk scales with the listed entry count, the cron-collision bias the M56 history documents; the 2026-09-15 repair split the TestClient harness floor out of the reading); changed-round median < 0.007 s | — (introduced with its first history row) |
+| M72 file-browser directory listing | M72 collector below | seconds per `GET /absolute_filepath/<dir>` request, worst on-disk listing corpus (the sessions root), the served path (the production gzip middleware mounted, Accept-Encoding: gzip — the browser shape; a bare app without the middleware reads the walk's floor alone, the vacuous-read class the M70 repair called out); the changed-round rebuild (one corpus move since the stored page keyed — a metadata rename into a session dir; the harness drops the page memo per timed round, row memo warm, builder level) | repeat-view median < 0.008 s (a tripped reading is read as host load and corpus growth first — the walk scales with the listed entry count, the cron-collision bias the M56 history documents; the 2026-09-15 repair split the TestClient harness floor out of the reading); changed-round median < 0.007 s | — (introduced with its first history row) |
 | M73 plan-verb validation event-loop lag | M73 collector below | seconds of loop lag + wall per amend validation (the registration gate: the DOM assertion set plus the headless-Chrome page-height render), scratch home, copied passing plan page (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 0.2 s (warm steady state; the first validation after a process start pays the one-time browser launch) | — (introduced with its first history row) |
 | M74 master turn-end raw-log rescan | M74 collector below | seconds of loop lag + wall per fallback-notice projection (whole read+parse+project of the turn's raw log), worst on-disk master-run raw log among the sessions the turn-end gate scans (backend option claude-family — the `_CLAUDE_RESUME_FLAG_BACKEND_TYPES` check the live call site runs), that session's own fresh translate (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.030 s | — (introduced with its first history row) |
 | M75 live-aggregator catch-up, first streamed event | M75 collector below | seconds of loop lag + wall per first-`persist_and_broadcast` catch-up (whole read+feed of the live corpus), worst on-disk live chat corpus, scratch home (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.020 s | — (introduced with its first history row) |
@@ -3548,7 +3548,7 @@ event loop per request — ~0.25 s of loop freeze per compare view of a 1 MB
 pair (the M14 pathology), re-computing an immutable result on every repeat
 view (the toggle flip, a plan update re-render, a refresh). The fixed handler
 builds the page in one thread hop and memoizes it on both files' (path,
-mtime_ns, size) signatures plus the injection flag — the marks are a pure
+mtime_ns, size) signatures — the marks are a pure
 function of the two files' bytes and artifact pages are only ever written
 whole, so a repeat view re-runs zero annotate. The compare view's repeat also
 ships its pre-compressed gzip form from a memo beside the plain one, the M70
@@ -3623,18 +3623,20 @@ TARGET = os.environ["M55_TARGET"]
 BASE = os.environ["M55_BASE"]
 
 # Scratch wiring: the router's get_config resolves the snapshot home, never the
-# live one; the snapshot's empty access key makes every reader credentialed, so
-# the timed request carries the artifact-comments injection like a real view.
+# live one; the tray injects unconditionally (the auth middleware owns the
+# access gate and this harness mounts none), so the timed request carries the
+# artifact-comments injection like a real view.
 cfg = CharlieBotConfig(charliebot_home=home)
 files_mod.get_config = lambda: cfg
 app = FastAPI()
-app.include_router(files_router, prefix="/files")
+app.include_router(files_router, prefix="/absolute_filepath")
 # The production middleware chain: every served response passes the whole-body
 # gzip whose deflate is part of the view's cost.
 app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
-# The file server addresses pages by absolute filesystem path (the /files and
-# /absolute_filepath prefixes are aliases); ?diff= stays session-relative.
-PATH = f"/files/{home}/sessions/{SID}/artifacts/{TARGET}"
+# The file server addresses pages by absolute filesystem path under the one
+# canonical /absolute_filepath prefix (the /files alias is unmounted); ?diff=
+# stays session-relative.
+PATH = f"/absolute_filepath/{home}/sessions/{SID}/artifacts/{TARGET}"
 QS = f"diff=artifacts/{BASE}".encode()
 HEADERS = [(b"host", b"test"), (b"accept-encoding", b"gzip")]  # the browser shape
 SCOPE = {
@@ -4655,8 +4657,8 @@ print(f"60 steady-state unhandled todo.updated frames; opencode_sse_event_unhand
 EOF
 ```
 
-M70 — artifact clean-view serve, steady state. Every credentialed view of a session artifact page
-(`GET /files/…/<session>/artifacts/<page>.html`) read and re-injected the whole page per request,
+M70 — artifact clean-view serve, steady state. Every view of a session artifact page
+(`GET /absolute_filepath/…/<session>/artifacts/<page>.html`) read and re-injected the whole page per request,
 while the `?diff=` sibling served repeats from the M55 annotate memo. The chat log links plan and
 report pages that are re-opened repeatedly (794 of the 823 artifact views in the 69.85 h live log
 sampled 2026-09-06 were repeats of an already-viewed file), so each repeat paid the full-file read
@@ -4670,17 +4672,17 @@ reading, 0.0026 s, is the vacuous-read class the M68 repair called out). The dri
 (the M101 pattern) because the TestClient/httpx layer reads ~9 ms of harness per request on this
 ~0.8 MB wire body — 9.0 of the standing collector's 9.9 ms at the 2026-09-14 round, a floor that
 drowned both the served path and the M70 landing's own fix — so one cold pass, as at first
-artifact view, then nine timed requests, with the snapshot's empty
-access key credentialing every reader (the injection gate reads the process home's credentials,
-so the run points ``CHARLIEBOT_HOME`` at the snapshot). Snapshot once:
+artifact view, then nine timed requests, with the tray injecting unconditionally (the auth
+middleware owns the access gate and the collector mounts none), so the drive carries the
+injected view a real reader gets. Snapshot once:
 
 ```bash
 /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
 import shutil, tempfile
 from pathlib import Path
 
-# Worst clean-view corpus: the largest .html artifact page on disk; the
-# credentialed view reads and re-injects the whole page per request.
+# Worst clean-view corpus: the largest .html artifact page on disk; the served
+# view reads and re-injects the whole page per request.
 root = Path.home() / ".charliebot" / "sessions"
 best, best_n = None, -1
 for p in root.glob("*/artifacts/*.html"):
@@ -4692,7 +4694,6 @@ home = Path(tempfile.mkdtemp(prefix="m70-artifact-home-", dir="/tmp"))
 dst = home / "sessions" / SID / "artifacts"
 dst.mkdir(parents=True)
 shutil.copy2(best, dst / best.name)
-(home / "credentials.yaml").write_text("charliebot:\n  access_key: ''\n", encoding="utf-8")
 print(f"worst artifact: session {SID}, {best.name}, {best_n / 1e6:.2f} MB")
 print(f"export M70_HOME={home} M70_SID={SID} M70_NAME={best.name} M70_SIZE={best_n}")
 EOF
@@ -4714,22 +4715,19 @@ from server import _CharlieBotGZipMiddleware
 home = Path(os.environ["M70_HOME"])
 SID = os.environ["M70_SID"]
 NAME = os.environ["M70_NAME"]
-# The files routes read the access key through the process home (get_credentials
-# is env-scoped, not cfg-scoped), so the process home points at the snapshot
-# before any request.
-os.environ["CHARLIEBOT_HOME"] = str(home)
 
 # Scratch wiring: the router's get_config resolves the snapshot home, never the
-# live one; the snapshot's empty access key makes every reader credentialed, so
-# the timed request carries the artifact-comments injection like a real view.
+# live one; the tray injects unconditionally (the auth middleware owns the
+# access gate and this harness mounts none), so the timed request carries the
+# artifact-comments injection like a real view.
 cfg = CharlieBotConfig(charliebot_home=home)
 files_mod.get_config = lambda: cfg
 app = FastAPI()
-app.include_router(files_router, prefix="/files")
+app.include_router(files_router, prefix="/absolute_filepath")
 # The production middleware chain: every served response passes the whole-body
 # gzip whose deflate is part of the view's cost.
 app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
-url = f"/files/{home}/sessions/{SID}/artifacts/{NAME}"
+url = f"/absolute_filepath/{home}/sessions/{SID}/artifacts/{NAME}"
 HEADERS = [(b"host", b"test"), (b"accept-encoding", b"gzip")]  # the browser shape
 SCOPE = {
     "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
@@ -4936,7 +4934,7 @@ EOF
 ```
 
 M72 — file-browser directory listing. The file server renders a directory's
-listing per request (`GET /files/<dir>` and `HEAD`); the browser's navigation
+listing per request (`GET /absolute_filepath/<dir>` and `HEAD`); the browser's navigation
 clicks pay the walk. The page memoizes on the walk's own entry snapshot
 (per-entry (is_dir, name, size, mtime), the resolved dir and URL prefix around
 it): equal walked state proves the stored page equals what this walk would
@@ -4976,12 +4974,12 @@ corpus = Path.home() / ".charliebot" / "sessions"
 n = sum(1 for _ in os.scandir(corpus))
 
 app = FastAPI()
-app.include_router(files_router, prefix="/files")
+app.include_router(files_router, prefix="/absolute_filepath")
 # The production middleware chain: every served response passes the whole-body
 # gzip whose deflate is part of the view's cost — a bare app reads the walk
 # floor alone.
 app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
-url = f"/files{corpus}"
+url = f"/absolute_filepath{corpus}"
 SCOPE = {
     "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
     "http_version": "1.1", "method": "GET", "scheme": "http",
@@ -5043,7 +5041,7 @@ import src.api.files as files_mod
 
 # Worst listing corpus: the sessions root (the M72 standing shape), read-only.
 corpus = Path.home() / ".charliebot" / "sessions"
-prefix = f"/files{corpus}"
+prefix = f"/absolute_filepath{corpus}"
 checkout = os.environ["CHECKOUT"].rsplit("/", 1)[-1]
 
 # Cold pass, as at a first browser open: rows memoized the way a first view
@@ -7238,8 +7236,10 @@ at 10.6-11.4 ms per view against 2.5-2.8 ms identity, a 727 KB pptx at ~19 ms ag
 transport compression for that media-type prefix list; text formats (html, json, svg, csv)
 keep compressing and SSE stays excluded. The cost is per-view serve time invisible to the standing HTTP
 probes, so the collector drives the real app stack raw-ASGI (`import server`, the production
-middleware chain over the file server's FileResponse arm, no credentials — the uncredentialed
-arm is the one the middleware compresses) over the worst on-disk `.png` and `.pptx` under the
+middleware chain over the file server's FileResponse arm) with the auth middleware's gate
+at its no-op — the scratch home pins an empty `charliebot_access_key`, because an
+uncredentialed request reads 401 before the route and the empty key serves the credentialed
+view's exact bytes — over the worst on-disk `.png` and `.pptx` under the
 sessions tree plus the worst artifact page as the witness: one cold pass per corpus, then five
 timed requests, reporting the serve wall, the wire bytes, and the transport header each answer
 carried. Evidence points the same collector at the before and after checkouts (`CHECKOUT` at
@@ -7248,14 +7248,22 @@ shape as the M35 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, os, sys, time
+import asyncio, os, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
+
+# The auth middleware's gate is a no-op on an empty configured key, while an
+# uncredentialed request reads 401 before the file route; the scratch home pins
+# the empty key so the drive carries the credentialed view's served shape.
+home = tempfile.mkdtemp(prefix="m105-transport-home-", dir="/tmp")
+Path(home, "credentials.yaml").write_text("charliebot:\n  access_key: ''\n", encoding="utf-8")
+os.environ["CHARLIEBOT_HOME"] = home
 import server  # the real app stack: the transport-gzip middleware over the file server
 
 # Worst served corpora per family: the largest .png and .pptx under the live
 # sessions tree's artifact dirs, plus the largest artifact page (the
-# keep-compressing witness). Read-only; the URL shape is the /files mount's.
+# keep-compressing witness). Read-only; the URL shape is the canonical
+# /absolute_filepath mount.
 root = Path.home() / ".charliebot" / "sessions"
 best = {}
 for p in root.glob("*/artifacts/*"):
@@ -7308,7 +7316,7 @@ async def main():
             print(f"{suffix}: no corpus under the sessions tree; unmeasured")
             continue
         n, p = entry
-        url = f"/files{p}"
+        url = f"/absolute_filepath{p}"
         _, _, cold_out = await drive(url)  # cold pass; not timed
         assert cold_out["status"] == 200, (url, cold_out["status"])
         times, wire, enc = [], 0, b""

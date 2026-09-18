@@ -435,8 +435,10 @@ def _request_with_contract(
       if method == "POST":
         resp = _request_post(
             url, json=payload, params=params, headers=internal_api_auth_headers(), timeout=HTTP_INTERNAL_API_TIMEOUT)
-      else:
+      elif method == "GET":
         resp = _request_get(url, params=params, headers=internal_api_auth_headers(), timeout=HTTP_INTERNAL_API_TIMEOUT)
+      else:
+        raise RuntimeError(f"internal-API method is POST or GET, got {method!r}")
     except _ConnectPhaseError as e:
       remaining = deadline - time.monotonic()
       if remaining <= 0:

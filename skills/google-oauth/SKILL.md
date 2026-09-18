@@ -8,7 +8,16 @@ description: >
 
 # Google OAuth
 
-All Google integrations share a single OAuth client and refresh token stored in the `google` section of `~/.charliebot/credentials.yaml`.
+All Google integrations share a single OAuth client and refresh token.
+
+## Configuration
+
+Single home of the shared credential setup; integration skills point here instead of restating it.
+
+- Credentials location: `~/.charliebot/credentials.yaml`
+- Keys (section `google`): `client_id`, `client_secret`, `refresh_token`
+- Auth model: OAuth2 user token flow using a long-lived refresh token
+- Store only the `refresh_token` key in the `google` section. Access tokens are minted at runtime and discarded after use.
 
 ## Runtime Token Mint
 

@@ -14,13 +14,7 @@ Read and search Gmail messages using the Gmail API with a user refresh token. Re
 
 ## Configuration
 
-- Credentials location: `~/.charliebot/credentials.yaml`
-- Keys (section `google`):
-  - `client_id`
-  - `client_secret`
-  - `refresh_token`
-- Auth model: OAuth2 user token flow using a long-lived refresh token
-- Store only the `refresh_token` key in the `google` section. Access tokens are minted at runtime and discarded after use.
+The shared Google credential configuration is defined once in the **google-oauth** skill: `skills/google-oauth/SKILL.md`.
 
 ## API Reference
 

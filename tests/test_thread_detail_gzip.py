@@ -72,7 +72,7 @@ async def test_detail_gzip_repeat_serves_memo_without_recompress(tmp_path: Path)
   cfg, thread_mgr, thread, _ = await _saved_thread(tmp_path)
   first = await get_thread(thread.session_id, thread.id, _page_request("gzip"), thread_mgr, cfg, attach=False)
 
-  with patch("src.api.responses.gzip.compress", gzip_explode_compress("repeat detail fetch re-ran the deflate")):
+  with patch("src.api.responses.gzip_level1", gzip_explode_compress("repeat detail fetch re-ran the deflate")):
     second = await get_thread(thread.session_id, thread.id, _page_request("gzip"), thread_mgr, cfg, attach=False)
   assert second.body == first.body
 

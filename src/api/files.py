@@ -1,7 +1,6 @@
 """File server router — serves files and directory listings from the filesystem."""
 
 import asyncio
-import gzip
 import html
 import json
 import math
@@ -17,6 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from src.api.auth import request_has_access_key
 from src.api.pages import _static_asset_version
 from src.api.responses import GZIP_RESPONSE_HEADERS, request_wants_gzip
+from src.core.compression import gzip_level1
 from src.core.config import configured_access_key, get_config
 from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.memo import BoundedMemo
@@ -133,8 +133,7 @@ def _annotated_diff_page_gzip(base_path: Path, page_path: Path, inject_ui: bool,
   hit = _annotate_gzip_memo.get(key)
   if hit is not None:
     return hit
-  compressed = gzip.compress(
-      _annotated_diff_page(base_path, page_path, inject_ui, session_id).encode("utf-8"), compresslevel=1, mtime=0)
+  compressed = gzip_level1(_annotated_diff_page(base_path, page_path, inject_ui, session_id).encode("utf-8"))
   _annotate_gzip_memo.store(key, compressed)
   return compressed
 
@@ -169,7 +168,7 @@ def _injected_artifact_page_gzip(fs_path: Path, session_id: str) -> bytes:
   hit = _clean_view_gzip_memo.get(key)
   if hit is not None:
     return hit
-  compressed = gzip.compress(_injected_artifact_page(fs_path, session_id), compresslevel=1, mtime=0)
+  compressed = gzip_level1(_injected_artifact_page(fs_path, session_id))
   _clean_view_gzip_memo.store(key, compressed)
   return compressed
 
@@ -413,7 +412,7 @@ def _listing_page_gzip(key: _ListingKey, listing: str) -> bytes:
   hit = _listing_gzip_memo.get(key)
   if hit is not None:
     return hit
-  compressed = gzip.compress(listing.encode("utf-8"), compresslevel=1, mtime=0)
+  compressed = gzip_level1(listing.encode("utf-8"))
   _listing_gzip_memo.store(key, compressed)
   return compressed
 

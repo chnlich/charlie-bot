@@ -852,12 +852,12 @@ def _page_request(accept_encoding: str = "") -> Request:
 
 
 def gzip_explode_compress(message: str) -> Callable[..., bytes]:
-  """gzip.compress stand-in failing the test the moment any deflate runs.
+  """Deflator stand-in failing the test the moment any deflate runs.
 
-  The repeat-fetch tests install it in place of an API module's gzip.compress:
-  the second fetch of an unchanged body must serve the stored compressed form,
-  so the stand-in's raise is how a re-deflate fails the test. *message* names
-  the fetch shape the test drives.
+  The repeat-fetch tests install it in place of an API module's ``gzip_level1``
+  binding: the second fetch of an unchanged body must serve the stored
+  compressed form, so the stand-in's raise is how a re-deflate fails the test.
+  *message* names the fetch shape the test drives.
   """
 
   def explode_compress(*args: object, **kwargs: object) -> bytes:
@@ -867,11 +867,12 @@ def gzip_explode_compress(message: str) -> Callable[..., bytes]:
 
 
 def gzip_counting_compress(real_compress: Callable[..., bytes], calls: list[bytes]) -> Callable[..., bytes]:
-  """gzip.compress stand-in recording every body it deflates to *calls*.
+  """Deflator stand-in recording every body it deflates to *calls*.
 
-  The corpus-move tests install it in place of an API module's gzip.compress so
-  the assertion can pin the deflate count and the bytes the fresh pass read,
-  with *real_compress* captured before the install keeps producing true forms.
+  The corpus-move tests install it in place of an API module's ``gzip_level1``
+  binding so the assertion can pin the deflate count and the bytes the fresh
+  pass read, with *real_compress* captured before the install keeps producing
+  true forms.
   """
 
   def counting_compress(data: bytes, *args: object, **kwargs: object) -> bytes:

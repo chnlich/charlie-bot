@@ -63,7 +63,9 @@ def inline_merge_executor(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def client(merge_cache: Path) -> TestClient:
   app = FastAPI()
-  app.add_middleware(server._CharlieBotGZipMiddleware, minimum_size=1)
+  # The production level: the responder's file is an IGzipFile, whose levels
+  # run 0-3, so the mount cannot ride starlette's zlib-default 9.
+  app.add_middleware(server._CharlieBotGZipMiddleware, minimum_size=1, compresslevel=1)
   app.include_router(pages.router)
   return TestClient(app)
 

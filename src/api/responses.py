@@ -22,7 +22,6 @@ code-fixed types (None, bool, int, ASCII strings).
 """
 
 import asyncio
-import gzip
 from typing import Any
 
 import orjson
@@ -30,6 +29,7 @@ from fastapi.responses import JSONResponse
 from starlette.requests import Request
 from starlette.responses import Response
 
+from src.core.compression import gzip_level1
 from src.core.memo import BoundedMemo
 
 
@@ -91,6 +91,6 @@ async def gzip_body_response(
     return PreencodedJSONResponse(body, headers=headers)
   gz = memo.get(body)
   if gz is None:
-    gz = await asyncio.to_thread(gzip.compress, body, 1, mtime=0)
+    gz = await asyncio.to_thread(gzip_level1, body)
     memo.store(body, gz)
   return PreencodedJSONResponse(gz, headers={**headers, **GZIP_RESPONSE_HEADERS})

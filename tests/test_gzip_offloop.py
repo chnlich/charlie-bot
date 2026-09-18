@@ -27,7 +27,10 @@ def _strip_mtime(wire: bytes) -> bytes:
 def _build(handler: Any, middleware: Any) -> FastAPI:
   app = FastAPI()
   app.get("/big")(handler)
-  app.add_middleware(middleware, minimum_size=1000, compresslevel=6)
+  # Level 3 is the responder's non-default ceiling: the mounted compresslevel
+  # must be an ISA-L level (0-3) since the responder's file is an IGzipFile,
+  # where unlike zlib a level of 0 is not "store".
+  app.add_middleware(middleware, minimum_size=1000, compresslevel=3)
   return app
 
 
@@ -88,8 +91,14 @@ def test_whole_body_gzip_bytes_match_starlette_inline() -> None:
   _, baseline_body = _drive(_build(handler, GZipMiddleware))
 
   assert headers["content-encoding"] == "gzip"
-  assert _strip_mtime(body) == _strip_mtime(baseline_body)
+  # The responder deflates with ISA-L and the stock middleware with zlib, so
+  # the wires differ as byte streams; the pinned contracts are the container's
+  # validity, the parsed-content parity, and the off-loop hop changing no
+  # bytes of the responder's own wire.
   assert gzip.decompress(body) == BODY
+  assert gzip.decompress(baseline_body) == BODY
+  _, body_again = _drive(_build(handler, server._CharlieBotGZipMiddleware))
+  assert _strip_mtime(body) == _strip_mtime(body_again)
 
 
 def test_small_body_and_preset_encoding_stay_identity() -> None:
@@ -116,8 +125,10 @@ def test_streaming_body_compresses_per_chunk() -> None:
   _, baseline_body = _drive(_build(stream, GZipMiddleware))
 
   assert headers["content-encoding"] == "gzip"
-  assert _strip_mtime(body) == _strip_mtime(baseline_body)
+  # Same deflator split as the whole-body test above: the streamed chunks'
+  # wire is ISA-L's, the stock middleware's is zlib's, so parity is parsed.
   assert gzip.decompress(body) == BODY
+  assert gzip.decompress(baseline_body) == BODY
 
 
 def test_already_compressed_media_types_ride_identity() -> None:

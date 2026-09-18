@@ -24,8 +24,13 @@ _MERGE_COMPRESSLEVEL = 1
 # Events per orjson.dumps call on the merge output. The encoder's per-element text
 # is context-free, so a batch's bracket-stripped rendering is byte-identical to the
 # per-event form; batching cut the serializer pass from 3.0 s to 1.7 s on the input
-# above. The batch is the only buffering beyond the gzip stream.
+# above. Every append site (walk body, thread_name insert, trailing process_
+# metadata) checks this bound, so no batch exceeds it.
 _MERGE_BATCH_EVENTS = 512
+
+# Sentinel for the walk's single-probe tid read: `event.get("tid", sentinel)` costs
+# one dict probe where `in` + indexing costs two. JSON can never produce this object.
+_NO_TID = object()
 
 # Id space one member of a multi-trace merge may allocate: the member's
 # sequencers start at 1 + file_index * this stride, so parallel members never
@@ -80,25 +85,21 @@ def _rank_label(path: Path) -> str:
 class _EventBatcher:
   """Serializes merged events into the output stream in batches.
 
-  The stream carries `e1,e2,...` with no brackets of its own; a batch's list
-  rendering minus its outer brackets is exactly that fragment.
+  The walk appends to one pending list and hands it to :meth:`flush` at the
+  batch bound and once at the end. The stream carries `e1,e2,...` with no
+  brackets of its own; a batch's list rendering minus its outer brackets is
+  exactly that fragment, so batch boundaries are byte-invisible.
   """
 
   def __init__(self, output: BinaryIO) -> None:
     self._output = output
-    self._pending: list[dict] = []
     self._emitted_any = False
     self.emitted = 0
 
-  def add(self, event: dict) -> None:
-    self._pending.append(event)
-    self.emitted += 1
-    if len(self._pending) >= _MERGE_BATCH_EVENTS:
-      self.flush()
-
-  def flush(self) -> None:
-    if not self._pending:
+  def flush(self, pending: list[dict]) -> None:
+    if not pending:
       return
+    self.emitted += len(pending)
     if self._emitted_any:
       self._output.write(b",")
     self._emitted_any = True
@@ -107,8 +108,8 @@ class _EventBatcher:
     # The parse pass rejects the NaN/Infinity literals stdlib json.load accepts,
     # so a trace carrying them fails the build; an in-memory non-finite float
     # (unreachable from a trace file) would render as null here.
-    self._output.write(orjson.dumps(self._pending)[1:-1])
-    self._pending.clear()
+    self._output.write(orjson.dumps(pending)[1:-1])
+    pending.clear()
 
 
 class _IdSequencer:
@@ -184,7 +185,7 @@ def _merge_one_trace(
       gpu_index = int(gpu_match.group(1)) if gpu_match else 0
       synthetic_meta[synthetic_pid] = (base_sort_index + 1000 + gpu_index, f"{rank_label} {label}")
 
-  batcher_add = batcher.add
+  batcher_flush = batcher.flush
   pid_map_get = pid_map.get
   tid_map_get = tid_seq.seen.get
   # tid_raw_map carries one raw value per key so the walk's per-event probe
@@ -196,6 +197,11 @@ def _merge_one_trace(
   tid_seq_call = tid_seq
   flow_seq_call = flow_seq
   _str = str
+  # The batch append rides the walk loop as plain list ops: one bound method call
+  # per event over a 1M-event corpus measured ~0.2 s of the build wall.
+  pending: list[dict] = []
+  pending_append = pending.append
+  batch_bound = _MERGE_BATCH_EVENTS
 
   for event in events:
     ph = event.get("ph")
@@ -216,8 +222,8 @@ def _merge_one_trace(
     if synthetic_pid is None:
       synthetic_pid = pid_map_get(_str(pid), rank_label)
     event["pid"] = synthetic_pid
-    if "tid" in event:
-      original_tid = event["tid"]
+    original_tid = event.get("tid", _NO_TID)
+    if original_tid is not _NO_TID:
       synthetic_tid = tid_raw_get(original_tid)
       if synthetic_tid is None:
         # First sight of this raw form: the str-canonical map decides whether
@@ -230,7 +236,7 @@ def _merge_one_trace(
           # First sight: the sequencer allocates and inserts; the thread_name
           # rides the same first sight instead of a second per-event set probe.
           synthetic_tid = tid_seq_call(original_tid)
-          batcher_add(
+          pending_append(
               {
                   "ph": "M",
                   "pid": event["pid"],
@@ -240,11 +246,15 @@ def _merge_one_trace(
                       "name": f"{rank_label}/{original_tid}"
                   },
               })
+          if len(pending) >= batch_bound:
+            batcher_flush(pending)
         tid_raw_map[original_tid] = synthetic_tid
       event["tid"] = synthetic_tid
     if ph in {"s", "t", "f"} and "id" in event:
       event["id"] = flow_seq_call(event["id"])
-    batcher_add(event)
+    pending_append(event)
+    if len(pending) >= batch_bound:
+      batcher_flush(pending)
 
   meta_tid = tid_seq("meta")
   for synthetic_pid, (sort_index, label) in synthetic_meta.items():
@@ -253,7 +263,10 @@ def _merge_one_trace(
         ("process_labels", {"labels": label}),
         ("process_sort_index", {"sort_index": sort_index}),
     ):
-      batcher.add({"ph": "M", "pid": synthetic_pid, "tid": meta_tid, "name": name, "args": args})
+      pending_append({"ph": "M", "pid": synthetic_pid, "tid": meta_tid, "name": name, "args": args})
+      if len(pending) >= batch_bound:
+        batcher_flush(pending)
+  batcher_flush(pending)
 
 
 @contextlib.contextmanager
@@ -302,8 +315,8 @@ def _merge_all(paths: list[Path], out_path: Path, slim: bool) -> None:
     output.write(b'{"traceEvents":[')
     batcher = _EventBatcher(output)
     for file_index, path in enumerate(paths):
+      # Each walk flushes its own pending list before returning.
       _merge_one_trace(path, file_index, batcher, tid_seq, flow_seq, slim)
-    batcher.flush()
     output.write(b"]}")
 
 
@@ -323,7 +336,6 @@ def build_trace_member(path: Path, out_path: Path, file_index: int, slim: bool) 
     flow_seq = _IdSequencer(id_start)
     batcher = _EventBatcher(output)
     _merge_one_trace(path, file_index, batcher, tid_seq, flow_seq, slim)
-    batcher.flush()
     if tid_seq._next_id >= id_bound or flow_seq._next_id >= id_bound:
       raise ValueError(
           f"trace {path} exhausted its member id stride "

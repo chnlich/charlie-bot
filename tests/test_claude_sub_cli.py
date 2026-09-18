@@ -9,6 +9,7 @@ import pytest
 
 from src.cli import claude_sub, claude_sub_hook
 from src.cli.claude_sub_bridge import (
+    HOOK_EVENTS,
     HookBridge,
     HookProtocolError,
     HookTurnState,
@@ -638,7 +639,7 @@ def test_hook_plugin_registers_every_required_event_without_user_settings(tmp_pa
   hooks = json.loads((plugin_dir / "hooks" / "hooks.json").read_text())
 
   assert plugin["name"] == "charliebot-hook-bridge"
-  assert set(hooks["hooks"]) == set(claude_sub._HOOK_EVENTS)
+  assert set(hooks["hooks"]) == set(HOOK_EVENTS)
   for event_name, groups in hooks["hooks"].items():
     if event_name == "Notification":
       assert "matcher" not in groups[0]

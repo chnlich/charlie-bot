@@ -1226,59 +1226,23 @@ WORKER_BUILD_BACKEND_PATCH_TARGET = "src.agents.worker.build_backend"
 # src.core.runs module attribute where that read resolves.
 RUNS_READ_PID_STAT_PATCH_TARGET = "src.core.runs.read_pid_stat"
 
-# Import-path patch target for the subprocess spawn the backend start contract drives through the
-# AgentBackend base path. src/agents/backends/base.py binds the library with module-scope
-# `import asyncio`, so monkeypatch.setattr lands the stand-in on the shared asyncio module through
-# this route and base.run's spawn read resolves it at call time; the library-root spelling
-# (ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET above) reaches the same attribute, so a
-# caller-qualified constant here records which backend's spawn a test drives.
+# The backend-construction seams, stated once for every constant below: each CLI
+# backend binds resolve_binary at import scope (`from src.agents.backends.base import
+# resolve_binary`), so monkeypatch.setattr on a ``*_RESOLVE_BINARY_PATCH_TARGET`` lands
+# the stand-in on that backend module's own attribute, where its __init__ reads the
+# helper at call time and never probes PATH, while sibling backends binding the same
+# helper keep their own namespaces. The backend start contract spawns through the
+# library each spawning module binds with module-scope `import asyncio`, so every
+# ``*_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET`` spelling below — the library root
+# (ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET above) and the caller-qualified forms —
+# reaches that one shared attribute at the run loop's call-time spawn read; the
+# caller-qualified form records which backend's spawn a test drives.
 BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.agents.backends.base.asyncio.create_subprocess_exec"
-
-# Import-path patch target for the binary resolution an OpenCodeBackend construction runs.
-# src/agents/backends/opencode.py binds the helper at import scope (`from
-# src.agents.backends.base import resolve_binary`), so monkeypatch.setattr lands the
-# stand-in on the src.agents.backends.opencode module attribute and OpenCodeBackend.__init__
-# reads it at call time; sibling backends binding the same helper (codex.py,
-# antigravity_cli.py, charlie_code.py) keep their own namespaces.
 OPENCODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.opencode.resolve_binary"
-
-# Import-path patch target for the subprocess spawn the backend start contract drives through the
-# OpenCodeBackend path. src/agents/backends/opencode.py binds the library with module-scope
-# `import asyncio`, so monkeypatch.setattr lands the stand-in on the shared asyncio module through
-# this route and the SSE run loop's spawn read resolves it at call time; the library-root
-# spelling (ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET above) reaches the same attribute.
 OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.agents.backends.opencode.asyncio.create_subprocess_exec"
-
-# Import-path patch target for the binary resolution a CodexBackend construction runs.
-# src/agents/backends/codex.py binds the helper at import scope (`from
-# src.agents.backends.base import resolve_binary`), so monkeypatch.setattr lands the
-# stand-in on the src.agents.backends.codex module attribute and CodexBackend.__init__
-# reads it at call time; sibling backends binding the same helper (opencode.py,
-# antigravity_cli.py, charlie_code.py, gemini_cli.py) keep their own namespaces.
 CODEX_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.codex.resolve_binary"
-
-# Import-path patch target for the binary resolution an AntigravityCliBackend construction
-# runs. src/agents/backends/antigravity_cli.py binds the helper at import scope (`from
-# src.agents.backends.base import resolve_binary`), so monkeypatch.setattr lands the
-# stand-in on the src.agents.backends.antigravity_cli module attribute and
-# AntigravityCliBackend.__init__ reads it at call time; sibling backends binding the same
-# helper (charlie_code.py, codex.py, gemini_cli.py, opencode.py) keep their own namespaces.
 ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.antigravity_cli.resolve_binary"
-
-# Import-path patch target for the binary resolution a CharlieCodeBackend construction
-# runs. src/agents/backends/charlie_code.py binds the helper at import scope (`from
-# src.agents.backends.base import resolve_binary`), so monkeypatch.setattr lands the
-# stand-in on the src.agents.backends.charlie_code module attribute and
-# CharlieCodeBackend.__init__ reads it at call time; sibling backends binding the same
-# helper (antigravity_cli.py, codex.py, gemini_cli.py, opencode.py) keep their own namespaces.
 CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.charlie_code.resolve_binary"
-
-# Import-path patch target for the binary resolution a GeminiCliBackend construction runs.
-# src/agents/backends/gemini_cli.py binds the helper at import scope (`from
-# src.agents.backends.base import resolve_binary`), so monkeypatch.setattr lands the
-# stand-in on the src.agents.backends.gemini_cli module attribute and GeminiCliBackend.__init__
-# reads it at call time; sibling backends binding the same helper (antigravity_cli.py,
-# charlie_code.py, codex.py, opencode.py) keep their own namespaces.
 GEMINI_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.gemini_cli.resolve_binary"
 
 # Patch target for the atomic-write swap hook. src/core/json_utils.py publishes each staged
@@ -1320,9 +1284,9 @@ def build_cli_backend(
   """Construct a CLI backend with its resolve_binary pinned to *fake_binary*.
 
   The one home of the backend-test construction contract: the patch lands the stand-in
-  on the module named by *resolve_patch_target* (each ``*_RESOLVE_BINARY_PATCH_TARGET``
-  constant above states that module's binding scope), so ``__init__`` never probes PATH,
-  and *defaults* fill kwargs the caller left out.
+  on the module named by *resolve_patch_target* (the shared note above the
+  ``*_RESOLVE_BINARY_PATCH_TARGET`` constants states that binding scope), so ``__init__``
+  never probes PATH, and *defaults* fill kwargs the caller left out.
   """
   monkeypatch.setattr(resolve_patch_target, lambda name, fallback: fake_binary)
   for key, value in (defaults or {}).items():

@@ -29,8 +29,8 @@ exactly as that file lists them, so every round's numbers compare with the histo
 seconds, and together they are the regression watch. The sweep's in-process collectors import the
 code under test from the repo's local main checkout, so the collector list opens with a preflight
 that pins that checkout at `origin/main` — a sibling cron can leave it on its own branch after its
-pull request merges, and a stale tree reads ghost numbers; when the preflight's restore fails
-loud, the round reports every in-process metric as unmeasured. The collectors observe the live
+pull request merges, and a stale tree reads ghost numbers; when the preflight fails loud (fetch,
+dirty tree, or a diverged checkout), the round reports every in-process metric as unmeasured. The collectors observe the live
 instance read-only, which is the only contact this run has with it. A collector that fails or prints
 nothing is itself a finding: the summary reports it, and the round treats that metric as
 unmeasured. That file is the single home for metric definitions, collector commands, healthy

@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import orjson
 from fastapi import APIRouter
 
 from src.core import claude_accounts
@@ -520,52 +521,63 @@ def _extract_codex_spend_events(path: Path) -> list[_SpendEvent] | None:
   # Model attribution is positional (a turn_context line applies to the token_count
   # events after it), so it is resolved here during the single pass. None means the
   # file could not be read (a warning was logged); event lists may be cached, None not.
+  # The walk parses the wire bytes per line: a changed rollout (a live codex turn's
+  # appends) is re-read from byte 0 every poll round, and orjson takes the bytes
+  # without the whole-file str decode read_text paid first.
   events: list[_SpendEvent] = []
   current_model = ""
   try:
-    for line_number, raw_line in enumerate(path.read_text().splitlines(), start=1):
-      line = raw_line.strip()
-      if not line:
-        continue
-      try:
-        event = json.loads(line)
-        if not isinstance(event, dict):
-          raise ValueError(f"expected JSON object, got {type(event).__name__}")
-        event_type = event.get("type")
-        payload = event.get("payload") or {}
-        if not isinstance(payload, dict):
-          raise ValueError(f"payload must be an object, got {type(payload).__name__}")
-        if event_type == CODEX_TURN_CONTEXT:
-          model = payload.get("model")
-          if isinstance(model, str):
-            current_model = model
-          continue
-        if event_type != CODEX_EVENT_MSG or payload.get("type") != CODEX_TOKEN_COUNT:
-          continue
-
-        info = payload.get("info") or {}
-        if not isinstance(info, dict):
-          raise ValueError(f"info must be an object, got {type(info).__name__}")
-        last_usage = info.get("last_token_usage")
-        if not last_usage:
-          continue
-        if not isinstance(last_usage, dict):
-          raise ValueError(f"last_token_usage must be an object, got {type(last_usage).__name__}")
-        token_usage = {
-            "input_tokens": last_usage["input_tokens"],
-            "cached_input_tokens": last_usage["cached_input_tokens"],
-            "output_tokens": last_usage["output_tokens"],
-        }
-        for key, value in token_usage.items():
-          if not isinstance(value, int):
-            raise ValueError(f"{key} must be an int, got {type(value).__name__}")
-
-        events.append((_parse_codex_timestamp(event["timestamp"]), current_model, token_usage))
-      except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
-        _log_codex_spend_row_skip(path, line_number, e)
+    raw = path.read_bytes()
   except OSError as e:
     log.warning("ext_usage_codex_spend_file_skip", path=str(path), error=str(e))
     return None
+  for line_number, raw_line in enumerate(raw.splitlines(), start=1):
+    line = raw_line.strip()
+    if not line:
+      continue
+    try:
+      event = orjson.loads(line)
+      if not isinstance(event, dict):
+        raise ValueError(f"expected JSON object, got {type(event).__name__}")
+      event_type = event.get("type")
+      payload = event.get("payload") or {}
+      if not isinstance(payload, dict):
+        raise ValueError(f"payload must be an object, got {type(payload).__name__}")
+      if event_type == CODEX_TURN_CONTEXT:
+        model = payload.get("model")
+        if isinstance(model, str):
+          current_model = model
+        continue
+      if event_type != CODEX_EVENT_MSG or payload.get("type") != CODEX_TOKEN_COUNT:
+        continue
+
+      info = payload.get("info") or {}
+      if not isinstance(info, dict):
+        raise ValueError(f"info must be an object, got {type(info).__name__}")
+      last_usage = info.get("last_token_usage")
+      if not last_usage:
+        continue
+      if not isinstance(last_usage, dict):
+        raise ValueError(f"last_token_usage must be an object, got {type(last_usage).__name__}")
+      token_usage = {
+          "input_tokens": last_usage["input_tokens"],
+          "cached_input_tokens": last_usage["cached_input_tokens"],
+          "output_tokens": last_usage["output_tokens"],
+      }
+      for key, value in token_usage.items():
+        if not isinstance(value, int):
+          raise ValueError(f"{key} must be an int, got {type(value).__name__}")
+
+      events.append((_parse_codex_timestamp(event["timestamp"]), current_model, token_usage))
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+      # An undecodable byte keeps the whole-file contract read_text enforced:
+      # one file-skip warning and no extraction, not a per-line skip.
+      try:
+        line.decode("utf-8")
+      except UnicodeDecodeError:
+        log.warning("ext_usage_codex_spend_file_skip", path=str(path), error=str(e))
+        return None
+      _log_codex_spend_row_skip(path, line_number, e)
   return events
 
 

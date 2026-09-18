@@ -783,6 +783,31 @@ def test_spend_aggregation_skips_bad_rows_without_poisoning_totals(tmp_path: Pat
   assert spend["last_7d_usd"] == pytest.approx(7.275)
 
 
+def test_spend_aggregation_undecodable_byte_yields_whole_file_skip(tmp_path: Path) -> None:
+  # A byte that is not valid UTF-8 keeps read_text's whole-file contract: one
+  # file-skip warning and no extraction, not a per-line row skip.
+  now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+  rollout_path = tmp_path / "rollout-corrupt.jsonl"
+  good = json.dumps(
+      _build_spend_token_count_event(
+          timestamp=now.isoformat().replace("+00:00", "Z"),
+          input_tokens=1_000_000,
+          cached_input_tokens=0,
+          output_tokens=0))
+  rollout_path.write_bytes(good.encode("utf-8") + b"\n" + b"\xff\xfe not utf-8\n")
+
+  warns: list[dict] = []
+  orig = ext_usage_mod.log.warning
+  ext_usage_mod.log.warning = lambda event, **kw: warns.append({"event": event, **kw})
+  try:
+    extracted = _extract_codex_spend_events(rollout_path)
+  finally:
+    ext_usage_mod.log.warning = orig
+
+  assert extracted is None
+  assert [w["event"] for w in warns] == ["ext_usage_codex_spend_file_skip"]
+
+
 def test_spend_aggregation_skips_unreadable_file(tmp_path: Path) -> None:
   now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 

@@ -661,15 +661,15 @@ def _codex_windows(rate_limits: dict[str, Any], *, account: str) -> list[dict[st
     resets_at = limit.get("resets_at")
     windows.append(
         {
-            "window_minutes":
+            claude_accounts.PANEL_WINDOW_MINUTES:
                 window_minutes,
-            "utilization":
+            claude_accounts.PANEL_UTILIZATION:
                 utilization,
-            "resets_at":
+            claude_accounts.PANEL_RESETS_AT:
                 datetime.fromtimestamp(resets_at, tz=UTC).isoformat()
                 if isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool) else "",
         })
-  windows.sort(key=lambda w: w["window_minutes"])
+  windows.sort(key=lambda w: w[claude_accounts.PANEL_WINDOW_MINUTES])
   return windows
 
 
@@ -714,9 +714,9 @@ def _transform_codex_response(
   credits_reading = _codex_credits(rate_limits["credits"], account=account) if "credits" in rate_limits else None
 
   usage = {
-      "windows": _codex_windows(rate_limits, account=account),
-      "fetched_at": fetched_at,
-      "provider": "codex",
+      claude_accounts.PANEL_WINDOWS: _codex_windows(rate_limits, account=account),
+      claude_accounts.PANEL_FETCHED_AT: fetched_at,
+      claude_accounts.PANEL_PROVIDER: "codex",
       "token_count_observed_at": event.get("timestamp", ""),
   }
   if credits_reading is not None:
@@ -916,10 +916,10 @@ def _scoped_windows(raw: dict[str, Any], *, account: str) -> list[dict[str, Any]
       _warn_unknown_limit_shape(provider="claude", account=account, slot=slot, reason="missing percent")
     windows.append(
         {
-            "window_minutes": window_minutes,
-            "scope_label": display_name,
-            "utilization": utilization,
-            "resets_at": entry.get("resets_at") or "",
+            claude_accounts.PANEL_WINDOW_MINUTES: window_minutes,
+            claude_accounts.PANEL_SCOPE_LABEL: display_name,
+            claude_accounts.PANEL_UTILIZATION: utilization,
+            claude_accounts.PANEL_RESETS_AT: entry.get("resets_at") or "",
         })
   return windows
 
@@ -937,12 +937,12 @@ def _transform_response(raw: dict[str, Any], *, account: str = "") -> dict[str, 
     bucket = raw.get(camel, raw.get(snake)) or {}
     windows.append(
         {
-            "window_minutes": window_minutes,
-            "utilization": _as_utilization(bucket.get("utilization")),
-            "resets_at": bucket.get("resetsAt", bucket.get("resets_at", "")),
+            claude_accounts.PANEL_WINDOW_MINUTES: window_minutes,
+            claude_accounts.PANEL_UTILIZATION: _as_utilization(bucket.get("utilization")),
+            claude_accounts.PANEL_RESETS_AT: bucket.get("resetsAt", bucket.get("resets_at", "")),
         })
   windows.extend(_scoped_windows(raw, account=account))
-  windows.sort(key=lambda w: (w["window_minutes"], w.get("scope_label", "")))
+  windows.sort(key=lambda w: (w[claude_accounts.PANEL_WINDOW_MINUTES], w.get(claude_accounts.PANEL_SCOPE_LABEL, "")))
 
   known = {name for camel, snake, _ in CLAUDE_WINDOW_FIELDS for name in (camel, snake)}
   for key, value in raw.items():
@@ -950,9 +950,9 @@ def _transform_response(raw: dict[str, Any], *, account: str = "") -> dict[str, 
       _warn_unknown_limit_shape(provider="claude", account=account, slot=key, reason="unrecognized window field")
 
   return {
-      "windows": windows,
-      "fetched_at": now,
-      "provider": "claude",
+      claude_accounts.PANEL_WINDOWS: windows,
+      claude_accounts.PANEL_FETCHED_AT: now,
+      claude_accounts.PANEL_PROVIDER: "claude",
   }
 
 
@@ -1011,7 +1011,7 @@ async def _poll_loop() -> None:
         seed_key = f"{inst.provider}:{inst.label}"
         if seed_key not in _cached_usage:
           _cached_usage[seed_key] = {
-              "provider": inst.provider,
+              claude_accounts.PANEL_PROVIDER: inst.provider,
               "account": inst.label,
               "pending": True,
           }
@@ -1040,7 +1040,7 @@ async def _poll_loop() -> None:
           # worth keeping when a later fetch fails.
           if prev is None or "error" in prev or "pending" in prev:
             _cached_usage[cache_key] = {
-                "provider": inst.provider,
+                claude_accounts.PANEL_PROVIDER: inst.provider,
                 "account": inst.label,
                 "error": inst.last_error,
             }
@@ -1087,17 +1087,17 @@ def _annotated_providers(now: datetime | None = None) -> dict[str, dict[str, Any
   moment = claude_accounts.now_or(now)
   providers: dict[str, dict[str, Any]] = {}
   for key, entry in _cached_usage.items():
-    windows = entry.get("windows")
-    if entry.get("provider") != "claude" or not isinstance(windows, list):
+    windows = entry.get(claude_accounts.PANEL_WINDOWS)
+    if entry.get(claude_accounts.PANEL_PROVIDER) != "claude" or not isinstance(windows, list):
       providers[key] = entry
       continue
-    sampled = claude_accounts.parse_iso_utc(entry.get("fetched_at"))
+    sampled = claude_accounts.parse_iso_utc(entry.get(claude_accounts.PANEL_FETCHED_AT))
     annotated = [
         {
             **window, "expired": True
         } if claude_accounts.panel_window_expired(window, sampled, moment) else window for window in windows
     ]
-    providers[key] = {**entry, "windows": annotated}
+    providers[key] = {**entry, claude_accounts.PANEL_WINDOWS: annotated}
   return providers
 
 

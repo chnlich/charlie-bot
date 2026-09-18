@@ -25,7 +25,6 @@ from src.core.credentials import (  # noqa: F401  (re-export: the established sr
     _credentials_cache,
     _file_fingerprint,
     _HotReloadCache,
-    _install_replace,
     configured_access_key,
     get_credentials,
     load_credentials,
@@ -33,8 +32,6 @@ from src.core.credentials import (  # noqa: F401  (re-export: the established sr
 from src.core.home import (  # noqa: F401  (re-export: the established src.core.config import path)
     CHARLIEBOT_HOME_ENV,
     CLAUDE_CONFIG_DIR_ENV_VAR,
-    _home_cache,
-    _resolve_home,
     charliebot_home_dir,
     default_charliebot_home,
     default_claude_dir,

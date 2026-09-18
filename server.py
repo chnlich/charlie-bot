@@ -443,11 +443,10 @@ app.include_router(code_server.router, prefix="/api/code-server", tags=["code-se
 app.include_router(ext_usage.router, prefix="/api", tags=["ext-usage"])
 app.include_router(anthropic_proxy.router, prefix="/api/anthropic-proxy", tags=["anthropic-proxy"])
 
-# File server (filesystem browser). The same router is mounted under every prefix in
-# FILE_SERVER_MOUNTS, so all of them reach one handler and one path resolution. "/absolute_filepath"
-# is the prefix written into chat text: it names what has to follow it, so a link missing its
-# absolute prefix reads as wrong where it is written. "/files" stays as the form the UI builds
-# and older links carry.
+# File server (filesystem browser), mounted under the one canonical prefix FILE_SERVER_MOUNTS
+# holds: "/absolute_filepath", the form written into chat text — the prefix names what has to
+# follow it, so a link missing its absolute prefix reads as wrong where it is written. The
+# legacy "/files" and "/file" spellings are unmounted: nothing answers there, both 404.
 for mount in FILE_SERVER_MOUNTS:
   app.include_router(files.router, prefix=mount, tags=["files"])
 

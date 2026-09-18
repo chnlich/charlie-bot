@@ -135,7 +135,7 @@ async def test_websocket_scope_passes_through_without_logging() -> None:
 @pytest.mark.asyncio
 async def test_streaming_body_logs_exactly_one_event() -> None:
   with capture_logs() as events:
-    await _drive(_streaming_app, _http_scope(path="/files/big.bin"))
+    await _drive(_streaming_app, _http_scope(path="/absolute_filepath/big.bin"))
 
   assert len(events) == 1
   assert events[0]["event"] == "http_request"

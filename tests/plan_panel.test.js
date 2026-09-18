@@ -493,11 +493,11 @@ test('parseOpenForks returns empty for null or empty documents', () => {
 // buildIframeUrl
 // ---------------------------------------------------------------------------
 
-test('buildIframeUrl builds a real /files URL with cbsession and cbpanel marker', () => {
+test('buildIframeUrl builds a real /absolute_filepath URL with cbsession and cbpanel marker', () => {
   const {planPanel} = loadPlanPanelScript({sessionId: 'sess-42', sessionsRoot: '/home/alice/.charliebot/sessions'});
   const url = planPanel.buildIframeUrl('artifacts/plan_01.html', 'sess-42', '/home/alice/.charliebot/sessions');
-  const expectedPath = '/files/home/alice/.charliebot/sessions/sess-42/artifacts/plan_01.html';
-  assert.ok(url.startsWith(expectedPath), 'URL starts with the real /files path');
+  const expectedPath = '/absolute_filepath/home/alice/.charliebot/sessions/sess-42/artifacts/plan_01.html';
+  assert.ok(url.startsWith(expectedPath), 'URL starts with the real /absolute_filepath path');
   assert.ok(url.indexOf('#cbsession=sess-42') !== -1, 'URL carries the cbsession fragment');
   assert.ok(url.indexOf('&cbpanel=1') !== -1, 'URL carries the cbpanel=1 marker');
 });
@@ -524,11 +524,11 @@ test('buildIframeUrlFromVersion returns null for unknown version', () => {
 // buildStandaloneUrl / buildStandaloneUrlFromVersion (Open in tab path)
 // ---------------------------------------------------------------------------
 
-test('buildStandaloneUrl builds a real /files URL with cbsession and NO cbpanel marker', () => {
+test('buildStandaloneUrl builds a real /absolute_filepath URL with cbsession and NO cbpanel marker', () => {
   const {planPanel} = loadPlanPanelScript({sessionId: 'sess-42', sessionsRoot: '/home/alice/.charliebot/sessions'});
   const url = planPanel.buildStandaloneUrl('artifacts/plan_01.html', 'sess-42', '/home/alice/.charliebot/sessions');
-  const expectedPath = '/files/home/alice/.charliebot/sessions/sess-42/artifacts/plan_01.html';
-  assert.ok(url.startsWith(expectedPath), 'URL starts with the real /files path');
+  const expectedPath = '/absolute_filepath/home/alice/.charliebot/sessions/sess-42/artifacts/plan_01.html';
+  assert.ok(url.startsWith(expectedPath), 'URL starts with the real /absolute_filepath path');
   assert.ok(url.indexOf('#cbsession=sess-42') !== -1, 'URL carries the cbsession fragment');
   assert.equal(url.indexOf('cbpanel'), -1, 'standalone URL must NOT carry the cbpanel marker');
 });

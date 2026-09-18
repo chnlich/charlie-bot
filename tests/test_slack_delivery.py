@@ -616,15 +616,15 @@ def _rig_with_publish_lane(tmp_path: Path) -> tuple[CharlieBotConfig, SessionMan
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("prefix", ["files", "absolute_filepath"])
 async def test_reply_rewrites_a_file_server_url_to_the_published_one_and_keeps_query_and_fragment(
-    tmp_path: Path, prefix: str) -> None:
+    tmp_path: Path) -> None:
   cfg, session_mgr, client = _rig_with_publish_lane(tmp_path)
   artifact = write_artifact(tmp_path, "sitrep.html", "<p>sitrep body</p>")
   sid = await _slack_session(session_mgr)
 
   with _listener_seam(client):
-    result = await post_reply(sid, f"details: {_FILE_HOST}/{prefix}/{artifact}?v=2#summary thanks", cfg, session_mgr)
+    result = await post_reply(
+        sid, f"details: {_FILE_HOST}/absolute_filepath/{artifact}?v=2#summary thanks", cfg, session_mgr)
 
   published_url = f"{_PUB_BASE}/sitrep.html?v=2#summary"
   assert client.posts == [{"channel": _CHANNEL, "text": f"details: {published_url} thanks", "thread_ts": _THREAD}]
@@ -644,7 +644,7 @@ async def test_reply_rewrites_a_percent_encoded_file_server_path(tmp_path: Path)
   encoded_path = quote(str(artifact), safe="")
 
   with _listener_seam(client):
-    result = await post_reply(sid, f"details: {_FILE_HOST}/files/{encoded_path}", cfg, session_mgr)
+    result = await post_reply(sid, f"details: {_FILE_HOST}/absolute_filepath/{encoded_path}", cfg, session_mgr)
 
   published_url = f"{_PUB_BASE}/encoded.html"
   assert client.posts == [{"channel": _CHANNEL, "text": f"details: {published_url}", "thread_ts": _THREAD}]
@@ -659,10 +659,10 @@ async def test_reply_refuses_as_a_whole_when_the_linked_file_is_gone(tmp_path: P
   sid = await _slack_session(session_mgr)
 
   with _listener_seam(client), pytest.raises(SlackReplyError) as excinfo:
-    await post_reply(sid, f"details: {_FILE_HOST}/files/{gone}", cfg, session_mgr)
+    await post_reply(sid, f"details: {_FILE_HOST}/absolute_filepath/{gone}", cfg, session_mgr)
 
   assert excinfo.value.status == 422
-  assert f"{_FILE_HOST}/files/{gone}" in excinfo.value.detail
+  assert f"{_FILE_HOST}/absolute_filepath/{gone}" in excinfo.value.detail
   assert not client.posts
   assert not _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)
   assert not any(cfg.publish.dir.iterdir())
@@ -675,7 +675,7 @@ async def test_reply_refuses_as_a_whole_when_the_publish_lane_is_unconfigured(tm
   sid = await _slack_session(session_mgr)
 
   with _listener_seam(client), pytest.raises(SlackReplyError) as excinfo:
-    await post_reply(sid, f"details: {_FILE_HOST}/files/{artifact}", cfg, session_mgr)
+    await post_reply(sid, f"details: {_FILE_HOST}/absolute_filepath/{artifact}", cfg, session_mgr)
 
   assert excinfo.value.status == 422
   assert "publish.dir" in excinfo.value.detail
@@ -710,7 +710,7 @@ async def test_reply_with_a_file_server_url_on_another_port_stays_as_written(tmp
   cfg, session_mgr, client = _rig_with_publish_lane(tmp_path)
   artifact = write_artifact(tmp_path, "sitrep.html", "<p>sitrep body</p>")
   sid = await _slack_session(session_mgr)
-  text = f"details: https://other.example.test:9999/files/{artifact}"
+  text = f"details: https://other.example.test:9999/absolute_filepath/{artifact}"
 
   with _listener_seam(client):
     result = await post_reply(sid, text, cfg, session_mgr)

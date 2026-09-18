@@ -3,7 +3,7 @@
 The chat link normalizer (web/static/js/chat/artifacts.js) repairs same-host links whose
 scheme or port was written from memory only for paths under a file-server prefix, because
 those are routes this server itself answers: server.py mounts the one files router under
-every prefix of FILE_SERVER_MOUNTS (src/core/constants.py). The frontend cannot import
+the single prefix of FILE_SERVER_MOUNTS (src/core/constants.py). The frontend cannot import
 that tuple, so its gate array and an older chat test's PREFIXES literal mirror the set.
 This test fails the merge in which any operand drifts: a prefix renamed in the home
 without updating the mirrors, or a mirror edited alone.
@@ -24,6 +24,9 @@ _MIRRORS = {
 
 _STRING_RE = re.compile(r"'([^']+)'|\"([^\"]+)\"")
 
+# The single canonical prefix: the legacy /files and /file spellings are hard-offline.
+_CANONICAL = {"/absolute_filepath"}
+
 
 def _served_prefixes() -> set[str]:
   text = (ROOT / "src/core/constants.py").read_text()
@@ -41,7 +44,7 @@ def _mirror_prefixes(rel: str, pattern: re.Pattern) -> set[str]:
 
 def test_file_server_prefixes_single_set() -> None:
   served = _served_prefixes()
-  assert len(served) > 1, f"FILE_SERVER_MOUNTS parsed as {served}; expected both prefixes"
+  assert served == _CANONICAL, f"FILE_SERVER_MOUNTS parsed as {served}; expected the one canonical prefix"
   for rel, pattern in _MIRRORS.items():
     mirror = _mirror_prefixes(rel, pattern)
     assert mirror == served, f"{rel} declares {mirror}, constants home declares {served}"

@@ -148,7 +148,7 @@ const planPanel = (() => {
     if (!root) {
       throw new Error('SESSIONS_ROOT not available for ' + urlKind);
     }
-    return '/files' + root + '/' + sessionId + '/' + file;
+    return '/absolute_filepath' + root + '/' + sessionId + '/' + file;
   }
 
   // diffFile, when set, rides as the ?diff= query *before* the #cbsession=…
@@ -158,8 +158,9 @@ const planPanel = (() => {
     return encodeURIComponent(diffFile).replace(/%2F/g, '/');
   }
 
-  // The address shape every plan-page URL this panel builds shares: the /files
-  // URL, then the ?diff= query ahead of the fragment (see encodeDiffFile), then
+  // The address shape every plan-page URL this panel builds shares: the
+  // /absolute_filepath URL, then the ?diff= query ahead of the fragment (see
+  // encodeDiffFile), then
   // the #cbsession= fragment; withPanelMarker appends `&cbpanel=1` inside the
   // fragment, the marker artifact-comments.js's framed guard reads. urlKind
   // names the caller in the SESSIONS_ROOT error.

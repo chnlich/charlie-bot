@@ -20,15 +20,16 @@ entry).
 
 The path after `/absolute_filepath/` is the absolute filesystem path with its leading `/` removed.
 The prefix names what has to follow it, so a path that dropped its leading segments reads as wrong
-where it is written. Examples:
+where it is written. This is the sole canonical prefix: the legacy `/files` and `/file` spellings
+are unmounted and answer 404, so never write or repair a link onto them. The file server sits
+behind the access key — an unauthenticated browser navigation gets the unlock form, not the file.
+
+Examples:
 
 | Filesystem path | URL |
 |---|---|
 | `/path/to/trace.json` | `<base_url>/absolute_filepath/path/to/trace.json` |
 | `/path/to/results/` | `<base_url>/absolute_filepath/path/to/results/` |
-
-The server answers on the alias `/files/` as well, which is the prefix links already sent carry and
-the prefix the web UI builds its own URLs with.
 
 ## Publish Lane
 

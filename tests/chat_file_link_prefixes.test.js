@@ -1,11 +1,11 @@
 // ---------------------------------------------------------------------------
-// Two prefixes, one path. A file link under /files/ and the same link under
-// /absolute_filepath/ resolve to one absolute path, one card and one plan
-// badge, and dedupe against each other inside a message. A link whose target
-// the server has nothing at is marked where it appears, in each of the three
-// carriers the render already walks. The marking costs the render no request it
-// was not already going to make. The fake DOM and the vm harness live in
-// file_link_dom_stub.js, shared with chat_url_ascii_boundary.test.js.
+// One prefix, one path. A file link under /absolute_filepath/ resolves to one
+// absolute path, one card and one plan badge; the retired /files/ alias is no
+// prefix at all. A link whose target the server has nothing at is marked where
+// it appears, in each of the three carriers the render already walks. The
+// marking costs the render no request it was not already going to make. The
+// fake DOM and the vm harness live in file_link_dom_stub.js, shared with
+// chat_url_ascii_boundary.test.js.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -28,19 +28,19 @@ const {
 
 const { SESSION_ID, SESSION_DIR } = require('./sessions_root_stub');
 
-const PREFIXES = ['/files', '/absolute_filepath'];
+const PREFIXES = ['/absolute_filepath'];
 
 // ---------------------------------------------------------------------------
 // Parse equivalence
 // ---------------------------------------------------------------------------
 
-test('either prefix resolves to the same absolute path', () => {
+test('the canonical prefix resolves to the absolute path', () => {
   const {context} = loadArtifactsScript();
   const resolved = PREFIXES.map((prefix) => context.Chat.resolveHtmlArtifactLink(prefix + ARTIFACT_ABS));
 
   resolved.forEach((link, index) => assert.ok(link, PREFIXES[index] + ' resolves'));
   assert.deepEqual(new Set(resolved.map((link) => link.absPath)), new Set([ARTIFACT_ABS]));
-  // The fetch URL keeps the prefix it arrived under, since the server answers on both.
+  // The fetch URL keeps the prefix it arrived under — the one the server answers on.
   resolved.forEach((link, index) => assert.equal(link.fetchUrl, PREFIXES[index] + ARTIFACT_ABS));
 });
 
@@ -53,10 +53,10 @@ test('an encoded path and a full URL resolve alike under the new prefix', () => 
   assert.equal(context.Chat.resolveHtmlArtifactLink(full).absPath, '//tmp/report/artifacts/plot.html');
 });
 
-test('the two forms of one artifact link dedupe to a single card inside one message', async () => {
+test('the carriers of one artifact link dedupe to a single card inside one message', async () => {
   const {context, requests} = loadArtifactsScript();
   const {root, prose} = makeMessage([
-    anchor('/files' + ARTIFACT_ABS, 'as the UI builds it'),
+    anchor('/absolute_filepath' + ARTIFACT_ABS, 'as the UI builds it'),
     new FakeText(' and '),
     inlineCode('/absolute_filepath' + ARTIFACT_ABS),
   ]);
@@ -69,7 +69,7 @@ test('the two forms of one artifact link dedupe to a single card inside one mess
   assert.deepEqual(requests, [], 'a card costs no request until it is expanded');
 });
 
-test('a plan version link carries the same badge under either prefix', async () => {
+test('a plan version link carries the plan badge', async () => {
   const snapshot = {
     plans: [{
       id: 3,
@@ -80,18 +80,13 @@ test('a plan version link carries the same badge under either prefix', async () 
     }],
   };
   const planPanel = {ready: () => Promise.resolve(), getRegistrySnapshot: () => snapshot};
-  const badges = [];
-  for (const prefix of PREFIXES) {
-    const {context} = loadArtifactsScript({planPanel});
-    const {root, prose} = makeMessage([anchor(prefix + SESSION_DIR + '/artifacts/plan_02.html')]);
-    await render(context, root);
-    const cards = insertedCards(prose.parentNode);
-    assert.equal(cards.length, 1);
-    badges.push(cards[0].innerHTML);
-  }
-  assert.match(badges[0], /plan-compact-card/);
-  assert.match(badges[0], /plan-compact-version">v2</);
-  assert.equal(badges[0], badges[1], 'the same card markup under both prefixes');
+  const {context} = loadArtifactsScript({planPanel});
+  const {root, prose} = makeMessage([anchor(PREFIXES[0] + SESSION_DIR + '/artifacts/plan_02.html')]);
+  await render(context, root);
+  const cards = insertedCards(prose.parentNode);
+  assert.equal(cards.length, 1);
+  assert.match(cards[0].innerHTML, /plan-compact-card/);
+  assert.match(cards[0].innerHTML, /plan-compact-version">v2</);
 });
 
 // ---------------------------------------------------------------------------
@@ -281,7 +276,7 @@ test('rendering an HTML artifact link issues no request at all', async () => {
   const {context, requests} = loadArtifactsScript({respond: statusResponder({})});
   const {root, prose} = makeMessage([
     anchor('/absolute_filepath' + ARTIFACT_ABS),
-    new FakeText(' and the same file at /files' + ARTIFACT_ABS + ' '),
+    new FakeText(' and the same file at https://charliebot.example/absolute_filepath' + ARTIFACT_ABS + ' '),
   ]);
 
   await render(context, root);
@@ -291,11 +286,11 @@ test('rendering an HTML artifact link issues no request at all', async () => {
   assert.equal(markersIn(prose).length, 0);
 });
 
-test('one HEAD per unique path, whichever prefix each occurrence used', async () => {
+test('one HEAD per unique path across every carrier an occurrence used', async () => {
   const abs = '/tmp/run-17/loss.csv';
   const {context, requests} = loadArtifactsScript({respond: statusResponder({})});
   const {root, prose} = makeMessage([
-    anchor('/files' + abs),
+    anchor('/absolute_filepath' + abs),
     new FakeText(' also written as /absolute_filepath' + abs + ' and as '),
     inlineCode('https://charliebot.example/absolute_filepath' + abs),
   ]);
@@ -309,7 +304,7 @@ test('one HEAD per unique path, whichever prefix each occurrence used', async ()
 
 // ---------------------------------------------------------------------------
 // Unrecognized-prefix artifact links: the second recognition channel. A
-// same-host link neither known prefix resolves still enters the probe when
+// same-host link the known prefix does not resolve still enters the probe when
 // its path carries an /artifacts/ segment — a mis-composed prefix keeps that
 // tail — and a 404 marks it like any other missing file. Same-host
 // application routes carry no such segment, another hostname is another

@@ -1,6 +1,7 @@
 // Same-host links whose scheme or port was written from memory are repaired only under the
-// file-server prefixes, the routes the page origin itself serves; every other path on this
-// host names another frontend and navigates exactly as written. P1 navigation fidelity:
+// file-server prefix, the route the page origin itself serves; every other path on this
+// host names another frontend and navigates exactly as written — the retired /files alias
+// among them. P1 navigation fidelity:
 // non-prefix links come back byte-identical with no probes. P2 correction preserved:
 // prefix links with a wrong scheme or port land on the page origin. The channel-2 missing
 // probe sees same-origin literals only; a cross-port candidate is neither rewritten nor
@@ -79,17 +80,20 @@ test('a wrong-scheme absolute_filepath link is pulled back to the page origin', 
   assert.deepEqual(out.requests.map((entry) => entry.method + ' ' + entry.url), ['HEAD ' + expected]);
 });
 
-test('a wrong-port /files link is pulled back to the page origin', async () => {
-  const out = await renderLink('https://charliebot.example:9999/files/tmp/a.html');
-  const expected = PAGE + 'files/tmp/a.html';
-  assert.equal(out.href, expected);
-  assert.deepEqual(out.requests.map((entry) => entry.method + ' ' + entry.url), ['HEAD ' + expected]);
+test('the retired /files alias is no file-server prefix: left as written, unprobed', async () => {
+  // server.py unmounted /files, so the page origin never served that path and the
+  // normalizer must treat it like any other same-host application route.
+  const href = 'https://charliebot.example:9999/files/tmp/a.html';
+  const out = await renderLink(href);
+  assert.equal(out.href, href);
+  assert.equal(out.requests.length, 0);
 });
 
 test('a same-origin prefix link needs no correction', async () => {
-  const out = await renderLink(PAGE + 'files/tmp/a.html');
-  assert.equal(out.href, PAGE + 'files/tmp/a.html');
-  assert.deepEqual(out.requests.map((entry) => entry.method + ' ' + entry.url), ['HEAD ' + PAGE + 'files/tmp/a.html']);
+  const out = await renderLink(PAGE + 'absolute_filepath/tmp/a.html');
+  assert.equal(out.href, PAGE + 'absolute_filepath/tmp/a.html');
+  assert.deepEqual(
+      out.requests.map((entry) => entry.method + ' ' + entry.url), ['HEAD ' + PAGE + 'absolute_filepath/tmp/a.html']);
 });
 
 // Channel-2 missing probe: same-origin literals are still probed, cross-port candidates are not.

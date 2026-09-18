@@ -37,7 +37,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - LaTeX panel
 - Voice input with local speech transcription (sherpa-onnx Qwen3-ASR)
 - Usage panels: external provider quotas and per-session context usage
-- File browser (`/files/`) and file uploads
+- File browser (`/absolute_filepath/`) and file uploads
 - Access-key auth
 
 ### Integrations

@@ -184,4 +184,4 @@ async def test_home_lists_the_four_server_destinations(tmp_path: Path) -> None:
   assert 'href="/"' in body
   assert 'href="/token-usage"' in body
   assert 'href="/diff"' in body
-  assert 'href="/files/"' in body
+  assert 'href="/absolute_filepath/"' in body

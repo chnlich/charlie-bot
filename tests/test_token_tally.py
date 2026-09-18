@@ -41,6 +41,15 @@ def _claude_record(record_id: str, model: str, ts: str, usage: dict) -> dict:
   }
 
 
+def _usage(input_: int, output: int) -> dict:
+  return {
+      "input_tokens": input_,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": output
+  }
+
+
 class Claude:
 
   def __init__(self, tmp_path: Path) -> None:
@@ -261,31 +270,13 @@ def test_tally_is_absolutely_correct(tmp_path: Path) -> None:
 
 def test_appends_are_visible(tmp_path: Path) -> None:
   claude = Claude(tmp_path)
-  claude.write(
-      claude.work, "sess1", [
-          _claude_record(
-              "m1", NAME, "2024-01-01T00:00:00Z", {
-                  "input_tokens": 10,
-                  "cache_creation_input_tokens": 0,
-                  "cache_read_input_tokens": 0,
-                  "output_tokens": 5
-              }),
-      ])
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
   db = tmp_path / "db.sqlite"
   first = _collect(claude, None, db)
   before = _row(first, "Claude Code", NAME)
 
   # A later session file records the same model: its total rises by exactly those tokens.
-  claude.write(
-      claude.work, "sess2", [
-          _claude_record(
-              "m2", NAME, "2024-01-02T00:00:00Z", {
-                  "input_tokens": 1000,
-                  "cache_creation_input_tokens": 0,
-                  "cache_read_input_tokens": 0,
-                  "output_tokens": 2
-              }),
-      ])
+  claude.write(claude.work, "sess2", [_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(1000, 2))])
   second = _collect(claude, None, db)
   after = _row(second, "Claude Code", NAME)
   assert after.total == before.total + 1002
@@ -323,19 +314,9 @@ def test_replays_are_not_double_counted(tmp_path: Path, with_cache: bool) -> Non
 def test_subagent_files_are_counted(tmp_path: Path) -> None:
   claude = Claude(tmp_path)
   claude.write(
-      claude.work,
-      "sessA", [],
-      subagents=[
-          [
-              _claude_record(
-                  "sub1", NAME, "2024-01-01T00:00:00Z", {
-                      "input_tokens": 30,
-                      "cache_creation_input_tokens": 0,
-                      "cache_read_input_tokens": 0,
-                      "output_tokens": 3
-                  })
-          ],
-      ])
+      claude.work, "sessA", [], subagents=[[
+          _claude_record("sub1", NAME, "2024-01-01T00:00:00Z", _usage(30, 3)),
+      ]])
   tally = _collect(claude, None, tmp_path / "db.sqlite")
   row = _row(tally, "Claude Code", NAME)
   assert row.calls == 1
@@ -345,26 +326,8 @@ def test_subagent_files_are_counted(tmp_path: Path) -> None:
 
 def test_cross_subscription_merge(tmp_path: Path) -> None:
   claude = Claude(tmp_path)
-  claude.write(
-      claude.work, "s1", [
-          _claude_record(
-              "a", NAME, "2024-01-01T00:00:00Z", {
-                  "input_tokens": 10,
-                  "cache_creation_input_tokens": 0,
-                  "cache_read_input_tokens": 0,
-                  "output_tokens": 1
-              }),
-      ])
-  claude.write(
-      claude.ext, "s2", [
-          _claude_record(
-              "b", NAME, "2024-01-02T00:00:00Z", {
-                  "input_tokens": 20,
-                  "cache_creation_input_tokens": 0,
-                  "cache_read_input_tokens": 0,
-                  "output_tokens": 2
-              }),
-      ])
+  claude.write(claude.work, "s1", [_claude_record("a", NAME, "2024-01-01T00:00:00Z", _usage(10, 1))])
+  claude.write(claude.ext, "s2", [_claude_record("b", NAME, "2024-01-02T00:00:00Z", _usage(20, 2))])
   tally = _collect(claude, None, tmp_path / "db.sqlite")
   matches = [r for r in tally.rows if r.source == "Claude Code" and r.model == NAME]
   assert len(matches) == 1
@@ -430,27 +393,9 @@ def test_codex_model_attribution(tmp_path: Path) -> None:
 
 def test_source_failure_isolation(tmp_path: Path) -> None:
   claude = Claude(tmp_path)
-  claude.write(
-      claude.work, "s1", [
-          _claude_record(
-              "a", NAME, "2024-01-01T00:00:00Z", {
-                  "input_tokens": 5,
-                  "cache_creation_input_tokens": 0,
-                  "cache_read_input_tokens": 0,
-                  "output_tokens": 1
-              }),
-      ])
+  claude.write(claude.work, "s1", [_claude_record("a", NAME, "2024-01-01T00:00:00Z", _usage(5, 1))])
   # The ext-1 config dir owns a log file that becomes unreadable.
-  claude.write(
-      claude.ext, "s1", [
-          _claude_record(
-              "a2", NAME, "2024-01-01T00:00:00Z", {
-                  "input_tokens": 5,
-                  "cache_creation_input_tokens": 0,
-                  "cache_read_input_tokens": 0,
-                  "output_tokens": 1
-              }),
-      ])
+  claude.write(claude.ext, "s1", [_claude_record("a2", NAME, "2024-01-01T00:00:00Z", _usage(5, 1))])
   codex = Codex(tmp_path)
   codex.write(
       "rollout", [
@@ -473,15 +418,6 @@ def test_source_failure_isolation(tmp_path: Path) -> None:
   assert any(r.source == "Codex" and r.model == "gpt-ok" for r in tally.rows)
   assert any(r.source == "opencode" for r in tally.rows)
   assert any("unreadable" in n and "ext" in n for n in tally.notes)
-
-
-def _usage(input_: int, output: int) -> dict:
-  return {
-      "input_tokens": input_,
-      "cache_creation_input_tokens": 0,
-      "cache_read_input_tokens": 0,
-      "output_tokens": output
-  }
 
 
 def _claude_rig(tmp_path: Path) -> Claude:
@@ -1323,21 +1259,7 @@ def test_incremental_partials_match_a_fresh_fold(tmp_path: Path) -> None:
     assert _tally_snapshot(inc) == _tally_snapshot(ref), label
 
   def rec(rid: str, ts: str, input_: int) -> dict:
-    return {
-        "message":
-            {
-                "id": rid,
-                "model": NAME,
-                "usage":
-                    {
-                        "input_tokens": input_,
-                        "cache_creation_input_tokens": 0,
-                        "cache_read_input_tokens": 0,
-                        "output_tokens": 1
-                    }
-            },
-        "timestamp": ts
-    }
+    return {"message": {"id": rid, "model": NAME, "usage": _usage(input_, 1)}, "timestamp": ts}
 
   both = {"work (default)": work, "ext-1": ext}
   write(work, "s1", [rec("k1", "t1", 100)])

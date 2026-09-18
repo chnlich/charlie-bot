@@ -1836,18 +1836,24 @@ def _master_result(input_tokens: int, output_tokens: int) -> dict:
   return {"type": "result", "completed": True, "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens}}
 
 
-def test_charliebot_thread_types(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """charlie-code-type threads count under their backend id; claude/opencode-type threads
-  (whose runs the CLI sources already carry) stay out entirely."""
-  _stub_registry(monkeypatch, _CLC_GEMINI)
-  cb = Charliebot(tmp_path)
-  cb.thread(
+def _seed_gemini_thread(cb: Charliebot, *, meta: bool = True) -> Path:
+  """The corpus's standard charlie-code thread: s1/t1, one 1000/50 result, no session ids."""
+  return cb.thread(
       "s1",
       "t1",
       backend="charlie-code-gemini-3.8-flash",
       model="openai/gemini-3.8-flash",
       session_ids=[],
-      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))],
+      meta=meta)
+
+
+def test_charliebot_thread_types(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """charlie-code-type threads count under their backend id; claude/opencode-type threads
+  (whose runs the CLI sources already carry) stay out entirely."""
+  _stub_registry(monkeypatch, _CLC_GEMINI)
+  cb = Charliebot(tmp_path)
+  _seed_gemini_thread(cb)
   cb.thread(
       "s1",
       "t2",
@@ -2077,14 +2083,7 @@ def test_charliebot_codex_reconciliation(tmp_path: Path, monkeypatch: pytest.Mon
 def test_charliebot_missing_metadata_skips_with_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _stub_registry(monkeypatch)
   cb = Charliebot(tmp_path)
-  cb.thread(
-      "s1",
-      "t1",
-      backend="charlie-code-gemini-3.8-flash",
-      model="openai/gemini-3.8-flash",
-      session_ids=[],
-      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))],
-      meta=False)
+  _seed_gemini_thread(cb, meta=False)
 
   tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)
 
@@ -2098,13 +2097,7 @@ def test_charliebot_cache_serves_and_appends(tmp_path: Path, monkeypatch: pytest
   shows up through the tail parse, and a trailing master result replaces the stored one."""
   _stub_registry(monkeypatch, _CLC_GEMINI)
   cb = Charliebot(tmp_path)
-  events = cb.thread(
-      "s1",
-      "t1",
-      backend="charlie-code-gemini-3.8-flash",
-      model="openai/gemini-3.8-flash",
-      session_ids=[],
-      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  events = _seed_gemini_thread(cb)
   capture = cb.master(
       "s1", "2026-09-11T21:00:00+00:00", [_master_context(1, "openai/gemini-3.8-flash"),
                                           _master_result(100, 5)])
@@ -2144,13 +2137,7 @@ def test_charliebot_dir_listing_memo(tmp_path: Path, monkeypatch: pytest.MonkeyP
   shows up on the next collect."""
   _stub_registry(monkeypatch, _CLC_GEMINI)
   cb = Charliebot(tmp_path)
-  cb.thread(
-      "s1",
-      "t1",
-      backend="charlie-code-gemini-3.8-flash",
-      model="openai/gemini-3.8-flash",
-      session_ids=[],
-      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  _seed_gemini_thread(cb)
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   first = _collect(None, None, db, cache, sessions=cb.root)
   assert _row(first, "charlie-bot", "gemini-3.8-flash").calls == 1
@@ -2202,13 +2189,7 @@ def test_charliebot_walk_errors_become_notes(tmp_path: Path, monkeypatch: pytest
   never reopened.)"""
   _stub_registry(monkeypatch, _CLC_GEMINI)
   cb = Charliebot(tmp_path)
-  events = cb.thread(
-      "s1",
-      "t1",
-      backend="charlie-code-gemini-3.8-flash",
-      model="openai/gemini-3.8-flash",
-      session_ids=[],
-      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  events = _seed_gemini_thread(cb)
   cb.thread(
       "s1",
       "t2",
@@ -2273,13 +2254,7 @@ def test_charliebot_walk_never_lists_or_stats_the_deep_dirs(tmp_path: Path, monk
   levels — the thread dirs, their data/ dirs and the run dirs are never listed or statted,
   so the per-collect stat count scales with candidates, not with corpus directories."""
   cb = Charliebot(tmp_path)
-  cb.thread(
-      "s1",
-      "t1",
-      backend="charlie-code-gemini-3.8-flash",
-      model="openai/gemini-3.8-flash",
-      session_ids=[],
-      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  _seed_gemini_thread(cb)
   cb.master("s1", "2026-09-11T21:00:00+00:00", [_master_context(1, "openai/gemini-3.8-flash"), _master_result(1, 1)])
   (cb.root / "s1" / "threads" / "t2").mkdir()  # a second thread with no events.jsonl yet
   (cb.root / "s1" / "data" / "master_runs" / "r2").mkdir()
@@ -2317,13 +2292,7 @@ def test_charliebot_walk_skips_symlinked_entries(tmp_path: Path) -> None:
   """A symlinked thread dir, run dir or session dir stays out of the corpus, the same rule
   the recursive walk ran under: only real directories are descended."""
   cb = Charliebot(tmp_path)
-  cb.thread(
-      "s1",
-      "t1",
-      backend="charlie-code-gemini-3.8-flash",
-      model="openai/gemini-3.8-flash",
-      session_ids=[],
-      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  _seed_gemini_thread(cb)
   outside = tmp_path / "outside"
   (outside / "data").mkdir(parents=True)
   (outside / "data" / "events.jsonl").write_text("{}\n")

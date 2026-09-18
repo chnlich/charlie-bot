@@ -421,6 +421,68 @@ def _member_form_output(paths: list[Path], tmp_path: Path, slim: bool) -> list[d
   return _read_merged(output)
 
 
+def test_build_trace_member_count_matches_the_fragment(tmp_path: Path) -> None:
+  # The returned count gates the multi-trace join's empty-member skip, so it
+  # must equal the events the fragment carries — dropped process_ rows excluded,
+  # thread_name inserts and the trailing process_ metadata included, across
+  # several batch flushes.
+  trace = tmp_path / "trace_rank0.json"
+  _write_trace(trace, _batch_events(2 * 512 + 3))
+  fragment = tmp_path / "member.jsonl"
+
+  count = build_trace_member(trace, fragment, 0, slim=False)
+
+  events = json.loads("[" + fragment.read_text(encoding="utf-8") + "]")
+  assert count == len(events)
+  # _batch_events carries no process_labels row, so no synthetic pid or
+  # process_ metadata exists; the fragment adds one thread_name per distinct
+  # tid (index % 3 → 3 threads) to the input's events.
+  assert len([e for e in events if e.get("name") == "thread_name"]) == 3
+  assert len([e for e in events if e.get("name", "").startswith("process_")]) == 0
+  assert count == len(_batch_events(2 * 512 + 3)) + 3
+
+
+def test_batches_never_exceed_the_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # Every append site checks the batch bound, including the trailing process_
+  # metadata loop: a many-pid corpus whose metadata tail outmasses the walk's
+  # own events must still flush in bounded batches, not one trailing dump.
+  import src.core.trace_merge as trace_merge_module
+
+  events: list[dict] = [{
+      "ph": "M",
+      "pid": pid,
+      "tid": 0,
+      "name": "process_labels",
+      "args": {
+          "labels": "CPU" if pid == 0 else f"GPU {pid}"
+      }
+  } for pid in range(400)]
+  events.extend({
+      "ph": "X",
+      "pid": index % 400,
+      "tid": index % 5,
+      "name": f"evt-{index}",
+      "ts": index,
+  } for index in range(250))
+  trace = tmp_path / "trace_many_pids.json"
+  _write_trace(trace, events)
+  output = tmp_path / "merged.json.gz"
+
+  sizes: list[int] = []
+  real_flush = trace_merge_module._EventBatcher.flush
+
+  def spy(self, pending: list[dict]) -> None:
+    if pending:
+      sizes.append(len(pending))
+    real_flush(self, pending)
+
+  monkeypatch.setattr(trace_merge_module._EventBatcher, "flush", spy)
+  merge_traces([trace], output, slim=False)
+
+  assert sizes and max(sizes) <= trace_merge_module._MERGE_BATCH_EVENTS
+  assert sum(sizes) == len(events) - 400 + 400 * 3 + 5  # walk + thread_name + metadata
+
+
 def test_member_form_matches_the_single_stream_form(tmp_path: Path) -> None:
   # The parallel member form is the production multi-trace path; the sequential
   # form stays the tests' and the M66 collector's reference. Both must merge the

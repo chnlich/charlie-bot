@@ -38,18 +38,9 @@ _NODE_TESTS = [
     "prose_markdown_memo.test.js",
     "rendering_worker_summary_origin.test.js",
     "session_switch_stale_pagination.test.js",
-    # v2 session-tree UI (stage 5): tree navigation, task/context/runs panels.
-    "session_tree_render.test.js",
     # UI follow-ups: whole-history current-Run selection and cross-client
     # creation notifications.
     "task_context_latest_run.test.js",
-    "session_tree_creation_notify.test.js",
-    # Running-feedback corrective work: shared spinner/gear cues on tree rows,
-    # live Run updates, legacy-probe protection, bounded reconciliation.
-    "session_tree_running_feedback.test.js",
-    # Unread-feedback corrective work: the shared unread dot on tree rows,
-    # read/unread ordering protection, bounded reconciliation coverage.
-    "session_tree_unread_feedback.test.js",
     "task_panel_actions.test.js",
     "task_context_rules.test.js",
     "task_runs_panel.test.js",

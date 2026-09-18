@@ -69,9 +69,6 @@ function connectWS() {
     // Re-sync plan panel state on (re)connect.
     if (typeof planPanel !== 'undefined') planPanel.invalidate();
     if (typeof planPanel !== 'undefined') planPanel.onReconnect();
-    // The catch-up cursor replays chat events but not sidebar notifications:
-    // the task tree reconciles its rendered levels once against current facts.
-    if (globalThis.Sidebar && Sidebar.SessionTree) Sidebar.SessionTree.onReconnected();
   };
 
   socket.onmessage = (e) => {
@@ -146,20 +143,12 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     return;
   }
 
-  if (t === 'session_group_changed') {
+  // A changed task node re-fetches the list the same way a group change does.
+  if (t === 'session_group_changed' || t === 'task_tree_changed') {
     const searchInput = document.getElementById('sidebar-search');
     const query = searchInput ? searchInput.value.trim() : '';
     if (query) handleSidebarSearch(query);
     else switchSidebarFilter(currentFilter);
-    return;
-  }
-
-  // One node's durable task facts changed (create/move/patch, Run lifecycle,
-  // input acknowledgement, report, close/reopen, prompt change). The tree
-  // re-reads the affected levels from the server; duplicate or out-of-order
-  // notifications change nothing because every refresh repaints from facts.
-  if (t === 'task_tree_changed') {
-    if (globalThis.Sidebar && Sidebar.SessionTree) Sidebar.SessionTree.onTreeChanged(ev.session_id);
     return;
   }
 

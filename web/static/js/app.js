@@ -37,16 +37,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // A one-click New Task from the welcome screen lands here through a full
-  // page load; the create flow left this flag so the chat composer comes up
-  // cursor-ready after the reload. Consumed on every load, so a landing that
-  // is not the created task's page never carries it forward.
-  const focusComposer = sessionStorage.getItem('charliebot-focus-composer') === '1';
-  if (focusComposer) sessionStorage.removeItem('charliebot-focus-composer');
-  if (focusComposer && SESSION_ID) {
-    document.getElementById('msg-input').focus();
-  }
-
   // LaTeX editor: track dirty state + Ctrl+S to compile
   const latexEditor = document.getElementById('latex-editor');
   if (latexEditor) {
@@ -88,12 +78,6 @@ document.addEventListener('DOMContentLoaded', () => {
           scheduleStatusPoll();
         }
       });
-      // The task tree's drift correction rides the same cadence: its
-      // notifications are best-effort, so a missed start/finish is healed by
-      // this bounded re-read of the rendered levels.
-      if (currentFilter === 'tasks' && globalThis.Sidebar && Sidebar.SessionTree) {
-        Sidebar.SessionTree.reconcileRenderedActivity();
-      }
     }, statusPollMs);
   }
   scheduleStatusPoll();

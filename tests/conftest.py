@@ -172,10 +172,15 @@ def make_work_item(
   )
 
 
+# One consumer round: the master-cc queue replaces _run_cc with this callable and
+# awaits its (cc_session_id, exit_code, error_msg, finish_extras) verdict.
+ConsumerRound = Callable[[master_cc_state._WorkItem], Awaitable[tuple[str | None, int, str | None, dict]]]
+
+
 async def _run_seeded_consumer(
     session_id: str,
     work_items: list[master_cc_state._WorkItem],
-    fake_run_cc: Callable[[master_cc_state._WorkItem], Awaitable[tuple[str | None, int, str | None, dict]]],
+    fake_run_cc: ConsumerRound,
     manager_patch: Any,
 ) -> None:
   """Run _session_consumer over a seeded queue with _run_cc replaced by *fake_run_cc* and
@@ -201,7 +206,7 @@ async def _run_seeded_consumer(
 async def run_session_consumer(
     session_id: str,
     work_items: list[master_cc_state._WorkItem],
-    fake_run_cc: Callable[[master_cc_state._WorkItem], Awaitable[tuple[str | None, int, str | None, dict]]],
+    fake_run_cc: ConsumerRound,
 ) -> None:
   """Run _session_consumer over a seeded queue with a fake CC: _run_cc is replaced by fake_run_cc,
   broadcasts are silenced, and the SessionManager double reports no running tasks. The session's
@@ -219,7 +224,7 @@ async def run_session_consumer(
 async def run_consumer_over_real_disk(
     session_id: str,
     work_items: list[master_cc_state._WorkItem],
-    fake_run_cc: Callable[[master_cc_state._WorkItem], Awaitable[tuple[str | None, int, str | None, dict]]],
+    fake_run_cc: ConsumerRound,
 ) -> None:
   """run_session_consumer with the SessionManager class kept real: the dequeue refresh reads disk
   through it, the teardown probe is silenced at the method, and no class-level patch can shadow

@@ -14,6 +14,7 @@ from conftest import (
     BROADCAST_PATCH_TARGET,
     BUILD_BACKEND_PATCH_TARGET,
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
+    ConsumerRound,
     TerminateFlagBackend,
     backend_option,
     compact_boundary_event,
@@ -849,7 +850,7 @@ async def test_handle_event_keeps_an_already_adopted_session_id_over_the_signal(
 # ---------------------------------------------------------------------------
 
 
-def _sound_round(cc_session_id: str):
+def _sound_round(cc_session_id: str) -> ConsumerRound:
 
   async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
     return (cc_session_id, 0, None, {})
@@ -857,7 +858,7 @@ def _sound_round(cc_session_id: str):
   return fake_run_cc
 
 
-def _failed_round(cc_session_id: str):
+def _failed_round(cc_session_id: str) -> ConsumerRound:
 
   async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
     return (cc_session_id, 1, "backend died", {})
@@ -932,7 +933,7 @@ async def test_dequeue_refresh_keeps_a_deliberately_empty_anchor(tmp_path: Path)
   item = make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
   seen_at_dequeue: list[str | None] = []
 
-  async def retry_round(work_item: master_cc_state._WorkItem):
+  async def retry_round(work_item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
     seen_at_dequeue.append(work_item.session_meta.cc_session_id)
     return ("fresh-id", 0, None, {})
 
@@ -984,13 +985,13 @@ async def test_consumer_disk_read_failure_falls_back_to_fill_empty_only(tmp_path
   second_snapshot = snapshot.model_copy(deep=True)
   second = make_work_item(cfg, second_snapshot, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
 
-  async def fake_run_cc(item: master_cc_state._WorkItem):
+  async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
     return ("cc-1", 0, None, {})
 
   real_read = SessionManager.read_metadata_fresh
   reads = {"n": 0}
 
-  async def flaky_read(self, session_id: str):
+  async def flaky_read(self: SessionManager, session_id: str) -> SessionMetadata | None:
     reads["n"] += 1
     if reads["n"] == 2:  # the second item's dequeue read fails
       raise OSError("disk gone")
@@ -1063,7 +1064,7 @@ async def test_dequeue_relays_the_rounds_anchor_into_a_snapshot_taken_before_the
 
   seen_at_dequeue: list[str | None] = []
 
-  async def first_round(item: master_cc_state._WorkItem):
+  async def first_round(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
     seen_at_dequeue.append(item.session_meta.cc_session_id)
     return ("cc-new", 0, None, {})
 

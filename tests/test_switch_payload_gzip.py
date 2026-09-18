@@ -7,22 +7,32 @@ from __future__ import annotations
 
 import gzip
 import json
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from conftest import _page_request, gzip_explode_compress, make_home_session
+from starlette.requests import Request
 from starlette.responses import Response
 
 from src.api import deps
 from src.api.sessions import all_sessions_status, get_session_bootstrap, get_session_view, list_scheduled_sessions
+from src.core.config import CharlieBotConfig
 from src.core.models import SessionMetadata
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
 
 
-async def _call(handler, session_id: str, request, meta: SessionMetadata, mgr: SessionManager, cfg) -> Response:
+async def _call(
+    handler: Callable[..., Awaitable[Response]],
+    session_id: str,
+    request: Request,
+    meta: SessionMetadata,
+    mgr: SessionManager,
+    cfg: CharlieBotConfig,
+) -> Response:
   """One direct handler call with the dependency shape each signature carries."""
   if handler is get_session_view:
     return await handler(session_id, request, meta, mgr, ThreadManager(cfg), cfg)

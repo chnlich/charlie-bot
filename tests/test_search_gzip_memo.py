@@ -44,7 +44,7 @@ async def test_search_gzip_repeat_serves_memo_without_recompress(tmp_path: Path)
   _cfg, mgr, _session = await make_home_session(tmp_path, name="needle")
   first = await sessions_api.search_sessions(_page_request("gzip"), q="needle", session_mgr=mgr)
 
-  with patch("src.api.responses.gzip.compress", gzip_explode_compress("repeat search re-ran the deflate")):
+  with patch("src.api.responses.gzip_level1", gzip_explode_compress("repeat search re-ran the deflate")):
     second = await sessions_api.search_sessions(_page_request("gzip"), q="needle", session_mgr=mgr)
   assert second.body == first.body
 

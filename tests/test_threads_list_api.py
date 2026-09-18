@@ -532,7 +532,7 @@ def test_list_gzip_repeat_serves_memo_without_recompress(tmp_path: Path) -> None
 
   first = client.get(url)
 
-  with patch("src.api.responses.gzip.compress", gzip_explode_compress("repeat list poll re-ran the deflate")):
+  with patch("src.api.responses.gzip_level1", gzip_explode_compress("repeat list poll re-ran the deflate")):
     second = client.get(url)
   assert second.headers["content-encoding"] == "gzip"
   assert second.content == first.content

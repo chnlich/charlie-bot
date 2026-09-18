@@ -1,6 +1,8 @@
 """CharlieBot server entry point."""
 
 import asyncio
+import contextlib
+import io
 import json
 import time
 from collections.abc import AsyncIterator
@@ -9,8 +11,9 @@ from datetime import datetime
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+from isal.igzip import IGzipFile
 from starlette.datastructures import Headers, MutableHeaders, QueryParams
-from starlette.middleware.gzip import GZipMiddleware, GZipResponder
+from starlette.middleware.gzip import GZipMiddleware, GZipResponder, IdentityResponder
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -110,6 +113,35 @@ class _OffLoopWholeBodyGZipResponder(GZipResponder):
   inline per-chunk path, whose chunks are small and whose gzip file state must
   not cross threads between writes.
   """
+
+  def __init__(self, app: ASGIApp, minimum_size: int, compresslevel: int = 1) -> None:
+    # IdentityResponder.__init__ binds the chain without the zlib file the
+    # GZipResponder layer would construct per request and this responder
+    # replaces; the deflate state builds at the first deflated body instead
+    # (through ISA-L, mtime=0 like the one-shot gzip memos'): a request the
+    # middleware skips — precompressed, excluded type, small body —
+    # constructs none of it.
+    IdentityResponder.__init__(self, app, minimum_size)
+    self.compresslevel = compresslevel
+    self.gzip_buffer = None
+    self.gzip_file = None
+
+  async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    # IdentityResponder.__call__ mounts the ASGI chain without the super's
+    # always-entered file contexts; the state built mid-flight closes through
+    # the stack when the request ends, written or not.
+    self.send = send
+    with contextlib.ExitStack() as stack:
+      self._exit_stack = stack
+      await self.app(scope, receive, self.send_with_compression)
+
+  def apply_compression(self, body: bytes, *, more_body: bool) -> bytes:
+    if self.gzip_file is None:
+      self.gzip_buffer = io.BytesIO()
+      self.gzip_file = IGzipFile(mode="wb", fileobj=self.gzip_buffer, compresslevel=self.compresslevel, mtime=0)
+      self._exit_stack.enter_context(self.gzip_buffer)
+      self._exit_stack.enter_context(self.gzip_file)
+    return super().apply_compression(body, more_body=more_body)
 
   async def send_with_compression(self, message: Message) -> None:
     if message["type"] == "http.response.start":

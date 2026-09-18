@@ -87,7 +87,7 @@ def test_repeat_gzip_download_recompresses_nothing(profile_home: Path, monkeypat
   first = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert first.status_code == 200
 
-  monkeypatch.setattr(sessions_api.gzip, "compress", gzip_explode_compress("repeat gzip download re-ran the deflate"))
+  monkeypatch.setattr(sessions_api, "gzip_level1", gzip_explode_compress("repeat gzip download re-ran the deflate"))
   resp = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
   assert resp.headers["content-encoding"] == "gzip"
@@ -104,7 +104,7 @@ def test_gzip_download_recompresses_when_file_appends(profile_home: Path, monkey
   assert first.status_code == 200
 
   calls: list[bytes] = []
-  monkeypatch.setattr(sessions_api.gzip, "compress", gzip_counting_compress(sessions_api.gzip.compress, calls))
+  monkeypatch.setattr(sessions_api, "gzip_level1", gzip_counting_compress(sessions_api.gzip_level1, calls))
   events_path = profile_home / "sessions" / sid / "data" / "chat_events.jsonl"
   with events_path.open("a", encoding="utf-8") as stream:
     stream.write(

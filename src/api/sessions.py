@@ -1,7 +1,6 @@
 """Session management API routes."""
 
 import asyncio
-import gzip
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -40,6 +39,7 @@ from src.api.responses import (
 from src.api.threads import view_thread_rows
 from src.core import claude_accounts, sidebar_state, thinking_state
 from src.core.chat_events import chat_events_path
+from src.core.compression import gzip_level1
 from src.core.config import (
     CharlieBotConfig,
     claude_config_dir,
@@ -846,7 +846,7 @@ async def get_session_events_page(
           # One deflate per page per projection generation, in the executor the
           # middleware's replaced pass also used; mtime=0 keeps the bytes
           # deterministic (the M101 serve's rule).
-          gz = await asyncio.to_thread(gzip.compress, body, 1, mtime=0)
+          gz = await asyncio.to_thread(gzip_level1, body)
           projection.store_page_body_gzip(before, limit, gz)
         return PreencodedJSONResponse(gz, headers=GZIP_RESPONSE_HEADERS)
       return PreencodedJSONResponse(body)
@@ -1175,7 +1175,7 @@ def _events_file_gzip(path: Path) -> bytes:
   hit = _events_gzip_memo.fresh(path, st)
   if hit is not None:
     return hit
-  compressed = gzip.compress(path.read_bytes(), compresslevel=1, mtime=0)
+  compressed = gzip_level1(path.read_bytes())
   _events_gzip_memo.record(path, st, compressed)
   return compressed
 

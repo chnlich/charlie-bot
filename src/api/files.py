@@ -165,7 +165,7 @@ def _injected_artifact_page(fs_path: Path, session_id: str) -> bytes:
 
 
 def _injected_artifact_page_gzip(fs_path: Path, session_id: str) -> bytes:
-  """The credentialed artifact view's gzip form, memoized beside the plain body.
+  """The artifact view's gzip form, memoized beside the plain body.
 
   The route ships these bytes with Content-Encoding: gzip set upstream, which
   is what makes the server's gzip middleware skip its own whole-body deflate —

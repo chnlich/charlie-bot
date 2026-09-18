@@ -750,27 +750,46 @@ class _OomReportBackend(ScriptedRelayBackend):
 
 
 @pytest.mark.asyncio
-async def test_run_cc_error_event_beats_the_stderr_banner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The Gemini-503 shape on the live exit path: the invocation's structured
-  error event is the hint, not the stderr help banner."""
+@pytest.mark.parametrize(
+    ("scripted_exit", "expected_exit", "expected_msg", "expected_errors"),
+    [
+        pytest.param(
+            1,
+            1,
+            LITELLM_503_ERROR_MESSAGE,
+            [f"Agent error: {LITELLM_503_ERROR_MESSAGE}"],
+            id="nonzero-exit-publishes-the-error-event",
+        ),
+        pytest.param(0, 0, None, [], id="zero-exit-stays-hint-free"),
+    ],
+)
+async def test_run_cc_error_hint_follows_the_invocation_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scripted_exit: int,
+    expected_exit: int,
+    expected_msg: str | None,
+    expected_errors: list[str],
+) -> None:
+  """The invocation's structured error event is the end-of-run hint, never the
+  stderr help banner: a nonzero exit publishes it, and an exit-0 recovery stays
+  hint-free even though the stream carried the same error event."""
   monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "login"))
   cfg = _solo_cfg(tmp_path)
   meta = SessionMetadata(id="s1", name="t", backend="solo")
   backend = ScriptedRelayBackend(
       [backend_base.make_error_event(LITELLM_503_ERROR_MESSAGE),
        backend_base.make_result_event()],
-      exit_code=1,
+      exit_code=scripted_exit,
       stderr_text=LITELLM_FEEDBACK_BANNER_STDERR)
   _install_backends(monkeypatch, [backend])
   item = make_work_item(cfg, meta, cfg.backends.options[0])
 
   _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
 
-  assert exit_code == 1
-  assert error_msg == LITELLM_503_ERROR_MESSAGE
-  errors = _events_of(item.callbacks, ET.ASSISTANT_ERROR)
-  assert len(errors) == 1
-  assert errors[0]["content"] == f"Agent error: {LITELLM_503_ERROR_MESSAGE}"
+  assert exit_code == expected_exit
+  assert error_msg == expected_msg
+  assert [e["content"] for e in _events_of(item.callbacks, ET.ASSISTANT_ERROR)] == expected_errors
 
 
 @pytest.mark.asyncio
@@ -786,28 +805,6 @@ async def test_run_cc_terminated_stays_hint_free(tmp_path: Path, monkeypatch: py
   _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
 
   assert exit_code == -15
-  assert error_msg is None
-  assert _events_of(item.callbacks, ET.ASSISTANT_ERROR) == []
-
-
-@pytest.mark.asyncio
-async def test_run_cc_success_stays_hint_free(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Exit 0 emits no error even when the stream carried an error event (the
-  invocation recovered from it) and the stderr tail is non-empty."""
-  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "login"))
-  cfg = _solo_cfg(tmp_path)
-  meta = SessionMetadata(id="s1", name="t", backend="solo")
-  backend = ScriptedRelayBackend(
-      [backend_base.make_error_event(LITELLM_503_ERROR_MESSAGE),
-       backend_base.make_result_event()],
-      exit_code=0,
-      stderr_text=LITELLM_FEEDBACK_BANNER_STDERR)
-  _install_backends(monkeypatch, [backend])
-  item = make_work_item(cfg, meta, cfg.backends.options[0])
-
-  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
-
-  assert exit_code == 0
   assert error_msg is None
   assert _events_of(item.callbacks, ET.ASSISTANT_ERROR) == []
 

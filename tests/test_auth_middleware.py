@@ -6,6 +6,7 @@ import pytest
 from conftest import (
     _ok_asgi_downstream,
     asgi_downstream_called,
+    asgi_response,
     run_through_asgi_middleware,
     stub_credentials,
 )
@@ -42,11 +43,9 @@ def _middleware(key: str) -> AuthMiddleware:
 
 
 def _response(sent: list[dict]) -> tuple[int, str, str]:
-  """Flatten the ASGI messages into (status, content-type, body)."""
-  start = next(m for m in sent if m["type"] == "http.response.start")
-  headers = dict(start["headers"])
-  body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
-  return start["status"], headers.get(b"content-type", b"").decode(), body.decode()
+  """Reshape the shared flatten into (status, content-type, body), decoded."""
+  status, headers, body = asgi_response(sent)
+  return status, headers.get(b"content-type", b"").decode(), body.decode()
 
 
 # Rows are the request shapes that must reach the downstream app: the gate is a

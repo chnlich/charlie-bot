@@ -13,7 +13,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from isal.igzip import IGzipFile
 from starlette.datastructures import Headers, MutableHeaders, QueryParams
-from starlette.middleware.gzip import GZipMiddleware, GZipResponder
+from starlette.middleware.gzip import GZipMiddleware, GZipResponder, IdentityResponder
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -115,13 +115,14 @@ class _OffLoopWholeBodyGZipResponder(GZipResponder):
   """
 
   def __init__(self, app: ASGIApp, minimum_size: int, compresslevel: int = 1) -> None:
-    super().__init__(app, minimum_size, compresslevel=compresslevel)
+    # IdentityResponder.__init__ binds the chain without the zlib file the
+    # GZipResponder layer would construct per request and this responder
+    # replaces; the deflate state builds at the first deflated body instead
+    # (through ISA-L, mtime=0 like the one-shot gzip memos'): a request the
+    # middleware skips — precompressed, excluded type, small body —
+    # constructs none of it.
+    IdentityResponder.__init__(self, app, minimum_size)
     self.compresslevel = compresslevel
-    # The super's zlib GzipFile writes its dated header into the shared buffer
-    # at construction and appends a trailer at close, so the deflate state is
-    # built at the first deflated body instead (through ISA-L, mtime=0 like
-    # the one-shot gzip memos'): a request the middleware skips —
-    # precompressed, excluded type, small body — constructs none of it.
     self.gzip_buffer = None
     self.gzip_file = None
 

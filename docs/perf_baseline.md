@@ -118,6 +118,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M106 switch-during-stream repaint | M106 collector below | ms per synchronous paint of the hide+re-show a session switch performs on a mid-stream pending draft (the largest on-disk assistant draft grown one 200 B delta per switch, the page's marked build, node vm harness — live state read-only); the painted frame's parity against a direct full-draft parse rides every reading | median < 0.005 s | — (introduced with its first history row) |
 | M107 multi-trace merged-trace build wall, worst on-disk trace dir | M107 collector below | seconds per `_cached_merge` build over the worst on-disk multi-trace dir (the merged view's dir shape: one merge-pool task per trace, the single gzip run streaming each member's fragment as it completes; scratch cache home, live home read-only) | median < max(8 s, bytes ÷ 200 MB/s) (recalibrated from max(14 s, bytes ÷ 150 MB/s): the 2026-09-17 landing's wave model left the level-1 `gzip` subprocess on the ordered fragment stream — 201 MB/s against the four members' 63 MB/s write — and the stream became the wall after each wave; the isal igzip swap reads 797 MB/s, the wall is the member waves again, and 2.09 GB / 12 traces measures 7.35-8.34 s, 250-284 MB/s effective; the bytes line tracks the corpus the way M78/M84/M101 track theirs) | — (introduced with its first history row) |
 | M108 claude-sub launch import+dispatch floor, fresh process | M108 collector below | seconds per `claude-sub --<unsupported-probe-flag>` wall (the subscription-mode worker binary's console script: every cc-claude subscription worker and reviewer launch pays this import floor before the claude CLI starts; the probe flag rejects after argv parse, so no launch work runs — the nonzero exit is the assert; the checkout under test rides PYTHONPATH because the venv's editable finder pins src to the main checkout) | median < 0.30 s (the residual floor is the account pool's runtime models — pydantic + backend_models + src.core.models, ~117 ms measured; the web framework and the config model stack stay out — the ban-set contract test pins it) | — (introduced with its first history row) |
+| M109 ext-usage codex spend changed-round re-parse | M109 collector below | seconds per changed-round re-parse of the worst rollout in the 7-day spend window (a live codex turn appends its rollout, so every 60 s poll round re-reads that file from byte 0); the cold full-window scan (the poller's first round after a server start, every window file re-read) | changed-round median < max(0.050 s, bytes ÷ 250 MB/s) (the changed round re-parses the whole changed file, so the line tracks its bytes the way the M78/M84/M101 lines track theirs); cold full-window median < 0.5 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -7456,10 +7457,55 @@ print(f"claude-sub launch floor median {times[3]:.3f} s, max {times[-1]:.3f} s o
 EOF
 ```
 
+M109 — ext-usage codex spend changed-round re-parse. The poller's spend aggregation serves unchanged
+rollouts from the stat-keyed spend cache; a changed rollout (a live codex turn appends its own rollout
+every event) is re-read from byte 0 — model attribution is positional (the turn_context line above each
+token_count event), so no tail window serves it. The cost is background poller work invisible to HTTP
+probes, so the collector times the changed round over the live corpus (read-only), from the checkout
+under test: one cold pass, as at a server start, then five timed changed rounds of the worst window
+file, then three timed cold full-window scans. Evidence while the live server runs older code points
+the same collector at the branch checkout (`CHECKOUT` at the worktree root), the same shape as the
+M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, sys, time
+sys.path.insert(0, os.environ["CHECKOUT"])
+from pathlib import Path
+from src.api.ext_usage import CodexUsageProvider, _list_rollout_files
+
+prov = CodexUsageProvider("main", str(Path.home() / ".codex"))
+rollouts = _list_rollout_files(prov.sessions_dir)
+now = time.time()
+live = [p for p in rollouts if p.stat().st_mtime >= now - 7 * 86400]
+big = max(live, key=lambda p: p.stat().st_size)
+cold0 = prov._compute_spend(live)  # cold pass, as at a server start; not timed
+times = []
+for _ in range(5):
+    prov._spend_cache.drop_where(lambda p: p == big)
+    t0 = time.perf_counter()
+    spend = prov._compute_spend(live)
+    times.append(time.perf_counter() - t0)
+times.sort()
+cold = []
+for _ in range(3):
+    prov._spend_cache.drop_where(lambda _: True)
+    t0 = time.perf_counter()
+    prov._compute_spend(live)
+    cold.append(time.perf_counter() - t0)
+cold.sort()
+assert spend == cold0, f"spend drift: {spend} vs {cold0}"
+print(f"{len(live)} rollouts in the 7-day spend window, worst {big.stat().st_size / 1e6:.1f} MB; "
+      f"changed-round spend re-parse median {times[2]:.3f} s, max {times[-1]:.3f} s over 5; "
+      f"cold full-window scan median {cold[1]:.3f} s, max {cold[2]:.3f} s over 3")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-18 | this PR | M109 ext-usage codex spend re-parse, introduced with this PR: changed-round re-parse of the worst window rollout median 0.809/0.796/0.792 → 0.140/0.143/0.137 s (−82 % to −83 %), maxima 0.829-0.819 → 0.146-0.161 s, every paired round faster; cold full-window scan 1.704/1.697/1.687 → 0.321/0.353/0.330 s medians (−80 % to −81 %), maxima 1.713-1.695 → 0.349-0.387 s (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, the 64-rollout 7-day spend window whose worst file is the 57.5 MB rollout-2026-09-11 turn, live corpus read-only, load 1.88 one-minute); extracted-events digest c2aa2663bf279b35 (736 spend events) identical across both arms; 75-passed ext_usage suite (74 + 1 new undecodable-byte whole-file-skip contract test), ruff and yapf clean; M109 definition, collector, healthy ranges, and history row introduced with this PR | the changed-file path re-read the rollout from byte 0 through `read_text` — a whole-file UTF-8 decode the walk then re-split — plus per-line stdlib json, and a live codex turn's appends made that the poll round's standing cost at the file's grown size; the walk now parses the wire bytes per line with orjson (the M78 funnel's zero-decode shape), keeping the OSError file-skip and the undecodable-byte whole-file-skip contracts verbatim — the lazy decode probe demotes only provable-JSON errors to row skips, so a corrupted file still warns once and extracts nothing |
 | 2026-09-18 | this PR | M95 worker-log newest-first scans, the from-the-end walk moved from window reads to a mapped backward scan: review-scan median 0.60/0.59/0.83 → 0.09/0.10/0.09 ms (−85 % to −89 %), failed-iteration judgment-pair median 6.17/6.00/6.46 → 0.93/1.04/0.92 ms (−83 % to −86 %), maxima 6.21-6.81 → 1.01-1.23 ms, every paired round faster (three interleaved rounds of the verbatim collectors — main checkout before vs branch worktree after back-to-back, the 9.8 MB / 232-line worst on-disk worker log carrying one 9.5 MB tool_result line, live home read-only, resolved blocker/summary/report identical across all six arms, load 1.71-1.89 one-minute); no-regression witnesses interleaved: M85 verify-finalize report read 0.6-0.8 → 0.2 ms medians (maxima 1.3-1.5 → 0.3 ms), M31 steady-state events-summary read 0.0008-0.0009 → 0.0005 s medians; 5713-passed suite + 11 skipped (one new test: the plain-filter walk's whole-line contract; the two walk early-stop tests re-pinned on the mapped scan's rfind extents), ruff clean; M95 healthy ranges recalibrated review < 0.005 s → < 0.001 s and judgment-pair < 0.012 s → < 0.004 s with this PR | the from-the-end walker memcpy'd its way through every byte between the consumer's answer and the file start one 512 KiB window at a time — cProfile put 4.0 of the pair's 7.2 ms in BufferedReader.read walking the 9.5 MB tool_result line whose head rejects it, the reads finding the line's opening newline; the backward scan now rides a read-only mapping (the parse_ndjson_file mechanism the #1785 zero-copy walk gave the whole-file parse): lines are zero-copy views between mmap.rfind newlines, a head-provable filter rejects a giant line for one bounded 256-byte probe, and an early stop never scans past its answer; 300 randomized trials × 3 filter shapes (none / head-provable / plain) output-identical to the old walker; the same walk serves the M31 summary read (parse_ndjson_tail_parseable), M85 (_resolve_final_report), the reviewer-completion scan (review.py), verify_trailer, and the codex rollout backward scans |
 | 2026-09-18 | this PR | M107 multi-trace merge compressor moved from `gzip -1` to the isal igzip CLI (same subprocess shape): build median 11.67/11.87/11.57 → 8.34/8.11/7.35 s (−29 % to −36 %), maxima 12.06-12.09 → 8.82-7.37 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, 12 traces / 2089.8 MB / 5,279,591 events of the step002110 dir, scratch cache home per arm, live traces read in place read-only, load 1.7-2.3 one-minute; event-identity digest d73f1c00bfd3 identical across all six arms; artifact 170.3 → 160.5 MB, −5.8 % wire); component attribution standalone: the level-1 `gzip` subprocess reads the members' 131 MB fragments at 201 MB/s single-core while the same level through isal's igzip CLI reads 797 MB/s (−5.7 % wire), and the ordered fragment stream — fragment k copies only after k−1 streams — made the stream's 2.6 s-per-wave drain the wall beside each 2.07 s wave (12 members / 4 workers = 3 waves; stream total 1.57 GB at 201 MB/s = 7.8 s of serialized copy vs 6.2 s of member waves); the isal stream's 2.0 s total returns the wall to the member waves; no-regression witnesses interleaved: M66 single-trace merge 3.87/4.15 → 3.85/3.78 s medians (the walk writes into the live pipe at 63 MB/s, under both compressors' pace — wall unchanged, artifact 21.5 → 20.4 MB) and M88 direct-pass 2.46/2.49 → 2.47/2.45 s (the 2.72 s validation parse is the floor; artifact 23.8 → 23.7 MB); 5712-passed suite + 11 skipped (test_trace_merge's walk-failure kill/reap contract rides the same Popen seam), ruff and yapf clean; M107 healthy range recalibrated max(14 s, bytes ÷ 150 MB/s) → max(8 s, bytes ÷ 200 MB/s) with this PR | the trace merge was the one gzip holdout after the ISA-L landing moved the seven one-shot memos and the middleware to isal — the 2026-09-17 member-parallel landing multiplied the fragments flowing through the ordered stream 4-wide while the subprocess still read 201 MB/s, so every wave's 524 MB burst drained slower than the next wave built |
 | 2026-09-18 | this PR | M6 append-round collector repaired, max line prices the served path: max 50.67/50.71/51.61 → 0.37/0.32/0.33 ms (−99.3 % to −99.4 %) over three interleaved rounds of the verbatim collector — old drive vs new drive back-to-back, the 20534-event worst live corpus copied to a scratch `CHARLIEBOT_HOME` per arm, live home read-only, parity True all six arms, load 1.60-1.87 one-minute; medians unchanged 0.058-0.07 ms both arms; component attribution: the first timed resolve's declared-window warning path (`_warn_declared_window_once` → `LazyStructlogLogger.__getattr__`) fired the lazy `import structlog` inside the timed region — 109 modules, 77.8 ms standalone cProfile wall — while the served process imports structlog at startup; the collector imports structlog beside its other imports, one line; healthy range unchanged (the line watches the median, 100x inside) | the append-round max is the metric's jank signal — the 3 s usage poll during a streamed turn — and priced the collector process's own lazy logger import (the vacuous-read class the M34/M55/M65/M70/M72 repairs called out), so a real 50 ms fold stall would have read the same as the harness artifact; collector command only, no product code |

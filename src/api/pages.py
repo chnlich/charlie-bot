@@ -11,7 +11,6 @@ import multiprocessing
 import os
 import socket
 import subprocess
-import sys
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -45,11 +44,11 @@ from src.core.sessions import SessionManager
 from src.core.timeouts import HOME_SERVICE_PROBE_TIMEOUT, SUBPROCESS_GIT_VERSION_TIMEOUT
 from src.core.token_tally import TokenTally, collect_token_usage
 from src.core.trace_merge import (
-    _MERGE_COMPRESSLEVEL,
     _gzip_exit_or_raise,
     _kill_gzip_run,
     _trace_events_or_raise,
     build_multi_trace_merge,
+    igzip_command,
     merge_traces,
 )
 
@@ -484,15 +483,13 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
 
   The artifact is the original bytes compressed and the parse result is discarded, so the two
   passes are independent; the parse holds the GIL for its whole run (measured: a concurrent
-  gzip thread makes no progress), so the compress must leave the process — the isal igzip run
-  at the merge path's compression level compresses in parallel with the parse (the merge
-  family's one compressor; see trace_merge._gzip_output_stream for the level's measured
-  costs). Validation parses
+  gzip thread makes no progress), so the compress must leave the process — the merge family's
+  one compressor (``trace_merge.igzip_command``) compresses in parallel with the parse. Validation parses
   with orjson, the parser the merge path's build already parses with, so both serve shapes
   share one JSON boundary: the NaN/Infinity literals stdlib json accepts fail the build loudly
   here too — a literal Perfetto cannot render must not reach the cache.
   """
-  command = [sys.executable, "-m", "isal.igzip", f"-{_MERGE_COMPRESSLEVEL}", "-n", "-c", str(path)]
+  command = igzip_command("-c", str(path))
   with (out_path.open("wb") as compressed, subprocess.Popen(command, stdout=compressed, stderr=subprocess.PIPE) as
         gzip_proc, gc_off(collect=True)):
     # The parse allocates ~1M dicts per 1M input events; the generational passes

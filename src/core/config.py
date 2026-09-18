@@ -32,10 +32,12 @@ from src.core.credentials import (  # noqa: F401  (re-export: the established sr
 )
 from src.core.home import (  # noqa: F401  (re-export: the established src.core.config import path)
     CHARLIEBOT_HOME_ENV,
+    CLAUDE_CONFIG_DIR_ENV_VAR,
     _home_cache,
     _resolve_home,
     charliebot_home_dir,
     default_charliebot_home,
+    default_claude_dir,
 )
 from src.core.log_once import LazyStructlogLogger
 from src.core.yaml_utils import load_yaml
@@ -766,19 +768,8 @@ def _resolve_prompt_file(entry: dict, repo_root: Path) -> Path | None:
 # src/cli/claude_sub.py), the pool strips any inherited value where it pinned the
 # directory itself (master_cc_run, claude_compaction.compaction_env), and the
 # in-process readers below and in tui/_claude_config_path and claude_sub read it
-# back. One spelling everywhere.
-CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
-
-
-def default_claude_dir() -> Path:
-  """The default claude login directory (``~/.claude``), read from HOME on every call.
-
-  The terminal fallback of :func:`claude_config_dir`'s order and the root the
-  cold-storage, autonamer, tui, and claude-sub readers re-derive per call, so those
-  honor a redirected HOME (tests isolate stores that way); the tally layer freezes an
-  import-time copy in ``token_tally.DEFAULT_CLAUDE_DIR``.
-  """
-  return Path.home() / ".claude"
+# back. One spelling everywhere; the names single-home in src.core.home so the
+# worker binary's launch path imports them without this module.
 
 
 def claude_config_dir(account: ClaudeAccount | None = None) -> Path:

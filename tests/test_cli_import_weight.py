@@ -311,3 +311,24 @@ def test_autonamer_and_recap_defer_the_registry_until_first_use() -> None:
       "round and the summarize path loading it at their one build")
   assert resolved is True, "the lazy build_backend binding did not resolve through the module attribute"
   assert after == ["src.agents.backends.registry"], (f"the lazy binding loaded unexpected modules: {after}")
+
+
+# The claude-sub chain's extra bans: the worker binary launches on every
+# subscription-mode spawn, so its import must stay off the web framework
+# (pty_common/tui carry only TYPE_CHECKING WebSocket hints and the relay imports
+# WebSocketDisconnect inside the function) and off the config model stack (the
+# backend ABC defers get_config to its cgroup read; runs and claude_accounts
+# carry the CharlieBotConfig hints under TYPE_CHECKING; the login-dir names
+# single-home in src.core.home).
+CLAUDE_SUB_HEAVY_MODULES = ("fastapi", "src.core.config", "yaml", "src.core.credentials")
+
+
+def test_claude_sub_chain_imports_without_the_web_framework_and_config_stack() -> None:
+  loaded = _modules_loaded_after_import("import src.cli.claude_sub", CLAUDE_SUB_HEAVY_MODULES)
+  assert loaded == [], (
+      "the claude-sub worker binary pulled the web framework or the config model "
+      f"stack into its launch process: {loaded}; the M108 launch wall "
+      "(docs/perf_baseline.md) depends on these staying out — the WebSocket "
+      "hints ride TYPE_CHECKING and the relay imports WebSocketDisconnect "
+      "inside the function, and get_config loads on the cgroup spawn path that "
+      "reads it")

@@ -1,4 +1,5 @@
-"""The profile-home resolution: the one place that reads ``CHARLIEBOT_HOME``.
+"""The profile-home and claude-login-directory resolution: the one place that
+reads ``CHARLIEBOT_HOME`` and the Claude login-dir derivations.
 
 Every state path derives from :func:`charliebot_home_dir`. The memory CLI
 imports from here directly: its store root is a pure derivation of the home,
@@ -12,6 +13,28 @@ import os
 from pathlib import Path
 
 CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
+
+# Claude Code's login-directory env var, a cross-process wire contract: the server
+# writes it onto a cc-claude child (claude_code._prepare_env, the tmux spawn in
+# src/cli/claude_sub.py), the pool strips any inherited value where it pinned the
+# directory itself (master_cc_run, claude_compaction.compaction_env), and the
+# in-process readers below and in tui/_claude_config_path and claude_sub read it
+# back. One spelling everywhere. It lives beside the profile home so the worker
+# binary's launch path (src.cli.claude_sub) resolves it without the config model
+# stack.
+CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
+
+
+def default_claude_dir() -> Path:
+  """The default claude login directory (``~/.claude``), read from HOME on every call.
+
+  The terminal fallback of :func:`src.core.config.claude_config_dir`'s order and
+  the root the cold-storage, autonamer, tui, and claude-sub readers re-derive per
+  call, so those honor a redirected HOME (tests isolate stores that way); the
+  tally layer freezes an import-time copy in ``token_tally.DEFAULT_CLAUDE_DIR``.
+  """
+  return Path.home() / ".claude"
+
 
 # The resolved home and its string form, per raw ``CHARLIEBOT_HOME`` value plus
 # ``HOME`` (``""`` raw is the default home, and a ``~`` value derives from

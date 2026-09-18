@@ -21,6 +21,8 @@ This module owns the pure/queryable parts of that contract:
 - reading the run's true completion time (the raw log's final mtime).
 """
 
+from __future__ import annotations
+
 import os
 import re
 import stat
@@ -29,14 +31,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import orjson
 
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
 from src.core.models import BackendType
 from src.core.ndjson import parse_ndjson_line
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
+
+if TYPE_CHECKING:
+  from src.core.config import CharlieBotConfig
 
 RAW_LOG_NAME = "agent.raw.ndjson"
 STDERR_LOG_NAME = "agent.stderr.log"

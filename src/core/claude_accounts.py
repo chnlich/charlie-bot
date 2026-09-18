@@ -33,11 +33,16 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from src.core.config import CharlieBotConfig
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendOption, BackendType, ClaudeAccount
+
+# future-annotations keep every cfg: CharlieBotConfig hint unevaluated; the config
+# model stack must stay out of the claude-sub worker binary's import (it imports
+# this module for CREDENTIALS_FILE).
+if TYPE_CHECKING:
+  from src.core.config import CharlieBotConfig
 
 log = LazyStructlogLogger()
 

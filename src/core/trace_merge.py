@@ -279,10 +279,12 @@ def _gzip_output_stream(out_path: Path) -> Iterator[BinaryIO]:
   ~800 MB/s against gzip's ~200 MB/s on this host's trace JSON, and the
   multi-trace merge's ordered fragment stream must keep pace with each 4-member
   wave or the stream becomes the wall. ``sys.executable`` is the process's own
-  interpreter, whose site has the declared isal dependency. The run reads
-  stdin, so the gzip header carries no name and mtime 0 — deterministic.
+  interpreter, whose site has the declared isal dependency. ``-n`` zeroes the
+  header's name and mtime fields — the CLI stamps the wall clock into a
+  stdin-fed stream otherwise, so without the flag the artifact bytes are not
+  deterministic run to run.
   """
-  command = [sys.executable, "-m", "isal.igzip", f"-{_MERGE_COMPRESSLEVEL}"]
+  command = [sys.executable, "-m", "isal.igzip", f"-{_MERGE_COMPRESSLEVEL}", "-n"]
   with out_path.open("wb") as compressed, subprocess.Popen(command, stdin=subprocess.PIPE, stdout=compressed,
                                                            stderr=subprocess.PIPE) as gzip_proc:
     output = gzip_proc.stdin

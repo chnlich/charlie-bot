@@ -7352,7 +7352,8 @@ the wall was the sum of N traces' parse+remap walks. The fixed form submits
 one merge-pool task per trace and streams each member's fragment into the
 single gzip run as its task completes — the wall becomes the slowest wave of
 members, ids allocate inside per-member strides so parallel members never
-collide, and the artifact stays the single-member deterministic gzip. The
+collide, and the artifact stays the single-member deterministic gzip run
+(`-n` keeps the isal igzip header's mtime 0). The
 cost is the first merged view of a trace dir (repeats serve the cache),
 invisible to the standing HTTP probes, so the collector writes only to a
 scratch `CHARLIEBOT_HOME` under /tmp (traces read in place, read-only) and

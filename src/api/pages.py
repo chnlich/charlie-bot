@@ -493,7 +493,7 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
   share one JSON boundary: the NaN/Infinity literals stdlib json accepts fail the build loudly
   here too — a literal Perfetto cannot render must not reach the cache.
   """
-  command = [sys.executable, "-m", "isal.igzip", f"-{_MERGE_COMPRESSLEVEL}", "-c", str(path)]
+  command = [sys.executable, "-m", "isal.igzip", f"-{_MERGE_COMPRESSLEVEL}", "-n", "-c", str(path)]
   with (out_path.open("wb") as compressed, subprocess.Popen(command, stdout=compressed, stderr=subprocess.PIPE) as
         gzip_proc, gc_off(collect=True)):
     # The parse allocates ~1M dicts per 1M input events; the generational passes

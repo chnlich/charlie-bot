@@ -921,7 +921,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
         # through the funnel, continue the turn from it; a refusal the copy on
         # disk already answers never fails the turn.
         await master_cc_relay.adopt_transcript_holder(
-            item, cc_session_id, refused_holder, account.label, reason="guard_refused_newer_transcript")
+            item, cc_session_id, refused_holder, account.label, reason=master_cc_relay.GUARD_REFUSED_NEWER_TRANSCRIPT)
         next_account = refused_holder
       # Counted toward the relay cap like any other account change, so even a
       # pathological refusal loop ends loudly at the same bound.

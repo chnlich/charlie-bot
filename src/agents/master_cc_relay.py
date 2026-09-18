@@ -113,6 +113,12 @@ def choose_turn_account(
   return chosen, cold
 
 
+# The reason both guard-refusal consumers label their reconcile row with: the
+# relay's mid-turn move and the run loop's post-prepare adoption react to the
+# same refusal, so the grep-able value has one spelling.
+GUARD_REFUSED_NEWER_TRANSCRIPT = "guard_refused_newer_transcript"
+
+
 async def adopt_transcript_holder(
     item: master_cc_state._WorkItem,
     cc_session_id: str | None,
@@ -210,7 +216,7 @@ async def place_turn(
         # kill between a relay's move and its label persist, or an unknown
         # defect). The move layer never redirects -- this consumer reconciles:
         # adopt the newer holder and continue the turn from it with no copy.
-        await adopt_transcript_holder(item, resume_id, chosen, previous.label, reason="guard_refused_newer_transcript")
+        await adopt_transcript_holder(item, resume_id, chosen, previous.label, reason=GUARD_REFUSED_NEWER_TRANSCRIPT)
     session_meta.claude_account = chosen.label
     if item.callbacks.persist_claude_account is not None:
       await item.callbacks.persist_claude_account(session_meta.id, chosen.label)
@@ -252,8 +258,8 @@ async def report_login_failure(
       session=item.session_meta.id,
       account=account.label,
       config_dir=account.config_dir,
-      reason="auth_failed")
-  await _persist(item)(claude_relay.login_required_event(account, "auth_failed"))
+      reason=claude_relay.LOGIN_REASON_AUTH_FAILED)
+  await _persist(item)(claude_relay.login_required_event(account, claude_relay.LOGIN_REASON_AUTH_FAILED))
 
 
 async def report_empty_credentials(cfg: CharlieBotConfig, item: master_cc_state._WorkItem) -> None:
@@ -266,8 +272,8 @@ async def report_empty_credentials(cfg: CharlieBotConfig, item: master_cc_state.
           session=item.session_meta.id,
           account=account.label,
           config_dir=account.config_dir,
-          reason="empty_credentials")
-      await _persist(item)(claude_relay.login_required_event(account, "empty_credentials"))
+          reason=claude_relay.LOGIN_REASON_EMPTY_CREDENTIALS)
+      await _persist(item)(claude_relay.login_required_event(account, claude_relay.LOGIN_REASON_EMPTY_CREDENTIALS))
 
 
 async def prepare_relay(

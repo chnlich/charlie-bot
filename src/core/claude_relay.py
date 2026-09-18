@@ -52,6 +52,12 @@ RELAY_REJECTED = "rejected"
 RELAY_WARNING = "warning"
 LOGIN_FAILED = "login_failed"
 
+# The login-required reason values: event_types.py pins the closed pair, and
+# each emit site labels both its server-log row and the chat event with the
+# same value, so a split spelling would fork the operator's grep.
+LOGIN_REASON_AUTH_FAILED = "auth_failed"
+LOGIN_REASON_EMPTY_CREDENTIALS = "empty_credentials"
+
 
 def _is_tool_result_event(event: dict) -> bool:
   """A Claude Code ``user`` event whose content carries a tool_result block: the relay safe point."""

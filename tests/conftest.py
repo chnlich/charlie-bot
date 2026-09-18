@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import mmap
 import os
 import re
 import shutil
@@ -418,6 +419,27 @@ def fresh_state_fixture(reset: Callable[[], None]) -> Callable[[], Iterator[None
     reset()
 
   return _fresh_state
+
+
+def recording_mmap_shim(extents: list[tuple[int, int]]) -> type:
+  """An mmap-module stand-in whose ``rfind`` records each ``(start, end)`` extent before delegating.
+
+  The backward-walk window tests install the returned class on the reader module's ``mmap``
+  reference and then assert every recorded extent stayed inside the window the early-stop
+  contract allows.
+  """
+
+  class _RecordingMmap(mmap.mmap):
+
+    def rfind(self, sub, start=0, end=None):  # noqa: ANN001, ANN202
+      extents.append((start, len(self) if end is None else end))
+      return mmap.mmap.rfind(self, sub, start, end)
+
+  class _Shim:
+    ACCESS_READ = mmap.ACCESS_READ
+    mmap = _RecordingMmap
+
+  return _Shim
 
 
 def user_event(content: str, timestamp: str | None = None) -> dict:

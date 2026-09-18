@@ -8,12 +8,12 @@ paths.
 
 import asyncio
 import json
-import mmap
 import os
 from pathlib import Path
 from typing import IO, Any
 
 import pytest
+from conftest import recording_mmap_shim
 
 from src.core import ndjson
 from src.core.ndjson import (
@@ -436,19 +436,7 @@ def test_iter_ndjson_events_from_end_reads_only_the_tail_window(
       f.write((json.dumps({"i": f"tail{i}"}) + "\n").encode())
 
   extents: list[tuple[int, int]] = []
-  real_rfind = mmap.mmap.rfind
-
-  class RecordingMmap(mmap.mmap):
-
-    def rfind(self, sub, start=0, end=None):  # noqa: ANN001, ANN202
-      extents.append((start, len(self) if end is None else end))
-      return real_rfind(self, sub, start, end)
-
-  class Shim:
-    ACCESS_READ = mmap.ACCESS_READ
-    mmap = RecordingMmap
-
-  monkeypatch.setattr(ndjson, "mmap", Shim)
+  monkeypatch.setattr(ndjson, "mmap", recording_mmap_shim(extents))
   walk = iter_ndjson_events_from_end(target, log_event="test_skip", log_fields={})
   assert next(walk) == {"i": "tail4"}
   walk.close()

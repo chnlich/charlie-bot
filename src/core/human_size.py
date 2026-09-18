@@ -1,5 +1,6 @@
 """Human-readable byte counts, one home shared by the file listing and the trash reports."""
 
+
 def format_size(size: int) -> str:
   """Render a byte count as ``"5 B"``, ``"2.0 KB"``, and upward with one decimal above bytes."""
   for unit in ("B", "KB", "MB", "GB", "TB"):

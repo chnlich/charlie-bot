@@ -206,6 +206,10 @@ def _backend_domain_for(backend_id: str, cfg: CharlieBotConfig) -> str | None:
 # constant does not home.
 _UNKNOWN_BACKEND_DETAIL = "backend '{}' is not a recognized backend id; valid ids: {}"
 
+# Shared Query description: the routes exposing the sidebar's ids parameter must
+# carry word-identical OpenAPI metadata, so the text has one copy here.
+_SIDEBAR_IDS_QUERY_DESC = "Comma-separated ids of the sessions the sidebar is rendering"
+
 
 def _resolve_requested_backend(
     requested_backend: str | None,
@@ -403,7 +407,7 @@ async def _load_requested_sessions(session_mgr: SessionManager, ids: str) -> lis
 @router.get('/status', response_model=None)
 async def all_sessions_status(
     request: Request,
-    ids: str = Query(..., description="Comma-separated ids of the sessions the sidebar is rendering"),
+    ids: str = Query(..., description=_SIDEBAR_IDS_QUERY_DESC),
     force: bool = False,
     session_mgr: SessionManager = Depends(get_session_manager),
 ) -> Response:
@@ -452,7 +456,7 @@ async def all_sessions_status(
 
 @router.get('/tui/status')
 async def tui_status_all(
-    ids: str = Query(..., description="Comma-separated ids of the sessions the sidebar is rendering"),
+    ids: str = Query(..., description=_SIDEBAR_IDS_QUERY_DESC),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:

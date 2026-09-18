@@ -19,6 +19,7 @@ from src.api.responses import GZIP_RESPONSE_HEADERS, request_wants_gzip
 from src.core.compression import gzip_level1
 from src.core.config import configured_access_key, get_config
 from src.core.constants import FILE_SERVER_MOUNTS
+from src.core.human_size import format_size
 from src.core.memo import BoundedMemo
 
 router = APIRouter()
@@ -224,14 +225,6 @@ def _resolve_diff_base(session_id: str, diff_param: str) -> Path:
   return candidate
 
 
-def _human_size(size: int) -> str:
-  for unit in ("B", "KB", "MB", "GB", "TB"):
-    if size < 1024:
-      return f"{size:.1f} {unit}" if unit != "B" else f"{size} {unit}"
-    size /= 1024
-  return f"{size:.1f} PB"
-
-
 def _format_mtime(epoch: float) -> str:
   """The listing's UTC minute text, "YYYY-MM-DD HH:MM", from an epoch-seconds float.
 
@@ -386,7 +379,7 @@ def _dir_listing_page(dir_path: Path, url_prefix: str, diff_param: str | None) -
       if _SAFE_ENTRY_RE.fullmatch(name) is None:
         name_text = html.escape(name_text)
         href = html.escape(f"{prefix}/{quote(name, safe='')}")
-      size_text = "" if is_dir else _human_size(size)
+      size_text = "" if is_dir else format_size(size)
       mtime_text = _format_mtime(mtime)
       row = (
           f'<tr>'

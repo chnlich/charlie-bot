@@ -44,7 +44,8 @@ def _gzip_client() -> TestClient:
 
 
 # The corpus's expected size text, pinned by value: a mirrored formatter here
-# would be a second copy of _human_size whose drift silently unpins the column.
+# would be a second copy of the shared format_size (src/core/human_size.py)
+# whose drift silently unpins the column.
 _CORPUS_SIZE_TEXT = {
     "alpha.txt": "5 B",
     "Beta & Co <beta>.txt": "2.0 KB",

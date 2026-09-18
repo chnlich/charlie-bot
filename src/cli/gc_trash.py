@@ -15,7 +15,8 @@ import shutil
 import sys
 
 from src.core.config import get_config
-from src.core.worktree_trash import format_size, list_trash_entries, trash_dir
+from src.core.human_size import format_size
+from src.core.worktree_trash import list_trash_entries, trash_dir
 
 
 def main() -> None:

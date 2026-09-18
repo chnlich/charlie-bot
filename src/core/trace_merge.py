@@ -24,9 +24,8 @@ _MERGE_COMPRESSLEVEL = 1
 # Events per orjson.dumps call on the merge output. The encoder's per-element text
 # is context-free, so a batch's bracket-stripped rendering is byte-identical to the
 # per-event form; batching cut the serializer pass from 3.0 s to 1.7 s on the input
-# above. The walk appends to one pending list and flushes it at this bound, so a
-# batch holds at most this many events plus the thread_name inserts of one
-# first-sight iteration.
+# above. Every append site (walk body, thread_name insert, trailing process_
+# metadata) checks this bound, so no batch exceeds it.
 _MERGE_BATCH_EVENTS = 512
 
 # Sentinel for the walk's single-probe tid read: `event.get("tid", sentinel)` costs
@@ -265,6 +264,8 @@ def _merge_one_trace(
         ("process_sort_index", {"sort_index": sort_index}),
     ):
       pending_append({"ph": "M", "pid": synthetic_pid, "tid": meta_tid, "name": name, "args": args})
+      if len(pending) >= batch_bound:
+        batcher_flush(pending)
   batcher_flush(pending)
 
 

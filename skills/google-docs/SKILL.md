@@ -31,7 +31,7 @@ Read the configured values before making any calls.
 
 Mint the access token from the stored refresh token with the recipe in the **google-oauth** skill: `skills/google-oauth/SKILL.md`.
 
-If the refresh token is invalid or revoked, re-run the bootstrap flow below.
+If the refresh token is invalid or revoked, re-run the bootstrap flow in the **google-oauth** skill: `skills/google-oauth/SKILL.md`.
 
 ### Create a Google Doc
 

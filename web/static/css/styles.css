@@ -501,16 +501,3 @@ body { overscroll-behavior: none; }
   #ext-usage-strip div:has(> [data-field^="7d-"]) { display: none; }
   #ext-usage-strip .w-24 { width: 3rem; }
 }
-
-/* Reduced motion: the running badge's pulse and the unread dot pulse stop, and
-   the work-state label and the dot's static disc carry their meaning. The
-   session spinner and the delegated-work gear deliberately keep their original
-   continuous rotation under this preference too: that motion is the row's
-   established running cue and the user explicitly restored it, so the spin
-   utilities are NOT covered here (a prior rule suppressing them is superseded).
-   !important stays load-bearing for the pulses: this file loads before
-   tailwind.css, whose .animate-pulse utility declaration would otherwise win
-   the cascade and keep them animating. */
-@media (prefers-reduced-motion: reduce) {
-  .animate-pulse, .animate-pulse-dot { animation: none !important; }
-}

@@ -4,15 +4,12 @@
 let _backlogLoaded = false;
 
 function switchTab(tab) {
-  const allTabs = ['terminal', 'chat-tex', 'chat', 'workers', 'task', 'task-context', 'runs', 'chat-backlog', 'chat-plans'];
-  // chat-tex, chat, and chat-backlog show the chat content; chat-plans,
-  // task, task-context and runs are full-area views (workers-pattern).
+  const allTabs = ['terminal', 'chat-tex', 'chat', 'workers', 'chat-backlog', 'chat-plans'];
+  // chat-tex, chat, and chat-backlog show the chat content; chat-plans is a
+  // full-area view (workers-pattern) and hides chat.
   const showChat = (tab === 'chat-tex' || tab === 'chat' || tab === 'chat-backlog');
   document.getElementById('tab-chat').classList.toggle('hidden', !showChat);
   document.getElementById('tab-workers').classList.toggle('hidden', tab !== 'workers');
-  document.getElementById('tab-task')?.classList.toggle('hidden', tab !== 'task');
-  document.getElementById('tab-task-context')?.classList.toggle('hidden', tab !== 'task-context');
-  document.getElementById('tab-runs')?.classList.toggle('hidden', tab !== 'runs');
   document.getElementById('tab-plans').classList.toggle('hidden', tab !== 'chat-plans');
   const terminalTab = document.getElementById('tab-terminal');
   if (terminalTab) {
@@ -73,9 +70,6 @@ function switchTab(tab) {
   if (tab === 'workers' && typeof ensureWorkersLoadedForActiveSession === 'function') {
     ensureWorkersLoadedForActiveSession();
   }
-  if (tab === 'task' && globalThis.TaskPanel) globalThis.TaskPanel.onTabShown();
-  if (tab === 'task-context' && globalThis.TaskContextPanel) globalThis.TaskContextPanel.onTabShown();
-  if (tab === 'runs' && globalThis.TaskRunsPanel) globalThis.TaskRunsPanel.onTabShown();
 
   if (globalThis.TerminalPanel) {
     if (tab === 'terminal') globalThis.TerminalPanel.show();

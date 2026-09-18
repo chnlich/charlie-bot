@@ -212,9 +212,7 @@ function rowUnreadState(sessionId, serverValue) {
 // The thinking spinner and the delegated-work gear are this module's SVGs and
 // this module's element ids (spinner-<id>, worker-indicator-<id>): every row
 // that renders them is patchable by setSessionIndicator, whatever view built
-// it. The legacy template rows use the string form; the task-tree rows build
-// the same two elements as DOM nodes so the tree can render them without
-// parsing HTML and the tests can address them by id.
+// it.
 const SPINNER_SVG_INNER =
   '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>'
   + '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>';
@@ -222,8 +220,6 @@ const GEAR_CENTER_PATH =
   '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>';
 const SPINNER_TITLE = 'Task is running';
 const GEAR_TITLE = 'Delegated work running in subtasks';
-
-const SVG_NS = 'http://www.w3.org/2000/svg';
 
 function spinnerSvgContent() {
   return SPINNER_SVG_INNER;
@@ -233,55 +229,11 @@ function gearSvgContent() {
   return (Sidebar.GEAR_SVG_PATH || '') + GEAR_CENTER_PATH;
 }
 
-function buildActivitySvg(id, spec, visible) {
-  const svg = document.createElementNS(SVG_NS, 'svg');
-  svg.id = id;
-  svg.setAttribute('class', spec.classes + (visible ? '' : ' hidden'));
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('stroke', spec.stroked ? 'currentColor' : 'none');
-  svg.setAttribute('title', spec.title);
-  svg.setAttribute('role', 'img');
-  svg.setAttribute('aria-label', spec.title);
-  svg.innerHTML = spec.content();
-  return svg;
-}
-
-// The tree rows' activity triple: the same spinner, gear and unread dot the
-// legacy rows render, as DOM nodes with the pinned ids. `state` is a
-// setSessionIndicator state ('thinking' shows the spinner, 'worker_only' the
-// gear); `hasUnread` is the row's server unread fact.
-function buildSessionActivityIndicators(container, sid, state, hasUnread) {
-  container.appendChild(buildActivitySvg('spinner-' + sid, {
-    classes: 'w-4 h-4 animate-spin text-yellow-400 flex-shrink-0',
-    stroked: false,
-    title: SPINNER_TITLE,
-    content: spinnerSvgContent,
-  }, state === 'thinking'));
-  container.appendChild(buildActivitySvg('worker-indicator-' + sid, {
-    classes: 'w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite]',
-    stroked: true,
-    title: GEAR_TITLE,
-    content: gearSvgContent,
-  }, state === 'worker_only'));
-  container.appendChild(buildUnreadDot(sid, !!hasUnread, !!hasUnread && state === 'idle'));
-  return container;
-}
-
 // The unread dot: the legacy rows' familiar yellow pulse, pinned to the
 // unread-<id> element id the row re-render path and the unread_changed
 // handler both address. Hidden while any activity cue shows (the dot is an
 // idle-state cue; activity hides it without discarding the flag).
 const UNREAD_TITLE = 'Unread reply';
-
-function buildUnreadDot(sid, hasUnread, visible) {
-  const dot = document.createElement('span');
-  dot.id = 'unread-' + sid;
-  dot.setAttribute('data-has-unread', hasUnread ? '1' : '0');
-  dot.title = UNREAD_TITLE;
-  dot.className = 'w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0' + (visible ? '' : ' hidden');
-  return dot;
-}
 
 // Thinking spinner, worker gear, unread dot: one session row's header indicators.
 // setSessionIndicator toggles each element by id, so the three id prefixes are pinned.
@@ -330,25 +282,7 @@ function updateSidebarHighlight(newSessionId) {
   }
 }
 
-// Task-tree rows carry the same indicator elements but answer from the tree's
-// server-derived facts. When the registered provider knows the session (a v2
-// task row), its state wins: a legacy thinking/thread probe must never clear a
-// true task Run spinner (worker Runs are invisible to the legacy thread walk),
-// nor show one over a finished Run.
-let treeIndicatorStateProvider = null;
-
-function setTreeIndicatorStateProvider(fn) {
-  treeIndicatorStateProvider = typeof fn === 'function' ? fn : null;
-}
-
-function effectiveIndicatorState(sid, state) {
-  if (!treeIndicatorStateProvider) return state;
-  const treeState = treeIndicatorStateProvider(sid);
-  return treeState === null || treeState === undefined ? state : treeState;
-}
-
 function setSessionIndicator(sid, state) {
-  state = effectiveIndicatorState(sid, state);
   const spinner = document.getElementById('spinner-' + sid);
   const worker = document.getElementById('worker-indicator-' + sid);
   const dot = document.getElementById('unread-' + sid);
@@ -558,12 +492,10 @@ const API = {
   updateSidebarSessionName,
   getSessionIndicatorState,
   renderSessionIndicators,
-  buildSessionActivityIndicators,
   recordUnreadFact,
   unreadSeqAtRequest,
   unreadReplyIsCurrent,
   rowUnreadState,
-  setTreeIndicatorStateProvider,
   renderPendingTriggerIndicator,
   renderPendingPlanApprovalIndicator,
   updateSidebarHighlight,

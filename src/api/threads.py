@@ -212,6 +212,13 @@ _list_body_memo: BoundedMemo[str, tuple[tuple[tuple[str, int, int], ...], bytes,
 _LIST_GZIP_MEMO_LIMIT = 8
 _list_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_LIST_GZIP_MEMO_LIMIT)
 
+# The events full fetch's gzip form, keyed on the body bytes themselves. One
+# slot per distinct projection: a log append moves the body, so the cap bounds
+# the memo at the worst body's bytes, and a repeat open of an unchanged log
+# serves the stored bytes instead of the middleware's per-request deflate.
+_EVENTS_GZIP_MEMO_LIMIT = 8
+_events_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_EVENTS_GZIP_MEMO_LIMIT)
+
 # The thread-detail poll's gzip form rides the same body-keyed memo: the full
 # row's 50 KB body re-deflates inside the middleware on every served request
 # although the rendered bytes are their own invalidation ground. One off-loop
@@ -709,11 +716,12 @@ def _append_worker_events(
 
 @router.get("/{session_id}/threads/{thread_id}/events", response_model=list[WorkerEvent])
 async def get_thread_events(
+    request: Request,
     session_id: str,
     thread_id: str,
     thread_mgr: ThreadManager = Depends(get_thread_manager),
     after: int | None = Query(default=None, ge=0),
-) -> list[WorkerEvent] | FastJsonResponse:
+) -> Response:
   """Return historical Worker events from the on-disk events.jsonl log.
 
   Without ``after`` the response is the full projected list. With ``after``
@@ -730,12 +738,14 @@ async def get_thread_events(
   events = read_thread_worker_events_memo_hit(events_path)
   if events is None:
     events = await asyncio.to_thread(read_thread_worker_events, events_path)
+  # Both shapes ride pre-dumped rows through FastJsonResponse: a Response skips
+  # response_model validation, whose jsonable_encoder pass is ~6x model_dump on
+  # mapped returns.
   if after is None:
-    return events
+    body = fast_json_bytes([e.model_dump(mode="json") for e in events])
+    return await gzip_body_response(request, body, {}, _events_gzip_memo)
   reset = after > len(events)
   start = 0 if reset else after
-  # A returned Response skips response_model validation; model_dump(mode="json") is
-  # ~6x faster than the jsonable_encoder pass FastAPI runs on mapped returns.
   return FastJsonResponse(
       {
           "events": [e.model_dump(mode="json") for e in events[start:]],

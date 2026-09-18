@@ -44,7 +44,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M31 worker-finalize events-summary read, steady state | M31 collector below | seconds per `read_events_summary` call, worst on-disk worker log | median < 0.02 s | — (introduced with its first history row) |
 | M32 memory-store assemble, steady state | M32 collector below | seconds per `assemble_master` call, live memory corpus | median < 0.005 s | — (introduced with its first history row) |
 | M33 assistant-stream draft render, full-turn replay | M33 collector below | seconds per replay of the largest on-disk assistant draft, 200 B deltas at 40 ms virtual cadence | median < 0.1 s | — (introduced with its first history row) |
-| M34 worker-events poll fetch at rendered count | M34 collector below | seconds + response bytes per events fetch, worst on-disk worker log | after=total median < 0.02 s; empty-tail body < 200 B; full fetch body < 200 KB (recalibrated from < 300 KB: each projected tool_result row's output is trimmed to TOOL_PREVIEW_CHARS — 500 chars, the client's inline-render bound — so the body scales with oversized-row count, not corpus bytes; see the 2026-09-14 history row) | — (introduced with its first history row) |
+| M34 worker-events poll fetch at rendered count | M34 collector below | seconds + response bytes per events fetch, worst on-disk worker log; the re-open repeat of the full fetch (the panel re-opening an unchanged log — the cold first parse + first deflate of a fresh body is the one-time cost, reported not priced) | after=total median < 0.002 s (recalibrated from < 0.02 s: the old line sat on the TestClient/httpx harness floor the 2026-09-17 repair removed — the served path reads 0.39-0.47 ms, the vacuous-read class the M36/M59/M71 repairs called out; see the 2026-09-17 history row); empty-tail body < 200 B; full fetch repeat median < 0.002 s (recalibrated with the same repair: the served re-open reads 1.11-1.17 ms after the FastJSON+gzip-memo landing, 1.85-2.00 ms before it); full fetch body < 200 KB | — (introduced with its first history row) |
 | M35 chat message-page responses, steady state | M35 collector below | seconds per request, worst projection corpus | events page median < 0.004 s (recalibrated from < 0.03 s: the old line sat on the TestClient harness floor and never saw the middleware's deflate — the repaired raw-ASGI drive reads the served path at 1.0-1.4 ms across the landing round's loads 2.4-3.0, the cron-collision bias the M56 history documents) | — (introduced with its first history row) |
 | M36 worker list poll payload and handler time, steady state | M36 collector below | seconds per list request + response body bytes, worst thread-metadata corpus; the conditional repeat (?etag=) of an unchanged poll | full median < 0.002 s (recalibrated from < 0.004 s: the 2026-09-15 repair removed the TestClient/httpx harness floor — the served path read 1.3-1.6 ms across that round's loads 3.1-3.7, the cron-collision bias the M56 history documents — and the same day's gzip-memo landing reads 0.62-0.69 ms; see both 2026-09-15 history rows); full decoded body < 200 KB; conditional body 0 B (204) | — (introduced with its first history row) |
 | M37 archived-session chat tail page, steady state | M37 collector below | seconds per `parse_ndjson_tail(200)` call, worst on-disk archived live file | median < 0.005 s | — (introduced with its first history row) |
@@ -1933,21 +1933,35 @@ returns only the events past the client's rendered raw count (a sound
 prefix cut: ``_append_worker_events`` never rewrites an emitted row) and
 answers ``reset`` + the full payload when the count runs ahead; the client
 appends tails through a scratch paint plus ``insertAdjacentHTML``. The
-steady state (the metric) is a poll with nothing new. The collector copies
+steady state (the metric) is a poll with nothing new. Both fetch shapes
+ride pre-dumped rows through FastJsonResponse (a Response skips
+response_model's jsonable_encoder pass, ~6x ``model_dump`` on mapped
+returns), and the full fetch's gzip form rides the body-keyed memo — one
+off-loop deflate per distinct projection, ``Content-Encoding`` set upstream
+so the middleware skips (the M59/M71 mechanism); the panel's re-open of an
+unchanged log is the repeat shape the full-fetch line prices, the cold
+first parse + first deflate of a fresh body is the panel's one-time cost
+and is reported, not priced. The collector copies
 the worst on-disk worker log into a scratch ``CHARLIEBOT_HOME`` (live home
-read once, never written), warms the memo, and times five full fetches (the
-pre-fix behavior, a byte-identical code path) and five ``after=total``
-fetches, asserting the empty-tail shape; the pytest suite pins prefix+tail
-parity. Evidence points the same collector at the branch checkout
-(``CHECKOUT`` at the worktree root), the same shape as the M7 protocol:
+read once, never written), and drives the endpoint raw-ASGI behind the
+production gzip middleware — the served path the middleware and route
+actually run (a TestClient drive adds ~1.5-2 ms of httpx harness per
+request and skips the middleware whose deflate the browser's fetch always
+pays) — one cold pass per shape, as at first panel open after a server
+start, then seven timed full fetches (the re-open shape) and seven timed
+``after=total`` fetches, asserting within-round body identity and the
+envelope-at-0 rows equaling the full fetch's parsed rows; the pytest suite
+pins prefix+tail parity. Evidence points the same collector at the branch
+checkout (``CHECKOUT`` at the worktree root), the same shape as the M7
+protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import os, shutil, sys, tempfile, time
+import asyncio, gzip, hashlib, json, os, shutil, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from server import _CharlieBotGZipMiddleware
 from src.api.deps import get_thread_manager
 from src.api.threads import router as threads_router
 from src.core.config import CharlieBotConfig
@@ -1971,30 +1985,90 @@ app = FastAPI()
 app.include_router(threads_router, prefix="/api/threads")
 cfg = CharlieBotConfig(charliebot_home=home)
 app.dependency_overrides[get_thread_manager] = lambda: ThreadManager(cfg)
-client = TestClient(app)
+# The production middleware chain: the browser's panel fetch always sends
+# Accept-Encoding: gzip, so the full fetch's deflate is part of the served
+# shape — a TestClient drive adds ~1.5-2 ms of httpx harness per request and
+# skips the middleware whose deflate the browser's fetch always pays (the
+# vacuous-read class the M36/M59/M71 repairs called out).
+app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
 url = f"/api/threads/{SID}/threads/{TID}/events"
 
-full = client.get(url)  # cold pass, as at first panel open after a server start; not timed
-total = len(full.json())
-full_times, full_bytes = [], 0
-for _ in range(5):
+
+def scope(url, query=b""):
+    return {
+        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1", "method": "GET", "scheme": "http",
+        "path": url, "raw_path": (url + ("?" + query.decode() if query else "")).encode(),
+        "query_string": query, "root_path": "",
+        "headers": [(b"host", b"test"), (b"accept-encoding", b"gzip")],
+        "client": ("test", 123), "server": ("test", 80),
+    }
+
+
+async def drive(url, query=b""):
+    body = b""
+    out = {"status": 0, "encoding": b""}
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        nonlocal body
+        if msg["type"] == "http.response.start":
+            out["status"] = msg["status"]
+            out["encoding"] = dict(msg.get("headers", [])).get(b"content-encoding", b"")
+        elif msg["type"] == "http.response.body":
+            body += msg.get("body", b"")
+
     t0 = time.perf_counter()
-    r = client.get(url)
-    full_times.append(time.perf_counter() - t0)
-    full_bytes = len(r.content)
-full_times.sort()
-inc_times, inc_bytes = [], 0
-for _ in range(5):
-    t0 = time.perf_counter()
-    r = client.get(url, params={"after": total})
-    inc_times.append(time.perf_counter() - t0)
-    inc_bytes = len(r.content)
-inc_times.sort()
-env = r.json()
-assert env["reset"] is False and env["total"] == total and env["events"] == []
-print(f"{best_n / 1e6:.1f} MB log, {total} events; full fetch median {full_times[2]:.4f} s, "
-      f"max {full_times[-1]:.4f} s ({full_bytes} B); after=total median {inc_times[2]:.4f} s, "
-      f"max {inc_times[-1]:.4f} s ({inc_bytes} B)")
+    await app(scope(url, query), receive, send)
+    return time.perf_counter() - t0, body, out
+
+
+def decoded(body, encoding):
+    return gzip.decompress(body) if encoding == b"gzip" else body
+
+
+def digest(decoded):
+    return hashlib.sha256(json.dumps(json.loads(decoded), sort_keys=True).encode()).hexdigest()[:12]
+
+
+async def timed(url, query=b""):
+    cold_dt, cold_body, cold_out = await drive(url, query)  # cold pass, as at first panel open; not timed
+    cold_dec = decoded(cold_body, cold_out["encoding"])
+    cold = (cold_dt, len(cold_body), len(cold_dec), digest(cold_dec))
+    times, wire, dec, digests = [], 0, 0, set()
+    for _ in range(7):
+        dt, body, out = await drive(url, query)
+        assert out["status"] == 200, (url, out["status"])
+        d = decoded(body, out["encoding"])
+        times.append(dt)
+        wire = len(body)
+        dec = len(d)
+        digests.add(digest(d))
+    times.sort()
+    assert len(digests) == 1, f"repeat bodies differ: {digests}"
+    return cold, times[3], times[-1], wire, dec, digests.pop()
+
+
+async def main():
+    (f_cold, _f_cw, _f_cd, f_dig), fm, fx, fwire, fdec, fdig = await timed(url)
+    assert f_dig == fdig
+    _env_dt, env_body, env_out = await drive(url, b"after=0")
+    env = json.loads(decoded(env_body, env_out["encoding"]))
+    total = env["total"]
+    assert env["reset"] is False
+    _full_dt, full_body, full_out = await drive(url)
+    assert env["events"] == json.loads(decoded(full_body, full_out["encoding"]))
+    (a_cold, _a_cw, _a_cd, a_dig), am, ax, awire, _adec, adig = await timed(url, f"after={total}".encode())
+    assert a_dig == adig
+    print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {best_n / 1e6:.1f} MB log, {total} events; "
+          f"full fetch cold (first parse + first deflate) {f_cold * 1000:.2f} ms, "
+          f"repeat median {fm * 1000:.2f} ms, max {fx * 1000:.2f} ms, wire {fwire} B, decoded {fdec} B, digest {fdig}; "
+          f"after=total cold {a_cold * 1000:.2f} ms, median {am * 1000:.2f} ms, max {ax * 1000:.2f} ms, "
+          f"body {awire} B, digest {adig}")
+
+asyncio.run(main())
 shutil.rmtree(home)
 EOF
 ```
@@ -7381,6 +7455,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-17 | this PR | M34 served-path repair + full-fetch FastJSON/gzip memo, three interleaved rounds of the repaired collector — main checkout before vs branch worktree after back-to-back, the 9.8 MB / 232-event worst on-disk worker log copied per arm, live home read-only, load 1.3-2.3 one-minute: full fetch repeat median 2.00/1.85/1.94 → 1.11/1.17/1.13 ms (−42 % to −45 %), maxima 2.08-2.16 → 1.38-1.48 ms, every paired round faster; after=total median 0.39/0.40/0.40 → 0.44/0.39/0.39 ms (band — the envelope path is byte-identical, only the handler's Request injection added); component attribution: the removed slices are response_model's jsonable_encoder pass over the 232-event list (the ~6x model_dump pass the envelope path's own note names) and the middleware's per-request level-1 deflate of the 112732 B body, replaced by pre-dumped rows through FastJsonResponse and the body-keyed gzip memo (one off-loop deflate per distinct projection, Content-Encoding set upstream); wire 28111-28116 B both arms, decoded 112732 B both arms; cold first fetch unchanged 116.27-121.38 → 117.01-121.04 ms (the process's first request: the 9.8 MB parse the M78 worker-log line prices plus first-request route/serializer setup, both arms); parity every arm: repeat digests single per shape, envelope-at-0 rows == full fetch's parsed rows (collector-asserted; cross-arm digests differ by design — the read path stamps missing timestamps with now() per process); 19-passed events/threads test files, full suite green, ruff and yapf clean; M34 healthy ranges recalibrated < 0.02 s → < 0.002 s (after=total) and the full-fetch repeat line introduced < 0.002 s with this PR | the full fetch (panel open / count-ahead reset) returned the mapped list through response_model — the jsonable_encoder pass the envelope path's after=N repair had already routed around — and its 112732 B body paid the gzip middleware's whole-body level-1 deflate on every request; both fetch shapes now ride the pre-dumped FastJsonResponse rows, and the full fetch's gzip form rides the body-keyed memo beside the plain render (the M59/M71 single-home), so a re-open of an unchanged panel serves stored bytes and a fresh body pays one off-loop deflate; the standing collector rode the TestClient harness and never mounted the middleware — the vacuous-read class — so the repaired raw-ASGI drive (the M35/M71 pattern) reads the served path the middleware and route actually run |
 | 2026-09-17 | this PR | M108 standing sweep's ghost trip diagnosed as a stale-default-checkout measurement, not a product regression, and the sweep's checkout pinned by a preflight, docs-only: the sweep's verbatim M108 collector read median 0.400 s, max 0.409 s against the < 0.30 s line 46 minutes after #1761 merged, while the same collector against a worktree at origin/main (20749aca) read 0.204/0.209 s; after restoring the default checkout from the sibling branch it sat on (`code-health/single-home-threads-seeded-session-rig`, its PR #1755 merged ~3 h earlier, tree clean) to origin/main, the verbatim collector on the restored checkout reads median 0.242 s, max 0.259 s (load 2.03-2.31 one-minute across the three readings) — inside the line; the 8-17 ms delta over #1761's after band (0.225-0.234 s at load 2.01-2.23) reads as this round's higher load; the stale tree's `git merge-base --is-ancestor 9e913956 HEAD` is false — it predated #1755-#1765, among them #1757 (M66) and #1761 (M108); M66's stale-vs-fresh readings 3.87 → 3.83 s sit inside the 8 s line either way — the bias is silent where it does not trip; preflight lands at the top of the collector list this PR edits, the cron prompt's measure paragraph points at it | every in-process collector imports the code under test from the repo's local main checkout and nothing pinned that checkout: a sibling cron's leftover branch made the hourly regression watch measure a pre-#1761 tree and report a ghost M108 trip (and reads pre-#1757 M66 code the same way, silently); the preflight fetches (loud on failure — a stale `origin/main` would make the compare pass while the tree sits behind), asserts a clean tree (tracked or untracked dirt exits before any mutation, the carrying that `switch` would otherwise do silently), compares `rev-parse HEAD` with `origin/main`, and restores with `git switch main` + `merge --ff-only` — a diverged checkout fails the merge loud, and the round reports the in-process metrics unmeasured, never measuring a stale tree |
 | 2026-09-17 | this PR | M108 claude-sub launch floor, introduced with this PR: fresh-process `claude-sub --<unsupported-probe-flag>` wall median 0.397/0.405/0.404 → 0.225/0.224/0.234 s, −42 % to −45 %, maxima 0.417-0.420 → 0.230-0.240 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, PYTHONPATH pinning the checkout under test, load 2.01-2.23 one-minute); component attribution, `-X importtime` fresh-process: fastapi 128 ms rode `src.agents.backends.pty_common`/`tui` although both carry the `WebSocket` name in TYPE_CHECKING-only positions (future-annotations keep the hints unevaluated) and the relay's one runtime consumer (`WebSocketDisconnect`) now imports inside the function; src.core.config 107 ms rode `backends.base → src.core.runs` (the `CharlieBotConfig` hints) and `claude_accounts` (same) — all under TYPE_CHECKING, and `base`'s one runtime `get_config` call site (the cgroup read) imports it there; the login-dir names (`CLAUDE_CONFIG_DIR_ENV_VAR`, `default_claude_dir`) single-home in src.core.home beside the profile home (env/HOME derivations no config key moves; config re-exports for its existing readers), and `claude_sub`/`claude_code`/`tui` import them from home; no-regression witnesses interleaved: M99 import server main 0.676-0.691 vs branch 0.661-0.711 s (overlapping bands at load 2.2-2.3 — parity) and M92 schedule-trigger --help 0.040 s (standing 0.041 s); 5707-passed suite + 11 skipped, ruff clean, plus the claude-sub ban-set contract test (fastapi + src.core.config + yaml + src.core.credentials stay out of the worker binary's import); M108 definition, collector, healthy range, and history row introduced with this PR | every cc-claude subscription worker and reviewer launch paid a ~0.40 s import floor before the claude CLI could start — 128 ms of fastapi (the PTY module's WebSocket hints) and 107 ms of the config model stack (backend-ABC and account-pool annotation imports) although neither serves the worker binary's launch path; the residual floor is the account pool's runtime models (pydantic + backend_models + src.core.models, ~117 ms) which the launch genuinely needs |
 | 2026-09-17 | this PR | M61 all-sessions and archived-page sub-readings priced, docs-only calibration, no code change: the collector prints four idle-cold readings but the definition priced only bare listing and single get_session, so the archived tab's page (the real `list_archived_page` shape) and the collector's full-set probe tripped nothing. Readings the lines are set from — all-sessions (the collector's `status=None` probe over the whole cached set; the production routes filter first and copy only their subsets, so no route pays this shape): 5.50-5.78 ms at 1075 cached metas (#810's after arm, 2026-09-05), then 5.95/6.81/6.46 ms at 1238/1237/1241 metas (this round's three sweeps 11:45-14:43, load 1.5-1.9 one-minute) — 4.8-5.5 µs per cached meta across the 1075→1241 growth; archived-page: 2.09-2.13 ms at 1075 metas (#810's after arm), 0.99-1.09 ms today; the priced sub-readings stand inside their lines (bare listing 0.03-0.05 ms, single get_session 0.042-0.055 ms) | all-sessions median < max(0.008 s, cached-metas × 0.000008 s): the probe's per-meta copy+sort floor held at 4.8-5.5 µs across the corpus growth, so the line tracks the cached set (the archived share never expires from it) the same corpus-tracking form the M78/M84/M101/M107 bytes-lines use — the 8 µs figure is 1.5-1.7x over the measured band and its margin carries the fresh-manager shape's cold sidebar-probe term; archived-page median < 0.003 s, 1.4x over #810's after band and 2.8x over today's readings |

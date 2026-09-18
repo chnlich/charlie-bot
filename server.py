@@ -1,6 +1,7 @@
 """CharlieBot server entry point."""
 
 import asyncio
+import contextlib
 import io
 import json
 import time
@@ -115,13 +116,31 @@ class _OffLoopWholeBodyGZipResponder(GZipResponder):
 
   def __init__(self, app: ASGIApp, minimum_size: int, compresslevel: int = 1) -> None:
     super().__init__(app, minimum_size, compresslevel=compresslevel)
-    # The superclass's zlib GzipFile wrote its dated header into the shared
-    # buffer at construction and will append a trailer at close, so both the
-    # buffer and the file are replaced and the stale file keeps only the
-    # discarded buffer. ISA-L deflates the same level-1 container faster, and
-    # mtime=0 keeps the wire deterministic like the one-shot gzip memos'.
-    self.gzip_buffer = io.BytesIO()
-    self.gzip_file = IGzipFile(mode="wb", fileobj=self.gzip_buffer, compresslevel=compresslevel, mtime=0)
+    self.compresslevel = compresslevel
+    # The super's zlib GzipFile writes its dated header into the shared buffer
+    # at construction and appends a trailer at close, so the deflate state is
+    # built at the first deflated body instead (through ISA-L, mtime=0 like
+    # the one-shot gzip memos'): a request the middleware skips —
+    # precompressed, excluded type, small body — constructs none of it.
+    self.gzip_buffer = None
+    self.gzip_file = None
+
+  async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    # IdentityResponder.__call__ mounts the ASGI chain without the super's
+    # always-entered file contexts; the state built mid-flight closes through
+    # the stack when the request ends, written or not.
+    self.send = send
+    with contextlib.ExitStack() as stack:
+      self._exit_stack = stack
+      await self.app(scope, receive, self.send_with_compression)
+
+  def apply_compression(self, body: bytes, *, more_body: bool) -> bytes:
+    if self.gzip_file is None:
+      self.gzip_buffer = io.BytesIO()
+      self.gzip_file = IGzipFile(mode="wb", fileobj=self.gzip_buffer, compresslevel=self.compresslevel, mtime=0)
+      self._exit_stack.enter_context(self.gzip_buffer)
+      self._exit_stack.enter_context(self.gzip_file)
+    return super().apply_compression(body, more_body=more_body)
 
   async def send_with_compression(self, message: Message) -> None:
     if message["type"] == "http.response.start":

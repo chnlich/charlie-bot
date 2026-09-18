@@ -114,8 +114,8 @@ def choose_turn_account(
 
 
 # The reason both guard-refusal consumers label their reconcile row with: the
-# relay's mid-turn move and the run loop's post-prepare adoption react to the
-# same refusal, so the grep-able value has one spelling.
+# placement move at turn start and the mid-turn relay move react to the same
+# refusal, so the grep-able value has one spelling.
 GUARD_REFUSED_NEWER_TRANSCRIPT = "guard_refused_newer_transcript"
 
 

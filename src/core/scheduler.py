@@ -452,7 +452,7 @@ class Scheduler:
       event = {
           'type': ET.HANDLER_RESULT,
           'task': task_cfg.name,
-          'status': 'ok',
+          'status': ET.HANDLER_STATUS_OK,
           'message': str(result) if result is not None else 'done',
       }
       session.last_run_status = LastRunStatus.SUCCESS
@@ -461,7 +461,7 @@ class Scheduler:
       event = {
           'type': ET.HANDLER_RESULT,
           'task': task_cfg.name,
-          'status': 'error',
+          'status': ET.HANDLER_STATUS_ERROR,
           'message': str(e),
       }
       session.last_run_status = LastRunStatus.FAILED

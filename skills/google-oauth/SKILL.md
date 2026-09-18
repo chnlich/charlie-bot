@@ -2,12 +2,37 @@
 name: google-oauth
 description: >
   Use when a Google integration (Gmail, Docs, Sheets, Drive, Calendar) needs its
-  OAuth client set up or its refresh token obtained again after expiry.
+  OAuth client set up, its refresh token obtained again after expiry, or an
+  access token minted at runtime.
 ---
 
-# Google OAuth Bootstrap
+# Google OAuth
 
 All Google integrations share a single OAuth client and refresh token stored in the `google` section of `~/.charliebot/credentials.yaml`.
+
+## Runtime Token Mint
+
+Every integration mints its access token at call time from the stored refresh
+token; access tokens are never persisted. Run this before the integration's own
+API calls:
+
+```bash
+# Read credentials (uses python3+pyyaml)
+read GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REFRESH_TOKEN < <(python3 -c "
+import yaml
+c = yaml.safe_load(open('$HOME/.charliebot/credentials.yaml'))
+print(c['google']['client_id'], c['google']['client_secret'], c['google']['refresh_token'])
+")
+
+ACCESS_TOKEN=$(curl -s -X POST https://oauth2.googleapis.com/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "client_id=$GOOGLE_CLIENT_ID" \
+  --data-urlencode "client_secret=$GOOGLE_CLIENT_SECRET" \
+  --data-urlencode "refresh_token=$GOOGLE_REFRESH_TOKEN" \
+  --data-urlencode "grant_type=refresh_token" | jq -r '.access_token')
+```
+
+## Bootstrap / Re-Authorization
 
 One-time setup to obtain a refresh token for the desktop-app OAuth flow:
 

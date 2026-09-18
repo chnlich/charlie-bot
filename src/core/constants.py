@@ -56,7 +56,7 @@ OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
 # mirrors the single element, pinned by tests/test_frontend_file_server_prefixes.py.
 FILE_SERVER_MOUNTS = ("/absolute_filepath",)
 
-# Public viewer route paths: pages.py declares each route with its spelling. The auth
+# Viewer route paths: pages.py declares each route with its spelling. The auth
 # whitelist (src.api.auth) does not admit them — they read local trace/report files, so
 # they sit behind the access key like the file server. The merged path is additionally the
 # special case server.py's gzip middleware skips (the body is already-compressed

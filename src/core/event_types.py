@@ -45,6 +45,12 @@ COMPLETE = "complete"
 
 # -- Scheduler / handler ----------------------------------------------------
 HANDLER_RESULT = "handler_result"
+# The handler_result event's ``status`` field: the renderer turns ``ok`` into a
+# ✓ system line and anything else into ✗. Persisted wire values; the producer
+# (src/core/scheduler.py) and the renderer (src/core/message_aggregator.py)
+# share this one spelling, so a one-site edit cannot fork the pair.
+HANDLER_STATUS_OK = "ok"
+HANDLER_STATUS_ERROR = "error"
 SCHEDULED_TRIGGER = "scheduled_trigger"
 SCHEDULED_RUN_SKIPPED = "scheduled_run_skipped"
 
@@ -92,6 +98,9 @@ COMPACT_BOUNDARY = "compact_boundary"
 # is terminated at the cap; ``content`` carries the rendered chat note. The
 # aggregator renders the note as a system message (src/core/message_aggregator.py).
 COMMAND_PROGRESS = "command_progress"
+# Legacy render-only ``system`` subtype: no producer remains, but persisted
+# history events still render as system messages. New code never emits it.
+TUI_MENU_DISMISSED = "tui_menu_dismissed"
 COMPACT_METADATA = "compact_metadata"
 # Token counts a compaction event carries. Both are persisted wire values and both live as inner
 # keys of a ``compact_metadata`` payload — on a ``compact_boundary`` system event and on the

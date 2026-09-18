@@ -8,7 +8,13 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
-from conftest import _ok_asgi_downstream, make_page_request, run_through_asgi_middleware, stub_credentials
+from conftest import (
+    _ok_asgi_downstream,
+    asgi_response,
+    make_page_request,
+    run_through_asgi_middleware,
+    stub_credentials,
+)
 
 from src.api import auth, pages
 from src.api.auth import AuthMiddleware
@@ -159,10 +165,9 @@ async def test_home_html_navigation_requires_auth() -> None:
       "query_string": b""
   }
   sent = await run_through_asgi_middleware(AuthMiddleware(app=_ok_asgi_downstream), scope)
-  start = next(m for m in sent if m["type"] == "http.response.start")
-  body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
-  assert start["status"] == 401
-  assert b"text/html" in dict(start["headers"])[b"content-type"]
+  status, headers, body = asgi_response(sent)
+  assert status == 401
+  assert b"text/html" in headers[b"content-type"]
   assert "<form" in body.decode()
 
 

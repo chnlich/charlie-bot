@@ -14,7 +14,13 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from conftest import _ok_asgi_downstream, make_page_request, run_through_asgi_middleware, stub_credentials
+from conftest import (
+    _ok_asgi_downstream,
+    asgi_response,
+    make_page_request,
+    run_through_asgi_middleware,
+    stub_credentials,
+)
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -123,13 +129,12 @@ async def test_an_unauthenticated_get_under_the_prefix_is_401(accept: bytes) -> 
       "query_string": b"",
   }
   sent = await run_through_asgi_middleware(auth.AuthMiddleware(app=_ok_asgi_downstream), scope)
-  start = next(m for m in sent if m["type"] == "http.response.start")
-  assert start["status"] == 401
-  content_type = dict(start["headers"])[b"content-type"]
+  status, headers, body = asgi_response(sent)
+  assert status == 401
+  content_type = headers[b"content-type"]
   if accept == b"text/html":
     # A browser navigation gets the unlock form, not JSON.
     assert content_type.startswith(b"text/html")
-    body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
     assert b"<form" in body
   else:
     assert content_type == b"application/json"
@@ -146,8 +151,8 @@ async def test_an_authenticated_get_under_the_prefix_reaches_the_route() -> None
       "query_string": b"",
   }
   sent = await run_through_asgi_middleware(auth.AuthMiddleware(app=_ok_asgi_downstream), scope)
-  start = next(m for m in sent if m["type"] == "http.response.start")
-  assert start["status"] == 200
+  status, _, _ = asgi_response(sent)
+  assert status == 200
 
 
 def test_the_legacy_files_and_file_prefixes_answer_404() -> None:

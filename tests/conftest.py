@@ -2834,6 +2834,14 @@ async def run_through_asgi_middleware(middleware: Any, scope: dict) -> list[dict
   return sent
 
 
+def asgi_response(sent: list[dict]) -> tuple[int, dict[bytes, bytes], bytes]:
+  """Flatten the messages run_through_asgi_middleware collected into (status, headers, body)."""
+  start = next(m for m in sent if m["type"] == "http.response.start")
+  headers = dict(start["headers"])
+  body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+  return start["status"], headers, body
+
+
 def asgi_downstream_called() -> bool:
   """Whether the shared downstream ran during the last run_through_asgi_middleware call."""
   return _ok_asgi_downstream.called

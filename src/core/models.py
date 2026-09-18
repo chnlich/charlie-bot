@@ -12,7 +12,7 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 # The cross-layer constants single-home in src/core.constants (stdlib-only, the
 # CLI import floor's contract); the names stay importable from here for every
 # model-layer importer.
-# The config-field models moved to backend_models so the config chain (every CLI
+# The config-field models live in backend_models so the config chain (every CLI
 # invocation's get_config) skips constructing the session/API models; these
 # re-exports keep the established src.core.models import path working.
 from src.core.backend_models import (  # noqa: F401  (re-export)
@@ -58,9 +58,6 @@ UtcDatetime = Annotated[datetime, BeforeValidator(ensure_utc)]
 # ---------------------------------------------------------------------------
 # Aliased types
 # ---------------------------------------------------------------------------
-
-SessionRating = Literal['thumbs_up', 'neutral', 'thumbs_down']
-
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -305,7 +302,7 @@ class PendingTrigger(BaseModel):
 # Session Models
 # ---------------------------------------------------------------------------
 
-# Role carried by the dedicated session of a mode: master cron task — the
+# Role carried by the dedicated session of a type: pm cron task — the
 # Project Manager for the task's ``project`` (group) value.
 PROJECT_ROLE = "project"
 
@@ -418,8 +415,6 @@ class SessionMetadata(BaseModel):
   native_backend: str | None = None
   native_model: str | None = None
 
-  # Rating
-  rating: SessionRating | None = None
   # Key is the round event id (UUID generated at event write time, or
   # "legacy:<event_index>" for events predating the UUID migration).
   round_ratings: dict[str, Literal['thumbs_up', 'thumbs_down']] = Field(default_factory=dict)

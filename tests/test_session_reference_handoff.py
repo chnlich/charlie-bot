@@ -81,7 +81,6 @@ async def test_elone_session_writes_reference_and_archives_parent(tmp_path: Path
   updated_parent = await mgr.get_session(parent)
   assert updated_parent is not None
   assert updated_parent.status == SessionStatus.ARCHIVED
-  assert updated_parent.rating == "thumbs_down"
 
 
 @pytest.mark.asyncio
@@ -145,6 +144,28 @@ async def test_fork_session_full_reference_rejects_corrupt_line(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_fork_reference_crosses_the_scan_chunk_boundary(tmp_path: Path) -> None:
+  """The mmap reference stream sweeps newline positions in 1 MiB chunks; a
+  corpus spanning several chunks with frames crossing each boundary must fork
+  byte-identically to the JSON lines it carries."""
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend=OPUS_BACKEND_ID)
+  events_path = mgr.get_chat_events_path(parent.id)
+  # One line per ~2 KiB until the corpus clears three chunk boundaries, with a
+  # frame straddling each: every chunk holds a partial line at both ends.
+  filler = "x" * 2048
+  events = [user_event(f"{i:04d}-{filler}") for i in range(1600)]
+  _append_events(events_path, events)
+  assert events_path.stat().st_size > 3 * (1 << 20)
+
+  child = await mgr.fork_session(parent.id)
+
+  expected = "".join(json.dumps(event) + "\n" for event in events)
+  assert _reference_path(mgr, child.id).read_text(encoding="utf-8") == expected
+
+
+@pytest.mark.asyncio
 async def test_fork_reference_keeps_utf8_parity_on_non_ascii_and_undecodable_bytes(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)
@@ -194,7 +215,6 @@ async def test_reference_handoff_errors_write_no_reference(tmp_path: Path) -> No
   updated_parent = await mgr.get_session(parent.id)
   assert updated_parent is not None
   assert updated_parent.status == SessionStatus.ACTIVE
-  assert updated_parent.rating is None
 
 
 @pytest.mark.asyncio

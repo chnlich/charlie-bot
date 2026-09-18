@@ -15,6 +15,13 @@ from src.core.timeouts import SUBPROCESS_GIT_DIFF_TIMEOUT, SUBPROCESS_GIT_READ_T
 
 router = APIRouter()
 
+# Shared Query descriptions: the routes exposing the same parameter must carry
+# word-identical OpenAPI metadata, so each description has one copy here.
+_REPO_QUERY_DESC = "Full path to git repo"
+_BASE_REF_QUERY_DESC = "Base ref"
+_HEAD_REF_QUERY_DESC = "Head ref"
+_DIFF_MODE_QUERY_DESC = "Diff range mode"
+
 # Per-file diff cap (bytes). A single file whose diff exceeds this is returned as
 # a content-free stub so one giant generated/lockfile/binary file can't wedge the page.
 _DIFF_MAX_BYTES = 5 * 1024 * 1024
@@ -208,9 +215,7 @@ def _walk_refs_dirs(root: Path, sig: list[tuple[str, int, int]]) -> None:
       entries = list(os.scandir(current))
     except OSError:
       continue
-    for entry in entries:
-      if entry.is_dir(follow_symlinks=False):
-        stack.append(Path(entry.path))
+    stack.extend(Path(entry.path) for entry in entries if entry.is_dir(follow_symlinks=False))
 
 
 def _refs_signature(repo_path: Path) -> _RefSignature:
@@ -343,7 +348,7 @@ def _list_branches_memoized_sync(repo_path: Path) -> list[str]:
 
 
 @router.get("/branches")
-async def list_branches(repo: str = Query(..., description="Full path to git repo")) -> list[str]:
+async def list_branches(repo: str = Query(..., description=_REPO_QUERY_DESC)) -> list[str]:
   """Return branch names for a repo, most recent first, up to 50."""
   repo_path = Path(repo).expanduser()
   if not (repo_path / ".git").exists() and not repo_path.name == ".git":
@@ -379,10 +384,10 @@ async def list_repos(cfg: CharlieBotConfig = Depends(get_config_on_loop)) -> lis
 
 @router.get("/diff/files")
 async def diff_files(
-    repo: str = Query(..., description="Full path to git repo"),
-    base: str = Query(..., description="Base ref"),
-    head: str = Query(..., description="Head ref"),
-    mode: Literal["three-dot", "two-dot"] = Query("three-dot", description="Diff range mode"),
+    repo: str = Query(..., description=_REPO_QUERY_DESC),
+    base: str = Query(..., description=_BASE_REF_QUERY_DESC),
+    head: str = Query(..., description=_HEAD_REF_QUERY_DESC),
+    mode: Literal["three-dot", "two-dot"] = Query("three-dot", description=_DIFF_MODE_QUERY_DESC),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   """Return a cheap per-file manifest (status + line counts) for the diff range.
@@ -440,14 +445,14 @@ async def diff_files(
 
 @router.get("/diff/file")
 async def diff_file(
-    repo: str = Query(..., description="Full path to git repo"),
-    base: str = Query(..., description="Base ref"),
-    head: str = Query(..., description="Head ref"),
-    mode: Literal["three-dot", "two-dot"] = Query("three-dot", description="Diff range mode"),
+    repo: str = Query(..., description=_REPO_QUERY_DESC),
+    base: str = Query(..., description=_BASE_REF_QUERY_DESC),
+    head: str = Query(..., description=_HEAD_REF_QUERY_DESC),
+    mode: Literal["three-dot", "two-dot"] = Query("three-dot", description=_DIFF_MODE_QUERY_DESC),
     path: str = Query(..., description="Repo-relative path of the file to diff"),
     old_path: str | None = Query(
         None, description="Pre-rename path; pass alongside path so a rename/copy renders as a rename, not a re-add"),
-    force: bool = Query(False, description="Render even if the diff exceeds the per-file cap"),
+    force: bool = Query(default=False, description="Render even if the diff exceeds the per-file cap"),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   """Return the unified diff for a single file.

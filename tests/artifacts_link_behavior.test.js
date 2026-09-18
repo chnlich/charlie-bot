@@ -15,7 +15,7 @@ function extractInterceptorScript(html) {
   return match ? match[0] : '';
 }
 
-test('injectLinkBehavior injects one base tag with the artifact /files href inside the head', () => {
+test('injectLinkBehavior injects one base tag with the artifact /absolute_filepath href inside the head', () => {
   const ctx = loadArtifactsScript();
   const absPath = '/home/chaoli/sessions/test-session/artifacts/plan.html';
   const input = '<html><head></head><body><p>hi</p></body></html>';
@@ -24,7 +24,7 @@ test('injectLinkBehavior injects one base tag with the artifact /files href insi
   assert.equal(countBaseTags(out), 1, 'exactly one <base> tag');
   const baseMatch = out.match(/<base\b[^>]*>/i);
   assert.ok(baseMatch, '<base> tag present');
-  assert.match(baseMatch[0], new RegExp('href="' + escapeHtml('/files' + absPath) + '"'));
+  assert.match(baseMatch[0], new RegExp('href="' + escapeHtml('/absolute_filepath' + absPath) + '"'));
 
   const headOpen = out.indexOf('<head>');
   const headClose = out.indexOf('</head>');
@@ -72,7 +72,7 @@ test('injectLinkBehavior base href contains no cbsession viewing fragment', () =
   const baseMatch = out.match(/<base\b[^>]*>/i);
   assert.ok(baseMatch, 'base tag present');
   assert.doesNotMatch(baseMatch[0], /cbsession/, 'base href has no #cbsession fragment');
-  assert.match(baseMatch[0], new RegExp('href="' + escapeHtml('/files' + absPath) + '"'));
+  assert.match(baseMatch[0], new RegExp('href="' + escapeHtml('/absolute_filepath' + absPath) + '"'));
 });
 
 test('injectLinkBehavior interceptor contains scrollIntoView branch without location.hash assignment', () => {

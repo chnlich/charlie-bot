@@ -28,7 +28,7 @@ def _strip_platform_notifications(text: str) -> str:
   return _SYSTEM_MESSAGE_BLOCK_RE.sub("", text)
 
 
-class AgentGuard(ValueError):
+class AgentGuardError(ValueError):
   """Raised to fail the round loudly when the agy envelope violates the resume contract."""
 
 
@@ -133,7 +133,7 @@ class AntigravityCliBackend(AgentBackend):
     envelope = self._parse_envelope(stdout_text)
     if envelope is None:
       yield make_error_event(f"agy exited 0 with non-envelope stdout: {stdout_text[:200]}")
-      raise AgentGuard(f"antigravity envelope guard: non-json stdout (exit 0): {stdout_text[:200]}")
+      raise AgentGuardError(f"antigravity envelope guard: non-json stdout (exit 0): {stdout_text[:200]}")
 
     status = envelope.get("status")
     if status != "SUCCESS":
@@ -144,12 +144,12 @@ class AntigravityCliBackend(AgentBackend):
     conversation_id = envelope.get("conversation_id")
     if not conversation_id:
       yield make_error_event("agy SUCCESS envelope missing conversation_id")
-      raise AgentGuard("antigravity envelope guard: SUCCESS envelope missing conversation_id")
+      raise AgentGuardError("antigravity envelope guard: SUCCESS envelope missing conversation_id")
 
     if self._resume_session_id and conversation_id != self._resume_session_id:
       yield make_error_event(
           f"agy resume envelope id {conversation_id} does not match anchor {self._resume_session_id}")
-      raise AgentGuard(
+      raise AgentGuardError(
           f"antigravity envelope guard: resume envelope id {conversation_id} does not match "
           f"anchor {self._resume_session_id}")
 

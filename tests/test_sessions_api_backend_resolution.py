@@ -174,7 +174,6 @@ async def test_route_rejects_unresolvable_backend_and_persists_nothing(
   if parent_id is not None:
     parent_after = await session_mgr.get_session(parent_id)
     assert parent_after.status == parent_before.status
-    assert parent_after.rating == parent_before.rating
 
 
 # --------------------------------------------------------- store-level property

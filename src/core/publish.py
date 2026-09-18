@@ -10,6 +10,7 @@ that refusal into a refused reply and the CLI into a non-zero exit.
 import filecmp
 import shutil
 from pathlib import Path
+from typing import Self
 
 from src.core.config import CharlieBotConfig
 
@@ -24,7 +25,7 @@ class PublishResult(str):
   path: Path
   overwrote: bool
 
-  def __new__(cls, url: str, path: Path, overwrote: bool) -> "PublishResult":
+  def __new__(cls, url: str, path: Path, overwrote: bool) -> Self:
     result = super().__new__(cls, url)
     result.path = path
     result.overwrote = overwrote

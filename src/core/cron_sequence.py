@@ -3,11 +3,11 @@
 A scheduled task with an explicit ``session_id`` binding fires against that
 stable task-tree node instead of the legacy role/group PM discovery:
 
-- ``mode: master`` admits one typed scheduled input (``SCHEDULED_TRIGGER``,
+- ``type: pm`` admits one typed scheduled input (``SCHEDULED_TRIGGER``,
   server-owned provenance: the input id derives from the task name and the
   firing's due time, never from a payload bit a run-token caller can forge) to
   the bound manager; the shared dispatcher launches the manager's turn.
-- worker modes (prompt / loop / steps) create ONE worker leaf per distinct
+- normal types (prompt / loop / steps) create ONE worker leaf per distinct
   firing under the bound manager. Steps share that leaf as ``scheduled_step``
   Runs with ``sequence_ref=(cron_steps, owner_ref=<firing>, position=<i>)``;
   the chain advances on a step's success and stops on its failure, exactly as
@@ -22,7 +22,7 @@ Boundaries this module pins:
   occurrence's time), so a repeated scan or a crash between admission and the
   scheduler's bookkeeping keeps choosing the SAME firing — an intentional new
   firing (the next due occurrence, or a manual run) is distinct.
-- A missing, non-task-tree, closed, paused, or non-manager (for mode master
+- A missing, non-task-tree, closed, paused, or non-manager (for type: pm
   and leaf creation) binding fails the fire VISIBLY and never silently creates
   a replacement session. Legacy unbound configuration keeps the legacy
   discovery path until explicit migration.
@@ -146,7 +146,7 @@ async def check_fireable_binding(
   """The binding a NEW cron execution may start against.
 
   Closed and paused bound nodes generate no new cron execution (the
-  configuration itself stays readable); a mode:master fire and a leaf creation
+  configuration itself stays readable); a type:pm fire and a leaf creation
   additionally require a manager node. Nothing here ever creates a
   replacement.
   """
@@ -160,15 +160,15 @@ async def check_fireable_binding(
     raise ScheduledBindingError(
         f"scheduled task '{task_cfg.name}' binds task {meta.id}, which is paused; "
         "a paused task generates no new cron execution")
-  if task_cfg.mode == "master" and meta.profile != "manager":
+  if task_cfg.type == "pm" and meta.profile != "manager":
     raise ScheduledBindingError(
-        f"scheduled task '{task_cfg.name}' (mode master) binds task {meta.id}, "
+        f"scheduled task '{task_cfg.name}' (type pm) binds task {meta.id}, "
         "which is not a manager")
   return meta
 
 
 # ---------------------------------------------------------------------------
-# Admission (mode master)
+# Admission (type: pm)
 # ---------------------------------------------------------------------------
 
 

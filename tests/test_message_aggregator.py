@@ -15,7 +15,7 @@ from src.core import event_types as ET
 from src.core import message_aggregator
 from src.core.message_aggregator import TOOL_PREVIEW_CHARS, MessageAggregator
 
-VOICE_KEY = "is_" + "voice"
+VOICE_KEY = "is_voice"
 
 # An oversized tool output, comfortably past TOOL_PREVIEW_CHARS; the exact
 # size is arbitrary, the over-bound shape is the point.
@@ -374,6 +374,17 @@ def test_format_k_tokens_at_its_boundary(count: int, expected: str) -> None:
             "Warning: dismissed a Claude TUI startup menu with Escape before sending the prompt.",
             None,
             id="tui_menu_dismissed",
+        ),
+        pytest.param(
+            {
+                "type": "system",
+                "subtype": ET.COMMAND_PROGRESS,
+                "content": "Command still running after 1 min (pid 4242): sleep 100",
+                "timestamp": "t",
+            },
+            "Command still running after 1 min (pid 4242): sleep 100",
+            None,
+            id="command_progress",
         ),
         pytest.param(
             {

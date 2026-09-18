@@ -32,6 +32,7 @@ function loadRenderer() {
   const context = buildRendererContext();
   vm.createContext(context);
   vm.runInContext(FAKE_MARKED_SRC, context, { filename: 'marked-fake.js' });
+  vm.runInContext(readStatic('math-scanner.js'), context, { filename: 'math-scanner.js' });
   vm.runInContext(readStatic('markdown-renderer.js'), context, { filename: 'markdown-renderer.js' });
   return context;
 }
@@ -40,6 +41,7 @@ function loadCodeRenderer() {
   const context = buildRendererContext({ withTimers: true });
   vm.createContext(context);
   vm.runInContext(FAKE_MARKED_CODE_SRC, context, { filename: 'marked-code-fake.js' });
+  vm.runInContext(readStatic('math-scanner.js'), context, { filename: 'math-scanner.js' });
   vm.runInContext(readStatic('markdown-renderer.js'), context, { filename: 'markdown-renderer.js' });
   return context;
 }

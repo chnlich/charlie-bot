@@ -10,8 +10,8 @@ move_to_end.
 import os
 import threading
 from collections import OrderedDict
-from collections.abc import Callable, Iterator
-from typing import Generic, Hashable, TypeVar
+from collections.abc import Callable, Hashable, Iterator
+from typing import Generic, TypeVar
 
 K = TypeVar("K", bound=Hashable)
 V = TypeVar("V")
@@ -41,6 +41,16 @@ class BoundedMemo(Generic[K, V]):
       if entry is not None:
         self._entries.move_to_end(key)
       return entry
+
+  def peek(self, key: K) -> V | None:
+    """Return the value under *key*, or None on a miss, without refreshing recency."""
+    with self._lock:
+      return self._entries.get(key)
+
+  def items(self) -> Iterator[tuple[K, V]]:
+    """Yield (key, value) pairs, least-recently-used first, from one consistent snapshot."""
+    with self._lock:
+      return iter(list(self._entries.items()))
 
   def store(self, key: K, value: V) -> None:
     """Store *value* under *key* and evict past the limit."""

@@ -15,10 +15,9 @@ import time
 from pathlib import Path
 
 import pytest
+from conftest import ROOT, _pid_alive
 
 from src.core import process as core_process
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Intermediate: spawn a long-lived child through the real asyncio spawn path
 # (the preexec helper only when told), print the child's pid, then stay alive
@@ -57,21 +56,12 @@ _DISAPPEAR_TIMEOUT = 2.0
 linux_only = pytest.mark.skipif(sys.platform != "linux", reason="PR_SET_PDEATHSIG is Linux-only")
 
 
-def _pid_alive(pid: int) -> bool:
-  try:
-    os.kill(pid, 0)
-  except ProcessLookupError:
-    return False
-  return True
-
-
 def _spawn_intermediate(tmp_path: Path, *, use_helper: bool) -> tuple[subprocess.Popen, int]:
   """Spawn the intermediate and return it with its long-lived child's pid."""
   script = tmp_path / f"intermediate_{'helper' if use_helper else 'plain'}.py"
   script.write_text(_INTERMEDIATE, encoding="utf-8")
   intermediate = subprocess.Popen(
-      [sys.executable, str(script),
-       str(REPO_ROOT), "with-helper" if use_helper else "plain"],
+      [sys.executable, str(script), str(ROOT), "with-helper" if use_helper else "plain"],
       stdout=subprocess.PIPE,
       stderr=subprocess.PIPE,
       text=True,

@@ -83,11 +83,9 @@ function renderUserMessageBubble(content, isVoice, timestamp, uploadedFiles) {
     + '</div>';
 }
 
-Chat.normalizeUserMessage = normalizeUserMessage;
-Chat.renderUserMessageBubble = renderUserMessageBubble;
-Chat.expose([
-  'normalizeUserMessage',
-  'renderUserMessageBubble',
-]);
+Chat.wire({
+  normalizeUserMessage,
+  renderUserMessageBubble,
+});
 
 })();

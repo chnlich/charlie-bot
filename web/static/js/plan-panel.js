@@ -148,7 +148,7 @@ const planPanel = (() => {
     if (!root) {
       throw new Error('SESSIONS_ROOT not available for ' + urlKind);
     }
-    return '/files' + root + '/' + sessionId + '/' + file;
+    return '/absolute_filepath' + root + '/' + sessionId + '/' + file;
   }
 
   // diffFile, when set, rides as the ?diff= query *before* the #cbsession=…
@@ -158,12 +158,22 @@ const planPanel = (() => {
     return encodeURIComponent(diffFile).replace(/%2F/g, '/');
   }
 
-  function buildIframeUrl(file, sessionId, sessionsRoot, diffFile) {
-    var url = _filesUrl(file, sessionId, sessionsRoot, 'plan panel iframe URL');
+  // The address shape every plan-page URL this panel builds shares: the
+  // /absolute_filepath URL, then the ?diff= query ahead of the fragment (see
+  // encodeDiffFile), then
+  // the #cbsession= fragment; withPanelMarker appends `&cbpanel=1` inside the
+  // fragment, the marker artifact-comments.js's framed guard reads. urlKind
+  // names the caller in the SESSIONS_ROOT error.
+  function _planPageUrl(file, sessionId, sessionsRoot, diffFile, urlKind, withPanelMarker) {
+    var url = _filesUrl(file, sessionId, sessionsRoot, urlKind);
     if (diffFile) url += '?diff=' + encodeDiffFile(diffFile);
-    return url +
-      '#cbsession=' + encodeURIComponent(sessionId) +
-      '&' + PLAN_PANEL_MARKER + '=1';
+    url += '#cbsession=' + encodeURIComponent(sessionId);
+    if (withPanelMarker) url += '&' + PLAN_PANEL_MARKER + '=1';
+    return url;
+  }
+
+  function buildIframeUrl(file, sessionId, sessionsRoot, diffFile) {
+    return _planPageUrl(file, sessionId, sessionsRoot, diffFile, 'plan panel iframe URL', true);
   }
 
   // The file pair behind both FromVersion builders: the version's file plus,
@@ -181,14 +191,11 @@ const planPanel = (() => {
     return files ? buildIframeUrl(files.file, sessionId, sessionsRoot, files.diffFile) : null;
   }
 
-  // Standalone URL for the "Open in tab" action: real /files URL with the
-  // cbsession fragment but WITHOUT the cbpanel marker. The comment tray
-  // activates via the top-level-page branch of artifact-comments.js (the
-  // framed guard is skipped because the page is not in an iframe).
+  // Standalone URL for the "Open in tab" action — no cbpanel marker: the page
+  // is not in an iframe, so the comment tray activates via the top-level-page
+  // branch of artifact-comments.js and the framed guard is skipped.
   function buildStandaloneUrl(file, sessionId, sessionsRoot, diffFile) {
-    var url = _filesUrl(file, sessionId, sessionsRoot, 'plan standalone URL');
-    if (diffFile) url += '?diff=' + encodeDiffFile(diffFile);
-    return url + '#cbsession=' + encodeURIComponent(sessionId);
+    return _planPageUrl(file, sessionId, sessionsRoot, diffFile, 'plan standalone URL', false);
   }
 
   function buildStandaloneUrlFromVersion(plan, version, sessionId, sessionsRoot, diffOn) {

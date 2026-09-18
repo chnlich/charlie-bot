@@ -3,10 +3,8 @@
 import json
 import os
 import re
-from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Generic, Literal, TypeVar
+from typing import Literal, TypeVar
 from zoneinfo import ZoneInfo
 
 from pydantic import (
@@ -21,12 +19,30 @@ from pydantic import (
 
 from src.core.backend_models import BackendOption, ClaudeAccount, ClaudeCompactionConfig
 from src.core.constants import REPO_ROOT
-from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
+from src.core.credentials import (  # noqa: F401  (re-export: the established src.core.config import path)
+    CREDENTIALS_FILENAME,
+    Credentials,
+    _credentials_cache,
+    # Not facade surface: nothing reaches these two through src.core.config — their call sites
+    # go through src.core.credentials, and the two serve this module's own
+    # _config_fingerprint and _config_cache.
+    _file_fingerprint,
+    _HotReloadCache,
+    configured_access_key,
+    get_credentials,
+    load_credentials,
+)
+from src.core.home import (  # noqa: F401  (re-export: the established src.core.config import path)
+    CHARLIEBOT_HOME_ENV,
+    CLAUDE_CONFIG_DIR_ENV_VAR,
+    charliebot_home_dir,
+    default_charliebot_home,
+    default_claude_dir,
+)
+from src.core.log_once import LazyStructlogLogger
 from src.core.yaml_utils import load_yaml
 
 log = LazyStructlogLogger()
-
-CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
 
 # Fixed house wall clock pinned by chart timestamps (src/api/pages.py), Slack timestamp
 # prefixes (src/core/slack_listener.py), worker-summary timestamps
@@ -41,62 +57,6 @@ HOUSE_TIMEZONE = "America/Los_Angeles"
 # (templates/index.html, two fallbacks in sidebar/modals.js) that cannot import
 # from Python — a change moves all three sites.
 DEFAULT_TIMEZONE = HOUSE_TIMEZONE
-
-# The resolved home and its string form, per raw ``CHARLIEBOT_HOME`` value plus
-# ``HOME`` (``""`` raw is the default home, and a ``~`` value derives from
-# HOME). The env values are the process's profile identity, fixed for the
-# process life, while resolve() is a per-component symlink walk and
-# ``Path.home()``/``str(Path)`` re-parse the path — per-request-fingerprint
-# work on every call if repeated. Both public readers serve the same cached
-# entry, so a caller comparing its home against the default sees one answer.
-_home_cache: dict[tuple[str, str], tuple[Path, str]] = {}
-
-
-def _home_cached(raw: str) -> tuple[Path, str]:
-  """The home for *raw* (``""`` is the default) as ``(Path, str)``, resolved once per env pair."""
-  key = (raw, os.environ.get("HOME", ""))
-  cached = _home_cache.get(key)
-  if cached is None:
-    if raw:
-      home = Path(raw).expanduser().resolve()
-    else:
-      home = Path.home() / ".charliebot"
-    cached = (home, str(home))
-    _home_cache[key] = cached
-  return cached
-
-
-def _resolve_home() -> tuple[Path, str]:
-  """The validated profile home as ``(Path, str)``."""
-  raw = os.environ.get(CHARLIEBOT_HOME_ENV, "").strip()
-  if raw and not raw.startswith(("~", "/")):
-    raise ValueError(f"{CHARLIEBOT_HOME_ENV} must be an absolute path or start with '~'; got {raw!r}")
-  return _home_cached(raw)
-
-
-def default_charliebot_home() -> Path:
-  """The state directory used when ``CHARLIEBOT_HOME`` is unset."""
-  return _home_cached("")[0]
-
-
-def charliebot_home_dir() -> Path:
-  """Return the state directory this process belongs to (its profile).
-
-  ``CHARLIEBOT_HOME`` selects the profile: unset or empty gives the default
-  ``~/.charliebot``, so an untouched host behaves exactly as before. This is the
-  only place that resolves the home path; every other path is derived
-  from :attr:`CharlieBotConfig.charliebot_home`. The one raw read of the variable
-  outside this function is the web terminal's profile check
-  (``src/agents/backends/terminal.py``): a tmux pane inherits the tmux server's
-  environment rather than this process's, so the terminal checks whether a
-  profile is set and passes the resolved home to new panes explicitly.
-
-  A set value must be absolute or start with ``~``. A relative value would be
-  resolved against each process's own working directory, silently handing the
-  server, the CLI and every worker a different home, so it is rejected here
-  instead of surfacing later as a write into the wrong profile.
-  """
-  return _resolve_home()[0]
 
 
 class ImprovementLoopConfig(BaseModel):
@@ -116,18 +76,18 @@ class ImprovementLoopConfig(BaseModel):
   extra_rules: list[str] = []  # module-specific rules appended to prompt
 
 
-# Single home of the mode:'master' project invariant: the cron create route
+# Single home of the type: pm project invariant: the cron create route
 # reports the violation as a 400 while the model validator raises it, so the
 # condition and message must not be restated per layer.
-def master_task_project_error(mode: str | None, project: str | None, session_id: str | None = None) -> str | None:
-  """Return the error text when a mode: master task lacks a binding, else None.
+def pm_task_project_error(task_type: str | None, project: str | None, session_id: str | None = None) -> str | None:
+  """Return the error text when a type: pm task lacks a project, else None.
 
-  The explicit session_id binding IS the master's session (no role/group PM
-  discovery applies to a bound task), so it satisfies mode 'master' without a
-  project. An unbound master task keeps requiring the project group.
+  The explicit session_id binding IS the PM's session (no role/group PM
+  discovery applies to a bound task), so it satisfies type 'pm' without a
+  project. An unbound pm task keeps requiring the project group.
   """
-  if mode == 'master' and not project and not session_id:
-    return "mode 'master' requires 'project' (the group the PM session is bound to)"
+  if task_type == 'pm' and not project and not session_id:
+    return "type 'pm' requires 'project' (the group the PM session is bound to)"
   return None
 
 
@@ -176,6 +136,12 @@ class ScheduledTaskFields(BaseModel):
 
   name: str
   cron: str
+  # Execution type, required on every task: 'pm' wakes the project manager's
+  # dedicated session with the task's prompt plus an appended Group line
+  # (requires 'project' and a prompt source); 'normal' runs one worker /
+  # handler / loop / steps fire. A missing or unknown value fails the file's
+  # load loudly instead of silently defaulting.
+  type: Literal['pm', 'normal']
   # Pre-resolution path string a host cron.d file declared. It is an in-process
   # field for transport to the API and UI only; no write path persists it.
   prompt_file: str | None = None
@@ -184,12 +150,6 @@ class ScheduledTaskFields(BaseModel):
   timezone: str = DEFAULT_TIMEZONE
   enabled: bool = True
   project: str | None = None
-  # Fire mode: absent or 'worker' spawns a worker per fire (existing behavior);
-  # 'master' wakes the dedicated session's master with the task's prompt: the
-  # pointed file owns the body, the host cron file carries only its path, and
-  # the loader reads the file on every load. An appended Group line follows the
-  # prompt.
-  mode: Literal['worker', 'master'] | None = None
   allow_failure: bool = False
   # Explicit task-tree binding (schema_version=2): the stable session id this
   # task fires against. A bound task never uses the role/group PM discovery —
@@ -220,10 +180,19 @@ class ScheduledTaskConfig(ScheduledTaskFields):
   notify: str | None = None  # 'telegram' or None
 
   @model_validator(mode='after')
-  def check_prompt_or_handler_or_loop(self) -> 'ScheduledTaskConfig':
-    sources = sum([bool(self.prompt), bool(self.steps), bool(self.handler), bool(self.loop)])
-    if sources != 1:
-      raise ValueError("task must have exactly one of 'prompt', 'prompt_file', 'steps', 'handler', or 'loop'")
+  def check_type_and_sources(self) -> 'ScheduledTaskConfig':
+    if self.type == 'pm':
+      if self.steps is not None or self.handler or self.loop:
+        raise ValueError("type 'pm' forbids 'steps', 'handler', and 'loop'; the PM wake is a prompt")
+      # A prompt_file-style entry is resolved into prompt before model
+      # validation, so an empty prompt here means the PM would wake up with no
+      # message at all.
+      if not self.prompt:
+        raise ValueError("type 'pm' requires a prompt source ('prompt' or 'prompt_file')")
+    else:
+      sources = sum([bool(self.prompt), bool(self.steps), bool(self.handler), bool(self.loop)])
+      if sources != 1:
+        raise ValueError("task must have exactly one of 'prompt', 'prompt_file', 'steps', 'handler', or 'loop'")
     if self.steps is not None and not self.steps:
       raise ValueError("steps must be a non-empty list")
     if self.steps:
@@ -236,17 +205,9 @@ class ScheduledTaskConfig(ScheduledTaskFields):
           raise ValueError(
               f"step '{step.name}' has no prompt body; the loader resolves each step's "
               "'prompt_file' before validation")
-    # A prompt_file-style entry is resolved into prompt before model
-    # validation, so an empty prompt here means master woke up with no message
-    # at all — including the master+handler and master+loop combinations the
-    # exactly-one rule allows.
-    if self.mode == 'master' and self.steps:
-      raise ValueError("mode 'master' requires a prompt source ('prompt' or 'prompt_file'), not 'steps'")
-    if self.mode == 'master' and not self.prompt:
-      raise ValueError("mode 'master' requires a prompt source ('prompt' or 'prompt_file')")
     if self.notify and self.notify != 'telegram':
       raise ValueError(f"notify must be 'telegram' or None, got '{self.notify}'")
-    if project_error := master_task_project_error(self.mode, self.project, self.session_id):
+    if project_error := pm_task_project_error(self.type, self.project, self.session_id):
       raise ValueError(project_error)
     if binding_error := scheduled_binding_error(self):
       raise ValueError(binding_error)
@@ -578,7 +539,7 @@ class CharlieBotConfig(BaseModel):
   @property
   def credentials_file(self) -> Path:
     """The profile's credentials.yaml: the secrets split out of config.yaml."""
-    return self.charliebot_home / "credentials.yaml"
+    return self.charliebot_home / CREDENTIALS_FILENAME
 
   @property
   def config_d_dir(self) -> Path:
@@ -620,99 +581,6 @@ def require_backend_option(cfg: CharlieBotConfig, backend_id: str, *, subject: s
 
 
 T = TypeVar("T")
-
-
-def _install_replace(current: T | None, fresh: T) -> T:
-  """Drop the previous value and adopt the fresh one."""
-  return fresh
-
-
-class _HotReloadCache(Generic[T]):
-  """One file-backed cache that reloads through a loader when the file's fingerprint moves.
-
-  ``get(loader)`` re-runs *loader* only when the fingerprint differs from both
-  the cached value's and the last failure's; the surrounding bookkeeping is the
-  one state machine every hot-reload cache shares:
-
-  - a failed reload keeps the previous value and logs one warning per error
-    string per process (the key is exactly the field the line logs); the
-    failed fingerprint is recorded, so the same broken corpus pays no parse
-    and no line until it moves — the freshness rule the successful path
-    follows, applied to failure;
-  - a reload with nothing cached re-raises: with no fallback the raise is what
-    surfaces the broken file, so no failed fingerprint is recorded;
-  - a successful reload installs, clears the failed fingerprint, and re-arms
-    the registry: a later relapse is a new onset and earns one new line.
-  """
-
-  def __init__(
-      self,
-      fingerprint: Callable[[], tuple[float, int]],
-      event: str,
-      install: Callable[[T | None, T], T],
-  ) -> None:
-    self._fingerprint = fingerprint
-    self._event = event
-    self._install = install
-    self.value: T | None = None
-    self._mtime: tuple[float, int] | None = None
-    self.failed_mtime: tuple[float, int] | None = None
-    self.seen = WarnOnceRegistry()
-
-  def reset(self) -> None:
-    """Forget the cached value and every fingerprint and warning state."""
-    self.value = None
-    self._mtime = None
-    self.failed_mtime = None
-    self.seen.clear()
-
-  def seed(self, value: T) -> None:
-    """Install *value* as if freshly loaded, stamped with the current fingerprint."""
-    self.value = value
-    self._mtime = self._fingerprint()
-
-  def get(self, loader: Callable[[], T]) -> T:
-    """Return the cached value, reloading through *loader* when the fingerprint moves."""
-    fingerprint = self._fingerprint()
-    if self.value is None or (fingerprint != self._mtime and fingerprint != self.failed_mtime):
-      try:
-        fresh = loader()
-      except Exception as error:
-        self.seen.log(log.warning, self._event, str(error), error=str(error))
-        if self.value is None:
-          raise
-        # Only a fallback value makes the failed fingerprint meaningful: with
-        # none, the raise above ends the process.
-        self.failed_mtime = fingerprint
-      else:
-        self.value = self._install(self.value, fresh)
-        self._mtime = fingerprint
-        self.failed_mtime = None
-        # The reported failure state ended: a later relapse is a new onset and
-        # earns one new line.
-        self.seen.clear()
-    return self.value
-
-
-def _file_fingerprint(name: str) -> tuple[float, int]:
-  """The ``(mtime, size)`` reload cache key over one file in the profile home.
-
-  Size comes from the same stat call and costs nothing extra; it catches
-  mtime-preserving writes (``cp -p``, ``touch -r``, two writes inside one second
-  on a coarse-resolution filesystem) that an mtime-only key would miss silently.
-  A content change that preserves both mtime and size is deliberately not
-  covered. A missing file stats to a sentinel rather than raising.
-
-  This is the per-request path (the auth middleware's ``get_config``), so the
-  stat stays on raw strings and ``os`` calls: per-call ``Path`` allocation and
-  ``resolve`` measured ~130 µs of the ~150 µs middleware floor on the live
-  corpus, against ~10 µs of unavoidable fresh stats.
-  """
-  try:
-    st = os.stat(os.path.join(_resolve_home()[1], name))
-  except OSError:
-    return (0.0, 0)
-  return (st.st_mtime, st.st_size)
 
 
 def _config_fingerprint() -> tuple[float, int]:
@@ -882,92 +750,6 @@ def get_config() -> CharlieBotConfig:
   return _config_cache.get(load_config)
 
 
-@dataclass
-class Credentials:
-  """One profile's ``credentials.yaml``: ``section -> key -> scalar`` secret values.
-
-  Deliberately outside :class:`CharlieBotConfig`: the structure file never
-  carries secrets, so nothing holding a config can leak one. :meth:`get`
-  answers "is it set"; :meth:`require` turns a missing value into a
-  :class:`ValueError` naming the key path and the file it is missing from.
-  """
-
-  path: Path
-  sections: dict[str, dict[str, str | int]]
-
-  def get(self, section: str, key: str) -> str | int | None:
-    """Return the value under *section*/*key*, or None when it is unset."""
-    return self.sections.get(section, {}).get(key)
-
-  def require(self, section: str, key: str) -> str | int:
-    """Return the value under *section*/*key*, raising :class:`ValueError` when it is unset."""
-    value = self.get(section, key)
-    if value is None:
-      raise ValueError(f"credentials.{section}.{key} is not set in {self.path}")
-    return value
-
-
-def load_credentials() -> Credentials:
-  """Load this profile's ``credentials.yaml``, the secrets file split out of ``config.yaml``.
-
-  A missing file loads as empty sections. The document must be a mapping whose
-  values are mappings whose values are strings or integers; a ``None`` value
-  counts as unset and is dropped. Any other shape raises :class:`ValueError`
-  naming the offending path as ``credentials.<section>`` or
-  ``credentials.<section>.<key>``. Section and key names are never validated:
-  any name loads.
-  """
-  path = charliebot_home_dir() / "credentials.yaml"
-  data = load_yaml(path, default={})
-  if data is None:
-    data = {}
-  if not isinstance(data, dict):
-    raise ValueError(f"credentials must be a mapping of sections: {path}")
-  sections: dict[str, dict[str, str | int]] = {}
-  for section, keys in data.items():
-    if not isinstance(keys, dict):
-      raise ValueError(f"credentials.{section} must be a mapping of keys: {path}")
-    entry: dict[str, str | int] = {}
-    for key, value in keys.items():
-      if value is None:
-        continue
-      if not isinstance(value, (str, int)):
-        raise ValueError(f"credentials.{section}.{key} must be a string or integer: {path}")
-      entry[key] = value
-    sections[section] = entry
-  return Credentials(path=path, sections=sections)
-
-
-def _credentials_fingerprint() -> tuple[float, int]:
-  """The reload cache key over ``credentials.yaml``: :func:`_file_fingerprint` on it."""
-  return _file_fingerprint("credentials.yaml")
-
-
-_credentials_cache = _HotReloadCache(
-    fingerprint=_credentials_fingerprint, event="credentials_reload_failed", install=_install_replace)
-
-
-def get_credentials() -> Credentials:
-  """Return the process-wide credentials, refreshed when ``credentials.yaml`` changes.
-
-  Independent of :func:`get_config`: the reload key is ``credentials.yaml``'s
-  ``(mtime, size)`` (see :func:`_credentials_fingerprint`), and the cached
-  :class:`Credentials` is replaced wholesale — its consumers read per call and
-  hold no instance references. A failed reload keeps the previous value and
-  logs one warning per onset; with nothing cached yet the error propagates.
-  """
-  return _credentials_cache.get(load_credentials)
-
-
-def configured_access_key() -> str:
-  """Return the ``charliebot.access_key`` credential, or "" when it is unset.
-
-  One home of the read every access-key gate repeats; an empty value means
-  every gate passes unauthenticated readers through.
-  """
-  return str(get_credentials().get("charliebot", "access_key") or "")
-
-
 _cron_snapshot = _CronSnapshot()
 
 
@@ -1011,24 +793,8 @@ def _resolve_prompt_file(entry: dict, repo_root: Path) -> Path | None:
   return path
 
 
-# Claude Code's login-directory env var, a cross-process wire contract: the server
-# writes it onto a cc-claude child (claude_code._prepare_env, the tmux spawn in
-# src/cli/claude_sub.py), the pool strips any inherited value where it pinned the
-# directory itself (master_cc_run, claude_compaction.compaction_env), and the
-# in-process readers below and in tui/_claude_config_path and claude_sub read it
-# back. One spelling everywhere.
-CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
-
-
-def default_claude_dir() -> Path:
-  """The default claude login directory (``~/.claude``), read from HOME on every call.
-
-  The terminal fallback of :func:`claude_config_dir`'s order and the root the
-  cold-storage, autonamer, tui, and claude-sub readers re-derive per call, so those
-  honor a redirected HOME (tests isolate stores that way); the tally layer freezes an
-  import-time copy in ``token_tally.DEFAULT_CLAUDE_DIR``.
-  """
-  return Path.home() / ".claude"
+# The CLAUDE_CONFIG_DIR cross-process wire contract (writers, pool strips,
+# readers) is stated once, on CLAUDE_CONFIG_DIR_ENV_VAR in src.core.home.
 
 
 def claude_config_dir(account: ClaudeAccount | None = None) -> Path:
@@ -1383,10 +1149,7 @@ def _fire_cron_error_alert(error_names: list[str]) -> None:
     log.info("cron_alert_skipped_no_event_loop", names=sorted(new_set))
     return
   names = sorted(new_set)
-  if names:
-    message = "⚠️ cron tasks failed to load: " + ", ".join(names)
-  else:
-    message = "✅ all cron load failures resolved"
+  message = "⚠️ cron tasks failed to load: " + ", ".join(names) if names else "✅ all cron load failures resolved"
   try:
     # Lazy: notifications imports this module.
     from src.core.notifications import send_telegram

@@ -18,7 +18,9 @@ from collections.abc import Callable
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import httpx
 import pytest
+from conftest import ROOT
 from conftest import cron_d_dir as _cron_d_dir
 from conftest import dump_yaml as _dump
 from conftest import write_cron_task as _write_task_text
@@ -38,8 +40,6 @@ from src.core.config import (
 from src.core.init import init_charliebot_home, seed_default_cron_tasks
 from src.core.yaml_utils import load_yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-
 # --- helpers -----------------------------------------------------------------
 
 
@@ -50,7 +50,7 @@ def _write_healthy(home: Path, name: str, cron: str, prompt_body: str) -> Path:
   repo.mkdir(parents=True, exist_ok=True)
   pf = repo / f"{name}.md"
   pf.write_text(prompt_body, encoding="utf-8")
-  _write_task_text(home, name, _dump({"cron": cron, "prompt_file": str(pf)}))
+  _write_task_text(home, name, _dump({"type": "normal", "cron": cron, "prompt_file": str(pf)}))
   return pf
 
 
@@ -79,6 +79,8 @@ def test_seed_idempotence(temp_home: Path) -> None:
   # The seeded host file keeps the repo pointers: the pointed files own the
   # prompt bodies, and the host file carries only the paths to them.
   assert body1 == {
+      "type":
+          "normal",
       "cron":
           "27 6 * * *",
       "timezone":
@@ -112,7 +114,12 @@ def test_existing_entry_untouched(temp_home: Path) -> None:
   cfg = get_config()
   defaults = load_yaml(cfg.charlie_bot_repo / "configs" / "cron.default.yaml", default={}).get("scheduled_tasks", [])
   for entry in defaults:
-    _write_task_text(temp_home, entry["name"], _dump({"cron": "5 5 * * *", "prompt_file": "prompts/whatever.md"}))
+    _write_task_text(
+        temp_home, entry["name"], _dump({
+            "type": "normal",
+            "cron": "5 5 * * *",
+            "prompt_file": "prompts/whatever.md"
+        }))
   cron_dir = _cron_d_dir(temp_home)
   before = {p.name: p.read_bytes() for p in sorted(cron_dir.glob("*.yaml"))}
 
@@ -170,10 +177,14 @@ def test_loader_loads_prompt_file_pointer(temp_home: Path) -> None:
     "task_yaml",
     [
         pytest.param({
+            "type": "normal",
             "cron": "* * * * *",
             "prompt": "body v1"
         }, id="inline-prompt"),
-        pytest.param({"cron": "* * * * *"}, id="no-prompt-source"),
+        pytest.param({
+            "type": "normal",
+            "cron": "* * * * *"
+        }, id="no-prompt-source"),
     ],
 )
 def test_loader_rejects_task_without_prompt_file(temp_home: Path, task_yaml: dict) -> None:
@@ -188,7 +199,7 @@ def test_loader_rejects_task_without_prompt_file(temp_home: Path, task_yaml: dic
 
 def test_promptless_handler_task_loads(temp_home: Path) -> None:
   """A handler task carries no prompt source of any kind and still loads."""
-  _write_task_text(temp_home, "backup", _dump({"cron": "0 3 * * *", "handler": "backup"}))
+  _write_task_text(temp_home, "backup", _dump({"type": "normal", "cron": "0 3 * * *", "handler": "backup"}))
   tasks = get_scheduled_tasks()
   assert len(tasks) == 1
   assert tasks[0].name == "backup"
@@ -200,7 +211,7 @@ def test_missing_pointer_target_recovers_when_restored(temp_home: Path) -> None:
   """A pointer whose target is missing is a loud per-file error; restoring the
   target flips the file back to healthy on the next load, without a restart."""
   prompt_path = temp_home / "prompt.md"
-  _write_task_text(temp_home, "task-a", _dump({"cron": "0 0 * * *", "prompt_file": str(prompt_path)}))
+  _write_task_text(temp_home, "task-a", _dump({"type": "normal", "cron": "0 0 * * *", "prompt_file": str(prompt_path)}))
   assert [e.name for e in get_scheduled_task_errors()] == ["task-a"]
 
   prompt_path.write_text("v1", encoding="utf-8")
@@ -286,7 +297,14 @@ def test_seed_dry_run_fails_loud_on_legacy_cron(temp_home: Path) -> None:
 
 def test_timezone_local_resolves(temp_home: Path) -> None:
   prompt_path = _write_healthy(temp_home, "t", "* * * * *", "p")
-  _write_task_text(temp_home, "t", _dump({"cron": "* * * * *", "timezone": "local", "prompt_file": str(prompt_path)}))
+  _write_task_text(
+      temp_home, "t",
+      _dump({
+          "type": "normal",
+          "cron": "* * * * *",
+          "timezone": "local",
+          "prompt_file": str(prompt_path)
+      }))
   tasks = get_scheduled_tasks()
   assert tasks[0].timezone != "local"
   ZoneInfo(tasks[0].timezone)
@@ -295,7 +313,9 @@ def test_timezone_local_resolves(temp_home: Path) -> None:
 def test_explicit_timezone_untouched(temp_home: Path) -> None:
   prompt_path = _write_healthy(temp_home, "t", "* * * * *", "p")
   _write_task_text(
-      temp_home, "t", _dump({
+      temp_home, "t",
+      _dump({
+          "type": "normal",
           "cron": "* * * * *",
           "timezone": "America/New_York",
           "prompt_file": str(prompt_path)
@@ -309,7 +329,7 @@ def test_explicit_timezone_untouched(temp_home: Path) -> None:
 
 def test_memory_curator_prompts_no_host_paths() -> None:
   for filename in ("memory_selector.md", "memory_reviewer.md"):
-    body = (REPO_ROOT / "prompts" / "cron" / "memory_curator" / filename).read_text(encoding="utf-8")
+    body = (ROOT / "prompts" / "cron" / "memory_curator" / filename).read_text(encoding="utf-8")
     assert "/home/" not in body
     assert "chaoli" not in body
 
@@ -341,11 +361,17 @@ def _inject_name_key(h: Path) -> Path:
 
 
 def _inject_unknown_key(h: Path) -> Path:
-  return _write_task_text(h, "broken-4", _dump({"cron": "0 0 * * *", "prompt_file": "p.md", "promt_file": "typo.md"}))
+  return _write_task_text(
+      h, "broken-4", _dump({
+          "type": "normal",
+          "cron": "0 0 * * *",
+          "prompt_file": "p.md",
+          "promt_file": "typo.md"
+      }))
 
 
 def _inject_missing_source(h: Path) -> Path:
-  return _write_task_text(h, "broken-5", _dump({"cron": "0 0 * * *"}))
+  return _write_task_text(h, "broken-5", _dump({"type": "normal", "cron": "0 0 * * *"}))
 
 
 def _inject_missing_prompt_file(h: Path) -> Path:
@@ -427,7 +453,9 @@ def test_hot_reload_edit_existing_file(temp_home: Path) -> None:
   assert get_scheduled_tasks()[0].cron == "0 0 * * *"
 
   _write_task_text(
-      temp_home, "task-a", _dump({
+      temp_home, "task-a",
+      _dump({
+          "type": "normal",
           "cron": "0 9 * * *",
           "prompt_file": str(temp_home / "repo" / "task-a.md")
       }))
@@ -526,6 +554,25 @@ def _client(cfg: CharlieBotConfig) -> TestClient:
   return TestClient(app)
 
 
+def _write_nightly_prompt(temp_home: Path, body: str) -> Path:
+  """The ``prompts/nightly.md`` pointer file the API round-trip tests POST."""
+  prompt_path = temp_home / "prompts" / "nightly.md"
+  prompt_path.parent.mkdir(parents=True, exist_ok=True)
+  prompt_path.write_text(body, encoding="utf-8")
+  return prompt_path
+
+
+def _post_nightly(client: TestClient, prompt_path: Path, cron: str = "0 2 * * *") -> httpx.Response:
+  """POST the canonical ``nightly`` pointer task; only *cron* varies across callers."""
+  return client.post(
+      "/api/cron/tasks", json={
+          "name": "nightly",
+          "type": "normal",
+          "cron": cron,
+          "prompt_file": str(prompt_path)
+      })
+
+
 @pytest.mark.parametrize(
     ("inject", "expected_name"),
     [(inject, name) for inject, name, _ in _BROKEN_CASES],
@@ -560,7 +607,9 @@ def test_list_tasks_omits_resolved_prompt(temp_home: Path) -> None:
   step_pf = repo / "step-one.md"
   step_pf.write_text("resolved step body", encoding="utf-8")
   _write_task_text(
-      temp_home, "task-chain", _dump({
+      temp_home, "task-chain",
+      _dump({
+          "type": "normal",
           "cron": "0 3 * * *",
           "steps": [{
               "name": "one",
@@ -584,7 +633,7 @@ def test_list_tasks_omits_resolved_prompt(temp_home: Path) -> None:
 # --- API: create persists the pointer, and the file reloads (round-trip) -----
 
 
-def _assert_pointer_round_trip(home: Path, prompt_path: Path, name: str, cron: str) -> None:
+def _assert_pointer_round_trip(home: Path, prompt_path: Path, name: str) -> None:
   """Both halves of the round-trip regression: the persisted file still carries
   prompt_file (and no prompt), AND it reloads through the loader into the
   resolved body. Asserting only the reload would pass the old inlining behavior
@@ -602,43 +651,27 @@ def _assert_pointer_round_trip(home: Path, prompt_path: Path, name: str, cron: s
 def test_api_create_round_trips_prompt_file(temp_home: Path) -> None:
   """POST /tasks with prompt_file persists the pointer, never the body; the
   persisted file reloads through the loader into the resolved body."""
-  prompt_path = temp_home / "prompts" / "nightly.md"
-  prompt_path.parent.mkdir(parents=True, exist_ok=True)
-  body = "Rebase omni main and report status.\n"
-  prompt_path.write_text(body, encoding="utf-8")
+  prompt_path = _write_nightly_prompt(temp_home, "Rebase omni main and report status.\n")
   cfg = get_config()
   with _client(cfg) as client:
-    response = client.post(
-        "/api/cron/tasks", json={
-            "name": "nightly",
-            "cron": "0 2 * * *",
-            "prompt_file": str(prompt_path)
-        })
+    response = _post_nightly(client, prompt_path)
     assert response.status_code == 200
     assert response.json()["prompt_file"] == str(prompt_path)
     assert "prompt" not in response.json()
-  _assert_pointer_round_trip(temp_home, prompt_path, "nightly", "0 2 * * *")
+  _assert_pointer_round_trip(temp_home, prompt_path, "nightly")
 
 
 def test_api_put_round_trips_prompt_file(temp_home: Path) -> None:
   """PUT /tasks/<name> with prompt_file persists the pointer, not a body, and
   the persisted file reloads into the resolved body."""
-  prompt_path = temp_home / "prompts" / "nightly.md"
-  prompt_path.parent.mkdir(parents=True, exist_ok=True)
-  body = "Rebase nightly orchestrator and report status.\n"
-  prompt_path.write_text(body, encoding="utf-8")
+  prompt_path = _write_nightly_prompt(temp_home, "Rebase nightly orchestrator and report status.\n")
   cfg = get_config()
   with _client(cfg) as client:
-    created = client.post(
-        "/api/cron/tasks", json={
-            "name": "nightly",
-            "cron": "0 2 * * *",
-            "prompt_file": str(prompt_path)
-        })
+    created = _post_nightly(client, prompt_path)
     assert created.status_code == 200
     response = client.put("/api/cron/tasks/nightly", json={"cron": "0 4 * * *", "prompt_file": str(prompt_path)})
     assert response.status_code == 200
-  _assert_pointer_round_trip(temp_home, prompt_path, "nightly", "0 4 * * *")
+  _assert_pointer_round_trip(temp_home, prompt_path, "nightly")
 
 
 # --- single source: an inline-prompt file is the only error, the pointer loads -
@@ -665,16 +698,9 @@ def test_single_source_inline_and_pointer(temp_home: Path) -> None:
 
 def test_api_create_writes_single_file(temp_home: Path) -> None:
   cfg = get_config()
-  prompt_path = temp_home / "prompts" / "nightly.md"
-  prompt_path.parent.mkdir(parents=True, exist_ok=True)
-  prompt_path.write_text("run nightly", encoding="utf-8")
+  prompt_path = _write_nightly_prompt(temp_home, "run nightly")
   with _client(cfg) as client:
-    response = client.post(
-        "/api/cron/tasks", json={
-            "name": "nightly",
-            "cron": "0 2 * * *",
-            "prompt_file": str(prompt_path)
-        })
+    response = _post_nightly(client, prompt_path)
     assert response.status_code == 200
     path = _cron_d_dir(temp_home) / "nightly.yaml"
     assert path.exists()
@@ -684,17 +710,15 @@ def test_api_create_writes_single_file(temp_home: Path) -> None:
     assert "prompt" not in stored
 
     # 409 on an existing job
-    dup = client.post("/api/cron/tasks", json={"name": "nightly", "cron": "0 3 * * *", "prompt_file": str(prompt_path)})
+    dup = _post_nightly(client, prompt_path, cron="0 3 * * *")
     assert dup.status_code == 409
 
 
 def test_api_put_round_trips_single_file(temp_home: Path) -> None:
   cfg = get_config()
-  prompt_path = temp_home / "prompts" / "nightly.md"
-  prompt_path.parent.mkdir(parents=True, exist_ok=True)
-  prompt_path.write_text("run nightly", encoding="utf-8")
+  prompt_path = _write_nightly_prompt(temp_home, "run nightly")
   with _client(cfg) as client:
-    client.post("/api/cron/tasks", json={"name": "nightly", "cron": "0 2 * * *", "prompt_file": str(prompt_path)})
+    _post_nightly(client, prompt_path)
     response = client.put("/api/cron/tasks/nightly", json={"cron": "0 4 * * *"})
     assert response.status_code == 200
     path = _cron_d_dir(temp_home) / "nightly.yaml"
@@ -753,7 +777,13 @@ def test_api_rejects_path_traversal_name(temp_home: Path, bad: str) -> None:
   with _client(cfg) as client:
     r_put = client.put(f"/api/cron/tasks/{bad}", json={"cron": "0 1 * * *"})
     r_del = client.delete(f"/api/cron/tasks/{bad}")
-    r_post = client.post("/api/cron/tasks", json={"name": bad, "cron": "0 1 * * *", "prompt_file": "p.md"})
+    r_post = client.post(
+        "/api/cron/tasks", json={
+            "name": bad,
+            "type": "normal",
+            "cron": "0 1 * * *",
+            "prompt_file": "p.md"
+        })
   # Every malicious name must be rejected before reaching the filesystem. A
   # single-segment bad name (e.g. ``a..``, ``.lead``) hits the handler's regex
   # check (400); path-shaped names (``..``, ``a/b``, ``/abs``) are blocked even
@@ -775,4 +805,5 @@ def test_scheduled_task_config_has_no_base_branch_field() -> None:
   ``extra='forbid'`` keeps a stray ``base_branch:`` key an error, not a silent drop."""
   assert "base_branch" not in ScheduledTaskConfig.model_fields
   with pytest.raises(ValidationError, match="base_branch"):
-    ScheduledTaskConfig(name="t", cron="0 0 * * *", prompt="p", base_branch="main")  # type: ignore[call-arg]
+    ScheduledTaskConfig(
+        name="t", cron="0 0 * * *", type="normal", prompt="p", base_branch="main")  # type: ignore[call-arg]

@@ -100,7 +100,7 @@ def extract_tool_result_text(block: dict) -> str:
 
 
 def _handler_result_msg(ev: dict) -> dict:
-  icon = '✓' if ev.get('status') == 'ok' else '✗'
+  icon = '✓' if ev.get('status') == ET.HANDLER_STATUS_OK else '✗'
   return {
       'role': 'system',
       'content': f"{icon} {ev.get('task', '')}: {ev.get('message', '')}",
@@ -117,7 +117,7 @@ def _compacting_model_note(ev: dict) -> str:
   return f'by {family.capitalize()}'
 
 
-def _format_k_tokens(count: int | float) -> str:
+def _format_k_tokens(count: float) -> str:
   """The one formatter every token figure of the compaction line goes through:
   one decimal below 100k (15.5k), whole k at or above (1014k)."""
   return f'{count / 1000:.1f}k' if count < 100_000 else f'{round(count / 1000)}k'
@@ -172,9 +172,9 @@ def _claude_account_login_required_msg(ev: dict) -> dict:
 
 def _resume_context_dropped_msg(ev: dict) -> dict:
   reason = ev.get('reason')
-  if reason == 'anchor_missing':
+  if reason == ET.RESUME_REASON_ANCHOR_MISSING:
     msg = 'Context not resumed: no previous session anchor was found'
-  elif reason == 'transcript_missing':
+  elif reason == ET.RESUME_REASON_TRANSCRIPT_MISSING:
     msg = 'Context not resumed: the previous session transcript is missing'
   else:
     msg = 'Context not resumed'
@@ -182,7 +182,7 @@ def _resume_context_dropped_msg(ev: dict) -> dict:
 
 
 def _system_msg(ev: dict) -> dict | None:
-  if ev.get("subtype") != "tui_menu_dismissed":
+  if ev.get("subtype") not in (ET.TUI_MENU_DISMISSED, ET.COMMAND_PROGRESS):
     return None
   return {
       "role": "system",
@@ -205,7 +205,7 @@ def _backend_overlay_inactive_msg(ev: dict) -> dict:
   backend_overlay_undeclared event that carries no reason field at all) renders
   the undeclared message.
   """
-  if ev.get("reason") == "unreadable":
+  if ev.get("reason") == ET.OVERLAY_REASON_UNREADABLE:
     return {
         "role":
             "system",
@@ -494,17 +494,18 @@ class MessageAggregator:
     row = {**self._tools_buf[-1], "output": output, "is_error": bool(is_error)}
     self._tools_buf[-1] = tool_preview(row)
 
-  def _stream_delta(self) -> dict | None:
+  def _stream_delta(self) -> Iterator[dict]:
+    """Yield the buffered draft's stream delta, or nothing when none is due."""
     if not self.emit_stream_deltas:
-      return None
+      return
     msg = self.pending_draft_message()
     if msg is None:
-      return None
+      return
     # The streaming bubble paints content and thinking only (paintStreamDraft);
     # each tool row rides the preview shape its renderer reads.
     if msg.get("tools"):
       msg["tools"] = [tool_preview(t) for t in msg["tools"]]
-    return {"type": "stream", "message": msg}
+    yield {"type": "stream", "message": msg}
 
   def _feed(self, ev: dict, idx: int) -> Iterator[dict]:
     t = ev.get("type")
@@ -516,9 +517,7 @@ class MessageAggregator:
         for block in (ev.get("message") or {}).get("content", []):
           if isinstance(block, dict) and block.get("type") == "tool_result" and self._tools_buf:
             self._attach_tool_output(extract_tool_result_text(block), block.get("is_error", False))
-        delta = self._stream_delta()
-        if delta is not None:
-          yield delta
+        yield from self._stream_delta()
         return
       yield from self._flush_to_message_delta()
       normalized = normalize_user_message_event(ev)
@@ -589,9 +588,7 @@ class MessageAggregator:
       if self._assistant_buf or self._tools_buf or self._thinking_buf:
         self._last_event_id = ev_id
 
-      delta = self._stream_delta()
-      if delta is not None:
-        yield delta
+      yield from self._stream_delta()
       return
 
     if t == ET.TOOL_USE:
@@ -600,9 +597,7 @@ class MessageAggregator:
       self._last_event_id = ev_id
       if self._last_assistant_ts is None:
         self._last_assistant_ts = ev.get('timestamp')
-      delta = self._stream_delta()
-      if delta is not None:
-        yield delta
+      yield from self._stream_delta()
       return
 
     if t == ET.TOOL_RESULT:
@@ -610,9 +605,7 @@ class MessageAggregator:
         return
       self._attach_tool_output(ev.get('content', ''), ev.get('is_error', False))
       self._last_event_idx = idx
-      delta = self._stream_delta()
-      if delta is not None:
-        yield delta
+      yield from self._stream_delta()
       return
 
     if t == ET.THINKING:
@@ -622,9 +615,7 @@ class MessageAggregator:
         self._last_assistant_ts = ev.get("timestamp")
       if self._assistant_buf or self._tools_buf or self._thinking_buf:
         self._last_event_id = ev_id
-      delta = self._stream_delta()
-      if delta is not None:
-        yield delta
+      yield from self._stream_delta()
       return
 
     handler = _SIMPLE_HANDLERS.get(t)

@@ -6,12 +6,13 @@ import json
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, Self
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
     BROADCAST_PATCH_TARGET,
+    _page_request,
     make_home_session,
     recycle_archive_cutoff_events,
 )
@@ -312,6 +313,41 @@ async def test_live_range_reparses_after_append(tmp_path: Path) -> None:
   assert [e["content"] for e in after] == ["f0", "f1", "f2", "f3"]
 
 
+class _CountingByteReader:
+  """open() wrapper recording every read()'s byte count into a shared tally."""
+
+  def __init__(self, inner: IO[bytes], reads: list[int]) -> None:
+    self._inner = inner
+    self._reads = reads
+
+  def read(self, *args: Any, **kwargs: Any) -> bytes:
+    data: bytes = self._inner.read(*args, **kwargs)
+    self._reads.append(len(data))
+    return data
+
+  def seek(self, *args: Any, **kwargs: Any) -> int:
+    return self._inner.seek(*args, **kwargs)
+
+  def __enter__(self) -> Self:
+    self._inner.__enter__()
+    return self
+
+  def __exit__(self, *args: object, **kwargs: Any) -> bool:
+    return bool(self._inner.__exit__(*args, **kwargs))
+
+
+def _count_reads_of(live_path: Path, real_open: Any, reads: list[int]) -> Any:
+  """A builtins.open patch tallying byte reads of *live_path* into *reads*."""
+
+  def counting_open(file: Any, *args: Any, **kwargs: Any) -> IO[bytes] | _CountingByteReader:
+    handle = real_open(file, *args, **kwargs)
+    if str(file) == str(live_path):
+      return _CountingByteReader(handle, reads)
+    return handle
+
+  return counting_open
+
+
 @pytest.mark.asyncio
 async def test_live_range_append_extends_memo_without_full_reparse(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
@@ -328,37 +364,10 @@ async def test_live_range_append_extends_memo_without_full_reparse(tmp_path: Pat
           "timestamp": (cutoff + timedelta(days=2)).isoformat()
       }) + "\n"
 
+  real_open = open
   read_bytes: list[int] = []
 
-  class _CountingReader:
-
-    def __init__(self, inner: IO[bytes]) -> None:
-      self._inner = inner
-
-    def read(self, *args: Any, **kwargs: Any) -> bytes:
-      data: bytes = self._inner.read(*args, **kwargs)
-      read_bytes.append(len(data))
-      return data
-
-    def seek(self, *args: Any, **kwargs: Any) -> int:
-      return self._inner.seek(*args, **kwargs)
-
-    def __enter__(self) -> "_CountingReader":
-      self._inner.__enter__()
-      return self
-
-    def __exit__(self, *args: Any, **kwargs: Any) -> bool:
-      return bool(self._inner.__exit__(*args, **kwargs))
-
-  real_open = open
-
-  def counting_open(file: Any, *args: Any, **kwargs: Any) -> IO[bytes] | _CountingReader:
-    handle = real_open(file, *args, **kwargs)
-    if str(file) == str(live_path):
-      return _CountingReader(handle)
-    return handle
-
-  with patch("builtins.open", counting_open):
+  with patch("builtins.open", _count_reads_of(live_path, real_open, read_bytes)):
     after, _ = mgr.load_chat_events_range(session.id, 5, 9)
   # The extension read the appended tail only, not the whole file.
   assert sum(read_bytes) == len(appended_line.encode("utf-8"))
@@ -366,7 +375,7 @@ async def test_live_range_append_extends_memo_without_full_reparse(tmp_path: Pat
   assert [e["content"] for e in after] == ["f0", "f1", "f2", "f3"]
   # The extended memo serves a further unchanged repeat with zero file bytes.
   read_bytes.clear()
-  with patch("builtins.open", counting_open):
+  with patch("builtins.open", _count_reads_of(live_path, real_open, read_bytes)):
     again, _ = mgr.load_chat_events_range(session.id, 5, 9)
   assert read_bytes == []
   assert [e["content"] for e in again] == ["f0", "f1", "f2", "f3"]
@@ -432,41 +441,6 @@ async def test_live_range_counts_physical_lines(tmp_path: Path) -> None:
   assert [e["content"] for e in got] == ["f0_first"]
   got, _ = mgr.load_chat_events_range(session.id, 5, 10)
   assert [e["content"] for e in got] == ["f0_first", "f1", "f2"]
-
-
-class _CountingByteReader:
-  """open() wrapper recording every read()'s byte count into a shared tally."""
-
-  def __init__(self, inner: IO[bytes], reads: list[int]) -> None:
-    self._inner = inner
-    self._reads = reads
-
-  def read(self, *args: Any, **kwargs: Any) -> bytes:
-    data: bytes = self._inner.read(*args, **kwargs)
-    self._reads.append(len(data))
-    return data
-
-  def seek(self, *args: Any, **kwargs: Any) -> int:
-    return self._inner.seek(*args, **kwargs)
-
-  def __enter__(self) -> "_CountingByteReader":
-    self._inner.__enter__()
-    return self
-
-  def __exit__(self, *args: Any, **kwargs: Any) -> bool:
-    return bool(self._inner.__exit__(*args, **kwargs))
-
-
-def _count_reads_of(live_path: Path, real_open: Any, reads: list[int]) -> Any:
-  """A builtins.open patch tallying byte reads of *live_path* into *reads*."""
-
-  def counting_open(file: Any, *args: Any, **kwargs: Any) -> IO[bytes] | _CountingByteReader:
-    handle = real_open(file, *args, **kwargs)
-    if str(file) == str(live_path):
-      return _CountingByteReader(handle, reads)
-    return handle
-
-  return counting_open
 
 
 @pytest.mark.asyncio
@@ -817,7 +791,7 @@ async def test_bootstrap_payload_trims_tool_previews_over_cap(tmp_path: Path) ->
   _append_events(mgr.get_chat_events_path(session.id), events)
 
   projection_messages_before = projection_messages(mgr, session.id)
-  messages, payload_messages = _switch_payload_messages(mgr, session)
+  _messages, payload_messages = _switch_payload_messages(mgr, session)
   tools = payload_messages[0]["tools"]
 
   assert tools[0]["output"] == big_output[:500]
@@ -867,7 +841,7 @@ async def test_events_page_returns_raw_next_before_for_aggregated_messages(tmp_p
   # The 3 events aggregate into a single still-unflushed assistant draft. The
   # draft belongs to the streaming-preview surface, not to the bubble list, so
   # the committed-message ordinal domain is empty and the page is empty.
-  resp = await get_session_events_page(session.id, before=3, limit=3, meta=session, session_mgr=mgr)
+  resp = await get_session_events_page(session.id, _page_request(), before=3, limit=3, meta=session, session_mgr=mgr)
   page = json.loads(resp.body)
 
   assert page["next_before"] == 0

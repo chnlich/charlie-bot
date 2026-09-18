@@ -4,7 +4,7 @@ import tarfile
 from datetime import datetime
 from pathlib import Path
 
-from src.core.config import charliebot_home_dir
+from src.core.config import CREDENTIALS_FILENAME, charliebot_home_dir
 from src.core.log_once import LazyStructlogLogger
 from src.core.threads import THREADS_DIR_NAME
 
@@ -39,7 +39,9 @@ def _should_exclude(arcname: str) -> bool:
   """Return True if the archive member (relative path) should be excluded."""
   parts = Path(arcname).parts
   for part in parts:
-    if part in ('.git', '.claude', 'credentials', '__pycache__') or part.endswith('.pyc'):
+    # CREDENTIALS_FILENAME is the profile's secrets file; it must never ride a
+    # backup, which the retention policy keeps for up to 90 days.
+    if part in ('.git', '.claude', CREDENTIALS_FILENAME, '__pycache__') or part.endswith('.pyc'):
       return True
   # Exclude sessions/*/threads and everything under it
   return len(parts) >= 3 and parts[0] == 'sessions' and parts[2] == THREADS_DIR_NAME
@@ -58,7 +60,7 @@ def _parse_backup_date(name: str) -> datetime | None:
 def create_backup() -> Path:
   """Create a compressed backup of this profile's state directory.
 
-  Excludes: .git, credentials, sessions/*/threads, *.pyc, __pycache__.
+  Excludes: .git, .claude, credentials.yaml, sessions/*/threads, *.pyc, __pycache__.
 
   Returns:
     Path to the created archive.

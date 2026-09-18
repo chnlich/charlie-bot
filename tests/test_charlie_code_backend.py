@@ -7,6 +7,8 @@ from conftest import (
     BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
     CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
     FLAG_LIKE_PROMPT,
+    LITELLM_503_ERROR_MESSAGE,
+    LITELLM_FEEDBACK_BANNER_STDERR,
     RUNS_READ_PID_STAT_PATCH_TARGET,
     assistant_text_event,
     backend_option,
@@ -21,6 +23,7 @@ from src.agents.backends.base import USER_LOCAL_BIN, AgentBackend
 from src.agents.backends.charlie_code import CharlieCodeBackend
 from src.agents.backends.registry import build_backend
 from src.core import event_types as ET
+from src.core import runs
 from src.core.config import CharlieBotConfig
 
 
@@ -117,6 +120,22 @@ def test_translate_failure_stream_preserves_error_message(monkeypatch: pytest.Mo
   ]
 
 
+def test_translated_error_event_feeds_the_end_of_run_hint_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+  """The Gemini-503 adaptation, in-process: the CLC backend's raw error row
+  translates to exactly the ET.ERROR event the hint selection reads, and the
+  selection prefers it over the stderr help banner."""
+  backend = _build_backend(monkeypatch)
+
+  translated = backend.translate_event({"type": "error", "message": LITELLM_503_ERROR_MESSAGE})
+
+  assert [event["type"] for event in translated] == [ET.ERROR]
+  hint = runs.select_error_hint(
+      [event.get("message", "") for event in translated if event.get("type") == ET.ERROR],
+      LITELLM_FEEDBACK_BANNER_STDERR)
+  assert hint == LITELLM_503_ERROR_MESSAGE
+  assert "Give Feedback" not in hint
+
+
 def test_translate_thought_and_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
@@ -126,6 +145,49 @@ def test_translate_thought_and_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
       "text": "I will inspect the files.",
   }) == [assistant_text_event("I will inspect the files.")]
   assert not backend.translate_event({"type": "future-event"})
+
+
+def test_translate_command_progress_renders_a_system_note_naming_the_command(monkeypatch: pytest.MonkeyPatch) -> None:
+  backend = _build_backend(monkeypatch)
+  command = "python train.py --epochs 3 &&\n  python eval.py " + "-" * 100
+  backend.translate_event({"type": "command", "step": 3, "id": "s-3-1", "command": command})
+
+  running = backend.translate_event(
+      {
+          "type": "command_progress",
+          "step": 3,
+          "id": "s-3-1",
+          "elapsed_seconds": 60,
+          "pid": 4242,
+          "log": "/tmp/s-3-1.log",
+          "killed": False,
+      })
+  terminated = backend.translate_event(
+      {
+          "type": "command_progress",
+          "step": 3,
+          "id": "s-3-1",
+          "elapsed_seconds": 900,
+          "pid": 4242,
+          "log": "/tmp/s-3-1.log",
+          "killed": True,
+      })
+
+  head = "python train.py --epochs 3 && python eval.py " + "-" * 100
+  assert running == [
+      {
+          "type": ET.SYSTEM,
+          "subtype": ET.COMMAND_PROGRESS,
+          "content": f"Command still running after 1 min (pid 4242): {head[:80]}",
+      }
+  ]
+  assert terminated == [
+      {
+          "type": ET.SYSTEM,
+          "subtype": ET.COMMAND_PROGRESS,
+          "content": f"Command terminated after 15 min (pid 4242): {head[:80]}",
+      }
+  ]
 
 
 def test_translate_compact_event_and_unknown_still_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -247,7 +309,7 @@ def test_build_command_writes_task_file_and_flags(monkeypatch: pytest.MonkeyPatc
   # Master instructions ride the cwd AGENTS.md system channel, byte-identical
   # to the assembled instructions string.
   agents_md = session_cwd / "AGENTS.md"
-  assert agents_md.read_bytes() == "Use concise answers.".encode("utf-8")
+  assert agents_md.read_bytes() == b"Use concise answers."
   # task.md carries the bare prompt: no <system-instructions> frame anywhere.
   task_md = tmp_path / "task.md"
   assert task_md.read_bytes() == FLAG_LIKE_PROMPT.encode("utf-8")
@@ -337,40 +399,22 @@ def test_build_command_emits_top_p_and_temperature_when_declared(
   assert temperature_idx < task_idx
 
 
-def test_build_command_without_sampling_fields_emits_neither_flag(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """Neither knob set: neither flag is emitted, keeping the argv byte-identical to the
-  command built before the fields existed, so older charlie-code builds keep working."""
+@pytest.mark.parametrize(
+    "absent_flags",
+    [("--top-p", "--temperature"), ("--no-stream", "--timeout-seconds")],
+    ids=["sampling-fields", "call-strategy-fields"],
+)
+def test_build_command_without_optional_fields_emits_neither_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, absent_flags: tuple[str, str]) -> None:
+  """Neither field of the axis set: neither flag is emitted, keeping the argv byte-identical
+  to the command built before the fields existed, so older charlie-code builds keep working."""
   backend = _build_backend(monkeypatch)
   backend._prepare_transport(tmp_path)
 
   cmd = backend._build_command(FLAG_LIKE_PROMPT)
 
-  assert "--top-p" not in cmd
-  assert "--temperature" not in cmd
-  assert cmd == [
-      "/usr/bin/charlie-code",
-      "--json",
-      "--model",
-      "charlie-code-test-model",
-      "--api-base",
-      "http://test.invalid/v1",
-      "--task-file",
-      str(tmp_path / "task.md"),
-  ]
-
-
-def test_build_command_without_call_strategy_fields_keeps_pre_change_command(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """An entry setting neither field emits neither flag: the argv is byte-identical to the
-  command built before the fields existed, so older charlie-code builds keep working."""
-  backend = _build_backend(monkeypatch)
-  backend._prepare_transport(tmp_path)
-
-  cmd = backend._build_command(FLAG_LIKE_PROMPT)
-
-  assert "--no-stream" not in cmd
-  assert "--timeout-seconds" not in cmd
+  for flag in absent_flags:
+    assert flag not in cmd
   assert cmd == [
       "/usr/bin/charlie-code",
       "--json",
@@ -406,7 +450,7 @@ def test_build_command_overwrites_task_file_on_retry(monkeypatch: pytest.MonkeyP
 # ---------------------------------------------------------------------------
 
 
-class _HaltAtSpawn(Exception):
+class _HaltAtSpawnError(Exception):
   """Control-flow sentinel: on_spawn raises it so the run halts at spawn time."""
 
 
@@ -431,11 +475,11 @@ async def _drive_run_halted_at_spawn(backend: AgentBackend, monkeypatch: pytest.
   stub_subprocess_spawn(monkeypatch, BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, 4242)
 
   async def on_spawn(pid: int) -> None:
-    raise _HaltAtSpawn
+    raise _HaltAtSpawnError
 
   backend._on_spawn = on_spawn
 
-  with pytest.raises(_HaltAtSpawn):
+  with pytest.raises(_HaltAtSpawnError):
     async for _event in backend.run("ordering prompt", str(tmp_path), {"PATH": "/usr/bin:/bin"}):
       pass
 
@@ -614,7 +658,7 @@ def test_api_base_required(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Image attachments: refusal without image_input, --image command assembly.
+# Image attachments: refusal on image_input: false, --image command assembly.
 # ---------------------------------------------------------------------------
 
 
@@ -626,7 +670,7 @@ async def _drive_run_halted_at_spawn_with_attachments(
 ) -> tuple[list[dict], object]:
   """Drive backend.run() with the conftest stub spawn; return (events, spawn mock).
 
-  on_spawn raises the file's _HaltAtSpawn sentinel so the run halts right after
+  on_spawn raises the file's _HaltAtSpawnError sentinel so the run halts right after
   the (stubbed) spawn — the spawn call's argv is the contract surface.
   """
   monkeypatch.setattr(RUNS_READ_PID_STAT_PATCH_TARGET, lambda pid: ("image-test-start", "R"))
@@ -638,20 +682,22 @@ async def _drive_run_halted_at_spawn_with_attachments(
   monkeypatch.setattr(BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, spawn)
 
   async def on_spawn(pid: int) -> None:
-    raise _HaltAtSpawn
+    raise _HaltAtSpawnError
 
   backend._on_spawn = on_spawn
   events: list[dict] = []
-  with pytest.raises(_HaltAtSpawn):
+  with pytest.raises(_HaltAtSpawnError):
+    # Per-item append is load-bearing: events yielded before the raise must stay
+    # in the list, which a collect-then-extend form drops.
     async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin:/bin"}, uploaded_files=uploaded_files):
-      events.append(event)
+      events.append(event)  # noqa: PERF401  (see comment above)
   return events, spawn
 
 
 @pytest.mark.asyncio
-async def test_run_refuses_images_without_image_input(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """image_input unset + an image ref: exactly one error event, no spawn, no result."""
-  backend = _build_backend(monkeypatch, log_dir=tmp_path / "logs")
+async def test_run_refuses_images_with_image_input_false(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """image_input: false + an image ref: exactly one error event, no spawn, no result."""
+  backend = _build_backend(monkeypatch, image_input=False, log_dir=tmp_path / "logs")
   monkeypatch.setattr(RUNS_READ_PID_STAT_PATCH_TARGET, lambda pid: ("refusal-test-start", "R"))
   process = MagicMock()
   process.pid = 4242
@@ -672,7 +718,7 @@ async def test_run_refuses_images_without_image_input(monkeypatch: pytest.Monkey
 
   expected = (
       "refused: image attachments not sent — this endpoint declares no image input "
-      "(image_input not set): error-shot.png")
+      "(image_input: false): error-shot.png")
   assert events == [{"type": ET.ERROR, "message": expected, "content": expected}]
   # Nothing is sent: no subprocess spawn and no result event.
   assert spawn.await_count == 0
@@ -682,6 +728,34 @@ async def test_run_refuses_images_without_image_input(monkeypatch: pytest.Monkey
 async def test_run_with_image_input_sends_images_in_reference_order_before_task_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   backend = _build_backend(monkeypatch, image_input=True, log_dir=tmp_path / "logs")
+  _events, spawn = await _drive_run_halted_at_spawn_with_attachments(
+      backend,
+      monkeypatch,
+      tmp_path,
+      uploaded_files=[
+          {
+              "filename": "a.png",
+              "path": str(tmp_path / "a.png")
+          },
+          {
+              "filename": "b.png",
+              "path": str(tmp_path / "b.png")
+          },
+      ],
+  )
+
+  cmd = list(spawn.await_args.args)
+  first = cmd.index("--image")
+  assert cmd[first:first + 4] == ["--image", str(tmp_path / "a.png"), "--image", str(tmp_path / "b.png")]
+  assert cmd.count("--image") == 2
+  assert first < cmd.index("--task-file")
+
+
+@pytest.mark.asyncio
+async def test_run_default_build_sends_images_in_reference_order_before_task_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """No image_input kwarg: images are sent; direct construction pins the constructor default, not the config field."""
+  backend = _build_backend(monkeypatch, log_dir=tmp_path / "logs")
   _events, spawn = await _drive_run_halted_at_spawn_with_attachments(
       backend,
       monkeypatch,

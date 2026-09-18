@@ -15,13 +15,14 @@ from typing import Any
 
 from src.core import artifact_check
 from src.core.constants import REPO_ROOT
-from src.core.http import requests_module_getattr
+from src.core.deferred import deferred_module_getattr
+from src.core.http import load_requests
 from src.core.timeouts import KATEX_CDN_FETCH_TIMEOUT
 
 
 def __getattr__(name: str) -> Any:
   # The "src.core.artifact_wrap.requests.*" patch targets resolve through this hook.
-  return requests_module_getattr(name, __name__, globals())
+  return deferred_module_getattr(name, __name__, globals(), "requests", load_requests)
 
 
 _PRERENDER_DRIVER = REPO_ROOT / "scripts" / "prerender_math.js"

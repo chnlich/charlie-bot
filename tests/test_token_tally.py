@@ -7,6 +7,7 @@ hard-coded total.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
@@ -37,6 +38,15 @@ def _claude_record(record_id: str, model: str, ts: str, usage: dict) -> dict:
       "requestId": f"req-{record_id}",
       "uuid": f"u-{record_id}",
       "timestamp": ts,
+  }
+
+
+def _usage(input_: int, output: int) -> dict:
+  return {
+      "input_tokens": input_,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "output_tokens": output
   }
 
 
@@ -156,6 +166,32 @@ def _spy_row_blobs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
   return projected
 
 
+def _spy_opencode_scans(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+  """Install a counting spy on tt._scan_opencode_rows; returns the per-collect scan list."""
+  scans: list[int] = []
+  orig = tt._scan_opencode_rows
+
+  def spy(con: sqlite3.Connection, memo: dict) -> tuple:
+    scans.append(1)
+    return orig(con, memo)
+
+  monkeypatch.setattr(tt, "_scan_opencode_rows", spy)
+  return scans
+
+
+def _spy_cache_loads(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+  """Install a counting spy on TallyCache.load; returns the loaded cache paths."""
+  loads: list[Path] = []
+  orig = tt.TallyCache.load
+
+  def spy(path: Path, notes: list) -> tt.TallyCache:
+    loads.append(path)
+    return orig(path, notes)
+
+  monkeypatch.setattr(tt.TallyCache, "load", staticmethod(spy))
+  return loads
+
+
 def _collect(
     claude: Claude | None,
     codex: Codex | None,
@@ -234,31 +270,13 @@ def test_tally_is_absolutely_correct(tmp_path: Path) -> None:
 
 def test_appends_are_visible(tmp_path: Path) -> None:
   claude = Claude(tmp_path)
-  claude.write(
-      claude.work, "sess1", [
-          _claude_record(
-              "m1", NAME, "2024-01-01T00:00:00Z", {
-                  "input_tokens": 10,
-                  "cache_creation_input_tokens": 0,
-                  "cache_read_input_tokens": 0,
-                  "output_tokens": 5
-              }),
-      ])
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
   db = tmp_path / "db.sqlite"
   first = _collect(claude, None, db)
   before = _row(first, "Claude Code", NAME)
 
   # A later session file records the same model: its total rises by exactly those tokens.
-  claude.write(
-      claude.work, "sess2", [
-          _claude_record(
-              "m2", NAME, "2024-01-02T00:00:00Z", {
-                  "input_tokens": 1000,
-                  "cache_creation_input_tokens": 0,
-                  "cache_read_input_tokens": 0,
-                  "output_tokens": 2
-              }),
-      ])
+  claude.write(claude.work, "sess2", [_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(1000, 2))])
   second = _collect(claude, None, db)
   after = _row(second, "Claude Code", NAME)
   assert after.total == before.total + 1002
@@ -296,19 +314,9 @@ def test_replays_are_not_double_counted(tmp_path: Path, with_cache: bool) -> Non
 def test_subagent_files_are_counted(tmp_path: Path) -> None:
   claude = Claude(tmp_path)
   claude.write(
-      claude.work,
-      "sessA", [],
-      subagents=[
-          [
-              _claude_record(
-                  "sub1", NAME, "2024-01-01T00:00:00Z", {
-                      "input_tokens": 30,
-                      "cache_creation_input_tokens": 0,
-                      "cache_read_input_tokens": 0,
-                      "output_tokens": 3
-                  })
-          ],
-      ])
+      claude.work, "sessA", [], subagents=[[
+          _claude_record("sub1", NAME, "2024-01-01T00:00:00Z", _usage(30, 3)),
+      ]])
   tally = _collect(claude, None, tmp_path / "db.sqlite")
   row = _row(tally, "Claude Code", NAME)
   assert row.calls == 1
@@ -318,26 +326,8 @@ def test_subagent_files_are_counted(tmp_path: Path) -> None:
 
 def test_cross_subscription_merge(tmp_path: Path) -> None:
   claude = Claude(tmp_path)
-  claude.write(
-      claude.work, "s1", [
-          _claude_record(
-              "a", NAME, "2024-01-01T00:00:00Z", {
-                  "input_tokens": 10,
-                  "cache_creation_input_tokens": 0,
-                  "cache_read_input_tokens": 0,
-                  "output_tokens": 1
-              }),
-      ])
-  claude.write(
-      claude.ext, "s2", [
-          _claude_record(
-              "b", NAME, "2024-01-02T00:00:00Z", {
-                  "input_tokens": 20,
-                  "cache_creation_input_tokens": 0,
-                  "cache_read_input_tokens": 0,
-                  "output_tokens": 2
-              }),
-      ])
+  claude.write(claude.work, "s1", [_claude_record("a", NAME, "2024-01-01T00:00:00Z", _usage(10, 1))])
+  claude.write(claude.ext, "s2", [_claude_record("b", NAME, "2024-01-02T00:00:00Z", _usage(20, 2))])
   tally = _collect(claude, None, tmp_path / "db.sqlite")
   matches = [r for r in tally.rows if r.source == "Claude Code" and r.model == NAME]
   assert len(matches) == 1
@@ -403,27 +393,9 @@ def test_codex_model_attribution(tmp_path: Path) -> None:
 
 def test_source_failure_isolation(tmp_path: Path) -> None:
   claude = Claude(tmp_path)
-  claude.write(
-      claude.work, "s1", [
-          _claude_record(
-              "a", NAME, "2024-01-01T00:00:00Z", {
-                  "input_tokens": 5,
-                  "cache_creation_input_tokens": 0,
-                  "cache_read_input_tokens": 0,
-                  "output_tokens": 1
-              }),
-      ])
+  claude.write(claude.work, "s1", [_claude_record("a", NAME, "2024-01-01T00:00:00Z", _usage(5, 1))])
   # The ext-1 config dir owns a log file that becomes unreadable.
-  claude.write(
-      claude.ext, "s1", [
-          _claude_record(
-              "a2", NAME, "2024-01-01T00:00:00Z", {
-                  "input_tokens": 5,
-                  "cache_creation_input_tokens": 0,
-                  "cache_read_input_tokens": 0,
-                  "output_tokens": 1
-              }),
-      ])
+  claude.write(claude.ext, "s1", [_claude_record("a2", NAME, "2024-01-01T00:00:00Z", _usage(5, 1))])
   codex = Codex(tmp_path)
   codex.write(
       "rollout", [
@@ -446,15 +418,6 @@ def test_source_failure_isolation(tmp_path: Path) -> None:
   assert any(r.source == "Codex" and r.model == "gpt-ok" for r in tally.rows)
   assert any(r.source == "opencode" for r in tally.rows)
   assert any("unreadable" in n and "ext" in n for n in tally.notes)
-
-
-def _usage(input_: int, output: int) -> dict:
-  return {
-      "input_tokens": input_,
-      "cache_creation_input_tokens": 0,
-      "cache_read_input_tokens": 0,
-      "output_tokens": output
-  }
 
 
 def _claude_rig(tmp_path: Path) -> Claude:
@@ -797,7 +760,8 @@ def test_opencode_row_data_matches_the_scan_projection() -> None:
       (["oc-nocache", "prov", None, 5, 0, 0, 1], True),
   ]
   # strict=True fails loud when the admitted corpus and its expected projections drift apart.
-  shapes = list(zip(_ADMITTED_OPENCODE_ROWS, projections, strict=True)) + [
+  shapes = [
+      *zip(_ADMITTED_OPENCODE_ROWS, projections, strict=True),
       # skipped rows below: non-assistant role counted 0 bytes; zero counters and
       # string tokens pass the filters but project to None with bytes counted
       ({
@@ -1004,7 +968,8 @@ def test_source_walk_round_persists_moved_opencode_rows(tmp_path: Path) -> None:
 
   entry = json.loads(cache.read_text())["sources"]["opencode"][str(db)]
   assert entry["sig"] != sig_before
-  rows_in_fresh = sum(row[1][3] for row in entry["rows"].values() if row[1] is not None)
+  sidecar = json.loads((cache.parent / entry["rows_file"]).read_text())
+  rows_in_fresh = sum(row[1][3] for row in sidecar["rows"].values() if row[1] is not None)
   assert rows_in_fresh == 5 + 100  # in_fresh: both rows' inputs
   con.close()
 
@@ -1046,7 +1011,11 @@ def test_entry_served_changed_round_adopts_the_partial(tmp_path: Path, monkeypat
   assert _row(rebuilt, "opencode", "oc-m").total == _row(adopted, "opencode", "oc-m").total
 
   doc = json.loads(cache.read_text())  # an entry without a stored partial (the v1 shape)
-  doc["sources"]["opencode"][str(db)].pop("partial", None)
+  rows = json.loads((cache.parent / doc["sources"]["opencode"][str(db)]["rows_file"]).read_text())["rows"]
+  doc["sources"]["opencode"][str(db)] = {
+      "sig": doc["sources"]["opencode"][str(db)]["sig"],
+      "records": [row[1] for row in rows.values() if row[1] is not None],
+  }
   cache.write_text(json.dumps(doc))
   tt._reset_aggregate_memo()
   tt._aggregate_memo = None
@@ -1217,14 +1186,7 @@ def test_cache_document_parses_once_per_process(tmp_path: Path, monkeypatch: pyt
   _write_opencode(db, [_oc_row()])
   _collect(claude, None, db, cache)
 
-  loads = []
-  orig = tt.TallyCache.load
-
-  def spy(path: Path, notes: list) -> tt.TallyCache:
-    loads.append(path)
-    return orig(path, notes)
-
-  monkeypatch.setattr(tt.TallyCache, "load", staticmethod(spy))
+  loads = _spy_cache_loads(monkeypatch)
   os.utime(claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl", None)  # signature moves
   second = _collect(claude, None, db, cache)
   assert loads == []  # the memoized document served the changed round
@@ -1242,20 +1204,8 @@ def test_reset_drops_the_probe_and_document_memos(tmp_path: Path, monkeypatch: p
   assert tt._opencode_doc_synced == {}
   _append_opencode(db, [_padded_opencode_row(100)])
 
-  scans, loads = [], []
-  orig_scan = tt._scan_opencode_rows
-  orig_load = tt.TallyCache.load
-
-  def spy_scan(con: sqlite3.Connection, memo: dict) -> tuple:
-    scans.append(1)
-    return orig_scan(con, memo)
-
-  def spy_load(path: Path, notes: list) -> tt.TallyCache:
-    loads.append(path)
-    return orig_load(path, notes)
-
-  monkeypatch.setattr(tt, "_scan_opencode_rows", spy_scan)
-  monkeypatch.setattr(tt.TallyCache, "load", staticmethod(spy_load))
+  scans = _spy_opencode_scans(monkeypatch)
+  loads = _spy_cache_loads(monkeypatch)
   _collect(None, None, db, cache)
   assert scans == [1]  # empty row memo: the cold scan ran
   assert loads == [cache]  # empty document memo: the document re-parsed
@@ -1309,21 +1259,7 @@ def test_incremental_partials_match_a_fresh_fold(tmp_path: Path) -> None:
     assert _tally_snapshot(inc) == _tally_snapshot(ref), label
 
   def rec(rid: str, ts: str, input_: int) -> dict:
-    return {
-        "message":
-            {
-                "id": rid,
-                "model": NAME,
-                "usage":
-                    {
-                        "input_tokens": input_,
-                        "cache_creation_input_tokens": 0,
-                        "cache_read_input_tokens": 0,
-                        "output_tokens": 1
-                    }
-            },
-        "timestamp": ts
-    }
+    return {"message": {"id": rid, "model": NAME, "usage": _usage(input_, 1)}, "timestamp": ts}
 
   both = {"work (default)": work, "ext-1": ext}
   write(work, "s1", [rec("k1", "t1", 100)])
@@ -1410,6 +1346,59 @@ def test_append_tail_parses_a_completed_partial_line_once(tmp_path: Path) -> Non
   assert _row(after, "Claude Code", NAME).total == 117
 
 
+def test_parse_lines_multi_chunk_giant_line_parity(monkeypatch: pytest.MonkeyPatch) -> None:
+  """A no-marker observation line spanning many chunks parses once: objects, order and the
+  consumed offset match the shapes the per-round re-concat read (the gigabyte raw-log shape
+  whose re-concat paid O(line^2 / chunk))."""
+  monkeypatch.setattr(tt, "_PARSE_CHUNK", 64)
+  lines = [
+      b'{"type": "context", "model": "clc-x"}',
+      b'{"pad": "' + b"q" * 500 + b'"}',  # no marker, spans ~8 chunks
+      b'{"type": "result", "usage": {"input_tokens": 3, "output_tokens": 4}}',
+      b'{"pad2": "' + b"r" * 130 + b'"}',  # no marker, spans 2-3 chunks
+      b'{"type": "result", "usage": {"input_tokens": 5, "output_tokens": 6}}',
+  ]
+  blob = b"\n".join(lines) + b"\n" + b'{"trailing": "fragment"}'
+  objects, consumed = tt._parse_lines(io.BytesIO(blob), tt._CHARLIEBOT_MASTER_MARKERS)
+  assert consumed == blob.rfind(b"\n") + 1  # the trailing fragment stays unconsumed
+  assert [(o.get("type"), o.get("usage", {}).get("input_tokens")) for o in objects] == [
+      ("context", None), ("result", 3), ("result", 5)
+  ]
+
+
+def test_charliebot_master_tail_spans_a_giant_observation_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The changed round's tail parse crosses a multi-chunk no-marker line appended since the
+  document's end offset and lands on the trailing result: the entry matches a cacheless
+  re-parse and the row bills the new result once."""
+  monkeypatch.setattr(tt, "_PARSE_CHUNK", 64)
+  _stub_registry(monkeypatch, _CLC_GLM)
+  cb = Charliebot(tmp_path)
+  log_file = cb.master(
+      "s1", "2026-09-16T19:42:20+00:00", [
+          {
+              "type": "session",
+              "session_id": "clc-1"
+          },
+          _master_context(10, "openai/zai-org/GLM-5.3-Flash"),
+          _master_result(500, 25),
+      ])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  first = _collect(None, None, db, cache, sessions=cb.root)
+  assert _row(first, "charlie-bot", "GLM-5.3-Flash").total == 525
+  with log_file.open("a") as fh:  # the streamed-turn shape: a giant observation line, then the result
+    fh.write('{"pad": "' + "q" * 500 + '"}\n')
+    fh.write(json.dumps(_master_result(700, 30)) + "\n")
+  after = _collect(None, None, db, cache, sessions=cb.root)
+  reference = _collect(None, None, db, sessions=cb.root)
+  assert after.rows == reference.rows
+  assert _row(after, "charlie-bot", "GLM-5.3-Flash").total == 730
+  assert after.scanned_bytes < log_file.stat().st_size  # the tail round read only the appended lines
+  entry = json.loads(cache.read_text())["sources"]["charlie-bot"][str(log_file)]
+  full = tt._master_contribution(str(log_file), tt._backend_registry())[0]
+  assert entry["records"] == full["records"]
+  assert entry["end"] == full["end"] == log_file.stat().st_size
+
+
 def test_append_tail_rejects_a_replaced_or_shrunk_file(tmp_path: Path) -> None:
   """A rewrite the guard cannot prove — replaced prefix or shrink — re-parses whole."""
   claude = _claude_rig(tmp_path)
@@ -1463,9 +1452,79 @@ def test_restart_cold_seeds_the_row_memo_from_the_document(tmp_path: Path, monke
 
   projected = _spy_row_blobs(monkeypatch)
   second = _collect(None, None, db, cache)
-  assert projected == []  # the seeded key diff proved every row unchanged without a blob read
+  assert projected == []  # the stored proof gate proved every row unchanged without a blob read
   assert second.scanned_bytes == 0
   assert _tally_snapshot(second) == _tally_snapshot(first)
+  con.close()
+
+
+def test_seeded_restart_probe_skips_the_key_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The seeded memo gates on the entry's stored proof aggregates: a signature-stale restart
+  # whose rows did not move matches the stored (count, sum) and never runs the key scan —
+  # the same weaker-proof trade the warm memo's gate makes on the WAL-noise rounds.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+  tt._reset_aggregate_memo()
+
+  con.execute("insert into other values ('noise2', 'x')")
+  con.commit()  # the WAL moves; the message table sits unchanged
+
+  def boom(*args: Any, **kwargs: Any) -> None:
+    raise AssertionError("key scan ran although the stored proof matched the live snapshot")
+
+  monkeypatch.setattr(tt, "_scan_opencode_rows", boom)
+  second = _collect(None, None, db, cache)
+  assert second.scanned_bytes == 0
+  assert _tally_snapshot(second) == _tally_snapshot(first)
+  con.close()
+
+
+def test_seeded_restart_scans_when_the_stored_probe_misses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # A row move between the document's write and the restart changes count and sum, so the
+  # stored proof misses and the seeded key diff runs — fetching only the moved row's blob.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+  tt._reset_aggregate_memo()
+
+  _insert_opencode_raw(con, [({}, _padded_opencode_row(500))])
+  con.commit()
+
+  scans = _spy_opencode_scans(monkeypatch)
+  projected = _spy_row_blobs(monkeypatch)
+  second = _collect(None, None, db, cache)
+  assert scans == [1]  # the proof miss sent the restart down the key diff
+  assert len(projected) == 1  # the moved row only
+  after = _row(second, "opencode", "oc-m")
+  assert after.calls == 2 and after.total == _row(first, "opencode", "oc-m").total + 102
+  con.close()
+
+
+def test_legacy_entry_without_probe_seeds_and_scans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # An entry stored before the probe field existed (a document from the prior deploy)
+  # seeds without a gate: the key diff runs, the served tally stays exact, and the round's
+  # own store writes the proof back for the next restart.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+  tt._reset_aggregate_memo()
+
+  doc = json.loads(cache.read_text())
+  entry = doc["sources"]["opencode"][str(db)]
+  assert "probe" in entry
+  del entry["probe"]
+  cache.write_text(json.dumps(doc))
+
+  con.execute("insert into other values ('noise2', 'x')")
+  con.commit()
+
+  scans = _spy_opencode_scans(monkeypatch)
+  projected = _spy_row_blobs(monkeypatch)
+  second = _collect(None, None, db, cache)
+  assert scans == [1]  # no stored proof: the key diff runs, the legacy contract
+  assert projected == []  # and still proves the rows unchanged without a blob read
+  assert _tally_snapshot(second) == _tally_snapshot(first)
+
+  doc = json.loads(cache.read_text())
+  assert len(doc["sources"]["opencode"][str(db)]["probe"]) == 2  # the store wrote the proof back
   con.close()
 
 
@@ -1491,6 +1550,111 @@ def test_restart_cold_recounts_only_moved_rows(tmp_path: Path, monkeypatch: pyte
   assert after.calls == 2  # the upsert replaced its row's record; the insert added one
   assert after.total == _row(first, "opencode", "oc-m").total - 6 + 102 + 102
   con.close()
+
+
+def test_current_entry_keeps_the_rows_bulk_in_the_sidecar(tmp_path: Path) -> None:
+  # The rows map is the document's bulk (~170k rows on this host's db); the persisted entry
+  # carries only its sidecar name beside the signature and partial, so the main document
+  # parses at the Claude+Codex corpus's size every collect.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  _collect(None, None, db, cache)
+
+  doc = json.loads(cache.read_text())
+  entry = doc["sources"]["opencode"][str(db)]
+  assert set(entry) == {"sig", "rows_file", "partial", "probe"}
+  assert isinstance(entry["probe"], list) and len(entry["probe"]) == 2
+  sidecar = json.loads((cache.parent / entry["rows_file"]).read_text())
+  assert set(sidecar) == {"version", "rows"}
+  seeded = sidecar["rows"]
+  assert len(seeded) == 1 and seeded[next(iter(seeded))][1][3] == 5  # the row's in_fresh
+  assert cache.stat().st_size < 10_000  # the document carries no row bulk
+  con.close()
+
+
+def test_zero_movement_restart_never_reads_the_sidecar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # A restart whose db signature still matches the stored entry serves from the stored
+  # partial: neither the sidecar parse nor the db read runs, so the restart-cold collect is
+  # the document parse plus the corpus walk.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+  tt._reset_aggregate_memo()
+
+  reads: list[str] = []
+  monkeypatch.setattr(tt, "_read_rows_sidecar", lambda *args: reads.append(args) or None)
+
+  def boom(*args: Any, **kwargs: Any) -> None:
+    raise AssertionError("matched-signature restart reopened the db")
+
+  monkeypatch.setattr(tt.sqlite3, "connect", boom)
+  second = _collect(None, None, db, cache)
+  assert reads == []
+  assert _tally_snapshot(second) == _tally_snapshot(first)
+  con.close()
+
+
+def test_missing_sidecar_seeds_from_a_full_scan_with_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # A sidecar lost between its write and the seed read (external deletion, a crashed
+  # replace) degrades to the no-seed contract: the full scan re-reads the blobs, the note
+  # surfaces the failure, and the served tally stays exact.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+  entry = json.loads(cache.read_text())["sources"]["opencode"][str(db)]
+  (cache.parent / entry["rows_file"]).unlink()
+  tt._reset_aggregate_memo()
+
+  con.execute("insert into other values ('noise2', 'x')")
+  con.commit()  # the WAL moves, so the seed path runs and must survive the missing sidecar
+
+  second = _collect(None, None, db, cache)
+  assert second.scanned_bytes > 0  # the cold scan re-read the data the seed could not serve
+  assert _tally_snapshot(second)[0] == _tally_snapshot(first)[0]  # the served rows stay exact
+  assert any("rows sidecar" in note and "missing" in note for note in second.notes)
+  con.close()
+
+
+def test_warm_memo_compound_round_skips_the_sidecar_parse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The long-lived server's steady compound round: the row memo is warm, the WAL moved the
+  # entry's signature, and a corpus move ran the source walk. The seed is a cold-memo
+  # device — the warm memo's key diff serves the round — so the sidecar parse must not run.
+  claude = _claude_rig(tmp_path)
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  _collect(claude, None, db, cache)
+
+  tt._aggregate_memo = None
+  tt._tally_memo = None
+  con.execute("insert into other values ('noise3', 'x')")
+  con.commit()
+  claude.write(claude.work, "sess-warm", [_claude_record("m-warm", NAME, "2024-01-03T00:00:00Z", _usage(10, 1))])
+
+  reads: list[str] = []
+  monkeypatch.setattr(tt, "_read_rows_sidecar", lambda *args: reads.append(args) or None)
+  served = _collect(claude, None, db, cache)
+  assert reads == []  # the warm memo's diff served the round; the sidecar stayed unread
+  assert _row(served, "opencode", "oc-m").total == 6
+  assert _row(served, "Claude Code", NAME).in_fresh == 20  # the rig's 10 + sess-warm's 10
+  con.close()
+
+
+def test_dropped_db_leaves_no_orphan_sidecar(tmp_path: Path) -> None:
+  # A db whose entry dropped from the document must not leave its rows bulk behind: the
+  # save that drops the entry sweeps the sidecar its rows_file named.
+  claude = _claude_rig(tmp_path)
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  _collect(claude, None, db, cache)
+  sidecar = next(cache.parent.glob("*.opencode_rows.json"))
+  sidecar_name = sidecar.name
+
+  con.close()
+  db.unlink()
+  Path(f"{db}-wal").unlink(missing_ok=True)
+  tt._aggregate_memo = None
+  tt._tally_memo = None
+  claude.write(claude.work, "sess2", [_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(1000, 2))])
+  _collect(claude, None, db, cache)  # the corpus move ran the save; the db is absent
+
+  assert not (cache.parent / sidecar_name).exists()
+  doc = json.loads(cache.read_text())
+  assert "opencode" not in doc["sources"]
 
 
 def test_stored_partial_adopts_without_replay(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1523,17 +1687,17 @@ def test_legacy_records_entry_still_serves(tmp_path: Path) -> None:
   _collect(None, None, db, cache)
 
   entry = json.loads(cache.read_text())["sources"]["opencode"][str(db)]
+  rows = json.loads((cache.parent / entry["rows_file"]).read_text())["rows"]
   legacy = {
       "version": 1,
       "sources":
           {
               "opencode":
                   {
-                      str(db):
-                          {
-                              "sig": entry["sig"],
-                              "records": [row[1] for row in entry["rows"].values() if row[1] is not None]
-                          }
+                      str(db): {
+                          "sig": entry["sig"],
+                          "records": [row[1] for row in rows.values() if row[1] is not None]
+                      }
                   }
           }
   }
@@ -1568,8 +1732,8 @@ def test_document_with_nan_literal_rebuilds_with_note(tmp_path: Path) -> None:
 class _Option:
   """One config.yaml backend option's shape the tally reads (id / type / model)."""
 
-  def __init__(self, id: str, type: str, model: str | None = None) -> None:
-    self.id, self.type, self.model = id, type, model
+  def __init__(self, option_id: str, option_type: str, model: str | None = None) -> None:
+    self.id, self.type, self.model = option_id, option_type, model
 
 
 class _Backends:
@@ -1672,18 +1836,24 @@ def _master_result(input_tokens: int, output_tokens: int) -> dict:
   return {"type": "result", "completed": True, "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens}}
 
 
-def test_charliebot_thread_types(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """charlie-code-type threads count under their backend id; claude/opencode-type threads
-  (whose runs the CLI sources already carry) stay out entirely."""
-  _stub_registry(monkeypatch, _CLC_GEMINI)
-  cb = Charliebot(tmp_path)
-  cb.thread(
+def _seed_gemini_thread(cb: Charliebot, *, meta: bool = True) -> Path:
+  """The corpus's standard charlie-code thread: s1/t1, one 1000/50 result, no session ids."""
+  return cb.thread(
       "s1",
       "t1",
       backend="charlie-code-gemini-3.8-flash",
       model="openai/gemini-3.8-flash",
       session_ids=[],
-      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))],
+      meta=meta)
+
+
+def test_charliebot_thread_types(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """charlie-code-type threads count under their backend id; claude/opencode-type threads
+  (whose runs the CLI sources already carry) stay out entirely."""
+  _stub_registry(monkeypatch, _CLC_GEMINI)
+  cb = Charliebot(tmp_path)
+  _seed_gemini_thread(cb)
   cb.thread(
       "s1",
       "t2",
@@ -1913,14 +2083,7 @@ def test_charliebot_codex_reconciliation(tmp_path: Path, monkeypatch: pytest.Mon
 def test_charliebot_missing_metadata_skips_with_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _stub_registry(monkeypatch)
   cb = Charliebot(tmp_path)
-  cb.thread(
-      "s1",
-      "t1",
-      backend="charlie-code-gemini-3.8-flash",
-      model="openai/gemini-3.8-flash",
-      session_ids=[],
-      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))],
-      meta=False)
+  _seed_gemini_thread(cb, meta=False)
 
   tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)
 
@@ -1934,13 +2097,7 @@ def test_charliebot_cache_serves_and_appends(tmp_path: Path, monkeypatch: pytest
   shows up through the tail parse, and a trailing master result replaces the stored one."""
   _stub_registry(monkeypatch, _CLC_GEMINI)
   cb = Charliebot(tmp_path)
-  events = cb.thread(
-      "s1",
-      "t1",
-      backend="charlie-code-gemini-3.8-flash",
-      model="openai/gemini-3.8-flash",
-      session_ids=[],
-      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  events = _seed_gemini_thread(cb)
   capture = cb.master(
       "s1", "2026-09-11T21:00:00+00:00", [_master_context(1, "openai/gemini-3.8-flash"),
                                           _master_result(100, 5)])
@@ -1980,13 +2137,7 @@ def test_charliebot_dir_listing_memo(tmp_path: Path, monkeypatch: pytest.MonkeyP
   shows up on the next collect."""
   _stub_registry(monkeypatch, _CLC_GEMINI)
   cb = Charliebot(tmp_path)
-  cb.thread(
-      "s1",
-      "t1",
-      backend="charlie-code-gemini-3.8-flash",
-      model="openai/gemini-3.8-flash",
-      session_ids=[],
-      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  _seed_gemini_thread(cb)
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   first = _collect(None, None, db, cache, sessions=cb.root)
   assert _row(first, "charlie-bot", "gemini-3.8-flash").calls == 1
@@ -2038,13 +2189,7 @@ def test_charliebot_walk_errors_become_notes(tmp_path: Path, monkeypatch: pytest
   never reopened.)"""
   _stub_registry(monkeypatch, _CLC_GEMINI)
   cb = Charliebot(tmp_path)
-  events = cb.thread(
-      "s1",
-      "t1",
-      backend="charlie-code-gemini-3.8-flash",
-      model="openai/gemini-3.8-flash",
-      session_ids=[],
-      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  events = _seed_gemini_thread(cb)
   cb.thread(
       "s1",
       "t2",
@@ -2109,13 +2254,7 @@ def test_charliebot_walk_never_lists_or_stats_the_deep_dirs(tmp_path: Path, monk
   levels — the thread dirs, their data/ dirs and the run dirs are never listed or statted,
   so the per-collect stat count scales with candidates, not with corpus directories."""
   cb = Charliebot(tmp_path)
-  cb.thread(
-      "s1",
-      "t1",
-      backend="charlie-code-gemini-3.8-flash",
-      model="openai/gemini-3.8-flash",
-      session_ids=[],
-      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  _seed_gemini_thread(cb)
   cb.master("s1", "2026-09-11T21:00:00+00:00", [_master_context(1, "openai/gemini-3.8-flash"), _master_result(1, 1)])
   (cb.root / "s1" / "threads" / "t2").mkdir()  # a second thread with no events.jsonl yet
   (cb.root / "s1" / "data" / "master_runs" / "r2").mkdir()
@@ -2153,13 +2292,7 @@ def test_charliebot_walk_skips_symlinked_entries(tmp_path: Path) -> None:
   """A symlinked thread dir, run dir or session dir stays out of the corpus, the same rule
   the recursive walk ran under: only real directories are descended."""
   cb = Charliebot(tmp_path)
-  cb.thread(
-      "s1",
-      "t1",
-      backend="charlie-code-gemini-3.8-flash",
-      model="openai/gemini-3.8-flash",
-      session_ids=[],
-      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  _seed_gemini_thread(cb)
   outside = tmp_path / "outside"
   (outside / "data").mkdir(parents=True)
   (outside / "data" / "events.jsonl").write_text("{}\n")

@@ -1,23 +1,23 @@
 """Tests for the ``charliebot artifact wrap`` assembly verb and its pre-render driver.
 
 The driver runs the checkout's scripts/prerender_math.js against the vendored
-KaTeX 0.16.21 build (one CDN fetch per pytest session); the byte-integrity gate
+KaTeX build (one CDN fetch per pytest session); the byte-integrity gate
 and the render-path assertion come from src/core/artifact_check.py.
 """
 
 import re
 import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 import requests
+from conftest import ROOT
 
 from src.cli.artifact import main as artifact_main
 from src.core import artifact_check
-from src.core.artifact_wrap import ensure_vendored_katex, wrap_fragment
+from src.core.artifact_wrap import KATEX_VERSION, ensure_vendored_katex, wrap_fragment
 
-_DRIVER = Path(__file__).resolve().parents[2] / "scripts" / "prerender_math.js"
+_DRIVER = ROOT / "scripts" / "prerender_math.js"
 
 # The session failure formulas plus the bracket classes: the same sources the
 # chat extension test pins, run here through the wrap driver so the two scanner
@@ -37,15 +37,19 @@ _LITERAL_SOURCES = ["costs $5 and $10 today", "price $5 later", "between $5 and$
 
 @pytest.fixture(scope="session")
 def vendored_katex(tmp_path_factory: pytest.TempPathFactory) -> Path:
-  """One CDN fetch per session; the wrap runs point at the fetched copy."""
-  return ensure_vendored_katex(tmp_path_factory.mktemp("katex-vendor") / "katex.min.js")
+  """One CDN fetch per session, at the vendor path the CLI's home resolution derives."""
+  home = tmp_path_factory.mktemp("katex-home")
+  return ensure_vendored_katex(home / "vendor" / "katex" / "katex.min.js")
 
 
 @pytest.fixture
 def cli_katex(monkeypatch: pytest.MonkeyPatch, vendored_katex: Path) -> Path:
-  """Point the CLI verb's config home at a dir whose vendor copy is the session-fetched one."""
-  monkeypatch.setattr(
-      "src.cli.common.get_config", lambda: SimpleNamespace(charliebot_home=vendored_katex.parent.parent))
+  """Point the CLI verb's home resolution at the fetched vendor copy's home.
+
+  The wrap verb resolves the home off the env (src.core.home), not the config —
+  the M98 seam shape; the module-level name is the patch target.
+  """
+  monkeypatch.setattr("src.cli.artifact.charliebot_home_dir", lambda: vendored_katex.parents[2])
   return vendored_katex
 
 
@@ -76,7 +80,7 @@ def _wrap(
   return output
 
 
-def _wrap_cli(tmp_path: Path, fragment_path: Path, output: Path, genre: str, *flags: str) -> SystemExit:
+def _wrap_cli(fragment_path: Path, output: Path, genre: str, *flags: str) -> SystemExit:
   with pytest.raises(SystemExit) as exc_info:
     artifact_main(["wrap", str(fragment_path), "--genre", genre, "--output", str(output), *flags])
   return exc_info.value
@@ -105,6 +109,27 @@ def test_ensure_vendored_katex_fails_loud_naming_the_manual_command(
   with pytest.raises(RuntimeError, match=r"curl -fsSL"):
     ensure_vendored_katex(vendor)
   assert not vendor.exists()
+
+
+def test_katex_build_pin_agrees_across_vendored_fetch_and_both_pages() -> None:
+  """artifact_wrap, the explain template, and the web UI pin one KaTeX build.
+
+  The vendored copy pre-renders math to markup the page scripts render at view
+  time, so a build split leaves one side rendering markup the other rejects.
+  The templates stay self-contained (a hand-composed page copies the head
+  verbatim), so they carry their own copies and this assertion holds them in
+  lockstep with KATEX_VERSION.
+  """
+  dist = f"https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist"
+  expected = (
+      f"{dist}/katex.min.css",
+      f"{dist}/katex.min.js",
+      f"{dist}/contrib/auto-render.min.js",
+  )
+  for page in ("prompts/explain_template.html", "web/templates/index.html"):
+    text = (ROOT / page).read_text(encoding="utf-8")
+    missing = [url for url in expected if url not in text]
+    assert not missing, f"{page} lost the pinned KaTeX build: {missing}"
 
 
 # ---------------------------------------------------------------------------
@@ -197,11 +222,11 @@ def test_cli_defaults_math_on_for_explain_and_off_for_other_genres(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], cli_katex: Path) -> None:
   fragment = _write_fragment(tmp_path, r"<p>$$y = x$$</p>")
   explain_output = tmp_path / "explain.html"
-  assert _wrap_cli(tmp_path, fragment, explain_output, "explain").code == 0
+  assert _wrap_cli(fragment, explain_output, "explain").code == 0
   assert 'class="katex-display"' in explain_output.read_text(encoding="utf-8")
 
   sitrep_output = tmp_path / "sitrep.html"
-  assert _wrap_cli(tmp_path, fragment, sitrep_output, "sitrep").code == 0
+  assert _wrap_cli(fragment, sitrep_output, "sitrep").code == 0
   sitrep_page = sitrep_output.read_text(encoding="utf-8")
   assert 'class="katex"' not in sitrep_page
   assert "$$y = x$$" in sitrep_page
@@ -211,7 +236,7 @@ def test_cli_no_math_disables_prerender_for_explain(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], cli_katex: Path) -> None:
   fragment = _write_fragment(tmp_path, r"<p>$$y = x$$</p>")
   output = tmp_path / "plain.html"
-  assert _wrap_cli(tmp_path, fragment, output, "explain", "--no-math").code == 0
+  assert _wrap_cli(fragment, output, "explain", "--no-math").code == 0
   page = output.read_text(encoding="utf-8")
   assert 'class="katex"' not in page
   assert "$$y = x$$" in page
@@ -233,7 +258,7 @@ def test_wrap_byte_gate_aborts_before_write_and_names_offsets(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], cli_katex: Path) -> None:
   fragment = _write_fragment(tmp_path, _damaged_fragment(), name="damaged.html")
   output = tmp_path / "damaged_page.html"
-  assert _wrap_cli(tmp_path, fragment, output, "explain").code == 1
+  assert _wrap_cli(fragment, output, "explain").code == 1
   err = capsys.readouterr().err
   assert "0x09 at offset" in err
   assert "0x0c at offset" in err
@@ -246,7 +271,7 @@ def test_wrap_byte_gate_runs_on_the_assembled_bytes(
   r"""A fragment TAB reports at its assembled-page offset, past the template head."""
   fragment = _write_fragment(tmp_path, "<p>x\ty</p>")
   output = tmp_path / "page.html"
-  assert _wrap_cli(tmp_path, fragment, output, "explain").code == 1
+  assert _wrap_cli(fragment, output, "explain").code == 1
   offset = int(re.search(r"0x09 at offset (\d+)", capsys.readouterr().err).group(1))
   assert offset > 5000  # the template head alone is longer than any fragment prefix
 
@@ -255,7 +280,7 @@ def test_wrap_byte_gate_passes_a_clean_fragment_through(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], cli_katex: Path) -> None:
   fragment = _write_fragment(tmp_path, r"<p>$$\text{logits} = Wx$$</p>")
   output = tmp_path / "clean.html"
-  assert _wrap_cli(tmp_path, fragment, output, "explain").code == 0
+  assert _wrap_cli(fragment, output, "explain").code == 0
   assembled = output.read_bytes()
   assert not [1 for b in assembled if b < 0x20 and b != 0x0A]
 

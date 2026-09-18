@@ -372,8 +372,8 @@ def test_codex_usage_transform_drops_unreadable_credits_and_warns(monkeypatch: p
   """
   warns = _capture_warnings(monkeypatch)
 
-  def transform(credits: Any) -> dict:
-    rate_limits = {"primary": None, "secondary": None, "plan_type": "business", "credits": credits}
+  def transform(raw_credits: Any) -> dict:
+    rate_limits = {"primary": None, "secondary": None, "plan_type": "business", "credits": raw_credits}
     event = codex_token_count_event("2026-03-27T18:39:35.694Z", rate_limits=rate_limits)
     return _transform_codex_response(event, fetched_at="2026-03-27T18:40:00+00:00")
 

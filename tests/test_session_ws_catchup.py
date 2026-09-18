@@ -8,7 +8,7 @@ from conftest import FakeWebSocket, assistant_text_event, scheduled_trigger_even
 from server import _CatchupWalk, _replay_aggregated_catchup, _send_session_catchup
 from src.core.models import SessionMetadata
 
-VOICE_KEY = "is_" + "voice"
+VOICE_KEY = "is_voice"
 
 
 def _assistant_event(text: str, ts: str) -> dict:

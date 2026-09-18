@@ -50,17 +50,29 @@ def _response(sent: list[dict]) -> tuple[int, str, str]:
 
 
 # Rows are the request shapes that must reach the downstream app: the gate is a
-# no-op while no key is configured, a valid cookie or Bearer credential passes
-# it, and /api/auth/status plus the viewer shells are public paths. The fields
-# mirror _scope's parameters in order.
+# no-op while no key is configured, a valid cookie or Bearer credential passes it
+# (the file server and the trace/report viewers included), and /api/auth/status
+# plus the SPA shell are the public paths. The fields mirror _scope's parameters
+# in order.
 _PASS_THROUGH_ROWS = [
     pytest.param("", "GET", "/api/chat", {"accept": "application/json"}, None, id="empty-key-is-noop"),
     pytest.param("secret", "GET", "/api/chat", None, {"charliebot_access_key": "secret"}, id="cookie-accepted"),
     pytest.param("secret", "GET", "/api/chat", {"authorization": "Bearer secret"}, None, id="bearer-header-accepted"),
     pytest.param("secret", "GET", "/api/auth/status", {"accept": "text/html"}, None, id="public-path-no-credential"),
-    pytest.param("secret", "GET", "/perfetto", {"accept": "text/html"}, None, id="viewer-page-perfetto"),
-    pytest.param("secret", "GET", "/perfetto/merged", {"accept": "text/html"}, None, id="viewer-page-perfetto-merged"),
-    pytest.param("secret", "GET", "/ncu", {"accept": "text/html"}, None, id="viewer-page-ncu"),
+    pytest.param(
+        "secret",
+        "GET",
+        "/absolute_filepath/tmp/trace.json",
+        None, {"charliebot_access_key": "secret"},
+        id="file-server-cookie-accepted"),
+    pytest.param("secret", "GET", "/perfetto", None, {"charliebot_access_key": "secret"}, id="viewer-page-perfetto"),
+    pytest.param(
+        "secret",
+        "GET",
+        "/perfetto/merged",
+        None, {"charliebot_access_key": "secret"},
+        id="viewer-page-perfetto-merged"),
+    pytest.param("secret", "GET", "/ncu", None, {"charliebot_access_key": "secret"}, id="viewer-page-ncu"),
 ]
 
 
@@ -114,6 +126,30 @@ async def test_non_get_html_accept_still_json_401() -> None:
   status, content_type, _ = _response(sent)
   assert status == 401
   assert content_type == "application/json"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/perfetto", "/perfetto/merged", "/ncu", "/absolute_filepath/tmp/trace.json"])
+async def test_host_state_readers_are_gated_without_a_credential(path: str) -> None:
+  # The file server and the trace/report viewers read the host filesystem, so they
+  # sit behind the access key: no public-path or public-prefix admission anymore.
+  mw = _middleware(key="secret")
+  sent = await run_through_asgi_middleware(mw, _scope(path=path, headers={"accept": "application/json"}))
+  status, content_type, body = _response(sent)
+  assert status == 401
+  assert content_type == "application/json"
+  assert json.loads(body) == {"detail": "Unauthorized"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/perfetto", "/perfetto/merged", "/ncu", "/absolute_filepath/tmp/trace.json"])
+async def test_gated_reader_paths_serve_the_login_page_to_a_browser_navigation(path: str) -> None:
+  mw = _middleware(key="secret")
+  sent = await run_through_asgi_middleware(mw, _scope(path=path, headers={"accept": "text/html"}))
+  status, content_type, body = _response(sent)
+  assert status == 401
+  assert "text/html" in content_type
+  assert "<form" in body
 
 
 @pytest.mark.asyncio

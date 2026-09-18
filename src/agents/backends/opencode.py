@@ -159,9 +159,8 @@ class OpenCodeBackend(AgentBackend):
     self._sleep = asyncio.sleep
     self._reset_run_state()
 
-  def _prepare_cwd(self, cwd: str) -> None:
-    """Write AGENTS.md into the cwd so opencode auto-detects it."""
-    self._write_instructions_file(cwd, 'AGENTS.md', 'opencode_wrote_agents_md')
+  # opencode auto-detects AGENTS.md in the run cwd.
+  _INSTRUCTIONS_TARGET: tuple[str, str] = ("AGENTS.md", "opencode_wrote_agents_md")
 
   def _build_command(self, prompt: str) -> list[str]:
     del prompt
@@ -453,10 +452,7 @@ class OpenCodeBackend(AgentBackend):
     also accepted for robustness. Returns the model's ``limit`` dict, or ``None``
     when the provider or model is absent or the payload shape is not recognised.
     """
-    if isinstance(providers_payload, dict):
-      providers = providers_payload.get("providers")
-    else:
-      providers = providers_payload
+    providers = providers_payload.get("providers") if isinstance(providers_payload, dict) else providers_payload
     if not isinstance(providers, list):
       return None
     for provider in providers:
@@ -490,7 +486,7 @@ class OpenCodeBackend(AgentBackend):
     raise RuntimeError("OpenCode SSE stream closed before server.connected")
 
   async def _send_prompt(
-      self, client: httpx.AsyncClient, session_id: str, prompt: str, uploaded_files: list[dict] | None = None) -> None:
+      self, client: httpx.AsyncClient, session_id: str, prompt: str, uploaded_files: list[dict] | None) -> None:
     if not self._model:
       raise ValueError("opencode backend requires a model")
     provider_id, model_id = self._model.split("/", 1)

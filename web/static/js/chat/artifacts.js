@@ -14,12 +14,13 @@ var MAX_EXPANDED_ARTIFACTS = 3;
 var htmlArtifactFetchCache = new Map();
 var expandedArtifactCards = [];
 
-// The two prefixes the file server answers on (server.py mounts one router under both):
-// "/absolute_filepath/" is the form written into chat text, "/files/" is what this UI builds
-// and what older messages carry. Every link below is normalized to the absolute path it names
-// before anything else looks at it, so cards, dedupe keys, cache keys and the plan version
-// badge see one path per file whichever prefix it arrived under.
-var FILE_SERVER_PREFIXES = ['/files', '/absolute_filepath'];
+// The one prefix the file server answers on (server.py mounts the router under
+// FILE_SERVER_MOUNTS's single element): "/absolute_filepath/", the form written into chat
+// text. The legacy "/files/" alias is unmounted server-side, so it is not a file-server
+// prefix here either. Every link below is normalized to the absolute path it names before
+// anything else looks at it, so cards, dedupe keys, cache keys and the plan version badge
+// see one path per file.
+var FILE_SERVER_PREFIXES = ['/absolute_filepath'];
 var FILE_SERVER_PREFIX_GROUP = '(?:' + FILE_SERVER_PREFIXES.join('|') + ')';
 
 function absolutePathFromServedPathname(pathname) {
@@ -47,8 +48,9 @@ function parseLinkUrl(href) {
 
 // A link naming this page's hostname with a different scheme or port is pulled back to the
 // page origin only when its path sits under a file-server prefix: those are routes the page
-// origin itself serves (server.py mounts one files router under both FILE_SERVER_PREFIXES),
-// so a link there whose scheme or port was written from memory is still unambiguous. Any
+// origin itself serves (server.py mounts the one files router under FILE_SERVER_MOUNTS's
+// single prefix), so a link there whose scheme or port was written from memory is still
+// unambiguous. Any
 // other path names another frontend on this host (the publish lane and each neighboring
 // port serve their own server), and is left exactly as written. Another hostname is another
 // server, and is returned as written.
@@ -103,7 +105,7 @@ function injectResizeScript(html, frameId) {
 }
 
 function injectLinkBehavior(html, absPath) {
-  var baseHref = '/files' + absPath;
+  var baseHref = '/absolute_filepath' + absPath;
   var src = String(html || '');
   var hasBase = /<base\b/i.test(src);
   var baseTag = '<base href="' + escapeHtml(baseHref) + '">';
@@ -191,7 +193,7 @@ function buildHtmlArtifactFrameHtml(opts) {
   var frameId = 'hf-' + Math.random().toString(36).slice(2);
   var withScript = injectResizeScript(injectLinkBehavior(rawHtml, absPath), frameId);
   var srcdoc = escapeForSrcdoc(withScript);
-  var openUrl = stampViewingSessionFragment('/files' + absPath);
+  var openUrl = stampViewingSessionFragment('/absolute_filepath' + absPath);
   var sourceHighlighted = hljs.highlight(rawHtml, {language: 'xml'}).value;
   var savedSize = loadHtmlArtifactSavedSize(filePath);
   var iframeSizeStyle = 'min-height:60px;max-height:80vh;';
@@ -534,23 +536,30 @@ function _planVersionRecord(plan, ver) {
   return {planId: plan.id, v: ver.v, title: plan.title, state: _planStateLabel(plan), file: ver.file};
 }
 
-function lookupRegisteredPlanVersion(snapshot, absPath, sessionId, sessionsRoot) {
+// Single walk of the registry's plans→versions: the record for the first
+// version whose (plan, ver) pair satisfies *match*, else null. Both lookups
+// below differ only in their *match*.
+function _findPlanVersionRecord(snapshot, match) {
   var plans = (snapshot && snapshot.plans) || [];
-  var sessionDir = buildSessionDir(sessionId, sessionsRoot);
-  if (!sessionDir) return null;
   for (var i = 0; i < plans.length; i++) {
     var plan = plans[i];
     var versions = (plan && plan.versions) || [];
     for (var j = 0; j < versions.length; j++) {
       var ver = versions[j];
-      if (!ver || !ver.file) continue;
-      var expected = sessionDir + '/' + ver.file;
-      if (absPath === expected) {
+      if (match(plan, ver)) {
         return _planVersionRecord(plan, ver);
       }
     }
   }
   return null;
+}
+
+function lookupRegisteredPlanVersion(snapshot, absPath, sessionId, sessionsRoot) {
+  var sessionDir = buildSessionDir(sessionId, sessionsRoot);
+  if (!sessionDir) return null;
+  return _findPlanVersionRecord(snapshot, function(plan, ver) {
+    return !!ver && !!ver.file && absPath === sessionDir + '/' + ver.file;
+  });
 }
 
 function decidePlanCardRender(snapshot, absPath, sessionId, sessionsRoot) {
@@ -558,25 +567,15 @@ function decidePlanCardRender(snapshot, absPath, sessionId, sessionsRoot) {
 }
 
 function lookupPlanVersionState(snapshot, planId, v) {
-  var plans = (snapshot && snapshot.plans) || [];
-  for (var i = 0; i < plans.length; i++) {
-    var plan = plans[i];
-    if (String(plan && plan.id) !== String(planId)) continue;
-    var versions = (plan && plan.versions) || [];
-    for (var j = 0; j < versions.length; j++) {
-      var ver = versions[j];
-      if (Number(ver && ver.v) === Number(v)) {
-        return _planVersionRecord(plan, ver);
-      }
-    }
-  }
-  return null;
+  return _findPlanVersionRecord(snapshot, function(plan, ver) {
+    return String(plan && plan.id) === String(planId) && Number(ver && ver.v) === Number(v);
+  });
 }
 
 var ARTIFACT_EXPAND_CONTROL = '<button type="button" onclick="toggleHtmlArtifactEmbed(this)">Expand</button>';
 
 function buildCompactToolbarHtml(title, absPath, controls) {
-  var openInTabUrl = stampViewingSessionFragment('/files' + absPath);
+  var openInTabUrl = stampViewingSessionFragment('/absolute_filepath' + absPath);
   return '<div class="html-artifact-toolbar">'
     + '<span class="filename">' + escapeHtml(title || '(untitled)') + '</span>'
     + controls
@@ -966,41 +965,30 @@ function installHtmlArtifactListener() {
 }
 installHtmlArtifactListener();
 
-Chat.embedLinkedHtmlArtifacts = embedLinkedHtmlArtifacts;
-Chat.resolveHtmlArtifactLink = resolveHtmlArtifactLink;
-Chat.findArtifactLinkInCode = findArtifactLinkInCode;
-Chat.toggleHtmlArtifactSource = toggleHtmlArtifactSource;
-Chat.startHtmlArtifactResize = startHtmlArtifactResize;
-Chat.expandHtmlArtifact = expandHtmlArtifact;
-Chat.toggleHtmlArtifactEmbed = toggleHtmlArtifactEmbed;
-Chat.expandArtifactCard = expandArtifactCard;
-Chat.collapseArtifactCard = collapseArtifactCard;
-Chat.fetchHtmlArtifact = fetchHtmlArtifact;
-Chat.htmlArtifactFetchCache = htmlArtifactFetchCache;
-Chat.expandedArtifactCards = expandedArtifactCards;
-Chat.injectLinkBehavior = injectLinkBehavior;
-Chat.lookupRegisteredPlanVersion = lookupRegisteredPlanVersion;
-Chat.decidePlanCardRender = decidePlanCardRender;
-Chat.lookupPlanVersionState = lookupPlanVersionState;
-Chat.buildPlanCompactCardHtml = buildPlanCompactCardHtml;
-Chat.updatePlanCardBadges = updatePlanCardBadges;
-Chat.openPlanFromCard = openPlanFromCard;
-Chat._planStateLabel = _planStateLabel;
-Chat.expose([
-  'resolveHtmlArtifactLink',
-  'findArtifactLinkInCode',
-  'toggleHtmlArtifactSource',
-  'startHtmlArtifactResize',
-  'expandHtmlArtifact',
-  'toggleHtmlArtifactEmbed',
-  'injectLinkBehavior',
-  'lookupRegisteredPlanVersion',
-  'decidePlanCardRender',
-  'lookupPlanVersionState',
-  'buildPlanCompactCardHtml',
-  'updatePlanCardBadges',
-  'openPlanFromCard',
-  '_planStateLabel',
-]);
+const GLOBALS = {
+  resolveHtmlArtifactLink,
+  findArtifactLinkInCode,
+  toggleHtmlArtifactSource,
+  startHtmlArtifactResize,
+  expandHtmlArtifact,
+  toggleHtmlArtifactEmbed,
+  injectLinkBehavior,
+  lookupRegisteredPlanVersion,
+  decidePlanCardRender,
+  lookupPlanVersionState,
+  buildPlanCompactCardHtml,
+  updatePlanCardBadges,
+  openPlanFromCard,
+  _planStateLabel,
+};
+const CHAT_ONLY = {
+  embedLinkedHtmlArtifacts,
+  expandArtifactCard,
+  collapseArtifactCard,
+  fetchHtmlArtifact,
+  htmlArtifactFetchCache,
+  expandedArtifactCards,
+};
+Chat.wire(GLOBALS, CHAT_ONLY);
 
 })();

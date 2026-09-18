@@ -112,7 +112,10 @@ def _reload_rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   cfg_path.write_text("server:\n  port: 1111\n", encoding="utf-8")
   monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
   monkeypatch.delenv(core_config.CHARLIEBOT_HOME_ENV, raising=False)
-  monkeypatch.setattr(core_config, "_home_cache", {})
+  # The home cache lives in src.core.home; config re-exports the name, but the
+  # resolver reads its own module's global, so the reset must target the owner.
+  from src.core import home as core_home
+  monkeypatch.setattr(core_home, "_home_cache", {})
   return cfg_path
 
 

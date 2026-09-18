@@ -39,10 +39,12 @@ import pytest
 from conftest import (
     OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
     REVIEW_TRIGGER_MASTER_PATCH_TARGET,
+    ROOT,
     _assert_failed_with_transport_reason,
     _await_recovery_tasks,
     _cfg,
     _kill_driver_mid_run,
+    _pid_alive,
     _read_meta,
     _recover,
     _terminal_summaries,
@@ -51,10 +53,10 @@ from conftest import (
     read_chat_events,
 )
 
-from src.agents.worker import QuotaExhaustedException, Worker
+from src.agents.worker import QuotaExhaustedError, Worker
 from src.core import event_types as ET
+from src.core import finalize_effects, runs
 from src.core import init as init_module
-from src.core import runs
 from src.core import spawner as spawner_module
 from src.core.config import CharlieBotConfig
 from src.core.git import git_create_worktree, git_worktree_dir_name
@@ -69,8 +71,6 @@ from src.core.models import (
 from src.core.process import kill_process_group
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # A fake reviewer: no LLM, just a real commit-of-its-own plus a `git push` of the
 # worker's already-committed change to the shared worktree's base branch, standing
@@ -93,7 +93,7 @@ exit 0
 
 # Attempt 1 of a VERIFY quota-retry pair: emits a rate_limit_event the way Claude
 # Code does on a rejected quota check, then dies -- the exact shape Worker._process_event
-# (src/agents/worker.py) turns into QuotaExhaustedException.
+# (src/agents/worker.py) turns into QuotaExhaustedError.
 QUOTA_SHIM = """#!/bin/sh
 cat >/dev/null
 echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ATTEMPT-1-MARKER"}]}}'
@@ -178,7 +178,7 @@ def _launch_driver(tmp_path: Path, home: Path, result_delay: float) -> tuple[sub
   driver = tmp_path / "driver.py"
   driver.write_text(DRIVER, encoding="utf-8")
   env = dict(os.environ)
-  env["PYTHONPATH"] = str(REPO_ROOT)
+  env["PYTHONPATH"] = str(ROOT)
   env["PATH"] = f"{shim_dir}:{env['PATH']}"
   env["FAKE_RESULT_DELAY"] = str(result_delay)
   proc = subprocess.Popen(
@@ -373,18 +373,25 @@ def _thread_metas(home: Path, session_id: str) -> list[dict]:
 
 async def _settle_finalize_window(home: Path, session_id: str, original_id: str) -> None:
   """Drain the named recovery tasks, then wait for the (idempotently, at most
-  once) spawned reviewer thread's own completion. The reviewer's own spawn_worker
-  task is unnamed (dispatched from spawn_review_worker), so _await_recovery_tasks()
-  alone cannot see it — only the disk state can.
+  once) spawned reviewer thread's own completion AND the master wake its
+  finalize fires. The reviewer's own spawn_worker task is unnamed (dispatched
+  from spawn_review_worker), so _await_recovery_tasks() alone cannot see it —
+  only the disk state can. The wake rides that same unnamed task, after the
+  terminal status write the loop above waits on, so the settle must also cover
+  the wake window: the next round's reconcile judges the wake by
+  finalize_effects.master_woke_after_summary over the chat events, and a round
+  starting before the ack lands would judge it missing and re-fire it.
   """
   await _await_recovery_tasks()
   deadline = time.monotonic() + 20.0
   while time.monotonic() < deadline:
     reviewers = [m for m in _thread_metas(home, session_id) if m.get("review_of") == original_id]
-    if reviewers and all(m.get("status") in ("completed", "failed", "cancelled") for m in reviewers):
+    reviewers_settled = reviewers and all(m.get("status") in ("completed", "failed", "cancelled") for m in reviewers)
+    woke = finalize_effects.master_woke_after_summary(read_chat_events(home, session_id), original_id)
+    if reviewers_settled and woke:
       return
     await asyncio.sleep(0.05)
-  raise TimeoutError("reviewer thread never settled")
+  raise TimeoutError("reviewer thread or its master wake never settled")
 
 
 @pytest.mark.asyncio
@@ -562,7 +569,7 @@ async def test_fresh_spawn_rotates_stale_raw_log_so_verify_retry_quota_not_repla
       task_description="do the thing",
       cfg=cfg,
   )
-  with pytest.raises(QuotaExhaustedException):
+  with pytest.raises(QuotaExhaustedError):
     await worker1.run()
 
   raw_path = data_dir / runs.RAW_LOG_NAME
@@ -680,7 +687,7 @@ def _launch_graceful_driver(tmp_path: Path,
   driver = tmp_path / "graceful_driver.py"
   driver.write_text(GRACEFUL_DRIVER, encoding="utf-8")
   env = dict(os.environ)
-  env["PYTHONPATH"] = str(REPO_ROOT)
+  env["PYTHONPATH"] = str(ROOT)
   env["PATH"] = f"{shim_dir}:{env['PATH']}"
   env["FAKE_RESULT_DELAY"] = str(result_delay)
   proc = subprocess.Popen(
@@ -694,14 +701,6 @@ def _launch_graceful_driver(tmp_path: Path,
   proc.wait(timeout=10)
   ids = json.loads((home / "driver_ids.json").read_text(encoding="utf-8"))
   return proc, ids
-
-
-def _pid_alive(pid: int) -> bool:
-  try:
-    os.kill(pid, 0)
-    return True
-  except OSError:
-    return False
 
 
 @pytest.mark.asyncio

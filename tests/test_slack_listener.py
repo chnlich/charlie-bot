@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
+    ROOT,
     SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
     SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
     build_slack_cfg,
@@ -40,9 +41,9 @@ _TS = "1700000000.000100"
 # The approved red-line and reply-format texts, read from the same prompts docs
 # the builder reads and stripped exactly like the builder, so the tail
 # assertions pin exact bytes.
-_RED_LINE_PATH = Path(__file__).resolve().parents[1] / "prompts" / "slack_reply_redline.md"
+_RED_LINE_PATH = ROOT / "prompts" / "slack_reply_redline.md"
 _RED_LINE = _RED_LINE_PATH.read_text(encoding="utf-8").strip()
-_FORMAT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "slack_reply_format.md"
+_FORMAT_PATH = ROOT / "prompts" / "slack_reply_format.md"
 _REPLY_FORMAT = _FORMAT_PATH.read_text(encoding="utf-8").strip()
 
 

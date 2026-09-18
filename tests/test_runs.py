@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from conftest import LITELLM_503_ERROR_MESSAGE, LITELLM_FEEDBACK_BANNER_STDERR
 
 from src.core import event_types as ET
 from src.core import finalize_effects, runs
@@ -158,6 +159,47 @@ def test_result_success_matrix() -> None:
 
 
 # ---------------------------------------------------------------------------
+# End-of-run error hint selection (pure)
+# ---------------------------------------------------------------------------
+
+
+def test_select_error_hint_prefers_the_invocation_error_event_over_stderr() -> None:
+  """The Gemini-503 shape: the structured error event is the hint, the stderr
+  help banner is not."""
+  hint = runs.select_error_hint([LITELLM_503_ERROR_MESSAGE], LITELLM_FEEDBACK_BANNER_STDERR)
+  assert hint == LITELLM_503_ERROR_MESSAGE
+  assert "Error code: 503" in hint and "UNAVAILABLE" in hint
+  assert "Give Feedback" not in hint
+  # The banner alone never masks the event, and an event alone still shows.
+  assert runs.select_error_hint([LITELLM_503_ERROR_MESSAGE], "") == LITELLM_503_ERROR_MESSAGE
+
+
+def test_select_error_hint_takes_the_last_non_empty_error_event() -> None:
+  messages = ["first failure", "", "   ", LITELLM_503_ERROR_MESSAGE]
+  assert runs.select_error_hint(messages, LITELLM_FEEDBACK_BANNER_STDERR) == LITELLM_503_ERROR_MESSAGE
+  assert runs.select_error_hint(["first failure", "", "   "], "") == "first failure"
+
+
+def test_select_error_hint_falls_back_to_cleaned_stderr() -> None:
+  """No error event: the stderr tail is the fallback, control characters
+  (the banner's ANSI color codes) cleaned away."""
+  hint = runs.select_error_hint([], LITELLM_FEEDBACK_BANNER_STDERR)
+  assert hint == runs.clean_control_characters(LITELLM_FEEDBACK_BANNER_STDERR).strip()
+  assert "\x1b" not in hint and chr(27) not in hint
+  assert hint.startswith("Give Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new")
+  assert "LiteLLM.Info" in hint
+  # A stderr of nothing but control characters is no hint at all.
+  assert runs.select_error_hint([], "\x1b[1;31m\x1b[0m\n\n") is None
+  assert runs.select_error_hint([], "") is None
+
+
+def test_select_error_hint_keeps_the_stderr_fallback_500_char_bound() -> None:
+  assert len(runs.select_error_hint([], "x" * 900)) == 500
+  # The structured error event is not capped: it is the complete failure.
+  assert runs.select_error_hint(["y" * 900], "") == "y" * 900
+
+
+# ---------------------------------------------------------------------------
 # Completion time and cursor
 # ---------------------------------------------------------------------------
 
@@ -172,13 +214,48 @@ def test_raw_completion_time_missing_and_present(tmp_path: Path) -> None:
   assert abs((datetime.now(UTC) - completion).total_seconds() - 60) < 5
 
 
-def test_raw_cursor_roundtrip_and_fallbacks(tmp_path: Path) -> None:
+def test_raw_cursor_read_parses_plain_decimal_and_fallbacks(tmp_path: Path) -> None:
   cursor = tmp_path / "sub" / runs.CURSOR_NAME
   assert runs.read_raw_cursor(cursor) == 0  # missing -> replay
-  runs.write_raw_cursor(cursor, 1234)
+  # The reader must keep parsing the plain unpadded decimal the pre-M104
+  # writer left on existing profiles' disks; the writer itself now lays down
+  # the fixed-width form only.
+  cursor.parent.mkdir(parents=True)
+  cursor.write_text("1234", encoding="utf-8")
   assert runs.read_raw_cursor(cursor) == 1234
   cursor.write_text("garbage", encoding="utf-8")
   assert runs.read_raw_cursor(cursor) == 0  # unparseable -> replay
+
+
+def test_raw_cursor_writer_roundtrip_and_monotonic_overwrite(tmp_path: Path) -> None:
+  cursor = tmp_path / "sub" / runs.CURSOR_NAME
+  writer = runs.RawCursorWriter(cursor)
+  try:
+    writer.write(1234)
+    assert runs.read_raw_cursor(cursor) == 1234
+    # The offset only shrinks across a mount's restart-of-scan shapes; the
+    # fixed-width rewrite must leave no stale tail of the longer value.
+    writer.write(987)
+    assert runs.read_raw_cursor(cursor) == 987
+    writer.write(0)
+    assert runs.read_raw_cursor(cursor) == 0
+  finally:
+    writer.close()
+  assert len(cursor.read_bytes()) == runs.CURSOR_FIELD_BYTES
+
+
+def test_raw_cursor_writer_overwrites_seeded_variable_width_cursor(tmp_path: Path) -> None:
+  cursor = tmp_path / runs.CURSOR_NAME
+  # A shorter-than-fixed-width seed (the pre-M104 writer's shape) must not
+  # leave stale bytes under the fixed-width rewrite.
+  cursor.write_text("1051067581", encoding="utf-8")
+  writer = runs.RawCursorWriter(cursor)
+  try:
+    writer.write(42)
+  finally:
+    writer.close()
+  assert runs.read_raw_cursor(cursor) == 42
+  assert len(cursor.read_bytes()) == runs.CURSOR_FIELD_BYTES
 
 
 # ---------------------------------------------------------------------------

@@ -142,6 +142,10 @@
                     enough to check by hand, and anchors each fact to its source. A resolved item keeps only the question and resolution
                     (p.resolved); never record rejected alternatives. When nothing needs judging, keep one line
                     stating there are no open trade-offs.
+                    A mechanism that outlives the task and that the request did not name enters the plan as an
+                    open Trade-off: the question names the existing mechanism it would replace, the folded
+                    explainer states the concrete gap that existing mechanism leaves open, and the
+                    recommendation keeps the existing mechanism whenever that gap is empty.
       6. Other Details — a collapsed details.details-layer. Use one li per autonomous implementation decision,
                     with a one-line rationale in span.m.
 
@@ -150,12 +154,19 @@
       Page budget: the page as it opens is the complete decision surface, so it reads in one screen: every
                     details-layer block collapsed, content stays within 2000 px height at the probe's
                     1280 px render width.
-                    Depth is welcome, folded: anything deeper belongs in a details-layer block, collapsed by
-                    default.
-                    Folding preserves information: over budget, content moves into collapsed blocks
-                    and stays on the page. The stylesheet is copied verbatim from the template
-                    (USAGE), and the budget counts the page at the template's type and spacing, so
-                    headroom comes from folding content.
+                    Depth is welcome, folded: inside a details-layer block, content length has no limit;
+                    expand as deep as needed, including diagrams (inline SVG or illustrations), concrete
+                    worked examples, and full evidence to explain mechanisms thoroughly.
+                    Information triage governs headroom: the main visible surface keeps only essential
+                    mechanism claims and decision lines. When over budget or accommodating cold-read inline
+                    glosses, prune by whole units: delete non-essential information wholesale (redundant
+                    adjectives, transition filler, and non-core background sentences), and move secondary
+                    or supporting content (comparison tables, benchmarks, worked examples, step details)
+                    into collapsed details-layer blocks. Headroom adjustments operate on blocks and whole
+                    sentences; word-by-word micro-shaving across sentences is excluded.
+                    The stylesheet is copied verbatim from the template (USAGE), and the budget counts
+                    the page at the template's type and spacing, so headroom comes from folding and
+                    wholesale pruning.
                     The always-visible minimum is the surface approval binds to:
                     the header, sections 1 and 3, 4.1's short definitions and folded-block summary lines,
                     and each Trade-off's question, recommendation, and trade lines. Shrink or split a plan
@@ -165,9 +176,7 @@
                     sentence&gt;&quot; (understanding pages: --genre understanding with the originating
                     request), which runs the exact registration assertions and then the cold read;
                     --assertions-only runs the assertions alone and prints the measured numbers (an
-                    understanding page never registers). Over budget, fold wholesale
-                    rather than delete: the Context body, the 4.2 content, and long 4.1 definition blocks
-                    move into collapsed details-layer blocks.
+                    understanding page never registers).
       Foot: use div.foot for the interaction rules. Reply by Trade-off number to override a recommendation or
                     resolution; unmentioned items accept the recommendation. Any Other Details entry the user
                     asks to control is promoted and then joins the approval object. "take off" releases the plan.

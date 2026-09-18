@@ -1,6 +1,6 @@
 import asyncio
 import gzip
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from conftest import make_http_scope
@@ -27,8 +27,27 @@ def _strip_mtime(wire: bytes) -> bytes:
 def _build(handler: Any, middleware: Any) -> FastAPI:
   app = FastAPI()
   app.get("/big")(handler)
-  app.add_middleware(middleware, minimum_size=1000, compresslevel=6)
+  # Level 3 is the responder's non-default ceiling: the mounted compresslevel
+  # must be an ISA-L level (0-3) since the responder's file is an IGzipFile,
+  # where unlike zlib a level of 0 is not "store".
+  app.add_middleware(middleware, minimum_size=1000, compresslevel=3)
   return app
+
+
+def _sliced_stream(media_type: str) -> Callable[[], StreamingResponse]:
+  """A handler streaming BODY in 100 KB slices. Each call builds a fresh
+  response and generator: the same handler is driven through two middlewares,
+  and a second drive over an exhausted generator would read an empty body."""
+
+  def stream() -> StreamingResponse:
+
+    async def chunks() -> AsyncIterator[bytes]:
+      for i in range(0, len(BODY), 100_000):
+        yield BODY[i:i + 100_000]
+
+    return StreamingResponse(chunks(), media_type=media_type)
+
+  return stream
 
 
 def _drive(app: FastAPI) -> tuple[dict[str, str], bytes]:
@@ -72,8 +91,14 @@ def test_whole_body_gzip_bytes_match_starlette_inline() -> None:
   _, baseline_body = _drive(_build(handler, GZipMiddleware))
 
   assert headers["content-encoding"] == "gzip"
-  assert _strip_mtime(body) == _strip_mtime(baseline_body)
+  # The responder deflates with ISA-L and the stock middleware with zlib, so
+  # the wires differ as byte streams; the pinned contracts are the container's
+  # validity, the parsed-content parity, and the off-loop hop changing no
+  # bytes of the responder's own wire.
   assert gzip.decompress(body) == BODY
+  assert gzip.decompress(baseline_body) == BODY
+  _, body_again = _drive(_build(handler, server._CharlieBotGZipMiddleware))
+  assert _strip_mtime(body) == _strip_mtime(body_again)
 
 
 def test_small_body_and_preset_encoding_stay_identity() -> None:
@@ -94,18 +119,51 @@ def test_small_body_and_preset_encoding_stay_identity() -> None:
 
 
 def test_streaming_body_compresses_per_chunk() -> None:
-
-  def stream() -> StreamingResponse:
-
-    async def chunks() -> AsyncIterator[bytes]:
-      for i in range(0, len(BODY), 100_000):
-        yield BODY[i:i + 100_000]
-
-    return StreamingResponse(chunks(), media_type="application/json")
+  stream = _sliced_stream("application/json")
 
   headers, body = _drive(_build(stream, server._CharlieBotGZipMiddleware))
   _, baseline_body = _drive(_build(stream, GZipMiddleware))
 
   assert headers["content-encoding"] == "gzip"
-  assert _strip_mtime(body) == _strip_mtime(baseline_body)
+  # Same deflator split as the whole-body test above: the streamed chunks'
+  # wire is ISA-L's, the stock middleware's is zlib's, so parity is parsed.
   assert gzip.decompress(body) == BODY
+  assert gzip.decompress(baseline_body) == BODY
+
+
+def test_already_compressed_media_types_ride_identity() -> None:
+
+  def page() -> Response:
+    return Response(content=BODY, media_type="image/png")
+
+  headers, body = _drive(_build(page, server._CharlieBotGZipMiddleware))
+  assert "content-encoding" not in headers
+  assert body == BODY
+
+  deck = _sliced_stream("application/vnd.openxmlformats-officedocument.presentationml.presentation")
+
+  headers, body = _drive(_build(deck, server._CharlieBotGZipMiddleware))
+  assert "content-encoding" not in headers
+  assert body == BODY
+
+
+def test_text_media_types_keep_compressing() -> None:
+
+  def svg() -> Response:
+    return Response(content=BODY, media_type="image/svg+xml")
+
+  headers, body = _drive(_build(svg, server._CharlieBotGZipMiddleware))
+  assert headers["content-encoding"] == "gzip"
+  assert gzip.decompress(body) == BODY
+
+  def events() -> StreamingResponse:
+
+    async def chunks() -> AsyncIterator[bytes]:
+      yield BODY
+      yield b""
+
+    return StreamingResponse(chunks(), media_type="text/event-stream")
+
+  headers, body = _drive(_build(events, server._CharlieBotGZipMiddleware))
+  assert "content-encoding" not in headers
+  assert body == BODY + b""

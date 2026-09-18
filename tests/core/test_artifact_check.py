@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 import pytest
 from conftest import (
+    ROOT,
     make_plan_setup,
     open_fork_html,
     plan_page_html,
@@ -25,17 +26,16 @@ from conftest import (
 from src.cli.artifact import main as artifact_main
 from src.core import artifact_check
 from src.core.artifact_check import run_assertions, run_probe
+from src.core.artifact_wrap import KATEX_VERSION
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET = "src.cli.common.get_config"
 
 
 def _genre_doc(genre: str, body: str) -> str:
   """Full HTML document for *genre*: its template's <style> block verbatim plus *body*."""
-  template = (_REPO_ROOT / "prompts" / artifact_check._GENRE_TEMPLATES[genre]).read_text(encoding="utf-8")
+  template = (ROOT / "prompts" / artifact_check._GENRE_TEMPLATES[genre]).read_text(encoding="utf-8")
   style = re.search(r"<style>.*?</style>", template, re.DOTALL).group(0)
   return f"<html><head>{style}</head><body>{body}</body></html>"
 
@@ -634,7 +634,7 @@ def test_ordinal_named_runs_in_every_genre(tmp_path: Path, genre: str) -> None:
 )
 def test_shipped_template_passes_its_own_genre(tmp_path: Path, genre: str, template: str) -> None:
   cfg = _chrome_cfg(tmp_path)
-  outcomes = run_assertions(genre, _REPO_ROOT / "prompts" / template, cfg)
+  outcomes = run_assertions(genre, ROOT / "prompts" / template, cfg)
   assert [o for o in outcomes if not o.passed] == []
 
 
@@ -956,7 +956,7 @@ def test_byte_integrity_reports_every_offending_offset(tmp_path: Path) -> None:
 def test_byte_integrity_passes_on_every_genre_template() -> None:
   """The gate reads the raw bytes itself, so the template files check directly through the runner."""
   for template in artifact_check._GENRE_TEMPLATES.values():
-    artifact = _REPO_ROOT / "prompts" / template
+    artifact = ROOT / "prompts" / template
     ctx = artifact_check._Context(
         genre="explain",
         artifact=artifact,
@@ -973,10 +973,12 @@ def test_byte_integrity_passes_on_a_clean_page(tmp_path: Path) -> None:
 # render-path (explain only)
 # ---------------------------------------------------------------------------
 
+_KATEX_DIST = f"https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist"
+
 _KATEX_HEAD_INJECTION = (
-    '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css">'
-    '<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js"></script>'
-    '<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/contrib/auto-render.min.js"></script>')
+    f'<link rel="stylesheet" href="{_KATEX_DIST}/katex.min.css">'
+    f'<script defer src="{_KATEX_DIST}/katex.min.js"></script>'
+    f'<script defer src="{_KATEX_DIST}/contrib/auto-render.min.js"></script>')
 
 
 def test_render_path_passes_on_pre_rendered_katex_markup(tmp_path: Path) -> None:
@@ -996,8 +998,9 @@ def test_render_path_passes_on_the_full_script_injection(tmp_path: Path) -> None
 
 
 def test_render_path_fails_on_a_partial_injection(tmp_path: Path) -> None:
-  doc = _genre_doc("explain", _sections([f"S{i}" for i in range(1, 6)])).replace(
-      "</head>", '<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js"></script></head>')
+  doc = _genre_doc("explain",
+                   _sections([f"S{i}" for i in range(1, 6)
+                             ])).replace("</head>", f'<script defer src="{_KATEX_DIST}/katex.min.js"></script></head>')
   (outcome,) = _run("explain", _write(tmp_path, doc))["render-path"]
   assert not outcome.passed
 

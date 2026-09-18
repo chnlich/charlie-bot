@@ -33,11 +33,11 @@ def _user_events(callbacks: models.SessionCallbacks) -> list[dict]:
 
 
 def test_build_prompt_prepends_disclaimer_for_voice() -> None:
-  assert master_cc._build_prompt("hello world", True) == DISCLAIMER + "\n" + "hello world"
+  assert master_cc._build_prompt("hello world", is_voice=True) == DISCLAIMER + "\n" + "hello world"
 
 
 def test_build_prompt_passes_through_when_not_voice() -> None:
-  assert master_cc._build_prompt("hello world", False) == "hello world"
+  assert master_cc._build_prompt("hello world", is_voice=False) == "hello world"
 
 
 def test_send_message_request_defaults_is_voice_false() -> None:

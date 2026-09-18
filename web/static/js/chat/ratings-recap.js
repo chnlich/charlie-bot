@@ -214,19 +214,17 @@ async function fetchRecapSummary(sessionId, eventIndex, panel) {
   }
 }
 
-Chat.setActiveRoundRatings = setActiveRoundRatings;
-Chat.renderRoundRatingButtons = renderRoundRatingButtons;
-Chat.initializeRoundRatings = initializeRoundRatings;
-Chat.rateRound = rateRound;
-Chat.toggleRecapPanel = toggleRecapPanel;
-Chat.toggleRecapAsks = toggleRecapAsks;
-Chat.rerunRecapSummary = rerunRecapSummary;
-Chat.expose([
-  'setActiveRoundRatings',
-  'rateRound',
-  'toggleRecapPanel',
-  'toggleRecapAsks',
-  'rerunRecapSummary',
-]);
+const GLOBALS = {
+  setActiveRoundRatings,
+  rateRound,
+  toggleRecapPanel,
+  toggleRecapAsks,
+  rerunRecapSummary,
+};
+const CHAT_ONLY = {
+  renderRoundRatingButtons,
+  initializeRoundRatings,
+};
+Chat.wire(GLOBALS, CHAT_ONLY);
 
 })();

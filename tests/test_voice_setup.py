@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import src.core.voice_setup as voice_setup
+from src.core import voice_setup
 from src.core.config import CharlieBotConfig
 
 

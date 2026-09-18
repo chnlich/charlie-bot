@@ -6,8 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import src.core.artifact_check as artifact_check
-import src.core.headless_render as headless_render
+from src.core import artifact_check, headless_render
 
 
 @pytest.fixture(autouse=True)

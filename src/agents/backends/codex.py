@@ -50,9 +50,8 @@ class CodexBackend(AgentBackend):
     # Track the last rendered todo snapshot to suppress duplicate started/completed payloads.
     self._last_todo_text: dict[str, str] = {}
 
-  def _prepare_cwd(self, cwd: str) -> None:
-    """Write AGENTS.md into the cwd so Codex auto-detects it."""
-    self._write_instructions_file(cwd, 'AGENTS.md', 'codex_wrote_agents_md')
+  # Codex auto-detects AGENTS.md in the run cwd.
+  _INSTRUCTIONS_TARGET: tuple[str, str] = ("AGENTS.md", "codex_wrote_agents_md")
 
   def _model_config_args(self) -> list[str]:
     args = ["--config", f'model_reasoning_effort="{self._model_reasoning_effort}"']

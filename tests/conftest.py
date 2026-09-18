@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import mmap
 import os
 import re
 import shutil
@@ -18,11 +19,25 @@ import pytest
 import yaml
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
   sys.path.insert(0, str(ROOT))
+
+# The Gemini 503 incident's two error channels, verbatim shapes: the failed
+# invocation's structured error event (the real failure) and the stderr tail
+# (the LiteLLM help banner that used to mask it in chat). Shared by the suites
+# covering the error-hint selection, the live exit, and the restart re-attach.
+LITELLM_503_ERROR_MESSAGE = (
+    "litellm.ServiceUnavailableError: ServiceUnavailableError: OpenAIException - "
+    "Error code: 503 - [{'error': {'code': 503, 'message': 'The service is currently "
+    "unavailable.', 'status': 'UNAVAILABLE'}}]")
+LITELLM_FEEDBACK_BANNER_STDERR = (
+    "\x1b[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\x1b[0m\n"
+    "LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'.\n"
+    "\nCommand logs retained at: /home/chaoli/.charlie-code/sessions/example.d/20260915T232823Z")
 
 # Imports must follow the sys.path bootstrap above.
 import src.core.config as core_config  # noqa: E402,I001
@@ -55,7 +70,7 @@ from src.core.spawner import resume_worker as _real_resume_worker  # noqa: E402
 from src.core.threads import ThreadManager  # noqa: E402
 from src.core.triggers import TriggerManager  # noqa: E402
 
-import src.core.headless_render as headless_render  # noqa: E402
+from src.core import headless_render  # noqa: E402
 
 
 def backend_option(**kwargs: Any) -> models.BackendBase:
@@ -113,6 +128,21 @@ def mock_session_callbacks() -> models.SessionCallbacks:
   )
 
 
+def manager_backed_callbacks(mgr: SessionManager) -> models.SessionCallbacks:
+  """SessionCallbacks whose anchor funnels are the real manager's, so anchor persistence is
+  observable on disk rather than on a mock's call list; broadcast stays mocked."""
+  return models.SessionCallbacks(
+      persist_and_broadcast=AsyncMock(),
+      **mocked_callback_fields(
+          persist_cc_session_id=mgr.persist_cc_session_id,
+          has_completed_round=mgr.has_completed_round,
+      ),
+      persist_master_run=mgr.persist_master_run,
+      persist_claude_account=mgr.persist_claude_account,
+      claude_context_state=AsyncMock(return_value=(None, None)),
+  )
+
+
 def make_work_item(
     cfg: CharlieBotConfig,
     session_meta: models.SessionMetadata,
@@ -143,30 +173,69 @@ def make_work_item(
   )
 
 
-async def run_session_consumer(
+# One consumer round: the master-cc queue replaces _run_cc with this callable and
+# awaits its (cc_session_id, exit_code, error_msg, finish_extras) verdict.
+ConsumerRound = Callable[[master_cc_state._WorkItem], Awaitable[tuple[str | None, int, str | None, dict]]]
+
+
+async def _run_seeded_consumer(
     session_id: str,
     work_items: list[master_cc_state._WorkItem],
-    fake_run_cc: Callable[[master_cc_state._WorkItem], Awaitable[tuple[str | None, int, str | None, dict]]],
+    fake_run_cc: ConsumerRound,
+    manager_patch: Any,
 ) -> None:
-  """Run _session_consumer over a seeded queue with a fake CC: _run_cc is replaced by fake_run_cc,
-  broadcasts are silenced, and the SessionManager double reports no running tasks. The session's
-  queue and consumer registry entries are dropped on exit; the consumer run is bounded at 5s."""
+  """Run _session_consumer over a seeded queue with _run_cc replaced by *fake_run_cc* and
+  broadcasts silenced; *manager_patch* is the context manager silencing the dequeue refresh's
+  running-tasks probe. The session's queue and consumer registry entries are dropped on exit;
+  the consumer run is bounded at 5s."""
   master_cc_state._session_queues.pop(session_id, None)
   master_cc_state._session_queues[session_id] = asyncio.Queue()
   for item in work_items:
     master_cc_state._session_queues[session_id].put_nowait(item)
-  workers_mock = MagicMock()
-  workers_mock._has_running_tasks = AsyncMock(return_value=False)
   try:
     with (
         patch.object(master_cc_run, "_run_cc", side_effect=fake_run_cc),
         patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
-        patch(SESSIONS_SESSION_MANAGER_PATCH_TARGET, return_value=workers_mock),
+        manager_patch,
     ):
       await asyncio.wait_for(master_cc_queue._session_consumer(session_id), timeout=5)
   finally:
     master_cc_state._session_queues.pop(session_id, None)
     master_cc_state._session_consumers.pop(session_id, None)
+
+
+async def run_session_consumer(
+    session_id: str,
+    work_items: list[master_cc_state._WorkItem],
+    fake_run_cc: ConsumerRound,
+) -> None:
+  """Run _session_consumer over a seeded queue with a fake CC: _run_cc is replaced by fake_run_cc,
+  broadcasts are silenced, and the SessionManager double reports no running tasks. The session's
+  queue and consumer registry entries are dropped on exit; the consumer run is bounded at 5s."""
+  workers_mock = MagicMock()
+  workers_mock._has_running_tasks = AsyncMock(return_value=False)
+  await _run_seeded_consumer(
+      session_id,
+      work_items,
+      fake_run_cc,
+      patch(SESSIONS_SESSION_MANAGER_PATCH_TARGET, return_value=workers_mock),
+  )
+
+
+async def run_consumer_over_real_disk(
+    session_id: str,
+    work_items: list[master_cc_state._WorkItem],
+    fake_run_cc: ConsumerRound,
+) -> None:
+  """run_session_consumer with the SessionManager class kept real: the dequeue refresh reads disk
+  through it, the teardown probe is silenced at the method, and no class-level patch can shadow
+  the refresh's own local import."""
+  await _run_seeded_consumer(
+      session_id,
+      work_items,
+      fake_run_cc,
+      patch.object(SessionManager, "_has_running_tasks", AsyncMock(return_value=False)),
+  )
 
 
 def reset_master_state(session_id: str) -> None:
@@ -352,6 +421,27 @@ def fresh_state_fixture(reset: Callable[[], None]) -> Callable[[], Iterator[None
   return _fresh_state
 
 
+def recording_mmap_shim(extents: list[tuple[int, int]]) -> type:
+  """An mmap-module stand-in whose ``rfind`` records each ``(start, end)`` extent before delegating.
+
+  The backward-walk window tests install the returned class on the reader module's ``mmap``
+  reference and then assert every recorded extent stayed inside the window the early-stop
+  contract allows.
+  """
+
+  class _RecordingMmap(mmap.mmap):
+
+    def rfind(self, sub, start=0, end=None):  # noqa: ANN001, ANN202
+      extents.append((start, len(self) if end is None else end))
+      return mmap.mmap.rfind(self, sub, start, end)
+
+  class _Shim:
+    ACCESS_READ = mmap.ACCESS_READ
+    mmap = _RecordingMmap
+
+  return _Shim
+
+
 def user_event(content: str, timestamp: str | None = None) -> dict:
   """A USER chat event; a test needing extra fields builds its own or merges them in."""
   event: dict[str, Any] = {"type": ET.USER, "content": content}
@@ -535,12 +625,12 @@ def queued_user_reorder_events() -> list[dict]:
   ]
 
 
-def make_json_response(payload: dict[str, Any]) -> MagicMock:
-  """A `requests.Response` stand-in for patched CLI `requests.post` calls: `.json()` returns payload,
-  `raise_for_status()` is a configured no-op so the CLI's success path runs straight through."""
+def make_json_response(payload: dict[str, Any], status_code: int = 200) -> MagicMock:
+  """A transport-response stand-in for patched CLI transport calls: `.status_code` is 200 (or the
+  given code) and `.json()` returns payload, so the CLI's success path runs straight through."""
   resp = MagicMock()
+  resp.status_code = status_code
   resp.json.return_value = payload
-  resp.raise_for_status.return_value = None
   return resp
 
 
@@ -610,13 +700,16 @@ def make_sessions_dir_config(tmp_path: Path) -> MagicMock:
 
 def setup_session_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sid: str) -> MagicMock:
   """Build a session dir tree at <tmp_path>/sessions/<sid> and chdir into it; the returned mock cfg is
-  what the tests patch into src.cli.common.get_config."""
+  what the tests patch into src.cli.common.get_config (the readback/diff readers). The sessions
+  root itself rides the light seam resolve_session_id reads, so the cwd derivation answers from
+  the built tree."""
   cfg = MagicMock()
   cfg.server.port = 9443
   cfg.sessions_dir = tmp_path / "sessions"
   session_dir = cfg.sessions_dir / sid
   session_dir.mkdir(parents=True, exist_ok=True)
   monkeypatch.chdir(session_dir)
+  monkeypatch.setattr(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, lambda: cfg.sessions_dir)
   return cfg
 
 
@@ -778,12 +871,80 @@ def make_page_request(path: str) -> Request:
   return Request(scope)
 
 
+def _page_request(accept_encoding: str = "") -> Request:
+  """The events route's request seam with one header: direct calls stand in for
+  FastAPI's injection, and the empty default is the no-gzip client shape."""
+  headers = [(b"accept-encoding", accept_encoding.encode())] if accept_encoding else []
+  return Request({"type": "http", "headers": headers})
+
+
+def gzip_explode_compress(message: str) -> Callable[..., bytes]:
+  """Deflator stand-in failing the test the moment any deflate runs.
+
+  The repeat-fetch tests install it in place of an API module's ``gzip_level1``
+  binding: the second fetch of an unchanged body must serve the stored
+  compressed form, so the stand-in's raise is how a re-deflate fails the test.
+  *message* names the fetch shape the test drives.
+  """
+
+  def explode_compress(*args: object, **kwargs: object) -> bytes:
+    raise AssertionError(message)
+
+  return explode_compress
+
+
+def gzip_counting_compress(real_compress: Callable[..., bytes], calls: list[bytes]) -> Callable[..., bytes]:
+  """Deflator stand-in recording every body it deflates to *calls*.
+
+  The corpus-move tests install it in place of an API module's ``gzip_level1``
+  binding so the assertion can pin the deflate count and the bytes the fresh
+  pass read, with *real_compress* captured before the install keeps producing
+  true forms.
+  """
+
+  def counting_compress(data: bytes, *args: object, **kwargs: object) -> bytes:
+    calls.append(data)
+    return real_compress(data, *args, **kwargs)
+
+  return counting_compress
+
+
+def mount_production_gzip(app: FastAPI) -> None:
+  """Mount the stock gzip middleware with the server's production numbers.
+
+  The precompressed-response tests' served-as-is and zero-deflate assertions pin production
+  behavior only while this pair matches the server's gzip mount — minimum_size=1000,
+  compresslevel=1 on ``_CharlieBotGZipMiddleware`` (server.py). The stock middleware is
+  deliberate: the subclass changes which responder deflates, not whether an already-compressed
+  body deflates, so the skip contract under test is the same.
+  """
+  app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1)
+
+
+def assert_gzip_served(resp: Any) -> None:
+  """Assert the response served a route's pre-compressed gzip form.
+
+  The route set the encoding upstream — that header is what makes the
+  middleware skip its own deflate — and carries the negotiation vary.
+  """
+  assert resp.headers["content-encoding"] == "gzip"
+  assert resp.headers["vary"] == "Accept-Encoding"
+
+
 def make_transcript(config_dir: Path, cc_session_id: str) -> Path:
   """Write a fake Claude Code session transcript under config_dir and return its path."""
   transcript = config_dir / "projects" / "slug" / f"{cc_session_id}.jsonl"
   transcript.parent.mkdir(parents=True, exist_ok=True)
   transcript.write_text("[]", encoding="utf-8")
   return transcript
+
+
+def seed_transcript_copy(config_dir: Path, cc_session_id: str, body: str, *, mtime_ns: int) -> Path:
+  """One transcript copy with an explicit mtime, so newness never rides on timing."""
+  path = make_transcript(config_dir, cc_session_id)
+  path.write_text(body, encoding="utf-8")
+  os.utime(path, ns=(mtime_ns, mtime_ns))
+  return path
 
 
 def write_pool_credentials(config_dir: Path, access_token: str = "token") -> None:
@@ -941,8 +1102,23 @@ TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET = "src.core.triggers._SACCT_AVAILABLE"
 # Import-path patch target for the CLI HTTP layer's config read. src/cli/common.py defines a
 # get_config forwarder (config's module imports lazily on first call, the M92 floor rule), so
 # mock setattrs the stand-in on the src.cli.common module attribute and every helper defined
-# there reads it as a module global at call time.
+# there reads it as a module global at call time. The request path itself reads only the
+# server port through the fingerprint-keyed document (_internal_base_url), so the transport
+# harness patches the base-url seam below and this target covers the remaining direct readers
+# (the sent-but-lost readback, plan diff's version files).
 CLI_COMMON_GET_CONFIG_PATCH_TARGET = "src.cli.common.get_config"
+
+# Import-path patch target for the CLI request path's server base URL. src/cli/common.py
+# resolves it through the fingerprint-keyed port document (_internal_base_url; a hit keeps
+# config's model stack out of the verb process), so mock setattrs the stand-in on the
+# src.cli.common module attribute and _request_with_contract reads it as a module global.
+CLI_COMMON_BASE_URL_PATCH_TARGET = "src.cli.common._internal_base_url"
+
+# Import-path patch target for the CLI's sessions root. src/cli/common.py derives it from the
+# env-resolved home (_sessions_dir, the M102 wrap-verb light path), so mock setattrs the
+# stand-in on the src.cli.common module attribute and resolve_session_id reads it as a module
+# global at call time.
+CLI_COMMON_SESSIONS_DIR_PATCH_TARGET = "src.cli.common._sessions_dir"
 
 # Import-path patch target for the version-skew hint the CLI error paths append. src/cli/common.py
 # defines _maybe_version_skew_hint and _exit_server_rejection reads it as a module global at call
@@ -979,7 +1155,7 @@ SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.core.slack_listener._bot_client"
 # Import-path patch target for the background-task spawner a scheduled task fires through.
 # src/core/scheduler.py binds the name at import scope (`from src.core.tasks import
 # create_logged_task`), so monkeypatch.setattr lands the stand-in on the src.core.scheduler
-# module attribute and _execute_master_task/_spawn_scheduled_worker read it at call time; the
+# module attribute and _execute_pm_task/_spawn_scheduled_worker read it at call time; the
 # src.core.slack_listener route above reaches a different namespace.
 SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.scheduler.create_logged_task"
 
@@ -988,7 +1164,7 @@ SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.scheduler.create_logged_ta
 # src.core.master_trigger import trigger_master`, `from src.core.spawner import
 # resolve_requested_subagent_backend_model, spawn_worker`, `from src.core.threads import
 # ThreadManager`), so monkeypatch.setattr lands the stand-in on the src.core.scheduler module
-# attribute and _reload_config, _execute_master_task, and _spawn_scheduled_worker read it at
+# attribute and _reload_config, _execute_pm_task, and _spawn_scheduled_worker read it at
 # call time; sibling modules binding the same functions keep their own routes.
 SCHEDULER_GET_CONFIG_PATCH_TARGET = "src.core.scheduler.get_config"
 SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = ("src.core.scheduler.resolve_requested_subagent_backend_model")
@@ -1030,14 +1206,13 @@ CHAT_RUN_AND_FINALIZE_PATCH_TARGET = "src.api.chat.run_and_finalize"
 CHAT_CREATE_LOGGED_TASK_PATCH_TARGET = "src.api.chat.create_logged_task"
 CHAT_CANCEL_MASTER_PATCH_TARGET = "src.api.chat.cancel_master"
 
-# Import-path patch targets for the CLI HTTP layer's transport. src/cli/common.py resolves
-# `requests` lazily (a module __getattr__ that imports-and-caches on first access), and its
-# helpers read requests.get at call time and pick requests.post inside _request_with_contract's
-# `request_fn = requests.post if ... else ...`, so mock and monkeypatch.setattr land the
-# stand-in on the requests module through the src.cli.common route and every helper defined
-# there picks it up at call time.
-CLI_COMMON_REQUESTS_POST_PATCH_TARGET = "src.cli.common.requests.post"
-CLI_COMMON_REQUESTS_GET_PATCH_TARGET = "src.cli.common.requests.get"
+# Import-path patch targets for the CLI HTTP layer's transport. src/cli/common.py exposes one
+# adapter per verb (`_request_post`/`_request_get`, both over the phase-separated http.client
+# client `_send_request`), and `_request_with_contract` reads the adapter as a module global at
+# call time, so mock and monkeypatch.setattr land the stand-in on the src.cli.common module
+# attribute and every helper defined there picks it up at call time.
+CLI_COMMON_TRANSPORT_POST_PATCH_TARGET = "src.cli.common._request_post"
+CLI_COMMON_TRANSPORT_GET_PATCH_TARGET = "src.cli.common._request_get"
 
 # Import-path patch target shared by every test that swaps the backend factory a master session
 # runs under. src/agents/master_cc_run.py binds the factory with call-time `from
@@ -1061,59 +1236,23 @@ WORKER_BUILD_BACKEND_PATCH_TARGET = "src.agents.worker.build_backend"
 # src.core.runs module attribute where that read resolves.
 RUNS_READ_PID_STAT_PATCH_TARGET = "src.core.runs.read_pid_stat"
 
-# Import-path patch target for the subprocess spawn the backend start contract drives through the
-# AgentBackend base path. src/agents/backends/base.py binds the library with module-scope
-# `import asyncio`, so monkeypatch.setattr lands the stand-in on the shared asyncio module through
-# this route and base.run's spawn read resolves it at call time; the library-root spelling
-# (ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET above) reaches the same attribute, so a
-# caller-qualified constant here records which backend's spawn a test drives.
+# The backend-construction seams, stated once for every constant below: each CLI
+# backend binds resolve_binary at import scope (`from src.agents.backends.base import
+# resolve_binary`), so monkeypatch.setattr on a ``*_RESOLVE_BINARY_PATCH_TARGET`` lands
+# the stand-in on that backend module's own attribute, where its __init__ reads the
+# helper at call time and never probes PATH, while sibling backends binding the same
+# helper keep their own namespaces. The backend start contract spawns through the
+# library each spawning module binds with module-scope `import asyncio`, so every
+# ``*_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET`` spelling below — the library root
+# (ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET above) and the caller-qualified forms —
+# reaches that one shared attribute at the run loop's call-time spawn read; the
+# caller-qualified form records which backend's spawn a test drives.
 BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.agents.backends.base.asyncio.create_subprocess_exec"
-
-# Import-path patch target for the binary resolution an OpenCodeBackend construction runs.
-# src/agents/backends/opencode.py binds the helper at import scope (`from
-# src.agents.backends.base import resolve_binary`), so monkeypatch.setattr lands the
-# stand-in on the src.agents.backends.opencode module attribute and OpenCodeBackend.__init__
-# reads it at call time; sibling backends binding the same helper (codex.py,
-# antigravity_cli.py, charlie_code.py) keep their own namespaces.
 OPENCODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.opencode.resolve_binary"
-
-# Import-path patch target for the subprocess spawn the backend start contract drives through the
-# OpenCodeBackend path. src/agents/backends/opencode.py binds the library with module-scope
-# `import asyncio`, so monkeypatch.setattr lands the stand-in on the shared asyncio module through
-# this route and the SSE run loop's spawn read resolves it at call time; the library-root
-# spelling (ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET above) reaches the same attribute.
 OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.agents.backends.opencode.asyncio.create_subprocess_exec"
-
-# Import-path patch target for the binary resolution a CodexBackend construction runs.
-# src/agents/backends/codex.py binds the helper at import scope (`from
-# src.agents.backends.base import resolve_binary`), so monkeypatch.setattr lands the
-# stand-in on the src.agents.backends.codex module attribute and CodexBackend.__init__
-# reads it at call time; sibling backends binding the same helper (opencode.py,
-# antigravity_cli.py, charlie_code.py, gemini_cli.py) keep their own namespaces.
 CODEX_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.codex.resolve_binary"
-
-# Import-path patch target for the binary resolution an AntigravityCliBackend construction
-# runs. src/agents/backends/antigravity_cli.py binds the helper at import scope (`from
-# src.agents.backends.base import resolve_binary`), so monkeypatch.setattr lands the
-# stand-in on the src.agents.backends.antigravity_cli module attribute and
-# AntigravityCliBackend.__init__ reads it at call time; sibling backends binding the same
-# helper (charlie_code.py, codex.py, gemini_cli.py, opencode.py) keep their own namespaces.
 ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.antigravity_cli.resolve_binary"
-
-# Import-path patch target for the binary resolution a CharlieCodeBackend construction
-# runs. src/agents/backends/charlie_code.py binds the helper at import scope (`from
-# src.agents.backends.base import resolve_binary`), so monkeypatch.setattr lands the
-# stand-in on the src.agents.backends.charlie_code module attribute and
-# CharlieCodeBackend.__init__ reads it at call time; sibling backends binding the same
-# helper (antigravity_cli.py, codex.py, gemini_cli.py, opencode.py) keep their own namespaces.
 CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.charlie_code.resolve_binary"
-
-# Import-path patch target for the binary resolution a GeminiCliBackend construction runs.
-# src/agents/backends/gemini_cli.py binds the helper at import scope (`from
-# src.agents.backends.base import resolve_binary`), so monkeypatch.setattr lands the
-# stand-in on the src.agents.backends.gemini_cli module attribute and GeminiCliBackend.__init__
-# reads it at call time; sibling backends binding the same helper (antigravity_cli.py,
-# charlie_code.py, codex.py, opencode.py) keep their own namespaces.
 GEMINI_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.gemini_cli.resolve_binary"
 
 # Patch target for the atomic-write swap hook. src/core/json_utils.py publishes each staged
@@ -1155,9 +1294,9 @@ def build_cli_backend(
   """Construct a CLI backend with its resolve_binary pinned to *fake_binary*.
 
   The one home of the backend-test construction contract: the patch lands the stand-in
-  on the module named by *resolve_patch_target* (each ``*_RESOLVE_BINARY_PATCH_TARGET``
-  constant above states that module's binding scope), so ``__init__`` never probes PATH,
-  and *defaults* fill kwargs the caller left out.
+  on the module named by *resolve_patch_target* (the shared note above the
+  ``*_RESOLVE_BINARY_PATCH_TARGET`` constants states that binding scope), so ``__init__``
+  never probes PATH, and *defaults* fill kwargs the caller left out.
   """
   monkeypatch.setattr(resolve_patch_target, lambda name, fallback: fake_binary)
   for key, value in (defaults or {}).items():
@@ -1546,31 +1685,40 @@ def fake_cli_cfg(monkeypatch: pytest.MonkeyPatch, sessions_dir: Path) -> None:
   monkeypatch.setattr(
       CLI_COMMON_GET_CONFIG_PATCH_TARGET,
       lambda: SimpleNamespace(server_base_url="https://server", sessions_dir=sessions_dir))
+  monkeypatch.setattr(CLI_COMMON_BASE_URL_PATCH_TARGET, lambda: "https://server")
 
 
 def _patched_cli_transport(transport_target: str, cfg: object, argv: list[str],
                            **transport_kw: object) -> Iterator[MagicMock]:
-  """The externals a CLI main() call touches: sys.argv becomes argv, get_config returns cfg, and the
-  transport verb at transport_target is a MagicMock built from transport_kw (bare when empty, so a
-  test can set the response after entering). The mock is yielded for that and for call assertions."""
+  """The externals a CLI main() call touches: sys.argv becomes argv, get_config returns cfg (the
+  readback/diff paths still read it), the request path's base URL derives from cfg's
+  server_base_url when it is a plain attribute (MagicMock auto-attrs stringify harmlessly — the
+  transport verb is patched, nothing dials), and the transport verb at transport_target is a
+  MagicMock built from transport_kw (a default 200/{} success response when no return_value is
+  given, so the CLI's success path runs; a test can set the response after entering). The mock is
+  yielded for that and for call assertions."""
+  base_url = str(getattr(cfg, "server_base_url", "http://localhost:18498"))
   with patch("sys.argv", argv), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
+       patch(CLI_COMMON_BASE_URL_PATCH_TARGET, return_value=base_url), \
        patch(transport_target, **transport_kw) as transport_mock:
+    if "return_value" not in transport_kw:
+      transport_mock.return_value = make_json_response({})
     yield transport_mock
 
 
 @contextlib.contextmanager
 def patched_cli_post(cfg: object, argv: list[str], **post_kw: object) -> Iterator[MagicMock]:
-  """_patched_cli_transport with requests.post as the patched verb (the POST path every CLI command
+  """_patched_cli_transport with _request_post as the patched verb (the POST path every CLI command
   shares)."""
-  yield from _patched_cli_transport(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, cfg, argv, **post_kw)
+  yield from _patched_cli_transport(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, cfg, argv, **post_kw)
 
 
 @contextlib.contextmanager
 def patched_cli_get(cfg: object, argv: list[str], **get_kw: object) -> Iterator[MagicMock]:
-  """_patched_cli_transport with requests.get as the patched verb (the GET-only commands, e.g.
+  """_patched_cli_transport with _request_get as the patched verb (the GET-only commands, e.g.
   plan list/diff)."""
-  yield from _patched_cli_transport(CLI_COMMON_REQUESTS_GET_PATCH_TARGET, cfg, argv, **get_kw)
+  yield from _patched_cli_transport(CLI_COMMON_TRANSPORT_GET_PATCH_TARGET, cfg, argv, **get_kw)
 
 
 def schedule_trigger_argv(message: str, *extra: str) -> list[str]:
@@ -1606,7 +1754,8 @@ def reset_config_caches() -> None:
   """
   core_config._config_cache.reset()
   core_config._credentials_cache.reset()
-  core_config._home_cache.clear()
+  from src.core import home as core_home
+  core_home._home_cache.clear()
   core_config._cron_snapshot = core_config._CronSnapshot()
 
 
@@ -2657,7 +2806,7 @@ async def fake_spawn_worker(
 
 async def _noop() -> None:
   """Awaitable stand-in returned by fakes patched over coroutine-returning helpers."""
-  return None
+  return
 
 
 async def _ok_asgi_downstream(scope: Any, receive: Any, send: Any) -> None:
@@ -2766,6 +2915,20 @@ def _cfg(home: Path) -> CharlieBotConfig:
       paths={"worktree_dir": str(home / "worktrees")},
       backends={"options": [backend_option(id="fake", label="Fake", type="cc-claude", model="fake-model")]},
   )
+
+
+def _pid_alive(pid: int) -> bool:
+  """True while *pid* is signalable, False when the kernel reports it gone.
+
+  Catches only ProcessLookupError — the one failure os.kill(pid, 0) gives on a
+  process the test spawned itself; anything else (e.g. PermissionError) means
+  the probe cannot answer and propagates.
+  """
+  try:
+    os.kill(pid, 0)
+  except ProcessLookupError:
+    return False
+  return True
 
 
 def _wait_for(predicate: Callable[[], bool], timeout: float, what: str) -> None:

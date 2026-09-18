@@ -9,7 +9,7 @@ from pathlib import Path
 
 from src.agents.backends.base import DISALLOWED_TOOLS_FLAG, SKIP_PERMISSIONS_FLAG, AgentBackend
 from src.core import event_types as ET
-from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR
+from src.core.home import CLAUDE_CONFIG_DIR_ENV_VAR
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.models import SESSION_ID_ENV_VAR
 from src.core.process import kill_process_group
@@ -150,7 +150,8 @@ def headless_claude_declared_window() -> tuple[int, int | None]:
   constant — because the host environment can change between calls.
 
   ``declared_window`` is the auto-compact window the CLI advertises. ``compact_point``
-  is ``declared_window − OUTPUT_RESERVE − CONTEXT_RESERVE`` (with the 433000 default
+  is ``declared_window − CLAUDE_COMPACT_OUTPUT_RESERVE − CLAUDE_COMPACT_CONTEXT_RESERVE``
+  (with the 433000 default
   this is 400000); the caller derives the real compaction point from the effective
   ``context_full`` (``min(model contextWindow, declared_window)``) using the same
   constants. Degrades loudly, never silently:
@@ -298,9 +299,8 @@ class ClaudeCodeBackend(AgentBackend):
     if self._extra_flags:
       self._cmd += self._extra_flags
 
-  def _prepare_cwd(self, cwd: str) -> None:
-    """Write CLAUDE.md into the cwd so Claude Code auto-detects it."""
-    self._write_instructions_file(cwd, "CLAUDE.md", "claude_code_wrote_claude_md")
+  # Claude Code auto-detects CLAUDE.md in the run cwd.
+  _INSTRUCTIONS_TARGET: tuple[str, str] = ("CLAUDE.md", "claude_code_wrote_claude_md")
 
   def _prepare_env(self, env: dict) -> dict:
     out = {**env, **headless_claude_env()}

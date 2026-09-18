@@ -172,9 +172,15 @@ async def trigger_master(
       if session_meta.cc_session_started_at < last_sat_1am_utc < datetime.now(UTC):
         log.info(
             'scheduled_cc_session_expired', session=resolved.id, started_at=str(session_meta.cc_session_started_at))
+        # The clear channel owns the disk write: anchors change only through
+        # their authorized channels, and a plain whole-object save would be
+        # corrected back to the old anchor by the save guard -- the recycle
+        # would silently do nothing behind its suppressed next-round alarm.
+        # The in-memory copy mirrors the cleared anchor for the summary tweak
+        # below.
+        await session_mgr.clear_cc_session_anchor(resolved.id)
         session_meta.cc_session_id = None
         session_meta.cc_session_started_at = None
-        await session_mgr.save_metadata(session_meta)
         # The weekly recycle deliberately clears the anchor; the next run is an
         # intentional fresh start, so suppress the resume-anchor-missing alarm.
         expect_fresh_session = True

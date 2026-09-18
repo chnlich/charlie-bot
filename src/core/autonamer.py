@@ -27,10 +27,11 @@ import re
 from collections.abc import Iterator
 from typing import Any
 
-from src.agents.backends.deferred_build import build_backend_module_getattr, load_build_backend
+from src.agents.backends.deferred_build import load_build_backend
 from src.core import claude_accounts
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, default_claude_dir
+from src.core.deferred import deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendOption, SessionMetadata
 from src.core.sessions import SessionManager
@@ -42,7 +43,7 @@ log = LazyStructlogLogger()
 
 def __getattr__(name: str) -> Any:
   # The "src.core.autonamer.build_backend" patch target resolves through this hook.
-  return build_backend_module_getattr(name, __name__, globals())
+  return deferred_module_getattr(name, __name__, globals(), "build_backend", load_build_backend)
 
 
 # Matches true defaults ("Session 7") and legacy empty placeholders ("7: ").
@@ -65,12 +66,16 @@ def is_default_session_name(name: str) -> bool:
   return bool(_DEFAULT_NAME_RE.match(name))
 
 
+# The one naming rule both prompts pin; a second copy would let the two drift.
+_VERBATIM_NAMES_RULE = (
+    "Use only names that appear verbatim in the conversation (project, repo, tool names); "
+    "never invent abbreviations, codes, or new spellings.")
+
 _TITLE_INSTRUCTION = (
     "Generate a short, descriptive title (3-6 words) and assign a group for this conversation.\n"
     'Return ONLY valid JSON: {{"name": "<title>", "group": "<group>"}}\n'
     "No explanation, no markdown fences, no extra text.\n"
-    "Use only names that appear verbatim in the conversation (project, repo, tool names); "
-    "never invent abbreviations, codes, or new spellings.\n"
+    f"{_VERBATIM_NAMES_RULE}\n"
     "{groups_clause}")
 
 _SYSTEM_PROMPT = (
@@ -79,8 +84,7 @@ _SYSTEM_PROMPT = (
     'The name should be 3-6 words, no quotes or punctuation at the end. '
     'The group should be a short category (1-3 words). '
     '{groups_clause} '
-    'Use only names that appear verbatim in the conversation (project, repo, tool names); '
-    'never invent abbreviations, codes, or new spellings. '
+    f"{_VERBATIM_NAMES_RULE} "
     'Do not attempt to answer or act on the user\'s question - just generate the JSON.')
 
 _NAMING_PROMPT = (

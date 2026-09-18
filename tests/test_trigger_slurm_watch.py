@@ -188,7 +188,7 @@ async def test_mixed_local_and_slurm_and_semantics(tmp_path: Path, pidfd_open_av
 async def test_no_sacct_host_slurm_create_fails(tmp_path: Path) -> None:
   _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
   with (
-      patch(TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET, False),
+      patch(TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET, new=False),
       pytest.raises(RuntimeError, match="sacct unavailable"),
   ):
     await trigger_mgr.create_trigger(
@@ -203,7 +203,7 @@ async def test_no_sacct_host_slurm_create_fails(tmp_path: Path) -> None:
 async def test_no_sacct_host_pure_delay_unaffected(tmp_path: Path) -> None:
   _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
   with (
-      patch(TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET, False),
+      patch(TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET, new=False),
       patch.object(TriggerManager, "_start_task", lambda self, t: None),
   ):
     trigger = await trigger_mgr.create_trigger(

@@ -12,8 +12,9 @@ record of what was measured and why it changed. Before writing code, read
 `skills/writing-style/genres/code.md` and follow it: comments carry constraints only; provenance
 lives in blame.
 
-Isolation rule: any validation that runs charliebot components uses a scratch `CHARLIEBOT_HOME`
-holding synthetic sessions only (fresh random ids, no `cc_session_id`), because `CHARLIEBOT_HOME`
+Isolation rule: any validation that runs charliebot components — the config loader, cron task
+loading, any worker spawn — uses a scratch `CHARLIEBOT_HOME` holding synthetic sessions only
+(fresh random ids, no `cc_session_id`), because `CHARLIEBOT_HOME`
 relocates the state directory alone: Claude Code transcripts live under the login directory
 (`CLAUDE_CONFIG_DIR`, default `~/.claude`), so a copied live session carries a `cc_session_id` that
 the real `claude` CLI resumes as the live master's own conversation, and the second master turn that
@@ -26,8 +27,12 @@ touches CI.
 
 Measure before anything else. Run the standing collectors listed in `docs/perf_baseline.md`
 exactly as that file lists them, so every round's numbers compare with the history; each takes
-seconds, and together they are the regression watch. The collectors observe the live instance
-read-only, which is the only contact this run has with it. A collector that fails or prints
+seconds, and together they are the regression watch. The sweep's in-process collectors import the
+code under test from the repo's local main checkout, so the collector list opens with a preflight
+that pins that checkout at `origin/main` — a sibling cron can leave it on its own branch after its
+pull request merges, and a stale tree reads ghost numbers; when the preflight fails loud (fetch,
+dirty tree, or a diverged checkout), the round reports every in-process metric as unmeasured. The collectors observe the live
+instance read-only, which is the only contact this run has with it. A collector that fails or prints
 nothing is itself a finding: the summary reports it, and the round treats that metric as
 unmeasured. That file is the single home for metric definitions, collector commands, healthy
 ranges, and sampling history, and nothing it owns is duplicated here. A topic whose evidence

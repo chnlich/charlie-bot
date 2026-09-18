@@ -27,7 +27,7 @@ from src.core.models import (
 )
 from src.core.slash_commands import SlashDispatchKind, SlashDispatchResult
 
-VOICE_KEY = "is_" + "voice"
+VOICE_KEY = "is_voice"
 
 
 @pytest.mark.asyncio

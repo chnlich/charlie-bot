@@ -4,7 +4,7 @@ import io
 import json
 import os
 import threading
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -16,6 +16,8 @@ from fastapi.testclient import TestClient
 import server
 from src.api import pages
 from src.core.trace_merge import merge_traces as real_merge_traces
+
+real_multi_trace_merge = pages._build_multi_trace_merge
 
 
 def _write_trace(path: Path, marker: str = "event") -> None:
@@ -30,16 +32,18 @@ def _write_trace(path: Path, marker: str = "event") -> None:
   )
 
 
-def _make_blocking_merge(calls: list[int], started: threading.Event,
-                         release: threading.Event) -> Callable[[list[Path], Path, bool], None]:
+def _make_blocking_multi_build(calls: list[int], started: threading.Event,
+                               release: threading.Event) -> Callable[[list[Path], Path, bool], Awaitable[None]]:
 
-  def blocking_merge(paths: list[Path], out_path: Path, slim: bool) -> None:
+  async def blocking_build(paths: list[Path], out_path: Path, slim: bool) -> None:
     calls.append(1)
-    real_merge_traces(paths, out_path, slim)
     started.set()
-    release.wait(10.0)
+    # The fake runs on the event loop (the build is awaited directly), so the
+    # gate must block in a thread — a blocking wait here would freeze the loop.
+    await asyncio.to_thread(release.wait, 10.0)
+    await real_multi_trace_merge(paths, out_path, slim)
 
-  return blocking_merge
+  return blocking_build
 
 
 @pytest.fixture
@@ -59,7 +63,9 @@ def inline_merge_executor(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def client(merge_cache: Path) -> TestClient:
   app = FastAPI()
-  app.add_middleware(server._CharlieBotGZipMiddleware, minimum_size=1)
+  # The production level: the responder's file is an IGzipFile, whose levels
+  # run 0-3, so the mount cannot ride starlette's zlib-default 9.
+  app.add_middleware(server._CharlieBotGZipMiddleware, minimum_size=1, compresslevel=1)
   app.include_router(pages.router)
   return TestClient(app)
 
@@ -79,6 +85,9 @@ def test_merge_endpoint_errors_and_gzip_response(client: TestClient, tmp_path: P
 
   trace = tmp_path / "rank0.json"
   _write_trace(trace)
+  # A dir holding a real trace must merge: pins the route parameter's alias on the 'dir' query
+  # key — a broken alias leaves the parameter None and lands in the 400 above instead.
+  assert client.get("/perfetto/merged", params={"dir": str(tmp_path)}).status_code == 200
   response = client.get("/perfetto/merged", params={"trace": str(trace)})
   assert response.status_code == 200
   assert response.content[:2] == b"\x1f\x8b"
@@ -94,6 +103,25 @@ def test_merge_endpoint_surfaces_corrupt_json_error(client: TestClient, tmp_path
   assert "unexpected character" in response.json()["detail"]
 
 
+def test_viewer_dir_query_reaches_the_route_through_the_alias(client: TestClient, tmp_path: Path) -> None:
+  """The viewer's 'dir' query key rides the route parameter's alias: with the key accepted the
+  page discovers the directory's traces; a broken alias leaves the parameter None and lands in
+  the no-inputs 400 instead."""
+  _write_trace(tmp_path / "rank0.json")
+  response = client.get("/perfetto", params={"dir": str(tmp_path), "pattern": "rank*.json"})
+  assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_viewer_dir_path_builds_merged_link_with_the_dir_key(tmp_path: Path) -> None:
+  """The merged-trace link the page builds carries the 'dir' query key perfetto_merged reads."""
+  _write_trace(tmp_path / "rank0.json")
+  response = await pages.perfetto_viewer(
+      make_page_request("/perfetto"), trace=[], dir_path=str(tmp_path), pattern="rank*.json", title=None, slim=None)
+  query = parse_qs(urlsplit(response.context["trace_url"]).query)
+  assert query["dir"] == [str(tmp_path)]
+
+
 def test_direct_pass_rejects_non_finite_literals(client: TestClient, tmp_path: Path) -> None:
   """The direct pass shares the merge path's JSON boundary: a NaN literal stdlib json accepts
   fails the build loudly instead of reaching the cache — a literal Perfetto cannot render."""
@@ -101,6 +129,18 @@ def test_direct_pass_rejects_non_finite_literals(client: TestClient, tmp_path: P
   non_finite.write_text('{"traceEvents": [{"ph": "X", "dur": NaN}]}', encoding="utf-8")
   response = client.get("/perfetto/merged", params={"trace": str(non_finite)})
   assert response.status_code == 500
+  assert not list(pages._perfetto_merge_cache_dir().glob("*.json.gz"))
+
+
+def test_direct_pass_rejects_json_without_trace_events(client: TestClient, tmp_path: Path) -> None:
+  """The build gate's shape contract: a JSON object with no traceEvents array (an analysis
+  manifest) parses cleanly but is not a trace — it must fail the build loudly instead of
+  compressing into the cache and reaching the viewer as a trace that renders nothing."""
+  manifest = tmp_path / "analysis_manifest.json"
+  manifest.write_text(json.dumps({"A": [{"rank": 0, "path": "/data/trace.json"}]}), encoding="utf-8")
+  response = client.get("/perfetto/merged", params={"trace": str(manifest)})
+  assert response.status_code == 500
+  assert "no traceEvents array" in response.json()["detail"]
   assert not list(pages._perfetto_merge_cache_dir().glob("*.json.gz"))
 
 
@@ -216,7 +256,7 @@ def test_merge_core_id_contract(tmp_path: Path) -> None:
           ]}),
       encoding="utf-8")
   out = tmp_path / "merged.json.gz"
-  real_merge_traces([first, second], out, False)
+  real_merge_traces([first, second], out, slim=False)
   with gzip.open(out) as merged_file:
     events = json.load(merged_file)["traceEvents"]
 
@@ -250,14 +290,14 @@ def test_merge_cache_hits_invalidates_on_mtime_and_prunes(
 ) -> None:
   merge_calls = 0
 
-  def counting_merge(paths: list[Path], out_path: Path, slim: bool) -> None:
+  async def counting_merge(paths: list[Path], out_path: Path, slim: bool) -> None:
     nonlocal merge_calls
     merge_calls += 1
-    real_merge_traces(paths, out_path, slim)
+    await real_multi_trace_merge(paths, out_path, slim)
 
-  monkeypatch.setattr(pages, "merge_traces", counting_merge)
+  monkeypatch.setattr(pages, "_build_multi_trace_merge", counting_merge)
 
-  # Merge leg: multiple inputs still go through merge_traces.
+  # Merge leg: multiple inputs go through the multi-trace build.
   first = tmp_path / "rank0.json"
   second = tmp_path / "rank1.json"
   _write_trace(first, "first")
@@ -309,7 +349,7 @@ async def test_perfetto_page_single_local_trace_uses_merged_url(tmp_path: Path) 
   trace = tmp_path / "rank0.json"
   _write_trace(trace)
   response = await pages.perfetto_viewer(
-      make_page_request("/perfetto"), trace=[str(trace)], dir=None, pattern="*.json", title=None, slim=None)
+      make_page_request("/perfetto"), trace=[str(trace)], dir_path=None, pattern="*.json", title=None, slim=None)
 
   merged_url = response.context["trace_url"]
   assert urlsplit(merged_url).path == "/perfetto/merged"
@@ -324,7 +364,7 @@ async def test_perfetto_page_single_remote_trace_has_no_warning() -> None:
   response = await pages.perfetto_viewer(
       make_page_request("/perfetto"),
       trace=["https://example.com/rank0.json"],
-      dir=None,
+      dir_path=None,
       pattern="*.json",
       title=None,
       slim=None,
@@ -339,7 +379,7 @@ async def test_perfetto_page_directory_single_match_uses_merged_url(tmp_path: Pa
   trace_dir.mkdir()
   _write_trace(trace_dir / "rank0.json")
   response = await pages.perfetto_viewer(
-      make_page_request("/perfetto"), trace=[], dir=str(trace_dir), pattern="rank*.json", title=None, slim=None)
+      make_page_request("/perfetto"), trace=[], dir_path=str(trace_dir), pattern="rank*.json", title=None, slim=None)
 
   assert urlsplit(response.context["trace_url"]).path == "/perfetto/merged"
   assert response.context["warn"] is None
@@ -353,7 +393,7 @@ async def test_perfetto_page_multiple_local_json_uses_one_merged_url(tmp_path: P
   response = await pages.perfetto_viewer(
       make_page_request("/perfetto"),
       trace=[str(path) for path in traces],
-      dir=None,
+      dir_path=None,
       pattern="*.json",
       title="Ranks",
       slim=1,
@@ -376,7 +416,7 @@ async def test_perfetto_page_directory_forwards_discovery_params(tmp_path: Path)
   _write_trace(trace_dir / "rank1.json")
   _write_trace(trace_dir / "rank0.json")
   response = await pages.perfetto_viewer(
-      make_page_request("/perfetto"), trace=[], dir=str(trace_dir), pattern="rank*.json", title=None, slim=None)
+      make_page_request("/perfetto"), trace=[], dir_path=str(trace_dir), pattern="rank*.json", title=None, slim=None)
 
   query = parse_qs(urlsplit(response.context["trace_url"]).query)
   assert query == {"dir": [str(trace_dir)], "pattern": ["rank*.json"]}
@@ -389,12 +429,12 @@ async def test_perfetto_page_mixed_inputs_warns_and_uses_first(tmp_path: Path) -
   response = await pages.perfetto_viewer(
       make_page_request("/perfetto"),
       trace=[str(local), "https://example.com/rank1.json"],
-      dir=None,
+      dir_path=None,
       pattern="*.json",
       title=None,
       slim=None,
   )
-  assert response.context["trace_url"] == f"/files{local}"
+  assert response.context["trace_url"] == f"/absolute_filepath{local}"
   assert "showing first trace only" in response.context["warn"]
 
 
@@ -402,7 +442,7 @@ async def test_perfetto_page_mixed_inputs_warns_and_uses_first(tmp_path: Path) -
 async def test_perfetto_page_rejects_empty_input() -> None:
   with pytest.raises(HTTPException) as error:
     await pages.perfetto_viewer(
-        make_page_request("/perfetto"), trace=[], dir=None, pattern="*.json", title=None, slim=None)
+        make_page_request("/perfetto"), trace=[], dir_path=None, pattern="*.json", title=None, slim=None)
   assert error.value.status_code == 400
 
 
@@ -476,7 +516,7 @@ async def test_two_phase_status_strings_are_present(tmp_path: Path) -> None:
   response = await pages.perfetto_viewer(
       make_page_request("/perfetto"),
       trace=[str(trace) for trace in traces],
-      dir=None,
+      dir_path=None,
       pattern="*.json",
       title=None,
       slim=None,
@@ -505,13 +545,13 @@ def test_single_flight_one_build_per_key(
   release = threading.Event()
   calls: list[int] = []
 
-  monkeypatch.setattr(pages, "merge_traces", _make_blocking_merge(calls, started, release))
+  monkeypatch.setattr(pages, "_build_multi_trace_merge", _make_blocking_multi_build(calls, started, release))
 
   async def run() -> None:
     paths = [first, second]
-    leader = asyncio.create_task(pages._cached_merge(paths, False))
+    leader = asyncio.create_task(pages._cached_merge(paths, slim=False))
     assert await _wait_until(started.is_set)
-    followers = [asyncio.create_task(pages._cached_merge(paths, False)) for _ in range(4)]
+    followers = [asyncio.create_task(pages._cached_merge(paths, slim=False)) for _ in range(4)]
     release.set()
     results = await asyncio.gather(leader, *followers)
     assert len(calls) == 1
@@ -535,14 +575,15 @@ def test_single_flight_progress_independently(
 
   calls: list[int] = []
 
-  def counting_merge(paths: list[Path], out_path: Path, slim: bool) -> None:
+  async def counting_merge(paths: list[Path], out_path: Path, slim: bool) -> None:
     calls.append(1)
-    real_merge_traces(paths, out_path, slim)
+    await real_multi_trace_merge(paths, out_path, slim)
 
-  monkeypatch.setattr(pages, "merge_traces", counting_merge)
+  monkeypatch.setattr(pages, "_build_multi_trace_merge", counting_merge)
 
   async def run() -> None:
-    result_a, result_b = await asyncio.gather(pages._cached_merge(key_a, False), pages._cached_merge(key_b, False))
+    result_a, result_b = await asyncio.gather(
+        pages._cached_merge(key_a, slim=False), pages._cached_merge(key_b, slim=False))
     assert result_a.is_file() and result_b.is_file()
     assert result_a != result_b
     assert len(calls) == 2
@@ -565,10 +606,10 @@ def test_disconnect_does_not_lose_work(
   release = threading.Event()
   calls: list[int] = []
 
-  monkeypatch.setattr(pages, "merge_traces", _make_blocking_merge(calls, started, release))
+  monkeypatch.setattr(pages, "_build_multi_trace_merge", _make_blocking_multi_build(calls, started, release))
 
   async def run() -> None:
-    waiter = asyncio.create_task(pages._cached_merge(key, False))
+    waiter = asyncio.create_task(pages._cached_merge(key, slim=False))
     assert await _wait_until(started.is_set)
     waiter.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -578,7 +619,7 @@ def test_disconnect_does_not_lose_work(
     assert await _wait_until(lambda: len(list(merge_cache.glob("*.json.gz"))) == 1)
     # A following request for the same key hits the now-cached entry, no second build.
     second_calls = len(calls)
-    hit = await pages._cached_merge(key, False)
+    hit = await pages._cached_merge(key, slim=False)
     assert hit.is_file()
     assert len(calls) == second_calls
 

@@ -44,7 +44,7 @@ from src.core.scheduler import Scheduler
 from src.core.sessions import (
     ScheduledSessionBusyError,
     SessionManager,
-    SuccessionRefused,
+    SuccessionRefusedError,
 )
 from src.core.thinking_state import clear_busy, mark_busy
 from src.core.triggers import TriggerManager
@@ -79,6 +79,7 @@ def _seed_scheduled_task(
   path.write_text(
       yaml.safe_dump(
           {
+              "type": "normal",
               "cron": cron,
               "prompt_file": str(prompt),
               "timezone": "America/Los_Angeles",
@@ -112,7 +113,7 @@ async def _make_scheduled_parent(
 
 
 @pytest.mark.asyncio
-async def test_elone_writes_successor_pointer_and_archives_thumbs_down_parent(tmp_path: Path) -> None:
+async def test_elone_writes_successor_pointer_and_archives_parent(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)
   parent_id = await _make_parent(mgr)
@@ -123,7 +124,8 @@ async def test_elone_writes_successor_pointer_and_archives_thumbs_down_parent(tm
   assert fresh_parent is not None
   assert fresh_parent.successor_session_id == child.id
   assert fresh_parent.status == SessionStatus.ARCHIVED
-  assert fresh_parent.rating == "thumbs_down"
+  # Session-level rating is gone: the persisted metadata carries no rating key.
+  assert "rating" not in json.loads(mgr._metadata_path(parent_id).read_text())
 
 
 @pytest.mark.asyncio
@@ -148,7 +150,6 @@ async def test_second_elone_of_ordinary_parent_overwrites_successor_and_leaves_f
   fresh_parent = await mgr.read_metadata_fresh(parent_id)
   assert fresh_parent is not None
   assert fresh_parent.status == SessionStatus.ARCHIVED
-  assert fresh_parent.rating == "thumbs_down"
   assert fresh_parent.successor_session_id == second_child.id
 
   # The first child's metadata is untouched by the second elone.
@@ -204,7 +205,6 @@ async def test_elone_of_scheduler_owned_session_succeeds_with_full_inheritance(
   fresh_parent = await mgr.read_metadata_fresh(parent.id)
   assert fresh_parent is not None
   assert fresh_parent.status == SessionStatus.ARCHIVED
-  assert fresh_parent.rating == "thumbs_down"
   assert fresh_parent.successor_session_id == child.id
   # The archived parent keeps its scheduled_task field; the alignment scan
   # only considers active sessions, so it stays inert.
@@ -228,7 +228,7 @@ async def test_second_elone_of_scheduler_owned_parent_refuses_and_mutates_nothin
   first_child = await mgr.elone_session(parent.id, event_index=1, backend="codex-o3")
   before = _session_dir_names(cfg)
 
-  with pytest.raises(SuccessionRefused):
+  with pytest.raises(SuccessionRefusedError):
     await mgr.elone_session(parent.id, event_index=1, backend="codex-o3")
 
   # No new session directory appears.
@@ -240,7 +240,6 @@ async def test_second_elone_of_scheduler_owned_parent_refuses_and_mutates_nothin
   assert fresh_parent is not None
   assert fresh_parent.successor_session_id == first_child.id
   assert fresh_parent.status == SessionStatus.ARCHIVED
-  assert fresh_parent.rating == "thumbs_down"
 
 
 @pytest.mark.asyncio
@@ -478,7 +477,13 @@ async def test_deliver_to_successor_reresolves_when_successor_appears_between_re
       # (under the lock) sees one — as if an elone landed while we waited.
       if calls["n"] >= 2:
         meta.successor_session_id = gen1.id
-        await mgr.save_metadata(meta)
+        # Written straight to the file: this stub runs inside
+        # deliver_to_successor's held tail lock, where a save_metadata call
+        # would both re-enter the patched read (the save guard reconciles
+        # anchors through it) and re-take the never-reentrant lock. A landing
+        # elone writes through its own lock, never this one, so the file
+        # write is the honest simulation.
+        mgr._metadata_path(gen0).write_text(meta.model_dump_json(indent=2), encoding="utf-8")
       return meta
     return await real_read(session_id)
 
@@ -733,7 +738,8 @@ async def _make_recently_run_cadence_parent(mgr: SessionManager) -> SessionMetad
 
 
 def _cadence_task_cfg() -> ScheduledTaskConfig:
-  return ScheduledTaskConfig(name="nightly", cron=_CADENCE_CRON, prompt="run nightly", backend="codex-o3")
+  return ScheduledTaskConfig(
+      name="nightly", cron=_CADENCE_CRON, type="normal", prompt="run nightly", backend="codex-o3")
 
 
 @pytest.mark.asyncio

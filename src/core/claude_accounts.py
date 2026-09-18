@@ -26,16 +26,23 @@ cc-claude entry uses the default login directory.
 from __future__ import annotations
 
 import json
+import os
 import shutil
-from collections.abc import Iterable, Set
+from collections.abc import Iterable
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from src.core.config import CharlieBotConfig
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendOption, BackendType, ClaudeAccount
+
+# future-annotations keep every cfg: CharlieBotConfig hint unevaluated; the config
+# model stack must stay out of the claude-sub worker binary's import (it imports
+# this module for CREDENTIALS_FILE).
+if TYPE_CHECKING:
+  from src.core.config import CharlieBotConfig
 
 log = LazyStructlogLogger()
 
@@ -73,6 +80,21 @@ _RESET_BONUS_MIN_HEADROOM = 0.10
 
 # Scores closer than this are a near-tie, broken by least-recent event activity.
 _SCORE_TIE = 0.02
+
+# Keys of the usage-panel payload and of one window entry in it: src/api/ext_usage.py
+# builds the payload from the providers' usage APIs, this module folds it into the
+# account readings, and web/static/js/ext_usage.js renders it — one home per key so
+# the producer, this consumer, and the browser cannot drift apart silently. A
+# window's ``utilization`` is a percentage as reported; ``resets_at`` is an ISO-8601
+# UTC string (empty when upstream reported none); ``scope_label`` names a
+# model-scoped window and is absent on plan-wide ones.
+PANEL_WINDOWS = "windows"
+PANEL_FETCHED_AT = "fetched_at"
+PANEL_PROVIDER = "provider"
+PANEL_WINDOW_MINUTES = "window_minutes"
+PANEL_UTILIZATION = "utilization"
+PANEL_RESETS_AT = "resets_at"
+PANEL_SCOPE_LABEL = "scope_label"
 
 
 @dataclass(frozen=True)
@@ -240,17 +262,17 @@ def observe_usage_panel(label: str, usage: dict, now: datetime | None = None) ->
   Panel utilizations are percentages; they are kept as reported and scaled when
   read, together with the ``scope_label`` that names a model-scoped window.
   """
-  windows = usage.get("windows") if isinstance(usage, dict) else None
+  windows = usage.get(PANEL_WINDOWS) if isinstance(usage, dict) else None
   if not isinstance(windows, list):
     return
-  fetched_at = usage.get("fetched_at")
+  fetched_at = usage.get(PANEL_FETCHED_AT)
   try:
     at = datetime.fromisoformat(fetched_at) if isinstance(fetched_at, str) else now_or(now)
   except ValueError:
     at = now_or(now)
   if at.tzinfo is None:
     at = at.replace(tzinfo=UTC)
-  _panel_readings[label] = {"at": at, "windows": [w for w in windows if isinstance(w, dict)]}
+  _panel_readings[label] = {"at": at, PANEL_WINDOWS: [w for w in windows if isinstance(w, dict)]}
 
 
 def parse_iso_utc(value: Any) -> datetime | None:
@@ -275,10 +297,10 @@ def panel_window_expired(window: dict[str, Any], sampled: datetime | None, now: 
   """
   if sampled is None:
     return False
-  resets_at = parse_iso_utc(window.get("resets_at"))
+  resets_at = parse_iso_utc(window.get(PANEL_RESETS_AT))
   if resets_at is not None and resets_at <= now and sampled < resets_at:
     return True
-  window_minutes = window.get("window_minutes")
+  window_minutes = window.get(PANEL_WINDOW_MINUTES)
   if isinstance(window_minutes, int) and not isinstance(window_minutes, bool):
     return now - sampled > timedelta(minutes=window_minutes)
   return False
@@ -297,10 +319,10 @@ def _live_windows(label: str, model: str | None, now: datetime) -> list[dict[str
     return []
   family = model_family(model)
   live: list[dict[str, Any]] = []
-  for window in stored["windows"]:
+  for window in stored[PANEL_WINDOWS]:
     if panel_window_expired(window, stored["at"], now):
       continue
-    scope = window.get("scope_label")
+    scope = window.get(PANEL_SCOPE_LABEL)
     if scope and not (family and family in str(scope).lower()):
       continue
     live.append(window)
@@ -314,7 +336,7 @@ def _panel_reading(label: str, model: str | None, now: datetime | None = None) -
     return None
   values: list[float] = []
   for window in _live_windows(label, model, now_or(now)):
-    value = window.get("utilization")
+    value = window.get(PANEL_UTILIZATION)
     if isinstance(value, (int, float)) and not isinstance(value, bool):
       values.append(float(value) / 100.0)
   if not values:
@@ -335,7 +357,7 @@ def latest_reading(label: str, model: str | None, now: datetime | None = None) -
   """
   moment = now_or(now)
   general = _newest_reading(_event_readings.get(label), _panel_reading(label, None, moment))
-  if model is None or not any(window.get("scope_label") for window in _live_windows(label, model, moment)):
+  if model is None or not any(window.get(PANEL_SCOPE_LABEL) for window in _live_windows(label, model, moment)):
     return general
   scoped = _panel_reading(label, model, moment)
   if scoped is None:
@@ -374,7 +396,7 @@ def select(
     cfg: CharlieBotConfig,
     model: str | None,
     exclude: Iterable[str] = (),
-    busy_accounts: Set[str] | None = None,
+    busy_accounts: AbstractSet[str] | None = None,
     now: datetime | None = None,
 ) -> ClaudeAccount | None:
   """The healthy account with the most headroom for *model*, ranked statelessly.
@@ -404,7 +426,7 @@ def select(
   if not available:
     return None
   idle = [(account, hr) for account, hr in available if busy_accounts is None or account.label not in busy_accounts]
-  contenders = idle if idle else available
+  contenders = idle or available
   scored = [(hr + _reset_bonus(account.label, model, moment, hr), account) for account, hr in contenders]
   best = max(score for score, _account in scored)
   tied = [account for score, account in scored if best - score <= _SCORE_TIE]
@@ -427,14 +449,14 @@ def _time_to_reset(label: str, model: str | None, now: datetime) -> float | None
   """
   limiting: tuple[float, dict[str, Any]] | None = None
   for window in _live_windows(label, model, now):
-    value = window.get("utilization")
+    value = window.get(PANEL_UTILIZATION)
     if not isinstance(value, (int, float)) or isinstance(value, bool):
       continue
     if limiting is None or float(value) > limiting[0]:
       limiting = (float(value), window)
   if limiting is None:
     return None
-  resets_at = parse_iso_utc(limiting[1].get("resets_at"))
+  resets_at = parse_iso_utc(limiting[1].get(PANEL_RESETS_AT))
   return (resets_at - now).total_seconds() if resets_at is not None else None
 
 
@@ -467,6 +489,28 @@ class TranscriptMoveError(RuntimeError):
   """A transcript copy between logins did not land byte-for-byte."""
 
 
+# The move guard's refusal marker, carried by every refusal message; the relay
+# consumers (place_turn, move_to_next_account) match it to tell the
+# newer-transcript refusal -- the one an adoption may answer -- from every other
+# copy failure.
+GUARD_REFUSAL_MARKER = "refusing to overwrite newer transcript"
+
+# Tail-window size of the placement probe's lineage check (see
+# ``transcript_lineage_split``): two KB-scale reads per placement.
+PROBE_TAIL_BYTES = 16 * 1024
+
+# A staged copy's name suffix. The staging file lives in the destination
+# directory but outside every path the transcript readers match
+# (``*/<cc-id>.jsonl`` and the ``<cc-id>/`` sidecar), so a half-copied file is
+# never visible as the transcript or as sidecar content.
+_STAGING_SUFFIX = ".staging"
+
+
+def is_newer_transcript_refusal(error: BaseException) -> bool:
+  """True when *error* is the move guard's newer-transcript refusal."""
+  return isinstance(error, TranscriptMoveError) and GUARD_REFUSAL_MARKER in str(error)
+
+
 def transcript_matches(config_dir: str | Path, cc_session_id: str) -> list[Path]:
   """Every top-level conversation transcript for *cc_session_id* under *config_dir*, sorted.
 
@@ -488,32 +532,229 @@ def find_transcript_account(cfg: CharlieBotConfig, cc_session_id: str) -> Claude
   return next((account for account in pool(cfg) if transcript_path(account.config_dir, cc_session_id)), None)
 
 
-def _tree_bytes(root: Path) -> int:
-  return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
+def _dst_holds_newer_transcript(src: Path, dst: Path) -> bool:
+  """True when copying *src* over *dst* would overwrite a strictly newer transcript.
+
+  The single-writer invariant grounds the mtime reading: the only writer of a
+  live transcript copy is the claude process running on that login (every write
+  stamps a fresh mtime), and this move's own ``copy2`` propagates the source's
+  mtime to its destination -- so a destination whose mtime is strictly newer
+  than the source holds a state the source never reached. Equal mtimes with a
+  larger destination are the same refusal (it grew under the same stamp); equal
+  mtimes AND equal size are the same copy re-moved and pass through.
+  """
+  if not dst.exists():
+    return False
+  src_stat, dst_stat = src.stat(), dst.stat()
+  if dst_stat.st_mtime_ns > src_stat.st_mtime_ns:
+    return True
+  return dst_stat.st_mtime_ns == src_stat.st_mtime_ns and dst_stat.st_size > src_stat.st_size
+
+
+def _refusal_detail(src: Path, dst: Path) -> str:
+  src_stat, dst_stat = src.stat(), dst.stat()
+  return (
+      f"dst {dst} (mtime {datetime.fromtimestamp(dst_stat.st_mtime, UTC).isoformat()}, size {dst_stat.st_size})"
+      f" vs src {src} (mtime {datetime.fromtimestamp(src_stat.st_mtime, UTC).isoformat()}, size {src_stat.st_size})")
+
+
+def _is_staging_name(name: str) -> bool:
+  return name.endswith(_STAGING_SUFFIX)
+
+
+def _sidecar_files(root: Path) -> set[Path]:
+  """Relative paths of *root*'s files, staged half-products excluded."""
+  if not root.is_dir():
+    return set()
+  return {path.relative_to(root) for path in root.rglob("*") if path.is_file() and not _is_staging_name(path.name)}
+
+
+def _sidecar_file_diff(sidecar: Path, dst_sidecar: Path) -> str:
+  """The two sidecar trees' file-set diff: missing at the destination, born at the
+  destination, or present on both sides with different sizes."""
+  src_rels, dst_rels = _sidecar_files(sidecar), _sidecar_files(dst_sidecar)
+  parts: list[str] = []
+  if missing := sorted(src_rels - dst_rels):
+    parts.append(f"missing at dst: {[str(rel) for rel in missing]}")
+  if extra := sorted(dst_rels - src_rels):
+    parts.append(f"only at dst: {[str(rel) for rel in extra]}")
+  if differing := sorted(
+      rel for rel in src_rels & dst_rels if (sidecar / rel).stat().st_size != (dst_sidecar / rel).stat().st_size):
+    parts.append(f"size differs: {[str(rel) for rel in differing]}")
+  return "; ".join(parts) if parts else "file sets equal"
+
+
+def _move_sidecar(sidecar: Path, dst_sidecar: Path) -> tuple[int, int, int] | None:
+  """Stage *sidecar*'s files into *dst_sidecar* one by one; report the file-set outcome.
+
+  Per file: copy2 to a staging file in the destination tree, verify the size
+  against the source, then ``os.replace`` into place -- the destination never
+  holds a half-written sidecar file. The pass condition is the file set: every
+  source file present and size-equal at the destination, which the staged
+  per-file copies guarantee on completion. Files born at the destination
+  (absent from the source) are retained and counted; the aggregate byte sum is
+  report-only. A failure raises TranscriptMoveError carrying the file-set diff
+  and leaves no staged half-products behind.
+  """
+  if not sidecar.is_dir():
+    return None
+  staged: list[Path] = []
+  try:
+    for src_file in sorted(path for path in sidecar.rglob("*") if path.is_file()):
+      dst_file = dst_sidecar / src_file.relative_to(sidecar)
+      dst_file.parent.mkdir(parents=True, exist_ok=True)
+      tmp = dst_file.with_name(dst_file.name + _STAGING_SUFFIX)
+      shutil.copy2(src_file, tmp)
+      staged.append(tmp)
+      if tmp.stat().st_size != src_file.stat().st_size:
+        raise TranscriptMoveError(f"transcript sidecar copy size mismatch: {src_file} -> {dst_file}")
+      os.replace(tmp, dst_file)
+      staged.pop()
+  except (OSError, TranscriptMoveError) as exc:
+    raise TranscriptMoveError(
+        f"transcript sidecar file-set mismatch: {sidecar} -> {dst_sidecar}"
+        f" ({_sidecar_file_diff(sidecar, dst_sidecar)}); last error: {exc}") from exc
+  finally:
+    for tmp in staged:
+      tmp.unlink(missing_ok=True)
+  src_rels, dst_rels = _sidecar_files(sidecar), _sidecar_files(dst_sidecar)
+  dst_only = dst_rels - src_rels
+  total_bytes = sum((dst_sidecar / rel).stat().st_size for rel in src_rels)
+  return len(src_rels), len(dst_only), total_bytes
 
 
 def move_transcript(cc_session_id: str, src_dir: str | Path, dst_dir: str | Path) -> Path:
   """Copy the conversation ``<uuid>.jsonl`` and its ``<uuid>/`` sidecar into *dst_dir*.
 
   The destination keeps the source's cwd-slug directory, so a ``--resume`` from
-  the same cwd under the new login finds it. Sizes are checked after the copy
-  and the source stays in place (a failed relay can fall back to it; the cold
-  storage sweep retires the old copy later). Raises TranscriptMoveError when
-  the source is missing or the copy differs in size.
+  the same cwd under the new login finds it. The jsonl lands through a staged
+  copy verified against the source and swapped in with ``os.replace`` -- the
+  destination never holds a partial transcript. The guard refuses to overwrite
+  a strictly newer destination copy (the kill between a relay's move and its
+  label persist, or a forked lineage); the consumers of that refusal adopt the
+  newer holder and continue from it, and the move layer itself never redirects.
+  Equal mtime and size is the same copy re-moved and passes through. The source
+  copy stays in place -- a failed relay falls back to it, and the queue
+  consumer's post-round :func:`retire_transcript_copies` retires it once the
+  round has ended soundly with its account label on disk. Raises
+  TranscriptMoveError when the source is missing, the guard refuses, or a copy
+  differs from its source.
   """
   src = transcript_path(src_dir, cc_session_id)
   if src is None:
     raise TranscriptMoveError(f"no transcript {cc_session_id}.jsonl under {Path(src_dir).expanduser() / 'projects'}")
   dst = Path(dst_dir).expanduser() / "projects" / src.parent.name / src.name
   dst.parent.mkdir(parents=True, exist_ok=True)
-  shutil.copy2(src, dst)
-  if dst.stat().st_size != src.stat().st_size:
-    raise TranscriptMoveError(f"transcript copy size mismatch: {src} -> {dst}")
-  sidecar = src.with_suffix("")
-  if sidecar.is_dir():
-    dst_sidecar = dst.with_suffix("")
-    shutil.copytree(sidecar, dst_sidecar, dirs_exist_ok=True)
-    if _tree_bytes(dst_sidecar) != _tree_bytes(sidecar):
-      raise TranscriptMoveError(f"transcript sidecar size mismatch: {sidecar} -> {dst_sidecar}")
-  log.info("claude_account_transcript_moved", cc_session_id=cc_session_id, src=str(src), dst=str(dst))
+  if _dst_holds_newer_transcript(src, dst):
+    src_stat, dst_stat = src.stat(), dst.stat()
+    log.warning(
+        "master_cc_transcript_move_stale_refused",
+        cc_session_id=cc_session_id,
+        src=str(src),
+        dst=str(dst),
+        src_mtime_ns=src_stat.st_mtime_ns,
+        src_size=src_stat.st_size,
+        dst_mtime_ns=dst_stat.st_mtime_ns,
+        dst_size=dst_stat.st_size,
+    )
+    raise TranscriptMoveError(f"{GUARD_REFUSAL_MARKER}: {_refusal_detail(src, dst)}")
+  staged = dst.with_name(dst.name + _STAGING_SUFFIX)
+  try:
+    shutil.copy2(src, staged)
+    if staged.stat().st_size != src.stat().st_size:
+      raise TranscriptMoveError(f"transcript copy size mismatch: {src} -> {dst}")
+    os.replace(staged, dst)
+  finally:
+    staged.unlink(missing_ok=True)
+  sidecar_report = _move_sidecar(src.with_suffix(""), dst.with_suffix(""))
+  log.info(
+      "claude_account_transcript_moved",
+      cc_session_id=cc_session_id,
+      src=str(src),
+      dst=str(dst),
+      sidecar_src_files=sidecar_report[0] if sidecar_report else None,
+      sidecar_dst_only_files=sidecar_report[1] if sidecar_report else None,
+      sidecar_bytes=sidecar_report[2] if sidecar_report else None,
+  )
   return dst
+
+
+def newest_transcript_copy(cfg: CharlieBotConfig, cc_session_id: str) -> tuple[ClaudeAccount, Path] | None:
+  """The pool account holding the mtime-newest copy of *cc_session_id*'s transcript, with its path.
+
+  The same per-cc-id ``*/<cc-id>.jsonl`` traversal across every pool root the
+  resume fallback uses; the newest copy is where the session's live content
+  continues, and equal mtimes break by path so the answer is deterministic.
+  """
+  best_key: tuple[int, Path] | None = None
+  best: tuple[ClaudeAccount, Path] | None = None
+  for account in pool(cfg):
+    for path in transcript_matches(account.config_dir, cc_session_id):
+      key = (path.stat().st_mtime_ns, path)
+      if best_key is None or key > best_key:
+        best_key, best = key, (account, path)
+  return best
+
+
+def _tail_window(path: Path) -> str:
+  """The file's last ``PROBE_TAIL_BYTES``, decoded leniently."""
+  with path.open("rb") as fh:
+    fh.seek(0, os.SEEK_END)
+    end = fh.tell()
+    fh.seek(max(0, end - PROBE_TAIL_BYTES))
+    return fh.read(PROBE_TAIL_BYTES).decode("utf-8", errors="replace")
+
+
+def transcript_lineage_split(label_copy: Path, newest_copy: Path) -> bool:
+  """True when the label copy's tail line is absent from the newest copy's tail window.
+
+  The placement probe's lineage reading, additive to mtime: mtime alone proves
+  newer-or-older, never who is whose successor. A label copy whose tail line the
+  newest copy still contains is that copy's ancestor or equal -- one lineage;
+  a tail line the newest copy does not contain means the two copies diverged
+  (forked, or the label stale past the window). Tail windows keep the probe at
+  two KB-scale reads; a label that grew past the window since it forked reads as
+  forked, and the adoption reaction is the same either way. A blank label
+  window has no tail line to compare and never reads as split.
+  """
+  tail_line = transcript_tail_line(label_copy)
+  if tail_line is None:
+    return False
+  return tail_line not in _tail_window(newest_copy)
+
+
+def transcript_tail_line(path: Path) -> str | None:
+  """The last non-empty line inside *path*'s tail window, or None when it is blank."""
+  lines = [line for line in _tail_window(path).splitlines() if line.strip()]
+  return lines[-1] if lines else None
+
+
+def retire_transcript_copies(cfg: CharlieBotConfig, cc_session_id: str, keep: int = 2) -> None:
+  """Retire every pool copy of *cc_session_id*'s transcript except the newest *keep*.
+
+  The live-session counterpart of storage_cool's cold-session sweep
+  (``src/core/storage_cool.py::_sweep_claude_transcripts``): storage_cool
+  retires whole transcript trees of sessions no reader can reach again, this
+  retires the redundant copies a relay leaves behind for one still-live
+  session -- the two deletion sets are disjoint, so neither can delete what the
+  other protects. The queue consumer calls this only after a round that ended
+  soundly and whose account label the funnel persisted, so the newest copies
+  are the ones the label names; a failed round keeps every copy as its
+  fallback.
+  """
+  copies = [
+      (path.stat().st_mtime_ns, path)
+      for account in pool(cfg)
+      for path in transcript_matches(account.config_dir, cc_session_id)
+  ]
+  newest_first = sorted(copies, key=lambda entry: entry[0], reverse=True)
+  for _mtime_ns, path in newest_first[keep:]:
+    sidecar = path.with_suffix("")
+    try:
+      path.unlink()
+      if sidecar.is_dir():
+        shutil.rmtree(sidecar)
+    except OSError as exc:
+      log.warning("claude_account_transcript_retire_failed", path=str(path), error=str(exc))
+      continue
+    log.info("claude_account_transcript_retired", cc_session_id=cc_session_id, path=str(path))

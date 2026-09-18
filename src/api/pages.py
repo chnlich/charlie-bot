@@ -1,10 +1,10 @@
-"""Server-rendered pages — single Jinja2 template for the entire UI."""
+"""Server-rendered pages — one Jinja2 template per page under web/templates/: the chat
+UI, home, diff, events viewer, token usage, NCU, and Perfetto."""
 
 import asyncio
 import concurrent.futures
 import datetime as dt
 import fnmatch
-import gc
 import hashlib
 import json
 import multiprocessing
@@ -14,20 +14,29 @@ import subprocess
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlencode, urlparse
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from starlette.responses import Response
 
 from src.api.code_server import is_code_server_available
 from src.api.deps import SESSION_NOT_FOUND_DETAIL, get_config_on_loop, get_session_manager
 from src.api.message_utils import build_session_bootstrap_data
 from src.api.sessions import _bootstrap_payload, _default_backend_id
+from src.core.buildinfo import read_repo_head_sha
 from src.core.config import CharlieBotConfig, configured_access_key, get_config
-from src.core.constants import FILE_SERVER_MOUNTS, REPO_ROOT
+from src.core.constants import (
+    AUTH_STATUS_PATH,
+    FILE_SERVER_MOUNTS,
+    NCU_VIEWER_PATH,
+    PERFETTO_MERGED_PATH,
+    PERFETTO_VIEWER_PATH,
+    REPO_ROOT,
+)
+from src.core.gc_control import gc_off
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus
 from src.core.ncu_parsing import NcuParseError, parse_ncu_report
@@ -35,7 +44,17 @@ from src.core.session_tree_preview import is_preview_mode
 from src.core.sessions import SessionManager
 from src.core.timeouts import HOME_SERVICE_PROBE_TIMEOUT, SUBPROCESS_GIT_VERSION_TIMEOUT
 from src.core.token_tally import TokenTally, collect_token_usage
-from src.core.trace_merge import _MERGE_COMPRESSLEVEL, merge_traces
+from src.core.trace_merge import (
+    _gzip_exit_or_raise,
+    _kill_gzip_run,
+    _trace_events_or_raise,
+    build_multi_trace_merge,
+    igzip_command,
+    merge_traces,
+)
+
+if TYPE_CHECKING:
+  from fastapi.templating import Jinja2Templates
 
 log = LazyStructlogLogger()
 
@@ -102,9 +121,11 @@ _token_usage_task: asyncio.Task | None = None
 # failure, so a later request retries rather than inheriting a stale failure.
 _merge_tasks: dict[str, asyncio.Task] = {}
 # Bounded process pool for the CPU-bound merge body, created lazily on first use and shut down
-# from the server lifespan's shutdown half.
+# from the server lifespan's shutdown half. Sized to the CPUs: a multi-trace merge runs one
+# member per trace on this pool and the wall is parse-bound, so more workers than the CPUs
+# only add contention; a single-trace merge uses one worker regardless.
 _merge_executor_instance: concurrent.futures.ProcessPoolExecutor | None = None
-_MERGE_POOL_WORKERS = 2
+_MERGE_POOL_WORKERS = min(4, os.cpu_count() or 2)
 
 
 def _perfetto_merge_cache_dir() -> Path:
@@ -119,26 +140,36 @@ def _token_tally_cache_path() -> Path:
 
 def _get_git_version() -> str:
   """Return git short hash + commit date (e.g. 'bc6b882 · 03-24'), or '' on failure."""
+  short_hash = read_repo_head_sha(SUBPROCESS_GIT_VERSION_TIMEOUT)
+  if short_hash is None:
+    log.warning("git_version_failed")
+    return ""
   try:
-    short_hash = subprocess.check_output(
-        ["git", "rev-parse", "--short", "HEAD"],
-        cwd=REPO_ROOT,
-        text=True,
-        timeout=SUBPROCESS_GIT_VERSION_TIMEOUT,
-    ).strip()
     commit_date = subprocess.check_output(
         ["git", "log", "-1", "--format=%cd", "--date=format:%m-%d"],
         cwd=REPO_ROOT,
         text=True,
         timeout=SUBPROCESS_GIT_VERSION_TIMEOUT,
     ).strip()
-    return f"{short_hash} · {commit_date}"
-  except Exception:
+  except (OSError, subprocess.SubprocessError):
     log.warning("git_version_failed")
     return ""
+  return f"{short_hash} · {commit_date}"
 
 
-_RUNTIME_GIT_VERSION = _get_git_version()
+# The two git subprocesses behind the version run only when a page renders the
+# token or the footer; the server import floor (docs/perf_baseline.md M99)
+# depends on them staying off it.
+_GIT_VERSION: str | None = None
+
+
+def _git_version() -> str:
+  """The module's git version, computed on first use and memoized."""
+  global _GIT_VERSION
+  if _GIT_VERSION is None:
+    _GIT_VERSION = _get_git_version()
+  return _GIT_VERSION
+
 
 # Content half of the ?v= asset token, keyed on the walk-instant signature
 # tuple: a file that moves after the walk keys the older digest and the next
@@ -202,15 +233,30 @@ def _asset_tree_digest() -> str:
 
 def _static_asset_version() -> str:
   """Cache-bust token for static assets: the runtime git version plus the served tree's content digest."""
-  git_part = _RUNTIME_GIT_VERSION.replace(" · ", "-").replace(" ", "-")
+  git_part = _git_version().replace(" · ", "-").replace(" ", "-")
   return f"{git_part}-{_asset_tree_digest()}"
 
 
 router = APIRouter()
-templates = Jinja2Templates(directory=str(REPO_ROOT / "web" / "templates"))
+
+# jinja2 + fastapi.templating ride every page render (~19 ms of the M99 server
+# import floor, marginal over the already-loaded fastapi) and no import-time
+# path touches a template, so the engine builds on first render; the test that
+# pins this is tests/test_cli_import_weight.py's server ban set.
+_templates_instance: "Jinja2Templates | None" = None
 
 
-@router.get("/api/auth/status")
+def _templates() -> "Jinja2Templates":
+  """The request-time template engine, built on first use and reused after."""
+  global _templates_instance
+  if _templates_instance is None:
+    from fastapi import templating
+
+    _templates_instance = templating.Jinja2Templates(directory=str(REPO_ROOT / "web" / "templates"))
+  return _templates_instance
+
+
+@router.get(AUTH_STATUS_PATH)
 async def auth_status() -> JSONResponse:
   """Return whether access-key authentication is enabled."""
   return JSONResponse({"auth_enabled": bool(configured_access_key())})
@@ -234,7 +280,7 @@ async def events_viewer(
   if not session:
     raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
 
-  return templates.TemplateResponse(
+  return _templates().TemplateResponse(
       request,
       "events_viewer.html",
       context={
@@ -246,11 +292,12 @@ async def events_viewer(
       })
 
 
-@router.get("/perfetto", response_class=HTMLResponse)
+@router.get(PERFETTO_VIEWER_PATH, response_class=HTMLResponse)
 async def perfetto_viewer(
     request: Request,
     trace: list[str] = Query(default=[]),
-    dir: str | None = None,
+    # alias keeps the URL query key 'dir': the page's own merged-trace link builds it.
+    dir_path: str | None = Query(default=None, alias="dir"),
     pattern: str = "*.json",
     title: str | None = None,
     slim: bool | None = None,
@@ -260,8 +307,8 @@ async def perfetto_viewer(
   Supports single trace, multiple traces, and directory auto-discovery.
   """
   inputs = [_trace_input(value) for value in trace]
-  if dir is not None:
-    discovered = await asyncio.to_thread(_discover_trace_paths, dir, pattern)
+  if dir_path is not None:
+    discovered = await asyncio.to_thread(_discover_trace_paths, dir_path, pattern)
     inputs.extend((f"{FILE_SERVER_MOUNTS[0]}{path}", path) for path in discovered)
 
   if not inputs:
@@ -270,20 +317,20 @@ async def perfetto_viewer(
   warn = None
   if await asyncio.to_thread(_all_local_json_traces, inputs):
     query: list[tuple[str, str]] = [("trace", str(path)) for _, path in inputs[:len(trace)]]
-    if dir is not None:
-      query.extend((("dir", dir), ("pattern", pattern)))
+    if dir_path is not None:
+      query.extend((("dir", dir_path), ("pattern", pattern)))
     if slim is not None:
       query.append(("slim", str(slim)))
-    trace_url = f"/perfetto/merged?{urlencode(query)}"
+    trace_url = f"{PERFETTO_MERGED_PATH}?{urlencode(query)}"
   else:
     trace_url = inputs[0][0]
     if len(inputs) > 1:
       warn = "⚠ Remote or non-JSON traces cannot be merged, showing first trace only"
 
-  display_title = title or dir or inputs[0][0].rsplit("/", 1)[-1]
-  is_merge = trace_url.startswith("/perfetto/merged") and (len(inputs) > 1 or bool(slim))
+  display_title = title or dir_path or inputs[0][0].rsplit("/", 1)[-1]
+  is_merge = trace_url.startswith(PERFETTO_MERGED_PATH) and (len(inputs) > 1 or bool(slim))
 
-  return templates.TemplateResponse(
+  return _templates().TemplateResponse(
       request,
       "perfetto.html",
       context={
@@ -292,7 +339,7 @@ async def perfetto_viewer(
           "warn": warn,
           "merge_count": len(inputs),
           "is_merge": is_merge,
-          "is_direct_pass": trace_url.startswith("/perfetto/merged") and not is_merge,
+          "is_direct_pass": trace_url.startswith(PERFETTO_MERGED_PATH) and not is_merge,
       })
 
 
@@ -415,43 +462,52 @@ async def _cached_gzip_build(cache_key: str, build: Callable[[Path], Awaitable[N
 async def _cached_merge(paths: list[Path], slim: bool) -> Path:
 
   async def build(temp_path: Path) -> None:
-    await asyncio.get_running_loop().run_in_executor(_merge_executor(), merge_traces, paths, temp_path, slim)
+    if len(paths) == 1:
+      await asyncio.get_running_loop().run_in_executor(_merge_executor(), merge_traces, paths, temp_path, slim)
+      return
+    await _build_multi_trace_merge(paths, slim, temp_path)
 
   return await _cached_gzip_build(_merge_cache_key(paths, slim, "merge"), build)
 
 
+async def _build_multi_trace_merge(paths: list[Path], slim: bool, out_path: Path) -> None:
+  """Build the multi-trace merged artifact off the event loop: member tasks on
+  the merge pool, the parent thread streaming each fragment into the single
+  gzip subprocess as its member completes (``build_multi_trace_merge`` owns
+  the member temp space; the caller owns artifact atomicity)."""
+  await asyncio.get_running_loop().run_in_executor(
+      None, build_multi_trace_merge, paths, out_path, slim, _merge_executor())
+
+
 def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
-  """Validate the trace is parseable JSON while a gzip process stream-compresses the original bytes.
+  """Validate the input is a parseable Chrome-JSON trace while a gzip process stream-compresses the original bytes.
 
   The artifact is the original bytes compressed and the parse result is discarded, so the two
   passes are independent; the parse holds the GIL for its whole run (measured: a concurrent
-  gzip thread makes no progress), so the compress must leave the process — the `gzip` run at
-  the merge path's compression level compresses in parallel with the parse. Validation parses
+  gzip thread makes no progress), so the compress must leave the process — the merge family's
+  one compressor (``trace_merge.igzip_command``) compresses in parallel with the parse. Validation parses
   with orjson, the parser the merge path's build already parses with, so both serve shapes
   share one JSON boundary: the NaN/Infinity literals stdlib json accepts fail the build loudly
   here too — a literal Perfetto cannot render must not reach the cache.
   """
-  with out_path.open("wb") as compressed, subprocess.Popen(["gzip", f"-{_MERGE_COMPRESSLEVEL}", "-c", str(path)],
-                                                           stdout=compressed, stderr=subprocess.PIPE) as gzip_proc:
+  command = igzip_command("-c", str(path))
+  with (out_path.open("wb") as compressed, subprocess.Popen(command, stdout=compressed, stderr=subprocess.PIPE) as
+        gzip_proc, gc_off(collect=True)):
     # The parse allocates ~1M dicts per 1M input events; the generational passes
     # over that churn measured 0.27-0.35 s per 307 MB parse. Unlike the merge
     # path's pool worker, this build runs on a server thread, so the disable is
-    # process-wide but bounded by the build window; the re-enable collect
-    # reclaims the parse's cyclic leftovers.
-    gc.disable()
+    # process-wide but bounded by the build window; collect reclaims the parse's
+    # cyclic leftovers.
     try:
       with path.open("rb") as validate_file:
-        orjson.loads(validate_file.read())
-      if gzip_proc.wait() != 0:
-        detail = gzip_proc.stderr.read().decode(errors="replace").strip()
-        raise RuntimeError(f"gzip -{_MERGE_COMPRESSLEVEL} failed for {path}: {detail}")
+        # Parseable JSON is not enough: a JSON object with no traceEvents array
+        # (an analysis manifest) would otherwise compress into the cache and
+        # reach the viewer as a trace that renders nothing.
+        _trace_events_or_raise(orjson.loads(validate_file.read()), path)
+      _gzip_exit_or_raise(gzip_proc, str(path))
     except BaseException:
-      gzip_proc.kill()
-      gzip_proc.wait()
+      _kill_gzip_run(gzip_proc)
       raise
-    finally:
-      gc.enable()
-      gc.collect()
 
 
 async def _cached_direct_pass(path: Path) -> Path:
@@ -459,23 +515,24 @@ async def _cached_direct_pass(path: Path) -> Path:
   async def build(temp_path: Path) -> None:
     await asyncio.get_running_loop().run_in_executor(None, _build_direct_pass_gzip, path, temp_path)
 
-  return await _cached_gzip_build(_merge_cache_key([path], False, "gzip"), build)
+  return await _cached_gzip_build(_merge_cache_key([path], slim=False, mode="gzip"), build)
 
 
-@router.get("/perfetto/merged")
+@router.get(PERFETTO_MERGED_PATH)
 async def perfetto_merged(
     trace: list[str] = Query(default=[]),
-    dir: str | None = None,
+    # alias keeps the URL query key 'dir': perfetto_viewer's merged-trace link builds it.
+    dir_path: str | None = Query(default=None, alias="dir"),
     pattern: str = "*.json",
     slim: bool = False,
 ) -> FileResponse:
   """Merge local Chrome JSON traces and serve the cached gzip output."""
-  if not trace and dir is None:
+  if not trace and dir_path is None:
     raise HTTPException(status_code=400, detail="Provide at least one trace path with 'trace' or 'dir'.")
 
   paths = [Path(value) for value in trace]
-  if dir is not None:
-    discovered = await asyncio.to_thread(_discover_trace_paths, dir, pattern)
+  if dir_path is not None:
+    discovered = await asyncio.to_thread(_discover_trace_paths, dir_path, pattern)
     if not discovered:
       raise HTTPException(status_code=400, detail="Provide at least one trace path; 'dir' matched no files.")
     paths.extend(discovered)
@@ -502,7 +559,7 @@ async def perfetto_merged(
 
 def _ncu_error_page(request: Request, message: str, status_code: int) -> HTMLResponse:
   """Render ncu.html with a clean error message and a 4xx status."""
-  return templates.TemplateResponse(
+  return _templates().TemplateResponse(
       request,
       "ncu.html",
       context={
@@ -513,7 +570,7 @@ def _ncu_error_page(request: Request, message: str, status_code: int) -> HTMLRes
   )
 
 
-@router.get("/ncu", response_class=HTMLResponse)
+@router.get(NCU_VIEWER_PATH, response_class=HTMLResponse)
 async def ncu_viewer(
     request: Request,
     file: list[str] = Query(default=[]),
@@ -544,7 +601,7 @@ async def ncu_viewer(
     return _ncu_error_page(request, str(exc), 422)
 
   download_url = FILE_SERVER_MOUNTS[0] + str(path)
-  return templates.TemplateResponse(
+  return _templates().TemplateResponse(
       request,
       "ncu.html",
       context={
@@ -677,7 +734,7 @@ async def token_usage_viewer(request: Request) -> HTMLResponse:
     # Only the last joiner to observe its own task still installed clears it; a joiner that
     # resumes after a newer task has already replaced it must not clobber that newer task.
     _token_usage_task = None
-  return templates.TemplateResponse(
+  return _templates().TemplateResponse(
       request,
       "token_usage.html",
       context=_token_usage_context(tally),
@@ -687,7 +744,7 @@ async def token_usage_viewer(request: Request) -> HTMLResponse:
 @router.get("/diff", response_class=HTMLResponse)
 async def diff_viewer(request: Request, cfg: CharlieBotConfig = Depends(get_config_on_loop)) -> HTMLResponse:
   """Render the GitHub-style diff viewer page."""
-  return templates.TemplateResponse(
+  return _templates().TemplateResponse(
       request,
       "diff.html",
       context={
@@ -715,7 +772,7 @@ async def home_page(request: Request, cfg: CharlieBotConfig = Depends(get_config
           "status": "up" if up else "down",
       } for service, up in zip(cfg.ui.home_services, statuses, strict=True)
   ]
-  return templates.TemplateResponse(
+  return _templates().TemplateResponse(
       request,
       "home.html",
       context={
@@ -777,7 +834,7 @@ async def index(
   active_backend_label = active_backend_opt.label if active_backend_opt else active_backend
   active_backend_type = active_backend_opt.type if active_backend_opt else ""
 
-  return templates.TemplateResponse(
+  return _templates().TemplateResponse(
       request,
       "index.html",
       context={
@@ -794,7 +851,7 @@ async def index(
           "auth_enabled": bool(configured_access_key()),
           "hostname": socket.gethostname(),
           "sessions_root": str(cfg.sessions_dir),
-          "version": _RUNTIME_GIT_VERSION,
+          "version": _git_version(),
           "static_asset_version": _static_asset_version(),
           "preview_mode": is_preview_mode(),
       })

@@ -19,32 +19,33 @@ from pathlib import Path
 from urllib.parse import quote
 
 import pytest
+from conftest import assert_gzip_served, gzip_counting_compress, gzip_explode_compress, mount_production_gzip
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from starlette.middleware.gzip import GZipMiddleware
 
 import src.api.files as files_api
-from src.api.files import _DIR_LISTING_TEMPLATE, _dir_listing_html, _format_mtime, _listing_memo, _row_memo
+from src.api.files import _DIR_LISTING_TEMPLATE, _dir_listing_page, _format_mtime, _listing_memo, _row_memo
 from src.api.files import router as files_router
 
 
 def _client() -> TestClient:
   app = FastAPI()
-  app.include_router(files_router, prefix="/files")
+  app.include_router(files_router, prefix="/absolute_filepath")
   return TestClient(app)
 
 
 def _gzip_client() -> TestClient:
-  """The files router behind the gzip middleware every production request
-  passes through, so the test sees the skip the pre-compressed response buys."""
+  """The files router behind the production gzip mount, so the test sees the
+  skip the pre-compressed response buys."""
   app = FastAPI()
-  app.include_router(files_router, prefix="/files")
-  app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1)
+  app.include_router(files_router, prefix="/absolute_filepath")
+  mount_production_gzip(app)
   return TestClient(app)
 
 
 # The corpus's expected size text, pinned by value: a mirrored formatter here
-# would be a second copy of _human_size whose drift silently unpins the column.
+# would be a second copy of the shared format_size (src/core/human_size.py)
+# whose drift silently unpins the column.
 _CORPUS_SIZE_TEXT = {
     "alpha.txt": "5 B",
     "Beta & Co <beta>.txt": "2.0 KB",
@@ -69,8 +70,8 @@ def _reference_listing(dir_path: Path, url_prefix: str) -> str:
             "mtime": datetime.fromtimestamp(stat.st_mtime, tz=UTC),
         })
   rows = ""
-  if url_prefix.rstrip("/") != "/files":
-    parent = "/".join(url_prefix.rstrip("/").split("/")[:-1]) or "/files"
+  if url_prefix.rstrip("/") != "/absolute_filepath":
+    parent = "/".join(url_prefix.rstrip("/").split("/")[:-1]) or "/absolute_filepath"
     rows += ('<tr>'
              f'<td>📁</td><td><a href="{html.escape(parent)}">..</a></td>'
              '<td></td><td></td>'
@@ -102,9 +103,9 @@ def _listing_corpus(tmp_path: Path) -> Path:
 
 def test_listing_matches_the_reference_walk_bytes(tmp_path: Path) -> None:
   corpus = _listing_corpus(tmp_path)
-  served = _dir_listing_html(corpus, f"/files{corpus}", None)
+  served = _dir_listing_page(corpus, f"/absolute_filepath{corpus}", None)[0]
   assert served is not None
-  assert served == _reference_listing(corpus, f"/files{corpus}")
+  assert served == _reference_listing(corpus, f"/absolute_filepath{corpus}")
 
 
 def test_a_changed_corpus_rebuild_serves_the_cold_builds_bytes(tmp_path: Path) -> None:
@@ -116,17 +117,17 @@ def test_a_changed_corpus_rebuild_serves_the_cold_builds_bytes(tmp_path: Path) -
   warm, as a long-running server's is.
   """
   corpus = _listing_corpus(tmp_path)
-  prefix = f"/files{corpus}"
+  prefix = f"/absolute_filepath{corpus}"
   _row_memo.clear()
   _listing_memo.clear()
-  assert _dir_listing_html(corpus, prefix, None) is not None
+  assert _dir_listing_page(corpus, prefix, None)[0] is not None
   assert len(_row_memo) == 5
   _listing_memo.clear()
   os.utime(corpus / "alpha.txt", None)
-  rebuilt = _dir_listing_html(corpus, prefix, None)
+  rebuilt = _dir_listing_page(corpus, prefix, None)[0]
   _row_memo.clear()
   _listing_memo.clear()
-  cold = _dir_listing_html(corpus, prefix, None)
+  cold = _dir_listing_page(corpus, prefix, None)[0]
   assert rebuilt is not None and cold is not None
   assert rebuilt == cold
 
@@ -134,14 +135,14 @@ def test_a_changed_corpus_rebuild_serves_the_cold_builds_bytes(tmp_path: Path) -
 def test_a_non_directory_returns_none_and_the_route_falls_through(tmp_path: Path) -> None:
   page = tmp_path / "page.txt"
   page.write_text("plain", encoding="utf-8")
-  assert _dir_listing_html(page, "/files", None) is None
-  response = _client().get(f"/files{page}")
+  assert _dir_listing_page(page, "/absolute_filepath", None)[0] is None
+  response = _client().get(f"/absolute_filepath{page}")
   assert response.status_code == 200
   assert response.text == "plain"
 
 
 def test_diff_param_on_a_directory_is_rejected(tmp_path: Path) -> None:
-  response = _client().get(f"/files{tmp_path}?diff=artifacts/other.html")
+  response = _client().get(f"/absolute_filepath{tmp_path}?diff=artifacts/other.html")
   assert response.status_code == 400
   assert "not a session artifact page" in response.json()["detail"]
 
@@ -151,9 +152,9 @@ def test_the_diff_400_outranks_the_unreadable_403(tmp_path: Path) -> None:
   locked.mkdir()
   locked.chmod(0o000)
   try:
-    plain = _client().get(f"/files{locked}")
+    plain = _client().get(f"/absolute_filepath{locked}")
     assert plain.status_code == 403
-    with_diff = _client().get(f"/files{locked}?diff=artifacts/other.html")
+    with_diff = _client().get(f"/absolute_filepath{locked}?diff=artifacts/other.html")
     assert with_diff.status_code == 400
     assert "not a session artifact page" in with_diff.json()["detail"]
   finally:
@@ -161,7 +162,7 @@ def test_the_diff_400_outranks_the_unreadable_403(tmp_path: Path) -> None:
 
 
 def test_an_absent_path_is_a_404(tmp_path: Path) -> None:
-  response = _client().get(f"/files{tmp_path / 'gone'}")
+  response = _client().get(f"/absolute_filepath{tmp_path / 'gone'}")
   assert response.status_code == 404
 
 
@@ -171,17 +172,14 @@ def test_an_absent_path_is_a_404(tmp_path: Path) -> None:
 
 def test_listing_gzip_view_ships_precompressed_page(tmp_path: Path) -> None:
   corpus = _listing_corpus(tmp_path)
-  url = f"/files{corpus}"
+  url = f"/absolute_filepath{corpus}"
 
   resp = _gzip_client().get(url, headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
-  # The route set the encoding upstream — that header is what makes the
-  # middleware skip its own deflate — and carries the negotiation vary.
-  assert resp.headers["content-encoding"] == "gzip"
-  assert resp.headers["vary"] == "Accept-Encoding"
+  assert_gzip_served(resp)
   # What ships is the listing page, compressed: the decoded body is byte-exact
   # against the independent reference walk.
-  assert resp.text == _reference_listing(corpus, f"/files{corpus}")
+  assert resp.text == _reference_listing(corpus, f"/absolute_filepath{corpus}")
 
 
 def test_listing_without_gzip_accept_gets_plain_page(tmp_path: Path) -> None:
@@ -189,10 +187,10 @@ def test_listing_without_gzip_accept_gets_plain_page(tmp_path: Path) -> None:
   Accept-Encoding names no gzip reads the plain page, no encoding set."""
   corpus = _listing_corpus(tmp_path)
 
-  resp = _client().get(f"/files{corpus}", headers={"Accept-Encoding": "br"})
+  resp = _client().get(f"/absolute_filepath{corpus}", headers={"Accept-Encoding": "br"})
   assert resp.status_code == 200
   assert "content-encoding" not in resp.headers
-  assert resp.text == _reference_listing(corpus, f"/files{corpus}")
+  assert resp.text == _reference_listing(corpus, f"/absolute_filepath{corpus}")
 
 
 def test_listing_gzip_repeat_view_recompresses_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -200,14 +198,11 @@ def test_listing_gzip_repeat_view_recompresses_nothing(tmp_path: Path, monkeypat
   body with zero deflate calls."""
   corpus = _listing_corpus(tmp_path)
   client = _gzip_client()
-  url = f"/files{corpus}"
+  url = f"/absolute_filepath{corpus}"
   first = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert first.status_code == 200
 
-  def explode_compress(*args: object, **kwargs: object) -> bytes:
-    raise AssertionError("repeat gzip view re-ran the deflate")
-
-  monkeypatch.setattr(files_api.gzip, "compress", explode_compress)
+  monkeypatch.setattr(files_api, "gzip_level1", gzip_explode_compress("repeat gzip view re-ran the deflate"))
   resp = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
   assert resp.headers["content-encoding"] == "gzip"
@@ -219,18 +214,12 @@ def test_listing_gzip_recompresses_when_corpus_moves(tmp_path: Path, monkeypatch
   memo keys on — the move must re-run the deflate, never serve the old form."""
   corpus = _listing_corpus(tmp_path)
   client = _gzip_client()
-  url = f"/files{corpus}"
+  url = f"/absolute_filepath{corpus}"
   first = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert first.status_code == 200
 
-  real_compress = files_api.gzip.compress
   calls: list[bytes] = []
-
-  def counting_compress(data: bytes, *args: object, **kwargs: object) -> bytes:
-    calls.append(data)
-    return real_compress(data, *args, **kwargs)
-
-  monkeypatch.setattr(files_api.gzip, "compress", counting_compress)
+  monkeypatch.setattr(files_api, "gzip_level1", gzip_counting_compress(files_api.gzip_level1, calls))
   os.utime(corpus / "alpha.txt", None)
   resp = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
@@ -238,14 +227,14 @@ def test_listing_gzip_recompresses_when_corpus_moves(tmp_path: Path, monkeypatch
   # The move ran the deflate once, over the fresh page: the served form is the
   # new walked state's, not the previous one's bytes.
   assert len(calls) == 1
-  assert resp.text == _reference_listing(corpus, f"/files{corpus}")
+  assert resp.text == _reference_listing(corpus, f"/absolute_filepath{corpus}")
 
 
 def test_mtime_text_is_utc(tmp_path: Path) -> None:
   target = tmp_path / "when.txt"
   target.write_bytes(b"x")
   stamp = time.strftime("%Y-%m-%d %H:%M", time.gmtime(target.stat().st_mtime))
-  served = _dir_listing_html(tmp_path, "/files", None)
+  served = _dir_listing_page(tmp_path, "/absolute_filepath", None)[0]
   assert served is not None and stamp in served
 
 

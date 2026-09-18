@@ -258,16 +258,16 @@ async def test_token_usage_inline_script_parses(
 
 
 @pytest.mark.asyncio
-async def test_index_uses_pinned_runtime_git_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_index_uses_memoized_git_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   cfg = make_home_config(tmp_path)
   git_lookup_calls = 0
 
   def fail_git_lookup() -> str:
     nonlocal git_lookup_calls
     git_lookup_calls += 1
-    raise AssertionError("index() should use the startup git version")
+    raise AssertionError("a memoized git version must not re-run git per render")
 
-  monkeypatch.setattr(pages, "_RUNTIME_GIT_VERSION", "abc1234 · 03-24")
+  monkeypatch.setattr(pages, "_GIT_VERSION", "abc1234 · 03-24")
   monkeypatch.setattr(pages, "_get_git_version", fail_git_lookup)
   stub_credentials({"charliebot": {"access_key": ""}})
 
@@ -289,10 +289,26 @@ async def test_index_uses_pinned_runtime_git_version(monkeypatch: pytest.MonkeyP
   assert git_lookup_calls == 0
 
 
+def test_git_version_computes_once(monkeypatch: pytest.MonkeyPatch) -> None:
+  """The git subprocesses run on the first version read, never per render."""
+  git_lookup_calls = 0
+
+  def counting_git_version() -> str:
+    nonlocal git_lookup_calls
+    git_lookup_calls += 1
+    return "abc1234 · 03-24"
+
+  monkeypatch.setattr(pages, "_GIT_VERSION", None)
+  monkeypatch.setattr(pages, "_get_git_version", counting_git_version)
+  assert pages._git_version() == "abc1234 · 03-24"
+  assert pages._git_version() == "abc1234 · 03-24"
+  assert git_lookup_calls == 1
+
+
 @pytest.mark.asyncio
 async def test_index_versions_local_static_assets(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   cfg = make_home_config(tmp_path)
-  monkeypatch.setattr(pages, "_RUNTIME_GIT_VERSION", "abc1234 · 03-24")
+  monkeypatch.setattr(pages, "_GIT_VERSION", "abc1234 · 03-24")
   stub_credentials({"charliebot": {"access_key": ""}})
 
   response = await pages.index(
@@ -315,7 +331,7 @@ async def test_index_versions_local_static_assets(monkeypatch: pytest.MonkeyPatc
 @pytest.mark.asyncio
 async def test_diff_viewer_versions_local_static_assets(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   cfg = make_home_config(tmp_path)
-  monkeypatch.setattr(pages, "_RUNTIME_GIT_VERSION", "abc1234 · 03-24")
+  monkeypatch.setattr(pages, "_GIT_VERSION", "abc1234 · 03-24")
 
   response = await pages.diff_viewer(request=make_page_request("/diff"), cfg=cfg)
 

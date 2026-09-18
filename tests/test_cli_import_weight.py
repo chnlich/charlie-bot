@@ -15,11 +15,9 @@ constants the argparse layer needs single-home in `src.core.constants` (stdlib-o
 import json
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
+from conftest import ROOT
 
 HEAVY_MODULES = (
     "src.agents.backends.base",
@@ -35,25 +33,32 @@ HEAVY_MODULES = (
 )
 
 # The plan chain's extra bans: the validation gate's registry stack, the web
-# framework, and plan_diff — its difflib + html subtree (~10 ms net of the pydantic
+# framework, plan_diff — its difflib + html subtree (~10 ms net of the pydantic
 # shared chain) serves only the diff verb's text render, and no sync plan command
-# touches it before its request.
-PLAN_HEAVY_MODULES = HEAVY_MODULES + (
+# touches it before its request — and asyncio (~38 ms, unshared in this chain):
+# plans.py's async registry methods are server-side, the sync CLI read path never
+# reaches them, and every lock and to_thread site imports it locally.
+PLAN_HEAVY_MODULES = (
+    *HEAVY_MODULES,
     "fastapi",
+    "asyncio",
     "src.core.artifact_check",
     "src.agents.backends.registry",
     "src.core.plan_diff",
 )
 
-# The memory chain's ban set: structlog (the log proxy defers it to first use).
-# config + models + pydantic stay out of the ban set: the get_config
-# module-attribute contract (tests/test_memory_store.py) and every verb's config read
-# bind them at import.
+# The memory chain's ban set: structlog (the log proxy defers it to first use)
+# and the config stack (src.core.config + its pydantic/models chains, ~180 ms of
+# the M98 wall) — the verbs read no config file: the store root derives from the
+# env-resolved home (src.core.home), which no config key can move.
 MEMORY_HEAVY_MODULES = (
     "src.agents.backends.base",
     "src.core.threads",
     "src.core.sessions",
     "src.core.runs",
+    "src.core.config",
+    "src.core.models",
+    "pydantic",
     "numpy",
     "structlog",
     "requests",
@@ -66,7 +71,7 @@ def _run_probe(code: str) -> subprocess.CompletedProcess[str]:
   # (check=True) instead of parsing an empty stream.
   return subprocess.run(
       [sys.executable, "-c", code],
-      cwd=REPO_ROOT,
+      cwd=ROOT,
       capture_output=True,
       text=True,
       timeout=120,
@@ -127,11 +132,18 @@ def test_plan_constants_match_the_model_literals() -> None:
 
 
 # The artifact chain's ban set: the probe's registry stack (backends.registry →
-# fastapi + sessions, autonamer → sessions + streaming) and the KaTeX
-# fetch's HTTP client serve only the check/wrap verb bodies — the probe imports
-# its stack inside run_probe, and the vendored-KaTeX steady state never fetches.
-ARTIFACT_HEAVY_MODULES = HEAVY_MODULES + (
+# fastapi + sessions, autonamer → sessions + streaming), asyncio (~35 ms —
+# pydantic_core is absent from this chain, so asyncio's import is unshared),
+# the headless renderer (its websockets stack ~60 ms), and the KaTeX fetch's
+# HTTP client serve only the check/wrap verb bodies — the probe imports its
+# stack inside run_probe, the page-height assertion imports the renderer inside
+# _measure_page_height, and the vendored-KaTeX steady state never fetches.
+ARTIFACT_HEAVY_MODULES = (
+    *HEAVY_MODULES,
     "fastapi",
+    "asyncio",
+    "websockets",
+    "src.core.headless_render",
     "src.agents.backends.registry",
     "src.agents.backends.base",
     "src.core.autonamer",
@@ -151,12 +163,37 @@ def test_artifact_chain_imports_without_the_heavy_chains() -> None:
       "requests on the CDN-fetch path only")
 
 
+def test_artifact_wrap_verb_runs_off_the_config_stack() -> None:
+  # The wrap verb's only config read is the profile home (the vendored-KaTeX
+  # path), a pure derivation of the env-resolved home (src.core.home) that no
+  # config key can move — so a fresh wrap invocation must not load the config
+  # model stack (~150 ms of the M102 wall).
+  code = (
+      "import argparse, json, sys, tempfile; "
+      "from pathlib import Path; "
+      "from src.cli.artifact import _run_wrap; "
+      "work = Path(tempfile.mkdtemp()); "
+      "(work / 'fragment.html').write_text('<p>probe</p>', encoding='utf-8'); "
+      "code = _run_wrap(argparse.Namespace(fragment=str(work / 'fragment.html'), genre='plan', "
+      "math=False, output=str(work / 'page.html'))); "
+      "loaded = sorted(set(sys.modules) & {'src.core.config', 'src.core.models', 'pydantic'}); "
+      "sys.stderr.write(json.dumps([code, loaded]))")
+  proc = _run_probe(code)
+  wrap_code, loaded = json.loads(proc.stderr)
+  assert wrap_code == 0, f"the wrap probe failed: {wrap_code}"
+  assert loaded == [], (
+      "the artifact wrap verb loaded the config stack at call time: "
+      f"{loaded}; the M102 command wall (docs/perf_baseline.md) depends on the "
+      "wrap verb resolving its home from src.core.home, not the config")
+
+
 def test_memory_chain_imports_without_the_heavy_chains() -> None:
   loaded = _modules_loaded_after_import("import src.cli.memory", MEMORY_HEAVY_MODULES)
   assert loaded == [], (
       "the memory command chain pulled a heavy chain or structlog into the CLI "
       f"process: {loaded}; the M98 invocation wall (docs/perf_baseline.md) depends "
-      "on these staying out — src.core.memory's log proxy defers structlog to first use")
+      "on these staying out — src.core.memory's log proxy defers structlog to first "
+      "use, and the verbs resolve the store root from src.core.home, not the config")
 
 
 # Modules whose log proxy defers structlog to first use. Each imports on an
@@ -205,7 +242,9 @@ def test_module_defers_structlog_until_the_first_log_call(module_name: str, impo
 # the backends stack rides its two spawn-path builds (the autonamer naming round
 # and the recap summarize, ~65 ms through src.agents.backends.registry and the
 # opencode/charlie_code module bodies), which load it on first use via the shared
-# load_build_backend (src/agents/backends/deferred_build.py).
+# load_build_backend (src/agents/backends/deferred_build.py); jinja2 +
+# fastapi.templating (~35 ms) ride the page renders, which build the engine on
+# first render (src/api/pages.py::_templates).
 SERVER_HEAVY_MODULES = (
     "numpy",
     "src.agents.transcriber",
@@ -217,6 +256,8 @@ SERVER_HEAVY_MODULES = (
     "src.agents.backends.registry",
     "src.agents.backends.opencode",
     "src.agents.backends.charlie_code",
+    "jinja2",
+    "fastapi.templating",
 )
 
 
@@ -236,7 +277,7 @@ def test_server_import_defers_the_speech_stack() -> None:
 
 
 # The sessions chain's extra bans: session_usage's usage math reads the opencode
-# compaction reserve from src.core.constants (the #1412 stdlib-only home), so the
+# compaction reserve from src.core.constants (the stdlib-only home), so the
 # chain imports no backend module for it.
 SESSIONS_HEAVY_MODULES = (
     "src.agents.backends.registry", "src.agents.backends.opencode", "src.agents.backends.charlie_code")
@@ -265,8 +306,29 @@ def test_autonamer_and_recap_defer_the_registry_until_first_use() -> None:
   proc = _run_probe(code)
   before, resolved, after = json.loads(proc.stderr)
   assert before == [], (
-      "autonamer or recap pulled the backends stack at module import: {before}; "
+      f"autonamer or recap pulled the backends stack at module import: {before}; "
       "the M99 server import floor (docs/perf_baseline.md) depends on the naming "
-      "round and the summarize path loading it at their one build".format(before=before))
+      "round and the summarize path loading it at their one build")
   assert resolved is True, "the lazy build_backend binding did not resolve through the module attribute"
   assert after == ["src.agents.backends.registry"], (f"the lazy binding loaded unexpected modules: {after}")
+
+
+# The claude-sub chain's extra bans: the worker binary launches on every
+# subscription-mode spawn, so its import must stay off the web framework
+# (pty_common/tui carry only TYPE_CHECKING WebSocket hints and the relay imports
+# WebSocketDisconnect inside the function) and off the config model stack (the
+# backend ABC defers get_config to its cgroup read; runs and claude_accounts
+# carry the CharlieBotConfig hints under TYPE_CHECKING; the login-dir names
+# single-home in src.core.home).
+CLAUDE_SUB_HEAVY_MODULES = ("fastapi", "src.core.config", "yaml", "src.core.credentials")
+
+
+def test_claude_sub_chain_imports_without_the_web_framework_and_config_stack() -> None:
+  loaded = _modules_loaded_after_import("import src.cli.claude_sub", CLAUDE_SUB_HEAVY_MODULES)
+  assert loaded == [], (
+      "the claude-sub worker binary pulled the web framework or the config model "
+      f"stack into its launch process: {loaded}; the M108 launch wall "
+      "(docs/perf_baseline.md) depends on these staying out — the WebSocket "
+      "hints ride TYPE_CHECKING and the relay imports WebSocketDisconnect "
+      "inside the function, and get_config loads on the cgroup spawn path that "
+      "reads it")

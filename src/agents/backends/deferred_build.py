@@ -24,18 +24,3 @@ def load_build_backend(namespace: dict[str, Any]) -> Any:
 
   namespace["build_backend"] = build_backend
   return build_backend
-
-
-def build_backend_module_getattr(name: str, module_name: str, namespace: dict[str, Any]) -> Any:
-  """Body of a carrier module's PEP 562 ``__getattr__`` that serves the deferred build_backend.
-
-  Each carrier defines ``def __getattr__(name): return
-  build_backend_module_getattr(name, __name__, globals())``. The
-  module-attribute route (e.g. ``src.core.recap.build_backend``) is the tests'
-  patch target; ``load_build_backend`` binds the same object as a module global
-  on first use, so later attribute reads resolve directly. Any other name
-  raises AttributeError, as PEP 562 requires.
-  """
-  if name != "build_backend":
-    raise AttributeError(f"module {module_name!r} has no attribute {name!r}")
-  return load_build_backend(namespace)

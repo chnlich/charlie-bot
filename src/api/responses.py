@@ -21,11 +21,16 @@ the dict's own key order, and the splice sites' hand-rolled scalar pieces
 code-fixed types (None, bool, int, ASCII strings).
 """
 
+import asyncio
 from typing import Any
 
 import orjson
 from fastapi.responses import JSONResponse
+from starlette.requests import Request
 from starlette.responses import Response
+
+from src.core.compression import gzip_level1
+from src.core.memo import BoundedMemo
 
 
 def fast_json_bytes(content: Any) -> bytes:
@@ -50,11 +55,42 @@ class PreencodedJSONResponse(Response):
   """JSON response serving body bytes a caller already rendered.
 
   The bytes must come from :func:`fast_json_bytes` (directly or via a memo of
-  its output), so served bodies stay byte-identical to the FastJsonResponse
-  render of the same payload.
+  its output), or be a reversible transform of such bytes — the events page's
+  gzip form — so the served parsed content stays identical to the
+  FastJsonResponse render of the same payload.
   """
 
   media_type = "application/json"
 
-  def __init__(self, body: bytes) -> None:
-    super().__init__(content=body)
+  def __init__(self, body: bytes, headers: dict[str, str] | None = None) -> None:
+    super().__init__(content=body, headers=headers)
+
+
+GZIP_RESPONSE_HEADERS: dict[str, str] = {"Content-Encoding": "gzip", "Vary": "Accept-Encoding"}
+
+
+def request_wants_gzip(request: Request) -> bool:
+  """Whether the client's Accept-Encoding admits gzip.
+
+  The same check the gzip middleware makes on the way in; answering with the
+  pre-compressed body and :data:`GZIP_RESPONSE_HEADERS` set is what makes that
+  middleware skip its per-request deflate.
+  """
+  return "gzip" in request.headers.get("accept-encoding", "")
+
+
+async def gzip_body_response(
+    request: Request, body: bytes, headers: dict[str, str], memo: BoundedMemo[bytes, bytes]) -> Response:
+  """Serve *body* plain or from *memo*'s gzip form (keyed on the bytes themselves).
+
+  One off-loop level-1 deflate per distinct body, stored so a repeat serves
+  the stored bytes; the gzip headers make the middleware skip (see
+  :func:`request_wants_gzip`).
+  """
+  if not request_wants_gzip(request):
+    return PreencodedJSONResponse(body, headers=headers)
+  gz = memo.get(body)
+  if gz is None:
+    gz = await asyncio.to_thread(gzip_level1, body)
+    memo.store(body, gz)
+  return PreencodedJSONResponse(gz, headers={**headers, **GZIP_RESPONSE_HEADERS})

@@ -1806,7 +1806,7 @@ def build_conversion_plan(cfg: CharlieBotConfig, snap: SourceSnapshot) -> Conver
         new_text=new_text))
     mappings.append(MappingEntry(
         source_kind="cron_config", source_id=config.rel_path, target_session_id=target,
-        disposition="cron_binding", detail={"mode": str(body.get("mode") or "worker")}))
+        disposition="cron_binding", detail={"type": str(body.get("type") or "normal")}))
 
   # --- triggers ---------------------------------------------------------------
   # Grouped by trigger id: a delayed trigger this plan already moved (its copy
@@ -1906,14 +1906,14 @@ def _is_our_cron_binding(body: dict, bound: str, task_name: str,
 
   True only when the bound session is one of this plan's manager conversions
   and the binding is exactly what an unbound file with this body would derive
-  (mode master → the PM session of the body's project, recovered from the
+  (type: pm → the PM session of the body's project, recovered from the
   manager's own project_key; worker/steps → the active scheduled session
   carrying the task name). A different binding is foreign and preserved.
   """
   manager = next((m for m in managers if m.session_id == bound), None)
   if manager is None:
     return False
-  if body.get("mode") == "master":
+  if body.get("type") == "pm":
     return manager.kind == "pm"
   return manager.kind == "scheduled" and manager.metadata.scheduled_task == task_name
 
@@ -1922,26 +1922,26 @@ def _resolve_cron_target(snap: SourceSnapshot, body: dict, managers: list[Manage
                          unresolved: list[UnresolvedEntry], rel_path: str) -> str | None:
   """The stable manager id one unbound cron task binds to.
 
-  A mode:master task binds its declared project group's PM session; a
+  A type: pm task binds its declared project group's PM session; a
   worker/steps task binds the active scheduled session carrying the task's
   name. Zero or several active sessions with that name is ambiguous and stays
   unresolved — a guess would point scheduled fires at the wrong node.
   """
   task_name = task_name_of(rel_path)
-  if body.get("mode") == "master":
+  if body.get("type") == "pm":
     project = body.get("project")
     if isinstance(project, str) and project:
       pm = next((m for m in managers if m.kind == "pm" and m.metadata.project_key == project), None)
       if pm is None:
         unresolved.append(UnresolvedEntry(
             source_kind="cron_config", source_id=rel_path,
-            reason=f"mode master task declares project {project!r} but no PM session carries that group",
+            reason=f"type pm task declares project {project!r} but no PM session carries that group",
             refs=[rel_path]))
         return None
       return pm.session_id
     unresolved.append(UnresolvedEntry(
         source_kind="cron_config", source_id=rel_path,
-        reason="mode master task has neither an explicit session_id nor a project group to bind",
+        reason="type pm task has neither an explicit session_id nor a project group to bind",
         refs=[rel_path]))
     return None
   active = [

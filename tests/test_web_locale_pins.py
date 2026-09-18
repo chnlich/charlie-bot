@@ -8,9 +8,8 @@ a new call from landing unpinned.
 
 from __future__ import annotations
 
-from pathlib import Path
+from conftest import ROOT
 
-ROOT = Path(__file__).resolve().parents[1]
 WEB_GLOBS = ("web/templates/**/*.html", "web/static/js/**/*.js")
 
 

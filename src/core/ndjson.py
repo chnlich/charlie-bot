@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import mmap
 import os
 from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from itertools import islice
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -135,10 +137,66 @@ def iter_ndjson_events(
 
 def parse_ndjson_file(path: Path) -> list[dict]:
   """Sync read+parse an NDJSON file. Skips blank/malformed lines."""
+  return parse_ndjson_events(path, log_event=PARSE_SKIP_LOG_EVENT, log_fields={})
+
+
+def parse_ndjson_events(path: Path, *, log_event: str, log_fields: dict[str, Any]) -> list[dict]:
+  """Whole-file read+parse with the caller's skip label and fields.
+
+  One zero-copy mmap pass: lines are memoryview slices of the mapping riding
+  :func:`parse_ndjson_line`'s memoryview contract, so a cold whole-file parse
+  pays no per-line decode or re-encode copy. The line domain is ``\n`` — the
+  same domain :func:`count_ndjson_lines` and the tail readers count, so the
+  whole-file parse and the windowed readers disagree on nothing. The mapping
+  is safe against the writers because they only ever append (an archive
+  rewrite publishes through ``os.replace`` onto a new inode); a writer that
+  truncated a mapped file would SIGBUS the parse instead.
+  """
   if not path.exists():
     return []
-  with open(path, encoding="utf-8") as f:
-    return list(iter_ndjson_events(f, log_event=PARSE_SKIP_LOG_EVENT, log_fields={}))
+  with open(path, "rb") as f, _mapped_lines(path, f) as (mm, size):
+    if mm is None:
+      return []
+    return list(iter_ndjson_events(_iter_mmap_lines(mm, size), log_event=log_event, log_fields=log_fields))
+
+
+@contextmanager
+def _mapped_lines(path: Path, f: BinaryIO) -> Iterator[tuple[mmap.mmap | None, int]]:
+  """Map *f* read-only and yield (mapping, size), closing the mapping on exit.
+
+  An empty file yields (None, 0) — mmap refuses a zero-length mapping. An
+  aborting parse can leave its last line view in an unwinding traceback's
+  frames; the buffer protocol frees the mapping when that frame dies, so the
+  explicit close is best-effort and the deferred case is logged, not fatal.
+  """
+  size = os.fstat(f.fileno()).st_size
+  mm = None if size == 0 else mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+  try:
+    yield mm, size
+  finally:
+    if mm is not None:
+      try:
+        mm.close()
+      except BufferError:
+        log.debug("ndjson_mmap_close_deferred", path=str(path))
+
+
+def _iter_mmap_lines(mm: mmap.mmap, size: int) -> Iterator[memoryview]:
+  """Yield the mapping's physical lines as zero-copy views, in file order.
+
+  Lines split on ``\n`` (a final line without its trailing newline still
+  yields), the same domain the count and tail readers count.
+  """
+  pos = 0
+  find = mm.find
+  while True:
+    nl = find(b"\n", pos)
+    if nl < 0:
+      if pos < size:
+        yield memoryview(mm)[pos:]
+      return
+    yield memoryview(mm)[pos:nl]
+    pos = nl + 1
 
 
 def count_ndjson_lines(path: Path) -> int:
@@ -214,6 +272,23 @@ def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bo
   return events, total, has_more
 
 
+# Bound, in bytes, on the head probe a head-provable filter reads in the
+# from-the-end walk. Every event type the repo writes proves within it; a
+# longer name defeats the proof and parses, the conservative direction the
+# filter's contract already takes for every shape it cannot read.
+_HEAD_PROOF_BYTES = 256
+
+
+def _parse_mapped_line(
+    mm: mmap.mmap, start: int, end: int, *, log_event: str, log_fields: dict[str, Any]) -> dict | None:
+  """Parse the mapping's [start, end) bytes under the reader skip contract.
+
+  The view lives only in this frame, so a walk that stops early never leaves
+  a mapping-pinning view in the walker's own frame and the mapping closes.
+  """
+  return parse_ndjson_line(memoryview(mm)[start:end], log_event=log_event, log_fields=log_fields)
+
+
 def iter_ndjson_events_from_end(
     path: Path,
     *,
@@ -225,72 +300,63 @@ def iter_ndjson_events_from_end(
   Same skip contract as :func:`iter_ndjson_events` (an empty or
   whitespace-only line is invisible, a line the parser rejects logs and
   yields nothing); *parse_filter* rides it with the same raw-line contract.
-  _TAIL_WINDOW_SIZE segments from the end walk lines backwards, so a consumer
-  that stops early never reads the bytes past its answer. A line longer than
-  the window accumulates one window-piece per walk step and joins them once
-  at the line's closing newline — O(line) total, where a re-concatenated
-  carry would pay O(line x segments) on multi-megabyte lines. A missing file
+  One backward scan over a read-only mapping: each line is the zero-copy view
+  between the newlines :func:`mmap.mmap.rfind` finds, so a consumer that
+  stops early never scans the bytes past its answer, and a line a
+  head-provable filter rejects costs one bounded head probe instead of the
+  line's bytes. The mapping is safe against the writers because they only
+  ever append (an archive rewrite publishes through ``os.replace`` onto a new
+  inode); a writer that truncated a mapped file would SIGBUS the walk — the
+  same ground :func:`parse_ndjson_events`' mapping stands on. A missing file
   yields nothing.
   """
   if not path.exists():
     return
   # A head fragment decides only a head-provable filter: a plain callable
-  # keyed on bytes beyond the head would misread the fragment, so the walker
-  # feeds it whole lines only.
+  # keyed on bytes beyond the head would misread a bounded probe, so the walk
+  # hands it whole lines only.
   head_filter = parse_filter if isinstance(parse_filter, HeadProvableFilter) else None
-  with open(path, "rb") as f:
-    f.seek(0, 2)
-    pos = f.tell()
-    pending: list[bytes] = []  # the line spanning pos, one window-piece per step, oldest piece first
+  with open(path, "rb") as f, _mapped_lines(path, f) as (mm, size):
+    if mm is None:
+      return
+    rfind = mm.rfind
+    pos = size
     while pos > 0:
-      start = max(0, pos - _TAIL_WINDOW_SIZE)
-      f.seek(start)
-      window = f.read(pos - start)
-      nl = window.rfind(b"\n")
-      if nl < 0:
-        # The whole window sits inside the line spanning pos: keep its bytes
-        # and walk older; the join happens once at the line's closing newline.
-        pending.insert(0, window)
-        if start == 0:
-          # The file's first line closes at the file start — no older segment
-          # follows, so the pending pieces are the whole line, and its head is
-          # pending[0]'s head (the window starting at byte 0): a rejected head
-          # skips the join, same contract as the closing-newline branch below.
-          if head_filter is None or head_filter(pending[0]):
-            yield from iter_ndjson_events(
-                [b"".join(pending)], log_event=log_event, log_fields=log_fields, parse_filter=parse_filter)
-        pos = start
+      nl = rfind(b"\n", 0, pos)
+      start = 0 if nl < 0 else nl + 1
+      if start == pos:
+        # The empty segment a trailing (or doubled) newline leaves: invisible
+        # under the skip contract, so no filter verdict can change it.
+        pos = 0 if nl < 0 else nl
         continue
-      lines = window[:nl].split(b"\n")
-      spanning = window[nl + 1:]
-      if pending:
-        # The joined line's head is *spanning* (the bytes from its opening
-        # newline to the window end), and a head-provable filter reads only
-        # that head — so a rejected head skips the join and the parse of the
-        # whole line, the multi-megabyte shape a no-match newest-first scan
-        # would otherwise carry and join. A head too short to prove parses.
-        if head_filter is None or head_filter(spanning):
-          lines.append(b"".join([spanning, *pending]))
-      elif spanning:
-        lines.append(spanning)
-      if start > 0:
-        pending = [lines[0]]  # this segment's left-truncated first line, completed by the next older segment
-        lines = lines[1:]
+      if parse_filter is None:
+        event = _parse_mapped_line(mm, start, pos, log_event=log_event, log_fields=log_fields)
+        if event is not None:
+          yield event
+      elif head_filter is not None:
+        head = bytes(memoryview(mm)[start:min(start + _HEAD_PROOF_BYTES, pos)])
+        if head_filter(head):
+          event = _parse_mapped_line(mm, start, pos, log_event=log_event, log_fields=log_fields)
+          if event is not None:
+            yield event
       else:
-        pending = []
-      yield from iter_ndjson_events(
-          reversed(lines), log_event=log_event, log_fields=log_fields, parse_filter=parse_filter)
-      pos = start
+        line = bytes(memoryview(mm)[start:pos])
+        if parse_filter(line):
+          event = parse_ndjson_line(line, log_event=log_event, log_fields=log_fields)
+          if event is not None:
+            yield event
+      pos = 0 if nl < 0 else nl
 
 
 class HeadProvableFilter:
   """A parse_filter whose False answers are provable from a line's head bytes
   alone.
 
-  The from-the-end walker hands one of these a multi-window line's head
-  fragment so a rejected head skips the line's join; a plain callable keyed on
-  bytes beyond the head would misread the fragment, so the walker extends
-  that trust to this type only and feeds every other filter whole lines.
+  The from-the-end walker hands one of these a bounded head probe so a
+  rejected giant line costs the probe instead of the line's bytes; a plain
+  callable keyed on bytes beyond the head would misread the probe, so the
+  walker extends that trust to this type only and feeds every other filter
+  whole lines.
   """
 
   __slots__ = ("_keep",)
@@ -312,10 +378,11 @@ def type_line_filter(types: frozenset[str]) -> HeadProvableFilter:
   event in that first value, and a value outside *types* cannot match a
   consumer keyed on those types. Every other shape — a foreign leading key,
   whitespace before the object, a value the head walk cannot read — returns
-  True and parses: the filter skips only what it can prove. The walker may
-  pass a line's head fragment (the bytes from its opening newline to the
-  window end); the fragment opens with the line's own first bytes, so the
-  proof reads identically, and a fragment without the closing quote parses.
+  True and parses: the filter skips only what it can prove. The from-the-end
+  walk may pass a bounded head probe (the line's first
+  ``_HEAD_PROOF_BYTES`` bytes); the probe opens with the line's own first
+  bytes, so the proof reads identically, and a probe without the closing
+  quote parses.
   """
 
   def keep(raw_line: bytes) -> bool:
@@ -362,8 +429,15 @@ def parse_ndjson_range(path: Path, start: int, end: int) -> tuple[list[dict], bo
   """
   if not path.exists():
     return [], False
-  with open(path, encoding="utf-8") as f:
-    events = list(iter_ndjson_events(islice(f, start, end), log_event="ndjson_range_parse_skip", log_fields={}))
+  with open(path, "rb") as f, _mapped_lines(path, f) as (mm, size):
+    if mm is None:
+      return [], start > 0
+    events = list(
+        iter_ndjson_events(
+            islice(_iter_mmap_lines(mm, size), start, end),
+            log_event="ndjson_range_parse_skip",
+            log_fields={},
+        ))
   return events, start > 0
 
 

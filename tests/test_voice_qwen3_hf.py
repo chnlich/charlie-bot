@@ -11,8 +11,8 @@ import numpy as np
 import pytest
 from conftest import fresh_state_fixture
 
-import src.core.voice_setup as voice_setup
 from src.agents import transcriber
+from src.core import voice_setup
 from src.core.config import CharlieBotConfig
 
 pytestmark = pytest.mark.local_only

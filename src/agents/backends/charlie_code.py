@@ -2,9 +2,9 @@
 
 The task text reaches the child through a `task.md` file in the run's
 transport directory, passed via `--task-file`; it never rides argv. Image
-attachments reach the child as repeated `--image` flags when the endpoint
-declares ``image_input`` (its config option); without it, a message carrying
-images is refused with one error event and nothing is sent.
+attachments reach the child as repeated `--image` flags by default; an
+endpoint whose config entry sets ``image_input: false`` refuses them with
+one error event and nothing is sent.
 """
 
 from collections.abc import AsyncIterator
@@ -29,6 +29,13 @@ from src.core import event_types as ET
 from src.core.log_once import LazyStructlogLogger
 
 log = LazyStructlogLogger()
+
+
+def _duration_label(seconds: float) -> str:
+  """Progress ticks read in minutes from one minute up ("1 min", "15 min"), else in seconds."""
+  if seconds >= 60:
+    return f"{seconds / 60:g} min"
+  return f"{seconds:g} s"
 
 
 def _context_reading_int(field: str, value: object) -> int | None:
@@ -59,7 +66,7 @@ class CharlieCodeBackend(AgentBackend):
       model: str,
       api_base: str | None = None,
       context_window: int | None = None,
-      image_input: bool = False,
+      image_input: bool = True,
       stream: bool = True,
       timeout_seconds: int | None = None,
       top_p: float | None = None,
@@ -86,17 +93,21 @@ class CharlieCodeBackend(AgentBackend):
     # Absolute paths of the current run's image attachments; run() fills it
     # before delegating and _build_command reads it while assembling flags.
     self._image_paths: list[str] = []
+    # Command text by command event id, so a command_progress event (which
+    # carries only the id) can name the command it reports on.
+    self._commands_by_id: dict[str, str] = {}
 
   async def run(self,
                 prompt: str,
                 cwd: str,
                 env: dict,
                 uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
-    """Refuse image attachments on endpoints without image input; otherwise hand them to the CLI as --image flags.
+    """Refuse image attachments on endpoints declaring ``image_input: false``;
+    otherwise hand them to the CLI as --image flags.
 
     Image refs are picked out of ``uploaded_files`` by filename extension
-    (the ``IMAGE_MIME_BY_EXT`` keys). An endpoint whose option does not
-    declare ``image_input`` gets exactly one error event and nothing else — no
+    (the ``IMAGE_MIME_BY_EXT`` keys). An endpoint whose option sets
+    ``image_input: false`` gets exactly one error event and nothing else — no
     subprocess, no result. Non-image refs never produce flags; they keep
     riding the [Attached files] path text inside the task.
     """
@@ -108,7 +119,7 @@ class CharlieCodeBackend(AgentBackend):
       names = ", ".join(Path(str(ref.get("filename", ""))).name for ref in image_refs)
       yield make_error_event(
           f"refused: image attachments not sent — this endpoint declares no image input "
-          f"(image_input not set): {names}")
+          f"(image_input: false): {names}")
       return
     self._image_paths = [str(ref.get("path", "")) for ref in image_refs]
     # No try/finally on the clear: every run() overwrites the attribute before
@@ -131,9 +142,8 @@ class CharlieCodeBackend(AgentBackend):
       apply_proxy_env(charlie_code_env, self._proxy_url)
     return charlie_code_env
 
-  def _prepare_cwd(self, cwd: str) -> None:
-    """Write AGENTS.md into the cwd so charlie-code appends it to its system message."""
-    self._write_instructions_file(cwd, "AGENTS.md", "charlie_code_wrote_agents_md")
+  # charlie-code appends the cwd AGENTS.md to its system message.
+  _INSTRUCTIONS_TARGET: tuple[str, str] = ("AGENTS.md", "charlie_code_wrote_agents_md")
 
   def _build_command(self, prompt: str) -> list[str]:
     if self._transport_dir is None:
@@ -177,9 +187,26 @@ class CharlieCodeBackend(AgentBackend):
       return [make_text_event(event["text"])]
 
     if event_type == "command":
+      self._commands_by_id[event["id"]] = event["command"]
       translated = make_tool_use_event("Bash", {"command": event["command"]})
       translated["id"] = event["id"]
       return [translated]
+
+    if event_type == "command_progress":
+      state = "terminated" if event["killed"] else "still running"
+      command = " ".join(self._commands_by_id[event["id"]].split())[:80]
+      return [
+          {
+              "type":
+                  ET.SYSTEM,
+              "subtype":
+                  ET.COMMAND_PROGRESS,
+              "content":
+                  (
+                      f"Command {state} after {_duration_label(event['elapsed_seconds'])} "
+                      f"(pid {event['pid']}): {command}"),
+          }
+      ]
 
     if event_type == "observation":
       translated = make_tool_result_event("Bash", event.get("output", ""))

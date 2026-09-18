@@ -4,8 +4,8 @@
 // ---------------------------------------------------------------------------
 // Sidebar spinner (running tasks indicator)
 // ---------------------------------------------------------------------------
-// Tracks server-reported unread state per session so we can restore the
-// unread dot after the spinner hides.
+// Tmux liveness and recent jsonl activity per tui-cli session id
+// ({running, busy}), as returned by the /api/sessions/tui/status poll.
 globalThis.TuiStatusMap = globalThis.TuiStatusMap || {};
 
 // Status polls are scoped to the sessions the sidebar is actually rendering.

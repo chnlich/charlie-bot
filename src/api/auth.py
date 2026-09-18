@@ -4,11 +4,10 @@ import hmac
 import json
 from http.cookies import CookieError, SimpleCookie
 
-from starlette.requests import Request
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from src.core.config import configured_access_key
-from src.core.constants import FILE_SERVER_MOUNTS
+from src.core.constants import AUTH_STATUS_PATH
 from src.core.run_token import RunTokenError, bearer_from_authorization, verify_run_token
 
 
@@ -27,24 +26,12 @@ def _credential_accepted(bearer: str, cookie: str, key: str) -> bool:
   return (bool(bearer) and _credential_matches(bearer, key)) or (bool(cookie) and _credential_matches(cookie, key))
 
 
-def request_has_access_key(request: Request, key: str) -> bool:
-  """True when *request* carries a valid access key, or when *key* is empty.
-
-  An empty configured key means the middleware passes every request through,
-  so every reader counts as authenticated. Otherwise the key is accepted from
-  either an ``Authorization: Bearer`` header or the access-key cookie,
-  compared with ``hmac.compare_digest``.
-  """
-  if not key:
-    return True
-  return _credential_accepted(_bearer_from_scope(request.scope), request.cookies.get(_ACCESS_KEY_COOKIE, ""), key)
-
-
-# Paths that are always public (no auth required). The viewer routes only render
-# or re-serve data already public via the file server, so exposing them leaks nothing
-# new and makes trace/report links shareable.
-_PUBLIC_PATHS = frozenset({"/", "/perfetto", "/perfetto/merged", "/ncu", "/api/auth/status"})
-_PUBLIC_PREFIXES = ("/static/", *(mount + "/" for mount in FILE_SERVER_MOUNTS))
+# Paths that are always public (no auth required): the SPA shell and the credential
+# check the login page's submit reads. Everything else that touches host state — the
+# file server and the /perfetto, /perfetto/merged and /ncu viewers included — sits
+# behind the access key; charliebot_pub is the only unauthenticated read surface.
+_PUBLIC_PATHS = frozenset({"/", AUTH_STATUS_PATH})
+_PUBLIC_PREFIXES = ("/static/",)
 
 # Self-contained HTML login page served to unauthenticated browser navigations.
 # On submit it stores the key in localStorage (the source of truth for the SPA

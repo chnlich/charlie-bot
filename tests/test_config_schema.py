@@ -9,7 +9,7 @@ from typing import get_args, get_origin
 
 import pytest
 import yaml
-from conftest import backend_option
+from conftest import ROOT, backend_option
 from pydantic import BaseModel
 
 from src.core import config as config_module
@@ -80,7 +80,7 @@ def test_load_config_names_every_legacy_key_in_the_file(tmp_path: Path, monkeypa
     config_module.load_config()
   message = str(excinfo.value)
   assert str(home / "config.yaml") in message.splitlines()[0]
-  named = dict(re.findall(r"^  (.+) -> (.+)$", message, re.M))
+  named = dict(re.findall(r"^  (.+) -> (.+)$", message, re.MULTILINE))
   fixture_keys = set(yaml.safe_load(FIXTURE_PATH.read_text(encoding="utf-8")))
   expected = {key for key in fixture_keys if key in LEGACY_KEYS or CREDENTIALS_PREFIX + key in LEGACY_KEYS}
   assert set(named) == expected
@@ -222,9 +222,9 @@ def test_get_credentials_caches_until_the_file_changes(tmp_path: Path, monkeypat
 
 
 def test_credentials_example_covers_every_credentials_legacy_key() -> None:
-  example_path = Path(__file__).resolve().parents[1] / "configs" / "credentials.example.yaml"
+  example_path = ROOT / "configs" / "credentials.example.yaml"
   raw_lines = example_path.read_text(encoding="utf-8").splitlines()
-  stripped = "\n".join(line[2:] if line.startswith("# ") else line for line in raw_lines)
+  stripped = "\n".join(line.removeprefix("# ") for line in raw_lines)
   example = yaml.safe_load(stripped)
   assert isinstance(example, dict)
   for old_key, location in LEGACY_KEYS.items():
@@ -235,7 +235,7 @@ def test_credentials_example_covers_every_credentials_legacy_key() -> None:
     assert key in example[section], old_key
 
 
-EXAMPLE_PATH = Path(__file__).resolve().parents[1] / "configs" / "config.example.yaml"
+EXAMPLE_PATH = ROOT / "configs" / "config.example.yaml"
 
 STARTER_BACKEND_IDS = ["claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-tui"]
 

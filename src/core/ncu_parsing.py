@@ -169,7 +169,7 @@ def _load_ncu_report_module() -> ModuleType | None:
     sys.path.append(python_dir)
 
   try:
-    import ncu_report  # type: ignore
+    import ncu_report  # type: ignore[import-not-found, import-untyped]
 
     _ncu_report_module = ncu_report
   except Exception:
@@ -694,10 +694,7 @@ def parse_ncu_report(path: str) -> dict:
     return cached
 
   module = _load_ncu_report_module()
-  if module is not None:
-    report = _parse_with_module(module, abspath)
-  else:
-    report = _parse_with_csv(abspath)
+  report = _parse_with_module(module, abspath) if module is not None else _parse_with_csv(abspath)
 
   report["path"] = abspath
   report["filename"] = os.path.basename(abspath)

@@ -33,13 +33,14 @@ from src.agents.backends.pty_common import (
 )
 from src.agents.backends.tui import mark_project_trusted
 from src.cli.claude_sub_bridge import (
+    HOOK_EVENTS,
     HookBridge,
     HookTurnState,
     PromptDelivery,
 )
 from src.core import event_types as ET
 from src.core.claude_accounts import CREDENTIALS_FILE
-from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, charliebot_home_dir, default_claude_dir
+from src.core.home import CLAUDE_CONFIG_DIR_ENV_VAR, charliebot_home_dir, default_claude_dir
 from src.core.json_utils import write_json_atomically
 from src.core.process import kill_process_group
 from src.core.timeouts import (
@@ -66,20 +67,6 @@ _MANAGED_NOTIFICATION_SETTINGS: dict[str, Any] = {
 _CAPABILITY_MARKERS = ("--plugin-dir", "--settings", "--session-id", "--resume")
 _VERSION_RE = re.compile(r"(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)")
 _SESSION_CONFIG_DIR_NAME = "configs"
-_HOOK_EVENTS = (
-    "SessionStart",
-    "UserPromptSubmit",
-    "MessageDisplay",
-    "PreToolUse",
-    "PostToolUse",
-    "PostToolUseFailure",
-    "PostCompact",
-    "Stop",
-    "StopFailure",
-    "Notification",
-    "PermissionRequest",
-    "SessionEnd",
-)
 
 
 class ClaudeSubError(RuntimeError):
@@ -530,7 +517,7 @@ def _write_hook_plugin(root: Path, bridge: HookBridge) -> Path:
   )
   helper = Path(__file__).with_name("claude_sub_hook.py").resolve()
   hooks: dict[str, list[dict[str, Any]]] = {}
-  for event_name in _HOOK_EVENTS:
+  for event_name in HOOK_EVENTS:
     gate = event_name in {"UserPromptSubmit", "PreToolUse", "PermissionRequest"}
     hook_args = [
         str(helper),

@@ -469,8 +469,7 @@ def test_header_splices_inside_the_wrap_column() -> None:
 
 
 @pytest.mark.parametrize(
-    "new, anchor",
-    [
+    "new, anchor", [
         ('<html><body><main><p>alpha beta</p></main></body></html>', '<main>'),
         ('<html><body><p>alpha beta</p></body></html>', '<body>'),
         ('<html><body><div class="unwrap"><div class="re-wrap"><p>alpha beta</p></div></div></body></html>', '<body>'),

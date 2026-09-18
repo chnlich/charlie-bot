@@ -26,6 +26,7 @@ from src.api.code_server import is_code_server_available
 from src.api.deps import SESSION_NOT_FOUND_DETAIL, get_config_on_loop, get_session_manager
 from src.api.message_utils import build_session_bootstrap_data
 from src.api.sessions import _bootstrap_payload, _default_backend_id
+from src.core.buildinfo import read_repo_head_sha
 from src.core.config import CharlieBotConfig, configured_access_key, get_config
 from src.core.constants import (
     AUTH_STATUS_PATH,
@@ -138,23 +139,21 @@ def _token_tally_cache_path() -> Path:
 
 def _get_git_version() -> str:
   """Return git short hash + commit date (e.g. 'bc6b882 · 03-24'), or '' on failure."""
+  short_hash = read_repo_head_sha(SUBPROCESS_GIT_VERSION_TIMEOUT)
+  if short_hash is None:
+    log.warning("git_version_failed")
+    return ""
   try:
-    short_hash = subprocess.check_output(
-        ["git", "rev-parse", "--short", "HEAD"],
-        cwd=REPO_ROOT,
-        text=True,
-        timeout=SUBPROCESS_GIT_VERSION_TIMEOUT,
-    ).strip()
     commit_date = subprocess.check_output(
         ["git", "log", "-1", "--format=%cd", "--date=format:%m-%d"],
         cwd=REPO_ROOT,
         text=True,
         timeout=SUBPROCESS_GIT_VERSION_TIMEOUT,
     ).strip()
-    return f"{short_hash} · {commit_date}"
-  except Exception:
+  except (OSError, subprocess.SubprocessError):
     log.warning("git_version_failed")
     return ""
+  return f"{short_hash} · {commit_date}"
 
 
 # The two git subprocesses behind the version run only when a page renders the

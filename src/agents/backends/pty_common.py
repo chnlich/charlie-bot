@@ -14,8 +14,7 @@ import signal
 import struct
 import tempfile
 import termios
-
-from fastapi import WebSocket, WebSocketDisconnect
+from typing import TYPE_CHECKING
 
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SESSION_ID_ENV_VAR
@@ -36,6 +35,12 @@ _PTY_READ_CHUNK = 4096
 # The browser end of every PTY is xterm.js; tmux only emits OSC 52 to a client whose
 # terminfo advertises `Ms`, which screen-256color does not.
 _PTY_CLIENT_TERM = "xterm-256color"
+
+# fastapi rides every claude-sub launch (the worker binary imports this module for
+# the tmux helpers); the WS-facing relay below is the only fastapi consumer, so its
+# imports stay inside that function and the WebSocket type rides TYPE_CHECKING.
+if TYPE_CHECKING:
+  from fastapi import WebSocket
 
 
 def _tmux_binary() -> str:
@@ -258,6 +263,8 @@ async def _run_pty_relay(websocket: WebSocket, attachment: PtyAttachment, *, pum
   Starts the PTY→WS pump, forwards browser `pty_input`/`pty_resize` messages to
   the PTY, then on exit cancels the pump and closes the attachment.
   """
+  from fastapi import WebSocketDisconnect
+
   pump_task = asyncio.create_task(
       _pump_pty_to_ws(attachment, websocket),
       name=pump_name,

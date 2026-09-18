@@ -22,7 +22,6 @@ from pathlib import Path
 
 from src.core import event_types as ET
 from src.core import runs
-from src.core.config import get_config
 from src.core.log_once import LazyStructlogLogger
 from src.core.ndjson import parse_ndjson_line, write_all
 from src.core.process import (
@@ -821,6 +820,11 @@ class AgentBackend(ABC):
     """
     if self._cgroup_session_id is None:
       return None
+    # The config model stack (~107 ms fresh-process, the claude-sub launch floor's
+    # largest slice) serves only this cgroup read; the backend ABC rides the
+    # worker binary's import, so the stack loads on the spawn path that needs it.
+    from src.core.config import get_config
+
     cfg = get_config()
     return prepare_session_cgroup(
         self._cgroup_session_id,

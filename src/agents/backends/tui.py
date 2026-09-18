@@ -14,9 +14,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any
-
-from fastapi import WebSocket
+from typing import TYPE_CHECKING, Any
 
 from src.agents.backends.base import SKIP_PERMISSIONS_SETTINGS, build_claude_argv
 from src.agents.backends.pty_common import (
@@ -32,11 +30,17 @@ from src.agents.backends.pty_common import (
     tmux_session_name,
 )
 from src.core import claude_accounts
-from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, default_claude_dir
+from src.core.home import CLAUDE_CONFIG_DIR_ENV_VAR, default_claude_dir
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendType
 
 log = LazyStructlogLogger()
+
+# fastapi serves only run_tui_attachment's annotation (future-annotations keep it
+# unevaluated); the module also rides the claude-sub worker launch via
+# mark_project_trusted, so the web framework must stay out of its import.
+if TYPE_CHECKING:
+  from fastapi import WebSocket
 
 _CLAUDE_TUI_SETTINGS = json.dumps(SKIP_PERMISSIONS_SETTINGS, separators=(",", ":"))
 _BUSY_THRESHOLD_SECONDS = 3.0

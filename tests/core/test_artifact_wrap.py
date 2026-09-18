@@ -1,7 +1,7 @@
 """Tests for the ``charliebot artifact wrap`` assembly verb and its pre-render driver.
 
 The driver runs the checkout's scripts/prerender_math.js against the vendored
-KaTeX 0.16.21 build (one CDN fetch per pytest session); the byte-integrity gate
+KaTeX build (one CDN fetch per pytest session); the byte-integrity gate
 and the render-path assertion come from src/core/artifact_check.py.
 """
 
@@ -15,7 +15,7 @@ from conftest import ROOT
 
 from src.cli.artifact import main as artifact_main
 from src.core import artifact_check
-from src.core.artifact_wrap import ensure_vendored_katex, wrap_fragment
+from src.core.artifact_wrap import KATEX_VERSION, ensure_vendored_katex, wrap_fragment
 
 _DRIVER = ROOT / "scripts" / "prerender_math.js"
 
@@ -109,6 +109,27 @@ def test_ensure_vendored_katex_fails_loud_naming_the_manual_command(
   with pytest.raises(RuntimeError, match=r"curl -fsSL"):
     ensure_vendored_katex(vendor)
   assert not vendor.exists()
+
+
+def test_katex_build_pin_agrees_across_vendored_fetch_and_both_pages() -> None:
+  """artifact_wrap, the explain template, and the web UI pin one KaTeX build.
+
+  The vendored copy pre-renders math to markup the page scripts render at view
+  time, so a build split leaves one side rendering markup the other rejects.
+  The templates stay self-contained (a hand-composed page copies the head
+  verbatim), so they carry their own copies and this assertion holds them in
+  lockstep with KATEX_VERSION.
+  """
+  dist = f"https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist"
+  expected = (
+      f"{dist}/katex.min.css",
+      f"{dist}/katex.min.js",
+      f"{dist}/contrib/auto-render.min.js",
+  )
+  for page in ("prompts/explain_template.html", "web/templates/index.html"):
+    text = (ROOT / page).read_text(encoding="utf-8")
+    missing = [url for url in expected if url not in text]
+    assert not missing, f"{page} lost the pinned KaTeX build: {missing}"
 
 
 # ---------------------------------------------------------------------------

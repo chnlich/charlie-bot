@@ -4,7 +4,7 @@
 // re-render and every coalesced streamed paint even when the message carries
 // no math — the walk M33's replay and M60's repeat-page metric stub away. This
 // collector wall-clocks the walk through the checkout's real renderer code and
-// the page's CDN-pinned katex 0.16.21 build over a jsdom DOM, over the worst
+// the page's CDN-pinned katex build over a jsdom DOM, over the worst
 // message page's assistant text blocks (a subset of M60's page corpus, which
 // adds user/worker_summary/plan bodies) and the largest math-free streamed
 // draft, live corpora read-only; CHECKOUT picks the code under test. jsdom
@@ -26,8 +26,17 @@ const { buildStreamHarness } = require('./stream_render_harness');
 const { MARKED_URL } = require('./marked_renderer_harness');
 
 const CHECKOUT = process.env.CHECKOUT || path.join(__dirname, '..');
-const KATEX_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js';
-const AUTO_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/contrib/auto-render.min.js';
+// The katex build the checkout's chat page serves (web/templates/index.html):
+// the walk under test is that page's walk, so the build reads from the same
+// page instead of a second pin here. No match is a loud preflight failure.
+const INDEX_HTML = fs.readFileSync(path.join(CHECKOUT, 'web', 'templates', 'index.html'), 'utf8');
+const katexScript = /<script defer src="(https:\/\/cdn\.jsdelivr\.net\/npm\/katex@[^"]+\/dist\/katex\.min\.js)"><\/script>/.exec(INDEX_HTML);
+if (!katexScript) {
+  throw new Error('web/templates/index.html carries no katex.min.js script tag; the collector lost its build pin');
+}
+const KATEX_URL = katexScript[1];
+const AUTO_URL = KATEX_URL.replace('katex.min.js', 'contrib/auto-render.min.js');
+const KATEX_LABEL = /katex@([^/]+)\//.exec(KATEX_URL)[1];
 const PAGE_MESSAGES = 40;
 
 let JSDOM;
@@ -125,7 +134,7 @@ try {
 
   console.log(
     `${page.length} bodies (${nFree} math-free, ${(pageBytes / 1024).toFixed(1)} KB, corpus sha1 ${digest}) ` +
-    `of a ${(fileSize / 1e6).toFixed(1)} MB live chat file, katex 0.16.21 walk over jsdom; ` +
+    `of a ${(fileSize / 1e6).toFixed(1)} MB live chat file, katex ${KATEX_LABEL} walk over jsdom; ` +
     `page re-render wall ${pageWall.toFixed(2)} ms, ${pageWalks} walks, parity ${pageParity}; ` +
     `${(text.length / 1024).toFixed(1)} KB math-free draft (sha1 ${draftDigest}), ${h.stats().frames.length} paints: ` +
     `walk wall ${walkMs.toFixed(2)} ms (${walkCalls} walks)`

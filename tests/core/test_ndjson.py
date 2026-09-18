@@ -8,13 +8,14 @@ paths.
 
 import asyncio
 import json
+import mmap
 import os
 from pathlib import Path
 from typing import IO, Any
 
 import pytest
 
-from core import byte_count_open
+from src.core import ndjson
 from src.core.ndjson import (
     _COUNT_MEMO_LIMIT,
     _TAIL_WINDOW_SIZE,
@@ -425,18 +426,35 @@ def test_iter_ndjson_events_from_end_line_longer_than_the_window(tmp_path: Path)
 def test_iter_ndjson_events_from_end_reads_only_the_tail_window(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # The early-stop contract the from-the-end readers rest on: a consumer that
-  # resolves in the newest segment must not read the older bytes at all.
+  # resolves in the newest segment must not scan the older bytes at all — the
+  # mapped backward scan's rfind extents stay inside the newest window.
   target = tmp_path / "events.jsonl"
   with target.open("wb") as f:
     for i in range(2000):  # ~14 KB per event: the early corpus spans several windows
       f.write((json.dumps({"i": i, "blob": "x" * 14000}) + "\n").encode())
-    f.write((json.dumps({"i": "answer"}) + "\n").encode())
+    for i in range(5):  # the answer a few lines inside the newest window
+      f.write((json.dumps({"i": f"tail{i}"}) + "\n").encode())
 
-  read_bytes = byte_count_open.install_byte_counting_open(monkeypatch)
+  extents: list[tuple[int, int]] = []
+  real_rfind = mmap.mmap.rfind
+
+  class RecordingMmap(mmap.mmap):
+
+    def rfind(self, sub, start=0, end=None):  # noqa: ANN001, ANN202
+      extents.append((start, len(self) if end is None else end))
+      return real_rfind(self, sub, start, end)
+
+  class Shim:
+    ACCESS_READ = mmap.ACCESS_READ
+    mmap = RecordingMmap
+
+  monkeypatch.setattr(ndjson, "mmap", Shim)
   walk = iter_ndjson_events_from_end(target, log_event="test_skip", log_fields={})
-  assert next(walk) == {"i": "answer"}
+  assert next(walk) == {"i": "tail4"}
   walk.close()
-  assert 0 < sum(read_bytes) <= _TAIL_WINDOW_SIZE
+  file_size = target.stat().st_size
+  assert extents, "the walk never scanned"
+  assert min(end for _, end in extents) >= file_size - _TAIL_WINDOW_SIZE
 
 
 def test_type_line_filter_keeps_candidate_type_lines() -> None:
@@ -492,6 +510,25 @@ def test_iter_ndjson_events_from_end_parse_filter_skips_unparsed(tmp_path: Path)
   filtered = list(iter_ndjson_events_from_end(target, log_event="test_skip", log_fields={}, parse_filter=keep))
   assert expected == filtered
   assert [e["type"] for e in filtered if "type" in e] == ["assistant", "result"]
+
+
+def test_iter_ndjson_events_from_end_plain_filter_sees_whole_lines(tmp_path: Path) -> None:
+  # A plain (non-head-provable) callable keys on bytes beyond the head, so the
+  # walk hands it each line whole, as bytes — never a truncated probe.
+  target = tmp_path / "events.jsonl"
+  with target.open("wb") as f:
+    f.write((json.dumps({"i": 0, "blob": "x" * 600}) + "\n").encode())
+    f.write((json.dumps({"i": 1, "blob": "y" * 600}) + "\n").encode())
+  seen: list[bytes] = []
+
+  def keep(raw_line: bytes) -> bool:
+    assert isinstance(raw_line, bytes)
+    seen.append(raw_line)
+    return raw_line.startswith(b'{"i": 0')
+
+  walked = list(iter_ndjson_events_from_end(target, log_event="test_skip", log_fields={}, parse_filter=keep))
+  assert [e["i"] for e in walked] == [0]
+  assert [line[:7] for line in seen] == [b'{"i": 1', b'{"i": 0']
 
 
 def _spy_opens(monkeypatch: pytest.MonkeyPatch) -> list[str]:

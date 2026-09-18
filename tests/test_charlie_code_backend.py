@@ -752,6 +752,34 @@ async def test_run_with_image_input_sends_images_in_reference_order_before_task_
 
 
 @pytest.mark.asyncio
+async def test_run_default_build_sends_images_in_reference_order_before_task_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """No image_input kwarg: images are sent; direct construction pins the constructor default, not the config field."""
+  backend = _build_backend(monkeypatch, log_dir=tmp_path / "logs")
+  _events, spawn = await _drive_run_halted_at_spawn_with_attachments(
+      backend,
+      monkeypatch,
+      tmp_path,
+      uploaded_files=[
+          {
+              "filename": "a.png",
+              "path": str(tmp_path / "a.png")
+          },
+          {
+              "filename": "b.png",
+              "path": str(tmp_path / "b.png")
+          },
+      ],
+  )
+
+  cmd = list(spawn.await_args.args)
+  first = cmd.index("--image")
+  assert cmd[first:first + 4] == ["--image", str(tmp_path / "a.png"), "--image", str(tmp_path / "b.png")]
+  assert cmd.count("--image") == 2
+  assert first < cmd.index("--task-file")
+
+
+@pytest.mark.asyncio
 async def test_run_with_image_input_and_only_non_image_refs_produces_no_image_flags(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   backend = _build_backend(monkeypatch, image_input=True, log_dir=tmp_path / "logs")

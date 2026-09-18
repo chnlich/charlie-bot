@@ -246,6 +246,21 @@ async def place_turn(
 # ---------------------------------------------------------------------------
 
 
+async def _report_login_required(item: master_cc_state._WorkItem, account: ClaudeAccount, reason: str) -> None:
+  """Emit the login-required operator notice once.
+
+  The log line keeps the chat event's type as its label, and the chat event
+  rides the item's persist hook.
+  """
+  log.error(
+      ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED,
+      session=item.session_meta.id,
+      account=account.label,
+      config_dir=account.config_dir,
+      reason=reason)
+  await _persist(item)(claude_relay.login_required_event(account, reason))
+
+
 async def report_login_failure(
     item: master_cc_state._WorkItem,
     account: ClaudeAccount,
@@ -253,13 +268,7 @@ async def report_login_failure(
 ) -> None:
   """Mark *account* unhealthy for the cooldown and tell the operator (account-free in chat)."""
   claude_accounts.record_auth_failure(account.label, now)
-  log.error(
-      ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED,
-      session=item.session_meta.id,
-      account=account.label,
-      config_dir=account.config_dir,
-      reason=claude_relay.LOGIN_REASON_AUTH_FAILED)
-  await _persist(item)(claude_relay.login_required_event(account, claude_relay.LOGIN_REASON_AUTH_FAILED))
+  await _report_login_required(item, account, claude_relay.LOGIN_REASON_AUTH_FAILED)
 
 
 async def report_empty_credentials(cfg: CharlieBotConfig, item: master_cc_state._WorkItem) -> None:
@@ -267,13 +276,7 @@ async def report_empty_credentials(cfg: CharlieBotConfig, item: master_cc_state.
   for account in claude_accounts.pool(cfg):
     present = claude_accounts.credentials_present(account)
     if claude_accounts.login_notice_due(account.label, unhealthy=not present):
-      log.error(
-          ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED,
-          session=item.session_meta.id,
-          account=account.label,
-          config_dir=account.config_dir,
-          reason=claude_relay.LOGIN_REASON_EMPTY_CREDENTIALS)
-      await _persist(item)(claude_relay.login_required_event(account, claude_relay.LOGIN_REASON_EMPTY_CREDENTIALS))
+      await _report_login_required(item, account, claude_relay.LOGIN_REASON_EMPTY_CREDENTIALS)
 
 
 async def prepare_relay(

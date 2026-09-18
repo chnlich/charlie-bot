@@ -194,8 +194,6 @@ def _merge_one_trace(
   # form arrived first allocated, the other rides its str key).
   tid_raw_map: dict[object, int] = {}
   tid_raw_get = tid_raw_map.get
-  tid_seq_call = tid_seq
-  flow_seq_call = flow_seq
   _str = str
   # The batch append rides the walk loop as plain list ops: one bound method call
   # per event over a 1M-event corpus measured ~0.2 s of the build wall.
@@ -235,7 +233,7 @@ def _merge_one_trace(
         if synthetic_tid is None:
           # First sight: the sequencer allocates and inserts; the thread_name
           # rides the same first sight instead of a second per-event set probe.
-          synthetic_tid = tid_seq_call(original_tid)
+          synthetic_tid = tid_seq(original_tid)
           pending_append(
               {
                   "ph": "M",
@@ -251,7 +249,7 @@ def _merge_one_trace(
         tid_raw_map[original_tid] = synthetic_tid
       event["tid"] = synthetic_tid
     if ph in {"s", "t", "f"} and "id" in event:
-      event["id"] = flow_seq_call(event["id"])
+      event["id"] = flow_seq(event["id"])
     pending_append(event)
     if len(pending) >= batch_bound:
       batcher_flush(pending)

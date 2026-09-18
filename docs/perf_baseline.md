@@ -7335,6 +7335,8 @@ import os, subprocess, sys, time
 checkout = os.environ["CHECKOUT"]
 # The console script resolves src through the editable finder pinned to the main
 # checkout, so the checkout under test rides PYTHONPATH (cwd-first import is the
+# The console script resolves src through the editable finder pinned to the main
+# checkout, so the checkout under test rides PYTHONPATH (cwd-first import is the
 # `python -c` shape, not the launch shape); the script itself lives in the venv
 # that owns this interpreter — worktree checkouts carry no .venv of their own.
 env = {**os.environ, "PYTHONPATH": checkout}

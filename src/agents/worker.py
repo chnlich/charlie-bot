@@ -322,8 +322,8 @@ class Worker:
           thread=self._thread.id,
           account=current.label,
           config_dir=current.config_dir,
-          reason="auth_failed")
-      notice = claude_relay.login_required_event(current, "auth_failed")
+          reason=claude_relay.LOGIN_REASON_AUTH_FAILED)
+      notice = claude_relay.login_required_event(current, claude_relay.LOGIN_REASON_AUTH_FAILED)
       await self._persist_and_broadcast(fd, notice)
       if self.on_session_event is not None:
         await self.on_session_event(notice)

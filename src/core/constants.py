@@ -47,18 +47,18 @@ PLAN_CLOSE_MODES = (PLAN_CLOSE_SUPERSEDED, PLAN_CLOSE_ABANDONED, PLAN_CLOSE_COMP
 # module for it (the M99 server import floor).
 OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
 
-# File-server URL prefixes: server.py mounts the one files router under each, so both
-# spellings reach the same handler. The first entry is the canonical form the UI builds
-# and older links carry; the second is the form written into chat text to name absolute
-# filesystem paths. Every Python reader derives its form (auth whitelist entries, trace
-# parsing, listing roots, slack URL rewriting) from this tuple; the frontend gate
-# (web/static/js/chat/artifacts.js) mirrors the set, pinned by
-# tests/test_frontend_file_server_prefixes.py.
-FILE_SERVER_MOUNTS = ("/files", "/absolute_filepath")
+# File-server URL prefix: server.py mounts the one files router under it. The prefix names
+# what has to follow it — the absolute filesystem path with its leading `/` removed — so a
+# path that dropped its leading segments reads as wrong where it is written. The legacy /files
+# (and singular /file) spellings are hard-offline: nothing is mounted there, both answer 404.
+# Every Python reader derives its form (auth whitelist entries, trace parsing, listing roots,
+# slack URL rewriting) from this tuple; the frontend gate (web/static/js/chat/artifacts.js)
+# mirrors the single element, pinned by tests/test_frontend_file_server_prefixes.py.
+FILE_SERVER_MOUNTS = ("/absolute_filepath",)
 
-# Public viewer route paths: pages.py declares each route with its spelling, and the
-# auth whitelist (src.api.auth) admits exactly these paths without a key, so a route
-# rename and its whitelist entry move together. The merged path is additionally the
+# Public viewer route paths: pages.py declares each route with its spelling. The auth
+# whitelist (src.api.auth) does not admit them — they read local trace/report files, so
+# they sit behind the access key like the file server. The merged path is additionally the
 # special case server.py's gzip middleware skips (the body is already-compressed
 # trace bytes) and the URL pages.py builds for merged traces.
 PERFETTO_VIEWER_PATH = "/perfetto"

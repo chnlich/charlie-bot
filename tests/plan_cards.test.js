@@ -226,7 +226,8 @@ test('buildPlanCompactCardHtml includes an Open in tab anchor whose href carries
   // stampViewingSessionFragment reads SESSION_ID from the script context.
   assert.match(href, /#cbsession=test-session/, 'href carries the #cbsession= fragment for the comment tray');
   assert.equal(href.indexOf('cbpanel'), -1, 'href must NOT carry the cbpanel marker (standalone page path)');
-  assert.ok(href.indexOf('/files' + absPath) === 0, 'href targets the real /files URL of the card version file');
+  assert.ok(href.indexOf('/absolute_filepath' + absPath) === 0,
+             'href targets the real /absolute_filepath URL of the card version file');
 });
 
 test('buildPlanCompactCardHtml renders the derived state string verbatim with no client-side derivation', () => {

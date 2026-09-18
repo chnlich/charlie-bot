@@ -890,7 +890,7 @@ async def ack_messages(
 def _rewrite_file_links(text: str, cfg: CharlieBotConfig) -> tuple[str, list[str]]:
   """Publish every file-server artifact the reply links and swap the URLs to the published ones.
 
-  A URL on this server's port under ``/files/`` or ``/absolute_filepath/`` names an
+  A URL on this server's port under the canonical ``/absolute_filepath/`` prefix names an
   artifact file. Each existing target is published through the one publish action and
   the URL replaced by the published one, with the query string and fragment
   re-attached unchanged. A match whose target file is gone raises ``SlackReplyError``

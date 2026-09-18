@@ -434,7 +434,7 @@ async def test_perfetto_page_mixed_inputs_warns_and_uses_first(tmp_path: Path) -
       title=None,
       slim=None,
   )
-  assert response.context["trace_url"] == f"/files{local}"
+  assert response.context["trace_url"] == f"/absolute_filepath{local}"
   assert "showing first trace only" in response.context["warn"]
 
 

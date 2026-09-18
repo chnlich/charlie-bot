@@ -62,7 +62,7 @@ def test_ncu_renders_sample_report(client: TestClient) -> None:
   # 6 kernels, embedded report data, and the handoff block.
   assert "6 kernels" in body
   assert "const REPORT =" in body
-  assert f"/files{_SAMPLE_REPORT}" in body
+  assert f"/absolute_filepath{_SAMPLE_REPORT}" in body
   assert f"ncu-ui {_SAMPLE_REPORT}" in body
   assert f"ncu --import {_SAMPLE_REPORT} --page details" in body
   assert _ROOFLINE_PLACEHOLDER in body

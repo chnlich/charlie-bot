@@ -13,11 +13,10 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
-from src.api.auth import request_has_access_key
 from src.api.pages import _static_asset_version
 from src.api.responses import GZIP_RESPONSE_HEADERS, request_wants_gzip
 from src.core.compression import gzip_level1
-from src.core.config import configured_access_key, get_config
+from src.core.config import get_config
 from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.human_size import format_size
 from src.core.memo import BoundedMemo
@@ -35,13 +34,13 @@ _DIFF_ANNOTATE_MEMO_LIMIT = 8
 _CLEAN_VIEW_MEMO_LIMIT = 8
 
 # Memo key for one annotated diff page: both resolved paths plus each file's
-# (mtime_ns, size) taken before its read, and whether the artifact-comments
-# injection rode along. The marks are a pure function of the two files' bytes
-# and an artifact page is only ever written whole, so an unchanged signature
-# pair proves the stored page current; an entry keyed from bytes read before a
-# concurrent rewrite is unreachable for the newer bytes. Served strings are
-# shared across responses, the no-defensive-copy idiom of the sibling memos.
-_AnnotateKey = tuple[str, int, int, str, int, int, bool]
+# (mtime_ns, size) taken before its read. The marks are a pure function of the
+# two files' bytes and an artifact page is only ever written whole, so an
+# unchanged signature pair proves the stored page current; an entry keyed from
+# bytes read before a concurrent rewrite is unreachable for the newer bytes.
+# Served strings are shared across responses, the no-defensive-copy idiom of
+# the sibling memos.
+_AnnotateKey = tuple[str, int, int, str, int, int]
 
 _annotate_memo: BoundedMemo[_AnnotateKey, str] = BoundedMemo(_DIFF_ANNOTATE_MEMO_LIMIT)
 
@@ -74,6 +73,13 @@ _DIFF_TARGET_DETAIL = "diff target is not a session artifact page: {}"
 _DIFF_BASE_NOT_FOUND_DETAIL = "diff base not found: {}"
 _PERMISSION_DENIED_DETAIL = "Permission denied"
 
+# Session artifact pages carry injected per-session state (the comment tray and
+# its inline session id), so no stored copy may outlive the request that read
+# it: the plain and the gzip artifact responses alike set Cache-Control:
+# no-store, the gzip one on top of the pre-compressed headers.
+_NO_STORE_HEADERS = {"Cache-Control": "no-store"}
+_ARTIFACT_GZIP_HEADERS = {**GZIP_RESPONSE_HEADERS, **_NO_STORE_HEADERS}
+
 
 def _file_signature(path: Path) -> tuple[int, int]:
   """(mtime_ns, size) of *path*; artifact writers publish whole files, so a rewrite always moves it."""
@@ -81,7 +87,7 @@ def _file_signature(path: Path) -> tuple[int, int]:
   return (st.st_mtime_ns, st.st_size)
 
 
-def _annotate_key(base_path: Path, page_path: Path, inject_ui: bool) -> _AnnotateKey:
+def _annotate_key(base_path: Path, page_path: Path) -> _AnnotateKey:
   """Both resolved paths plus each file's (mtime_ns, size) taken before its read.
 
   The base's missing file is the same 404 the annotate raises, so the key's one
@@ -92,17 +98,19 @@ def _annotate_key(base_path: Path, page_path: Path, inject_ui: bool) -> _Annotat
   except OSError as e:
     raise HTTPException(status_code=404, detail=_DIFF_BASE_NOT_FOUND_DETAIL.format(base_path)) from e
   page_sig = (str(page_path), *_file_signature(page_path))
-  return (*base_sig, *page_sig, inject_ui)
+  return (*base_sig, *page_sig)
 
 
-def _annotated_diff_page(base_path: Path, page_path: Path, inject_ui: bool, session_id: str) -> str:
-  """The diff page's target annotated against its base, repeats served from the memo.
+def _annotated_diff_page(base_path: Path, page_path: Path, session_id: str) -> str:
+  """The diff page's target annotated against its base, comment tray wrapped on, repeats served from the memo.
 
   A cold annotate parses both pages end to end (~0.25 s on a 1 MB pair,
   measured) — work per request no repeat view must re-run, since neither bytes
-  nor marks can change between views.
+  nor marks can change between views. The comment layer rides every diff view:
+  the auth middleware owns the credential gate, so the route never branches on
+  the request to decide whether the tray appears.
   """
-  key = _annotate_key(base_path, page_path, inject_ui)
+  key = _annotate_key(base_path, page_path)
   hit = _annotate_memo.get(key)
   if hit is not None:
     return hit
@@ -116,13 +124,12 @@ def _annotated_diff_page(base_path: Path, page_path: Path, inject_ui: bool, sess
   # off the module import.
   from src.core import plan_diff
   page = plan_diff.annotate(base_text, page_text)
-  if inject_ui:
-    page = _inject_artifact_ui(page, session_id)
+  page = _inject_artifact_ui(page, session_id)
   _annotate_memo.store(key, page)
   return page
 
 
-def _annotated_diff_page_gzip(base_path: Path, page_path: Path, inject_ui: bool, session_id: str) -> bytes:
+def _annotated_diff_page_gzip(base_path: Path, page_path: Path, session_id: str) -> bytes:
   """The annotated diff page's gzip form, memoized beside the plain body.
 
   The route ships these bytes with Content-Encoding: gzip set upstream, which
@@ -130,17 +137,17 @@ def _annotated_diff_page_gzip(base_path: Path, page_path: Path, inject_ui: bool,
   level 1 over the multi-MB worst compare view is the per-click cost the memo
   removes. mtime=0 keeps the compressed bytes deterministic across processes.
   """
-  key = _annotate_key(base_path, page_path, inject_ui)
+  key = _annotate_key(base_path, page_path)
   hit = _annotate_gzip_memo.get(key)
   if hit is not None:
     return hit
-  compressed = gzip_level1(_annotated_diff_page(base_path, page_path, inject_ui, session_id).encode("utf-8"))
+  compressed = gzip_level1(_annotated_diff_page(base_path, page_path, session_id).encode("utf-8"))
   _annotate_gzip_memo.store(key, compressed)
   return compressed
 
 
 def _injected_artifact_page(fs_path: Path, session_id: str) -> bytes:
-  """The credentialed artifact view's body: the page wrapped in the artifact UI, memoized on the file signature.
+  """The artifact view's body: the page wrapped in the artifact UI, memoized on the file signature.
 
   A repeat view of an unchanged page pays one stat and zero file bytes — the
   read re-ran on every view before the memo (~4.8 ms on the 1 MB worst
@@ -455,34 +462,34 @@ async def serve_file(path: str, request: Request) -> Response:
     return HTMLResponse(listing)
 
   # Standalone artifact HTML gets the review UI injected here — the single chokepoint
-  # that serves every artifact page — regardless of how the artifact was authored, but
-  # only for readers who carry a valid access key: only they can post a comment, so only
-  # they see the comment entry. An uncredentialed reader gets the file's original bytes.
+  # that serves every artifact page — regardless of how the artifact was authored and
+  # unconditionally: the auth middleware owns the credential gate (an uncredentialed
+  # reader is answered 401 before this route runs), so a per-request credential branch
+  # here could only ever make the comment tray silently vanish behind a stale cookie.
   session_id = _artifact_session_id(fs_path) if fs_path.suffix.lower() == ".html" else None
   if diff_param is not None:
     # A diff request addresses two artifact pages. Both must pass the artifact
     # predicate before anything is served, so a malformed address is rejected
     # rather than silently answered with the clean page. The marks themselves
-    # are spliced into the response before the optional comment layer below.
+    # are spliced into the response before the comment layer wraps them.
     if session_id is None:
       raise HTTPException(status_code=400, detail=_DIFF_TARGET_DETAIL.format(fs_path))
     base_path = _resolve_diff_base(session_id, diff_param)
-    inject_ui = request_has_access_key(request, configured_access_key())
     if request_wants_gzip(request):
-      body = await asyncio.to_thread(_annotated_diff_page_gzip, base_path, fs_path, inject_ui, session_id)
-      return Response(content=body, media_type="text/html", headers=GZIP_RESPONSE_HEADERS)
+      body = await asyncio.to_thread(_annotated_diff_page_gzip, base_path, fs_path, session_id)
+      return Response(content=body, media_type="text/html", headers=_ARTIFACT_GZIP_HEADERS)
     # A cold annotate parses both pages whole (~0.25 s on a 1 MB pair), so the
     # build runs off the event loop; a memo hit answers with zero file bytes.
-    html_text = await asyncio.to_thread(_annotated_diff_page, base_path, fs_path, inject_ui, session_id)
-    return HTMLResponse(html_text, media_type="text/html")
+    html_text = await asyncio.to_thread(_annotated_diff_page, base_path, fs_path, session_id)
+    return HTMLResponse(html_text, media_type="text/html", headers=_NO_STORE_HEADERS)
 
-  if session_id is not None and request_has_access_key(request, configured_access_key()):
+  if session_id is not None:
     if request_wants_gzip(request):
       body = await asyncio.to_thread(_injected_artifact_page_gzip, fs_path, session_id)
-      return Response(content=body, media_type="text/html", headers=GZIP_RESPONSE_HEADERS)
+      return Response(content=body, media_type="text/html", headers=_ARTIFACT_GZIP_HEADERS)
     # One executor hop: signature, memo hit, and on a miss the read+inject+store.
     body = await asyncio.to_thread(_injected_artifact_page, fs_path, session_id)
-    return HTMLResponse(body, media_type="text/html")
+    return HTMLResponse(body, media_type="text/html", headers=_NO_STORE_HEADERS)
 
   # Serve the file with auto-detected MIME type
   media_type, _ = mimetypes.guess_type(str(fs_path))

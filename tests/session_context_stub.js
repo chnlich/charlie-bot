@@ -83,10 +83,12 @@ function baseSessionContext(overrides = {}) {
     BACKEND_OPTIONS: overrides.BACKEND_OPTIONS || {},
     BACKEND_TYPES: overrides.BACKEND_TYPES || {},
     BACKEND_ALIASES: overrides.BACKEND_ALIASES || {},
-    // config.js's shared literal pair; index.html loads config.js before the
-    // chat/sidebar modules createChatSidebarContext fans out to.
+    // config.js's shared literals and the draft-save seam; index.html loads
+    // config.js before the chat/sidebar modules createChatSidebarContext fans
+    // out to.
     JSON_HEADERS: {'Content-Type': 'application/json'},
     PROGRESS_BAR_FILL_CLASS: 'h-full rounded-full transition-all duration-300',
+    saveDraftNow: () => {},
   };
   context.window = {addEventListener: () => {}, innerHeight: 800};
   context.CSS = {escape: (value) => String(value)};

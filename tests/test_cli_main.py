@@ -1,12 +1,15 @@
 """Tests for the unified charliebot CLI dispatcher."""
 
+import re
 import sys
 from types import ModuleType
 
 import pytest
+from conftest import ROOT
 
 from src.cli import delegate, improve, publish, remote_launch, schedule_trigger, slack
 from src.cli import main as cli_main
+from src.cli.main import _COMMANDS
 
 
 @pytest.mark.parametrize(
@@ -56,3 +59,12 @@ def test_dispatcher_rejects_unknown_subcommand(capsys: pytest.CaptureFixture[str
   err = capsys.readouterr().err
   assert "unknown subcommand" in err
   assert "schedule-trigger" in err
+
+
+def test_readme_cli_glance_names_exactly_the_dispatcher_subcommands() -> None:
+  """The README "CLI at a glance" bullets stay in lockstep with _COMMANDS, the
+  dispatcher registry that owns the subcommand vocabulary."""
+  readme = ROOT.joinpath("README.md").read_text(encoding="utf-8")
+  section = readme.split("## CLI at a glance", 1)[1].split("\n## ", 1)[0]
+  documented = re.findall(r"^- `charliebot ([a-z-]+)`", section, flags=re.MULTILINE)
+  assert sorted(documented) == sorted(_COMMANDS)

@@ -1676,20 +1676,28 @@ def _rows_sidecar_name(db: Path) -> str:
   return hashlib.sha1(str(db).encode()).hexdigest()[:16] + ".opencode_rows.json"
 
 
+_ROWS_SIDECAR_NOTE_PREFIX = "Tally cache: rows sidecar"
+
+
+def _sidecar_seed_note(notes: list[str], name: str, reason: str) -> None:
+  """Append the sidecar seed-failure note; *reason* names what the read hit."""
+  notes.append(f"{_ROWS_SIDECAR_NOTE_PREFIX} {name} {reason}; seeding from a full scan")
+
+
 def _read_rows_sidecar(cache_dir: Path, name: str, notes: list[str]) -> dict | None:
   """The sidecar document's rows map, or None when unreadable — the seed then falls back to
   the full scan (the no-seed contract), with the failure surfaced as a note."""
   try:
     doc = orjson.loads((cache_dir / name).read_bytes())
   except FileNotFoundError:
-    notes.append(f"Tally cache: rows sidecar {name} is missing; seeding from a full scan")
+    _sidecar_seed_note(notes, name, "is missing")
     return None
   except (OSError, ValueError) as exc:
-    notes.append(f"Tally cache: rows sidecar {name} unreadable ({exc}); seeding from a full scan")
+    _sidecar_seed_note(notes, name, f"unreadable ({exc})")
     return None
   rows = doc.get("rows") if isinstance(doc, dict) else None
   if not isinstance(rows, dict):
-    notes.append(f"Tally cache: rows sidecar {name} carries no rows map; seeding from a full scan")
+    _sidecar_seed_note(notes, name, "carries no rows map")
     return None
   return rows
 
@@ -1702,7 +1710,7 @@ def _write_rows_sidecar(cache_dir: Path, name: str, rows: dict, notes: list[str]
     payload = orjson.dumps({"version": 1, "rows": rows})
     atomic_write_stream(cache_dir / name, lambda stream: stream.write(payload))
   except OSError as exc:
-    notes.append(f"Tally cache: rows sidecar write failed: {exc}")
+    notes.append(f"{_ROWS_SIDECAR_NOTE_PREFIX} write failed: {exc}")
     return False
   return True
 

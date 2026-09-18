@@ -495,7 +495,7 @@ async def test_config_loader_and_api_round_trip_binding(tmp_path: Path, monkeypa
   wake_md.write_text("wake the pm\n", encoding="utf-8")
   (cron_dir / "bound.yaml").write_text(yaml.safe_dump({
       "cron": "0 3 * * *",
-      "type": "pm",
+      "type": "normal",
       "prompt_file": str(wake_md),
       "session_id": str(manager.id),
       "backend": "fake",

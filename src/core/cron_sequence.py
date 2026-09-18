@@ -60,7 +60,7 @@ class ScheduledBindingError(RuntimeError):
   """The configured binding cannot serve this fire (never silently replaced)."""
 
 
-def firing_ref_prefix(owner_ref: str) -> "tuple[str, str] | None":
+def firing_ref_prefix(owner_ref: str) -> tuple[str, str] | None:
   """(task name, firing) from a cron_steps owner_ref.
 
   Cron task names never contain ':' (the loader's name guard), so the first
@@ -76,7 +76,7 @@ def firing_ref_prefix(owner_ref: str) -> "tuple[str, str] | None":
   return name, firing
 
 
-def load_bound_task(task_name: str, cfg: "object") -> "ScheduledTaskConfig | None":
+def load_bound_task(task_name: str, cfg: object) -> ScheduledTaskConfig | None:
   """The current config of one named scheduled task, or None when unconfigured.
 
   Reads the task's own cron.d file under this instance's home so recovery can
@@ -117,7 +117,7 @@ def work_run_request_id(task_cfg: ScheduledTaskConfig, firing: str) -> str:
 
 async def resolve_binding(
     task_cfg: ScheduledTaskConfig,
-    tree: "TaskTreeManager",
+    tree: TaskTreeManager,
 ) -> SessionMetadata:
   """Load the bound task-tree node; every invalid binding fails loudly.
 
@@ -141,7 +141,7 @@ async def resolve_binding(
 
 async def check_fireable_binding(
     task_cfg: ScheduledTaskConfig,
-    tree: "TaskTreeManager",
+    tree: TaskTreeManager,
 ) -> SessionMetadata:
   """The binding a NEW cron execution may start against.
 
@@ -175,7 +175,7 @@ async def check_fireable_binding(
 async def fire_bound_master(
     task_cfg: ScheduledTaskConfig,
     meta: SessionMetadata,
-    tree: "TaskTreeManager",
+    tree: TaskTreeManager,
     firing: str,
 ) -> dict:
   """Admit one typed scheduled input to the bound manager and dispatch it.
@@ -208,7 +208,7 @@ async def fire_bound_master(
 async def ensure_firing_leaf(
     task_cfg: ScheduledTaskConfig,
     meta: SessionMetadata,
-    tree: "TaskTreeManager",
+    tree: TaskTreeManager,
     firing: str,
     goal: str,
     backend: str,
@@ -245,7 +245,7 @@ async def ensure_firing_leaf(
 
 
 async def register_leaf_run(
-    tree: "TaskTreeManager",
+    tree: TaskTreeManager,
     leaf_id: str,
     task_cfg: ScheduledTaskConfig,
     firing: str,
@@ -282,7 +282,7 @@ async def register_leaf_run(
   return fresh
 
 
-async def run_result_text(tree: "TaskTreeManager", leaf_id: str, run_id: str) -> str:
+async def run_result_text(tree: TaskTreeManager, leaf_id: str, run_id: str) -> str:
   """One Run's closing words from its translated events log ('' without any)."""
   events_path = tree.runs.run_dir(leaf_id, run_id) / "events.jsonl"
   if not events_path.is_file():
@@ -298,7 +298,7 @@ async def run_result_text(tree: "TaskTreeManager", leaf_id: str, run_id: str) ->
 async def run_firing_steps(
     task_cfg: ScheduledTaskConfig,
     meta: SessionMetadata,
-    tree: "TaskTreeManager",
+    tree: TaskTreeManager,
     firing: str,
     leaf_id: str,
 ) -> None:
@@ -370,7 +370,7 @@ async def run_firing_steps(
 
 
 async def deliver_boundary_report(
-    tree: "TaskTreeManager",
+    tree: TaskTreeManager,
     leaf_id: str,
     recipient: str,
     task_cfg: ScheduledTaskConfig,
@@ -395,7 +395,7 @@ async def deliver_boundary_report(
 
 
 async def deliver_withheld_boundary(
-    tree: "TaskTreeManager",
+    tree: TaskTreeManager,
     leaf_id: str,
     recipient: str,
     task_cfg: ScheduledTaskConfig,
@@ -403,7 +403,7 @@ async def deliver_withheld_boundary(
     position: int,
     step_name: str,
     reason: str,
-    executed: "list[tuple[int, str, str, str]]",
+    executed: list[tuple[int, str, str, str]],
 ) -> None:
   """The boundary report for a chain whose next launch was withheld.
 
@@ -421,7 +421,7 @@ async def deliver_withheld_boundary(
       tree, leaf_id, recipient, task_cfg, firing, "blocked", summary)
 
 
-async def redrive_firing(leaf_id: str, tree: "TaskTreeManager", cfg) -> None:
+async def redrive_firing(leaf_id: str, tree: TaskTreeManager, cfg) -> None:
   """Re-drive one firing's chain or boundary from its leaf's durable facts.
 
   The single re-drive entry the startup recovery pass and every scheduled_step
@@ -458,14 +458,14 @@ async def redrive_firing(leaf_id: str, tree: "TaskTreeManager", cfg) -> None:
 # ---------------------------------------------------------------------------
 
 
-def effective_backend(task_cfg: ScheduledTaskConfig, tree: "TaskTreeManager") -> str:
+def effective_backend(task_cfg: ScheduledTaskConfig, tree: TaskTreeManager) -> str:
   """The task's effective backend id, resolved strictly against the config."""
   from src.core.scheduler import effective_scheduled_task_backend
   return effective_scheduled_task_backend(task_cfg, tree._cfg)
 
 
 def resolved_backend_model(
-    task_cfg: ScheduledTaskConfig, tree: "TaskTreeManager", backend_id: str | None,
+    task_cfg: ScheduledTaskConfig, tree: TaskTreeManager, backend_id: str | None,
 ) -> tuple[str, str | None]:
   """(backend, model) for one fire's run: the step's or task's backend, resolved
   strictly to its configured default model (the same resolution the legacy
@@ -479,7 +479,7 @@ def resolved_backend_model(
   return _option_default_backend_model(option, source="scheduled task ")
 
 
-def _adapter_of(tree: "TaskTreeManager") -> "object":
+def _adapter_of(tree: TaskTreeManager) -> object:
   from src.core.task_execution import TaskExecutionAdapter
 
   adapter = tree.dispatch.executor
@@ -488,14 +488,14 @@ def _adapter_of(tree: "TaskTreeManager") -> "object":
   return adapter
 
 
-def launch(tree: "TaskTreeManager", leaf_id: str, run_id: str, prompt: str | None) -> None:
+def launch(tree: TaskTreeManager, leaf_id: str, run_id: str, prompt: str | None) -> None:
   """The scheduler-owned launch through the shared adapter."""
   _adapter_of(tree).launch_scheduled(leaf_id, run_id, prompt=prompt)
 
 
 async def launch_and_settle(
-    tree: "TaskTreeManager", leaf_id: str, run_id: str, prompt: str | None,
-) -> "LaunchSettlement":
+    tree: TaskTreeManager, leaf_id: str, run_id: str, prompt: str | None,
+) -> LaunchSettlement:
   """The scheduler-owned launch followed to its settlement (the shared
   launch/wait observation): a durable terminal outcome, or an explicit
   withheld verdict when the launch precondition failed and no process
@@ -504,14 +504,14 @@ async def launch_and_settle(
   return await _adapter_of(tree).launch_and_settle(leaf_id, run_id, prompt=prompt, scheduled=True)
 
 
-async def terminal_outcome(tree: "TaskTreeManager", leaf_id: str, run_id: str) -> str | None:
+async def terminal_outcome(tree: TaskTreeManager, leaf_id: str, run_id: str) -> str | None:
   run = await tree.runs.get_run(leaf_id, run_id)
   if run is None:
     return None
   return tree.runs.terminal_outcome(tree.runs.load_events_sync(leaf_id), run_id)
 
 
-async def step_advanced(tree: "TaskTreeManager", leaf_id: str, run_id: str) -> bool:
+async def step_advanced(tree: TaskTreeManager, leaf_id: str, run_id: str) -> bool:
   """Whether one step's durable record clears the chain's advance gate.
 
   The legacy chain advanced on the process exit code; the v2 record carries
@@ -527,7 +527,7 @@ async def step_advanced(tree: "TaskTreeManager", leaf_id: str, run_id: str) -> b
   return run.exit_code == 0
 
 
-async def wait_for_terminal(tree: "TaskTreeManager", leaf_id: str, run_id: str) -> str:
+async def wait_for_terminal(tree: TaskTreeManager, leaf_id: str, run_id: str) -> str:
   while True:
     outcome = await terminal_outcome(tree, leaf_id, run_id)
     if outcome is not None:
@@ -543,7 +543,7 @@ async def wait_for_terminal(tree: "TaskTreeManager", leaf_id: str, run_id: str) 
 async def reconcile_bound_firings(
     task_cfg: ScheduledTaskConfig,
     meta: SessionMetadata,
-    tree: "TaskTreeManager",
+    tree: TaskTreeManager,
     firing: str,
     leaf_id: str,
 ) -> None:
@@ -660,7 +660,7 @@ async def reconcile_bound_firings(
 
 
 async def run_firing_steps_boundary_report(
-    tree: "TaskTreeManager",
+    tree: TaskTreeManager,
     task_cfg: ScheduledTaskConfig,
     meta: SessionMetadata,
     firing: str,

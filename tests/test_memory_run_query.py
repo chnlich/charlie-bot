@@ -34,9 +34,14 @@ def _write_store(cfg) -> None:
     (entry_dir / f"{slug}.md").write_text(front + body, encoding="utf-8")
 
 
-async def _launched_run(tmp_path: Path, *, profile: str) -> tuple[object, TaskTreeManager, str, str, str]:
+async def _launched_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *,
+                        profile: str) -> tuple[object, TaskTreeManager, str, str, str]:
   cfg = make_home_config(tmp_path)
   import src.core.config as core_config
+  # The CLI's store root is charliebot_home_dir() / "memory" (env-resolved, config-free):
+  # pin CHARLIEBOT_HOME to this config's home so the seeded store and every reader
+  # (CLI verbs, run-token audience resolution) see one home.
+  monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(cfg.charliebot_home))
   core_config._credentials_cache.seed(core_config.Credentials(
       path=cfg.charliebot_home / "credentials.yaml",
       sections={"charliebot": {"access_key": "query-op-key"}}))
@@ -77,7 +82,7 @@ def _run_cli(monkeypatch: pytest.MonkeyPatch, cfg, argv: list[str], token: str |
 
 
 async def test_active_run_token_fixes_the_audience(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, profile="worker")
+  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
   try:
     # No --audience: the worker run's token filters to the worker audience.
     out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "beta"], token)
@@ -98,7 +103,7 @@ async def test_active_run_token_fixes_the_audience(tmp_path: Path, monkeypatch: 
 
 
 async def test_manager_run_token_maps_to_master_audience(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, profile="manager")
+  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="manager")
   try:
     out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "alpha"], token)
     assert code == 0, err
@@ -113,7 +118,7 @@ async def test_manager_run_token_maps_to_master_audience(tmp_path: Path, monkeyp
 
 
 async def test_ended_run_token_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, profile="worker")
+  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
   try:
     await tree.runs.record_finish(session_id, run_id, "completed", input_event_ids=[])
     out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "beta"], token)
@@ -126,7 +131,7 @@ async def test_ended_run_token_refuses(tmp_path: Path, monkeypatch: pytest.Monke
 
 async def test_invalid_and_not_launched_tokens_refuse(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, profile="worker")
+  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
   try:
     # A token signed with a different key fails verification.
     foreign = sign_run_token(
@@ -146,7 +151,7 @@ async def test_invalid_and_not_launched_tokens_refuse(
 
 
 async def test_wrong_instance_token_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, profile="worker")
+  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
   try:
     # A token for a session this instance never heard of.
     stranger = sign_run_token(
@@ -161,7 +166,7 @@ async def test_wrong_instance_token_refuses(tmp_path: Path, monkeypatch: pytest.
 
 
 async def test_no_token_keeps_operator_semantics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, profile="worker")
+  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
   try:
     out, err, code = _run_cli(
         monkeypatch, cfg, ["query", "--topic", "alpha", "--audience", "master"], None)

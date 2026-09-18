@@ -27,7 +27,7 @@ from fastapi import WebSocket
 import src.core.session_tree_preview as preview_module
 from src.core.json_utils import atomic_write_text
 from src.core.session_tree_preview import (
-  PreviewRefused,
+  PreviewRefusedError,
   PreviewUnavailableGate,
   PreviewWorkspaceError,
   _launcher_supports_session_dir,
@@ -97,7 +97,7 @@ def source_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def test_resolve_preview_home_requires_absolute(tmp_path: Path) -> None:
-  with pytest.raises(PreviewRefused, match="absolute path"):
+  with pytest.raises(PreviewRefusedError, match="absolute path"):
     resolve_preview_home("relative/dir")
   assert resolve_preview_home(str(tmp_path / "preview")) == tmp_path / "preview"
   target = tmp_path / "real-target"
@@ -109,18 +109,18 @@ def test_resolve_preview_home_requires_absolute(tmp_path: Path) -> None:
 
 def test_check_home_location_refuses_overlaps(tmp_path: Path, source_home: Path) -> None:
   inside = source_home / "nested" / "preview"
-  with pytest.raises(PreviewRefused, match="overlaps the production home"):
+  with pytest.raises(PreviewRefusedError, match="overlaps the production home"):
     check_home_location(inside, source_home=source_home, source_workspace_dirs=[])
   container = tmp_path / "container"
   prod_inside = container / ".charliebot"
   prod_inside.mkdir(parents=True)
-  with pytest.raises(PreviewRefused, match="overlaps the production home"):
+  with pytest.raises(PreviewRefusedError, match="overlaps the production home"):
     check_home_location(container, source_home=prod_inside, source_workspace_dirs=[])
   workspace_inside = tmp_path / "workspaces" / "preview"
-  with pytest.raises(PreviewRefused, match="overlaps the production workspace"):
+  with pytest.raises(PreviewRefusedError, match="overlaps the production workspace"):
     check_home_location(workspace_inside, source_home=tmp_path / "elsewhere",
                         source_workspace_dirs=[str(tmp_path / "workspaces")])
-  with pytest.raises(PreviewRefused, match="overlaps the running checkout"):
+  with pytest.raises(PreviewRefusedError, match="overlaps the running checkout"):
     check_home_location(REPO_ROOT / "sub" / "dir", source_home=tmp_path / "elsewhere",
                         source_workspace_dirs=[])
   sibling = tmp_path / "sibling-preview"
@@ -129,15 +129,15 @@ def test_check_home_location_refuses_overlaps(tmp_path: Path, source_home: Path)
 
 
 def test_check_port_refuses_source_port_and_occupied(source_home: Path) -> None:
-  with pytest.raises(PreviewRefused, match="between 1 and 65535"):
+  with pytest.raises(PreviewRefusedError, match="between 1 and 65535"):
     check_port(0, source_server_port=18498)
-  with pytest.raises(PreviewRefused, match="source profile's server port"):
+  with pytest.raises(PreviewRefusedError, match="source profile's server port"):
     check_port(18498, source_server_port=18498)
   with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
     sock.bind(("127.0.0.1", 0))
     sock.listen(1)
     occupied = sock.getsockname()[1]
-    with pytest.raises(PreviewRefused, match="not free"):
+    with pytest.raises(PreviewRefusedError, match="not free"):
       check_port(occupied, source_server_port=18498)
   free = _free_port()
   check_port(free, source_server_port=18498)
@@ -169,24 +169,24 @@ def test_classify_home_fresh_existing_and_refusals(tmp_path: Path) -> None:
   assert classify_home(empty) is True
   as_file = tmp_path / "a-file"
   as_file.write_text("x")
-  with pytest.raises(PreviewRefused, match="not a directory"):
+  with pytest.raises(PreviewRefusedError, match="not a directory"):
     classify_home(as_file)
   unrelated = tmp_path / "unrelated"
   (unrelated / "sessions" / "abc").mkdir(parents=True)
   (unrelated / "config.yaml").write_text("server: {host: 127.0.0.1, port: 1}\n")
-  with pytest.raises(PreviewRefused, match="not a session-tree preview home") as exc:
+  with pytest.raises(PreviewRefusedError, match="not a session-tree preview home") as exc:
     classify_home(unrelated)
   assert any("config.yaml" in detail for detail in exc.value.details)
   legacy = tmp_path / "legacy"
   (legacy / "sessions" / "abc").mkdir(parents=True)
   (legacy / "sessions" / "abc" / "metadata.json").write_text(json.dumps({"id": "abc"}))
-  with pytest.raises(PreviewRefused, match="not a session-tree preview home") as exc:
+  with pytest.raises(PreviewRefusedError, match="not a session-tree preview home") as exc:
     classify_home(legacy)
   assert any("legacy v1 session" in detail for detail in exc.value.details)
   migrated = tmp_path / "migrated"
   migrated.mkdir()
   (migrated / "session_tree_migration.json").write_text("{}")
-  with pytest.raises(PreviewRefused, match="not a session-tree preview home") as exc:
+  with pytest.raises(PreviewRefusedError, match="not a session-tree preview home") as exc:
     classify_home(migrated)
   assert any("migration products" in detail for detail in exc.value.details)
   valid = tmp_path / "valid"
@@ -196,7 +196,7 @@ def test_classify_home_fresh_existing_and_refusals(tmp_path: Path) -> None:
   foreign = tmp_path / "foreign"
   foreign.mkdir()
   _write_record(foreign, home_str="/somewhere/else")
-  with pytest.raises(PreviewRefused, match="not a session-tree preview home"):
+  with pytest.raises(PreviewRefusedError, match="not a session-tree preview home"):
     classify_home(foreign)
 
 
@@ -210,9 +210,9 @@ def test_read_source_backend_validations(source_home: Path) -> None:
   assert entry["id"] == "clc-test"
   assert entry["type"] == "charlie-code"
   assert credential is None
-  with pytest.raises(PreviewRefused, match="not configured in the source profile"):
+  with pytest.raises(PreviewRefusedError, match="not configured in the source profile"):
     read_source_backend("no-such-backend")
-  with pytest.raises(PreviewRefused, match="requires --backend"):
+  with pytest.raises(PreviewRefusedError, match="requires --backend"):
     read_source_backend("")
 
 
@@ -222,7 +222,7 @@ def test_read_source_backend_refuses_unisolated_backend_types(tmp_path: Path,
   write_source_home(home, backend={
       "id": "cc-claude-entry", "label": "CC", "type": "cc-claude", "model": "claude-x"})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
-  with pytest.raises(PreviewRefused, match="only for charlie-code"):
+  with pytest.raises(PreviewRefusedError, match="only for charlie-code"):
     read_source_backend("cc-claude-entry")
 
 
@@ -233,7 +233,7 @@ def test_read_source_backend_requires_referenced_credential(tmp_path: Path,
       "id": "clc-cred", "label": "CLC", "type": "charlie-code", "model": "openai/fake",
       "api_base": "http://127.0.0.1:9/v1", "credential": "missing-section"})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
-  with pytest.raises(PreviewRefused, match="credentials.missing-section.api_key"):
+  with pytest.raises(PreviewRefusedError, match="credentials.missing-section.api_key"):
     read_source_backend("clc-cred")
 
 
@@ -256,18 +256,18 @@ def test_prepare_preview_wraps_unreadable_source_profile(tmp_path: Path,
   write_source_home(home)
   (home / "config.yaml").write_text("server: [broken, shape]\n", encoding="utf-8")
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
-  with pytest.raises(PreviewRefused, match="could not read the source profile"):
+  with pytest.raises(PreviewRefusedError, match="could not read the source profile"):
     prepare_preview(str(tmp_path / "trial"), _free_port(), "clc-test")
   assert not (tmp_path / "trial").exists()
 
 
 def test_check_launcher_refusals(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(preview_module, "shutil_which", lambda binary: None)
-  with pytest.raises(PreviewRefused, match="launcher is not installed"):
+  with pytest.raises(PreviewRefusedError, match="launcher is not installed"):
     preview_module.check_launcher()
   monkeypatch.setattr(preview_module, "shutil_which", lambda binary: "/fake/charlie-code")
   monkeypatch.setattr(preview_module, "_launcher_supports_session_dir", lambda binary: False)
-  with pytest.raises(PreviewRefused, match="--session-dir"):
+  with pytest.raises(PreviewRefusedError, match="--session-dir"):
     preview_module.check_launcher()
   monkeypatch.setattr(preview_module, "_launcher_supports_session_dir", lambda binary: True)
   preview_module.check_launcher()
@@ -325,7 +325,7 @@ def test_validate_existing_config_refuses_unsafe_shapes(tmp_path: Path, mutate, 
   data = validate_existing_config(home)
   mutate(data)
   (home / "config.yaml").write_text(yaml.safe_dump(data), encoding="utf-8")
-  with pytest.raises(PreviewRefused, match=match):
+  with pytest.raises(PreviewRefusedError, match=match):
     validate_existing_config(home)
 
 
@@ -333,7 +333,7 @@ def test_validate_existing_config_requires_the_backend_credential(tmp_path: Path
   home = _existing_preview_home(tmp_path, backend={
       "id": "clc-cred", "label": "CLC", "type": "charlie-code", "model": "openai/fake",
       "api_base": "http://127.0.0.1:9/v1", "credential": "provider"})
-  with pytest.raises(PreviewRefused, match="provider.api_key"):
+  with pytest.raises(PreviewRefusedError, match="provider.api_key"):
     validate_existing_config(home)
 
 
@@ -454,11 +454,11 @@ def test_read_source_backend_additions_read_entries_and_credentials_in_order(
 
 
 def test_read_source_backend_additions_refusals(multi_source_home: Path) -> None:
-  with pytest.raises(PreviewRefused, match="requested more than once"):
+  with pytest.raises(PreviewRefusedError, match="requested more than once"):
     read_source_backend_additions(["clc-second", "clc-second"], exclude_ids=set())
-  with pytest.raises(PreviewRefused, match="already part of this trial's backend selection"):
+  with pytest.raises(PreviewRefusedError, match="already part of this trial's backend selection"):
     read_source_backend_additions(["clc-default"], exclude_ids={"clc-default"})
-  with pytest.raises(PreviewRefused, match="not configured in the source profile"):
+  with pytest.raises(PreviewRefusedError, match="not configured in the source profile"):
     read_source_backend_additions(["no-such"], exclude_ids=set())
 
 
@@ -474,11 +474,11 @@ def test_read_source_backend_additions_refuse_unisolated_type_missing_credential
       {"id": "clc-noapi", "label": "NoApi", "type": "charlie-code", "model": "openai/m"},
   ])
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
-  with pytest.raises(PreviewRefused, match="only for charlie-code"):
+  with pytest.raises(PreviewRefusedError, match="only for charlie-code"):
     read_source_backend_additions(["other-family"], exclude_ids=set())
-  with pytest.raises(PreviewRefused, match="credentials.missing-section.api_key"):
+  with pytest.raises(PreviewRefusedError, match="credentials.missing-section.api_key"):
     read_source_backend_additions(["clc-cred"], exclude_ids=set())
-  with pytest.raises(PreviewRefused, match="declares no api_base"):
+  with pytest.raises(PreviewRefusedError, match="declares no api_base"):
     read_source_backend_additions(["clc-noapi"], exclude_ids=set())
 
 
@@ -556,7 +556,7 @@ def test_seed_existing_home_refuses_a_non_mapping_credentials_store_untouched(tm
   creds_before = (home / "credentials.yaml").read_text()
   setup = _setup_for(home, 18500, fresh=False)
   setup.backend_additions = _two_additions()
-  with pytest.raises(PreviewRefused, match="not a credentials mapping"):
+  with pytest.raises(PreviewRefusedError, match="not a credentials mapping"):
     seed_or_validate_preview_home(setup)
   assert (home / "config.yaml").read_text() == config_before
   assert (home / "credentials.yaml").read_text() == creds_before
@@ -571,7 +571,7 @@ def test_seed_existing_home_refuses_an_already_present_addition_untouched(tmp_pa
       ({"id": "clc-test", "label": "CLC", "type": "charlie-code",
         "model": "openai/fake", "api_base": "http://127.0.0.1:9/v1"}, None),
   ]
-  with pytest.raises(PreviewRefused, match="already in the preview home's catalog"):
+  with pytest.raises(PreviewRefusedError, match="already in the preview home's catalog"):
     seed_or_validate_preview_home(setup)
   assert (home / "config.yaml").read_text() == config_before
   assert (home / "credentials.yaml").read_text() == creds_before
@@ -665,14 +665,14 @@ def test_prepare_preview_restart_uses_stored_backend(tmp_path: Path, source_home
   assert setup.backend_id == "clc-test"
   assert setup.fresh_hint is False
   assert setup.access_key == "preview-key-old"
-  with pytest.raises(PreviewRefused, match="does not match the preview home's configured backend"):
+  with pytest.raises(PreviewRefusedError, match="does not match the preview home's configured backend"):
     prepare_preview(str(home), 18500, "other-backend")
 
 
 def test_prepare_preview_refuses_source_home_and_port(tmp_path: Path, source_home: Path) -> None:
-  with pytest.raises(PreviewRefused, match="overlaps the production home"):
+  with pytest.raises(PreviewRefusedError, match="overlaps the production home"):
     prepare_preview(str(source_home / "nested"), _free_port(), "clc-test")
-  with pytest.raises(PreviewRefused, match="source profile's server port"):
+  with pytest.raises(PreviewRefusedError, match="source profile's server port"):
     prepare_preview(str(tmp_path / "trial"), 18498, "clc-test")
 
 
@@ -680,7 +680,7 @@ def test_prepare_preview_refuses_unsafe_existing_content(tmp_path: Path, source_
   unrelated = tmp_path / "unrelated"
   unrelated.mkdir()
   (unrelated / "config.yaml").write_text("server: {port: 1}\n")
-  with pytest.raises(PreviewRefused, match="not a session-tree preview home"):
+  with pytest.raises(PreviewRefusedError, match="not a session-tree preview home"):
     prepare_preview(str(unrelated), _free_port(), "clc-test")
 
 
@@ -733,7 +733,7 @@ def test_assert_no_bound_singletons(monkeypatch: pytest.MonkeyPatch) -> None:
   assert_no_bound_singletons()
   for name in singleton_names:
     monkeypatch.setattr(deps, name, object())
-    with pytest.raises(PreviewRefused, match="bound before the preview environment") as excinfo:
+    with pytest.raises(PreviewRefusedError, match="bound before the preview environment") as excinfo:
       assert_no_bound_singletons()
     assert name in str(excinfo.value)
 

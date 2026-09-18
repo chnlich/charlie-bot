@@ -621,7 +621,7 @@ RUN_IDENTITY_UNKNOWN_DETAIL = "run token does not reference an active run"
 RUN_IDENTITY_NOT_LAUNCHED_DETAIL = "run token references a run that has not launched"
 
 
-def run_identity_refusal(run: "RunRecord | None", events: list[dict]) -> str | None:
+def run_identity_refusal(run: RunRecord | None, events: list[dict]) -> str | None:
     """Why *run* is not an active, launched Run for caller identity, or None.
 
     The one predicate both identity consumers share: the API caller-identity

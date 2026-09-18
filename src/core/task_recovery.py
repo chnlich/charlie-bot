@@ -47,9 +47,9 @@ _FORKILL = "follow-up"
 
 async def reconcile_task_tree(
     cfg: CharlieBotConfig,
-    tree: "TaskTreeManager",
-    session_mgr: "SessionManager",
-    adapter: "TaskExecutionAdapter | None" = None,
+    tree: TaskTreeManager,
+    session_mgr: SessionManager,
+    adapter: TaskExecutionAdapter | None = None,
 ) -> dict:
     """Reconcile every v2 node this instance owns. Returns pass counters."""
     from src.core.improve_sequence import reconcile_interrupted_sequences
@@ -90,11 +90,11 @@ async def reconcile_task_tree(
 
 async def _reconcile_node(
     session_id: str,
-    tree: "TaskTreeManager",
-    session_mgr: "SessionManager",
-    adapter: "TaskExecutionAdapter | None",
+    tree: TaskTreeManager,
+    session_mgr: SessionManager,
+    adapter: TaskExecutionAdapter | None,
     counters: dict,
-    cfg: "CharlieBotConfig",
+    cfg: CharlieBotConfig,
 ) -> None:
     meta = await tree.load_meta(session_id)
     if meta is None:
@@ -166,9 +166,9 @@ async def _reconcile_node(
 
 async def _replay_cron_firing(
     session_id: str,
-    tree: "TaskTreeManager",
-    run: "object",
-    cfg: "CharlieBotConfig",
+    tree: TaskTreeManager,
+    run: object,
+    cfg: CharlieBotConfig,
 ) -> None:
     """Re-drive one firing's chain/boundary through its owning module."""
     from src.core import cron_sequence
@@ -181,10 +181,10 @@ async def _replay_cron_firing(
 
 async def _replay_followups(
     session_id: str,
-    tree: "TaskTreeManager",
-    adapter: "TaskExecutionAdapter | None",
+    tree: TaskTreeManager,
+    adapter: TaskExecutionAdapter | None,
     counters: dict,
-    cfg: "CharlieBotConfig",
+    cfg: CharlieBotConfig,
 ) -> None:
     """Re-drive every completed Run's follow-up that its crash window lost.
 

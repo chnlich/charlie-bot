@@ -137,10 +137,7 @@ def _count_walks(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
   walks = {"n": 0}
   real = threads_api._row_source_stats
 
-  def counting(threads_dir: str,
-               triggers_dir: str,
-               runs_dir: str | None = None) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]],
-                                                     list[tuple[str, os.stat_result]]]:
+  def counting(threads_dir: str, triggers_dir: str, runs_dir: str | None = None):
     walks["n"] += 1
     return real(threads_dir, triggers_dir, runs_dir)
 

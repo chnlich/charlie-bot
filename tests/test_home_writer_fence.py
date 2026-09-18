@@ -317,25 +317,25 @@ def test_release_does_not_erase_a_successor_identity(tmp_path: Path) -> None:
 def test_fence_refuses_symlinked_paths(tmp_path: Path) -> None:
   """A symlinked state directory, lock, or identity record refuses acquisition
   and probing instead of placing or reading the exclusion outside the home."""
-  from src.core.home_writer_fence import FencePathRefusal
+  from src.core.home_writer_fence import FencePathRefusalError
   outside = tmp_path / "outside"
   outside.mkdir()
   # (a) state itself is a symlink.
   home = tmp_path / "home_a"
   home.mkdir()
   (home / "state").symlink_to(outside)
-  with pytest.raises(FencePathRefusal, match="symlink"):
+  with pytest.raises(FencePathRefusalError, match="symlink"):
     acquire_home_writer_fence(home, purpose="cli")
-  with pytest.raises(FencePathRefusal, match="symlink"):
+  with pytest.raises(FencePathRefusalError, match="symlink"):
     probe_writer_fence(home)
   assert not (outside / "home_writer.lock").exists()
   # (b) the lock file is a symlink inside a real state dir.
   home = tmp_path / "home_b"
   (home / "state").mkdir(parents=True)
   (home / "state" / "home_writer.lock").symlink_to(outside / "captured.lock")
-  with pytest.raises(FencePathRefusal, match="symlink"):
+  with pytest.raises(FencePathRefusalError, match="symlink"):
     acquire_home_writer_fence(home, purpose="cli")
-  with pytest.raises(FencePathRefusal, match="symlink"):
+  with pytest.raises(FencePathRefusalError, match="symlink"):
     probe_writer_fence(home)
   assert not (outside / "captured.lock").exists()
   # (c) a real fence still works after the refusals.

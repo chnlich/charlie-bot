@@ -336,7 +336,7 @@ def build_full_home(home: Path) -> Path:
       fire_at=BASE + timedelta(hours=4), message="check the sweep"))
   builder.cron_config(
       "nightly-sweep",
-      f"cron: '30 2 * * *'\nrepo: {home / 'repo'}\n"
+      f"cron: '30 2 * * *'\ntype: normal\nrepo: {home / 'repo'}\n"
       f"prompt_file: {home / 'repo' / 'prompts/nightly.md'}\nbackend: synth\n")
 
   builder.session(SessionMetadata(id=S_STEPS, name="Nightly sweep steps", backend="synth",

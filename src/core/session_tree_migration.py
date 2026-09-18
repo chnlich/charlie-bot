@@ -93,6 +93,7 @@ conversion. There is no global transaction and no claim of one.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -119,7 +120,7 @@ from src.core.control_events import (
 )
 from src.core.home_writer_fence import (
     FenceHolder,
-    FencePathRefusal,
+    FencePathRefusalError,
     HomeWriterActiveError,
     acquire_home_writer_fence,
     probe_writer_fence,
@@ -183,7 +184,7 @@ class MigrationError(RuntimeError):
   """A migration command failed; the CLI prints the message and exits 1."""
 
 
-class MigrationRefused(MigrationError):
+class MigrationRefusedError(MigrationError):
   """Apply/rollback refused before or during mutation; inputs are intact."""
 
   def __init__(self, reason: str, *, details: list[str] | None = None) -> None:
@@ -191,7 +192,7 @@ class MigrationRefused(MigrationError):
     super().__init__(reason)
 
 
-class ManifestDriftError(MigrationRefused):
+class ManifestDriftError(MigrationRefusedError):
   """The source no longer matches the manifest's hash binding."""
 
 
@@ -572,10 +573,8 @@ def _scan_raw_turn(raw_path: Path) -> RawTurnScan:
       saw_manual_compact = True
     ts = event.get("timestamp")
     if isinstance(ts, str):
-      try:
+      with contextlib.suppress(ValueError):
         last_timestamp = ensure_utc(datetime.fromisoformat(ts))
-      except ValueError:
-        pass
   if result is None:
     return RawTurnScan(result=None, outcome=None, last_timestamp=last_timestamp)
   outcome = _result_base_outcome(result)
@@ -978,7 +977,7 @@ class RunProduct:
   input_event_ids: list[str] = field(default_factory=list)
   # The retained thread this Run was derived from (the thread's own events log
   # is the Run's retained result source for the completed-import verdicts).
-  evidence_thread: "ThreadInfo | None" = None
+  evidence_thread: ThreadInfo | None = None
 
 
 @dataclass
@@ -993,7 +992,7 @@ class WorkerNodeProduct:
   source_refs: list[str]
   task_closed: dict | None = None  # completed-import close fact (child nodes)
   child_report: dict | None = None  # delivery fact in the owner's log
-  completion_thread: "ThreadInfo | None" = None  # the work thread the completed-import pass judges
+  completion_thread: ThreadInfo | None = None  # the work thread the completed-import pass judges
 
 
 @dataclass
@@ -1589,11 +1588,10 @@ def build_conversion_plan(cfg: CharlieBotConfig, snap: SourceSnapshot) -> Conver
         reason="legacy config.d/cron.yaml is present; its entries are not loadable "
                "and must be split into config.d/cron.d/ before migration",
         refs=[snap.legacy_cron_file]))
-  for rel in snap.unreadable:
-    unresolved.append(UnresolvedEntry(
-        source_kind="unreadable_record", source_id=rel,
-        reason="input record is unreadable or malformed; it must not be silently omitted",
-        refs=[rel]))
+  unresolved.extend(UnresolvedEntry(
+      source_kind="unreadable_record", source_id=rel,
+      reason="input record is unreadable or malformed; it must not be silently omitted",
+      refs=[rel]) for rel in snap.unreadable)
   for sid, error in snap.session_parse_errors.items():
     unresolved.append(UnresolvedEntry(
         source_kind="session", source_id=sid, reason=error,
@@ -1612,10 +1610,7 @@ def build_conversion_plan(cfg: CharlieBotConfig, snap: SourceSnapshot) -> Conver
   for sid, info in snap.sessions.items():
     if info.meta is None:
       continue
-    if info.meta.successor_session_id:
-      tail = canonical_successor_tail(snap.sessions, sid, unresolved)
-    else:
-      tail = sid
+    tail = canonical_successor_tail(snap.sessions, sid, unresolved) if info.meta.successor_session_id else sid
     canonical[sid] = tail
 
   # A tail must itself be an unconverted legacy session; a successor that is
@@ -2166,7 +2161,7 @@ def _plan_manager_conversion(
     predecessor_of: dict[str, list[str]],
     pm_of_group: dict[str, str],
     project_bodies: dict[str, str],
-    projects: dict[str, "ProjectInfo"],
+    projects: dict[str, ProjectInfo],
     managers: list[ManagerConversion],
     mappings: list[MappingEntry],
     unresolved: list[UnresolvedEntry],
@@ -2575,7 +2570,7 @@ def _bind_input_to_run(turn_runs: list[RunProduct], run_id: str, input_id: str) 
         run_product.record.input_event_ids.append(input_id)
         run_product.input_event_ids.append(input_id)
       return
-  raise MigrationRefused(
+  raise MigrationRefusedError(
       f"input {input_id} correlates to run {run_id}, which this conversion does not plan")
 
 
@@ -3304,7 +3299,7 @@ def quiescence_blockers(snap: SourceSnapshot) -> list[dict]:
   blockers: list[dict] = []
   try:
     fence = probe_writer_fence(snap.home)
-  except FencePathRefusal as e:
+  except FencePathRefusalError as e:
     blockers.append({"kind": "fence_path", "detail": str(e)})
     fence = {}
   if fence.get("exclusive_holder_alive"):
@@ -3315,10 +3310,10 @@ def quiescence_blockers(snap: SourceSnapshot) -> list[dict]:
     else:
       blockers.append({"kind": "writer_fence",
                        "detail": "home writer fence is held; holder identity unreadable"})
-  for hit in scan_live_home_processes(snap.home, default_home=default_charliebot_home()):
-    blockers.append({"kind": hit.get("kind", "live_process"), "pid": hit["pid"],
-                     "detail": f"live process bound to this home: "
-                               f"{hit.get('detail') or hit['cmdline'] or hit['pid']}"})
+  blockers.extend({"kind": hit.get("kind", "live_process"), "pid": hit["pid"],
+                   "detail": f"live process bound to this home: "
+                             f"{hit.get('detail') or hit['cmdline'] or hit['pid']}"}
+                  for hit in scan_live_home_processes(snap.home, default_home=default_charliebot_home()))
   for sid in sorted(snap.sessions):
     info = snap.sessions[sid]
     if info.meta is None:
@@ -3372,9 +3367,9 @@ def quiescence_blockers(snap: SourceSnapshot) -> list[dict]:
                                     "without a provable process identity "
                                     f"(pid={run_record.pid}, "
                                     f"pid_start={'set' if run_record.pid_start else 'missing'})")})
-    for problem in info.unreadable_runs:
-      blockers.append({"kind": "unknown_v2_run", "detail": (
-          f"v2 run record unreadable; activity cannot be proven either way: {problem}")})
+    blockers.extend({"kind": "unknown_v2_run", "detail": (
+        f"v2 run record unreadable; activity cannot be proven either way: {problem}")}
+        for problem in info.unreadable_runs)
     for loop in info.loops:
       state = loop.state
       if state is None or getattr(state, "status", "") != "running":
@@ -3419,28 +3414,27 @@ def build_manifest(cfg: CharlieBotConfig, snap: SourceSnapshot) -> tuple[Migrati
   source_files = [
       SourceFileRecord(path=path, sha256=snap.hashes[path], size=snap.files[path])
       for path in sorted(snap.hashes)]
-  created: list[str] = []
   bodies_dir = cfg.charliebot_home / PROMPT_BODIES_DIR_NAME
-  for body in plan.prompt_bodies:
-    created.append((bodies_dir / f"{body.ref}.md").relative_to(cfg.charliebot_home).as_posix())
+  created = [(bodies_dir / f"{body.ref}.md").relative_to(cfg.charliebot_home).as_posix()
+             for body in plan.prompt_bodies]
   for product in plan.workers:
     node = cfg.sessions_dir / product.target_id
-    created.append((node / "metadata.json").relative_to(cfg.charliebot_home).as_posix())
-    created.append((node / DATA_DIR_NAME / "chat_events.jsonl").relative_to(cfg.charliebot_home).as_posix())
-    for run in product.runs:
-      created.append((node / DATA_DIR_NAME / "runs" / run.record.id / "metadata.json")
-                     .relative_to(cfg.charliebot_home).as_posix())
+    created.extend([
+        (node / "metadata.json").relative_to(cfg.charliebot_home).as_posix(),
+        (node / DATA_DIR_NAME / "chat_events.jsonl").relative_to(cfg.charliebot_home).as_posix(),
+        *((node / DATA_DIR_NAME / "runs" / run.record.id / "metadata.json")
+          .relative_to(cfg.charliebot_home).as_posix() for run in product.runs),
+    ])
   for manager in plan.managers:
     created.append(f"sessions/{manager.session_id}/metadata.json")
-    for run in manager.manager_turn_runs:
-      created.append(f"sessions/{manager.session_id}/data/runs/{run.record.id}/metadata.json")
+    created.extend(
+        f"sessions/{manager.session_id}/data/runs/{run.record.id}/metadata.json"
+        for run in manager.manager_turn_runs)
     created.append(f"sessions/{manager.session_id}/data/chat_events.jsonl")
   if plan.alias_old_sessions or plan.alias_old_threads:
     created.append(f"sessions/{ALIASES_FILE_NAME}")
-  for rewrite in plan.cron_rewrites:
-    created.append(rewrite.rel_path)
-  for move in plan.trigger_moves:
-    created.append(move.new_rel_path)
+  created.extend(rewrite.rel_path for rewrite in plan.cron_rewrites)
+  created.extend(move.new_rel_path for move in plan.trigger_moves)
   manifest = MigrationManifest(
       created_at=datetime.now(UTC),
       converter_code_sha256=converter_code_sha256(),
@@ -3469,7 +3463,7 @@ class _ApplyContext:
   backup_dir: Path
   receipts_path: Path
   receipts: dict[str, ProductReceipt] = field(default_factory=dict)  # last receipt per path
-  tree: "TaskTreeManager | None" = None
+  tree: TaskTreeManager | None = None
 
 
 _SOURCE_SHA_RE = re.compile(r"[0-9a-f]{64}")
@@ -3478,7 +3472,7 @@ _SOURCE_SHA_RE = re.compile(r"[0-9a-f]{64}")
 def _validate_receipt_rel(rel: str, *, what: str) -> None:
   """A receipt's path/backup reference must be a confined relative path."""
   if not rel or rel.startswith("/") or "\\" in rel or ".." in Path(rel).parts:
-    raise MigrationRefused(f"receipt {what} {rel!r} is not a confined relative path")
+    raise MigrationRefusedError(f"receipt {what} {rel!r} is not a confined relative path")
 
 
 def _validate_receipt(receipt: ProductReceipt) -> None:
@@ -3497,7 +3491,7 @@ def _read_receipts(path: Path) -> dict[str, ProductReceipt]:
     try:
       receipt = ProductReceipt.model_validate_json(line)
     except ValueError as e:
-      raise MigrationRefused(f"migration receipt journal unreadable at {path}: {e}") from e
+      raise MigrationRefusedError(f"migration receipt journal unreadable at {path}: {e}") from e
     _validate_receipt(receipt)
     receipts[receipt.path] = receipt
   return receipts
@@ -3529,11 +3523,11 @@ def _confined(cfg: CharlieBotConfig, rel: str) -> Path:
   path = home / rel
   resolved = path.resolve()
   if not resolved.is_relative_to(home):
-    raise MigrationRefused(f"product path {rel!r} resolves outside the home ({resolved})")
+    raise MigrationRefusedError(f"product path {rel!r} resolves outside the home ({resolved})")
   current = path
   while True:
     if current.is_symlink():
-      raise MigrationRefused(f"product path {rel!r} traverses the symlink {current}")
+      raise MigrationRefusedError(f"product path {rel!r} traverses the symlink {current}")
     if current == home:
       break
     current = current.parent
@@ -3561,7 +3555,7 @@ def _backup_file(ctx: _ApplyContext, rel: str, current_hash: str | None) -> str 
       os.fsync(f.fileno())
     copied = _sha256_file(tmp)
     if copied != current_hash:
-      raise MigrationRefused(
+      raise MigrationRefusedError(
           f"backup verification failed for {rel}: copied {copied}, source {current_hash}")
     os.replace(tmp, dest)
   finally:
@@ -3586,7 +3580,7 @@ def _log_contains_event(cfg: CharlieBotConfig, session_id: str, event_id: str) -
   try:
     raw = path.read_bytes()
   except OSError as e:
-    raise MigrationRefused(f"chat log unreadable at {path}: {e}") from e
+    raise MigrationRefusedError(f"chat log unreadable at {path}: {e}") from e
   for line in raw.split(b"\n"):
     if not line.strip():
       continue
@@ -3649,7 +3643,7 @@ def _fact_mismatch(expected: PlannedFact, landed: dict,
   return None
 
 
-def _planned_fact_expected(ctx: "_ApplyContext", session_id: str,
+def _planned_fact_expected(ctx: _ApplyContext, session_id: str,
                            key: tuple) -> PlannedFact | None:
   """The plan's expected content for one fact key (None: not planned here)."""
   facts = _planned_facts(ctx.plan)
@@ -3745,9 +3739,9 @@ def _append_fact_if_absent(cfg: CharlieBotConfig, session_id: str, event: dict,
 
   event_id = str(event.get("id"))
   if not event_id:
-    raise MigrationRefused(f"refusing to append a fact without a stable id to {session_id}")
+    raise MigrationRefusedError(f"refusing to append a fact without a stable id to {session_id}")
   if (expected is None) != (manifest_created_at is None):
-    raise MigrationRefused(
+    raise MigrationRefusedError(
         "content-verified append needs the planned fact and the manifest's creation "
         "time together; one without the other would silently skip the proof")
   log_rel = f"sessions/{session_id}/data/chat_events.jsonl"
@@ -3757,7 +3751,7 @@ def _append_fact_if_absent(cfg: CharlieBotConfig, session_id: str, event: dict,
       assert manifest_created_at is not None
       mismatch = _fact_mismatch(expected, landed, manifest_created_at)
       if mismatch is not None:
-        raise MigrationRefused(
+        raise MigrationRefusedError(
             f"chat log of {session_id} already holds id {event_id} with different content: "
             f"{mismatch}")
     return _hash_rel(cfg, log_rel) or "", False
@@ -3769,20 +3763,20 @@ def _append_fact_if_absent(cfg: CharlieBotConfig, session_id: str, event: dict,
 
 def _validate_manifest_shape(manifest: MigrationManifest) -> None:
   if manifest.schema_version != MANIFEST_SCHEMA_VERSION:
-    raise MigrationRefused(
+    raise MigrationRefusedError(
         f"manifest schema_version {manifest.schema_version} is not supported "
         f"(this converter writes {MANIFEST_SCHEMA_VERSION})")
   for record in manifest.source_files:
     rel = record.path
     if rel.startswith("/") or ".." in Path(rel).parts or not rel:
-      raise MigrationRefused(f"manifest source path {rel!r} is not a confined relative path")
+      raise MigrationRefusedError(f"manifest source path {rel!r} is not a confined relative path")
   # source_sha names the migration state directory: it must be exactly the
   # hash the converter writes, or a crafted manifest could escape the home.
   if not _SOURCE_SHA_RE.fullmatch(manifest.source_sha):
-    raise MigrationRefused(
+    raise MigrationRefusedError(
         f"manifest source_sha {manifest.source_sha!r} is not a sha-256 hex digest")
   if not manifest.home_path:
-    raise MigrationRefused("manifest carries no home_path")
+    raise MigrationRefusedError("manifest carries no home_path")
   for receipt in manifest.receipts:
     _validate_receipt(receipt)
 
@@ -3792,9 +3786,9 @@ def _check_manifest_home(cfg: CharlieBotConfig, manifest: MigrationManifest) -> 
   try:
     recorded = Path(manifest.home_path).resolve()
   except (OSError, RuntimeError, ValueError) as e:
-    raise MigrationRefused(f"manifest home_path {manifest.home_path!r} is unusable: {e}") from e
+    raise MigrationRefusedError(f"manifest home_path {manifest.home_path!r} is unusable: {e}") from e
   if recorded != cfg.charliebot_home.resolve():
-    raise MigrationRefused(
+    raise MigrationRefusedError(
         f"manifest was built for home {manifest.home_path!r}, not the selected home "
         f"{cfg.charliebot_home}; a manifest must not be transplanted between homes — "
         "regenerate it with --dry-run against the selected home")
@@ -3808,11 +3802,11 @@ def _checked_state_dir(cfg: CharlieBotConfig, source_sha: str) -> Path:
   home_resolved = cfg.charliebot_home.resolve()
   for path in (state, migration_state, target, target / "backup"):
     if path.is_symlink():
-      raise MigrationRefused(f"migration state path is a symlink: {path}")
+      raise MigrationRefusedError(f"migration state path is a symlink: {path}")
     if path.exists() and not path.is_dir():
-      raise MigrationRefused(f"migration state path is not a directory: {path}")
+      raise MigrationRefusedError(f"migration state path is not a directory: {path}")
     if not path.resolve().is_relative_to(home_resolved):
-      raise MigrationRefused(f"migration state path resolves outside the home: {path}")
+      raise MigrationRefusedError(f"migration state path resolves outside the home: {path}")
   return target
 
 
@@ -3823,10 +3817,10 @@ def _confine_under(base: Path, rel: str, *, what: str) -> Path:
   for part in Path(rel).parts:
     current = current / part
     if current.is_symlink():
-      raise MigrationRefused(f"{what} {rel!r} traverses the symlink {current}")
+      raise MigrationRefusedError(f"{what} {rel!r} traverses the symlink {current}")
   resolved = current.resolve()
   if not resolved.is_relative_to(base.resolve()):
-    raise MigrationRefused(f"{what} {rel!r} resolves outside {base}")
+    raise MigrationRefusedError(f"{what} {rel!r} resolves outside {base}")
   return resolved
 
 
@@ -3890,8 +3884,8 @@ def _log_append_problems(cfg: CharlieBotConfig, rel: str, record: SourceFileReco
     return [f"{rel}: unreadable while checking the appended region: {e}"]
   if record is not None:
     if len(raw) < record.size or _sha256_bytes(raw[:record.size]) != record.sha256:
-      return [f"{rel}: the pre-apply bytes are not an intact prefix of the current file "
-              f"(changed history); manifest {record.sha256[:12]}"]
+      return [(f"{rel}: the pre-apply bytes are not an intact prefix of the current file "
+               f"(changed history); manifest {record.sha256[:12]}")]
     suffix = raw[record.size:]
   else:
     suffix = raw  # a migration-created node's log: the whole file is this apply's append
@@ -3911,8 +3905,8 @@ def _log_append_problems(cfg: CharlieBotConfig, rel: str, record: SourceFileReco
       key = (str(kind), str(event.get("id") or ""))
     expected = planned_facts.get(key)
     if expected is None:
-      return [f"{rel}: appended event {event.get('id')!r} (type {kind!r}) is not one of this "
-              "plan's facts (a new-system write or unrelated input reached the log)"]
+      return [(f"{rel}: appended event {event.get('id')!r} (type {kind!r}) is not one of this "
+               "plan's facts (a new-system write or unrelated input reached the log)")]
     if key in seen:
       return [f"{rel}: appended fact {key[1]!r} appears twice"]
     seen.add(key)
@@ -3986,7 +3980,7 @@ def _safe_json(line: bytes) -> dict | None:
 def _check_converter_code(manifest: MigrationManifest) -> None:
   current = converter_code_sha256()
   if current != manifest.converter_code_sha256:
-    raise MigrationRefused(
+    raise MigrationRefusedError(
         "converter code drift: this manifest was built by a different "
         f"session_tree_migration.py ({manifest.converter_code_sha256[:12]} vs {current[:12]}); "
         "regenerate it with --dry-run")
@@ -4002,16 +3996,16 @@ def _plan_matches_manifest(plan: ConversionPlan, manifest: MigrationManifest) ->
   if planned != recorded:
     missing = [k for k in recorded if k not in set(planned)][:5]
     extra = [k for k in planned if k not in set(recorded)][:5]
-    raise MigrationRefused(
+    raise MigrationRefusedError(
         "manifest mismatch: rebuilding the plan from the manifest's bound source produces "
         f"different mappings (recorded-only: {missing}; derived-only: {extra}); regenerate "
         "the manifest with --dry-run")
   if plan.unresolved and not manifest.unresolved:
-    raise MigrationRefused(
+    raise MigrationRefusedError(
         "unresolved conversions discovered while rebuilding the plan: "
         + "; ".join(f"{u.source_kind}:{u.source_id} ({u.reason})" for u in plan.unresolved[:8]))
   if manifest.unresolved:
-    raise MigrationRefused(
+    raise MigrationRefusedError(
         "manifest lists unresolved conversions; resolve them and regenerate: "
         + "; ".join(f"{u.source_kind}:{u.source_id} ({u.reason})" for u in manifest.unresolved[:8]))
 
@@ -4030,7 +4024,7 @@ def _verify_receipts_intact(ctx: _ApplyContext) -> None:
           f"{receipt.path}: receipt {None if receipt.post_sha256 is None else receipt.post_sha256[:12]}, "
           f"current {None if current is None else current[:12]}")
   if broken:
-    raise MigrationRefused(
+    raise MigrationRefusedError(
         "applied products no longer match their receipts (a new-system write or an edit "
         "reached the migration's products); refusing to continue: " + "; ".join(broken[:8]),
         details=broken)
@@ -4049,7 +4043,7 @@ def _publish_worker_node(cfg: CharlieBotConfig, product: WorkerNodeProduct) -> N
   if final_dir.exists():
     existing_meta = final_dir / "metadata.json"
     if not existing_meta.is_file() or existing_meta.read_text(encoding="utf-8") != meta_bytes:
-      raise MigrationRefused(
+      raise MigrationRefusedError(
           f"target collision: {final_dir} exists with different content than this manifest's "
           "worker product; refusing to overwrite")
     return
@@ -4079,7 +4073,7 @@ def _write_prompt_bodies(cfg: CharlieBotConfig, bodies: list[PromptBodyWrite]) -
     path = bodies_dir / f"{body.ref}.md"
     if path.exists():
       if path.read_text(encoding="utf-8") != body.text:
-        raise MigrationRefused(
+        raise MigrationRefusedError(
             f"prompt body store corrupted at {path}: fingerprint content mismatch")
       continue
     atomic_write_text(path, body.text)
@@ -4103,7 +4097,7 @@ def _load_manifest(manifest_path: Path) -> MigrationManifest:
   try:
     return MigrationManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
   except (OSError, ValueError) as e:
-    raise MigrationRefused(f"manifest unreadable at {manifest_path}: {e}") from e
+    raise MigrationRefusedError(f"manifest unreadable at {manifest_path}: {e}") from e
 
 
 def apply_manifest(cfg: CharlieBotConfig, manifest_path: Path, *, manifest: MigrationManifest | None = None) -> dict:
@@ -4113,7 +4107,7 @@ def apply_manifest(cfg: CharlieBotConfig, manifest_path: Path, *, manifest: Migr
   _validate_manifest_shape(manifest)
   _check_converter_code(manifest)
   if manifest.rolled_back_at is not None:
-    raise MigrationRefused(
+    raise MigrationRefusedError(
         "this manifest was rolled back; it is a historical record — rebuild a fresh "
         "manifest with --dry-run before applying again")
 
@@ -4138,15 +4132,15 @@ def apply_manifest(cfg: CharlieBotConfig, manifest_path: Path, *, manifest: Migr
 
   blockers = quiescence_blockers(snap)
   if blockers:
-    raise MigrationRefused(
+    raise MigrationRefusedError(
         "quiescence not proven; the source may have live writers (resolve these and retry): "
         + "; ".join(str(b.get("detail") or b) for b in blockers[:10]),
         details=[orjson.dumps(b).decode() for b in blockers])
 
   try:
     fence = acquire_home_writer_fence(cfg.charliebot_home, purpose="session-tree migrate --apply")
-  except (HomeWriterActiveError, FencePathRefusal) as e:
-    raise MigrationRefused(str(e)) from e
+  except (HomeWriterActiveError, FencePathRefusalError) as e:
+    raise MigrationRefusedError(str(e)) from e
   try:
     return asyncio.run(_apply_locked(cfg, manifest_path, ctx))
   finally:
@@ -4204,21 +4198,23 @@ def _backup_targets(ctx: _ApplyContext) -> list[tuple[str, str | None]]:
   """
   targets: list[tuple[str, str | None]] = []
   for manager in ctx.plan.managers:
-    targets.append((f"sessions/{manager.session_id}/metadata.json",
-                    _manifest_pre_hash(ctx, f"sessions/{manager.session_id}/metadata.json")))
-    targets.append((f"sessions/{manager.session_id}/data/chat_events.jsonl",
-                    _manifest_pre_hash(ctx, f"sessions/{manager.session_id}/data/chat_events.jsonl")))
-    for run in manager.manager_turn_runs:
-      targets.append((f"sessions/{manager.session_id}/data/runs/{run.record.id}/metadata.json",
-                      _manifest_pre_hash(ctx, f"sessions/{manager.session_id}/data/runs/{run.record.id}/metadata.json")))
-  for rewrite in ctx.plan.cron_rewrites:
-    targets.append((rewrite.rel_path, _manifest_pre_hash(ctx, rewrite.rel_path)))
+    sid = manager.session_id
+    targets.extend([
+        (f"sessions/{sid}/metadata.json", _manifest_pre_hash(ctx, f"sessions/{sid}/metadata.json")),
+        (f"sessions/{sid}/data/chat_events.jsonl",
+         _manifest_pre_hash(ctx, f"sessions/{sid}/data/chat_events.jsonl")),
+        *((f"sessions/{sid}/data/runs/{run.record.id}/metadata.json",
+           _manifest_pre_hash(ctx, f"sessions/{sid}/data/runs/{run.record.id}/metadata.json"))
+          for run in manager.manager_turn_runs),
+    ])
+  targets.extend((rewrite.rel_path, _manifest_pre_hash(ctx, rewrite.rel_path))
+                 for rewrite in ctx.plan.cron_rewrites)
   aliases_rel = f"sessions/{ALIASES_FILE_NAME}"
   existing_aliases = _hash_rel(ctx.cfg, aliases_rel)
   if ctx.plan.alias_old_sessions or ctx.plan.alias_old_threads or existing_aliases is not None:
     targets.append((aliases_rel, _manifest_pre_hash(ctx, aliases_rel)))
-  for move in ctx.plan.trigger_moves:
-    targets.append((move.old_rel_path, _manifest_pre_hash(ctx, move.old_rel_path)))
+  targets.extend((move.old_rel_path, _manifest_pre_hash(ctx, move.old_rel_path))
+                 for move in ctx.plan.trigger_moves)
   return targets
 
 
@@ -4238,7 +4234,7 @@ async def _apply_locked(cfg: CharlieBotConfig, manifest_path: Path, ctx: _ApplyC
   # the manifest's own applied products are not "drift" but anything else is.
   late = scan_live_home_processes(cfg.charliebot_home, default_home=default_charliebot_home())
   if late:
-    raise MigrationRefused(
+    raise MigrationRefusedError(
         "quiescence lost at the mutation boundary: live process(es) bound to this home "
         "appeared after the preflight check: "
         + "; ".join(f"pid {h['pid']} ({h['cmdline'] or 'unknown'})" for h in late[:8]),
@@ -4270,12 +4266,12 @@ async def _apply_locked(cfg: CharlieBotConfig, manifest_path: Path, ctx: _ApplyC
       if receipt.backup is not None and receipt.pre_sha256 is not None:
         backup_file = _confine_under(ctx.backup_dir, receipt.backup, what="backup reference")
         if not backup_file.is_file():
-          raise MigrationRefused(
+          raise MigrationRefusedError(
               f"original backup missing for {rel} ({backup_file}); the pre-apply bytes "
               "are the recovery evidence and cannot be recreated")
         backed = _sha256_file(backup_file)
         if backed != receipt.pre_sha256:
-          raise MigrationRefused(
+          raise MigrationRefusedError(
               f"original backup for {rel} no longer matches the pre-apply hash "
               f"({backed[:12]} != {receipt.pre_sha256[:12]}); refusing to continue over "
               "changed recovery evidence")
@@ -4283,12 +4279,12 @@ async def _apply_locked(cfg: CharlieBotConfig, manifest_path: Path, ctx: _ApplyC
     dest = _confine_under(ctx.backup_dir, rel, what="backup path")
     if dest.exists():
       if pre_hash is None:
-        raise MigrationRefused(
+        raise MigrationRefusedError(
             f"backup exists for {rel} although the manifest recorded no original; "
             "refusing to interpret it")
       backed = _sha256_file(dest)
       if backed != pre_hash:
-        raise MigrationRefused(
+        raise MigrationRefusedError(
             f"existing backup for {rel} does not match the manifest's pre-apply hash "
             f"({backed[:12]} != {pre_hash[:12]}); the pre-apply bytes are authoritative "
             "and must not be replaced")
@@ -4302,7 +4298,7 @@ async def _apply_locked(cfg: CharlieBotConfig, manifest_path: Path, ctx: _ApplyC
       try:
         existing_index = orjson.loads(index_path.read_bytes())
       except ValueError as e:
-        raise MigrationRefused(f"backup index unreadable at {index_path}: {e}") from e
+        raise MigrationRefusedError(f"backup index unreadable at {index_path}: {e}") from e
     existing_index.update(backup_manifest)
     atomic_write_text(index_path, orjson.dumps(existing_index, option=orjson.OPT_INDENT_2).decode())
 
@@ -4325,10 +4321,10 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
                  if (cfg.charliebot_home / PROMPT_BODIES_DIR_NAME / f"{b.ref}.md")
                  .relative_to(cfg.charliebot_home).as_posix() == rel), None)
     if body is None:
-      raise MigrationRefused(f"created product {rel} has no planned body")
+      raise MigrationRefusedError(f"created product {rel} has no planned body")
     if path.exists():
       if path.read_text(encoding="utf-8") != body.text:
-        raise MigrationRefused(
+        raise MigrationRefusedError(
             f"prompt body store corrupted at {path}: fingerprint content mismatch")
       if receipt is None:
         _append_receipt(ctx, ProductReceipt(path=rel, kind="created",
@@ -4399,7 +4395,7 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
             path=rel, kind="created", post_sha256=pre))
       return 0
     if pre is not None:
-      raise MigrationRefused(
+      raise MigrationRefusedError(
           f"target collision: {rel} exists with different content; refusing to overwrite")
     post = _write_run_record(cfg, manager.session_id, run_product.record)
     _append_receipt(ctx, ProductReceipt(path=rel, kind="created", post_sha256=post))
@@ -4427,12 +4423,12 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
       landed = [e for e in events
                 if e.get("type") == ET.RUN_FINISHED and e.get("run_id") == run_product.record.id]
       if not landed:
-        raise MigrationRefused(
+        raise MigrationRefusedError(
             f"run {run_product.record.id} has terminal outcome {existing_outcome!r} but no "
             "retained run_finished fact")
       mismatch = _fact_mismatch(expected, landed[0], ctx.manifest.created_at)
       if mismatch is not None:
-        raise MigrationRefused(
+        raise MigrationRefusedError(
             f"chat log of {session_id} already holds a run_finished fact for "
             f"{run_product.record.id} with different content: {mismatch}")
     post = _hash_rel(ctx.cfg, log_rel)
@@ -4524,7 +4520,7 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
       try:
         current = orjson.loads(path.read_bytes())
       except ValueError as e:
-        raise MigrationRefused(f"existing alias file unreadable at {path}: {e}") from e
+        raise MigrationRefusedError(f"existing alias file unreadable at {path}: {e}") from e
       expected = orjson.loads(plan.aliases_text.encode("utf-8"))
       for section in ("old_session_ids", "old_threads"):
         rows = current.get(section) if isinstance(current, dict) else None
@@ -4533,7 +4529,7 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
           continue
         for key, value in rows.items():
           if key not in kept or kept[key] != value:
-            raise MigrationRefused(
+            raise MigrationRefusedError(
                 f"existing alias row {section}/{key} is not this manifest's product "
                 f"(current {value!r}); refusing to overwrite")
     _confined(cfg, rel)
@@ -4574,7 +4570,7 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
     if receipt_new is None:
       if new_path.exists():
         if new_path.read_text(encoding="utf-8") != expected_new:
-          raise MigrationRefused(
+          raise MigrationRefusedError(
               f"target collision: {move.new_rel_path} exists with different content; "
               "refusing to overwrite")
         _append_receipt(ctx, ProductReceipt(
@@ -4594,7 +4590,7 @@ async def _apply_product(ctx: _ApplyContext, kind: str, payload: object) -> int:
           backup=move.old_rel_path))
     return 1
 
-  raise MigrationRefused(f"unknown product kind {kind!r}")
+  raise MigrationRefusedError(f"unknown product kind {kind!r}")
 
 
 def _manifest_pre_hash(ctx: _ApplyContext, rel: str) -> str | None:
@@ -4725,7 +4721,7 @@ async def _finish_apply(cfg: CharlieBotConfig, manifest_path: Path, ctx: _ApplyC
   problems = await verify_applied(cfg, manifest, ctx.plan)
   atomic_write_text(manifest_path, manifest.model_dump_json(indent=2))
   if problems:
-    raise MigrationRefused(
+    raise MigrationRefusedError(
         "apply completed but post-apply verification failed; the home holds the migration's "
         "products and its backups (do NOT rerun apply; inspect and roll back): "
         + "; ".join(problems[:10]),
@@ -4752,14 +4748,10 @@ def _prune_empty_dirs_bottom_up(root: Path, *, stop_at: Path) -> None:
     return
   for child in sorted(root.rglob("*"), reverse=True):
     if child.is_dir():
-      try:
+      with contextlib.suppress(OSError):
         child.rmdir()
-      except OSError:
-        pass
-  try:
+  with contextlib.suppress(OSError):
     root.rmdir()
-  except OSError:
-    pass
 
 
 def _read_rollback_journal(path: Path) -> dict[str, str]:
@@ -4773,9 +4765,9 @@ def _read_rollback_journal(path: Path) -> dict[str, str]:
     try:
       entry = orjson.loads(line)
     except ValueError as e:
-      raise MigrationRefused(f"rollback journal unreadable at {path}: {e}") from e
+      raise MigrationRefusedError(f"rollback journal unreadable at {path}: {e}") from e
     if not isinstance(entry, dict) or "path" not in entry or "action" not in entry:
-      raise MigrationRefused(f"rollback journal entry malformed at {path}: {line[:120]}")
+      raise MigrationRefusedError(f"rollback journal entry malformed at {path}: {line[:120]}")
     _validate_receipt_rel(str(entry["path"]), what="rollback journal path")
     journaled[str(entry["path"])] = str(entry["action"])
   return journaled
@@ -4823,8 +4815,8 @@ def _validate_rollback_state(cfg: CharlieBotConfig, manifest: MigrationManifest,
   """
   broken: list[str] = []
   source_map = {record.path: record for record in manifest.source_files}
-  for problem in snap.unreadable:
-    broken.append(f"{problem}: unreadable; the protected state cannot be proven")
+  broken.extend(
+      f"{problem}: unreadable; the protected state cannot be proven" for problem in snap.unreadable)
   for rel, current in sorted(snap.hashes.items()):
     record = source_map.get(rel)
     if record is not None and current == record.sha256:
@@ -4852,7 +4844,7 @@ def _validate_rollback_state(cfg: CharlieBotConfig, manifest: MigrationManifest,
         continue
     broken.append(f"{rel}: not accounted for by the manifest's source binding or receipts "
                   f"(new-system write or unrelated data; current {current[:12]})")
-  for rel, record in sorted(source_map.items()):
+  for rel in sorted(source_map):
     if rel in snap.hashes:
       continue
     receipt = receipts.get(rel)
@@ -4882,7 +4874,7 @@ def _validate_rollback_state(cfg: CharlieBotConfig, manifest: MigrationManifest,
       broken.append(
           f"{receipt.path}: backup hash {backed[:12]} != pre-apply hash {receipt.pre_sha256[:12]}")
   if broken:
-    raise MigrationRefused(
+    raise MigrationRefusedError(
         "rollback refused: the protected home no longer matches the applied manifest's "
         "receipts and source binding (nothing was restored, evidence is intact): "
         + "; ".join(broken[:10]),
@@ -4907,23 +4899,23 @@ def rollback_manifest(cfg: CharlieBotConfig, manifest_path: Path,
   _validate_manifest_shape(manifest)
   _check_manifest_home(cfg, manifest)
   if manifest.applied_at is None:
-    raise MigrationRefused("this manifest was never applied; there is nothing to roll back")
+    raise MigrationRefusedError("this manifest was never applied; there is nothing to roll back")
   if manifest.rolled_back_at is not None:
-    raise MigrationRefused("this manifest was already rolled back")
+    raise MigrationRefusedError("this manifest was already rolled back")
   if not manifest.receipts:
-    raise MigrationRefused("manifest carries no receipts; rollback cannot prove product state")
+    raise MigrationRefusedError("manifest carries no receipts; rollback cannot prove product state")
   # The home's own receipt journal is the durable proof that THIS home was the
   # applied one; a manifest carried to another home refuses before any read
   # of its products.
   state_dir = _checked_state_dir(cfg, manifest.source_sha)
   receipts_path = state_dir / RECEIPTS_FILE_NAME
   if not receipts_path.is_file():
-    raise MigrationRefused(
+    raise MigrationRefusedError(
         f"no migration receipt journal for this manifest in this home ({receipts_path}); "
         "the manifest's receipts name another home's apply")
   receipts = _read_receipts(receipts_path)
   if not receipts:
-    raise MigrationRefused(
+    raise MigrationRefusedError(
         f"the migration receipt journal at {receipts_path} holds no products; rollback "
         "cannot prove product state from it")
   backup_dir = state_dir / "backup"
@@ -4932,7 +4924,7 @@ def rollback_manifest(cfg: CharlieBotConfig, manifest_path: Path,
   def refuse_blockers(snap: SourceSnapshot) -> None:
     blockers = quiescence_blockers(snap)
     if blockers:
-      raise MigrationRefused(
+      raise MigrationRefusedError(
           "quiescence not proven; the source may have live writers (resolve these and retry): "
           + "; ".join(str(b.get("detail") or b) for b in blockers[:10]),
           details=[orjson.dumps(b).decode() for b in blockers])
@@ -4944,8 +4936,8 @@ def rollback_manifest(cfg: CharlieBotConfig, manifest_path: Path,
 
   try:
     fence = acquire_home_writer_fence(cfg.charliebot_home, purpose="session-tree migrate --rollback")
-  except (HomeWriterActiveError, FencePathRefusal) as e:
-    raise MigrationRefused(str(e)) from e
+  except (HomeWriterActiveError, FencePathRefusalError) as e:
+    raise MigrationRefusedError(str(e)) from e
   try:
     # Authoritative re-read and re-validation under the exclusion, before the
     # first replacement: a writer that changed a protected product between the
@@ -4954,10 +4946,10 @@ def rollback_manifest(cfg: CharlieBotConfig, manifest_path: Path,
     manifest = _load_manifest(manifest_path)
     _validate_manifest_shape(manifest)
     if manifest.rolled_back_at is not None:
-      raise MigrationRefused("this manifest was already rolled back")
+      raise MigrationRefusedError("this manifest was already rolled back")
     receipts = _read_receipts(receipts_path)
     if not receipts:
-      raise MigrationRefused(
+      raise MigrationRefusedError(
           f"the migration receipt journal at {receipts_path} holds no products; rollback "
           "cannot prove product state from it")
     journaled = _read_rollback_journal(rollback_journal_path)
@@ -4969,7 +4961,7 @@ def rollback_manifest(cfg: CharlieBotConfig, manifest_path: Path,
     # first restore.
     late = scan_live_home_processes(cfg.charliebot_home, default_home=default_charliebot_home())
     if late:
-      raise MigrationRefused(
+      raise MigrationRefusedError(
           "quiescence lost at the mutation boundary: live process(es) bound to this home "
           "appeared after the preflight check: "
           + "; ".join(f"pid {h['pid']} ({h['cmdline'] or 'unknown'})" for h in late[:8]),
@@ -4987,14 +4979,14 @@ def rollback_manifest(cfg: CharlieBotConfig, manifest_path: Path,
         continue  # the file is wholly migration-owned: phase 2 removes it
       backup_rel = receipt.backup
       if backup_rel is None:
-        raise MigrationRefused(
+        raise MigrationRefusedError(
             f"backup reference missing for {receipt.path}; rollback cannot restore it")
       backup_file = _confine_under(backup_dir, backup_rel, what="backup reference")
       if not backup_file.is_file():
-        raise MigrationRefused(f"backup file missing: {backup_file}")
+        raise MigrationRefusedError(f"backup file missing: {backup_file}")
       backed = _sha256_file(backup_file)
       if backed != receipt.pre_sha256:
-        raise MigrationRefused(
+        raise MigrationRefusedError(
             f"backup hash mismatch for {receipt.path}: backup {backed[:12]}, "
             f"expected {receipt.pre_sha256[:12]}")
       dest = _confined(cfg, receipt.path)
@@ -5012,7 +5004,7 @@ def rollback_manifest(cfg: CharlieBotConfig, manifest_path: Path,
         continue  # already removed (validated above)
       current = _sha256_file(path)
       if current != receipt.post_sha256:
-        raise MigrationRefused(
+        raise MigrationRefusedError(
             f"created product {receipt.path} changed after apply ({current[:12]}); "
             "refusing to delete it")
       _journal_rollback(rollback_journal_path, receipt.path, "removed")

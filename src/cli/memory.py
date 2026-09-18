@@ -22,11 +22,23 @@ import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from src.core import memory
-from src.core.config import CharlieBotConfig
 from src.core.home import charliebot_home_dir
 from src.core.run_token import load_run_token
+
+if TYPE_CHECKING:
+  from src.core.config import CharlieBotConfig
+
+
+def get_config() -> "CharlieBotConfig":
+  """Deferred config load: the module import stays config-free (the M98 invocation
+  wall — a broken config.yaml must not block the store's own verbs), and only the
+  run-token path (which must resolve the run credential's fixed audience) calls it.
+  """
+  from src.core.config import get_config as _load_config
+  return _load_config()
 
 
 def _memory_dir() -> Path:
@@ -63,7 +75,6 @@ def main() -> None:
 def _cmd_query(args: argparse.Namespace) -> None:
   token = load_run_token()
   if token is not None:
-    from src.core.config import get_config
     cfg = get_config()
     audience = _resolve_run_scoped_audience(cfg, token)
     if args.audience is not None and args.audience != audience:
@@ -107,7 +118,7 @@ def _cmd_query(args: argparse.Namespace) -> None:
     print(memory.full_text(e))
 
 
-def _resolve_run_scoped_audience(cfg: CharlieBotConfig, token: str) -> str:
+def _resolve_run_scoped_audience(cfg: "CharlieBotConfig", token: str) -> str:
   """The audience the verified, active owning Run of *token* fixes — or a visible exit.
 
   Reuses the central run-identity pieces (the signature verifier and the one
@@ -115,14 +126,13 @@ def _resolve_run_scoped_audience(cfg: CharlieBotConfig, token: str) -> str:
   A wrong-instance token names a session this home's sessions directory has
   never heard of, which is the same visible unknown-run refusal.
   """
+  from src.core.config import get_credentials
   from src.core.control_events import ControlEventSink
   from src.core.run_token import RunTokenError, verify_run_token
   from src.core.runs import RunStore, run_identity_refusal
   from src.core.session_aliases import SessionAliasStore
   from src.core.sessions import SessionManager
   from src.core.task_sessions import TaskTreeManager
-
-  from src.core.config import get_credentials
   key = str(get_credentials().get("charliebot", "access_key") or "")
   if not key:
     print("error: run token presented but no signing key is configured", file=sys.stderr)

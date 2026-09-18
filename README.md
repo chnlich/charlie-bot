@@ -87,6 +87,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - `charliebot remote-launch` — launch a long-running remote command
 - `charliebot schedule-trigger` — schedule a delayed trigger (timed or watching PIDs/SLURM jobs)
 - `charliebot session` — create sessions and relay agent-to-agent messages between them
+- `charliebot session-tree` — migrate a home's legacy sessions to the task tree (dry-run/apply/rollback) and run an isolated trial preview
 - `charliebot slack` — reply to or ack the Slack thread a session was summoned from
 - `charliebot storage` — reclaim storage held by cold sessions and unreferenced backend records
 - `charliebot gc-trash` — inspect and purge quarantined worktree trash

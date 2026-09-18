@@ -249,9 +249,9 @@ def main() -> None:
   elif args.session_command == "tree":
     _cmd_tree(args)
   elif args.session_command == "pause":
-    _set_paused(args.session_id, True)
+    _set_paused(args.session_id, paused=True)
   elif args.session_command == "resume":
-    _set_paused(args.session_id, False)
+    _set_paused(args.session_id, paused=False)
   elif args.session_command == "retry":
     _cmd_retry(args)
   elif args.session_command == "acknowledge":

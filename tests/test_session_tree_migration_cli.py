@@ -32,7 +32,7 @@ from test_session_tree_migration import (
 from src.core import event_types as ET
 from src.core import session_tree_migration as migration
 from src.core.json_utils import atomic_write_text
-from src.core.session_tree_migration import MigrationRefused
+from src.core.session_tree_migration import MigrationRefusedError
 
 
 def test_cli_help_and_usage_exit_codes(monkeypatch: pytest.MonkeyPatch, full_home: Path) -> None:
@@ -348,7 +348,7 @@ def test_interrupted_apply_resumes_exactly(
   async def flaky(ctx, kind, payload):
     count["n"] += 1
     if count["n"] in crash_points:
-      raise MigrationRefused(f"SIMULATED CRASH after {count['n'] - 1} products")
+      raise MigrationRefusedError(f"SIMULATED CRASH after {count['n'] - 1} products")
     return await original(ctx, kind, payload)
 
   migration._apply_product = flaky
@@ -358,7 +358,7 @@ def test_interrupted_apply_resumes_exactly(
       try:
         migration.apply_manifest(cfg, manifest_path)
         break
-      except MigrationRefused as e:
+      except MigrationRefusedError as e:
         assert "SIMULATED CRASH" in str(e)
         crashes += 1
   finally:
@@ -494,7 +494,7 @@ def test_missing_backup_aborts_apply_with_evidence_intact(
 
   migration._sha256_file = flaky_hash
   try:
-    with pytest.raises(MigrationRefused) as excinfo:
+    with pytest.raises(MigrationRefusedError) as excinfo:
       migration.apply_manifest(cfg, manifest_path)
     assert "backup verification failed" in str(excinfo.value)
   finally:
@@ -650,12 +650,12 @@ def test_interrupted_apply_inside_worker_product_resume_and_rollback_exact(
 
   def flaky_append(ctx, receipt):
     if is_worker_run_receipt(receipt.path):
-      raise migration.MigrationRefused("SIMULATED CRASH inside worker_node receipts")
+      raise migration.MigrationRefusedError("SIMULATED CRASH inside worker_node receipts")
     return original_append(ctx, receipt)
 
   migration._append_receipt = flaky_append
   try:
-    with pytest.raises(migration.MigrationRefused, match="SIMULATED CRASH"):
+    with pytest.raises(migration.MigrationRefusedError, match="SIMULATED CRASH"):
       migration.apply_manifest(cfg, manifest_path)
   finally:
     migration._append_receipt = original_append
@@ -754,12 +754,12 @@ def _crash_between_append_and_receipt(
   def flaky_append(ctx, receipt):
     if receipt.kind == "appended" and receipt.pre_sha256 is not None and not first["seen"]:
       first["seen"] = True
-      raise MigrationRefused("SIMULATED CRASH between fact append and receipt")
+      raise MigrationRefusedError("SIMULATED CRASH between fact append and receipt")
     return original_append(ctx, receipt)
 
   migration._append_receipt = flaky_append
   try:
-    with pytest.raises(MigrationRefused, match="SIMULATED CRASH"):
+    with pytest.raises(MigrationRefusedError, match="SIMULATED CRASH"):
       migration.apply_manifest(cfg, manifest_path)
   finally:
     migration._append_receipt = original_append
@@ -1284,12 +1284,12 @@ def test_interrupted_rollback_resumes_from_durable_evidence(
                       _crash=crash_after):
       _state["n"] += 1
       if _state["n"] > _crash:
-        raise MigrationRefused(f"SIMULATED CRASH inside rollback after {_crash} journal writes")
+        raise MigrationRefusedError(f"SIMULATED CRASH inside rollback after {_crash} journal writes")
       return _original(path, rel, action)
 
     migration._journal_rollback = flaky_journal
     try:
-      with pytest.raises(MigrationRefused, match="SIMULATED CRASH"):
+      with pytest.raises(MigrationRefusedError, match="SIMULATED CRASH"):
         migration.rollback_manifest(home_config_of(monkeypatch, home), manifest_path)
     finally:
       migration._journal_rollback = original_journal
@@ -1331,12 +1331,12 @@ def test_rollback_resume_refuses_interfered_with_evidence(
   def flaky_journal(path, rel, action):
     state["n"] += 1
     if state["n"] > 3:
-      raise MigrationRefused("SIMULATED CRASH inside rollback")
+      raise MigrationRefusedError("SIMULATED CRASH inside rollback")
     return original_journal(path, rel, action)
 
   migration._journal_rollback = flaky_journal
   try:
-    with pytest.raises(MigrationRefused, match="SIMULATED CRASH"):
+    with pytest.raises(MigrationRefusedError, match="SIMULATED CRASH"):
       migration.rollback_manifest(home_config_of(monkeypatch, home), manifest_path)
   finally:
     migration._journal_rollback = original_journal
@@ -1400,12 +1400,12 @@ def test_resume_after_alias_merge_crash_recognizes_its_own_product(
   def flaky_append(ctx, receipt):
     if receipt.path == aliases_rel and not state["seen"]:
       state["seen"] = True
-      raise MigrationRefused("SIMULATED CRASH between aliases write and receipt")
+      raise MigrationRefusedError("SIMULATED CRASH between aliases write and receipt")
     return original_append(ctx, receipt)
 
   migration._append_receipt = flaky_append
   try:
-    with pytest.raises(MigrationRefused, match="SIMULATED CRASH"):
+    with pytest.raises(MigrationRefusedError, match="SIMULATED CRASH"):
       migration.apply_manifest(cfg, manifest_path)
   finally:
     migration._append_receipt = original_append
@@ -1441,7 +1441,7 @@ def test_resume_after_alias_merge_crash_recognizes_its_own_product(
   state["seen"] = False
   migration._append_receipt = flaky_append
   try:
-    with pytest.raises(MigrationRefused, match="SIMULATED CRASH"):
+    with pytest.raises(MigrationRefusedError, match="SIMULATED CRASH"):
       migration.apply_manifest(cfg2, manifest_path2)
   finally:
     migration._append_receipt = original_append

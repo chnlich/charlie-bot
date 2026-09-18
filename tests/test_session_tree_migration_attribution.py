@@ -569,7 +569,7 @@ def test_append_fact_if_absent_verifies_existing_content(tmp_path, monkeypatch):
                                 "event_type": ET.USER}]
   with open(log, "ab") as f:
     f.write(json.dumps(foreign).encode() + b"\n")
-  with pytest.raises(migration.MigrationRefused, match="different content"):
+  with pytest.raises(migration.MigrationRefusedError, match="different content"):
     migration._append_fact_if_absent(cfg, manager.session_id, dict(manager.task_imported),
                                      expected, datetime.now(UTC) - timedelta(hours=1))
   assert log.read_bytes() != before  # the forged line stays (refusal preserves bytes)

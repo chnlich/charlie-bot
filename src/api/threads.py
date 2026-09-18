@@ -721,7 +721,7 @@ async def get_thread_events(
     thread_id: str,
     thread_mgr: ThreadManager = Depends(get_thread_manager),
     after: int | None = Query(default=None, ge=0),
-) -> FastJsonResponse:
+) -> Response:
   """Return historical Worker events from the on-disk events.jsonl log.
 
   Without ``after`` the response is the full projected list. With ``after``

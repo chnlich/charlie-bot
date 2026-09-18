@@ -96,9 +96,8 @@ async def test_401_response_logs_one_event_with_status_401() -> None:
 
 @pytest.mark.asyncio
 async def test_inner_app_exception_logs_500_and_reraises() -> None:
-  with pytest.raises(ValueError, match="boom"):
-    with capture_logs() as events:
-      await _drive(_raising_app, _http_scope(method="POST"))
+  with pytest.raises(ValueError, match="boom"), capture_logs() as events:
+    await _drive(_raising_app, _http_scope(method="POST"))
 
   assert len(events) == 1
   event = events[0]
@@ -136,7 +135,7 @@ async def test_websocket_scope_passes_through_without_logging() -> None:
 @pytest.mark.asyncio
 async def test_streaming_body_logs_exactly_one_event() -> None:
   with capture_logs() as events:
-    await _drive(_streaming_app, _http_scope(path="/files/big.bin"))
+    await _drive(_streaming_app, _http_scope(path="/absolute_filepath/big.bin"))
 
   assert len(events) == 1
   assert events[0]["event"] == "http_request"

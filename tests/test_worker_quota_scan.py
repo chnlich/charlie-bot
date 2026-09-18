@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from conftest import make_worker, process_worker_event
 
-from src.agents.worker import QuotaExhaustedException
+from src.agents.worker import QuotaExhaustedError
 from src.core import event_types as ET
 
 
@@ -19,7 +19,7 @@ from src.core import event_types as ET
 async def test_error_event_with_quota_pattern_raises_and_persists(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   event = {"type": ET.ERROR, "message": "API Error: quota exceeded for project", "content": ""}
-  with pytest.raises(QuotaExhaustedException):
+  with pytest.raises(QuotaExhaustedError):
     await process_worker_event(make_worker(tmp_path, "quota-scan"), tmp_path, event, monkeypatch)
   lines = (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()
   assert len(lines) == 1 and json.loads(lines[0])["message"] == event["message"]

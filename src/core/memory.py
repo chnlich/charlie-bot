@@ -482,16 +482,6 @@ def _index_lines(index_entries: list[Entry]) -> str:
   return "\n".join([INDEX_HEADER] + [f"{e.topic}/{e.slug} · {e.title}" for e in index_entries])
 
 
-def _format_block(full_body_entries: list[Entry], index_entries: list[Entry]) -> str:
-  """Join full bodies (sorted) then index lines (sorted) into one text block."""
-  chunks: list[str] = []
-  if full_body_entries:
-    chunks.append("\n\n".join(full_text(e) for e in full_body_entries))
-  if index_entries:
-    chunks.append(_index_lines(index_entries))
-  return "\n\n".join(chunks)
-
-
 def audience_allows(entry: Entry, audience: str) -> bool:
   """The one audience predicate every read surface shares (startup, preview, query).
 
@@ -558,8 +548,8 @@ def _selection_from_parts(
     usage_line: str | None,
 ) -> MemorySelection:
   """Build the selection: one full segment, one index segment, stable sorts, exact text."""
-  full_body_entries.sort(key=lambda e: (e.topic, e.slug))
-  index_entries.sort(key=lambda e: (e.topic, e.slug))
+  full_body_entries.sort(key=entry_order_key)
+  index_entries.sort(key=entry_order_key)
   segments: list[tuple[str, str, tuple[MemoryEntrySource, ...]]] = []
   if full_body_entries:
     segments.append((
@@ -607,7 +597,7 @@ def select_master_memory(memory_dir: Path) -> MemorySelection | None:
   store = _load_selection_store(memory_dir)
   if store is None:
     return None
-  resident_names = {t.name for t in store.topics.values() if t.resident}
+  resident_names = resident_topic_names(store)
   full_body_entries: list[Entry] = []
   index_entries: list[Entry] = []
   for e in store.entries:
@@ -647,6 +637,24 @@ def select_worker_memory(memory_dir: Path, repo_basename: str) -> MemorySelectio
       index_entries.append(e)
   return _selection_from_parts(
       "worker", repo_basename, full_body_entries, index_entries, usage_line=WORKER_USAGE_LINE)
+def entry_order_key(entry: Entry) -> tuple[str | None, str]:
+  """The store's canonical entry order: ``(topic, slug)``.
+
+  Every listing of entries — both spawn assemblers and the CLI query — sorts
+  with this key, so one change moves them all.
+  """
+  return (entry.topic, entry.slug)
+
+
+def resident_topic_names(store: Store) -> set[str]:
+  """Names of the store's resident topics.
+
+  ``assemble_master`` injects resident-topic entries in full and serves the
+  rest as index lines; the CLI query's ``--resident`` filter matches the same
+  set. ``assemble_worker`` does not consult residency — it splits on
+  ``topic == repo_basename``.
+  """
+  return {t.name for t in store.topics.values() if t.resident}
 
 
 def assemble_master(memory_dir: Path) -> str | None:

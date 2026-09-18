@@ -406,7 +406,7 @@ async def test_resume_round_emits_identical_notice_from_projection(
   raw_path = log_dir / runs.RAW_LOG_NAME
   assistant_line = json.dumps(_assistant("claude-opus-4-8", "served reply")) + "\n"
   raw_path.write_text(assistant_line + json.dumps(_result()) + "\n", encoding="utf-8")
-  runs.write_raw_cursor(log_dir / runs.CURSOR_NAME, 0)
+  (log_dir / runs.CURSOR_NAME).write_text("0", encoding="utf-8")
 
   record = MasterRunRecord(
       pid=None,
@@ -447,7 +447,7 @@ async def test_resume_notice_persists_exactly_once_with_full_fields(
       json.dumps(_assistant("claude-opus-4-8", "one")) + "\n" + json.dumps(_assistant("claude-sonnet-5", "two")) +
       "\n" + json.dumps(_result()) + "\n",
       encoding="utf-8")
-  runs.write_raw_cursor(log_dir / runs.CURSOR_NAME, 0)
+  (log_dir / runs.CURSOR_NAME).write_text("0", encoding="utf-8")
 
   record = MasterRunRecord(
       pid=None,

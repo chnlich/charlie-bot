@@ -4,7 +4,9 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from html import unescape
 from html.parser import HTMLParser
-from pathlib import Path
+
+import pytest
+from conftest import ROOT
 
 from src.core import plan_diff
 from src.core.plan_diff import (
@@ -17,7 +19,6 @@ from src.core.plan_diff import (
     diff_text,
 )
 
-_ROOT = Path(__file__).resolve().parents[1]
 _BLOCK_TAGS = {
     "address", "article", "aside", "blockquote", "body", "caption", "dd", "details", "dialog", "div", "dl", "dt",
     "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr",
@@ -114,18 +115,19 @@ def _marks(html: str) -> list[tuple[str, re.Match[str]]]:
   def in_ignored(match: re.Match[str]) -> bool:
     return any(start <= match.start() < end for start, end in ignored)
 
-  for match in re.finditer(r"<ins\b[^>]*\bcbd-ins\b[^>]*>.*?</ins\s*>", html, re.IGNORECASE | re.DOTALL):
-    if not in_ignored(match):
-      marks.append(("ins", match))
-  for match in re.finditer(
-      r"<([A-Za-z][\w:-]*)\b(?=[^>]*\bcbd-del\b)(?=[^>]*\bdata-del\s*=\s*\"[^\"]*\")[^>]*>.*?</\1\s*>", html,
-      re.IGNORECASE | re.DOTALL):
-    if not in_ignored(match):
-      marks.append(("del", match))
-  for match in re.finditer(r"<([A-Za-z][\w:-]*)\b(?=[^>]*\bcbd-new\b)[^>]*>.*?</\1\s*>", html,
-                           re.IGNORECASE | re.DOTALL):
-    if not in_ignored(match):
-      marks.append(("new", match))
+  marks.extend(
+      ("ins", match)
+      for match in re.finditer(r"<ins\b[^>]*\bcbd-ins\b[^>]*>.*?</ins\s*>", html, re.IGNORECASE | re.DOTALL)
+      if not in_ignored(match))
+  marks.extend(
+      ("del", match) for match in re.finditer(
+          r"<([A-Za-z][\w:-]*)\b(?=[^>]*\bcbd-del\b)(?=[^>]*\bdata-del\s*=\s*\"[^\"]*\")[^>]*>.*?</\1\s*>", html,
+          re.IGNORECASE | re.DOTALL) if not in_ignored(match))
+  marks.extend(
+      ("new", match)
+      for match in re.finditer(
+          r"<([A-Za-z][\w:-]*)\b(?=[^>]*\bcbd-new\b)[^>]*>.*?</\1\s*>", html, re.IGNORECASE | re.DOTALL)
+      if not in_ignored(match))
   return sorted(marks, key=lambda item: item[1].start())
 
 
@@ -196,7 +198,7 @@ def test_four_invariants_hold_for_synthetic_pair() -> None:
 
 def _fixture_pair() -> tuple[str, str]:
   """The real captured plan page pair the whole-pipeline tests annotate: v10 base, v11 new."""
-  data = _ROOT / "tests/data"
+  data = ROOT / "tests/data"
   base = (data / "plan_move2-direct-kill_v10.html").read_text(encoding="utf-8")
   new = (data / "plan_move2-direct-kill_v11.html").read_text(encoding="utf-8")
   return base, new
@@ -466,25 +468,21 @@ def test_header_splices_inside_the_wrap_column() -> None:
   assert annotated.index('<p>alpha beta</p>') > annotated.index('<div class="cbd-header"')
 
 
-def test_header_splices_inside_main_when_wrap_is_absent() -> None:
-  new = '<html><body><main><p>alpha beta</p></main></body></html>'
+@pytest.mark.parametrize(
+    "new, anchor", [
+        ('<html><body><main><p>alpha beta</p></main></body></html>', '<main>'),
+        ('<html><body><p>alpha beta</p></body></html>', '<body>'),
+        ('<html><body><div class="unwrap"><div class="re-wrap"><p>alpha beta</p></div></div></body></html>', '<body>'),
+    ],
+    ids=[
+        "splices-inside-main-when-wrap-absent",
+        "body-start-fallback-without-wrap-or-main",
+        "class-names-merely-containing-wrap-are-not-anchors",
+    ])
+def test_header_lands_after_the_anchor_the_fallback_chain_selects(new: str, anchor: str) -> None:
   annotated = annotate(new, new)
   assert annotated.count('<div class="cbd-header"') == 1
-  assert annotated.index('<div class="cbd-header"') == annotated.index('<main>') + len('<main>')
-
-
-def test_header_keeps_the_body_start_fallback_without_wrap_or_main() -> None:
-  new = '<html><body><p>alpha beta</p></body></html>'
-  annotated = annotate(new, new)
-  assert annotated.count('<div class="cbd-header"') == 1
-  assert annotated.index('<div class="cbd-header"') == annotated.index('<body>') + len('<body>')
-
-
-def test_header_ignores_class_names_that_merely_contain_wrap() -> None:
-  new = '<html><body><div class="unwrap"><div class="re-wrap"><p>alpha beta</p></div></div></body></html>'
-  annotated = annotate(new, new)
-  assert annotated.count('<div class="cbd-header"') == 1
-  assert annotated.index('<div class="cbd-header"') == annotated.index('<body>') + len('<body>')
+  assert annotated.index('<div class="cbd-header"') == annotated.index(anchor) + len(anchor)
 
 
 def test_header_offset_matches_a_full_reparse_of_the_spliced_page() -> None:
@@ -600,9 +598,7 @@ def _fuzz_document(rng: random.Random) -> str:
       pieces.append(f"<{tag}{_fuzz_attrs(rng)}>")
       if tag not in _VOID_TAGS:
         stack.append(tag)
-  for tag in reversed(stack):
-    if rng.random() < 0.7:
-      pieces.append(f"</{tag}>")
+  pieces.extend(f"</{tag}>" for tag in reversed(stack) if rng.random() < 0.7)
   return "".join(pieces)
 
 

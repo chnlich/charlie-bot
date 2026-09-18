@@ -43,6 +43,9 @@ async function loadContext(hljsSource) {
   vm.createContext(context);
   vm.runInContext(hljsSource, context, { filename: 'highlight.min.js' });
   vm.runInContext(await fetchUrl(MARKED_URL), context, { filename: 'marked.min.js' });
+  // The checkout's page load order: math-scanner.js defines the mathSpan
+  // global the renderer's math tokenizer reads.
+  vm.runInContext(readJs('math-scanner.js'), context, { filename: 'math-scanner.js' });
   vm.runInContext(readJs('markdown-renderer.js'), context, { filename: 'markdown-renderer.js' });
   return context;
 }

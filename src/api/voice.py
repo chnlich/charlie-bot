@@ -28,12 +28,12 @@ async def handle_voice_websocket(websocket: WebSocket, session_id: str) -> None:
   """Run one local streaming transcription WebSocket."""
   # src.agents.transcriber carries the numpy import; the transcription stack
   # loads here, off the server import path the M99 collector measures.
-  from src.agents.transcriber import SpeechModelsNotReady, create_transcription_session
+  from src.agents.transcriber import SpeechModelsNotReadyError, create_transcription_session
 
   cfg = get_config()
   try:
     session = await asyncio.to_thread(create_transcription_session, cfg)
-  except SpeechModelsNotReady as exc:
+  except SpeechModelsNotReadyError as exc:
     await _send_error_and_close(websocket, str(exc))
     return
   except Exception as exc:

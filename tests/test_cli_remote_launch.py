@@ -14,16 +14,17 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from conftest import CLI_COMMON_GET_CONFIG_PATCH_TARGET
+from conftest import CLI_COMMON_SESSIONS_DIR_PATCH_TARGET
 
 from src.cli.remote_launch import main
+from src.core.timeouts import SSH_CONNECT_TIMEOUT
 
 # Import-path patch targets for the remote_launch seams. src/cli/remote_launch.py binds
 # get_config at import scope (`from src.core.config import get_config`) and reaches
 # subprocess.run through its module-scope `import subprocess`, so patch() lands each
 # stand-in on the src.cli.remote_launch module attribute and main() reads them at call
-# time; the src.cli.common helpers bind get_config in their own namespace
-# (CLI_COMMON_GET_CONFIG_PATCH_TARGET), and a drifted string copy of either route would
+# time; the src.cli.common helpers bind the sessions root in their own namespace
+# (CLI_COMMON_SESSIONS_DIR_PATCH_TARGET), and a drifted string copy of either route would
 # patch a name nothing reads.
 _GET_CONFIG_PATCH_TARGET = "src.cli.remote_launch.get_config"
 _SUBPROCESS_RUN_PATCH_TARGET = "src.cli.remote_launch.subprocess.run"
@@ -65,7 +66,7 @@ def _patched_launch(cfg: MagicMock, argv_tail: list[str], run_patch: Any = None)
   """
   patches = [
       patch("sys.argv", ["remote_launch", *argv_tail]),
-      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),
+      patch(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=cfg.sessions_dir),
       patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg),
   ]
   if run_patch is not None:
@@ -223,7 +224,7 @@ def test_success_path_with_mocked_ssh(tmp_path: Path, capsys: pytest.CaptureFixt
   ssh_argv = mock_run.call_args.args[0]
   assert ssh_argv[0] == "ssh"
   assert "BatchMode=yes" in ssh_argv
-  assert "ConnectTimeout=10" in ssh_argv
+  assert f"ConnectTimeout={SSH_CONNECT_TIMEOUT}" in ssh_argv
   assert "remote.example.com" in ssh_argv
   assert ssh_argv[-3:-1] == ["bash", "-c"]
   # OpenSSH joins argv into a remote command string, so the bash -c payload must be quoted.

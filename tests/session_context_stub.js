@@ -59,6 +59,7 @@ function baseSessionContext(overrides = {}) {
     },
     disconnectWS: () => {},
     connectWS: () => {},
+    cancelReconnect: () => {},
     resetVoiceState: () => {},
     renderFileChips: () => {},
     hideSlashPopup: () => {},
@@ -91,10 +92,12 @@ function baseSessionContext(overrides = {}) {
     BACKEND_OPTIONS: overrides.BACKEND_OPTIONS || {},
     BACKEND_TYPES: overrides.BACKEND_TYPES || {},
     BACKEND_ALIASES: overrides.BACKEND_ALIASES || {},
-    // config.js's shared literal pair; index.html loads config.js before the
-    // chat/sidebar modules createChatSidebarContext fans out to.
+    // config.js's shared literals and the draft-save seam; index.html loads
+    // config.js before the chat/sidebar modules createChatSidebarContext fans
+    // out to.
     JSON_HEADERS: {'Content-Type': 'application/json'},
     PROGRESS_BAR_FILL_CLASS: 'h-full rounded-full transition-all duration-300',
+    saveDraftNow: () => {},
   };
   context.window = {addEventListener: () => {}, innerHeight: 800};
   context.CSS = {escape: (value) => String(value)};
@@ -130,7 +133,7 @@ function makeSidebarRow(sessionId, name) {
 
 // One session-metadata fixture as the sidebar wire format carries it. Only the
 // fields every sidebar harness shares live here: a harness whose fixture must
-// leave a field undefined (usage_poll reads no status/rating) or default it
+// leave a field undefined (usage_poll reads no status) or default it
 // differently (delete_backfill's Work group) passes that field in overrides —
 // it is never added to this base.
 function makeSessionMeta(id, overrides = {}) {

@@ -55,6 +55,15 @@ def _session_rig(tmp_path: Path, session_id: str, name: str, backend: str) -> tu
   return session_mgr, meta
 
 
+def _assert_no_context_tier(usage: dict | None) -> None:
+  """Every tier declined: the resolution returned a mapping with no context reading and no model."""
+  assert usage is not None
+  assert usage["context_tokens"] is None
+  assert usage["context_full"] is None
+  assert usage["context_compact_at"] is None
+  assert usage["model"] == ""
+
+
 @pytest.fixture(autouse=True)
 def _codex_home_under_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   """Pin the codex resolver's default home under tmp_path: codex runs from the default
@@ -309,12 +318,8 @@ async def test_claude_tier_admission_unaffected_by_boundary_only_events(tmp_path
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
   # No qualifying assistant event exists, so the claude tier does not admit --
-  # falls through to the no-source tier (context fields None).
-  assert usage is not None
-  assert usage["context_tokens"] is None
-  assert usage["context_full"] is None
-  assert usage["context_compact_at"] is None
-  assert usage["model"] == ""
+  # falls through to the no-source tier.
+  _assert_no_context_tier(usage)
 
 
 # ---------------------------------------------------------------------------
@@ -419,11 +424,7 @@ async def test_no_source_tier_when_results_but_no_assistant_usage(tmp_path: Path
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
-  assert usage is not None
-  assert usage["context_tokens"] is None
-  assert usage["context_full"] is None
-  assert usage["context_compact_at"] is None
-  assert usage["model"] == ""
+  _assert_no_context_tier(usage)
   assert usage["total_cost_usd"] == pytest.approx(0.5)
 
 
@@ -953,11 +954,7 @@ async def test_empty_slot_keeps_context_unknown(tmp_path: Path) -> None:
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
-  assert usage is not None
-  assert usage["context_tokens"] is None
-  assert usage["context_full"] is None
-  assert usage["context_compact_at"] is None
-  assert usage["model"] == ""
+  _assert_no_context_tier(usage)
 
   empty_meta = SessionMetadata(id="session-emptyslot-none", name="Empty Slot None", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, empty_meta, [])

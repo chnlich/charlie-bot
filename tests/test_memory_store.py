@@ -524,10 +524,10 @@ def test_assemble_worker_missing_dir_returns_none(tmp_path: Path) -> None:
 
 # --- CLI add creates exactly one staging file, never touches entries/ -------
 
-# Import-path patch target for the memory CLI's config read: src/cli/memory.py binds the name
-# with `from src.core.config import get_config`, so mock setattrs the
+# Import-path patch target for the memory CLI's home read: src/cli/memory.py binds the name
+# with `from src.core.home import charliebot_home_dir`, so mock setattrs the
 # stand-in on the src.cli.memory module attribute and the CLI's entry points read it at call time.
-_CLI_MEMORY_GET_CONFIG_PATCH_TARGET = "src.cli.memory.get_config"
+_CLI_MEMORY_HOME_PATCH_TARGET = "src.cli.memory.charliebot_home_dir"
 
 
 def _fake_cfg(tmp_path: Path) -> SimpleNamespace:
@@ -535,13 +535,13 @@ def _fake_cfg(tmp_path: Path) -> SimpleNamespace:
   home.mkdir()
   mem = home / "memory"
   _write_topics(mem)
-  return SimpleNamespace(memory_dir=mem, sessions_dir=home / "sessions")
+  return SimpleNamespace(home=home, memory_dir=mem, sessions_dir=home / "sessions")
 
 
 def _patch_cli_cfg(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
-  """Point the memory CLI's get_config at a fresh fake store and return that config."""
+  """Point the memory CLI's home resolution at a fresh fake store and return that config."""
   cfg = _fake_cfg(tmp_path)
-  monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(_CLI_MEMORY_HOME_PATCH_TARGET, lambda: cfg.home)
   return cfg
 
 

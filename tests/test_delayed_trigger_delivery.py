@@ -19,7 +19,7 @@ from src.core.models import CreateSessionRequest, PendingTrigger, TriggerStatus
 from src.core.sessions import SessionManager
 from src.core.triggers import TriggerManager
 
-VOICE_KEY = "is_" + "voice"
+VOICE_KEY = "is_voice"
 
 
 @pytest.mark.asyncio

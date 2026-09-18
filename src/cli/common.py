@@ -20,18 +20,18 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:
-  import requests
-
-  from src.core.config import CharlieBotConfig, Credentials
+  from src.core.config import CharlieBotConfig
+  from src.core.credentials import Credentials
 
 from src.core.constants import SESSION_ID_ENV_VAR
-from src.core.http import requests_module_getattr
+from src.core.home import charliebot_home_dir
 from src.core.run_token import load_run_token
 from src.core.timeouts import (
     CLI_CONNECT_TOTAL_TIMEOUT,
@@ -50,26 +50,213 @@ TASK_SPEC_REQUIRED_HEADINGS = (
 )
 
 
-def __getattr__(name: str) -> Any:
-  # The "src.cli.common.requests.*" patch targets resolve through this hook.
-  return requests_module_getattr(name, __name__, globals())
+class _ConnectPhaseError(Exception):
+  """The TCP connection never established: the request provably was not sent, so a retry is safe."""
+
+
+class _SentButLostError(Exception):
+  """The connection broke after the request was sent: the outcome is unknown."""
+
+
+class _CliResponse:
+  """One internal-API response: the status the contract's rejection check reads, and the parsed-JSON accessor."""
+
+  def __init__(self, status_code: int, reason: str, body: bytes) -> None:
+    self.status_code = status_code
+    self._reason = reason
+    self._body = body
+
+  def __str__(self) -> str:
+    return f"HTTP {self.status_code} {self._reason}".strip()
+
+  def json(self) -> Any:
+    return json.loads(self._body)
+
+
+def _send_request(
+    method: str,
+    url: str,
+    *,
+    payload: dict[str, Any] | None,
+    params: dict[str, Any] | None,
+    headers: dict[str, str],
+    timeout: float,
+) -> _CliResponse:
+  """One request over http.client with the restart-crossing contract's phase separation.
+
+  The connect phase raises _ConnectPhaseError (nothing was sent — a retry is safe); every
+  failure after it raises _SentButLostError (the request may have landed — never retried).
+  http.client raises separately per phase; requests folds connect and read failures into one
+  ConnectionError class, which cannot drive this contract.
+  """
+  import http.client
+  import ssl
+  import urllib.parse
+
+  parts = urllib.parse.urlsplit(url)
+  path = parts.path or "/"
+  query = urllib.parse.urlencode(params) if params is not None else ""
+  if parts.query:
+    query = f"{parts.query}&{query}" if query else parts.query
+  if query:
+    path = f"{path}?{query}"
+  body = json.dumps(payload).encode("utf-8") if payload is not None else None
+  send_headers = dict(headers)
+  if body is not None:
+    send_headers["Content-Type"] = "application/json"
+  if parts.scheme == "https":
+    # verify=False parity: the base URL is the config-owned internal server.
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    conn: http.client.HTTPConnection = http.client.HTTPSConnection(
+        parts.hostname, parts.port, timeout=timeout, context=context)
+  else:
+    conn = http.client.HTTPConnection(parts.hostname, parts.port, timeout=timeout)
+  try:
+    try:
+      conn.connect()
+    except (OSError, TimeoutError) as e:
+      raise _ConnectPhaseError(str(e)) from e
+    try:
+      conn.request(method, path, body=body, headers=send_headers)
+      raw = conn.getresponse()
+      resp_body = raw.read()
+    except (OSError, TimeoutError, http.client.HTTPException) as e:
+      raise _SentButLostError(str(e)) from e
+  finally:
+    conn.close()
+  return _CliResponse(raw.status, raw.reason, resp_body)
+
+
+def _request_post(
+    url: str,
+    *,
+    json: dict[str, Any] | None,
+    params: dict[str, Any] | None,
+    headers: dict[str, str],
+    timeout: float,
+) -> _CliResponse:
+  """The POST transport seam; requests' call shape kept so the tests' patch target and call-args assertions hold."""
+  return _send_request("POST", url, payload=json, params=params, headers=headers, timeout=timeout)
+
+
+def _request_patch(
+    url: str,
+    *,
+    json: dict[str, Any] | None,
+    headers: dict[str, str],
+    timeout: float,
+) -> _CliResponse:
+  """The PATCH transport seam; same contract as _request_post."""
+  return _send_request("PATCH", url, payload=json, params=None, headers=headers, timeout=timeout)
+
+
+def _request_get(
+    url: str,
+    *,
+    params: dict[str, Any] | None,
+    headers: dict[str, str],
+    timeout: float,
+) -> _CliResponse:
+  """The GET transport seam; same contract as _request_post."""
+  return _send_request("GET", url, payload=None, params=params, headers=headers, timeout=timeout)
 
 
 def get_config() -> CharlieBotConfig:
   """Resolve the process config, importing its module on first call.
 
   config's import chain (pydantic models + yaml, ~180 ms of the M92 CLI import
-  floor) serves only paths that read config; --help never does. The module
-  attribute stays the tests' patch target (conftest
+  floor) serves only paths that read config; --help never does, and the
+  request path reads only the server port through the fingerprint-keyed
+  document below. The module attribute stays the tests' patch target (conftest
   CLI_COMMON_GET_CONFIG_PATCH_TARGET setattrs this name).
   """
   from src.core.config import get_config
   return get_config()
 
 
+# The request contract's server port, cached under the profile home as a
+# fingerprint-keyed document. The key pairs config.yaml's (mtime, size) — the
+# reload key the server's own config cache uses — with config.py's, so a deploy
+# that moved a default re-prices the cache with one full read. The document is
+# written only by a full get_config() resolution, so a hit answers with a value
+# the real loader produced; a config edit moves the fingerprint and the next
+# call pays the full read and rewrites. An unreadable or foreign-shaped
+# document is a miss: the full read below is the recovery and the rewrite
+# replaces the document.
+_BASE_URL_CACHE_RELPATH = os.path.join("cache", "cli_base_url.json")
+
+
+def _config_module_fingerprint() -> tuple[float, int]:
+  """The (mtime, size) of the checkout's own config.py — the defaults' source."""
+  path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "core", "config.py")
+  try:
+    st = os.stat(path)
+  except OSError:
+    return (0.0, 0)
+  return (st.st_mtime, st.st_size)
+
+
+def _cached_server_port() -> int | None:
+  """Return the cached server port, or None when the document is absent, stale, or unreadable."""
+  from src.core.credentials import _file_fingerprint
+
+  fingerprint = [list(_file_fingerprint("config.yaml")), list(_config_module_fingerprint())]
+  try:
+    doc = json.loads((Path(charliebot_home_dir()) / _BASE_URL_CACHE_RELPATH).read_text(encoding="utf-8"))
+  except (OSError, ValueError):
+    return None
+  if not isinstance(doc, dict) or doc.get("fingerprint") != fingerprint:
+    return None
+  port = doc.get("port")
+  return port if isinstance(port, int) else None
+
+
+def _store_base_url_cache(port: int) -> None:
+  """Write the fingerprint-keyed port document atomically (a torn write never publishes)."""
+  from src.core.credentials import _file_fingerprint
+
+  doc = {"fingerprint": [_file_fingerprint("config.yaml"), _config_module_fingerprint()], "port": port}
+  cache_path = Path(charliebot_home_dir()) / _BASE_URL_CACHE_RELPATH
+  cache_path.parent.mkdir(parents=True, exist_ok=True)
+  descriptor, temp_name = tempfile.mkstemp(dir=cache_path.parent, suffix=".tmp")
+  try:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as f:
+      json.dump(doc, f)
+    os.replace(temp_name, cache_path)
+  except BaseException:
+    with contextlib.suppress(OSError):
+      os.unlink(temp_name)
+    raise
+
+
+def _internal_base_url() -> str:
+  """The internal API base URL: the cached port when fresh, one full config read otherwise.
+
+  The heavy config import (pydantic + yaml models, ~150 ms of the M97 wall)
+  rides only the miss path; the module attribute stays the tests' patch target
+  (conftest CLI_COMMON_BASE_URL_PATCH_TARGET setattrs this name).
+  """
+  port = _cached_server_port()
+  if port is None:
+    port = get_config().server.port
+    _store_base_url_cache(port)
+  return f"http://localhost:{port}"
+
+
+def _sessions_dir() -> Path:
+  """The sessions root, derived from the env-resolved home (the same value the config model
+  carries; the M102 wrap-verb precedent). The module attribute stays the tests' patch target
+  (conftest CLI_COMMON_SESSIONS_DIR_PATCH_TARGET setattrs this name)."""
+  from src.core.home import charliebot_home_dir
+
+  return (charliebot_home_dir() / "sessions").resolve()
+
+
 def get_credentials() -> Credentials:
-  """Resolve the process credentials, importing config's module on first call (same M92 floor rule as get_config)."""
-  from src.core.config import get_credentials
+  """Resolve the process credentials (the light secrets module; config's model stack stays out)."""
+  from src.core.credentials import get_credentials
   return get_credentials()
 
 
@@ -87,7 +274,7 @@ def internal_api_auth_headers() -> dict[str, str]:
   run_token = load_run_token()
   if run_token:
     return {"Authorization": f"Bearer {run_token}"}
-  from src.core.config import configured_access_key
+  from src.core.credentials import configured_access_key
   access_key = configured_access_key()
   if access_key:
     return {"Authorization": f"Bearer {access_key}"}
@@ -187,34 +374,33 @@ def compose_version_skew_hint(
           f"— server restart may be required")
 
 
-def _best_effort_server_version(cfg: CharlieBotConfig) -> tuple[str | None, str | None]:
+def _best_effort_server_version(base_url: str) -> tuple[str | None, str | None]:
   """Best-effort fetch of /api/internal/version. Returns (sha, started_at) or (None, None).
 
   Swallows every failure (network, non-200, non-JSON) so the CLI error path never raises
   from the hint computation. Bounded by HTTP_VERSION_SKEW_TIMEOUT.
   """
-  import requests  # module-local: the module __getattr__ serves only attribute access
   try:
-    resp = requests.get(
-        f"{cfg.server_base_url}/api/internal/version",
+    resp = _request_get(
+        f"{base_url}/api/internal/version",
+        params=None,
         headers=internal_api_auth_headers(),
-        timeout=HTTP_VERSION_SKEW_TIMEOUT,
-        verify=False,
-    )
-    resp.raise_for_status()
+        timeout=HTTP_VERSION_SKEW_TIMEOUT)
+    if resp.status_code >= 400:
+      return None, None
     info = resp.json()
-  except (requests.RequestException, ValueError):
+  except (_ConnectPhaseError, _SentButLostError, ValueError):
     return None, None
   return info.get("sha"), info.get("started_at")
 
 
-def _maybe_version_skew_hint(cfg: CharlieBotConfig) -> str | None:
+def _maybe_version_skew_hint(base_url: str) -> str | None:
   """Gather server + local SHAs and compose the hint. Pure-failure-safe (never raises)."""
   # buildinfo pulls subprocess (measured ~4 ms of the M92 floor) and serves
   # only the version-skew failure path; the parser-build path never reads a SHA.
   from src.core.buildinfo import read_repo_head_sha
 
-  server_sha, started_at = _best_effort_server_version(cfg)
+  server_sha, started_at = _best_effort_server_version(base_url)
   local_sha = read_repo_head_sha(SUBPROCESS_GIT_SHA_TIMEOUT)
   return compose_version_skew_hint(server_sha, started_at, local_sha)
 
@@ -223,47 +409,27 @@ _CONNECT_RETRY_BASE_DELAY = 0.25  # seconds; doubles per attempt
 _CONNECT_RETRY_MAX_DELAY = 5.0  # seconds
 
 
-def _is_connect_failure(exc: requests.RequestException) -> bool:
-  """True only when the request provably never reached the server.
-
-  TCP connect refused/timed out means zero bytes were sent, so the requested
-  effect did not happen and a retry is safe. Connection resets are excluded:
-  a reset may arrive after the server accepted (and possibly processed) the
-  request — that is the outcome_unknown class instead.
-  """
-  import requests  # module-local: the module __getattr__ serves only attribute access
-  if isinstance(exc, requests.exceptions.ConnectTimeout):
-    return True
-  if isinstance(exc, requests.exceptions.ConnectionError):
-    msg = str(exc)
-    return (
-        "Failed to establish a new connection" in msg or "Connection refused" in msg or
-        "NameResolutionError" in msg  # DNS never resolved — nothing was sent
-    )
-  return False
-
-
 def _exit_with_error(error_obj: dict[str, Any], exit_code: int = 1) -> NoReturn:
   print(json.dumps(error_obj), file=sys.stderr)
   sys.exit(exit_code)
 
 
 def _exit_server_rejection(
-    cfg: CharlieBotConfig,
-    exc: requests.RequestException,
+    base_url: str,
+    resp: Any,
     rejection_exit_codes: dict[int, int] | None,
 ) -> NoReturn:
   """Handle a server that explicitly answered with an error status."""
-  msg = str(exc)
+  msg = str(resp)
   with contextlib.suppress(ValueError, KeyError):
-    msg = exc.response.json()["detail"]  # type: ignore[union-attr]
+    msg = resp.json()["detail"]
   error_obj: dict[str, Any] = {"error": msg, "code": "server_error", "effect": "none"}
-  hint = _maybe_version_skew_hint(cfg)
+  hint = _maybe_version_skew_hint(base_url)
   if hint is not None:
     error_obj["hint"] = hint
   exit_code = 1
-  if rejection_exit_codes is not None and exc.response is not None:
-    exit_code = rejection_exit_codes.get(exc.response.status_code, 1)
+  if rejection_exit_codes is not None:
+    exit_code = rejection_exit_codes.get(resp.status_code, 1)
   _exit_with_error(error_obj, exit_code)
 
 
@@ -278,34 +444,31 @@ def _request_with_contract(
     unknown_effect: str,
 ) -> dict[str, Any]:
   """Issue one internal-API call under the restart-crossing contract."""
-  import requests  # module-local: the module __getattr__ serves only attribute access
-  cfg = get_config()
-  url = f"{cfg.server_base_url}{endpoint}"
-  request_fn = requests.post if method == "POST" else requests.get
+  base_url = _internal_base_url()
+  url = f"{base_url}{endpoint}"
   deadline = time.monotonic() + CLI_CONNECT_TOTAL_TIMEOUT
   attempt = 0
   while True:
     try:
-      resp = request_fn(
-          url,
-          json=payload,
-          params=params,
-          headers=internal_api_auth_headers(),
-          timeout=HTTP_INTERNAL_API_TIMEOUT,
-          verify=False)
-      resp.raise_for_status()
-      return resp.json()
-    except requests.RequestException as e:
-      if e.response is not None:
-        _exit_server_rejection(cfg, e, rejection_exit_codes)
-      if _is_connect_failure(e):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-          _exit_with_error({"error": str(e), "code": "server_unavailable", "effect": "none"})
-        delay = min(_CONNECT_RETRY_BASE_DELAY * (2**attempt), _CONNECT_RETRY_MAX_DELAY, remaining)
-        attempt += 1
-        time.sleep(delay)
-        continue
+      if method == "POST":
+        resp = _request_post(
+            url, json=payload, params=params, headers=internal_api_auth_headers(), timeout=HTTP_INTERNAL_API_TIMEOUT)
+      elif method == "PATCH":
+        resp = _request_patch(
+            url, json=payload, headers=internal_api_auth_headers(), timeout=HTTP_INTERNAL_API_TIMEOUT)
+      elif method == "GET":
+        resp = _request_get(url, params=params, headers=internal_api_auth_headers(), timeout=HTTP_INTERNAL_API_TIMEOUT)
+      else:
+        raise RuntimeError(f"internal-API method is POST, PATCH or GET, got {method!r}")
+    except _ConnectPhaseError as e:
+      remaining = deadline - time.monotonic()
+      if remaining <= 0:
+        _exit_with_error({"error": str(e), "code": "server_unavailable", "effect": "none"})
+      delay = min(_CONNECT_RETRY_BASE_DELAY * (2**attempt), _CONNECT_RETRY_MAX_DELAY, remaining)
+      attempt += 1
+      time.sleep(delay)
+      continue
+    except _SentButLostError as e:
       # Sent but the response was lost — never re-issue the call (its effect
       # may have landed). Read back this call's own on-disk artifact instead.
       if readback is not None:
@@ -313,6 +476,9 @@ def _request_with_contract(
         if artifact is not None:
           return artifact
       _exit_with_error({"error": str(e), "code": "outcome_unknown", "effect": unknown_effect})
+    if resp.status_code >= 400:
+      _exit_server_rejection(base_url, resp, rejection_exit_codes)
+    return resp.json()
 
 
 def post_internal_api(
@@ -348,20 +514,13 @@ def patch_internal_api(
     rejection_exit_codes: dict[int, int] | None = None,
 ) -> dict[str, Any]:
   """PATCH an internal CharlieBot API endpoint under the same error contract as ``post_internal_api``."""
-  import requests  # module-local: the module __getattr__ serves only attribute access
-  cfg = get_config()
-  url = f"{cfg.server_base_url}{endpoint}"
-  try:
-    resp = requests.patch(
-        url,
-        json=payload,
-        headers=internal_api_auth_headers(),
-        timeout=HTTP_INTERNAL_API_TIMEOUT,
-        verify=False)
-    resp.raise_for_status()
-    return resp.json()
-  except requests.RequestException as e:
-    _exit_server_rejection(cfg, e, rejection_exit_codes)
+  return _request_with_contract(
+      "PATCH",
+      endpoint,
+      payload=payload,
+      rejection_exit_codes=rejection_exit_codes,
+      unknown_effect="unknown",
+  )
 
 
 def get_api(endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -510,7 +669,7 @@ def resolve_session_id(arg_session: str | None) -> str:
   (reading a sibling session's artifacts, entering a worktree) keeps working.
   """
   cwd = Path.cwd().resolve()
-  sessions_dir = get_config().sessions_dir.resolve()
+  sessions_dir = _sessions_dir()
   cwd_session = cwd.name if cwd.parent == sessions_dir else None
 
   # An empty value carries no identity, so it reads as absent and the cwd

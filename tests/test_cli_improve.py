@@ -13,6 +13,7 @@ from conftest import (
 from conftest import setup_session_cwd as _setup_session_cwd
 from pydantic import ValidationError
 
+from src.cli.common import _SentButLostError
 from src.cli.improve import main
 from src.core.models import ImproveRequest
 
@@ -89,9 +90,8 @@ def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyP
   goal_file = tmp_path / "goal.md"
   goal_file.write_text("fix")
 
-  import requests as req_lib
   with patched_cli_post(cfg, _improve_argv("s1", str(tmp_path), goal_file),
-                        side_effect=req_lib.RequestException("conn error")), \
+                        side_effect=_SentButLostError("conn error")), \
        patch(_IMPROVE_GET_CONFIG_PATCH_TARGET, return_value=cfg):
     with pytest.raises(SystemExit) as exc_info:
       main()

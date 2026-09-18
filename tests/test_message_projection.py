@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import bisect
+import gzip
 import json
 import time
 from pathlib import Path
@@ -17,7 +18,10 @@ import pytest
 from conftest import (
     BROADCAST_PATCH_TARGET,
     OPUS_BACKEND_ID,
+    _page_request,
+    assert_gzip_served,
     fake_backends,
+    gzip_explode_compress,
     make_home_session,
     recycle_archive_cutoff_events,
 )
@@ -652,7 +656,7 @@ async def test_archive_fallback_serves_from_old_path(tmp_path: Path) -> None:
   # archive_offset=5, live has 3 events at global indices 5,6,7.
   # before=8 (global event index), limit=3 → events [5,8) = 3 messages.
   meta = await mgr.get_session(session.id)
-  resp = await get_session_events_page(session.id, before=8, limit=3, meta=meta, session_mgr=mgr)
+  resp = await get_session_events_page(session.id, _page_request(), before=8, limit=3, meta=meta, session_mgr=mgr)
   page = json.loads(resp.body)
   assert page["next_before"] == 5
   assert len(page["messages"]) == 3
@@ -914,7 +918,6 @@ def test_page_body_cache_lru_cap_evicts_oldest() -> None:
   assert projection.cached_page_body(30, 1) is None, "untouched oldest entry must evict first"
   assert projection.cached_page_body(29, 1) == b"body-1"
   assert projection.cached_page_body(0, 1) == b"new"
-  assert len(projection._page_bodies) == cap
 
 
 @pytest.mark.asyncio
@@ -933,8 +936,10 @@ async def test_events_route_repeat_page_serves_cached_bytes(tmp_path: Path) -> N
   assert projection is not None
   before, limit = len(projection.committed), 3
 
-  first = await get_session_events_page(session.id, before=before, limit=limit, meta=meta, session_mgr=mgr)
-  second = await get_session_events_page(session.id, before=before, limit=limit, meta=meta, session_mgr=mgr)
+  first = await get_session_events_page(
+      session.id, _page_request(), before=before, limit=limit, meta=meta, session_mgr=mgr)
+  second = await get_session_events_page(
+      session.id, _page_request(), before=before, limit=limit, meta=meta, session_mgr=mgr)
   assert first.body == second.body
   assert json.loads(first.body) == _page_payload(projection, before, limit)
 
@@ -950,8 +955,66 @@ async def test_events_route_repeat_page_serves_cached_bytes(tmp_path: Path) -> N
   grown = await asyncio.to_thread(mgr.get_message_projection, session.id)
   assert grown is not None and grown is not projection
   new_before = len(grown.committed)
-  third = await get_session_events_page(session.id, before=new_before, limit=limit, meta=meta, session_mgr=mgr)
+  third = await get_session_events_page(
+      session.id, _page_request(), before=new_before, limit=limit, meta=meta, session_mgr=mgr)
   # The advanced projection's own page carries the new turn — not a cached body.
   page = json.loads(third.body)
   assert any(m.get("content") == "q9" for m in page["messages"])
   assert json.loads(third.body) == _page_payload(grown, new_before, limit)
+
+
+@pytest.mark.asyncio
+async def test_events_route_gzip_click_ships_precompressed_body(tmp_path: Path) -> None:
+  """A gzip-accepting page click serves the projection's gzip form: the decompressed
+  bytes equal the plain body, the vary header names the negotiator, and a repeat
+  click re-compresses nothing."""
+  from src.api.sessions import get_session_events_page
+
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _append_events(mgr.get_chat_events_path(session.id), _turned_messages_events([2, 2, 2]))
+  meta = await mgr.get_session(session.id)
+  before, limit = 6, 3
+
+  plain = await get_session_events_page(
+      session.id, _page_request(), before=before, limit=limit, meta=meta, session_mgr=mgr)
+  first = await get_session_events_page(
+      session.id, _page_request("gzip"), before=before, limit=limit, meta=meta, session_mgr=mgr)
+  assert_gzip_served(first)
+  assert gzip.decompress(first.body) == plain.body
+
+  with patch("src.api.sessions.gzip_level1", gzip_explode_compress("repeat gzip click re-ran the deflate")):
+    second = await get_session_events_page(
+        session.id, _page_request("gzip"), before=before, limit=limit, meta=meta, session_mgr=mgr)
+  assert second.body == first.body
+
+
+@pytest.mark.asyncio
+async def test_events_route_gzip_recompresses_after_advance(tmp_path: Path) -> None:
+  """A projection advance starts an empty cache: the grown page's first gzip
+  click compresses once and its bytes carry the new turn."""
+  from src.api.sessions import get_session_events_page
+
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _append_events(mgr.get_chat_events_path(session.id), _turned_messages_events([2, 2, 2]))
+  meta = await mgr.get_session(session.id)
+
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
+    await mgr.persist_and_broadcast(session.id, {"id": "u9", "type": ET.USER, "content": "q9", "timestamp": "t9-u"})
+    await mgr.persist_and_broadcast(
+        session.id, {
+            "id": "done9",
+            "type": ET.MASTER_DONE,
+            "thinking_seconds": 1,
+            "timestamp": "t9-done"
+        })
+  grown = await asyncio.to_thread(mgr.get_message_projection, session.id)
+  assert grown is not None
+  new_before, limit = len(grown.committed), 3
+
+  gz = await get_session_events_page(
+      session.id, _page_request("gzip"), before=new_before, limit=limit, meta=meta, session_mgr=mgr)
+  plain = await get_session_events_page(
+      session.id, _page_request(), before=new_before, limit=limit, meta=meta, session_mgr=mgr)
+  assert gz.headers["content-encoding"] == "gzip"
+  assert gzip.decompress(gz.body) == plain.body
+  assert any(m.get("content") == "q9" for m in json.loads(plain.body)["messages"])

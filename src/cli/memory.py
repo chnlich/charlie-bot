@@ -1,8 +1,10 @@
 """CLI: labeled-entry memory store (query / add / lint).
 
-Pure-local; no server dependency for an operator query. The store lives at
-``cfg.memory_dir`` (``~/.charliebot/memory/``). See ``src/core/memory.py`` for
-the store contract.
+Pure-local; no server dependency. The store lives at
+``charliebot_home_dir() / "memory"`` (``~/.charliebot/memory/``); the home is
+env-resolved (src.core.home) and no config key can move it, so the verbs read
+no config file — a broken config.yaml must not block the store's own verbs.
+See ``src/core/memory.py`` for the store contract.
 
   charliebot memory query --topic <t> [--audience A] [--index] [--resident]
   charliebot memory add [--file F]
@@ -22,8 +24,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from src.core import memory
-from src.core.config import CharlieBotConfig, get_config, get_credentials
+from src.core.config import CharlieBotConfig
+from src.core.home import charliebot_home_dir
 from src.core.run_token import load_run_token
+
+
+def _memory_dir() -> Path:
+  """The store root: ``<home>/memory`` (the CharlieBotConfig.memory_dir derivation)."""
+  return charliebot_home_dir() / "memory"
 
 
 def main() -> None:
@@ -53,9 +61,10 @@ def main() -> None:
 
 
 def _cmd_query(args: argparse.Namespace) -> None:
-  cfg = get_config()
   token = load_run_token()
   if token is not None:
+    from src.core.config import get_config
+    cfg = get_config()
     audience = _resolve_run_scoped_audience(cfg, token)
     if args.audience is not None and args.audience != audience:
       print(
@@ -64,8 +73,7 @@ def _cmd_query(args: argparse.Namespace) -> None:
           file=sys.stderr)
       sys.exit(1)
     args.audience = audience
-  memory_dir = cfg.memory_dir
-  store = memory.load_store(memory_dir)
+  store = memory.load_store(_memory_dir())
   unknown = [t for t in args.topic if t not in store.topics]
   if unknown:
     for value in unknown:
@@ -76,7 +84,7 @@ def _cmd_query(args: argparse.Namespace) -> None:
         print(f"error: unknown topic: {value}", file=sys.stderr)
     sys.exit(1)
   wanted_topics = set(args.topic)
-  resident_names = {t.name for t in store.topics.values() if t.resident}
+  resident_names = memory.resident_topic_names(store)
   matched = []
   for e in store.entries:
     if e.topic not in wanted_topics:
@@ -86,7 +94,7 @@ def _cmd_query(args: argparse.Namespace) -> None:
     if args.resident and e.topic not in resident_names:
       continue
     matched.append(e)
-  matched.sort(key=lambda e: (e.topic, e.slug))
+  matched.sort(key=memory.entry_order_key)
   if args.index:
     for e in matched:
       print(f"{e.topic}/{e.slug} · {e.title}")
@@ -114,6 +122,7 @@ def _resolve_run_scoped_audience(cfg: CharlieBotConfig, token: str) -> str:
   from src.core.sessions import SessionManager
   from src.core.task_sessions import TaskTreeManager
 
+  from src.core.config import get_credentials
   key = str(get_credentials().get("charliebot", "access_key") or "")
   if not key:
     print("error: run token presented but no signing key is configured", file=sys.stderr)
@@ -155,11 +164,11 @@ def _cmd_add(args: argparse.Namespace) -> None:
   # A title with no slug-charset character (pure CJK, for example) falls back
   # to the fixed ``capture`` segment; the write still proceeds.
   slug = _slugify(title) or "capture"
-  cfg = get_config()
-  sess8 = _session_slug8(cfg)
+  home = charliebot_home_dir()
+  sess8 = _session_slug8(home / "sessions")
   ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
   filename = f"{ts}-{sess8}-{slug}.md"
-  staging_dir = cfg.memory_dir / "staging"
+  staging_dir = home / "memory" / "staging"
   staging_dir.mkdir(parents=True, exist_ok=True)
   target = staging_dir / filename
   target.write_text(body, encoding="utf-8")
@@ -167,8 +176,7 @@ def _cmd_add(args: argparse.Namespace) -> None:
 
 
 def _cmd_lint() -> None:
-  cfg = get_config()
-  violations = memory.lint(cfg.memory_dir)
+  violations = memory.lint(_memory_dir())
   if violations:
     for v in violations:
       print(v)
@@ -183,11 +191,10 @@ def _slugify(text: str) -> str:
   return s.strip("-")
 
 
-def _session_slug8(cfg: CharlieBotConfig) -> str:
+def _session_slug8(sessions_dir: Path) -> str:
   """First 8 chars of the CharlieBot session id derived from cwd, else 'nosess'."""
   cwd = Path.cwd().resolve()
-  sessions_dir = cfg.sessions_dir.resolve()
-  if cwd.parent == sessions_dir:
+  if cwd.parent == sessions_dir.resolve():
     return cwd.name[:8]
   return "nosess"
 

@@ -6,7 +6,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-import requests
 from conftest import CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET, make_json_response, patched_cli_post
 from conftest import setup_session_cwd as _setup_session_cwd
 
@@ -74,7 +73,6 @@ def test_server_refusal_exits_non_zero_with_the_detail_on_stderr(
   refusal = MagicMock()
   refusal.status_code = 409
   refusal.json.return_value = {"detail": "Session has no Slack thread"}
-  refusal.raise_for_status.side_effect = requests.HTTPError(response=refusal)
   with patched_cli_post(cfg, ["slack", "reply", "--file", str(reply_file)], return_value=refusal), \
        patch(CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET, return_value=None), \
        pytest.raises(SystemExit) as exc_info:

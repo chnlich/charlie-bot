@@ -6,9 +6,9 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 
 ### Orchestration
 
-- Master/worker/reviewer delegation in isolated git worktrees with ff-only merge
+- Master/worker/reviewer delegation in isolated git worktrees, integrated by fast-forward-only pushes to the base branch
 - Pluggable backends: Claude Code, Kimi, OpenAI-compatible, Codex, Gemini CLI, OpenCode, Charlie Code, Antigravity CLI
-- Chat file uploads: text attachments ride the message's path text; image attachments reach the Charlie Code CLI as repeated `--image` flags when its backend entry declares `image_input: true`, and are refused with one error event (nothing sent) when it does not
+- Chat file uploads: text attachments ride the message's path text; image attachments reach the Charlie Code CLI as repeated `--image` flags by default, and are refused with one error event (nothing sent) when the backend entry sets `image_input: false`
 - `charliebot improve` autonomous change-run-verify iteration loops
 - Plan registry (`charliebot plan`) with HTML plan artifacts and anchored comments
 
@@ -28,7 +28,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 ### Web UI
 
 - Streaming chat over WebSockets
-- Sessions sidebar with groups, filters, and search; star / archive / fork / rate sessions
+- Sessions sidebar with groups, filters, and search; star / archive / fork sessions
 - Worker (thread), plan, backlog, and context panels
 - HTML artifact viewer with line-anchored comments
 - GitHub-style diff viewer with diff comments
@@ -37,7 +37,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - LaTeX panel
 - Voice input with local speech transcription (sherpa-onnx Qwen3-ASR)
 - Usage panels: external provider quotas and per-session context usage
-- File browser (`/files/`) and file uploads
+- File browser (`/absolute_filepath/`) and file uploads
 - Access-key auth
 
 ### Integrations

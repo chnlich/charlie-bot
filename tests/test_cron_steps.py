@@ -77,6 +77,8 @@ def _seed_steps_task(cron_dir: Path,
   rev_body = "Review the diff.\n"
   rev_path.write_text(rev_body, encoding="utf-8")
   body: dict[str, Any] = {
+      "type":
+          "normal",
       "cron":
           "0 3 * * *",
       "steps":
@@ -141,16 +143,16 @@ _STEPS_TASK_CONFLICT_CASES = [
         }}, ("exactly one of", "'loop'", "'steps'"),
         id="loop"),
     pytest.param(lambda _tmp_path: {
-        "mode": "master",
+        "type": "pm",
         "project": "proj"
-    }, ("master", "'steps'"), id="mode-master"),
+    }, ("'pm'", "'steps'"), id="type-pm"),
 ]
 
 
 @pytest.mark.parametrize(("build_extra", "expected_fragments"), _STEPS_TASK_CONFLICT_CASES)
 def test_load_cron_file_rejects_steps_task_field_conflict(
     tmp_path: Path, build_extra: Callable[[Path], dict], expected_fragments: tuple[str, ...]) -> None:
-  """A steps task carrying another task-level prompt source — or a master mode —
+  """A steps task carrying another task-level prompt source — or a pm type —
   fails the load, and the error names the conflicting keys."""
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True)
@@ -166,6 +168,8 @@ def test_load_cron_file_rejects_duplicate_step_names(tmp_path: Path) -> None:
   sel_path.parent.mkdir(parents=True, exist_ok=True)
   sel_path.write_text("Select.\n", encoding="utf-8")
   body = {
+      "type":
+          "normal",
       "cron":
           "0 3 * * *",
       "steps": [
@@ -191,7 +195,7 @@ def test_load_cron_file_rejects_empty_steps(tmp_path: Path) -> None:
   cron_dir.mkdir(parents=True)
   cfg = build_scheduler_cfg(tmp_path)
   yaml_path = cron_dir / "chained.yaml"
-  yaml_path.write_text(yaml.safe_dump({"cron": "0 3 * * *", "steps": []}), encoding="utf-8")
+  yaml_path.write_text(yaml.safe_dump({"type": "normal", "cron": "0 3 * * *", "steps": []}), encoding="utf-8")
   # bool([]) is False, so an empty steps list fails the exactly-one-source check
   # before the non-empty check can name it.
   with pytest.raises(ValueError, match="task must have exactly one of"):
@@ -216,7 +220,7 @@ def test_load_cron_file_rejects_step_prompt_source_violation(
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True)
   cfg = build_scheduler_cfg(tmp_path)
-  body = {"cron": "0 3 * * *", "steps": [step_body]}
+  body = {"type": "normal", "cron": "0 3 * * *", "steps": [step_body]}
   yaml_path = cron_dir / "chained.yaml"
   yaml_path.write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
   with pytest.raises(ValueError) as exc_info:
@@ -232,6 +236,7 @@ def _steps_task_cfg() -> ScheduledTaskConfig:
   return ScheduledTaskConfig(
       name="chained",
       cron="* * * * *",
+      type="normal",
       backend=OPUS_BACKEND_ID,
       steps=[
           StepConfig(name="selector", prompt=SELECTOR_BODY, prompt_file="prompts/selector.md"),
@@ -259,7 +264,7 @@ def _patch_chain_pipes(monkeypatch: pytest.MonkeyPatch, spawns: list[dict[str, A
   monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, _capture_spawn(spawns))
 
 
-async def _make_chain_session(cfg: Any, session_mgr: SessionManager) -> SessionMetadata:
+async def _make_chain_session(session_mgr: SessionManager) -> SessionMetadata:
   return await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: chained", scheduled_task="chained"), backend=OPUS_BACKEND_ID)
 
@@ -300,7 +305,7 @@ async def _completion_rig(
   """
   cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
   thread_mgr = ThreadManager(cfg)
-  session = await _make_chain_session(cfg, session_mgr)
+  session = await _make_chain_session(session_mgr)
   threads: list[ThreadMetadata] = []
   for index, result_text in enumerate(results):
     step_name = "selector" if index == 0 else "reviewer"

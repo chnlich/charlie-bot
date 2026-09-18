@@ -694,7 +694,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
           session_meta.id, {
               "type": ET.BACKEND_OVERLAY_INACTIVE,
               "backend": option.id,
-              "reason": "undeclared",
+              "reason": ET.OVERLAY_REASON_UNDECLARED,
           })
     elif prompt_overlay == "none":
       prompt_overlay = None
@@ -716,7 +716,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
           session_meta.id, {
               "type": ET.BACKEND_OVERLAY_INACTIVE,
               "backend": option.id,
-              "reason": "unreadable",
+              "reason": ET.OVERLAY_REASON_UNREADABLE,
               "overlay": prompt_overlay,
               "error": type(overlay_error).__name__,
           })
@@ -770,7 +770,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       and not item.expect_fresh_session and not fresh_native):
     anchor_on_disk = session_meta.cc_session_id
     if anchor_on_disk or await item.callbacks.has_completed_round(session_meta.id):
-      reason = "transcript_missing" if anchor_on_disk else "anchor_missing"
+      reason = ET.RESUME_REASON_TRANSCRIPT_MISSING if anchor_on_disk else ET.RESUME_REASON_ANCHOR_MISSING
       log.error(
           "master_cc_resume_anchor_missing",
           session=session_meta.id,
@@ -846,6 +846,12 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       else runs.master_run_log_dir(cfg.sessions_dir / session_meta.id, started_at))
   raw_log = str(log_dir / runs.RAW_LOG_NAME)
 
+  # The invocation's own translated error-event messages, in stream order — the
+  # raw material for the end-of-run error hint (runs.select_error_hint). Reset
+  # at each invocation's start, so a relayed round's error never outlives its
+  # own round.
+  error_event_messages: list[str] = []
+
   async def _on_spawn(pid: int) -> None:
     nonlocal record_persisted
     await tracker.on_spawn(pid)
@@ -876,6 +882,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   ) -> None:
     """One process of this turn: build the backend, stream its events, record its exit."""
     nonlocal backend, exit_code, cc_session_id, record_persisted, started_at, log_dir, raw_log
+    error_event_messages.clear()
     if backend is not None:
       record_persisted = False
       started_at = datetime.now(UTC)
@@ -902,6 +909,8 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
 
     async for event in backend.run(spawn_prompt, cwd, env, uploaded_files=item.uploaded_files):
       tracker.on_event(event)
+      if event.get("type") == ET.ERROR:
+        error_event_messages.append(event.get("message", ""))
       cc_session_id = await _handle_event(event, session_meta.id, cc_session_id, item.callbacks.persist_and_broadcast)
       if watch is not None and watch.observe(event):
         # Armed relay at its safe point: the tool result is on disk, stop here.
@@ -919,8 +928,12 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       assert backend is not None
       decision = watch.decision(exit_code, backend.stderr_text) if watch is not None else None
       if decision is None:
-        if exit_code != 0 and backend.stderr_text and not backend.terminated:
-          error_msg = backend.stderr_text[:500]
+        if exit_code != 0 and not backend.terminated:
+          # The invocation's own structured error event outranks the stderr
+          # help banner (runs.select_error_hint); an explicit user stop keeps
+          # today's no-hint behavior, and the cgroup report below still wins
+          # over both channels.
+          error_msg = runs.select_error_hint(error_event_messages, backend.stderr_text)
         # Session memory-cap / host-OOM attribution: the
         # routing report supersedes a bare stderr tail ("Killed") whenever the
         # cgroup's counters moved.
@@ -933,15 +946,33 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
         error_msg = claude_relay.relay_limit_message()
         exit_code = 1
         break
-      next_account, relay_error = await master_cc_relay.prepare_relay(
+      next_account, relay_error, refused_holder = await master_cc_relay.prepare_relay(
           cfg, item, option, cc_session_id, account, cwd, decision)
       if next_account is None:
-        error_msg = relay_error
-        exit_code = 1
-        break
+        if refused_holder is None:
+          error_msg = relay_error
+          exit_code = 1
+          break
+        # The mid-turn move hit the newer-transcript guard: the destination
+        # holds the newer copy (the kill between a previous relay's move and
+        # its persist, or an unknown defect). Same predicate and reaction as
+        # the placement layer's self-heal -- adopt the destination, persist it
+        # through the funnel, continue the turn from it; a refusal the copy on
+        # disk already answers never fails the turn.
+        await master_cc_relay.adopt_transcript_holder(
+            item, cc_session_id, refused_holder, account.label, reason=master_cc_relay.GUARD_REFUSED_NEWER_TRANSCRIPT)
+        next_account = refused_holder
+      # Counted toward the relay cap like any other account change, so even a
+      # pathological refusal loop ends loudly at the same bound.
       relays += 1
       account = next_account
       session_meta.claude_account = account.label
+      # The relay's label persist point: disk carries the new account from the
+      # moment the continuation is built, not at round end (the placement and
+      # refusal paths persist through the same funnel; an unchanged account
+      # skips the write inside it).
+      if item.callbacks.persist_claude_account is not None:
+        await item.callbacks.persist_claude_account(session_meta.id, account.label)
       spawn_prompt = claude_relay.CONTINUATION_PROMPT
       spawn_flags, spawn_resume_id = _build_extra_flags(option, cc_session_id, item)
 
@@ -1135,8 +1166,13 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
     stderr_text = await asyncio.to_thread(_read_stderr_tail, stderr_path)
     if stderr_text:
       log.warning("master_cc_stderr", session=session_meta.id, stderr=stderr_text)
-      if exit_code != 0:
-        error_msg = stderr_text[:500]
+    if exit_code != 0:
+      # Same selection rule as the live path, fed from the whole-file
+      # projection above (zero new I/O): an error event sitting before the
+      # persisted cursor is still found — the manual-compaction recovery
+      # pattern in this block. The stderr tail is only the fallback.
+      error_msg = runs.select_error_hint(
+          [event.get("message", "") for event in events if event.get("type") == ET.ERROR], stderr_text)
 
     # Same turn-end model attribution on the re-attach path: the whole-round
     # projection above is reused (zero new I/O) and the identical notice is

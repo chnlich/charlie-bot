@@ -5,7 +5,7 @@ import re
 import sys
 from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -167,8 +167,9 @@ async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(
   chunks = [
       b'data: {"type": "server.connected", "properties": {}}\n',
       b"\n",
-      b'data: {"type": "message.updated", "properties": {"sessionID": "session-1", '
-      b'"info": {"id": "m1", "role": "assistant"}}}\n',
+      (
+          b'data: {"type": "message.updated", "properties": {"sessionID": "session-1", '
+          b'"info": {"id": "m1", "role": "assistant"}}}\n'),
       b"\n",
       *frame_chunks,
       b'data: {"type": "session.idle", "properties": {"sessionID": "session-1"}}\n',
@@ -1065,7 +1066,22 @@ class _FakeDelayedStreamResponse:
       yield (line + "\n").encode("utf-8")
 
 
-class _FakeStreamContextManager:
+class _ClientContextDouble:
+  """Async-context boilerplate shared by the file's httpx client doubles.
+
+  Entering yields the double itself; exiting never suppresses the wrapped
+  exception. A double that hands back a scripted response overrides
+  ``__aenter__`` with its own typed return and inherits only ``__aexit__``.
+  """
+
+  async def __aenter__(self) -> Self:
+    return self
+
+  async def __aexit__(self, *exc: object) -> bool:
+    return False
+
+
+class _FakeStreamContextManager(_ClientContextDouble):
 
   def __init__(self, response: _FakeDelayedStreamResponse) -> None:
     self._response = response
@@ -1073,21 +1089,12 @@ class _FakeStreamContextManager:
   async def __aenter__(self) -> _FakeDelayedStreamResponse:
     return self._response
 
-  async def __aexit__(self, *exc: object) -> bool:
-    return False
 
-
-class _FakeRunHttpClient:
+class _FakeRunHttpClient(_ClientContextDouble):
   """Stand-in for httpx.AsyncClient in run(): only the /event stream is real."""
 
   def __init__(self, response: _FakeDelayedStreamResponse) -> None:
     self._response = response
-
-  async def __aenter__(self) -> "_FakeRunHttpClient":
-    return self
-
-  async def __aexit__(self, *exc: object) -> bool:
-    return False
 
   def stream(self, method: str, path: str, timeout: float | None = None) -> _FakeStreamContextManager:
     assert path == "/event"
@@ -1240,7 +1247,7 @@ class _StubEventStreamResponse(_StubHttpResponse):
       yield ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
 
 
-class _StubStreamContext:
+class _StubStreamContext(_ClientContextDouble):
   """Async context manager handing the scripted /event response to run()."""
 
   def __init__(self, response: _StubEventStreamResponse) -> None:
@@ -1248,9 +1255,6 @@ class _StubStreamContext:
 
   async def __aenter__(self) -> _StubEventStreamResponse:
     return self._response
-
-  async def __aexit__(self, *exc: object) -> bool:
-    return False
 
 
 class _StubServeScript:
@@ -1265,17 +1269,11 @@ class _StubServeScript:
     self.abort_posts: list[str] = []
 
 
-class _StubServeHttpClient:
+class _StubServeHttpClient(_ClientContextDouble):
   """httpx.AsyncClient double over ``_StubServeScript`` (fake endpoints, no real server)."""
 
   def __init__(self, script: _StubServeScript) -> None:
     self._script = script
-
-  async def __aenter__(self) -> "_StubServeHttpClient":
-    return self
-
-  async def __aexit__(self, *exc: object) -> bool:
-    return False
 
   async def get(self, path: str) -> _StubHttpResponse:
     if path == "/global/health":
@@ -1626,16 +1624,10 @@ async def test_per_call_clients_carry_shared_ssl_context(monkeypatch: pytest.Mon
   ~20 ms of event-loop CPU per call on this host."""
   captured: list[dict] = []
 
-  class _KwargsClient:
+  class _KwargsClient(_ClientContextDouble):
 
     def __init__(self, **kwargs: object) -> None:
       captured.append(kwargs)
-
-    async def __aenter__(self) -> "_KwargsClient":
-      return self
-
-    async def __aexit__(self, *exc: object) -> bool:
-      return False
 
     async def get(self, path: str) -> _StubHttpResponse:
       if path == "/config/providers":

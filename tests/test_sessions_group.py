@@ -143,9 +143,9 @@ async def test_mark_unread_and_update_thinking_state_do_not_clobber(tmp_path: Pa
   # end up on disk.
   real_save = mgr.save_metadata
 
-  async def yielding_save(m: SessionMetadata) -> None:
+  async def yielding_save(m: SessionMetadata, **_kwargs: bool) -> None:
     await asyncio.sleep(0)
-    await real_save(m)
+    await real_save(m, **_kwargs)
 
   updated_at = datetime(2026, 3, 31, 12, 1, tzinfo=UTC)
   with (

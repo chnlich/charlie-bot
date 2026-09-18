@@ -9,7 +9,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from conftest import ROOT
+
 SURFACE_DIRS = ("skills", "prompts")
 SURFACE_GLOBS = ("*.md", "*.html")
 FILE_SERVER_SKILL = ROOT / "skills" / "file-server" / "SKILL.md"
@@ -39,16 +40,14 @@ def test_the_written_file_link_form_is_the_absolute_filepath_prefix() -> None:
   assert "<base_url>/absolute_filepath/" in FILE_SERVER_SKILL.read_text(encoding="utf-8")
 
 
-def test_the_legacy_prefix_appears_only_where_the_alias_is_documented() -> None:
+def test_the_legacy_prefix_is_documented_nowhere() -> None:
+  """The /files alias is hard-offline: no writing surface may present it as a working link form."""
   legacy: list[tuple[Path, int, str]] = []
   for path in _surface_files():
     for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
       if "/files/" in line:
         legacy.append((path, number, line))
-  assert len(legacy) == 1, f"the legacy prefix is documented more than once: {legacy}"
-  path, _, line = legacy[0]
-  assert path == FILE_SERVER_SKILL
-  assert "alias" in line.lower(), line
+  assert legacy == [], f"the retired /files prefix is presented as a link form: {legacy}"
 
 
 def test_the_sourcing_rule_probes_the_exact_path_before_pasting() -> None:

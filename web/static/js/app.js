@@ -115,7 +115,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const inp = document.getElementById('msg-input');
       if (inp) autoResize(inp);
       if (!ws || ws.readyState !== WebSocket.OPEN) {
-        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+        cancelReconnect();
         reconnectDelay = 1000;
         connectWS();
       }

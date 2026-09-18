@@ -14,10 +14,11 @@ from typing import Any
 
 import structlog
 
-from src.agents.backends.deferred_build import build_backend_module_getattr, load_build_backend
+from src.agents.backends.deferred_build import load_build_backend
 from src.api.message_utils import events_to_messages
 from src.core.autonamer import iter_light_backends
 from src.core.config import CharlieBotConfig
+from src.core.deferred import deferred_module_getattr
 from src.core.json_utils import write_json_atomically
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.models import utc_now
@@ -33,7 +34,7 @@ log = structlog.get_logger()
 
 def __getattr__(name: str) -> Any:
   # The "src.core.recap.build_backend" patch target resolves through this hook.
-  return build_backend_module_getattr(name, __name__, globals())
+  return deferred_module_getattr(name, __name__, globals(), "build_backend", load_build_backend)
 
 
 _ASK_CHARS = 80

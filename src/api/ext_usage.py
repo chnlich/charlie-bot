@@ -21,6 +21,7 @@ from src.core.config import get_config
 from src.core.http import get_http_client
 from src.core.json_utils import write_json_atomically
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
+from src.core.memo import StatSignatureMemo
 from src.core.models import ClaudeAccount
 from src.core.streaming import SIDEBAR_CHANNEL, streaming_manager
 from src.core.timeouts import (
@@ -51,6 +52,10 @@ _USAGE_TAIL_BYTES = 1 << 20
 # Scan-set bound for plan-pool readings: time-bounded, not count-bounded, so
 # concurrent sessions can never cut a fresh plan event out of the scan set.
 _CODEX_USAGE_SCAN_WINDOW_HOURS = 6
+# Cap for the per-account spend memo. The live sweep drops files outside the
+# 7-day window each round, so the resident set is the live rollout count; this
+# bound only stops a pathological dir from growing the memo without bound.
+_SPEND_CACHE_LIMIT = 512
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 TOKEN_REFRESH_URL = "https://platform.claude.com/v1/oauth/token"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -207,19 +212,21 @@ class ClaudeUsageProvider:
 class CodexUsageProvider:
   """Reads usage from <home_dir>/sessions/ JSONL files for one account.
 
-  ``_spend_cache`` holds resolved spend events per rollout file keyed on the
-  file's (mtime_ns, size). ``_usage_cache`` holds each scanned file's newest
-  plan-pool token_count event under the same key; an unchanged file costs no
-  read, and a changed one is read from its tail window. The poll loop fetches
-  one account at a time and awaits each fetch, so one instance's cache never
-  sees concurrent access.
+  ``_spend_cache`` is a StatSignatureMemo holding resolved spend events per
+  rollout file, fresh while the file's (mtime_ns, size) stands. ``_usage_cache``
+  holds each scanned file's newest plan-pool token_count event under the same
+  stat signature (hand-rolled because the cached verdict can be None, which
+  StatSignatureMemo cannot store); an unchanged file costs no read, and a
+  changed one is read from its tail window. The poll loop fetches one account
+  at a time and awaits each fetch, so one instance's cache never sees
+  concurrent access.
   """
 
   def __init__(self, label: str, home_dir: str) -> None:
     self.label = label
     self.sessions_dir = Path(home_dir) / "sessions"
     self.last_error = "no sessions found"
-    self._spend_cache: dict[Path, tuple[int, int, list[_SpendEvent]]] = {}
+    self._spend_cache: StatSignatureMemo[Path, list[_SpendEvent]] = StatSignatureMemo(_SPEND_CACHE_LIMIT)
     self._usage_cache: dict[Path, tuple[int, int, dict[str, Any] | None]] = {}
 
   async def fetch(self) -> dict[str, Any] | None:
@@ -305,18 +312,16 @@ class CodexUsageProvider:
       if stat.st_mtime < min_mtime:
         continue
       live.add(path)
-      cached = self._spend_cache.get(path)
-      if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
-        events_by_file.append(cached[2])
+      cached = self._spend_cache.fresh(path, stat)
+      if cached is not None:
+        events_by_file.append(cached)
         continue
       events = _extract_codex_spend_events(path)
       # An unreadable file (None) is skipped, not cached, so the next round retries it.
       if events is not None:
-        self._spend_cache[path] = (stat.st_mtime_ns, stat.st_size, events)
+        self._spend_cache.record(path, stat, events)
         events_by_file.append(events)
-    for path in list(self._spend_cache):
-      if path not in live:
-        del self._spend_cache[path]
+    self._spend_cache.drop_where(lambda path: path not in live)
     return _sum_codex_spend_events(events_by_file, now=now)
 
 
@@ -656,19 +661,19 @@ def _codex_windows(rate_limits: dict[str, Any], *, account: str) -> list[dict[st
     resets_at = limit.get("resets_at")
     windows.append(
         {
-            "window_minutes":
+            claude_accounts.PANEL_WINDOW_MINUTES:
                 window_minutes,
-            "utilization":
+            claude_accounts.PANEL_UTILIZATION:
                 utilization,
-            "resets_at":
+            claude_accounts.PANEL_RESETS_AT:
                 datetime.fromtimestamp(resets_at, tz=UTC).isoformat()
                 if isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool) else "",
         })
-  windows.sort(key=lambda w: w["window_minutes"])
+  windows.sort(key=lambda w: w[claude_accounts.PANEL_WINDOW_MINUTES])
   return windows
 
 
-def _codex_credits(credits: Any, *, account: str) -> dict[str, Any] | None:
+def _codex_credits(raw_credits: Any, *, account: str) -> dict[str, Any] | None:
   """The credits reading to emit, or None when the wire shape is unrecognized.
 
   ``unlimited`` is forwarded only as the strict bool the wire carries; the
@@ -676,16 +681,16 @@ def _codex_credits(credits: Any, *, account: str) -> dict[str, Any] | None:
   emits nothing and warns through the unknown-limit-shape path, mirroring how
   unknown window shapes are handled.
   """
-  if not isinstance(credits, dict):
+  if not isinstance(raw_credits, dict):
     _warn_unknown_limit_shape(provider="codex", account=account, slot="credits", reason="credits is not an object")
     return None
-  unlimited = credits.get("unlimited")
+  unlimited = raw_credits.get("unlimited")
   if not isinstance(unlimited, bool):
     _warn_unknown_limit_shape(provider="codex", account=account, slot="credits", reason="unlimited is not a bool")
     return None
   emitted: dict[str, Any] = {"unlimited": unlimited}
   try:
-    emitted["balance"] = float(credits.get("balance"))
+    emitted["balance"] = float(raw_credits.get("balance"))
   except (TypeError, ValueError):
     _warn_unknown_limit_shape(
         provider="codex", account=account, slot="credits", reason="missing or unparseable balance")
@@ -706,18 +711,18 @@ def _transform_codex_response(
   # An absent credits key (older CLI events) and a present-but-unreadable one
   # are different states: only the latter warns, and only the former keeps the
   # plan_type fallback below in play.
-  credits = _codex_credits(rate_limits["credits"], account=account) if "credits" in rate_limits else None
+  credits_reading = _codex_credits(rate_limits["credits"], account=account) if "credits" in rate_limits else None
 
   usage = {
-      "windows": _codex_windows(rate_limits, account=account),
-      "fetched_at": fetched_at,
-      "provider": "codex",
+      claude_accounts.PANEL_WINDOWS: _codex_windows(rate_limits, account=account),
+      claude_accounts.PANEL_FETCHED_AT: fetched_at,
+      claude_accounts.PANEL_PROVIDER: "codex",
       "token_count_observed_at": event.get("timestamp", ""),
   }
-  if credits is not None:
-    usage["credits"] = credits
+  if credits_reading is not None:
+    usage["credits"] = credits_reading
   if ("primary" in rate_limits and "secondary" in rate_limits and primary is None and secondary is None and
-      ((credits is not None and credits["unlimited"] is True) or
+      ((credits_reading is not None and credits_reading["unlimited"] is True) or
        ("credits" not in rate_limits and rate_limits.get("plan_type") == "business"))):
     usage["rate_limits_state"] = "business-unlimited"
   return usage
@@ -911,10 +916,10 @@ def _scoped_windows(raw: dict[str, Any], *, account: str) -> list[dict[str, Any]
       _warn_unknown_limit_shape(provider="claude", account=account, slot=slot, reason="missing percent")
     windows.append(
         {
-            "window_minutes": window_minutes,
-            "scope_label": display_name,
-            "utilization": utilization,
-            "resets_at": entry.get("resets_at") or "",
+            claude_accounts.PANEL_WINDOW_MINUTES: window_minutes,
+            claude_accounts.PANEL_SCOPE_LABEL: display_name,
+            claude_accounts.PANEL_UTILIZATION: utilization,
+            claude_accounts.PANEL_RESETS_AT: entry.get("resets_at") or "",
         })
   return windows
 
@@ -932,12 +937,12 @@ def _transform_response(raw: dict[str, Any], *, account: str = "") -> dict[str, 
     bucket = raw.get(camel, raw.get(snake)) or {}
     windows.append(
         {
-            "window_minutes": window_minutes,
-            "utilization": _as_utilization(bucket.get("utilization")),
-            "resets_at": bucket.get("resetsAt", bucket.get("resets_at", "")),
+            claude_accounts.PANEL_WINDOW_MINUTES: window_minutes,
+            claude_accounts.PANEL_UTILIZATION: _as_utilization(bucket.get("utilization")),
+            claude_accounts.PANEL_RESETS_AT: bucket.get("resetsAt", bucket.get("resets_at", "")),
         })
   windows.extend(_scoped_windows(raw, account=account))
-  windows.sort(key=lambda w: (w["window_minutes"], w.get("scope_label", "")))
+  windows.sort(key=lambda w: (w[claude_accounts.PANEL_WINDOW_MINUTES], w.get(claude_accounts.PANEL_SCOPE_LABEL, "")))
 
   known = {name for camel, snake, _ in CLAUDE_WINDOW_FIELDS for name in (camel, snake)}
   for key, value in raw.items():
@@ -945,9 +950,9 @@ def _transform_response(raw: dict[str, Any], *, account: str = "") -> dict[str, 
       _warn_unknown_limit_shape(provider="claude", account=account, slot=key, reason="unrecognized window field")
 
   return {
-      "windows": windows,
-      "fetched_at": now,
-      "provider": "claude",
+      claude_accounts.PANEL_WINDOWS: windows,
+      claude_accounts.PANEL_FETCHED_AT: now,
+      claude_accounts.PANEL_PROVIDER: "claude",
   }
 
 
@@ -1006,7 +1011,7 @@ async def _poll_loop() -> None:
         seed_key = f"{inst.provider}:{inst.label}"
         if seed_key not in _cached_usage:
           _cached_usage[seed_key] = {
-              "provider": inst.provider,
+              claude_accounts.PANEL_PROVIDER: inst.provider,
               "account": inst.label,
               "pending": True,
           }
@@ -1035,7 +1040,7 @@ async def _poll_loop() -> None:
           # worth keeping when a later fetch fails.
           if prev is None or "error" in prev or "pending" in prev:
             _cached_usage[cache_key] = {
-                "provider": inst.provider,
+                claude_accounts.PANEL_PROVIDER: inst.provider,
                 "account": inst.label,
                 "error": inst.last_error,
             }
@@ -1082,17 +1087,17 @@ def _annotated_providers(now: datetime | None = None) -> dict[str, dict[str, Any
   moment = claude_accounts.now_or(now)
   providers: dict[str, dict[str, Any]] = {}
   for key, entry in _cached_usage.items():
-    windows = entry.get("windows")
-    if entry.get("provider") != "claude" or not isinstance(windows, list):
+    windows = entry.get(claude_accounts.PANEL_WINDOWS)
+    if entry.get(claude_accounts.PANEL_PROVIDER) != "claude" or not isinstance(windows, list):
       providers[key] = entry
       continue
-    sampled = claude_accounts.parse_iso_utc(entry.get("fetched_at"))
+    sampled = claude_accounts.parse_iso_utc(entry.get(claude_accounts.PANEL_FETCHED_AT))
     annotated = [
         {
             **window, "expired": True
         } if claude_accounts.panel_window_expired(window, sampled, moment) else window for window in windows
     ]
-    providers[key] = {**entry, "windows": annotated}
+    providers[key] = {**entry, claude_accounts.PANEL_WINDOWS: annotated}
   return providers
 
 

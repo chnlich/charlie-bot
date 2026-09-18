@@ -12,7 +12,7 @@ const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext
   makeSessionMeta } = require('./session_context_stub');
 
 function makeArchivedSession(id, overrides = {}) {
-  return makeSessionMeta(id, {status: 'archived', rating: null, ...overrides});
+  return makeSessionMeta(id, {status: 'archived', ...overrides});
 }
 
 function makePage(sessions, {hasMore = false, groups = null} = {}) {

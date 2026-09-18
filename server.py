@@ -1,6 +1,8 @@
 """CharlieBot server entry point."""
 
 import asyncio
+import contextlib
+import io
 import json
 import time
 from collections.abc import AsyncIterator
@@ -9,8 +11,9 @@ from datetime import datetime
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+from isal.igzip import IGzipFile
 from starlette.datastructures import Headers, MutableHeaders, QueryParams
-from starlette.middleware.gzip import GZipMiddleware, GZipResponder
+from starlette.middleware.gzip import GZipMiddleware, GZipResponder, IdentityResponder
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -38,7 +41,7 @@ from src.api.deps import session_manager, set_trigger_manager, task_manager, thr
 from src.core import timeouts
 from src.core.buildinfo import init_build_info
 from src.core.config import CharlieBotConfig, configured_access_key, get_config, get_credentials, require_backends
-from src.core.constants import FILE_SERVER_MOUNTS, REPO_ROOT
+from src.core.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH, REPO_ROOT
 from src.core.http import close_http_client
 from src.core.init import (
     init_charliebot_home,
@@ -68,6 +71,37 @@ _CATCHUP_RENDER_SLICE = 4
 # round-trip (~104 µs measured on this host); above it the thread hop wins.
 _OFFLOOP_GZIP_MIN_BODY = 8192
 
+# Content types whose format is already entropy-coded: transport gzip spends
+# serve CPU per view to shrink the wire by at most a few percent (or to grow
+# it), so these answers ride identity. text/event-stream stays excluded —
+# starlette's responder defers to this list once the start message is seen,
+# so the SSE exclusion must live here. Text formats (html, json, svg, csv)
+# stay outside the list and keep compressing.
+_TRANSPORT_GZIP_SKIP_MEDIA_PREFIXES = (
+    "text/event-stream",
+    "image/gif",
+    "image/heic",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/x-icon",
+    "image/vnd.microsoft.icon",
+    "video/",
+    "audio/",
+    "application/pdf",
+    "application/zip",
+    "application/x-zip-compressed",
+    "application/x-7z-compressed",
+    "application/gzip",
+    "application/x-gzip",
+    "application/vnd.openxmlformats-officedocument",
+    "application/vnd.ms-powerpoint",
+    "application/msword",
+    "font/woff",
+    "font/woff2",
+    "application/font-woff",
+)
+
 
 class _OffLoopWholeBodyGZipResponder(GZipResponder):
   """Whole-body responses deflate in a worker thread; streaming chunks stay inline.
@@ -80,7 +114,44 @@ class _OffLoopWholeBodyGZipResponder(GZipResponder):
   not cross threads between writes.
   """
 
+  def __init__(self, app: ASGIApp, minimum_size: int, compresslevel: int = 1) -> None:
+    # IdentityResponder.__init__ binds the chain without the zlib file the
+    # GZipResponder layer would construct per request and this responder
+    # replaces; the deflate state builds at the first deflated body instead
+    # (through ISA-L, mtime=0 like the one-shot gzip memos'): a request the
+    # middleware skips — precompressed, excluded type, small body —
+    # constructs none of it.
+    IdentityResponder.__init__(self, app, minimum_size)
+    self.compresslevel = compresslevel
+    self.gzip_buffer = None
+    self.gzip_file = None
+
+  async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    # IdentityResponder.__call__ mounts the ASGI chain without the super's
+    # always-entered file contexts; the state built mid-flight closes through
+    # the stack when the request ends, written or not.
+    self.send = send
+    with contextlib.ExitStack() as stack:
+      self._exit_stack = stack
+      await self.app(scope, receive, self.send_with_compression)
+
+  def apply_compression(self, body: bytes, *, more_body: bool) -> bytes:
+    if self.gzip_file is None:
+      self.gzip_buffer = io.BytesIO()
+      self.gzip_file = IGzipFile(mode="wb", fileobj=self.gzip_buffer, compresslevel=self.compresslevel, mtime=0)
+      self._exit_stack.enter_context(self.gzip_buffer)
+      self._exit_stack.enter_context(self.gzip_file)
+    return super().apply_compression(body, more_body=more_body)
+
   async def send_with_compression(self, message: Message) -> None:
+    if message["type"] == "http.response.start":
+      # The superclass sets content_type_is_excluded from its own one-entry
+      # constant at the start message; this responder's body branches read the
+      # flag only after that point, so recompute it here from the wider list.
+      await super().send_with_compression(message)
+      content_type = Headers(raw=self.initial_message["headers"]).get("content-type", "")
+      self.content_type_is_excluded = content_type.startswith(_TRANSPORT_GZIP_SKIP_MEDIA_PREFIXES)
+      return
     if (message["type"] == "http.response.body" and not self.started and not self.content_encoding_set and
         not self.content_type_is_excluded and not message.get("more_body", False) and
         len(message.get("body", b"")) >= _OFFLOOP_GZIP_MIN_BODY):
@@ -98,10 +169,10 @@ class _OffLoopWholeBodyGZipResponder(GZipResponder):
 
 
 class _CharlieBotGZipMiddleware(GZipMiddleware):
-  """Skip HTTP transport compression for already-compressed trace files."""
+  """Skips transport compression where it cannot pay: the merged-trace path, and media types by prefix."""
 
   async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-    if scope["type"] == "http" and scope["path"] == "/perfetto/merged":
+    if scope["type"] == "http" and scope["path"] == PERFETTO_MERGED_PATH:
       await self.app(scope, receive, send)
       return
     if scope["type"] == "http" and "gzip" in Headers(scope=scope).get("Accept-Encoding", ""):
@@ -410,11 +481,10 @@ app.include_router(code_server.router, prefix="/api/code-server", tags=["code-se
 app.include_router(ext_usage.router, prefix="/api", tags=["ext-usage"])
 app.include_router(anthropic_proxy.router, prefix="/api/anthropic-proxy", tags=["anthropic-proxy"])
 
-# File server (filesystem browser). The same router is mounted under every prefix in
-# FILE_SERVER_MOUNTS, so all of them reach one handler and one path resolution. "/absolute_filepath"
-# is the prefix written into chat text: it names what has to follow it, so a link missing its
-# absolute prefix reads as wrong where it is written. "/files" stays as the form the UI builds
-# and older links carry.
+# File server (filesystem browser), mounted under the one canonical prefix FILE_SERVER_MOUNTS
+# holds: "/absolute_filepath", the form written into chat text — the prefix names what has to
+# follow it, so a link missing its absolute prefix reads as wrong where it is written. The
+# legacy "/files" and "/file" spellings are unmounted: nothing answers there, both 404.
 for mount in FILE_SERVER_MOUNTS:
   app.include_router(files.router, prefix=mount, tags=["files"])
 

@@ -13,7 +13,7 @@ const { makeAnchor, makeProseRoot } = require('./chat_prose_stub');
 
 const { SESSION_DIR } = require('./sessions_root_stub');
 
-const ARTIFACT_HREF = '/files' + SESSION_DIR + '/artifacts/report.html';
+const ARTIFACT_HREF = '/absolute_filepath' + SESSION_DIR + '/artifacts/report.html';
 const ARTIFACT_ABS = SESSION_DIR + '/artifacts/report.html';
 
 // ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ test('a registered plan version still renders the plan card and no iframe', asyn
     getRegistrySnapshot: () => snapshot,
   };
   const {context, requests} = loadArtifactsScript({planPanel});
-  const {root, parent} = makeProseRoot({anchors: [makeAnchor('/files' + SESSION_DIR + '/artifacts/plan_01.html')]});
+  const {root, parent} = makeProseRoot({anchors: [makeAnchor('/absolute_filepath' + SESSION_DIR + '/artifacts/plan_01.html')]});
 
   context.Chat.embedLinkedHtmlArtifacts(root);
   await new Promise((resolve) => setImmediate(resolve));
@@ -147,7 +147,7 @@ test('at most three cards stay expanded — a fourth collapses the oldest', asyn
   const {context} = loadArtifactsScript();
   const cards = [1, 2, 3, 4].map((n) => {
     const abs = SESSION_DIR + '/artifacts/r' + n + '.html';
-    return makeCard(abs, '/files' + abs);
+    return makeCard(abs, '/absolute_filepath' + abs);
   });
 
   for (const card of cards) await context.Chat.expandArtifactCard(card);
@@ -165,7 +165,7 @@ test('collapsing by hand frees a slot so the next expansion evicts nothing', asy
   const {context} = loadArtifactsScript();
   const cards = [1, 2, 3, 4].map((n) => {
     const abs = SESSION_DIR + '/artifacts/r' + n + '.html';
-    return makeCard(abs, '/files' + abs);
+    return makeCard(abs, '/absolute_filepath' + abs);
   });
 
   for (const card of cards.slice(0, 3)) await context.Chat.expandArtifactCard(card);
@@ -187,14 +187,14 @@ test('the artifact fetch cache holds at most eight entries, evicting least-recen
   const paths = [];
   for (let i = 0; i < 9; i++) paths.push(SESSION_DIR + '/artifacts/a' + i + '.html');
 
-  for (const abs of paths.slice(0, 8)) await context.Chat.fetchHtmlArtifact(abs, '/files' + abs);
+  for (const abs of paths.slice(0, 8)) await context.Chat.fetchHtmlArtifact(abs, '/absolute_filepath' + abs);
   assert.equal(cache.size, 8);
 
   // Re-read the oldest key so the second-oldest becomes least recently used.
-  await context.Chat.fetchHtmlArtifact(paths[0], '/files' + paths[0]);
+  await context.Chat.fetchHtmlArtifact(paths[0], '/absolute_filepath' + paths[0]);
   assert.equal(requests.length, 8, 'a cache hit does not refetch');
 
-  await context.Chat.fetchHtmlArtifact(paths[8], '/files' + paths[8]);
+  await context.Chat.fetchHtmlArtifact(paths[8], '/absolute_filepath' + paths[8]);
   assert.equal(cache.size, 8, 'the cache never grows past its bound');
   assert.equal(cache.has(paths[0]), true, 'the recently re-read entry survives');
   assert.equal(cache.has(paths[1]), false, 'the least recently used entry was evicted');
@@ -218,6 +218,6 @@ test('a failed artifact fetch is not cached', async () => {
   context.fetch = async () => ({ok: false, status: 404, text: async () => ''});
   const abs = SESSION_DIR + '/artifacts/missing.html';
 
-  await assert.rejects(() => context.Chat.fetchHtmlArtifact(abs, '/files' + abs));
+  await assert.rejects(() => context.Chat.fetchHtmlArtifact(abs, '/absolute_filepath' + abs));
   assert.equal(context.Chat.htmlArtifactFetchCache.has(abs), false);
 });

@@ -5,10 +5,11 @@ import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 import pytest
-from conftest import fake_backends
+from conftest import assert_gzip_served, fake_backends, gzip_explode_compress
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -56,6 +57,21 @@ def _seeded_client(tmp_path: Path) -> tuple[TestClient, str, str]:
   app.dependency_overrides[get_config] = lambda: cfg
   app.dependency_overrides[get_config_on_loop] = lambda: cfg
   return TestClient(app), session_id, long_thread_id
+
+
+def _seeded_thread_dir(tmp_path: Path, name: str, *thread_texts: str) -> tuple[CharlieBotConfig, str, Path]:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
+  sessions = SessionManager(cfg)
+
+  async def seed() -> str:
+    session = await sessions.create_session(CreateSessionRequest(name=name))
+    threads = ThreadManager(cfg)
+    for text in thread_texts:
+      await threads.create_thread(session, text)
+    return session.id
+
+  session_id = asyncio.run(seed())
+  return cfg, session_id, cfg.sessions_dir / session_id / "threads"
 
 
 def test_list_caps_long_descriptions_and_marks_truncation(tmp_path: Path) -> None:
@@ -112,6 +128,26 @@ _WALK_SKIP_ENDPOINTS = [
 ]
 
 
+def _count_walks(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+  """Install a counting wrapper over ``threads_api._row_source_stats``.
+
+  Returns the counter dict: ``walks["n"]`` is how many full source walks the
+  polled routes ran since the install.
+  """
+  walks = {"n": 0}
+  real = threads_api._row_source_stats
+
+  def counting(threads_dir: str,
+               triggers_dir: str,
+               runs_dir: str | None = None) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]],
+                                                     list[tuple[str, os.stat_result]]]:
+    walks["n"] += 1
+    return real(threads_dir, triggers_dir, runs_dir)
+
+  monkeypatch.setattr(threads_api, "_row_source_stats", counting)
+  return walks
+
+
 @pytest.mark.parametrize(("memos", "url_pattern", "rows_key"), _WALK_SKIP_ENDPOINTS)
 def test_rows_skip_the_walk_until_a_mark_or_the_sweep(
     tmp_path: Path,
@@ -129,16 +165,7 @@ def test_rows_skip_the_walk_until_a_mark_or_the_sweep(
     body = response.json()
     return body if rows_key is None else body[rows_key]
 
-  walks = {"n": 0}
-  real = threads_api._row_source_stats
-
-  def counting(threads_dir: str,
-               triggers_dir: str,
-               runs_dir: str | None = None):
-    walks["n"] += 1
-    return real(threads_dir, triggers_dir, runs_dir)
-
-  monkeypatch.setattr(threads_api, "_row_source_stats", counting)
+  walks = _count_walks(monkeypatch)
 
   client.get(url)
   assert walks["n"] == 1
@@ -285,21 +312,11 @@ def test_list_rows_ship_epoch_ms_timestamps(tmp_path: Path) -> None:
 
 def test_list_body_sorts_thread_and_trigger_rows_by_one_epoch_ms_key(tmp_path: Path) -> None:
   """The mixed body sort compares int against int: both row kinds convert their timestamps."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
-  sessions = SessionManager(cfg)
-
-  async def seed() -> str:
-    session = await sessions.create_session(CreateSessionRequest(name="mixed-sort"))
-    threads = ThreadManager(cfg)
-    await threads.create_thread(session, "the thread row")
-    return session.id
-
-  session_id = asyncio.run(seed())
-  threads_dir = cfg.sessions_dir / session_id / "threads"
+  cfg, session_id, threads_dir = _seeded_thread_dir(tmp_path, "mixed-sort", "the thread row")
   mgr = ThreadManager(cfg)
   pairs = list(core_threads.iter_thread_meta_stats(str(threads_dir)))
   metas = mgr.list_threads_from_stats(iter(pairs))
-  thread_item = threads_api._thread_list_items(session_id, pairs, metas)[0]
+  thread_item, thread_fragment = threads_api._thread_list_items(session_id, pairs, metas)[0]
   trigger = PendingTrigger(
       session_id=session_id,
       fire_at=datetime.now(UTC) + timedelta(hours=1),
@@ -307,7 +324,7 @@ def test_list_body_sorts_thread_and_trigger_rows_by_one_epoch_ms_key(tmp_path: P
       watch_targets=[],
   )
 
-  body = json.loads(threads_api._list_body([thread_item], [trigger]))
+  body = json.loads(threads_api._list_body([(thread_item, thread_fragment)], [trigger]))
 
   stamps = [row["created_at"] for row in body]
   assert stamps == sorted(stamps, reverse=True)
@@ -317,24 +334,86 @@ def test_list_body_sorts_thread_and_trigger_rows_by_one_epoch_ms_key(tmp_path: P
   assert trigger_row["fire_at"] == int(trigger.fire_at.timestamp() * 1000)
 
 
+def test_list_body_splice_matches_whole_dump() -> None:
+  """The joined per-row fragments are byte-identical to the whole-array dump they replaced.
+
+  The splice is only safe because the encoder's per-element text is context-free;
+  this pins that property for the list body's options across the row shapes the
+  payload carries (nested dicts, None, unicode, float timestamps, escapes).
+  """
+  rows: list[dict] = [
+      {
+          "type": "thread",
+          "id": "t1",
+          "description": "plain ascii",
+          "status": "running",
+          "created_at": 1700,
+          "completed_at": None,
+          "backend": "cc-claude"
+      },
+      {
+          "type": "thread",
+          "id": "t2",
+          "description": "üñïçødé 与中文 \"quoted\" back\\slash",
+          "status": "completed",
+          "created_at": 1699.5,
+          "completed_at": 1701,
+          "backend": "opencode",
+          "description_full_len": 42
+      },
+      {
+          "type": "trigger",
+          "id": "tr1",
+          "message": "multi\nline\ttab",
+          "status": "pending",
+          "fire_at": 1702,
+          "created_at": 1702
+      },
+      {
+          "type": "thread",
+          "id": "t3",
+          "description": "",
+          "status": "pending",
+          "created_at": 1698,
+          "completed_at": None,
+          "backend": None
+      },
+      {
+          "type": "thread",
+          "id": "t4",
+          "description": "nested",
+          "status": "running",
+          "created_at": 1697,
+          "completed_at": None,
+          "backend": "cc-claude",
+          "extra": {
+              "watch": ["a", "b"],
+              "deep": {
+                  "k": [1, {
+                      "x": None
+                  }]
+              }
+          }
+      },
+  ]
+  pairs = [(row, threads_api._row_fragment(row)) for row in rows]
+  trigger = PendingTrigger(
+      session_id="s", fire_at=datetime.now(UTC) + timedelta(hours=1), message="the trigger row", watch_targets=[])
+  spliced = threads_api._list_body(pairs, [trigger])
+  dicts = [pair[0] for pair in pairs] + [threads_api._trigger_list_item(trigger)]
+  dicts.sort(key=lambda row: row["created_at"], reverse=True)
+  whole = json.dumps(dicts, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+  assert spliced == whole
+
+
 def test_rebuild_tolerates_file_vanished_between_walk_and_read(tmp_path: Path) -> None:
   """A pair the walk statted but whose file vanished before its read parses as no row, not a crash."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
-  sessions = SessionManager(cfg)
-
-  async def seed() -> str:
-    session = await sessions.create_session(CreateSessionRequest(name="vanished"))
-    threads = ThreadManager(cfg)
-    await threads.create_thread(session, "survivor")
-    return session.id
-
-  session_id = asyncio.run(seed())
-  threads_dir = cfg.sessions_dir / session_id / "threads"
+  cfg, session_id, threads_dir = _seeded_thread_dir(tmp_path, "vanished", "survivor")
   mgr = ThreadManager(cfg)
   pairs = list(core_threads.iter_thread_meta_stats(str(threads_dir)))
   # A pair from the signature's walk whose file the session GC removed before
   # the rebuild's parse-merge read it.
-  stale = pairs + [(str(threads_dir / "vanished" / "metadata.json"), pairs[0][1])]
+  stale = [*pairs, (str(threads_dir / "vanished" / "metadata.json"), pairs[0][1])]
 
   metas = mgr.list_threads_from_stats(stale)
   assert metas[1] is None
@@ -345,18 +424,7 @@ def test_rebuild_tolerates_file_vanished_between_walk_and_read(tmp_path: Path) -
 
 def test_list_threads_from_stats_matches_list_threads(tmp_path: Path) -> None:
   """The shared parse-merge serves the same metas from pre-walked pairs as from its own scan."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
-  sessions = SessionManager(cfg)
-
-  async def seed() -> str:
-    session = await sessions.create_session(CreateSessionRequest(name="from-stats"))
-    threads = ThreadManager(cfg)
-    await threads.create_thread(session, "one")
-    await threads.create_thread(session, "two")
-    return session.id
-
-  session_id = asyncio.run(seed())
-  threads_dir = cfg.sessions_dir / session_id / "threads"
+  cfg, session_id, threads_dir = _seeded_thread_dir(tmp_path, "from-stats", "one", "two")
   mgr = ThreadManager(cfg)
   scanned = asyncio.run(mgr.list_threads(session_id))
 
@@ -421,16 +489,7 @@ def test_sweep_survives_continuous_marked_polls(tmp_path: Path, monkeypatch: pyt
   _cleared_memos()
   url = f"/api/threads/{session_id}/list"
 
-  walks = {"n": 0}
-  real = threads_api._row_source_stats
-
-  def counting(threads_dir: str,
-               triggers_dir: str,
-               runs_dir: str | None = None):
-    walks["n"] += 1
-    return real(threads_dir, triggers_dir, runs_dir)
-
-  monkeypatch.setattr(threads_api, "_row_source_stats", counting)
+  walks = _count_walks(monkeypatch)
   client.get(url)
   rows = {row["id"] for row in client.get(url).json()}
   any_id = next(iter(rows))
@@ -443,3 +502,70 @@ def test_sweep_survives_continuous_marked_polls(tmp_path: Path, monkeypatch: pyt
     if walks["n"] == 2:
       break
   assert walks["n"] == 2, "no full walk within 10 continuously marked polls"
+
+
+def test_list_gzip_ships_precompressed_body(tmp_path: Path) -> None:
+  """The 3 s poll's gzip form rides the body-keyed memo: the served bytes
+  decompress to the plain body, the tag names the plain render, and the
+  conditional 204 stays bodyless under a gzip-accepting client."""
+  client, session_id, _ = _seeded_client(tmp_path)
+  threads_api._list_gzip_memo.clear()
+  url = f"/api/threads/{session_id}/list"
+
+  gz = client.get(url)
+  plain = client.get(url, headers={"accept-encoding": "identity"})
+  assert_gzip_served(gz)
+  assert gz.headers["ETag"] == plain.headers["ETag"]
+  assert gz.json() == plain.json()
+
+  conditional = client.get(url, params={"etag": plain.headers["ETag"]})
+  assert conditional.status_code == 204
+  assert conditional.content == b""
+  assert conditional.headers["ETag"] == plain.headers["ETag"]
+
+
+def test_list_gzip_repeat_serves_memo_without_recompress(tmp_path: Path) -> None:
+  """A repeat poll of the same body serves the memo's bytes and re-compresses nothing."""
+  client, session_id, _ = _seeded_client(tmp_path)
+  threads_api._list_gzip_memo.clear()
+  url = f"/api/threads/{session_id}/list"
+
+  first = client.get(url)
+
+  with patch("src.api.responses.gzip_level1", gzip_explode_compress("repeat list poll re-ran the deflate")):
+    second = client.get(url)
+  assert second.headers["content-encoding"] == "gzip"
+  assert second.content == first.content
+  assert len(threads_api._list_gzip_memo) == 1
+
+
+def test_list_gzip_changed_body_recompresses(tmp_path: Path) -> None:
+  """A row-source rewrite changes the body: the next gzip poll compresses that
+  body once and its decompressed bytes carry the new status."""
+  client, session_id, _ = _seeded_client(tmp_path)
+  threads_api._list_gzip_memo.clear()
+  url = f"/api/threads/{session_id}/list"
+
+  first = client.get(url)
+  rows = {row["id"] for row in first.json()}
+  any_id = next(iter(rows))
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
+  asyncio.run(ThreadManager(cfg).update_status(session_id, any_id, ThreadStatus.RUNNING))
+
+  second = client.get(url)
+  assert second.headers["content-encoding"] == "gzip"
+  plain = client.get(url, headers={"accept-encoding": "identity"})
+  assert second.content == plain.content
+  assert next(row for row in plain.json() if row["id"] == any_id)["status"] == "running"
+
+
+def test_list_plain_request_stays_uncompressed(tmp_path: Path) -> None:
+  """A client sending no Accept-Encoding reads the plain render, and the gzip
+  memo gains no entry."""
+  client, session_id, _ = _seeded_client(tmp_path)
+  threads_api._list_gzip_memo.clear()
+  url = f"/api/threads/{session_id}/list"
+
+  plain = client.get(url, headers={"accept-encoding": "identity"})
+  assert "content-encoding" not in plain.headers
+  assert len(threads_api._list_gzip_memo) == 0

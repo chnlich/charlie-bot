@@ -473,6 +473,11 @@ def _sweep_claude_transcripts(
   it has been idle past the safety window. Worktree-encoded directories follow the
   same orphan rule once the worktree itself is gone. Any other name encodes a cwd
   CharlieBot never handed a claude process and is never touched.
+
+  The live-session counterpart is claude_accounts.retire_transcript_copies, which
+  trims a still-live session's redundant pool copies to the newest two; the two
+  deletion sets are disjoint (whole cold trees vs individual copies of a live
+  transcript), so neither can delete what the other protects.
   """
   worktree_prefix = claude_project_dir_name(Path(cfg.paths.worktree_dir)) + "-"
   live_worktrees = _live_worktree_dir_names(cfg) if session_id is None else set()
@@ -625,7 +630,7 @@ def _opencode_aggregate_sizes(db: Path, aggregate_ids: list[str]) -> dict[str, t
   # Keep aggregates with no event rows in the map too.  Their sequence row is
   # still a backend record covered by the deletion rule, even though it frees
   # zero event bytes.
-  sizes: dict[str, tuple[int, int]] = {aggregate_id: (0, 0) for aggregate_id in aggregate_ids}
+  sizes: dict[str, tuple[int, int]] = dict.fromkeys(aggregate_ids, (0, 0))
   for start in range(0, len(aggregate_ids), _SQL_PARAM_CHUNK):
     chunk = aggregate_ids[start:start + _SQL_PARAM_CHUNK]
     rows = _opencode_query(db, _AGGREGATE_SIZES_SQL.format(",".join("?" * len(chunk))), tuple(chunk))
@@ -937,13 +942,12 @@ def run_cool_sweep(
     _vacuum_opencode_store(force=force)
 
   result = SweepResult(
-      categories=tuple(
-          [
-              CategoryResult(transport.name, transport.unit, transport.count, transport.bytes),
-              CategoryResult(claude.name, claude.unit, claude.count, claude.bytes),
-              CategoryResult(codex.name, codex.unit, codex.count, codex.bytes),
-              CategoryResult(opencode.name, opencode.unit, opencode.count, opencode.bytes),
-          ]),
+      categories=(
+          CategoryResult(transport.name, transport.unit, transport.count, transport.bytes),
+          CategoryResult(claude.name, claude.unit, claude.count, claude.bytes),
+          CategoryResult(codex.name, codex.unit, codex.count, codex.bytes),
+          CategoryResult(opencode.name, opencode.unit, opencode.count, opencode.bytes),
+      ),
       freelist_bytes=_opencode_freelist_bytes(DEFAULT_OPENCODE_DB))
   log.info(
       "storage_cool_sweep_done",

@@ -18,12 +18,11 @@ project trees under ``tmp_path``; no live ``~/.charliebot`` state is touched.
 from pathlib import Path
 from types import SimpleNamespace
 
-from conftest import make_instruction_cfg
+from conftest import ROOT, make_instruction_cfg
 
 from src.agents import master_cc, master_cc_run
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-CONTRACT_TEXT = (REPO_ROOT / "prompts" / "project_manager.md").read_text(encoding="utf-8")
+CONTRACT_TEXT = (ROOT / "prompts" / "project_manager.md").read_text(encoding="utf-8")
 
 # The two mode markers, verbatim: the builder's identity parts carry them and
 # the contract's mode section keys on them.
@@ -65,6 +64,19 @@ def _meta(group: str) -> SimpleNamespace:
   return SimpleNamespace(id="s1", role=PROJECT_ROLE, group=group)
 
 
+def _two_group_cfg(tmp_path: Path, contract: str | None) -> SimpleNamespace:
+  """One cfg whose repo contract file serves both an enabled (lean) group-alpha
+  and an unconfigured group-beta — the one-repo-one-contract shape the
+  shared-contract tests assert on, unlike the per-test cfgs the helpers above build."""
+  cfg = make_instruction_cfg(tmp_path, manager_contract=contract)
+  enabled_dir = cfg.charliebot_home / "projects" / "group-alpha"
+  enabled_dir.mkdir(parents=True)
+  (enabled_dir / "project.yaml").write_text("prompt_file: project.md\n", encoding="utf-8")
+  (enabled_dir / "project.md").write_text(COMMON_TEXT, encoding="utf-8")
+  (cfg.charliebot_home / "projects" / "group-beta").mkdir(parents=True)
+  return cfg
+
+
 # ---------------------------------------------------------------------------
 # The builder markers and the contract's mode section stay in lockstep
 # ---------------------------------------------------------------------------
@@ -95,7 +107,7 @@ def test_enabled_manager_gets_contract_common_rules_and_enabled_marker(tmp_path:
   out = master_cc._build_instructions_content(_meta("group-alpha"), cfg, None)
 
   assert out is not None
-  assert getattr(out, "project_error") is None
+  assert out.project_error is None
   assert out.count(CONTRACT_TEXT) == 1
   assert out.count(COMMON_TEXT) == 1
   assert out.count(SUPPLEMENT_TEXT) == 1
@@ -131,7 +143,7 @@ def test_unconfigured_manager_gets_pointer_with_not_enabled_marker_and_no_contra
   out = master_cc._build_instructions_content(_meta("group-beta"), cfg, None)
 
   assert out is not None
-  assert getattr(out, "project_error") is None
+  assert out.project_error is None
   assert MARKER_UNCONFIGURED in out
   assert MARKER_ENABLED not in out
   assert "your ledger duties stand" in out
@@ -155,13 +167,7 @@ def test_unconfigured_manager_gets_pointer_with_not_enabled_marker_and_no_contra
 
 def test_both_managers_share_one_contract_with_nonconflicting_respective_duties(tmp_path: Path) -> None:
   """The same repo contract file serves both managers; each binds its own mode."""
-  # One repo, one contract file: both groups read it.
-  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_TEXT)
-  enabled_dir = cfg.charliebot_home / "projects" / "group-alpha"
-  enabled_dir.mkdir(parents=True)
-  (enabled_dir / "project.yaml").write_text("prompt_file: project.md\n", encoding="utf-8")
-  (enabled_dir / "project.md").write_text(COMMON_TEXT, encoding="utf-8")
-  (cfg.charliebot_home / "projects" / "group-beta").mkdir(parents=True)
+  cfg = _two_group_cfg(tmp_path, contract=CONTRACT_TEXT)
 
   enabled = master_cc._build_instructions_content(_meta("group-alpha"), cfg, None)
   unconfigured = master_cc._build_instructions_content(_meta("group-beta"), cfg, None)
@@ -183,19 +189,14 @@ def test_both_managers_share_one_contract_with_nonconflicting_respective_duties(
 
 def test_missing_repo_contract_fails_only_enabled_manager(tmp_path: Path) -> None:
   """An unconfigured manager never needs the repo file at build time; an enabled one does."""
-  cfg = make_instruction_cfg(tmp_path, manager_contract=None)
-  enabled_dir = cfg.charliebot_home / "projects" / "group-alpha"
-  enabled_dir.mkdir(parents=True)
-  (enabled_dir / "project.yaml").write_text("prompt_file: project.md\n", encoding="utf-8")
-  (enabled_dir / "project.md").write_text(COMMON_TEXT, encoding="utf-8")
-  (cfg.charliebot_home / "projects" / "group-beta").mkdir(parents=True)
+  cfg = _two_group_cfg(tmp_path, contract=None)
 
   enabled = master_cc._build_instructions_content(_meta("group-alpha"), cfg, None)
   assert enabled is not None
-  error = getattr(enabled, "project_error")
+  error = enabled.project_error
   assert error is not None and "repo manager contract unreadable" in str(error)
 
   unconfigured = master_cc._build_instructions_content(_meta("group-beta"), cfg, None)
   assert unconfigured is not None
-  assert getattr(unconfigured, "project_error") is None
+  assert unconfigured.project_error is None
   assert MARKER_UNCONFIGURED in unconfigured

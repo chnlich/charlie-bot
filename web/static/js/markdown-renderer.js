@@ -120,7 +120,7 @@ function codeBlockHtml(displayLang, isMarkdown, innerHtml, markerId) {
     ? '<button class="copy-btn" onclick="renderMarkdown(this)">Render</button>'
     : '';
   const marker = markerId === null ? '' : ` data-hl="${markerId}"`;
-  return `<div class="code-block"><div class="code-header"><span class="code-lang">${displayLang}</span>${renderBtn}<button class="copy-btn" onclick="copyCode(this)">Copy</button></div><pre><code class="hljs"${marker}>${wrapWideChars(innerHtml)}</code></pre></div>`;
+  return `<div class="code-block"><div class="code-header"><span class="code-lang">${displayLang}</span>${renderBtn}<button class="copy-btn" onclick="copyCode(this)">Copy</button></div><pre><code class="hljs"${marker}>${wrapWideCharsCached(innerHtml)}</code></pre></div>`;
 }
 // ---------------------------------------------------------------------------
 // Wide-character 2ch boxes. The code font stack ('Fira Code', ui-monospace,
@@ -247,6 +247,12 @@ function wc2chIsWide(cp) {
 // entities around escaped text, so wide chars only ever appear in text
 // segments.
 var WC2CH_TAG_SPLIT_RE = /(<[^>]*>)/g;
+// Any character below U+1100 — the lowest W/F range's floor in WC2CH_RANGES —
+// is never wrappable, so a text segment the probe misses skips the per-char
+// scan whole. The probe is conservative in the safe direction: a non-W/F char
+// at or above U+1100 still takes the scan, and astral characters arrive as
+// surrogate units (≥ U+1100) that the scan already consumes as pairs.
+var WC2CH_PRESENT_RE = /[\u1100-\uFFFF]/;
 // Trailing marks that render inside the wide char's glyph run and share its
 // box: General_Category=Mark (a legal \p escape, unlike East_Asian_Width).
 // U+FE0F is itself Mn, so the class already carries it; the explicit check
@@ -288,9 +294,36 @@ function wrapWideChars(html) {
   var out = [];
   for (var i = 0; i < parts.length; i++) {
     if (i % 2 === 1) out.push(parts[i]);  // odd segments are the captured tags
-    else wc2chWrapText(parts[i], out);
+    else if (WC2CH_PRESENT_RE.test(parts[i])) wc2chWrapText(parts[i], out);
+    else out.push(parts[i]);
   }
   return out.join('');
+}
+
+// Re-wraps of one inner HTML are pure repeats: a streamed draft re-renders its
+// completed blocks from the highlight cache on every paint, and the flush's
+// marker swap re-wraps the bytes its settled block just wrapped. The wrap is a
+// pure function of the input string, so a bounded LRU serves the repeats; the
+// cap bounds retained outputs to one wrapped block per entry, keyed by bytes
+// the highlight cache already holds. The tool-preview mounts (workers.js,
+// chat/rendering.js) stay on the direct wrap: their re-renders carry new
+// truncated bodies, so caching them would only evict the block entries.
+var WRAP_CACHE_CAP = 64;
+var wrapWideCharsCache = new Map();
+
+function wrapWideCharsCached(html) {
+  var cached = wrapWideCharsCache.get(html);
+  if (cached !== undefined) {
+    wrapWideCharsCache.delete(html);
+    wrapWideCharsCache.set(html, cached);
+    return cached;
+  }
+  cached = wrapWideChars(html);
+  if (wrapWideCharsCache.size >= WRAP_CACHE_CAP) {
+    wrapWideCharsCache.delete(wrapWideCharsCache.keys().next().value);
+  }
+  wrapWideCharsCache.set(html, cached);
+  return cached;
 }
 
 function highlightKey(lang, code) {
@@ -534,61 +567,10 @@ function recordCodeTokens(tokens) {
   // wraps _{subscripts} in <em> — KaTeX receives the bytes the model wrote.
   // Rendering itself stays with renderChatMath's auto-render walk on the DOM
   // text node; this extension only decides what survives the parse. The
-  // scanner rules are duplicated in scripts/prerender_math.js (the wrap
-  // pre-render driver, which scans HTML fragments instead of markdown); the
-  // two copies are kept behavior-identical by tests/chat_math_extension.test.js.
-  function mathRaw(src) {
-    const isWs = (c) => c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f' || c === '\v';
-    const isDigit = (c) => c >= '0' && c <= '9';
-    // $...$: single line. Open: next char non-whitespace and non-$ (blocks
-    // "$5 and $10" currency, whose close candidate sits next to whitespace).
-    // Close: prev char non-whitespace non-$, next char non-digit.
-    if (src.startsWith('$') && !src.startsWith('$$')) {
-      if (src[1] === undefined || isWs(src[1])) return undefined;
-      for (let j = 1; j < src.length; j++) {
-        const c = src[j];
-        if (c === '\\') { j++; continue; }  // \$ never closes; \x pairs skip as content
-        if (c === '\n') return undefined;
-        if (c !== '$') continue;
-        if (isWs(src[j - 1]) || src[j - 1] === '$') continue;
-        if (isDigit(src[j + 1])) continue;
-        return src.slice(0, j + 1);
-      }
-      return undefined;
-    }
-    // $$...$$: multi-line; the first $$ closes; any $ inside the content
-    // declines the token (no nested $ — a relaxed rule only adds misreads).
-    if (src.startsWith('$$')) {
-      for (let j = 2; j < src.length; j++) {
-        if (src[j] !== '$') continue;
-        if (src[j + 1] !== '$') return undefined;
-        if (j === 2) return undefined;  // empty content
-        return src.slice(0, j + 2);
-      }
-      return undefined;
-    }
-    // \(...\) inline single-line, \[...\] display multi-line. The close check
-    // runs before the escape skip so the delimiter's own backslash is not
-    // consumed as an escape pair; \[ inside the content never re-opens. A \]
-    // immediately followed by ']' is not a close (display math with [N, 32]
-    // style trailing brackets).
-    const bracket = src.startsWith('\\[') ? { close: '\\]', singleLine: false }
-      : src.startsWith('\\(') ? { close: '\\)', singleLine: true }
-      : null;
-    if (bracket) {
-      for (let j = 2; j < src.length; j++) {
-        if (src.startsWith(bracket.close, j)) {
-          if (bracket.close.endsWith(']') && src[j + 2] === ']') { j++; continue; }
-          if (j === 2) return undefined;  // empty content
-          return src.slice(0, j + 2);
-        }
-        if (src[j] === '\\') { j++; continue; }
-        if (src[j] === '\n' && bracket.singleLine) return undefined;
-      }
-      return undefined;
-    }
-    return undefined;
-  }
+  // delimiter scan is math-scanner.js's mathSpan (loaded just before this
+  // file), shared with the wrap pre-render driver; tests/chat_math_extension.test.js
+  // and tests/core/test_artifact_wrap.py run the same case list against the
+  // two consumers.
   const mathExtension = {
     name: 'math',
     level: 'inline',
@@ -604,8 +586,8 @@ function recordCodeTokens(tokens) {
       return cut;
     },
     tokenizer(src) {
-      const raw = mathRaw(src);
-      return raw && { type: 'math', raw, text: raw };
+      const hit = mathSpan(src);
+      return hit && { type: 'math', raw: hit.raw, text: hit.raw };
     },
     // Same invariant as renderer.html: the span renders as literal text, so a
     // < or & inside the formula can never become a DOM node.
@@ -798,13 +780,13 @@ function flushDeferredCodeHighlights() {
     for (const el of document.querySelectorAll(selector)) {
       // Same wrap codeBlockHtml applied to the settled memo bytes: the DOM
       // write and the memo entry stay byte-identical.
-      el.innerHTML = wrapWideChars(rec.highlighted);
+      el.innerHTML = wrapWideCharsCached(rec.highlighted);
       el.removeAttribute('data-hl');
       found = true;
     }
     for (const root of roots) {
       for (const el of root.querySelectorAll(selector)) {
-        el.innerHTML = wrapWideChars(rec.highlighted);
+        el.innerHTML = wrapWideCharsCached(rec.highlighted);
         el.removeAttribute('data-hl');
         found = true;
       }

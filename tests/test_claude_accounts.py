@@ -16,8 +16,10 @@ from conftest import (
     mock_session_callbacks,
     pool_cfg,
     run_session_consumer,
+    seed_transcript_copy,
     write_pool_credentials,
 )
+from structlog.testing import capture_logs
 
 from src.agents import master_cc_run, master_cc_state
 from src.api import ext_usage as ext_usage_mod
@@ -698,3 +700,197 @@ async def test_consumer_skips_account_persistence_when_no_account_was_assigned(t
 
   callbacks.persist_claude_account.assert_not_awaited()
   assert asyncio.iscoroutinefunction(SessionManager.persist_claude_account)
+
+
+# ---------------------------------------------------------------------------
+# The move guard (refuse to overwrite a newer copy)
+# ---------------------------------------------------------------------------
+
+
+def test_move_transcript_refuses_to_overwrite_a_strictly_newer_destination(tmp_path: Path) -> None:
+  src_dir, dst_dir = tmp_path / "claude-main", tmp_path / "claude-ext-1"
+  src = seed_transcript_copy(src_dir, "uuid-1", '{"stale": true}\n', mtime_ns=1_000)
+  dst = seed_transcript_copy(dst_dir, "uuid-1", '{"stale": true}\n{"live": true}\n', mtime_ns=2_000)
+
+  with pytest.raises(claude_accounts.TranscriptMoveError) as excinfo:
+    claude_accounts.move_transcript("uuid-1", src_dir, dst_dir)
+
+  message = str(excinfo.value)
+  assert claude_accounts.GUARD_REFUSAL_MARKER in message
+  assert str(dst) in message and str(src) in message
+  dst_body, src_body = dst.read_text(encoding="utf-8"), src.read_text(encoding="utf-8")
+  assert f"size {len(dst_body)}" in message.split("vs src")[0]
+  assert f"size {len(src_body)}" in message.split("vs src")[1]
+  # The refusal moves nothing: both copies stand exactly as they were.
+  assert src.read_text(encoding="utf-8") == '{"stale": true}\n'
+  assert dst.read_text(encoding="utf-8") == '{"stale": true}\n{"live": true}\n'
+
+
+def test_move_transcript_refuses_when_mtimes_match_and_destination_is_larger(tmp_path: Path) -> None:
+  src_dir, dst_dir = tmp_path / "claude-main", tmp_path / "claude-ext-1"
+  seed_transcript_copy(src_dir, "uuid-1", "short\n", mtime_ns=5_000)
+  seed_transcript_copy(dst_dir, "uuid-1", "short\nand the destination grew under the same stamp\n", mtime_ns=5_000)
+
+  with pytest.raises(claude_accounts.TranscriptMoveError) as excinfo:
+    claude_accounts.move_transcript("uuid-1", src_dir, dst_dir)
+
+  assert claude_accounts.GUARD_REFUSAL_MARKER in str(excinfo.value)
+
+
+def test_move_transcript_passes_an_identical_copy_back_through(tmp_path: Path) -> None:
+  """Equal mtime and size is the same copy re-moved: the move proceeds, not a refusal."""
+  src_dir, dst_dir = tmp_path / "claude-main", tmp_path / "claude-ext-1"
+  body = '{"same": true}\n'
+  src = seed_transcript_copy(src_dir, "uuid-1", body, mtime_ns=5_000)
+  dst = seed_transcript_copy(dst_dir, "uuid-1", body, mtime_ns=5_000)
+
+  moved = claude_accounts.move_transcript("uuid-1", src_dir, dst_dir)
+
+  assert moved == dst
+  assert dst.read_text(encoding="utf-8") == body
+  assert src.exists(), "the source copy stays for fallback"
+
+
+def test_move_transcript_leaves_no_staging_file_behind(tmp_path: Path) -> None:
+  src_dir, dst_dir = tmp_path / "claude-main", tmp_path / "claude-ext-1"
+  transcript = make_transcript(src_dir, "uuid-1")
+  sidecar = transcript.with_suffix("") / "tool-results"
+  sidecar.mkdir(parents=True)
+  (sidecar / "r.txt").write_text("result", encoding="utf-8")
+
+  claude_accounts.move_transcript("uuid-1", src_dir, dst_dir)
+
+  slug_dir = dst_dir / "projects" / transcript.parent.name
+  assert sorted(path.name for path in slug_dir.iterdir()) == [
+      "uuid-1", "uuid-1.jsonl"
+  ], ("the staged copies are gone: only the final jsonl and its sidecar remain")
+
+
+def test_move_transcript_sidecar_mismatch_error_carries_the_file_set_diff(tmp_path: Path) -> None:
+  """A sidecar stage that cannot land reports which files are missing, extra, or differ."""
+  src_dir, dst_dir = tmp_path / "claude-main", tmp_path / "claude-ext-1"
+  transcript = make_transcript(src_dir, "uuid-1")
+  sidecar = transcript.with_suffix("")
+  sidecar.mkdir()
+  (sidecar / "a.txt").write_text("alpha", encoding="utf-8")
+  (sidecar / "sub").mkdir()
+  (sidecar / "sub" / "b.txt").write_text("beta", encoding="utf-8")
+  # The destination slug already holds a directory where a.txt must land: the
+  # staged copy can never be replaced into place.
+  dst_sidecar = dst_dir / "projects" / transcript.parent.name / "uuid-1"
+  (dst_sidecar / "a.txt").mkdir(parents=True)
+  (dst_sidecar / "a.txt" / "keep.txt").write_text("born here", encoding="utf-8")
+
+  with pytest.raises(claude_accounts.TranscriptMoveError) as excinfo:
+    claude_accounts.move_transcript("uuid-1", src_dir, dst_dir)
+
+  message = str(excinfo.value)
+  assert "file-set mismatch" in message
+  assert "missing at dst" in message and "a.txt" in message and "sub/b.txt" in message
+  assert "only at dst" in message and "a.txt/keep.txt" in message
+  # No staged half-products remain at the destination.
+  assert [path.name for path in dst_sidecar.rglob("*") if path.is_file()] == ["keep.txt"]
+
+
+def test_move_transcript_retains_and_counts_destination_born_sidecar_files(tmp_path: Path) -> None:
+  src_dir, dst_dir = tmp_path / "claude-main", tmp_path / "claude-ext-1"
+  transcript = make_transcript(src_dir, "uuid-1")
+  src_sidecar = transcript.with_suffix("")
+  src_sidecar.mkdir()
+  (src_sidecar / "src.txt").write_text("from source", encoding="utf-8")
+  dst_sidecar = dst_dir / "projects" / transcript.parent.name / "uuid-1"
+  (dst_sidecar / "born-here").mkdir(parents=True)
+  (dst_sidecar / "born-here" / "dst.txt").write_text("from destination", encoding="utf-8")
+
+  with capture_logs() as logs:
+    claude_accounts.move_transcript("uuid-1", src_dir, dst_dir)
+
+  assert (dst_sidecar / "born-here" / "dst.txt").read_text(encoding="utf-8") == "from destination"
+  moved = next(entry for entry in logs if entry["event"] == "claude_account_transcript_moved")
+  assert moved["sidecar_src_files"] == 1
+  assert moved["sidecar_dst_only_files"] == 1
+  assert moved["sidecar_bytes"] == len("from source")
+
+
+# ---------------------------------------------------------------------------
+# Copy retirement after a sound round
+# ---------------------------------------------------------------------------
+
+
+def test_retire_transcript_copies_keeps_the_newest_two(tmp_path: Path) -> None:
+  cfg = _pool_cfg(tmp_path)
+  oldest = seed_transcript_copy(tmp_path / "claude-ext-2", "uuid-1", "oldest\n", mtime_ns=1_000)
+  middle = seed_transcript_copy(tmp_path / "claude-ext-1", "uuid-1", "middle\n", mtime_ns=2_000)
+  newest = seed_transcript_copy(tmp_path / "claude-main", "uuid-1", "newest\n", mtime_ns=3_000)
+  for copy in (oldest, middle, newest):
+    (copy.with_suffix("") / "tool-results").mkdir(parents=True)
+    (copy.with_suffix("") / "tool-results" / "r.txt").write_text("x", encoding="utf-8")
+
+  claude_accounts.retire_transcript_copies(cfg, "uuid-1")
+
+  assert not oldest.exists() and not oldest.with_suffix("").exists()
+  assert middle.exists() and newest.exists()
+  assert (newest.with_suffix("") / "tool-results" / "r.txt").exists()
+  assert claude_accounts.transcript_matches(tmp_path / "claude-ext-2", "uuid-1") == []
+
+
+def test_retire_transcript_copies_keeps_a_custom_count(tmp_path: Path) -> None:
+  cfg = _pool_cfg(tmp_path)
+  seed_transcript_copy(tmp_path / "claude-ext-2", "uuid-1", "oldest\n", mtime_ns=1_000)
+  middle = seed_transcript_copy(tmp_path / "claude-ext-1", "uuid-1", "middle\n", mtime_ns=2_000)
+  newest = seed_transcript_copy(tmp_path / "claude-main", "uuid-1", "newest\n", mtime_ns=3_000)
+
+  claude_accounts.retire_transcript_copies(cfg, "uuid-1", keep=1)
+
+  assert not middle.exists()
+  assert newest.exists()
+
+
+def test_retire_transcript_copies_is_a_noop_below_the_keep_count(tmp_path: Path) -> None:
+  cfg = _pool_cfg(tmp_path)
+  only = seed_transcript_copy(tmp_path / "claude-main", "uuid-1", "only\n", mtime_ns=1_000)
+
+  claude_accounts.retire_transcript_copies(cfg, "uuid-1")
+
+  assert only.exists()
+
+
+# ---------------------------------------------------------------------------
+# The placement probe's lineage helpers
+# ---------------------------------------------------------------------------
+
+
+def test_newest_transcript_copy_picks_the_mtime_newest_pool_holder(tmp_path: Path) -> None:
+  cfg = _pool_cfg(tmp_path)
+  seed_transcript_copy(tmp_path / "claude-ext-2", "uuid-1", "old\n", mtime_ns=1_000)
+  newest = seed_transcript_copy(tmp_path / "claude-ext-1", "uuid-1", "new\n", mtime_ns=2_000)
+
+  holder = claude_accounts.newest_transcript_copy(cfg, "uuid-1")
+
+  assert holder is not None
+  assert holder[0].label == "ext-1"
+  assert holder[1] == newest
+  assert claude_accounts.newest_transcript_copy(cfg, "uuid-9") is None
+
+
+def test_transcript_lineage_split_tells_succession_from_fork(tmp_path: Path) -> None:
+  label_copy = tmp_path / "label.jsonl"
+  # A successor: the newest copy grew past the label's tail, out of the probe window.
+  seed_line = '{"type": "user", "content": "seed"}\n'
+  grown = seed_line + '{"type": "assistant", "content": "' + "x" * (claude_accounts.PROBE_TAIL_BYTES * 2) + '"}\n'
+  newest_grown = tmp_path / "newest-grown.jsonl"
+  newest_grown.write_text(grown, encoding="utf-8")
+  label_copy.write_text(seed_line, encoding="utf-8")
+
+  assert claude_accounts.transcript_lineage_split(
+      label_copy, newest_grown) is True, ("the label's tail line fell out of the newest copy's tail window: split")
+
+  # Same lineage: the newest copy still ends where the label ends.
+  newest_equal = tmp_path / "newest-equal.jsonl"
+  newest_equal.write_text(seed_line, encoding="utf-8")
+  assert claude_accounts.transcript_lineage_split(label_copy, newest_equal) is False
+
+  # A blank label window has no tail line to compare and never reads as split.
+  blank = tmp_path / "blank.jsonl"
+  blank.write_text("", encoding="utf-8")
+  assert claude_accounts.transcript_lineage_split(blank, newest_grown) is False

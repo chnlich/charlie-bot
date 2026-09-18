@@ -75,10 +75,7 @@ def _reference_takeoff_gate(
         except ValueError:
           issued_at = None
         if issued_at is not None:
-          if issued_at.tzinfo is None:
-            issued_at = None
-          else:
-            issued_at = issued_at.astimezone(UTC)
+          issued_at = None if issued_at.tzinfo is None else issued_at.astimezone(UTC)
         if issued_at is not None:
           latest_pre_takeoff_at = issued_at
   pre_takeoff_active = (
@@ -109,7 +106,6 @@ def _patch_delegate_spawn_rig(
     monkeypatch: pytest.MonkeyPatch,
     req: DelegateRequest,
     session_mgr: Any,
-    thread_mgr: Any,
     captured: dict[str, Any],
 ) -> None:
   """Install the resolve/spawn/create_logged_task/get_config fakes shared by the delegate_task
@@ -733,7 +729,7 @@ async def test_delegate_task_verify_skips_takeoff_gate_and_spawns_repoless(monke
     raise AssertionError(f"takeoff gate should not run for verify: {session_id}")
 
   session_mgr.load_chat_events_sync = fail_if_gate_runs  # type: ignore[method-assign]
-  _patch_delegate_spawn_rig(monkeypatch, req, session_mgr, thread_mgr, captured)
+  _patch_delegate_spawn_rig(monkeypatch, req, session_mgr, captured)
 
   result = await internal.delegate_task(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
 
@@ -791,7 +787,7 @@ async def test_delegate_task_does_not_pass_takeoff_gate_to_spawn_worker(monkeypa
     assert mgr is session_mgr
 
   monkeypatch.setattr(internal, "check_takeoff_gate", fake_takeoff_gate)
-  _patch_delegate_spawn_rig(monkeypatch, req, session_mgr, thread_mgr, captured)
+  _patch_delegate_spawn_rig(monkeypatch, req, session_mgr, captured)
 
   result = await internal.delegate_task(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
 

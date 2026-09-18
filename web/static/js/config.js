@@ -90,14 +90,18 @@ function initAuth() {
 // ---------------------------------------------------------------------------
 let _draftTimer = null;
 
-function saveDraft() {
+// The one writer of the msg-input draft: every switch path and the debounced
+// input handler flush through here, keyed by the live DRAFT_KEY.
+function saveDraftNow() {
   if (!DRAFT_KEY) return;
+  const v = document.getElementById('msg-input').value;
+  if (v) localStorage.setItem(DRAFT_KEY, v);
+  else localStorage.removeItem(DRAFT_KEY);
+}
+
+function saveDraft() {
   clearTimeout(_draftTimer);
-  _draftTimer = setTimeout(() => {
-    const v = document.getElementById('msg-input').value;
-    if (v) localStorage.setItem(DRAFT_KEY, v);
-    else localStorage.removeItem(DRAFT_KEY);
-  }, 300);
+  _draftTimer = setTimeout(saveDraftNow, 300);
 }
 let masterThinking = !!THINKING_SINCE;
 

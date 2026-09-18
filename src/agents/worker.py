@@ -17,10 +17,11 @@ from src.agents.backends.base import (
     tail_follow_events,
 )
 from src.agents.backends.claude_code import ClaudeCodeBackend, claude_supervisor_env
-from src.agents.backends.deferred_build import build_backend_module_getattr, load_build_backend
+from src.agents.backends.deferred_build import load_build_backend
 from src.core import claude_accounts, claude_compaction, claude_relay, runs
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.deferred import deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendOption, BackendType, ClaudeAccount, ThreadMetadata
 from src.core.ndjson import append_ndjson
@@ -34,7 +35,7 @@ log = LazyStructlogLogger()
 
 def __getattr__(name: str) -> Any:
   # The "src.agents.worker.build_backend" patch target resolves through this hook.
-  return build_backend_module_getattr(name, __name__, globals())
+  return deferred_module_getattr(name, __name__, globals(), "build_backend", load_build_backend)
 
 
 QUOTA_ERROR_PATTERNS = [
@@ -46,7 +47,7 @@ QUOTA_ERROR_PATTERNS = [
 ]
 
 
-class QuotaExhaustedException(Exception):
+class QuotaExhaustedError(Exception):
   pass
 
 
@@ -325,16 +326,18 @@ class Worker:
           thread=self._thread.id,
           account=current.label,
           config_dir=current.config_dir,
-          reason="auth_failed")
-      notice = claude_relay.login_required_event(current, "auth_failed")
+          reason=claude_relay.LOGIN_REASON_AUTH_FAILED)
+      notice = claude_relay.login_required_event(current, claude_relay.LOGIN_REASON_AUTH_FAILED)
       await self._persist_and_broadcast(fd, notice)
       if self.on_session_event is not None:
         await self.on_session_event(notice)
     if self._relays >= claude_relay.MAX_RELAYS_PER_TURN:
       raise RuntimeError(claude_relay.relay_limit_message())
-    nxt, error = claude_relay.move_to_next_account(
+    nxt, error, _refused_holder = claude_relay.move_to_next_account(
         self._cfg, self._backend_option.model, current, self._thread.claude_session_id)
     if nxt is None:
+      # A guard-refused move ends the worker loudly like every other relay
+      # failure: adoption is the master turn's consumer decision, not this loop's.
       raise claude_relay.PoolExhaustedError(error)
     log.warning(
         "worker_account_relay",
@@ -489,7 +492,7 @@ class Worker:
             account=self._claude_account.label if self._claude_account is not None else None)
         if self._relay_watch is None:
           await _append_event_line(fd, _event_line(event_data))
-          raise QuotaExhaustedException(f"Rate limited ({rate_type}), resets at {resets_at}")
+          raise QuotaExhaustedError(f"Rate limited ({rate_type}), resets at {resets_at}")
 
     if event_type == ET.ASSISTANT:
       message = event_data.get("message")
@@ -499,7 +502,7 @@ class Worker:
 
     if event_type == ET.ERROR and any(p in event_message or p in event_content for p in QUOTA_ERROR_PATTERNS):
       await _append_event_line(fd, _event_line(event_data))
-      raise QuotaExhaustedException(event_data.get("message", "Quota exhausted"))
+      raise QuotaExhaustedError(event_data.get("message", "Quota exhausted"))
 
     # Write to disk
     await _append_event_line(fd, _event_line(event_data))

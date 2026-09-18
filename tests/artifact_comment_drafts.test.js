@@ -7,7 +7,7 @@ const {dockOf, findChildByClass, makeElement, clickElement, flushPromises} =
 const {loadArtifactCommentsContext} = require('./artifact_comments_vm_context');
 const {SESSIONS_ROOT} = require('./sessions_root_stub');
 
-const ARTIFACT_PATH = '/files' + SESSIONS_ROOT + '/sess-draft/artifacts/plan.html';
+const ARTIFACT_PATH = '/absolute_filepath' + SESSIONS_ROOT + '/sess-draft/artifacts/plan.html';
 const DRAFT_KEY = 'cbc-draft:' + ARTIFACT_PATH;
 
 // Objects created inside a vm context have a different Object.prototype than the

@@ -8,6 +8,7 @@
 const fs = require('node:fs');
 const https = require('node:https');
 const path = require('node:path');
+const { MAX_STRING_LENGTH } = require('node:buffer').constants;
 
 const { buildStreamHarness } = require('./stream_render_harness');
 
@@ -43,52 +44,53 @@ function liveChatFiles() {
   return files;
 }
 
-// One line of *p per yield, read in bounded chunks: a live chat file can outgrow
-// the engine's max string length (a whole-file readFileSync throws
-// ERR_STRING_TOO_LONG long before that), so the corpus scan never holds a whole
-// file. A single line larger than MAX_LINE_BYTES is outside every collector's
-// corpus by definition — one that size either cannot be materialized as a
-// string at all or cannot replay through the per-200-bytes paint harness in
-// bounded time — so it is skipped with one loud warning instead of failing
-// every corpus read on the host.
-function* readLines(p) {
-  const CHUNK_BYTES = 16 * 1024 * 1024;
-  const MAX_LINE_BYTES = 256 * 1024 * 1024;
+// One chat file's lines, streamed: a single tool_result line can carry ~1 GB,
+// past Node's max string length, and a whole-file readFileSync throws
+// ERR_STRING_TOO_LONG on the file holding it. Lines ride byte buffers to the
+// newline and only complete lines decode, so a chunk boundary never splits a
+// UTF-8 character. A line above MAX_STRING_LENGTH bytes is dropped unparsed:
+// at or under the cap the char count (bounded by the byte count) always
+// parses, and no JSON event line that size holds a body the scans read.
+const CHUNK_BYTES = 1 << 20;
+
+function* chatFileLines(p) {
   const fd = fs.openSync(p, 'r');
   try {
-    let pending = Buffer.alloc(0);
-    let skipping = false;
     const buf = Buffer.alloc(CHUNK_BYTES);
-    let read;
-    while ((read = fs.readSync(fd, buf, 0, CHUNK_BYTES, null)) > 0) {
-      const chunk = buf.subarray(0, read);
+    let pieces = [];
+    let pending = 0; // bytes accumulated for the line in progress
+    let overflow = false;
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, CHUNK_BYTES, null);
+      if (n === 0) break;
       let start = 0;
-      for (;;) {
-        const idx = chunk.indexOf(10, start);
-        if (idx === -1) break;
-        if (!skipping) {
-          pending = Buffer.concat([pending, chunk.subarray(start, idx)]);
-          if (pending.length > MAX_LINE_BYTES) {
-            process.emitWarning(`readLines: skipping an unmaterializable ${pending.length}-byte line in ${p}`);
-            skipping = true;
-          } else {
-            yield pending.toString('utf8');
+      while (start < n) {
+        const nl = buf.subarray(start, n).indexOf(10);
+        if (nl === -1) {
+          if (!overflow) {
+            pieces.push(Buffer.from(buf.subarray(start, n)));
+            pending += n - start;
+            if (pending > MAX_STRING_LENGTH) { pieces = []; overflow = true; }
           }
-        }
-        skipping = false;
-        pending = Buffer.alloc(0);
-        start = idx + 1;
-      }
-      if (!skipping) {
-        pending = Buffer.concat([pending, chunk.subarray(start)]);
-        if (pending.length > MAX_LINE_BYTES) {
-          process.emitWarning(`readLines: skipping an unmaterializable ${pending.length}-byte line in ${p}`);
-          skipping = true;
-          pending = Buffer.alloc(0);
+          start = n;
+        } else {
+          const end = start + nl;
+          if (!overflow) {
+            pieces.push(Buffer.from(buf.subarray(start, end)));
+            const line = Buffer.concat(pieces);
+            if (line.length <= MAX_STRING_LENGTH) yield line.toString('utf8');
+          }
+          pieces = [];
+          pending = 0;
+          overflow = false;
+          start = end + 1;
         }
       }
     }
-    if (!skipping && pending.length) yield pending.toString('utf8');
+    if (!overflow && pieces.length) {
+      const line = Buffer.concat(pieces);
+      if (line.length <= MAX_STRING_LENGTH) yield line.toString('utf8');
+    }
   } finally {
     fs.closeSync(fd);
   }
@@ -102,7 +104,7 @@ function largestAssistantDraft(accept) {
   let best = '';
   for (const f of files) {
     if (f.size <= best.length) continue;
-    for (const line of readLines(f.p)) {
+    for (const line of chatFileLines(f.p)) {
       if (!line || line.indexOf('"assistant"') === -1) continue;
       let ev;
       try { ev = JSON.parse(line); } catch { continue; }
@@ -147,7 +149,7 @@ function worstPageCorpus(bodyTexts, pageMessages) {
   if (!worst) throw new Error('no on-disk live chat file');
   const { p: best, size: bestSize } = worst;
   const texts = [];
-  for (const line of readLines(best)) {
+  for (const line of chatFileLines(best)) {
     if (!line) continue;
     let ev;
     try {

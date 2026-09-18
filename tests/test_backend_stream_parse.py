@@ -40,7 +40,7 @@ class _LineReader:
     self._lines = lines
     self._i = 0
 
-  def __aiter__(self) -> "_LineReader":
+  def __aiter__(self) -> _LineReader:
     return self
 
   async def __anext__(self) -> bytes:
@@ -97,13 +97,15 @@ async def _collect_staged_tail(partial: bytes, completion: bytes) -> list[dict]:
     events: list[dict] = []
 
     async def consume() -> None:
+      # Per-item append is load-bearing: the mid-flight `assert events == []` below
+      # probes incremental delivery, which a collect-then-extend defers to the end.
       async for event in tail_follow_events(
           raw,
           translate=lambda event: [event],
           is_alive=lambda: True,
           post_result_timeout=9999.0,
       ):
-        events.append(event)
+        events.append(event)  # noqa: PERF401  (see comment above)
 
     task = asyncio.create_task(consume())
     try:
@@ -135,6 +137,43 @@ async def test_tail_follow_events_replays_from_offset() -> None:
   # The NaN-bearing line lands in this range and skips as malformed (the
   # parser boundary the funnels adopt), so only the result line survives.
   assert [event["seq"] for event in events] == [3]
+
+
+@pytest.mark.asyncio
+async def test_tail_follow_events_checkpoints_cursor_at_consumed_offset() -> None:
+  """A mount with a cursor file leaves it at the consumed byte offset —
+  including the skipped lines' bytes (blank and malformed consume index), so
+  a re-attach at the recorded offset replays nothing already delivered."""
+  from src.core import runs
+
+  raw_bytes = b"".join(_LINES)
+  with tempfile.TemporaryDirectory() as work:
+    raw = Path(work) / "agent.raw.ndjson"
+    raw.write_bytes(raw_bytes)
+    cursor = Path(work) / runs.CURSOR_NAME
+    events = [
+        event async for event in tail_follow_events(
+            raw,
+            translate=lambda event: [event],
+            is_alive=lambda: False,
+            cursor=cursor,
+            post_result_timeout=60.0,
+        )
+    ]
+    assert [event["seq"] for event in events] == [1, 3]
+    assert runs.read_raw_cursor(cursor) == len(raw_bytes)
+    # A re-attach at the recorded offset replays nothing.
+    events = [
+        event async for event in tail_follow_events(
+            raw,
+            translate=lambda event: [event],
+            is_alive=lambda: False,
+            cursor=cursor,
+            start_offset=runs.read_raw_cursor(cursor),
+            post_result_timeout=60.0,
+        )
+    ]
+    assert events == []
 
 
 @pytest.mark.asyncio

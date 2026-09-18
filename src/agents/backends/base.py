@@ -9,6 +9,7 @@ at the recorded cursor without the agent noticing anything.
 """
 
 import asyncio
+import mmap
 import os
 import shutil
 import signal
@@ -22,7 +23,6 @@ from pathlib import Path
 
 from src.core import event_types as ET
 from src.core import runs
-from src.core.config import get_config
 from src.core.log_once import LazyStructlogLogger
 from src.core.ndjson import parse_ndjson_line, write_all
 from src.core.process import (
@@ -487,109 +487,124 @@ async def tail_follow_events(
     last_output_at = last_growth
   silence_reported = False
   pending_tool_calls: set[str] = set()
+  cursor_writer = runs.RawCursorWriter(cursor) if cursor is not None else None
 
-  with open(raw_path, "rb") as f:
-    f.seek(offset)
-    # The drain reads to EOF once per round and carries only the trailing
-    # partial line into the next round, so a completed backlog costs one
-    # C-level readall plus one slice per line; the chunked bytearray carry
-    # re-grew and compacted the whole accumulated buffer per 64 KB round, and
-    # a 10 MB backlog measured ~14 ms of that churn against a ~13 ms parse
-    # floor (the live read side of every covered backend's streamed turn).
-    carry = b""
-    while True:
-      fresh = f.read()
-      if fresh:
-        last_growth = time.monotonic()
-        # The producer's last write, anchored to the monotonic clock (the
-        # file's mtime — reading pre-mount backlog must not count as output).
-        last_output_at = last_growth - max(0.0, time.time() - os.fstat(f.fileno()).st_mtime)
-        data = carry + fresh if carry else fresh
-        carry = b""
-        view = memoryview(data)
-        start = 0
-        while True:
-          nl = data.find(b"\n", start)
-          if nl < 0:
-            carry = data[start:]
-            break
-          # The line rides a zero-copy view: orjson parses straight from the
-          # read buffer, where a bytes slice paid a full copy per line (the
-          # 10 MB worst line measured ~5 ms of copy plus ~8 ms of parse
-          # inflation from the copy's cold cache).
-          raw_line = view[start:nl]
-          start = nl + 1
-          offset += len(raw_line) + 1
-          event = parse_ndjson_line(raw_line, log_event="backend_line_not_json", log_fields={})
-          if event is None:
-            continue
-          mtime = os.fstat(f.fileno()).st_mtime
-          for translated in translate(event):
-            evt_type = translated.get("type")
+  try:
+    with open(raw_path, "rb") as f:
+      # The drain maps the file read-only each round and splits its lines from
+      # the mapping — parse_ndjson_file's zero-copy walk — so a completed
+      # backlog pays no whole-backlog bytes copy (the 1 GB worst raw log
+      # measured ~554 ms of readall memcpy against its ~2.7 s parse floor).
+      # *read_to* is the scan watermark: the region past the last consumed
+      # line is re-examined only when the producer added bytes, so a torn tail
+      # waits for its completion instead of rescanning every poll. The raw
+      # log's writers only ever append (a rotated log moves to an inode the
+      # open fd never sees); a writer that truncated the mapped file would
+      # SIGBUS the drain, the contract parse_ndjson_file's mapping states.
+      carry = b""
+      read_to = start_offset
+      while True:
+        size = os.fstat(f.fileno()).st_size
+        if size > read_to:
+          last_growth = time.monotonic()
+          # The producer's last write, anchored to the monotonic clock (the
+          # file's mtime — reading pre-mount backlog must not count as output).
+          last_output_at = last_growth - max(0.0, time.time() - os.fstat(f.fileno()).st_mtime)
+          mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+          view = None
+          try:
+            view = memoryview(mm)
+            pos = offset
+            while True:
+              nl = mm.find(b"\n", pos)
+              if nl < 0:
+                break
+              # The line rides a zero-copy view: orjson parses straight from
+              # the mapping, where a bytes slice paid a full copy per line.
+              offset = nl + 1
+              event = parse_ndjson_line(view[pos:nl], log_event="backend_line_not_json", log_fields={})
+              pos = nl + 1
+              if event is None:
+                continue
+              mtime = os.fstat(f.fileno()).st_mtime
+              for translated in translate(event):
+                evt_type = translated.get("type")
 
-            # Track pending tool calls — wrapped format (OpenCode/GLM-5):
-            # {type: 'assistant', message: {content: [{type: 'tool_use', id: '...'}]}}
-            if evt_type == ET.ASSISTANT:
-              for item in translated.get("message", {}).get("content", []):
-                if isinstance(item, dict) and item.get("type") == ET.TOOL_USE:
-                  tool_id = item.get("id", "")
+                # Track pending tool calls — wrapped format (OpenCode/GLM-5):
+                # {type: 'assistant', message: {content: [{type: 'tool_use', id: '...'}]}}
+                if evt_type == ET.ASSISTANT:
+                  for item in translated.get("message", {}).get("content", []):
+                    if isinstance(item, dict) and item.get("type") == ET.TOOL_USE:
+                      tool_id = item.get("id", "")
+                      if tool_id:
+                        pending_tool_calls.add(tool_id)
+
+                # Track pending tool calls — flat format (Codex/Gemini):
+                # {type: 'tool_use', id: '...', name: '...'}
+                if evt_type == ET.TOOL_USE:
+                  tool_id = translated.get("id", "")
                   if tool_id:
                     pending_tool_calls.add(tool_id)
 
-            # Track pending tool calls — flat format (Codex/Gemini):
-            # {type: 'tool_use', id: '...', name: '...'}
-            if evt_type == ET.TOOL_USE:
-              tool_id = translated.get("id", "")
-              if tool_id:
-                pending_tool_calls.add(tool_id)
-
-            # Clear pending tool calls on tool_result events — flat format.
-            if evt_type == ET.TOOL_RESULT:
-              tool_use_id = translated.get("tool_use_id", "")
-              if tool_use_id:
-                pending_tool_calls.discard(tool_use_id)
-
-            # Clear pending tool calls — wrapped format (Claude Code):
-            # {type: 'user', message: {content: [{type: 'tool_result', tool_use_id: '...'}]}}
-            if evt_type == ET.USER:
-              for item in translated.get("message", {}).get("content", []):
-                if isinstance(item, dict) and item.get("type") == ET.TOOL_RESULT:
-                  tool_use_id = item.get("tool_use_id", "")
+                # Clear pending tool calls on tool_result events — flat format.
+                if evt_type == ET.TOOL_RESULT:
+                  tool_use_id = translated.get("tool_use_id", "")
                   if tool_use_id:
                     pending_tool_calls.discard(tool_use_id)
 
-            _clamp_event_timestamp(translated, mtime)
-            yield translated
+                # Clear pending tool calls — wrapped format (Claude Code):
+                # {type: 'user', message: {content: [{type: 'tool_result', tool_use_id: '...'}]}}
+                if evt_type == ET.USER:
+                  for item in translated.get("message", {}).get("content", []):
+                    if isinstance(item, dict) and item.get("type") == ET.TOOL_RESULT:
+                      tool_use_id = item.get("tool_use_id", "")
+                      if tool_use_id:
+                        pending_tool_calls.discard(tool_use_id)
 
-            if not saw_result and evt_type == ET.RESULT:
-              if pending_tool_calls:
-                log.debug(
-                    "backend_result_suppressed_pending_tools",
-                    pending=len(pending_tool_calls),
-                    tool_ids=list(pending_tool_calls),
-                )
-              else:
-                saw_result = True
-                last_growth = time.monotonic()
-          if cursor is not None:
-            runs.write_raw_cursor(cursor, offset)
-        continue
+                _clamp_event_timestamp(translated, mtime)
+                yield translated
 
-      if saw_result and time.monotonic() - last_growth > post_result_timeout:
-        log.warning("backend_post_result_timeout", timeout=post_result_timeout)
-        break
-      if not is_alive():
-        break  # producer gone and fully drained
-      if (on_silence is not None and not silence_reported and
-          time.monotonic() - last_output_at > NO_OUTPUT_REPORT_THRESHOLD):
-        silence_reported = True
-        await on_silence()
-      await asyncio.sleep(poll_interval)
+                if not saw_result and evt_type == ET.RESULT:
+                  if pending_tool_calls:
+                    log.debug(
+                        "backend_result_suppressed_pending_tools",
+                        pending=len(pending_tool_calls),
+                        tool_ids=list(pending_tool_calls),
+                    )
+                  else:
+                    saw_result = True
+                    last_growth = time.monotonic()
+              if cursor_writer is not None:
+                cursor_writer.write(offset)
+            carry = bytes(view[pos:])
+            read_to = len(mm)
+          finally:
+            del view
+            try:
+              mm.close()
+            except BufferError:
+              log.debug("ndjson_mmap_close_deferred", path=str(raw_path))
+          continue
 
-    if carry.strip():
-      # Dropping it makes a restart replay the run's tail as at most a
-      # duplicate — never a loss.
-      log.warning("raw_trailing_torn_line_dropped", bytes=len(carry))
+        if saw_result and time.monotonic() - last_growth > post_result_timeout:
+          log.warning("backend_post_result_timeout", timeout=post_result_timeout)
+          break
+        if not is_alive():
+          break  # producer gone and fully drained
+        if (on_silence is not None and not silence_reported and
+            time.monotonic() - last_output_at > NO_OUTPUT_REPORT_THRESHOLD):
+          silence_reported = True
+          await on_silence()
+        await asyncio.sleep(poll_interval)
+
+      if carry.strip():
+        # Dropping it makes a restart replay the run's tail as at most a
+        # duplicate — never a loss.
+        log.warning("raw_trailing_torn_line_dropped", bytes=len(carry))
+
+  finally:
+    if cursor_writer is not None:
+      cursor_writer.close()
 
 
 def _rotate_stale_transport(log_dir: Path, raw_path: Path, stderr_path: Path, cursor_path: Path) -> None:
@@ -644,8 +659,9 @@ class AgentBackend(ABC):
   underlying execution mechanism.
 
   Template-method pattern: subclasses override ``_build_command()`` (required),
-  and optionally ``_prepare_cwd()``, ``_prepare_transport()``, ``_prepare_env()``,
-  and ``translate_event()``.
+  and optionally declare ``_INSTRUCTIONS_TARGET`` (what ``_prepare_cwd()`` writes
+  into the run cwd), ``_prepare_transport()``, ``_prepare_env()``, and
+  ``translate_event()``.
 
   Event schema contract:
     All events yielded by run() must be JSON-serializable dicts with at
@@ -714,8 +730,18 @@ class AgentBackend(ABC):
     """
     ...
 
+  # (filename, log_event) of the instructions file _prepare_cwd writes into the
+  # run cwd; None keeps the hook a no-op for backends with no file channel.
+  _INSTRUCTIONS_TARGET: tuple[str, str] | None = None
+
   def _prepare_cwd(self, cwd: str) -> None:
-    """Hook to prepare the working directory before subprocess spawn. No-op default."""
+    """Hook to prepare the working directory before subprocess spawn.
+
+    The base implementation writes the file named by ``_INSTRUCTIONS_TARGET``
+    into the cwd (a no-op when no target is declared).
+    """
+    if self._INSTRUCTIONS_TARGET is not None:
+      self._write_instructions_file(cwd, *self._INSTRUCTIONS_TARGET)
 
   def _prepare_transport(self, log_dir: Path) -> None:
     """Hook to prepare the transport directory before ``_build_command()`` runs.
@@ -815,6 +841,11 @@ class AgentBackend(ABC):
     """
     if self._cgroup_session_id is None:
       return None
+    # The config model stack (~107 ms fresh-process, the claude-sub launch floor's
+    # largest slice) serves only this cgroup read; the backend ABC rides the
+    # worker binary's import, so the stack loads on the spawn path that needs it.
+    from src.core.config import get_config
+
     cfg = get_config()
     return prepare_session_cgroup(
         self._cgroup_session_id,

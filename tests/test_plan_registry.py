@@ -80,29 +80,24 @@ async def test_present_returns_awaiting_approval(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_present_absolute_in_session_path_stores_relative_path(tmp_path: Path) -> None:
-  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
-  file_abs = str((cfg.sessions_dir / meta.id / file_rel).resolve())
-
-  await plan_mgr.present(meta.id, file=file_abs, title="P1")
-
-  data = json.loads((cfg.sessions_dir / meta.id / "plans.json").read_text(encoding="utf-8"))
-  assert data["plans"][0]["versions"][0]["file"] == file_rel
-
-
-@pytest.mark.asyncio
-async def test_amend_absolute_in_session_path_stores_relative_path(tmp_path: Path) -> None:
+@pytest.mark.parametrize("amend", [False, True], ids=["present", "amend"])
+async def test_absolute_in_session_path_stores_relative_path(tmp_path: Path, amend: bool) -> None:
+  """A path that resolves inside the session dir is stored relative, through both verb boundaries."""
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   file_1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=file_1, title="P1")
-  file_2 = _write_artifact(cfg, meta.id, "plan_02.html")
-  file_2_abs = str((cfg.sessions_dir / meta.id / file_2).resolve())
-
-  await plan_mgr.amend(meta.id, file=file_2_abs, plan_id=1, note="reworded goal")
+  if amend:
+    await plan_mgr.present(meta.id, file=file_1, title="P1")
+    file_2 = _write_artifact(cfg, meta.id, "plan_02.html")
+    file_2_abs = str((cfg.sessions_dir / meta.id / file_2).resolve())
+    await plan_mgr.amend(meta.id, file=file_2_abs, plan_id=1, note="reworded goal")
+    expected = [file_1, file_2]
+  else:
+    file_1_abs = str((cfg.sessions_dir / meta.id / file_1).resolve())
+    await plan_mgr.present(meta.id, file=file_1_abs, title="P1")
+    expected = [file_1]
 
   data = json.loads((cfg.sessions_dir / meta.id / "plans.json").read_text(encoding="utf-8"))
-  assert [ver["file"] for ver in data["plans"][0]["versions"]] == [file_1, file_2]
+  assert [ver["file"] for ver in data["plans"][0]["versions"]] == expected
 
 
 @pytest.mark.asyncio
@@ -789,7 +784,7 @@ async def test_present_rejects_open_trade_off_with_bodyless_explainer(tmp_path: 
   bodyless = open_fork_html().replace("</div>", '<details class="details-layer"><summary>Why</summary></details></div>')
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content=_plan_doc_with_open_fork(bodyless))
-  with pytest.raises(ValueError, match="fork-explainer.*explainer has no body"):
+  with pytest.raises(ValueError, match=r"fork-explainer.*explainer has no body"):
     await plan_mgr.present(meta.id, file=file_rel, title="P1")
 
 

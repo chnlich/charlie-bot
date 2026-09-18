@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import make_home_config, make_sessions_client, write_trigger
+from conftest import _page_request, make_home_config, make_sessions_client, write_trigger
 from pydantic import TypeAdapter
 
 from src.api import sessions as sessions_api
@@ -133,7 +133,8 @@ async def test_all_sessions_status_includes_pending_trigger_fields(tmp_path: Pat
   )
   write_trigger(cfg.sessions_dir / session.id / "triggers" / "pending-status.json", trigger)
 
-  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=session_mgr)).body)
+  status = json.loads(
+      (await sessions_api.all_sessions_status(_page_request(), ids=session.id, session_mgr=session_mgr)).body)
   assert status[session.id]["has_unread"] is True
   assert status[session.id]["has_running_tasks"] is False
   assert status[session.id]["has_pending_trigger"] is True
@@ -160,7 +161,8 @@ async def test_all_sessions_status_includes_archived_sessions(tmp_path: Path) ->
   )
   write_trigger(cfg.sessions_dir / session.id / "triggers" / "pending-archived.json", trigger)
 
-  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=session_mgr)).body)
+  status = json.loads(
+      (await sessions_api.all_sessions_status(_page_request(), ids=session.id, session_mgr=session_mgr)).body)
   # Archived sessions remain in the status response but skip per-session
   # filesystem work, so pending-trigger fields are always empty regardless of
   # any trigger files still on disk.

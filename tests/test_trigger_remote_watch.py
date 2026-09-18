@@ -12,10 +12,9 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-import requests
 from conftest import (
-    CLI_COMMON_REQUESTS_GET_PATCH_TARGET,
-    CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+    CLI_COMMON_TRANSPORT_GET_PATCH_TARGET,
+    CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
     TRIGGER_MASTER_PATCH_TARGET,
     TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
     FakeAsyncProcess,
@@ -28,6 +27,7 @@ from conftest import make_trigger_setup as _make_mgr
 from conftest import no_sleep as _no_sleep
 from pydantic import ValidationError
 
+from src.cli import common
 from src.cli import schedule_trigger as cli_module
 from src.core.models import (
     LocalPid,
@@ -388,9 +388,6 @@ def _fake_200_post(captured: dict) -> Callable[..., Any]:
   class _FakeResp:
     status_code = 200
 
-    def raise_for_status(self) -> None:
-      return None
-
     def json(self) -> dict:
       return {"trigger_id": "t1", "fire_at": "2030-01-01T00:00:00+00:00"}
 
@@ -399,8 +396,7 @@ def _fake_200_post(captured: dict) -> Callable[..., Any]:
       json: dict | None = None,
       params: dict | None = None,
       headers: dict | None = None,
-      timeout: float | None = None,
-      verify: bool | None = None) -> _FakeResp:
+      timeout: float | None = None) -> _FakeResp:
     captured["url"] = url
     captured["payload"] = json
     return _FakeResp()
@@ -413,7 +409,7 @@ def test_cli_accepts_mixed_kinds(monkeypatch: pytest.MonkeyPatch) -> None:
   captured: dict = {}
   fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
 
-  monkeypatch.setattr(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, _fake_200_post(captured))
+  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, _fake_200_post(captured))
   with patch.object(sys, "argv", argv):
     cli_module.main()
 
@@ -459,7 +455,7 @@ def test_cli_max_wait_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
   captured: dict = {}
   fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
 
-  monkeypatch.setattr(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, _fake_200_post(captured))
+  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, _fake_200_post(captured))
   with patch.object(sys, "argv", argv):
     cli_module.main()
 
@@ -478,9 +474,6 @@ def test_cli_remote_dead_exits_with_code_2(monkeypatch: pytest.MonkeyPatch) -> N
     status_code = 422
     text = ""
 
-    def raise_for_status(self) -> None:
-      raise requests.exceptions.HTTPError(response=self)
-
     def json(self) -> dict:
       return {"detail": "verify-on-create failed for remote watch target(s): neptune:5678 -> DEAD ('DEAD\\n')"}
 
@@ -489,15 +482,14 @@ def test_cli_remote_dead_exits_with_code_2(monkeypatch: pytest.MonkeyPatch) -> N
       json: dict | None = None,
       params: dict | None = None,
       headers: dict | None = None,
-      timeout: float | None = None,
-      verify: bool | None = None) -> _FakeResp:
+      timeout: float | None = None) -> _FakeResp:
     return _FakeResp()
 
   def _offline_get(url: str, **kwargs: Any) -> None:  # best-effort version hint must not reach a real server
-    raise requests.ConnectionError("offline")
+    raise common._ConnectPhaseError("offline")
 
-  monkeypatch.setattr(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, _fake_post)
-  monkeypatch.setattr(CLI_COMMON_REQUESTS_GET_PATCH_TARGET, _offline_get)
+  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, _fake_post)
+  monkeypatch.setattr(CLI_COMMON_TRANSPORT_GET_PATCH_TARGET, _offline_get)
   with patch.object(sys, "argv", argv), pytest.raises(SystemExit) as excinfo:
     cli_module.main()
 

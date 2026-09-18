@@ -1,13 +1,14 @@
 """Session management for CharlieBot."""
 
 import asyncio
+import contextlib
 import io
 import json
+import mmap
 import os
 import shutil
 import stat
 import time
-from collections import OrderedDict
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
 from src.core import plan_paths, sidebar_state
 from src.core.chat_events import ChatEventStore
 from src.core.config import CharlieBotConfig
+from src.core.gc_control import gc_off
 from src.core.init import RUNNING_SCAN_WINDOW, iter_recent_thread_metas
 from src.core.init_worker_recovery import walk_thread_meta_stats
 from src.core.json_utils import (
@@ -139,6 +141,11 @@ _SUCCESSOR_CHAIN_HOP_LIMIT = 100
 # whole-corpus single-span feed parks the loop behind GIL handoffs for its
 # full span (measured 23 ms worst hold per pass).
 _AGGREGATOR_INIT_SLICE_EVENTS = 256
+
+# The resume anchors: the two metadata fields that name where the conversation
+# lives (the cc-id and the pool login holding its transcript). They change only
+# through their authorized channels (see save_metadata's guard).
+_ANCHOR_FIELDS = ("cc_session_id", "claude_account")
 
 _TRANSIENT_METADATA_FIELDS = {
     "has_running_tasks",
@@ -405,7 +412,7 @@ def _absence_rescan_start(
     if not query_lower.startswith(needle):
       continue
     old_size, old_ino = root_sig[1], root_sig[2]
-    if old_ino == sig[2] and sig[1] > old_size and old_size > best_size:
+    if old_ino == sig[2] and sig[1] > old_size > best_size:
       best_size = old_size
   if best_size < 0:
     return 0
@@ -621,7 +628,17 @@ def _reference_newlines(arr: "np.ndarray") -> "np.ndarray":
   return parts[0] if len(parts) == 1 else np.concatenate(parts)
 
 
-def _fast_reference_frames(data: bytes, take: int) -> tuple[int, int, int, bool] | None:
+def _mapping_ascii(data: "mmap.mmap") -> bool:
+  """Whole-mapping ASCII sweep, chunked so the compare's scratch stays in cache."""
+  import numpy as np
+  arr = np.frombuffer(data, dtype=np.uint8)
+  for offset in range(0, arr.size, _REFERENCE_SCAN_CHUNK):
+    if arr[offset:min(offset + _REFERENCE_SCAN_CHUNK, arr.size)].max() > 0x7F:
+      return False
+  return True
+
+
+def _fast_reference_frames(data: "bytes | mmap.mmap", take: int) -> tuple[int, int, int, bool] | None:
   """Vectorized frame check for the first ``take`` raw lines of ``data``.
 
   Returns ``(raw, start, end, needs_newline)`` when every in-budget frame is a
@@ -658,7 +675,7 @@ def _fast_reference_frames(data: bytes, take: int) -> tuple[int, int, int, bool]
   return (raw, int(starts[0]), end, needs_newline)
 
 
-def _stream_reference_lines(out: BinaryIO, data: bytes, take: int) -> tuple[int, int]:
+def _stream_reference_lines(out: BinaryIO, data: "bytes | mmap.mmap", take: int) -> tuple[int, int]:
   """Copy the non-blank lines among the first ``take`` raw line frames of ``data`` into ``out``.
 
   Returns ``(raw, appended)``: raw frames spent against the budget (blank
@@ -672,20 +689,30 @@ def _stream_reference_lines(out: BinaryIO, data: bytes, take: int) -> tuple[int,
   """
   # Validity parity with the text-mode read this replaces: it raised the same
   # UnicodeDecodeError on undecodable bytes, so the decoded result is unused.
-  # ASCII bytes are always valid UTF-8, so the isascii() scan proves validity
-  # and only a non-ASCII corpus pays the full decode.
-  if not data.isascii():
+  # ASCII bytes are always valid UTF-8, so an ASCII proof passes validity and
+  # only a non-ASCII corpus pays the full decode. An mmap lacks isascii(); the
+  # numpy sweep answers for the whole mapping, and a non-ASCII mapping
+  # materializes once so the decode raises the identical error.
+  ascii_ok = _mapping_ascii(data) if isinstance(data, mmap.mmap) else data.isascii()
+  if not ascii_ok:
+    if isinstance(data, mmap.mmap):
+      data = bytes(data)
     data.decode("utf-8")
   fast = _fast_reference_frames(data, take)
   if fast is not None:
     raw, start, end, needs_newline = fast
     if end > start:
-      out.write(memoryview(data)[start:end])
+      # The window's exported pointer must not outlive the write: the source's
+      # mmap closes after this call, and closing refuses while a view exists.
+      window = memoryview(data)[start:end]
+      try:
+        out.write(window)
+      finally:
+        window.release()
       if needs_newline:
         out.write(b"\n")
     return raw, raw
 
-  view = memoryview(data)
   pos = 0
   raw = 0
   appended = 0
@@ -706,16 +733,39 @@ def _stream_reference_lines(out: BinaryIO, data: bytes, take: int) -> tuple[int,
         raise ValueError(f"parent event line is not a serialized event object: {snippet!r}")
       # The CR of a CRLF pair folds before the write, matching the
       # universal-newline translation of the text-mode read; every other
-      # original byte (edge whitespace included) is kept.
+      # original byte (edge whitespace included) is kept. The per-line slice
+      # keeps no pointer exported past the write (an mmap closes after this
+      # stream returns, and closing refuses while a view exists).
       write_end = end - 1 if end > pos and data[end - 1] == 0x0D else end
-      out.write(view[pos:write_end])
+      out.write(data[pos:write_end])
       out.write(b"\n")
       appended += 1
     pos = end + 1
   return raw, appended
 
 
-class SuccessionRefused(ValueError):
+def _stream_reference_file(out: BinaryIO, source: Path, take: int) -> tuple[int, int]:
+  """Stream one reference source's first ``take`` raw line frames into ``out``.
+
+  The source rides an mmap: the frame scan and the window write read the
+  mapping directly, so the corpus never enters the Python heap as one object —
+  the gigabyte-class live files pay the scan's memory bandwidth, not a
+  whole-file memcpy. Chat files mutate only by append between archive rewrites
+  and rewrites publish through ``os.replace`` (the ChatEventStore's stated
+  rule), so the mapping holds an append-only or already-unlinked inode and
+  never truncates under it.
+  """
+  with source.open("rb") as handle:
+    if os.fstat(handle.fileno()).st_size == 0:
+      return _stream_reference_lines(out, b"", take)  # mmap refuses an empty file
+    mapping = mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ)
+    try:
+      return _stream_reference_lines(out, mapping, take)
+    finally:
+      mapping.close()
+
+
+class SuccessionRefusedError(ValueError):
   """An elone was refused because a scheduler-owned parent cannot take a new successor.
 
   Only a scheduler-owned parent (``scheduled_task`` set) that already has a
@@ -792,7 +842,8 @@ class SessionManager:
     # to_thread side must not observe a half-updated map, so the memo
     # mechanics are BoundedMemo's locked ones, not a bare OrderedDict's.
     self._projection_cache: BoundedMemo[str, MessageProjection] = BoundedMemo(_PROJECTION_LRU_LIMIT)
-    self._search_miss_memo: OrderedDict[str, OrderedDict[str, tuple[int, int, int]]] = OrderedDict()
+    self._search_miss_memo: BoundedMemo[str, BoundedMemo[str, tuple[int, int,
+                                                                    int]]] = BoundedMemo(_SEARCH_MISS_MEMO_LIMIT)
 
   # ---------------------------------------------------------------------------
   # Session CRUD
@@ -849,6 +900,13 @@ class SessionManager:
     """
     return await self._scheduled_sessions.archive_sessions_for_task(task_name)
 
+  async def write_scheduled_task_enabled(self, task_name: str, enabled: bool) -> None:
+    """Write the ``enabled`` run gate of task_name's cron yaml, preserving every other key.
+
+    See ``src/core/scheduled_sessions.py`` for the persistence contract.
+    """
+    await self._scheduled_sessions.write_scheduled_task_enabled(task_name, enabled)
+
   def _tui_cli_option(self, backend_id: str) -> BackendOption | None:
     # Only tui-cli backends carry tmux lifecycle state, and the create and
     # destroy hooks must agree on which sessions that covers.
@@ -895,7 +953,10 @@ class SessionManager:
     # populate below covers disk loads only; re-stamping a hit's timestamp
     # would wrongly extend its TTL.
     if self._migrate_round_rating_keys(meta):
-      await self.save_metadata(meta)
+      # Never acquires (get_session runs under callers' locks too); the anchor
+      # reconciliation still runs -- the upgrade path never legitimately
+      # changes an anchor, so a stale one is corrected to disk.
+      await self.save_metadata(meta, lock_held=True)
     elif not cache_hit:
       self._metadata_cache[session_id] = (meta, time.monotonic(), sig)
     return _stamp_thinking_since(meta.model_copy())
@@ -1154,8 +1215,8 @@ class SessionManager:
   async def search_sessions_readonly(
       self,
       query: str,
-      include_running_status: bool = False,
-      include_pending_trigger_status: bool = False,
+      include_running_status: bool,
+      include_pending_trigger_status: bool,
   ) -> tuple[list[SessionMetadata], dict[str, dict]]:
     """Search sessions by name (every status) and chat event content (active only), case-insensitive.
 
@@ -1191,7 +1252,8 @@ class SessionManager:
     read_jobs: list[tuple[SessionMetadata, Path, tuple[int, int, int], int]] = []
     for meta, path in content_candidates:
       key = str(path)
-      memo_roots = tuple((self._search_miss_memo.get(key) or {}).items())
+      roots = self._search_miss_memo.peek(key)
+      memo_roots = tuple(roots.items()) if roots is not None else ()
       try:
         stat = path.stat()
       except OSError as e:
@@ -1237,15 +1299,9 @@ class SessionManager:
     """
     roots = self._search_miss_memo.get(memo_key)
     if roots is None:
-      roots = OrderedDict()
-      self._search_miss_memo[memo_key] = roots
-    roots[needle] = sig
-    roots.move_to_end(needle)
-    while len(roots) > _SEARCH_MISS_ROOTS_PER_FILE:
-      roots.popitem(last=False)
-    self._search_miss_memo.move_to_end(memo_key)
-    while len(self._search_miss_memo) > _SEARCH_MISS_MEMO_LIMIT:
-      self._search_miss_memo.popitem(last=False)
+      roots = BoundedMemo(_SEARCH_MISS_ROOTS_PER_FILE)
+    roots.store(needle, sig)
+    self._search_miss_memo.store(memo_key, roots)
 
   async def fork_session(
       self,
@@ -1264,7 +1320,7 @@ class SessionManager:
       event_index: int,
       backend: str | None = None,
   ) -> SessionMetadata:
-    """Create an Elon-e session: reference handoff, archive + thumbs-down parent.
+    """Create an Elon-e session: reference handoff, archive the parent.
 
     Runs the succession rejection BEFORE any child session is created, so a
     refused call mutates nothing on disk. The per-parent invariant: each elone
@@ -1281,7 +1337,7 @@ class SessionManager:
     if fresh_parent is None:
       raise FileNotFoundError(f"parent session not found: {parent_id}")
     if fresh_parent.successor_session_id is not None and fresh_parent.scheduled_task is not None:
-      raise SuccessionRefused(
+      raise SuccessionRefusedError(
           f"session {parent_id} already has a successor "
           f"({fresh_parent.successor_session_id}); elone that successor or fork for a separate branch")
     if fresh_parent.scheduled_task is not None:
@@ -1289,7 +1345,7 @@ class SessionManager:
     else:
       meta = await self._spawn_with_reference(parent_id, event_index, backend, "E")
 
-    # Auto-archive and thumbs-down the parent, and record the elone successor
+    # Auto-archive the parent, and record the elone successor
     # pointer (re-read under lock so concurrent mutations to the parent aren't
     # clobbered). Latest-wins: an ordinary parent's pointer is overwritten to
     # name each new child, so the pointer always names the most recent elone.
@@ -1298,10 +1354,9 @@ class SessionManager:
       fresh_parent = await self.get_session(parent_id)
       if fresh_parent:
         fresh_parent.status = SessionStatus.ARCHIVED
-        fresh_parent.rating = "thumbs_down"
         fresh_parent.successor_session_id = meta.id
         fresh_parent.updated_at = utc_now()
-        await self.save_metadata(fresh_parent)
+        await self.save_metadata(fresh_parent, lock_held=True)
     self._drop_session_runtime_state(parent_id)
 
     self._log_spawn("session_eloned", meta, parent_id, event_index)
@@ -1510,9 +1565,9 @@ class SessionManager:
           if raw_left <= 0:
             break
           # A full-corpus budget spans nearly the whole file (only an archive
-          # pass mid-fork shrinks a take below the line count), so read_bytes
-          # over-reads no bytes worth chunk-accumulating against.
-          raw, appended = _stream_reference_lines(out, source.read_bytes(), raw_left)
+          # pass mid-fork shrinks a take below the line count), so the mapping
+          # over-covers no bytes worth chunk-accumulating against.
+          raw, appended = _stream_reference_file(out, source, raw_left)
           raw_left -= raw
           archived += appended
       if archived != archive_take:
@@ -1521,7 +1576,7 @@ class SessionManager:
       live_path = self.get_chat_events_path(parent_id)
       live = 0
       if live_take and live_path.exists():
-        _, live = _stream_reference_lines(out, live_path.read_bytes(), live_take)
+        _, live = _stream_reference_file(out, live_path, live_take)
       if live != live_take:
         raise ValueError(f"loaded {live} live parent events for requested range [0, {live_take})")
 
@@ -1576,11 +1631,11 @@ class SessionManager:
 
   async def mark_read(self, session_id: str) -> SessionMetadata | None:
     """Clear the unread flag for a session."""
-    return await self._set_unread_flag(session_id, False)
+    return await self._set_unread_flag(session_id, has_unread=False)
 
   async def mark_unread(self, session_id: str) -> None:
     """Set the unread flag for a session (called when master/workers produce output)."""
-    await self._set_unread_flag(session_id, True)
+    await self._set_unread_flag(session_id, has_unread=True)
 
   async def _set_unread_flag(self, session_id: str, has_unread: bool) -> SessionMetadata | None:
     """Write the unread flag and broadcast only when it actually flips.
@@ -1594,7 +1649,7 @@ class SessionManager:
       if not meta or meta.has_unread == has_unread:
         return meta
       meta.has_unread = has_unread
-      await self.save_metadata(meta)
+      await self.save_metadata(meta, lock_held=True)
       # The unread flag is a tree-row projection input (SessionRow.has_unread):
       # drop the rebuildable index so a tree page read after this flip is built
       # from the fresh flag, not from a pre-flip index snapshot.
@@ -1662,7 +1717,7 @@ class SessionManager:
         fresh = await self.get_session(session_id)
         if fresh is not None:
           fresh.archive_offset += events_archived
-          await self.save_metadata(fresh)
+          await self.save_metadata(fresh, lock_held=True)
       self._drop_session_runtime_state(session_id)
 
     log.info(
@@ -1705,11 +1760,11 @@ class SessionManager:
 
   async def star_session(self, session_id: str) -> SessionMetadata | None:
     """Star a session."""
-    return await self._update_field(session_id, "starred", True, "session_starred")
+    return await self._update_field(session_id, "starred", value=True, log_event="session_starred")
 
   async def unstar_session(self, session_id: str) -> SessionMetadata | None:
     """Unstar a session."""
-    return await self._update_field(session_id, "starred", False, "session_unstarred")
+    return await self._update_field(session_id, "starred", value=False, log_event="session_unstarred")
 
   async def set_group(self, session_id: str, group: str | None) -> SessionMetadata | None:
     """Set or clear the group for a session."""
@@ -1747,7 +1802,7 @@ class SessionManager:
           continue
         fresh.group = new_name
         fresh.updated_at = utc_now()
-        await self.save_metadata(fresh)
+        await self.save_metadata(fresh, lock_held=True)
       count += 1
     return count
 
@@ -1768,7 +1823,7 @@ class SessionManager:
       if fresh.cc_session_id != cc_session_id:
         fresh.cc_session_id = cc_session_id
         fresh.cc_session_started_at = utc_now()
-      await self.save_metadata(fresh)
+      await self.save_metadata(fresh, lock_held=True, anchor_write=True)
       read_back = await self._get_session_bypassing_cache(session_id)
     return read_back.cc_session_id if read_back is not None else None
 
@@ -1784,9 +1839,27 @@ class SessionManager:
         return None
       if fresh.claude_account != claude_account:
         fresh.claude_account = claude_account
-        await self.save_metadata(fresh)
+        await self.save_metadata(fresh, lock_held=True, anchor_write=True)
       read_back = await self._get_session_bypassing_cache(session_id)
     return read_back.claude_account if read_back is not None else None
+
+  async def clear_cc_session_anchor(self, session_id: str) -> None:
+    """Intentionally clear the session's resume anchor; the authorized clear channel.
+
+    Lock-holding read-modify-write semantics identical to the single-field
+    funnels: fresh read under the per-session lock, both anchor fields cleared,
+    saved with anchor authority. The weekly recycle's deliberate fresh start
+    goes through here -- an unchanneled whole-object save would leave the old
+    anchor on disk (the guard corrects it back) and the recycle would silently
+    do nothing behind its suppressed next-round alarm.
+    """
+    async with self._lock_for(session_id):
+      fresh = await self._get_session_bypassing_cache(session_id)
+      if fresh is None:
+        return
+      fresh.cc_session_id = None
+      fresh.cc_session_started_at = None
+      await self.save_metadata(fresh, lock_held=True, anchor_write=True)
 
   async def claude_context_state(self, session_id: str,
                                  session_meta: SessionMetadata) -> tuple[int | None, datetime | None]:
@@ -1831,7 +1904,7 @@ class SessionManager:
       if fresh is None:
         return
       setattr(fresh, field, value)
-      await self.save_metadata(fresh)
+      await self.save_metadata(fresh, lock_held=True)
 
   async def persist_master_run(self, session_id: str, record: MasterRunRecord | None) -> None:
     """Set or clear the session's in-flight master-turn record."""
@@ -2030,6 +2103,18 @@ class SessionManager:
     reached it; a drop instead aborts at the next slice boundary and the
     caller's epoch-moved path reruns.
     """
+    # The init parses and folds the whole live corpus in one bounded span, and
+    # the generational passes its dict churn triggers paused the event loop
+    # up to ~74 ms at the session's first streamed event after a server start
+    # (measured 20534-event worst corpus, 2026-09-15). GC is process-global
+    # and the init runs on server threads, so the disable spans the whole init.
+    # The parse's dicts stay referenced by the events cache and the feed's
+    # discards refcount-clear, so no collect rides the re-enable.
+    with gc_off(collect=False):
+      return await self._catch_up_aggregator(session_id, epoch)
+
+  async def _catch_up_aggregator(self, session_id: str, epoch: int) -> MessageAggregator | None:
+    """Catch up one aggregator to the on-disk corpus; called under the init's gc boundary."""
     # Live file only holds events from index archive_offset onward; seed the
     # aggregator's offset so the deltas it emits carry the same GLOBAL
     # event_index that persist_and_broadcast stamps on the raw event.
@@ -2404,7 +2489,8 @@ class SessionManager:
       try:
         migrated = self._migrate_round_rating_keys(meta)
         if migrated:
-          await self.save_metadata(meta)
+          # Same no-acquire, still-checked migrate save as get_session's.
+          await self.save_metadata(meta, lock_held=True)
       except Exception as exc:
         log.warning("session_load_failed", session_id=session_id, error=str(exc))
         continue
@@ -2429,7 +2515,7 @@ class SessionManager:
         return None
       setattr(meta, field, value)
       meta.updated_at = utc_now()
-      await self.save_metadata(meta)
+      await self.save_metadata(meta, lock_held=True)
     log.info(log_event, session_id=session_id, **log_fields)
     return meta
 
@@ -2454,9 +2540,9 @@ class SessionManager:
   async def _enrich_and_sort(
       self,
       sessions: list[SessionMetadata],
-      include_running_status: bool = False,
-      include_pending_trigger_status: bool = False,
-      include_pending_plan_approval: bool = False,
+      include_running_status: bool,
+      include_pending_trigger_status: bool,
+      include_pending_plan_approval: bool,
   ) -> list[SessionMetadata]:
     """Populate sidebar state and sort newest first."""
     await self.populate_sidebar_state(
@@ -2471,8 +2557,8 @@ class SessionManager:
   async def resolve_sidebar_state(
       self,
       sessions: list[SessionMetadata],
-      include_running_status: bool = False,
-      include_pending_trigger_status: bool = False,
+      include_running_status: bool,
+      include_pending_trigger_status: bool,
       include_pending_plan_approval: bool = False,
       force: bool = False,
   ) -> dict[str, dict]:
@@ -2621,8 +2707,8 @@ class SessionManager:
   async def populate_sidebar_state(
       self,
       sessions: list[SessionMetadata],
-      include_running_status: bool = False,
-      include_pending_trigger_status: bool = False,
+      include_running_status: bool,
+      include_pending_trigger_status: bool,
       include_pending_plan_approval: bool = False,
       force: bool = False,
   ) -> None:
@@ -2688,7 +2774,42 @@ class SessionManager:
       return 0
     return sum(1 for d in self._cfg.sessions_dir.iterdir() if d.is_dir())
 
-  async def save_metadata(self, meta: SessionMetadata) -> None:
+  async def _reconcile_anchor_fields(self, meta: SessionMetadata) -> None:
+    """Correct *meta*'s anchor fields back to the on-disk values before a whole-object save.
+
+    The guard behind the authorized-channel model: the two resume anchors change
+    only through their channels (``persist_cc_session_id``, ``persist_claude_account``,
+    ``clear_cc_session_anchor``), so a whole-object save built from a stale cached
+    meta must not roll them back -- the 2026-09-14 incident's whole-object
+    write-back did exactly that. Reads metadata.json fresh (a cached view is the
+    very staleness this guard exists for) and mutates *meta* in place; a
+    correction logs ``session_anchor_write_corrected`` and the save proceeds
+    write-through rather than refusing. Runs under the per-session lock: inside
+    the caller's critical section for the lock-holding save sites, under the
+    acquisition save_metadata performs for everyone else.
+    """
+    disk = await self.read_metadata_fresh(meta.id)
+    if disk is None:
+      return
+    for field in _ANCHOR_FIELDS:
+      on_disk = getattr(disk, field)
+      if getattr(meta, field) != on_disk:
+        log.warning(
+            "session_anchor_write_corrected",
+            session_id=meta.id,
+            field=field,
+            on_disk=on_disk,
+            attempted=getattr(meta, field),
+        )
+        setattr(meta, field, on_disk)
+
+  async def save_metadata(
+      self,
+      meta: SessionMetadata,
+      *,
+      lock_held: bool = False,
+      anchor_write: bool = False,
+  ) -> None:
     """Persist *meta* to metadata.json and refresh the TTL cache from the serialized form.
 
     The write is atomic — a unique-per-call tmp file swapped in by ``os.replace``
@@ -2698,21 +2819,39 @@ class SessionManager:
     (see ``get_session``'s migrate branch). ``updated_at`` is written as given:
     bumping or preserving it is the caller's decision (``_update_field`` bumps,
     ``_set_unread_flag`` does not).
-    """
-    path = self._metadata_path(meta.id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    serialized = meta.model_dump_json(indent=2, exclude=_TRANSIENT_METADATA_FIELDS)
 
-    await asyncio.to_thread(atomic_write_text, path, serialized)
-    # Signature stays None: a write cannot prove the on-disk signature its bytes
-    # carry (a concurrent rename could land before any post-write stat), so the
-    # entry re-reads at its next expiry and re-keys from that read's own stat.
-    self._metadata_cache[meta.id] = (SessionMetadata.model_validate_json(serialized), time.monotonic(), None)
-    # The single funnel for every session-metadata write (35+ call sites, plus
-    # the ScheduledSessionStore delegate): status transitions (archive/unarchive)
-    # land here, so the sidebar snapshot must re-probe this session.
-    sidebar_state.mark_sidebar_dirty(meta.id)
-    self._listings_revision += 1
+    The anchor fields are reconciled against disk on every save that may carry
+    them (``_reconcile_anchor_fields``), always under the per-session lock:
+
+    * ``lock_held`` — the caller already holds the per-session lock (the in-class
+      read-modify-write sites, and the migrate branches whose get_session runs
+      both under callers' locks and lock-free, so their save can never acquire).
+      The lock is never reentrant; the reconciliation then runs inside the
+      caller's own critical section. Lock-free callers get the acquisition here.
+    * ``anchor_write`` — this save is an authorized anchor channel
+      (``persist_cc_session_id``, ``persist_claude_account``,
+      ``clear_cc_session_anchor``) and legitimately changes an anchor field; the
+      reconciliation is skipped, because its whole purpose would revert the
+      intended write. Every other caller is reconciled: a stale anchor is
+      corrected back to the disk value and the correction is logged.
+    """
+    async with self._lock_for(meta.id) if not lock_held else contextlib.nullcontext():
+      if not anchor_write:
+        await self._reconcile_anchor_fields(meta)
+      path = self._metadata_path(meta.id)
+      path.parent.mkdir(parents=True, exist_ok=True)
+      serialized = meta.model_dump_json(indent=2, exclude=_TRANSIENT_METADATA_FIELDS)
+
+      await asyncio.to_thread(atomic_write_text, path, serialized)
+      # Signature stays None: a write cannot prove the on-disk signature its bytes
+      # carry (a concurrent rename could land before any post-write stat), so the
+      # entry re-reads at its next expiry and re-keys from that read's own stat.
+      self._metadata_cache[meta.id] = (SessionMetadata.model_validate_json(serialized), time.monotonic(), None)
+      # The single funnel for every session-metadata write (35+ call sites, plus
+      # the ScheduledSessionStore delegate): status transitions (archive/unarchive)
+      # land here, so the sidebar snapshot must re-probe this session.
+      sidebar_state.mark_sidebar_dirty(meta.id)
+      self._listings_revision += 1
 
   def _session_dir(self, session_id: str) -> Path:
     return self._cfg.sessions_dir / session_id

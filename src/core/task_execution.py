@@ -45,7 +45,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.agents.worker import QuotaExhaustedException, Worker
+from src.agents.worker import QuotaExhaustedError, Worker
 from src.core import claude_relay, git, review, runs, task_prompts
 from src.core import event_types as ET
 from src.core.chat_events import chat_events_path
@@ -835,7 +835,7 @@ class TaskExecutionAdapter:
                 await worker.terminate()
             error = str(exc)
             log.warning("task_run_pool_exhausted", session_id=session_id, run_id=run_id, error=error)
-        except QuotaExhaustedException as exc:
+        except QuotaExhaustedError as exc:
             if worker is not None:
                 await worker.terminate()
             error = str(exc)

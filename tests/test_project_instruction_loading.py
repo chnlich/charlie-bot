@@ -196,7 +196,7 @@ def test_global_and_overlay_content_preserved_with_project_layer(tmp_path: Path)
   assert COMMON_MARK in out
   assert "OVERLAY FENCE" in out
   assert out.index(COMMON_MARK) < out.index("OVERLAY FENCE")
-  assert getattr(out, "overlay_error") is None
+  assert out.overlay_error is None
 
 
 def test_body_diagnostics_log_source_path_and_hash(tmp_path: Path) -> None:
@@ -233,7 +233,7 @@ def test_hot_change_read_on_next_build(tmp_path: Path) -> None:
 
 def _assert_project_error(out: object, *fragments: str) -> None:
   assert out is not None
-  error = getattr(out, "project_error")
+  error = out.project_error
   assert error is not None
   for fragment in fragments:
     assert fragment in str(error)
@@ -292,7 +292,7 @@ def test_ordinary_session_does_not_read_supplement_content(tmp_path: Path) -> No
   (cfg.charliebot_home / "projects" / "proj" / "manager.md").chmod(0o000)
   ordinary = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
   assert ordinary is not None
-  assert getattr(ordinary, "project_error") is None
+  assert ordinary.project_error is None
   assert COMMON_MARK in ordinary
   assert SUPPLEMENT_MARK not in ordinary
 
@@ -413,11 +413,11 @@ def test_absent_project_directory_still_unconfigured(tmp_path: Path) -> None:
 
   out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
   assert out is not None
-  assert getattr(out, "project_error") is None
+  assert out.project_error is None
   assert COMMON_MARK not in out
   manager = master_cc._build_instructions_content(_meta(PROJECT_ROLE, "proj"), cfg, None)
   assert manager is not None
-  assert getattr(manager, "project_error") is None
+  assert manager.project_error is None
   assert "This session is the Project Manager for group proj." in manager
 
 
@@ -439,7 +439,7 @@ def test_config_symlink_inside_project_dir_loads(tmp_path: Path) -> None:
   (project_dir / "project.yaml").symlink_to(project_dir / "real-config.yaml")
   out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
   assert out is not None
-  assert getattr(out, "project_error") is None
+  assert out.project_error is None
   assert COMMON_MARK in out
 
 
@@ -489,7 +489,7 @@ def test_symlinked_project_directory_stays_confined(tmp_path: Path) -> None:
   link.symlink_to(real)
   out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
   assert out is not None
-  assert getattr(out, "project_error") is None
+  assert out.project_error is None
   assert COMMON_MARK in out
 
   # A body symlink escaping the real directory still fails confinement.
@@ -511,7 +511,7 @@ def test_missing_repo_contract_fails_manager_only(tmp_path: Path) -> None:
   cfg = _make_project(tmp_path, write_contract=False)
   ordinary = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
   assert ordinary is not None
-  assert getattr(ordinary, "project_error") is None
+  assert ordinary.project_error is None
   assert COMMON_MARK in ordinary
 
   manager = master_cc._build_instructions_content(_meta(PROJECT_ROLE, "proj"), cfg, None)
@@ -522,7 +522,7 @@ def test_configured_supplement_missing_fails_manager_only(tmp_path: Path) -> Non
   cfg = _make_project(tmp_path, files={"common.md": COMMON_MARK})
   ordinary = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
   assert ordinary is not None
-  assert getattr(ordinary, "project_error") is None
+  assert ordinary.project_error is None
 
   manager = master_cc._build_instructions_content(_meta(PROJECT_ROLE, "proj"), cfg, None)
   _assert_project_error(manager, "manager.md", "unreadable")

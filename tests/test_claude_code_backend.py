@@ -53,12 +53,13 @@ def test_effort_flag_appended_after_model() -> None:
   assert effort_index == model_index + 2
 
 
-def test_effort_flag_absent_when_unset() -> None:
+@pytest.mark.parametrize("absent_flag", ["--effort", "--settings"], ids=["effort", "fast-mode"])
+def test_optional_flag_absent_when_unset(absent_flag: str) -> None:
   backend = ClaudeCodeBackend(model="claude-opus-4-8")
 
   cmd = backend._build_command("hi")
 
-  assert "--effort" not in cmd
+  assert absent_flag not in cmd
 
 
 def test_cli_binary_replaces_only_command_binary() -> None:
@@ -126,12 +127,6 @@ def test_fast_mode_appends_settings_flag() -> None:
   cmd = backend._build_command("hi")
   settings_index = cmd.index("--settings")
   assert cmd[settings_index + 1] == '{"fastMode":true}'
-
-
-def test_fast_mode_absent_when_unset() -> None:
-  backend = ClaudeCodeBackend(model="claude-opus-4-8")
-  cmd = backend._build_command("hi")
-  assert "--settings" not in cmd
 
 
 def test_claude_session_id_appends_session_flag() -> None:

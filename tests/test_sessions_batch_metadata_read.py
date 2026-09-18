@@ -73,10 +73,10 @@ def _isolate_migration_save_failure(mgr: SessionManager, monkeypatch: pytest.Mon
   _write_metadata(mgr, bad)
   real_save = mgr.save_metadata
 
-  async def fail_bad_save(meta: SessionMetadata) -> None:
+  async def fail_bad_save(meta: SessionMetadata, **_kwargs: bool) -> None:
     if meta.id == bad.id:
       raise OSError("save failed")
-    await real_save(meta)
+    await real_save(meta, **_kwargs)
 
   monkeypatch.setattr(mgr, "save_metadata", fail_bad_save)
   return bad
@@ -214,10 +214,10 @@ async def test_batch_migrates_legacy_round_ratings(
   real_save = mgr.save_metadata
   save_calls = 0
 
-  async def counting_save(meta: SessionMetadata) -> None:
+  async def counting_save(meta: SessionMetadata, **_kwargs: bool) -> None:
     nonlocal save_calls
     save_calls += 1
-    await real_save(meta)
+    await real_save(meta, **_kwargs)
 
   monkeypatch.setattr(mgr, "save_metadata", counting_save)
 

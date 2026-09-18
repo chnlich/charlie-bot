@@ -3,14 +3,17 @@
 import asyncio
 import copy
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
+from starlette.requests import Request
+from starlette.responses import Response
 
 from src.api.deps import bad_request, get_config_on_loop, get_session_manager
-from src.api.responses import FastJsonResponse
+from src.api.responses import GZIP_RESPONSE_HEADERS, PreencodedJSONResponse, fast_json_bytes, request_wants_gzip
+from src.core.compression import gzip_level1
 from src.core.config import (
     CharlieBotConfig,
     ScheduledTaskConfig,
@@ -22,10 +25,11 @@ from src.core.config import (
     cron_path,
     get_scheduled_task_errors,
     get_scheduled_tasks,
-    master_task_project_error,
+    pm_task_project_error,
     require_backend_option,
     scheduled_binding_error,
 )
+from src.core.deferred import deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionMetadata
 from src.core.scheduler import load_croniter, scheduled_task_session_binding
@@ -49,9 +53,8 @@ _NEXT_RUN_MEMO: dict[tuple[str, str], tuple[datetime, str]] = {}
 
 
 def __getattr__(name: str) -> Any:
-  if name == "croniter":
-    return load_croniter(globals())
-  raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+  # The "src.api.cron.croniter" patch target (tests/test_cron_next_run_memo.py) resolves through this hook.
+  return deferred_module_getattr(name, __name__, globals(), "croniter", load_croniter)
 
 
 def next_run_iso(cron_expr: str, timezone: str, now_utc: datetime) -> str:
@@ -108,6 +111,8 @@ def _apply_task_update(task: dict, req: "TaskUpdate") -> dict:
     updated['timezone'] = req.timezone
   if req.enabled is not None:
     updated['enabled'] = req.enabled
+  if req.type is not None:
+    updated['type'] = req.type
   if req.project is not None:
     updated['project'] = req.project or None
   if req.allow_failure is not None:
@@ -136,20 +141,20 @@ async def _ensure_backend_update_session(
     raise HTTPException(status_code=409, detail=str(e)) from e
 
 
-def _check_master_project_unique(name: str, mode: str | None, project: str | None) -> None:
-  """Reject when another mode: master task already carries the same project (group).
+def _check_pm_project_unique(name: str, task_type: str | None, project: str | None) -> None:
+  """Reject when another type: pm task already carries the same project (group).
 
-  At most one active mode: master task per group, so at most one live
-  role=project session per group. The check names the conflicting task.
+  At most one type: pm task per group, so at most one live role=project
+  session per group. The check names the conflicting task.
   """
-  if mode != 'master':
+  if task_type != 'pm':
     return
   for other in get_scheduled_tasks():
-    if other.name != name and other.mode == 'master' and other.project == project:
+    if other.name != name and other.type == 'pm' and other.project == project:
       raise HTTPException(
           status_code=409,
           detail=(
-              f"mode 'master' task for project '{project}' already exists: '{other.name}' "
+              f"type 'pm' task for project '{project}' already exists: '{other.name}' "
               "(at most one Project Manager task per group)"))
 
 
@@ -160,6 +165,7 @@ class TaskUpdate(BaseModel):
   backend: str | None = None
   timezone: str | None = None
   enabled: bool | None = None
+  type: Literal['pm', 'normal'] | None = None
   project: str | None = None
   allow_failure: bool | None = None
   session_id: str | None = None
@@ -174,7 +180,7 @@ class TaskCreate(ScheduledTaskFields):
 
 
 @router.get('/tasks')
-async def list_cron_tasks() -> FastJsonResponse:
+async def list_cron_tasks(request: Request) -> Response:
   """Return all scheduled tasks plus one error entry per broken file, never 500.
 
   Valid jobs are sorted by name, followed by one entry per error record shaped
@@ -193,16 +199,32 @@ async def list_cron_tasks() -> FastJsonResponse:
   # is already a primitive, so the bytes equal the encoder-rendered output).
   # Returning the mapped list instead would pay jsonable_encoder's dict
   # recursion per request for the same bytes.
-  valid = [
-      t.model_dump(mode="json", exclude={
-          'prompt': True,
-          'steps': {
-              '__all__': {
-                  'prompt': True
-              }
-          }
-      }) for t in get_scheduled_tasks()
-  ]
+  body, gz = _cron_tasks_body()
+  if not request_wants_gzip(request):
+    return PreencodedJSONResponse(body)
+  return PreencodedJSONResponse(gz, headers=GZIP_RESPONSE_HEADERS)
+
+
+# The grouped sidebar render pairs this poll with /api/sessions/scheduled every
+# 3 s, and the browser's fetch always accepts gzip. The rendered bytes and
+# their level-1 gzip form cache on the snapshot's own generation: the identity
+# of the tasks list get_scheduled_tasks returns — stable between config
+# changes, rebuilt by any reload, and pinned by the cache's own reference so a
+# freed list's address can never be reused for a new one. One config change
+# re-renders and re-compresses once; every poll in between serves both bodies
+# with zero render and zero deflate, and Content-Encoding set upstream makes
+# the middleware skip its own pass (the M72 mechanism).
+_CRON_TASKS_BODY_CACHE: tuple[list, bytes, bytes] | None = None
+
+
+def _cron_tasks_body() -> tuple[bytes, bytes]:
+  """Return (plain body, gzip body) for the current cron snapshot, rendering once per generation."""
+  global _CRON_TASKS_BODY_CACHE
+  tasks = get_scheduled_tasks()
+  cache = _CRON_TASKS_BODY_CACHE
+  if cache is not None and cache[0] is tasks:
+    return cache[1], cache[2]
+  valid = [t.model_dump(mode="json", exclude={'prompt': True, 'steps': {'__all__': {'prompt': True}}}) for t in tasks]
   broken = [
       {
           'name': e.name,
@@ -212,7 +234,10 @@ async def list_cron_tasks() -> FastJsonResponse:
           'enabled': e.enabled
       } for e in get_scheduled_task_errors()
   ]
-  return FastJsonResponse(valid + broken)
+  body = fast_json_bytes(valid + broken)
+  gz = gzip_level1(body)
+  _CRON_TASKS_BODY_CACHE = (tasks, body, gz)
+  return body, gz
 
 
 async def apply_task_yaml_update(
@@ -260,7 +285,7 @@ async def apply_task_yaml_update(
 
   rotated: SessionMetadata | None = None
   if cand_model.enabled:
-    _check_master_project_unique(name, cand_model.mode, cand_model.project)
+    _check_pm_project_unique(name, cand_model.type, cand_model.project)
   rotated = await _ensure_backend_update_session(name, cand_model, req, cfg, session_mgr)
   await asyncio.to_thread(_write_cron_yaml, name, candidate)
   log.debug('cron_task_updated', name=name)
@@ -284,11 +309,11 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
   """Add a new scheduled job as its own config.d/cron.d/<name>.yaml file."""
   _validate_cron_name(req.name)
   _validate_backend_id(req.backend, cfg)
-  if project_error := master_task_project_error(req.mode, req.project):
+  if project_error := pm_task_project_error(req.type, req.project):
     raise HTTPException(status_code=400, detail=project_error)
   if binding_error := scheduled_binding_error(req):
     raise HTTPException(status_code=400, detail=binding_error)
-  _check_master_project_unique(req.name, req.mode, req.project)
+  _check_pm_project_unique(req.name, req.type, req.project)
   path = cron_path(req.name)
   if path.exists():
     raise HTTPException(status_code=409, detail=f'Task "{req.name}" already exists')
@@ -301,7 +326,7 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
   # in place — see _validate_cron_body), exactly as the update route does, so
   # the persisted file keeps the submitted prompt_file pointer: the pointed
   # file owns the prompt body and this file carries only the path to it. An
-  # unreadable prompt_file or a master task without a prompt source becomes a
+  # unreadable prompt_file or a type: pm task without a prompt source becomes a
   # 409 with the loader's error text, and nothing is written to disk.
   try:
     await asyncio.to_thread(_validate_cron_body, copy.deepcopy(body), cfg.charlie_bot_repo, req.name)

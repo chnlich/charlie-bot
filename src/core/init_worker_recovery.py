@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 from src.core import event_types as ET
 from src.core import finalize_effects, runs
 from src.core.git import git_quarantine_worktree, git_worktree_dir_name
+from src.core.human_size import format_size
 from src.core.json_utils import load_json_meta
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import StatSignatureMemo
@@ -35,7 +36,7 @@ from src.core.process import kill_process_group
 from src.core.tasks import create_logged_task
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
-from src.core.worktree_trash import dir_size_bytes, format_size, trash_dir
+from src.core.worktree_trash import dir_size_bytes, trash_dir
 
 log = LazyStructlogLogger()
 
@@ -82,7 +83,7 @@ def _reset_thread_meta_memo_for_tests() -> None:
 _silence_reported_thread_ids: set[str] = set()
 
 
-def _iter_thread_meta_stats(threads_dir: Path, log_event: str) -> Iterator[tuple[str, str, "os.stat_result"]]:
+def _iter_thread_meta_stats(threads_dir: Path, log_event: str) -> Iterator[tuple[str, str, os.stat_result]]:
   """Yield ``(thread_dir, metadata.json path, stat)`` for every thread dir under *threads_dir*.
 
   The one scandir+stat walk both stat-first consumers take: the signature walk
@@ -110,7 +111,7 @@ def _iter_thread_meta_stats(threads_dir: Path, log_event: str) -> Iterator[tuple
       yield entry.path, meta_path, st
 
 
-def walk_thread_meta_stats(threads_dir: Path, log_event: str) -> list[tuple[str, str, "os.stat_result"]]:
+def walk_thread_meta_stats(threads_dir: Path, log_event: str) -> list[tuple[str, str, os.stat_result]]:
   """``(thread_dir, metadata.json path, stat)`` for every thread dir under *threads_dir*.
 
   The scandir+stat phase the sidebar probe's signature walk takes once and
@@ -124,7 +125,7 @@ def iter_recent_thread_metas(
     now: datetime,
     log_event: str,
     window: timedelta = RUNNING_SCAN_WINDOW,
-    walked: list[tuple[str, str, "os.stat_result"]] | None = None,
+    walked: list[tuple[str, str, os.stat_result]] | None = None,
 ) -> Iterator[tuple[str, str, dict]]:
   """Yield ``(thread_dir, meta_path, meta)`` for threads modified within *window*.
 

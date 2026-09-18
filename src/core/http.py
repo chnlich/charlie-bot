@@ -38,24 +38,10 @@ def load_requests(namespace: dict[str, Any]) -> Any:
 
   Each consumer passes its own ``globals()``: the per-module binding keeps that
   module's bare-name reads working and its module-attribute route (e.g.
-  ``src.cli.common.requests``) the tests' monkeypatch target, exactly as
+  ``src.core.artifact_wrap.requests``) the tests' monkeypatch target, exactly as
   ``load_croniter`` does for croniter.
   """
   import requests
 
   namespace["requests"] = requests
   return requests
-
-
-def requests_module_getattr(name: str, module_name: str, namespace: dict[str, Any]) -> Any:
-  """Body of a consumer module's PEP 562 ``__getattr__`` that serves the deferred requests import.
-
-  Each consumer defines ``def __getattr__(name): return requests_module_getattr(name,
-  __name__, globals())``. The module-attribute route (e.g. ``src.cli.common.requests.post``)
-  is the tests' monkeypatch target; ``load_requests`` binds the same object as a module
-  global on first use, so the consumer's own bare-name reads resolve directly. Any other
-  name raises AttributeError, as PEP 562 requires.
-  """
-  if name != "requests":
-    raise AttributeError(f"module {module_name!r} has no attribute {name!r}")
-  return load_requests(namespace)

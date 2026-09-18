@@ -16,12 +16,17 @@ This module owns the pure/queryable parts of that contract:
 - the outcome table mapping on-disk facts to a ``RunOutcome``;
 - the pure raw-line -> translated-event projection shared by the live read
   loop, the re-attach path, and tests;
+- the end-of-run error-hint selection for a failed invocation (the
+  invocation's own error events over the stderr tail);
 - reading the run's true completion time (the raw log's final mtime).
 """
+
+from __future__ import annotations
 
 import asyncio
 import base64
 import os
+import re
 import signal
 import stat
 import time
@@ -30,11 +35,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import orjson
 
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
 from src.core.control_events import (
   ACTOR_SYSTEM,
   ControlEventSink,
@@ -47,6 +52,9 @@ from src.core.models import BackendType, RunRecord, ensure_utc, utc_now
 from src.core.ndjson import parse_ndjson_line
 from src.core.session_aliases import SessionAliasStore
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
+
+if TYPE_CHECKING:
+  from src.core.config import CharlieBotConfig
 
 RAW_LOG_NAME = "agent.raw.ndjson"
 STDERR_LOG_NAME = "agent.stderr.log"
@@ -352,6 +360,42 @@ def result_success(result: dict) -> bool:
   return result.get("subtype") in (None, "success") and result.get("is_error") in (None, False)
 
 
+# The stderr fallback hint keeps the stderr-first slice's 500-character bound
+# (the behavior it replaces); the structured error event passes through whole.
+_STDERR_HINT_MAX_CHARS = 500
+
+# ANSI escape sequences (CSI parameters/intermediates/final byte, OSC up to its
+# BEL or ST terminator) render as garbage in a chat hint; the control-character
+# class sweeps whatever escape forms remain. Newlines and tabs survive: they
+# are stderr formatting, not noise.
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+_CONTROL_CHAR = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def clean_control_characters(text: str) -> str:
+  """Strip ANSI escapes and control characters, keeping newlines and tabs."""
+  return _CONTROL_CHAR.sub("", _ANSI_ESCAPE.sub("", text))
+
+
+def select_error_hint(error_messages: list[str], stderr_text: str) -> str | None:
+  """End-of-run error hint for one failed invocation: its own error events first.
+
+  A failed invocation's translated ``error`` events carry the real failure (an
+  HTTP status and reason); the stderr tail usually carries only the client
+  library's generic help banner. The last non-empty error message wins; when
+  the invocation emitted none, the stderr tail is the fallback — control
+  characters cleaned, capped at the bound the stderr-first slice it replaces
+  used. None when neither channel says anything. Pure: both end paths (live
+  tracking and restart re-attach) feed it from what they already hold, and the
+  raw log itself is never touched.
+  """
+  for message in reversed(error_messages):
+    if message.strip():
+      return message
+  cleaned = clean_control_characters(stderr_text).strip()
+  return cleaned[:_STDERR_HINT_MAX_CHARS] or None
+
+
 def project_raw_file(raw_path: Path, translate: Callable[[dict], list[dict]]) -> list[dict]:
   """Whole-file projection: read, parse, and project one raw log.
 
@@ -407,9 +451,35 @@ def read_raw_cursor(cursor: Path) -> int:
     return 0
 
 
-def write_raw_cursor(cursor: Path, offset: int) -> None:
-  cursor.parent.mkdir(parents=True, exist_ok=True)
-  cursor.write_text(str(offset), encoding="utf-8")
+CURSOR_FIELD_BYTES = 20
+
+
+class RawCursorWriter:
+  """Held-fd checkpoint writer for one tail-follow mount's cursor file.
+
+  The follow checkpoints once per consumed line, so the write must not pay an
+  open+truncate+close cycle per call (~0.9 ms on this host's storage): the
+  mount holds one fd and rewrites the offset as one fixed-width zero-padded
+  decimal in place. The fixed width keeps every rewrite a single pwrite, so a
+  read can only observe the full old or the full new value; a torn read
+  between two monotonic offsets parses to the older one and replays
+  duplicates, never loss (the read_raw_cursor contract).
+  """
+
+  def __init__(self, path: Path) -> None:
+    self._path = path
+    self._fd: int | None = None
+
+  def write(self, offset: int) -> None:
+    if self._fd is None:
+      self._path.parent.mkdir(parents=True, exist_ok=True)
+      self._fd = os.open(self._path, os.O_WRONLY | os.O_CREAT, 0o666)
+    os.pwrite(self._fd, b"%0*d" % (CURSOR_FIELD_BYTES, offset), 0)
+
+  def close(self) -> None:
+    if self._fd is not None:
+      os.close(self._fd)
+      self._fd = None
 
 
 # ---------------------------------------------------------------------------

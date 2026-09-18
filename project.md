@@ -28,7 +28,7 @@ All instance-specific data (configs, sessions, memory) is stored here.
 `CHARLIEBOT_HOME` selects which one: unset gives `~/.charliebot`, and a set value (absolute
 or `~`-prefixed; relative is rejected) gives a separate profile, seeded on first use. Several
 profiles run side by side on one host, each with its own port in its own `config.yaml`. The
-home path is resolved in exactly one place, `charliebot_home_dir()` in `src/core/config.py`;
+home path is resolved in exactly one place, `charliebot_home_dir()` in `src/core/home.py`;
 every other path derives from `CharlieBotConfig.charliebot_home`. One raw read of the variable
 sits outside it: the web terminal's profile check (`src/agents/backends/terminal.py`). A tmux
 pane inherits the tmux server's environment rather than the server process's, so the terminal
@@ -61,7 +61,9 @@ thread branch — the directory name is the branch name with `/` replaced by `-`
 ```
 
 **Notes:**
-- Individual Worker logs are in `threads/{uuid}/data/` (`stdout.log`, `stderr.log`, `events.jsonl`).
+- Individual Worker logs are in `threads/{uuid}/data/`: the raw-log spawn writes `agent.raw.ndjson` (the
+  CLI's stream) plus `agent.stderr.log`; the pipe transports write `stdout.log` plus `stderr.log`;
+  `events.jsonl` holds the translated events.
 - `workspace_dirs`: Config option (`config.yaml`) listing workspace directories to scan for git projects. The `GET /api/sessions/projects` endpoint returns discovered projects for the UI project picker.
 
 ### 3.2 Repository Code Structure (Stateless)
@@ -83,9 +85,9 @@ charlie-bot/
 |------|------|------------------|
 | **Master Agent** | Claude Code session (`src/agents/master_cc.py`) | User interaction, high-level planning, delegating coding tasks to Workers, reviewing combined worker+reviewer results. Runs as a persistent Claude Code subprocess with `--resume` support across messages. Can use any configured backend. |
 | **Worker Agent** | Claude Code CLI (`src/agents/worker.py`) | Code analysis, implementation, file editing, git operations, testing. Runs in an isolated git worktree on a dedicated branch. Told NOT to rebase/merge/remove the worktree — a reviewer handles that. |
-| **Review Agent** | Claude Code CLI (same Worker class) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto base branch, merges (ff-only), and cleans up the worktree. Intentionally uses a DIFFERENT backend than the Worker (cross-backend review via `backends.preference` config). |
+| **Review Agent** | Claude Code CLI (same Worker class) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto the remote base, pushes the branch to the base (git rejects a non-fast-forward push), and cleans up the worktree. Intentionally uses a DIFFERENT backend than the Worker (cross-backend review via `backends.preference` config). |
 
-**Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/agents/backends/base.py`). The `BackendType` vocabulary (`src/core/models.py`) names the backends, and `src/agents/backends/registry.py` dispatches each `BackendOption.type` to its implementation. Backend selection is configured via `backends.options` and `backends.preference` in `config.yaml`.
+**Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/agents/backends/base.py`). The `BackendType` vocabulary (`src/core/backend_models.py`) names the backends, and `src/agents/backends/registry.py` dispatches each `BackendOption.type` to its implementation. Backend selection is configured via `backends.options` and `backends.preference` in `config.yaml`.
 
 ### 4.2 Session & Thread Model
 - **Session**: Represents a project/workspace. Each Session has:
@@ -100,8 +102,8 @@ charlie-bot/
 
 ### 4.3 Git Isolation Strategy
 - **Thread Branch Isolation**: Each Worker operates on its own branch in an isolated git worktree to prevent conflicts
-- **Reviewer Merge**: The review agent rebases the worker's branch onto the base branch and merges with `--ff-only`
-- **Worktree Cleanup**: The reviewer removes the worktree after successful merge
+- **Reviewer Merge-Back**: The review agent rebases the worker's branch onto the remote base branch and pushes it there; git rejects a non-fast-forward push, so the base only fast-forwards
+- **Worktree Cleanup**: The reviewer removes the worktree after the branch lands on the base
 
 ---
 
@@ -130,7 +132,7 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
      - Reviews `git diff base_branch...branch_name`
      - Fixes any issues found, commits fixes
      - Rebases the branch onto the base branch
-     - Merges back to main with `--ff-only`
+     - Pushes the rebased branch to the remote base (`git push origin HEAD:{base_branch}`); git rejects a non-fast-forward push
      - Cleans up the worktree
    - If the reviewer **fails**, it retries with the next untried backend from `backends.preference`. Max retries = `len(backends.preference)`
 
@@ -186,7 +188,7 @@ A local git repo at `~/.charliebot/memory/` holds one durable fact or rule set p
 3. Audio uploaded to backend
 4. **Local sherpa-onnx Qwen3-ASR** transcribes (VAD + simulated-streaming partials; supports Chinese, English, mixed, and ~30 languages)
 5. Transcription displayed in UI first
-6. Passed to Master with disclaimer: *"This is a voice-transcribed message and may not be exactly accurate. Please ask clarifying questions if anything is unclear."*
+6. Passed to Master with a disclaimer prefix: the displayed message stays verbatim, and the prompt the agent receives carries the fixed voice note from `_VOICE_DISCLAIMER` (`src/agents/master_cc_run.py`)
 
 ---
 
@@ -198,14 +200,16 @@ A local git repo at `~/.charliebot/memory/` holds one durable fact or rule set p
 - **Persistence**: Worker state is flushed to disk in real-time; Master can resume after restart
 
 ### 8.2 JSON Stream Monitoring
-Workers run with `--output-format stream-json --verbose`:
-```json
-{"type": "thinking", "content": "Analyzing..."}
-{"type": "file_write", "path": "src/auth.py", "lines_added": 45}
-{"type": "error", "message": "ImportError..."}
-{"type": "complete", "status": "success"}
-```
-Master parses this to distinguish "thinking" from "stuck" and track progress precisely.
+Workers run with `--output-format stream-json --verbose`, so the raw NDJSON log (`agent.raw.ndjson`)
+holds the CLI's stream. The lines are `assistant` events carrying `message.content` blocks
+(`text`, `thinking`, `tool_use`), `user` tool-result wrappers, and a final `result`.
+`AgentBackend.translate_event` (`src/agents/backends/base.py`) turns each line into the events that
+land in `events.jsonl` and the WebSocket stream: the Anthropic-endpoint backends (cc-claude,
+cc-kimi, cc-openai-compatible) pass lines through unchanged; the other backends translate their
+native streams into CC-compatible events with per-backend vocabularies (codex, for one, emits
+`thinking` and `file_write`).
+A raw log that stops growing while the process is still alive is what the server reports as stuck
+(the no-output silence report); thinking in progress is the `thinking` content.
 
 ---
 

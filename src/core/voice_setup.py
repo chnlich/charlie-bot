@@ -139,7 +139,7 @@ def run_gpu_preflight(
   import torch
   import transformers
 
-  import src.agents.transcriber as transcriber
+  from src.agents import transcriber
 
   if not torch.cuda.is_available():
     raise RuntimeError("preflight (b) failed: torch imports but torch.cuda.is_available() is False")

@@ -36,9 +36,15 @@ function disconnectWS() {
   try { socket.close(); } catch {}
 }
 
+// Session teardown and connectWS re-entry call this so a pending backoff
+// timer cannot fire connectWS into the session that was replaced.
+function cancelReconnect() {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+}
+
 function connectWS() {
   if (!SESSION_ID) return;
-  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  cancelReconnect();
   const targetSession = SESSION_ID;
   const generation = ++wsGeneration;
   const wsUrl = wsUrlWithToken(`/ws/sessions/${SESSION_ID}`);

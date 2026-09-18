@@ -26,7 +26,7 @@ from conftest import (
     rate_limit_event,
 )
 
-from src.agents.worker import QuotaExhaustedException, Worker
+from src.agents.worker import QuotaExhaustedError, Worker
 from src.core import (
     claude_accounts,
     claude_compaction,
@@ -211,7 +211,7 @@ async def test_worker_outside_the_pool_still_raises_on_rejection(
   _install_backends(monkeypatch, [ScriptedRelayBackend([rate_limit_event("rejected", 1.0)], exit_code=1)])
   worker = _worker(tmp_path, cfg, None)
 
-  with pytest.raises(QuotaExhaustedException, match="Rate limited"):
+  with pytest.raises(QuotaExhaustedError, match="Rate limited"):
     await worker.run()
 
 

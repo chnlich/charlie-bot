@@ -9,6 +9,7 @@ import pytest
 
 from src.cli import claude_sub, claude_sub_hook
 from src.cli.claude_sub_bridge import (
+    HOOK_EVENTS,
     HookBridge,
     HookProtocolError,
     HookTurnState,
@@ -375,8 +376,8 @@ async def test_hook_bridge_accepts_fake_hook_source_and_emits_events(tmp_path: P
         claude_sub_hook._send_request,
         str(bridge.socket_path),
         bridge.token,
-        False,
-        _payload("SessionStart", source="startup"),
+        gate=False,
+        payload=_payload("SessionStart", source="startup"),
     )
     assert session_start == {"ok": True}
     assert (await bridge.events.get())["subtype"] == "init"
@@ -385,16 +386,16 @@ async def test_hook_bridge_accepts_fake_hook_source_and_emits_events(tmp_path: P
         claude_sub_hook._send_request,
         str(bridge.socket_path),
         bridge.token,
-        True,
-        _payload("UserPromptSubmit", prompt=PROMPT, turn_id="turn-1"),
+        gate=True,
+        payload=_payload("UserPromptSubmit", prompt=PROMPT, turn_id="turn-1"),
     )
     assert user_submit == {"ok": True}
     message = await asyncio.to_thread(
         claude_sub_hook._send_request,
         str(bridge.socket_path),
         bridge.token,
-        False,
-        _payload(
+        gate=False,
+        payload=_payload(
             "MessageDisplay",
             turn_id="turn-1",
             message_id="message-1",
@@ -474,27 +475,33 @@ def _install_config_paths(
   return source_global, source_settings, source_credentials, source_remote
 
 
+def _seed_overlay(payload: dict) -> Path:
+  """A pre-existing overlay ``.claude.json`` in the session config dir.
+
+  The one writer of the seed every overlay-behavior test starts from.
+  """
+  config_dir = claude_sub._session_config_dir(SESSION_ID)
+  config_dir.mkdir(parents=True)
+  overlay_global = config_dir / ".claude.json"
+  overlay_global.write_text(json.dumps(payload), encoding="utf-8")
+  return overlay_global
+
+
 def test_session_config_overlay_heals_existing_overlay_missing_trust_entry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
   source_global, _, _, _ = _install_config_paths(monkeypatch, tmp_path)
-  config_dir = claude_sub._session_config_dir(SESSION_ID)
-  config_dir.mkdir(parents=True)
-  overlay_global = config_dir / ".claude.json"
-  overlay_global.write_text(
-      json.dumps(
-          {
-              "preservedKey": "kept",
-              "messageIdleNotifThresholdMs": claude_sub._IDLE_NOTIFICATION_THRESHOLD_MS,
-              "projects": {
-                  "/unrelated": {
-                      "hasTrustDialogAccepted": True
-                  }
-              },
-          }),
-      encoding="utf-8",
-  )
+  overlay_global = _seed_overlay(
+      {
+          "preservedKey": "kept",
+          "messageIdleNotifThresholdMs": claude_sub._IDLE_NOTIFICATION_THRESHOLD_MS,
+          "projects": {
+              "/unrelated": {
+                  "hasTrustDialogAccepted": True
+              }
+          },
+      })
 
   claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
 
@@ -513,21 +520,15 @@ def test_session_config_overlay_preserves_existing_project_onboarding_seen_count
     tmp_path: Path,
 ) -> None:
   _install_config_paths(monkeypatch, tmp_path)
-  config_dir = claude_sub._session_config_dir(SESSION_ID)
-  config_dir.mkdir(parents=True)
-  overlay_global = config_dir / ".claude.json"
-  overlay_global.write_text(
-      json.dumps(
-          {
-              "projects": {
-                  WORKING_DIRECTORY: {
-                      "hasTrustDialogAccepted": False,
-                      "projectOnboardingSeenCount": 7,
-                  },
+  overlay_global = _seed_overlay(
+      {
+          "projects": {
+              WORKING_DIRECTORY: {
+                  "hasTrustDialogAccepted": False,
+                  "projectOnboardingSeenCount": 7,
               },
-          }),
-      encoding="utf-8",
-  )
+          },
+      })
 
   claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
 
@@ -541,22 +542,16 @@ def test_session_config_overlay_idempotent_when_already_configured(
     tmp_path: Path,
 ) -> None:
   _install_config_paths(monkeypatch, tmp_path)
-  config_dir = claude_sub._session_config_dir(SESSION_ID)
-  config_dir.mkdir(parents=True)
-  overlay_global = config_dir / ".claude.json"
-  overlay_global.write_text(
-      json.dumps(
-          {
-              "projects": {
-                  WORKING_DIRECTORY: {
-                      "hasTrustDialogAccepted": True,
-                      "projectOnboardingSeenCount": 3,
-                  },
+  _seed_overlay(
+      {
+          "projects": {
+              WORKING_DIRECTORY: {
+                  "hasTrustDialogAccepted": True,
+                  "projectOnboardingSeenCount": 3,
               },
-              "messageIdleNotifThresholdMs": claude_sub._IDLE_NOTIFICATION_THRESHOLD_MS,
-          }),
-      encoding="utf-8",
-  )
+          },
+          "messageIdleNotifThresholdMs": claude_sub._IDLE_NOTIFICATION_THRESHOLD_MS,
+      })
   writes: list[Path] = []
   real_write = claude_sub._write_json_atomically
 
@@ -644,7 +639,7 @@ def test_hook_plugin_registers_every_required_event_without_user_settings(tmp_pa
   hooks = json.loads((plugin_dir / "hooks" / "hooks.json").read_text())
 
   assert plugin["name"] == "charliebot-hook-bridge"
-  assert set(hooks["hooks"]) == set(claude_sub._HOOK_EVENTS)
+  assert set(hooks["hooks"]) == set(HOOK_EVENTS)
   for event_name, groups in hooks["hooks"].items():
     if event_name == "Notification":
       assert "matcher" not in groups[0]
@@ -679,7 +674,7 @@ async def test_respawn_passes_one_prompt_directly_and_does_not_use_a_shell(
       disallowed_tools=["AskUserQuestion,ExitPlanMode"],
   )
 
-  await claude_sub._respawn_claude(args, SESSION_ID, True, tmp_path / "plugin", Path.cwd())
+  await claude_sub._respawn_claude(args, SESSION_ID, resume=True, plugin_dir=tmp_path / "plugin", cwd=Path.cwd())
 
   assert len(calls) == 1
   command = calls[0]
@@ -710,7 +705,7 @@ async def test_respawn_passes_auto_compact_window_default_to_the_pane(
       disallowed_tools=["AskUserQuestion,ExitPlanMode"],
   )
 
-  await claude_sub._respawn_claude(args, SESSION_ID, True, tmp_path / "plugin", Path.cwd())
+  await claude_sub._respawn_claude(args, SESSION_ID, resume=True, plugin_dir=tmp_path / "plugin", cwd=Path.cwd())
 
   command = calls[0]
   assert "CLAUDE_CODE_AUTO_COMPACT_WINDOW=433000" in command

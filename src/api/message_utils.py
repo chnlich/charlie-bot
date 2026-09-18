@@ -11,6 +11,7 @@ from src.core.message_aggregator import MessageAggregator
 from src.core.message_events import _ATTACHED_FILES_MARKER, _stable_history_projection
 
 if TYPE_CHECKING:
+  from src.core.message_projection import MessageProjection
   from src.core.models import SessionMetadata
   from src.core.sessions import SessionManager
 
@@ -27,6 +28,7 @@ __all__ = [
     "build_user_event",
     "events_to_messages",
     "events_to_view",
+    "get_message_projection_fast",
 ]
 
 
@@ -104,6 +106,23 @@ class SessionViewData:
   has_more: bool = False
 
 
+async def get_message_projection_fast(
+    session_mgr: 'SessionManager',
+    session_id: str,
+) -> 'MessageProjection | None':
+  """Return the session's message projection via the warm-hit fast path.
+
+  A warm projection hit is a dict read + len compare answered on the event
+  loop; only a miss pays the executor round-trip the threaded getter needs
+  for its disk reads. Returns None when no projection is available (an
+  archived session), and the caller takes its fallback path.
+  """
+  projection = session_mgr.projection_memo_hit(session_id)
+  if projection is None:
+    projection = await asyncio.to_thread(session_mgr.get_message_projection, session_id)
+  return projection
+
+
 async def _projection_page(
     session_mgr: 'SessionManager',
     session_id: str,
@@ -113,13 +132,9 @@ async def _projection_page(
 
   Returns (messages, pending_draft, event_count, oldest_ordinal, has_more), or
   None when no projection is available and the caller must take the legacy
-  tail-events path. A warm projection hit is a dict read + len compare, so it
-  is answered on the event loop; the executor round-trip is paid only on a
-  miss, where the threaded getter reads or advances.
+  tail-events path.
   """
-  projection = session_mgr.projection_memo_hit(session_id)
-  if projection is None:
-    projection = await asyncio.to_thread(session_mgr.get_message_projection, session_id)
+  projection = await get_message_projection_fast(session_mgr, session_id)
   if projection is None:
     return None
   messages, oldest_ordinal, has_more = projection.tail(message_limit)

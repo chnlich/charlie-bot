@@ -42,6 +42,30 @@ def test_get_miss_returns_none() -> None:
   assert memo.get("missing") is None
 
 
+def test_peek_serves_without_refreshing_recency() -> None:
+  """peek answers a hit without moving it, so a read cannot protect a key from eviction."""
+  memo: BoundedMemo[str, int] = BoundedMemo(2)
+  memo.store("a", 1)
+  memo.store("b", 2)
+  assert memo.peek("a") == 1
+
+  memo.store("c", 3)
+  assert list(memo) == ["b", "c"]
+  assert memo.peek("a") is None
+  assert memo.peek("missing") is None
+
+
+def test_items_yields_pairs_lru_first() -> None:
+  """items yields (key, value) pairs in __iter__'s order, from one snapshot."""
+  memo: BoundedMemo[str, int] = BoundedMemo(2)
+  memo.store("a", 1)
+  memo.store("b", 2)
+  assert list(memo.items()) == [("a", 1), ("b", 2)]
+
+  memo.get("a")
+  assert list(memo.items()) == [("b", 2), ("a", 1)]
+
+
 def _stat(path: Path, mtime_ns: int, size: int) -> os.stat_result:
   """A real stat of a file rewritten to *size* bytes and *mtime_ns*, the way the memo's
   consumers see signatures: from files whose writes publish through renames and utimes."""

@@ -37,16 +37,6 @@ def dir_size_bytes(path: Path) -> int:
   return total
 
 
-def format_size(num_bytes: int) -> str:
-  """Format a byte count as a human-readable string."""
-  size = float(num_bytes)
-  for unit in ("B", "KB", "MB", "GB", "TB"):
-    if size < 1024 or unit == "TB":
-      return f"{size:.1f} {unit}"
-    size /= 1024
-  return f"{size:.1f} TB"
-
-
 @dataclass(frozen=True)
 class TrashEntry:
   """A single top-level directory sitting in the quarantine trash."""

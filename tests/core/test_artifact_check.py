@@ -998,8 +998,9 @@ def test_render_path_passes_on_the_full_script_injection(tmp_path: Path) -> None
 
 
 def test_render_path_fails_on_a_partial_injection(tmp_path: Path) -> None:
-  doc = _genre_doc("explain", _sections([f"S{i}" for i in range(1, 6)])).replace(
-      "</head>", f'<script defer src="{_KATEX_DIST}/katex.min.js"></script></head>')
+  doc = _genre_doc("explain",
+                   _sections([f"S{i}" for i in range(1, 6)
+                             ])).replace("</head>", f'<script defer src="{_KATEX_DIST}/katex.min.js"></script></head>')
   (outcome,) = _run("explain", _write(tmp_path, doc))["render-path"]
   assert not outcome.passed
 

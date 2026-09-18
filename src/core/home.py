@@ -18,10 +18,10 @@ CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
 # writes it onto a cc-claude child (claude_code._prepare_env, the tmux spawn in
 # src/cli/claude_sub.py), the pool strips any inherited value where it pinned the
 # directory itself (master_cc_run, claude_compaction.compaction_env), and the
-# in-process readers below and in tui/_claude_config_path and claude_sub read it
-# back. One spelling everywhere. It lives beside the profile home so the worker
-# binary's launch path (src.cli.claude_sub) resolves it without the config model
-# stack.
+# in-process readers in src.core.config.claude_config_dir, tui/_claude_config_path,
+# and claude_sub read it back. One spelling everywhere. It lives beside the profile
+# home so the worker binary's launch path (src.cli.claude_sub) resolves it without
+# the config model stack.
 CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
 
 

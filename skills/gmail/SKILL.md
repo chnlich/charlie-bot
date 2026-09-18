@@ -32,20 +32,7 @@ All Gmail API requests use:
 
 ### Refresh an Access Token
 
-```bash
-read GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REFRESH_TOKEN < <(python3 -c "
-import yaml
-c = yaml.safe_load(open('$HOME/.charliebot/credentials.yaml'))
-print(c['google']['client_id'], c['google']['client_secret'], c['google']['refresh_token'])
-")
-
-ACCESS_TOKEN=$(curl -s -X POST https://oauth2.googleapis.com/token \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  --data-urlencode "client_id=$GOOGLE_CLIENT_ID" \
-  --data-urlencode "client_secret=$GOOGLE_CLIENT_SECRET" \
-  --data-urlencode "refresh_token=$GOOGLE_REFRESH_TOKEN" \
-  --data-urlencode "grant_type=refresh_token" | jq -r '.access_token')
-```
+Mint the access token from the stored refresh token with the recipe in the **google-oauth** skill: `skills/google-oauth/SKILL.md`.
 
 ### List Messages
 

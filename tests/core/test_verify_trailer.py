@@ -152,4 +152,5 @@ def test_resolve_final_report_reads_only_the_tail_window_on_the_fallback_path(
   assert _resolve_final_report(target) == "the report\nRESULT: clean"
   file_size = target.stat().st_size
   assert extents, "the walk never scanned"
-  assert min(end for _, end in extents) >= file_size - 2 * 512 * 1024  # the newest window plus the fallback's one older window
+  assert min(
+      end for _, end in extents) >= file_size - 2 * 512 * 1024  # the newest window plus the fallback's one older window

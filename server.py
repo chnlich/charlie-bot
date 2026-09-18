@@ -1,6 +1,7 @@
 """CharlieBot server entry point."""
 
 import asyncio
+import io
 import json
 import time
 from collections.abc import AsyncIterator
@@ -9,6 +10,7 @@ from datetime import datetime
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+from isal.igzip import IGzipFile
 from starlette.datastructures import Headers, MutableHeaders, QueryParams
 from starlette.middleware.gzip import GZipMiddleware, GZipResponder
 from starlette.responses import Response
@@ -110,6 +112,16 @@ class _OffLoopWholeBodyGZipResponder(GZipResponder):
   inline per-chunk path, whose chunks are small and whose gzip file state must
   not cross threads between writes.
   """
+
+  def __init__(self, app: ASGIApp, minimum_size: int, compresslevel: int = 1) -> None:
+    super().__init__(app, minimum_size, compresslevel=compresslevel)
+    # The superclass's zlib GzipFile wrote its dated header into the shared
+    # buffer at construction and will append a trailer at close, so both the
+    # buffer and the file are replaced and the stale file keeps only the
+    # discarded buffer. ISA-L deflates the same level-1 container faster, and
+    # mtime=0 keeps the wire deterministic like the one-shot gzip memos'.
+    self.gzip_buffer = io.BytesIO()
+    self.gzip_file = IGzipFile(mode="wb", fileobj=self.gzip_buffer, compresslevel=compresslevel, mtime=0)
 
   async def send_with_compression(self, message: Message) -> None:
     if message["type"] == "http.response.start":

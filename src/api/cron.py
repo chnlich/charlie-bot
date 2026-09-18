@@ -2,7 +2,6 @@
 
 import asyncio
 import copy
-import gzip
 from datetime import datetime
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -14,6 +13,7 @@ from starlette.responses import Response
 
 from src.api.deps import bad_request, get_config_on_loop, get_session_manager
 from src.api.responses import GZIP_RESPONSE_HEADERS, PreencodedJSONResponse, fast_json_bytes, request_wants_gzip
+from src.core.compression import gzip_level1
 from src.core.config import (
     CharlieBotConfig,
     ScheduledTaskConfig,
@@ -228,7 +228,7 @@ def _cron_tasks_body() -> tuple[bytes, bytes]:
       } for e in get_scheduled_task_errors()
   ]
   body = fast_json_bytes(valid + broken)
-  gz = gzip.compress(body, 1, mtime=0)
+  gz = gzip_level1(body)
   _CRON_TASKS_BODY_CACHE = (tasks, body, gz)
   return body, gz
 

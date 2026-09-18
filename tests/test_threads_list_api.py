@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
-from conftest import fake_backends, gzip_explode_compress
+from conftest import assert_gzip_served, fake_backends, gzip_explode_compress
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -513,8 +513,7 @@ def test_list_gzip_ships_precompressed_body(tmp_path: Path) -> None:
 
   gz = client.get(url)
   plain = client.get(url, headers={"accept-encoding": "identity"})
-  assert gz.headers["content-encoding"] == "gzip"
-  assert gz.headers["vary"] == "Accept-Encoding"
+  assert_gzip_served(gz)
   assert gz.headers["ETag"] == plain.headers["ETag"]
   assert gz.json() == plain.json()
 

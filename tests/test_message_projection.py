@@ -19,6 +19,7 @@ from conftest import (
     BROADCAST_PATCH_TARGET,
     OPUS_BACKEND_ID,
     _page_request,
+    assert_gzip_served,
     fake_backends,
     gzip_explode_compress,
     make_home_session,
@@ -978,8 +979,7 @@ async def test_events_route_gzip_click_ships_precompressed_body(tmp_path: Path) 
       session.id, _page_request(), before=before, limit=limit, meta=meta, session_mgr=mgr)
   first = await get_session_events_page(
       session.id, _page_request("gzip"), before=before, limit=limit, meta=meta, session_mgr=mgr)
-  assert first.headers["content-encoding"] == "gzip"
-  assert first.headers["vary"] == "Accept-Encoding"
+  assert_gzip_served(first)
   assert gzip.decompress(first.body) == plain.body
 
   with patch("src.api.sessions.gzip_level1", gzip_explode_compress("repeat gzip click re-ran the deflate")):

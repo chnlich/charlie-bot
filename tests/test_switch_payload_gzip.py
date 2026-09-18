@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from conftest import _page_request, gzip_explode_compress, make_home_session
+from conftest import _page_request, assert_gzip_served, gzip_explode_compress, make_home_session
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -61,8 +61,7 @@ async def test_switch_gzip_ships_precompressed_body(tmp_path: Path) -> None:
     for handler in (get_session_view, get_session_bootstrap):
       plain = await _call(handler, session.id, _page_request(), meta, mgr, cfg)
       gz = await _call(handler, session.id, _page_request("gzip"), meta, mgr, cfg)
-      assert gz.headers["content-encoding"] == "gzip"
-      assert gz.headers["vary"] == "Accept-Encoding"
+      assert_gzip_served(gz)
       assert gzip.decompress(gz.body) == plain.body
       assert json.loads(plain.body)["session"]["id"] == session.id
 
@@ -121,8 +120,7 @@ async def test_sidebar_gzip_ships_precompressed_body(tmp_path: Path) -> None:
   with patch.object(deps, "_trigger_manager", TriggerManager(cfg, mgr)):
     status_gz = await _call(all_sessions_status, session.id, _page_request("gzip"), meta, mgr, cfg)
     status_plain = await _call(all_sessions_status, session.id, _page_request(), meta, mgr, cfg)
-    assert status_gz.headers["content-encoding"] == "gzip"
-    assert status_gz.headers["vary"] == "Accept-Encoding"
+    assert_gzip_served(status_gz)
     assert gzip.decompress(status_gz.body) == status_plain.body
     assert json.loads(status_plain.body)[session.id]["has_unread"] is False
 

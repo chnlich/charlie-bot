@@ -9,7 +9,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_OPTION, gzip_counting_compress, gzip_explode_compress, mount_production_gzip
+from conftest import (
+    OPUS_BACKEND_OPTION,
+    assert_gzip_served,
+    gzip_counting_compress,
+    gzip_explode_compress,
+    mount_production_gzip,
+)
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -55,10 +61,7 @@ def test_gzip_accepted_download_ships_precompressed_body(profile_home: Path) -> 
   cfg, sid = _session_with_events(profile_home)
   resp = _gzip_client(cfg).get(f"/api/sessions/{sid}/events.jsonl", headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
-  # The route set the encoding upstream — that header is what makes the
-  # middleware skip its own per-chunk deflate — and carries the negotiation vary.
-  assert resp.headers["content-encoding"] == "gzip"
-  assert resp.headers["vary"] == "Accept-Encoding"
+  assert_gzip_served(resp)
   assert resp.text == PROBE_EVENTS
 
 

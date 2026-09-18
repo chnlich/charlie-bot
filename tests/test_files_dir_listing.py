@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import pytest
-from conftest import gzip_counting_compress, gzip_explode_compress, mount_production_gzip
+from conftest import assert_gzip_served, gzip_counting_compress, gzip_explode_compress, mount_production_gzip
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -176,10 +176,7 @@ def test_listing_gzip_view_ships_precompressed_page(tmp_path: Path) -> None:
 
   resp = _gzip_client().get(url, headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
-  # The route set the encoding upstream — that header is what makes the
-  # middleware skip its own deflate — and carries the negotiation vary.
-  assert resp.headers["content-encoding"] == "gzip"
-  assert resp.headers["vary"] == "Accept-Encoding"
+  assert_gzip_served(resp)
   # What ships is the listing page, compressed: the decoded body is byte-exact
   # against the independent reference walk.
   assert resp.text == _reference_listing(corpus, f"/files{corpus}")

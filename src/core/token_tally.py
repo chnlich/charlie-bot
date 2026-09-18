@@ -390,12 +390,17 @@ class TallyCache:
     self._next[source][key] = entry
 
 
+def _unreadable_note(notes: list[str], source: str, label: str, exc: object) -> None:
+  """Append the tally's unreadable note for one path; the single home of its wording."""
+  notes.append(f"{source}: unreadable {label}: {exc}")
+
+
 def _walk_error_hook(t: _Tally, source: str, label: str, root_name: str) -> Callable[[OSError], None]:
   """The os.walk onerror hook turning an unreadable directory into a per-account note."""
 
   def _onerror(exc: OSError) -> None:
     if not isinstance(exc, FileNotFoundError):
-      t.notes.append(f"{source}: unreadable {label}/{root_name}: {exc}")
+      _unreadable_note(t.notes, source, f"{label}/{root_name}", exc)
 
   return _onerror
 
@@ -507,7 +512,7 @@ def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str,
     session_listing = _charliebot_listing(str(sessions))
   except OSError as exc:
     if not isinstance(exc, FileNotFoundError):
-      t.notes.append(f"charlie-bot: unreadable {sessions}: {exc}")
+      _unreadable_note(t.notes, "charlie-bot", str(sessions), exc)
     return
   for session_path in session_listing:
     for kind, container, name in _WALK_KINDS:
@@ -515,7 +520,7 @@ def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str,
         listing = _charliebot_listing(session_path + _WALK_SEP + container)
       except OSError as exc:
         if not isinstance(exc, FileNotFoundError):
-          t.notes.append(f"charlie-bot: unreadable {session_path}/{container}: {exc}")
+          _unreadable_note(t.notes, "charlie-bot", f"{session_path}/{container}", exc)
         continue
       for entry_path in listing:
         path = entry_path + _WALK_SEP + name
@@ -1122,7 +1127,7 @@ def _walk_source(
   for account, home in homes.items():
     for path, st, error in _iter_jsonl_stats(home / sub, t, source, account):
       if st is None:
-        t.notes.append(f"{source}: unreadable {account}/{os.path.basename(path)}: {error}")
+        _unreadable_note(t.notes, source, f"{account}/{os.path.basename(path)}", error)
         walked.append((path, account, None, False))
         continue
       entry = (cache.lookup_sig(cache_key, path, [st.st_mtime_ns, st.st_size]) if cache is not None else None)
@@ -1132,7 +1137,7 @@ def _walk_source(
         try:
           entry, nbytes = parse(path, prev)
         except OSError as exc:
-          t.notes.append(f"{source}: unreadable {account}/{os.path.basename(path)}: {exc}")
+          _unreadable_note(t.notes, source, f"{account}/{os.path.basename(path)}", exc)
           walked.append((path, account, None, False))
           continue
         t.scanned_bytes += nbytes
@@ -1510,7 +1515,7 @@ def collect_charliebot(
   clc_master = 0
   for kind, path, mtime_ns, size, error in rows:
     if mtime_ns is None:
-      t.notes.append(f"charlie-bot: unreadable {path}: {error}")
+      _unreadable_note(t.notes, "charlie-bot", path, error)
       continue
     entry = cache.lookup_sig("charlie-bot", path, [mtime_ns, size]) if cache is not None else None
     if entry is None:
@@ -1519,7 +1524,7 @@ def collect_charliebot(
       try:
         entry, nbytes = parse(path, registry, prev)
       except (OSError, ValueError) as exc:
-        t.notes.append(f"charlie-bot: unreadable {path}: {exc}")
+        _unreadable_note(t.notes, "charlie-bot", path, exc)
         continue
       t.scanned_bytes += nbytes
       if cache is not None:

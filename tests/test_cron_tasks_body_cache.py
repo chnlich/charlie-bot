@@ -8,7 +8,7 @@ import gzip
 import json
 
 import pytest
-from conftest import _page_request
+from conftest import _page_request, assert_gzip_served
 
 import src.api.cron as cron_mod
 from src.api.cron import list_cron_tasks
@@ -35,8 +35,7 @@ async def test_cron_tasks_gzip_ships_precompressed_body(monkeypatch: pytest.Monk
   gz = await list_cron_tasks(_page_request("gzip"))
   plain = await list_cron_tasks(_page_request())
 
-  assert gz.headers["content-encoding"] == "gzip"
-  assert gz.headers["vary"] == "Accept-Encoding"
+  assert_gzip_served(gz)
   assert gzip.decompress(gz.body) == plain.body
   payload = json.loads(plain.body)
   assert [row["name"] for row in payload] == ["nightly"]

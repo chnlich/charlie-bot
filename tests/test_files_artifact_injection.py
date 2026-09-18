@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import gzip_explode_compress, mount_production_gzip, stub_credentials
+from conftest import assert_gzip_served, gzip_explode_compress, mount_production_gzip, stub_credentials
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -260,10 +260,7 @@ def test_serve_file_gzip_view_ships_precompressed_injected_page(sessions_root: P
 
   resp = _build_gzip_client("secret").get("/files" + str(page), headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
-  # The route set the encoding upstream — that header is what makes the
-  # middleware skip its own deflate — and carries the negotiation vary.
-  assert resp.headers["content-encoding"] == "gzip"
-  assert resp.headers["vary"] == "Accept-Encoding"
+  assert_gzip_served(resp)
   assert resp.headers["content-type"].startswith("text/html")
   # What ships is the injected page, compressed: the decoded body is byte-exact
   # against the plain form, comment layer and session id included.
@@ -496,10 +493,7 @@ def test_serve_file_diff_gzip_ships_precompressed_annotated_page(sessions_root: 
   resp = _build_gzip_client("secret").get(
       "/files" + str(new) + "?diff=artifacts/plan_01.html", headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
-  # The route set the encoding upstream — that header is what makes the
-  # middleware skip its own deflate — and carries the negotiation vary.
-  assert resp.headers["content-encoding"] == "gzip"
-  assert resp.headers["vary"] == "Accept-Encoding"
+  assert_gzip_served(resp)
   assert resp.headers["content-type"].startswith("text/html")
   # What ships is the annotated page, compressed: the decoded body is byte-exact
   # against the plain form, marks and comment layer included.

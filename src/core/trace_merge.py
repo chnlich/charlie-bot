@@ -6,6 +6,7 @@ import fcntl
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -63,10 +64,10 @@ def _trace_events_or_raise(trace: object, path: Path) -> list[dict]:
 
 
 def _gzip_exit_or_raise(gzip_proc: subprocess.Popen, context: str) -> None:
-  """Reap the gzip run's exit; a nonzero exit raises with the stderr the run wrote."""
+  """Reap the compressor run's exit; a nonzero exit raises with the stderr the run wrote."""
   if gzip_proc.wait() != 0:
     detail = gzip_proc.stderr.read().decode(errors="replace").strip()
-    raise RuntimeError(f"gzip -{_MERGE_COMPRESSLEVEL} failed ({context}): {detail}")
+    raise RuntimeError(f"isal.igzip -{_MERGE_COMPRESSLEVEL} failed ({context}): {detail}")
 
 
 def _kill_gzip_run(gzip_proc: subprocess.Popen) -> None:
@@ -269,15 +270,21 @@ def _merge_one_trace(
 
 @contextlib.contextmanager
 def _gzip_output_stream(out_path: Path) -> Iterator[BinaryIO]:
-  """Yield the stdin of a gzip run compressing into ``out_path``.
+  """Yield the stdin of an ISA-L igzip run compressing into ``out_path``.
 
   The compress must leave the process to overlap the GIL-bound walk; the pipe
   capacity is _MERGE_PIPE_BYTES so a flush completes without blocking. A writer
-  failure kills the run and a nonzero wait raises with the gzip stderr. The run
-  reads stdin, so the gzip header carries no name and mtime 0 — deterministic.
+  failure kills the run and a nonzero wait raises with the compressor stderr.
+  The compressor is the isal igzip CLI, not ``gzip``: level-1 ISA-L reads
+  ~800 MB/s against gzip's ~200 MB/s on this host's trace JSON, and the
+  multi-trace merge's ordered fragment stream must keep pace with each 4-member
+  wave or the stream becomes the wall. ``sys.executable`` is the process's own
+  interpreter, whose site has the declared isal dependency. The run reads
+  stdin, so the gzip header carries no name and mtime 0 — deterministic.
   """
-  with out_path.open("wb") as compressed, subprocess.Popen(["gzip", f"-{_MERGE_COMPRESSLEVEL}"], stdin=subprocess.PIPE,
-                                                           stdout=compressed, stderr=subprocess.PIPE) as gzip_proc:
+  command = [sys.executable, "-m", "isal.igzip", f"-{_MERGE_COMPRESSLEVEL}"]
+  with out_path.open("wb") as compressed, subprocess.Popen(command, stdin=subprocess.PIPE, stdout=compressed,
+                                                           stderr=subprocess.PIPE) as gzip_proc:
     output = gzip_proc.stdin
     fcntl.fcntl(output.fileno(), fcntl.F_SETPIPE_SZ, _MERGE_PIPE_BYTES)
     try:

@@ -11,6 +11,7 @@ import multiprocessing
 import os
 import socket
 import subprocess
+import sys
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -484,14 +485,16 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
 
   The artifact is the original bytes compressed and the parse result is discarded, so the two
   passes are independent; the parse holds the GIL for its whole run (measured: a concurrent
-  gzip thread makes no progress), so the compress must leave the process — the `gzip` run at
-  the merge path's compression level compresses in parallel with the parse. Validation parses
+  gzip thread makes no progress), so the compress must leave the process — the isal igzip run
+  at the merge path's compression level compresses in parallel with the parse (the merge
+  family's one compressor; see trace_merge._gzip_output_stream for the level's measured
+  costs). Validation parses
   with orjson, the parser the merge path's build already parses with, so both serve shapes
   share one JSON boundary: the NaN/Infinity literals stdlib json accepts fail the build loudly
   here too — a literal Perfetto cannot render must not reach the cache.
   """
-  with (out_path.open("wb") as compressed, subprocess.Popen(["gzip", f"-{_MERGE_COMPRESSLEVEL}", "-c", str(path)],
-                                                            stdout=compressed, stderr=subprocess.PIPE) as
+  command = [sys.executable, "-m", "isal.igzip", f"-{_MERGE_COMPRESSLEVEL}", "-c", str(path)]
+  with (out_path.open("wb") as compressed, subprocess.Popen(command, stdout=compressed, stderr=subprocess.PIPE) as
         gzip_proc, gc_off(collect=True)):
     # The parse allocates ~1M dicts per 1M input events; the generational passes
     # over that churn measured 0.27-0.35 s per 307 MB parse. Unlike the merge

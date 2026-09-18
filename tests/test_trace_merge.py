@@ -448,22 +448,25 @@ def test_batches_never_exceed_the_bound(tmp_path: Path, monkeypatch: pytest.Monk
   # own events must still flush in bounded batches, not one trailing dump.
   import src.core.trace_merge as trace_merge_module
 
-  events: list[dict] = [{
-      "ph": "M",
-      "pid": pid,
-      "tid": 0,
-      "name": "process_labels",
-      "args": {
-          "labels": "CPU" if pid == 0 else f"GPU {pid}"
-      }
-  } for pid in range(400)]
-  events.extend({
-      "ph": "X",
-      "pid": index % 400,
-      "tid": index % 5,
-      "name": f"evt-{index}",
-      "ts": index,
-  } for index in range(250))
+  events: list[dict] = [
+      {
+          "ph": "M",
+          "pid": pid,
+          "tid": 0,
+          "name": "process_labels",
+          "args": {
+              "labels": "CPU" if pid == 0 else f"GPU {pid}"
+          }
+      } for pid in range(400)
+  ]
+  events.extend(
+      {
+          "ph": "X",
+          "pid": index % 400,
+          "tid": index % 5,
+          "name": f"evt-{index}",
+          "ts": index,
+      } for index in range(250))
   trace = tmp_path / "trace_many_pids.json"
   _write_trace(trace, events)
   output = tmp_path / "merged.json.gz"

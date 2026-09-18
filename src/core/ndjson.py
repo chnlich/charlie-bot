@@ -352,10 +352,11 @@ class HeadProvableFilter:
   """A parse_filter whose False answers are provable from a line's head bytes
   alone.
 
-  The from-the-end walker hands one of these a multi-window line's head
-  fragment so a rejected head skips the line's join; a plain callable keyed on
-  bytes beyond the head would misread the fragment, so the walker extends
-  that trust to this type only and feeds every other filter whole lines.
+  The from-the-end walker hands one of these a bounded head probe so a
+  rejected giant line costs the probe instead of the line's bytes; a plain
+  callable keyed on bytes beyond the head would misread the probe, so the
+  walker extends that trust to this type only and feeds every other filter
+  whole lines.
   """
 
   __slots__ = ("_keep",)
@@ -377,10 +378,11 @@ def type_line_filter(types: frozenset[str]) -> HeadProvableFilter:
   event in that first value, and a value outside *types* cannot match a
   consumer keyed on those types. Every other shape — a foreign leading key,
   whitespace before the object, a value the head walk cannot read — returns
-  True and parses: the filter skips only what it can prove. The walker may
-  pass a line's head fragment (the bytes from its opening newline to the
-  window end); the fragment opens with the line's own first bytes, so the
-  proof reads identically, and a fragment without the closing quote parses.
+  True and parses: the filter skips only what it can prove. The from-the-end
+  walk may pass a bounded head probe (the line's first
+  ``_HEAD_PROOF_BYTES`` bytes); the probe opens with the line's own first
+  bytes, so the proof reads identically, and a probe without the closing
+  quote parses.
   """
 
   def keep(raw_line: bytes) -> bool:

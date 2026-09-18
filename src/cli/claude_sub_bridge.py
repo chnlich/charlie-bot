@@ -36,17 +36,17 @@ class HookProtocolError(HookBridgeError):
 
 
 _SESSION_START_SOURCES = frozenset({"startup", "resume", "clear", "compact"})
-NOTIFICATION_TYPES = (
-    "permission_prompt",
-    "idle_prompt",
-    "auth_success",
-    "elicitation_dialog",
-    "elicitation_complete",
-    "elicitation_response",
-    "agent_needs_input",
-    "agent_completed",
-)
-_NOTIFICATION_TYPES = frozenset(NOTIFICATION_TYPES)
+_NOTIFICATION_TYPES = frozenset(
+    {
+        "permission_prompt",
+        "idle_prompt",
+        "auth_success",
+        "elicitation_dialog",
+        "elicitation_complete",
+        "elicitation_response",
+        "agent_needs_input",
+        "agent_completed",
+    })
 _SESSION_END_REASONS = frozenset(
     {
         "clear",

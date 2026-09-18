@@ -100,7 +100,7 @@ def extract_tool_result_text(block: dict) -> str:
 
 
 def _handler_result_msg(ev: dict) -> dict:
-  icon = '✓' if ev.get('status') == 'ok' else '✗'
+  icon = '✓' if ev.get('status') == ET.HANDLER_STATUS_OK else '✗'
   return {
       'role': 'system',
       'content': f"{icon} {ev.get('task', '')}: {ev.get('message', '')}",
@@ -182,7 +182,7 @@ def _resume_context_dropped_msg(ev: dict) -> dict:
 
 
 def _system_msg(ev: dict) -> dict | None:
-  if ev.get("subtype") not in ("tui_menu_dismissed", ET.COMMAND_PROGRESS):
+  if ev.get("subtype") not in (ET.TUI_MENU_DISMISSED, ET.COMMAND_PROGRESS):
     return None
   return {
       "role": "system",

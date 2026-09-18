@@ -159,9 +159,8 @@ class OpenCodeBackend(AgentBackend):
     self._sleep = asyncio.sleep
     self._reset_run_state()
 
-  def _prepare_cwd(self, cwd: str) -> None:
-    """Write AGENTS.md into the cwd so opencode auto-detects it."""
-    self._write_instructions_file(cwd, 'AGENTS.md', 'opencode_wrote_agents_md')
+  # opencode auto-detects AGENTS.md in the run cwd.
+  _INSTRUCTIONS_TARGET: tuple[str, str] = ("AGENTS.md", "opencode_wrote_agents_md")
 
   def _build_command(self, prompt: str) -> list[str]:
     del prompt

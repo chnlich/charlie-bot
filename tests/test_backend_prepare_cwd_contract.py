@@ -1,13 +1,14 @@
 """_prepare_cwd instructions-file contract for the backends that write one.
 
-``AgentBackend._write_instructions_file`` (src/agents/backends/base.py) owns the
-write/skip mechanics; each overriding backend pins only its (filename, log
-event) pair. The parametrized cases drive each backend's own ``_prepare_cwd``
-so the delegation itself stays pinned: the configured instructions content
-lands byte-identical in the backend's file inside the run cwd, and no file is
-written when ``instructions_content`` is unset. The rest of the surface stays
-in its natural home: antigravity's no-op pin in test_antigravity_cli_backend.py,
-charlie_code's task.md composition in test_charlie_code_backend.py.
+``AgentBackend._prepare_cwd`` (src/agents/backends/base.py) owns the write/skip
+mechanics; each backend declares only its (filename, log event) pair as
+``_INSTRUCTIONS_TARGET``. The parametrized cases drive each backend's
+``_prepare_cwd`` so the wiring itself stays pinned: the configured instructions
+content lands byte-identical in the backend's file inside the run cwd, and no
+file is written when ``instructions_content`` is unset. The rest of the
+surface stays in its natural home: antigravity's no-op pin in
+test_antigravity_cli_backend.py, charlie_code's task.md composition in
+test_charlie_code_backend.py.
 """
 
 from __future__ import annotations

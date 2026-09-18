@@ -298,9 +298,8 @@ class ClaudeCodeBackend(AgentBackend):
     if self._extra_flags:
       self._cmd += self._extra_flags
 
-  def _prepare_cwd(self, cwd: str) -> None:
-    """Write CLAUDE.md into the cwd so Claude Code auto-detects it."""
-    self._write_instructions_file(cwd, "CLAUDE.md", "claude_code_wrote_claude_md")
+  # Claude Code auto-detects CLAUDE.md in the run cwd.
+  _INSTRUCTIONS_TARGET: tuple[str, str] = ("CLAUDE.md", "claude_code_wrote_claude_md")
 
   def _prepare_env(self, env: dict) -> dict:
     out = {**env, **headless_claude_env()}

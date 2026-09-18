@@ -23,6 +23,9 @@ from src.core.credentials import (  # noqa: F401  (re-export: the established sr
     CREDENTIALS_FILENAME,
     Credentials,
     _credentials_cache,
+    # Not facade surface: nothing reaches these two through src.core.config — their call sites
+    # go through src.core.credentials, and the two serve this module's own
+    # _config_fingerprint and _config_cache.
     _file_fingerprint,
     _HotReloadCache,
     configured_access_key,

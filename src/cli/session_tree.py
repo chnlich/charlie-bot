@@ -46,7 +46,7 @@ from pathlib import Path
 from src.core.config import get_config
 from src.core.session_tree_migration import (
     MigrationError,
-    MigrationRefused,
+    MigrationRefusedError,
     apply_manifest,
     build_manifest,
     rollback_manifest,
@@ -144,7 +144,7 @@ def _cmd_migrate(args: argparse.Namespace) -> None:
         output.parent.mkdir(parents=True, exist_ok=True)
       from src.core.json_utils import atomic_write_text
       atomic_write_text(output, manifest.model_dump_json(indent=2))
-    except MigrationRefused as e:
+    except MigrationRefusedError as e:
       _fail(str(e), e.details)
     except OSError as e:
       _fail(f"dry-run output could not be written to {output}: {e}")
@@ -168,7 +168,7 @@ def _cmd_migrate(args: argparse.Namespace) -> None:
       _fail("--apply requires --manifest FILE")
     try:
       result = apply_manifest(cfg, Path(args.manifest))
-    except MigrationRefused as e:
+    except MigrationRefusedError as e:
       _fail(str(e), e.details)
     except MigrationError as e:
       _fail(str(e))
@@ -179,7 +179,7 @@ def _cmd_migrate(args: argparse.Namespace) -> None:
     _fail("--rollback requires --manifest FILE")
   try:
     result = rollback_manifest(cfg, Path(args.manifest))
-  except MigrationRefused as e:
+  except MigrationRefusedError as e:
     _fail(str(e), e.details)
   except MigrationError as e:
     _fail(str(e))
@@ -188,11 +188,11 @@ def _cmd_migrate(args: argparse.Namespace) -> None:
 
 def _cmd_preview(args: argparse.Namespace) -> None:
   from src.core.home_writer_fence import HomeWriterActiveError
-  from src.core.session_tree_preview import PreviewRefused, run_preview_command
+  from src.core.session_tree_preview import PreviewRefusedError, run_preview_command
 
   try:
     run_preview_command(args.home, args.port, args.backend, args.add_backend or [])
-  except PreviewRefused as e:
+  except PreviewRefusedError as e:
     _fail(str(e), e.details)
   except HomeWriterActiveError as e:
     # A live holder (the running preview instance itself) refuses the whole

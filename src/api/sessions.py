@@ -1710,17 +1710,15 @@ async def list_pending_task_inputs(
     pending = task_mgr.dispatch.pending_inputs(session_id)
   except (TaskInvalidError, TaskNotFoundError) as e:
     raise _task_http_error(e) from e
-  items = []
-  for event in pending:
-    items.append({
-        "id": str(event.get("id")),
-        "type": str(event.get("type")),
-        "timestamp": event.get("timestamp"),
-        "actor": event.get("actor"),
-        "source_session_id": event.get("source_session_id"),
-        "from_session_name": event.get("from_session_name"),
-        "text": str(event.get("content") or event.get("summary") or ""),
-    })
+  items = [{
+      "id": str(event.get("id")),
+      "type": str(event.get("type")),
+      "timestamp": event.get("timestamp"),
+      "actor": event.get("actor"),
+      "source_session_id": event.get("source_session_id"),
+      "from_session_name": event.get("from_session_name"),
+      "text": str(event.get("content") or event.get("summary") or ""),
+  } for event in pending]
   return {"items": items}
 
 

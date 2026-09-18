@@ -1075,9 +1075,9 @@ async def test_manager_native_continuation_gates_on_instruction_hash(
     await tree.record_native_anchor(
         manager.id, prompt_hash=snapshot1["prompt_hash"], backend="fake",
         model="fake-model", reset_anchor=False)
-    meta_raw = await tree.load_meta(manager.id)
-    meta_raw.cc_session_id = anchor_id
-    await tree._save_meta(meta_raw)
+    # The conversation anchor changes only through its authorized channel: a
+    # whole-object save's anchor reconciliation would correct it back to disk.
+    await session_mgr.persist_cc_session_id(manager.id, anchor_id)
 
     # Turn 2 (input-only change): same instructions ⇒ the conversation continues
     # (no reset notice, anchor untouched).
@@ -1131,11 +1131,11 @@ async def test_backend_identity_change_starts_a_fresh_native_context(
     await tree.record_native_anchor(
         manager.id, prompt_hash=snapshot1["prompt_hash"], backend="fake",
         model="fake-model", reset_anchor=False)
-    meta_raw = await tree.load_meta(manager.id)
-    meta_raw.cc_session_id = anchor
-    await tree._save_meta(meta_raw)
+    # The conversation anchor changes only through its authorized channel.
+    await session_mgr.persist_cc_session_id(manager.id, anchor)
     # The anchor's recorded identity no longer matches (a backend switch
     # happened): the next turn cannot claim continuity over it.
+    meta_raw = await tree.load_meta(manager.id)
     meta_raw.native_backend = "some-other-backend"
     await tree._save_meta(meta_raw)
     await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="two", actor="user")

@@ -137,7 +137,7 @@ _EXTERNAL_DISABLED_REASON = (
     "External messaging and delayed triggers are disabled in the session-tree preview instance.")
 
 
-class PreviewRefused(RuntimeError):
+class PreviewRefusedError(RuntimeError):
   """A preparation or launch precondition failed; the message names the reason."""
 
   def __init__(self, reason: str, *, details: list[str] | None = None) -> None:
@@ -175,26 +175,26 @@ def resolve_preview_home(home_raw: str) -> Path:
   """Resolve ``--home`` to the complete real path, symlinks included."""
   raw = (home_raw or "").strip()
   if not raw:
-    raise PreviewRefused("--home is required: give the preview instance its own directory")
+    raise PreviewRefusedError("--home is required: give the preview instance its own directory")
   if not raw.startswith(("~", "/")):
-    raise PreviewRefused(f"--home must be an absolute path or start with '~'; got {raw!r}")
+    raise PreviewRefusedError(f"--home must be an absolute path or start with '~'; got {raw!r}")
   return _resolved(raw)
 
 
 def check_home_location(home: Path, *, source_home: Path, source_workspace_dirs: list[str]) -> None:
   """Refuse a home overlapping the production home, production workspaces, or the checkout."""
   if _overlap(home, source_home):
-    raise PreviewRefused(
+    raise PreviewRefusedError(
         f"--home {home} overlaps the production home {source_home}; "
         "the preview needs a directory outside it")
   for raw_dir in source_workspace_dirs:
     workspace = _resolved(raw_dir)
     if _overlap(home, workspace):
-      raise PreviewRefused(
+      raise PreviewRefusedError(
           f"--home {home} overlaps the production workspace dir {workspace}; "
           "the preview needs a directory outside every configured workspace")
   if _overlap(home, REPO_ROOT):
-    raise PreviewRefused(
+    raise PreviewRefusedError(
         f"--home {home} overlaps the running checkout {REPO_ROOT}; "
         "the preview home must not live inside the source tree")
 
@@ -202,9 +202,9 @@ def check_home_location(home: Path, *, source_home: Path, source_workspace_dirs:
 def check_port(port: int, *, source_server_port: int) -> None:
   """Refuse an out-of-range port, the source server's port, and an occupied one."""
   if not 1 <= port <= 65535:
-    raise PreviewRefused(f"--port must be between 1 and 65535; got {port}")
+    raise PreviewRefusedError(f"--port must be between 1 and 65535; got {port}")
   if port == source_server_port:
-    raise PreviewRefused(
+    raise PreviewRefusedError(
         f"--port {port} is the source profile's server port; the preview instance needs its own port")
   with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
     # SO_REUSEADDR keeps TIME_WAIT sockets from reading as occupancy; a live
@@ -213,7 +213,7 @@ def check_port(port: int, *, source_server_port: int) -> None:
     try:
       sock.bind(("127.0.0.1", port))
     except OSError as e:
-      raise PreviewRefused(f"--port {port} is not free on 127.0.0.1: {e}") from e
+      raise PreviewRefusedError(f"--port {port} is not free on 127.0.0.1: {e}") from e
 
 
 def shutil_which(binary: str) -> str | None:
@@ -228,7 +228,7 @@ def _launcher_supports_session_dir(binary: str) -> bool:
   try:
     proc = subprocess.run([binary, "--help"], capture_output=True, text=True, check=False, timeout=30)
   except (OSError, subprocess.SubprocessError) as e:
-    raise PreviewRefused(f"the charlie-code launcher at {binary} could not be run: {e}") from e
+    raise PreviewRefusedError(f"the charlie-code launcher at {binary} could not be run: {e}") from e
   return "--session-dir" in (proc.stdout + proc.stderr)
 
 
@@ -236,10 +236,10 @@ def check_launcher() -> None:
   """The charlie-code launcher must exist and support its session-directory override."""
   binary = shutil_which("charlie-code")
   if binary is None:
-    raise PreviewRefused(
+    raise PreviewRefusedError(
         "the charlie-code launcher is not installed; the preview cannot run its selected backend")
   if not _launcher_supports_session_dir(binary):
-    raise PreviewRefused(
+    raise PreviewRefusedError(
         "the installed charlie-code does not support --session-dir; native session isolation "
         "cannot be guaranteed, so the preview refuses to start")
 
@@ -251,7 +251,7 @@ def check_ui_assets() -> None:
       REPO_ROOT / "web" / "static" / "css" / "tailwind.css",
   ) if not p.is_file()]
   if missing:
-    raise PreviewRefused("the running checkout is missing the shipped UI assets: " + ", ".join(missing))
+    raise PreviewRefusedError("the running checkout is missing the shipped UI assets: " + ", ".join(missing))
 
 
 def _legacy_home_evidence(home: Path) -> list[str]:
@@ -320,12 +320,12 @@ def classify_home(home: Path) -> bool:
   if not home.exists():
     return True
   if not home.is_dir():
-    raise PreviewRefused(f"--home {home} exists and is not a directory")
+    raise PreviewRefusedError(f"--home {home} exists and is not a directory")
   if _effective_entries(home):
     if read_preview_record(home) is None:
       evidence = _legacy_home_evidence(home)
       details = evidence or ["the directory is not empty and carries no session-tree preview record"]
-      raise PreviewRefused(
+      raise PreviewRefusedError(
           f"--home {home} exists and is not a session-tree preview home "
           "(no valid preview_instance.json record); refusing to touch it", details=details)
     return False
@@ -346,7 +346,7 @@ def read_source_backend(backend_id: str) -> tuple[dict, tuple[str, str] | None]:
   triggers, native sessions — is never read into the trial.
   """
   if not backend_id:
-    raise PreviewRefused(
+    raise PreviewRefusedError(
         "a fresh preview home requires --backend ID: name the backend this trial instance will run")
   return _read_source_backend_option(backend_id)
 
@@ -366,9 +366,9 @@ def read_source_backend_additions(
   seen: set[str] = set()
   for backend_id in (add_ids or []):
     if backend_id in seen:
-      raise PreviewRefused(f"--add-backend {backend_id!r} is requested more than once")
+      raise PreviewRefusedError(f"--add-backend {backend_id!r} is requested more than once")
     if backend_id in exclude_ids:
-      raise PreviewRefused(
+      raise PreviewRefusedError(
           f"--add-backend {backend_id!r} is already part of this trial's backend selection")
     resolved.append(_read_source_backend_option(backend_id))
     seen.add(backend_id)
@@ -380,14 +380,14 @@ def _read_source_backend_option(backend_id: str) -> tuple[dict, tuple[str, str] 
   cfg = load_config()
   option = cfg.get_backend_option(backend_id)
   if option is None:
-    raise PreviewRefused(f"backend {backend_id!r} is not configured in the source profile {cfg.config_file}")
+    raise PreviewRefusedError(f"backend {backend_id!r} is not configured in the source profile {cfg.config_file}")
   if option.type is not BackendType.CHARLIE_CODE:
-    raise PreviewRefused(
+    raise PreviewRefusedError(
         f"backend {backend_id!r} has type {option.type.value!r}; the preview isolates native "
         "session state only for charlie-code (its --session-dir override), so other backend "
         "types are refused until their isolation is proven")
   if not option.api_base:
-    raise PreviewRefused(
+    raise PreviewRefusedError(
         f"backend {backend_id!r} declares no api_base; the charlie-code adapter cannot run "
         "without one, so the entry is refused instead of seeded broken")
   entry = json.loads(option.model_dump_json())
@@ -397,7 +397,7 @@ def _read_source_backend_option(backend_id: str) -> tuple[dict, tuple[str, str] 
     creds = load_credentials()
     api_key = creds.get(section, "api_key")
     if api_key is None:
-      raise PreviewRefused(
+      raise PreviewRefusedError(
           f"backend {backend_id!r} references credentials.{section}.api_key, which is not set "
           f"in {creds.path}; the provider credential is required to run the trial")
     credential = (section, {"api_key": str(api_key)})
@@ -442,7 +442,7 @@ def _read_source_identity() -> tuple[str, str]:
   try:
     return git("rev-parse", "--abbrev-ref", "HEAD"), git("rev-parse", "HEAD")
   except (OSError, subprocess.SubprocessError, subprocess.CalledProcessError) as e:
-    raise PreviewRefused(f"the running checkout has no readable git identity: {e}") from e
+    raise PreviewRefusedError(f"the running checkout has no readable git identity: {e}") from e
 
 
 def _new_access_key() -> str:
@@ -462,12 +462,12 @@ def prepare_preview(home_raw: str, port: int, backend_id: str | None,
   """
   try:
     return _prepare_preview(home_raw, port, backend_id, add_backend_ids)
-  except PreviewRefused:
+  except PreviewRefusedError:
     raise
   except (ValueError, OSError) as e:
     # A source profile that cannot be read (malformed config/credentials) is an
     # environmental refusal, not a traceback: surface it structured.
-    raise PreviewRefused(f"preview preparation could not read the source profile: {e}") from e
+    raise PreviewRefusedError(f"preview preparation could not read the source profile: {e}") from e
 
 
 def _prepare_preview(home_raw: str, port: int, backend_id: str | None,
@@ -484,7 +484,7 @@ def _prepare_preview(home_raw: str, port: int, backend_id: str | None,
   else:
     entries, stored_backend_id, credential = _stored_backend_catalog(home)
     if backend_id and backend_id != stored_backend_id:
-      raise PreviewRefused(
+      raise PreviewRefusedError(
           f"--backend {backend_id!r} does not match the preview home's configured backend "
           f"{stored_backend_id!r}; restart either without --backend or with the home's own backend")
     backend_id = stored_backend_id
@@ -523,55 +523,55 @@ def validate_existing_config(home: Path) -> dict:
   path = home / "config.yaml"
   data = load_yaml(path)
   if not isinstance(data, dict):
-    raise PreviewRefused(f"{path} is not a config mapping; this is not a usable preview home")
+    raise PreviewRefusedError(f"{path} is not a config mapping; this is not a usable preview home")
   unexpected = sorted(set(data) - _ALLOWED_CONFIG_TOP_KEYS)
   if unexpected:
-    raise PreviewRefused(
+    raise PreviewRefusedError(
         f"{path} carries sections outside the preview trial contract: {', '.join(unexpected)}; "
         "a preview home holds only server/paths/backends",
         details=[f"unexpected section: {key}" for key in unexpected])
   missing = sorted(_ALLOWED_CONFIG_TOP_KEYS - set(data))
   if missing:
-    raise PreviewRefused(f"{path} is missing the preview trial sections: {', '.join(missing)}")
+    raise PreviewRefusedError(f"{path} is missing the preview trial sections: {', '.join(missing)}")
   try:
     CharlieBotConfig(charliebot_home=home, **data)
   except Exception as e:
-    raise PreviewRefused(f"{path} does not validate against the config schema: {e}") from e
+    raise PreviewRefusedError(f"{path} does not validate against the config schema: {e}") from e
   options = data["backends"].get("options")
   if not isinstance(options, list) or not options:
     count = len(options) if isinstance(options, list) else "non-list"
-    raise PreviewRefused(f"{path} must configure at least one backend for the trial; found {count}")
+    raise PreviewRefusedError(f"{path} must configure at least one backend for the trial; found {count}")
   seen_ids: set[str] = set()
   for entry in options:
     if not isinstance(entry, dict) or entry.get("type") != BackendType.CHARLIE_CODE.value:
-      raise PreviewRefused(
+      raise PreviewRefusedError(
           f"{path} configures a non-charlie-code backend; the preview isolates native state only "
           "for charlie-code")
     entry_id = entry.get("id")
     if not entry_id:
-      raise PreviewRefused(f"{path} configures a backend without an id")
+      raise PreviewRefusedError(f"{path} configures a backend without an id")
     if entry_id in seen_ids:
-      raise PreviewRefused(f"{path} configures backend id {entry_id!r} more than once")
+      raise PreviewRefusedError(f"{path} configures backend id {entry_id!r} more than once")
     seen_ids.add(str(entry_id))
   for raw_dir in data["paths"].get("workspace_dirs", []):
     workspace = _resolved(raw_dir)
     if not _contains(home, workspace):
-      raise PreviewRefused(
+      raise PreviewRefusedError(
           f"{path} points paths.workspace_dirs outside the preview home ({workspace}); the trial "
           "workspace boundary must stay inside the home")
   worktree_dir = _resolved(data["paths"].get("worktree_dir", ""))
   if not _contains(home, worktree_dir):
-    raise PreviewRefused(
+    raise PreviewRefusedError(
         f"{path} points paths.worktree_dir outside the preview home ({worktree_dir}); worker "
         "worktrees must stay inside the home")
   creds = load_yaml(home / "credentials.yaml", default={})
   for entry in options:
     referenced = entry.get("credential")
-    if referenced:
-      if not isinstance(creds, dict) or not (creds.get(str(referenced)) or {}).get("api_key"):
-        raise PreviewRefused(
-            f"the preview home's credentials.yaml has no {referenced}.api_key for the configured "
-            "backend; the provider credential is required to run the trial")
+    if referenced and (
+        not isinstance(creds, dict) or not (creds.get(str(referenced)) or {}).get("api_key")):
+      raise PreviewRefusedError(
+          f"the preview home's credentials.yaml has no {referenced}.api_key for the configured "
+          "backend; the provider credential is required to run the trial")
   return data
 
 
@@ -581,7 +581,7 @@ def _stored_backend_catalog(home: Path) -> tuple[list[dict], str, tuple[str, str
   entries = [dict(entry) for entry in options]
   backend_id = entries[0].get("id")
   if not backend_id:
-    raise PreviewRefused(f"{home / 'config.yaml'} configures a backend without an id")
+    raise PreviewRefusedError(f"{home / 'config.yaml'} configures a backend without an id")
   credential: tuple[str, str] | None = None
   referenced = entries[0].get("credential")
   if referenced:
@@ -596,7 +596,7 @@ def _existing_access_key(home: Path) -> str:
   creds = load_yaml(home / "credentials.yaml", default={})
   key = creds.get("charliebot", {}).get("access_key") if isinstance(creds, dict) else None
   if not key:
-    raise PreviewRefused(
+    raise PreviewRefusedError(
         f"{home / 'credentials.yaml'} has no charliebot.access_key; the preview instance's "
         "browser credential is missing and must be restored before restart")
   return str(key)
@@ -684,7 +684,7 @@ def _extend_existing_home_catalog(setup: PreviewSetup) -> None:
   new_credentials: dict[str, str] = {}
   for entry, credential in setup.backend_additions:
     if entry["id"] in existing_ids:
-      raise PreviewRefused(
+      raise PreviewRefusedError(
           f"--add-backend {entry['id']!r} is already in the preview home's catalog; "
           "nothing to add")
     options.append(entry)
@@ -696,7 +696,7 @@ def _extend_existing_home_catalog(setup: PreviewSetup) -> None:
   credentials_path = setup.home / "credentials.yaml"
   creds = load_yaml(credentials_path, default={})
   if not isinstance(creds, dict):
-    raise PreviewRefused(f"{credentials_path} is not a credentials mapping; refusing to extend it")
+    raise PreviewRefusedError(f"{credentials_path} is not a credentials mapping; refusing to extend it")
   save_yaml(config_path, data)
   added_sections = []
   for section, api_key in new_credentials.items():
@@ -763,11 +763,11 @@ def activate_preview_environment(setup: PreviewSetup) -> None:
     os.environ.pop(var, None)
   resolved = charliebot_home_dir()
   if resolved != setup.home:
-    raise PreviewRefused(
+    raise PreviewRefusedError(
         f"the selected home resolved to {resolved}, not the requested {setup.home}")
   cfg = load_config()
   if cfg.charliebot_home != setup.home:
-    raise PreviewRefused(
+    raise PreviewRefusedError(
         f"the loaded config still binds {cfg.charliebot_home}; the preview environment did not switch")
   log.info("preview_environment_selected", home=str(setup.home), backend=setup.backend_id)
 
@@ -779,7 +779,7 @@ def assert_no_bound_singletons() -> None:
   bound = [name for name in ("_session_manager", "_thread_manager", "_trigger_manager", "_task_manager")
            if getattr(deps, name, None) is not None]
   if bound:
-    raise PreviewRefused(
+    raise PreviewRefusedError(
         "application singletons bound before the preview environment switched: " + ", ".join(bound))
 
 
@@ -910,7 +910,7 @@ def make_preview_lifespan(setup: PreviewSetup) -> Callable[[Any], AsyncIterator[
   async def lifespan(app: Any) -> AsyncIterator[None]:
     cfg = get_config()
     if cfg.charliebot_home != setup.home:
-      raise PreviewRefused(
+      raise PreviewRefusedError(
           f"the preview lifespan bound {cfg.charliebot_home}, not the prepared home {setup.home}")
     boot_time = utc_now()
     try:
@@ -1009,7 +1009,7 @@ def run_preview_command(home_raw: str, port: int, backend_id: str | None,
                         add_backend_ids: list[str] | None = None) -> None:
   """Prepare, validate and run one foreground preview instance; returns after clean shutdown.
 
-  Every refusal exits through :class:`PreviewRefused` before any write; the
+  Every refusal exits through :class:`PreviewRefusedError` before any write; the
   writer fence is held for the whole run and released on every exit, including
   startup and shutdown failures. ``add_backend_ids`` are extra explicitly
   selected charlie-code entries: seeded on a fresh home, appended to an

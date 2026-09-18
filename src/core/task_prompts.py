@@ -155,7 +155,7 @@ class PromptSnapshot:
     }
 
   @classmethod
-  def from_json_dict(cls, data: dict) -> "PromptSnapshot":
+  def from_json_dict(cls, data: dict) -> PromptSnapshot:
     """Rebuild a stored snapshot; a malformed stored file raises (never silently serves)."""
     try:
       blocks = tuple(
@@ -347,7 +347,7 @@ def _overlay_rule_segments(
 
 def _local_rule_segments(
     prompt_bodies_dir: Path,
-    chain: "tuple[tuple[str, str | None], ...]",
+    chain: tuple[tuple[str, str | None], ...],
     node_ref: str | None,
     node_id: str,
 ) -> list[RuleSegment]:

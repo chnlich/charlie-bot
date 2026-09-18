@@ -22,8 +22,9 @@ import hashlib
 import hmac
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Literal
+from typing import Literal
 
 RUN_TOKEN_ENV = "CHARLIEBOT_RUN_TOKEN"
 

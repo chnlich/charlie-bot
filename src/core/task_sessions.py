@@ -200,10 +200,10 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
       child_event_id = event.get("child_event_id")
       if isinstance(child_session_id, str) and isinstance(child_event_id, str):
         facts.delivered_reports.add((child_session_id, child_event_id))
-    if etype in _INPUT_EVENT_TYPES:
-      if facts.boundary_index is None or absolute > facts.boundary_index or (
-          event_id is not None and event_id in facts.imported_pending_ids):
-        facts.input_candidates.append(event)
+    if etype in _INPUT_EVENT_TYPES and (
+        facts.boundary_index is None or absolute > facts.boundary_index
+        or (event_id is not None and event_id in facts.imported_pending_ids)):
+      facts.input_candidates.append(event)
   return facts
 
 
@@ -581,9 +581,13 @@ class TaskTreeManager:
       meta.native_prompt_hash = prompt_hash
       meta.native_backend = backend
       meta.native_model = model
-      if reset_anchor:
-        meta.cc_session_id = None
       await self._save_meta(meta)
+      if reset_anchor and meta.cc_session_id is not None:
+        # The fresh native context voids the old conversation anchor. The clear
+        # goes through the authorized channel: a whole-object save's anchor
+        # reconciliation would correct it back to the disk value and the reset
+        # would silently do nothing.
+        await self._sessions.clear_cc_session_anchor(session_id)
 
   def prompt_rule_summaries(self, meta: SessionMetadata, index: "_TreeIndex") -> dict:
     """The scope/source/current-rule facts the Task/Context UI reads from the detail.
@@ -927,9 +931,9 @@ class TaskTreeManager:
       fs = req.model_fields_set
       structural = bool(fs & {"task", "profile", "task_parent_id"})
       blockers = self._structural_blockers(session_id) if structural else []
-      if "profile" in fs and req.profile is not None and req.profile != meta.profile:
-        if req.profile == "worker" and self._children_count(session_id) > 0:
-          blockers.append("demotion to worker requires a task with no child tasks")
+      if ("profile" in fs and req.profile is not None and req.profile != meta.profile
+          and req.profile == "worker" and self._children_count(session_id) > 0):
+        blockers.append("demotion to worker requires a task with no child tasks")
       if "task_parent_id" in fs and req.task_parent_id != meta.task_parent_id:
         blockers.extend(await self._reparent_blockers(session_id, req.task_parent_id))
       if blockers:
@@ -1188,8 +1192,9 @@ class TaskTreeManager:
     triggers_dir = self._cfg.sessions_dir / session_id / "triggers"
     if triggers_dir.is_dir() and any(triggers_dir.glob("*.json")):
       blockers.append("has saved trigger reference(s)")
-    for old_id in self.aliases.old_ids_for(session_id):
-      blockers.append(f"referenced by session alias for old id {old_id}")
+    blockers.extend(
+        f"referenced by session alias for old id {old_id}"
+        for old_id in self.aliases.old_ids_for(session_id))
     return blockers
 
   def _deletion_blockers_locked(self, index: "_TreeIndex", session_id: str) -> list[str]:

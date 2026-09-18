@@ -75,7 +75,7 @@ def iteration_run_request_id(loop_id: int, iteration: int) -> str:
 
 
 async def create_improve_child(
-    tree: "TaskTreeManager",
+    tree: TaskTreeManager,
     session_id: str,
     loop_id: int,
     goal: str,
@@ -117,7 +117,7 @@ def _compose_iteration_description(goal: str, plan: str | None, previous_summari
 
 
 async def register_iteration_run(
-    tree: "TaskTreeManager",
+    tree: TaskTreeManager,
     child_id: str,
     session_id: str,
     loop_id: int,
@@ -165,7 +165,7 @@ async def register_iteration_run(
     return fresh
 
 
-async def terminal_outcome(tree: "TaskTreeManager", child_id: str, run_id: str) -> str | None:
+async def terminal_outcome(tree: TaskTreeManager, child_id: str, run_id: str) -> str | None:
     run = await tree.runs.get_run(child_id, run_id)
     if run is None:
         return None
@@ -173,7 +173,7 @@ async def terminal_outcome(tree: "TaskTreeManager", child_id: str, run_id: str) 
 
 
 async def _iteration_blocker(
-    tree: "TaskTreeManager", child_id: str, run_id: str, iteration: int, outcome: str,
+    tree: TaskTreeManager, child_id: str, run_id: str, iteration: int, outcome: str,
 ) -> tuple[str | None, str]:
     """The failed iteration's quota blocker and summary, from its own event log.
 
@@ -192,7 +192,7 @@ async def _iteration_blocker(
 async def run_improve_sequence(
     session_id: str,
     cfg: CharlieBotConfig,
-    tree: "TaskTreeManager",
+    tree: TaskTreeManager,
     *,
     loop_id: int,
     iterations: int,
@@ -389,7 +389,7 @@ async def run_improve_sequence(
 
 
 async def _settle_withheld_iteration(
-    tree: "TaskTreeManager",
+    tree: TaskTreeManager,
     session_id: str,
     cfg: CharlieBotConfig,
     loop_id: int,
@@ -432,7 +432,7 @@ async def _settle_withheld_iteration(
 
 
 async def _judge_iteration(
-    tree: "TaskTreeManager", child_id: str, run_id: str, iteration: int,
+    tree: TaskTreeManager, child_id: str, run_id: str, iteration: int,
     wt_path: Path, loop_dir: Path, tip_before: str,
 ) -> str:
     """The mechanical iteration judgment: report validity over the git delta.
@@ -467,7 +467,7 @@ async def _judge_iteration(
 
 
 async def _broadcast_iteration_progress(
-    tree: "TaskTreeManager", session_id: str, child_id: str, run_id: str,
+    tree: TaskTreeManager, session_id: str, child_id: str, run_id: str,
     iteration: int, iterations: int, status: str, summary: str, loop_dir: Path,
 ) -> None:
     """The per-iteration progress event: chat visibility only, never an input.
@@ -489,7 +489,7 @@ async def _broadcast_iteration_progress(
 
 
 async def _deliver_sequence_report(
-    tree: "TaskTreeManager",
+    tree: TaskTreeManager,
     child_id: str,
     session_id: str,
     loop_id: int,
@@ -534,7 +534,7 @@ async def _deliver_sequence_report(
 
 
 async def reconcile_interrupted_sequences(
-    cfg: CharlieBotConfig, tree: "TaskTreeManager", boot_pid: int | None = None,
+    cfg: CharlieBotConfig, tree: TaskTreeManager, boot_pid: int | None = None,
 ) -> int:
     """Mark every improve loop whose controller died with the old process.
 
@@ -589,6 +589,6 @@ async def reconcile_interrupted_sequences(
     return repaired
 
 
-def spawn_sequence_controller(coro, *, name: str) -> "object":
+def spawn_sequence_controller(coro, *, name: str) -> object:
     """Fire-and-forget the sequence controller task (the API handler's tail)."""
     return create_logged_task(coro, name=name)

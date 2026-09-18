@@ -26,6 +26,8 @@ writers predating this fence. A refused startup or apply exits with the
 holder's details; nothing is ever killed by this module.
 """
 
+from __future__ import annotations
+
 import fcntl
 import os
 from dataclasses import dataclass
@@ -46,7 +48,7 @@ FENCE_IDENTITY_NAME = "writer_identity.json"
 class HomeWriterActiveError(RuntimeError):
   """The home's writer fence is held by a live process (startup/apply refuses)."""
 
-  def __init__(self, holder: "FenceHolder | None", home: Path, purpose: str) -> None:
+  def __init__(self, holder: FenceHolder | None, home: Path, purpose: str) -> None:
     self.holder = holder
     self.home = home
     detail = (
@@ -56,7 +58,7 @@ class HomeWriterActiveError(RuntimeError):
     super().__init__(f"{purpose} refused for home {home}: {detail}")
 
 
-class FencePathRefusal(RuntimeError):
+class FencePathRefusalError(RuntimeError):
   """A fence path is unsafe (symlinked state dir, lock, or identity record)."""
 
 
@@ -89,14 +91,14 @@ def _checked_fence_paths(home: Path) -> None:
   home = Path(home)
   state = home / STATE_DIR_NAME
   if state.is_symlink():
-    raise FencePathRefusal(f"home state directory is a symlink: {state}")
+    raise FencePathRefusalError(f"home state directory is a symlink: {state}")
   if state.exists() and not state.is_dir():
-    raise FencePathRefusal(f"home state path is not a directory: {state}")
+    raise FencePathRefusalError(f"home state path is not a directory: {state}")
   if not state.resolve().is_relative_to(home.resolve()):
-    raise FencePathRefusal(f"home state directory resolves outside the home: {state}")
+    raise FencePathRefusalError(f"home state directory resolves outside the home: {state}")
   for path in (fence_lock_path(home), fence_identity_path(home)):
     if path.is_symlink():
-      raise FencePathRefusal(f"home writer fence path is a symlink: {path}")
+      raise FencePathRefusalError(f"home writer fence path is a symlink: {path}")
 
 
 def _pid_start_of(pid: int) -> str | None:
@@ -146,7 +148,7 @@ class HomeWriterFence:
         os.close(self._fd)
         self._fd = None
 
-  def __enter__(self) -> "HomeWriterFence":
+  def __enter__(self) -> HomeWriterFence:  # noqa: PYI034 (the fence object is the context; Self predates this pin)
     return self
 
   def __exit__(self, *exc: object) -> None:
@@ -172,7 +174,7 @@ def acquire_home_writer_fence(home: Path, *, purpose: str) -> HomeWriterFence:
   try:
     fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
   except OSError as e:
-    raise FencePathRefusal(f"home writer fence lock is not usable at {lock_path}: {e}") from e
+    raise FencePathRefusalError(f"home writer fence lock is not usable at {lock_path}: {e}") from e
   try:
     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
   except OSError as e:

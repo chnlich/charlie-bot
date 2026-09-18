@@ -159,8 +159,8 @@ def resolve_launch_overlay(option: BackendOption) -> tuple[str | None, bool]:
 
 
 def capture_prompt_chain(
-    tree: "TaskTreeManager", index: object, meta: SessionMetadata,
-) -> "tuple[tuple[tuple[str, str | None], ...], str | None]":
+    tree: TaskTreeManager, index: object, meta: SessionMetadata,
+) -> tuple[tuple[tuple[str, str | None], ...], str | None]:
     """Subtree refs root → this node (inclusive) plus this node's own rule ref.
 
     The subtree scope is THIS NODE AND ITS DESCENDANTS: the chain ends with
@@ -180,11 +180,11 @@ def capture_prompt_chain(
 
 async def assemble_coherent_snapshot(
     cfg: CharlieBotConfig,
-    tree: "TaskTreeManager",
+    tree: TaskTreeManager,
     meta: SessionMetadata,
     kind: str,
     option: BackendOption,
-) -> "tuple[PromptSnapshot, OSError | None, bool]":
+) -> tuple[PromptSnapshot, OSError | None, bool]:
     """One coherent assembly pass over the tree, templates, memory and rules.
 
     Ancestor relations and refs are captured under the control lock; the
@@ -237,7 +237,7 @@ async def assemble_coherent_snapshot(
 class TaskExecutionAdapter:
     """Binds registered Runs to the existing master/worker execution harnesses."""
 
-    def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager, tree: "TaskTreeManager") -> None:
+    def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager, tree: TaskTreeManager) -> None:
         self._cfg = cfg
         self._sessions = session_mgr
         self._tree = tree
@@ -918,7 +918,7 @@ class TaskExecutionAdapter:
         return "failed"
 
     @staticmethod
-    def _events_log_result_success(events_log: Path) -> "tuple[bool, bool]":
+    def _events_log_result_success(events_log: Path) -> tuple[bool, bool]:
         """(found, success) of the last RESULT event in a translated events log."""
         found = False
         success = False
@@ -943,7 +943,7 @@ class TaskExecutionAdapter:
 
         return await asyncio.to_thread(_scan)
 
-    def _fresh_translate(self, option: BackendOption) -> "Callable[[dict], list[dict]]":
+    def _fresh_translate(self, option: BackendOption) -> Callable[[dict], list[dict]]:
         """A fresh translate callable for one whole-file scan (stateful translates need one instance)."""
         from src.agents.backends.registry import build_backend
         try:
@@ -1146,7 +1146,7 @@ class TaskExecutionAdapter:
     # Resume interface (the startup-recovery stage's re-attach entry)
     # ------------------------------------------------------------------
 
-    async def resume_run(self, session_id: str, run_id: str, *, is_alive: "Callable[[], bool] | None" = None) -> None:
+    async def resume_run(self, session_id: str, run_id: str, *, is_alive: Callable[[], bool] | None = None) -> None:
         """Re-attach one launched Run and follow it to its terminal fact.
 
         The startup-recovery pass consumes this interface. Liveness comes from
@@ -1192,7 +1192,7 @@ class TaskExecutionAdapter:
         raise TaskInvalidError(f"run {run_id} (kind={run.kind}) has no resume adapter")
 
     async def _resume_manager_turn(
-        self, meta: SessionMetadata, run: RunRecord, option: BackendOption, is_alive: "Callable[[], bool]"
+        self, meta: SessionMetadata, run: RunRecord, option: BackendOption, is_alive: Callable[[], bool]
     ) -> None:
         """Re-attach a v2 manager turn through the per-session queue's follow path."""
         from src.agents.master_cc import enqueue_master_resume
@@ -1236,7 +1236,7 @@ class TaskExecutionAdapter:
         )
 
     async def _resume_worker_run(
-        self, meta: SessionMetadata, run: RunRecord, option: BackendOption, is_alive: "Callable[[], bool]"
+        self, meta: SessionMetadata, run: RunRecord, option: BackendOption, is_alive: Callable[[], bool]
     ) -> None:
         """Re-attach a worker Run through Worker.resume's tail-follow."""
         session_id, run_id = meta.id, run.id
@@ -1418,7 +1418,7 @@ class TaskExecutionAdapter:
         self.launch(session_id, run_id)
         return run_id
 
-    async def _landing_for_work(self, work_run: RunRecord) -> "tuple[str, str, str] | None":
+    async def _landing_for_work(self, work_run: RunRecord) -> tuple[str, str, str] | None:
         """The (branch, commit, repo) landing evidence of a reviewed work Run, or None.
 
         The commit is the work branch's tip in its repository; the check
@@ -1431,7 +1431,7 @@ class TaskExecutionAdapter:
         if commit is None:
             return None
         from src.core.git import git_verify_commit_landed
-        landed, reason = await git_verify_commit_landed(
+        landed, _reason = await git_verify_commit_landed(
             Path(work_run.repo_path), work_run.base_branch, commit)
         if not landed:
             return None
@@ -1538,7 +1538,7 @@ class TuiTaskLaunch:
     instructions_text: str
     working_dir: Path
     model: str | None
-    _tree: "TaskTreeManager"
+    _tree: TaskTreeManager
 
     async def record_process(self) -> None:
         """Pin the terminal's process identity (tmux pane pid + start marker) on the Run."""
@@ -1561,7 +1561,7 @@ class TuiTaskLaunch:
 
 
 async def fail_unlaunched_tui_run(
-    tree: "TaskTreeManager", session_id: str, run_id: str, *, reason: str,
+    tree: TaskTreeManager, session_id: str, run_id: str, *, reason: str,
 ) -> None:
     """Land the definitely-unlaunched terminal fact for a prepared TUI launch.
 
@@ -1586,7 +1586,7 @@ async def fail_unlaunched_tui_run(
 
 
 async def prepare_tui_task_launch(
-    cfg: CharlieBotConfig, session_id: str, tree: "TaskTreeManager | None" = None,
+    cfg: CharlieBotConfig, session_id: str, tree: TaskTreeManager | None = None,
 ) -> TuiTaskLaunch | None:
     """The v2 TUI task's launch seam: one Run per actual terminal launch, or None.
 

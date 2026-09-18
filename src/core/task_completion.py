@@ -97,7 +97,7 @@ class CompletionEvidence:
 class TaskCompletionManager:
     """The close/cancel/reopen owner wired over one TaskTreeManager."""
 
-    def __init__(self, tree: "TaskTreeManager") -> None:
+    def __init__(self, tree: TaskTreeManager) -> None:
         self._tree = tree
 
     # ------------------------------------------------------------------
@@ -108,8 +108,8 @@ class TaskCompletionManager:
         self,
         session_id: str,
         *,
-        exclude_run_ids: "set[str] | None" = None,
-        exclude_input_ids: "set[str] | None" = None,
+        exclude_run_ids: set[str] | None = None,
+        exclude_input_ids: set[str] | None = None,
     ) -> list[str]:
         """The closure blockers of one task, from current facts (lock held by caller).
 
@@ -141,9 +141,10 @@ class TaskCompletionManager:
             blocker = tree.runs.run_blocker(run, events, tree._host_boot_time())
             if blocker is not None:
                 blockers.append(blocker)
-        for descendant in tree._descendants(index, session_id):
-            if tree.task_state_of(index, descendant) == "open":
-                blockers.append(f"has open descendant task {descendant}")
+        blockers.extend(
+            f"has open descendant task {descendant}"
+            for descendant in tree._descendants(index, session_id)
+            if tree.task_state_of(index, descendant) == "open")
         return blockers
 
     def cancellation_blockers(self, session_id: str) -> list[str]:
@@ -167,9 +168,10 @@ class TaskCompletionManager:
             blocker = tree.runs.run_blocker(run, events, tree._host_boot_time())
             if blocker is not None:
                 blockers.append(blocker)
-        for descendant in tree._descendants(index, session_id):
-            if tree.task_state_of(index, descendant) == "open":
-                blockers.append(f"has open descendant task {descendant}")
+        blockers.extend(
+            f"has open descendant task {descendant}"
+            for descendant in tree._descendants(index, session_id)
+            if tree.task_state_of(index, descendant) == "open")
         return blockers
 
     # ------------------------------------------------------------------
@@ -424,8 +426,8 @@ class TaskCompletionManager:
         *,
         request_id: str,
         evidence: CompletionEvidence,
-        caller: "object",
-    ) -> "tuple[int, dict]":
+        caller: object,
+    ) -> tuple[int, dict]:
         """One completion operation: 200 Session, 202 pending_run_finish, or 409 blockers.
 
         Operator callers close immediately (after evidence validation and a
@@ -476,7 +478,7 @@ class TaskCompletionManager:
         return await self._close_now(
             session_id, request_id=request_id, evidence=evidence, actor=ACTOR_USER)
 
-    def _replay_close_request(self, session_id: str, request_id: str) -> "tuple[int, dict] | None":
+    def _replay_close_request(self, session_id: str, request_id: str) -> tuple[int, dict] | None:
         """The original outcome of an already-recorded operation id, if one exists.
 
         Covers both the pending close request (202 replay) and the landed
@@ -505,7 +507,7 @@ class TaskCompletionManager:
         request_id: str,
         owner_run_id: str,
         evidence: CompletionEvidence,
-    ) -> "tuple[int, dict]":
+    ) -> tuple[int, dict]:
         """Durably save one own-run closure request and answer 202 (lock held inside)."""
         tree = self._tree
         async with tree.control_lock:
@@ -535,9 +537,9 @@ class TaskCompletionManager:
         request_id: str,
         evidence: CompletionEvidence,
         actor: str,
-        exclude_run_ids: "set[str] | None" = None,
-        exclude_input_ids: "set[str] | None" = None,
-    ) -> "tuple[int, dict]":
+        exclude_run_ids: set[str] | None = None,
+        exclude_input_ids: set[str] | None = None,
+    ) -> tuple[int, dict]:
         """Evaluate, validate, and land one completed close (the operator path).
 
         Facts are snapshotted and checked under the lock, evidence validation
@@ -712,10 +714,10 @@ class TaskCompletionManager:
         *,
         run_id: str,
         summary: str | None = None,
-        result_refs: "list[str] | None" = None,
+        result_refs: list[str] | None = None,
         request_id: str | None = None,
-        evidence: "CompletionEvidence | None" = None,
-    ) -> "tuple[int, dict]":
+        evidence: CompletionEvidence | None = None,
+    ) -> tuple[int, dict]:
         """Automatic successful worker completion: finish first, then close checks.
 
         The current Run must already be durably finished (the dispatcher's
@@ -738,8 +740,8 @@ class TaskCompletionManager:
         facts = tree.facts_of(session_id)
         if facts.run_outcomes.get(run_id) != "success":
             raise TaskConflictError(
-                [f"run {run_id} has no successful run_finished fact; "
-                 "failed or interrupted evidence keeps the task open"])
+                [(f"run {run_id} has no successful run_finished fact; "
+                  "failed or interrupted evidence keeps the task open")])
         run = await tree.runs.get_run(session_id, run_id)
         if run is None:
             from src.core.task_sessions import TaskNotFoundError
@@ -808,7 +810,7 @@ class TaskCompletionManager:
         request_id: str,
         input_ids: list[str],
         note: str,
-        caller: "object",
+        caller: object,
     ) -> dict:
         """The operator's durable confirmation that exact task inputs were handled.
 
@@ -894,7 +896,7 @@ class TaskCompletionManager:
         facts = tree.facts_of(session_id)
         return set(facts.confirmed_input_ids)
 
-    def _replay_input_ack(self, session_id: str, request_id: str) -> "dict | None":
+    def _replay_input_ack(self, session_id: str, request_id: str) -> dict | None:
         """The original outcome of an already-recorded acknowledgement id."""
         tree = self._tree
         event_id = stable_input_ack_event_id(session_id, request_id)
@@ -919,7 +921,7 @@ class TaskCompletionManager:
         *,
         request_id: str,
         reason: str,
-        caller: "object",
+        caller: object,
     ) -> dict:
         """Explicit operator cancellation with reason, preserving all evidence.
 
@@ -953,8 +955,8 @@ class TaskCompletionManager:
             meta = tree._index_meta(index, session_id)
             if tree.task_state_of(index, session_id) != "open":
                 raise TaskConflictError(
-                    [f"task {session_id} is {tree.task_state_of(index, session_id)}; "
-                     "only an open task can be cancelled"])
+                    [(f"task {session_id} is {tree.task_state_of(index, session_id)}; "
+                      "only an open task can be cancelled")])
             replay = self._replay_close_request(session_id, request_id)
             if replay is not None:
                 return replay[1]
@@ -1006,7 +1008,7 @@ class TaskCompletionManager:
         *,
         request_id: str,
         reason: str,
-        caller: "object",
+        caller: object,
         closed_event_id: str | None = None,
     ) -> dict:
         """Explicit operator reopen of one closed task.

@@ -61,13 +61,13 @@ ROUTE_INPUT_TYPES: frozenset[str] = frozenset({ET.USER, ET.AGENT_MESSAGE})
 class TaskInputDispatcher:
     """The input/report owner wired over one TaskTreeManager."""
 
-    def __init__(self, tree: "TaskTreeManager") -> None:
+    def __init__(self, tree: TaskTreeManager) -> None:
         self._tree = tree
         # The execution-stage seam: an async callable (session_id, pending input
         # event dicts) that binds a Run and launches. None until the execution
         # adapters land — admission and recovery work without it, and no
         # acknowledgement ever stands in for a Run that did not run.
-        self.executor: "object | None" = None
+        self.executor: object | None = None
 
     # ------------------------------------------------------------------
     # Admission
@@ -404,9 +404,9 @@ class TaskInputDispatcher:
         *,
         outcome: str,
         exit_code: int | None = None,
-        ended_at: "object | None" = None,
-        input_event_ids: "list[str] | None" = None,
-    ) -> "object":
+        ended_at: object | None = None,
+        input_event_ids: list[str] | None = None,
+    ) -> object:
         """The one entry adapters use to land a Run's terminal fact.
 
         The acknowledgement payload is validated against the Run's registered
@@ -500,7 +500,7 @@ class TaskInputDispatcher:
         result_refs: list[str] | None = None,
         recipient: str | None,
         actor: str = ACTOR_AGENT,
-    ) -> "tuple[dict, bool]":
+    ) -> tuple[dict, bool]:
         """deliver_child_report for a caller already holding the control lock.
 
         Returns (report, created): created is False when the stable report id

@@ -30,7 +30,6 @@ from src.agents.backends.pty_common import (
     tmux_session_name,
 )
 from src.core import claude_accounts
-from src.core.config import CharlieBotConfig
 from src.core.home import CLAUDE_CONFIG_DIR_ENV_VAR, default_claude_dir
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendType
@@ -42,6 +41,8 @@ log = LazyStructlogLogger()
 # mark_project_trusted, so the web framework must stay out of its import.
 if TYPE_CHECKING:
   from fastapi import WebSocket
+
+  from src.core.config import CharlieBotConfig
 
 _CLAUDE_TUI_SETTINGS = json.dumps(SKIP_PERMISSIONS_SETTINGS, separators=(",", ":"))
 _BUSY_THRESHOLD_SECONDS = 3.0
@@ -182,7 +183,7 @@ class TuiBackend:
 
 
 async def run_tui_attachment(
-    websocket: WebSocket, session_id: str, cfg: "CharlieBotConfig", task_tree: object = None,
+    websocket: WebSocket, session_id: str, cfg: CharlieBotConfig, task_tree: object = None,
 ) -> None:
   """Per-WS PTY loop: spawn `tmux attach`, pump bytes, handle pty_input/pty_resize.
 
@@ -197,7 +198,7 @@ async def run_tui_attachment(
   uses the current rules.
   """
   sessions_dir = cfg.sessions_dir
-  launch: "TuiTaskLaunch | None" = None
+  launch: TuiTaskLaunch | None = None
   try:
     # Lazy: the launch seam lives with the other Run owners, whose module must
     # not be pulled onto this transport module's import path.

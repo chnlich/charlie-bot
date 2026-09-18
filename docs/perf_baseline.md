@@ -3453,8 +3453,8 @@ M53 — config reload failure re-fire, broken steady state. `get_config` is the
 per-request config read (the auth middleware calls it on every HTTP request,
 the scheduler on every tick), and while the corpus stays broken a failed
 reload re-ran the full YAML parse + model validation and re-fired
-`config_reload_failed` on every call — the pre-fix form left `_config_mtime`
-at the old fingerprint, so the reload condition never went false (the live
+`config_reload_failed` on every call — the pre-fix form never recorded the
+failed reload's fingerprint, so the reload condition never went false (the live
 burst: 4431 lines in a 24.9 h server log, ~1/s inside the 16:00-18:00 window
 of 2026-09-04, three distinct error strings). The fixed form memoizes the
 failed reload on its fingerprint — re-parse only when a file moves, the same

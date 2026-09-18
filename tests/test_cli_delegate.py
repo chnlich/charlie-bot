@@ -40,6 +40,24 @@ def _repo_argv(repo: str, task_spec_file: Path, *extra: str, session: str | None
   ]
 
 
+def _verify_argv(task_spec_file: Path, *extra: str, task_type: str) -> list[str]:
+  """Argv for a repoless delegate main() call: the session/task-spec-file/keep-worktree skeleton
+  plus the flags this test adds (extra); task_type stays explicit because the parametrized sites
+  pass non-verify types."""
+  return [
+      "delegate",
+      "--session",
+      "s1",
+      "--task-spec-file",
+      str(task_spec_file),
+      "--keep-worktree",
+      "0",
+      "--task-type",
+      task_type,
+      *extra,
+  ]
+
+
 def _task_spec(source_line: str = "- (none)") -> str:
   return (
       "## Goal\n"
@@ -169,17 +187,7 @@ def test_main_verify_posts_repoless_payload(tmp_path: Path, monkeypatch: pytest.
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
-  with patched_cli_post(cfg, [
-      "delegate",
-      "--session",
-      "s1",
-      "--task-spec-file",
-      str(task_spec_file),
-      "--keep-worktree",
-      "0",
-      "--task-type",
-      "verify",
-  ]) as post_mock:
+  with patched_cli_post(cfg, _verify_argv(task_spec_file, task_type="verify")) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t2", "description": "task"}
     main()
 
@@ -200,19 +208,10 @@ def test_main_verify_rejects_repo_scoped_arguments(
   task_spec_file = _write_task_spec(tmp_path)
   value = str(tmp_path) if flag == "--repo" else "main"
 
-  with patch("sys.argv", [
-      "delegate",
-      "--session",
-      "s1",
-      "--task-spec-file",
-      str(task_spec_file),
-      "--keep-worktree",
-      "0",
-      "--task-type",
-      "verify",
-      flag,
-      value,
-  ]), pytest.raises(SystemExit) as exc_info:
+  with (
+      patch("sys.argv", _verify_argv(task_spec_file, flag, value, task_type="verify")),
+      pytest.raises(SystemExit) as exc_info,
+  ):
     main()
 
   assert_cli_reject(exc_info, capsys, flag, "forbidden")
@@ -236,18 +235,10 @@ def test_main_repo_task_types_require_repo_and_base_branch(
   task_spec_file = _write_task_spec(tmp_path)
   argv_tail = ["--repo", str(tmp_path)] if provide_repo else ["--base-branch", "main"]
 
-  with patch("sys.argv", [
-      "delegate",
-      "--session",
-      "s1",
-      "--task-spec-file",
-      str(task_spec_file),
-      "--keep-worktree",
-      "0",
-      "--task-type",
-      task_type,
-      *argv_tail,
-  ]), pytest.raises(SystemExit) as exc_info:
+  with (
+      patch("sys.argv", _verify_argv(task_spec_file, *argv_tail, task_type=task_type)),
+      pytest.raises(SystemExit) as exc_info,
+  ):
     main()
 
   assert_cli_reject(exc_info, capsys, missing_flag, "required")

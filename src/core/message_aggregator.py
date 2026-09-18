@@ -172,9 +172,9 @@ def _claude_account_login_required_msg(ev: dict) -> dict:
 
 def _resume_context_dropped_msg(ev: dict) -> dict:
   reason = ev.get('reason')
-  if reason == 'anchor_missing':
+  if reason == ET.RESUME_REASON_ANCHOR_MISSING:
     msg = 'Context not resumed: no previous session anchor was found'
-  elif reason == 'transcript_missing':
+  elif reason == ET.RESUME_REASON_TRANSCRIPT_MISSING:
     msg = 'Context not resumed: the previous session transcript is missing'
   else:
     msg = 'Context not resumed'
@@ -205,7 +205,7 @@ def _backend_overlay_inactive_msg(ev: dict) -> dict:
   backend_overlay_undeclared event that carries no reason field at all) renders
   the undeclared message.
   """
-  if ev.get("reason") == "unreadable":
+  if ev.get("reason") == ET.OVERLAY_REASON_UNREADABLE:
     return {
         "role":
             "system",

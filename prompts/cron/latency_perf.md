@@ -26,8 +26,12 @@ touches CI.
 
 Measure before anything else. Run the standing collectors listed in `docs/perf_baseline.md`
 exactly as that file lists them, so every round's numbers compare with the history; each takes
-seconds, and together they are the regression watch. The collectors observe the live instance
-read-only, which is the only contact this run has with it. A collector that fails or prints
+seconds, and together they are the regression watch. The sweep's in-process collectors import the
+code under test from the repo's local main checkout, so the collector list opens with a preflight
+that pins that checkout at `origin/main` — a sibling cron can leave it on its own branch after its
+pull request merges, and a stale tree reads ghost numbers; when the preflight fails loud (fetch,
+dirty tree, or a diverged checkout), the round reports every in-process metric as unmeasured. The collectors observe the live
+instance read-only, which is the only contact this run has with it. A collector that fails or prints
 nothing is itself a finding: the summary reports it, and the round treats that metric as
 unmeasured. That file is the single home for metric definitions, collector commands, healthy
 ranges, and sampling history, and nothing it owns is duplicated here. A topic whose evidence

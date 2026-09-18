@@ -474,27 +474,33 @@ def _install_config_paths(
   return source_global, source_settings, source_credentials, source_remote
 
 
+def _seed_overlay(payload: dict) -> Path:
+  """A pre-existing overlay ``.claude.json`` in the session config dir.
+
+  The one writer of the seed every overlay-behavior test starts from.
+  """
+  config_dir = claude_sub._session_config_dir(SESSION_ID)
+  config_dir.mkdir(parents=True)
+  overlay_global = config_dir / ".claude.json"
+  overlay_global.write_text(json.dumps(payload), encoding="utf-8")
+  return overlay_global
+
+
 def test_session_config_overlay_heals_existing_overlay_missing_trust_entry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
   source_global, _, _, _ = _install_config_paths(monkeypatch, tmp_path)
-  config_dir = claude_sub._session_config_dir(SESSION_ID)
-  config_dir.mkdir(parents=True)
-  overlay_global = config_dir / ".claude.json"
-  overlay_global.write_text(
-      json.dumps(
-          {
-              "preservedKey": "kept",
-              "messageIdleNotifThresholdMs": claude_sub._IDLE_NOTIFICATION_THRESHOLD_MS,
-              "projects": {
-                  "/unrelated": {
-                      "hasTrustDialogAccepted": True
-                  }
-              },
-          }),
-      encoding="utf-8",
-  )
+  overlay_global = _seed_overlay(
+      {
+          "preservedKey": "kept",
+          "messageIdleNotifThresholdMs": claude_sub._IDLE_NOTIFICATION_THRESHOLD_MS,
+          "projects": {
+              "/unrelated": {
+                  "hasTrustDialogAccepted": True
+              }
+          },
+      })
 
   claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
 
@@ -513,21 +519,15 @@ def test_session_config_overlay_preserves_existing_project_onboarding_seen_count
     tmp_path: Path,
 ) -> None:
   _install_config_paths(monkeypatch, tmp_path)
-  config_dir = claude_sub._session_config_dir(SESSION_ID)
-  config_dir.mkdir(parents=True)
-  overlay_global = config_dir / ".claude.json"
-  overlay_global.write_text(
-      json.dumps(
-          {
-              "projects": {
-                  WORKING_DIRECTORY: {
-                      "hasTrustDialogAccepted": False,
-                      "projectOnboardingSeenCount": 7,
-                  },
+  overlay_global = _seed_overlay(
+      {
+          "projects": {
+              WORKING_DIRECTORY: {
+                  "hasTrustDialogAccepted": False,
+                  "projectOnboardingSeenCount": 7,
               },
-          }),
-      encoding="utf-8",
-  )
+          },
+      })
 
   claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
 
@@ -541,22 +541,16 @@ def test_session_config_overlay_idempotent_when_already_configured(
     tmp_path: Path,
 ) -> None:
   _install_config_paths(monkeypatch, tmp_path)
-  config_dir = claude_sub._session_config_dir(SESSION_ID)
-  config_dir.mkdir(parents=True)
-  overlay_global = config_dir / ".claude.json"
-  overlay_global.write_text(
-      json.dumps(
-          {
-              "projects": {
-                  WORKING_DIRECTORY: {
-                      "hasTrustDialogAccepted": True,
-                      "projectOnboardingSeenCount": 3,
-                  },
+  _seed_overlay(
+      {
+          "projects": {
+              WORKING_DIRECTORY: {
+                  "hasTrustDialogAccepted": True,
+                  "projectOnboardingSeenCount": 3,
               },
-              "messageIdleNotifThresholdMs": claude_sub._IDLE_NOTIFICATION_THRESHOLD_MS,
-          }),
-      encoding="utf-8",
-  )
+          },
+          "messageIdleNotifThresholdMs": claude_sub._IDLE_NOTIFICATION_THRESHOLD_MS,
+      })
   writes: list[Path] = []
   real_write = claude_sub._write_json_atomically
 

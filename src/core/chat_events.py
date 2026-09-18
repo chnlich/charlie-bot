@@ -39,9 +39,9 @@ _LIVE_RANGE_MEMO_LIMIT = 4
 # A from-the-end walk serves a live-half window without reading the whole
 # file when the window does not reach the file's first line; a span past the
 # byte cap is read once by the full build instead, which then serves every
-# later window from memory. The walk chunk is the iter_ndjson_events_from_end
-# tail-window size itself, so both from-the-end readers move through the file
-# in the same segment; the walk's stop rule lives on _walk_tail_line_texts.
+# later window from memory. The chunk bounds one read's buffer at the tail
+# readers' shared window size, so both read families price the same slice;
+# the walk's stop rule lives on _walk_tail_line_texts.
 _WALK_BYTE_BUDGET = 32 * 1024 * 1024
 _WALK_CHUNK_BYTES = _TAIL_WINDOW_SIZE
 

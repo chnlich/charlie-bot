@@ -81,6 +81,21 @@ _RESET_BONUS_MIN_HEADROOM = 0.10
 # Scores closer than this are a near-tie, broken by least-recent event activity.
 _SCORE_TIE = 0.02
 
+# Keys of the usage-panel payload and of one window entry in it: src/api/ext_usage.py
+# builds the payload from the providers' usage APIs, this module folds it into the
+# account readings, and web/static/js/ext_usage.js renders it — one home per key so
+# the producer, this consumer, and the browser cannot drift apart silently. A
+# window's ``utilization`` is a percentage as reported; ``resets_at`` is an ISO-8601
+# UTC string (empty when upstream reported none); ``scope_label`` names a
+# model-scoped window and is absent on plan-wide ones.
+PANEL_WINDOWS = "windows"
+PANEL_FETCHED_AT = "fetched_at"
+PANEL_PROVIDER = "provider"
+PANEL_WINDOW_MINUTES = "window_minutes"
+PANEL_UTILIZATION = "utilization"
+PANEL_RESETS_AT = "resets_at"
+PANEL_SCOPE_LABEL = "scope_label"
+
 
 @dataclass(frozen=True)
 class RateLimitReading:
@@ -247,17 +262,17 @@ def observe_usage_panel(label: str, usage: dict, now: datetime | None = None) ->
   Panel utilizations are percentages; they are kept as reported and scaled when
   read, together with the ``scope_label`` that names a model-scoped window.
   """
-  windows = usage.get("windows") if isinstance(usage, dict) else None
+  windows = usage.get(PANEL_WINDOWS) if isinstance(usage, dict) else None
   if not isinstance(windows, list):
     return
-  fetched_at = usage.get("fetched_at")
+  fetched_at = usage.get(PANEL_FETCHED_AT)
   try:
     at = datetime.fromisoformat(fetched_at) if isinstance(fetched_at, str) else now_or(now)
   except ValueError:
     at = now_or(now)
   if at.tzinfo is None:
     at = at.replace(tzinfo=UTC)
-  _panel_readings[label] = {"at": at, "windows": [w for w in windows if isinstance(w, dict)]}
+  _panel_readings[label] = {"at": at, PANEL_WINDOWS: [w for w in windows if isinstance(w, dict)]}
 
 
 def parse_iso_utc(value: Any) -> datetime | None:
@@ -282,10 +297,10 @@ def panel_window_expired(window: dict[str, Any], sampled: datetime | None, now: 
   """
   if sampled is None:
     return False
-  resets_at = parse_iso_utc(window.get("resets_at"))
+  resets_at = parse_iso_utc(window.get(PANEL_RESETS_AT))
   if resets_at is not None and resets_at <= now and sampled < resets_at:
     return True
-  window_minutes = window.get("window_minutes")
+  window_minutes = window.get(PANEL_WINDOW_MINUTES)
   if isinstance(window_minutes, int) and not isinstance(window_minutes, bool):
     return now - sampled > timedelta(minutes=window_minutes)
   return False
@@ -304,10 +319,10 @@ def _live_windows(label: str, model: str | None, now: datetime) -> list[dict[str
     return []
   family = model_family(model)
   live: list[dict[str, Any]] = []
-  for window in stored["windows"]:
+  for window in stored[PANEL_WINDOWS]:
     if panel_window_expired(window, stored["at"], now):
       continue
-    scope = window.get("scope_label")
+    scope = window.get(PANEL_SCOPE_LABEL)
     if scope and not (family and family in str(scope).lower()):
       continue
     live.append(window)
@@ -321,7 +336,7 @@ def _panel_reading(label: str, model: str | None, now: datetime | None = None) -
     return None
   values: list[float] = []
   for window in _live_windows(label, model, now_or(now)):
-    value = window.get("utilization")
+    value = window.get(PANEL_UTILIZATION)
     if isinstance(value, (int, float)) and not isinstance(value, bool):
       values.append(float(value) / 100.0)
   if not values:
@@ -342,7 +357,7 @@ def latest_reading(label: str, model: str | None, now: datetime | None = None) -
   """
   moment = now_or(now)
   general = _newest_reading(_event_readings.get(label), _panel_reading(label, None, moment))
-  if model is None or not any(window.get("scope_label") for window in _live_windows(label, model, moment)):
+  if model is None or not any(window.get(PANEL_SCOPE_LABEL) for window in _live_windows(label, model, moment)):
     return general
   scoped = _panel_reading(label, model, moment)
   if scoped is None:
@@ -434,14 +449,14 @@ def _time_to_reset(label: str, model: str | None, now: datetime) -> float | None
   """
   limiting: tuple[float, dict[str, Any]] | None = None
   for window in _live_windows(label, model, now):
-    value = window.get("utilization")
+    value = window.get(PANEL_UTILIZATION)
     if not isinstance(value, (int, float)) or isinstance(value, bool):
       continue
     if limiting is None or float(value) > limiting[0]:
       limiting = (float(value), window)
   if limiting is None:
     return None
-  resets_at = parse_iso_utc(limiting[1].get("resets_at"))
+  resets_at = parse_iso_utc(limiting[1].get(PANEL_RESETS_AT))
   return (resets_at - now).total_seconds() if resets_at is not None else None
 
 

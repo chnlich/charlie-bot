@@ -921,6 +921,16 @@ def mount_production_gzip(app: FastAPI) -> None:
   app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1)
 
 
+def assert_gzip_served(resp: Any) -> None:
+  """Assert the response served a route's pre-compressed gzip form.
+
+  The route set the encoding upstream — that header is what makes the
+  middleware skip its own deflate — and carries the negotiation vary.
+  """
+  assert resp.headers["content-encoding"] == "gzip"
+  assert resp.headers["vary"] == "Accept-Encoding"
+
+
 def make_transcript(config_dir: Path, cc_session_id: str) -> Path:
   """Write a fake Claude Code session transcript under config_dir and return its path."""
   transcript = config_dir / "projects" / "slug" / f"{cc_session_id}.jsonl"

@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from conftest import _page_request, gzip_explode_compress
+from conftest import _page_request, assert_gzip_served, gzip_explode_compress
 
 from src.api.threads import _detail_gzip_memo, get_thread
 from src.core.config import CharlieBotConfig
@@ -56,8 +56,7 @@ async def test_detail_gzip_ships_precompressed_body(tmp_path: Path) -> None:
   cfg, thread_mgr, thread, worktree = await _saved_thread(tmp_path)
   plain = await get_thread(thread.session_id, thread.id, _page_request(), thread_mgr, cfg, attach=False)
   gz = await get_thread(thread.session_id, thread.id, _page_request("gzip"), thread_mgr, cfg, attach=False)
-  assert gz.headers["content-encoding"] == "gzip"
-  assert gz.headers["vary"] == "Accept-Encoding"
+  assert_gzip_served(gz)
   assert gzip.decompress(gz.body) == plain.body
   data = json.loads(plain.body)
   assert data["attach_command"] == f"cd {worktree} && claude --resume session-123"

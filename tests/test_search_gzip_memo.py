@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from conftest import _page_request, gzip_explode_compress, make_home_session
+from conftest import _page_request, assert_gzip_served, gzip_explode_compress, make_home_session
 
 import src.api.sessions as sessions_api
 
@@ -31,8 +31,7 @@ async def test_search_gzip_ships_precompressed_body(tmp_path: Path) -> None:
   plain = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr)
   gz = await sessions_api.search_sessions(_page_request("gzip"), q="needle", session_mgr=mgr)
 
-  assert gz.headers["content-encoding"] == "gzip"
-  assert gz.headers["vary"] == "Accept-Encoding"
+  assert_gzip_served(gz)
   assert gzip.decompress(gz.body) == plain.body
   assert json.loads(plain.body)[0]["name"] == "needle"
 

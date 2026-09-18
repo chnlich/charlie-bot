@@ -465,23 +465,8 @@ function renderSessionView(data) {
     renderWorkersTabUnknown();
   }
 
-  // v2 task-node chrome: Task/Context/Runs replace Workers; the panels bind to
-  // this session before any tab shows, so a switch cannot leave a prior node's
-  // editor or run list in place.
-  const isTaskNode = !!session.profile;
-  for (const btnId of ['btn-task', 'btn-task-context', 'btn-runs']) {
-    const btn = document.getElementById(btnId);
-    if (btn) btn.classList.toggle('hidden', !isTaskNode);
-  }
-  const workersBtn = document.getElementById('btn-workers');
-  if (workersBtn) workersBtn.classList.toggle('hidden', isTaskNode);
-  if (globalThis.TaskPanel) globalThis.TaskPanel.onSessionChanged(isTaskNode ? session : null);
-  if (globalThis.TaskContextPanel) globalThis.TaskContextPanel.onSessionChanged(isTaskNode ? session : null);
-  if (globalThis.TaskRunsPanel) globalThis.TaskRunsPanel.onSessionChanged(isTaskNode ? session : null);
-  if (globalThis.Sidebar && Sidebar.SessionTree) Sidebar.SessionTree.onSessionShown(session);
-
   // Restore whichever tab was active before the session switch
-  const activeBtn = document.querySelector('#btn-terminal.bg-blue-600\\/20, #btn-chat-tex.bg-blue-600\\/20, #btn-chat.bg-blue-600\\/20, #btn-workers.bg-blue-600\\/20, #btn-task.bg-blue-600\\/20, #btn-task-context.bg-blue-600\\/20, #btn-runs.bg-blue-600\\/20, #btn-chat-backlog.bg-blue-600\\/20');
+  const activeBtn = document.querySelector('#btn-terminal.bg-blue-600\\/20, #btn-chat-tex.bg-blue-600\\/20, #btn-chat.bg-blue-600\\/20, #btn-workers.bg-blue-600\\/20, #btn-chat-backlog.bg-blue-600\\/20');
   const activeTab = activeBtn ? activeBtn.id.replace('btn-', '') : 'chat';
   switchTab(activeTab);
 
@@ -743,61 +728,6 @@ function renderUsageFromData(usage) {
 // ---------------------------------------------------------------------------
 // Session management
 // ---------------------------------------------------------------------------
-// The primary sidebar button (the creation toolbar's wide blue "New Session"):
-// inside the tasks filter and in preview mode it directly creates one root
-// manager — carrying the dropdown's selected model — and opens Chat in one
-// click with zero form fields; everywhere else it keeps the legacy session
-// create, which reads the same dropdown itself.
-function createSessionOrTask() {
-  if (globalThis.TaskPanel && (currentFilter === 'tasks' || globalThis.__CHARLIEBOT_PREVIEW__)) {
-    // In preview mode every create action is a v2 task (root manager when no
-    // parent is selected); the legacy session path does not exist there.
-    void createRootTaskAndOpen();
-    return;
-  }
-  createSession();
-}
-
-// One pending create action: a second click while the create-and-open is in
-// flight is absorbed, so rapid clicks never fire a second create. The create's
-// request id itself rides the task panel's replay contract (TaskPanel
-// .createRootTask), so even a create whose response was lost replays to the
-// same single node on retry.
-let pendingRootTaskCreate = false;
-
-async function createRootTaskAndOpen() {
-  if (pendingRootTaskCreate) return;
-  pendingRootTaskCreate = true;
-  try {
-    const meta = await globalThis.TaskPanel.createRootTask();
-    if (!SESSION_ID) {
-      // The welcome screen has no composer DOM (the SPA view is torn down
-      // there), so the landing is a full page load; this flag brings the chat
-      // composer up cursor-ready after the reload.
-      sessionStorage.setItem('charliebot-focus-composer', '1');
-      location.href = '/?session=' + meta.id;
-      return;
-    }
-    // The child-create success sequence: drop the cached tree levels so the
-    // switch's own tree read renders the new node, then let the existing
-    // switch machinery own the teardown — it saves this session's message
-    // draft, stashes the task-edit drafts and reconnects the socket.
-    if (globalThis.Sidebar && Sidebar.SessionTree) Sidebar.SessionTree.invalidateAll();
-    await switchSession(meta.id);
-    // A new task opens Chat even when the previous task displayed Task,
-    // Context or Runs; the cursor lands in the empty composer.
-    switchTab('chat');
-    document.getElementById('msg-input').focus();
-  } catch (err) {
-    // A failed create is visible and retryable: the view, drafts and tree stay
-    // exactly as they were, and the retry replays the same request id.
-    console.error('Create task failed:', err);
-    showToast('Create task failed: ' + (err && err.message ? err.message : err) + '. Please try again.', true);
-  } finally {
-    pendingRootTaskCreate = false;
-  }
-}
-
 async function createSession() {
   try {
     const backendSel = document.getElementById('new-session-backend');
@@ -893,7 +823,6 @@ const API = {
   loadOlderIfNeeded,
   renderUsageFromData,
   createSession,
-  createSessionOrTask,
   renderNoActiveSessionView,
 };
 Sidebar.wire(API);

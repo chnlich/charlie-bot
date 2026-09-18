@@ -38,13 +38,6 @@ _NODE_TESTS = [
     "prose_markdown_memo.test.js",
     "rendering_worker_summary_origin.test.js",
     "session_switch_stale_pagination.test.js",
-    # UI follow-ups: whole-history current-Run selection and cross-client
-    # creation notifications.
-    "task_context_latest_run.test.js",
-    "task_panel_actions.test.js",
-    "task_context_rules.test.js",
-    "task_runs_panel.test.js",
-    "session_view_new_task.test.js",
     "session_view_sentinel.test.js",
     "show_more_toggle.test.js",
     "sidebar_rename_prefill.test.js",

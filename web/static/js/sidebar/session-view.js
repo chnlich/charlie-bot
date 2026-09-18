@@ -297,12 +297,7 @@ async function switchSession(sessionId) {
   const fromSessionId = SESSION_ID;
   const switchStartedAt = Date.now();
 
-  // Save draft for current session
-  if (DRAFT_KEY) {
-    const v = document.getElementById('msg-input').value;
-    if (v) localStorage.setItem(DRAFT_KEY, v);
-    else localStorage.removeItem(DRAFT_KEY);
-  }
+  saveDraftNow();
 
   if (masterThinking) stopThinking();
   teardownActiveSessionView();
@@ -750,12 +745,7 @@ async function createSession() {
 
     switching = true;
     ++switchGeneration;
-    if (DRAFT_KEY) {
-      const input = document.getElementById('msg-input');
-      const draft = input ? input.value : '';
-      if (draft) localStorage.setItem(DRAFT_KEY, draft);
-      else localStorage.removeItem(DRAFT_KEY);
-    }
+    saveDraftNow();
     if (masterThinking) stopThinking();
     teardownActiveSessionView();
     disconnectWS();

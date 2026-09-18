@@ -591,8 +591,10 @@ _aggregate_memo: tuple[tuple, _SourceAggregate] | None = None
 _tally_memo: tuple[tuple, list[dict], list[str]] | None = None
 
 # Per-row memo for the opencode message table: db path -> {message id: (time_updated, record
-# or None)}; see the module docstring for the key's contract.
-_opencode_row_memos: dict[str, dict[str, tuple[int, list | None]]] = {}
+# or None)}; see the module docstring for the key's contract. A seeded entry's values are the
+# sidecar's parsed [time_updated, record] lists adopted in place — same positional shape, see
+# _advance_opencode_rows.
+_opencode_row_memos: dict[str, dict[str, tuple[int, list | None] | list]] = {}
 
 # Per-db change count of the row memo: the epoch a scan-built whole-tally memo keys its rows
 # on. It advances exactly when a scan moves the memo (a row landed, moved, or vanished), so
@@ -1742,7 +1744,12 @@ def _advance_opencode_rows(
       memo = _opencode_row_memos.setdefault(key, {})
       seeded = not memo and seed is not None
       if seeded:
-        memo.update({mid: (row[0], row[1]) for mid, row in seed.items()})
+        # The seed's parsed rows are [time_updated, record] pairs, and every memo consumer
+        # reads values positionally ([0]/[1] and two-name unpacking), so the map adopts
+        # directly: the per-row tuple rebuild cost ~0.35 s at a 190k-row sidecar, and a
+        # value is only ever replaced whole, never mutated, so the parsed lists alias
+        # safely into the memo.
+        memo.update(seed)
       con.execute("begin")  # one snapshot: the stored proof must describe the scanned state
       probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone()) if memo else None
       gate = seed_probe if seeded else _opencode_probes.get(key)
@@ -1892,7 +1899,7 @@ def _merge_opencode(
 
 def _adjust_opencode_partial(
     t: _Tally,
-    memo: dict[str, tuple[int, list | None]],
+    memo: dict[str, tuple[int, list | None] | list],
     partial: _OpencodePartial,
     deltas: list[tuple[list | None, list | None]],
 ) -> int:
@@ -1945,7 +1952,7 @@ def _adjust_opencode_partial(
 
 def _scan_opencode_rows(
     con: sqlite3.Connection,
-    memo: dict[str, tuple[int, list | None]],
+    memo: dict[str, tuple[int, list | None] | list],
 ) -> tuple[int, list[tuple[list | None, list | None]] | None]:
   """Advance *memo* to the message table's current rows; return the bytes this pass read and
   the per-row record deltas ``(old, new)`` — rows whose ``(id, time_updated)`` key moved, and

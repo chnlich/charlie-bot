@@ -431,7 +431,7 @@ def recording_mmap_shim(extents: list[tuple[int, int]]) -> type:
 
   class _RecordingMmap(mmap.mmap):
 
-    def rfind(self, sub, start=0, end=None):  # noqa: ANN001, ANN202
+    def rfind(self, sub: bytes, start: int = 0, end: int | None = None) -> int:
       extents.append((start, len(self) if end is None else end))
       return mmap.mmap.rfind(self, sub, start, end)
 

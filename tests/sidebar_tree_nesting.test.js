@@ -198,3 +198,62 @@ test('search results stay flat: no nesting, no chevron', () => {
   assert.deepEqual(anchorIdsInOrder(nav.innerHTML), ['r1', 'w-old', 'c-old', 'g1', 'w-new', 'c-new']);
   assert.doesNotMatch(nav.innerHTML, /data-tree-children|data-tree-toggle/);
 });
+
+test('a logical row offers New child session; a worker leaf does not', () => {
+  const {context, nav} = buildContext();
+
+  context.renderSessionList([manager('r1', null, 10), worker('w-new', 'r1', 11), meta('legacy')], 'all');
+
+  assert.match(rowHtml(nav.innerHTML, 'r1'), /title="New child session"[\s\S]*?createChildSession\('r1'\)|createChildSession\('r1'\)[\s\S]*?title="New child session"/);
+  assert.match(rowHtml(nav.innerHTML, 'legacy'), /createChildSession\('legacy'\)/);
+  assert.doesNotMatch(rowHtml(nav.innerHTML, 'w-new'), /New child session|createChildSession/);
+});
+
+test('the active session’s ancestors open once per switch and a manual collapse then holds', () => {
+  const {context, nav} = buildContext();
+  context.SESSION_ID = 'g1';
+
+  context.renderSessionList(familyRows(), 'all');
+
+  let html = nav.innerHTML;
+  assert.doesNotMatch(html.match(/<div class="tree-children[^"]*"[^>]*data-tree-children="r1">/)[0], /hidden/);
+  assert.doesNotMatch(html.match(/<div class="tree-children[^"]*"[^>]*data-tree-children="c-new">/)[0], /hidden/);
+  assert.equal(context.Sidebar.isTreeNodeExpanded('r1'), true);
+  assert.equal(context.Sidebar.isTreeNodeExpanded('c-new'), true);
+  assert.equal(context.Sidebar.treeParentId('g1'), 'c-new');
+  assert.equal(context.Sidebar.treeParentId('r1'), null);
+
+  // The user folds the root: the next repaint of the same session keeps it folded.
+  context.refreshSessionStatusNow = () => {};
+  context.toggleTreeNode('r1');
+  context.renderSessionList(familyRows(), 'all');
+  html = nav.innerHTML;
+  assert.match(html.match(/<div class="tree-children[^"]*"[^>]*data-tree-children="r1">/)[0], / hidden"/);
+
+  // A switch to another nested session reveals its path again.
+  context.SESSION_ID = 'w-old';
+  context.renderSessionList(familyRows(), 'all');
+  assert.doesNotMatch(nav.innerHTML.match(/<div class="tree-children[^"]*"[^>]*data-tree-children="r1">/)[0], /hidden/);
+});
+
+test('expandTreeNode opens a collapsed parent and is a no-op on an open one', () => {
+  const {context} = buildContext();
+  const container = createElement({className: 'tree-children hidden'});
+  const chevron = createElement({className: 'tree-chevron'});
+  let refreshes = 0;
+  context.document.querySelectorAll = (selector) => {
+    if (selector === '[data-tree-children="p1"]') return [container];
+    if (selector === '[data-tree-toggle="p1"]') return [chevron];
+    return [];
+  };
+  context.refreshSessionStatusNow = () => { refreshes += 1; };
+
+  context.Sidebar.expandTreeNode('p1');
+  assert.equal(context.Sidebar.isTreeNodeExpanded('p1'), true);
+  assert.equal(container.classList.contains('hidden'), false);
+  assert.equal(chevron.classList.contains('rotate-90'), true);
+  assert.equal(refreshes, 1);
+
+  context.Sidebar.expandTreeNode('p1');
+  assert.equal(refreshes, 1, 'an already open node is left alone');
+});

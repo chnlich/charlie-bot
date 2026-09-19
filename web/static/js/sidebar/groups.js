@@ -261,6 +261,7 @@ const PENCIL_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" st
 // The one clock-badge body (face plus hands): renderScheduledBadge below
 // and, through the namespace, workers.js's trigger-card icon
 // (Sidebar.CLOCK_SVG_BODY). Each call site keeps its own <svg> wrapper.
+const PLUS_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>`;
 const CLOCK_SVG_BODY = `<circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/>`;
 
 // The one modal chrome for the sidebar's JS-built overlays: showGroupSelector's
@@ -318,6 +319,17 @@ function renderArchiveButton(s, activeBtnClass) {
 
 // Renders '' for a falsy taskName: the caller's show-guard stays visible in
 // the argument it passes.
+// A logical session row creates a child logical session under itself: the
+// same creation body as New Session with this row as the parent.
+function renderNewChildButton(s, activeBtnClass) {
+  return renderRowActionButton(
+      `event.preventDefault(); event.stopPropagation(); createChildSession('${s.id}')`,
+      'hover:text-green-400',
+      'New child session',
+      PLUS_SVG_PATH,
+      activeBtnClass);
+}
+
 function renderCronGearButton(taskName, activeBtnClass) {
   if (!taskName) return '';
   return `<button onclick="event.preventDefault(); event.stopPropagation(); openCronEditor('${escapeHtml(taskName)}')"
@@ -618,8 +630,10 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
   if (!options.skipRefresh) scheduleProjectManagerRefresh();
   // Grouping follows the root rows; a child row nests under its parent
   // whatever its own group field says.
-  const {roots, childrenOf} = buildSessionTree(sessions);
+  const {roots, childrenOf, parentOf} = buildSessionTree(sessions);
   lastTreeChildrenOf = childrenOf;
+  lastTreeParentOf = parentOf;
+  revealActiveSessionOnce(parentOf);
   const {groups, sortedKeys} = groupSessionsBySortedKeys(roots, s => s.group);
   const collapsedState = loadGroupCollapsedState(SESSION_GROUP_COLLAPSED_STORAGE_KEY);
   const limitState = loadGroupLimitState(SESSION_GROUP_LIMIT_STORAGE_KEY);
@@ -769,6 +783,9 @@ function renderSessionTimeLine(s, timeIso, timeStr, staticTime = false) {
 // collapsed (a persisted expand state once hid a preview-cap regression).
 const treeExpandedNodes = new Set();
 let lastTreeChildrenOf = new Map();
+let lastTreeParentOf = new Map();
+// The session whose ancestors the last paint opened (one reveal per switch).
+let lastRevealedSessionId = null;
 
 const LEAF_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>`;
 
@@ -779,12 +796,14 @@ const LEAF_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stro
 function buildSessionTree(sessions) {
   const ids = new Set(sessions.map(s => s.id));
   const childrenOf = new Map();
+  const parentOf = new Map();
   const roots = [];
   sessions.forEach(s => {
     const parent = s.task_parent_id;
     if (parent && ids.has(parent)) {
       if (!childrenOf.has(parent)) childrenOf.set(parent, []);
       childrenOf.get(parent).push(s);
+      parentOf.set(s.id, parent);
     } else {
       roots.push(s);
     }
@@ -794,7 +813,7 @@ function buildSessionTree(sessions) {
     const workerOrder = (a.profile === 'worker' ? 1 : 0) - (b.profile === 'worker' ? 1 : 0);
     return workerOrder || newestFirst(a, b);
   }));
-  return {roots, childrenOf};
+  return {roots, childrenOf, parentOf};
 }
 
 function countTreeRows(rows, childrenOf) {
@@ -808,6 +827,22 @@ function isTreeNodeExpanded(sessionId) {
 // The children of the last grouped paint, for indicator aggregation.
 function treeChildIds(sessionId) {
   return (lastTreeChildrenOf.get(sessionId) || []).map(s => s.id);
+}
+
+// The parent of a nested row in the last grouped paint (null for a root).
+function treeParentId(sessionId) {
+  return lastTreeParentOf.get(sessionId) || null;
+}
+
+// The active session's ancestors open once per switch, so a node reached by
+// a deep link or a fresh create is visible; a later manual collapse holds
+// until the next switch.
+function revealActiveSessionOnce(parentOf) {
+  if (!SESSION_ID || SESSION_ID === lastRevealedSessionId) return;
+  lastRevealedSessionId = SESSION_ID;
+  for (let parent = parentOf.get(SESSION_ID); parent; parent = parentOf.get(parent)) {
+    treeExpandedNodes.add(parent);
+  }
 }
 
 function renderTreeChevron(sessionId, childCount) {
@@ -841,8 +876,7 @@ function renderSessionTree(s, filter, options, childrenOf) {
   </div>`;
 }
 
-function toggleTreeNode(sessionId) {
-  const expanded = !treeExpandedNodes.has(sessionId);
+function applyTreeNodeExpansion(sessionId, expanded) {
   if (expanded) treeExpandedNodes.add(sessionId); else treeExpandedNodes.delete(sessionId);
   const selectorId = CSS.escape(sessionId);
   document.querySelectorAll(`[data-tree-children="${selectorId}"]`).forEach(el => {
@@ -855,6 +889,14 @@ function toggleTreeNode(sessionId) {
   // A parent's indicators stand in for its collapsed subtree; the next status
   // read re-evaluates them for the new expand state.
   if (typeof refreshSessionStatusNow === 'function') refreshSessionStatusNow();
+}
+
+function toggleTreeNode(sessionId) {
+  applyTreeNodeExpansion(sessionId, !treeExpandedNodes.has(sessionId));
+}
+
+function expandTreeNode(sessionId) {
+  if (!treeExpandedNodes.has(sessionId)) applyTreeNodeExpansion(sessionId, true);
 }
 
 function renderSessionItem(s, filter, options = {}) {
@@ -901,6 +943,7 @@ function renderSessionItem(s, filter, options = {}) {
       ${renderStarButton(s, activeBtnClass)}
       ${renderRenameButton(s, activeBtnClass)}
       ${groupBtn}
+      ${renderNewChildButton(s, activeBtnClass)}
       ${renderArchiveButton(s, activeBtnClass)}
       ${renderCronGearButton(filter === 'scheduled' ? s.scheduled_task : '', activeBtnClass)}`;
   }
@@ -1022,7 +1065,9 @@ const SIDEBAR_ONLY = {
   buildSessionTree,
   renderSessionTree,
   isTreeNodeExpanded,
+  expandTreeNode,
   treeChildIds,
+  treeParentId,
 };
 Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
 

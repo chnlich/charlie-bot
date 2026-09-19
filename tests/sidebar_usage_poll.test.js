@@ -1145,7 +1145,13 @@ test('createSession switches open chat through SPA state without full reload', a
   await context.createSession();
 
   assert.equal(fetchRequests[0].url, '/api/sessions/');
-  assert.deepEqual(JSON.parse(fetchRequests[0].opts.body), {backend: 'codex-o3'});
+  // The task creation body: a client request key, a root parent, the manager
+  // profile, an empty goal and the dropdown's backend.
+  const body = JSON.parse(fetchRequests[0].opts.body);
+  assert.equal(typeof body.request_id, 'string');
+  assert.ok(body.request_id.length > 0);
+  delete body.request_id;
+  assert.deepEqual(body, {task_parent_id: null, profile: 'manager', task: {goal: ''}, backend: 'codex-o3'});
   assert.equal(context.location.href, '');
   assert.equal(context.SESSION_ID, 'session-b');
   assert.equal(context.DRAFT_KEY, 'charliebot-draft-session-b');

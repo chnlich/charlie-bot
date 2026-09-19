@@ -728,17 +728,47 @@ function renderUsageFromData(usage) {
 // ---------------------------------------------------------------------------
 // Session management
 // ---------------------------------------------------------------------------
+// Both creation entry points (the New Session button and a row's hover "+")
+// send the task creation body: a client request key (a replay under the same
+// parent returns the same node), the parent id (null for a root), always the
+// manager profile, and an empty goal. The server names the node from its
+// session counter, as it names a session today.
+function newTaskRequestId() {
+  if (globalThis.crypto && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return 'ui-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+function taskCreateBody(taskParentId, backend) {
+  return {
+    request_id: newTaskRequestId(),
+    task_parent_id: taskParentId,
+    profile: 'manager',
+    task: {goal: ''},
+    backend,
+  };
+}
+
 async function createSession() {
+  await createTaskNode(null);
+}
+
+async function createChildSession(parentId) {
+  await createTaskNode(parentId);
+}
+
+async function createTaskNode(taskParentId) {
   try {
     const backendSel = document.getElementById('new-session-backend');
     const backend = backendSel ? backendSel.value : undefined;
     const res = await fetch('/api/sessions/', {
       method: 'POST',
       headers: JSON_HEADERS,
-      body: JSON.stringify({ backend }),
+      body: JSON.stringify(taskCreateBody(taskParentId, backend)),
     });
     if (!res.ok) throw new Error(`Create session failed: ${res.status}`);
     const data = await res.json();
+    // The new child must be visible when the list repaints: open its parent.
+    if (taskParentId && typeof Sidebar.expandTreeNode === 'function') Sidebar.expandTreeNode(taskParentId);
     if (!SESSION_ID) {
       location.href = '/?session=' + data.id;
       return;
@@ -823,6 +853,7 @@ const API = {
   loadOlderIfNeeded,
   renderUsageFromData,
   createSession,
+  createChildSession,
   renderNoActiveSessionView,
 };
 Sidebar.wire(API);

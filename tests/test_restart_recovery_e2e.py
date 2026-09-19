@@ -24,7 +24,6 @@ resolve_run's explicit reason.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import os
 import signal
@@ -50,6 +49,7 @@ from conftest import (
     _terminal_summaries,
     _wait_for,
     build_recovery_cfg,
+    cancel_and_drain,
     read_chat_events,
 )
 
@@ -757,9 +757,7 @@ async def test_graceful_shutdown_in_setup_phase_reaches_never_started_row(
           thread_mgr,
           request=SpawnRequest(resolved_backend="fake", resolved_model="fake-model", prompt_override="x")))
   await asyncio.wait_for(setup_entered.wait(), timeout=10.0)
-  task.cancel()
-  with contextlib.suppress(asyncio.CancelledError):
-    await task
+  await cancel_and_drain(task)
 
   meta = _read_meta(home, ids["session"], ids["thread"])
   assert meta["status"] == "idle"  # untouched: no failed/-1 fabricated at shutdown

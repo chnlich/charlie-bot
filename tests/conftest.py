@@ -2852,6 +2852,19 @@ def close_create_logged_task(coro: Any, *, name: str | None = None) -> None:
   coro.close()
 
 
+async def cancel_and_drain(task: asyncio.Task) -> None:
+  """Cancel *task*, then await it under a suppressed CancelledError so the task's
+  own finally block finishes before the caller continues.
+
+  Deliberately no done-guard, unlike src.core.tasks.cancel_and_wait: awaiting an
+  already-finished test task re-raises its pending exception, and skipping that
+  await would turn a task bug into a silently green test.
+  """
+  task.cancel()
+  with contextlib.suppress(asyncio.CancelledError):
+    await task
+
+
 def capture_create_logged_task(captured: dict[str, Any]) -> Callable[..., Any]:
   """Return a create_logged_task stand-in that captures the spawn coroutine's locals."""
 

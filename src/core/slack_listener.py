@@ -1154,7 +1154,7 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
   """Boot pass over every Slack session; returns how many notices and nudges it produced.
 
   First the summons lost while queued: the startup replay covers ``ET.USER``
-  only (src/core/init.py), so a Slack injection sitting in the queue when the
+  only (src/core/init_master_recovery.py), so a Slack injection sitting in the queue when the
   process died is picked up by nothing else and gets the lost-summon notice.
   Then the round-end audit over every finished round, which closes the crash
   windows between a done and its nudge, and between a nudge round's done and

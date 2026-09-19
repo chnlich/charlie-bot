@@ -70,8 +70,8 @@ DIED_WITHOUT_RESULT_REASON = "process exited without a final result event"
 
 # Effective-alive verdicts: wherever death cannot be PROVEN (a liveness input
 # is missing, or the probe says alive), the run is treated as alive and never
-# finalized failed on missing evidence. These reasons route init.py's
-# report-only branch (no re-attach) for rows that have nothing followable.
+# finalized failed on missing evidence. These reasons route the boot-recovery
+# passes' report-only branch (no re-attach) for rows that have nothing followable.
 UNCOVERED_ALIVE_REASON = "uncovered-alive"
 RAW_MISSING_ALIVE_REASON = "raw-missing-alive"
 

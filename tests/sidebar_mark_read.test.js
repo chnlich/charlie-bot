@@ -2,9 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { loadSidebarStatusContext } = require('./sidebar_status_context_stub');
-const { baseSessionContext, bootstrapPayload, createChatSidebarContext, installSessionDocumentLookups,
-  makeSidebarRow, stubPageTimers } = require('./session_context_stub');
-const { createElement } = require('./dom_element_stub');
+const { bootstrapPayload, buildSwitchFlowHarness, makeSidebarRow } = require('./session_context_stub');
 
 // ---------------------------------------------------------------------------
 // markSessionRead standalone: sidebar/status.js through the shared stub loader.
@@ -43,9 +41,8 @@ test('markSessionRead swallows a fetch failure with a console log only', async (
 });
 
 // ---------------------------------------------------------------------------
-// Switch flow: the POST lands only on the winning generation's landed render.
-// The harness mirrors session_switch_stale_pagination.test.js's shape: real
-// chat+sidebar modules in a vm context, bootstrap fetches the test controls.
+// Switch flow: the POST lands only on the winning generation's landed render,
+// through the shared switch-flow harness in session_context_stub.js.
 // ---------------------------------------------------------------------------
 
 const BOOTSTRAP = {
@@ -54,46 +51,28 @@ const BOOTSTRAP = {
 };
 
 function buildHarness() {
-  const messages = createElement({id: 'messages'});
-  messages.clientHeight = 500;
-  messages.scrollHeight = 100;
-  messages.scrollTop = 0;
-  const rows = [
-    makeSidebarRow('session-a', 'Alpha'),
-    makeSidebarRow('session-b', 'Beta'),
-    makeSidebarRow('session-c', 'Gamma'),
-  ];
-  const elements = new Map([
-    ['messages', messages],
-    ['header-session-name', createElement({id: 'header-session-name'})],
-    ['backend-badge', createElement()],
-    ['input-model-badge', createElement()],
-    ['msg-input', createElement()],
-    ...rows.map((row) => [row.id, row]),
-  ]);
-  const h = {messages, elements, readPosts: [], pendingBootstraps: {}};
-
-  const {context} = baseSessionContext({elements});
-  context.eventCursor = 0;
-  installSessionDocumentLookups(context, elements, messages, rows);
-  context.fetch = (url, opts = {}) => {
-    if (url.endsWith('/read') && opts.method === 'POST') {
-      h.readPosts.push(url);
-      return Promise.resolve({ok: true, json: async () => ({})});
-    }
-    const boot = url.match(/\/api\/sessions\/([^/]+)\/bootstrap/);
-    if (boot) {
-      const gate = h.pendingBootstraps[boot[1]];
-      if (gate) return gate.promise;
-      return Promise.resolve({ok: true, status: 200, json: async () => BOOTSTRAP[boot[1]]});
-    }
-    return Promise.resolve({ok: true, status: 200, json: async () => ({})});
-  };
-  stubPageTimers(context);
-
-  createChatSidebarContext(context);
-  h.context = context;
-  return h;
+  return buildSwitchFlowHarness({
+    rows: [
+      makeSidebarRow('session-a', 'Alpha'),
+      makeSidebarRow('session-b', 'Beta'),
+      makeSidebarRow('session-c', 'Gamma'),
+    ],
+    scrollHeight: 100,
+    fields: {readPosts: [], pendingBootstraps: {}},
+    fetch: (h, url, opts = {}) => {
+      if (url.endsWith('/read') && opts.method === 'POST') {
+        h.readPosts.push(url);
+        return Promise.resolve({ok: true, json: async () => ({})});
+      }
+      const boot = url.match(/\/api\/sessions\/([^/]+)\/bootstrap/);
+      if (boot) {
+        const gate = h.pendingBootstraps[boot[1]];
+        if (gate) return gate.promise;
+        return Promise.resolve({ok: true, status: 200, json: async () => BOOTSTRAP[boot[1]]});
+      }
+      return Promise.resolve({ok: true, status: 200, json: async () => ({})});
+    },
+  });
 }
 
 // Park one session's bootstrap fetch so the test owns when that switch's

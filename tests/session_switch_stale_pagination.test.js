@@ -1,9 +1,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const {baseSessionContext, bootstrapPayload, createChatSidebarContext, installSessionDocumentLookups, makeSidebarRow,
-  stubPageTimers, SWITCH_TELEMETRY_URL} = require('./session_context_stub');
-const {createElement} = require('./dom_element_stub');
+const {bootstrapPayload, buildSwitchFlowHarness, makeSidebarRow, SWITCH_TELEMETRY_URL} =
+  require('./session_context_stub');
 
 const PENDING = Symbol('pending');
 
@@ -40,72 +39,47 @@ function bPage(before) {
 // request with its resolve/reject handles recorded in pendingEvents; any
 // other value is answered immediately as the page payload.
 function buildHarness(eventsHandler) {
-  const messages = createElement({id: 'messages'});
-  messages.clientHeight = 500;
-  messages.scrollHeight = 100;
-  messages.scrollTop = 0;
-  const rows = [
-    makeSidebarRow('session-a', 'Alpha'),
-    makeSidebarRow('session-b', 'Beta'),
-  ];
-  const elements = new Map([
-    ['messages', messages],
-    ['header-session-name', createElement({id: 'header-session-name'})],
-    ['backend-badge', createElement()],
-    ['input-model-badge', createElement()],
-    ['msg-input', createElement()],
-    ...rows.map((row) => [row.id, row]),
-  ]);
-  const h = {
-    messages,
-    elements,
-    fetchCalls: [],
-    pendingEvents: [],
-    errors: [],
-    preBootstrap: null,
-  };
-
-  const {context} = baseSessionContext({elements});
-  context.eventCursor = 0;
-  context.console.error = (...args) => h.errors.push(args);
-  installSessionDocumentLookups(context, elements, messages, rows);
-  context.fetch = async (url, opts = {}) => {
-    if (url === SWITCH_TELEMETRY_URL) {
-      return {ok: true, status: 200, json: async () => ({ok: true})};
-    }
-    const boot = url.match(/\/api\/sessions\/([^/]+)\/bootstrap/);
-    if (boot) {
-      // Interleaving (a) hook: the test may land the stale flight inside the
-      // bootstrap branch, before the response feeds the render microtask.
-      if (h.preBootstrap) {
-        const pre = h.preBootstrap;
-        h.preBootstrap = null;
-        pre();
+  return buildSwitchFlowHarness({
+    rows: [
+      makeSidebarRow('session-a', 'Alpha'),
+      makeSidebarRow('session-b', 'Beta'),
+    ],
+    scrollHeight: 100,
+    fields: {fetchCalls: [], pendingEvents: [], errors: [], preBootstrap: null},
+    contextTweaks: (context, h) => { context.console.error = (...args) => h.errors.push(args); },
+    fetch: (h, url, opts = {}) => {
+      if (url === SWITCH_TELEMETRY_URL) {
+        return {ok: true, status: 200, json: async () => ({ok: true})};
       }
-      return {ok: true, status: 200, json: async () => BOOTSTRAP[boot[1]]};
-    }
-    const page = url.match(/\/api\/sessions\/([^/]+)\/events\?before=(\d+)/);
-    if (page) {
-      h.fetchCalls.push(url);
-      const out = eventsHandler(page[1], Number(page[2]));
-      if (out === PENDING) {
-        const entry = {sessionId: page[1], before: Number(page[2])};
-        entry.done = new Promise((resolve, reject) => {
-          entry.resolve = resolve;
-          entry.reject = reject;
-        });
-        h.pendingEvents.push(entry);
-        return entry.done.then((payload) => ({ok: true, status: 200, json: async () => payload}));
+      const boot = url.match(/\/api\/sessions\/([^/]+)\/bootstrap/);
+      if (boot) {
+        // Interleaving (a) hook: the test may land the stale flight inside the
+        // bootstrap branch, before the response feeds the render microtask.
+        if (h.preBootstrap) {
+          const pre = h.preBootstrap;
+          h.preBootstrap = null;
+          pre();
+        }
+        return {ok: true, status: 200, json: async () => BOOTSTRAP[boot[1]]};
       }
-      return {ok: true, status: 200, json: async () => out};
-    }
-    return {ok: true, status: 200, json: async () => ({})};
-  };
-  stubPageTimers(context);
-
-  createChatSidebarContext(context);
-  h.context = context;
-  return h;
+      const page = url.match(/\/api\/sessions\/([^/]+)\/events\?before=(\d+)/);
+      if (page) {
+        h.fetchCalls.push(url);
+        const out = eventsHandler(page[1], Number(page[2]));
+        if (out === PENDING) {
+          const entry = {sessionId: page[1], before: Number(page[2])};
+          entry.done = new Promise((resolve, reject) => {
+            entry.resolve = resolve;
+            entry.reject = reject;
+          });
+          h.pendingEvents.push(entry);
+          return entry.done.then((payload) => ({ok: true, status: 200, json: async () => payload}));
+        }
+        return {ok: true, status: 200, json: async () => out};
+      }
+      return {ok: true, status: 200, json: async () => ({})};
+    },
+  });
 }
 
 const alwaysPending = () => PENDING;

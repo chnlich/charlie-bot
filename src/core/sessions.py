@@ -52,7 +52,8 @@ from src.core.ndjson import append_ndjson
 from src.core.plans import AWAITING_APPROVAL_STATE, read_plans_tolerant
 from src.core.process import cleanup_session_cgroup
 from src.core.scheduled_sessions import (
-    # re-export: src/api/cron.py imports ScheduledSessionBusyError from this module
+    # re-export: src/api/cron.py and src/api/sessions.py import
+    # ScheduledSessionBusyError from this module
     ScheduledSessionBusyError,
     ScheduledSessionStore,
 )

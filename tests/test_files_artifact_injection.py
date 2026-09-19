@@ -133,6 +133,7 @@ def test_serve_file_builds_the_1mib_chunk_response(sessions_root: Path, monkeypa
   real = files_api._ServedFileResponse
 
   class _Recording(real):
+
     def __init__(self, *args: object, **kwargs: object) -> None:
       built.append(self)
       super().__init__(*args, **kwargs)

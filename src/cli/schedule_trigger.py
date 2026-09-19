@@ -1,8 +1,7 @@
 """CLI script for master CC to schedule a delayed trigger.
 
-Called by the master Claude Code instance as a shell command. ``--session``
-is optional; the server-written CHARLIEBOT_SESSION_ID supplies it in normal master
-use (see ``resolve_session_id``).
+Called by the master Claude Code instance as a shell command (session
+identity resolves per ``resolve_session_id``).
 
   charliebot schedule-trigger \
     --max-wait 3600 \

@@ -6,15 +6,15 @@
 ``create`` builds session metadata only (no first message); with ``--group`` a
 second call assigns the group. ``send`` relays a message into the target
 session as an ``agent_message`` event (never a ``user`` event), so it neither
-mints nor revokes a takeoff authorization window. The caller session comes
-from the server-written CHARLIEBOT_SESSION_ID per the usual CLI convention
-(see ``resolve_session_id``).
+mints nor revokes a takeoff authorization window. The caller session resolves
+per ``resolve_session_id``.
 """
 
 import argparse
 import json
 
 from src.cli.common import (
+    add_session_arg,
     exit_usage_error,
     post_internal_api,
     read_required_text_file,
@@ -37,11 +37,7 @@ def _build_parser() -> argparse.ArgumentParser:
   source = send.add_mutually_exclusive_group(required=True)
   source.add_argument("--message", default=None, help="Message text")
   source.add_argument("--file", default=None, help="Read the message text from this file")
-  send.add_argument(
-      "--session",
-      required=False,
-      default=None,
-      help="Caller session id (optional; taken from the CHARLIEBOT_SESSION_ID the server writes)")
+  add_session_arg(send)
   return parser
 
 

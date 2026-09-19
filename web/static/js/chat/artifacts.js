@@ -563,10 +563,6 @@ function lookupRegisteredPlanVersion(snapshot, absPath, sessionId, sessionsRoot)
   });
 }
 
-function decidePlanCardRender(snapshot, absPath, sessionId, sessionsRoot) {
-  return lookupRegisteredPlanVersion(snapshot, absPath, sessionId, sessionsRoot) ? 'compact' : 'legacy';
-}
-
 function lookupPlanVersionState(snapshot, planId, v) {
   return _findPlanVersionRecord(snapshot, function(plan, ver) {
     return String(plan && plan.id) === String(planId) && Number(ver && ver.v) === Number(v);
@@ -967,20 +963,12 @@ function installHtmlArtifactListener() {
 installHtmlArtifactListener();
 
 const GLOBALS = {
-  resolveHtmlArtifactLink,
-  findArtifactLinkInCode,
   toggleHtmlArtifactSource,
   startHtmlArtifactResize,
   expandHtmlArtifact,
   toggleHtmlArtifactEmbed,
-  injectLinkBehavior,
-  lookupRegisteredPlanVersion,
-  decidePlanCardRender,
-  lookupPlanVersionState,
-  buildPlanCompactCardHtml,
   updatePlanCardBadges,
   openPlanFromCard,
-  _planStateLabel,
 };
 const CHAT_ONLY = {
   embedLinkedHtmlArtifacts,
@@ -989,6 +977,13 @@ const CHAT_ONLY = {
   fetchHtmlArtifact,
   htmlArtifactFetchCache,
   expandedArtifactCards,
+  resolveHtmlArtifactLink,
+  findArtifactLinkInCode,
+  injectLinkBehavior,
+  lookupRegisteredPlanVersion,
+  lookupPlanVersionState,
+  buildPlanCompactCardHtml,
+  _planStateLabel,
 };
 Chat.wire(GLOBALS, CHAT_ONLY);
 

@@ -308,11 +308,11 @@ test('resolveHtmlArtifactLink accepts raw URL strings and anchor elements', () =
   const pathHref = '/absolute_filepath/%2Ftmp%2Freport/artifacts/plot.html';
   const fullHref = 'https://example.com/absolute_filepath/%2Ftmp%2Freport/artifacts/plot.html';
 
-  const pathResult = context.resolveHtmlArtifactLink(pathHref);
+  const pathResult = context.Chat.resolveHtmlArtifactLink(pathHref);
   assert.equal(pathResult.absPath, '//tmp/report/artifacts/plot.html');
   assert.equal(pathResult.fetchUrl, '/absolute_filepath/%2Ftmp%2Freport/artifacts/plot.html');
 
-  const fullResult = context.resolveHtmlArtifactLink(fullHref);
+  const fullResult = context.Chat.resolveHtmlArtifactLink(fullHref);
   assert.equal(fullResult.absPath, '//tmp/report/artifacts/plot.html');
   assert.equal(fullResult.fetchUrl, '/absolute_filepath/%2Ftmp%2Freport/artifacts/plot.html');
 
@@ -321,12 +321,12 @@ test('resolveHtmlArtifactLink accepts raw URL strings and anchor elements', () =
       return name === 'href' ? pathHref : null;
     },
   };
-  const anchorResult = context.resolveHtmlArtifactLink(anchor);
+  const anchorResult = context.Chat.resolveHtmlArtifactLink(anchor);
   assert.equal(anchorResult.absPath, '//tmp/report/artifacts/plot.html');
 
-  assert.equal(context.resolveHtmlArtifactLink('/absolute_filepath/report/artifacts/plot.txt'), null);
-  assert.equal(context.resolveHtmlArtifactLink('/other/path/artifacts/plot.html'), null);
-  assert.equal(context.resolveHtmlArtifactLink('not a url'), null);
+  assert.equal(context.Chat.resolveHtmlArtifactLink('/absolute_filepath/report/artifacts/plot.txt'), null);
+  assert.equal(context.Chat.resolveHtmlArtifactLink('/other/path/artifacts/plot.html'), null);
+  assert.equal(context.Chat.resolveHtmlArtifactLink('not a url'), null);
 });
 
 test('embedLinkedHtmlArtifacts stamps artifact prose links and rendered card open URLs with session fragment', async () => {
@@ -357,14 +357,14 @@ test('findArtifactLinkInCode extracts artifact URLs from inline code text', () =
     return {textContent: text};
   }
 
-  const pathResult = context.findArtifactLinkInCode(code('/absolute_filepath/%2Ftmp%2Freport/artifacts/plot.html'));
+  const pathResult = context.Chat.findArtifactLinkInCode(code('/absolute_filepath/%2Ftmp%2Freport/artifacts/plot.html'));
   assert.equal(pathResult.absPath, '//tmp/report/artifacts/plot.html');
 
-  const fullResult = context.findArtifactLinkInCode(code('See https://example.com/absolute_filepath/%2Ftmp%2Freport/artifacts/plot.html here'));
+  const fullResult = context.Chat.findArtifactLinkInCode(code('See https://example.com/absolute_filepath/%2Ftmp%2Freport/artifacts/plot.html here'));
   assert.equal(fullResult.absPath, '//tmp/report/artifacts/plot.html');
 
-  assert.equal(context.findArtifactLinkInCode(code('just some code')), null);
-  assert.equal(context.findArtifactLinkInCode(code('https://example.com/absolute_filepath/report/artifacts/plot.txt')), null);
+  assert.equal(context.Chat.findArtifactLinkInCode(code('just some code')), null);
+  assert.equal(context.Chat.findArtifactLinkInCode(code('https://example.com/absolute_filepath/report/artifacts/plot.txt')), null);
 });
 
 test('embedLinkedHtmlArtifacts embeds a bare artifact path in plain prose text', async () => {

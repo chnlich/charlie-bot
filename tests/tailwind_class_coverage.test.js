@@ -267,8 +267,8 @@ test('tailwind utility classes used by rendered messages/cards are all present i
 
   // 4. Plan compact card, in both a pending and an approved-with-takeoff state.
   const artifactsCtx = loadArtifactsScript({ sessionId: 'sess-1' });
-  snippets.push(artifactsCtx.buildPlanCompactCardHtml(1, 1, 'Remove the Play CDN', 'awaiting approval', '/abs/plan_01.html'));
-  snippets.push(artifactsCtx.buildPlanCompactCardHtml(2, 3, 'Follow-up plan', 'approved · v3', '/abs/plan_02.html'));
+  snippets.push(artifactsCtx.Chat.buildPlanCompactCardHtml(1, 1, 'Remove the Play CDN', 'awaiting approval', '/abs/plan_01.html'));
+  snippets.push(artifactsCtx.Chat.buildPlanCompactCardHtml(2, 3, 'Follow-up plan', 'approved · v3', '/abs/plan_02.html'));
 
   const tokens = extractClassTokens(snippets);
   assert.ok(tokens.size > 50, `fixture should exercise a healthy number of distinct class tokens (got ${tokens.size})`);

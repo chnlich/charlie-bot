@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import wave
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -143,6 +142,10 @@ def _persist_voice_dump(cfg: CharlieBotConfig, session_id: str, audio_bytes: byt
 
 
 def _write_wav(path: Path, pcm_bytes: bytes) -> None:
+  # wave rides the write like the transcriber stack rides its provisioning: the
+  # M99 server import floor carries no audio-container stack.
+  import wave
+
   from src.agents.transcriber import SAMPLE_RATE
 
   with wave.open(str(path), "wb") as wav:

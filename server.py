@@ -98,8 +98,7 @@ _TRANSPORT_GZIP_SKIP_MEDIA_PREFIXES = (
     "application/vnd.openxmlformats-officedocument",
     "application/vnd.ms-powerpoint",
     "application/msword",
-    "font/woff",
-    "font/woff2",
+    "font/woff",  # prefix match also covers font/woff2
     "application/font-woff",
 )
 

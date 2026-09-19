@@ -449,8 +449,7 @@ async def all_sessions_status(
         sidebar_state.HAS_PENDING_PLAN_APPROVAL: entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL],
     }
   # The sidebar's 3 s poll is this host's second-busiest route; the gzip form
-  # rides the body-keyed memo (_switch_payload_response) for the message-page
-  # cost reason in get_session_events_page.
+  # rides the body-keyed memo (_switch_payload_response).
   return await _switch_payload_response(request, result)
 
 
@@ -746,7 +745,6 @@ async def get_session_view(
   view = await build_session_view_data(session_id, session_mgr, thread_rows)
   trigger_mgr = trigger_manager()
   triggers = await trigger_mgr.list_triggers(session_id)
-  # FastJsonResponse for the message-page cost reason in get_session_events_page.
   # The workers tab paints one CSS-truncated description line per card and its
   # full-text modal fetches the thread row on click (the workers-panel list's
   # truncation contract), so the view ships the same prefixed rows — the
@@ -763,8 +761,7 @@ async def get_session_view(
       "has_more": view.has_more,
   }
   payload.update(_active_backend_payload(meta, cfg))
-  # FastJsonResponse for the message-page cost reason in get_session_events_page;
-  # the switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
+  # The switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
   return await _switch_payload_response(request, payload)
 
 
@@ -778,8 +775,7 @@ async def get_session_bootstrap(
 ) -> Response:
   """Return the minimal data needed to make one chat session usable."""
   bootstrap = await build_session_bootstrap_data(session_id, session_mgr)
-  # FastJsonResponse for the message-page cost reason in get_session_events_page;
-  # the switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
+  # The switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
   return await _switch_payload_response(request, _bootstrap_payload(bootstrap, cfg))
 
 
@@ -814,7 +810,6 @@ async def get_session_usage(
       "usage": usage,
   }
   payload.update(_active_backend_payload(meta, cfg))
-  # FastJsonResponse for the message-page cost reason in get_session_events_page.
   return FastJsonResponse(payload)
 
 
@@ -1230,6 +1225,5 @@ async def list_plans(
   Unknown session → 404. Known session → always 200 with ``{"plans": [...], "errors": [...]}``;
   a corrupt registry produces 200 with empty plans and one error entry, never 5xx.
   """
-  # The plan panel polls this route; FastJsonResponse for the message-page cost
-  # reason in get_session_events_page.
+  # The plan panel polls this route.
   return FastJsonResponse(await plan_mgr.list_plans(session_id))

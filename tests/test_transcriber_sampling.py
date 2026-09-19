@@ -77,18 +77,23 @@ def _session_with_pcm(samples: np.ndarray) -> transcriber.SimulatedStreamingTran
   return session
 
 
+def _install_decode_capture(monkeypatch: pytest.MonkeyPatch, return_text: str) -> list[np.ndarray]:
+  captured: list[np.ndarray] = []
+
+  def fake_decode(bundle: transcriber._SpeechModelBundle, samples: np.ndarray) -> str:
+    captured.append(samples.copy())
+    return return_text
+
+  monkeypatch.setattr(transcriber, "_decode_samples", fake_decode)
+  return captured
+
+
 def test_closed_vad_segments_decode_padded_raw_pcm_without_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
   source = np.arange(20_000, dtype=np.int16)
   session = _session_with_pcm(source)
   session._decoded_region_end = 5_000
   session._vad = _ClosedVad(_ClosedSegment(start=10_000, length=1_000))
-  captured: list[np.ndarray] = []
-
-  def fake_decode(bundle: transcriber._SpeechModelBundle, samples: np.ndarray) -> str:
-    captured.append(samples.copy())
-    return "decoded"
-
-  monkeypatch.setattr(transcriber, "_decode_samples", fake_decode)
+  captured = _install_decode_capture(monkeypatch, "decoded")
 
   assert session._drain_closed_segments()
 
@@ -105,13 +110,7 @@ def test_live_vad_segment_decodes_padded_raw_pcm_without_advancing_frozen_bounda
   session = _session_with_pcm(source)
   session._decoded_region_end = 5_000
   session._vad = _LiveVad(_LiveSegment(start=10_000))
-  captured: list[np.ndarray] = []
-
-  def fake_decode(bundle: transcriber._SpeechModelBundle, samples: np.ndarray) -> str:
-    captured.append(samples.copy())
-    return "live"
-
-  monkeypatch.setattr(transcriber, "_decode_samples", fake_decode)
+  captured = _install_decode_capture(monkeypatch, "live")
 
   assert session._decode_live_segment_if_due() == "live"
 
@@ -127,13 +126,7 @@ def test_closed_segment_after_three_second_pause_decodes_full_pause(monkeypatch:
   session = _session_with_pcm(source)
   session._decoded_region_end = 10_000
   session._vad = _ClosedVad(_ClosedSegment(start=58_000, length=2_000))
-  captured: list[np.ndarray] = []
-
-  def fake_decode(bundle: transcriber._SpeechModelBundle, samples: np.ndarray) -> str:
-    captured.append(samples.copy())
-    return "decoded"
-
-  monkeypatch.setattr(transcriber, "_decode_samples", fake_decode)
+  captured = _install_decode_capture(monkeypatch, "decoded")
 
   assert session._drain_closed_segments()
 
@@ -148,13 +141,7 @@ def test_closed_segment_after_seven_second_pause_decodes_only_last_five_seconds(
   session = _session_with_pcm(source)
   session._decoded_region_end = 10_000
   session._vad = _ClosedVad(_ClosedSegment(start=122_000, length=2_000))
-  captured: list[np.ndarray] = []
-
-  def fake_decode(bundle: transcriber._SpeechModelBundle, samples: np.ndarray) -> str:
-    captured.append(samples.copy())
-    return "decoded"
-
-  monkeypatch.setattr(transcriber, "_decode_samples", fake_decode)
+  captured = _install_decode_capture(monkeypatch, "decoded")
 
   assert session._drain_closed_segments()
 
@@ -168,13 +155,7 @@ def test_live_segment_decode_follows_same_left_edge_rule(monkeypatch: pytest.Mon
   session = _session_with_pcm(source)
   session._decoded_region_end = 1_000
   session._vad = _LiveVad(_LiveSegment(start=85_000))
-  captured: list[np.ndarray] = []
-
-  def fake_decode(bundle: transcriber._SpeechModelBundle, samples: np.ndarray) -> str:
-    captured.append(samples.copy())
-    return "live"
-
-  monkeypatch.setattr(transcriber, "_decode_samples", fake_decode)
+  captured = _install_decode_capture(monkeypatch, "live")
 
   assert session._decode_live_segment_if_due() == "live"
 

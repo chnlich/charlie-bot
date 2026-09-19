@@ -235,13 +235,14 @@ Known-alive symbols:
   `fake_run_tmux` factory docstring states that drop-in contract, and `format` mirrors the
   stdlib `BaseHTTPRequestHandler.log_message(self, format, *args)` signature). Vulture flags
   each at 100% confidence as an unused variable.
-- `bundle` (`tests/test_transcriber_sampling.py`, first parameter of the two
-  `fake_decode` stubs installed for `transcriber._decode_samples` via `monkeypatch.setattr`)
+- `bundle` (`tests/test_transcriber_sampling.py`, first parameter of the one
+  `fake_decode` stub inside `_install_decode_capture`, the helper the decode tests
+  install for `transcriber._decode_samples` via `monkeypatch.setattr`)
   — the real `_decode_samples` (src/agents/transcriber.py) is called with two positional
   arguments from `_drain_closed_segments` and `_decode_live_segment_if_due`
   (the two decode call sites in the same file), so `bundle` must stay to receive `self._bundle`;
   deleting the parameter makes the stub raise TypeError on the first decode. Vulture flags
-  it at 100% confidence as an unused variable at both sites. Same class as the `art`/`t_mgr`
+  it at 100% confidence as an unused variable. Same class as the `art`/`t_mgr`
   stub-parameter entries above.
 - `interrupt_reason` (`tests/test_worktree_quarantine.py`, keyword parameter of the
   `fake_resume_worker` stub installed for `spawner.resume_worker` via `monkeypatch.setattr`)

@@ -683,6 +683,10 @@ class TaskTreeManager:
         await self._authorize_agent_creation(caller, profile, task_parent_id, parent_meta)
       if task_parent_id is not None:
         parent_meta = await self.load_meta(task_parent_id)
+        if parent_meta is not None and parent_meta.profile is None:
+          # A legacy session becomes a manager node the first time it parents
+          # a task (the sidebar's hover "+" lands here).
+          parent_meta = await self._adopt_legacy_session_locked(task_parent_id)
         self._require_task(parent_meta, task_parent_id)
         assert parent_meta is not None
         if parent_meta.profile != "manager":
@@ -718,6 +722,37 @@ class TaskTreeManager:
     # request (returned above) publishes nothing and signals nothing.
     await self.events.notify_tree_changed(task_id, ET.TASK_CREATED)
     return fresh
+
+  async def adopt_legacy_session(self, session_id: str) -> SessionMetadata:
+    """A legacy session (profile None) becomes a manager node the first time it
+    is asked to parent task work: a delegation, an improve loop, or a child
+    create naming it as the parent. Only profile and schema_version change, the
+    two fields Promote writes; its history threads stay on the thread path. A
+    node that already carries a profile is returned unchanged.
+    """
+    async with self.control_lock:
+      return await self._adopt_legacy_session_locked(session_id)
+
+  async def _adopt_legacy_session_locked(self, session_id: str) -> SessionMetadata:
+    meta = await self.load_meta(session_id)
+    if meta is None:
+      raise TaskNotFoundError(f"session {session_id} not found")
+    if meta.profile is not None:
+      return meta
+    meta.profile = "manager"
+    meta.schema_version = 2
+    await self._save_meta(meta)
+    await self.events.notify_tree_changed(session_id, "task_updated")
+    return meta
+
+  async def _default_node_name(self, task: TaskSpec | None, profile: str) -> str:
+    """A node created without a name takes the goal's first line when there is
+    one; otherwise the legacy session counter name ("Session N"), so the
+    sidebar's one-click create names a task node the way it names a session.
+    """
+    if task is not None and task.goal.strip():
+      return default_task_name(task, profile)
+    return await self._sessions._next_session_name()
 
   async def _authorize_agent_creation(
       self,
@@ -771,7 +806,7 @@ class TaskTreeManager:
     temp_dir = sessions_dir / f".task-{task_id}-{os.getpid()}-{uuid4_hex()}.tmp"
     meta = SessionMetadata(
         id=task_id,
-        name=name or default_task_name(task, profile),
+        name=name or await self._default_node_name(task, profile),
         schema_version=2,
         profile=profile,  # type: ignore[arg-type]
         task=task,

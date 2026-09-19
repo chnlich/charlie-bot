@@ -722,3 +722,32 @@ async def test_launch_and_settle_follows_a_live_process_without_relaunching(
     assert observation.withheld is None
     assert observation.outcome == "success"
     assert builds == []  # followed, never relaunched
+
+
+@pytest.mark.asyncio
+async def test_improve_on_a_legacy_session_adopts_it_and_starts_the_sequence(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    """A legacy session with a take-off in its own chat starts the improve
+    loop through the real route: the session becomes a manager node and the
+    loop's worker child hangs under it."""
+    from datetime import UTC, datetime
+
+    from src.core.models import CreateSessionRequest
+    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+    # The legacy gate step resolves the backend through the config owner.
+    from src.api import internal as internal_api
+    monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
+    legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"))
+    await session_mgr.save_chat_event(legacy.id, {
+        "id": "user-takeoff", "type": ET.USER, "content": "Take off. Improve it.", "actor": "user",
+        "timestamp": datetime.now(UTC).isoformat()})
+    _worker_backends(monkeypatch, ["iter one"])
+
+    body, child_id = await _start_loop(
+        cfg, session_mgr, tree, legacy, monkeypatch, payload_overrides={"iterations": 1})
+
+    adopted = await session_mgr.get_session(legacy.id)
+    assert adopted is not None and adopted.profile == "manager" and adopted.schema_version == 2
+    child = await tree.load_meta(child_id)
+    assert child is not None and child.profile == "worker" and child.task_parent_id == legacy.id
+    assert body["session_id"] == legacy.id

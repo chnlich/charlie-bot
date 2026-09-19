@@ -300,7 +300,8 @@ async def test_verify_exemption_on_the_v2_route_and_launch(
 @pytest.mark.asyncio
 async def test_v1_delegate_without_takeoff_stays_blocked(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
-    """The v1 thread path keeps its session-local gate: no take-off, no spawn."""
+    """A legacy session keeps its session-local gate: no take-off, no spawn,
+    and the session is not adopted as a task node."""
     cfg, session_mgr, tree, root, child = await make_tree(tmp_path, monkeypatch)
     builds = install_backends(monkeypatch, [], "src.agents.worker.build_backend")
     from src.core.models import CreateSessionRequest
@@ -313,3 +314,94 @@ async def test_v1_delegate_without_takeoff_stays_blocked(
     assert resp.status_code == 403
     assert "no active authorization" in resp.json()["detail"]
     assert builds == []
+    stays_legacy = await session_mgr.get_session(legacy.id)
+    assert stays_legacy is not None and stays_legacy.profile is None
+    assert stays_legacy.schema_version == 1
+
+
+def _legacy_user_takeoff(content: str = "Take off. Ship it.") -> dict:
+    return {"id": "user-takeoff", "type": ET.USER, "content": content, "actor": "user",
+            "timestamp": datetime.now(UTC).isoformat()}
+
+
+@pytest.mark.asyncio
+async def test_legacy_session_is_adopted_as_manager_on_first_delegation(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    """A legacy session whose own chat carries a take-off delegates through the
+    real route: it becomes a manager node (profile and schema_version change,
+    nothing else), the worker leaf hangs under it with one launched Run, and
+    the reply carries the task-tree shape."""
+    cfg, session_mgr, tree, _root, _child = await make_tree(tmp_path, monkeypatch)
+    builds = install_backends(
+        monkeypatch, [SpawningScriptedBackend([result_event("leaf done")])],
+        "src.agents.worker.build_backend")
+    from src.core.models import CreateSessionRequest
+    legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"))
+    await session_mgr.save_chat_event(legacy.id, _legacy_user_takeoff())
+    before = (await session_mgr.get_session(legacy.id)).model_dump(exclude={"updated_at"})
+
+    from tests.test_task_execution import make_api_client
+    with make_api_client(cfg, session_mgr, tree) as client:
+        first = client.post(
+            "/api/internal/delegate", json=delegate_payload(legacy.id, repo), headers=OPERATOR)
+        assert first.status_code == 200, first.text
+        body = first.json()
+        assert body["parent_session_id"] == legacy.id
+        leaf_id, run_id = body["session_id"], body["run_id"]
+        assert body["thread_id"] == run_id
+
+        adopted = await session_mgr.get_session(legacy.id)
+        assert adopted is not None
+        after = adopted.model_dump(exclude={"updated_at"})
+        assert after["profile"] == "manager" and after["schema_version"] == 2
+        assert {k for k in before if before[k] != after[k]} == {"profile", "schema_version"}
+
+        leaf = await tree.load_meta(leaf_id)
+        assert leaf is not None and leaf.profile == "worker" and leaf.task_parent_id == legacy.id
+        assert leaf.task is not None and leaf.task.task_type == "quick-edit"
+        assert [r.id for r in tree.runs.list_run_records_sync(leaf_id)] == [run_id]
+
+        deadline = asyncio.get_event_loop().time() + 15
+        while asyncio.get_event_loop().time() < deadline:
+            if tree.runs.terminal_outcome(tree.runs.load_events_sync(leaf_id), run_id) is not None:
+                break
+            await asyncio.sleep(0.05)
+        else:
+            pytest.fail("the delegated leaf run never reached a terminal fact")
+    assert len(builds) == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_verify_delegation_adopts_the_session_and_records_the_task_type(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    """A read-only verify delegation from a legacy session needs no take-off,
+    adopts the session as a manager node, and records the verify task type on
+    the repo-less leaf."""
+    cfg, session_mgr, tree, _root, _child = await make_tree(tmp_path, monkeypatch)
+    builds = install_backends(
+        monkeypatch, [SpawningScriptedBackend([result_event("verdict: yes")])],
+        "src.agents.worker.build_backend")
+    from src.core.models import CreateSessionRequest
+    legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"))
+
+    from tests.test_task_execution import make_api_client
+    with make_api_client(cfg, session_mgr, tree) as client:
+        verify = client.post(
+            "/api/internal/delegate", json=delegate_payload(legacy.id, repo, task_type="verify"),
+            headers=OPERATOR)
+        assert verify.status_code == 200, verify.text
+        leaf_id, run_id = verify.json()["session_id"], verify.json()["run_id"]
+        adopted = await session_mgr.get_session(legacy.id)
+        assert adopted is not None and adopted.profile == "manager" and adopted.schema_version == 2
+        leaf = await tree.load_meta(leaf_id)
+        assert leaf is not None and leaf.task is not None
+        assert leaf.task.task_type == "verify" and leaf.task.repo_path is None
+
+        deadline = asyncio.get_event_loop().time() + 15
+        while asyncio.get_event_loop().time() < deadline:
+            if tree.runs.terminal_outcome(tree.runs.load_events_sync(leaf_id), run_id) is not None:
+                break
+            await asyncio.sleep(0.05)
+        else:
+            pytest.fail("the verify run never launched")
+    assert len(builds) == 1

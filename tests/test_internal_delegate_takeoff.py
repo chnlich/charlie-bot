@@ -11,7 +11,6 @@ from conftest import (
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
     FakeSessionManager,
-    capture_create_logged_task,
     delegate_invocation,
     scheduled_trigger_event,
     user_event,
@@ -25,9 +24,7 @@ from src.core.config import CharlieBotConfig
 from src.core.models import (
     DelegateRequest,
     SessionMetadata,
-    SpawnRequest,
     TaskType,
-    ThreadMetadata,
 )
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
 
@@ -100,46 +97,6 @@ def _build_request(
       repo_path=repo_path,
       task_type=task_type,
   )
-
-
-def _patch_delegate_spawn_rig(
-    monkeypatch: pytest.MonkeyPatch,
-    req: DelegateRequest,
-    session_mgr: Any,
-    captured: dict[str, Any],
-) -> None:
-  """Install the resolve/spawn/create_logged_task/get_config fakes shared by the delegate_task
-  flow tests. The resolve fake is awaited directly, so its body asserts the session and requested
-  backend at call time. The spawn fake is never awaited — create_logged_task's capture stub closes
-  the coroutine — so the capture (not this body) is what pins its bound arguments for assertions."""
-
-  async def fake_resolve_requested_subagent_backend_model(
-      session_id: str,
-      cfg: Any,
-      mgr: Any,
-      requested_backend: str | None = None,
-  ) -> tuple[str, str]:
-    assert session_id == req.session_id
-    assert mgr is session_mgr
-    assert requested_backend == "codex-o3"
-    return "codex-o3", "o3"
-
-  async def fake_spawn_worker(
-      session_id: str,
-      description: str,
-      thread_id: str,
-      cfg: Any,
-      mgr: Any,
-      t_mgr: Any,
-      request: SpawnRequest | None = None,
-  ) -> None:
-    return None
-
-  monkeypatch.setattr(
-      internal, "resolve_requested_subagent_backend_model", fake_resolve_requested_subagent_backend_model)
-  monkeypatch.setattr(internal, "spawn_worker", fake_spawn_worker)
-  monkeypatch.setattr(internal, "create_logged_task", capture_create_logged_task(captured))
-  monkeypatch.setattr(internal, "get_config", lambda: object())
 
 
 def test_takeoff_gate_blocks_takeoff_followed_by_ordinary_user_message() -> None:
@@ -608,7 +565,6 @@ async def test_delegate_task_returns_403_when_takeoff_gate_blocks(monkeypatch: p
   req = _build_request()
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id=req.session_id, name="Test")
-  thread_mgr = AsyncMock()
 
   def fake_takeoff_gate(session_id: str, mgr: Any) -> None:
     assert session_id == req.session_id
@@ -618,11 +574,10 @@ async def test_delegate_task_returns_403_when_takeoff_gate_blocks(monkeypatch: p
   monkeypatch.setattr(internal, "check_takeoff_gate", fake_takeoff_gate)
 
   with pytest.raises(HTTPException) as exc_info:
-    await internal.delegate_task(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
+    await internal.delegate_task(req, session_mgr=session_mgr)
 
   assert exc_info.value.status_code == 403
   assert exc_info.value.detail == "blocked"
-  thread_mgr.create_thread.assert_not_awaited()
   session_mgr.persist_and_broadcast.assert_not_awaited()
 
 
@@ -631,14 +586,12 @@ async def test_delegate_task_returns_403_when_takeoff_gate_blocks(monkeypatch: p
 async def test_delegate_task_repo_task_types_block_without_takeoff(task_type: TaskType) -> None:
   req = _build_request(task_type=task_type)
   session_mgr = FakeSessionManager([{"type": ET.USER, "content": "please proceed"}])
-  thread_mgr = AsyncMock()
 
   with pytest.raises(HTTPException) as exc_info:
-    await internal.delegate_task(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
+    await internal.delegate_task(req, session_mgr=session_mgr)
 
   assert exc_info.value.status_code == 403
   assert "no active authorization" in exc_info.value.detail
-  thread_mgr.create_thread.assert_not_awaited()
   session_mgr.persist_and_broadcast.assert_not_awaited()
 
 
@@ -652,10 +605,9 @@ async def test_improve_stays_blocked_without_takeoff() -> None:
       goal="Improve this",
   )
   session_mgr = FakeSessionManager([{"type": ET.USER, "content": "please proceed"}])
-  thread_mgr = AsyncMock()
 
   with pytest.raises(HTTPException) as exc_info:
-    await internal.start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
+    await internal.start_improve_loop(req, session_mgr=session_mgr)
 
   assert exc_info.value.status_code == 403
   assert "no active authorization" in exc_info.value.detail
@@ -714,104 +666,16 @@ async def test_improve_uses_the_same_pre_takeoff_gate(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
-async def test_delegate_task_verify_skips_takeoff_gate_and_spawns_repoless(monkeypatch: pytest.MonkeyPatch) -> None:
-  req = _build_request(task_type=TaskType.VERIFY, repo_path=None, base_branch=None)
-  session_mgr = FakeSessionManager([{"type": ET.USER, "content": "please proceed"}])
-  thread_mgr = AsyncMock()
-  thread_mgr.create_thread.return_value = ThreadMetadata(
-      id="thread-id",
-      session_id=req.session_id,
-      description=req.description,
-  )
-  captured: dict[str, Any] = {}
-
-  def fail_if_gate_runs(session_id: str) -> list[dict[str, Any]]:
-    raise AssertionError(f"takeoff gate should not run for verify: {session_id}")
-
-  session_mgr.load_chat_events_sync = fail_if_gate_runs  # type: ignore[method-assign]
-  _patch_delegate_spawn_rig(monkeypatch, req, session_mgr, captured)
-
-  result = await internal.delegate_task(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
-
-  assert result == {"thread_id": "thread-id", "description": req.description}
-  assert thread_mgr.create_thread.call_args.kwargs["require_review"] is False
-  assert captured["request"] == SpawnRequest(
-      repo_path=None,
-      base_branch=None,
-      context=req.context,
-      resolved_backend="codex-o3",
-      resolved_model="o3",
-      task_type=TaskType.VERIFY,
-  )
-  session_mgr.persist_and_broadcast.assert_awaited_once()
-  task_event = session_mgr.persist_and_broadcast.await_args.args[1]
-  assert task_event["type"] == ET.TASK_DELEGATED
-  assert task_event["thread_id"] == "thread-id"
-  assert task_event["description"] == req.description
-  assert task_event["backend"] == "codex-o3"
-  assert task_event["model"] == "o3"
-  assert task_event["delegate_invocation"] == delegate_invocation(task_type="verify", repo_path=None, base_branch=None)
-
-
-@pytest.mark.asyncio
 async def test_delegate_task_verify_rejects_repo_path() -> None:
   req = _build_request(task_type=TaskType.VERIFY, repo_path="/tmp/repo", base_branch=None)
   session_mgr = AsyncMock()
-  thread_mgr = AsyncMock()
 
   with pytest.raises(HTTPException) as exc_info:
-    await internal.delegate_task(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
+    await internal.delegate_task(req, session_mgr=session_mgr)
 
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == "verify delegations are repo-less; omit repo_path"
   session_mgr.get_session.assert_not_awaited()
-  thread_mgr.create_thread.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_delegate_task_does_not_pass_takeoff_gate_to_spawn_worker(monkeypatch: pytest.MonkeyPatch) -> None:
-  req = _build_request()
-  session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = SessionMetadata(id=req.session_id, name="Test")
-  thread_mgr = AsyncMock()
-  thread_mgr.create_thread.return_value = ThreadMetadata(
-      id="thread-id",
-      session_id=req.session_id,
-      description=req.description,
-  )
-
-  captured: dict[str, Any] = {}
-
-  def fake_takeoff_gate(session_id: str, mgr: Any) -> None:
-    assert session_id == req.session_id
-    assert mgr is session_mgr
-
-  monkeypatch.setattr(internal, "check_takeoff_gate", fake_takeoff_gate)
-  _patch_delegate_spawn_rig(monkeypatch, req, session_mgr, captured)
-
-  result = await internal.delegate_task(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
-
-  assert result == {"thread_id": "thread-id", "description": req.description}
-  assert captured["session_id"] == req.session_id
-  assert captured["description"] == req.description
-  assert captured["thread_id"] == "thread-id"
-  assert captured["request"] == SpawnRequest(
-      repo_path=req.repo_path,
-      base_branch=req.base_branch,
-      context=req.context,
-      resolved_backend="codex-o3",
-      resolved_model="o3",
-      task_type=TaskType.IMPLEMENT,
-  )
-  assert not hasattr(captured["request"], "require_takeoff")
-  session_mgr.persist_and_broadcast.assert_awaited_once()
-  task_event = session_mgr.persist_and_broadcast.await_args.args[1]
-  assert task_event["type"] == ET.TASK_DELEGATED
-  assert task_event["thread_id"] == "thread-id"
-  assert task_event["description"] == req.description
-  assert task_event["backend"] == "codex-o3"
-  assert task_event["model"] == "o3"
-  assert task_event["delegate_invocation"] == delegate_invocation()
 
 
 @pytest.mark.asyncio
@@ -819,7 +683,6 @@ async def test_delegate_task_returns_400_for_invalid_backend(monkeypatch: pytest
   req = _build_request()
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id=req.session_id, name="Test")
-  thread_mgr = AsyncMock()
 
   def fake_takeoff_gate(session_id: str, mgr: Any) -> None:
     assert session_id == req.session_id
@@ -834,11 +697,10 @@ async def test_delegate_task_returns_400_for_invalid_backend(monkeypatch: pytest
   monkeypatch.setattr(internal, "get_config", lambda: object())
 
   with pytest.raises(HTTPException) as exc_info:
-    await internal.delegate_task(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
+    await internal.delegate_task(req, session_mgr=session_mgr)
 
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == "requested backend 'codex-o3' is not in backends.options"
-  thread_mgr.create_thread.assert_not_awaited()
 
 
 # --- verify default backend via backends.preference ---

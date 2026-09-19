@@ -11,7 +11,7 @@ from conftest import OPUS_BACKEND_ID, make_home_config
 
 from src.core import event_types as ET
 from src.core.control_events import sha256_hex, stable_task_id
-from src.core.models import EventRef, PatchSessionTaskRequest, RunRecord, TaskSpec
+from src.core.models import CreateSessionRequest, EventRef, PatchSessionTaskRequest, RunRecord, TaskSpec
 from src.core.run_token import CallerIdentity
 from src.core.runs import read_pid_stat
 from src.core.sessions import SessionManager
@@ -113,20 +113,61 @@ async def test_flat_paths_survive_reparenting(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_history_copying_never_becomes_a_task_parent(tmp_path: Path) -> None:
   _, session_mgr, mgr = build_env(tmp_path)
-  legacy = await session_mgr.create_session(
-      __import__("src.core.models", fromlist=["CreateSessionRequest"]).CreateSessionRequest(name="legacy"),
-      backend=OPUS_BACKEND_ID)
+  legacy = await session_mgr.create_session(CreateSessionRequest(name="legacy"), backend=OPUS_BACKEND_ID)
   legacy.parent_session_id = "some-old-session"
   legacy.origin_ref = EventRef(session_id="some-old-session", event_id=None)
   await session_mgr.save_metadata(legacy)
 
   index = await mgr._get_index()
-  assert legacy.id not in index.children.get(None, [])  # not a task-tree node at all
-  with pytest.raises(TaskInvalidError, match="not a task-tree node"):
-    await create_task(mgr, parent=legacy.id, request_id="child-of-legacy")
-  # The copy source never turns into a task parent by inference.
+  assert legacy.id not in index.children.get(None, [])  # not a task-tree node yet
+  # The first child create adopts the legacy session as a manager node; the
+  # history-copy fields never turn into tree parentage.
+  child = await create_task(mgr, parent=legacy.id, request_id="child-of-legacy")
   fresh = await session_mgr.get_session(legacy.id)
   assert fresh is not None and fresh.task_parent_id is None
+  assert fresh.profile == "manager" and fresh.schema_version == 2
+  assert child.task_parent_id == legacy.id
+  index = await mgr._get_index()
+  assert legacy.id in index.children.get(None, [])
+  assert child.id in mgr._children_of(index, legacy.id)
+
+
+@pytest.mark.asyncio
+async def test_adopt_legacy_session_writes_profile_and_schema_version_once(tmp_path: Path) -> None:
+  _, session_mgr, mgr = build_env(tmp_path)
+  legacy = await session_mgr.create_session(CreateSessionRequest(name="legacy"), backend=OPUS_BACKEND_ID)
+  before = legacy.model_dump(exclude={"updated_at"})
+
+  adopted = await mgr.adopt_legacy_session(legacy.id)
+
+  assert adopted.profile == "manager" and adopted.schema_version == 2
+  after = adopted.model_dump(exclude={"updated_at"})
+  assert {k for k in before if before[k] != after[k]} == {"profile", "schema_version"}
+  stored = await session_mgr.get_session(legacy.id)
+  assert stored is not None and stored.profile == "manager" and stored.schema_version == 2
+  # A second call is a read: nothing is rewritten.
+  again = await mgr.adopt_legacy_session(legacy.id)
+  assert again.updated_at == stored.updated_at
+  # A node that already carries a profile keeps it.
+  worker = await create_task(mgr, parent=adopted.id, request_id="w", profile="worker", name="W")
+  assert (await mgr.adopt_legacy_session(worker.id)).profile == "worker"
+  with pytest.raises(TaskNotFoundError):
+    await mgr.adopt_legacy_session("missing")
+
+
+@pytest.mark.asyncio
+async def test_unnamed_create_without_a_goal_takes_the_session_counter_name(tmp_path: Path) -> None:
+  _, _session_mgr, mgr = build_env(tmp_path)
+  first = await create_task(mgr, parent=None, request_id="r1", task=TaskSpec(goal=""))
+  second = await create_task(mgr, parent=None, request_id="r2", task=None)
+  with_goal = await create_task(mgr, parent=first.id, request_id="w", profile="worker",
+                                task=TaskSpec(goal="Fix the login\nsecond line"))
+  named = await create_task(mgr, parent=None, request_id="r3", name="Given", task=None)
+
+  assert first.name.startswith("Session ") and second.name.startswith("Session ")
+  assert first.name != second.name
+  assert with_goal.name == "Fix the login"
+  assert named.name == "Given"
 
 
 # ---------------------------------------------------------------------------

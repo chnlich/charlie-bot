@@ -11,9 +11,12 @@ Known-alive symbols:
   `src/agents/backends/tui.py`) — reached by string: `TUI_KILL_TMUX_SESSION_PATCH_TARGET`
   (`tests/conftest.py`) names the `src.agents.backends.tui` path, so the re-export is the
   path the monkeypatch resolves through.
-- `ScheduledSessionBusyError` — documented re-export (src/api/cron.py imports it from
-  src/core/sessions), kept deliberately. Used in-file by `_elone_scheduled_successor`'s
-  raise, so the import line carries no `# noqa`.
+- `ScheduledSessionBusyError` (defined in `src/core/scheduled_sessions.py`) — the import in
+  `src/core/sessions.py` is a documented re-export (`src/api/cron.py` and `src/api/sessions.py`
+  import it from `src.core.sessions`) and is used in-file by `_elone_scheduled_successor`'s
+  raise, so it carries no `# noqa`. Both API-side imports are plain used imports: their in-file
+  uses are the `except ScheduledSessionBusyError` clauses in `_ensure_backend_update_session`
+  (`src/api/cron.py`) and the elone route (`src/api/sessions.py`).
 - `_no_master_wake` — pytest fixture in `tests/test_spawner_finalize_liveness_gate.py`, reached by
   string via `@pytest.mark.usefixtures("_no_master_wake")`; invisible to static dead-code tools.
 - `_clean_ceiling_env` — pytest fixture in `tests/test_session_usage.py`, reached by string via

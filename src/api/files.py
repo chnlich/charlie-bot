@@ -145,7 +145,7 @@ def _annotated_diff_page_gzip(base_path: Path, page_path: Path, session_id: str)
   The route ships these bytes with Content-Encoding: gzip set upstream, which
   is what makes the server's gzip middleware skip its own whole-body deflate —
   level 1 over the multi-MB worst compare view is the per-click cost the memo
-  removes. mtime=0 keeps the compressed bytes deterministic across processes.
+  removes.
   """
   key = _annotate_key(base_path, page_path)
   hit = _annotate_gzip_memo.get(key)
@@ -179,8 +179,7 @@ def _injected_artifact_page_gzip(fs_path: Path, session_id: str) -> bytes:
 
   The route ships these bytes with Content-Encoding: gzip set upstream, which
   is what makes the server's gzip middleware skip its own whole-body deflate —
-  level 1 over the ~1 MB worst page measures ~27 ms per view. mtime=0 keeps
-  the compressed bytes deterministic across processes.
+  level 1 over the ~1 MB worst page measures ~27 ms per view.
   """
   key: _CleanViewKey = (str(fs_path), *_file_signature(fs_path))
   hit = _clean_view_gzip_memo.get(key)
@@ -417,7 +416,6 @@ def _listing_page_gzip(key: _ListingKey, listing: str) -> bytes:
 
   The route ships these bytes with Content-Encoding: gzip set upstream, which
   is what makes the server's gzip middleware skip its own whole-body deflate.
-  mtime=0 keeps the compressed bytes deterministic across processes.
   """
   hit = _listing_gzip_memo.get(key)
   if hit is not None:

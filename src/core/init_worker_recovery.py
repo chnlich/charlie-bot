@@ -469,7 +469,7 @@ def _parse_started_at(meta: dict) -> datetime | None:
 
 
 def _silence_report_text(thread_id: str, reason: str) -> str:
-  """The one-per-boot "alive but silent" report, shared by its two emit paths."""
+  """The one-per-boot "alive but silent" report, shared by its emit paths."""
   return (
       f"Worker thread {thread_id[:8]} is still alive but produced no output for over "
       f"{NO_OUTPUT_REPORT_THRESHOLD // 3600}h ({reason}). Suspected hung; "

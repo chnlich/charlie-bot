@@ -5,7 +5,7 @@ let slashSidebarVisible = false;
 let slashSidebarCommands = [];
 
 // One class chain for the param form's select, textarea, and plain inputs keeps
-// the three control variants painting alike; the textarea site appends
+// the control variants painting alike; the textarea site appends
 // ' resize-y' on top. Split only at token boundaries: Tailwind's content scan
 // only generates classes it sees as complete tokens, so no literal may break
 // inside a class name.

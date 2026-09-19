@@ -52,10 +52,10 @@
 <body class="dark bg-slate-900 text-slate-100 overflow-hidden" style="height:var(--app-h,100dvh)">
   {# Shared chrome literals: form_label_class for the slash-command/context
      sidebar labels and the scheduled-task modal labels below, close_btn_class
-     for the six close_button calls below, cron_field_class for the seven
-     scheduled-task modal input/select fields below. Each literal stays a
-     complete token run: Tailwind extracts class candidates from source text,
-     never split across template syntax. #}
+     for the close_button calls below, cron_field_class for the scheduled-task
+     modal input/select fields below. Each literal stays a complete token run:
+     Tailwind extracts class candidates from source text, never split across
+     template syntax. #}
   {% set form_label_class = 'block text-xs text-slate-400 mb-1' %}
   {% set close_btn_class = 'text-slate-500 hover:text-slate-300 p-1' %}
   {% set cron_field_class = 'w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200' %}

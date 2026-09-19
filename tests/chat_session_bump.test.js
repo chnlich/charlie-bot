@@ -419,6 +419,18 @@ const TYPE_LABELS = {user: 'You', scheduled_trigger: 'Trigger', worker_summary: 
 const DEPTHS = ['outline', 'compact', 'expanded'];
 const BUBBLE_TIME_TEXT = 'Apr 2, 2026, 3:04:05 AM PDT';
 
+// The #page-depth-control rig renderSessionView's depth reproject resolves:
+// one button per DEPTHS entry, carrying its depth in dataset.pageDepth.
+function buildDepthControl() {
+  const control = new FakeElement('DIV', {id: 'page-depth-control'});
+  for (const depth of DEPTHS) {
+    const btn = new FakeElement('BUTTON', {className: 'turn-depth-btn'});
+    btn.dataset.pageDepth = depth;
+    control.appendChild(btn);
+  }
+  return control;
+}
+
 // --- input spec -> DOM -----------------------------------------------------
 function msg(role, id, extra = {}) {
   return Object.assign({kind: 'msg', role, id, text: `${role} ${id}`, ts: null}, extra);
@@ -497,12 +509,7 @@ function buildElement(item) {
 
 function mountCase(items) {
   const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
-  const control = new FakeElement('DIV', {id: 'page-depth-control'});
-  for (const depth of DEPTHS) {
-    const btn = new FakeElement('BUTTON', {className: 'turn-depth-btn'});
-    btn.dataset.pageDepth = depth;
-    control.appendChild(btn);
-  }
+  const control = buildDepthControl();
   const nodes = new Map();
   for (const item of items) {
     const el = buildElement(item);
@@ -1324,6 +1331,16 @@ function makeEngineTimers() {
   return {now: 0, idle: [], raf: [], timeout: []};
 }
 
+// The timing seams the turn engine drives; the recorders stay observable so a
+// test can flush each queue deterministically.
+function installEngineTimers(context, timers) {
+  context.performance = {now: () => timers.now};
+  context.requestIdleCallback = (fn) => (timers.idle.push(fn), timers.idle.length);
+  context.requestAnimationFrame = (fn) => (timers.raf.push(fn), timers.raf.length);
+  context.setTimeout = (fn) => (timers.timeout.push(fn), timers.timeout.length);
+  context.clearTimeout = () => {};
+}
+
 function installScrollTopClamp(root) {
   let scrollTop = root.scrollTop;
   Object.defineProperty(root, 'scrollTop', {
@@ -1343,12 +1360,7 @@ function mountEngine(messages, {clientHeight = 900, clampScrollTop = false} = {}
   if (clampScrollTop) installScrollTopClamp(root);
   const stream = new FakeElement('DIV', {id: 'streaming-msg'});
   root.appendChild(stream);
-  const control = new FakeElement('DIV', {id: 'page-depth-control'});
-  for (const depth of DEPTHS) {
-    const btn = new FakeElement('BUTTON', {className: 'turn-depth-btn'});
-    btn.dataset.pageDepth = depth;
-    control.appendChild(btn);
-  }
+  const control = buildDepthControl();
   const timers = makeEngineTimers();
   const {context} = loadChatContext({
     createTreeWalker() {
@@ -1361,11 +1373,7 @@ function mountEngine(messages, {clientHeight = 900, clampScrollTop = false} = {}
       return null;
     },
   });
-  context.performance = {now: () => timers.now};
-  context.requestIdleCallback = (fn) => (timers.idle.push(fn), timers.idle.length);
-  context.requestAnimationFrame = (fn) => (timers.raf.push(fn), timers.raf.length);
-  context.setTimeout = (fn) => (timers.timeout.push(fn), timers.timeout.length);
-  context.clearTimeout = () => {};
+  installEngineTimers(context, timers);
   context.fetch = async () => ({ok: false, status: 500, json: async () => ({})});
   context.Chat.buildTurnEngineMessageNode = fakeEngineNode;
   const engine = context.Chat.TurnEngine.mountIfAvailable(root, messages, 'sess-eng');
@@ -2008,12 +2016,7 @@ function mountPagerCase(fetchPage, {clientHeight = 100, baseHeight = 2000} = {})
   root.__baseHeight = baseHeight;
   const stream = new FakeElement('DIV', {id: 'streaming-msg'});
   root.appendChild(stream);
-  const control = new FakeElement('DIV', {id: 'page-depth-control'});
-  for (const depth of DEPTHS) {
-    const btn = new FakeElement('BUTTON', {className: 'turn-depth-btn'});
-    btn.dataset.pageDepth = depth;
-    control.appendChild(btn);
-  }
+  const control = buildDepthControl();
   const timers = makeEngineTimers();
   const fetchCalls = [];
   const {context} = baseSessionContext();
@@ -2030,11 +2033,7 @@ function mountPagerCase(fetchPage, {clientHeight = 100, baseHeight = 2000} = {})
   };
   context.document.querySelector = () => null;
   context.document.querySelectorAll = () => [];
-  context.performance = {now: () => timers.now};
-  context.requestIdleCallback = (fn) => (timers.idle.push(fn), timers.idle.length);
-  context.requestAnimationFrame = (fn) => (timers.raf.push(fn), timers.raf.length);
-  context.setTimeout = (fn) => (timers.timeout.push(fn), timers.timeout.length);
-  context.clearTimeout = () => {};
+  installEngineTimers(context, timers);
   context.fetch = async (url) => {
     fetchCalls.push(url);
     return fetchPage(url);

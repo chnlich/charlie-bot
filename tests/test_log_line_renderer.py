@@ -6,6 +6,7 @@ are equal, so a structlog upgrade that moves a padding or quoting rule fails her
 
 import contextlib
 import io
+import sys
 
 import pytest
 import structlog
@@ -132,3 +133,41 @@ def test_configured_renderer_serves_the_lean_path() -> None:
   # (PrintLogger appends the newline the renderer return value does not carry.)
   dev_line = dev(None, "info", dict(event_dict))
   assert line[line.index("["):].rstrip("\n") == dev_line[dev_line.index("["):]
+
+
+def test_configured_chain_stamps_local_time_like_the_default_chain() -> None:
+  from src.core.log_once import ensure_lean_renderer
+
+  ensure_lean_renderer()
+  stampers = [p for p in structlog.get_config()["processors"] if isinstance(p, structlog.processors.TimeStamper)]
+  assert len(stampers) == 1
+  # TimeStamper defaults to utc=True; the default chain passes utc=False, and
+  # dropping it shifts every served stamp to UTC.
+  assert stampers[0].fmt == "%Y-%m-%d %H:%M:%S" and stampers[0].utc is False
+
+
+@pytest.mark.parametrize(
+    ("env", "tty", "expected"), [
+        ({}, False, False),
+        ({}, True, True),
+        ({
+            "NO_COLOR": "1"
+        }, True, False),
+        ({
+            "FORCE_COLOR": "1"
+        }, False, True),
+    ])
+def test_color_decision_mirrors_the_default_chain(
+    env: dict, tty: bool, expected: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+  # structlog._config decides at import: not NO_COLOR and (FORCE_COLOR or
+  # isatty); the four shapes below are that rule (_has_colors is always true
+  # on linux). ConsoleRenderer only re-decides when colors=None, which it
+  # treats as _has_colors at its own import — so the table is the reference.
+  for key in ("NO_COLOR", "FORCE_COLOR"):
+    monkeypatch.delenv(key, raising=False)
+  for key, value in env.items():
+    monkeypatch.setenv(key, value)
+  monkeypatch.setattr(sys.stdout, "isatty", lambda: tty, raising=False)
+  from src.core.log_once import _LeanLineRenderer as lean_cls
+
+  assert lean_cls()._colors == expected

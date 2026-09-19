@@ -1,10 +1,12 @@
 """The one warn-once rule: at most one log line per key per process.
 
-Also home to the structlog-deferring logger proxy. Both residents stay
-stdlib-only: config and memory bind them at import, on CLI chains whose
-measured floors depend on structlog staying out until first use.
+Also home to the structlog-deferring logger proxy and the server's lean
+log-line renderer. Every resident stays stdlib-only at import: config and
+memory bind them at import, on CLI chains whose measured floors depend on
+structlog staying out until first use.
 """
 
+import os
 import sys
 from collections.abc import Callable, Hashable
 from typing import Any
@@ -113,9 +115,14 @@ class _LeanLineRenderer:
   """
 
   def __init__(self) -> None:
-    # The dev renderer colorizes only when stdout is a terminal; the server's
-    # redirected log file always takes the non-color shape this class mirrors.
-    self._colors = sys.stdout.isatty()
+    # structlog._config's exact color decision for the default chain, mirrored
+    # so the lean path and the dev fallback agree under NO_COLOR/FORCE_COLOR
+    # (the server's redirected log file takes the non-color shape on linux,
+    # where structlog.dev._has_colors is always true).
+    no_colors = os.environ.get("NO_COLOR", "") != ""
+    force_colors = os.environ.get("FORCE_COLOR", "") != ""
+    self._colors = not no_colors and (
+        force_colors or (sys.stdout is not None and hasattr(sys.stdout, "isatty") and sys.stdout.isatty()))
     self._dev: Any = None
 
   def __call__(self, logger: object, name: str, event_dict: dict) -> str:
@@ -167,6 +174,8 @@ def ensure_lean_renderer() -> None:
           structlog.processors.add_log_level,
           structlog.processors.StackInfoRenderer(),
           structlog.dev.set_exc_info,
-          structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S"),
+          # utc=False is the default chain's choice (local time); TimeStamper
+          # itself defaults to utc=True, which would shift every served stamp.
+          structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S", utc=False),
           _LeanLineRenderer(),
       ])

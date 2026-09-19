@@ -47,7 +47,6 @@ from src.api.cron import router as cron_router  # noqa: E402
 from src.api.deps import get_session_manager  # noqa: E402
 from src.api.internal import router as internal_router  # noqa: E402
 from src.api.sessions import router as sessions_router  # noqa: E402
-from src.core import claude_accounts  # noqa: E402
 from src.core import event_types as ET  # noqa: E402
 from src.core import improve_command  # noqa: E402
 from src.core import init as init_module  # noqa: E402
@@ -59,6 +58,7 @@ from src.core import review  # noqa: E402
 from src.api.deps import get_config_on_loop  # noqa: E402
 from src.core.config import CharlieBotConfig, get_config  # noqa: E402
 from src.core.git import BaseResolution  # noqa: E402
+from src.core.home import CREDENTIALS_FILE  # noqa: E402
 from src.core.plans import PlanRegistryManager  # noqa: E402
 from src.core.scheduler import Scheduler  # noqa: E402
 from src.core.sessions import SessionManager  # noqa: E402
@@ -922,7 +922,7 @@ def seed_transcript_copy(config_dir: Path, cc_session_id: str, body: str, *, mti
 def write_pool_credentials(config_dir: Path, access_token: str = "token") -> None:
   """Write Claude OAuth credentials into a pool account's config dir, marking the login present."""
   config_dir.mkdir(parents=True, exist_ok=True)
-  (config_dir / claude_accounts.CREDENTIALS_FILE).write_text(
+  (config_dir / CREDENTIALS_FILE).write_text(
       json.dumps({"claudeAiOauth": {
           "accessToken": access_token,
           "refreshToken": "r"

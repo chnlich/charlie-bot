@@ -27,11 +27,11 @@ from src.api.responses import (
 )
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.constants import BackendType
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.message_aggregator import TOOL_PREVIEW_CHARS, extract_text_from_message, extract_tool_result_text
 from src.core.models import (
-    BackendType,
     CcClaudeBackend,
     PendingTrigger,
     ThreadMetadata,

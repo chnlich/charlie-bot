@@ -14,8 +14,9 @@ from typing import Any
 from src.core import event_types as ET
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
 from src.core.config import CharlieBotConfig
+from src.core.constants import BackendType
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import BackendType, SessionMetadata
+from src.core.models import SessionMetadata
 from src.core.ndjson import iter_ndjson_events, iter_ndjson_events_from_end
 
 log = LazyStructlogLogger()

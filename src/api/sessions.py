@@ -46,13 +46,13 @@ from src.core.config import (
     get_config,
     get_scheduled_tasks,
 )
+from src.core.constants import BackendType
 from src.core.event_types import BACKEND_SWITCHED
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.message_aggregator import tool_preview
 from src.core.models import (
     BackendOption,
-    BackendType,
     CreateSessionRequest,
     DeleteGroupRequest,
     EloneSessionRequest,

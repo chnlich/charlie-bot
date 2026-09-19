@@ -17,11 +17,11 @@ from src.api.message_utils import (
 from src.core import event_types as ET
 from src.core.autonamer import is_default_session_name, maybe_auto_name
 from src.core.config import CharlieBotConfig
+from src.core.constants import BackendType
 from src.core.log_once import LazyStructlogLogger
 from src.core.message_aggregator import extract_text_from_message
 from src.core.message_events import serialize_uploaded_files
 from src.core.models import (
-    BackendType,
     SendMessageRequest,
     SessionMetadata,
     SessionStatus,

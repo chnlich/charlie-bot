@@ -1,9 +1,11 @@
 """JSON response rendering for the request-path endpoints.
 
-The hot JSON endpoints return pre-built plain payloads, so the remaining
-per-request cost is the render itself. orjson renders the same payload
-parsed-identically several times faster than CPython's C JSON encoder and
-emits raw UTF-8 instead of ``\\uXXXX`` escapes, shrinking non-ASCII-bearing
+The hot JSON endpoints return these Response subclasses directly, not plain
+dicts, so FastAPI skips response_model validation and the jsonable_encoder
+pass it runs on mapped returns. Their payloads are pre-built plain values, so
+the remaining per-request cost is the render itself. orjson renders the same
+payload parsed-identically several times faster than CPython's C JSON encoder
+and emits raw UTF-8 instead of ``\\uXXXX`` escapes, shrinking non-ASCII-bearing
 bodies on the wire. Callers rely on: the parsed content equals the stdlib
 render, splices built from ``fast_json_bytes`` segments stay byte-identical
 to a fresh render of the merged payload, and unsupported payload types raise

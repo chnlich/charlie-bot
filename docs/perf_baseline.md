@@ -13,7 +13,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | --- | --- | --- | --- | --- |
 | M1 host: load + serve CPU | `uptime`; M1 collector below | load 1/5/15; serve count; %CPU total | load < 4 (CPU count); serve CPU total < 300 % | 3.27 / 2.42 / 2.94; 4 serve processes, 237.9 % CPU |
 | M2 UI polls | M2 collector below | polls/h; log MB | < 6000 polls/h | 2755 polls/h; 3.1 MB log |
-| M3 API latency, 401 path | M3 collector below | seconds per request | median < 0.005 s | median 0.002 s, max 0.002 s |
+| M3 API latency, 401 path | M3 collector below | seconds per request; the in-server floor sub-reading (the raw-ASGI drive of the same 401 path through the real app stack — middleware chain plus the http_request log line — the served path uvicorn runs after its lifespan installs the lean log renderer) | median < 0.005 s; in-server floor median < 0.000060 s (the line sits at the pre-fix dev-render floor — a regression to it trips; the cron-collision bias the M56 history documents applies) | median 0.002 s, max 0.002 s |
 | M4 turns | M4 collector below | seconds per turn; hung sessions (an archived session is never hung — `_session_archived`'s rule; neither is a session whose running threads' own worker logs moved within the hour — a delegation's chat file goes quiet for the delegation's whole run, see the 2026-09-14 history row) | median < 600 s (recalibrated from < 300 s: the median tracks the bot's own cron-delegation workload mix, not code health — see the 2026-09-12 history row); hung = 0 | median 53 s, max 1133 s; 0 hung |
 | M5 threads/list latency | M5 collector below | seconds per request, worst session | median < 0.05 s | — (introduced with its first history row) |
 | M6 session usage latency | M6 collector below | seconds per request, worst session; the append-round repeat (one appended event before each timed resolution — the 3 s usage poll during a streamed turn — scratch home) | median < 0.05 s; append-round median < 0.005 s | — (introduced with its first history row) |
@@ -178,6 +178,58 @@ auth header; the timing reads the middleware-and-framework floor of the server p
 ```bash
 curl -s -o /dev/null -w 'http_code=%{http_code} time_total=%{time_total}s\n' http://127.0.0.1:18498/api/sessions/status
 for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{time_total}\n' http://127.0.0.1:18498/api/sessions/status; done | sort -n | awk '{a[NR]=$1} END {printf "median %.3f s, max %.3f s over %d requests\n", a[int((NR+1)/2)], a[NR], NR}'
+```
+
+M3 in-server floor — the same 401 path driven raw-ASGI through the real app stack (the middleware
+chain plus the http_request log line, the served path uvicorn runs after its lifespan installs the
+lean log renderer — the curl reading above is dominated by client overhead and cannot see a
+server-side cut of this size). One cold pass, then the median of 1000 drives with stdout captured
+so the render cost stays in the reading:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, contextlib, io, os, sys, time
+sys.path.insert(0, os.environ["CHECKOUT"])
+import server as srv
+from src.core.log_once import ensure_lean_renderer
+
+ensure_lean_renderer()  # the lifespan's first startup statement
+
+def scope():
+    return {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1", "method": "GET", "scheme": "http",
+            "path": "/api/sessions/status", "raw_path": b"/api/sessions/status",
+            "query_string": b"", "root_path": "",
+            "headers": [(b"host", b"test")],
+            "client": ("t", 1), "server": ("t", 80)}
+
+async def drive():
+    out = {"status": 0}
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+    async def send(msg):
+        if msg["type"] == "http.response.start":
+            out["status"] = msg["status"]
+    await srv.app(scope(), receive, send)
+    return out["status"]
+
+sink = io.StringIO()
+async def main():
+    for _ in range(100):
+        with contextlib.redirect_stdout(sink):
+            await drive()
+    ts = []
+    with contextlib.redirect_stdout(sink):
+        for _ in range(1000):
+            t0 = time.perf_counter()
+            await drive()
+            ts.append(time.perf_counter() - t0)
+    ts.sort()
+    print(f"in-server 401 floor median {ts[500] * 1e6:.2f} us, p10 {ts[100] * 1e6:.2f} us, "
+          f"p90 {ts[900] * 1e6:.2f} us over 1000")
+
+asyncio.run(main())
+EOF
 ```
 
 M4 — turn durations and hung sessions. The projection reads only `type` and `timestamp` from chat
@@ -7470,6 +7522,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-18 | this PR | M3 in-server 401 floor, the http_request log line's renderer moved from the dev ConsoleRenderer to a byte-identical inline renderer: floor median 57.85/59.36/59.22/59.72/58.24 → 44.35/44.70/43.85/45.09/45.64 µs (−21.6 % to −25.9 %), p10 55.90-57.91 → 41.10-43.60 µs, p90 83.45-94.38 → 63.53-73.90 µs, every paired round faster (five interleaved rounds of the A/B harness — main checkout before vs branch worktree after back-to-back, 1000 raw-ASGI 401 drives per arm, the branch arm installing the renderer its lifespan installs, main arm's drive reading the dev path main serves, load 1.5-1.8 one-minute); the doc collector on the branch reads 42.83 µs median (p10 41.41, p90 63.23); the log line's share measured standalone: muting the http_request line drops the main drive 59.4 → 16.0 µs — the line cost 43.3 µs of the 59.4 µs floor, 73 %; the curl standing collector cannot see a cut this size (client-dominated; the standing reading median 0.001 s at 18:43 stands until deploy); 5838-passed suite + 11 skipped (the byte-identity battery — every render compared against the dev renderer over level and event padding, value repr rules, the fallback shapes, and the configured chain, plus pins on the chain's local-time stamper and the env-aware color decision), ruff and yapf clean; M3 in-server floor healthy range introduced at < 0.000060 s (the after band 42.8-45.6 µs sits 1.3-1.4× inside; the line sits at the pre-fix dev-render floor, so a renderer regression trips it) | structlog's default chain ends in the dev ConsoleRenderer and the server never configured it — every http_request line paid the dev pad/repr machinery on the request path (43.3 µs of the 59.4 µs 401 floor, ~114k requests per 55.8 h of server log); the lean renderer reproduces that non-color line byte for byte for the common shape (timestamp, level, event, sorted key=value fields with the dev quoting rule), keeps the dev renderer for exception/stack/logger-name lines (the traceback formatter is the one shape it does not reproduce) and whenever the dev color decision (NO_COLOR/FORCE_COLOR/tty) selects colors, mirrors the default chain's local-time stamper (TimeStamper's own utc default is True — dropping the default chain's utc=False would shift every served stamp to UTC), and installs from the server lifespan's first startup statement — never at import, where it would tax the CLI floors the M92/M98 collectors measure, and never inside a capture_logs context, whose exit restores the config it entered with; the independent charlie-code review of the PR flagged exactly the two contract drifts (the utc default and the NO_COLOR/FORCE_COLOR mirror) plus a stale module docstring, all fixed before merge |
 | 2026-09-19 | this PR | M105 file-arm serve chunking, 64 KiB → 1 MiB (starlette 1.0.0's FileResponse class attribute): png serve median 7.45/6.59/5.19 → 1.88/1.62/2.02 ms (−61 % to −75 %), maxima 9.36-7.18 → 3.86-4.10 ms; pptx 4.64/4.54/3.68 → 1.40/1.25/1.46 ms (−60 % to −70 %); html witness 28.50/29.19/30.59 → 20.44/17.16/19.20 ms (−29 % to −45 %), maxima 37.96-34.51 → 23.91-24.40 ms, every paired round faster (five interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, the worst on-disk artifact corpora of the live sessions tree, scratch credentials home per drive, live files read-only, load 3.8-4.6 one-minute; transport identity kept on png/pptx, gzip kept on the html witness); wire: identity arms byte-identical across arms, html witness 2972245 → 2974307 B (+0.07 %, the middleware's per-chunk deflate now batches 4 × 1 MiB instead of 61 × 64 KiB — different gzip block boundaries over the same level, decompressed body byte-identical); component context: the 64 KiB default prices the page-cache serve at ~250 MB/s (one executor hop + one ASGI send per chunk; 16 chunks per MB, 21 for the png corpus), and the sweep's png reading had sat at its line (5.64 vs max(5.0, bytes ÷ 250 MB/s) = 5.38 ms) with the live log showing a 1.46 GB trace json served at 7.65 s, both per-chunk-bound; 5805-passed suite + 11 skipped (two new tests: the route builds the 1 MiB-chunk subclass, and a >1 MiB binary serves byte-identical with identity transport), ruff and yapf clean; M105 healthy ranges unchanged (every moved reading went further inside its line) | starlette 1.0.0 exposes the read chunk size only as the FileResponse class attribute, so the file arm serves through a one-attribute subclass; the chunking is transport-only — the served bytes are the file's bytes in both arms, and the Range path's min(chunk, remaining) clamp keeps byte ranges exact; the html witness rides the same FileResponse through the compressing responder (the collector's scratch sessions_dir resolves the live-tree artifact to no session, so it never reaches the injected-page memo), which is why the witness moves with the same change |
 | 2026-09-18 | this PR | M7 restart-cold seeded row-memo build removed (the sidecar's parsed rows map adopts as the memo in place): restart-cold wall median 1.333/1.282/1.277 → 0.947/0.952/1.003 s (−25 % to −29 %), maxima 1.333 → 1.003 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, the live cache document copied per arm with its sidecar and the 23.4 GB live db read in place mode=ro by the collect itself, live home never written, load 1.9-4.1 one-minute with the full test suite running on the host); component attribution standalone: the per-row tuple comprehension over the 190,497-row sidecar measures 348 ms vs 5 ms for the direct `dict.update` of the same map; payload parity on a deterministic scratch corpus (3000-row opencode db + one appended row rebuilt per round, per-arm cache dirs): the opencode row identical across all six arms (oc-m 3001 calls, 15007 in_fresh, 3002 output — the appended row's +7/+2 landing in every arm), the whole-rows digest moving only with the live claude corpora between rounds; 5732-passed suite + 11 skipped (the restart-cold seed tests' exact-record contracts among them), ruff clean; M7 healthy ranges unchanged (the standing collector's reading moves 1.29 s → ~0.98 s medians inside the unchanged max(0.5 s, bytes ÷ 25 MB/s) line) | the seeded restart rebuilt the 190k-entry row memo from the just-parsed sidecar rows one tuple at a time (~0.35 s of the ~1.3 s wall) although the seed's [time_updated, record] lists index positionally exactly like the (time_updated, record) tuples every memo consumer reads — [0]/[1] and two-name unpacking — and a memo value is only ever replaced whole, never mutated, so the parsed lists alias into the memo and the build drops to one C-level dict update; the gate-pass restart shape saves the same build (its memo build ran before the probe check) |
 | 2026-09-18 | this PR | M95 worker-log newest-first scans, the from-the-end walk moved from window reads to a mapped backward scan: review-scan median 0.60/0.59/0.83 → 0.09/0.10/0.09 ms (−85 % to −89 %), failed-iteration judgment-pair median 6.17/6.00/6.46 → 0.93/1.04/0.92 ms (−83 % to −86 %), maxima 6.21-6.81 → 1.01-1.23 ms, every paired round faster (three interleaved rounds of the verbatim collectors — main checkout before vs branch worktree after back-to-back, the 9.8 MB / 232-line worst on-disk worker log carrying one 9.5 MB tool_result line, live home read-only, resolved blocker/summary/report identical across all six arms, load 1.71-1.89 one-minute); no-regression witnesses interleaved: M85 verify-finalize report read 0.6-0.8 → 0.2 ms medians (maxima 1.3-1.5 → 0.3 ms), M31 steady-state events-summary read 0.0008-0.0009 → 0.0005 s medians; 5713-passed suite + 11 skipped (one new test: the plain-filter walk's whole-line contract; the two walk early-stop tests re-pinned on the mapped scan's rfind extents), ruff clean; M95 healthy ranges recalibrated review < 0.005 s → < 0.001 s and judgment-pair < 0.012 s → < 0.004 s with this PR | the from-the-end walker memcpy'd its way through every byte between the consumer's answer and the file start one 512 KiB window at a time — cProfile put 4.0 of the pair's 7.2 ms in BufferedReader.read walking the 9.5 MB tool_result line whose head rejects it, the reads finding the line's opening newline; the backward scan now rides a read-only mapping (the parse_ndjson_file mechanism the #1785 zero-copy walk gave the whole-file parse): lines are zero-copy views between mmap.rfind newlines, a head-provable filter rejects a giant line for one bounded 256-byte probe, and an early stop never scans past its answer; 300 randomized trials × 3 filter shapes (none / head-provable / plain) output-identical to the old walker; the same walk serves the M31 summary read (parse_ndjson_tail_parseable), M85 (_resolve_final_report), the reviewer-completion scan (review.py), verify_trailer, and the codex rollout backward scans |

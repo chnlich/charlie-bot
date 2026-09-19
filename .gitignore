@@ -1,8 +1,6 @@
 # Python
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
 .Python
 *.egg-info/
 dist/
@@ -14,10 +12,8 @@ env/
 
 # Frontend
 node_modules/
-web/node_modules/
 
 # Environment & secrets
-.env
 *.env
 
 # IDE

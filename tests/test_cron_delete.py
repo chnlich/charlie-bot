@@ -6,6 +6,7 @@ import pytest
 from conftest import (
     OPUS_BACKEND_ID,
     append_events,
+    apply_config_overrides,
     cron_d_dir,
     dump_yaml,
     make_scheduler_setup,
@@ -17,7 +18,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api.cron import router as cron_router
-from src.api.deps import get_config, get_session_manager
+from src.api.deps import get_session_manager
 from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, SessionMetadata, SessionStatus
@@ -30,7 +31,7 @@ def make_cron_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager
   app = FastAPI()
   app.include_router(cron_router, prefix="/api/cron")
   app.include_router(sessions_router, prefix="/api/sessions")
-  app.dependency_overrides[get_config] = lambda: cfg
+  apply_config_overrides(app, cfg)
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   return TestClient(app)
 

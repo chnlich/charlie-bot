@@ -13,11 +13,11 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from conftest import BROADCAST_PATCH_TARGET, make_home_session
+from conftest import BROADCAST_PATCH_TARGET, apply_config_overrides, make_home_session
 from fastapi import FastAPI
 
 from src.api import deps
-from src.api.deps import get_config, get_config_on_loop, get_session_manager, get_thread_manager
+from src.api.deps import get_session_manager, get_thread_manager
 from src.api.sessions import router as sessions_router
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
@@ -36,8 +36,7 @@ def _sessions_app(cfg: CharlieBotConfig, mgr: SessionManager) -> FastAPI:
   """
   app = FastAPI()
   app.include_router(sessions_router, prefix="/api/sessions")
-  app.dependency_overrides[get_config] = lambda: cfg
-  app.dependency_overrides[get_config_on_loop] = lambda: cfg
+  apply_config_overrides(app, cfg)
   app.dependency_overrides[get_session_manager] = lambda: mgr
   app.dependency_overrides[get_thread_manager] = lambda: ThreadManager(cfg)
   return app

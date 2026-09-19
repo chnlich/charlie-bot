@@ -756,6 +756,18 @@ async def make_home_session(
   return cfg, mgr, session
 
 
+def apply_config_overrides(app: FastAPI, cfg: CharlieBotConfig) -> None:
+  """Bind both config dependency keys to the one instance on *app*.
+
+  A mounted route resolves cfg through either dependency (get_config_on_loop
+  on the polled routes, get_config on the sync ones), so a rig must carry the
+  override on both keys — one key alone leaves routes on the other resolving
+  the real config.
+  """
+  app.dependency_overrides[get_config] = lambda: cfg
+  app.dependency_overrides[get_config_on_loop] = lambda: cfg
+
+
 def make_router_client(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
@@ -766,10 +778,7 @@ def make_router_client(
   extra routers or overrides builds its own FastAPI app."""
   app = FastAPI()
   app.include_router(router, prefix=prefix)
-  app.dependency_overrides[get_config] = lambda: cfg
-  # The polled routes resolve cfg through the on-loop dependency (same instance
-  # the sync key serves), so both keys carry the override.
-  app.dependency_overrides[get_config_on_loop] = lambda: cfg
+  apply_config_overrides(app, cfg)
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   return TestClient(app)
 

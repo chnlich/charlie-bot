@@ -10,14 +10,12 @@ from unittest.mock import patch
 
 import httpx
 import pytest
-from conftest import assert_gzip_served, fake_backends, gzip_explode_compress
+from conftest import apply_config_overrides, assert_gzip_served, fake_backends, gzip_explode_compress
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api import threads as threads_api
 from src.api.deps import (
-    get_config,
-    get_config_on_loop,
     get_session_manager,
     get_thread_manager,
     get_trigger_manager,
@@ -55,8 +53,7 @@ def _seeded_client(tmp_path: Path) -> tuple[TestClient, str, str]:
   app.dependency_overrides[get_thread_manager] = lambda: ThreadManager(cfg)
   app.dependency_overrides[get_trigger_manager] = lambda: TriggerManager(cfg, sessions)
   app.dependency_overrides[get_session_manager] = lambda: sessions
-  app.dependency_overrides[get_config] = lambda: cfg
-  app.dependency_overrides[get_config_on_loop] = lambda: cfg
+  apply_config_overrides(app, cfg)
   return TestClient(app), session_id, long_thread_id
 
 

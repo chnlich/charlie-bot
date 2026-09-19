@@ -7,13 +7,12 @@ from typing import Any
 
 import httpx
 import pytest
-from conftest import loop_stall_gaps, stall_before_call
+from conftest import apply_config_overrides, loop_stall_gaps, stall_before_call
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api import git as git_api
-from src.api.deps import get_config_on_loop
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -51,10 +50,7 @@ def _build_app(workspace: Path) -> FastAPI:
   )
   app = FastAPI()
   app.include_router(git_api.router, prefix="/api/git")
-  app.dependency_overrides[get_config] = lambda: cfg
-  # The routes resolve cfg through the on-loop dependency (same instance the
-  # sync key serves), so both keys carry the override.
-  app.dependency_overrides[get_config_on_loop] = lambda: cfg
+  apply_config_overrides(app, cfg)
   return app
 
 
@@ -336,8 +332,7 @@ def test_repo_outside_workspace_rejected(tmp_path: Path) -> None:
   )
   app = FastAPI()
   app.include_router(git_api.router, prefix="/api/git")
-  app.dependency_overrides[get_config] = lambda: cfg
-  app.dependency_overrides[get_config_on_loop] = lambda: cfg
+  apply_config_overrides(app, cfg)
   client = TestClient(app)
 
   resp = _get_diff(client, "files", repo, "main", "feature")

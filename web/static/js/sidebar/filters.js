@@ -328,11 +328,7 @@ const GLOBALS = {
   toggleSessionStar,
 };
 const SIDEBAR_ONLY = {
-  registerSidebarFilter,
-  getSidebarFilter,
-  getRestorableSidebarFilters,
   filterPillClass,
-  renderSidebarFilterPills,
 };
 Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
 

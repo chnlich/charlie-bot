@@ -2856,9 +2856,10 @@ async def cancel_and_drain(task: asyncio.Task) -> None:
   """Cancel *task*, then await it under a suppressed CancelledError so the task's
   own finally block finishes before the caller continues.
 
-  Deliberately no done-guard, unlike src.core.tasks.cancel_and_wait: awaiting an
-  already-finished test task re-raises its pending exception, and skipping that
-  await would turn a task bug into a silently green test.
+  Deliberately no None-guard, unlike src.core.tasks.cancel_and_wait: shutdown's
+  optional task is legitimately quiet, while a test teardown holding None where
+  a task was expected is a bug to fail loudly on. An already-finished task's
+  pending exception still surfaces here — the suppressed await re-raises it.
   """
   task.cancel()
   with contextlib.suppress(asyncio.CancelledError):

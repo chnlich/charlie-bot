@@ -569,8 +569,8 @@ function recordCodeTokens(tokens) {
   // text node; this extension only decides what survives the parse. The
   // delimiter scan is math-scanner.js's mathSpan (loaded just before this
   // file), shared with the wrap pre-render driver; tests/chat_math_extension.test.js
-  // and tests/core/test_artifact_wrap.py run the same case list against the
-  // two consumers.
+  // and tests/core/test_artifact_wrap.py run the same case list against both
+  // consumers.
   const mathExtension = {
     name: 'math',
     level: 'inline',

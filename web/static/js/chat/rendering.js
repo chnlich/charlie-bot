@@ -12,7 +12,7 @@
 // separator's "Clone to here" fork button below.
 const CLONE_SVG = '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6"/></svg>';
 
-// The one down-chevron glyph, path-only because its two sites keep different
+// The one down-chevron glyph, path-only because its consuming sites keep different
 // <svg> wrappers: renderToolActivity's "N tool calls" toggle (w-3 h-3) and
 // buildTurnFoldBar's turn-fold chevron.
 const CHEVRON_DOWN_SVG_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>';

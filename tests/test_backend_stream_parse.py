@@ -12,13 +12,13 @@ their existing raise-on-malformed contract, only the parser moves.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import cancel_and_drain
 from test_opencode_backend import _build_backend, _FakeSseResponse
 
 from src.agents.backends.base import iter_ndjson_events, tail_follow_events
@@ -117,9 +117,7 @@ async def _collect_staged_tail(partial: bytes, completion: bytes) -> list[dict]:
       while not events and time.monotonic() < deadline:
         await asyncio.sleep(0.01)
     finally:
-      task.cancel()
-      with contextlib.suppress(asyncio.CancelledError):
-        await task
+      await cancel_and_drain(task)
     return events
 
 

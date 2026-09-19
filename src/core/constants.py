@@ -41,10 +41,11 @@ PLAN_CLOSE_MODES = (PLAN_CLOSE_SUPERSEDED, PLAN_CLOSE_ABANDONED, PLAN_CLOSE_COMP
 
 # opencode's own compaction output-reserve default ($d = 20000 in the opencode binary,
 # applied as `compaction.reserved ?? min($d, maxOutputTokens)`; checkable via
-# `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`). The opencode backend
-# (src.agents.backends.opencode) and the usage resolver's compact-point math
-# (src.core.session_usage) share one spelling, so the usage chain imports no backend
-# module for it (the M99 server import floor).
+# `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`). The only reader is the
+# usage resolver's compact-point math (src.core.session_usage); the opencode backend
+# (src.agents.backends.opencode) never reads it — the binary's own default applies, and the
+# backend's module note carries the fact without an import. The stdlib-only home is what
+# keeps the usage chain off the backends stack (the M99 server import floor).
 OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
 
 # File-server URL prefix: server.py mounts the one files router under it. The prefix names

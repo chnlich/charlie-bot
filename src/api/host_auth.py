@@ -21,12 +21,11 @@ from src.core.host_auth import (
 )
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import utc_now
-from src.core.tasks import cancel_and_wait, create_logged_task
+from src.core.tasks import SingleTaskPoller, create_logged_task
 
 log = LazyStructlogLogger()
 router = APIRouter()
 
-_poller_task: asyncio.Task | None = None
 # One round at a time holds the state file: the flag is set and read
 # synchronously on the event loop, so a second probe request that arrives while
 # a round runs reuses it instead of starting a second one.
@@ -211,18 +210,6 @@ async def _poll_loop() -> None:
     await asyncio.sleep(PROBE_INTERVAL_SEC)
 
 
-async def start_poller() -> None:
-  """Start the background probe poller. Call from the app lifespan."""
-  global _poller_task
-  _poller_task = asyncio.create_task(_poll_loop())
-  log.info("host_auth_poller_started")
-
-
-async def stop_poller() -> None:
-  """Cancel the background probe poller. Call from the app lifespan shutdown."""
-  global _poller_task
-  task = _poller_task
-  if task is not None:
-    _poller_task = None
-    await cancel_and_wait(task)
-    log.info("host_auth_poller_stopped")
+_poller = SingleTaskPoller(_poll_loop, log, "host_auth_poller_started", "host_auth_poller_stopped")
+start_poller = _poller.start
+stop_poller = _poller.stop

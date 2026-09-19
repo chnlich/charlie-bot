@@ -20,7 +20,6 @@ import json
 import os
 import re
 import sys
-import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -204,19 +203,14 @@ def _cached_server_port() -> int | None:
 def _store_base_url_cache(port: int) -> None:
   """Write the fingerprint-keyed port document atomically (a torn write never publishes)."""
   from src.core.credentials import _file_fingerprint
+  from src.core.json_utils import write_json_atomically
 
   doc = {"fingerprint": [_file_fingerprint("config.yaml"), _config_module_fingerprint()], "port": port}
   cache_path = Path(charliebot_home_dir()) / _BASE_URL_CACHE_RELPATH
   cache_path.parent.mkdir(parents=True, exist_ok=True)
-  descriptor, temp_name = tempfile.mkstemp(dir=cache_path.parent, suffix=".tmp")
-  try:
-    with os.fdopen(descriptor, "w", encoding="utf-8") as f:
-      json.dump(doc, f)
-    os.replace(temp_name, cache_path)
-  except BaseException:
-    with contextlib.suppress(OSError):
-      os.unlink(temp_name)
-    raise
+  # Only the miss path calls this, after get_config() has already paid pydantic's
+  # import; the hit path must stay free of that stack, so the import stays here.
+  write_json_atomically(cache_path, doc, private=True)
 
 
 def _internal_base_url() -> str:

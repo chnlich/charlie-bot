@@ -16,6 +16,7 @@ from conftest import (
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
     ConsumerRound,
     TerminateFlagBackend,
+    _run_seeded_consumer,
     backend_option,
     compact_boundary_event,
     drain_session_consumer,
@@ -26,7 +27,6 @@ from conftest import (
     mocked_callback_fields,
     patch_instructions_content,
     patch_resume_seams,
-    run_consumer_over_real_disk,
     run_resume_round,
     run_session_consumer,
     user_event,
@@ -53,6 +53,22 @@ from src.core.sessions import SessionManager
 
 def _make_meta(session_id: str) -> SessionMetadata:
   return SessionMetadata(id=session_id, name="t", backend="fake", cc_session_id=None)
+
+
+async def run_consumer_over_real_disk(
+    session_id: str,
+    work_items: list[master_cc_state._WorkItem],
+    fake_run_cc: ConsumerRound,
+) -> None:
+  """run_session_consumer with the SessionManager class kept real: the dequeue refresh reads disk
+  through it, the teardown probe is silenced at the method, and no class-level patch can shadow
+  the refresh's own local import."""
+  await _run_seeded_consumer(
+      session_id,
+      work_items,
+      fake_run_cc,
+      patch.object(SessionManager, "_has_running_tasks", AsyncMock(return_value=False)),
+  )
 
 
 @pytest.mark.asyncio

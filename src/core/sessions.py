@@ -20,7 +20,7 @@ from src.core import event_types as ET
 if TYPE_CHECKING:
   import numpy as np
 from src.core import plan_paths, sidebar_state
-from src.core.chat_events import ChatEventStore
+from src.core.chat_events import ARCHIVE_FILE_GLOB, ChatEventStore, chat_event_archives_dir
 from src.core.config import CharlieBotConfig
 from src.core.constants import BackendType
 from src.core.gc_control import gc_off
@@ -1550,11 +1550,11 @@ class SessionManager:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     def _write(out: BinaryIO) -> None:
-      archives_dir = parent_dir / "data" / "archives"
+      archives_dir = chat_event_archives_dir(parent_dir)
       raw_left = archive_take
       archived = 0
       if raw_left and archives_dir.is_dir():
-        for source in sorted(archives_dir.glob("chat_events.*.jsonl")):
+        for source in sorted(archives_dir.glob(ARCHIVE_FILE_GLOB)):
           if raw_left <= 0:
             break
           # A full-corpus budget spans nearly the whole file (only an archive

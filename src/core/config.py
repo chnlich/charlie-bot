@@ -1107,10 +1107,12 @@ def _fire_cron_error_alert(error_names: list[str]) -> None:
   new_set = frozenset(error_names)
   if new_set == _read_cron_alert_state():
     return
-  # Lazy: both imports ride the event-loop machinery, and this module is every
-  # CLI invocation's shared core — a synchronous CLI path never reaches here.
+  # Lazy: all three imports ride the event-loop machinery, and this module is
+  # every CLI invocation's shared core — a synchronous CLI path never reaches
+  # here.
   import asyncio
 
+  from src.core.json_utils import write_json_atomically
   from src.core.tasks import create_logged_task
 
   try:
@@ -1130,7 +1132,7 @@ def _fire_cron_error_alert(error_names: list[str]) -> None:
   try:
     state_path = _cron_alert_state_path()
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(names, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_json_atomically(state_path, names, newline=True)
   except OSError:
     log.exception("cron_alert_state_write_failed")
 

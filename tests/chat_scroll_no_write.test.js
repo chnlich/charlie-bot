@@ -116,7 +116,7 @@ test('showScrollToBottom writes exactly once when the button needs to become vis
 test('hideScrollToBottom writes nothing when the button is already hidden', () => {
   const btn = makeCountingElement(['hidden'], '');
   const context = loadScrollContext(new Map([['scroll-to-bottom', btn]]));
-  context.hideScrollToBottom();
+  context.Chat.hideScrollToBottom();
   assert.equal(btn.counts.classWrites, 0);
   assert.equal(btn.classList.contains('hidden'), true);
 });
@@ -124,7 +124,7 @@ test('hideScrollToBottom writes nothing when the button is already hidden', () =
 test('hideScrollToBottom writes exactly once when the button needs to become hidden', () => {
   const btn = makeCountingElement([], '');
   const context = loadScrollContext(new Map([['scroll-to-bottom', btn]]));
-  context.hideScrollToBottom();
+  context.Chat.hideScrollToBottom();
   assert.equal(btn.counts.classWrites, 1);
   assert.equal(btn.classList.contains('hidden'), true);
 });

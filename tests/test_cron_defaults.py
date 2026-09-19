@@ -1,6 +1,6 @@
 """Acceptance tests for repo-owned default cron tasks and the per-job loader.
 
-Covers the seed mechanism in ``src/core/init.py::seed_default_cron_tasks`` (the
+Covers the seed mechanism in ``src/core/init_seed.py::seed_default_cron_tasks`` (the
 seeded host file keeps the ``prompt_file`` pointer, never an inlined body), the
 loader's acceptance of ``prompt_file``, its rejection of an inline ``prompt``
 (and of a body with no prompt source at all), ``timezone: local`` resolution

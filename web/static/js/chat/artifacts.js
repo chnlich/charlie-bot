@@ -21,6 +21,7 @@ var expandedArtifactCards = [];
 // anything else looks at it, so cards, dedupe keys, cache keys and the plan version badge
 // see one path per file.
 var FILE_SERVER_PREFIXES = ['/absolute_filepath'];
+var FILE_SERVER_PREFIX = FILE_SERVER_PREFIXES[0];
 var FILE_SERVER_PREFIX_GROUP = '(?:' + FILE_SERVER_PREFIXES.join('|') + ')';
 
 function absolutePathFromServedPathname(pathname) {
@@ -105,7 +106,7 @@ function injectResizeScript(html, frameId) {
 }
 
 function injectLinkBehavior(html, absPath) {
-  var baseHref = '/absolute_filepath' + absPath;
+  var baseHref = FILE_SERVER_PREFIX + absPath;
   var src = String(html || '');
   var hasBase = /<base\b/i.test(src);
   var baseTag = '<base href="' + escapeHtml(baseHref) + '">';
@@ -193,7 +194,7 @@ function buildHtmlArtifactFrameHtml(opts) {
   var frameId = 'hf-' + Math.random().toString(36).slice(2);
   var withScript = injectResizeScript(injectLinkBehavior(rawHtml, absPath), frameId);
   var srcdoc = escapeForSrcdoc(withScript);
-  var openUrl = stampViewingSessionFragment('/absolute_filepath' + absPath);
+  var openUrl = stampViewingSessionFragment(FILE_SERVER_PREFIX + absPath);
   var sourceHighlighted = hljs.highlight(rawHtml, {language: 'xml'}).value;
   var savedSize = loadHtmlArtifactSavedSize(filePath);
   var iframeSizeStyle = 'min-height:60px;max-height:80vh;';
@@ -575,7 +576,7 @@ function lookupPlanVersionState(snapshot, planId, v) {
 var ARTIFACT_EXPAND_CONTROL = '<button type="button" onclick="toggleHtmlArtifactEmbed(this)">Expand</button>';
 
 function buildCompactToolbarHtml(title, absPath, controls) {
-  var openInTabUrl = stampViewingSessionFragment('/absolute_filepath' + absPath);
+  var openInTabUrl = stampViewingSessionFragment(FILE_SERVER_PREFIX + absPath);
   return '<div class="html-artifact-toolbar">'
     + '<span class="filename">' + escapeHtml(title || '(untitled)') + '</span>'
     + controls

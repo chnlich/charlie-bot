@@ -707,9 +707,8 @@ def _search_row_body(meta: SessionMetadata, row_key: tuple) -> bytes:
 # gzip-accepting fetch pays the middleware's whole-body level-1 deflate in the
 # send path, the M35 events-page cost the projection fix removed there.
 # Content-Encoding set upstream is what makes that middleware skip its own
-# pass (the M72 listing mechanism), and mtime=0 keeps the bytes deterministic
-# (the M101 serve's rule). The limit covers one steady-state body per open
-# tab's id set plus the other callers'.
+# pass (the M72 listing mechanism). The limit covers one steady-state body per
+# open tab's id set plus the other callers'.
 _SWITCH_GZIP_MEMO_LIMIT = 16
 _switch_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SWITCH_GZIP_MEMO_LIMIT)
 
@@ -856,8 +855,7 @@ async def get_session_events_page(
         gz = projection.cached_page_body_gzip(before, limit)
         if gz is None:
           # One deflate per page per projection generation, in the executor the
-          # middleware's replaced pass also used; mtime=0 keeps the bytes
-          # deterministic (the M101 serve's rule).
+          # middleware's replaced pass also used.
           gz = await asyncio.to_thread(gzip_level1, body)
           projection.store_page_body_gzip(before, limit, gz)
         return PreencodedJSONResponse(gz, headers=GZIP_RESPONSE_HEADERS)
@@ -1181,7 +1179,7 @@ def _events_file_gzip(path: Path) -> bytes:
 
   stat precedes the read in the same call, so the signature proves the bytes a
   repeat hit serves; an append between requests only makes the next caller miss
-  and re-read. mtime=0 keeps the compressed bytes deterministic across processes.
+  and re-read.
   """
   st = path.stat()
   hit = _events_gzip_memo.fresh(path, st)

@@ -10,7 +10,6 @@ from zoneinfo import ZoneInfo
 from src.core import event_types as ET
 from src.core import task_chain
 from src.core.backlog_loop import determine_action
-from src.core.backup import apply_retention, create_backup
 from src.core.config import (
     CharlieBotConfig,
     ScheduledTaskConfig,
@@ -32,7 +31,6 @@ from src.core.models import (
 )
 from src.core.sessions import SessionManager
 from src.core.spawner import resolve_requested_subagent_backend_model, spawn_worker
-from src.core.storage_cool import format_sweep_line, run_cool_sweep
 from src.core.tasks import cancel_and_wait, create_logged_task
 from src.core.threads import ThreadManager
 
@@ -59,6 +57,10 @@ def load_croniter(namespace: dict[str, Any]) -> Any:
 
 async def _backup_handler() -> str:
   """Built-in handler: create a backup and apply retention policy."""
+  # backup (tarfile) rides the handler like croniter: the M99 server import
+  # floor carries no tar archive stack for a handler that may never fire.
+  from src.core.backup import apply_retention, create_backup
+
   loop = asyncio.get_running_loop()
   archive = await loop.run_in_executor(None, create_backup)
   await loop.run_in_executor(None, apply_retention)
@@ -68,6 +70,11 @@ async def _backup_handler() -> str:
 
 async def _cool_storage_handler() -> str:
   """Built-in handler: reclaim cold sessions' readerless bytes (real run, no dry run)."""
+  # storage_cool (sqlite3, token_tally) rides the handler like croniter: the
+  # M99 server import floor carries no cold-sweep stack for a handler that may
+  # never fire.
+  from src.core.storage_cool import format_sweep_line, run_cool_sweep
+
   loop = asyncio.get_running_loop()
   result = await loop.run_in_executor(None, run_cool_sweep)
   summary = format_sweep_line(result)

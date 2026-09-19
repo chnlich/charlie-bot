@@ -7,11 +7,11 @@ import datetime as dt
 import fnmatch
 import hashlib
 import json
-import multiprocessing
 import os
 import socket
 import subprocess
 import tempfile
+import types
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -39,21 +39,13 @@ from src.core.constants import (
 from src.core.gc_control import gc_off
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus
-from src.core.ncu_parsing import NcuParseError, parse_ncu_report
 from src.core.sessions import SessionManager
 from src.core.timeouts import HOME_SERVICE_PROBE_TIMEOUT, SUBPROCESS_GIT_VERSION_TIMEOUT
-from src.core.token_tally import TokenTally, collect_token_usage
-from src.core.trace_merge import (
-    _gzip_exit_or_raise,
-    _kill_gzip_run,
-    _trace_events_or_raise,
-    build_multi_trace_merge,
-    igzip_command,
-    merge_traces,
-)
 
 if TYPE_CHECKING:
   from fastapi.templating import Jinja2Templates
+
+  from src.core.token_tally import TokenTally
 
 log = LazyStructlogLogger()
 
@@ -128,7 +120,10 @@ _merge_tasks: dict[str, asyncio.Task] = {}
 # from the server lifespan's shutdown half. Sized to the CPUs: a multi-trace merge runs one
 # member per trace on this pool and the wall is parse-bound, so more workers than the CPUs
 # only add contention; a single-trace merge uses one worker regardless.
-_merge_executor_instance: concurrent.futures.ProcessPoolExecutor | None = None
+# The annotation stays quoted: concurrent.futures resolves ProcessPoolExecutor through a
+# module __getattr__ whose first read imports .process (multiprocessing rides it), and the
+# M99 server import floor carries no spawn-pool stack for a pool that may never build.
+_merge_executor_instance: "concurrent.futures.ProcessPoolExecutor | None" = None
 _MERGE_POOL_WORKERS = min(4, os.cpu_count() or 2)
 
 
@@ -258,6 +253,17 @@ def _templates() -> "Jinja2Templates":
 
     _templates_instance = templating.Jinja2Templates(directory=str(REPO_ROOT / "web" / "templates"))
   return _templates_instance
+
+
+def _trace_merge() -> types.ModuleType:
+  """The request-time trace-merge stack, imported on first use and reused after.
+
+  The merge builders and the direct-pass validator are the only consumers; the
+  M99 server import floor carries no trace stack.
+  """
+  import src.core.trace_merge
+
+  return src.core.trace_merge
 
 
 @router.get(AUTH_STATUS_PATH)
@@ -400,10 +406,14 @@ def _prune_perfetto_merge_cache(fresh_path: Path) -> None:
     stale_path.unlink()
 
 
-def _merge_executor() -> concurrent.futures.ProcessPoolExecutor | None:
+def _merge_executor() -> "concurrent.futures.ProcessPoolExecutor | None":
   """Return the shared merge process pool, building it on first use."""
   global _merge_executor_instance
   if _merge_executor_instance is None:
+    # multiprocessing rides the pool build like croniter rides its next-run
+    # resolutions: the M99 server import floor carries no spawn-pool stack.
+    import multiprocessing
+
     _merge_executor_instance = concurrent.futures.ProcessPoolExecutor(
         max_workers=_MERGE_POOL_WORKERS, mp_context=multiprocessing.get_context("spawn"))
   return _merge_executor_instance
@@ -467,7 +477,9 @@ async def _cached_merge(paths: list[Path], slim: bool) -> Path:
 
   async def build(temp_path: Path) -> None:
     if len(paths) == 1:
-      await asyncio.get_running_loop().run_in_executor(_merge_executor(), merge_traces, paths, temp_path, slim)
+      await asyncio.get_running_loop().run_in_executor(
+          _merge_executor(),
+          _trace_merge().merge_traces, paths, temp_path, slim)
       return
     await _build_multi_trace_merge(paths, slim, temp_path)
 
@@ -480,7 +492,8 @@ async def _build_multi_trace_merge(paths: list[Path], slim: bool, out_path: Path
   gzip subprocess as its member completes (``build_multi_trace_merge`` owns
   the member temp space; the caller owns artifact atomicity)."""
   await asyncio.get_running_loop().run_in_executor(
-      None, build_multi_trace_merge, paths, out_path, slim, _merge_executor())
+      None,
+      _trace_merge().build_multi_trace_merge, paths, out_path, slim, _merge_executor())
 
 
 def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
@@ -494,7 +507,7 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
   share one JSON boundary: the NaN/Infinity literals stdlib json accepts fail the build loudly
   here too — a literal Perfetto cannot render must not reach the cache.
   """
-  command = igzip_command("-c", str(path))
+  command = _trace_merge().igzip_command("-c", str(path))
   with (out_path.open("wb") as compressed, subprocess.Popen(command, stdout=compressed, stderr=subprocess.PIPE) as
         gzip_proc, gc_off(collect=True)):
     # The parse allocates ~1M dicts per 1M input events; the generational passes
@@ -507,10 +520,10 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
         # Parseable JSON is not enough: a JSON object with no traceEvents array
         # (an analysis manifest) would otherwise compress into the cache and
         # reach the viewer as a trace that renders nothing.
-        _trace_events_or_raise(orjson.loads(validate_file.read()), path)
-      _gzip_exit_or_raise(gzip_proc, str(path))
+        _trace_merge()._trace_events_or_raise(orjson.loads(validate_file.read()), path)
+      _trace_merge()._gzip_exit_or_raise(gzip_proc, str(path))
     except BaseException:
-      _kill_gzip_run(gzip_proc)
+      _trace_merge()._kill_gzip_run(gzip_proc)
       raise
 
 
@@ -599,6 +612,10 @@ async def ncu_viewer(
   if not await asyncio.to_thread(path.is_file):
     return _ncu_error_page(request, f"Report not found: {target}", 404)
 
+  # The NCU report parser rides the viewer like croniter rides its next-run
+  # resolutions: the M99 server import floor carries no report-parsing stack.
+  from src.core.ncu_parsing import NcuParseError, parse_ncu_report
+
   try:
     report = await asyncio.to_thread(parse_ncu_report, str(path))
   except NcuParseError as exc:
@@ -630,7 +647,7 @@ def _compact(n: float) -> str:
   return f"{int(n):,}"
 
 
-def _token_usage_context(tally: TokenTally) -> dict:
+def _token_usage_context(tally: "TokenTally") -> dict:
   """Prepare the display context for the token_usage template from one tally.
 
   Computes the aggregate stats the page renders server-side (hero, tiles, conclusions),
@@ -731,6 +748,11 @@ async def token_usage_viewer(request: Request) -> HTMLResponse:
   global _token_usage_task
   task = _token_usage_task
   if task is None:
+    # The tally stack (sqlite3, orjson walkers) rides the page like croniter
+    # rides its next-run resolutions: the M99 server import floor carries no
+    # tally stack for a page that may never load.
+    from src.core.token_tally import collect_token_usage
+
     task = _token_usage_task = asyncio.create_task(
         asyncio.to_thread(collect_token_usage, cache_path=_token_tally_cache_path()))
   tally = await task

@@ -244,7 +244,12 @@ def test_module_defers_structlog_until_the_first_log_call(module_name: str, impo
 # opencode/charlie_code module bodies), which load it on first use via the shared
 # load_build_backend (src/agents/backends/deferred_build.py); jinja2 +
 # fastapi.templating (~35 ms) ride the page renders, which build the engine on
-# first render (src/api/pages.py::_templates).
+# first render (src/api/pages.py::_templates); tarfile + the backup stack ride
+# the backup handler, sqlite3 + token_tally + storage_cool ride the cool-storage
+# handler and the token-usage page, multiprocessing + the spawn pool ride the
+# merge-pool build, ncu_parsing and trace_merge ride the NCU and Perfetto pages,
+# and wave rides the voice wav write — each lazy at its use site, the croniter
+# seam.
 SERVER_HEAVY_MODULES = (
     "numpy",
     "src.agents.transcriber",
@@ -258,6 +263,15 @@ SERVER_HEAVY_MODULES = (
     "src.agents.backends.charlie_code",
     "jinja2",
     "fastapi.templating",
+    "tarfile",
+    "src.core.backup",
+    "sqlite3",
+    "src.core.token_tally",
+    "src.core.storage_cool",
+    "multiprocessing",
+    "src.core.ncu_parsing",
+    "src.core.trace_merge",
+    "wave",
 )
 
 

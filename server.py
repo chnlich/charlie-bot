@@ -49,7 +49,7 @@ from src.core.init import (
     reconcile_master_identity,
     run_crash_recovery,
 )
-from src.core.log_once import LazyStructlogLogger
+from src.core.log_once import LazyStructlogLogger, ensure_lean_renderer
 from src.core.message_aggregator import MessageAggregator
 from src.core.models import BackendType, SessionMetadata, utc_now
 from src.core.process import log_session_cgroup_startup, sweep_stale_session_cgroups
@@ -315,6 +315,9 @@ async def _run_slack_backfill(cfg: CharlieBotConfig, session_mgr: SessionManager
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   """Application lifespan: startup and shutdown tasks."""
+  # Before the first startup log line: every http_request line the server
+  # renders rides this renderer (see src/core/log_once.py).
+  ensure_lean_renderer()
   cfg = get_config()
   boot_time = utc_now()
 

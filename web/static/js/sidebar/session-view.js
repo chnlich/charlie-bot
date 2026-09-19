@@ -370,10 +370,13 @@ async function switchSession(sessionId) {
     throw err;
   }
 
-  // Mark switched-to session as read (WS was closed so broadcast is lost)
+  // Mark switched-to session as read (WS was closed so broadcast is lost);
+  // the server-side flag clears only now, on the winning generation's landed
+  // render — superseded generations and render errors returned above.
   sessionUnread[sessionId] = false;
   const unreadDot = document.getElementById('unread-' + sessionId);
   if (unreadDot) unreadDot.classList.add('hidden');
+  markSessionRead(sessionId);
 
   // Reconnect WebSocket
   reconnectDelay = 1000;

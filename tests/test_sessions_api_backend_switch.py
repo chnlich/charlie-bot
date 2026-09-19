@@ -11,14 +11,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 import yaml
-from conftest import CODEX_BACKEND_OPTION, backend_option
+from conftest import CODEX_BACKEND_OPTION, apply_config_overrides, backend_option
 from conftest import make_sessions_client as _build_client
 from conftest import make_transcript as _make_transcript
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.agents import master_cc
-from src.api.deps import get_config, get_config_on_loop, get_session_manager, get_thread_manager
+from src.api.deps import get_session_manager, get_thread_manager
 from src.api.sessions import _active_backend_payload, _same_backend_domain
 from src.api.sessions import router as sessions_router
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig
@@ -136,8 +136,7 @@ async def test_session_view_ships_the_backend_payload_fields(tmp_path: Path) -> 
   app.include_router(sessions_router, prefix="/api/sessions")
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   app.dependency_overrides[get_thread_manager] = lambda: ThreadManager(cfg)
-  app.dependency_overrides[get_config] = lambda: cfg
-  app.dependency_overrides[get_config_on_loop] = lambda: cfg
+  apply_config_overrides(app, cfg)
   with TestClient(app) as client:
     body = client.get(f"/api/sessions/{meta.id}/view").json()
   expected = _active_backend_payload(meta, cfg)

@@ -4,15 +4,14 @@ from typing import Any
 
 import httpx
 import pytest
-from conftest import backend_option, stub_credentials
+from conftest import apply_config_overrides, backend_option, stub_credentials
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.agents.backends.openai_compatible_claude import OpenAICompatibleClaudeBackend
 from src.agents.backends.registry import build_backend
 from src.api.anthropic_proxy import router as proxy_router
-from src.api.deps import get_config_on_loop
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig
 
 _PROXY_PREFIX = "/api/anthropic-proxy"
 _BACKEND_ID = "cc-glm52"
@@ -91,10 +90,7 @@ def test_registry_requires_access_key_from_credentials() -> None:
 def _build_client(cfg: CharlieBotConfig) -> TestClient:
   app = FastAPI()
   app.include_router(proxy_router, prefix=_PROXY_PREFIX)
-  app.dependency_overrides[get_config] = lambda: cfg
-  # The route resolves cfg through the on-loop dependency (same instance the
-  # sync key serves), so both keys carry the override.
-  app.dependency_overrides[get_config_on_loop] = lambda: cfg
+  apply_config_overrides(app, cfg)
   return TestClient(app)
 
 

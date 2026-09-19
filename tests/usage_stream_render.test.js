@@ -1,10 +1,23 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { buildStreamHarness, FAKE_MARKED_SRC } = require('./stream_render_harness');
+const { buildStreamHarness, FAKE_MARKED_SRC, CUTTING_MARKED_SRC } = require('./stream_render_harness');
+
+function adapt(h0) {
+  return { ...h0, frames: h0.stats().frames, lastHtml: () => h0.stats().frames.at(-1) || '' };
+}
 
 function loadUsage() {
-  const h = buildStreamHarness(FAKE_MARKED_SRC);
-  return { ...h, frames: h.stats().frames, lastHtml: () => h.stats().frames.at(-1) || '' };
+  return adapt(buildStreamHarness(FAKE_MARKED_SRC));
+}
+
+// Both reuse-path tests assert which strings the lexer re-ran across the
+// switch-shaped hide+re-show, so the harness records every lexer input.
+function loadCuttingUsage() {
+  const h = adapt(buildStreamHarness(CUTTING_MARKED_SRC));
+  const lexerInputs = [];
+  const realLexer = h.context.marked.lexer;
+  h.context.marked.lexer = (s) => { lexerInputs.push(s); return realLexer(s); };
+  return { h, lexerInputs };
 }
 
 test('first delta paints synchronously at the leading edge', () => {
@@ -47,22 +60,7 @@ test('deltas spaced past the cadence each paint at the leading edge', () => {
 });
 
 test('a switch-shaped hide+re-show of the same draft reuses the parse state', () => {
-  // A line-cutting fake marked: paragraph tokens carry the line body only and
-  // each newline rides its own space token, so streamSafeCut's sequential
-  // indexOf walk locates every raw and freezes cuts at line ends — the
-  // incremental reuse path engages (the default fake's single paragraph token
-  // never cuts, and streaming paints drive lexer/parser, never parse).
-  const cuttingMarked =
-    'globalThis.marked = { Renderer: function() { return {}; }, use() {}, ' +
-    'parse: (s) => s.split("\\n").filter(Boolean).map((l) => `<p>${l}</p>`).join(""), ' +
-    'lexer: (s) => s.split("\\n").filter(Boolean).flatMap((l) => ' +
-    '[{ type: "paragraph", raw: l, text: l }, { type: "space", raw: "\\n" }]), ' +
-    'parser: (tokens) => tokens.map((t) => t.type === "space" ? "" : `<p>${t.text}</p>`).join("") };';
-  const h0 = buildStreamHarness(cuttingMarked);
-  const h = { ...h0, frames: h0.stats().frames, lastHtml: () => h0.stats().frames.at(-1) || '' };
-  const lexerInputs = [];
-  const realLexer = h.context.marked.lexer;
-  h.context.marked.lexer = (s) => { lexerInputs.push(s); return realLexer(s); };
+  const { h, lexerInputs } = loadCuttingUsage();
   h.showStreaming({ content: 'one\ntwo\nthree\n' });
   h.advance(250);
   const lexesAfterTurn = lexerInputs.length;
@@ -80,17 +78,7 @@ test('a switch-shaped hide+re-show of the same draft reuses the parse state', ()
 });
 
 test('a hide followed by a different draft parses fresh', () => {
-  const cuttingMarked =
-    'globalThis.marked = { Renderer: function() { return {}; }, use() {}, ' +
-    'parse: (s) => s.split("\\n").filter(Boolean).map((l) => `<p>${l}</p>`).join(""), ' +
-    'lexer: (s) => s.split("\\n").filter(Boolean).flatMap((l) => ' +
-    '[{ type: "paragraph", raw: l, text: l }, { type: "space", raw: "\\n" }]), ' +
-    'parser: (tokens) => tokens.map((t) => t.type === "space" ? "" : `<p>${t.text}</p>`).join("") };';
-  const h0 = buildStreamHarness(cuttingMarked);
-  const h = { ...h0, frames: h0.stats().frames, lastHtml: () => h0.stats().frames.at(-1) || '' };
-  const lexerInputs = [];
-  const realLexer = h.context.marked.lexer;
-  h.context.marked.lexer = (s) => { lexerInputs.push(s); return realLexer(s); };
+  const { h, lexerInputs } = loadCuttingUsage();
   h.showStreaming({ content: 'first\nsession\ndraft\n' });
   h.advance(250);
   h.context.hideStreaming();

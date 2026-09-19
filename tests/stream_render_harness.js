@@ -19,6 +19,18 @@ const FAKE_MARKED_SRC =
   'lexer: (s) => [{ type: "paragraph", raw: s, text: s }], ' +
   'parser: (tokens) => tokens.map((t) => `<p>${t.text}</p>`).join("") };';
 
+// Line-cutting fake marked: paragraph tokens carry the line body only and each
+// newline rides its own space token, so streamSafeCut's sequential indexOf walk
+// locates every raw and freezes cuts at line ends — the incremental reuse path
+// engages (FAKE_MARKED_SRC's single paragraph token never cuts, and streaming
+// paints drive lexer/parser, never parse).
+const CUTTING_MARKED_SRC =
+  'globalThis.marked = { Renderer: function() { return {}; }, use() {}, ' +
+  'parse: (s) => s.split("\\n").filter(Boolean).map((l) => `<p>${l}</p>`).join(""), ' +
+  'lexer: (s) => s.split("\\n").filter(Boolean).flatMap((l) => ' +
+  '[{ type: "paragraph", raw: l, text: l }, { type: "space", raw: "\\n" }]), ' +
+  'parser: (tokens) => tokens.map((t) => t.type === "space" ? "" : `<p>${t.text}</p>`).join("") };';
+
 // CHECKOUT overrides the code under test (the M33 A/B protocol); the default is
 // this harness's own repo root so behavior tests exercise their own checkout.
 const CHECKOUT = process.env.CHECKOUT || path.join(__dirname, '..');
@@ -113,4 +125,4 @@ function buildStreamHarness(markedSource, options = {}) {
   return { context, showStreaming, advance, flushIdle, stats: () => ({ paintMs, timerCount: timers.size, frames }) };
 }
 
-module.exports = { buildStreamHarness, FAKE_MARKED_SRC };
+module.exports = { buildStreamHarness, FAKE_MARKED_SRC, CUTTING_MARKED_SRC };

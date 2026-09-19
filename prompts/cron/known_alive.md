@@ -536,6 +536,6 @@ Known-alive symbols:
   back, so vulture flags each write as an unused attribute.
 - `_reset_api_round_state` (`tests/test_host_auth.py`) — `@pytest.fixture(autouse=True)`
   fixture; pytest invokes it around every test in its module with no in-file reference,
-  resetting `api._round_running` and `api._poller_task` before and after each test.
+  resetting `api._round_running` and `api._poller.task` before and after each test.
   Vulture flags it as an unused function (60% confidence). Same autouse class as
   `_codex_home_under_tmp` above.

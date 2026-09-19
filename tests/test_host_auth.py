@@ -58,10 +58,10 @@ def _flat(body: str) -> str:
 @pytest.fixture(autouse=True)
 def _reset_api_round_state() -> Any:
   api._round_running = False
-  api._poller_task = None
+  api._poller.task = None
   yield
   api._round_running = False
-  api._poller_task = None
+  api._poller.task = None
 
 
 @pytest.fixture
@@ -568,7 +568,7 @@ async def test_start_and_stop_poller(monkeypatch: pytest.MonkeyPatch) -> None:
   await asyncio.sleep(0.01)
   assert calls
   await api.stop_poller()
-  assert api._poller_task is None
+  assert api._poller.task is None
 
 
 def test_leak_scan_list_covers_the_host_auth_files() -> None:

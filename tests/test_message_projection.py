@@ -920,6 +920,20 @@ def test_page_body_cache_lru_cap_evicts_oldest() -> None:
   assert projection.cached_page_body(0, 1) == b"new"
 
 
+async def _broadcast_advance_turn(mgr: SessionManager, session_id: str) -> None:
+  """Broadcast one user ask and its master_done close, broadcasts dropped — the
+  advance the events-route advance tests grow the projection with."""
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
+    await mgr.persist_and_broadcast(session_id, {"id": "u9", "type": ET.USER, "content": "q9", "timestamp": "t9-u"})
+    await mgr.persist_and_broadcast(
+        session_id, {
+            "id": "done9",
+            "type": ET.MASTER_DONE,
+            "thinking_seconds": 1,
+            "timestamp": "t9-done"
+        })
+
+
 @pytest.mark.asyncio
 async def test_events_route_repeat_page_serves_cached_bytes(tmp_path: Path) -> None:
   """The events route serves a repeat page from the projection's body cache,
@@ -943,15 +957,7 @@ async def test_events_route_repeat_page_serves_cached_bytes(tmp_path: Path) -> N
   assert first.body == second.body
   assert json.loads(first.body) == _page_payload(projection, before, limit)
 
-  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
-    await mgr.persist_and_broadcast(session.id, {"id": "u9", "type": ET.USER, "content": "q9", "timestamp": "t9-u"})
-    await mgr.persist_and_broadcast(
-        session.id, {
-            "id": "done9",
-            "type": ET.MASTER_DONE,
-            "thinking_seconds": 1,
-            "timestamp": "t9-done"
-        })
+  await _broadcast_advance_turn(mgr, session.id)
   grown = await asyncio.to_thread(mgr.get_message_projection, session.id)
   assert grown is not None and grown is not projection
   new_before = len(grown.committed)
@@ -998,15 +1004,7 @@ async def test_events_route_gzip_recompresses_after_advance(tmp_path: Path) -> N
   _append_events(mgr.get_chat_events_path(session.id), _turned_messages_events([2, 2, 2]))
   meta = await mgr.get_session(session.id)
 
-  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
-    await mgr.persist_and_broadcast(session.id, {"id": "u9", "type": ET.USER, "content": "q9", "timestamp": "t9-u"})
-    await mgr.persist_and_broadcast(
-        session.id, {
-            "id": "done9",
-            "type": ET.MASTER_DONE,
-            "thinking_seconds": 1,
-            "timestamp": "t9-done"
-        })
+  await _broadcast_advance_turn(mgr, session.id)
   grown = await asyncio.to_thread(mgr.get_message_projection, session.id)
   assert grown is not None
   new_before, limit = len(grown.committed), 3

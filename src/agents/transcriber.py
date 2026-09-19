@@ -36,11 +36,20 @@ MAX_RECORDING_SAMPLES = SAMPLE_RATE * MAX_RECORDING_SECONDS
 # segment. Measured on this host (x86_64 WSL2, RTX 3080 box; measurements in
 # ab_voice_decode_v1.py, session artifacts): the CPU sherpa engine decodes a 10.1s
 # segment in ~3.1s and a 26.6s segment in ~7.9s (num_threads=4); the GPU qwen3_hf
-# engine decodes the 26.6s segment in ~2.0-2.3s. At a 2s refresh the 20s-cap segment
-# would pin the decode thread (duty > 100%), and even at 5s the duty peaks near half
-# on the longest segments, so partials refresh every 5s of speech.
+# engine decodes the 26.6s segment in ~2.0-2.3s. One decode window is bounded at
+# 25.4s (5s pause + 20s speech cap + 0.4s tail; see SEGMENT_DECODE_PAUSE_SAMPLES),
+# so at a 2s refresh it would pin the decode thread (duty > 100%), and even at 5s
+# the duty peaks near half on the longest segments, so partials refresh every 5s of
+# speech.
 LIVE_DECODE_INTERVAL_SAMPLES = SAMPLE_RATE * 5
 LIVE_DECODE_MIN_SAMPLES = SAMPLE_RATE // 2
+# A segment's decode starts where the previous one's ended, pause included, so quiet
+# speech the detector labels silence still reaches the model. The cap bounds one
+# decode at 5s pause + the detector's 20s max_speech_duration + 0.4s tail = 25.4s,
+# about 330 audio positions plus 256 new tokens, inside the CPU engine's
+# max_total_len=1024.
+SEGMENT_DECODE_PAUSE_SAMPLES = 5 * SAMPLE_RATE
+# Padding after a segment's speech end, so a word tail just past the cut still decodes.
 SEGMENT_DECODE_PAD_SAMPLES = 6_400
 VAD_BUFFER_SECONDS = MAX_RECORDING_SECONDS + 10
 
@@ -410,7 +419,9 @@ def _create_vad_config(paths: VoiceModelPaths) -> object:
   vad_config = sherpa_onnx.VadModelConfig()
   vad_config.silero_vad.model = str(paths.silero_vad)
   vad_config.silero_vad.threshold = 0.5
-  vad_config.silero_vad.min_silence_duration = 0.35
+  # A measured 0.93s mid-sentence pause split a phrase into a 1.35s fragment the
+  # model misrecognized; only pauses of 1.0s or more end a segment.
+  vad_config.silero_vad.min_silence_duration = 1.0
   vad_config.silero_vad.min_speech_duration = 0.25
   vad_config.silero_vad.max_speech_duration = 20.0
   vad_config.sample_rate = SAMPLE_RATE
@@ -562,7 +573,7 @@ class SimulatedStreamingTranscriptionSession:
     return _decode_samples(self._bundle, samples)
 
   def _raw_samples_for_decode(self, start_sample: int, end_sample: int) -> tuple[np.ndarray, int]:
-    left = max(self._decoded_region_end, start_sample - SEGMENT_DECODE_PAD_SAMPLES)
+    left = max(self._decoded_region_end, start_sample - SEGMENT_DECODE_PAUSE_SAMPLES)
     right = min(self._fed_samples, end_sample + SEGMENT_DECODE_PAD_SAMPLES)
     if right <= left:
       return np.empty(0, dtype=np.float32), left

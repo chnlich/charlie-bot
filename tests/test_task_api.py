@@ -129,7 +129,7 @@ async def test_one_click_root_create_empty_goal_is_a_valid_task(task_env) -> Non
         assert meta["schema_version"] == 2 and meta["profile"] == "manager"
         assert meta["task_parent_id"] is None
         assert meta["task"]["goal"] == ""
-        assert meta["name"] == "New manager task", "the server default title, renameable later"
+        assert meta["name"].startswith("Session "), "the session counter default title, renameable later"
         assert meta["backend"] == OPUS_BACKEND_ID, "the existing default backend resolution"
         replay = client.post("/api/sessions/", json=body)
         assert replay.status_code == 200

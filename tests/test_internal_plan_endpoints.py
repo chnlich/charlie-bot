@@ -4,12 +4,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import (
-    OPUS_BACKEND_ID,
-    OPUS_BACKEND_OPTION,
-    capture_create_logged_task,
-)
-from conftest import build_plan_cfg as _build_cfg
 from conftest import make_plan_setup as _setup
 from conftest import write_plan_artifact as _write_artifact
 from fastapi import FastAPI
@@ -20,9 +14,7 @@ from src.api.internal import router as internal_router
 from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-    CreateSessionRequest,
     SessionMetadata,
-    TaskType,
 )
 from src.core.plans import PlanRegistryManager
 from src.core.sessions import SessionManager
@@ -319,42 +311,6 @@ async def test_plan_updated_broadcast_on_present_and_absent_from_chat_events(tmp
 # ---------------------------------------------------------------------------
 # ThreadMetadata.task_type is set on delegate-created threads
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_delegate_sets_task_type_on_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  from src.api import internal
-  from src.core.models import DelegateRequest
-
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  thread_mgr = ThreadManager(cfg)
-  meta = await session_mgr.create_session(CreateSessionRequest(name="Test"), backend=OPUS_BACKEND_ID)
-  captured_thread: dict[str, Any] = {}
-
-  async def fake_spawn_worker(*args: Any, **kwargs: Any) -> None:
-    return None
-
-  async def fake_resolve(*args: Any, **kwargs: Any) -> tuple[str, str]:
-    return OPUS_BACKEND_ID, OPUS_BACKEND_OPTION.model
-
-  monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve)
-  monkeypatch.setattr(internal, "spawn_worker", fake_spawn_worker)
-  monkeypatch.setattr(internal, "create_logged_task", capture_create_logged_task(captured_thread))
-  monkeypatch.setattr(internal, "get_config", lambda: cfg)
-  monkeypatch.setattr(internal, "check_takeoff_gate", lambda *a, **k: None)
-
-  req = DelegateRequest(
-      session_id=meta.id,
-      description="verify this plan",
-      task_type=TaskType.VERIFY,
-  )
-  result = await internal.delegate_task(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
-  assert result["thread_id"]
-
-  thread = await thread_mgr.get_thread(meta.id, result["thread_id"])
-  assert thread is not None
-  assert thread.task_type == TaskType.VERIFY
 
 
 # ---------------------------------------------------------------------------

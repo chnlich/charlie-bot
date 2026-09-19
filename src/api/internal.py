@@ -11,7 +11,6 @@ from src.api.deps import (
   get_plan_manager,
   get_session_manager,
   get_task_manager,
-  get_thread_manager,
   get_trigger_manager,
   require_found,
 )
@@ -27,7 +26,6 @@ from src.core.improve_command import (
   loop_goal_path,
   loop_plan_path,
   reserve_loop_state,
-  run_improve_loop,
   save_loop_state,
 )
 from src.core.log_once import LazyStructlogLogger
@@ -45,7 +43,6 @@ from src.core.models import (
   SessionMetadata,
   SlackAckRequest,
   SlackReplyRequest,
-  SpawnRequest,
   TaskType,
   WatchKind,
 )
@@ -60,12 +57,10 @@ from src.core.slack_listener import (
 from src.core.spawner import (
   resolve_requested_subagent_backend_model,
   select_verify_backend,
-  spawn_worker,
 )
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
 from src.core.task_sessions import TaskTreeManager
 from src.core.tasks import create_logged_task
-from src.core.threads import ThreadManager
 from src.core.triggers import ArchivedSessionError, RemoteVerifyError, TriggerManager
 
 log = LazyStructlogLogger()
@@ -289,15 +284,19 @@ async def _delegate_task_tree(
 async def delegate_task(
     req: DelegateRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: object = Depends(require_caller_dep),
 ) -> dict:
-  """Create a worker task and spawn it, or the legacy thread path for v1 sessions."""
+  """Create a worker task under the calling manager and launch its first Run.
+
+  A legacy session (profile None) is adopted as a manager node on its first
+  delegation, after its own session-local gate and backend check have passed,
+  so a blocked or malformed request converts nothing; its history threads
+  stay on the thread path.
+  """
   # Repo/branch contract first, before any session access or backend
   # resolution: the rejection must not depend on the caller's configured
-  # backends, and a replayed request must fail identically on both the v2
-  # task-tree path and the legacy thread path.
+  # backends, and a replayed request must fail identically.
   if req.task_type == TaskType.VERIFY:
     if req.repo_path is not None:
       raise HTTPException(status_code=400, detail="verify delegations are repo-less; omit repo_path")
@@ -311,63 +310,12 @@ async def delegate_task(
       raise HTTPException(
           status_code=400, detail=f"{req.task_type.value} delegations require base_branch")
   target = require_found(await session_mgr.get_session(req.session_id))
-  if target.profile is not None:
-    meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(
-        req, session_mgr, task_mgr)
-    return await _delegate_task_tree(
-        req, meta, cfg, task_mgr, session_mgr, caller, resolved_backend, resolved_model)
   meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(
       req, session_mgr, task_mgr)
-
-  require_review = req.task_type == TaskType.IMPLEMENT  # noqa: F841  (legacy shape unchanged)
-
-  # Create thread immediately so it's visible in the UI
-  thread = await thread_mgr.create_thread(
-      meta,
-      req.description,
-      context=req.context,
-      require_review=require_review,
-      task_type=req.task_type,
-  )
-
-  # Fire-and-forget: spawn worker in background
-  create_logged_task(
-      spawn_worker(
-          req.session_id,
-          req.description,
-          thread.id,
-          cfg,
-          session_mgr,
-          thread_mgr,
-          request=SpawnRequest(
-              repo_path=req.repo_path,
-              base_branch=req.base_branch,
-              context=req.context,
-              resolved_backend=resolved_backend,
-              resolved_model=resolved_model,
-              keep_worktree=req.keep_worktree,
-              task_type=req.task_type,
-          ),
-      ))
-
-  # Save and broadcast task_delegated event so cursor stays in sync on reconnect
-  task_event = {
-      "type": ET.TASK_DELEGATED,
-      "thread_id": thread.id,
-      "description": req.description,
-      "timestamp": thread.created_at.isoformat(),
-      "backend": resolved_backend or "",
-      "model": resolved_model or "",
-      ET.DELEGATE_INVOCATION: _delegate_invocation_event_payload(req),
-  }
-  await session_mgr.persist_and_broadcast(req.session_id, task_event)
-
-  log.info("task_delegated_internal", session=req.session_id, thread_id=thread.id)
-
-  return {
-      "thread_id": thread.id,
-      "description": req.description,
-  }
+  if target.profile is None:
+    meta = await task_mgr.adopt_legacy_session(req.session_id)
+  return await _delegate_task_tree(
+      req, meta, cfg, task_mgr, session_mgr, caller, resolved_backend, resolved_model)
 
 
 @router.post("/improve")
@@ -375,72 +323,22 @@ async def start_improve_loop(
     req: ImproveRequest,
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     session_mgr: SessionManager = Depends(get_session_manager),
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> dict:
-  """Launch an iterative improvement loop as a background task.
+  """Launch an iterative improvement loop on the task tree as a background task.
 
-  A v2 manager target runs the sequence on the task tree: one worker child
-  task, one iteration Run per round (``sequence_ref`` kind=improve), and the
-  one final sequence result delivered to the manager through the common report
-  owner. A legacy (v1) session keeps the existing thread-based loop unchanged.
+  One worker child task, one iteration Run per round (``sequence_ref``
+  kind=improve), and one final sequence result delivered to the manager
+  through the common report owner. A legacy session (profile None) is adopted
+  as a manager node on its first loop, after its own session-local gate and
+  backend check have passed, so a blocked or malformed request converts
+  nothing.
   """
   target = require_found(await session_mgr.get_session(req.session_id))
-  if target.profile is not None:
-    return await _start_improve_sequence(req, cfg, task_mgr, session_mgr)
-
-  _meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(
-      req, session_mgr, task_mgr)
-
-  work_branch = req.work_branch or f"improve/{int(time.time())}"
-  try:
-    state = await reserve_loop_state(
-        req.session_id,
-        req.goal,
-        work_branch,
-        req.repo_path,
-        cfg,
-        plan=req.plan,
-        base_branch=req.base_branch,
-        merge_back=req.merge_back,
-        resolved_backend=resolved_backend,
-        resolved_model=resolved_model,
-    )
-  except ImproveLoopAlreadyRunningError as e:
-    raise HTTPException(status_code=409, detail=str(e)) from e
-
-  create_logged_task(
-      run_improve_loop(
-          session_id=req.session_id,
-          repo_path=req.repo_path,
-          iterations=req.iterations,
-          goal=req.goal,
-          cfg=cfg,
-          session_mgr=session_mgr,
-          thread_mgr=thread_mgr,
-          base_branch=req.base_branch,
-          work_branch=work_branch,
-          merge_back=req.merge_back,
-          resolved_backend=resolved_backend,
-          resolved_model=resolved_model,
-          loop_id=state.loop_id,
-          plan=req.plan,
-      ),
-      name=f"improve-loop-{req.session_id}",
-  )
-
-  log.info("improve_loop_started", session=req.session_id, iterations=req.iterations, goal=req.goal)
-
-  response = {
-      "status": "started",
-      "session_id": req.session_id,
-      "iterations": req.iterations,
-      "loop_id": state.loop_id,
-      "goal_path": str(loop_goal_path(req.session_id, state.loop_id, cfg)),
-  }
-  if req.plan is not None:
-    response["plan_path"] = str(loop_plan_path(req.session_id, state.loop_id, cfg))
-  return response
+  if target.profile is None:
+    await _authorize_spawn_request(req, session_mgr, task_mgr)
+    await task_mgr.adopt_legacy_session(req.session_id)
+  return await _start_improve_sequence(req, cfg, task_mgr, session_mgr)
 
 
 async def _start_improve_sequence(

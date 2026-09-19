@@ -616,7 +616,11 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
   }
   lastGroupedRenderArgs = {sessions, filter};
   if (!options.skipRefresh) scheduleProjectManagerRefresh();
-  const {groups, sortedKeys} = groupSessionsBySortedKeys(sessions, s => s.group);
+  // Grouping follows the root rows; a child row nests under its parent
+  // whatever its own group field says.
+  const {roots, childrenOf} = buildSessionTree(sessions);
+  lastTreeChildrenOf = childrenOf;
+  const {groups, sortedKeys} = groupSessionsBySortedKeys(roots, s => s.group);
   const collapsedState = loadGroupCollapsedState(SESSION_GROUP_COLLAPSED_STORAGE_KEY);
   const limitState = loadGroupLimitState(SESSION_GROUP_LIMIT_STORAGE_KEY);
 
@@ -667,14 +671,15 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
         </svg>
         <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">${escapeHtml(label)}</span>
         ${groupActions}
-        <span class="text-xs text-slate-500 ml-auto">${groupSessions.length}</span>
+        <span class="text-xs text-slate-500 ml-auto">${countTreeRows(groupSessions, childrenOf)}</span>
       </div>
       <div class="session-group-items ${isCollapsed ? 'hidden' : ''}" data-sgroup-items="${safeKey}">
         ${pmRowHtml}
-        ${groupSessions.map((s, index) => renderSessionItem(
+        ${groupSessions.map((s, index) => renderSessionTree(
           s,
           filter,
-          taskRowOptions(s, index)
+          taskRowOptions(s, index),
+          childrenOf
         )).join('')}
         ${renderGroupLimitToggle('session', key, groupSessions.length, isLimitExpanded)}
       </div>
@@ -757,6 +762,101 @@ function renderSessionTimeLine(s, timeIso, timeStr, staticTime = false) {
     + `</span>`;
 }
 
+// ---------------------------------------------------------------------------
+// Task-tree nesting: a child task node renders under its parent row.
+// ---------------------------------------------------------------------------
+// The expanded set lives in memory only, so a reload starts every parent
+// collapsed (a persisted expand state once hid a preview-cap regression).
+const treeExpandedNodes = new Set();
+let lastTreeChildrenOf = new Map();
+
+const LEAF_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>`;
+
+// Roots are the rows without a parent in this list (a null parent, or a parent
+// that is archived or filtered out); every other row nests under its parent.
+// Roots keep the list order; children put logical sessions before worker
+// leaves, each newest first. The server rejects cycles, so the walk ends.
+function buildSessionTree(sessions) {
+  const ids = new Set(sessions.map(s => s.id));
+  const childrenOf = new Map();
+  const roots = [];
+  sessions.forEach(s => {
+    const parent = s.task_parent_id;
+    if (parent && ids.has(parent)) {
+      if (!childrenOf.has(parent)) childrenOf.set(parent, []);
+      childrenOf.get(parent).push(s);
+    } else {
+      roots.push(s);
+    }
+  });
+  const newestFirst = (a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
+  childrenOf.forEach(list => list.sort((a, b) => {
+    const workerOrder = (a.profile === 'worker' ? 1 : 0) - (b.profile === 'worker' ? 1 : 0);
+    return workerOrder || newestFirst(a, b);
+  }));
+  return {roots, childrenOf};
+}
+
+function countTreeRows(rows, childrenOf) {
+  return rows.reduce((n, s) => n + 1 + countTreeRows(childrenOf.get(s.id) || [], childrenOf), 0);
+}
+
+function isTreeNodeExpanded(sessionId) {
+  return treeExpandedNodes.has(sessionId);
+}
+
+// The children of the last grouped paint, for indicator aggregation.
+function treeChildIds(sessionId) {
+  return (lastTreeChildrenOf.get(sessionId) || []).map(s => s.id);
+}
+
+function renderTreeChevron(sessionId, childCount) {
+  const expanded = treeExpandedNodes.has(sessionId);
+  return `<svg class="w-3 h-3 text-slate-500 transition-transform cursor-pointer flex-shrink-0 tree-chevron ${expanded ? 'rotate-90' : ''}"
+         data-tree-toggle="${sessionId}" role="button" aria-expanded="${expanded ? 'true' : 'false'}"
+         title="${childCount} child task${childCount === 1 ? '' : 's'}"
+         onclick="event.preventDefault(); event.stopPropagation(); toggleTreeNode(this.dataset.treeToggle)"
+         fill="none" stroke="currentColor" viewBox="0 0 24 24">${CHEVRON_SVG_PATH}</svg>`;
+}
+
+function renderWorkerLeafIcon() {
+  return `<svg class="w-3.5 h-3.5 text-slate-500 flex-shrink-0" title="Worker (implementation leaf)" fill="none" stroke="currentColor" viewBox="0 0 24 24">${LEAF_SVG_PATH}</svg>`;
+}
+
+// One row followed by its subtree. The outer wrapper carries the row's
+// group-limit class and attributes, so a root hidden by the 5-row preview
+// hides its subtree with it and Show all reveals both; the inner container
+// carries the expand state. Each level indents 22px behind a guide line.
+function renderSessionTree(s, filter, options, childrenOf) {
+  const children = childrenOf.get(s.id) || [];
+  const row = renderSessionItem(s, filter, {...options, treeChildCount: children.length});
+  if (!children.length) return row;
+  const wrapClass = ['tree-subtree', options.extraClass || ''].filter(Boolean).join(' ');
+  const wrapAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
+  const hiddenClass = treeExpandedNodes.has(s.id) ? '' : ' hidden';
+  return `${row}<div class="${wrapClass}"${wrapAttrs}>
+    <div class="tree-children ml-4 pl-1.5 mt-0.5 border-l border-slate-600${hiddenClass}" data-tree-children="${s.id}">
+      ${children.map(c => renderSessionTree(c, filter, {}, childrenOf)).join('')}
+    </div>
+  </div>`;
+}
+
+function toggleTreeNode(sessionId) {
+  const expanded = !treeExpandedNodes.has(sessionId);
+  if (expanded) treeExpandedNodes.add(sessionId); else treeExpandedNodes.delete(sessionId);
+  const selectorId = CSS.escape(sessionId);
+  document.querySelectorAll(`[data-tree-children="${selectorId}"]`).forEach(el => {
+    el.classList.toggle('hidden', !expanded);
+  });
+  document.querySelectorAll(`[data-tree-toggle="${selectorId}"]`).forEach(el => {
+    el.classList.toggle('rotate-90', expanded);
+    el.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  });
+  // A parent's indicators stand in for its collapsed subtree; the next status
+  // read re-evaluates them for the new expand state.
+  if (typeof refreshSessionStatusNow === 'function') refreshSessionStatusNow();
+}
+
 function renderSessionItem(s, filter, options = {}) {
   recordRenderedSessionStatus(s);
   const isActive = SESSION_ID === s.id;
@@ -764,6 +864,9 @@ function renderSessionItem(s, filter, options = {}) {
   // tab, search results): unarchive/delete actions, and none of the live-state
   // indicators, which archived sessions cannot carry.
   const isArchivedRow = filter === 'archived' || s.status === 'archived';
+  // A worker leaf is identified by its icon and carries the archive action alone.
+  const isWorker = s.profile === 'worker';
+  const isWorkerRow = isWorker && !isArchivedRow;
   const activeClass = sessionRowActiveClass(isActive);
   const activeBtnClass = isActive ? '!opacity-100' : '';
   const timeStr = s.updated_at ? relativeTime(s.updated_at) : '';
@@ -791,6 +894,8 @@ function renderSessionItem(s, filter, options = {}) {
           'Delete permanently',
           TRASH_SVG_PATH,
           activeBtnClass)}`;
+  } else if (isWorkerRow) {
+    actions = renderArchiveButton(s, activeBtnClass);
   } else {
     actions = `
       ${renderStarButton(s, activeBtnClass)}
@@ -811,7 +916,9 @@ function renderSessionItem(s, filter, options = {}) {
      ondblclick="startRename(event, '${s.id}')"
      onclick="event.preventDefault(); switchSession('${s.id}')"
      id="session-${s.id}"${extraAttrs}>
+    ${options.treeChildCount ? renderTreeChevron(s.id, options.treeChildCount) : ''}
     ${indicators}
+    ${isWorker ? renderWorkerLeafIcon() : ''}
     <span class="flex-1 min-w-0">
       <span class="truncate block session-name">${escapeHtml(s.name)}</span>
       ${filter === 'scheduled' && s.schedule_cron ? renderSessionScheduleLine(s) : renderSessionTimeLine(s, timeIso, timeStr, !!options.staticTime)}
@@ -890,6 +997,7 @@ const GLOBALS = {
   deleteGroup,
   renderSessionItem,
   renderSessionList,
+  toggleTreeNode,
 };
 const SIDEBAR_ONLY = {
   TRASH_SVG_PATH,
@@ -911,6 +1019,10 @@ const SIDEBAR_ONLY = {
   openPmSlotEditor,
   removeSessionFromRenderedList,
   resyncSessionUnread,
+  buildSessionTree,
+  renderSessionTree,
+  isTreeNodeExpanded,
+  treeChildIds,
 };
 Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
 

@@ -6,7 +6,7 @@ NO_OUTPUT_REPORT_THRESHOLD, emits at most one reminder per mount via
 ``on_silence`` — the same text shape as the boot STALLED report. It never
 judges death and never stops the follow.
 
-The once-key (a boot-scoped set in init.py, keyed by thread_id) is shared by
+The once-key (a boot-scoped set in init_worker_recovery.py, keyed by thread_id) is shared by
 the boot STALLED report and every mount's recheck: whichever emits first
 claims the thread for this boot, so repeated re-mounts can never re-emit.
 Nothing is persisted.

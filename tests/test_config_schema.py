@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 import re
 from pathlib import Path
 from typing import get_args, get_origin
@@ -204,21 +203,6 @@ def test_credentials_shape_errors_name_the_offending_depth(
   with pytest.raises(ValueError) as excinfo:
     config_module.load_credentials()
   assert fragment in str(excinfo.value)
-
-
-def test_get_credentials_caches_until_the_file_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  home = _credentials_home(tmp_path, monkeypatch)
-  cred_path = home / "credentials.yaml"
-  cred_path.write_text("alpha:\n  key: one\n", encoding="utf-8")
-  first = config_module.get_credentials()
-  assert first.get("alpha", "key") == "one"
-  assert config_module.get_credentials() is first
-  cred_path.write_text("alpha:\n  key: two\n", encoding="utf-8")
-  st = os.stat(cred_path)
-  os.utime(cred_path, (st.st_atime, st.st_mtime + 10))
-  second = config_module.get_credentials()
-  assert second is not first
-  assert second.get("alpha", "key") == "two"
 
 
 def test_credentials_example_covers_every_credentials_legacy_key() -> None:

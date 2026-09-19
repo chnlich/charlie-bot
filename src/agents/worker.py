@@ -38,8 +38,9 @@ def __getattr__(name: str) -> Any:
   return deferred_module_getattr(name, __name__, globals(), "build_backend", load_build_backend)
 
 
+# Each entry is a substring catch-all for its family: bare "quota" also matches
+# every phrase form ("quota exceeded", ...), so phrase entries stay out.
 QUOTA_ERROR_PATTERNS = [
-    "quota exceeded",
     "rate limit",
     "resource_exhausted",
     "429",

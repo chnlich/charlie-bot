@@ -36,6 +36,9 @@ from src.core.timeouts import SUBPROCESS_GIT_READ_TIMEOUT_ASYNC
 
 log = LazyStructlogLogger()
 
+# The first matching substring names the blocker, so an entry contained in an
+# earlier one can never be named: keep the shorter form ("out of token" covers
+# "out of tokens").
 _QUOTA_BLOCKER_TEXT_PATTERNS = (
     "quota exhausted",
     "quota exceeded",
@@ -55,7 +58,6 @@ _QUOTA_BLOCKER_TEXT_PATTERNS = (
     "429",
     "out of token",
     "out-of-token",
-    "out of tokens",
     "insufficient tokens",
     "tokens exhausted",
 )

@@ -1209,6 +1209,10 @@ test('archiveSession removes the row inline and switches to the next rendered se
         },
       };
     }
+    if (url === '/api/sessions/session-b/read') {
+      assert.equal(opts.method, 'POST');
+      return {ok: true, async json() { return {}; }};
+    }
     throw new Error('unexpected fetch ' + url);
   };
   context.renderSessionView = (data) => { rendered = data; };
@@ -1221,6 +1225,7 @@ test('archiveSession removes the row inline and switches to the next rendered se
     '/api/sessions/session-a',
     SWITCH_TELEMETRY_URL,
     '/api/sessions/session-b/bootstrap',
+    '/api/sessions/session-b/read',  // the landed switch marks the new session read post-render
     SWITCH_TELEMETRY_URL,
   ]);
   assert.equal(rowA.removed, true);

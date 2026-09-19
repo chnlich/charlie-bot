@@ -30,6 +30,7 @@ _NODE_TESTS = [
     "cron_broken_ui.test.js",
     "diff_comments.test.js",
     "ext_usage_render.test.mjs",
+    "leaf_view.test.js",
     "marked_hl_cache.test.js",
     "page_timers_visibility.test.js",
     "panel_resize.test.js",
@@ -63,7 +64,6 @@ _NODE_TESTS = [
     "worker_events_incremental.test.js",
     "worker_events_metadata_failure.test.js",
     "worker_events_truncation_note.test.js",
-    "workers_list_conditional_poll.test.js",
     "websocket_catchup_split_invariance.test.js",
     "websocket_session_isolation.test.js",
 ]

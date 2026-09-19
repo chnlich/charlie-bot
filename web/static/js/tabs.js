@@ -4,12 +4,15 @@
 let _backlogLoaded = false;
 
 function switchTab(tab) {
-  const allTabs = ['terminal', 'chat-tex', 'chat', 'workers', 'chat-backlog', 'chat-plans'];
+  const allTabs = ['terminal', 'chat-tex', 'chat', 'chat-backlog', 'chat-plans'];
   // chat-tex, chat, and chat-backlog show the chat content; chat-plans is a
-  // full-area view (workers-pattern) and hides chat.
-  const showChat = (tab === 'chat-tex' || tab === 'chat' || tab === 'chat-backlog');
+  // full-area view and hides chat. A worker leaf has no chat: its Run list
+  // (sidebar/workers.js) takes the chat family's place.
+  const chatFamily = (tab === 'chat-tex' || tab === 'chat' || tab === 'chat-backlog');
+  const leaf = typeof activeSessionIsLeaf === 'function' && activeSessionIsLeaf();
+  const showChat = chatFamily && !leaf;
   document.getElementById('tab-chat').classList.toggle('hidden', !showChat);
-  document.getElementById('tab-workers').classList.toggle('hidden', tab !== 'workers');
+  document.getElementById('tab-workers').classList.toggle('hidden', !(chatFamily && leaf));
   document.getElementById('tab-plans').classList.toggle('hidden', tab !== 'chat-plans');
   const terminalTab = document.getElementById('tab-terminal');
   if (terminalTab) {
@@ -67,7 +70,7 @@ function switchTab(tab) {
     planPanel.onTabShown();
   }
 
-  if (tab === 'workers' && typeof ensureWorkersLoadedForActiveSession === 'function') {
+  if (chatFamily && leaf && typeof ensureWorkersLoadedForActiveSession === 'function') {
     ensureWorkersLoadedForActiveSession();
   }
 

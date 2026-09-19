@@ -152,20 +152,135 @@ function renderWorkersTabUnknown() {
   const container = document.getElementById('tab-workers');
   if (!container) return;
   container.innerHTML = '<div id="workers-loading-placeholder" class="flex items-center justify-center h-full text-slate-500 text-sm">Loading worker threads...</div>';
-  updateWorkersTabBadge();
 }
 
-// Poll-based workers tab updates (replaces WS-driven addWorkerCard/updateWorkerStatus)
+// ---------------------------------------------------------------------------
+// Worker leaf view
+// ---------------------------------------------------------------------------
+// A worker leaf has no chat of its own to read, so opening it shows the node's
+// Run list in the main area instead (tabs.js swaps it in for the chat family).
+// Each Run renders through the worker card above: the thread routes accept a
+// Run id as an alias, so the card's live event view and cancel button address
+// the Run itself. After delivery a banner at the top carries the report
+// summary and the four evidence links. The session view sets the leaf when
+// the loaded session's profile is worker; the value is compared against
+// SESSION_ID so it never outlives a switch.
+let leafSessionId = null;
+let leafSummary = '';
 
-function renderWorkersListItems(items, sessionId) {
-  const threads = [];
-  const triggers = [];
-  for (const item of items || []) {
-    if (item.type === 'trigger') triggers.push(item);
-    else threads.push(item);
-  }
-  renderWorkersTab(threads, sessionId, triggers);
-  updateWorkersTabBadge();
+function setLeafSession(sessionId, summary) {
+  leafSessionId = sessionId || null;
+  leafSummary = summary || '';
+}
+
+function activeSessionIsLeaf() {
+  return !!leafSessionId && leafSessionId === SESSION_ID;
+}
+
+// RunRow.state (fact-derived) folded into the card's status vocabulary, the
+// same way the thread alias folds it server-side (_v2_run_status).
+const RUN_CARD_STATUS = {
+  success: 'completed', failed: 'failed', interrupted: 'failed', attention: 'failed',
+  stopped: 'cancelled', queued: 'idle', running: 'running',
+};
+
+function runCardRow(run, description) {
+  return {
+    type: 'thread',
+    id: run.id,
+    description: description || '',
+    status: RUN_CARD_STATUS[run.state] || 'idle',
+    // A queued run has not started; the card dates it now, as the alias row does.
+    created_at: run.started_at || new Date().toISOString(),
+    completed_at: run.ended_at || null,
+    backend: run.backend || '',
+  };
+}
+
+function leafGoal(detail) {
+  return (detail && detail.task && detail.task.goal) || '';
+}
+
+// The host file viewer serves absolute paths under /absolute_filepath; a
+// reference that is not a path gets no link.
+function evidenceHref(ref) {
+  return typeof ref === 'string' && ref.startsWith('/') ? '/absolute_filepath' + ref : null;
+}
+
+// The diff page compares the run's work branch against its base branch.
+function diffHref(run, sessionId) {
+  if (!run || !run.repo_path || !run.base_branch || !run.branch_name) return null;
+  return '/diff?repo=' + encodeURIComponent(run.repo_path)
+    + '&base=' + encodeURIComponent(run.base_branch)
+    + '&head=' + encodeURIComponent(run.branch_name)
+    + '&session=' + encodeURIComponent(sessionId || '');
+}
+
+// The delivered run is the newest successful one (runs arrive newest first).
+function deliveredRun(runs) {
+  return (runs || []).find(run => run.state === 'success') || null;
+}
+
+function evidenceLinkHtml(label, href) {
+  if (!href) return '<span class="text-slate-500">' + label + '</span>';
+  return '<a class="text-blue-400 hover:underline" href="' + escapeHtmlAttr(href) + '" target="_blank" rel="noopener">' + label + '</a>';
+}
+
+function leafDeliveryHtml(detail, runs, summary, sessionId) {
+  const state = detail && detail.task_state;
+  if (!state || state === 'open') return '';
+  const delivered = state === 'completed';
+  const palette = delivered ? 'border-green-500/50 bg-green-500/10' : 'border-slate-600 bg-slate-800';
+  const labelClass = delivered ? 'text-green-300' : 'text-slate-400';
+  const run = deliveredRun(runs) || (runs && runs[0]) || null;
+  const links = [
+    evidenceLinkHtml('Raw log', evidenceHref(run && run.raw_log_ref)),
+    evidenceLinkHtml('Events', evidenceHref(run && run.events_ref)),
+    evidenceLinkHtml('Result', evidenceHref(run && run.result_ref)),
+    evidenceLinkHtml('Diff', diffHref(run, sessionId)),
+  ];
+  return '<div class="rounded-xl border ' + palette + ' px-4 py-3 space-y-1">'
+    + '<p class="text-xs font-semibold uppercase tracking-wider ' + labelClass + '">' + (delivered ? 'Delivered' : 'Task ' + escapeHtml(state)) + '</p>'
+    + (summary ? '<p class="text-sm text-slate-200 whitespace-pre-wrap">' + escapeHtml(summary) + '</p>' : '')
+    + '<p class="text-xs flex flex-wrap gap-3">' + links.join('') + '</p>'
+    + '</div>';
+}
+
+function leafHeaderHtml(detail) {
+  const goal = leafGoal(detail);
+  return '<div class="px-1">'
+    + '<p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Worker task</p>'
+    + '<p class="text-sm text-slate-300 whitespace-pre-wrap">'
+    + (goal ? escapeHtml(goal) : '<span class="text-slate-500">No task goal recorded</span>')
+    + '</p></div>';
+}
+
+function renderLeafView(detail, runs, summary, sessionId) {
+  const container = document.getElementById('tab-workers');
+  if (!container) return;
+  const sid = sessionId || (detail && detail.id) || SESSION_ID;
+  const goal = leafGoal(detail);
+  const cards = (runs || []).map(run =>
+    '<div class="' + WORKER_CARD_CLASS + '">' + workerCardBodyHtml(runCardRow(run, goal), sid) + '</div>');
+  container.innerHTML = leafHeaderHtml(detail)
+    + '<div id="leaf-delivery-slot">' + leafDeliveryHtml(detail, runs, summary, sid) + '</div>'
+    + '<div id="leaf-runs" class="space-y-3">'
+    + (cards.length ? cards.join('')
+      : '<div id="no-workers-placeholder" class="flex items-center justify-center py-8 text-slate-500 text-sm">No runs yet</div>')
+    + '</div>';
+}
+
+// The leaf's data: the detail row (task_state, goal) and its newest 50 runs.
+async function fetchLeafData(sessionId) {
+  const [detailRes, runsRes] = await Promise.all([
+    fetch('/api/sessions/' + sessionId, {cache: 'no-store'}),
+    fetch('/api/sessions/' + sessionId + '/runs?order=desc&limit=50', {cache: 'no-store'}),
+  ]);
+  if (!detailRes.ok) throw new Error('HTTP ' + detailRes.status);
+  if (!runsRes.ok) throw new Error('HTTP ' + runsRes.status);
+  const detail = await detailRes.json();
+  const page = await runsRes.json();
+  return {detail, runs: (page && page.items) || []};
 }
 
 function restartWorkersPolling() {
@@ -175,90 +290,57 @@ function restartWorkersPolling() {
 async function ensureWorkersLoadedForActiveSession(opts) {
   const force = opts && opts.force;
   const pollSessionId = SESSION_ID;
-  if (!pollSessionId) return;
+  if (!pollSessionId || !activeSessionIsLeaf()) return;
   if (!force && workersLoadedForSession === pollSessionId) return;
   if (workersLoadInflightForSession === pollSessionId) return;
   workersLoadInflightForSession = pollSessionId;
   try {
-    const res = await fetch('/api/threads/' + pollSessionId + '/list');
-    if (!res.ok) throw new Error(res.status);
-    workersListEtag = res.headers.get('ETag');
-    const items = await res.json();
+    const {detail, runs} = await fetchLeafData(pollSessionId);
     if (pollSessionId !== SESSION_ID) return;
-    renderWorkersListItems(items || [], pollSessionId);
+    renderLeafView(detail, runs, leafSummary, pollSessionId);
     workersLoadedForSession = pollSessionId;
     restartWorkersPolling();
   } catch (err) {
-    console.error('loadWorkers failed:', err);
+    console.error('loadLeafRuns failed:', err);
   } finally {
     if (workersLoadInflightForSession === pollSessionId) workersLoadInflightForSession = null;
   }
 }
 
+// The 3 s leaf poll: existing cards take their new status in place (an open
+// event view stays open), new runs get a card, and the banner follows the
+// task state.
 function pollWorkers() {
   const pollSessionId = SESSION_ID;
-  if (!pollSessionId) return;
+  if (!pollSessionId || !activeSessionIsLeaf()) return;
   if (workersLoadedForSession !== pollSessionId) {
     ensureWorkersLoadedForActiveSession({force: true});
     return;
   }
-  // The list body carries an ETag; repeating it via ?etag= asks the server
-  // for a bodyless 204 instead of the full rows when nothing behind the list
-  // moved. no-store keeps every poll a real request (the browser's HTTP cache
-  // would fulfil a revalidation itself and hide the answer).
-  const etagParam = workersListEtag ? '?etag=' + encodeURIComponent(workersListEtag) : '';
-  fetch('/api/threads/' + pollSessionId + '/list' + etagParam, {cache: 'no-store'})
-    .then(r => {
-      if (r.status === 204) return null;
-      if (!r.ok) return null;
-      const etag = r.headers.get('ETag');
-      if (etag) workersListEtag = etag;
-      return r.json();
+  fetchLeafData(pollSessionId)
+    .then(({detail, runs}) => {
+      if (pollSessionId !== SESSION_ID) return;
+      applyLeafPoll(detail, runs, pollSessionId);
     })
-    .then(items => {
-      if (!items || pollSessionId !== SESSION_ID) return;
-      for (const item of items) {
-        if (item.type === 'trigger') {
-          const existing = document.getElementById('trigger-dot-' + item.id);
-          if (!existing) {
-            addTriggerCard(item.id, item.message, item.fire_at, item.created_at, item.status);
-          } else {
-            updateTriggerStatus(item.id, item.status);
-          }
-        } else {
-          const existing = document.getElementById('thread-dot-' + item.id);
-          if (!existing) {
-            addWorkerCard(item.id, item.description, item.created_at, item.backend || '', item.description_full_len);
-            if (item.status !== 'running') updateWorkerStatus(item.id, item.status);
-          } else {
-            updateWorkerStatus(item.id, item.status);
-          }
-        }
-      }
-    })
-    .catch(err => console.error('pollWorkers failed:', err));
+    .catch(err => console.error('pollLeafRuns failed:', err));
 }
 
-function updateWorkersTabBadge() {
-  var btn = document.getElementById('btn-workers');
-  if (!btn) return;
-  var count = document.querySelectorAll('[id^="thread-dot-"]').length
-    + document.querySelectorAll('[id^="trigger-dot-"]').length;
-  var badge = btn.querySelector('span');
-  if (count > 0) {
-    if (!badge) {
-      badge = document.createElement('span');
-      badge.className = 'ml-1 text-xs bg-slate-600 px-1.5 py-0.5 rounded-full';
-      btn.appendChild(badge);
+function applyLeafPoll(detail, runs, sessionId) {
+  const goal = leafGoal(detail);
+  // Oldest first, so each prepend keeps the newest run on top.
+  [...runs].reverse().forEach(run => {
+    const row = runCardRow(run, goal);
+    if (!document.getElementById('thread-dot-' + run.id)) {
+      addWorkerCard(run.id, row.description, row.created_at, row.backend);
     }
-    badge.textContent = count;
-  } else if (badge) {
-    badge.remove();
-  }
+    updateWorkerStatus(run.id, row.status);
+  });
+  const slot = document.getElementById('leaf-delivery-slot');
+  if (slot) slot.innerHTML = leafDeliveryHtml(detail, runs, leafSummary, sessionId);
 }
 
 // ---------------------------------------------------------------------------
-// Workers tab live updates
+// Card live updates
 // ---------------------------------------------------------------------------
 const finalFetchDone = new Set();
 
@@ -301,7 +383,8 @@ function updateWorkerStatus(threadId, status) {
 }
 
 function addWorkerCard(threadId, description, createdAt, backend, descriptionFullLen) {
-  const container = document.getElementById('tab-workers');
+  // The leaf view keeps its cards under leaf-runs, below the header and banner.
+  const container = document.getElementById('leaf-runs') || document.getElementById('tab-workers');
   if (!container) return;
   // Remove placeholder if present
   document.getElementById('no-workers-placeholder')?.remove();
@@ -315,7 +398,6 @@ function addWorkerCard(threadId, description, createdAt, backend, descriptionFul
     description_full_len: descriptionFullLen,
   }, SESSION_ID);
   container.prepend(card);
-  updateWorkersTabBadge();
 }
 
 // ---------------------------------------------------------------------------
@@ -335,7 +417,6 @@ function addTriggerCard(triggerId, message, fireAt, createdAt, status) {
   card.id = 'trigger-card-' + triggerId;
   card.innerHTML = triggerCardBodyHtml(triggerId, status, message, fireAt, SESSION_ID);
   container.appendChild(card);
-  updateWorkersTabBadge();
 }
 
 function updateTriggerStatus(triggerId, status) {
@@ -387,10 +468,14 @@ const API = {
   fetchWorkerDescription,
   renderWorkersTab,
   renderWorkersTabUnknown,
+  setLeafSession,
+  activeSessionIsLeaf,
+  runCardRow,
+  leafDeliveryHtml,
+  renderLeafView,
   restartWorkersPolling,
   ensureWorkersLoadedForActiveSession,
   pollWorkers,
-  updateWorkersTabBadge,
   updateWorkerStatus,
   addWorkerCard,
   updateTriggerStatus,

@@ -53,9 +53,9 @@ log = LazyStructlogLogger()
 HOUSE_TIMEZONE = "America/Los_Angeles"
 
 # The API request model TaskCreate (src/api/cron.py) inherits this default through
-# ScheduledTaskFields; the web UI re-pins the value in three literals
-# (templates/index.html, two fallbacks in sidebar/modals.js) that cannot import
-# from Python — a change moves all three sites.
+# ScheduledTaskFields; the web UI re-pins the value in literals (index.html and
+# fallbacks in sidebar/modals.js) that cannot import from Python — a change moves
+# every re-pinning site.
 DEFAULT_TIMEZONE = HOUSE_TIMEZONE
 
 

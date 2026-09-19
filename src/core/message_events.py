@@ -71,7 +71,7 @@ def normalize_user_message_event(ev: dict) -> dict:
 
 
 def _interval_scan(events: list[dict]) -> tuple[list[tuple[int, int]], int]:
-  """Single walk of the run-interval rule the two consumers below share.
+  """Single walk of the run-interval rule the consumers below share.
 
   Returns (complete_intervals, closed_prefix_len): one (latest adoption signal,
   closing MASTER_DONE) index pair per completed run interval, and the largest

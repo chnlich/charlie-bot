@@ -313,8 +313,8 @@ _SAFE_ENTRY_RE = re.compile(r"[A-Za-z0-9_.~-]+")
 
 # One home for the listing page's chrome (the rows are built per walk): the
 # dir-listing byte-pin test in tests/test_files_dir_listing.py formats this
-# same template for its reference builder, so a chrome edit cannot desync the
-# two builders.
+# same template for its reference builder, so a chrome edit cannot desync
+# the paired builders.
 _DIR_LISTING_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Index of {display_path}</title>

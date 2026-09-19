@@ -644,7 +644,7 @@ class TriggerManager:
     self._tasks[trigger.id] = task
 
   async def _is_dormant_target(self, session_id: str) -> bool:
-    """The one dormancy judgment for all three readers in this module — create-time
+    """The one dormancy judgment for every reader in this module — create-time
     rejection, the wait watchdog, and the fire-time backstop: resolve *session_id*'s
     succession chain and answer whether the chain end is ARCHIVED with no successor,
     the user's explicit "no more wakes" signal. A chain end that has a successor

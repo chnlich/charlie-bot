@@ -129,7 +129,7 @@ async def adopt_transcript_holder(
   """Make *holder* the session's account label: funnel-persist it, then warn.
 
   The one adoption reaction the plan's reconciliation paths share -- the
-  placement probe (forked or stale lineage) and the two guard-refusal consumers
+  placement probe (forked or stale lineage) and the guard-refusal consumers
   (the placement move, the mid-turn relay): the label follows the holder that
   actually carries the newest transcript, the turn continues from it with no
   copy, and every trigger lands a persistent grep-able row.

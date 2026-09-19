@@ -327,9 +327,11 @@
     const REPORT = {{ report | tojson }};
     const kernels = REPORT.kernels;
     const CSV_FALLBACK = REPORT.parser === 'csv';
-    const ROOFLINE_PLACEHOLDER = 'No roofline data in this report (requires --set full/detailed)';
-    const rooflineReport = REPORT.roofline || { available: false, message: ROOFLINE_PLACEHOLDER, rooflines: [] };
-    let selectedRooflineId = rooflineReport.rooflines && rooflineReport.rooflines.length ? rooflineReport.rooflines[0].id : null;
+    // The parser always sets the roofline key: available mirrors rooflines
+    // being non-empty, and message carries the unavailable note exactly when
+    // available is false.
+    const rooflineReport = REPORT.roofline;
+    let selectedRooflineId = rooflineReport.rooflines.length ? rooflineReport.rooflines[0].id : null;
 
     function fmtNum(v) {
       if (v === null || v === undefined) return null;
@@ -755,8 +757,7 @@
     }
 
     function currentRoofline() {
-      const list = rooflineReport.rooflines || [];
-      return list.find(r => r.id === selectedRooflineId) || list[0] || null;
+      return rooflineReport.rooflines.find((r) => r.id === selectedRooflineId);
     }
 
     function powersBetween(min, max) {
@@ -913,16 +914,12 @@
     function renderRoofline() {
       const root = document.getElementById('roofline-root');
       root.innerHTML = '';
-      if (!rooflineReport.available || !rooflineReport.rooflines || !rooflineReport.rooflines.length) {
-        root.appendChild(emptyNote(rooflineReport.message || ROOFLINE_PLACEHOLDER));
+      if (!rooflineReport.available) {
+        root.appendChild(emptyNote(rooflineReport.message));
         return;
       }
 
       const selected = currentRoofline();
-      if (!selected) {
-        root.appendChild(emptyNote(ROOFLINE_PLACEHOLDER));
-        return;
-      }
 
       const controls = document.createElement('div');
       controls.className = 'roofline-controls';

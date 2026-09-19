@@ -144,7 +144,6 @@ async function toggleThreadDetail(threadId, sessionId) {
     stopThreadPoll(threadId);
     loadedThreads.delete(threadId);
     loadedEventCounts.delete(threadId);
-    finalFetchDone.delete(threadId);
   }
 }
 

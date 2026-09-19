@@ -60,6 +60,7 @@ _NODE_TESTS = [
     "worker_events_incremental.test.js",
     "worker_events_metadata_failure.test.js",
     "worker_events_truncation_note.test.js",
+    "worker_toggle_collapse.test.js",
     "workers_list_conditional_poll.test.js",
     "websocket_catchup_split_invariance.test.js",
     "websocket_session_isolation.test.js",

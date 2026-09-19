@@ -10,11 +10,11 @@ from src.agents.backends.base import make_error_event, make_master_done_event
 from src.core import claude_accounts, runs, sidebar_state
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.constants import BackendType
 from src.core.latex import get_tex_path, snapshot_tex
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import (
     BackendOption,
-    BackendType,
     MasterRunRecord,
     SessionCallbacks,
     SessionMetadata,

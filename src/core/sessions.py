@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 from src.core import plan_paths, sidebar_state
 from src.core.chat_events import ChatEventStore
 from src.core.config import CharlieBotConfig
+from src.core.constants import BackendType
 from src.core.gc_control import gc_off
 from src.core.init import RUNNING_SCAN_WINDOW, iter_recent_thread_metas
 from src.core.init_worker_recovery import walk_thread_meta_stats
@@ -39,7 +40,6 @@ from src.core.message_projection import MessageProjection
 from src.core.models import (
     TERMINAL_THREAD_STATUSES,
     BackendOption,
-    BackendType,
     CreateSessionRequest,
     MasterRunRecord,
     SessionCallbacks,

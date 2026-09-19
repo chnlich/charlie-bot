@@ -13,7 +13,8 @@ from src.agents.backends.openai_compatible_claude import OpenAICompatibleClaudeB
 from src.agents.backends.opencode import OpenCodeBackend
 from src.agents.backends.tui import TuiBackend
 from src.core.config import CharlieBotConfig, ClaudeAccount, get_credentials
-from src.core.models import BackendOption, BackendType
+from src.core.constants import BackendType
+from src.core.models import BackendOption
 
 
 def _require_model(option: BackendOption) -> str:

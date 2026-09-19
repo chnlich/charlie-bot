@@ -42,7 +42,7 @@ from src.api.deps import session_manager, set_trigger_manager, thread_manager
 from src.core import timeouts
 from src.core.buildinfo import init_build_info
 from src.core.config import CharlieBotConfig, configured_access_key, get_config, get_credentials, require_backends
-from src.core.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH, REPO_ROOT
+from src.core.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH, REPO_ROOT, BackendType
 from src.core.http import close_http_client
 from src.core.init import (
     init_charliebot_home,
@@ -51,7 +51,7 @@ from src.core.init import (
 )
 from src.core.log_once import LazyStructlogLogger, ensure_lean_renderer
 from src.core.message_aggregator import MessageAggregator
-from src.core.models import BackendType, SessionMetadata, utc_now
+from src.core.models import SessionMetadata, utc_now
 from src.core.process import log_session_cgroup_startup, sweep_stale_session_cgroups
 from src.core.scheduler import Scheduler
 from src.core.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager

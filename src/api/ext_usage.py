@@ -17,7 +17,7 @@ from src.core import claude_accounts
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
 from src.core.codex_usage import CODEX_EVENT_MSG, CODEX_TOKEN_COUNT, CODEX_TURN_CONTEXT, DEFAULT_CODEX_HOME
 from src.core.config import get_config
-from src.core.home import default_claude_dir
+from src.core.home import CREDENTIALS_FILE, default_claude_dir
 from src.core.http import get_http_client
 from src.core.json_utils import write_json_atomically
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
@@ -357,7 +357,7 @@ class _UsageInstance:
 
 def _create_provider(provider: str, label: str, dir_path: str) -> ClaudeUsageProvider | CodexUsageProvider:
   if provider == "claude":
-    return ClaudeUsageProvider(label, Path(dir_path) / claude_accounts.CREDENTIALS_FILE)
+    return ClaudeUsageProvider(label, Path(dir_path) / CREDENTIALS_FILE)
   if provider == "codex":
     return CodexUsageProvider(label, dir_path)
   raise ValueError(f"unknown usage provider: {provider!r}")

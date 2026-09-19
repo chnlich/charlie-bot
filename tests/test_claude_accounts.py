@@ -28,6 +28,7 @@ from src.core import claude_accounts, storage_cool, token_tally
 from src.core import config as core_config
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.home import CREDENTIALS_FILE
 from src.core.models import (
     ClaudeAccount,
     CreateSessionRequest,
@@ -143,7 +144,7 @@ def test_credentials_present_requires_a_non_empty_access_token(tmp_path: Path) -
   write_pool_credentials(tmp_path / "a", access_token="")
   assert claude_accounts.credentials_present(account) is False  # emptied by a failed refresh
 
-  (tmp_path / "a" / claude_accounts.CREDENTIALS_FILE).write_text("not json", encoding="utf-8")
+  (tmp_path / "a" / CREDENTIALS_FILE).write_text("not json", encoding="utf-8")
   assert claude_accounts.credentials_present(account) is False
 
   write_pool_credentials(tmp_path / "a")

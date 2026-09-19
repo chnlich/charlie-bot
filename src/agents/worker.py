@@ -21,9 +21,10 @@ from src.agents.backends.deferred_build import load_build_backend
 from src.core import claude_accounts, claude_compaction, claude_relay, runs
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.constants import BackendType
 from src.core.deferred import deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import BackendOption, BackendType, ClaudeAccount, ThreadMetadata
+from src.core.models import BackendOption, ClaudeAccount, ThreadMetadata
 from src.core.ndjson import append_ndjson
 from src.core.ndjson import write_all as _write_all
 from src.core.process import kill_group_escalating

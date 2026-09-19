@@ -12,11 +12,11 @@ import pytest
 
 from src.api.threads import _backend_dispatch
 from src.core.config import CharlieBotConfig
+from src.core.constants import BackendType
 from src.core.models import (
     BACKEND_CLASSES,
     MODEL_OPTIONAL_ROUTING_BACKEND_TYPES,
     BackendBase,
-    BackendType,
     CcClaudeBackend,
     ThreadMetadata,
     TuiCliBackend,

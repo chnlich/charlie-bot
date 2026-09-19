@@ -33,13 +33,12 @@ SAMPLE_RATE = 16_000
 MAX_RECORDING_SECONDS = 5 * 60
 MAX_RECORDING_SAMPLES = SAMPLE_RATE * MAX_RECORDING_SECONDS
 # Partial refresh re-decodes the open VAD segment, and decode cost grows with the
-# segment. Measured on this host (x86_64 WSL2, RTX 3080 box; measurements in
-# ab_voice_decode_v1.py, session artifacts): the CPU sherpa engine decodes a 10.1s
-# segment in ~3.1s and a 26.6s segment in ~7.9s (num_threads=4); the GPU qwen3_hf
-# engine decodes the 26.6s segment in ~2.0-2.3s. One decode window is bounded at
-# 25.4s (5s pause + 20s speech cap + 0.4s tail; see SEGMENT_DECODE_PAUSE_SAMPLES),
-# so at a 2s refresh it would pin the decode thread (duty > 100%), and even at 5s
-# the duty peaks near half on the longest segments, so partials refresh every 5s of
+# segment. Measured on this host: the CPU sherpa engine decodes a 10.1s segment in
+# ~3.1s and a 26.6s segment in ~7.9s (num_threads=4); the GPU qwen3_hf engine
+# decodes the 26.6s segment in ~2.0-2.3s. One decode window is bounded at 25.4s
+# (5s pause + 20s speech cap + 0.4s tail; see SEGMENT_DECODE_PAUSE_SAMPLES), so at
+# a 2s refresh it would pin the decode thread (duty > 100%), and even at 5s the
+# duty peaks near half on the longest segments, so partials refresh every 5s of
 # speech.
 LIVE_DECODE_INTERVAL_SAMPLES = SAMPLE_RATE * 5
 LIVE_DECODE_MIN_SAMPLES = SAMPLE_RATE // 2

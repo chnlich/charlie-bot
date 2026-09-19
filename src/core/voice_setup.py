@@ -25,14 +25,11 @@ from src.core.yaml_utils import load_yaml
 
 log = structlog.get_logger()
 
-# GPU decode budget for the preflight's ~10s real recording, measured on this host
-# (x86_64 WSL2, RTX 3080 with the ~4.5GB desktop load active) during implementation:
-# 10.1s of speech decoded warm in 1.17-1.57s across Qwen3-ASR-0.6B/1.7B in BF16
-# (ab_voice_decode_stability_v1.py in the session artifacts). The threshold keeps
-# ~1.6x headroom over the worst measured warm decode while still failing a VRAM-
-# paging-style pathology (the one 19s outlier seen on a cold first pass). Note the
-# measured magnitude is above the plan's hoped-for <1s: the host is WSL2 and the
-# Windows desktop holds ~4.5GB of VRAM and ~17% GPU utilization.
+# GPU decode budget for the preflight's ~10s real recording, measured on this host:
+# 10.1s of speech decoded warm in 1.17-1.57s across Qwen3-ASR-0.6B/1.7B in BF16.
+# The threshold keeps ~1.6x headroom over the worst measured warm decode while
+# still failing a VRAM-paging-style pathology (the one 19s outlier seen on a cold
+# first pass).
 PREFLIGHT_DECODE_THRESHOLD_SECONDS = 2.5
 
 # The preflight decode check needs a real user recording near the calibration length:

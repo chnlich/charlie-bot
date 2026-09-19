@@ -2093,8 +2093,10 @@ middleware and route actually run; a TestClient drive adds ~1.5-2 ms of httpx
 harness per request and skips the middleware whose deflate the browser's fetch
 always pays, the vacuous-read class the M36/M59 repairs called out: one cold pass
 per endpoint, as at first view after a server start, then five timed requests, with
-digests read off the decoded last timed response so the view/bootstrap mark_read
-write-once cannot skew the cross-checkout comparison. Evidence points the same
+digests read off the decoded last timed response. All three endpoints are
+side-effect-free reads — the view/bootstrap mark_read write-once moved off the
+fetch path to the client's post-render ``POST /read`` — so no write side effect
+survives to skew the cross-checkout comparison. Evidence points the same
 collector at the before and after checkouts (``CHECKOUT`` at each root, shared
 ``M35_HOME`` snapshot), asserting identical decoded bodies, the same shape as the
 M7 protocol. Snapshot once:

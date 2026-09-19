@@ -40,6 +40,7 @@ _NODE_TESTS = [
     "session_switch_stale_pagination.test.js",
     "session_view_sentinel.test.js",
     "show_more_toggle.test.js",
+    "sidebar_mark_read.test.js",
     "sidebar_rename_prefill.test.js",
     "sidebar_session_model.test.js",
     "sidebar_usage_poll.test.js",

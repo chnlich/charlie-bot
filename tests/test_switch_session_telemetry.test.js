@@ -13,6 +13,7 @@ function buildSwitchHarness() {
   const bootstrapFetches = [];
   const pendingSwitches = [];
   const telemetryPosts = [];
+  const readPosts = [];
   const sequence = [];
   const failBootstrap = new Set();
   const knobs = {failTelemetry: false};
@@ -50,6 +51,11 @@ function buildSwitchHarness() {
       if (knobs.failTelemetry) throw new Error('telemetry down');
       return {ok: true, status: 200, json: async () => ({ok: true})};
     }
+    const readMatch = url.match(/\/api\/sessions\/([^/]+)\/read$/);
+    if (readMatch && opts.method === 'POST') {
+      readPosts.push(readMatch[1]);
+      return {ok: true, status: 200, json: async () => ({})};
+    }
     const match = url.match(/\/api\/sessions\/([^/]+)\/bootstrap/);
     bootstrapFetches.push(url);
     sequence.push('fetch:' + (match ? match[1] : url));
@@ -84,6 +90,7 @@ function buildSwitchHarness() {
     bootstrapFetches,
     pendingSwitches,
     telemetryPosts,
+    readPosts,
     sequence,
     failBootstrap,
     knobs,
@@ -175,6 +182,8 @@ test('superseded generation never renders, logs superseded, and feeds the cache'
   assert.equal(h.bootstrapFetches.length, fetchesBefore, 'cache hit must skip the bootstrap fetch');
   assert.match(h.messages.innerHTML, /hello from session-b/);
   assert.doesNotMatch(h.messages.innerHTML, /hello from session-c/);
+  assert.deepEqual(h.readPosts, ['session-c', 'session-b'],
+      'only landed renders post /read: c network switch, b cache-hit switch');
   assert.equal(h.context.eventCursor, 6, 'cache-hit render must seed the replay cursor');
   assert.equal(h.context.switching, false);
   const completedB = h.telemetryPosts.filter((t) => t.phase === 'completed' && t.to_session === 'session-b');
@@ -206,6 +215,8 @@ test('cache hit happens only within the 60s window', async () => {
   assert.equal(h.bootstrapFetches.filter((u) => u.includes('/session-b/')).length, 2,
       'an expired cache entry must force a fresh fetch (original + aged re-click)');
   assert.match(h.messages.innerHTML, /hello from session-b/);
+  assert.deepEqual(h.readPosts, ['session-c', 'session-b'],
+      'the aged re-click renders after its fresh fetch and posts /read');
 });
 
 // ---------------------------------------------------------------------------

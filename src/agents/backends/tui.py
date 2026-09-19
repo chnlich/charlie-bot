@@ -115,7 +115,10 @@ def _ensure_claude_project_trusted(working_dir: Path) -> None:
   if not mark_project_trusted(config, project_path):
     return
   config_path.parent.mkdir(parents=True, exist_ok=True)
-  write_json_atomically(config_path, config, indent=2, newline=True)
+  # private: the swap publishes a fresh inode, and the config can carry API-key
+  # state, so the file lands 0600 instead of the umask default — matching the
+  # claude_sub session-overlay writer of this same file.
+  write_json_atomically(config_path, config, indent=2, newline=True, private=True)
   log.info("tui_claude_project_trusted", path=project_path, config_path=str(config_path))
 
 

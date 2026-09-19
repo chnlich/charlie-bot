@@ -47,6 +47,8 @@ def test_ensure_claude_project_trusted_marks_session_dir(monkeypatch: pytest.Mon
   project = data["projects"][str(working_dir.resolve())]
   assert project["hasTrustDialogAccepted"] is True
   assert project["projectOnboardingSeenCount"] == 1
+  # The config can carry API-key state, so the atomic swap must publish it 0600.
+  assert ((config_dir / ".claude.json").stat().st_mode & 0o777) == 0o600
 
 
 def _patch_tmux_env(

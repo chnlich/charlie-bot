@@ -341,8 +341,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 }
 .overflow-toggle { display: none; }
 .input-buttons { position: relative; }
-  .sidebar-overlay { display: none; }
-  .hamburger-btn { display: none !important; }
+.sidebar-overlay { display: none; }
+.hamburger-btn { display: none !important; }
 .provider-pill { flex: 0 0 auto; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
 .provider-claude { background: #1e3a5f; color: #93c5fd; }
 .provider-codex { background: #14532d; color: #86efac; }
@@ -353,22 +353,22 @@ body.resizing { cursor: col-resize; user-select: none; }
   .input-buttons .overflow-toggle { display: inline-flex; }
   .input-buttons .collapsible { display: none; }
   .input-buttons .collapsible.show { display: flex; position: absolute; bottom: 100%; right: 0; background: #1e293b; border: 1px solid #475569; border-radius: 0.75rem; padding: 0.5rem; gap: 0.5rem; margin-bottom: 0.5rem; z-index: 50; }
-    #sidebar { display: none; position: fixed; top: 0; left: 0; bottom: 0; z-index: 100; width: 320px !important; }
-    #sidebar.open { display: flex; }
-    #resize-handle { display: none; }
-    #latex-resize-handle { display: none !important; }
-    .sidebar-overlay.active { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
-    .hamburger-btn { display: inline-flex !important; }
-    #backlog-panel:not(.hidden) { width: 100% !important; }
-    #latex-panel:not(.hidden) { width: 100% !important; }
-    /* Bug 2: Tabs on their own row on mobile */
-    main > header { flex-wrap: wrap; }
-    #tab-buttons { width: 100%; overflow-x: auto; order: 99; -webkit-overflow-scrolling: touch; }
-    #tab-buttons button { white-space: nowrap; }
-    #usage-indicator { display: none !important; }
-    .input-buttons button { min-width: 44px; min-height: 44px; }
-    #ext-usage-strip [data-field$="-reset"] { display: none; }  /* hide verbose reset timestamps */
-    #ext-usage-strip .w-24 { width: 4rem; }  /* shrink bars from w-24 (6rem) to 4rem */
+  #sidebar { display: none; position: fixed; top: 0; left: 0; bottom: 0; z-index: 100; width: 320px !important; }
+  #sidebar.open { display: flex; }
+  #resize-handle { display: none; }
+  #latex-resize-handle { display: none !important; }
+  .sidebar-overlay.active { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
+  .hamburger-btn { display: inline-flex !important; }
+  #backlog-panel:not(.hidden) { width: 100% !important; }
+  #latex-panel:not(.hidden) { width: 100% !important; }
+  /* Tabs on their own row on mobile */
+  main > header { flex-wrap: wrap; }
+  #tab-buttons { width: 100%; overflow-x: auto; order: 99; -webkit-overflow-scrolling: touch; }
+  #tab-buttons button { white-space: nowrap; }
+  #usage-indicator { display: none !important; }
+  .input-buttons button { min-width: 44px; min-height: 44px; }
+  #ext-usage-strip [data-field$="-reset"] { display: none; }  /* hide verbose reset timestamps */
+  #ext-usage-strip .w-24 { width: 4rem; }  /* shrink bars from w-24 (6rem) to 4rem */
 }
 /* Account rows are single-line flex and can exceed a narrow viewport, and body is
    overflow:hidden — without a scroll container here the row tail is clipped and
@@ -447,12 +447,12 @@ body.resizing { cursor: col-resize; user-select: none; }
 .slash-item:hover, .slash-item.active { background: #334155; }
 .slash-item .slash-name { font-weight: 600; color: #93c5fd; font-family: ui-monospace, 'Fira Code', monospace; }
 .slash-item .slash-desc { color: #94a3b8; font-size: 0.75rem; align-self: center; }
-/* Bug 1: On touch devices, invisible sidebar action buttons swallow taps.
+/* On touch devices, invisible sidebar action buttons swallow taps.
    Exclude buttons forced visible via !opacity-100 (starred / active session). */
 @media (hover: none) {
   #session-list .group-hover\:opacity-100:not(.\!opacity-100) { opacity: 0.4; pointer-events: auto; }
 }
-/* Bug 3: Prevent overscroll bounce */
+/* Prevent overscroll bounce */
 body { overscroll-behavior: none; }
 /* Slash command sidebar */
 .slash-sidebar {

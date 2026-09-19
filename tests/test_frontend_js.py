@@ -41,6 +41,7 @@ _NODE_TESTS = [
     "session_view_create_task.test.js",
     "session_view_sentinel.test.js",
     "show_more_toggle.test.js",
+    "sidebar_indicator_priority.test.js",
     "sidebar_rename_prefill.test.js",
     "sidebar_session_model.test.js",
     "sidebar_tree_nesting.test.js",

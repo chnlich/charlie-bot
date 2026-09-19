@@ -152,7 +152,7 @@ test('toggleTreeNode flips the in-memory state, the rendered subtree and the che
     if (selector === '[data-tree-toggle="r1"]') return [chevron];
     return [];
   };
-  context.refreshSessionStatusNow = () => { refreshes += 1; };
+  context.Sidebar.refreshSessionIndicator = () => { refreshes += 1; };
 
   assert.equal(context.Sidebar.isTreeNodeExpanded('r1'), false);
   context.toggleTreeNode('r1');
@@ -224,7 +224,7 @@ test('the active session’s ancestors open once per switch and a manual collaps
   assert.equal(context.Sidebar.treeParentId('r1'), null);
 
   // The user folds the root: the next repaint of the same session keeps it folded.
-  context.refreshSessionStatusNow = () => {};
+  context.Sidebar.refreshSessionIndicator = () => {};
   context.toggleTreeNode('r1');
   context.renderSessionList(familyRows(), 'all');
   html = nav.innerHTML;
@@ -246,7 +246,7 @@ test('expandTreeNode opens a collapsed parent and is a no-op on an open one', ()
     if (selector === '[data-tree-toggle="p1"]') return [chevron];
     return [];
   };
-  context.refreshSessionStatusNow = () => { refreshes += 1; };
+  context.Sidebar.refreshSessionIndicator = () => { refreshes += 1; };
 
   context.Sidebar.expandTreeNode('p1');
   assert.equal(context.Sidebar.isTreeNodeExpanded('p1'), true);

@@ -704,6 +704,8 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
   if (pmStateCache) {
     resyncSessionUnread(Object.values(pmStateCache.pmByGroup));
   }
+  // Parent rows take their collapsed-subtree stand-ins now that the rows exist.
+  if (typeof Sidebar.refreshTreeIndicators === 'function') Sidebar.refreshTreeIndicators();
   updateRelativeTimes();
   refreshTuiDots();
 }
@@ -886,9 +888,9 @@ function applyTreeNodeExpansion(sessionId, expanded) {
     el.classList.toggle('rotate-90', expanded);
     el.setAttribute('aria-expanded', expanded ? 'true' : 'false');
   });
-  // A parent's indicators stand in for its collapsed subtree; the next status
-  // read re-evaluates them for the new expand state.
-  if (typeof refreshSessionStatusNow === 'function') refreshSessionStatusNow();
+  // A parent's indicators stand in for its collapsed subtree: repaint it for
+  // the new expand state from the facts already applied.
+  if (typeof Sidebar.refreshSessionIndicator === 'function') Sidebar.refreshSessionIndicator(sessionId);
 }
 
 function toggleTreeNode(sessionId) {
@@ -972,6 +974,9 @@ function renderSessionItem(s, filter, options = {}) {
 
 function renderSessionList(sessions, filter) {
   searchListPainted = (filter === 'search');
+  // Only the grouped paint nests rows; a flat paint shows each row's own facts.
+  lastTreeChildrenOf = new Map();
+  lastTreeParentOf = new Map();
   if (filter === 'scheduled') {
     renderGroupedScheduledList(sessions);
     return;

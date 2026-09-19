@@ -783,6 +783,23 @@ async def get_session_bootstrap(
   return await _switch_payload_response(request, _bootstrap_payload(bootstrap, cfg))
 
 
+@router.post('/{session_id}/read')
+async def mark_session_read(
+    session_id: str,
+    _meta: SessionMetadata = Depends(require_session),
+    session_mgr: SessionManager = Depends(get_session_manager),
+) -> dict:
+  """Clear the session's unread flag; the client posts this after a render lands.
+
+  "Read" means "content rendered": the view/bootstrap GETs stay side-effect-free
+  and this explicit POST is the only flip-off path, so a bare data fetch can no
+  longer wipe the sidebar's unread dot. Flip semantics and the unread_changed
+  broadcast (only on an actual flip) are SessionManager.mark_read's own.
+  """
+  await session_mgr.mark_read(session_id)
+  return {"session_id": session_id, "has_unread": False}
+
+
 @router.get('/{session_id}/usage')
 async def get_session_usage(
     session_id: str,

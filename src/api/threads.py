@@ -433,10 +433,11 @@ async def _list_response(request: Request, body: bytes, etag_value: str, etag: s
 
 # The session view's threads array rides the same row proof as the list body:
 # sorted rows per session gated on the write revision (every row-source
-# writer marks through mark_sidebar_dirty). The view's mark_read
-# no-ops once the session is read, so repeat views serve rows with zero stats;
-# a writer mark or the sweep walk rebuilds from the walked pairs, the row memo
-# serving the unmoved files' rows.
+# writer marks through mark_sidebar_dirty). The view itself writes nothing
+# (mark_read moved off the fetch path to the client's post-render POST /read),
+# so repeat views serve rows with zero stats; a writer mark or the sweep walk
+# rebuilds from the walked pairs, the row memo serving the unmoved files'
+# rows.
 _VIEW_ROWS_MEMO_LIMIT = 8
 _VIEW_ROWS_SWEEP_EVERY = 10
 _view_rows_memo: BoundedMemo[str, list[dict]] = BoundedMemo(_VIEW_ROWS_MEMO_LIMIT)

@@ -393,7 +393,30 @@ def test_schedule_trigger_readback_picks_pending_over_fired_historical_leg(
   assert out == {"trigger_id": "trg-new", "fire_at": "2024-02-01T00:00:00Z"}
 
 
-class _StubPlanListener:
+class _QuietHandler(http.server.BaseHTTPRequestHandler):
+  """Base for the stub listeners' handlers: silences the per-request stderr log
+  line the stdlib writes; the base class dispatches ``log_message`` by name."""
+
+  def log_message(self, format: str, *args: object) -> None:  # noqa: A002  stdlib signature mirror
+    pass
+
+
+class _StubListener:
+  """Serves one handler class on a free 127.0.0.1 port from a daemon thread;
+  ``close()`` shuts the server down. Subclasses define the handler."""
+
+  def __init__(self, handler: type[http.server.BaseHTTPRequestHandler]) -> None:
+    self._httpd = http.server.HTTPServer(("127.0.0.1", 0), handler)
+    self.port = self._httpd.server_address[1]
+    self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+    self._thread.start()
+
+  def close(self) -> None:
+    self._httpd.shutdown()
+    self._httpd.server_close()
+
+
+class _StubPlanListener(_StubListener):
   """A sibling of test_master_restart_recovery_e2e.py's _BlackHoleServer: POST is
   accepted then reset (sent-but-lost), GET answers with a crafted plans listing —
   exactly the shape ``plan``'s readback needs (a real GET response, not a mock).
@@ -402,7 +425,7 @@ class _StubPlanListener:
   def __init__(self, plans_payload: dict) -> None:
     payload = plans_payload
 
-    class Handler(http.server.BaseHTTPRequestHandler):
+    class Handler(_QuietHandler):
 
       def do_GET(self) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -417,17 +440,7 @@ class _StubPlanListener:
         self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
         self.connection.close()
 
-      def log_message(self, format: str, *args: object) -> None:  # noqa: A002  stdlib signature mirror
-        pass
-
-    self._httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-    self.port = self._httpd.server_address[1]
-    self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
-    self._thread.start()
-
-  def close(self) -> None:
-    self._httpd.shutdown()
-    self._httpd.server_close()
+    super().__init__(Handler)
 
 
 def test_plan_readback_resolves_to_seeded_plan_on_sent_but_lost(
@@ -480,7 +493,7 @@ def test_plan_readback_reports_outcome_unknown_when_nothing_matches(
     stub.close()
 
 
-class _CapturePostListener:
+class _CapturePostListener(_StubListener):
   """A stub that answers 200 to POST and records the wire request: the real
   http.client client's serialization (Content-Type, body bytes, query string)
   is this module's own code now, so it needs a real-socket pin."""
@@ -489,7 +502,7 @@ class _CapturePostListener:
     received: dict = {}
     self.received = received
 
-    class Handler(http.server.BaseHTTPRequestHandler):
+    class Handler(_QuietHandler):
 
       def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
@@ -504,17 +517,7 @@ class _CapturePostListener:
         self.end_headers()
         self.wfile.write(body)
 
-      def log_message(self, format: str, *args: object) -> None:  # noqa: A002  stdlib signature mirror
-        pass
-
-    self._httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-    self.port = self._httpd.server_address[1]
-    self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
-    self._thread.start()
-
-  def close(self) -> None:
-    self._httpd.shutdown()
-    self._httpd.server_close()
+    super().__init__(Handler)
 
 
 def test_post_sends_json_body_content_type_and_auth_header_over_the_real_client(

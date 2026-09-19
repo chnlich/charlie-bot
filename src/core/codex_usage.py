@@ -15,7 +15,7 @@ from src.core import event_types as ET
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
 from src.core.config import CharlieBotConfig
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import BackendType
+from src.core.models import BackendType, SessionMetadata
 from src.core.ndjson import iter_ndjson_events, iter_ndjson_events_from_end
 
 log = LazyStructlogLogger()
@@ -135,7 +135,7 @@ class CodexUsageResolver:
   def resolve(
       self,
       session_id: str,
-      session_meta: Any,
+      session_meta: SessionMetadata,
       events: list[dict],
   ) -> dict | None:
     """Resolve Codex-native usage and merge with base usage.

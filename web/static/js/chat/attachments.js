@@ -84,8 +84,9 @@ function renderUserMessageBubble(content, isVoice, timestamp, uploadedFiles) {
 }
 
 Chat.wire({
-  normalizeUserMessage,
   renderUserMessageBubble,
+}, {
+  normalizeUserMessage,
 });
 
 })();

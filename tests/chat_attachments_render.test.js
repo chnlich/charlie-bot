@@ -197,7 +197,7 @@ function loadSlashCommandsScript(fetchImpl, uploadsInFlight = 0) {
 test('normalizeUserMessage strips legacy attachment footers and keeps file names for rendering', () => {
   const context = loadChatScript();
 
-  const normalized = context.normalizeUserMessage(
+  const normalized = context.Chat.normalizeUserMessage(
     'Check this file\n\n[Attached files]\n- /tmp/report.pdf',
     null
   );

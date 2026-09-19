@@ -336,8 +336,6 @@ async def run_round(
     save_state(state, state_path)
     log.info("host_auth_probe_round", hosts=len(host_list), probed=0, forced=force)
     return state
-  state["interval_sec"] = PROBE_INTERVAL_SEC
-  state["ttl_sec"] = TRUST_CACHE_TTL_SEC
   state["probe_running"] = True
   save_state(state, state_path)
   try:

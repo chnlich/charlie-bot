@@ -228,6 +228,17 @@ function setSessionIndicator(sid, state) {
   if (dot) dot.classList.toggle('hidden', state !== 'idle' || !sessionUnread[sid]);
 }
 
+// "Read" means rendered: the session's server-side unread flag clears only
+// through this POST, which the render paths fire after content painted
+// (app.js's initial render, switchSession's winning generation). A bare data
+// fetch never clears it. Fire-and-forget: a lost POST leaves the dot up until
+// the next render reposts, so no retry or state mutation lives here.
+function markSessionRead(sessionId) {
+  fetch('/api/sessions/' + sessionId + '/read', {method: 'POST'}).catch((err) => {
+    console.error('markSessionRead failed:', err);
+  });
+}
+
 function setSessionPendingTriggerIndicator(sid, status) {
   const icon = document.getElementById('pending-trigger-' + sid);
   if (!icon) return;
@@ -430,6 +441,7 @@ const API = {
   renderPendingPlanApprovalIndicator,
   updateSidebarHighlight,
   setSessionIndicator,
+  markSessionRead,
   setSessionPendingTriggerIndicator,
   setSessionPendingPlanApprovalIndicator,
   updateSpinner,

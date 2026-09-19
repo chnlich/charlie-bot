@@ -86,9 +86,6 @@ class _LogRecorder:
   def error(self, event: str, **fields: Any) -> None:
     self.events.append(event)
 
-  def exception(self, event: str, **fields: Any) -> None:
-    self.events.append(event)
-
 
 @pytest.mark.parametrize(
     ("returncode", "output", "expected"),

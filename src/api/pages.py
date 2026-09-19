@@ -11,6 +11,7 @@ import os
 import socket
 import subprocess
 import tempfile
+import types
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -254,11 +255,11 @@ def _templates() -> "Jinja2Templates":
   return _templates_instance
 
 
-def _trace_merge():
+def _trace_merge() -> types.ModuleType:
   """The request-time trace-merge stack, imported on first use and reused after.
 
-  The merge pool, the direct-pass validator, and the NCU and token-usage pages
-  are the only consumers; the M99 server import floor carries no trace stack.
+  The merge builders and the direct-pass validator are the only consumers; the
+  M99 server import floor carries no trace stack.
   """
   import src.core.trace_merge
 

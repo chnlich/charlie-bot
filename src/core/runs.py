@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING
 import orjson
 
 from src.core import event_types as ET
-from src.core.models import BackendType
+from src.core.constants import BackendType
 from src.core.ndjson import parse_ndjson_line
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 

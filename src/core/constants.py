@@ -72,3 +72,17 @@ class WatchKind(StrEnum):
   LOCAL_PID = "local_pid"
   REMOTE_PID = "remote_pid"
   SLURM_JOB = "slurm_job"
+
+
+class BackendType(StrEnum):
+  """The BackendOption.type vocabulary; config.yaml carries the same strings."""
+
+  CC_CLAUDE = "cc-claude"
+  CC_KIMI = "cc-kimi"
+  CC_OPENAI_COMPATIBLE = "cc-openai-compatible"
+  CODEX = "codex"
+  CHARLIE_CODE = "charlie-code"
+  GEMINI = "gemini"
+  OPENCODE = "opencode"
+  ANTIGRAVITY = "antigravity"
+  TUI_CLI = "tui-cli"

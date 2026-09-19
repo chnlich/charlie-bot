@@ -39,8 +39,7 @@ from src.cli.claude_sub_bridge import (
     PromptDelivery,
 )
 from src.core import event_types as ET
-from src.core.claude_accounts import CREDENTIALS_FILE
-from src.core.home import CLAUDE_CONFIG_DIR_ENV_VAR, charliebot_home_dir, default_claude_dir
+from src.core.home import CLAUDE_CONFIG_DIR_ENV_VAR, CREDENTIALS_FILE, charliebot_home_dir, default_claude_dir
 from src.core.json_utils import write_json_atomically
 from src.core.process import kill_process_group
 from src.core.timeouts import (

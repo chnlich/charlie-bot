@@ -16,8 +16,8 @@ import tempfile
 import termios
 from typing import TYPE_CHECKING
 
+from src.core.constants import SESSION_ID_ENV_VAR
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import SESSION_ID_ENV_VAR
 from src.core.timeouts import PTY_WS_RECV_TIMEOUT
 
 log = LazyStructlogLogger()

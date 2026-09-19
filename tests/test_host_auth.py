@@ -608,7 +608,7 @@ def test_leak_scanner_reaches_the_host_auth_files(tmp_path: Path) -> None:
 
 def test_trust_cache_constant_is_the_local_derivation_without_source_coordinates() -> None:
   source = (ROOT / "src/core/host_auth.py").read_text(encoding="utf-8")
-  match = re.search(r"^TRUST_CACHE_TTL_SEC = 7 \* 86400.*$", source, re.M)
+  match = re.search(r"^TRUST_CACHE_TTL_SEC = 7 \* 86400.*$", source, re.MULTILINE)
   assert match, "the trust-cache constant must be written as the 7 x 86400 derivation"
   line = match.group(0)
   assert "604800" in line

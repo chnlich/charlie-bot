@@ -2,8 +2,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {bootstrapPayload, buildSwitchFlowHarness, makeSidebarRow, SWITCH_TELEMETRY_URL} =
-  require('./session_context_stub');
+const {baseSessionContext, bootstrapPayload, createChatSidebarContext, installSessionDocumentLookups, makeSidebarRow,
+  stubPageTimers, SWITCH_TELEMETRY_URL} = require('./session_context_stub');
 const {createElement} = require('./dom_element_stub');
 
 // vm harness for switchSession: bootstrap fetches resolve through manual
@@ -22,68 +22,81 @@ function buildSwitchHarness() {
     'session-b': bootstrapPayload('session-b', 0, false),
     'session-c': bootstrapPayload('session-c', 0, false),
   };
+  const messages = createElement({id: 'messages'});
+  messages.clientHeight = 500;
+  messages.scrollHeight = 1000;
   const headerName = createElement({id: 'header-session-name'});
-  return buildSwitchFlowHarness({
-    rows: [
-      makeSidebarRow('session-a', 'Alpha'),
-      makeSidebarRow('session-b', 'Beta'),
-      makeSidebarRow('session-c', 'Gamma'),
-    ],
-    scrollHeight: 1000,
-    fields: {
-      bootstrapFetches,
-      pendingSwitches,
-      telemetryPosts,
-      readPosts,
-      sequence,
-      failBootstrap,
-      knobs,
-      headerName,
-      payloadFor: (sid) => payloads[sid],
-      resolveLastSwitch: () => pendingSwitches[pendingSwitches.length - 1].resolve(),
-    },
-    contextTweaks: (context, h) => {
-      // The tests read the header through this element; it must be the same
-      // node the harness map answers getElementById with.
-      h.elements.set('header-session-name', headerName);
-      let locationHref = '';
-      context.location = {
-        get href() { return locationHref; },
-        set href(value) { sequence.push('reload'); locationHref = String(value); },
-        protocol: 'http:',
-        host: 'localhost:8000',
-        search: '',
-      };
-    },
-    fetch: (h, url, opts = {}) => {
-      if (url === SWITCH_TELEMETRY_URL) {
-        const body = JSON.parse(opts.body);
-        h.telemetryPosts.push(body);
-        h.sequence.push('telemetry:' + body.phase);
-        if (h.knobs.failTelemetry) throw new Error('telemetry down');
-        return {ok: true, status: 200, json: async () => ({ok: true})};
-      }
-      const readMatch = url.match(/\/api\/sessions\/([^/]+)\/read$/);
-      if (readMatch && opts.method === 'POST') {
-        h.readPosts.push(readMatch[1]);
-        return {ok: true, status: 200, json: async () => ({})};
-      }
-      const match = url.match(/\/api\/sessions\/([^/]+)\/bootstrap/);
-      h.bootstrapFetches.push(url);
-      h.sequence.push('fetch:' + (match ? match[1] : url));
-      if (!match || h.failBootstrap.has(match[1])) {
-        return {ok: false, status: 500, json: async () => ({})};
-      }
-      const entry = {sessionId: match[1]};
-      entry.done = new Promise((resolve) => { entry.resolve = resolve; });
-      h.pendingSwitches.push(entry);
-      return entry.done.then(() => ({
-        ok: true,
-        status: 200,
-        json: async () => h.payloadFor(entry.sessionId),
-      }));
-    },
-  });
+  const rows = [
+    makeSidebarRow('session-a', 'Alpha'),
+    makeSidebarRow('session-b', 'Beta'),
+    makeSidebarRow('session-c', 'Gamma'),
+  ];
+  const elements = new Map([
+    ['messages', messages],
+    ['header-session-name', headerName],
+    ['backend-badge', createElement()],
+    ['input-model-badge', createElement()],
+    ['msg-input', createElement()],
+    ...rows.map((row) => [row.id, row]),
+  ]);
+
+  const {context} = baseSessionContext({elements});
+  context.eventCursor = 0;
+  installSessionDocumentLookups(context, elements, messages, rows);
+  context.fetch = async (url, opts = {}) => {
+    if (url === SWITCH_TELEMETRY_URL) {
+      const body = JSON.parse(opts.body);
+      telemetryPosts.push(body);
+      sequence.push('telemetry:' + body.phase);
+      if (knobs.failTelemetry) throw new Error('telemetry down');
+      return {ok: true, status: 200, json: async () => ({ok: true})};
+    }
+    const readMatch = url.match(/\/api\/sessions\/([^/]+)\/read$/);
+    if (readMatch && opts.method === 'POST') {
+      readPosts.push(readMatch[1]);
+      return {ok: true, status: 200, json: async () => ({})};
+    }
+    const match = url.match(/\/api\/sessions\/([^/]+)\/bootstrap/);
+    bootstrapFetches.push(url);
+    sequence.push('fetch:' + (match ? match[1] : url));
+    if (!match || failBootstrap.has(match[1])) {
+      return {ok: false, status: 500, json: async () => ({})};
+    }
+    const entry = {sessionId: match[1]};
+    entry.done = new Promise((resolve) => { entry.resolve = resolve; });
+    pendingSwitches.push(entry);
+    return entry.done.then(() => ({
+      ok: true,
+      status: 200,
+      json: async () => payloads[entry.sessionId],
+    }));
+  };
+  let locationHref = '';
+  context.location = {
+    get href() { return locationHref; },
+    set href(value) { sequence.push('reload'); locationHref = String(value); },
+    protocol: 'http:',
+    host: 'localhost:8000',
+    search: '',
+  };
+  stubPageTimers(context);
+
+  createChatSidebarContext(context);
+  return {
+    context,
+    messages,
+    elements,
+    headerName,
+    bootstrapFetches,
+    pendingSwitches,
+    telemetryPosts,
+    readPosts,
+    sequence,
+    failBootstrap,
+    knobs,
+    payloadFor: (sid) => payloads[sid],
+    resolveLastSwitch: () => pendingSwitches[pendingSwitches.length - 1].resolve(),
+  };
 }
 
 // ---------------------------------------------------------------------------

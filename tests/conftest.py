@@ -4,7 +4,6 @@ import json
 import mmap
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -219,22 +218,6 @@ async def run_session_consumer(
       work_items,
       fake_run_cc,
       patch(SESSIONS_SESSION_MANAGER_PATCH_TARGET, return_value=workers_mock),
-  )
-
-
-async def run_consumer_over_real_disk(
-    session_id: str,
-    work_items: list[master_cc_state._WorkItem],
-    fake_run_cc: ConsumerRound,
-) -> None:
-  """run_session_consumer with the SessionManager class kept real: the dequeue refresh reads disk
-  through it, the teardown probe is silenced at the method, and no class-level patch can shadow
-  the refresh's own local import."""
-  await _run_seeded_consumer(
-      session_id,
-      work_items,
-      fake_run_cc,
-      patch.object(SessionManager, "_has_running_tasks", AsyncMock(return_value=False)),
   )
 
 
@@ -731,26 +714,6 @@ def assert_cli_reject_exit2(
   """Same as assert_cli_reject with the exit code pinned at 2 (CLI usage error, e.g. bad file input)."""
   assert exc_info.value.code == 2
   _assert_stderr_fragments(capsys, *err_fragments)
-
-
-def run_node_js_test(node_test: Path, skip_reason: str) -> None:
-  """Run one node --test file; hosts without node skip rather than fail, and cwd=ROOT keeps repo-relative asset
-  loads working."""
-  node = shutil.which('node')
-  if node is None:
-    pytest.skip(skip_reason)
-
-  result = subprocess.run(
-      [node, '--test', str(node_test)],
-      cwd=ROOT,
-      capture_output=True,
-      text=True,
-      check=False,
-      # The suites finish in ~1s; the bound turns a hung node child into a test failure instead of a CI hang.
-      timeout=300,
-  )
-  if result.returncode != 0:
-    pytest.fail(f'Node tests failed.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}')
 
 
 def make_home_config(tmp_path: Path) -> CharlieBotConfig:
@@ -1425,16 +1388,6 @@ def cfg_with_repo(repo_root: Path) -> CharlieBotConfig:
   return _Cfg()  # type: ignore[return-value]
 
 
-def build_antigravity_cfg(tmp_path: Path) -> CharlieBotConfig:
-  """CharlieBotConfig for antigravity-routing tests: the .charliebot home lives under tmp_path so each
-  test owns its own tree, and the backend list registers the model-less antigravity option the
-  resume-id routing resolves against."""
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backends={"options": [AGY_BACKEND_OPTION]},
-  )
-
-
 def build_two_backend_cfg(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig for cross-backend tests: the .charliebot home lives under tmp_path so each test owns its
   own tree, and the backend list registers the opus-then-codex pair that pin-resolution and fallback-ordering
@@ -1504,16 +1457,6 @@ def build_light_cc_cfg() -> CharlieBotConfig:
           "options": [backend_option(id="light-cc", label="Light CC", type="cc-claude", model="haiku")],
           "preference": ["light-cc"],
       })
-
-
-def build_chain_cfg(*options: models.BackendOption) -> CharlieBotConfig:
-  """CharlieBotConfig whose backends.preference chains the given options in the order given.
-
-  One-shot fallback tests read the chain off backends.options and backends.preference
-  together, so the pair must not drift; deriving the preference list here is what
-  keeps the order stated once per test.
-  """
-  return CharlieBotConfig(backends={"options": list(options), "preference": [option.id for option in options]})
 
 
 PUBLISH_BASE_URL = "https://pub.example.test/charliebot_pub"
@@ -1714,13 +1657,6 @@ def patched_cli_post(cfg: object, argv: list[str], **post_kw: object) -> Iterato
   yield from _patched_cli_transport(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, cfg, argv, **post_kw)
 
 
-@contextlib.contextmanager
-def patched_cli_get(cfg: object, argv: list[str], **get_kw: object) -> Iterator[MagicMock]:
-  """_patched_cli_transport with _request_get as the patched verb (the GET-only commands, e.g.
-  plan list/diff)."""
-  yield from _patched_cli_transport(CLI_COMMON_TRANSPORT_GET_PATCH_TARGET, cfg, argv, **get_kw)
-
-
 def schedule_trigger_argv(message: str, *extra: str) -> list[str]:
   """The schedule_trigger CLI argv the CLI tests share: session s1, --max-wait 60, --message."""
   return ["schedule_trigger", "--session", "s1", "--max-wait", "60", "--message", message, *extra]
@@ -1896,15 +1832,6 @@ def write_memory_entry(memory_dir: Path, topic: str, slug: str, legacy: bool = F
   d = memory_dir / "entries" / topic
   d.mkdir(parents=True, exist_ok=True)
   p = d / f"{slug}.md"
-  text = legacy_memory_entry_text(topic, slug, **kw) if legacy else memory_entry_text(topic, slug, **kw)
-  p.write_text(text, encoding="utf-8")
-  return p
-
-
-def write_memory_staging(memory_dir: Path, name: str, topic: str, slug: str, legacy: bool = False, **kw: Any) -> Path:
-  """Write one staging candidate ``staging/<name>.md``; same text rules as write_memory_entry."""
-  memory_dir.joinpath("staging").mkdir(parents=True, exist_ok=True)
-  p = memory_dir / "staging" / f"{name}.md"
   text = legacy_memory_entry_text(topic, slug, **kw) if legacy else memory_entry_text(topic, slug, **kw)
   p.write_text(text, encoding="utf-8")
   return p
@@ -2558,16 +2485,6 @@ def make_one_shot_backend(one_shot: AsyncMock) -> MagicMock:
   return backend
 
 
-def make_one_shot_chain(*one_shots: AsyncMock) -> list[MagicMock]:
-  """One-shot backends for a full preference-chain walk: one per candidate, in preference order.
-
-  Chain tests hand this list to patch(build_backend, side_effect=...) so each
-  build_backend call serves the next candidate, and a chain that stops early
-  leaves the surplus backends unbuilt.
-  """
-  return [make_one_shot_backend(one_shot) for one_shot in one_shots]
-
-
 class SuccessorDeliveryShim:
   """Default succession delivery for test fakes: no successor, persist into the owning session.
 
@@ -2840,11 +2757,6 @@ def asgi_response(sent: list[dict]) -> tuple[int, dict[bytes, bytes], bytes]:
   headers = dict(start["headers"])
   body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
   return start["status"], headers, body
-
-
-def asgi_downstream_called() -> bool:
-  """Whether the shared downstream ran during the last run_through_asgi_middleware call."""
-  return _ok_asgi_downstream.called
 
 
 def close_create_logged_task(coro: Any, *, name: str | None = None) -> None:

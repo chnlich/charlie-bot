@@ -1,10 +1,9 @@
 """CLI script for the ``charliebot plan`` subcommand.
 
-Subcommands (verbs) follow the same caller contract as ``charliebot delegate``:
-session id comes from the server-written CHARLIEBOT_SESSION_ID (explicit
-``--session`` mismatches are rejected; see ``resolve_session_id``),
-the result is a single JSON object on stdout, and server 4xx/5xx ``detail`` is
-written to stderr as a JSON error with a non-zero exit code.
+Subcommands (verbs) follow the same caller contract as ``charliebot delegate``
+(session identity per ``resolve_session_id``): the result is a single JSON
+object on stdout, and server 4xx/5xx ``detail`` is written to stderr as a JSON
+error with a non-zero exit code.
 
   charliebot plan present --file artifacts/plan_01.html --title "…"
   charliebot plan amend --file artifacts/plan_02.html --note "…" [--plan N]

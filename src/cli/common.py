@@ -567,6 +567,9 @@ def resolve_session_id(arg_session: str | None) -> str:
   session's directory routes by the variable and prints a non-fatal warning
   naming both ids, so a stale copied path stays visible while a legitimate cd
   (reading a sibling session's artifacts, entering a worktree) keeps working.
+
+  This docstring is the single home for the CLI caller-contract summary; the
+  CLI module headers point here instead of restating it.
   """
   cwd = Path.cwd().resolve()
   sessions_dir = _sessions_dir()

@@ -1,9 +1,8 @@
 """CLI script for master CC to delegate tasks to worker agents.
 
-Called by the master Claude Code instance as a shell command:
+Called by the master Claude Code instance as a shell command (session
+identity resolves per ``resolve_session_id``):
 
-  # --session is optional; the server-written CHARLIEBOT_SESSION_ID supplies it
-  # in normal master use (see ``resolve_session_id``).
   charliebot delegate \
     --repo /path/to/repo \
     --base-branch main \

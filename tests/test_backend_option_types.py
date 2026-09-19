@@ -3,12 +3,12 @@
 import pytest
 from pydantic import ValidationError
 
+from src.core.constants import BackendType
 from src.core.models import (
     BACKEND_CLASSES,
     BACKEND_OPTION_ADAPTER,
     MODEL_OPTIONAL_ROUTING_BACKEND_TYPES,
     BackendBase,
-    BackendType,
     CharlieCodeBackend,
     CodexBackend,
 )

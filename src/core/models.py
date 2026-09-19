@@ -20,7 +20,6 @@ from src.core.backend_models import (  # noqa: F401  (re-export)
     MODEL_OPTIONAL_ROUTING_BACKEND_TYPES,
     BackendBase,
     BackendOption,
-    BackendType,
     CcClaudeBackend,
     CharlieCodeBackend,
     ClaudeAccount,

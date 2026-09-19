@@ -12,8 +12,8 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from src.api.deps import bad_request, get_config_on_loop
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_credentials
+from src.core.constants import BackendType
 from src.core.http import get_http_client
-from src.core.models import BackendType
 from src.core.sse import iter_sse_lines
 
 if TYPE_CHECKING:

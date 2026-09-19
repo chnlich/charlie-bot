@@ -152,8 +152,8 @@ from src.core.codex_usage import (
     DEFAULT_CODEX_HOME,
 )
 from src.core.config import default_claude_dir, get_config
+from src.core.constants import BackendType
 from src.core.json_utils import atomic_write_stream
-from src.core.models import BackendType
 from src.core.runs import DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RAW_LOG_NAME
 from src.core.threads import EVENTS_LOG_NAME, METADATA_NAME, THREADS_DIR_NAME
 

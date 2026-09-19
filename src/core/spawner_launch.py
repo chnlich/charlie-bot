@@ -7,6 +7,7 @@ from pathlib import Path
 from src.agents.worker import Worker
 from src.core import claude_relay, spawner_backends, spawner_prompt
 from src.core.config import CharlieBotConfig
+from src.core.constants import BackendType
 from src.core.git import (
     git_create_worktree,
     git_remote_default_branch_and_tip,
@@ -14,7 +15,6 @@ from src.core.git import (
 )
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import (
-    BackendType,
     SpawnRequest,
     TaskType,
     ThreadMetadata,

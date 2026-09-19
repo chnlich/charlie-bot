@@ -118,6 +118,19 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"E2E-RESULT
 exit 0
 """
 
+# The two drivers' shared session rig, spliced into each driver source after
+# `home` binds. Each driver's imports must cover every name the fragment uses.
+_DRIVER_SESSION_SETUP = """\
+  cfg = CharlieBotConfig(
+      charliebot_home=home,
+      paths={"worktree_dir": str(home / "worktrees")},
+      backends={"options": [CcClaudeBackend(id="fake", label="Fake", model="fake-model")]},
+  )
+  session_mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
+  meta = await session_mgr.create_session(CreateSessionRequest(name="e2e"))
+"""
+
 DRIVER = """import asyncio
 import json
 import sys
@@ -132,15 +145,7 @@ from src.core.threads import ThreadManager
 
 async def main() -> None:
   home = Path(sys.argv[1])
-  cfg = CharlieBotConfig(
-      charliebot_home=home,
-      paths={"worktree_dir": str(home / "worktrees")},
-      backends={"options": [CcClaudeBackend(id="fake", label="Fake", model="fake-model")]},
-  )
-  session_mgr = SessionManager(cfg)
-  thread_mgr = ThreadManager(cfg)
-  meta = await session_mgr.create_session(CreateSessionRequest(name="e2e"))
-  thread = await thread_mgr.create_thread(meta, "e2e task")
+""" + _DRIVER_SESSION_SETUP + """  thread = await thread_mgr.create_thread(meta, "e2e task")
   # Sync handshake for the test harness (stdout is structlog's, not ours).
   (home / "driver_ids.json").write_text(json.dumps({"session": meta.id, "thread": thread.id}))
   await spawner.spawn_worker(
@@ -632,15 +637,7 @@ from src.core.threads import ThreadManager
 async def main() -> None:
   home = Path(sys.argv[1])
   description = sys.argv[2]
-  cfg = CharlieBotConfig(
-      charliebot_home=home,
-      paths={"worktree_dir": str(home / "worktrees")},
-      backends={"options": [CcClaudeBackend(id="fake", label="Fake", model="fake-model")]},
-  )
-  session_mgr = SessionManager(cfg)
-  thread_mgr = ThreadManager(cfg)
-  meta = await session_mgr.create_session(CreateSessionRequest(name="e2e"))
-  thread = await thread_mgr.create_thread(meta, description)
+""" + _DRIVER_SESSION_SETUP + """  thread = await thread_mgr.create_thread(meta, description)
   (home / "driver_ids.json").write_text(json.dumps({"session": meta.id, "thread": thread.id}))
   task = asyncio.create_task(
       spawner.spawn_worker(

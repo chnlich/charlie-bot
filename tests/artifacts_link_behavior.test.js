@@ -19,7 +19,7 @@ test('injectLinkBehavior injects one base tag with the artifact /absolute_filepa
   const ctx = loadArtifactsScript();
   const absPath = '/home/chaoli/sessions/test-session/artifacts/plan.html';
   const input = '<html><head></head><body><p>hi</p></body></html>';
-  const out = ctx.injectLinkBehavior(input, absPath);
+  const out = ctx.Chat.injectLinkBehavior(input, absPath);
 
   assert.equal(countBaseTags(out), 1, 'exactly one <base> tag');
   const baseMatch = out.match(/<base\b[^>]*>/i);
@@ -41,7 +41,7 @@ test('injectLinkBehavior does not inject a second base tag when one already exis
   const ctx = loadArtifactsScript();
   const absPath = '/home/chaoli/sessions/test-session/artifacts/plan.html';
   const input = '<html><head><base href="/other"></head><body><p>hi</p></body></html>';
-  const out = ctx.injectLinkBehavior(input, absPath);
+  const out = ctx.Chat.injectLinkBehavior(input, absPath);
 
   assert.equal(countBaseTags(out), 1, 'no second base tag injected');
   const baseMatch = out.match(/<base\b[^>]*>/i);
@@ -57,7 +57,7 @@ test('injectLinkBehavior prepends base and appends interceptor when no head or b
   const ctx = loadArtifactsScript();
   const absPath = '/tmp/report/artifacts/plot.html';
   const input = '<p>hello</p>';
-  const out = ctx.injectLinkBehavior(input, absPath);
+  const out = ctx.Chat.injectLinkBehavior(input, absPath);
 
   assert.ok(out.startsWith('<base href="'), 'base tag prepended at the very start');
   assert.equal(countBaseTags(out), 1, 'exactly one base tag');
@@ -68,7 +68,7 @@ test('injectLinkBehavior prepends base and appends interceptor when no head or b
 test('injectLinkBehavior base href contains no cbsession viewing fragment', () => {
   const ctx = loadArtifactsScript();
   const absPath = '/home/chaoli/sessions/test-session/artifacts/plan.html';
-  const out = ctx.injectLinkBehavior('<html><head></head><body></body></html>', absPath);
+  const out = ctx.Chat.injectLinkBehavior('<html><head></head><body></body></html>', absPath);
   const baseMatch = out.match(/<base\b[^>]*>/i);
   assert.ok(baseMatch, 'base tag present');
   assert.doesNotMatch(baseMatch[0], /cbsession/, 'base href has no #cbsession fragment');
@@ -77,7 +77,7 @@ test('injectLinkBehavior base href contains no cbsession viewing fragment', () =
 
 test('injectLinkBehavior interceptor contains scrollIntoView branch without location.hash assignment', () => {
   const ctx = loadArtifactsScript();
-  const out = ctx.injectLinkBehavior('<html><head></head><body></body></html>', '/a/b.html');
+  const out = ctx.Chat.injectLinkBehavior('<html><head></head><body></body></html>', '/a/b.html');
   const script = extractInterceptorScript(out);
   assert.ok(script, 'interceptor script present');
 
@@ -93,7 +93,7 @@ test('injectLinkBehavior interceptor contains scrollIntoView branch without loca
 
 test('injectLinkBehavior interceptor opens other links in a new tab via window.open', () => {
   const ctx = loadArtifactsScript();
-  const out = ctx.injectLinkBehavior('<html><head></head><body></body></html>', '/a/b.html');
+  const out = ctx.Chat.injectLinkBehavior('<html><head></head><body></body></html>', '/a/b.html');
   const script = extractInterceptorScript(out);
   assert.ok(script, 'interceptor script present');
 

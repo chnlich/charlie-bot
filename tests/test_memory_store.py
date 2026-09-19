@@ -10,11 +10,11 @@ import io
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
-from conftest import memory_entry_text as _entry_text
+from conftest import legacy_memory_entry_text, memory_entry_text
 from conftest import write_memory_entry as _write_entry
-from conftest import write_memory_staging as _write_staging
 from conftest import write_memory_topics as _write_topics
 
 from src.core import memory
@@ -28,6 +28,15 @@ from src.core.memory import (
 )
 
 # --- parse_entry: v2 ----------------------------------------------------------
+
+
+def write_memory_staging(memory_dir: Path, name: str, topic: str, slug: str, legacy: bool = False, **kw: Any) -> Path:
+  """Write one staging candidate ``staging/<name>.md``; same text rules as write_memory_entry."""
+  memory_dir.joinpath("staging").mkdir(parents=True, exist_ok=True)
+  p = memory_dir / "staging" / f"{name}.md"
+  text = legacy_memory_entry_text(topic, slug, **kw) if legacy else memory_entry_text(topic, slug, **kw)
+  p.write_text(text, encoding="utf-8")
+  return p
 
 
 def test_parse_valid(tmp_path: Path) -> None:
@@ -167,14 +176,14 @@ def test_parse_legacy_created_source_parseable(tmp_path: Path) -> None:
 def _mismatched_dir_entry(tmp_path: Path) -> None:
   d = tmp_path / "entries" / "wrongdir"
   d.mkdir(parents=True)
-  (d / "slug.md").write_text(_entry_text("profile", "slug"), encoding="utf-8")
+  (d / "slug.md").write_text(memory_entry_text("profile", "slug"), encoding="utf-8")
 
 
 def _bad_filename_entry(tmp_path: Path) -> None:
   d = tmp_path / "entries" / "profile"
   d.mkdir(parents=True)
   # space is outside the slug charset
-  (d / "bad slug.md").write_text(_entry_text("profile", "bad slug"), encoding="utf-8")
+  (d / "bad slug.md").write_text(memory_entry_text("profile", "bad slug"), encoding="utf-8")
 
 
 _LOAD_REJECTION_CASES = [
@@ -283,7 +292,8 @@ def test_lint_entries_flags_bad_audience_element(tmp_path: Path) -> None:
 def test_lint_staging_legacy_candidate_stays_clean(tmp_path: Path) -> None:
   """Existing staged candidates (created/source header, both, '# ' body) stay lint-clean."""
   _write_topics(tmp_path)
-  _write_staging(tmp_path, "20260728T120000Z-abcd1234-pending", "profile", "pending", legacy=True, audience="both")
+  write_memory_staging(
+      tmp_path, "20260728T120000Z-abcd1234-pending", "profile", "pending", legacy=True, audience="both")
   violations = lint(tmp_path)
   assert not violations, f"expected clean, got: {violations}"
 
@@ -291,7 +301,7 @@ def test_lint_staging_legacy_candidate_stays_clean(tmp_path: Path) -> None:
 def test_lint_revises_in_staging_accepted(tmp_path: Path) -> None:
   _write_topics(tmp_path)
   _write_entry(tmp_path, "profile", "existing")
-  _write_staging(
+  write_memory_staging(
       tmp_path, "20260728T120000Z-abcd1234-rev-prop", "newtopic", "rev-prop", revises="existing", audience="worker")
   violations = lint(tmp_path)
   assert not violations, f"expected clean, got: {violations}"
@@ -299,7 +309,7 @@ def test_lint_revises_in_staging_accepted(tmp_path: Path) -> None:
 
 def test_lint_staging_comma_audience_accepted(tmp_path: Path) -> None:
   _write_topics(tmp_path)
-  _write_staging(tmp_path, "cand", "profile", "cand", audience="master, worker")
+  write_memory_staging(tmp_path, "cand", "profile", "cand", audience="master, worker")
   violations = lint(tmp_path)
   assert not violations, f"expected clean, got: {violations}"
 

@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 from conftest import (
+    AGY_BACKEND_OPTION,
     BUILD_BACKEND_PATCH_TARGET,
     FakeBackend,
     backend_option,
-    build_antigravity_cfg,
     make_work_item,
     patch_instructions_content,
 )
@@ -19,6 +19,16 @@ from src.agents import master_cc, master_cc_run
 from src.agents.backends import base as backend_base
 from src.core import config as core_config
 from src.core import models
+
+
+def build_antigravity_cfg(tmp_path: Path) -> core_config.CharlieBotConfig:
+  """CharlieBotConfig for antigravity-routing tests: the .charliebot home lives under tmp_path so each
+  test owns its own tree, and the backend list registers the model-less antigravity option the
+  resume-id routing resolves against."""
+  return core_config.CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backends={"options": [AGY_BACKEND_OPTION]},
+  )
 
 
 def test_build_master_env_writes_own_session_and_prepends_repo_venv(

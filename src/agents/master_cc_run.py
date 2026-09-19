@@ -21,12 +21,12 @@ from src.agents.backends.claude_code import (
 from src.core import claude_accounts, claude_relay, runs
 from src.core import event_types as ET
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig, claude_config_dir
+from src.core.constants import SESSION_ID_ENV_VAR
 from src.core.latex import check_tex_changed, clear_snapshot
 from src.core.log_once import LazyStructlogLogger
 from src.core.memory import assemble_master
 from src.core.models import (
     PROJECT_ROLE,
-    SESSION_ID_ENV_VAR,
     BackendOption,
     BackendType,
     ClaudeAccount,

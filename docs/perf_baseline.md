@@ -4250,9 +4250,11 @@ session open fetches `GET /api/sessions/{id}/view`, whose `threads` array rode a
 worst corpus — while the workers tab it feeds paints one CSS-truncated description line
 per card and its full-text modal fetches the thread row on click (the M36 list contract,
 which the same card builder already consumes). The fix ships the M36 prefixed rows, so
-the view body carries one prefix per thread instead of the whole metadata. The handler's
-mark_read write rules out driving the live instance, so the collector resolves the session
-whose threads directory carries the most metadata files (the M5 resolution rule), copies
+the view body carries one prefix per thread instead of the whole metadata. The view is a
+side-effect-free read — the old write-once mark_read moved to the client's post-render
+`POST /read` — so the scratch-home copy is pure read-only corpus isolation rather than
+write avoidance: the collector resolves the session whose threads directory carries the
+most metadata files (the M5 resolution rule), copies
 that session (metadata.json, data/, threads/) into a scratch `CHARLIEBOT_HOME` under /tmp
 (live home read once for the copy, never written), and times the handler function from the
 checkout under test: one cold pass, as at first view after a server start, then nine timed
@@ -4286,7 +4288,8 @@ SID = best.name
 
 # Isolation: scratch CHARLIEBOT_HOME under /tmp holding only a copy of that
 # session's metadata.json, data/, and threads/; live home read once for the
-# copy, never written (the view's mark_read lands on the copy).
+# copy, never written (the view is a side-effect-free read; the copy pins the
+# corpus and keeps the timed calls off the live home).
 home = Path(tempfile.mkdtemp(prefix="m63-view-home-", dir="/tmp"))
 dst = home / "sessions" / SID
 dst.mkdir(parents=True)

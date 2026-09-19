@@ -24,6 +24,13 @@ CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
 # the config model stack.
 CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
 
+# The OAuth credential filename inside a login directory: claude-sub snapshots it
+# into the session-only config overlay, the account pool reads it for health, and
+# the usage provider derives its per-account path from it. It lives beside the
+# login-dir names so the claude-sub launch resolves it without the account pool's
+# pydantic models.
+CREDENTIALS_FILE = ".credentials.json"
+
 
 def default_claude_dir() -> Path:
   """The default claude login directory (``~/.claude``), read from HOME on every call.

@@ -14,13 +14,12 @@ mounted with:
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
-from conftest import REVIEW_TRIGGER_MASTER_PATCH_TARGET, _cfg, _recovery_reports
+from conftest import REVIEW_TRIGGER_MASTER_PATCH_TARGET, _cfg, _recovery_reports, cancel_and_drain
 
 from src.agents.worker import Worker
 from src.core import spawner
@@ -154,9 +153,7 @@ async def test_cancellation_gate_by_probe(
           interrupt_reason="",
           on_silence=None))
   await asyncio.wait_for(resume_entered.wait(), timeout=10.0)
-  task.cancel()
-  with contextlib.suppress(asyncio.CancelledError):
-    await task
+  await cancel_and_drain(task)
   assert task.cancelled()
 
   assert _thread_status(home, session_meta.id, thread.id) == expected_status

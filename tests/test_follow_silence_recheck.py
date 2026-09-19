@@ -15,14 +15,13 @@ Nothing is persisted.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
-from conftest import SuccessorDeliveryShim, fresh_state_fixture
+from conftest import SuccessorDeliveryShim, cancel_and_drain, fresh_state_fixture
 
 from src.agents.backends.base import tail_follow_events
 from src.core import init as init_module
@@ -96,9 +95,7 @@ async def test_silence_crossing_emits_exactly_one_recheck_and_follow_continues(t
       await asyncio.sleep(0.05)
     assert [e.get("type") for e in events] == ["assistant"]
   finally:
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-      await task
+    await cancel_and_drain(task)
 
 
 @pytest.mark.asyncio
@@ -119,9 +116,7 @@ async def test_no_recheck_before_threshold(tmp_path: Path) -> None:
     assert not reports
     assert [e.get("type") for e in events] == ["assistant"]
   finally:
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-      await task
+    await cancel_and_drain(task)
 
 
 @pytest.mark.asyncio
@@ -162,9 +157,7 @@ async def test_remount_cannot_reemit_within_one_boot(tmp_path: Path) -> None:
     task = asyncio.create_task(
         _consume(raw, events, lambda: init_module._follow_silence_recheck(session_mgr, "sess", "tid")))
     await asyncio.sleep(0.4)
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-      await task
+    await cancel_and_drain(task)
 
   await mount_once()
   assert len(session_mgr.events) == 1

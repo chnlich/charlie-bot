@@ -316,11 +316,24 @@ def test_autonamer_and_recap_defer_the_registry_until_first_use() -> None:
 # The claude-sub chain's extra bans: the worker binary launches on every
 # subscription-mode spawn, so its import must stay off the web framework
 # (pty_common/tui carry only TYPE_CHECKING WebSocket hints and the relay imports
-# WebSocketDisconnect inside the function) and off the config model stack (the
+# WebSocketDisconnect inside the function), off the config model stack (the
 # backend ABC defers get_config to its cgroup read; runs and claude_accounts
 # carry the CharlieBotConfig hints under TYPE_CHECKING; the login-dir names
-# single-home in src.core.home).
-CLAUDE_SUB_HEAVY_MODULES = ("fastapi", "src.core.config", "yaml", "src.core.credentials")
+# single-home in src.core.home), and off the pydantic model stacks: the
+# vocabulary constants (BackendType, SESSION_ID_ENV_VAR) single-home in
+# src.core.constants, the credential filename in src.core.home, and the account
+# pool itself loads only at the call site that reads transcripts — its module
+# scope builds the account models the launch never reads.
+CLAUDE_SUB_HEAVY_MODULES = (
+    "fastapi",
+    "src.core.config",
+    "yaml",
+    "src.core.credentials",
+    "pydantic",
+    "src.core.models",
+    "src.core.backend_models",
+    "src.core.claude_accounts",
+)
 
 
 def test_claude_sub_chain_imports_without_the_web_framework_and_config_stack() -> None:

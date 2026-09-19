@@ -35,12 +35,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from src.core.constants import BackendType
+from src.core.home import CREDENTIALS_FILE  # noqa: F401  (re-export)
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import BackendOption, BackendType, ClaudeAccount
+from src.core.models import BackendOption, ClaudeAccount
 
 # future-annotations keep every cfg: CharlieBotConfig hint unevaluated; the config
-# model stack must stay out of the claude-sub worker binary's import (it imports
-# this module for CREDENTIALS_FILE).
+# model stack must stay out of the claude-sub worker binary's import.
 if TYPE_CHECKING:
   from src.core.config import CharlieBotConfig
 
@@ -57,8 +58,6 @@ WARNING_UTILIZATION = 0.90
 # An account whose last authentication failure is younger than this is skipped:
 # a failed OAuth refresh is not cleared by retrying within minutes.
 AUTH_FAILURE_COOLDOWN = timedelta(minutes=15)
-
-CREDENTIALS_FILE = ".credentials.json"
 
 # The two binding windows every ``rate_limit_event`` carries under
 # ``unifiedWindows``; the overage window is not a limit on the subscription.

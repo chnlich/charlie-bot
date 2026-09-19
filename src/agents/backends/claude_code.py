@@ -9,9 +9,9 @@ from pathlib import Path
 
 from src.agents.backends.base import DISALLOWED_TOOLS_FLAG, SKIP_PERMISSIONS_FLAG, AgentBackend
 from src.core import event_types as ET
+from src.core.constants import SESSION_ID_ENV_VAR
 from src.core.home import CLAUDE_CONFIG_DIR_ENV_VAR
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
-from src.core.models import SESSION_ID_ENV_VAR
 from src.core.process import kill_process_group
 
 log = LazyStructlogLogger()

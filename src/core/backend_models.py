@@ -6,29 +6,18 @@ invocation's first ``get_config``) never constructs the session/API models in
 import path.
 """
 
-from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
+# The vocabulary single-homes in the stdlib-only constants module so readers that
+# need only the enum (src.core.runs, the claude-sub launch chain) skip the pydantic
+# model construction this module exists for; this import is the re-export.
+from src.core.constants import BackendType  # noqa: F401  (re-export)
+
 # ---------------------------------------------------------------------------
 # Backend Models
 # ---------------------------------------------------------------------------
-
-
-class BackendType(StrEnum):
-  """The BackendOption.type vocabulary; config.yaml carries the same strings."""
-
-  CC_CLAUDE = "cc-claude"
-  CC_KIMI = "cc-kimi"
-  CC_OPENAI_COMPATIBLE = "cc-openai-compatible"
-  CODEX = "codex"
-  CHARLIE_CODE = "charlie-code"
-  GEMINI = "gemini"
-  OPENCODE = "opencode"
-  ANTIGRAVITY = "antigravity"
-  TUI_CLI = "tui-cli"
-
 
 MODEL_OPTIONAL_ROUTING_BACKEND_TYPES: frozenset[BackendType] = frozenset({BackendType.ANTIGRAVITY, BackendType.TUI_CLI})
 

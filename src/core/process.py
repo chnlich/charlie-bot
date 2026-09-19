@@ -1,7 +1,6 @@
 """Process management utilities."""
 
 import asyncio
-import contextlib
 import ctypes
 import os
 import signal
@@ -13,6 +12,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
+from src.core.tasks import cancel_and_wait
 from src.core.timeouts import (
     KILL_ESCALATION_GRACE_SECONDS,
     KILL_ESCALATION_POLL_SECONDS,
@@ -86,9 +86,7 @@ async def wait_or_kill_group(
     kill_process_group(pid, signal.SIGKILL)
     raise
   finally:
-    stderr_task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-      await stderr_task
+    await cancel_and_wait(stderr_task)
 
 
 def _pdeathsig_should_self_kill(parent_pid: int, observed_ppid: int) -> bool:

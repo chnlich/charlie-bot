@@ -6,7 +6,7 @@ import io
 import json
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from datetime import datetime
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -56,7 +56,7 @@ from src.core.process import log_session_cgroup_startup, sweep_stale_session_cgr
 from src.core.scheduler import Scheduler
 from src.core.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager
 from src.core.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
-from src.core.tasks import create_logged_task
+from src.core.tasks import cancel_and_wait, create_logged_task
 from src.core.triggers import TriggerManager
 
 log = LazyStructlogLogger()
@@ -393,16 +393,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   yield
 
   speech_model_task = getattr(app.state, "speech_model_task", None)
-  if speech_model_task is not None and not speech_model_task.done():
-    speech_model_task.cancel()
-    with suppress(asyncio.CancelledError):
-      await speech_model_task
+  await cancel_and_wait(speech_model_task)
   for attr in ("slack_listener_task", "slack_backfill_task"):
-    task = getattr(app.state, attr, None)
-    if task is not None and not task.done():
-      task.cancel()
-      with suppress(asyncio.CancelledError):
-        await task
+    await cancel_and_wait(getattr(app.state, attr, None))
   await ext_usage.stop_poller()
   await host_auth.stop_poller()
   await close_http_client()

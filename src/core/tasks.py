@@ -1,6 +1,8 @@
-"""Helpers for fire-and-forget asyncio tasks with exception logging."""
+"""Helpers for background asyncio tasks: fire-and-forget creation with exception
+logging, and shutdown-time cancellation with a drain."""
 
 import asyncio
+import contextlib
 from collections.abc import Coroutine
 
 from src.core.log_once import LazyStructlogLogger
@@ -31,3 +33,17 @@ def create_logged_task(coro: Coroutine, *, name: str | None = None) -> asyncio.T
   _background_tasks.add(task)
   task.add_done_callback(_task_done_callback)
   return task
+
+
+async def cancel_and_wait(task: asyncio.Task | None) -> None:
+  """Cancel *task*, then wait out the cancellation before returning; a None task is already quiet.
+
+  Awaiting (suppressing CancelledError) lets the task's own finally block
+  finish first, so a stopped task never outlives the shutdown step that
+  stopped it.
+  """
+  if task is None:
+    return
+  task.cancel()
+  with contextlib.suppress(asyncio.CancelledError):
+    await task

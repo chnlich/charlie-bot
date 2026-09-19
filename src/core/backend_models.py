@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # The vocabulary single-homes in the stdlib-only constants module so readers that
 # need only the enum (src.core.runs, the claude-sub launch chain) skip the pydantic
 # model construction this module exists for; this import is the re-export.
-from src.core.constants import BackendType  # noqa: F401  (re-export)
+from src.core.constants import BackendType
 
 # ---------------------------------------------------------------------------
 # Backend Models

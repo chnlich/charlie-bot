@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src.core.constants import BackendType
-from src.core.home import CREDENTIALS_FILE  # noqa: F401  (re-export)
+from src.core.home import CREDENTIALS_FILE
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendOption, ClaudeAccount
 

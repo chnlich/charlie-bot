@@ -1,7 +1,6 @@
 """Scheduler — runs cron-like tasks that produce results in dedicated sessions."""
 
 import asyncio
-import contextlib
 import traceback
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -34,7 +33,7 @@ from src.core.models import (
 from src.core.sessions import SessionManager
 from src.core.spawner import resolve_requested_subagent_backend_model, spawn_worker
 from src.core.storage_cool import format_sweep_line, run_cool_sweep
-from src.core.tasks import create_logged_task
+from src.core.tasks import cancel_and_wait, create_logged_task
 from src.core.threads import ThreadManager
 
 log = LazyStructlogLogger()
@@ -197,10 +196,7 @@ class Scheduler:
     log.info("scheduler_started")
 
   async def stop(self) -> None:
-    if self._task and not self._task.done():
-      self._task.cancel()
-      with contextlib.suppress(asyncio.CancelledError):
-        await self._task
+    await cancel_and_wait(self._task)
     log.info("scheduler_stopped")
 
   async def run_task_now(self, task_name: str) -> dict:

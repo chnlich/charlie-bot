@@ -1,7 +1,6 @@
 """The host-auth panel: the standing probe poller and its page, status, and probe routes."""
 
 import asyncio
-import contextlib
 from datetime import datetime
 
 from fastapi import APIRouter, Request
@@ -22,7 +21,7 @@ from src.core.host_auth import (
 )
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import utc_now
-from src.core.tasks import create_logged_task
+from src.core.tasks import cancel_and_wait, create_logged_task
 
 log = LazyStructlogLogger()
 router = APIRouter()
@@ -225,7 +224,5 @@ async def stop_poller() -> None:
   task = _poller_task
   if task is not None:
     _poller_task = None
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-      await task
+    await cancel_and_wait(task)
     log.info("host_auth_poller_stopped")

@@ -1,7 +1,6 @@
 """External tool usage poller and API route (Claude Code, Codex)."""
 
 import asyncio
-import contextlib
 import json
 import os
 import re
@@ -24,6 +23,7 @@ from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.memo import StatSignatureMemo
 from src.core.models import ClaudeAccount
 from src.core.streaming import SIDEBAR_CHANNEL, streaming_manager
+from src.core.tasks import cancel_and_wait
 from src.core.timeouts import (
     EXT_USAGE_ROUND_GAP_SECONDS,
     EXT_USAGE_VERSION_PROBE_TIMEOUT,
@@ -1132,7 +1132,5 @@ async def stop_poller() -> None:
   task = _poller_task
   if task is not None:
     _poller_task = None
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-      await task
+    await cancel_and_wait(task)
     log.info("ext_usage_poller_stopped")

@@ -22,6 +22,8 @@ const renderedSessionStatuses = {};
 
 function recordRenderedSessionStatus(session) {
   renderedSessionStatuses[session.id] = (session && session.status) || 'active';
+  // The row's own activity as painted; the indicator aggregation reads it.
+  ownIndicatorState[session.id] = getSessionIndicatorState(session);
 }
 
 function sidebarSessionIds() {
@@ -282,13 +284,74 @@ function updateSidebarHighlight(newSessionId) {
   }
 }
 
-function setSessionIndicator(sid, state) {
+// Indicator priority over the nested sidebar. A row's own activity comes
+// first (its thinking spinner, then its delegated-work gear); a collapsed
+// parent then stands in for its subtree: a running descendant shows the gear,
+// an unread descendant shows the dot. An expanded parent shows its own facts
+// only, since the descendants show theirs. The facts are the latest applied
+// state per row (list paint, status poll, running_changed broadcast) and the
+// shared unread map; the tree shape comes from the last grouped paint.
+const ownIndicatorState = {};
+
+function treeChildIdsOf(sid) {
+  return Sidebar.treeChildIds ? Sidebar.treeChildIds(sid) : [];
+}
+
+function treeStandsInForSubtree(sid) {
+  if (!treeChildIdsOf(sid).length) return false;
+  return !(Sidebar.isTreeNodeExpanded && Sidebar.isTreeNodeExpanded(sid));
+}
+
+function subtreeHasActivity(sid) {
+  return treeChildIdsOf(sid).some(child => (ownIndicatorState[child] || 'idle') !== 'idle' || subtreeHasActivity(child));
+}
+
+function subtreeHasUnread(sid) {
+  return treeChildIdsOf(sid).some(child => !!sessionUnread[child] || subtreeHasUnread(child));
+}
+
+function effectiveIndicatorState(sid) {
+  const own = ownIndicatorState[sid] || 'idle';
+  if (own !== 'idle') return own;
+  if (treeStandsInForSubtree(sid) && subtreeHasActivity(sid)) return 'worker_only';
+  return 'idle';
+}
+
+function effectiveUnread(sid) {
+  if (sessionUnread[sid]) return true;
+  return treeStandsInForSubtree(sid) && subtreeHasUnread(sid);
+}
+
+function paintSessionIndicator(sid) {
+  const state = effectiveIndicatorState(sid);
   const spinner = document.getElementById('spinner-' + sid);
   const worker = document.getElementById('worker-indicator-' + sid);
   const dot = document.getElementById('unread-' + sid);
   if (spinner) spinner.classList.toggle('hidden', state !== 'thinking');
   if (worker) worker.classList.toggle('hidden', state !== 'worker_only');
-  if (dot) dot.classList.toggle('hidden', state !== 'idle' || !sessionUnread[sid]);
+  if (dot) dot.classList.toggle('hidden', state !== 'idle' || !effectiveUnread(sid));
+}
+
+// Repaint one row and every ancestor whose stand-in may have changed.
+function refreshSessionIndicator(sid) {
+  paintSessionIndicator(sid);
+  if (!Sidebar.treeParentId) return;
+  for (let parent = Sidebar.treeParentId(sid); parent; parent = Sidebar.treeParentId(parent)) {
+    paintSessionIndicator(parent);
+  }
+}
+
+function setSessionIndicator(sid, state) {
+  ownIndicatorState[sid] = state;
+  refreshSessionIndicator(sid);
+}
+
+// A grouped paint renders each row with its own facts; the parent rows take
+// their stand-in state here, once the rows exist.
+function refreshTreeIndicators() {
+  Object.keys(ownIndicatorState).forEach(sid => {
+    if (treeChildIdsOf(sid).length) paintSessionIndicator(sid);
+  });
 }
 
 function setSessionPendingTriggerIndicator(sid, status) {
@@ -500,6 +563,10 @@ const API = {
   renderPendingPlanApprovalIndicator,
   updateSidebarHighlight,
   setSessionIndicator,
+  refreshSessionIndicator,
+  refreshTreeIndicators,
+  effectiveIndicatorState,
+  effectiveUnread,
   setSessionPendingTriggerIndicator,
   setSessionPendingPlanApprovalIndicator,
   updateSpinner,

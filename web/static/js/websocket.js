@@ -160,12 +160,8 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
   if (t === 'unread_changed') {
     recordUnreadFact(ev.session_id, ev.has_unread);
     if (ev.session_id === SESSION_ID) return;
-    const spinner = document.getElementById('spinner-' + ev.session_id);
-    const gear = document.getElementById('worker-indicator-' + ev.session_id);
-    const activityVisible = (spinner && !spinner.classList.contains('hidden'))
-      || (gear && !gear.classList.contains('hidden'));
-    const dot = document.getElementById('unread-' + ev.session_id);
-    if (dot) dot.classList.toggle('hidden', !ev.has_unread || activityVisible);
+    // The row and its collapsed ancestors repaint from the shared facts.
+    refreshSessionIndicator(ev.session_id);
     return;
   }
 

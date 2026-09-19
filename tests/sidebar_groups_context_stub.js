@@ -23,7 +23,7 @@ const BACKEND_OPTIONS = {
 };
 
 function loadGroups() {
-  const Sidebar = {expose() {}, state: {}};
+  const Sidebar = {state: {}};
   const context = {
     Sidebar,
     globalThis: null,

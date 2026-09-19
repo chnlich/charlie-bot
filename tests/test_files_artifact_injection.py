@@ -124,6 +124,42 @@ def test_serve_file_injects_thread_artifact_with_session_id_not_thread_id(sessio
   assert '"T"' not in resp.text
 
 
+def test_serve_file_builds_the_1mib_chunk_response(sessions_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The file arm serves through _ServedFileResponse — the 1 MiB-chunk subclass
+  is the route's whole transport knob, so a revert to the base FileResponse must
+  fail this test, not silently re-price every artifact serve."""
+  page = _write(sessions_root / "S" / "artifacts" / "x.png")
+  built = []
+  real = files_api._ServedFileResponse
+
+  class _Recording(real):
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+      built.append(self)
+      super().__init__(*args, **kwargs)
+
+  monkeypatch.setattr(files_api, "_ServedFileResponse", _Recording)
+  resp = _build_client("secret").get("/absolute_filepath" + str(page))
+  assert resp.status_code == 200
+  assert len(built) == 1
+  assert built[0].chunk_size == 1 << 20
+
+
+def test_serve_file_binary_body_is_byte_identical_across_chunks(sessions_root: Path) -> None:
+  """A payload larger than one 1 MiB chunk rides the chunked read path; the
+  served body must be exactly the file's bytes with identity transport."""
+  page = sessions_root / "S" / "artifacts" / "trace.bin"
+  page.parent.mkdir(parents=True, exist_ok=True)
+  payload = bytes(range(256)) * ((2 << 20) // 256) + b"tail"
+  assert len(payload) > (1 << 20)
+  page.write_bytes(payload)
+
+  resp = _build_client("secret").get("/absolute_filepath" + str(page))
+  assert resp.status_code == 200
+  assert "content-encoding" not in resp.headers
+  assert resp.content == payload
+
+
 def test_serve_file_injects_deeper_nested_artifact(sessions_root: Path) -> None:
   # A depth the old path-shape regex never matched: the predicate only cares that the
   # page sits under <session>/... with an `artifacts` parent, not how deep.

@@ -23,6 +23,16 @@ from src.core.memo import BoundedMemo
 
 router = APIRouter()
 
+
+class _ServedFileResponse(FileResponse):
+  # Starlette 1.0.0 exposes the read chunk size as this class attribute (no
+  # __init__ parameter). The 64 KiB default prices a page-cache serve at
+  # ~250 MB/s: one executor hop plus one ASGI send per chunk. A 1 MiB chunk
+  # cuts both ~16x per MB and is the transport's only knob; the wire bytes are
+  # identical, so no served body changes.
+  chunk_size = 1 << 20
+
+
 # Bound on _annotate_memo in annotated diff pages: one compare view reads one
 # page against one base at a time, so the cap covers every compare view open
 # across tabs, and one slot holds the ~1.5 MB worst annotated page.
@@ -494,6 +504,6 @@ async def serve_file(path: str, request: Request) -> Response:
   # Serve the file with auto-detected MIME type
   media_type, _ = mimetypes.guess_type(str(fs_path))
   try:
-    return FileResponse(str(fs_path), media_type=media_type)
+    return _ServedFileResponse(str(fs_path), media_type=media_type)
   except PermissionError as e:
     raise HTTPException(status_code=403, detail=_PERMISSION_DENIED_DETAIL) from e

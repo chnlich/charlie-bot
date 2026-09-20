@@ -150,7 +150,7 @@ async def _transcribe_with_bundle(session_id: str, bundle: object, pcm_bytes: by
 def _persist_voice_audio(cfg: CharlieBotConfig, session_id: str, pcm_bytes: bytes) -> Path:
   """Write the uploaded recording to sessions/{id}/voice/ and return its path.
 
-  Same layout the streaming persistence used; runs before the decode.
+  Runs before the decode.
   """
   ts = datetime.now(UTC).strftime("%Y-%m-%dT%H%M%S.%f")[:-3] + "Z"
   stem = f"{ts}_{uuid4().hex[:8]}"

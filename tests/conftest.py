@@ -309,6 +309,21 @@ async def run_resume_round(
     await drain_session_consumer(meta.id, timeout=5)
 
 
+def crashed_run_record(raw_log: Path) -> models.MasterRunRecord:
+  """MasterRunRecord for the re-attach tests' crashed run: raw log on disk, no process left behind.
+
+  pid=None leaves the record with no liveness probe and no kill path, so a test pairs it with
+  ``run_resume_round(..., is_alive=lambda: False)`` and the follower drains the raw file and
+  stops instead of waiting out the post-result timeout.
+  """
+  return models.MasterRunRecord(
+      pid=None,
+      pid_start=None,
+      started_at=datetime.now(UTC) - timedelta(seconds=60),
+      raw_log=str(raw_log),
+  )
+
+
 def stall_before_call(delay: float, real: Callable[..., Any]) -> Callable[..., Any]:
   """A drop-in stand-in that blocks *delay* seconds, then delegates to *real*.
 

@@ -26,6 +26,8 @@ from src.core.models import SessionMetadata, ThreadMetadata, ThreadStatus
 from src.core.ndjson import count_ndjson_lines
 from src.core.sessions import SessionManager
 
+_WALK_CHUNK_BYTES_PATCH_TARGET = "src.core.chat_events._WALK_CHUNK_BYTES"
+
 
 def _write_thread(threads_dir: Path, thread_id: str, status: ThreadStatus, completed_at: datetime | None) -> None:
   thread_dir = threads_dir / thread_id
@@ -452,7 +454,7 @@ async def test_live_range_walk_serves_tail_window_without_full_read(tmp_path: Pa
   real_open = open
   reads: list[int] = []
   with patch("builtins.open", _count_reads_of(live_path, real_open, reads)), \
-          patch("src.core.chat_events._WALK_CHUNK_BYTES", 64):
+          patch(_WALK_CHUNK_BYTES_PATCH_TARGET, 64):
     got, has_more = mgr.load_chat_events_range(session.id, 9, 11)
   # The walk read the window's tail span, not the whole file.
   assert 0 < sum(reads) < file_size
@@ -479,7 +481,7 @@ async def test_live_range_backward_extension_serves_scroll_below_walked_window(t
   real_open = open
   reads: list[int] = []
   with patch("builtins.open", _count_reads_of(live_path, real_open, reads)), \
-          patch("src.core.chat_events._WALK_CHUNK_BYTES", 64):
+          patch(_WALK_CHUNK_BYTES_PATCH_TARGET, 64):
     second, _ = mgr.load_chat_events_range(session.id, 7, 9)
   # The backward extension read the page's span, not the whole file.
   assert 0 < sum(reads) < file_size
@@ -546,7 +548,7 @@ async def test_live_range_walk_budget_falls_back_to_full_build(tmp_path: Path) -
   reads: list[int] = []
   with patch("builtins.open", _count_reads_of(live_path, real_open, reads)), \
           patch("src.core.chat_events._WALK_BYTE_BUDGET", 128), \
-          patch("src.core.chat_events._WALK_CHUNK_BYTES", 64):
+          patch(_WALK_CHUNK_BYTES_PATCH_TARGET, 64):
     got, _ = mgr.load_chat_events_range(session.id, 9, 11)
   # The over-budget span fell back to the full build, which read the file once.
   assert sum(reads) >= file_size

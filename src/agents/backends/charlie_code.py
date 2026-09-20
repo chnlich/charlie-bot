@@ -194,7 +194,14 @@ class CharlieCodeBackend(AgentBackend):
 
     if event_type == "command_progress":
       state = "terminated" if event["killed"] else "still running"
-      command = " ".join(self._commands_by_id[event["id"]].split())[:80]
+      raw = self._commands_by_id.get(event["id"])
+      command = " ".join(raw.split())[:80] if raw is not None else None
+      if raw is None:
+        # A progress ping replayed mid-stream after a server restart finds the
+        # translator's registered-command state empty; degrade to a text-less
+        # note instead of crashing the turn with a KeyError.
+        log.debug("charlie_code_progress_unknown_command", id=event["id"])
+      suffix = f": {command}" if raw is not None else ""
       return [
           {
               "type":
@@ -204,7 +211,7 @@ class CharlieCodeBackend(AgentBackend):
               "content":
                   (
                       f"Command {state} after {_duration_label(event['elapsed_seconds'])} "
-                      f"(pid {event['pid']}): {command}"),
+                      f"(pid {event['pid']}){suffix}"),
           }
       ]
 

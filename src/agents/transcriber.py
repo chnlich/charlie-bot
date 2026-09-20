@@ -95,6 +95,9 @@ class _SpeechModelBundle:
 
 
 _state_lock = threading.Lock()
+# Dedicated build lock for _get_model_bundle: a ~7 s model build holds this, never
+# _state_lock, so readiness readers (get_ready_model_paths) never wait on a build.
+_bundle_build_lock = threading.Lock()
 _provisioning_started = False
 _ready_paths: VoiceModelPaths | None = None
 _provisioning_error: str | None = None
@@ -391,24 +394,34 @@ def _get_model_bundle(cfg: CharlieBotConfig, paths: VoiceModelPaths) -> _SpeechM
   if bundle is not None and bundle_engine == cfg.voice.engine:
     return bundle
 
-  if cfg.voice.engine == "qwen3_hf":
-    try:
-      bundle = create_qwen3_hf_bundle(cfg, paths)
-    except Exception as exc:
-      # GPU engine down (missing packages, no card, load error): keep voice alive on
-      # the CPU engine. The ready log below names the actually active engine, and the
-      # deployment preflight re-asserts the GPU path, so the downgrade is visible.
-      log.warning("voice_gpu_engine_init_failed", error=str(exc), engine="qwen3_hf", fallback="sherpa")
-      bundle = create_sherpa_bundle(_ensure_sherpa_paths_cached(cfg))
-  else:
-    bundle = create_sherpa_bundle(paths)
+  # Double-checked single-flight: concurrent first accesses queue on the dedicated
+  # build lock, and the in-lock re-check lets the losers return the winner's bundle
+  # instead of building a second recognizer. The build never holds _state_lock.
+  with _bundle_build_lock:
+    with _state_lock:
+      bundle = _bundle
+      bundle_engine = _bundle_engine
+    if bundle is not None and bundle_engine == cfg.voice.engine:
+      return bundle
 
-  log.info("voice_model_bundle_ready", engine=bundle.engine, model_id=bundle.model_id)
-  with _state_lock:
-    if _bundle is None or _bundle_engine != cfg.voice.engine:
-      _bundle = bundle
-      _bundle_engine = cfg.voice.engine
-    return _bundle
+    if cfg.voice.engine == "qwen3_hf":
+      try:
+        bundle = create_qwen3_hf_bundle(cfg, paths)
+      except Exception as exc:
+        # GPU engine down (missing packages, no card, load error): keep voice alive on
+        # the CPU engine. The ready log below names the actually active engine, and the
+        # deployment preflight re-asserts the GPU path, so the downgrade is visible.
+        log.warning("voice_gpu_engine_init_failed", error=str(exc), engine="qwen3_hf", fallback="sherpa")
+        bundle = create_sherpa_bundle(_ensure_sherpa_paths_cached(cfg))
+    else:
+      bundle = create_sherpa_bundle(paths)
+
+    log.info("voice_model_bundle_ready", engine=bundle.engine, model_id=bundle.model_id)
+    with _state_lock:
+      if _bundle is None or _bundle_engine != cfg.voice.engine:
+        _bundle = bundle
+        _bundle_engine = cfg.voice.engine
+      return _bundle
 
 
 def create_sherpa_bundle(paths: VoiceModelPaths) -> _SpeechModelBundle:
@@ -525,3 +538,23 @@ def _decode_samples(bundle: _SpeechModelBundle, samples: np.ndarray) -> str:
 
 def _join_segments(*parts: str) -> str:
   return " ".join(part for part in (p.strip() for p in parts) if part)
+
+
+# The warm decode's shape: the cold cost it pays is kernel compilation and allocation
+# keyed to the input's size and dtypes, not its content, so the parameters are
+# hard-coded boot constants, not a tuning surface.
+WARMUP_SECONDS = 0.5
+WARMUP_FREQUENCY_HZ = 440.0
+
+
+def warm_up_bundle(bundle: _SpeechModelBundle) -> None:
+  """Decode one deterministic 0.5 s 440 Hz sine through the bundle and discard the text.
+
+  Serves server._provision_speech_models: it moves the first-decode cold cost (CUDA
+  kernel init + memory allocation, measured ~5 s) from the first real request to
+  boot. The decoded text carries no signal — a same-shape sine pays the identical
+  cold cost — so it is dropped; this is not a transcription correctness check.
+  """
+  positions = np.arange(int(SAMPLE_RATE * WARMUP_SECONDS), dtype=np.float64)
+  samples = np.sin(2 * np.pi * WARMUP_FREQUENCY_HZ * positions / SAMPLE_RATE)
+  _decode_samples(bundle, samples.astype(np.float32))

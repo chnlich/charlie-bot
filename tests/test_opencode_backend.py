@@ -37,6 +37,11 @@ from src.core import event_types as ET
 from src.core.streaming import handle_compaction_events
 from src.core.timeouts import OPENCODE_ABORT_TIMEOUT, OPENCODE_HTTP_API_TIMEOUT
 
+# The opencode backend's httpx seam: the module's PEP 562 hook serves `httpx` as a
+# module attribute, so pytest's string-target resolution lands the stand-in on the
+# shared httpx module where the backend's local `import httpx` sites read it.
+_OPENCODE_HTTPX_ASYNC_CLIENT_PATCH_TARGET = "src.agents.backends.opencode.httpx.AsyncClient"
+
 
 def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> OpenCodeBackend:
   return build_cli_backend(
@@ -60,7 +65,7 @@ def _rig_end_to_end_run(
   monkeypatch.setattr(backend, "_fetch_model_limit", AsyncMock(return_value=None))
   monkeypatch.setattr(backend, "_create_session", AsyncMock(return_value="session-1"))
   monkeypatch.setattr(backend, "_send_prompt", AsyncMock())
-  monkeypatch.setattr("src.agents.backends.opencode.httpx.AsyncClient", lambda **kwargs: _FakeRunHttpClient(response))
+  monkeypatch.setattr(_OPENCODE_HTTPX_ASYNC_CLIENT_PATCH_TARGET, lambda **kwargs: _FakeRunHttpClient(response))
   return process
 
 
@@ -1316,7 +1321,7 @@ def _rig_stub_serve_run(
   processes = [_StubServeProcess(chunks) for chunks in stderr_chunks_per_attempt]
   create_process = AsyncMock(side_effect=processes)
   monkeypatch.setattr(OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, create_process)
-  monkeypatch.setattr("src.agents.backends.opencode.httpx.AsyncClient", lambda **kwargs: _StubServeHttpClient(script))
+  monkeypatch.setattr(_OPENCODE_HTTPX_ASYNC_CLIENT_PATCH_TARGET, lambda **kwargs: _StubServeHttpClient(script))
   sleep_calls: list[float] = []
 
   async def _record_sleep(seconds: float) -> None:
@@ -1662,7 +1667,7 @@ async def test_per_call_clients_carry_shared_ssl_context(monkeypatch: pytest.Mon
                   (0.0, ""),
               ]))
 
-  monkeypatch.setattr("src.agents.backends.opencode.httpx.AsyncClient", _KwargsClient)
+  monkeypatch.setattr(_OPENCODE_HTTPX_ASYNC_CLIENT_PATCH_TARGET, _KwargsClient)
   backend = _build_backend(monkeypatch, model="provider/model")
   monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
   monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())

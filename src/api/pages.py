@@ -35,6 +35,10 @@ from src.core.constants import (
     PERFETTO_MERGED_PATH,
     PERFETTO_VIEWER_PATH,
     REPO_ROOT,
+    USAGE_SOURCE_CHARLIE_BOT,
+    USAGE_SOURCE_CLAUDE_CODE,
+    USAGE_SOURCE_CODEX,
+    USAGE_SOURCE_OPENCODE,
 )
 from src.core.gc_control import gc_off
 from src.core.log_once import LazyStructlogLogger
@@ -647,6 +651,12 @@ def _compact(n: float) -> str:
   return f"{int(n):,}"
 
 
+# The usage panel's source display order: the per-source tiles iterate it, and each
+# row's slot number sent to the charts is its position here.
+_USAGE_SOURCES = (USAGE_SOURCE_CLAUDE_CODE, USAGE_SOURCE_CODEX, USAGE_SOURCE_OPENCODE, USAGE_SOURCE_CHARLIE_BOT)
+_USAGE_SLOT = {src: slot for slot, src in enumerate(_USAGE_SOURCES, 1)}
+
+
 def _token_usage_context(tally: "TokenTally") -> dict:
   """Prepare the display context for the token_usage template from one tally.
 
@@ -670,7 +680,7 @@ def _token_usage_context(tally: "TokenTally") -> dict:
   top = max(rows, key=lambda r: r.total) if rows else None
   top_out = max(rows, key=lambda r: r.output) if rows else None
   per_src: dict[str, dict] = {}
-  for src in ("Claude Code", "Codex", "opencode", "charlie-bot"):
+  for src in _USAGE_SOURCES:
     sub = [r for r in rows if r.source == src]
     per_src[src] = {
         "t_comp": _compact(sum(r.total for r in sub)),
@@ -697,12 +707,7 @@ def _token_usage_context(tally: "TokenTally") -> dict:
                           "output": a.output,
                           "total": a.total
                       } for a in r.accounts],
-                  "slot": {
-                      "Claude Code": 1,
-                      "Codex": 2,
-                      "opencode": 3,
-                      "charlie-bot": 4
-                  }[r.source],
+                  "slot": _USAGE_SLOT[r.source],
                   "window": f"{r.first} → {r.last}",
               } for r in rows
           ],
@@ -719,6 +724,7 @@ def _token_usage_context(tally: "TokenTally") -> dict:
       "fresh_percent": tot["in_fresh"] / tot["total"] * 100 if tot["total"] else 0.0,
       "out_share": out_share,
       "per_src": per_src,
+      "usage_sources": list(_USAGE_SOURCES),
       "tot_calls": f"{tot['calls']:,}",
       "top_escaped": top.model if top else "",
       "top_compact": _compact(top.total) if top else "0",

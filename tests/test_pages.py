@@ -196,7 +196,8 @@ async def test_token_usage_route_labels_charliebot_source(
   assert "charlie-code-gemini-3.8-flash" in body  # the account split row
   assert "charlie-bot reads its own thread event logs" in body  # the Sources bullet
   assert "their per-run usage lives only in the thread event logs" in body  # Not covered
-  assert "'charlie-bot':4" in body  # the JS payload's source slot
+  assert '"slot": 4' in body  # the JS payload's per-row source slot
+  assert 'const LEG = ["Claude Code", "Codex", "opencode", "charlie-bot"]' in body  # the legend rides the server's display order
   scale = body.split("Scale by platform:", 1)[1].split("</li>", 1)[0]
   for src in ("Claude Code", "opencode", "Codex", "charlie-bot"):
     assert src in scale  # every source per_src carries renders its clause
@@ -206,9 +207,9 @@ async def test_token_usage_route_labels_charliebot_source(
 async def test_token_usage_route_renders_when_a_source_key_is_absent(
     monkeypatch: pytest.MonkeyPatch, pages_config: CharlieBotConfig) -> None:
   """The deploy-skew shape renders: the template reloads from disk while the serving
-  process runs the python it started with, so a freshly added source's per_src key stays
-  absent until that process restarts — the page serves the sources it knows instead of
-  failing the whole report."""
+  process runs the python it started with, so a freshly added source's per_src key and a
+  freshly added context key like usage_sources both stay absent until that process
+  restarts — the page serves the sources it knows instead of failing the whole report."""
   tally = _usage_tally([_claude_row("2024-01-01", "2024-01-02")])
   monkeypatch.setattr(token_tally, "collect_token_usage", lambda **_kwargs: tally)
   real_context = pages._token_usage_context
@@ -216,6 +217,7 @@ async def test_token_usage_route_renders_when_a_source_key_is_absent(
   def skew_context(tally: TokenTally) -> dict:
     ctx = real_context(tally)
     del ctx["ctx"]["per_src"]["charlie-bot"]  # the pre-source serving process's shape
+    del ctx["ctx"]["usage_sources"]  # the pre-legend serving process's shape
     return ctx
 
   monkeypatch.setattr(pages, "_token_usage_context", skew_context)
@@ -226,6 +228,7 @@ async def test_token_usage_route_renders_when_a_source_key_is_absent(
   scale = body.split("Scale by platform:", 1)[1].split("</li>", 1)[0]
   assert "Claude Code 65 (100%, 1 models)" in scale
   assert "charlie-bot" not in scale
+  assert "const LEG = []" in body  # the absent legend key renders an empty legend
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="requires node on PATH")

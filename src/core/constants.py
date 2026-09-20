@@ -67,6 +67,16 @@ PERFETTO_MERGED_PATH = "/perfetto/merged"
 NCU_VIEWER_PATH = "/ncu"
 AUTH_STATUS_PATH = "/api/auth/status"
 
+# Usage-source vocabulary: the token tally (src/core/token_tally.py) tags every row with
+# one of these corpus sources, and the usage panel (src/api/pages.py) keys its per-source
+# tiles and row slots on the same spellings. The panel reads rows the tally produces but
+# must not import it — the tally pulls the config and model stack onto every page render —
+# so the shared spellings live in this stdlib-only module.
+USAGE_SOURCE_CLAUDE_CODE = "Claude Code"
+USAGE_SOURCE_CODEX = "Codex"
+USAGE_SOURCE_OPENCODE = "opencode"
+USAGE_SOURCE_CHARLIE_BOT = "charlie-bot"
+
 
 class WatchKind(StrEnum):
   UNKNOWN = "unknown"  # fail-loud sentinel; never a valid target, no default

@@ -196,7 +196,8 @@ async def test_token_usage_route_labels_charliebot_source(
   assert "charlie-code-gemini-3.8-flash" in body  # the account split row
   assert "charlie-bot reads its own thread event logs" in body  # the Sources bullet
   assert "their per-run usage lives only in the thread event logs" in body  # Not covered
-  assert "'charlie-bot':4" in body  # the JS payload's source slot
+  assert '"slot": 4' in body  # the JS payload's per-row source slot
+  assert 'const LEG = ["Claude Code", "Codex", "opencode", "charlie-bot"]' in body  # the legend rides the server's display order
   scale = body.split("Scale by platform:", 1)[1].split("</li>", 1)[0]
   for src in ("Claude Code", "opencode", "Codex", "charlie-bot"):
     assert src in scale  # every source per_src carries renders its clause

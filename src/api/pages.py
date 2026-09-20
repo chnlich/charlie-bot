@@ -724,6 +724,7 @@ def _token_usage_context(tally: "TokenTally") -> dict:
       "fresh_percent": tot["in_fresh"] / tot["total"] * 100 if tot["total"] else 0.0,
       "out_share": out_share,
       "per_src": per_src,
+      "usage_sources": list(_USAGE_SOURCES),
       "tot_calls": f"{tot['calls']:,}",
       "top_escaped": top.model if top else "",
       "top_compact": _compact(top.total) if top else "0",

@@ -90,6 +90,18 @@ def _seed_scheduled_task(
   return path
 
 
+def _scheduled_succession_rig(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    cron: str = "0 2 * * *",
+) -> tuple[CharlieBotConfig, SessionManager, Path]:
+  """The scheduler-owned succession rig: two-backend config, its manager, and the seeded task yaml path."""
+  cfg = build_two_backend_cfg(tmp_path)
+  mgr = SessionManager(cfg)
+  return cfg, mgr, _seed_scheduled_task(tmp_path, monkeypatch, cron=cron)
+
+
 async def _make_scheduled_parent(
     mgr: SessionManager,
     *,
@@ -177,9 +189,7 @@ async def test_elone_of_scheduler_owned_session_succeeds_with_full_inheritance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = build_two_backend_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  yaml_path = _seed_scheduled_task(tmp_path, monkeypatch)
+  _cfg, mgr, yaml_path = _scheduled_succession_rig(tmp_path, monkeypatch)
   parent = await _make_scheduled_parent(mgr, role=PROJECT_ROLE, group="proj-a")
   parent.last_scheduled_run = "2026-08-20T02:00:00-07:00"
   parent.last_scheduled_cron = "0 2 * * *"
@@ -220,9 +230,7 @@ async def test_second_elone_of_scheduler_owned_parent_refuses_and_mutates_nothin
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = build_two_backend_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  _seed_scheduled_task(tmp_path, monkeypatch)
+  cfg, mgr, _ = _scheduled_succession_rig(tmp_path, monkeypatch)
   parent = await _make_scheduled_parent(mgr)
 
   first_child = await mgr.elone_session(parent.id, event_index=1, backend="codex-o3")
@@ -510,9 +518,7 @@ async def test_alignment_scan_is_noop_at_every_succession_transition(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   """At each transition state the backend alignment scan has no rotation work to do."""
-  cfg = build_two_backend_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  _seed_scheduled_task(tmp_path, monkeypatch)
+  cfg, mgr, _ = _scheduled_succession_rig(tmp_path, monkeypatch)
   parent = await _make_scheduled_parent(mgr)
   old_backend = parent.backend
   new_backend = "codex-o3"
@@ -557,9 +563,7 @@ async def test_succession_keeps_scheduler_chain_intact_for_tick_and_triggers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = build_two_backend_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  yaml_path = _seed_scheduled_task(tmp_path, monkeypatch)
+  cfg, mgr, yaml_path = _scheduled_succession_rig(tmp_path, monkeypatch)
   parent = await _make_scheduled_parent(mgr)
   trigger_mgr = TriggerManager(cfg, mgr)
   scheduler = Scheduler(cfg, mgr)
@@ -603,9 +607,7 @@ async def test_unarchived_old_generation_does_not_capture_the_next_cron_fire(
   """Scheduled-session selection sorts by creation time, not updated_at: a
   pulled-back (unarchived) old generation refreshes its updated_at, so only the
   creation order keeps the task's next fire on the newest generation."""
-  cfg = build_two_backend_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  _seed_scheduled_task(tmp_path, monkeypatch)
+  _cfg, mgr, _ = _scheduled_succession_rig(tmp_path, monkeypatch)
   gen1 = await _make_scheduled_parent(mgr)
 
   gen2 = await mgr.elone_session(gen1.id, event_index=0)
@@ -629,9 +631,7 @@ async def test_handoff_reference_holds_exact_parent_prefix_and_parent_pointer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = build_two_backend_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  _seed_scheduled_task(tmp_path, monkeypatch)
+  _cfg, mgr, _ = _scheduled_succession_rig(tmp_path, monkeypatch)
   parent = await _make_scheduled_parent(mgr, events=3)
 
   child = await mgr.elone_session(parent.id, event_index=1, backend="codex-o3")
@@ -648,9 +648,7 @@ async def test_busy_scheduler_owned_elone_raises_the_rotation_exception_type(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = build_two_backend_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  _seed_scheduled_task(tmp_path, monkeypatch)
+  _cfg, mgr, _ = _scheduled_succession_rig(tmp_path, monkeypatch)
   parent = await _make_scheduled_parent(mgr)
   mark_busy(parent.id)
   try:
@@ -675,9 +673,7 @@ async def test_busy_scheduler_owned_elone_endpoint_maps_to_409(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = build_two_backend_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  _seed_scheduled_task(tmp_path, monkeypatch)
+  cfg, mgr, _ = _scheduled_succession_rig(tmp_path, monkeypatch)
   client = _build_client(cfg, mgr)
   parent = await _make_scheduled_parent(mgr)
   mark_busy(parent.id)
@@ -697,9 +693,7 @@ async def test_failed_write_back_rolls_back_the_succession(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = build_two_backend_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  yaml_path = _seed_scheduled_task(tmp_path, monkeypatch)
+  _cfg, mgr, yaml_path = _scheduled_succession_rig(tmp_path, monkeypatch)
   parent = await _make_scheduled_parent(mgr)
   original_yaml = yaml_path.read_text(encoding="utf-8")
 
@@ -747,9 +741,7 @@ async def test_cadence_continuity_tick_does_not_refire_after_succession(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = build_two_backend_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  _seed_scheduled_task(tmp_path, monkeypatch, cron=_CADENCE_CRON)
+  cfg, mgr, _ = _scheduled_succession_rig(tmp_path, monkeypatch, cron=_CADENCE_CRON)
   parent = await _make_recently_run_cadence_parent(mgr)
   await mgr.elone_session(parent.id, event_index=1, backend="codex-o3")
 
@@ -769,9 +761,7 @@ async def test_cadence_canary_without_bookkeeping_migration_the_tick_refires(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   """Companion canary: with the bookkeeping migration removed, the same tick fires."""
-  cfg = build_two_backend_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  _seed_scheduled_task(tmp_path, monkeypatch, cron=_CADENCE_CRON)
+  cfg, mgr, _ = _scheduled_succession_rig(tmp_path, monkeypatch, cron=_CADENCE_CRON)
   parent = await _make_recently_run_cadence_parent(mgr)
   monkeypatch.setattr(
       ScheduledSessionStore, "migrate_scheduler_bookkeeping", lambda self, old_session, new_session: None)

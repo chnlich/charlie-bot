@@ -12,9 +12,12 @@ from conftest import compact_boundary_event as _compact_boundary_event
 from src.agents.backends.base import make_context_reading_event
 from src.agents.backends.claude_code import (
     _DECLARED_WINDOW_WARNINGS_SEEN,
+    AUTO_COMPACT_WINDOW_ENV,
+    AUTOCOMPACT_PCT_OVERRIDE_ENV,
     CLAUDE_COMPACT_CONTEXT_RESERVE,
     CLAUDE_COMPACT_OUTPUT_RESERVE,
     HEADLESS_CLAUDE_DEFAULT_ENV,
+    MAX_CONTEXT_TOKENS_ENV,
     headless_claude_declared_window,
 )
 from src.core import codex_usage, session_usage
@@ -501,33 +504,36 @@ def _reset_declared_window_warnings() -> None:
 @pytest.fixture
 def _clean_ceiling_env(monkeypatch: pytest.MonkeyPatch) -> None:
   """Remove env vars that would change the declared window so each test starts clean."""
-  for name in ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "CLAUDE_CODE_MAX_CONTEXT_TOKENS"):
+  # The declared-window logic reads exactly these three names; the module constants are
+  # the one-spelling home the default pin, the forward allowlist, and the degradation
+  # checks must agree on.
+  for name in (AUTO_COMPACT_WINDOW_ENV, AUTOCOMPACT_PCT_OVERRIDE_ENV, MAX_CONTEXT_TOKENS_ENV):
     monkeypatch.delenv(name, raising=False)
 
 
 @pytest.mark.usefixtures("_clean_ceiling_env")
 def test_declared_window_subtracts_reserves_from_declared_window(monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
+  monkeypatch.setenv(AUTO_COMPACT_WINDOW_ENV, "500000")
   expected_point = 500_000 - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
   assert headless_claude_declared_window() == (500_000, expected_point)
 
 
 @pytest.mark.usefixtures("_clean_ceiling_env")
 def test_declared_window_follows_host_export_of_different_window(monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "1000000")
+  monkeypatch.setenv(AUTO_COMPACT_WINDOW_ENV, "1000000")
   expected_point = 1_000_000 - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
   assert headless_claude_declared_window() == (1_000_000, expected_point)
   assert headless_claude_declared_window() != (500_000, 500_000 - 33_000)
 
 
 @pytest.mark.parametrize("override_var", [
-    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
-    "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+    AUTOCOMPACT_PCT_OVERRIDE_ENV,
+    MAX_CONTEXT_TOKENS_ENV,
 ])
 @pytest.mark.usefixtures("_clean_ceiling_env")
 def test_declared_window_returns_none_compact_point_when_override_present_and_warns(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], override_var: str) -> None:
-  monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
+  monkeypatch.setenv(AUTO_COMPACT_WINDOW_ENV, "500000")
   monkeypatch.setenv(override_var, "1")
   result = headless_claude_declared_window()
   assert result == (500_000, None)  # declared window, no compaction point
@@ -539,20 +545,20 @@ def test_declared_window_returns_none_compact_point_when_override_present_and_wa
 @pytest.mark.usefixtures("_clean_ceiling_env")
 def test_declared_window_returns_default_when_window_unparseable_and_warns(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "not-a-number")
-  default_window = int(HEADLESS_CLAUDE_DEFAULT_ENV["CLAUDE_CODE_AUTO_COMPACT_WINDOW"])
+  monkeypatch.setenv(AUTO_COMPACT_WINDOW_ENV, "not-a-number")
+  default_window = int(HEADLESS_CLAUDE_DEFAULT_ENV[AUTO_COMPACT_WINDOW_ENV])
   expected_point = default_window - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
   result = headless_claude_declared_window()
   assert result == (default_window, expected_point)
   out = capsys.readouterr().out
-  assert "CLAUDE_CODE_AUTO_COMPACT_WINDOW" in out
+  assert AUTO_COMPACT_WINDOW_ENV in out
   assert "declared_window" in out.lower()
 
 
 @pytest.mark.usefixtures("_clean_ceiling_env")
 def test_declared_window_degraded_warning_fires_once_per_process(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  monkeypatch.setenv("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "400000")
+  monkeypatch.setenv(MAX_CONTEXT_TOKENS_ENV, "400000")
   assert headless_claude_declared_window()[1] is None
   assert "claude_declared_window_degraded" in capsys.readouterr().out
   assert headless_claude_declared_window()[1] is None
@@ -562,12 +568,12 @@ def test_declared_window_degraded_warning_fires_once_per_process(
 @pytest.mark.usefixtures("_clean_ceiling_env")
 def test_declared_window_unparseable_warning_refires_for_a_new_bad_value(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "not-a-number")
+  monkeypatch.setenv(AUTO_COMPACT_WINDOW_ENV, "not-a-number")
   headless_claude_declared_window()
   assert "claude_declared_window_unparseable_window" in capsys.readouterr().out
   headless_claude_declared_window()
   assert capsys.readouterr().out == ""
-  monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "also-not-a-number")
+  monkeypatch.setenv(AUTO_COMPACT_WINDOW_ENV, "also-not-a-number")
   headless_claude_declared_window()
   assert "claude_declared_window_unparseable_window" in capsys.readouterr().out
 
@@ -609,8 +615,8 @@ async def test_claude_tier_full_and_point_for_window_model(
 @pytest.mark.usefixtures("_clean_ceiling_env")
 async def test_claude_tier_point_none_under_forwarded_unmodelled_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "433000")
-  monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "1")
+  monkeypatch.setenv(AUTO_COMPACT_WINDOW_ENV, "433000")
+  monkeypatch.setenv(AUTOCOMPACT_PCT_OVERRIDE_ENV, "1")
   session_mgr, meta = _session_rig(tmp_path, "session-override", "Override", OPUS_BACKEND_ID)
   _write_session(
       session_mgr, meta, [
@@ -724,7 +730,7 @@ async def test_snapshot_tier_compact_at_ignores_claude_constants_but_claude_tier
   # (20000 / 13000); the snapshot tier must not move, the claude tier must.
   monkeypatch.setattr("src.core.session_usage.CLAUDE_COMPACT_OUTPUT_RESERVE", 50_000)
   monkeypatch.setattr("src.core.session_usage.CLAUDE_COMPACT_CONTEXT_RESERVE", 50_000)
-  monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "600000")
+  monkeypatch.setenv(AUTO_COMPACT_WINDOW_ENV, "600000")
 
   # Snapshot (opencode) tier — same limit as the existing 270000 / 250000 case.
   session_mgr, snap_meta = _session_rig(tmp_path, "session-decouple-snap", "Snap Decouple", "opencode-glm52")

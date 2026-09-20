@@ -879,9 +879,6 @@ const GLOBALS = {
   toggleSessionGroupLimit,
   toggleCronGroupLimit,
   showGroupSelector,
-  setSessionGroup,
-  renderScheduledSessionItem,
-  renderGroupedScheduledList,
   toggleCronGroup,
   toggleSessionGroup,
   renameGroup,
@@ -902,6 +899,9 @@ const SIDEBAR_ONLY = {
   renderProjectManagerRow,
   renderProjectManagerSlotRow,
   resyncSessionUnread,
+  setSessionGroup,
+  renderScheduledSessionItem,
+  renderGroupedScheduledList,
 };
 Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
 

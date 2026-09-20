@@ -307,7 +307,7 @@ test('workers sidebar escapes full descriptions in initial and live cards', () =
 
   assert.match(container.innerHTML, /data-full="Quote &quot;double&quot; and &#39;single&#39; &lt;tag&gt;"/);
 
-  context.addWorkerCard('thread-b', description, '2026-07-01T12:00:00Z', '');
+  context.Sidebar.addWorkerCard('thread-b', description, '2026-07-01T12:00:00Z', '');
 
   assert.match(container.children[0].innerHTML, /data-full="Quote &quot;double&quot; and &#39;single&#39; &lt;tag&gt;"/);
 });

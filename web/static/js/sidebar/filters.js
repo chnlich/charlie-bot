@@ -314,9 +314,7 @@ async function toggleSessionStar(id, currentlyStarred) {
 
 
 const GLOBALS = {
-  removeSessionRowInline,
   archiveSession,
-  deleteSessionPermanently,
   unarchiveSession,
   stopActiveTui,
   confirmDeletePermanently,
@@ -329,6 +327,8 @@ const GLOBALS = {
 };
 const SIDEBAR_ONLY = {
   filterPillClass,
+  removeSessionRowInline,
+  deleteSessionPermanently,
 };
 Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
 

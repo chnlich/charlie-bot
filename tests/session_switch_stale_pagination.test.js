@@ -130,7 +130,7 @@ function collectText(el) {
 function startHangingAFlight(h) {
   h.context.renderSessionView(BOOTSTRAP['session-a']);
   h.messages.scrollTop = 0;
-  h.context.loadOlderIfNeeded(h.messages);
+  h.context.Sidebar.loadOlderIfNeeded(h.messages);
   assert.deepEqual(h.fetchCalls, [A_PAGE_900], 'A pagination must be in flight before the switch');
 }
 
@@ -168,7 +168,7 @@ test('interleaving (a): stale page landing between placeholder and render is dro
   assert.doesNotMatch(collectText(h.messages), /A-OLDER-PAGE/, 'no A message node in the container');
 
   h.messages.scrollTop = 0;
-  h.context.loadOlderIfNeeded(h.messages);
+  h.context.Sidebar.loadOlderIfNeeded(h.messages);
   assert.deepEqual(eventsUrls(h, 'session-b'), [B_PAGE_500], 'the next request must carry B own cursor');
   assert.equal(eventsUrls(h, 'session-a').length, 1, 'still no fresh A pagination URL');
 });
@@ -190,7 +190,7 @@ test('interleaving (b): stale page landing after B rendered, no B flight, is dro
   assert.doesNotMatch(collectText(h.messages), /A-OLDER-PAGE/, 'no A message node in the container');
 
   h.messages.scrollTop = 0;
-  h.context.loadOlderIfNeeded(h.messages);
+  h.context.Sidebar.loadOlderIfNeeded(h.messages);
   assert.deepEqual(eventsUrls(h, 'session-b'), [B_PAGE_500], 'the next request must carry B own cursor');
   assert.equal(eventsUrls(h, 'session-a').length, 1, 'still no fresh A pagination URL');
 });
@@ -201,13 +201,13 @@ test('interleaving (c): stale page landing while B own pagination is in flight i
   await completeSwitch(h, 'session-b');
 
   h.messages.scrollTop = 0;
-  const bFlight = h.context.loadOlderIfNeeded(h.messages);
+  const bFlight = h.context.Sidebar.loadOlderIfNeeded(h.messages);
   assert.deepEqual(eventsUrls(h, 'session-b'), [B_PAGE_500], 'B own flight is in the air with cursor 500');
 
   h.pendingEvents[0].resolve(aPage(true));
   await flush();
 
-  h.context.loadOlderIfNeeded(h.messages);
+  h.context.Sidebar.loadOlderIfNeeded(h.messages);
   assert.deepEqual(eventsUrls(h, 'session-b'), [B_PAGE_500], 'the drop must not release B gate ownership');
   assert.equal(eventsUrls(h, 'session-a').length, 1, 'no fresh A pagination URL');
 
@@ -257,7 +257,7 @@ test('ownership release: after the drop, B paginates again with its own cursor',
   assert.deepEqual(eventsUrls(h, 'session-b'), [], 'no B request yet');
 
   h.messages.scrollTop = 0;
-  h.context.loadOlderIfNeeded(h.messages);  // direct re-entry via the exported API
+  h.context.Sidebar.loadOlderIfNeeded(h.messages);  // direct re-entry via the exported API
   assert.deepEqual(eventsUrls(h, 'session-b'), [B_PAGE_500],
       'the gate is free for B and the request carries B own cursor');
 });
@@ -268,7 +268,7 @@ test('ownership probe: gate holds while B is in flight, releases on B own comple
   await completeSwitch(h, 'session-b');
 
   h.messages.scrollTop = 0;
-  const bFlight = h.context.loadOlderIfNeeded(h.messages);
+  const bFlight = h.context.Sidebar.loadOlderIfNeeded(h.messages);
   assert.deepEqual(eventsUrls(h, 'session-b'), [B_PAGE_500]);
 
   h.pendingEvents[0].resolve(aPage(true));
@@ -276,7 +276,7 @@ test('ownership probe: gate holds while B is in flight, releases on B own comple
 
   // Probe 1: an injected re-entry while B is in flight must stay gated — a
   // finally that unconditionally cleared the hold would let this fetch out.
-  h.context.loadOlderIfNeeded(h.messages);
+  h.context.Sidebar.loadOlderIfNeeded(h.messages);
   assert.deepEqual(eventsUrls(h, 'session-b'), [B_PAGE_500], 're-entry stays gated during B flight');
 
   // B's own completion releases the hold (credential-equal finally).
@@ -286,7 +286,7 @@ test('ownership probe: gate holds while B is in flight, releases on B own comple
 
   // Probe 2: a re-entry now issues a fresh request continuing B's cursor.
   h.messages.scrollTop = 0;
-  h.context.loadOlderIfNeeded(h.messages);
+  h.context.Sidebar.loadOlderIfNeeded(h.messages);
   const urls = eventsUrls(h, 'session-b');
   assert.equal(urls.length, 7, 'the post-release re-entry issues a fresh request');
   assert.deepEqual(beforeValues(urls), [500, 450, 400, 350, 300, 250, 200],
@@ -314,7 +314,7 @@ test('A-B-A switch-back: the first A flight is dropped on the generation leg alo
   assert.equal(sentinel.getAttribute('data-state'), 'idle');
 
   h.messages.scrollTop = 0;
-  h.context.loadOlderIfNeeded(h.messages);
+  h.context.Sidebar.loadOlderIfNeeded(h.messages);
   assert.deepEqual(eventsUrls(h, 'session-a'), [A_PAGE_900, A_PAGE_900],
       'fresh pagination restarts from the bootstrap cursor (900), not the stale page cursor (800)');
 });
@@ -328,13 +328,13 @@ test('unswitched pagination still lands and applies its page and cursor', async 
   h.context.renderSessionView(BOOTSTRAP['session-a']);
   h.messages.scrollTop = 0;
 
-  await h.context.loadOlderIfNeeded(h.messages);
+  await h.context.Sidebar.loadOlderIfNeeded(h.messages);
 
   assert.deepEqual(h.fetchCalls, [A_PAGE_900, '/api/sessions/session-a/events?before=800&limit=40'],
       'the first page landed, advanced the cursor, and viewport-fill continued from it');
   assert.ok(!findSentinel(h), 'the final has_more:false page removed the sentinel');
 
   h.messages.scrollTop = 0;
-  h.context.loadOlderIfNeeded(h.messages);
+  h.context.Sidebar.loadOlderIfNeeded(h.messages);
   assert.equal(h.fetchCalls.length, 2, 'has_more:false was applied — no further request');
 });

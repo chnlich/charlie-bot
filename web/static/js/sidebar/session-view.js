@@ -817,16 +817,17 @@ const API = {
   setSwitchableBackends,
   setBackendSwitchRotates,
   updateActiveBackendBadges,
-  switchBackend,
   scheduleLazySessionDataLoad,
   switchSession,
   renderSessionView,
   initScrollPagination,
-  loadOlderIfNeeded,
   renderUsageFromData,
   createSession,
   renderNoActiveSessionView,
 };
-Sidebar.wire(API);
+Sidebar.wire(API, {
+  switchBackend,
+  loadOlderIfNeeded,
+});
 
 })();

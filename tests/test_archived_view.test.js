@@ -138,7 +138,7 @@ test('the status poll id set excludes archived rows', async () => {
   context.switchSidebarFilter('archived');
   await new Promise(setImmediate);
 
-  assert.deepEqual(Array.from(context.sidebarSessionIds()), ['session-live']);
+  assert.deepEqual(Array.from(context.Sidebar.sidebarSessionIds()), ['session-live']);
   assert.ok(nav.children[1].children[0].innerHTML.includes('arch-0'));
 });
 

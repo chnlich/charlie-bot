@@ -93,7 +93,7 @@ def test_repeat_gzip_download_recompresses_nothing(profile_home: Path, monkeypat
   monkeypatch.setattr(sessions_api, "gzip_level1", gzip_explode_compress("repeat gzip download re-ran the deflate"))
   resp = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
-  assert resp.headers["content-encoding"] == "gzip"
+  assert_gzip_served(resp)
   assert resp.content == first.content
 
 
@@ -114,7 +114,7 @@ def test_gzip_download_recompresses_when_file_appends(profile_home: Path, monkey
         '{"id":"e-late","type":"user","message":{"role":"user","content":"late"},"timestamp":"2026-09-02T00:00:00Z"}\n')
   resp = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
-  assert resp.headers["content-encoding"] == "gzip"
+  assert_gzip_served(resp)
   # The append ran the deflate once, over the fresh file: the served form is
   # the new bytes', not the previous entry's.
   assert len(calls) == 1

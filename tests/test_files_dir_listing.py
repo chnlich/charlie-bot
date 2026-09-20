@@ -205,7 +205,7 @@ def test_listing_gzip_repeat_view_recompresses_nothing(tmp_path: Path, monkeypat
   monkeypatch.setattr(files_api, "gzip_level1", gzip_explode_compress("repeat gzip view re-ran the deflate"))
   resp = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
-  assert resp.headers["content-encoding"] == "gzip"
+  assert_gzip_served(resp)
   assert resp.text == first.text
 
 
@@ -223,7 +223,7 @@ def test_listing_gzip_recompresses_when_corpus_moves(tmp_path: Path, monkeypatch
   os.utime(corpus / "alpha.txt", None)
   resp = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
-  assert resp.headers["content-encoding"] == "gzip"
+  assert_gzip_served(resp)
   # The move ran the deflate once, over the fresh page: the served form is the
   # new walked state's, not the previous one's bytes.
   assert len(calls) == 1

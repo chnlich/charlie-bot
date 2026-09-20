@@ -164,15 +164,11 @@ def test_run_tmux_new_session_returns_under_uvloop(
 @pytest.mark.asyncio
 async def test_ensure_terminal_session_starts_global_login_shell(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    path_home: Path,
 ) -> None:
   # The default home keeps the historical name; any other home appends a digest of its path.
   monkeypatch.delenv(CHARLIEBOT_HOME_ENV, raising=False)
-  home_dir = tmp_path / "home"
-  home_dir.mkdir()
   calls = []
-  monkeypatch.setattr(terminal.Path, "home", staticmethod(lambda: home_dir))
-
   fake_run_tmux = make_fake_run_tmux(calls)
 
   monkeypatch.setattr(pty_common, "_run_tmux", fake_run_tmux)
@@ -190,7 +186,7 @@ async def test_ensure_terminal_session_starts_global_login_shell(
       "-y",
       "24",
       "-c",
-      str(home_dir),
+      str(path_home),
       "bash",
       "-l",
   ) in calls

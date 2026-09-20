@@ -22,7 +22,6 @@ from conftest import (
 
 import src.api.sessions as sessions_api
 
-
 _fresh_search_gzip_memo = fresh_state_fixture(sessions_api._search_gzip_memo.clear)
 
 

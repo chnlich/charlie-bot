@@ -353,7 +353,7 @@
       wrap.className = 'turn-wrap';
       wrap.dataset.turnKey = seg.key;
       wrap.dataset.turnOpen = String(open);
-      wrap.appendChild(Chat.buildTurnRowFromSpec(seg.rowSpec, seg.key));
+      wrap.appendChild(Chat.buildTurnRowFromSpec(seg.rowSpec));
       if (!open) return wrap;
 
       seg.entries.forEach((entry) => wrap.appendChild(entry.node));

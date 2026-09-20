@@ -47,22 +47,11 @@ PLAN_HEAVY_MODULES = (
     "src.core.plan_diff",
 )
 
-# The memory chain's ban set: structlog (the log proxy defers it to first use)
-# and the config stack (src.core.config + its pydantic/models chains, ~180 ms of
-# the M98 wall) — the verbs read no config file: the store root derives from the
-# env-resolved home (src.core.home), which no config key can move.
-MEMORY_HEAVY_MODULES = (
-    "src.agents.backends.base",
-    "src.core.threads",
-    "src.core.sessions",
-    "src.core.runs",
-    "src.core.config",
-    "src.core.models",
-    "pydantic",
-    "numpy",
-    "structlog",
-    "requests",
-)
+# The memory chain's ban set is the base CLI set: the verbs read no config file
+# (the store root derives from the env-resolved home (src.core.home), which no
+# config key can move) and src.core.memory's log proxy defers structlog to first
+# use, so every chain the base set bans stays out of `import src.cli.memory` too.
+MEMORY_HEAVY_MODULES = HEAVY_MODULES
 
 
 def _run_probe(code: str) -> subprocess.CompletedProcess[str]:

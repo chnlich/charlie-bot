@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import json
 import signal
-import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -33,6 +32,7 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
+    _async_wait_for,
     backend_option,
     make_work_item,
     mocked_callback_fields,
@@ -648,9 +648,8 @@ async def test_queued_user_event_ids_covers_running_and_queued_items() -> None:
       master_cc._enqueue_work_item(session_meta.id, running)
       master_cc._enqueue_work_item(session_meta.id, queued)
       # Let the consumer pick up the first item.
-      deadline = time.monotonic() + 2.0
-      while session_meta.id not in master_cc_state._current_items and time.monotonic() < deadline:
-        await asyncio.sleep(0.01)
+      await _async_wait_for(
+          lambda: session_meta.id in master_cc_state._current_items, 2.0, "the consumer never picked up the first item")
       ids = master_cc.queued_user_event_ids(session_meta.id)
       assert ids == {"evt-running", "evt-queued"}
   finally:

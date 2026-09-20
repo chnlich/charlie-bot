@@ -3059,6 +3059,17 @@ def _wait_for(predicate: Callable[[], bool], timeout: float, what: str) -> None:
   raise TimeoutError(what)
 
 
+async def _async_wait_for(predicate: Callable[[], bool], timeout: float, what: str) -> None:
+  # Async sibling of _wait_for: the tasks an async test waits on advance only while
+  # the test yields to the event loop, so the poll must asyncio.sleep, not block.
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    if predicate():
+      return
+    await asyncio.sleep(0.05)
+  raise TimeoutError(what)
+
+
 def _read_meta(home: Path, session_id: str, thread_id: str) -> dict:
   meta_path = home / "sessions" / session_id / "threads" / thread_id / "metadata.json"
   return json.loads(meta_path.read_text(encoding="utf-8"))

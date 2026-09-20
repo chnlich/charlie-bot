@@ -58,6 +58,13 @@ def _session_rig(tmp_path: Path, session_id: str, name: str, backend: str) -> tu
   return session_mgr, meta
 
 
+async def _resolved_usage(session_mgr: SessionManager, meta: SessionMetadata) -> dict:
+  """The common resolve rig: default-kwargs resolve asserting a mapping came back."""
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+  assert usage is not None
+  return usage
+
+
 def _assert_no_context_tier(usage: dict | None) -> None:
   """Every tier declined: the resolution returned a mapping with no context reading and no model."""
   assert usage is not None
@@ -232,9 +239,7 @@ async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp
   session_mgr, meta = _session_rig(tmp_path, "session-assistant", "Assistant", OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, _cumulative_result_with_assistant_reading())
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   assert usage["context_tokens"] == 150_000  # assistant event sum, not 1.5M
   assert usage["context_full"] == 200_000
   assert usage["model"] == "claude-opus-4-6"
@@ -296,9 +301,7 @@ async def test_claude_tier_context_tokens_across_a_compact_boundary(
           "contextWindow": 200_000
       }}), *boundary_events])
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   assert usage["context_tokens"] == expected_context_tokens
   assert usage["context_full"] == 200_000
   assert usage["model"] == "claude-opus-4-6"
@@ -349,9 +352,7 @@ async def test_claude_tier_resolves_context_full_from_assistant_model_not_dict_o
           _assistant_event("claude-opus-4-6", input_tokens=80_000),
       ])
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   assert usage["context_full"] == 200_000  # from the real model, not 50_000
 
 
@@ -371,9 +372,7 @@ async def test_claude_tier_context_full_is_declared_window_when_model_usage_abse
           _assistant_event("claude-opus-4-6", input_tokens=70_000),
       ])
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   declared_window, compact_point = headless_claude_declared_window()
   assert usage["context_full"] == declared_window
   assert usage["context_compact_at"] == compact_point
@@ -399,9 +398,7 @@ async def test_claude_tier_ignores_subagent_and_synthetic_assistant_events(tmp_p
           _assistant_event("claude-opus-4-6", input_tokens=90_000, cache_read=10_000),
       ])
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   assert usage["context_tokens"] == 100_000  # the real event, not 400_000
 
 
@@ -461,9 +458,7 @@ async def test_total_cost_across_results(
           _assistant_event("claude-opus-4-6", input_tokens=50_000),
       ])
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   assert usage["total_cost_usd"] == expected_cost
 
 
@@ -480,9 +475,7 @@ async def test_public_entry_point_has_no_events_parameter(tmp_path: Path) -> Non
   events.append(_assistant_event("claude-opus-4-6", input_tokens=10_000))
   _write_session(session_mgr, meta, events)
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   # Full list has 50 result events at 0.01 each = 0.50.
   assert usage["total_cost_usd"] == pytest.approx(0.50)
   # The events parameter is gone — passing a tail must be rejected.
@@ -603,9 +596,7 @@ async def test_claude_tier_full_and_point_for_window_model(
           _assistant_event("claude-opus-4-6", input_tokens=72_900),
       ])
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   # min(model window, 433000 declared); compact point = full - 20000 - 13000.
   assert usage["context_full"] == expected_full
   assert usage["context_compact_at"] == expected_compact_at
@@ -626,9 +617,7 @@ async def test_claude_tier_point_none_under_forwarded_unmodelled_override(
           _assistant_event("claude-opus-4-6", input_tokens=72_900),
       ])
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   assert usage["context_full"] == 433_000
   assert usage["context_compact_at"] is None  # degraded override -> no compaction line
 
@@ -669,9 +658,7 @@ async def test_snapshot_tier_full_and_point_for_limit_shape(
           _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, limit)),
       ])
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   assert usage["context_full"] == expected_full
   assert usage["context_compact_at"] == expected_compact_at
   assert usage["context_tokens"] == 100_000 + 5_000 + 2_000 + 30_000 + 10_000
@@ -709,9 +696,7 @@ async def test_snapshot_tier_uses_newest_result_event_carrying_snapshot(tmp_path
                   }, _SNAPSHOT_LIMIT)),
       ])
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   assert usage["model"] == "new/model"
   assert usage["context_full"] == 270_000
   assert usage["context_tokens"] == 20_000 + 2_000 + 3_000 + 4_000 + 5_000
@@ -799,9 +784,7 @@ async def test_context_reading_tier_beats_cumulative_result_usage(tmp_path: Path
           _k3_reading(),
       ])
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   _assert_k3_reading(usage)
   # Cost still comes from the shared fold over result events.
   assert usage["total_cost_usd"] == pytest.approx(0.30)
@@ -819,9 +802,7 @@ async def test_reading_overrides_older_claude_reading(tmp_path: Path) -> None:
           _k3_reading(),
       ])
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   _assert_k3_reading(usage)
 
 
@@ -838,9 +819,7 @@ async def test_claude_reading_overrides_older_context_reading(tmp_path: Path) ->
           _assistant_event("claude-opus-4-6", input_tokens=100_000),
       ])
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   # Today's claude arithmetic, unchanged: assistant prompt sum, min(modelUsage
   # window, declared window), compact point minus the two Claude reserves.
   assert usage["context_tokens"] == 100_000
@@ -858,9 +837,7 @@ async def test_reading_overrides_older_snapshot(tmp_path: Path) -> None:
           _k3_reading(),
       ])
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   _assert_k3_reading(usage)
 
 
@@ -873,9 +850,7 @@ async def test_snapshot_overrides_older_context_reading(tmp_path: Path) -> None:
           _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
       ])
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   # Today's snapshot derivation, unchanged.
   assert usage["context_tokens"] == 100_000 + 5_000 + 2_000 + 30_000 + 10_000
   assert usage["context_full"] == 270_000
@@ -897,9 +872,7 @@ async def test_reading_after_compact_boundary_still_wins(tmp_path: Path) -> None
           _k3_reading(),
       ])
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   # The boundary refined the claude slot, but the later context_reading moved
   # the slot to resolved: the reading decides, not post_tokens.
   _assert_k3_reading(usage)
@@ -1032,9 +1005,7 @@ async def test_codex_rollout_resolves_via_other_backend_when_session_backend_abs
       token_event=_CODEX_TOKEN_EVENT,
   )
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   assert usage["context_tokens"] == 179319
   assert usage["context_full"] == 258400  # model_context_window (no auto-compact configured)
   assert usage["context_compact_at"] is None  # unconfigured — no compaction line
@@ -1061,9 +1032,7 @@ async def test_codex_unconfigured_compaction_logs_no_warning(
       token_event=_CODEX_TOKEN_EVENT,
   )
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   assert usage["context_full"] == 258400
   assert usage["context_compact_at"] is None  # unconfigured — no compaction line
   captured = capsys.readouterr().out
@@ -1097,9 +1066,7 @@ async def test_codex_context_compact_at_uses_auto_compact_limit_when_configured(
           last_total=176_810),
   )
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   assert usage["context_full"] == 258400  # model_context_window
   assert usage["context_compact_at"] == 180_000  # auto-compact limit
   assert usage["context_tokens"] == 176028
@@ -1166,9 +1133,7 @@ async def test_codex_native_cost_by_turn_model(tmp_path: Path, turn_model: str, 
           last_total=181_051),
   )
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
+  usage = await _resolved_usage(session_mgr, meta)
   assert usage["total_cost_usd"] == expected_cost
   assert usage["model"] == turn_model
 

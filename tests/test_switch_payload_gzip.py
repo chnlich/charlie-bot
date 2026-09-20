@@ -12,7 +12,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from conftest import _page_request, assert_gzip_served, gzip_explode_compress, make_home_session
+from conftest import (
+    RESPONSES_GZIP_LEVEL1_PATCH_TARGET,
+    _page_request,
+    assert_gzip_served,
+    gzip_explode_compress,
+    make_home_session,
+)
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -75,7 +81,7 @@ async def test_switch_gzip_repeat_serves_memo_without_recompress(tmp_path: Path)
   with patch.object(deps, "_trigger_manager", TriggerManager(cfg, mgr)):
     first = await _call(get_session_view, session.id, _page_request("gzip"), meta, mgr, cfg)
 
-    with patch("src.api.responses.gzip_level1", gzip_explode_compress("repeat switch fetch re-ran the deflate")):
+    with patch(RESPONSES_GZIP_LEVEL1_PATCH_TARGET, gzip_explode_compress("repeat switch fetch re-ran the deflate")):
       second = await _call(get_session_view, session.id, _page_request("gzip"), meta, mgr, cfg)
     assert second.body == first.body
 
@@ -143,7 +149,7 @@ async def test_sidebar_gzip_repeat_serves_memo_without_recompress(tmp_path: Path
     first = await _call(all_sessions_status, session.id, _page_request("gzip"), meta, mgr, cfg)
     first_sched = await _call(list_scheduled_sessions, session.id, _page_request("gzip"), meta, mgr, cfg)
 
-    with patch("src.api.responses.gzip_level1", gzip_explode_compress("repeat sidebar fetch re-ran the deflate")):
+    with patch(RESPONSES_GZIP_LEVEL1_PATCH_TARGET, gzip_explode_compress("repeat sidebar fetch re-ran the deflate")):
       second = await _call(all_sessions_status, session.id, _page_request("gzip"), meta, mgr, cfg)
       second_sched = await _call(list_scheduled_sessions, session.id, _page_request("gzip"), meta, mgr, cfg)
     assert second.body == first.body

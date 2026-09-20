@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 import yaml
+from conftest import BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET
 
 from src.core.backlog_loop import _next_id, determine_action
 from src.core.config import ImprovementLoopConfig
@@ -94,7 +95,7 @@ async def test_stale_in_progress_reset(tmp_path: Path) -> None:
   _write_backlog(backlog, items)
   cfg = _make_cfg()
 
-  with patch('src.core.backlog_loop.git_add_commit_push', new_callable=AsyncMock) as mock_commit:
+  with patch(BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET, new_callable=AsyncMock) as mock_commit:
     action, prompt = await determine_action(backlog, cfg, tmp_path)
 
   assert action == 'stale_reset'

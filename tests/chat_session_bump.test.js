@@ -2060,7 +2060,7 @@ function mountPagerCase(fetchPage, {clientHeight = 100, baseHeight = 2000} = {})
 test('pager chains next-cursor fetches while parked in the trigger zone and stops at the 30-page cap', async () => {
   const {context, root, fetchCalls} = mountPagerCase(mergePageFetch());
 
-  await context.loadOlderIfNeeded(root);
+  await context.Sidebar.loadOlderIfNeeded(root);
 
   // 1 user-gesture page + 30 trigger-zone chained pages; every response still
   // said has_more, so the stop is the cap — not history exhaustion.
@@ -2093,7 +2093,7 @@ test('a shift-0 landing with has_more lifts a viewport parked at scrollTop 0 to 
     };
   });
 
-  await context.loadOlderIfNeeded(root);
+  await context.Sidebar.loadOlderIfNeeded(root);
 
   assert.deepEqual(fetchCalls.map(cursorOf), [100, 99], 'one landed page, one failed page');
   assert.equal(root.scrollTop, 1, 'the parked viewport was lifted to 1px');
@@ -2103,9 +2103,9 @@ test('a user-gesture call resets both burst counters and re-arms the chains', as
   // Trigger-zone counter: the first gesture caps at 30 chained pages; the
   // second gesture (no second argument) must reset it, re-arming a full chain.
   const parked = mountPagerCase(mergePageFetch());
-  await parked.context.loadOlderIfNeeded(parked.root);
+  await parked.context.Sidebar.loadOlderIfNeeded(parked.root);
   assert.equal(parked.fetchCalls.length, 31, 'first gesture: 1 page + 30 trigger-zone fills');
-  await parked.context.loadOlderIfNeeded(parked.root);
+  await parked.context.Sidebar.loadOlderIfNeeded(parked.root);
   assert.equal(parked.fetchCalls.length, 62, 'second gesture reset the counter: another 1 + 30 fills');
   assert.deepEqual(parked.fetchCalls.map(cursorOf), Array.from({length: 62}, (_, i) => 100 - i));
 
@@ -2118,8 +2118,8 @@ test('a user-gesture call resets both burst counters and re-arms the chains', as
       return {has_more: true, next_before: cursorOf(url) - 1, messages: []};
     },
   }), {clientHeight: 400, baseHeight: 0});
-  await unscrollable.context.loadOlderIfNeeded(unscrollable.root);
+  await unscrollable.context.Sidebar.loadOlderIfNeeded(unscrollable.root);
   assert.equal(unscrollable.fetchCalls.length, 6, 'first gesture: 1 page + 5 viewport fills');
-  await unscrollable.context.loadOlderIfNeeded(unscrollable.root);
+  await unscrollable.context.Sidebar.loadOlderIfNeeded(unscrollable.root);
   assert.equal(unscrollable.fetchCalls.length, 12, 'second gesture reset the counter: another 1 + 5 fills');
 });

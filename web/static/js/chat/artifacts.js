@@ -967,10 +967,10 @@ const GLOBALS = {
   startHtmlArtifactResize,
   expandHtmlArtifact,
   toggleHtmlArtifactEmbed,
-  updatePlanCardBadges,
   openPlanFromCard,
 };
 const CHAT_ONLY = {
+  updatePlanCardBadges,
   embedLinkedHtmlArtifacts,
   expandArtifactCard,
   collapseArtifactCard,

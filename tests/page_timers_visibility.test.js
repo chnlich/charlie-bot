@@ -166,7 +166,6 @@ function buildSidebarContext() {
     updateRelativeTimes() {},
     formatTokens: (n) => String(n),
     renderWorkersTab() {},
-    updateWorkersTabBadge() {},
     switchTab() {},
     showToast() {},
     loadedThreads: {clear() {}},

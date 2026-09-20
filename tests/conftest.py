@@ -1369,11 +1369,13 @@ def build_slack_cfg(tmp_path: Path) -> CharlieBotConfig:
 class FakeSlackClient:
   """Recording Slack Web API double for slack_listener tests; never touches the network.
 
-  Every call lands in ``calls`` as ``(method, kwargs)``. ``reactions`` models the
-  live per-message reaction set the ack-clear path reads back, ``thread`` is what
-  the conversations.replies seam returns, and permalinks and channel names are
-  fabricated. Implements only what the listener paths may call: a regression to
-  reading anything else fails here with an AttributeError by construction.
+  Every call lands in ``calls`` as ``(method, kwargs)`` — the completeness
+  assertions built on it fail on any call a path was not expected to make.
+  ``reactions`` models the live per-message reaction set the ack-clear path
+  reads back, ``thread`` is what the conversations.replies seam returns, and
+  permalinks and channel names are fabricated. Implements only what the
+  listener paths may call: a regression to reading anything else fails here
+  with an AttributeError by construction.
   """
 
   def __init__(self, *, fail_posts: bool = False, fail_remove: bool = False) -> None:
@@ -1392,6 +1394,7 @@ class FakeSlackClient:
 
   async def get_thread_replies(self, channel: str, thread_ts: str) -> list[dict]:
     """The thread-read seam the reply gate consumes; the seeded ``thread`` as a copy."""
+    self.calls.append(("get_thread_replies", {"channel": channel, "thread_ts": thread_ts}))
     self.reply_calls += 1
     return list(self.thread)
 
@@ -1409,6 +1412,7 @@ class FakeSlackClient:
 
   async def remove_reaction(self, channel: str, name: str, ts: str) -> dict:
     """Mirror SlackClient's contract: no_reaction is a payload, other failures raise."""
+    self.calls.append(("remove_reaction", {"channel": channel, "name": name, "ts": ts}))
     self.remove_calls.append({"channel": channel, "name": name, "ts": ts})
     if self._fail_remove:
       raise RuntimeError("reactions.remove failed: missing_scope")

@@ -129,7 +129,9 @@ async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path:
   # The Slack traffic is exactly one eyes reaction on the mention, one
   # permalink lookup for the mention's own ts, plus one channel-name lookup
   # for the auto-grouping — no thread-content read of any kind, and no posted
-  # acceptance message.
+  # acceptance message. The completeness assertion below fails on any other
+  # client call, so a summon path that started reading thread content or
+  # removing reactions fails here.
   posts = [c for name, c in client.calls if name == "post_message"]
   assert not posts
   reactions = [c for name, c in client.calls if name == "add_reaction"]

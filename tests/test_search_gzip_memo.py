@@ -15,6 +15,7 @@ from conftest import (
     RESPONSES_GZIP_LEVEL1_PATCH_TARGET,
     _page_request,
     assert_gzip_served,
+    fresh_state_fixture,
     gzip_explode_compress,
     make_home_session,
 )
@@ -22,10 +23,7 @@ from conftest import (
 import src.api.sessions as sessions_api
 
 
-@pytest.fixture(autouse=True)
-def _fresh_search_gzip_memo() -> None:
-  """The module-level memo persists across tests; every test starts empty."""
-  sessions_api._search_gzip_memo.clear()
+_fresh_search_gzip_memo = fresh_state_fixture(sessions_api._search_gzip_memo.clear)
 
 
 @pytest.mark.asyncio

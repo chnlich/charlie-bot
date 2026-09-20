@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import OPUS_BACKEND_ID, SYNTHETIC_MODEL, backend_option
+from conftest import OPUS_BACKEND_ID, SYNTHETIC_MODEL, backend_option, fresh_state_fixture
 from conftest import codex_token_count_event as _codex_token_count_envelope
 from conftest import compact_boundary_event as _compact_boundary_event
 
@@ -488,10 +488,7 @@ async def test_public_entry_point_has_no_events_parameter(tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-def _reset_declared_window_warnings() -> None:
-  """Restore the warn-once registry's process-start state around every test."""
-  _DECLARED_WINDOW_WARNINGS_SEEN.clear()
+_reset_declared_window_warnings = fresh_state_fixture(_DECLARED_WINDOW_WARNINGS_SEEN.clear)
 
 
 @pytest.fixture

@@ -108,16 +108,33 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     }
   }
 
+  // children mimics a real HTMLCollection: index + length only, none of the
+  // array prototype methods, so code under test must go through Array.from.
   const makeEl = () => {
-    const el = {id: '', className: '', textContent: '', style: {}, children: [], removed: false};
-    el.appendChild = (child) => el.children.push(child);
+    const kids = [];
+    const el = {id: '', className: '', textContent: '', style: {}, removed: false};
+    const sync = () => {
+      const collection = {length: kids.length};
+      for (let i = 0; i < kids.length; i++) collection[i] = kids[i];
+      el.children = collection;
+    };
+    sync();
+    el.appendChild = (child) => {
+      kids.push(child);
+      sync();
+    };
     el.remove = () => {
       el.removed = true;
       if (el.id) state.overlayMap.delete(el.id);
     };
     return el;
   };
-  const findByClass = (root, name) => (root.children.find((child) => child.className === name) || null);
+  const findByClass = (root, name) => {
+    for (let i = 0; i < root.children.length; i++) {
+      if (root.children[i].className === name) return root.children[i];
+    }
+    return null;
+  };
 
   const button = {
     classList: {

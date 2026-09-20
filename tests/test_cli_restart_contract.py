@@ -495,9 +495,9 @@ def test_plan_readback_reports_outcome_unknown_when_nothing_matches(
 
 
 class _CapturePostListener(_StubListener):
-  """A stub that answers 200 to POST and records the wire request: the real
-  http.client client's serialization (Content-Type, body bytes, query string)
-  is this module's own code now, so it needs a real-socket pin."""
+  """A stub that answers 200 to POST and records the wire request: the plain-HTTP
+  client's serialization (Content-Type, body bytes, query string) is this module's
+  own code now, so it needs a real-socket pin."""
 
   def __init__(self) -> None:
     received: dict = {}

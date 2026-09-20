@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 if TYPE_CHECKING:
   import io
   import socket
-  from urllib.parse import SplitResult
+  import urllib.parse
 
   from src.core.config import CharlieBotConfig
   from src.core.credentials import Credentials
@@ -119,7 +119,7 @@ def _send_request(
 
 
 def _https_request(
-    parts: SplitResult,
+    parts: urllib.parse.SplitResult,
     method: str,
     path: str,
     body: bytes | None,
@@ -157,7 +157,7 @@ def _has_header(send_headers: dict[str, str], name: str) -> bool:
 
 
 def _plain_http_request(
-    parts: SplitResult,
+    parts: urllib.parse.SplitResult,
     method: str,
     path: str,
     body: bytes | None,

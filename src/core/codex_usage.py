@@ -30,6 +30,21 @@ CODEX_EVENT_MSG = "event_msg"
 CODEX_TOKEN_COUNT = "token_count"
 
 
+def codex_token_count_payload(event: dict[str, Any]) -> dict[str, Any] | None:
+  """The ``token_count`` payload an ``event_msg`` record wraps, else None.
+
+  The unwrap gate every rollout reader applies before reading token numbers:
+  a non-event_msg record, a null payload, or a payload of another type is not
+  a token_count record.
+  """
+  if event.get("type") != CODEX_EVENT_MSG:
+    return None
+  payload = event.get("payload") or {}
+  if payload.get("type") != CODEX_TOKEN_COUNT:
+    return None
+  return payload
+
+
 def default_codex_home() -> Path:
   """The default codex home (``~/.codex``), read from HOME on every call.
 
@@ -45,10 +60,8 @@ DEFAULT_CODEX_HOME = default_codex_home()
 
 def _extract_codex_rollout_usage_event(event: dict[str, Any]) -> dict[str, Any] | None:
   """Return context usage from a native Codex token_count event."""
-  if event.get("type") != CODEX_EVENT_MSG:
-    return None
-  payload = event.get("payload") or {}
-  if payload.get("type") != CODEX_TOKEN_COUNT:
+  payload = codex_token_count_payload(event)
+  if payload is None:
     return None
   info = payload.get("info") or {}
   last_usage = info.get("last_token_usage") or {}

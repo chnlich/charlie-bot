@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 from typing import IO, Any
 
+import orjson
 import pytest
 from conftest import recording_mmap_shim
 
@@ -149,6 +150,27 @@ def test_parse_ndjson_line_bytes_hard_corruption_skips() -> None:
   # A line the replace decode cannot rescue (invalid UTF-8 AND broken JSON)
   # skips as malformed, like any rejected line.
   assert parse_ndjson_line(b'{"text": "ok\xff', log_event="t", log_fields={}) is None
+
+
+def test_parse_ndjson_line_structural_rejection_skips_without_the_repair_pass() -> None:
+  # errors="replace" rewrites invalid UTF-8 sequences and nothing else, so a
+  # structural failure (control character, truncation) survives the replaced
+  # decode unchanged and the repair round trip cannot change its verdict —
+  # the line skips with exactly one parse attempt, no copy + decode + re-scan.
+  import unittest.mock
+
+  structural = [b'{"a": "x\x01y"}', b'{"a": "x', b'{"a": tru}', b'{"a": NaN}']
+  for line in structural:
+    calls = []
+    real_loads = orjson.loads
+
+    def counting(raw: Any, _real: Any = real_loads, _calls: list[int] = calls) -> Any:
+      _calls.append(1)
+      return _real(raw)
+
+    with unittest.mock.patch.object(orjson, "loads", counting):
+      assert parse_ndjson_line(line, log_event="t", log_fields={}) is None, line
+    assert len(calls) == 1, (line, calls)
 
 
 def test_parse_ndjson_line_bytes_whitespace_only_skips_without_strip_copy() -> None:

@@ -428,7 +428,6 @@ async function cancelMaster() {
 const API = {
   recordRenderedSessionStatus,
   sidebarSessionIds,
-  tuiSidebarSessionIds,
   renderTuiStatusDot,
   fetchTuiStatus,
   refreshTuiDots,
@@ -456,6 +455,6 @@ const API = {
   updateThinkingTime,
   cancelMaster,
 };
-Sidebar.wire(API);
+Sidebar.wire(API, {tuiSidebarSessionIds});
 
 })();

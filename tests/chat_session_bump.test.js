@@ -1033,7 +1033,7 @@ test('I5: manual open/fold, an expanded N steps bar and an open recap panel surv
   // Reader-expanded `N steps` bar in the second turn.
   const bar = second.querySelector('.turn-fold-bar');
   const band = second.querySelector('.turn-fold-content');
-  context.toggleTurnFold(bar);
+  context.Chat.toggleTurnFold(bar);
   assert.equal(band.classList.contains('hidden'), false);
   assert.equal(bar.getAttribute('aria-expanded'), 'true');
 
@@ -1218,7 +1218,7 @@ test('turn fold bar toggles its single intermediate span', () => {
   assert.equal(content.classList.contains('hidden'), true);
   assert.equal(bar.getAttribute('aria-expanded'), 'false');
 
-  context.toggleTurnFold(bar);
+  context.Chat.toggleTurnFold(bar);
 
   assert.equal(content.classList.contains('hidden'), false);
   assert.equal(bar.getAttribute('aria-expanded'), 'true');
@@ -1749,7 +1749,7 @@ test('turn engine: override, expanded steps bar and open recap survive window ev
   assert.ok(wrap.querySelectorAll('.turn-fold-bar').length > 0 || debug().heights[indexOfX()] > 0);
 
   const bar = wrap.querySelector('.turn-fold-bar');
-  context.toggleTurnFold(bar);
+  context.Chat.toggleTurnFold(bar);
   settle(timers);
   wrap = wrapsByKey(root).get(keyX);
   assert.equal(wrap.querySelector('.turn-fold-content').classList.contains('hidden'), false,

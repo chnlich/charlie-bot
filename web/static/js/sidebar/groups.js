@@ -883,8 +883,6 @@ const GLOBALS = {
   renderScheduledSessionItem,
   renderGroupedScheduledList,
   toggleCronGroup,
-  renderProjectManagerRow,
-  renderProjectManagerSlotRow,
   toggleSessionGroup,
   renameGroup,
   deleteGroup,
@@ -901,6 +899,8 @@ const SIDEBAR_ONLY = {
   MODAL_DIALOG_CLASS,
   openPmSlotEditor,
   removeSessionFromRenderedList,
+  renderProjectManagerRow,
+  renderProjectManagerSlotRow,
   resyncSessionUnread,
 };
 Sidebar.wire(GLOBALS, SIDEBAR_ONLY);

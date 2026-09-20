@@ -9,30 +9,19 @@ the assertions live in one place.
 from typing import Any
 
 import pytest
-from conftest import (
-    CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
-    OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
-    build_cli_backend,
-)
+from conftest import CLI_BACKEND_RIGS, build_cli_backend
 
 from src.agents.backends.base import AgentBackend
 from src.agents.backends.charlie_code import CharlieCodeBackend
 from src.agents.backends.opencode import OpenCodeBackend
 
-# Each row mirrors the backend's own test module's _build_backend construction
-# (class, resolve_binary patch target, fake binary, constructor defaults).
+# Each row is the backend's shared conftest rig prefixed by its class:
+# (backend class, resolve_binary patch target, fake binary, constructor defaults).
 BackendDescriptor = tuple[type[AgentBackend], str, str, dict[str, Any]]
 
 _CLI_BACKENDS: list[pytest.param] = [
-    pytest.param(
-        (
-            CharlieCodeBackend, CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/charlie-code", {
-                "model": "charlie-code-test-model",
-                "api_base": "http://test.invalid/v1",
-            }),
-        id="charlie-code",
-    ),
-    pytest.param((OpenCodeBackend, OPENCODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/opencode", {}), id="opencode"),
+    pytest.param((cls, *CLI_BACKEND_RIGS[cls]), id=rig_id)
+    for cls, rig_id in [(CharlieCodeBackend, "charlie-code"), (OpenCodeBackend, "opencode")]
 ]
 
 

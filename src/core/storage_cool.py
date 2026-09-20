@@ -38,7 +38,7 @@ import shutil
 import sqlite3
 import sys
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -267,6 +267,21 @@ def _sorted_scan(root: Path, listing: Iterable[Path]) -> list[Path] | None:
     return None
 
 
+def _sweep_root_entries(roots: Iterable[Path], listing: Callable[[Path], Iterable[Path]]) -> Iterator[Path]:
+  """Yield each sweep root's sorted entries, skipping a missing root or an unreadable listing.
+
+  ``_sorted_scan`` already logs a listing failure; the sweep's best-effort
+  contract is that one unreadable directory never stops the run.
+  """
+  for root in roots:
+    if not root.is_dir():
+      continue
+    entries = _sorted_scan(root, listing(root))
+    if entries is None:
+      continue
+    yield from entries
+
+
 def _managed_transport_dirs(session_dir: Path) -> list[Path]:
   """The two directory shapes whose direct children the transport rule governs."""
   managed: list[Path] = []
@@ -290,14 +305,10 @@ def _managed_transport_dirs(session_dir: Path) -> list[Path]:
 
 def _sweep_raw_transport(session_dir: Path, counter: _Counter, dry_run: bool) -> None:
   """Delete the reserved transport names inside the session's managed run directories."""
-  for managed_dir in _managed_transport_dirs(session_dir):
-    entries = _sorted_scan(managed_dir, managed_dir.iterdir())
-    if entries is None:
+  for entry in _sweep_root_entries(_managed_transport_dirs(session_dir), lambda root: root.iterdir()):
+    if not entry.is_file() or not _is_transport_name(entry.name):
       continue
-    for entry in entries:
-      if not entry.is_file() or not _is_transport_name(entry.name):
-        continue
-      _delete_file(entry, counter, dry_run)
+    _delete_file(entry, counter, dry_run)
 
 
 def _delete_file(path: Path, counter: _Counter, dry_run: bool, *, count: bool = True) -> None:
@@ -460,33 +471,27 @@ def _sweep_claude_transcripts(
   """
   worktree_prefix = claude_project_dir_name(Path(cfg.paths.worktree_dir)) + "-"
   live_worktrees = _live_worktree_dir_names(cfg) if session_id is None else set()
-  for projects_root in claude_projects_roots(cfg):
-    if not projects_root.is_dir():
+  for entry in _sweep_root_entries(claude_projects_roots(cfg), lambda root: root.iterdir()):
+    if not entry.is_dir():
       continue
-    entries = _sorted_scan(projects_root, projects_root.iterdir())
-    if entries is None:
-      continue
-    for entry in entries:
-      if not entry.is_dir():
+    encoded_session = _encoded_session_id(entry.name)
+    if encoded_session is not None:
+      owner = facts.get(encoded_session)
+      if owner is not None:
+        # The session still exists: only the cold rule decides.
+        if owner.cold:
+          _delete_claude_project_dir(entry, counter, dry_run)
+      elif (cfg.sessions_dir / encoded_session).is_dir():
+        # An unreadable session metadata file is not proof that the session
+        # was deleted; only a missing session directory makes this an orphan.
         continue
-      encoded_session = _encoded_session_id(entry.name)
-      if encoded_session is not None:
-        owner = facts.get(encoded_session)
-        if owner is not None:
-          # The session still exists: only the cold rule decides.
-          if owner.cold:
-            _delete_claude_project_dir(entry, counter, dry_run)
-        elif (cfg.sessions_dir / encoded_session).is_dir():
-          # An unreadable session metadata file is not proof that the session
-          # was deleted; only a missing session directory makes this an orphan.
-          continue
-        elif session_id is None and _idle_past_window(entry, now, ORPHAN_IDLE_DAYS):
-          # No metadata references it any more: orphan past the window.
-          _delete_claude_project_dir(entry, counter, dry_run)
-      elif session_id is None and entry.name.startswith(worktree_prefix) and entry.name not in live_worktrees:
-        # A worktree's transcripts are orphans once the worktree is gone.
-        if _idle_past_window(entry, now, ORPHAN_IDLE_DAYS):
-          _delete_claude_project_dir(entry, counter, dry_run)
+      elif session_id is None and _idle_past_window(entry, now, ORPHAN_IDLE_DAYS):
+        # No metadata references it any more: orphan past the window.
+        _delete_claude_project_dir(entry, counter, dry_run)
+    elif session_id is None and entry.name.startswith(worktree_prefix) and entry.name not in live_worktrees:
+      # A worktree's transcripts are orphans once the worktree is gone.
+      if _idle_past_window(entry, now, ORPHAN_IDLE_DAYS):
+        _delete_claude_project_dir(entry, counter, dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -523,34 +528,28 @@ def _sweep_codex_rollouts(
 ) -> None:
   """Delete rollout files under the session-cold / unreferenced-plus-window rule."""
   scoped_backends = _scoped_backend_sessions(facts, references, session_id)
-  for tree in codex_session_trees():
-    if not tree.is_dir():
+  for path in _sweep_root_entries(codex_session_trees(), lambda root: root.rglob(f"{_CODEX_ROLLOUT_PREFIX}*.jsonl")):
+    backend_session = codex_rollout_session_id(path)
+    if backend_session is None:
       continue
-    candidates = _sorted_scan(tree, tree.rglob(f"{_CODEX_ROLLOUT_PREFIX}*.jsonl"))
-    if candidates is None:
-      continue
-    for path in candidates:
-      backend_session = codex_rollout_session_id(path)
-      if backend_session is None:
-        continue
-      if session_id is not None:
-        # Scoped run: only the named session's own record, already cold-verified,
-        # and never a record also referenced by a live session.
-        if backend_session in scoped_backends and _referenced_and_cold(references, backend_session):
-          _delete_file(path, counter, dry_run)
-        continue
-      if references.get(backend_session) is None:
-        # Unreferenced: the file's own mtime is the idle clock.
-        try:
-          idle_since = path.stat().st_mtime
-        except OSError as e:
-          log.warning("storage_cool_file_stat_failed", path=str(path), error=str(e))
-          continue
-        if _idle_past(idle_since, now, ORPHAN_IDLE_DAYS):
-          _delete_file(path, counter, dry_run)
-        continue
-      if _referenced_and_cold(references, backend_session):
+    if session_id is not None:
+      # Scoped run: only the named session's own record, already cold-verified,
+      # and never a record also referenced by a live session.
+      if backend_session in scoped_backends and _referenced_and_cold(references, backend_session):
         _delete_file(path, counter, dry_run)
+      continue
+    if references.get(backend_session) is None:
+      # Unreferenced: the file's own mtime is the idle clock.
+      try:
+        idle_since = path.stat().st_mtime
+      except OSError as e:
+        log.warning("storage_cool_file_stat_failed", path=str(path), error=str(e))
+        continue
+      if _idle_past(idle_since, now, ORPHAN_IDLE_DAYS):
+        _delete_file(path, counter, dry_run)
+      continue
+    if _referenced_and_cold(references, backend_session):
+      _delete_file(path, counter, dry_run)
 
 
 def _scoped_backend_sessions(

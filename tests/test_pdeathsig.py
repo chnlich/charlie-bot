@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 import pytest
-from conftest import ROOT, _pid_alive
+from conftest import ROOT, _pid_alive, _wait_for
 
 from src.core import process as core_process
 
@@ -85,13 +85,6 @@ def _cleanup(intermediate: subprocess.Popen, child_pid: int) -> None:
   intermediate.wait(timeout=10)
 
 
-def _wait_child_gone(child_pid: int) -> bool:
-  deadline = time.monotonic() + _DISAPPEAR_TIMEOUT
-  while time.monotonic() < deadline and _pid_alive(child_pid):
-    time.sleep(0.05)
-  return not _pid_alive(child_pid)
-
-
 def test_recheck_decision_self_kills_on_parent_mismatch() -> None:
   assert core_process._pdeathsig_should_self_kill(1234, 1) is True
 
@@ -118,10 +111,11 @@ def test_signal_to_intermediate_kernel_reaps_child(tmp_path: Path, sig: signal.S
     os.kill(intermediate.pid, sig)
     intermediate.wait(timeout=10)
     assert intermediate.returncode == -sig
-    reaped = _wait_child_gone(child_pid)
+    _wait_for(
+        lambda: not _pid_alive(child_pid), _DISAPPEAR_TIMEOUT,
+        f"child survived its parent's {sig.name} by more than 2 s — PDEATHSIG did not fire")
   finally:
     _cleanup(intermediate, child_pid)
-  assert reaped, f"child survived its parent's {sig.name} by more than 2 s — PDEATHSIG did not fire"
 
 
 @linux_only

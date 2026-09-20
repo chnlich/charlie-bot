@@ -26,6 +26,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:
+  import io
+  import socket
+  from urllib.parse import SplitResult
+
   from src.core.config import CharlieBotConfig
   from src.core.credentials import Credentials
 
@@ -56,6 +60,10 @@ class _SentButLostError(Exception):
   """The connection broke after the request was sent: the outcome is unknown."""
 
 
+class _MalformedResponseError(Exception):
+  """The response head or body framing did not parse: sent-but-lost semantics."""
+
+
 class _CliResponse:
   """One internal-API response: the status the contract's rejection check reads, and the parsed-JSON accessor."""
 
@@ -80,15 +88,18 @@ def _send_request(
     headers: dict[str, str],
     timeout: float,
 ) -> _CliResponse:
-  """One request over http.client with the restart-crossing contract's phase separation.
+  """One request with the restart-crossing contract's phase separation.
 
   The connect phase raises _ConnectPhaseError (nothing was sent — a retry is safe); every
   failure after it raises _SentButLostError (the request may have landed — never retried).
-  http.client raises separately per phase; requests folds connect and read failures into one
-  ConnectionError class, which cannot drive this contract.
+  requests folds connect and read failures into one ConnectionError class, which cannot
+  drive this contract.
+
+  The plain-HTTP path — the ``http://localhost:{port}`` base every verb builds — runs the
+  minimal socket client: ``import http.client`` costs ~16 ms of every verb's wall for
+  response shapes the internal API never answers with (the M97 landing's remaining client
+  stack). The https branch keeps http.client for its TLS handling.
   """
-  import http.client
-  import ssl
   import urllib.parse
 
   parts = urllib.parse.urlsplit(url)
@@ -103,14 +114,28 @@ def _send_request(
   if body is not None:
     send_headers["Content-Type"] = "application/json"
   if parts.scheme == "https":
-    # verify=False parity: the base URL is the config-owned internal server.
-    context = ssl.create_default_context()
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
-    conn: http.client.HTTPConnection = http.client.HTTPSConnection(
-        parts.hostname, parts.port, timeout=timeout, context=context)
-  else:
-    conn = http.client.HTTPConnection(parts.hostname, parts.port, timeout=timeout)
+    return _https_request(parts, method, path, body, send_headers, timeout)
+  return _plain_http_request(parts, method, path, body, send_headers, timeout)
+
+
+def _https_request(
+    parts: SplitResult,
+    method: str,
+    path: str,
+    body: bytes | None,
+    send_headers: dict[str, str],
+    timeout: float,
+) -> _CliResponse:
+  """The https transport: http.client carries the TLS stack (config-owned https base URLs)."""
+  import http.client
+  import ssl
+
+  # verify=False parity: the base URL is the config-owned internal server.
+  context = ssl.create_default_context()
+  context.check_hostname = False
+  context.verify_mode = ssl.CERT_NONE
+  conn: http.client.HTTPConnection = http.client.HTTPSConnection(
+      parts.hostname, parts.port, timeout=timeout, context=context)
   try:
     try:
       conn.connect()
@@ -125,6 +150,138 @@ def _send_request(
   finally:
     conn.close()
   return _CliResponse(raw.status, raw.reason, resp_body)
+
+
+def _has_header(send_headers: dict[str, str], name: str) -> bool:
+  return any(key.lower() == name for key in send_headers)
+
+
+def _plain_http_request(
+    parts: SplitResult,
+    method: str,
+    path: str,
+    body: bytes | None,
+    send_headers: dict[str, str],
+    timeout: float,
+) -> _CliResponse:
+  """One request over a raw socket: the minimal HTTP/1.1 client for the plain-HTTP base.
+
+  The wire shape is what http.client sent before (Host, Accept-Encoding: identity, the
+  caller's headers, Content-Length on a body) plus ``Connection: close`` — one shot per
+  connection, which also makes the read-to-EOF framing fallback sound. The phase contract
+  matches _send_request: connect failures are _ConnectPhaseError, everything after the
+  first byte left is _SentButLostError, and a malformed response parses as lost, never as
+  success.
+  """
+  import socket
+
+  host = parts.hostname or "localhost"
+  port = parts.port if parts.port is not None else 80
+  wire = [f"{method} {path} HTTP/1.1"]
+  if not _has_header(send_headers, "host"):
+    wire.append(f"Host: {host}:{port}")
+  if not _has_header(send_headers, "accept-encoding"):
+    wire.append("Accept-Encoding: identity")
+  wire.append("Connection: close")
+  if body is not None and not _has_header(send_headers, "content-length"):
+    wire.append(f"Content-Length: {len(body)}")
+  wire.extend(f"{name}: {value}" for name, value in send_headers.items())
+  request_bytes = ("\r\n".join(wire) + "\r\n\r\n").encode("latin-1")
+  if body is not None:
+    request_bytes += body
+  try:
+    sock = socket.create_connection((host, port), timeout=timeout)
+  except (OSError, TimeoutError) as e:
+    raise _ConnectPhaseError(str(e)) from e
+  try:
+    try:
+      sock.sendall(request_bytes)
+      status, reason, resp_body = _read_http1_response(sock)
+    except (OSError, TimeoutError, _MalformedResponseError) as e:
+      raise _SentButLostError(str(e)) from e
+  finally:
+    sock.close()
+  return _CliResponse(status, reason, resp_body)
+
+
+_MAX_LINE = 65536  # http.client's own response-line/header bound
+
+
+def _read_http1_response(sock: socket.socket) -> tuple[int, str, bytes]:
+  """Read one HTTP/1.1 response head + body off the connected socket.
+
+  Framing: chunked, Content-Length, or read-to-EOF (the request pins ``Connection:
+  close``, so an absent framing header means the server closes). Any malformed line,
+  framing mismatch, or short body raises _MalformedResponseError — the sent-but-lost
+  class, never a silent mis-parse.
+  """
+  sock_file = sock.makefile("rb")
+  try:
+    status_line = sock_file.readline(_MAX_LINE + 1)
+    if not status_line or len(status_line) > _MAX_LINE:
+      raise _MalformedResponseError("missing or oversized status line")
+    pieces = status_line.split(None, 2)
+    if len(pieces) < 2 or not pieces[0].startswith(b"HTTP/"):
+      raise _MalformedResponseError(f"malformed status line: {status_line!r}")
+    try:
+      status = int(pieces[1])
+    except ValueError as e:
+      raise _MalformedResponseError(f"non-numeric status: {pieces[1]!r}") from e
+    reason = pieces[2].rstrip(b"\r\n").decode("latin-1") if len(pieces) > 2 else ""
+    headers: dict[str, str] = {}
+    while True:
+      line = sock_file.readline(_MAX_LINE + 1)
+      if not line or len(line) > _MAX_LINE:
+        raise _MalformedResponseError("unterminated response head")
+      if line in (b"\r\n", b"\n"):
+        break
+      name, sep, value = line.partition(b":")
+      if not sep:
+        raise _MalformedResponseError(f"malformed header line: {line!r}")
+      headers[name.strip(b" \t").lower().decode("latin-1")] = value.strip(b" \t\r\n").decode("latin-1")
+    return status, reason, _read_framed_body(sock_file, headers)
+  finally:
+    sock_file.close()
+
+
+def _read_framed_body(sock_file: io.BufferedReader, headers: dict[str, str]) -> bytes:
+  """Read the response body per its framing header, as the docstring of _read_http1_response specifies."""
+  if "chunked" in headers.get("transfer-encoding", "").lower():
+    chunks: list[bytes] = []
+    while True:
+      size_line = sock_file.readline(_MAX_LINE + 1)
+      if not size_line or len(size_line) > _MAX_LINE:
+        raise _MalformedResponseError("unterminated chunked body")
+      size_token = size_line.split(b";", 1)[0].strip()
+      try:
+        size = int(size_token, 16)
+      except ValueError as e:
+        raise _MalformedResponseError(f"malformed chunk size: {size_line!r}") from e
+      if size == 0:
+        while True:
+          trailer = sock_file.readline(_MAX_LINE + 1)
+          if trailer in (b"\r\n", b"\n", b""):
+            break
+          if len(trailer) > _MAX_LINE:
+            raise _MalformedResponseError("oversized trailer line")
+        return b"".join(chunks)
+      chunk = sock_file.read(size)
+      if len(chunk) != size:
+        raise _MalformedResponseError("truncated chunk")
+      chunks.append(chunk)
+      if sock_file.readline(_MAX_LINE + 1).strip():
+        raise _MalformedResponseError("missing chunk terminator")
+  content_length = headers.get("content-length")
+  if content_length is not None:
+    try:
+      expected = int(content_length)
+    except ValueError as e:
+      raise _MalformedResponseError(f"malformed content-length: {content_length!r}") from e
+    resp_body = sock_file.read(expected)
+    if len(resp_body) != expected:
+      raise _MalformedResponseError("truncated body")
+    return resp_body
+  return sock_file.read()
 
 
 def _request_post(

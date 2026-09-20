@@ -1366,6 +1366,71 @@ def build_slack_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
+class FakeSlackClient:
+  """Recording Slack Web API double for slack_listener tests; never touches the network.
+
+  Every call lands in ``calls`` as ``(method, kwargs)`` — the completeness
+  assertions built on it fail on any call a path was not expected to make.
+  ``reactions`` models the live per-message reaction set the ack-clear path
+  reads back, ``thread`` is what the conversations.replies seam returns, and
+  permalinks and channel names are fabricated. Implements only what the
+  listener paths may call: a regression to reading anything else fails here
+  with an AttributeError by construction.
+  """
+
+  def __init__(self, *, fail_posts: bool = False, fail_remove: bool = False) -> None:
+    self.calls: list[tuple[str, dict]] = []
+    self.posts: list[dict] = []
+    self.remove_calls: list[dict] = []
+    self.reactions: dict[str, set[str]] = {}
+    self.thread: list[dict] = []
+    self.reply_calls = 0
+    self.fail_posts = fail_posts
+    self._fail_remove = fail_remove
+
+  async def open_connection(self) -> str:
+    self.calls.append(("open_connection", {"channel": None}))
+    return "wss://fake.example/socket"
+
+  async def get_thread_replies(self, channel: str, thread_ts: str) -> list[dict]:
+    """The thread-read seam the reply gate consumes; the seeded ``thread`` as a copy."""
+    self.calls.append(("get_thread_replies", {"channel": channel, "thread_ts": thread_ts}))
+    self.reply_calls += 1
+    return list(self.thread)
+
+  async def post_message(self, channel: str, text: str, thread_ts: str | None = None) -> dict:
+    if self.fail_posts:
+      raise RuntimeError("chat.postMessage failed")
+    self.calls.append(("post_message", {"channel": channel, "text": text, "thread_ts": thread_ts}))
+    self.posts.append({"channel": channel, "text": text, "thread_ts": thread_ts})
+    return {"ok": True}
+
+  async def add_reaction(self, channel: str, name: str, ts: str) -> dict:
+    self.calls.append(("add_reaction", {"channel": channel, "name": name, "ts": ts}))
+    self.reactions.setdefault(ts, set()).add(name)
+    return {"ok": True}
+
+  async def remove_reaction(self, channel: str, name: str, ts: str) -> dict:
+    """Mirror SlackClient's contract: no_reaction is a payload, other failures raise."""
+    self.calls.append(("remove_reaction", {"channel": channel, "name": name, "ts": ts}))
+    self.remove_calls.append({"channel": channel, "name": name, "ts": ts})
+    if self._fail_remove:
+      raise RuntimeError("reactions.remove failed: missing_scope")
+    names = self.reactions.setdefault(ts, set())
+    if name not in names:
+      return {"ok": False, "error": "no_reaction"}
+    names.discard(name)
+    return {"ok": True}
+
+  async def get_permalink(self, channel: str, ts: str) -> str:
+    self.calls.append(("get_permalink", {"channel": channel, "ts": ts}))
+    return f"https://fake.slack.test/archives/{channel}/p{ts}"
+
+  async def get_channel_name(self, channel_id: str) -> str | None:
+    self.calls.append(("get_channel_name", {"channel": channel_id}))
+    return f"name-of-{channel_id}"
+
+
 def make_instruction_cfg(tmp_path: Path, *, manager_contract: str | None) -> SimpleNamespace:
   """Fake instruction inputs for the master-instruction builder: a repo whose prompts/master.md
   reads "BASE PROMPT", plus prompts/project_manager.md carrying the manager_contract text when

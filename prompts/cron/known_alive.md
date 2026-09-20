@@ -466,15 +466,16 @@ Known-alive symbols:
   `len(_search_gzip_memo) == 0`, which holds only because the autouse reset cleared the entry the
   module's earlier gzip tests stored. Same autouse class as `_fresh_detail_memo` above.
 - `open_connection`, `post_message`, `add_reaction`, `get_permalink`, `get_thread_replies` (the
-  Slack-client doubles in `tests/test_slack_listener.py`, `tests/test_slack_delivery.py`, and
+  Slack-client double `FakeSlackClient` in `tests/conftest.py`, shared by
+  `tests/test_slack_listener.py`, `tests/test_slack_delivery.py`, and
   `tests/core/test_slack_thread_follow.py`) — the summon, reply, follow, and ack paths in
   `src/core/slack_listener.py` dispatch every Slack Web API call on the injected client
   (`client.post_message(...)`, `client.get_permalink(...)`, `client.get_thread_replies(...)`,
-  `client.add_reaction(...)`, `client.open_connection()`), so each double's method is reached
-  only through that dynamic dispatch. The doubles' docstrings pin the surface ("implements only
-  what the summon path may call"), so a missing method fails with an AttributeError by
+  `client.add_reaction(...)`, `client.open_connection()`), so each method is reached
+  only through that dynamic dispatch. The double's docstring pins the surface ("implements only
+  what the listener paths may call"), so a missing method fails with an AttributeError by
   construction, never silently. Vulture flags each method as unused (60% confidence); the names
-  match only the doubles and the real `SlackClient` in `src/core/slack_listener.py`.
+  match only the double and the real `SlackClient` in `src/core/slack_listener.py`.
 - `raise_for_status`, `aclose`, `aiter_bytes` (the httpx response doubles: `FakeChunkedResponse`
   in `tests/conftest.py`, `_FakeDelayedStreamResponse`/`_StubHttpResponse`/
   `_StubEventStreamResponse` in `tests/test_opencode_backend.py`, `_FakeResponse` in

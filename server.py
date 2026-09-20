@@ -266,16 +266,32 @@ async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context: obj
 
 
 def _provision_speech_models(cfg: CharlieBotConfig) -> None:
-  """Provision the speech models on a worker thread.
+  """Provision the speech models on a worker thread, then warm the decode path.
 
   src.agents.transcriber carries the numpy import (~90 ms), so the module loads
   here instead of the event loop's startup path: the M99 import floor
   (docs/perf_baseline.md) prices the import's wall, and this thread's span is
   exactly the cost the metric does not see.
+
+  After provisioning opens readiness, the same thread builds the resident bundle
+  (single-flight, so a concurrent first request shares it) and decodes one
+  synthetic sine, moving the ~12 s one-time cold cost off the first request. A
+  warm failure only logs: readiness stays exactly as provisioning published it
+  and the endpoints keep their lazy path as the fallback.
   """
   from src.agents import transcriber
 
   transcriber.provision_models(cfg)
+  started = time.monotonic()
+  try:
+    bundle = transcriber.get_transcription_bundle(cfg)
+    transcriber.warm_up_bundle(bundle)
+  except Exception:
+    # Includes the not-ready raise of a parked provisioning failure: log it loudly
+    # and keep booting — a warm failure never parks readiness nor kills the thread.
+    log.exception("voice_warmup_failed")
+    return
+  log.info("voice_warmup_complete", elapsed_ms=round((time.monotonic() - started) * 1000))
 
 
 async def _run_crash_recovery(cfg: CharlieBotConfig, boot_time: datetime, identity: asyncio.Task | None = None) -> None:

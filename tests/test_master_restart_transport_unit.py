@@ -546,6 +546,77 @@ async def test_identity_judgment_runs_before_any_new_turn_door(tmp_path: Path, m
     assert calls.index("identity") < calls.index(door), f"identity judged after {door}: {calls}"
 
 
+# --- _provision_speech_models: warm segment after provisioning ----------------
+
+
+def test_provision_speech_models_warms_after_provisioning(monkeypatch: pytest.MonkeyPatch) -> None:
+  """The startup thread provisions first, then builds the bundle and runs the one warm decode.
+
+  Asserted on recorded call order and the single warm call, never on the decoded
+  text: the warm segment fetches the resident bundle and hands it to the warm
+  decode exactly once, and a successful pass logs voice_warmup_complete."""
+  from structlog.testing import capture_logs
+
+  import server
+  from src.agents import transcriber
+
+  calls: list[str] = []
+  warm_bundle = object()
+
+  def fake_provision(cfg: CharlieBotConfig) -> None:
+    calls.append("provision")
+
+  def fake_get_bundle(warm_cfg: CharlieBotConfig) -> object:
+    calls.append("bundle")
+    return warm_bundle
+
+  def fake_warm(bundle: object) -> None:
+    calls.append(f"warm:{bundle is warm_bundle}")
+
+  monkeypatch.setattr(transcriber, "provision_models", fake_provision)
+  monkeypatch.setattr(transcriber, "get_transcription_bundle", fake_get_bundle)
+  monkeypatch.setattr(transcriber, "warm_up_bundle", fake_warm)
+
+  with capture_logs() as logs:
+    server._provision_speech_models(CharlieBotConfig())
+
+  assert calls == ["provision", "bundle", "warm:True"]
+  complete = [event for event in logs if event["event"] == "voice_warmup_complete"]
+  assert complete and isinstance(complete[0]["elapsed_ms"], int)
+  assert not [event for event in logs if event["event"] == "voice_warmup_failed"]
+
+
+def test_provision_speech_models_warm_failure_logs_and_continues(monkeypatch: pytest.MonkeyPatch) -> None:
+  """A warm failure (a parked provisioning error's not-ready raise included) is logged, never re-raised.
+
+  The fake provision mirrors the real failure path — the error is parked, no ready
+  paths published — so the warm segment hits the same SpeechModelsNotReadyError the
+  production flow would raise there; readiness itself stays untouched."""
+  from structlog.testing import capture_logs
+
+  import server
+  from src.agents import transcriber
+
+  def parked_provision(cfg: CharlieBotConfig) -> None:
+    with transcriber._state_lock:
+      transcriber._provisioning_error = "model download failed"
+      transcriber._provisioning_started = False
+
+  monkeypatch.setattr(transcriber, "_provisioning_error", None)
+  monkeypatch.setattr(transcriber, "_ready_paths", None)
+  monkeypatch.setattr(transcriber, "provision_models", parked_provision)
+
+  with capture_logs() as logs:
+    server._provision_speech_models(CharlieBotConfig())  # must return, not raise
+
+  failed = [event for event in logs if event["event"] == "voice_warmup_failed"]
+  assert failed and failed[0]["log_level"] == "error"
+  assert not [event for event in logs if event["event"] == "voice_warmup_complete"]
+  # Readiness is exactly as provisioning left it: still parked, 503 path unchanged.
+  with pytest.raises(transcriber.SpeechModelsNotReadyError, match="model download failed"):
+    transcriber.get_ready_model_paths()
+
+
 # --- queued_user_event_ids ----------------------------------------------------
 
 

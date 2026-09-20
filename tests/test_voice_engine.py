@@ -2,7 +2,7 @@
 
 The GPU bundle factory is mocked in every test here — the real GPU path runs under the
 local_only marker in test_voice_qwen3_hf.py. The module-level bundle cache is reset
-around each test so a stub bundle never leaks into the streaming or websocket suites.
+around each test so a stub bundle never leaks into the other voice suites.
 """
 
 from __future__ import annotations

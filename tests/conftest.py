@@ -1918,6 +1918,19 @@ def temp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
+def path_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+  """Point ``Path.home()`` at a created ``tmp_path / "home"`` and return it.
+
+  The env-only ``temp_home`` does not reach code that resolves the user home through
+  ``Path.home()`` — that call site needs the patch on the class itself.
+  """
+  home = tmp_path / "home"
+  home.mkdir()
+  monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+  return home
+
+
+@pytest.fixture
 def profile_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
   """Point ``CHARLIEBOT_HOME`` at a fresh tmp dir and clear the config module caches around it.
 

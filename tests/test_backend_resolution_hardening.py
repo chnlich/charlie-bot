@@ -100,17 +100,16 @@ def test_registry_scopes_opencode_proxy_to_opencode_constructor(monkeypatch: pyt
 # --------------------------------------------------------------- config reload
 
 
-def _reload_rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-  """Temp default home carrying config.yaml (port 1111); returns the config path.
+def _reload_rig(home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+  """Default home (the ``path_home`` fixture's) carrying config.yaml (port 1111); returns the config path.
 
-  Both reload tests assert default-home resolution under the patched Path.home, so the
-  suite-wide profile variable that the autouse fixture sets is deleted here.
+  Both reload tests assert default-home resolution under the fixture's patched
+  Path.home, so the suite-wide profile variable that the autouse fixture sets is
+  deleted here.
   """
-  home = tmp_path / "home"
   (home / ".charliebot").mkdir(parents=True)
   cfg_path = home / ".charliebot" / "config.yaml"
   cfg_path.write_text("server:\n  port: 1111\n", encoding="utf-8")
-  monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
   monkeypatch.delenv(core_config.CHARLIEBOT_HOME_ENV, raising=False)
   # The home cache lives in src.core.home; config re-exports the name, but the
   # resolver reads its own module's global, so the reset must target the owner.
@@ -126,9 +125,9 @@ def _write_port_2222(cfg_path: Path) -> None:
   os.utime(cfg_path, (0, 0))  # force a different mtime
 
 
-def test_get_config_refreshes_in_place_keeping_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_config_refreshes_in_place_keeping_identity(path_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A reload must update the existing instance so earlier holders see new values."""
-  cfg_path = _reload_rig(tmp_path, monkeypatch)
+  cfg_path = _reload_rig(path_home, monkeypatch)
 
   first = core_config.get_config()
   holder = first  # a long-lived singleton captures the object here
@@ -141,8 +140,8 @@ def test_get_config_refreshes_in_place_keeping_identity(tmp_path: Path, monkeypa
   assert holder.server.port == 2222
 
 
-def test_get_config_keeps_previous_value_when_reload_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg_path = _reload_rig(tmp_path, monkeypatch)
+def test_get_config_keeps_previous_value_when_reload_fails(path_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg_path = _reload_rig(path_home, monkeypatch)
 
   first = core_config.get_config()
   _write_port_2222(cfg_path)

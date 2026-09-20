@@ -468,12 +468,7 @@ async def test_maybe_auto_name_skips_loudly_when_no_preference_resolves() -> Non
 
 
 @pytest.mark.asyncio
-async def test_claude_ai_title_returns_when_no_jsonl_exists(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-  home_dir = tmp_path / "home"
-  monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
+async def test_claude_ai_title_returns_when_no_jsonl_exists(path_home: Path) -> None:
   session_mgr = AsyncMock()
   session_meta = SessionMetadata(id="session-no-jsonl", name="Session 1")
 
@@ -483,16 +478,11 @@ async def test_claude_ai_title_returns_when_no_jsonl_exists(
 
 
 @pytest.mark.asyncio
-async def test_claude_ai_title_returns_when_jsonl_has_no_ai_title(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-  home_dir = tmp_path / "home"
-  monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
+async def test_claude_ai_title_returns_when_jsonl_has_no_ai_title(path_home: Path) -> None:
   session_meta = SessionMetadata(id="session-no-title", name="Session 2")
   session_mgr = AsyncMock()
   _write_claude_jsonl(
-      home_dir,
+      path_home,
       session_meta.id,
       [
           {
@@ -517,17 +507,12 @@ async def test_claude_ai_title_returns_when_jsonl_has_no_ai_title(
 
 
 @pytest.mark.asyncio
-async def test_claude_ai_title_applies_title_for_default_session(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-  home_dir = tmp_path / "home"
-  monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
+async def test_claude_ai_title_applies_title_for_default_session(path_home: Path) -> None:
   session_meta = SessionMetadata(id="session-title", name="Session 3")
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="session-title", name="Session 3")
   _write_claude_jsonl(
-      home_dir,
+      path_home,
       session_meta.id,
       [
           {
@@ -552,17 +537,12 @@ async def test_claude_ai_title_applies_title_for_default_session(
 
 
 @pytest.mark.asyncio
-async def test_claude_ai_title_prefixes_default_session_number(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-  home_dir = tmp_path / "home"
-  monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
+async def test_claude_ai_title_prefixes_default_session_number(path_home: Path) -> None:
   session_meta = SessionMetadata(id="session-tui-prefix", name="Session 77")
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="session-tui-prefix", name="Session 77")
   _write_claude_jsonl(
-      home_dir,
+      path_home,
       session_meta.id,
       [{
           "type": "ai-title",
@@ -580,17 +560,12 @@ async def test_claude_ai_title_prefixes_default_session_number(
 
 
 @pytest.mark.asyncio
-async def test_claude_ai_title_does_not_overwrite_manual_session_name(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-  home_dir = tmp_path / "home"
-  monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
+async def test_claude_ai_title_does_not_overwrite_manual_session_name(path_home: Path) -> None:
   session_meta = SessionMetadata(id="session-manual", name="My Custom Name")
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="session-manual", name="My Custom Name")
   _write_claude_jsonl(
-      home_dir,
+      path_home,
       session_meta.id,
       [{
           "type": "ai-title",

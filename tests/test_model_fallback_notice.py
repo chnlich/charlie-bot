@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -20,6 +19,7 @@ from conftest import (
     TerminateFlagBackend,
     assistant_text_event,
     backend_option,
+    crashed_run_record,
     make_work_item,
     mock_session_callbacks,
     patch_instructions_content,
@@ -44,7 +44,6 @@ from src.core.message_aggregator import (
 from src.core.models import (
     BackendOption,
     CreateSessionRequest,
-    MasterRunRecord,
     SessionMetadata,
 )
 from src.core.sessions import SessionManager
@@ -408,12 +407,7 @@ async def test_resume_round_emits_identical_notice_from_projection(
   raw_path.write_text(assistant_line + json.dumps(_result()) + "\n", encoding="utf-8")
   (log_dir / runs.CURSOR_NAME).write_text("0", encoding="utf-8")
 
-  record = MasterRunRecord(
-      pid=None,
-      pid_start=None,
-      started_at=datetime.now(UTC) - timedelta(seconds=60),
-      raw_log=str(raw_path),
-  )
+  record = crashed_run_record(raw_path)
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [FABLE_OPTION]})
   meta = SessionMetadata(id=session_id, name="t", backend=FABLE_OPTION.id)
   cb = mock_session_callbacks()
@@ -449,12 +443,7 @@ async def test_resume_notice_persists_exactly_once_with_full_fields(
       encoding="utf-8")
   (log_dir / runs.CURSOR_NAME).write_text("0", encoding="utf-8")
 
-  record = MasterRunRecord(
-      pid=None,
-      pid_start=None,
-      started_at=datetime.now(UTC) - timedelta(seconds=60),
-      raw_log=str(raw_path),
-  )
+  record = crashed_run_record(raw_path)
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [FABLE_OPTION]})
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="fb-persist"))

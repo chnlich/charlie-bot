@@ -27,7 +27,7 @@ async def _session_with_chat_content(session_mgr: SessionManager, body: str, nam
 
 @pytest.mark.asyncio
 async def test_content_search_hits_and_misses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr("src.core.sessions._SEARCH_CHUNK_CHARS", 16)
+  monkeypatch.setattr(sessions_mod, "_SEARCH_CHUNK_CHARS", 16)
   cfg = make_home_config(tmp_path)
   mgr = SessionManager(cfg)
   hit = await _session_with_chat_content(mgr, '{"type":"user","content":"the Purple Fox jumped"}\n', "hit-session")
@@ -40,7 +40,7 @@ async def test_content_search_hits_and_misses(tmp_path: Path, monkeypatch: pytes
 
 @pytest.mark.asyncio
 async def test_content_search_matches_across_chunk_boundaries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr("src.core.sessions._SEARCH_CHUNK_CHARS", 16)
+  monkeypatch.setattr(sessions_mod, "_SEARCH_CHUNK_CHARS", 16)
   cfg = make_home_config(tmp_path)
   mgr = SessionManager(cfg)
   # The needle starts inside one chunk and ends inside the next.
@@ -53,7 +53,7 @@ async def test_content_search_matches_across_chunk_boundaries(tmp_path: Path, mo
 
 @pytest.mark.asyncio
 async def test_content_search_needle_longer_than_one_chunk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr("src.core.sessions._SEARCH_CHUNK_CHARS", 16)
+  monkeypatch.setattr(sessions_mod, "_SEARCH_CHUNK_CHARS", 16)
   cfg = make_home_config(tmp_path)
   mgr = SessionManager(cfg)
   needle = "a" * 5 + "verylongneedlethatoutlivesachunk" + "b" * 5

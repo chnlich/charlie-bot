@@ -548,10 +548,9 @@ async def _consume_mention(
     session_mgr: SessionManager, trigger_mgr: TriggerManager, session_id: str, mention_ts: str) -> None:
   """The mention round consumes its own ts: advance the watermark to it and cancel armed follows."""
   meta = await session_mgr.get_session(session_id)
-  # The summon path resolved this session (created, unarchived, or found ACTIVE) immediately
-  # before the call, so a None here can only mean a broken invariant — and silently skipping
-  # the watermark advance would leave the summon's own mention permanently unread.
-  assert meta is not None
+  # A None here would silently skip the watermark advance, leaving the summon's own
+  # mention permanently unread; the invariant break fails loudly instead.
+  assert meta is not None, "unreachable: the summon path resolves the session just before this call"
   if meta.slack_watermark_ts is None or meta.slack_watermark_ts < mention_ts:
     meta.slack_watermark_ts = mention_ts
     meta.updated_at = utc_now()

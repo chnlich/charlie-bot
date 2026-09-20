@@ -180,6 +180,77 @@ def test_translate_command_progress_renders_a_system_note_naming_the_command(mon
   ]
 
 
+def test_translate_command_progress_unknown_id_degrades_to_a_text_less_note(monkeypatch: pytest.MonkeyPatch) -> None:
+  # A progress ping replayed mid-stream after a server restart finds the
+  # translator's registered-command state empty; the turn must not crash.
+  backend = _build_backend(monkeypatch)
+  debugs: list[dict] = []
+  monkeypatch.setattr(charlie_code_mod.log, "debug", lambda event, **kw: debugs.append({"event": event, **kw}))
+
+  translated = backend.translate_event(
+      {
+          "type": "command_progress",
+          "step": 5,
+          "id": "s-58-1",
+          "elapsed_seconds": 300,
+          "pid": 693331,
+          "log": "/tmp/s-58-1.log",
+          "killed": False,
+      })
+
+  assert translated == [
+      {
+          "type": ET.SYSTEM,
+          "subtype": ET.COMMAND_PROGRESS,
+          "content": "Command still running after 5 min (pid 693331)",
+      }
+  ]
+  assert debugs == [{"event": "charlie_code_progress_unknown_command", "id": "s-58-1"}]
+
+
+def test_translate_command_progress_registered_id_output_is_byte_identical(monkeypatch: pytest.MonkeyPatch) -> None:
+  backend = _build_backend(monkeypatch)
+  backend.translate_event({"type": "command", "step": 3, "id": "s-3-1", "command": "python train.py --epochs 3"})
+  # The degenerate registered-but-empty command keeps its ": " suffix.
+  backend.translate_event({"type": "command", "step": 4, "id": "s-4-1", "command": ""})
+
+  normal = backend.translate_event(
+      {
+          "type": "command_progress",
+          "step": 3,
+          "id": "s-3-1",
+          "elapsed_seconds": 300,
+          "pid": 693331,
+          "log": "/tmp/s-3-1.log",
+          "killed": False,
+      })
+  empty = backend.translate_event(
+      {
+          "type": "command_progress",
+          "step": 4,
+          "id": "s-4-1",
+          "elapsed_seconds": 300,
+          "pid": 693332,
+          "log": "/tmp/s-4-1.log",
+          "killed": False,
+      })
+
+  assert normal == [
+      {
+          "type": ET.SYSTEM,
+          "subtype": ET.COMMAND_PROGRESS,
+          "content": "Command still running after 5 min (pid 693331): python train.py --epochs 3",
+      }
+  ]
+  assert empty == [
+      {
+          "type": ET.SYSTEM,
+          "subtype": ET.COMMAND_PROGRESS,
+          "content": "Command still running after 5 min (pid 693332): ",
+      }
+  ]
+
+
 def test_translate_compact_event_and_unknown_still_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 

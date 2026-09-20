@@ -7,7 +7,9 @@ import math
 import mimetypes
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
@@ -139,21 +141,34 @@ def _annotated_diff_page(base_path: Path, page_path: Path, session_id: str) -> s
   return page
 
 
+_K = TypeVar("_K")
+
+
+def _gzip_form(memo: BoundedMemo[_K, bytes], key: _K, build: Callable[[], bytes]) -> bytes:
+  """The level-1 gzip form of the plain body *build* yields, memoized under *key*.
+
+  A hit returns the stored bytes and never calls *build*; a miss deflates
+  *build()* once, stores, and returns. The route ships the result with
+  Content-Encoding: gzip set upstream, which is what makes the server's gzip
+  middleware skip its own whole-body deflate.
+  """
+  hit = memo.get(key)
+  if hit is not None:
+    return hit
+  compressed = gzip_level1(build())
+  memo.store(key, compressed)
+  return compressed
+
+
 def _annotated_diff_page_gzip(base_path: Path, page_path: Path, session_id: str) -> bytes:
   """The annotated diff page's gzip form, memoized beside the plain body.
 
-  The route ships these bytes with Content-Encoding: gzip set upstream, which
-  is what makes the server's gzip middleware skip its own whole-body deflate —
-  level 1 over the multi-MB worst compare view is the per-click cost the memo
+  Level 1 over the multi-MB worst compare view is the per-click cost the memo
   removes.
   """
   key = _annotate_key(base_path, page_path)
-  hit = _annotate_gzip_memo.get(key)
-  if hit is not None:
-    return hit
-  compressed = gzip_level1(_annotated_diff_page(base_path, page_path, session_id).encode("utf-8"))
-  _annotate_gzip_memo.store(key, compressed)
-  return compressed
+  return _gzip_form(
+      _annotate_gzip_memo, key, lambda: _annotated_diff_page(base_path, page_path, session_id).encode("utf-8"))
 
 
 def _injected_artifact_page(fs_path: Path, session_id: str) -> bytes:
@@ -177,17 +192,10 @@ def _injected_artifact_page(fs_path: Path, session_id: str) -> bytes:
 def _injected_artifact_page_gzip(fs_path: Path, session_id: str) -> bytes:
   """The artifact view's gzip form, memoized beside the plain body.
 
-  The route ships these bytes with Content-Encoding: gzip set upstream, which
-  is what makes the server's gzip middleware skip its own whole-body deflate —
-  level 1 over the ~1 MB worst page measures ~27 ms per view.
+  Level 1 over the ~1 MB worst page measures ~27 ms per view.
   """
   key: _CleanViewKey = (str(fs_path), *_file_signature(fs_path))
-  hit = _clean_view_gzip_memo.get(key)
-  if hit is not None:
-    return hit
-  compressed = gzip_level1(_injected_artifact_page(fs_path, session_id))
-  _clean_view_gzip_memo.store(key, compressed)
-  return compressed
+  return _gzip_form(_clean_view_gzip_memo, key, lambda: _injected_artifact_page(fs_path, session_id))
 
 
 def _artifact_session_id(fs_path: Path) -> str | None:
@@ -412,17 +420,8 @@ def _dir_listing_page(dir_path: Path, url_prefix: str, diff_param: str | None) -
 
 
 def _listing_page_gzip(key: _ListingKey, listing: str) -> bytes:
-  """The listing page's gzip form, memoized beside the plain page.
-
-  The route ships these bytes with Content-Encoding: gzip set upstream, which
-  is what makes the server's gzip middleware skip its own whole-body deflate.
-  """
-  hit = _listing_gzip_memo.get(key)
-  if hit is not None:
-    return hit
-  compressed = gzip_level1(listing.encode("utf-8"))
-  _listing_gzip_memo.store(key, compressed)
-  return compressed
+  """The listing page's gzip form, memoized beside the plain page."""
+  return _gzip_form(_listing_gzip_memo, key, lambda: listing.encode("utf-8"))
 
 
 def _resolve_and_list(path: str, url_prefix: str,

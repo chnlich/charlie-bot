@@ -348,6 +348,28 @@ function sessionRowActiveClass(isActive) {
   return isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
 }
 
+// The one session-row frame shared by renderScheduledSessionItem and
+// renderSessionItem: the anchor open tag, the name span, and the closing tag.
+// A markup change to the row frame lands here, not in one renderer.
+// indicators and line are prebuilt strings — the status column and the content
+// after the name span — and actions the trailing button column.
+function renderSessionRowShell(s, {filter, activeClass, options, indicators, line, actions}) {
+  const extraClass = options.extraClass ? ' ' + options.extraClass : '';
+  const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
+  return `<a href="/?session=${s.id}&filter=${filter}"
+     class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}"
+     ondblclick="startRename(event, '${s.id}')"
+     onclick="event.preventDefault(); switchSession('${s.id}')"
+     id="session-${s.id}"${extraAttrs}>
+    ${indicators}
+    <span class="flex-1 min-w-0">
+      <span class="truncate block session-name">${escapeHtml(s.name)}</span>
+      ${line}
+    </span>
+    ${actions}
+  </a>`;
+}
+
 function renderScheduledSessionItem(s, options = {}) {
   const isActive = SESSION_ID === s.id;
   const activeClass = sessionRowActiveClass(isActive);
@@ -357,25 +379,16 @@ function renderScheduledSessionItem(s, options = {}) {
     ${renderRenameButton(s, activeBtnClass)}
     ${renderArchiveButton(s, activeBtnClass)}
     ${renderCronGearButton(s.scheduled_task, activeBtnClass)}`;
-  const extraClass = options.extraClass ? ' ' + options.extraClass : '';
-  const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
-  return `<a href="/?session=${s.id}&filter=scheduled"
-     class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}"
-     ondblclick="startRename(event, '${s.id}')"
-     onclick="event.preventDefault(); switchSession('${s.id}')"
-     id="session-${s.id}"${extraAttrs}>
-    ${renderSessionIndicators(s)}
-    ${renderPendingTriggerIndicator(s)}
-    ${renderPendingPlanApprovalIndicator(s)}
-    ${renderScheduledBadge(s)}
-    ${renderTuiStatusDot(s)}
-    <span class="flex-1 min-w-0">
-      <span class="truncate block session-name">${escapeHtml(s.name)}</span>
-      ${s.schedule_cron ? renderSessionScheduleLine(s) : ''}
-      ${s.last_run_status ? `<span class="block text-xs ${s.last_run_status === 'success' ? 'text-green-400' : s.last_run_status === 'running' ? 'text-yellow-400' : s.last_run_status === 'skipped' ? 'text-slate-400' : (s.schedule_allow_failure ? 'text-amber-400' : 'text-red-400')}">Last: ${escapeHtml(s.last_run_status)}${s.last_scheduled_run ? ', ' + formatBubbleTime(s.last_scheduled_run) : ''}${s.last_run_status === 'failed' && s.schedule_allow_failure ? ' (review needed)' : ''}</span>` : ''}
-    </span>
-    ${actions}
-  </a>`;
+  const indicators = [
+      renderSessionIndicators(s),
+      renderPendingTriggerIndicator(s),
+      renderPendingPlanApprovalIndicator(s),
+      renderScheduledBadge(s),
+      renderTuiStatusDot(s),
+  ].join('\n    ');
+  const line = `${s.schedule_cron ? renderSessionScheduleLine(s) : ''}
+      ${s.last_run_status ? `<span class="block text-xs ${s.last_run_status === 'success' ? 'text-green-400' : s.last_run_status === 'running' ? 'text-yellow-400' : s.last_run_status === 'skipped' ? 'text-slate-400' : (s.schedule_allow_failure ? 'text-amber-400' : 'text-red-400')}">Last: ${escapeHtml(s.last_run_status)}${s.last_scheduled_run ? ', ' + formatBubbleTime(s.last_scheduled_run) : ''}${s.last_run_status === 'failed' && s.schedule_allow_failure ? ' (review needed)' : ''}</span>` : ''}`;
+  return renderSessionRowShell(s, {filter: 'scheduled', activeClass, options, indicators, line, actions});
 }
 
 // Empty list note shared by the scheduled/grouped/search lists here and,
@@ -799,25 +812,17 @@ function renderSessionItem(s, filter, options = {}) {
       ${renderArchiveButton(s, activeBtnClass)}
       ${renderCronGearButton(filter === 'scheduled' ? s.scheduled_task : '', activeBtnClass)}`;
   }
-  const extraClass = options.extraClass ? ' ' + options.extraClass : '';
-  const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
-  const indicators = isArchivedRow ? '' : `${renderSessionIndicators(s)}
-    ${renderPendingTriggerIndicator(s)}
-    ${renderPendingPlanApprovalIndicator(s)}
-    ${s.scheduled_task ? renderScheduledBadge(s) : ''}
-    ${renderTuiStatusDot(s)}`;
-  return `<a href="/?session=${s.id}&filter=${filter}"
-     class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}"
-     ondblclick="startRename(event, '${s.id}')"
-     onclick="event.preventDefault(); switchSession('${s.id}')"
-     id="session-${s.id}"${extraAttrs}>
-    ${indicators}
-    <span class="flex-1 min-w-0">
-      <span class="truncate block session-name">${escapeHtml(s.name)}</span>
-      ${filter === 'scheduled' && s.schedule_cron ? renderSessionScheduleLine(s) : renderSessionTimeLine(s, timeIso, timeStr, !!options.staticTime)}
-    </span>
-    ${actions}
-  </a>`;
+  const indicators = isArchivedRow ? '' : [
+      renderSessionIndicators(s),
+      renderPendingTriggerIndicator(s),
+      renderPendingPlanApprovalIndicator(s),
+      s.scheduled_task ? renderScheduledBadge(s) : '',
+      renderTuiStatusDot(s),
+  ].join('\n    ');
+  const line = filter === 'scheduled' && s.schedule_cron
+      ? renderSessionScheduleLine(s)
+      : renderSessionTimeLine(s, timeIso, timeStr, !!options.staticTime);
+  return renderSessionRowShell(s, {filter, activeClass, options, indicators, line, actions});
 }
 
 function renderSessionList(sessions, filter) {

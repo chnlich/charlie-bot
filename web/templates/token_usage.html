@@ -183,8 +183,12 @@
 const DATA = {{ payload|safe }};
 const SLOT = {1:'var(--series-1)', 2:'var(--series-2)', 3:'var(--series-3)', 4:'var(--series-4)'};
 // Legend order is the server's source display order (slot 1..n); each payload row
-// carries its own slot number, so no client-side source→slot map exists.
-const LEG = {{ ctx.usage_sources | tojson }}.map((name, i) => [i + 1, name]);
+// carries its own slot number, so no client-side source→slot map exists. The legend key
+// only exists on the python this page ships with: the template reloads from disk while
+// the serving process runs the python it started with, so the key stays absent until
+// that process restarts — an absent key renders an empty legend instead of failing the
+// whole report.
+const LEG = {{ (ctx.usage_sources or []) | tojson }}.map((name, i) => [i + 1, name]);
 const fmt = n => n.toLocaleString('en-US');
 const compact = n => {
   for (const [c,s] of [[1e9,'B'],[1e6,'M'],[1e3,'K']])

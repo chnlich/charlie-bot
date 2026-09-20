@@ -159,7 +159,14 @@ async function startRecording() {
   run.ui = ensureVoiceOverlay();
   showVoiceHint(run, 'Starting...');
   try {
-    run.stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    run.stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
 
     const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
     run.audioContext = new AudioContextCtor();

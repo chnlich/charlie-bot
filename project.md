@@ -186,7 +186,7 @@ A local git repo at `~/.charliebot/memory/` holds one durable fact or rule set p
 1. User presses/clicks button to start recording
 2. Presses/clicks again to stop and send
 3. Audio uploaded to backend
-4. **Local sherpa-onnx Qwen3-ASR** transcribes (VAD + simulated-streaming partials; supports Chinese, English, mixed, and ~30 languages)
+4. **Local speech transcription** decodes the complete recording offline: the VAD segments it and each segment decodes in one shot (sherpa-onnx Qwen3-ASR on CPU by default, `voice.engine=qwen3_hf` on GPU hosts; supports Chinese, English, mixed, and ~30 languages)
 5. Transcription displayed in UI first
 6. Passed to Master with a disclaimer prefix: the displayed message stays verbatim, and the prompt the agent receives carries the fixed voice note from `_VOICE_DISCLAIMER` (`src/agents/master_cc_run.py`)
 

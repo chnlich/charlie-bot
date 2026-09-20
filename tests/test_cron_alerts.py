@@ -16,12 +16,19 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import NOTIFICATIONS_SEND_TELEGRAM_PATCH_TARGET, reset_config_caches
 from conftest import dump_yaml as _dump
+from conftest import reset_config_caches
 from conftest import write_cron_task as _write_task_text
 
 import src.core.config as cm
 from src.core.config import CharlieBotConfig
+
+# Import-path patch target for the Telegram delivery the cron-load alert posts. The alert helper
+# in src/core/config.py imports send_telegram at call time (lazy, notifications imports config),
+# so that import resolves the stand-in landed on the src.core.notifications module attribute;
+# import-scope binders of the same function (spawner_finalize) keep their own bound object and
+# are not intercepted through this route.
+NOTIFICATIONS_SEND_TELEGRAM_PATCH_TARGET = "src.core.notifications.send_telegram"
 
 
 @pytest.fixture

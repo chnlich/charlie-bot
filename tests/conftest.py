@@ -1097,18 +1097,6 @@ CLI_COMMON_SESSIONS_DIR_PATCH_TARGET = "src.cli.common._sessions_dir"
 # time, so mock setattrs the stand-in on the src.cli.common module attribute.
 CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET = "src.cli.common._maybe_version_skew_hint"
 
-# Import-path patch target for the publish command's config read. src/cli/publish.py binds the
-# name with `from src.core.config import get_config`, so mock setattrs the stand-in on the
-# src.cli.publish module attribute and main's preflight reads it at call time.
-CLI_PUBLISH_GET_CONFIG_PATCH_TARGET = "src.cli.publish.get_config"
-
-# Import-path patch target for the Telegram delivery the cron-load alert posts. The alert helper
-# in src/core/config.py imports send_telegram at call time (lazy, notifications imports config),
-# so that import resolves the stand-in landed on the src.core.notifications module attribute;
-# import-scope binders of the same function (spawner_finalize) keep their own bound object and
-# are not intercepted through this route.
-NOTIFICATIONS_SEND_TELEGRAM_PATCH_TARGET = "src.core.notifications.send_telegram"
-
 # Import-path patch targets for the master wake a Slack message fires. src/core/slack_listener.py
 # binds both names at import scope (`from src.core.master_trigger import trigger_master`,
 # `from src.core.tasks import create_logged_task`), so mock setattrs the stand-ins on the
@@ -1245,14 +1233,6 @@ JSON_UTILS_OS_REPLACE_PATCH_TARGET = "src.core.json_utils.os.replace"
 TUI_KILL_TMUX_SESSION_PATCH_TARGET = "src.agents.backends.tui.kill_tmux_session"
 TUI_TMUX_SESSION_EXISTS_PATCH_TARGET = "src.agents.backends.tui.tmux_session_exists"
 TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET = "src.agents.backends.tui._claude_jsonl_busy"
-
-# Import-path patch targets for the server's terminal websocket. server.py defines _check_ws_auth
-# and its websocket handlers read it as a module global at call time, and the terminal handler
-# imports run_terminal_attachment at call time (`from src.agents.backends.terminal import
-# run_terminal_attachment` inside terminal_websocket), so monkeypatch.setattr lands both stand-ins
-# on their defining module attributes and the handler's reads resolve them.
-SERVER_CHECK_WS_AUTH_PATCH_TARGET = "server._check_ws_auth"
-TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET = "src.agents.backends.terminal.run_terminal_attachment"
 
 
 def build_cli_backend(

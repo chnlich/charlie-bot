@@ -1115,8 +1115,7 @@ TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET = "src.core.triggers._SACCT_AVAILABLE"
 
 # Import-path patch target for the watchdog's poll interval. src/core/triggers.py defines
 # _DORMANCY_CHECK_SECONDS at module scope, and the dormancy-watch loop reads it inside
-# _watch_session_dormancy at call time, so tests compress the wait by setting the module
-# attribute.
+# _watch_dormancy at call time, so tests compress the wait by setting the module attribute.
 TRIGGERS_DORMANCY_CHECK_SECONDS_PATCH_TARGET = "src.core.triggers._DORMANCY_CHECK_SECONDS"
 
 # Import-path patch target for the CLI HTTP layer's config read. src/cli/common.py defines a
@@ -1172,8 +1171,10 @@ SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.scheduler.create_logged_ta
 # `from src.core.master_trigger import trigger_master`, `from src.core.spawner import
 # resolve_requested_subagent_backend_model, spawn_worker`, `from src.core.threads import
 # ThreadManager`), so monkeypatch.setattr lands the stand-in on the src.core.scheduler module
-# attribute and _reload_config, _execute_pm_task, and _spawn_scheduled_worker read it at
-# call time; sibling modules binding the same functions keep their own routes.
+# attribute and the call-time readers — _reload_config, _execute_pm_task, and
+# _spawn_scheduled_worker for the bindings above; _tick and run_task_now for
+# get_scheduled_tasks — read it there; sibling modules binding the same functions keep their
+# own routes.
 SCHEDULER_GET_CONFIG_PATCH_TARGET = "src.core.scheduler.get_config"
 SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.core.scheduler.get_scheduled_tasks"
 SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = ("src.core.scheduler.resolve_requested_subagent_backend_model")
@@ -1239,11 +1240,12 @@ BUILD_BACKEND_PATCH_TARGET = "src.agents.backends.registry.build_backend"
 # exactly the semantics the master-cc registry route relies on.
 WORKER_BUILD_BACKEND_PATCH_TARGET = "src.agents.worker.build_backend"
 
-# Import-path patch target for the worker's fallback backend constructor. src/agents/worker.py
+# Import-path patch target for the worker's default-backend fallback. src/agents/worker.py
 # binds the class at import scope (`from src.agents.backends.claude_code import
-# ClaudeCodeBackend, claude_supervisor_env`), and the non-cc-claude fallback return reads it
-# as a module global at call time, so tests that drive the fallback set the stand-in on the
-# src.agents.worker module attribute.
+# ClaudeCodeBackend, claude_supervisor_env`), and _build_backend's fallback return — reached
+# when no backend_option is set or a translate-only build fails — reads it as a module global
+# at call time, so tests that drive that fallback set the stand-in on the src.agents.worker
+# module attribute.
 WORKER_CLAUDE_CODE_BACKEND_PATCH_TARGET = "src.agents.worker.ClaudeCodeBackend"
 
 # Import-path patch target for the /proc stat read the backend start contract pins. src/core/runs.py

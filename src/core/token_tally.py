@@ -139,7 +139,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import BinaryIO, NamedTuple
+from typing import BinaryIO, NamedTuple, TypeVar
 
 import orjson
 
@@ -412,35 +412,56 @@ def _walk_error_hook(t: _Tally, source: str, label: str, root_name: str) -> Call
 
 
 # The claude+codex walk's per-directory listing memo: (dirpath, suffixes) ->
-# ((mtime_ns, size), (subdir paths, candidate file paths)). One stat validates a remembered
-# listing, since an entry's create, delete or rename moves the containing directory's own
-# mtime_ns, while a file append moves only the file's mtime, which the walk's per-file stat
-# takes every pass. The candidate file names are stored suffix-filtered, so *suffixes* rides
-# the memo key. Paths are absolute so a memo hit joins nothing. Entries are bounded by the
-# historical directory set of the walked trees; a subtree that stops being walked leaves its
-# entries until the process restarts.
+# ((mtime_ns, size), (subdir paths, candidate file paths)). The candidate file names are
+# stored suffix-filtered, so *suffixes* rides the memo key. Paths are absolute so a memo hit
+# joins nothing. Entries are bounded by the historical directory set of the walked trees; a
+# subtree that stops being walked leaves its entries until the process restarts.
 _jsonl_dir_memo: dict[tuple[str, tuple[str, ...]], tuple[tuple[int, int], tuple[list[str], list[str]]]] = {}
+
+_MemoKey = TypeVar("_MemoKey")
+_MemoValue = TypeVar("_MemoValue")
+
+
+def _memoized_listing(
+    memo: dict[_MemoKey, tuple[tuple[int, int], _MemoValue]],
+    lookup_key: _MemoKey,
+    dirpath: str,
+    scan: Callable[[], _MemoValue],
+) -> _MemoValue:
+  """Serve *scan*'s listing through *memo*, validated by the directory's own stat pair.
+
+  A remembered listing costs one stat to validate; a miss re-scandirs. A vanished directory
+  drops its memo entry and raises FileNotFoundError; any other read failure raises OSError
+  for the caller to note. The stored pair is ((mtime_ns, size), value): one stat validates a
+  remembered listing, since an entry's create, delete or rename moves the containing
+  directory's own mtime_ns, while a file append moves only the file's mtime, which the
+  walk's per-file stat takes every pass.
+  """
+  try:
+    st = os.stat(dirpath)
+    stat_key = (st.st_mtime_ns, st.st_size)
+  except OSError:
+    memo.pop(lookup_key, None)
+    raise
+  hit = memo.get(lookup_key)
+  if hit is not None and hit[0] == stat_key:
+    return hit[1]
+  try:
+    value = scan()
+  except OSError:
+    memo.pop(lookup_key, None)
+    raise
+  memo[lookup_key] = (stat_key, value)
+  return value
 
 
 def _jsonl_listing(dirpath: str, suffixes: tuple[str, ...]) -> tuple[list[str], list[str]]:
   """The directory's subdirectory paths and suffix-matching file paths, memoized on the
-  directory's own stat pair.
+  directory's own stat pair (``_memoized_listing`` owns the stat-and-fail contract)."""
 
-  A remembered listing costs one stat to validate; a miss re-scandirs. A vanished directory
-  drops its memo entry and raises FileNotFoundError; any other read failure raises OSError
-  for the caller to note."""
-  try:
-    st = os.stat(dirpath)
-    key = (st.st_mtime_ns, st.st_size)
-  except OSError:
-    _jsonl_dir_memo.pop((dirpath, suffixes), None)
-    raise
-  memo = _jsonl_dir_memo.get((dirpath, suffixes))
-  if memo is not None and memo[0] == key:
-    return memo[1]
-  subdirs: list[str] = []
-  files: list[str] = []
-  try:
+  def scan() -> tuple[list[str], list[str]]:
+    subdirs: list[str] = []
+    files: list[str] = []
     with os.scandir(dirpath) as scandir:
       for entry in scandir:
         if entry.is_dir():
@@ -448,11 +469,9 @@ def _jsonl_listing(dirpath: str, suffixes: tuple[str, ...]) -> tuple[list[str], 
             subdirs.append(entry.path)
         elif entry.name.endswith(suffixes):
           files.append(entry.path)
-  except OSError:
-    _jsonl_dir_memo.pop((dirpath, suffixes), None)
-    raise
-  _jsonl_dir_memo[(dirpath, suffixes)] = (key, (subdirs, files))
-  return subdirs, files
+    return subdirs, files
+
+  return _memoized_listing(_jsonl_dir_memo, (dirpath, suffixes), dirpath, scan)
 
 
 def _iter_jsonl_stats(
@@ -488,40 +507,23 @@ def _iter_jsonl_stats(
 
 
 # The charlie-bot walk's per-directory listing memo: dirpath -> ((mtime_ns, size),
-# [subdir path]). One stat validates a remembered listing, since an entry's create, delete
-# or rename moves the containing directory's own mtime_ns, while a file append moves only
-# the file's mtime, which the walk's per-file stat takes every round. Only subdirectories
-# are listed: the walk's sole consumer stats candidate files one level below these
-# directories, and an entry's dir-ness changes only through a parent-directory rename the
-# stat pair catches. Paths are absolute so a memo hit joins nothing. Entries are bounded by
-# the historical directory set of the sessions tree; a subtree that stops being listed
-# leaves its entries until the process restarts.
+# [subdir path]). Only subdirectories are listed: the walk's sole consumer stats candidate
+# files one level below these directories, and an entry's dir-ness changes only through a
+# parent-directory rename the stat pair catches. Paths are absolute so a memo hit joins
+# nothing. Entries are bounded by the historical directory set of the sessions tree; a
+# subtree that stops being listed leaves its entries until the process restarts.
 _charliebot_dir_memo: dict[str, tuple[tuple[int, int], list[str]]] = {}
 
 
 def _charliebot_listing(dirpath: str) -> list[str]:
-  """The directory's subdirectory paths, memoized on the directory's own stat pair.
+  """The directory's subdirectory paths, memoized on the directory's own stat pair
+  (``_memoized_listing`` owns the stat-and-fail contract)."""
 
-  A remembered listing costs one stat to validate; a miss re-scandirs. A vanished directory
-  drops its memo entry and raises FileNotFoundError; any other read failure raises OSError
-  for the caller to note."""
-  try:
-    st = os.stat(dirpath)
-    key = (st.st_mtime_ns, st.st_size)
-  except OSError:
-    _charliebot_dir_memo.pop(dirpath, None)
-    raise
-  memo = _charliebot_dir_memo.get(dirpath)
-  if memo is not None and memo[0] == key:
-    return memo[1]
-  try:
+  def scan() -> list[str]:
     with os.scandir(dirpath) as scandir:
-      listing = [entry.path for entry in scandir if entry.is_dir() and not entry.is_symlink()]
-  except OSError:
-    _charliebot_dir_memo.pop(dirpath, None)
-    raise
-  _charliebot_dir_memo[dirpath] = (key, listing)
-  return listing
+      return [entry.path for entry in scandir if entry.is_dir() and not entry.is_symlink()]
+
+  return _memoized_listing(_charliebot_dir_memo, dirpath, dirpath, scan)
 
 
 # The walk's per-kind (kind, container under the session dir, candidate file name), built

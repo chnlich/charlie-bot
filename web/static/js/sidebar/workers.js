@@ -387,7 +387,6 @@ const API = {
   fetchWorkerDescription,
   renderWorkersTab,
   renderWorkersTabUnknown,
-  restartWorkersPolling,
   ensureWorkersLoadedForActiveSession,
   pollWorkers,
   updateWorkersTabBadge,
@@ -396,6 +395,6 @@ const API = {
   updateTriggerStatus,
   cancelTrigger,
 };
-Sidebar.wire(API);
+Sidebar.wire(API, {restartWorkersPolling});
 
 })();

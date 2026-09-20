@@ -599,6 +599,14 @@ def test_member_form_raises_when_every_member_is_a_non_trace(tmp_path: Path) -> 
     _member_form_output([manifest], tmp_path, slim=False)
 
 
+def test_member_form_with_no_members_ships_the_empty_artifact(tmp_path: Path) -> None:
+  # Zero members is not "every member rejected": the pre-skip form shipped the
+  # empty array for it, and the all-skipped raise must not fire there.
+  output = tmp_path / "empty-merge.json.gz"
+  build_multi_trace_merge([], output, slim=False, executor=None)
+  assert _read_merged(output) == []
+
+
 def test_build_trace_member_raises_when_ids_exhaust_the_stride(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   import src.core.trace_merge as trace_merge_module
 

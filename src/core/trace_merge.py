@@ -428,7 +428,7 @@ def build_multi_trace_merge(
           shutil.copyfileobj(fragment_file, output)
         emitted = True
       output.write(b"]}")
-    if skipped == len(paths):
+    if paths and skipped == len(paths):
       raise ValueError(
           f"multi-trace merge rejected every member as a non-Chrome-JSON trace: "
           f"{', '.join(str(path) for path in paths)}")

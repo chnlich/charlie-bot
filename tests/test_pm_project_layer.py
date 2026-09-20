@@ -25,6 +25,7 @@ from conftest import (
     OPUS_BACKEND_ID,
     SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
     SCHEDULER_GET_CONFIG_PATCH_TARGET,
+    SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET,
     SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
     SCHEDULER_TRIGGER_MASTER_PATCH_TARGET,
     _noop,
@@ -515,7 +516,7 @@ async def test_tick_disables_task_on_manual_pm_archive(
   monkeypatch.setattr(scheduler, "_get_or_create_session", get_or_create)
   monkeypatch.setattr(scheduler, "_maybe_run", maybe_run)
   monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr("src.core.scheduler.get_scheduled_tasks", lambda: [task_cfg])
+  monkeypatch.setattr(SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET, lambda: [task_cfg])
 
   await scheduler._tick()
 
@@ -556,7 +557,7 @@ async def test_tick_elone_successor_does_not_trigger_stop_or_dead_group_terminat
   monkeypatch.setattr(scheduler, "_get_or_create_session", get_or_create)
   monkeypatch.setattr(scheduler, "_maybe_run", maybe_run)
   monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr("src.core.scheduler.get_scheduled_tasks", lambda: [task_cfg])
+  monkeypatch.setattr(SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET, lambda: [task_cfg])
 
   await scheduler._tick()
 

@@ -729,15 +729,16 @@ const GLOBALS = {
   appendMessage,
   applyTurnOutline,
   setPageDepth,
-  toggleTurnFold,
 };
-// Turn primitives the window engine builds wraps from. Legacy callers go
+// Turn primitives the window engine builds wraps from and drives through Chat;
+// the fold bar's click handler closes over the module scope. Legacy callers go
 // through wrapTurn / applyTurnOutline above and never touch these directly.
 const CHAT_ONLY = {
   buildTurnRowFromSpec,
   installTurnFold,
   installTurnCollapseControl,
   setTurnFoldExpanded,
+  toggleTurnFold,
 };
 Chat.wire(GLOBALS, CHAT_ONLY);
 

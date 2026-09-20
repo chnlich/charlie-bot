@@ -1,171 +1,152 @@
+"""Offline transcription windowing tests: fake VAD segments drive the arithmetic.
+
+The real VAD/decoder run under the local_only suites (test_voice_offline_models.py,
+test_voice_qwen3_hf.py); here the bundle is a stub and the segments are pre-set, so
+the feed cadence, window padding, and concatenation rules hold without models.
+"""
+
 from __future__ import annotations
 
-from pathlib import Path
+import threading
 
 import numpy as np
 import pytest
 
 from src.agents import transcriber
-from src.core.config import CharlieBotConfig
 
 
-class _LengthOnlySamples:
-
-  def __init__(self, length: int) -> None:
-    self._length = length
-
-  def __len__(self) -> int:
-    return self._length
-
-  def __array__(self, *args: object, **kwargs: object) -> None:
-    raise AssertionError("segment.samples must not be decoded")
-
-
-class _ClosedSegment:
+class _FakeSegment:
 
   def __init__(self, start: int, length: int) -> None:
     self.start = start
-    self.samples = _LengthOnlySamples(length)
+    self.samples = np.zeros(length, dtype=np.float32)
 
 
-class _ClosedVad:
+class _FakeVad:
 
-  def __init__(self, segment: _ClosedSegment) -> None:
-    self._segment = segment
-    self._empty = False
+  def __init__(self, segments: list[tuple[int, int]]) -> None:
+    self._segments = [_FakeSegment(start, length) for start, length in segments]
+    self.feed_sizes: list[int] = []
+    self.flushed = False
+
+  def accept_waveform(self, samples: np.ndarray) -> None:
+    self.feed_sizes.append(samples.size)
+
+  def flush(self) -> None:
+    self.flushed = True
 
   def empty(self) -> bool:
-    return self._empty
+    return not self._segments
 
   @property
-  def front(self) -> _ClosedSegment:
-    return self._segment
+  def front(self) -> _FakeSegment:
+    return self._segments[0]
 
   def pop(self) -> None:
-    self._empty = True
+    self._segments.pop(0)
 
 
-class _LiveSegment:
-
-  def __init__(self, start: int) -> None:
-    self.start = start
-
-
-class _LiveVad:
-
-  def __init__(self, segment: _LiveSegment) -> None:
-    self.current_segment = segment
-
-  def is_speech_detected(self) -> bool:
-    return True
+def _stub_bundle() -> transcriber._SpeechModelBundle:
+  return transcriber._SpeechModelBundle(
+      recognizer=object(), vad_config=object(), decode_lock=threading.Lock(), engine="sherpa", model_id="test")
 
 
-def _session_with_pcm(samples: np.ndarray) -> transcriber.SimulatedStreamingTranscriptionSession:
-  session = transcriber.SimulatedStreamingTranscriptionSession.__new__(
-      transcriber.SimulatedStreamingTranscriptionSession)
-  session._bundle = object()
-  session._vad = None
-  session._pcm_chunks = [samples.astype("<i2").tobytes()]
-  session._frozen_segments = []
-  session._fed_samples = samples.size
-  session._last_partial = ""
-  session._last_live_text = ""
-  session._last_live_decode_at = -transcriber.LIVE_DECODE_INTERVAL_SAMPLES
-  session._saw_speech = False
-  session._decoded_region_end = 0
-  session._finished = False
-  return session
-
-
-def _install_decode_capture(monkeypatch: pytest.MonkeyPatch, return_text: str) -> list[np.ndarray]:
+def _install_fakes(
+    monkeypatch: pytest.MonkeyPatch,
+    segments: list[tuple[int, int]],
+    decode_texts: list[str],
+) -> tuple[list[np.ndarray], _FakeVad]:
+  vad = _FakeVad(segments)
   captured: list[np.ndarray] = []
 
-  def fake_decode(bundle: transcriber._SpeechModelBundle, samples: np.ndarray) -> str:
+  def fake_open_vad(_config: object, _buffer_seconds: float) -> _FakeVad:
+    return vad
+
+  def fake_decode(_bundle: object, samples: np.ndarray) -> str:
     captured.append(samples.copy())
-    return return_text
+    return decode_texts[len(captured) - 1]
 
+  monkeypatch.setattr(transcriber, "_open_vad", fake_open_vad)
   monkeypatch.setattr(transcriber, "_decode_samples", fake_decode)
-  return captured
+  return captured, vad
 
 
-def test_closed_vad_segments_decode_padded_raw_pcm_without_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
-  source = np.arange(20_000, dtype=np.int16)
-  session = _session_with_pcm(source)
-  session._decoded_region_end = 5_000
-  session._vad = _ClosedVad(_ClosedSegment(start=10_000, length=1_000))
-  captured = _install_decode_capture(monkeypatch, "decoded")
+def test_offline_feeds_vad_in_128ms_steps_and_flushes(monkeypatch: pytest.MonkeyPatch) -> None:
+  _captured, vad = _install_fakes(monkeypatch, [], [])
+  seconds = 5
+  pcm = np.zeros(seconds * transcriber.SAMPLE_RATE, dtype="<i2").tobytes()
 
-  assert session._drain_closed_segments()
+  transcriber.transcribe_pcm_offline(_stub_bundle(), pcm)
 
-  expected = source[5_000:17_400].astype(np.float32) / 32768.0
-  np.testing.assert_allclose(captured[0], expected)
-  assert session._frozen_segments == ["decoded"]
-  assert session._decoded_region_end == 17_400
-  assert session._saw_speech
+  assert vad.flushed
+  # 80000 samples = 39 full 128 ms steps plus a 128-sample tail.
+  assert vad.feed_sizes == [transcriber.OFFLINE_VAD_FEED_SAMPLES] * 39 + [128]
+  assert all(size <= transcriber.OFFLINE_VAD_FEED_SAMPLES for size in vad.feed_sizes)
 
 
-def test_live_vad_segment_decodes_padded_raw_pcm_without_advancing_frozen_boundary(
-    monkeypatch: pytest.MonkeyPatch) -> None:
-  source = np.arange(20_000, dtype=np.int16)
-  session = _session_with_pcm(source)
-  session._decoded_region_end = 5_000
-  session._vad = _LiveVad(_LiveSegment(start=10_000))
-  captured = _install_decode_capture(monkeypatch, "live")
+def test_offline_feed_tail_is_the_remainder(monkeypatch: pytest.MonkeyPatch) -> None:
+  _captured, vad = _install_fakes(monkeypatch, [], [])
+  # 2 full 128 ms steps plus a 100 ms remainder.
+  pcm = np.zeros(2 * transcriber.OFFLINE_VAD_FEED_SAMPLES + 1600, dtype="<i2").tobytes()
 
-  assert session._decode_live_segment_if_due() == "live"
+  transcriber.transcribe_pcm_offline(_stub_bundle(), pcm)
 
-  expected = source[5_000:20_000].astype(np.float32) / 32768.0
-  np.testing.assert_allclose(captured[0], expected)
-  assert session._decoded_region_end == 5_000
-  assert session._last_live_decode_at == 20_000
-  assert session._saw_speech
+  assert vad.feed_sizes == [2048, 2048, 1600]
 
 
-def test_closed_segment_after_three_second_pause_decodes_full_pause(monkeypatch: pytest.MonkeyPatch) -> None:
-  source = np.arange(70_000, dtype=np.int16)
-  session = _session_with_pcm(source)
-  session._decoded_region_end = 10_000
-  session._vad = _ClosedVad(_ClosedSegment(start=58_000, length=2_000))
-  captured = _install_decode_capture(monkeypatch, "decoded")
+def test_offline_decodes_padded_windows_without_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
+  source = np.arange(200_000, dtype="<i2").astype(np.int16)
+  # Two segments; the second opens after the first's decode window has closed.
+  captured, _vad = _install_fakes(
+      monkeypatch,
+      segments=[(100_000, 10_000), (130_000, 20_000)],
+      decode_texts=["first", "second"],
+  )
 
-  assert session._drain_closed_segments()
+  text = transcriber.transcribe_pcm_offline(_stub_bundle(), source.tobytes())
 
-  expected = source[10_000:66_400].astype(np.float32) / 32768.0
-  np.testing.assert_allclose(captured[0], expected)
-  assert session._decoded_region_end == 66_400
-
-
-def test_closed_segment_after_seven_second_pause_decodes_only_last_five_seconds(
-    monkeypatch: pytest.MonkeyPatch) -> None:
-  source = np.arange(140_000, dtype=np.int16)
-  session = _session_with_pcm(source)
-  session._decoded_region_end = 10_000
-  session._vad = _ClosedVad(_ClosedSegment(start=122_000, length=2_000))
-  captured = _install_decode_capture(monkeypatch, "decoded")
-
-  assert session._drain_closed_segments()
-
-  expected = source[42_000:130_400].astype(np.float32) / 32768.0
-  np.testing.assert_allclose(captured[0], expected)
-  assert session._decoded_region_end == 130_400
+  assert text == "first second"
+  pause, pad = transcriber.SEGMENT_DECODE_PAUSE_SAMPLES, transcriber.SEGMENT_DECODE_PAD_SAMPLES
+  # Window 1: 5 s of pause before the segment, 0.4 s of tail after, clamped at 0.
+  np.testing.assert_array_equal(captured[0], source[20_000:116_400].astype(np.float32) / 32768.0)
+  # Window 2: the left edge clips against window 1's right edge, so the padded
+  # windows never overlap or replay audio.
+  np.testing.assert_array_equal(captured[1], source[116_400:156_400].astype(np.float32) / 32768.0)
+  assert pause == 5 * transcriber.SAMPLE_RATE and pad == 6_400
 
 
-def test_live_segment_decode_follows_same_left_edge_rule(monkeypatch: pytest.MonkeyPatch) -> None:
-  source = np.arange(100_000, dtype=np.int16)
-  session = _session_with_pcm(source)
-  session._decoded_region_end = 1_000
-  session._vad = _LiveVad(_LiveSegment(start=85_000))
-  captured = _install_decode_capture(monkeypatch, "live")
+def test_offline_windows_clamp_to_the_recording_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+  source = np.arange(30_000, dtype="<i2").astype(np.int16)
+  # The segment sits at the very start and its pad runs past the recording's end.
+  captured, _vad = _install_fakes(monkeypatch, [(0, 10_000)], ["only"])
 
-  assert session._decode_live_segment_if_due() == "live"
+  transcriber.transcribe_pcm_offline(_stub_bundle(), source.tobytes())
 
-  expected = source[5_000:100_000].astype(np.float32) / 32768.0
-  np.testing.assert_allclose(captured[0], expected)
-  assert session._decoded_region_end == 1_000
-  assert session._last_live_decode_at == 100_000
+  np.testing.assert_array_equal(captured[0], source[0:16_400].astype(np.float32) / 32768.0)
 
 
-def test_vad_config_ends_segment_after_one_second_of_silence(tmp_path: Path) -> None:
-  vad_config = transcriber._create_vad_config(transcriber.voice_model_paths(CharlieBotConfig(charliebot_home=tmp_path)))
+def test_offline_skips_empty_segment_texts(monkeypatch: pytest.MonkeyPatch) -> None:
+  source = np.zeros(40_000, dtype="<i2")
+  _captured, _vad = _install_fakes(
+      monkeypatch,
+      segments=[(0, 10_000), (20_000, 10_000)],
+      decode_texts=["", "kept"],
+  )
 
-  assert vad_config.silero_vad.min_silence_duration == 1.0
+  assert transcriber.transcribe_pcm_offline(_stub_bundle(), source.tobytes()) == "kept"
+
+
+def test_offline_without_speech_decodes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+  captured, vad = _install_fakes(monkeypatch, [], [])
+
+  assert transcriber.transcribe_pcm_offline(_stub_bundle(), np.zeros(16_000, dtype="<i2").tobytes()) == ""
+
+  assert captured == []
+  assert vad.flushed
+
+
+def test_offline_odd_pcm_length_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+  _install_fakes(monkeypatch, [], [])
+
+  with pytest.raises(ValueError, match="byte length must be even"):
+    transcriber.transcribe_pcm_offline(_stub_bundle(), b"\x00\x00\x00")

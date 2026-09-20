@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import concurrent.futures
 import time
 import wave
 from pathlib import Path
@@ -16,8 +15,6 @@ from src.core import voice_setup
 from src.core.config import CharlieBotConfig
 
 pytestmark = pytest.mark.local_only
-
-CHUNK_SAMPLES = 2048
 
 reset_bundle_cache = fresh_state_fixture(transcriber.reset_bundle_cache_for_tests)
 
@@ -61,28 +58,31 @@ def test_qwen3_hf_gpu_decode_real_recording() -> None:
   print(f"Text: {text}")
 
 
-def test_qwen3_hf_gpu_session_streams_and_finalizes() -> None:
-  """The production session path (VAD + partials + finish) runs on the GPU engine."""
+def test_qwen3_hf_gpu_offline_decode_meets_latency_budget() -> None:
+  """The offline path (VAD segmentation + one decode per segment) runs on the GPU
+  engine, and a recording within the 25.4 s single-decode-window bound returns its
+  full text inside the plan's 5 s budget on the healthy-GPU host."""
   cfg = CharlieBotConfig(voice={"engine": "qwen3_hf"})
   _require_gpu_assets(cfg)
 
   wav_path = voice_setup.pick_preflight_recording(cfg.sessions_dir)
-  session = transcriber.create_transcription_session(cfg)
-  assert session._bundle.engine == "qwen3_hf"
+  bundle = transcriber.get_transcription_bundle(cfg)
+  assert bundle.engine == "qwen3_hf"
 
-  with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+  with wave.open(str(wav_path), "rb") as wav:
+    pcm = wav.readframes(wav.getnframes())
+  audio_seconds = len(pcm) / 2 / transcriber.SAMPLE_RATE
+  assert audio_seconds <= 25.4
 
-    def feed() -> str:
-      with wave.open(str(wav_path), "rb") as wav:
-        while True:
-          data = wav.readframes(CHUNK_SAMPLES)
-          if not data:
-            break
-          session.accept_pcm(data)
-      return session.finish()
+  started = time.perf_counter()
+  text = transcriber.transcribe_pcm_offline(bundle, pcm)
+  decode_seconds = time.perf_counter() - started
 
-    final_text = executor.submit(feed).result(timeout=120)
-
-  if session._saw_speech:
-    assert final_text
-    print(f"Final text: {final_text}")
+  assert text
+  print(f"Engine: {bundle.engine} model: {bundle.model_id}")
+  print(f"Audio: {wav_path} ({audio_seconds:.1f}s)")
+  print(f"Decode: {decode_seconds:.3f}s (RTF {decode_seconds / audio_seconds:.4f})")
+  print(f"Text: {text}")
+  assert decode_seconds < 5.0, (
+      f"{audio_seconds:.1f}s of audio decoded in {decode_seconds:.3f}s; the plan's "
+      "healthy-GPU budget is full text within 5 s for recordings up to 25.4 s")

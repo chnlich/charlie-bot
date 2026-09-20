@@ -82,14 +82,14 @@ Known-alive symbols:
   fixture, reached by fixture-name discovery like the block above. It resets the registry by
   calling the registry's own `clear()` (the seam `WarnOnceRegistry` documents for tests); a
   word-match grep finds only the definition.
-- `session_websocket`, `voice_websocket` — `@app.websocket` handlers in `server.py`
-  (`/ws/sessions/{session_id}`, `/ws/voice/{session_id}`), reached by URL string:
-  `web/static/js/websocket.js` dials `/ws/sessions/${SESSION_ID}` and `web/static/js/voice-input.js`
-  dials `/ws/voice/${...}`. The Python names have exactly zero whole-repo matches outside their
-  definitions, so vulture flags them as unused functions. Same class as the `src/api/*.py` route
-  handlers above, kept as its own entry because these live in `server.py` itself.
+- `session_websocket` — `@app.websocket` handler in `server.py` (`/ws/sessions/{session_id}`),
+  reached by URL string: `web/static/js/websocket.js` dials `/ws/sessions/${SESSION_ID}`. The
+  Python name has exactly zero whole-repo matches outside its definition, so vulture flags it as
+  an unused function. Same class as the `src/api/*.py` route handlers above, kept as its own entry
+  because these live in `server.py` itself.
   (`terminal_websocket` needs no entry: `tests/test_terminal_backend.py` imports it by name, so the
-  Step 3 grep finds it.)
+  Step 3 grep finds it. Voice input has no websocket handler since the record-then-upload
+  migration: `POST /api/voice/...` runs through the `src/api/voice.py` router.)
 - `slack_listener_task`, `slack_backfill_task` — `app.state` task handles assigned in the root
   `server.py` lifespan and read by string: the shutdown loop iterates
   `for attr in ("slack_listener_task", "slack_backfill_task")` and fetches each via

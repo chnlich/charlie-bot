@@ -1,11 +1,18 @@
 // ---------------------------------------------------------------------------
 // Auth: global fetch wrapper to attach Bearer token and handle 401s
 // ---------------------------------------------------------------------------
+// The one reader of the access key for request auth: the fetch wrapper below and
+// the voice upload's XHR (which no wrapper patches) both send this header.
+function accessTokenAuthorization() {
+  const key = localStorage.getItem('charliebot_access_key');
+  return key ? 'Bearer ' + key : null;
+}
+
 const _origFetch = window.fetch;
 window.fetch = function(url, opts = {}) {
-  const key = localStorage.getItem('charliebot_access_key');
-  if (key) {
-    opts.headers = { ...(opts.headers || {}), 'Authorization': 'Bearer ' + key };
+  const authorization = accessTokenAuthorization();
+  if (authorization) {
+    opts.headers = { ...(opts.headers || {}), 'Authorization': authorization };
   }
   return _origFetch.call(window, url, opts).then(res => {
     if (res.status === 401) { showAuthOverlay(); }

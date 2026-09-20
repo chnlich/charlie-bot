@@ -716,11 +716,40 @@ def assert_cli_reject_exit2(
   _assert_stderr_fragments(capsys, *err_fragments)
 
 
+def voice_fixture_pair(cfg: CharlieBotConfig) -> tuple[Path, str]:
+  """A persisted (recording, persisted transcript) pair under cfg.sessions_dir, for the
+  local_only voice suites: the transcript is what the production pipeline wrote for that
+  recording. Picks the pair closest to 8 s; skips degenerate transcripts (< 20 chars)
+  that came from the broken streaming path. Skips the test when the host has none."""
+  import wave as wave_mod
+
+  best: tuple[tuple[float, str], Path, str] | None = None
+  for wav_path in sorted(cfg.sessions_dir.glob("*/voice/*.wav")):
+    txt_path = wav_path.with_suffix(".txt")
+    if not txt_path.is_file():
+      continue
+    try:
+      with wave_mod.open(str(wav_path), "rb") as wav:
+        if (wav.getnchannels(), wav.getsampwidth(), wav.getframerate()) != (1, 2, 16_000):
+          continue
+        duration = wav.getnframes() / wav.getframerate()
+    except (wave_mod.Error, OSError):
+      continue
+    transcript = txt_path.read_text(encoding="utf-8")
+    if len(transcript) < 20 or not 3 <= duration <= 60:
+      continue
+    key = (abs(duration - 8.0), wav_path.name)
+    if best is None or key < best[0]:
+      best = (key, wav_path, transcript)
+  if best is None:
+    pytest.skip("no persisted voice recording with its transcript under the session home")
+  return best[1], best[2]
+
+
 def make_home_config(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig rooted at tmp_path/"charliebot-home". Leaves the home dir un-created:
-  one call site (the sherpa streaming test) mkdirs it itself, and most sites never touch disk.
-  One Opus backend registered so SessionManager.create_session's default (backends.options[0])
-  resolves."""
+  most sites never touch disk, and a site that does mkdirs it itself. One Opus backend
+  registered so SessionManager.create_session's default (backends.options[0]) resolves."""
   return CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home", backends={"options": [OPUS_BACKEND_OPTION]})
 
 

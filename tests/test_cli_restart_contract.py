@@ -24,7 +24,14 @@ from types import ModuleType
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import ROOT, make_json_response, write_trigger
+from conftest import (
+    CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+    CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
+    CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
+    ROOT,
+    make_json_response,
+    write_trigger,
+)
 
 from src.cli import common
 from src.cli import improve as improve_module
@@ -80,9 +87,10 @@ def _patch_readback_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cli_mod
   patch lands on ``common``'s adapter, which ``_request_with_contract`` reads at call time.
   """
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setattr(cli_module, "get_config", lambda: cfg)
-  monkeypatch.setattr(common, "_request_post", lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
+  monkeypatch.setattr(
+      CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
   return cfg
 
 
@@ -94,7 +102,7 @@ def _patch_readback_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cli_mod
 def test_connect_never_established_retries_with_backoff_then_exhausts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   clock = _FakeClock()
   monkeypatch.setattr(common, "time", clock)
   monkeypatch.setattr(common, "CLI_CONNECT_TOTAL_TIMEOUT", 2.0)
@@ -106,7 +114,7 @@ def test_connect_never_established_retries_with_backoff_then_exhausts(
     call_count += 1
     raise _connect_refused()
 
-  monkeypatch.setattr(common, "_request_post", fake_post)
+  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, fake_post)
 
   with pytest.raises(SystemExit) as exc_info:
     common.post_internal_api("/api/internal/x", {"a": 1})
@@ -130,9 +138,9 @@ def test_connect_never_established_bounded_wall_clock_with_real_clock(
   CLI_CONNECT_TOTAL_TIMEOUT to sub-second keeps the actual wall-clock wait
   small and bounded — never anywhere near the real 60 s default."""
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setattr(common, "CLI_CONNECT_TOTAL_TIMEOUT", 0.3)
-  monkeypatch.setattr(common, "_request_post", lambda *a, **k: (_ for _ in ()).throw(_connect_refused()))
+  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, lambda *a, **k: (_ for _ in ()).throw(_connect_refused()))
 
   started = time.monotonic()
   with pytest.raises(SystemExit) as exc_info:
@@ -147,7 +155,7 @@ def test_connect_never_established_bounded_wall_clock_with_real_clock(
 def test_listener_absent_then_appears_mid_budget_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The operationally important case: no listener yet, one appears mid-retry, call succeeds."""
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   clock = _FakeClock()
   monkeypatch.setattr(common, "time", clock)
   monkeypatch.setattr(common, "CLI_CONNECT_TOTAL_TIMEOUT", 5.0)
@@ -161,7 +169,7 @@ def test_listener_absent_then_appears_mid_budget_succeeds(tmp_path: Path, monkey
       raise _connect_refused()
     return common._CliResponse(200, "OK", json.dumps({"ok": True}).encode())
 
-  monkeypatch.setattr(common, "_request_post", fake_post)
+  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, fake_post)
 
   result = common.post_internal_api("/api/internal/x", {"a": 1})
 
@@ -183,10 +191,10 @@ def _rejection(status_code: int, detail: str) -> MagicMock:
 def test_server_rejection_reports_full_triple_and_hint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
-  monkeypatch.setattr(common, "_request_post", lambda *a, **k: _rejection(409, "stale version"))
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, lambda *a, **k: _rejection(409, "stale version"))
   monkeypatch.setattr(
-      common, "_maybe_version_skew_hint",
+      CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
       lambda cfg: "server running abc123, repo at def456 — server restart may be required")
 
   with pytest.raises(SystemExit) as exc_info:
@@ -207,9 +215,9 @@ def test_server_rejection_exit_code_override_keeps_code_and_effect(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   """schedule-trigger's 422 -> 2 contract: the override changes only the exit code."""
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
-  monkeypatch.setattr(common, "_request_post", lambda *a, **k: _rejection(422, "no such target"))
-  monkeypatch.setattr(common, "_maybe_version_skew_hint", lambda cfg: None)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, lambda *a, **k: _rejection(422, "no such target"))
+  monkeypatch.setattr(CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET, lambda cfg: None)
 
   with pytest.raises(SystemExit) as exc_info:
     common.post_internal_api("/api/internal/x", {"a": 1}, rejection_exit_codes={422: 2})
@@ -465,7 +473,7 @@ def test_plan_readback_resolves_to_seeded_plan_on_sent_but_lost(
   stub = _StubPlanListener(plans_payload)
   try:
     cfg = _cfg(tmp_path, server={"port": stub.port})
-    monkeypatch.setattr(common, "get_config", lambda: cfg)
+    monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
 
     plan_module.main(["present", "--session", "sess-plan", "--file", "artifacts/plan_01.html", "--title", "My Plan"])
 
@@ -480,7 +488,7 @@ def test_plan_readback_reports_outcome_unknown_when_nothing_matches(
   stub = _StubPlanListener({"plans": []})
   try:
     cfg = _cfg(tmp_path, server={"port": stub.port})
-    monkeypatch.setattr(common, "get_config", lambda: cfg)
+    monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
 
     with pytest.raises(SystemExit) as exc_info:
       plan_module.main(
@@ -526,7 +534,7 @@ def test_post_sends_json_body_content_type_and_auth_header_over_the_real_client(
   stub = _CapturePostListener()
   try:
     cfg = _cfg(tmp_path, server={"port": stub.port})
-    monkeypatch.setattr(common, "get_config", lambda: cfg)
+    monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
 
     result = common._request_with_contract(
         "POST", "/api/internal/x", payload={"a": 1}, params={"k": "v"}, unknown_effect="none")
@@ -610,7 +618,7 @@ def test_find_local_thread_concurrent_identical_specs_resolves_to_newest(
   """Two identical (description, task_type) threads in flight: readback must give a
   definite answer (the newest), not ambiguity — so no second worker gets spawned."""
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
 
   session_id = "sess-concurrent"
   _write_thread(
@@ -641,7 +649,7 @@ def test_find_local_thread_verify_and_implement_never_cross_match(
   """Matching requires description AND task_type: a verify thread must never satisfy
   an implement call's readback, nor the reverse, even with an identical description."""
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
 
   session_id = "sess-verify-vs-implement"
   _write_thread(cfg, session_id, "verify-thread", description="check the plan", task_type="verify", status="running")

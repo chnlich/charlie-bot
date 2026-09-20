@@ -888,6 +888,15 @@ def _wal_db_with_noise_table(tmp_path: Path) -> tuple[Path, Path, sqlite3.Connec
   return db, cache, con
 
 
+def _seeded_restart_rig(tmp_path: Path) -> tuple[Path, Path, sqlite3.Connection, tt.TokenTally]:
+  """Build the WAL rig, seed the document with one cold collect, then drop the aggregate
+  memo: the next collect is a restart — memo cold, persisted document warm."""
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+  tt._reset_aggregate_memo()
+  return db, cache, con, first
+
+
 def test_tally_memo_survives_wal_noise_without_row_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # opencode writes other tables under plain serve traffic, so the WAL sidecar moves while
   # the message table sits unchanged. The row memo's key diff proves that and re-serves the
@@ -1443,9 +1452,7 @@ def test_restart_cold_seeds_the_row_memo_from_the_document(tmp_path: Path, monke
   # A process restart rebuilds the row memo from the document's rows map and proves it with
   # one key pass: the restart-cold round re-reads zero message blobs and zero corpus bytes
   # where the unseeded cold scan re-read every contributing row's data.
-  db, cache, con = _wal_db_with_noise_table(tmp_path)
-  first = _collect(None, None, db, cache)
-  tt._reset_aggregate_memo()
+  db, cache, con, first = _seeded_restart_rig(tmp_path)
 
   con.execute("insert into other values ('noise2', 'x')")
   con.commit()  # the WAL moves, so the entry's stored signature misses and the scan path runs
@@ -1462,9 +1469,7 @@ def test_seeded_restart_probe_skips_the_key_scan(tmp_path: Path, monkeypatch: py
   # The seeded memo gates on the entry's stored proof aggregates: a signature-stale restart
   # whose rows did not move matches the stored (count, sum) and never runs the key scan —
   # the same weaker-proof trade the warm memo's gate makes on the WAL-noise rounds.
-  db, cache, con = _wal_db_with_noise_table(tmp_path)
-  first = _collect(None, None, db, cache)
-  tt._reset_aggregate_memo()
+  db, cache, con, first = _seeded_restart_rig(tmp_path)
 
   con.execute("insert into other values ('noise2', 'x')")
   con.commit()  # the WAL moves; the message table sits unchanged
@@ -1482,9 +1487,7 @@ def test_seeded_restart_probe_skips_the_key_scan(tmp_path: Path, monkeypatch: py
 def test_seeded_restart_scans_when_the_stored_probe_misses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # A row move between the document's write and the restart changes count and sum, so the
   # stored proof misses and the seeded key diff runs — fetching only the moved row's blob.
-  db, cache, con = _wal_db_with_noise_table(tmp_path)
-  first = _collect(None, None, db, cache)
-  tt._reset_aggregate_memo()
+  db, cache, con, first = _seeded_restart_rig(tmp_path)
 
   _insert_opencode_raw(con, [({}, _padded_opencode_row(500))])
   con.commit()
@@ -1503,9 +1506,7 @@ def test_legacy_entry_without_probe_seeds_and_scans(tmp_path: Path, monkeypatch:
   # An entry stored before the probe field existed (a document from the prior deploy)
   # seeds without a gate: the key diff runs, the served tally stays exact, and the round's
   # own store writes the proof back for the next restart.
-  db, cache, con = _wal_db_with_noise_table(tmp_path)
-  first = _collect(None, None, db, cache)
-  tt._reset_aggregate_memo()
+  db, cache, con, first = _seeded_restart_rig(tmp_path)
 
   doc = json.loads(cache.read_text())
   entry = doc["sources"]["opencode"][str(db)]
@@ -1532,9 +1533,7 @@ def test_restart_cold_recounts_only_moved_rows(tmp_path: Path, monkeypatch: pyte
   # The seeded memo diffs the live key set: only rows whose (id, time_updated) moved since the
   # document was written re-enter the parser — one insert and one in-place step-finish upsert,
   # the production write shapes, and both deltas fold out of and into the stored partial.
-  db, cache, con = _wal_db_with_noise_table(tmp_path)
-  first = _collect(None, None, db, cache)
-  tt._reset_aggregate_memo()
+  db, cache, con, first = _seeded_restart_rig(tmp_path)
 
   _insert_opencode_raw(con, [({}, _padded_opencode_row(500))])
   mid, = con.execute("select id from message where data not like '%pad%'").fetchone()
@@ -1575,9 +1574,7 @@ def test_zero_movement_restart_never_reads_the_sidecar(tmp_path: Path, monkeypat
   # A restart whose db signature still matches the stored entry serves from the stored
   # partial: neither the sidecar parse nor the db read runs, so the restart-cold collect is
   # the document parse plus the corpus walk.
-  db, cache, con = _wal_db_with_noise_table(tmp_path)
-  first = _collect(None, None, db, cache)
-  tt._reset_aggregate_memo()
+  db, cache, con, first = _seeded_restart_rig(tmp_path)
 
   reads: list[str] = []
   monkeypatch.setattr(tt, "_read_rows_sidecar", lambda *args: reads.append(args) or None)

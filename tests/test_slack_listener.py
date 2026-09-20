@@ -16,6 +16,7 @@ from conftest import (
     ROOT,
     SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
     SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
+    FakeSlackClient,
     build_slack_cfg,
     make_task_spawner,
 )
@@ -56,37 +57,6 @@ def _spawn_round_tasks() -> list[asyncio.Task]:
 _spawn_round_tasks.tasks: list[asyncio.Task] = []
 
 
-class _FakeSlackClient:
-  """Records calls and fabricates per-input permalinks; never touches the network.
-
-  Implements only what the summon path may call: a regression to reading
-  thread content fails here with an AttributeError by construction.
-  """
-
-  def __init__(self) -> None:
-    self.calls: list[tuple[str, dict]] = []
-
-  async def open_connection(self) -> str:
-    self.calls.append(("open_connection", {"channel": None}))
-    return "wss://fake.example/socket"
-
-  async def post_message(self, channel: str, text: str, thread_ts: str | None = None) -> dict:
-    self.calls.append(("post_message", {"channel": channel, "text": text, "thread_ts": thread_ts}))
-    return {"ok": True}
-
-  async def add_reaction(self, channel: str, name: str, ts: str) -> dict:
-    self.calls.append(("add_reaction", {"channel": channel, "name": name, "ts": ts}))
-    return {"ok": True}
-
-  async def get_permalink(self, channel: str, ts: str) -> str:
-    self.calls.append(("get_permalink", {"channel": channel, "ts": ts}))
-    return f"https://fake.slack.test/archives/{channel}/p{ts}"
-
-  async def get_channel_name(self, channel_id: str) -> str | None:
-    self.calls.append(("get_channel_name", {"channel": channel_id}))
-    return f"name-of-{channel_id}"
-
-
 def _make_event(**overrides: object) -> dict:
   """Build an allowed app_mention event, merging in per-test overrides."""
   base: dict = {
@@ -114,10 +84,10 @@ def _origin(event: dict) -> SlackOrigin:
   return SlackOrigin(team_id=event["team"], channel_id=event["channel"], thread_ts=_thread_ts(event))
 
 
-def _rig(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, _FakeSlackClient]:
+def _rig(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, FakeSlackClient]:
   """Summon rig: cfg and session manager rooted at tmp_path, plus the recording fake client."""
   cfg = build_slack_cfg(tmp_path)
-  return cfg, SessionManager(cfg), _FakeSlackClient()
+  return cfg, SessionManager(cfg), FakeSlackClient()
 
 
 @contextlib.contextmanager
@@ -159,7 +129,9 @@ async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path:
   # The Slack traffic is exactly one eyes reaction on the mention, one
   # permalink lookup for the mention's own ts, plus one channel-name lookup
   # for the auto-grouping — no thread-content read of any kind, and no posted
-  # acceptance message.
+  # acceptance message. The completeness assertion below fails on any other
+  # client call, so a summon path that started reading thread content or
+  # removing reactions fails here.
   posts = [c for name, c in client.calls if name == "post_message"]
   assert not posts
   reactions = [c for name, c in client.calls if name == "add_reaction"]
@@ -321,7 +293,7 @@ async def test_reactions_add_failure_still_spawns_the_round(tmp_path: Path) -> N
   cfg, session_mgr, _ = _rig(tmp_path)
   event = _make_event()
 
-  class _FailingReactionClient(_FakeSlackClient):
+  class _FailingReactionClient(FakeSlackClient):
 
     async def add_reaction(self, channel: str, name: str, ts: str) -> dict:
       raise RuntimeError("missing_scope")
@@ -390,7 +362,7 @@ async def test_unresolvable_channel_name_groups_by_channel_id(tmp_path: Path) ->
   cfg, session_mgr, _ = _rig(tmp_path)
   event = _make_event()
 
-  class _UnresolvingClient(_FakeSlackClient):
+  class _UnresolvingClient(FakeSlackClient):
 
     async def get_channel_name(self, channel_id: str) -> str | None:
       self.calls.append(("get_channel_name", {"channel": channel_id}))

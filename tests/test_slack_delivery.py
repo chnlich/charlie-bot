@@ -17,6 +17,7 @@ from conftest import (
     SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET,
     SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
     SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
+    FakeSlackClient,
     build_slack_cfg,
     make_internal_router_client,
     make_task_spawner,
@@ -64,61 +65,18 @@ _MARKER_ERA_CONTENT = (
     "The reply begins after a line that reads exactly `SLACK REPLY:`.")
 
 
-class _FakeSlackClient:
-  """Records posts and models each message's live reaction set; never touches the network.
-
-  ``reactions`` maps a message ts to the names currently on it — the Slack-side
-  end state the ack-clear tests assert against. ``thread`` is what the
-  conversations.replies seam (the reply gate) returns: an empty thread by
-  default, so a test that never seeds it faces no unread messages.
-  """
-
-  def __init__(self, *, fail_posts: bool = False, fail_remove: bool = False) -> None:
-    self.posts: list[dict] = []
-    self.remove_calls: list[dict] = []
-    self.reactions: dict[str, set[str]] = {}
-    self.thread: list[dict] = []
-    self.fail_posts = fail_posts
-    self._fail_remove = fail_remove
-
-  async def get_thread_replies(self, channel: str, thread_ts: str) -> list[dict]:
-    """The thread-read seam the reply gate consumes; the seeded ``thread`` as-is."""
-    return self.thread
-
-  async def post_message(self, channel: str, text: str, thread_ts: str | None = None) -> dict:
-    if self.fail_posts:
-      raise RuntimeError("chat.postMessage failed")
-    self.posts.append({"channel": channel, "text": text, "thread_ts": thread_ts})
-    return {"ok": True}
-
-  async def add_reaction(self, channel: str, name: str, ts: str) -> dict:
-    self.reactions.setdefault(ts, set()).add(name)
-    return {"ok": True}
-
-  async def remove_reaction(self, channel: str, name: str, ts: str) -> dict:
-    """Mirror SlackClient's contract: no_reaction is a payload, other failures raise."""
-    self.remove_calls.append({"channel": channel, "name": name, "ts": ts})
-    if self._fail_remove:
-      raise RuntimeError("reactions.remove failed: missing_scope")
-    names = self.reactions.setdefault(ts, set())
-    if name not in names:
-      return {"ok": False, "error": "no_reaction"}
-    names.discard(name)
-    return {"ok": True}
-
-
 def _rig(tmp_path: Path,
          *,
          fail_posts: bool = False,
-         fail_remove: bool = False) -> tuple[CharlieBotConfig, SessionManager, _FakeSlackClient]:
+         fail_remove: bool = False) -> tuple[CharlieBotConfig, SessionManager, FakeSlackClient]:
   """Slack rig: cfg and manager rooted at tmp_path, plus a recording fake client."""
   cfg = build_slack_cfg(tmp_path)
-  return cfg, SessionManager(cfg), _FakeSlackClient(fail_posts=fail_posts, fail_remove=fail_remove)
+  return cfg, SessionManager(cfg), FakeSlackClient(fail_posts=fail_posts, fail_remove=fail_remove)
 
 
 @contextlib.contextmanager
 def _listener_seam(
-    client: _FakeSlackClient,
+    client: FakeSlackClient,
     *,
     tasks: list[asyncio.Task] | None = None,
     trigger: AsyncMock | None = None,
@@ -227,7 +185,7 @@ def _done(input_event_id: str | None, exit_code: int = 0) -> dict:
   return event
 
 
-async def _unanswered_nudge_round(session_mgr: SessionManager, client: _FakeSlackClient) -> tuple[str, dict, dict]:
+async def _unanswered_nudge_round(session_mgr: SessionManager, client: FakeSlackClient) -> tuple[str, dict, dict]:
   """A Slack thread re-asked once with no reply yet; returns (sid, summon, nudge).
 
   The summon round completed and the eyes reaction marks the thread
@@ -255,7 +213,7 @@ def _notices(events: list[dict]) -> list[dict]:
 
 
 async def _assert_round_not_audited(
-    client: _FakeSlackClient, cfg: CharlieBotConfig, session_mgr: SessionManager, sid: str, done: dict) -> None:
+    client: FakeSlackClient, cfg: CharlieBotConfig, session_mgr: SessionManager, sid: str, done: dict) -> None:
   """deliver_done answers no on this round: no Slack post, no master wake, no appended event."""
   trigger = AsyncMock()
   before = len(session_mgr.load_chat_events_sync(sid))
@@ -609,10 +567,10 @@ def _pub_cfg(tmp_path: Path) -> CharlieBotConfig:
   return build_slack_cfg(tmp_path).model_copy(update={"publish": PublishConfig(dir=lane, public_base_url=_PUB_BASE)})
 
 
-def _rig_with_publish_lane(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, _FakeSlackClient]:
+def _rig_with_publish_lane(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, FakeSlackClient]:
   """The slack rig with the publish lane deployed: the rewrite tests' shared fixture."""
   cfg = _pub_cfg(tmp_path)
-  return cfg, SessionManager(cfg), _FakeSlackClient()
+  return cfg, SessionManager(cfg), FakeSlackClient()
 
 
 @pytest.mark.asyncio
@@ -753,7 +711,7 @@ def _slack_meta() -> SessionMetadata:
 
 def test_route_returns_the_readback_json() -> None:
   session_mgr = _RouteSessions(_slack_meta())
-  client = _FakeSlackClient()
+  client = FakeSlackClient()
   with _listener_seam(client), make_internal_router_client(build_slack_cfg(Path("/nonexistent")), session_mgr) as http:
     resp = http.post("/api/internal/slack/reply", json={"session_id": "s1", "text": "hi"})
 
@@ -782,7 +740,7 @@ def test_route_returns_the_readback_json() -> None:
 def test_route_maps_refusals_to_status_codes_and_persists_nothing(
     meta: SessionMetadata | None, session_id: str, text: str, status: int, detail_fragment: str) -> None:
   session_mgr = _RouteSessions(meta)
-  client = _FakeSlackClient()
+  client = FakeSlackClient()
   with _listener_seam(client), make_internal_router_client(build_slack_cfg(Path("/nonexistent")), session_mgr) as http:
     resp = http.post("/api/internal/slack/reply", json={"session_id": session_id, "text": text})
 
@@ -794,7 +752,7 @@ def test_route_maps_refusals_to_status_codes_and_persists_nothing(
 
 def test_route_maps_a_rejected_post_to_502() -> None:
   session_mgr = _RouteSessions(_slack_meta())
-  client = _FakeSlackClient(fail_posts=True)
+  client = FakeSlackClient(fail_posts=True)
   with (
       _listener_seam(client),
       patch(_RETRY_DELAYS_PATCH_TARGET, (0.0, 0.0)),

@@ -10,7 +10,13 @@ from unittest.mock import patch
 
 import httpx
 import pytest
-from conftest import apply_config_overrides, assert_gzip_served, fake_backends, gzip_explode_compress
+from conftest import (
+    RESPONSES_GZIP_LEVEL1_PATCH_TARGET,
+    apply_config_overrides,
+    assert_gzip_served,
+    fake_backends,
+    gzip_explode_compress,
+)
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -528,7 +534,7 @@ def test_list_gzip_repeat_serves_memo_without_recompress(tmp_path: Path) -> None
 
   first = client.get(url)
 
-  with patch("src.api.responses.gzip_level1", gzip_explode_compress("repeat list poll re-ran the deflate")):
+  with patch(RESPONSES_GZIP_LEVEL1_PATCH_TARGET, gzip_explode_compress("repeat list poll re-ran the deflate")):
     second = client.get(url)
   assert second.headers["content-encoding"] == "gzip"
   assert second.content == first.content

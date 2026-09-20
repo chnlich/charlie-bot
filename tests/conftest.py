@@ -850,6 +850,14 @@ def _page_request(accept_encoding: str = "") -> Request:
   return Request({"type": "http", "headers": headers})
 
 
+# Import-path patch target for the response-render deflator. src/api/responses.py binds the
+# name at import scope (`from src.core.compression import gzip_level1`), so patch lands the
+# stand-in on the src.api.responses module attribute and gzip_body_response reads it at call
+# time. Sibling API modules binding their own copy (files.py, sessions.py, cron.py) are patched
+# through their module objects instead — a deflate driven there never touches this route.
+RESPONSES_GZIP_LEVEL1_PATCH_TARGET = "src.api.responses.gzip_level1"
+
+
 def gzip_explode_compress(message: str) -> Callable[..., bytes]:
   """Deflator stand-in failing the test the moment any deflate runs.
 
@@ -1043,6 +1051,11 @@ TRIGGER_MASTER_PATCH_TARGET = "src.core.triggers.trigger_master"
 MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET = (
     "src.core.master_trigger.run_message_with_resume_recovery")
 
+# The resume-free sibling of the inner run above: trigger_master's resume path reads run_message
+# as the same defining module's global, so the stand-in lands on the same module attribute and
+# the note above's interception argument carries over.
+MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET = "src.core.master_trigger.run_message"
+
 # Import-path patch target for the config re-read a firing trigger passes to the master wake.
 # src/core/triggers.py binds the name at import scope (`from src.core.config import get_config`),
 # so mock setattrs the stand-in on the src.core.triggers module attribute and _wait_and_fire's
@@ -1214,6 +1227,12 @@ CODEX_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.codex.resolve_binary"
 ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.antigravity_cli.resolve_binary"
 CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.charlie_code.resolve_binary"
 GEMINI_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.gemini_cli.resolve_binary"
+
+# Import-path patch target for the improve loop's commit step. src/core/backlog_loop.py binds
+# the name at import scope (`from src.core.git import git_add_commit_push`), so mock setattrs
+# the stand-in on the src.core.backlog_loop module attribute and the stale-item handler's
+# commit call reads it there.
+BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET = "src.core.backlog_loop.git_add_commit_push"
 
 # Patch target for the atomic-write swap hook. src/core/json_utils.py publishes each staged
 # payload with an ``os.replace`` attribute lookup on its module-scope ``import os`` binding, and

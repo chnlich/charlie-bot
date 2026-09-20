@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
+    MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET,
     MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET,
     OPUS_BACKEND_ID,
     build_sessions_cfg,
@@ -199,7 +200,7 @@ async def test_weekly_recycle_clears_the_anchor_through_the_channel(tmp_path: Pa
   with (
       patch("src.core.master_trigger.datetime", _FakeDatetime),
       patch(MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET, run_message_mock),
-      patch("src.core.master_trigger.run_message", run_message_mock),
+      patch(MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET, run_message_mock),
   ):
     await trigger_master(session.id, "worker summary", mgr._cfg, mgr)
 

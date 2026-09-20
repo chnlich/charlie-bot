@@ -11,7 +11,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from conftest import _page_request, assert_gzip_served, gzip_explode_compress, make_home_session
+from conftest import (
+    RESPONSES_GZIP_LEVEL1_PATCH_TARGET,
+    _page_request,
+    assert_gzip_served,
+    gzip_explode_compress,
+    make_home_session,
+)
 
 import src.api.sessions as sessions_api
 
@@ -43,7 +49,7 @@ async def test_search_gzip_repeat_serves_memo_without_recompress(tmp_path: Path)
   _cfg, mgr, _session = await make_home_session(tmp_path, name="needle")
   first = await sessions_api.search_sessions(_page_request("gzip"), q="needle", session_mgr=mgr)
 
-  with patch("src.api.responses.gzip_level1", gzip_explode_compress("repeat search re-ran the deflate")):
+  with patch(RESPONSES_GZIP_LEVEL1_PATCH_TARGET, gzip_explode_compress("repeat search re-ran the deflate")):
     second = await sessions_api.search_sessions(_page_request("gzip"), q="needle", session_mgr=mgr)
   assert second.body == first.body
 

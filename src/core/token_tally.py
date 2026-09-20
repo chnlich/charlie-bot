@@ -152,7 +152,13 @@ from src.core.codex_usage import (
     codex_token_count_payload,
 )
 from src.core.config import default_claude_dir, get_config
-from src.core.constants import BackendType
+from src.core.constants import (
+    USAGE_SOURCE_CHARLIE_BOT,
+    USAGE_SOURCE_CLAUDE_CODE,
+    USAGE_SOURCE_CODEX,
+    USAGE_SOURCE_OPENCODE,
+    BackendType,
+)
 from src.core.json_utils import atomic_write_stream
 from src.core.runs import DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RAW_LOG_NAME
 from src.core.threads import EVENTS_LOG_NAME, METADATA_NAME, THREADS_DIR_NAME
@@ -512,7 +518,7 @@ def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str,
     session_listing = _charliebot_listing(str(sessions))
   except OSError as exc:
     if not isinstance(exc, FileNotFoundError):
-      _unreadable_note(t.notes, "charlie-bot", str(sessions), exc)
+      _unreadable_note(t.notes, USAGE_SOURCE_CHARLIE_BOT, str(sessions), exc)
     return
   for session_path in session_listing:
     for kind, container, name in _WALK_KINDS:
@@ -520,7 +526,7 @@ def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str,
         listing = _charliebot_listing(session_path + _WALK_SEP + container)
       except OSError as exc:
         if not isinstance(exc, FileNotFoundError):
-          _unreadable_note(t.notes, "charlie-bot", f"{session_path}/{container}", exc)
+          _unreadable_note(t.notes, USAGE_SOURCE_CHARLIE_BOT, f"{session_path}/{container}", exc)
         continue
       for entry_path in listing:
         path = entry_path + _WALK_SEP + name
@@ -553,7 +559,7 @@ def _charliebot_signature(
   are write-once, and the parse reads them on the round the log itself moves)."""
   entries = tuple(
       sorted((kind, path, m, s) if m is not None else (kind, path, None, err) for kind, path, m, s, err in rows))
-  return ("charlie-bot", str(sessions), entries, notes)
+  return (USAGE_SOURCE_CHARLIE_BOT, str(sessions), entries, notes)
 
 
 def _corpus_signature(
@@ -565,7 +571,11 @@ def _corpus_signature(
   The charlie-bot component arrives pre-walked: the caller's one pass feeds both this
   signature and the serve, so a collect never walks that corpus twice."""
   sig = []
-  for source, homes, sub in (("Claude Code", claude_homes, "projects"), ("Codex", codex_homes, "sessions")):
+  walk_sources = (
+      (USAGE_SOURCE_CLAUDE_CODE, claude_homes, "projects"),
+      (USAGE_SOURCE_CODEX, codex_homes, "sessions"),
+  )
+  for source, homes, sub in walk_sources:
     probe = _Tally()
     entries = []
     for label, home in homes.items():
@@ -636,13 +646,13 @@ def _snapshot_opencode_partial(t: _Tally, count: int) -> _OpencodePartial:
   alias a served tally's containers, so every bucket copies."""
   return _OpencodePartial(
       by_model={
-          k: dict(v) for k, v in t.by_model.items() if k[0] == "opencode"
+          k: dict(v) for k, v in t.by_model.items() if k[0] == USAGE_SOURCE_OPENCODE
       },
       by_account={
-          k: dict(v) for k, v in t.by_account.items() if k[0] == "opencode"
+          k: dict(v) for k, v in t.by_account.items() if k[0] == USAGE_SOURCE_OPENCODE
       },
       span={
-          k: tuple(v) for k, v in t.span.items() if k[0] == "opencode"
+          k: tuple(v) for k, v in t.span.items() if k[0] == USAGE_SOURCE_OPENCODE
       },
       count=count)
 
@@ -674,14 +684,14 @@ def _partial_from_doc(doc: object) -> _OpencodePartial | None:
     return None
   return _OpencodePartial(
       by_model={
-          ("opencode", model): bucket for model, bucket in doc["by_model"].items()
+          (USAGE_SOURCE_OPENCODE, model): bucket for model, bucket in doc["by_model"].items()
       },
       by_account={
-          ("opencode", model, account): bucket for model, buckets in doc["by_account"].items()
+          (USAGE_SOURCE_OPENCODE, model, account): bucket for model, buckets in doc["by_account"].items()
           for account, bucket in buckets.items()
       },
       span={
-          ("opencode", model): tuple(pair) for model, pair in doc["span"].items()
+          (USAGE_SOURCE_OPENCODE, model): tuple(pair) for model, pair in doc["span"].items()
       },
       count=doc["count"])
 
@@ -1016,7 +1026,7 @@ def _fold_file_partial(source: str, account: str, path_key: tuple, entry: dict, 
   corpus counts; Claude dedupes corpus-wide (first fold wins), Codex always contributes."""
   fold = _Tally()
   keys = None
-  if source == "Claude Code":
+  if source == USAGE_SOURCE_CLAUDE_CODE:
     keys = {}
     for rec in entry["records"]:
       key = rec[0]
@@ -1097,7 +1107,7 @@ def _reconcile_partials(t: _Tally, source: str, walked: list[tuple[str, str, dic
   for state_key, partial in _source_partials.items():
     if state_key[0] == source:
       _apply_partial(t, partial)
-  if source == "Claude Code":
+  if source == USAGE_SOURCE_CLAUDE_CODE:
     for key, record in _claude_orphan.items():
       holders = _claude_key_holders.get(key)
       if not holders:
@@ -1152,10 +1162,11 @@ def _walk_source(
 
 
 def collect_claude(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -> None:
-  walked, order = _walk_source(t, "Claude Code", "claude", "projects", homes, cache, _claude_file_contribution)
-  _reconcile_partials(t, "Claude Code", walked, order)
-  n_records = sum(p.n_records for k, p in _source_partials.items() if k[0] == "Claude Code")
-  entry_dupes = sum(p.entry_dupes for k, p in _source_partials.items() if k[0] == "Claude Code")
+  walked, order = _walk_source(
+      t, USAGE_SOURCE_CLAUDE_CODE, "claude", "projects", homes, cache, _claude_file_contribution)
+  _reconcile_partials(t, USAGE_SOURCE_CLAUDE_CODE, walked, order)
+  n_records = sum(p.n_records for k, p in _source_partials.items() if k[0] == USAGE_SOURCE_CLAUDE_CODE)
+  entry_dupes = sum(p.entry_dupes for k, p in _source_partials.items() if k[0] == USAGE_SOURCE_CLAUDE_CODE)
   distinct = len(_claude_key_counts)
   t.notes.append(
       f"Claude Code: {distinct:,} unique API responses over {len(homes)} config dirs, "
@@ -1255,8 +1266,8 @@ def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict,
 
 
 def collect_codex(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -> None:
-  walked, order = _walk_source(t, "Codex", "codex", "sessions", homes, cache, _codex_file_contribution)
-  _reconcile_partials(t, "Codex", walked, order)
+  walked, order = _walk_source(t, USAGE_SOURCE_CODEX, "codex", "sessions", homes, cache, _codex_file_contribution)
+  _reconcile_partials(t, USAGE_SOURCE_CODEX, walked, order)
   check = [tuple(entry["check"]) for _, _, entry, _ in walked if entry is not None and entry["check"] is not None]
   if check:
     w = sum(x for x, _ in check)
@@ -1453,7 +1464,7 @@ def _rollout_session_ids(codex_homes: dict[str, Path], t: _Tally) -> set[str]:
   can see."""
   ids: set[str] = set()
   for label, home in codex_homes.items():
-    for path, _st, _error in _iter_jsonl_stats(home / "sessions", t, "charlie-bot", f"{label} rollouts"):
+    for path, _st, _error in _iter_jsonl_stats(home / "sessions", t, USAGE_SOURCE_CHARLIE_BOT, f"{label} rollouts"):
       name = os.path.basename(path)
       if not name.startswith("rollout-") or not name.endswith(".jsonl"):
         continue
@@ -1494,7 +1505,7 @@ def _fold_records(t: _Tally, source: str, records: list) -> int:
 
 def _fold_charliebot_records(t: _Tally, records: list[list]) -> int:
   """Fold one charlie-bot entry's records into the accumulator; returns the folded count."""
-  return _fold_records(t, "charlie-bot", records)
+  return _fold_records(t, USAGE_SOURCE_CHARLIE_BOT, records)
 
 
 def collect_charliebot(
@@ -1517,20 +1528,20 @@ def collect_charliebot(
   clc_master = 0
   for kind, path, mtime_ns, size, error in rows:
     if mtime_ns is None:
-      _unreadable_note(t.notes, "charlie-bot", path, error)
+      _unreadable_note(t.notes, USAGE_SOURCE_CHARLIE_BOT, path, error)
       continue
-    entry = cache.lookup_sig("charlie-bot", path, [mtime_ns, size]) if cache is not None else None
+    entry = cache.lookup_sig(USAGE_SOURCE_CHARLIE_BOT, path, [mtime_ns, size]) if cache is not None else None
     if entry is None:
-      prev = cache.prev("charlie-bot", path) if cache is not None else None
+      prev = cache.prev(USAGE_SOURCE_CHARLIE_BOT, path) if cache is not None else None
       parse = _thread_contribution if kind == "thread" else _master_contribution
       try:
         entry, nbytes = parse(path, registry, prev)
       except (OSError, ValueError) as exc:
-        _unreadable_note(t.notes, "charlie-bot", path, exc)
+        _unreadable_note(t.notes, USAGE_SOURCE_CHARLIE_BOT, path, exc)
         continue
       t.scanned_bytes += nbytes
       if cache is not None:
-        cache.store_sig("charlie-bot", path, entry)
+        cache.store_sig(USAGE_SOURCE_CHARLIE_BOT, path, entry)
     if kind == "master":
       folded += _fold_charliebot_records(t, entry["records"])
       clc_master += sum(1 for rec in entry["records"] if rec[1] == _CLC_MASTER_ACCOUNT)
@@ -1787,7 +1798,7 @@ def _advance_opencode_rows(
 
 def _replay_opencode_records(t: _Tally, records: list) -> None:
   """Fold an opencode record list into the accumulator (the cold and cache-document paths)."""
-  _fold_records(t, "opencode", records)
+  _fold_records(t, USAGE_SOURCE_OPENCODE, records)
 
 
 def _merge_opencode(
@@ -1809,7 +1820,7 @@ def _merge_opencode(
     return None, 0, False
   sig = _opencode_db_signature(db)
   key = str(db)
-  entry = cache.lookup_sig("opencode", key, sig) if cache is not None and sig is not None else None
+  entry = cache.lookup_sig(USAGE_SOURCE_OPENCODE, key, sig) if cache is not None and sig is not None else None
   epoch = 0
   from_scan = False
   if entry is not None:
@@ -1836,7 +1847,7 @@ def _merge_opencode(
   if scan is None:
     seed = None
     seed_probe = None
-    prev = cache.prev("opencode", key) if cache is not None else None
+    prev = cache.prev(USAGE_SOURCE_OPENCODE, key) if cache is not None else None
     if prev is not None:
       # The seed is a cold-memo device: a warm row memo is already at least as fresh as any
       # stored rows, so reading the multi-MB sidecar here would serve nothing.
@@ -1865,12 +1876,12 @@ def _merge_opencode(
   # store below persists it, so it lands before the entry is built.
   _opencode_partials[key] = _snapshot_opencode_partial(t, count)
   if cache is not None and sig is not None:
-    entry = cache.prev("opencode", key)
+    entry = cache.prev(USAGE_SOURCE_OPENCODE, key)
     if entry is not None and _opencode_doc_synced.get(key):
       # The probe proved the rows unchanged since this entry was stored: its signature is
       # stale only by WAL writes to rows the tally never reads, and re-signing it would
       # rewrite the multi-MB sidecar for a signature the next WAL write stales anyway.
-      cache.store_sig("opencode", key, entry)
+      cache.store_sig(USAGE_SOURCE_OPENCODE, key, entry)
     else:
       stored = {
           "sig": sig,
@@ -1891,7 +1902,7 @@ def _merge_opencode(
           stored["rows_file"] = name
       else:
         stored["rows_file"] = prev_rows_file
-      cache.store_sig("opencode", key, stored)
+      cache.store_sig(USAGE_SOURCE_OPENCODE, key, stored)
       _opencode_doc_synced[key] = True
   t.notes.append(f"opencode: {count:,} assistant messages with token counts")
   return sig, epoch, from_scan
@@ -1919,17 +1930,18 @@ def _adjust_opencode_partial(
       # the bucket for re-derivation from the row memo.
       model, account, ts, in_fresh, cache_write, cache_read, output = rec
       vals = {"in_fresh": in_fresh, "cache_write": cache_write, "cache_read": cache_read, "output": output}
-      for key, bucket in ((("opencode", model), by_model), (("opencode", model, account), by_account)):
+      model_key = (USAGE_SOURCE_OPENCODE, model)
+      for key, bucket in ((model_key, by_model), ((USAGE_SOURCE_OPENCODE, model, account), by_account)):
         tgt = bucket.setdefault(key, dict.fromkeys(FIELDS, 0)) if sign > 0 else bucket[key]
         for name, value in vals.items():
           tgt[name] += sign * value
         tgt["calls"] += sign
       if ts:
-        lo, hi = span.get(("opencode", model), (None, None))
+        lo, hi = span.get(model_key, (None, None))
         if sign > 0:
-          span[("opencode", model)] = (ts if lo is None or ts < lo else lo, ts if hi is None or ts > hi else hi)
+          span[model_key] = (ts if lo is None or ts < lo else lo, ts if hi is None or ts > hi else hi)
         elif ts in (lo, hi):
-          rederive.add(("opencode", model))
+          rederive.add(model_key)
   for span_key in rederive:
     lo = hi = None
     for _, rec in memo.values():

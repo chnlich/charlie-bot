@@ -12,7 +12,7 @@ from conftest import (
     RUNS_READ_PID_STAT_PATCH_TARGET,
     assistant_text_event,
     backend_option,
-    build_cli_backend,
+    build_cli_backend_rig,
     stub_credentials,
     stub_subprocess_spawn,
 )
@@ -28,17 +28,7 @@ from src.core.config import CharlieBotConfig
 
 
 def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> CharlieCodeBackend:
-  return build_cli_backend(
-      monkeypatch,
-      CharlieCodeBackend,
-      CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
-      "/usr/bin/charlie-code",
-      defaults={
-          "model": "charlie-code-test-model",
-          "api_base": "http://test.invalid/v1"
-      },
-      **kwargs,
-  )
+  return build_cli_backend_rig(monkeypatch, CharlieCodeBackend, **kwargs)
 
 
 def test_translate_success_stream_preserves_tool_pair_ids_and_usage(monkeypatch: pytest.MonkeyPatch) -> None:

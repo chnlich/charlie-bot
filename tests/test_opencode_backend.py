@@ -12,11 +12,10 @@ import httpx
 import pytest
 from conftest import (
     OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
-    OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
     SYNTHETIC_MODEL,
     FakeChunkedResponse,
     assistant_text_event,
-    build_cli_backend,
+    build_cli_backend_rig,
     fake_one_shot_proc,
     stub_subprocess_spawn,
 )
@@ -44,8 +43,7 @@ _OPENCODE_HTTPX_ASYNC_CLIENT_PATCH_TARGET = "src.agents.backends.opencode.httpx.
 
 
 def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> OpenCodeBackend:
-  return build_cli_backend(
-      monkeypatch, OpenCodeBackend, OPENCODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/opencode", **kwargs)
+  return build_cli_backend_rig(monkeypatch, OpenCodeBackend, **kwargs)
 
 
 def _rig_end_to_end_run(

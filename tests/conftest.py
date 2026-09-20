@@ -1180,8 +1180,8 @@ CHAT_CREATE_LOGGED_TASK_PATCH_TARGET = "src.api.chat.create_logged_task"
 CHAT_CANCEL_MASTER_PATCH_TARGET = "src.api.chat.cancel_master"
 
 # Import-path patch targets for the CLI HTTP layer's transport. src/cli/common.py exposes one
-# adapter per verb (`_request_post`/`_request_get`, both over the phase-separated http.client
-# client `_send_request`), and `_request_with_contract` reads the adapter as a module global at
+# adapter per verb (`_request_post`/`_request_get`, both over the phase-separated client
+# `_send_request`), and `_request_with_contract` reads the adapter as a module global at
 # call time, so mock and monkeypatch.setattr land the stand-in on the src.cli.common module
 # attribute and every helper defined there picks it up at call time.
 CLI_COMMON_TRANSPORT_POST_PATCH_TARGET = "src.cli.common._request_post"

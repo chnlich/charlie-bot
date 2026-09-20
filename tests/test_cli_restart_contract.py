@@ -15,6 +15,7 @@ import http.server
 import json
 import socket
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -23,7 +24,7 @@ from types import ModuleType
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import make_json_response, write_trigger
+from conftest import ROOT, make_json_response, write_trigger
 
 from src.cli import common
 from src.cli import improve as improve_module
@@ -494,9 +495,9 @@ def test_plan_readback_reports_outcome_unknown_when_nothing_matches(
 
 
 class _CapturePostListener(_StubListener):
-  """A stub that answers 200 to POST and records the wire request: the real
-  http.client client's serialization (Content-Type, body bytes, query string)
-  is this module's own code now, so it needs a real-socket pin."""
+  """A stub that answers 200 to POST and records the wire request: the plain-HTTP
+  client's serialization (Content-Type, body bytes, query string) is this module's
+  own code now, so it needs a real-socket pin."""
 
   def __init__(self) -> None:
     received: dict = {}
@@ -537,6 +538,65 @@ def test_post_sends_json_body_content_type_and_auth_header_over_the_real_client(
     assert stub.received["body"] == {"a": 1}
   finally:
     stub.close()
+
+
+def test_plain_http_request_never_loads_the_http_client_stack() -> None:
+  """The plain-HTTP verb request runs the minimal socket client: http.client (+ssl,
+  email.parser inside it, ~16 ms of every verb's wall) must stay out of the process —
+  the M97 landing's remaining client stack (docs/perf_baseline.md). A raw-socket stub
+  serves the response because http.server's own import would load http.client in the
+  probe, defeating the assertion."""
+  response = (
+      b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+      b"Content-Length: 13\r\nConnection: close\r\n\r\n" + b'{"request":1}')
+
+  probe = '''
+import json, socket, sys, threading
+from src.cli.common import _send_request
+
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.bind(("127.0.0.1", 0))
+server.listen(1)
+served = {}
+
+def serve():
+    conn, _ = server.accept()
+    served["request"] = conn.recv(65536).decode("latin-1")
+    conn.sendall(STUB_RESPONSE)
+    conn.close()
+    server.close()
+
+threading.Thread(target=serve, daemon=True).start()
+resp = _send_request("POST", f"http://127.0.0.1:{server.getsockname()[1]}/api/internal/x?a=b",
+                     payload={"k": 1}, params=None, headers={}, timeout=5.0)
+print(json.dumps({
+    "status": resp.status_code,
+    "reason": resp._reason,
+    "body": json.loads(resp._body),
+    "request": served["request"],
+    "http_client_loaded": "http.client" in sys.modules,
+    "ssl_loaded": "ssl" in sys.modules,
+    "email_loaded": "email.parser" in sys.modules,
+}))
+'''.replace("STUB_RESPONSE", repr(response))
+  result = subprocess.run(
+      [sys.executable, "-c", probe],
+      cwd=ROOT,
+      capture_output=True,
+      text=True,
+      timeout=60,
+      check=True,
+  )
+  out = json.loads(result.stdout)
+  assert out["status"] == 200 and out["reason"] == "OK" and out["body"] == {"request": 1}
+  request_head, _, request_body = out["request"].partition("\r\n\r\n")
+  assert request_head.splitlines()[0] == "POST /api/internal/x?a=b HTTP/1.1"
+  assert "Content-Type: application/json" in request_head
+  assert "Content-Length:" in request_head
+  assert request_body == json.dumps({"k": 1})
+  assert out["http_client_loaded"] is False
+  assert out["ssl_loaded"] is False
+  assert out["email_loaded"] is False
 
 
 # ---------------------------------------------------------------------------

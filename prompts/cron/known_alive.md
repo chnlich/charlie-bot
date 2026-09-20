@@ -539,3 +539,19 @@ Known-alive symbols:
   resetting `api._round_running` and `api._poller.task` before and after each test.
   Vulture flags it as an unused function (60% confidence). Same autouse class as
   `_codex_home_under_tmp` above.
+- `warm_cfg` (`tests/test_master_restart_transport_unit.py`, parameter of the `fake_get_bundle`
+  stub installed for `transcriber.get_transcription_bundle` via `monkeypatch.setattr`) — the real
+  `get_transcription_bundle(cfg)` (`src/agents/transcriber.py`) is called with one positional
+  argument from the startup thread's warm segment (`server._provision_speech_models`), so the
+  stub's replaced signature fixes the arity and `warm_cfg` must stay to receive it; deleting the
+  parameter makes the stub raise TypeError when the warm segment calls it. Vulture flags it at
+  100% confidence as an unused variable under the tests-only and combined src+tests scans alike.
+  Same arity-fixed stub-parameter class as the `uri` entry above.
+- `_round_running` (the reset writes in `tests/test_host_auth.py`'s `_reset_api_round_state`),
+  `_provisioning_error` and `_provisioning_started` (the parked-provision stub's writes in
+  `tests/test_master_restart_transport_unit.py`), and `_bundle_engine` (the `PublishThenLock`
+  stub's and the prepopulate test's writes in `tests/test_voice_engine.py`) — production
+  module-global writes from test setup, read in `src/api/host_auth.py` and
+  `src/agents/transcriber.py`. A tests-only vulture scan flags each write as an unused attribute;
+  the combined src+tests scan sees the reads and stays silent, the `base_html`/`new_html` case.
+  Same class as the `_cron_snapshot`/`_user_agent_cache`/`_token_usage_task` entry above.

@@ -1,19 +1,12 @@
 import pytest
-from conftest import GEMINI_RESOLVE_BINARY_PATCH_TARGET, assistant_text_event, build_cli_backend
+from conftest import assistant_text_event, build_cli_backend_rig
 
 from src.agents.backends.gemini_cli import GeminiCliBackend
 from src.core import event_types as ET
 
 
 def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: object) -> GeminiCliBackend:
-  return build_cli_backend(
-      monkeypatch,
-      GeminiCliBackend,
-      GEMINI_RESOLVE_BINARY_PATCH_TARGET,
-      "/usr/bin/gemini",
-      defaults={"model": "gemini-test-model"},
-      **kwargs,
-  )
+  return build_cli_backend_rig(monkeypatch, GeminiCliBackend, **kwargs)
 
 
 def test_build_command_wraps_instructions_and_resume(monkeypatch: pytest.MonkeyPatch) -> None:

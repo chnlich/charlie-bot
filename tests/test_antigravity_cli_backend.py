@@ -9,7 +9,7 @@ from conftest import (
     AGY_BACKEND_OPTION,
     ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
     assistant_text_event,
-    build_cli_backend,
+    build_cli_backend_rig,
 )
 
 from src.agents.backends.antigravity_cli import AntigravityCliBackend
@@ -20,8 +20,7 @@ from src.core.config import CharlieBotConfig
 
 
 def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> AntigravityCliBackend:
-  return build_cli_backend(
-      monkeypatch, AntigravityCliBackend, ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/agy", **kwargs)
+  return build_cli_backend_rig(monkeypatch, AntigravityCliBackend, **kwargs)
 
 
 def _write_fake_agy(tmp_path: Path, body: str) -> Path:

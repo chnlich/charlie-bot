@@ -16,12 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import (
-    CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
-    CODEX_RESOLVE_BINARY_PATCH_TARGET,
-    OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
-    build_cli_backend,
-)
+from conftest import CLI_BACKEND_RIGS, build_cli_backend
 
 from src.agents.backends.base import AgentBackend
 from src.agents.backends.charlie_code import CharlieCodeBackend
@@ -30,21 +25,13 @@ from src.agents.backends.codex import CodexBackend
 from src.agents.backends.opencode import OpenCodeBackend
 
 # (backend class, ctor kwargs, resolve_binary patch target or None, fake binary,
-# instructions file name). ctor kwargs mirror each backend's per-file test rig;
-# claude_code takes its CLI binary through the cli_binary kwarg and resolves
-# nothing, so it needs no patch target.
-_INSTRUCTIONS_BACKENDS = [
-    (ClaudeCodeBackend, {}, None, "claude", "CLAUDE.md"),
-    (
-        CharlieCodeBackend, {
-            "model": "charlie-code-test-model",
-            "api_base": "http://test.invalid/v1"
-        }, CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/charlie-code", "AGENTS.md"),
-    (CodexBackend, {
-        "model": "codex-test-model"
-    }, CODEX_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/codex", "AGENTS.md"),
-    (OpenCodeBackend, {}, OPENCODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/opencode", "AGENTS.md"),
-]
+# instructions file name). Each CLI row is the backend's shared conftest rig
+# (CLI_BACKEND_RIGS); claude_code takes its CLI binary through the cli_binary
+# kwarg and resolves nothing, so it needs no patch target.
+_INSTRUCTIONS_BACKENDS = [(ClaudeCodeBackend, {}, None, "claude", "CLAUDE.md")]
+for _cls in (CharlieCodeBackend, CodexBackend, OpenCodeBackend):
+  _patch_target, _fake_binary, _defaults = CLI_BACKEND_RIGS[_cls]
+  _INSTRUCTIONS_BACKENDS.append((_cls, _defaults, _patch_target, _fake_binary, "AGENTS.md"))
 _INSTRUCTIONS_BACKEND_IDS = [case[0].__name__ for case in _INSTRUCTIONS_BACKENDS]
 
 
@@ -110,12 +97,9 @@ def test_prepare_cwd_skips_instructions_file_when_unset(
 def test_opencode_prepare_cwd_writes_agents_md_even_when_config_exists(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """AGENTS.md must be written even when opencode.json already exists (resumed sessions)."""
+  patch_target, fake_binary, defaults = CLI_BACKEND_RIGS[OpenCodeBackend]
   backend = _build_backend(
-      OpenCodeBackend, {},
-      OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
-      "/usr/bin/opencode",
-      monkeypatch,
-      instructions_content="# Instructions")
+      OpenCodeBackend, defaults, patch_target, fake_binary, monkeypatch, instructions_content="# Instructions")
   config_dir = tmp_path / ".opencode"
   config_dir.mkdir()
   (config_dir / "opencode.json").write_text("{}", encoding="utf-8")

@@ -11,7 +11,7 @@ from conftest import (
     FLAG_LIKE_PROMPT,
     assistant_text_event,
     backend_option,
-    build_cli_backend,
+    build_cli_backend_rig,
     fake_one_shot_proc,
 )
 
@@ -22,14 +22,7 @@ from src.core.config import CharlieBotConfig
 
 
 def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> CodexBackend:
-  return build_cli_backend(
-      monkeypatch,
-      CodexBackend,
-      CODEX_RESOLVE_BINARY_PATCH_TARGET,
-      "/usr/bin/codex",
-      defaults={"model": "codex-test-model"},
-      **kwargs,
-  )
+  return build_cli_backend_rig(monkeypatch, CodexBackend, **kwargs)
 
 
 @pytest.mark.parametrize("resume_session_id", [

@@ -42,6 +42,11 @@ LITELLM_FEEDBACK_BANNER_STDERR = (
 import src.core.config as core_config  # noqa: E402,I001
 from src.agents import master_cc_queue, master_cc_run, master_cc_state, worker as worker_module  # noqa: E402
 from src.agents.backends import base as backend_base  # noqa: E402
+from src.agents.backends.antigravity_cli import AntigravityCliBackend  # noqa: E402
+from src.agents.backends.charlie_code import CharlieCodeBackend  # noqa: E402
+from src.agents.backends.codex import CodexBackend  # noqa: E402
+from src.agents.backends.gemini_cli import GeminiCliBackend  # noqa: E402
+from src.agents.backends.opencode import OpenCodeBackend  # noqa: E402
 from src.agents.worker import Worker  # noqa: E402
 from src.api.cron import router as cron_router  # noqa: E402
 from src.api.deps import get_session_manager  # noqa: E402
@@ -1318,6 +1323,46 @@ def build_cli_backend(
   for key, value in (defaults or {}).items():
     kwargs.setdefault(key, value)
   return backend_cls(**kwargs)
+
+
+# One row per CLI backend: the resolve_binary patch target, the fake binary
+# build_cli_backend pins on it, and the constructor defaults a plain test build
+# relies on. The per-backend test modules build through build_cli_backend_rig and
+# the cross-backend contract tables read these rows, so the (target, binary,
+# defaults) triple is spelled exactly once per backend.
+CLI_BACKEND_RIGS: dict[type[backend_base.AgentBackend], tuple[str, str, dict[str, Any]]] = {
+    AntigravityCliBackend: (ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/agy", {}),
+    CharlieCodeBackend:
+        (
+            CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
+            "/usr/bin/charlie-code",
+            {
+                "model": "charlie-code-test-model",
+                "api_base": "http://test.invalid/v1"
+            },
+        ),
+    CodexBackend: (CODEX_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/codex", {
+        "model": "codex-test-model"
+    }),
+    GeminiCliBackend: (GEMINI_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/gemini", {
+        "model": "gemini-test-model"
+    }),
+    OpenCodeBackend: (OPENCODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/opencode", {}),
+}
+
+
+def build_cli_backend_rig(
+    monkeypatch: pytest.MonkeyPatch,
+    backend_cls: type[backend_base.AgentBackend],
+    **kwargs: Any,
+) -> backend_base.AgentBackend:
+  """Construct *backend_cls* through its CLI_BACKEND_RIGS row.
+
+  A caller relies on the row's fake binary being pinned and the row's defaults
+  filling kwargs it leaves out; *kwargs* override the defaults per test.
+  """
+  patch_target, fake_binary, defaults = CLI_BACKEND_RIGS[backend_cls]
+  return build_cli_backend(monkeypatch, backend_cls, patch_target, fake_binary, defaults=defaults, **kwargs)
 
 
 def stub_subprocess_spawn(monkeypatch: pytest.MonkeyPatch, patch_target: str, pid: int) -> MagicMock:

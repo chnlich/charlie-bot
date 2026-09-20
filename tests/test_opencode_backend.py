@@ -3,7 +3,7 @@ import base64
 import json
 import re
 import sys
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,6 +17,7 @@ from conftest import (
     assistant_text_event,
     build_cli_backend_rig,
     fake_one_shot_proc,
+    fresh_state_fixture,
     stub_subprocess_spawn,
 )
 
@@ -1132,14 +1133,13 @@ async def test_sse_watchdog_timeout_fails_run_end_to_end(
   assert "opencode_sse_silence_timeout" in capsys.readouterr().out
 
 
-@pytest.fixture(autouse=True)
-def _fresh_unhandled_part_type_registry() -> Iterator[None]:
-  """Keep the process-wide warn-once registry from leaking across tests."""
+def _clear_unhandled_part_registries() -> None:
+  """Keep the process-wide warn-once registries from leaking across tests."""
   opencode_mod._UNHANDLED_PART_TYPES.clear()
   opencode_mod._UNHANDLED_SSE_EVENT_TYPES.clear()
-  yield
-  opencode_mod._UNHANDLED_PART_TYPES.clear()
-  opencode_mod._UNHANDLED_SSE_EVENT_TYPES.clear()
+
+
+_fresh_unhandled_part_type_registry = fresh_state_fixture(_clear_unhandled_part_registries)
 
 
 _UNHANDLED_PART_EVENTS = [

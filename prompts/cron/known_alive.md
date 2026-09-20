@@ -442,17 +442,17 @@ Known-alive symbols:
   `src.core.autonamer.build_backend` (`tests/test_autonamer.py`), and
   `src.core.recap.build_backend` (`tests/test_recap.py`). Vulture flags each hook as an unused
   function at 60% confidence.
-- `_fresh_detail_memo` (`tests/test_thread_detail_gzip.py`) — `@pytest.fixture(autouse=True)`
+- `_fresh_detail_memo` (`tests/test_thread_detail_gzip.py`) — a `fresh_state_fixture(...)` assignment
   clearing the thread-detail gzip memo (`src.api.threads._detail_gzip_memo`) around every test
   in its module; pytest applies it with no in-file reference, so a tests-scope vulture scan
-  flags it as an unused function (60% confidence) and its name has exactly zero whole-repo
+  flags it as an unused variable (60% confidence) and its name has exactly zero whole-repo
   matches outside its definition. It is load-bearing: the module's plain-request and attach-mode
   tests assert `len(_detail_gzip_memo) == 0`, which holds only because the autouse reset cleared
   the entries earlier gzip tests stored. Same autouse class as `_clean_probe_state` above.
-- `_fresh_search_gzip_memo` (`tests/test_search_gzip_memo.py`) — `@pytest.fixture(autouse=True)`
-  clearing the capped search's body-keyed gzip memo (`src.api.sessions._search_gzip_memo`) around
-  every test in its module; pytest applies it with no in-file reference, so a vulture scan flags
-  it as an unused function (60% confidence) and its name has exactly zero whole-repo matches
+- `_fresh_search_gzip_memo` (`tests/test_search_gzip_memo.py`) — a `fresh_state_fixture(...)`
+  assignment clearing the capped search's body-keyed gzip memo (`src.api.sessions._search_gzip_memo`)
+  around every test in its module; pytest applies it with no in-file reference, so a vulture scan
+  flags it as an unused variable (60% confidence) and its name has exactly zero whole-repo matches
   outside its definition. It is load-bearing: the module's plain-request test asserts
   `len(_search_gzip_memo) == 0`, which holds only because the autouse reset cleared the entry the
   module's earlier gzip tests stored. Same autouse class as `_fresh_detail_memo` above.

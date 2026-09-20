@@ -487,7 +487,6 @@ async def test_public_entry_point_has_no_events_parameter(tmp_path: Path) -> Non
 # Acceptance test 8: headless_claude_declared_window
 # ---------------------------------------------------------------------------
 
-
 _reset_declared_window_warnings = fresh_state_fixture(_DECLARED_WINDOW_WARNINGS_SEEN.clear)
 
 

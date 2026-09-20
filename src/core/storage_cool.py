@@ -229,6 +229,18 @@ def _optional_str(value: object) -> str | None:
   return str(value) if value else None
 
 
+def _referenced_and_cold(references: dict[str, list[_SessionFacts]], backend_session: str) -> bool:
+  """The referenced-cold half of the module's one deletion rule: CharlieBot metadata
+  references the record and every referencing owner is cold."""
+  referencing = references.get(backend_session)
+  return bool(referencing) and all(owner.cold for owner in referencing)
+
+
+def _idle_past(idle_since_epoch: float, now: datetime, idle_days: int) -> bool:
+  """The orphan-window half of the rule: the record's own idle clock has passed *idle_days*."""
+  return now.timestamp() - idle_since_epoch >= idle_days * 86400
+
+
 # ---------------------------------------------------------------------------
 # Part 1: raw transport files of cold sessions
 # ---------------------------------------------------------------------------
@@ -387,11 +399,12 @@ def _newest_mtime(path: Path) -> float | None:
 
 
 def _idle_past_window(path: Path, now: datetime, idle_days: int) -> bool:
+  """Newest-mtime form of the idle judgment for a transcript directory; False (logged) on probe failure."""
   newest = _newest_mtime(path)
   if newest is None:
     log.warning("storage_cool_idle_probe_failed", path=str(path))
     return False
-  return now.timestamp() - newest >= idle_days * 86400
+  return _idle_past(newest, now, idle_days)
 
 
 def _live_worktree_dir_names(cfg: CharlieBotConfig) -> set[str]:
@@ -509,7 +522,7 @@ def _sweep_codex_rollouts(
     session_id: str | None,
 ) -> None:
   """Delete rollout files under the session-cold / unreferenced-plus-window rule."""
-  scoped_backends = _scoped_backend_sessions(facts, references, session_id) if session_id is not None else set()
+  scoped_backends = _scoped_backend_sessions(facts, references, session_id)
   for tree in codex_session_trees():
     if not tree.is_dir():
       continue
@@ -523,30 +536,31 @@ def _sweep_codex_rollouts(
       if session_id is not None:
         # Scoped run: only the named session's own record, already cold-verified,
         # and never a record also referenced by a live session.
-        referencing = references.get(backend_session)
-        if backend_session in scoped_backends and referencing and all(owner.cold for owner in referencing):
+        if backend_session in scoped_backends and _referenced_and_cold(references, backend_session):
           _delete_file(path, counter, dry_run)
         continue
-      referencing = references.get(backend_session)
-      if referencing:
-        if all(owner.cold for owner in referencing):
+      if references.get(backend_session) is None:
+        # Unreferenced: the file's own mtime is the idle clock.
+        try:
+          idle_since = path.stat().st_mtime
+        except OSError as e:
+          log.warning("storage_cool_file_stat_failed", path=str(path), error=str(e))
+          continue
+        if _idle_past(idle_since, now, ORPHAN_IDLE_DAYS):
           _delete_file(path, counter, dry_run)
         continue
-      try:
-        idle_since = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
-      except OSError as e:
-        log.warning("storage_cool_file_stat_failed", path=str(path), error=str(e))
-        continue
-      if now - idle_since >= timedelta(days=ORPHAN_IDLE_DAYS):
+      if _referenced_and_cold(references, backend_session):
         _delete_file(path, counter, dry_run)
 
 
 def _scoped_backend_sessions(
     facts: dict[str, _SessionFacts],
     references: dict[str, list[_SessionFacts]],
-    session_id: str,
+    session_id: str | None,
 ) -> set[str]:
-  """Return every backend id referenced by the one scoped session."""
+  """Every backend id the scoped session references; empty when the run is unscoped."""
+  if session_id is None:
+    return set()
   owner = facts.get(session_id)
   backend_sessions = {owner.cc_session_id} if owner and owner.cc_session_id is not None else set()
   backend_sessions.update(
@@ -629,11 +643,13 @@ def _opencode_targets(
   when every referencing session is cold, and an unreferenced one once the
   backend's own timestamp has been idle past the safety window.
   """
-  scoped_backends = _scoped_backend_sessions(facts, references, session_id) if session_id is not None else set()
+  scoped_backends = _scoped_backend_sessions(facts, references, session_id)
   if session_id is not None and not scoped_backends:
     return {}
   if session_id is None:
     candidates = _opencode_candidate_ids(db, None)
+    if candidates is None:
+      return None
   else:
     candidates = []
     for backend_session in sorted(scoped_backends):
@@ -641,30 +657,24 @@ def _opencode_targets(
       if backend_candidates is None:
         return None
       candidates.extend(backend_candidates)
-  if candidates is None:
-    return None
   if not candidates:
     return {}
   if session_id is not None:
-    safe_candidates = [
-        aggregate_id for aggregate_id in candidates
-        if (referencing := references.get(aggregate_id)) and all(owner.cold for owner in referencing)
-    ]
+    safe_candidates = [aggregate_id for aggregate_id in candidates if _referenced_and_cold(references, aggregate_id)]
     return _opencode_aggregate_sizes(db, safe_candidates)
   referenced_cold: list[str] = []
   unreferenced: list[str] = []
   for aggregate_id in candidates:
-    referencing = references.get(aggregate_id)
-    if referencing is None:
+    if references.get(aggregate_id) is None:
       unreferenced.append(aggregate_id)
-    elif all(owner.cold for owner in referencing):
+    elif _referenced_and_cold(references, aggregate_id):
       referenced_cold.append(aggregate_id)
   updated = _opencode_session_updated(db) if unreferenced else {}
   if updated is None:
     return None
   window_ids = [
       aggregate_id for aggregate_id in unreferenced
-      if aggregate_id in updated and now.timestamp() - updated[aggregate_id] / 1000 >= ORPHAN_IDLE_DAYS * 86400
+      if aggregate_id in updated and _idle_past(updated[aggregate_id] / 1000, now, ORPHAN_IDLE_DAYS)
   ]
   return _opencode_aggregate_sizes(db, referenced_cold + window_ids)
 

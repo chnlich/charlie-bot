@@ -28,9 +28,6 @@ function buildContext(sessionId) {
         uploadedFiles: msg.uploaded_files || [],
       });
     },
-    addWorkerCard: () => {},
-    updateWorkerStatus: () => {},
-    updateSpinner: () => {},
     switchSidebarFilter: (filter) => {
       sidebarActions.push({type: 'filter', value: filter});
     },

@@ -389,12 +389,14 @@ const API = {
   renderWorkersTabUnknown,
   ensureWorkersLoadedForActiveSession,
   pollWorkers,
-  updateWorkersTabBadge,
   updateWorkerStatus,
-  addWorkerCard,
-  updateTriggerStatus,
   cancelTrigger,
 };
-Sidebar.wire(API, {restartWorkersPolling});
+Sidebar.wire(API, {
+  restartWorkersPolling,
+  updateWorkersTabBadge,
+  addWorkerCard,
+  updateTriggerStatus,
+});
 
 })();

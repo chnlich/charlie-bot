@@ -90,7 +90,7 @@ test('sentinel shows loading text while a request is in flight', async () => {
 
   renderSessionViewWith(context, elements, true);
 
-  const loadPromise = context.loadOlderIfNeeded(messages);
+  const loadPromise = context.Sidebar.loadOlderIfNeeded(messages);
   const sentinel = findSentinel(elements);
   assert.equal(sentinel.getAttribute('data-state'), 'loading');
   assert.match(sentinel.innerHTML, /Loading older messages/);
@@ -109,7 +109,7 @@ test('failed fetch keeps has_more and leaves a clickable failed sentinel', async
 
   renderSessionViewWith(context, elements, true);
 
-  await context.loadOlderIfNeeded(messages);
+  await context.Sidebar.loadOlderIfNeeded(messages);
 
   // Failure must NOT clear has_more — verify by checking that a second call
   // (or clicking the failed sentinel) triggers another fetch.
@@ -156,7 +156,7 @@ test('programmatic scroll restore does not trigger another fetch', async () => {
   // suppress flag.
   context.initScrollPagination();
 
-  await context.loadOlderIfNeeded(messages);
+  await context.Sidebar.loadOlderIfNeeded(messages);
   assert.equal(fetchCount, 1, 'exactly one fetch for the page');
 
   // Simulate the scroll event dispatched by the programmatic scrollTop
@@ -201,7 +201,7 @@ test('viewport fill stops at 5 consecutive auto-loads', async () => {
   // re-grab elements from context is not needed; messages is the same object.
   // renderSessionViewWith resets scrollTop to 0.
 
-  await context.loadOlderIfNeeded(messages);
+  await context.Sidebar.loadOlderIfNeeded(messages);
   // 1 initial fetch + 5 viewport fills = 6 total.
   assert.equal(fetchCount, 6, `expected 6 fetches (1 initial + 5 fills), got ${fetchCount}`);
 });
@@ -218,7 +218,7 @@ test('successful page with no more messages removes the sentinel', async () => {
 
   renderSessionViewWith(context, elements, true);
 
-  await context.loadOlderIfNeeded(messages);
+  await context.Sidebar.loadOlderIfNeeded(messages);
 
   const sentinel = findSentinel(elements);
   assert.ok(!sentinel || sentinel.removed, 'sentinel must be removed when has_more becomes false');
@@ -255,7 +255,7 @@ test('missing pagination cursor fails loudly instead of silently doing nothing',
   renderStaleBootstrap(context, messages, {oldest_event_index: 4});
   messages.scrollTop = 0;
 
-  await context.loadOlderIfNeeded(messages);
+  await context.Sidebar.loadOlderIfNeeded(messages);
 
   assert.equal(fetchCount, 0, 'an unusable cursor must not reach the network');
   const sentinel = findSentinel(elements);

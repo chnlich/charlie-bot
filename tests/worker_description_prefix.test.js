@@ -63,8 +63,8 @@ test('addWorkerCard carries the truncation marker to the painted card', () => {
   const container = createElement();
   const context = loadSidebarWorkers(new Map([['tab-workers', container]]), []);
 
-  context.addWorkerCard('thread-live', TRUNCATED_THREAD.description, '2026-07-01T12:00:00Z', '', TRUNCATED_THREAD.description_full_len);
-  context.addWorkerCard('thread-short', FULL_THREAD.description, '2026-07-01T12:00:00Z', '');
+  context.Sidebar.addWorkerCard('thread-live', TRUNCATED_THREAD.description, '2026-07-01T12:00:00Z', '', TRUNCATED_THREAD.description_full_len);
+  context.Sidebar.addWorkerCard('thread-short', FULL_THREAD.description, '2026-07-01T12:00:00Z', '');
 
   assert.match(container.children[1].innerHTML, /fetchWorkerDescription\('thread-live', 'session-a'\)/);
   assert.match(container.children[0].innerHTML, /data-full="short task"/);

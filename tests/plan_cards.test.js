@@ -242,7 +242,7 @@ test('updatePlanCardBadges writes the labeled state into the plan-compact-state 
   const ctx = loadArtifactsScript({document});
   const plan = makePlan(1, [makeVersion(2)], {state: 'approved', takeoff: {v: 2, at: 'x'}});
   const snapshot = {plans: [plan]};
-  ctx.updatePlanCardBadges(snapshot);
+  ctx.Chat.updatePlanCardBadges(snapshot);
   assert.equal(card._badge.textContent, 'approved \u00B7 v2');
 });
 
@@ -252,7 +252,7 @@ test('updatePlanCardBadges leaves the badge untouched when the plan version is n
   const document = {querySelectorAll: () => [card]};
   const ctx = loadArtifactsScript({document});
   const snapshot = {plans: [makePlan(1, [makeVersion(1)], {state: 'in flight'})]};
-  ctx.updatePlanCardBadges(snapshot);
+  ctx.Chat.updatePlanCardBadges(snapshot);
   assert.equal(card._badge.textContent, 'old');
 });
 
@@ -262,6 +262,6 @@ test('updatePlanCardBadges writes the plain state when the plan is not approved'
   const ctx = loadArtifactsScript({document});
   const plan = makePlan(1, [makeVersion(1)], {state: 'awaiting approval'});
   const snapshot = {plans: [plan]};
-  ctx.updatePlanCardBadges(snapshot);
+  ctx.Chat.updatePlanCardBadges(snapshot);
   assert.equal(card._badge.textContent, 'awaiting approval');
 });

@@ -21,7 +21,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
-from conftest import SuccessorDeliveryShim, cancel_and_drain, fresh_state_fixture
+from conftest import SuccessorDeliveryShim, _async_wait_for, cancel_and_drain, fresh_state_fixture
 
 from src.agents.backends.base import tail_follow_events
 from src.core import init as init_module
@@ -80,9 +80,7 @@ async def test_silence_crossing_emits_exactly_one_recheck_and_follow_continues(t
   try:
     # Cross the threshold; exactly one reminder for this mount, even after
     # more idle polling.
-    deadline = time.monotonic() + margin + 3.0
-    while not reports and time.monotonic() < deadline:
-      await asyncio.sleep(0.05)
+    await _async_wait_for(lambda: bool(reports), margin + 3.0, "the silence recheck never reported")
     assert reports == ["recheck"]
     await asyncio.sleep(0.5)
     assert reports == ["recheck"]
@@ -90,9 +88,7 @@ async def test_silence_crossing_emits_exactly_one_recheck_and_follow_continues(t
     # The follow never judged death and never stopped: a late line is consumed.
     with raw.open("ab") as f:
       f.write(b'{"type":"assistant"}\n')
-    deadline = time.monotonic() + 2.0
-    while not events and time.monotonic() < deadline:
-      await asyncio.sleep(0.05)
+    await _async_wait_for(lambda: bool(events), 2.0, "the follow never consumed the late line")
     assert [e.get("type") for e in events] == ["assistant"]
   finally:
     await cancel_and_drain(task)

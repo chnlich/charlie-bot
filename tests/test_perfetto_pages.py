@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from conftest import make_page_request
+from conftest import _async_wait_for, make_page_request
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
@@ -452,16 +452,6 @@ def test_perfetto_template_has_no_browser_merger() -> None:
     assert deleted_name not in template
 
 
-async def _wait_until(predicate: Callable[[], bool], timeout: float = 5.0) -> bool:
-  loop = asyncio.get_running_loop()
-  deadline = loop.time() + timeout
-  while loop.time() < deadline:
-    if predicate():
-      return True
-    await asyncio.sleep(0.01)
-  return predicate()
-
-
 def test_slim_query_accepts_booleans_and_rejects_other_values(client: TestClient, tmp_path: Path) -> None:
   trace = tmp_path / "rank0.json"
   _write_trace(trace)
@@ -550,7 +540,7 @@ def test_single_flight_one_build_per_key(
   async def run() -> None:
     paths = [first, second]
     leader = asyncio.create_task(pages._cached_merge(paths, slim=False))
-    assert await _wait_until(started.is_set)
+    await _async_wait_for(started.is_set, 5.0, "the first merge build never started")
     followers = [asyncio.create_task(pages._cached_merge(paths, slim=False)) for _ in range(4)]
     release.set()
     results = await asyncio.gather(leader, *followers)
@@ -610,13 +600,14 @@ def test_disconnect_does_not_lose_work(
 
   async def run() -> None:
     waiter = asyncio.create_task(pages._cached_merge(key, slim=False))
-    assert await _wait_until(started.is_set)
+    await _async_wait_for(started.is_set, 5.0, "the blocked merge build never started")
     waiter.cancel()
     with pytest.raises(asyncio.CancelledError):
       await waiter
     # The shared build keeps running even though the waiter disconnected.
     release.set()
-    assert await _wait_until(lambda: len(list(merge_cache.glob("*.json.gz"))) == 1)
+    await _async_wait_for(
+        lambda: len(list(merge_cache.glob("*.json.gz"))) == 1, 5.0, "the shared build never wrote its cache entry")
     # A following request for the same key hits the now-cached entry, no second build.
     second_calls = len(calls)
     hit = await pages._cached_merge(key, slim=False)

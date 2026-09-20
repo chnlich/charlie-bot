@@ -40,6 +40,7 @@ from conftest import (
     REVIEW_TRIGGER_MASTER_PATCH_TARGET,
     ROOT,
     _assert_failed_with_transport_reason,
+    _async_wait_for,
     _await_recovery_tasks,
     _cfg,
     _kill_driver_mid_run,
@@ -388,15 +389,15 @@ async def _settle_finalize_window(home: Path, session_id: str, original_id: str)
   starting before the ack lands would judge it missing and re-fire it.
   """
   await _await_recovery_tasks()
-  deadline = time.monotonic() + 20.0
-  while time.monotonic() < deadline:
+
+  def settled() -> bool:
     reviewers = [m for m in _thread_metas(home, session_id) if m.get("review_of") == original_id]
-    reviewers_settled = reviewers and all(m.get("status") in ("completed", "failed", "cancelled") for m in reviewers)
+    reviewers_settled = bool(reviewers) and all(
+        m.get("status") in ("completed", "failed", "cancelled") for m in reviewers)
     woke = finalize_effects.master_woke_after_summary(read_chat_events(home, session_id), original_id)
-    if reviewers_settled and woke:
-      return
-    await asyncio.sleep(0.05)
-  raise TimeoutError("reviewer thread or its master wake never settled")
+    return reviewers_settled and woke
+
+  await _async_wait_for(settled, 20.0, "reviewer thread or its master wake never settled")
 
 
 @pytest.mark.asyncio

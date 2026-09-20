@@ -25,6 +25,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from conftest import (
+    CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET,
     CLI_COMMON_GET_CONFIG_PATCH_TARGET,
     CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
     CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
@@ -105,7 +106,7 @@ def test_connect_never_established_retries_with_backoff_then_exhausts(
   monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   clock = _FakeClock()
   monkeypatch.setattr(common, "time", clock)
-  monkeypatch.setattr(common, "CLI_CONNECT_TOTAL_TIMEOUT", 2.0)
+  monkeypatch.setattr(CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET, 2.0)
 
   call_count = 0
 
@@ -139,7 +140,7 @@ def test_connect_never_established_bounded_wall_clock_with_real_clock(
   small and bounded — never anywhere near the real 60 s default."""
   cfg = _cfg(tmp_path)
   monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr(common, "CLI_CONNECT_TOTAL_TIMEOUT", 0.3)
+  monkeypatch.setattr(CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET, 0.3)
   monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, lambda *a, **k: (_ for _ in ()).throw(_connect_refused()))
 
   started = time.monotonic()
@@ -158,7 +159,7 @@ def test_listener_absent_then_appears_mid_budget_succeeds(tmp_path: Path, monkey
   monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   clock = _FakeClock()
   monkeypatch.setattr(common, "time", clock)
-  monkeypatch.setattr(common, "CLI_CONNECT_TOTAL_TIMEOUT", 5.0)
+  monkeypatch.setattr(CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET, 5.0)
 
   attempts = 0
 

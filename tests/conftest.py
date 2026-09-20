@@ -1164,6 +1164,12 @@ CLI_COMMON_SESSIONS_DIR_PATCH_TARGET = "src.cli.common._sessions_dir"
 # time, so mock setattrs the stand-in on the src.cli.common module attribute.
 CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET = "src.cli.common._maybe_version_skew_hint"
 
+# Import-path patch target for the CLI connect-retry budget. src/cli/common.py binds the name
+# at import scope (`from src.core.timeouts import CLI_CONNECT_TOTAL_TIMEOUT`), so mock setattrs
+# the test budget on the src.cli.common module attribute and post_internal_api's retry loop
+# reads it as a module global at call time; the source value stays the timeouts module's own.
+CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET = "src.cli.common.CLI_CONNECT_TOTAL_TIMEOUT"
+
 # Import-path patch targets for the master wake a Slack message fires. src/core/slack_listener.py
 # binds both names at import scope (`from src.core.master_trigger import trigger_master`,
 # `from src.core.tasks import create_logged_task`), so mock setattrs the stand-ins on the

@@ -479,14 +479,14 @@ function ensureVoiceOverlay() {
 }
 
 function collectVoiceOverlay(overlay) {
-  const byClass = (name) => overlay.children.find((child) => child.className === name) || null;
+  // children is a live HTMLCollection, not an array: go through Array.from.
+  const byClass = (name) => Array.from(overlay.children).find((child) => child.className === name) || null;
   const bar = byClass('voice-level-bar');
   const meta = byClass('voice-meta');
   return {
-    overlay,
-    fill: bar ? bar.children.find((child) => child.className === 'voice-level-fill') : null,
-    timer: meta ? meta.children.find((child) => child.className === 'voice-timer') : null,
-    hint: meta ? meta.children.find((child) => child.className === 'voice-hint') : null,
+    fill: bar ? Array.from(bar.children).find((child) => child.className === 'voice-level-fill') : null,
+    timer: meta ? Array.from(meta.children).find((child) => child.className === 'voice-timer') : null,
+    hint: meta ? Array.from(meta.children).find((child) => child.className === 'voice-hint') : null,
   };
 }
 

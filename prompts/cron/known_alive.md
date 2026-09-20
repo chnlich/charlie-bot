@@ -119,7 +119,7 @@ Known-alive symbols:
   `SlashCommandParam`, `fired_at` on `PendingTrigger`) as unused variables/attributes, but every
   one of those names is grep-findable in repo (`_TRANSIENT_METADATA_FIELDS`, tests, web JS,
   Jinja templates), so the Step 3 grep already protects them and they get no entries.
-- `pytestmark` (`tests/test_voice_sherpa_streaming.py`, `tests/test_voice_qwen3_hf.py`) —
+- `pytestmark` (`tests/test_voice_offline_models.py`, `tests/test_voice_qwen3_hf.py`) —
   module-level `pytest.mark.local_only` assignments that pytest's collection reads by
   attribute name (the marker is registered in `pyproject.toml`). The name appears only at
   those assignment sites, so vulture flags each as an unused variable.
@@ -235,15 +235,6 @@ Known-alive symbols:
   `fake_run_tmux` factory docstring states that drop-in contract, and `format` mirrors the
   stdlib `BaseHTTPRequestHandler.log_message(self, format, *args)` signature). Vulture flags
   each at 100% confidence as an unused variable.
-- `bundle` (`tests/test_transcriber_sampling.py`, first parameter of the one
-  `fake_decode` stub inside `_install_decode_capture`, the helper the decode tests
-  install for `transcriber._decode_samples` via `monkeypatch.setattr`)
-  — the real `_decode_samples` (src/agents/transcriber.py) is called with two positional
-  arguments from `_drain_closed_segments` and `_decode_live_segment_if_due`
-  (the two decode call sites in the same file), so `bundle` must stay to receive `self._bundle`;
-  deleting the parameter makes the stub raise TypeError on the first decode. Vulture flags
-  it at 100% confidence as an unused variable. Same class as the `art`/`t_mgr`
-  stub-parameter entries above.
 - `interrupt_reason` (`tests/test_worktree_quarantine.py`, keyword parameter of the
   `fake_resume_worker` stub installed for `spawner.resume_worker` via `monkeypatch.setattr`)
   — every production call site (`src/core/init_worker_recovery.py`)
@@ -491,15 +482,15 @@ Known-alive symbols:
   sends through `websocket.send_json(...)`, the resize path calls `attachment.resize(cols, rows)`,
   and the server catchup/replay producers send through `FakeWebSocket.send_json`; every call
   dispatches on the injected double. Vulture flags each method as unused.
-- `front`, `current_segment`, `is_speech_detected` (the VAD doubles `_ClosedVad` and `_LiveVad` in
-  `tests/test_transcriber_sampling.py`) — `_drain_closed_segments` and
-  `_decode_live_segment_if_due` (`src/agents/transcriber.py`) read the VAD's `front`/
-  `current_segment` and call `is_speech_detected()` on whatever the test installed. The same
-  file's `_session_with_pcm` builds the real session object via `__new__`, so its
-  `_vad`/`_fed_samples`/`_last_partial`/`_last_live_text`/`_finished` writes are that instance's
-  initialization and the decode paths read them back; vulture flags both the stub methods and
-  those writes as unused. (`empty` and `pop`, the other two `_ClosedVad` methods, escape the
-  tests-scope flag through cross-file name matches but belong to the same surface.)
+- `accept_waveform`, `flush`, `empty`, `front`, `pop` (`_FakeVad` in
+  `tests/test_transcriber_sampling.py`) — `transcribe_pcm_offline`
+  (src/agents/transcriber.py) drives the installed VAD duck-typed: it feeds
+  `accept_waveform` in 128 ms steps, calls `flush()`, then drains the segment queue
+  through `empty()`/`front`/`pop()`. A vulture scan of `tests/test_transcriber_sampling.py`
+  alone flags `accept_waveform`, `flush`, `empty`, and `front` as unused methods/property
+  (60% confidence); any scan that also takes in `tests/test_voice_offline_models.py` — the
+  real-VAD suite, the whole tests/ tree — stays silent because its call sites use the same
+  names.
 - `_proc`, `_ws` (backend and warm-renderer doubles in `tests/test_backend_logging.py`,
   `tests/test_opencode_backend.py`, and the fake `_launch` in `tests/core/test_headless_render.py`)
   — the stderr pump reads `self._proc.stderr` (`src/agents/backends/base.py`), the opencode

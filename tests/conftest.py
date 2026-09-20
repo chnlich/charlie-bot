@@ -1918,6 +1918,21 @@ def temp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
+def path_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+  """Point ``Path.home()`` at a created ``tmp_path / "home"`` and return it.
+
+  ``Path.home()`` honors a redirected ``HOME`` env (the ``temp_home`` route), so this
+  fixture exists for its layout: the home sits in its own ``tmp_path / "home"``
+  subdirectory, distinct from the sibling trees (config dirs, spec files) a test puts
+  directly under ``tmp_path``.
+  """
+  home = tmp_path / "home"
+  home.mkdir()
+  monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+  return home
+
+
+@pytest.fixture
 def profile_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
   """Point ``CHARLIEBOT_HOME`` at a fresh tmp dir and clear the config module caches around it.
 

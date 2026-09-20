@@ -43,8 +43,8 @@ MAX_RECORDING_SAMPLES = SAMPLE_RATE * MAX_RECORDING_SECONDS
 SEGMENT_DECODE_PAUSE_SAMPLES = 5 * SAMPLE_RATE
 # Padding after a segment's speech end, so a word tail just past the cut still decodes.
 SEGMENT_DECODE_PAD_SAMPLES = 6_400
-# The offline path feeds the VAD in 128 ms steps, the cadence the streaming pipeline's
-# browser worklet used. sherpa marks a segment's start at most 2*WindowSize +
+# The offline path feeds the VAD in 128 ms steps, the browser worklet's capture-chunk
+# cadence. sherpa marks a segment's start at most 2*WindowSize +
 # min_speech_duration = 2*512 + 4000 = 5024 samples (~0.31 s) before the end of the
 # feed where speech is first detected, so a feed larger than that clips the sentence
 # onset (one whole-recording feed loses everything before tail - 5024); at 128 ms any
@@ -65,7 +65,7 @@ SILERO_VAD_SHA256 = "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cb
 
 
 class SpeechModelsNotReadyError(RuntimeError):
-  """Raised when a voice stream starts before model provisioning is complete."""
+  """Raised when a voice request arrives before model provisioning is complete."""
 
 
 @dataclass(frozen=True)

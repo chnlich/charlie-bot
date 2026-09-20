@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import make_home_config, make_page_request, stub_credentials
+from conftest import fresh_state_fixture, make_home_config, make_page_request, stub_credentials
 
 from src.api import pages
 from src.core import token_tally
@@ -18,12 +18,12 @@ from src.core.models import SessionMetadata, SessionStatus
 from src.core.token_tally import AccountRow, ModelRow, TokenTally
 
 
-@pytest.fixture(autouse=True)
-def _reset_token_usage_single_flight() -> None:
+def _reset_token_usage_task() -> None:
   """Isolate the module-level single-flight holder between route tests."""
   pages._token_usage_task = None
-  yield
-  pages._token_usage_task = None
+
+
+_reset_token_usage_single_flight = fresh_state_fixture(_reset_token_usage_task)
 
 
 @pytest.fixture

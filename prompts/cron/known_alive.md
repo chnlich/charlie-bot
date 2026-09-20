@@ -66,8 +66,10 @@ Known-alive symbols:
   reached by pytest's fixture-name discovery only: zero whole-repo matches outside their
   definitions, so vulture flags them as unused functions. Most are single-line
   `fresh_state_fixture(...)` assignments in their module (built by the conftest factory of the
-  same name) rather than `def` fixtures; vulture flags those assignments as unused variables
-  the same way, and name discovery still reaches them. Vulture also flags
+  same name) rather than `def` fixtures; vulture stays silent on those assignments — its
+  underscore-name ignore covers underscore-prefixed variables — so the underscore-prefixed ones
+  rely on fixture-name discovery alone, while `def` forms surface as unused functions. Vulture
+  also flags
   `pidfd_open_available` (`tests/conftest.py`, shared skip gate for the pid/slurm watch
   tests, requested by name in `tests/test_trigger_pid_watch.py`, `tests/test_trigger_slurm_watch.py`,
   and `tests/test_trigger_succession.py`), but it is named in the parameter lists of the tests
@@ -442,20 +444,22 @@ Known-alive symbols:
   `src.core.autonamer.build_backend` (`tests/test_autonamer.py`), and
   `src.core.recap.build_backend` (`tests/test_recap.py`). Vulture flags each hook as an unused
   function at 60% confidence.
-- `_fresh_detail_memo` (`tests/test_thread_detail_gzip.py`) — `@pytest.fixture(autouse=True)`
+- `_fresh_detail_memo` (`tests/test_thread_detail_gzip.py`) — a `fresh_state_fixture(...)` assignment
   clearing the thread-detail gzip memo (`src.api.threads._detail_gzip_memo`) around every test
-  in its module; pytest applies it with no in-file reference, so a tests-scope vulture scan
-  flags it as an unused function (60% confidence) and its name has exactly zero whole-repo
-  matches outside its definition. It is load-bearing: the module's plain-request and attach-mode
+  in its module; pytest applies it with no in-file reference, and its name has exactly zero
+  whole-repo matches outside its definition. Vulture stays silent on the assignment form (its
+  underscore-name ignore covers underscore-prefixed variables), so fixture-name discovery is
+  the only thing reaching it. It is load-bearing: the module's plain-request and attach-mode
   tests assert `len(_detail_gzip_memo) == 0`, which holds only because the autouse reset cleared
   the entries earlier gzip tests stored. Same autouse class as `_clean_probe_state` above.
-- `_fresh_search_gzip_memo` (`tests/test_search_gzip_memo.py`) — `@pytest.fixture(autouse=True)`
-  clearing the capped search's body-keyed gzip memo (`src.api.sessions._search_gzip_memo`) around
-  every test in its module; pytest applies it with no in-file reference, so a vulture scan flags
-  it as an unused function (60% confidence) and its name has exactly zero whole-repo matches
-  outside its definition. It is load-bearing: the module's plain-request test asserts
-  `len(_search_gzip_memo) == 0`, which holds only because the autouse reset cleared the entry the
-  module's earlier gzip tests stored. Same autouse class as `_fresh_detail_memo` above.
+- `_fresh_search_gzip_memo` (`tests/test_search_gzip_memo.py`) — a `fresh_state_fixture(...)`
+  assignment clearing the capped search's body-keyed gzip memo (`src.api.sessions._search_gzip_memo`)
+  around every test in its module; pytest applies it with no in-file reference, and its name has
+  exactly zero whole-repo matches outside its definition. Vulture stays silent on the assignment
+  form (its underscore-name ignore covers underscore-prefixed variables), so fixture-name
+  discovery is the only thing reaching it. It is load-bearing: the module's plain-request test
+  asserts `len(_search_gzip_memo) == 0`, which holds only because the autouse reset cleared the
+  entry the module's earlier gzip tests stored. Same autouse class as `_fresh_detail_memo` above.
 - `open_connection`, `post_message`, `add_reaction`, `get_permalink`, `get_thread_replies` (the
   Slack-client double `FakeSlackClient` in `tests/conftest.py`, shared by
   `tests/test_slack_listener.py`, `tests/test_slack_delivery.py`, and

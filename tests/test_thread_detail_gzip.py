@@ -16,6 +16,7 @@ from conftest import (
     RESPONSES_GZIP_LEVEL1_PATCH_TARGET,
     _page_request,
     assert_gzip_served,
+    fresh_state_fixture,
     gzip_explode_compress,
 )
 
@@ -48,9 +49,7 @@ async def _saved_thread(tmp_path: Path) -> tuple[CharlieBotConfig, ThreadManager
   return cfg, thread_mgr, thread, worktree
 
 
-@pytest.fixture(autouse=True)
-def _fresh_detail_memo() -> None:
-  _detail_gzip_memo.clear()
+_fresh_detail_memo = fresh_state_fixture(_detail_gzip_memo.clear)
 
 
 @pytest.mark.asyncio

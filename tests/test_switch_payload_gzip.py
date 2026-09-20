@@ -16,6 +16,7 @@ from conftest import (
     RESPONSES_GZIP_LEVEL1_PATCH_TARGET,
     _page_request,
     assert_gzip_served,
+    fresh_state_fixture,
     gzip_explode_compress,
     make_home_session,
 )
@@ -23,7 +24,13 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from src.api import deps
-from src.api.sessions import all_sessions_status, get_session_bootstrap, get_session_view, list_scheduled_sessions
+from src.api.sessions import (
+    _switch_gzip_memo,
+    all_sessions_status,
+    get_session_bootstrap,
+    get_session_view,
+    list_scheduled_sessions,
+)
 from src.core.config import CharlieBotConfig
 from src.core.models import SessionMetadata
 from src.core.sessions import SessionManager
@@ -49,12 +56,7 @@ async def _call(
   return await handler(session_id, request, meta, mgr, cfg)
 
 
-@pytest.fixture(autouse=True)
-def _fresh_switch_memo() -> None:
-  """The module-level memo persists across tests; every test starts empty."""
-  from src.api.sessions import _switch_gzip_memo
-
-  _switch_gzip_memo.clear()
+_fresh_switch_memo = fresh_state_fixture(_switch_gzip_memo.clear)
 
 
 @pytest.mark.asyncio

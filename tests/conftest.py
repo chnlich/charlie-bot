@@ -1921,8 +1921,10 @@ def temp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def path_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   """Point ``Path.home()`` at a created ``tmp_path / "home"`` and return it.
 
-  The env-only ``temp_home`` does not reach code that resolves the user home through
-  ``Path.home()`` — that call site needs the patch on the class itself.
+  ``Path.home()`` honors a redirected ``HOME`` env (the ``temp_home`` route), so this
+  fixture exists for its layout: the home sits in its own ``tmp_path / "home"``
+  subdirectory, distinct from the sibling trees (config dirs, spec files) a test puts
+  directly under ``tmp_path``.
   """
   home = tmp_path / "home"
   home.mkdir()

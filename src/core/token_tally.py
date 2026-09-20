@@ -145,11 +145,11 @@ import orjson
 
 from src.core import event_types as ET
 from src.core.codex_usage import (
-    CODEX_EVENT_MSG,
     CODEX_SESSION_META,
     CODEX_TOKEN_COUNT,
     CODEX_TURN_CONTEXT,
     DEFAULT_CODEX_HOME,
+    codex_token_count_payload,
 )
 from src.core.config import default_claude_dir, get_config
 from src.core.constants import BackendType
@@ -1179,11 +1179,11 @@ def _codex_records(recs: list[dict], model: str | None, records: list[list]) -> 
   walked = 0
   final_total = 0
   for rec in recs:
-    payload = rec.get("payload") or {}
     if rec.get("type") in (CODEX_SESSION_META, CODEX_TURN_CONTEXT):
-      model = payload.get("model") or model
+      model = (rec.get("payload") or {}).get("model") or model
       continue
-    if rec.get("type") != CODEX_EVENT_MSG or payload.get("type") != CODEX_TOKEN_COUNT:
+    payload = codex_token_count_payload(rec)
+    if payload is None:
       continue
     info = payload.get("info") or {}
     last, total = info.get("last_token_usage") or {}, info.get("total_token_usage") or {}

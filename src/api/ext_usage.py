@@ -15,7 +15,7 @@ from fastapi import APIRouter
 
 from src.core import claude_accounts
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
-from src.core.codex_usage import CODEX_EVENT_MSG, CODEX_TOKEN_COUNT, CODEX_TURN_CONTEXT, DEFAULT_CODEX_HOME
+from src.core.codex_usage import CODEX_TURN_CONTEXT, DEFAULT_CODEX_HOME, codex_token_count_payload
 from src.core.config import get_config
 from src.core.home import CREDENTIALS_FILE, default_claude_dir
 from src.core.http import get_http_client
@@ -437,10 +437,7 @@ def _latest_token_count_event(
       event = json.loads(line)
     except json.JSONDecodeError:
       continue
-    if event.get("type") != CODEX_EVENT_MSG:
-      continue
-    payload = event.get("payload", {})
-    if payload.get("type") != CODEX_TOKEN_COUNT:
+    if codex_token_count_payload(event) is None:
       continue
     if match is not None and not match(event):
       continue
@@ -542,7 +539,7 @@ def _extract_codex_spend_events(path: Path) -> list[_SpendEvent] | None:
           if isinstance(model, str):
             current_model = model
           continue
-        if event_type != CODEX_EVENT_MSG or payload.get("type") != CODEX_TOKEN_COUNT:
+        if codex_token_count_payload(event) is None:
           continue
 
         info = payload.get("info") or {}

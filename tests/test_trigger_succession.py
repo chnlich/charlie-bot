@@ -11,6 +11,7 @@ import pytest
 from conftest import (
     MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET,
     OPUS_BACKEND_ID,
+    TRIGGERS_DORMANCY_CHECK_SECONDS_PATCH_TARGET,
     TRIGGERS_GET_CONFIG_PATCH_TARGET,
     make_home_session,
     patch_trigger_mocks,
@@ -182,7 +183,7 @@ async def test_watch_trigger_cancelled_when_session_archived_mid_wait(
   cfg, mgr, session = await make_home_session(tmp_path, name="Watched", backend=OPUS_BACKEND_ID)
   trigger_mgr = TriggerManager(cfg, mgr)
   # Drive the clock: poll the dormancy predicate every 50ms instead of 60s.
-  monkeypatch.setattr("src.core.triggers._DORMANCY_CHECK_SECONDS", 0.05)
+  monkeypatch.setattr(TRIGGERS_DORMANCY_CHECK_SECONDS_PATCH_TARGET, 0.05)
 
   # A pid that stays alive for the whole test: the wait would otherwise run to
   # its 3600s deadline, so only the watchdog can end this trigger.
@@ -206,7 +207,7 @@ async def test_pure_delay_trigger_cancelled_when_session_archived_mid_wait(
   before the (hour-away) deadline."""
   cfg, mgr, session = await make_home_session(tmp_path, name="Delayed", backend=OPUS_BACKEND_ID)
   trigger_mgr = TriggerManager(cfg, mgr)
-  monkeypatch.setattr("src.core.triggers._DORMANCY_CHECK_SECONDS", 0.05)
+  monkeypatch.setattr(TRIGGERS_DORMANCY_CHECK_SECONDS_PATCH_TARGET, 0.05)
 
   await assert_archive_mid_wait_cancels(trigger_mgr, mgr, session.id, delay_seconds=3600, message="pure delay")
 

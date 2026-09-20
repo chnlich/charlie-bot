@@ -65,6 +65,16 @@ def _count_lines(f: BinaryIO) -> int:
 # own windows, so a debug log still says which reader skipped the line.
 PARSE_SKIP_LOG_EVENT = "ndjson_parse_skip"
 
+# orjson names its invalid-UTF-8 class with this message prefix at every
+# position (it validates the whole input's encoding upfront, so the error
+# reads column 1 wherever the bad byte sits). The errors="replace" repair
+# below can rescue only that class: replace rewrites invalid UTF-8 sequences
+# and nothing else, so a structural failure (control character in string,
+# truncation, bad literal) survives the replaced decode unchanged and a
+# re-parse of it doubles the scan a giant failed line pays (measured on a
+# 2.1 GB failed line: one scan 5.6 s, the repair round trip 8.0 s more).
+_UTF8_ERROR_PREFIX = "str is not valid UTF-8"
+
 
 def parse_ndjson_line(
     line: str | bytes | bytearray | memoryview, *, log_event: str, log_fields: dict[str, Any]) -> dict | None:
@@ -75,15 +85,18 @@ def parse_ndjson_line(
   *log_event* (plus *log_fields* and the parse error) at debug level and
   answers None. The parse
   rides the raw line — orjson ignores surrounding whitespace, so no strip copy
-  runs — and a bytes line the strict parse rejects gets one errors="replace"
-  decode before the verdict: a torn multibyte char parses as U+FFFD, hard
-  corruption skips as malformed. A memoryview line parses zero-copy (the raw
+  runs — and a bytes line orjson rejects as invalid UTF-8 gets one
+  errors="replace" decode before the verdict: a torn multibyte char parses as
+  U+FFFD, hard corruption skips as malformed. A structural rejection (control
+  character, truncation, bad literal) skips without the repair pass — replace
+  rewrites only invalid UTF-8 sequences, so the re-parse cannot change its
+  verdict (see _UTF8_ERROR_PREFIX). A memoryview line parses zero-copy (the raw
   bytes stay shared with the caller's read buffer); its replace fallback
-  copies once, on the parse-failed path only. The parser is orjson, ~2x
-  stdlib json.loads per line measured on the live corpora; orjson rejects the
-  stdlib json NaN/Infinity extensions and float literals that overflow a
-  double (those lines skip as malformed), and ints at or beyond 2**64 parse
-  as float where stdlib keeps exact precision.
+  copies once, on the utf-8-class parse-failed path only. The parser is
+  orjson, ~2x stdlib json.loads per line measured on the live corpora; orjson
+  rejects the stdlib json NaN/Infinity extensions and float literals that
+  overflow a double (those lines skip as malformed), and ints at or beyond
+  2**64 parse as float where stdlib keeps exact precision.
   """
   if not line:
     return None
@@ -101,6 +114,9 @@ def parse_ndjson_line(
   try:
     return orjson.loads(line)
   except ValueError as e:
+    if not str(e).startswith(_UTF8_ERROR_PREFIX):
+      log.debug(log_event, error=str(e), **log_fields)
+      return None
     if isinstance(line, memoryview):
       line = line.tobytes()
     if not isinstance(line, bytes):

@@ -1113,6 +1113,11 @@ ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "asyncio.create_subprocess_exec"
 # patch setattrs the stand-in on the src.core.triggers module attribute.
 TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET = "src.core.triggers._SACCT_AVAILABLE"
 
+# Import-path patch target for the watchdog's poll interval. src/core/triggers.py defines
+# _DORMANCY_CHECK_SECONDS at module scope, and the dormancy-watch loop reads it inside
+# _watch_dormancy at call time, so tests compress the wait by setting the module attribute.
+TRIGGERS_DORMANCY_CHECK_SECONDS_PATCH_TARGET = "src.core.triggers._DORMANCY_CHECK_SECONDS"
+
 # Import-path patch target for the CLI HTTP layer's config read. src/cli/common.py defines a
 # get_config forwarder (config's module imports lazily on first call, the M92 floor rule), so
 # mock setattrs the stand-in on the src.cli.common module attribute and every helper defined
@@ -1162,13 +1167,16 @@ SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.core.slack_listener._bot_client"
 SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.scheduler.create_logged_task"
 
 # Import-path patch targets for the seams a scheduled run fires through. src/core/scheduler.py
-# binds each name at import scope (`from src.core.config import get_config`, `from
-# src.core.master_trigger import trigger_master`, `from src.core.spawner import
+# binds each name at import scope (`from src.core.config import get_config, get_scheduled_tasks`,
+# `from src.core.master_trigger import trigger_master`, `from src.core.spawner import
 # resolve_requested_subagent_backend_model, spawn_worker`, `from src.core.threads import
 # ThreadManager`), so monkeypatch.setattr lands the stand-in on the src.core.scheduler module
-# attribute and _reload_config, _execute_pm_task, and _spawn_scheduled_worker read it at
-# call time; sibling modules binding the same functions keep their own routes.
+# attribute and the call-time readers — _reload_config, _execute_pm_task, and
+# _spawn_scheduled_worker for the bindings above; _tick and run_task_now for
+# get_scheduled_tasks — read it there; sibling modules binding the same functions keep their
+# own routes.
 SCHEDULER_GET_CONFIG_PATCH_TARGET = "src.core.scheduler.get_config"
+SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.core.scheduler.get_scheduled_tasks"
 SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = ("src.core.scheduler.resolve_requested_subagent_backend_model")
 SCHEDULER_SPAWN_WORKER_PATCH_TARGET = "src.core.scheduler.spawn_worker"
 SCHEDULER_THREAD_MANAGER_PATCH_TARGET = "src.core.scheduler.ThreadManager"
@@ -1231,6 +1239,14 @@ BUILD_BACKEND_PATCH_TARGET = "src.agents.backends.registry.build_backend"
 # so the worker path's stand-in binds here — an existing binding is returned untouched,
 # exactly the semantics the master-cc registry route relies on.
 WORKER_BUILD_BACKEND_PATCH_TARGET = "src.agents.worker.build_backend"
+
+# Import-path patch target for the worker's default-backend fallback. src/agents/worker.py
+# binds the class at import scope (`from src.agents.backends.claude_code import
+# ClaudeCodeBackend, claude_supervisor_env`), and _build_backend's fallback return — reached
+# when no backend_option is set or a translate-only build fails — reads it as a module global
+# at call time, so tests that drive that fallback set the stand-in on the src.agents.worker
+# module attribute.
+WORKER_CLAUDE_CODE_BACKEND_PATCH_TARGET = "src.agents.worker.ClaudeCodeBackend"
 
 # Import-path patch target for the /proc stat read the backend start contract pins. src/core/runs.py
 # defines read_pid_stat; src/agents/backends/base.py binds the module (`from src.core import runs`)

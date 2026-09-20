@@ -164,7 +164,7 @@ def test_parse_ndjson_line_structural_rejection_skips_without_the_repair_pass() 
     calls = []
     real_loads = orjson.loads
 
-    def counting(raw, _real=real_loads, _calls=calls):
+    def counting(raw: Any, _real: Any = real_loads, _calls: list[int] = calls) -> Any:
       _calls.append(1)
       return _real(raw)
 

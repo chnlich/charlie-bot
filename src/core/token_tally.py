@@ -411,6 +411,50 @@ def _walk_error_hook(t: _Tally, source: str, label: str, root_name: str) -> Call
   return _onerror
 
 
+# The claude+codex walk's per-directory listing memo: (dirpath, suffixes) ->
+# ((mtime_ns, size), (subdir paths, candidate file paths)). One stat validates a remembered
+# listing, since an entry's create, delete or rename moves the containing directory's own
+# mtime_ns, while a file append moves only the file's mtime, which the walk's per-file stat
+# takes every pass. The candidate file names are stored suffix-filtered, so *suffixes* rides
+# the memo key. Paths are absolute so a memo hit joins nothing. Entries are bounded by the
+# historical directory set of the walked trees; a subtree that stops being walked leaves its
+# entries until the process restarts.
+_jsonl_dir_memo: dict[tuple[str, tuple[str, ...]], tuple[tuple[int, int], tuple[list[str], list[str]]]] = {}
+
+
+def _jsonl_listing(dirpath: str, suffixes: tuple[str, ...]) -> tuple[list[str], list[str]]:
+  """The directory's subdirectory paths and suffix-matching file paths, memoized on the
+  directory's own stat pair.
+
+  A remembered listing costs one stat to validate; a miss re-scandirs. A vanished directory
+  drops its memo entry and raises FileNotFoundError; any other read failure raises OSError
+  for the caller to note."""
+  try:
+    st = os.stat(dirpath)
+    key = (st.st_mtime_ns, st.st_size)
+  except OSError:
+    _jsonl_dir_memo.pop((dirpath, suffixes), None)
+    raise
+  memo = _jsonl_dir_memo.get((dirpath, suffixes))
+  if memo is not None and memo[0] == key:
+    return memo[1]
+  subdirs: list[str] = []
+  files: list[str] = []
+  try:
+    with os.scandir(dirpath) as scandir:
+      for entry in scandir:
+        if entry.is_dir():
+          if not entry.is_symlink():
+            subdirs.append(entry.path)
+        elif entry.name.endswith(suffixes):
+          files.append(entry.path)
+  except OSError:
+    _jsonl_dir_memo.pop((dirpath, suffixes), None)
+    raise
+  _jsonl_dir_memo[(dirpath, suffixes)] = (key, (subdirs, files))
+  return subdirs, files
+
+
 def _iter_jsonl_stats(
     root: Path, t: _Tally, source: str, label: str,
     suffixes: tuple[str, ...] = (".jsonl",)) -> Iterator[tuple[str, os.stat_result | None, str | None]]:
@@ -422,27 +466,25 @@ def _iter_jsonl_stats(
   gets the error instead, which becomes a per-account note; a missing directory is not an error
   here (``discover_homes`` already filters those out for the real on-disk layout). Paths are
   plain strings carrying each file's stat, so both consumers — the corpus signature and the
-  per-file serve walk — pay one syscall per file and never build a Path per entry.
+  per-file serve walk — pay one syscall per file and never build a Path per entry. Each
+  directory's listing is memoized on the directory's own stat pair (``_jsonl_listing``), so a
+  repeat walk over an unchanged tree pays one stat per directory and one per candidate file.
   """
   hook = _walk_error_hook(t, source, label, root.name)
   stack = [str(root)]
   while stack:
     dirpath = stack.pop()
     try:
-      scandir = os.scandir(dirpath)
+      subdirs, files = _jsonl_listing(dirpath, suffixes)
     except OSError as exc:
       hook(exc)
       continue
-    with scandir:
-      for entry in scandir:
-        if entry.is_dir():
-          if not entry.is_symlink():
-            stack.append(entry.path)
-        elif entry.name.endswith(suffixes):
-          try:
-            yield entry.path, entry.stat(follow_symlinks=True), None
-          except OSError as exc:
-            yield entry.path, None, repr(exc)
+    stack.extend(subdirs)
+    for path in files:
+      try:
+        yield path, os.stat(path, follow_symlinks=True), None
+      except OSError as exc:
+        yield path, None, repr(exc)
 
 
 # The charlie-bot walk's per-directory listing memo: dirpath -> ((mtime_ns, size),
@@ -563,28 +605,29 @@ def _charliebot_signature(
 
 
 def _corpus_signature(
-    claude_homes: dict[str, Path], codex_homes: dict[str, Path], sessions: Path,
-    charliebot_rows: list[tuple[str, str, int | None, int | None, str | None]], charliebot_notes: tuple[str,
-                                                                                                        ...]) -> tuple:
-  """Walk signature of the Claude+Codex+charlie-bot corpus: home pairs, every log file's stat
-  pair, and the walk's own error strings. Any corpus or permission move changes the tuple.
-  The charlie-bot component arrives pre-walked: the caller's one pass feeds both this
-  signature and the serve, so a collect never walks that corpus twice."""
+    claude_homes: dict[str, Path], codex_homes: dict[str, Path], sessions: Path, claude_rows: _JsonlRows,
+    codex_rows: _JsonlRows, charliebot_rows: list[tuple[str, str, int | None, int | None, str | None]],
+    charliebot_notes: tuple[str, ...], claude_notes: tuple[str, ...], codex_notes: tuple[str, ...]) -> tuple:
+  """Walk signature of the Claude+Codex+charlie-bot corpus from the shared walks' rows: home
+  pairs, every log file's stat pair, and the walks' own error strings. Any corpus or
+  permission move changes the tuple. The claude, codex and charlie-bot components arrive
+  pre-walked: the caller's one pass per tree feeds both this signature and the serve, so a
+  collect never walks a corpus twice."""
   sig = []
-  walk_sources = (
-      (USAGE_SOURCE_CLAUDE_CODE, claude_homes, "projects"),
-      (USAGE_SOURCE_CODEX, codex_homes, "sessions"),
-  )
-  for source, homes, sub in walk_sources:
-    probe = _Tally()
-    entries = []
-    for label, home in homes.items():
-      per_home = []
-      for path, st, error in _iter_jsonl_stats(home / sub, probe, source, label):
-        per_home.append((path, st.st_mtime_ns, st.st_size) if st is not None else (path, None, error))
-      entries.append((label, tuple(sorted(per_home))))
+  for source, homes, rows_by_account, walk_notes in (
+      (USAGE_SOURCE_CLAUDE_CODE, claude_homes, claude_rows, claude_notes),
+      (USAGE_SOURCE_CODEX, codex_homes, codex_rows, codex_notes),
+  ):
+    entries = tuple(
+        (
+            label,
+            tuple(
+                sorted(
+                    (path, mtime_ns, size) if mtime_ns is not None else (path, None, error)
+                    for path, mtime_ns, size, error in rows_by_account[label])))
+        for label in homes)
     home_pairs = tuple(sorted((label, str(path)) for label, path in homes.items()))
-    sig.append((source, home_pairs, tuple(entries), tuple(probe.notes)))
+    sig.append((source, home_pairs, entries, walk_notes))
   sig.append(_charliebot_signature(sessions, charliebot_rows, charliebot_notes))
   return tuple(sig)
 
@@ -1117,32 +1160,56 @@ def _reconcile_partials(t: _Tally, source: str, walked: list[tuple[str, str, dic
       _add_record(t, source, anchor[1], record)
 
 
+# One source walk's rows: account -> (path, mtime_ns, size, error) per file, the stat pair
+# None with the error string on an unreadable file. The shared shape of _walk_jsonl_logs's
+# return and the consumers that take it pre-walked.
+_JsonlRows = dict[str, list[tuple[str, int | None, int | None, str | None]]]
+
+
+def _walk_jsonl_logs(
+    sub: str,
+    homes: dict[str, Path],
+    source: str,
+    t: _Tally,
+) -> _JsonlRows:
+  """Walk every home's *sub* tree once: ``account -> [(path, mtime_ns, size, error)]`` per
+  file, the stat pair None with the error string on an unreadable file. The corpus signature
+  and ``_walk_source`` consume the same rows, so a collect walks each tree once — the
+  charlie-bot walk's one-pass contract (``_walk_charliebot``)."""
+  rows: dict[str, list[tuple[str, int | None, int | None, str | None]]] = {}
+  for account, home in homes.items():
+    per_home: list[tuple[str, int | None, int | None, str | None]] = []
+    for path, st, error in _iter_jsonl_stats(home / sub, t, source, account):
+      per_home.append((path, st.st_mtime_ns, st.st_size, None) if st is not None else (path, None, None, error))
+    rows[account] = per_home
+  return rows
+
+
 def _walk_source(
     t: _Tally,
     source: str,
     cache_key: str,
-    sub: str,
     homes: dict[str, Path],
+    rows_by_account: _JsonlRows,
     cache: TallyCache | None,
     parse: Callable,
 ) -> tuple[list[tuple[str, str, dict | None, bool]], dict]:
-  """Walk every log file, serving cache hits and parsing misses; returns one row per file —
+  """Serve every walked log file, cache hits and parse misses; returns one row per file —
   (path, account, entry or None on a failed parse, cache-hit flag) — plus the walk order.
 
-  The walk is ``_iter_jsonl_stats``: each file arrives as its str path plus the stat the
-  walker took before yielding, so a serve pays one syscall per file and no Path build — the
-  same stat pair both proves the cached entry and keys its store. Only a cache miss builds
-  anything heavier than dict lookups.
+  The rows arrive pre-walked (``_walk_jsonl_logs``), the same pass the corpus signature
+  consumed, so the serve pays no directory listing at all — one cache-gated lookup per file,
+  a parse only on a miss.
   """
   walked: list[tuple[str, str, dict | None, bool]] = []
   order: dict[tuple, int] = {}
-  for account, home in homes.items():
-    for path, st, error in _iter_jsonl_stats(home / sub, t, source, account):
-      if st is None:
+  for account in homes:
+    for path, mtime_ns, size, error in rows_by_account[account]:
+      if mtime_ns is None:
         _unreadable_note(t.notes, source, f"{account}/{os.path.basename(path)}", error)
         walked.append((path, account, None, False))
         continue
-      entry = (cache.lookup_sig(cache_key, path, [st.st_mtime_ns, st.st_size]) if cache is not None else None)
+      entry = (cache.lookup_sig(cache_key, path, [mtime_ns, size]) if cache is not None else None)
       hit = entry is not None
       if entry is None:
         prev = cache.prev(cache_key, path) if cache is not None else None
@@ -1161,9 +1228,9 @@ def _walk_source(
   return walked, order
 
 
-def collect_claude(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -> None:
+def collect_claude(t: _Tally, homes: dict[str, Path], cache: TallyCache | None, rows_by_account: _JsonlRows) -> None:
   walked, order = _walk_source(
-      t, USAGE_SOURCE_CLAUDE_CODE, "claude", "projects", homes, cache, _claude_file_contribution)
+      t, USAGE_SOURCE_CLAUDE_CODE, "claude", homes, rows_by_account, cache, _claude_file_contribution)
   _reconcile_partials(t, USAGE_SOURCE_CLAUDE_CODE, walked, order)
   n_records = sum(p.n_records for k, p in _source_partials.items() if k[0] == USAGE_SOURCE_CLAUDE_CODE)
   entry_dupes = sum(p.entry_dupes for k, p in _source_partials.items() if k[0] == USAGE_SOURCE_CLAUDE_CODE)
@@ -1265,8 +1332,8 @@ def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict,
   return entry, end
 
 
-def collect_codex(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -> None:
-  walked, order = _walk_source(t, USAGE_SOURCE_CODEX, "codex", "sessions", homes, cache, _codex_file_contribution)
+def collect_codex(t: _Tally, homes: dict[str, Path], cache: TallyCache | None, rows_by_account: _JsonlRows) -> None:
+  walked, order = _walk_source(t, USAGE_SOURCE_CODEX, "codex", homes, rows_by_account, cache, _codex_file_contribution)
   _reconcile_partials(t, USAGE_SOURCE_CODEX, walked, order)
   check = [tuple(entry["check"]) for _, _, entry, _ in walked if entry is not None and entry["check"] is not None]
   if check:
@@ -2069,7 +2136,13 @@ def collect_token_usage(
   global _aggregate_memo, _tally_memo
   charliebot_probe = _Tally()
   charliebot_rows = _walk_charliebot(sessions_dir, charliebot_probe)
-  signature = _corpus_signature(claude_homes, codex_homes, sessions_dir, charliebot_rows, tuple(charliebot_probe.notes))
+  claude_probe = _Tally()
+  codex_probe = _Tally()
+  claude_rows = _walk_jsonl_logs("projects", claude_homes, USAGE_SOURCE_CLAUDE_CODE, claude_probe)
+  codex_rows = _walk_jsonl_logs("sessions", codex_homes, USAGE_SOURCE_CODEX, codex_probe)
+  signature = _corpus_signature(
+      claude_homes, codex_homes, sessions_dir, claude_rows, codex_rows, charliebot_rows, tuple(charliebot_probe.notes),
+      tuple(claude_probe.notes), tuple(codex_probe.notes))
   lookup_sig = _opencode_db_signature(opencode_db)
   tally_memo = _tally_memo
   if lookup_sig is not None and tally_memo is not None and tally_memo[0][:2] == (signature, lookup_sig):
@@ -2113,8 +2186,10 @@ def collect_token_usage(
     # The shared walk's dir-level error notes ride the fresh round (the rows carry only
     # per-file errors); the memo captures them here and serves them on hit rounds.
     t.notes.extend(charliebot_probe.notes)
-    collect_claude(t, claude_homes, cache)
-    collect_codex(t, codex_homes, cache)
+    t.notes.extend(claude_probe.notes)
+    t.notes.extend(codex_probe.notes)
+    collect_claude(t, claude_homes, cache, claude_rows)
+    collect_codex(t, codex_homes, cache, codex_rows)
     collect_charliebot(t, codex_homes, cache, charliebot_rows)
     _aggregate_memo = (signature, _SourceAggregate.snapshot(t, notes_from))
   else:

@@ -19,6 +19,7 @@ from conftest import (
     _run_seeded_consumer,
     backend_option,
     compact_boundary_event,
+    crashed_run_record,
     drain_session_consumer,
     fresh_master_state,
     make_work_item,
@@ -770,15 +771,7 @@ async def test_zero_output_guard_resume_exempts_manual_compact(tmp_path: Path, m
   cursor_path = log_dir / runs.CURSOR_NAME
   cursor_path.write_text(str(len(boundary_line.encode("utf-8"))), encoding="utf-8")
 
-  # pid=None: no liveness probe and no kill path; is_alive=False makes the
-  # follower drain the file and stop instead of waiting out the post-result
-  # timeout.
-  record = MasterRunRecord(
-      pid=None,
-      pid_start=None,
-      started_at=datetime.now(UTC) - timedelta(seconds=60),
-      raw_log=str(raw_path),
-  )
+  record = crashed_run_record(raw_path)
 
   cfg = _make_consumer_cfg(tmp_path)
   meta = _make_meta(session_id)

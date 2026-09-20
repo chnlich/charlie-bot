@@ -274,8 +274,11 @@ it to the session cwd (CLAUDE.md for Claude Code, AGENTS.md for the other backen
 
 **WebSocket Endpoints**
 - `/ws/sessions/{session_id}` — session-level events (worker completion summaries pushed to chat)
-- `/ws/voice/{session_id}` — voice input: recorded audio streams to the local transcriber, partials and final text stream back
 - `/ws/terminal` — the profile's tmux-backed web terminal
+
+Voice input rides HTTP, not a WebSocket: `POST /api/voice/{session_id}/confirm` decodes the
+opening clip as a recognition probe, and `POST /api/voice/{session_id}` takes the full
+recording on release (persisted under `sessions/{id}/voice/`, then decoded offline).
 
 **Frontend**
 - Vanilla-JS UI under `web/static/js/`, served by FastAPI StaticFiles (Node.js/npm is build-time only: Tailwind CSS)

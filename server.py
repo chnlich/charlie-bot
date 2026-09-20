@@ -441,6 +441,7 @@ app.include_router(git.router, prefix="/api/git", tags=["git"])
 app.include_router(code_server.router, prefix="/api/code-server", tags=["code-server"])
 app.include_router(ext_usage.router, prefix="/api", tags=["ext-usage"])
 app.include_router(anthropic_proxy.router, prefix="/api/anthropic-proxy", tags=["anthropic-proxy"])
+app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
 
 # File server (filesystem browser), mounted under the one canonical prefix FILE_SERVER_MOUNTS
 # holds: "/absolute_filepath", the form written into chat text — the prefix names what has to
@@ -507,15 +508,6 @@ async def session_websocket(websocket: WebSocket, session_id: str) -> None:
     await streaming_manager.unsubscribe(channel, websocket)
     await streaming_manager.unsubscribe(SIDEBAR_CHANNEL, websocket)
     log.info("session_ws_disconnected", session_id=session_id)
-
-
-@app.websocket("/ws/voice/{session_id}")
-async def voice_websocket(websocket: WebSocket, session_id: str) -> None:
-  """Receive PCM audio and stream local transcription updates to the browser."""
-  if not await _check_ws_auth(websocket):
-    return
-  await websocket.accept()
-  await voice.handle_voice_websocket(websocket, session_id)
 
 
 async def _send_session_catchup(

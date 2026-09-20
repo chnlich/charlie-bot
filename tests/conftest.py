@@ -1588,15 +1588,22 @@ def build_tui_sessions_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
-def build_codex_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
-  """CharlieBotConfig for spawner worktree-launch tests: the charliebot-home and worktrees dirs live
-  under tmp_path so each test owns its own tree, and the backend list registers the codex option the
-  launch paths resolve."""
+def build_option_worktree_cfg(tmp_path: Path, option: models.BackendBase) -> CharlieBotConfig:
+  """CharlieBotConfig for tests that pick their backend option: the charliebot-home and worktrees
+  dirs live under tmp_path so each test owns its own tree, and the backend list registers exactly
+  the one option the caller names."""
   return CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
       paths={"worktree_dir": str(tmp_path / "worktrees")},
-      backends={"options": [CODEX_BACKEND_OPTION]},
+      backends={"options": [option]},
   )
+
+
+def build_codex_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """CharlieBotConfig for spawner worktree-launch tests: the charliebot-home and worktrees dirs live
+  under tmp_path so each test owns its own tree, and the backend list registers the codex option the
+  launch paths resolve. The codex preset of build_option_worktree_cfg."""
+  return build_option_worktree_cfg(tmp_path, CODEX_BACKEND_OPTION)
 
 
 def build_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:

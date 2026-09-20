@@ -1141,7 +1141,6 @@ def _clear_unhandled_part_registries() -> None:
 
 _fresh_unhandled_part_type_registry = fresh_state_fixture(_clear_unhandled_part_registries)
 
-
 _UNHANDLED_PART_EVENTS = [
     {
         "id": "p1",

@@ -102,26 +102,34 @@ def _build_base_args(parser: argparse.ArgumentParser) -> None:
   parser.add_argument("--base-sha", default=None, help="Code sha the plan targets")
 
 
-def _add_present(parser: argparse.ArgumentParser) -> None:
+def _add_file_arg(parser: argparse.ArgumentParser) -> None:
   parser.add_argument("--file", required=True, help="Artifact path relative to the session dir")
+
+
+def _add_plan_arg(parser: argparse.ArgumentParser) -> None:
+  parser.add_argument("--plan", type=int, default=None, help="Target plan id (required when ambiguous)")
+
+
+def _add_present(parser: argparse.ArgumentParser) -> None:
+  _add_file_arg(parser)
   parser.add_argument("--title", required=True, help="Plan title")
   _build_base_args(parser)
 
 
 def _add_amend(parser: argparse.ArgumentParser) -> None:
-  parser.add_argument("--file", required=True, help="Artifact path relative to the session dir")
+  _add_file_arg(parser)
   parser.add_argument(
       "--note",
       required=True,
       help="One line saying why this version differs from its predecessor; rides on the version record")
-  parser.add_argument("--plan", type=int, default=None, help="Target plan id (required when ambiguous)")
+  _add_plan_arg(parser)
   parser.add_argument(
       "--trigger", choices=PLAN_AMEND_TRIGGERS, default="feedback", help="Revision trigger (default feedback)")
   _build_base_args(parser)
 
 
 def _add_approve(parser: argparse.ArgumentParser) -> None:
-  parser.add_argument("--plan", type=int, default=None, help="Target plan id (required when ambiguous)")
+  _add_plan_arg(parser)
 
 
 def _add_close(parser: argparse.ArgumentParser) -> None:

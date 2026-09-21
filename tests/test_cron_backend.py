@@ -22,6 +22,7 @@ from conftest import (
     close_create_logged_task,
     make_cron_client,
     make_scheduler_setup,
+    write_nightly_prompt,
 )
 
 from src.api import cron as cron_api
@@ -57,14 +58,6 @@ def _patch_cron_d(monkeypatch: pytest.MonkeyPatch, cron_dir: Path) -> None:
 _NIGHTLY_PROMPT_MD = "run nightly\n"
 
 
-def _write_nightly_prompt_source(tmp_path: Path) -> Path:
-  """Write the nightly job's prompt source that host files point at."""
-  md_path = tmp_path / "prompts" / "nightly.md"
-  md_path.parent.mkdir(parents=True, exist_ok=True)
-  md_path.write_text(_NIGHTLY_PROMPT_MD, encoding="utf-8")
-  return md_path
-
-
 def _cron_api_rig(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -81,7 +74,7 @@ def _cron_api_rig(
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
   if preseed_backend is None:
-    md_path = _write_nightly_prompt_source(tmp_path)
+    md_path = write_nightly_prompt(tmp_path, _NIGHTLY_PROMPT_MD)
   else:
     _yaml_path, md_path, _md_content = _seed_prompt_file_task(cron_dir, tmp_path, backend=preseed_backend)
   _patch_cron_d(monkeypatch, cron_dir)
@@ -388,7 +381,7 @@ def _seed_prompt_file_task(cron_dir: Path, tmp_path: Path, *, backend: str | Non
   the pointed file owns the body, exactly as production host files look.
   ``backend`` adds the backend key to the host file.
   """
-  md_path = _write_nightly_prompt_source(tmp_path)
+  md_path = write_nightly_prompt(tmp_path, _NIGHTLY_PROMPT_MD)
   body: dict[str, Any] = {
       "type": "normal",
       "cron": "0 3 * * *",

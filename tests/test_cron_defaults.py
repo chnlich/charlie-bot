@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
-from conftest import ROOT, make_cron_client
+from conftest import ROOT, make_cron_client, write_nightly_prompt
 from conftest import cron_d_dir as _cron_d_dir
 from conftest import dump_yaml as _dump
 from conftest import write_cron_task as _write_task_text
@@ -537,14 +537,6 @@ def test_broken_prompt_file_missing_path(temp_home: Path) -> None:
 # --- API: GET /tasks is total and includes broken entries --------------------
 
 
-def _write_nightly_prompt(temp_home: Path, body: str) -> Path:
-  """The ``prompts/nightly.md`` pointer file the API round-trip tests POST."""
-  prompt_path = temp_home / "prompts" / "nightly.md"
-  prompt_path.parent.mkdir(parents=True, exist_ok=True)
-  prompt_path.write_text(body, encoding="utf-8")
-  return prompt_path
-
-
 def _post_nightly(client: TestClient, prompt_path: Path, cron: str = "0 2 * * *") -> httpx.Response:
   """POST the canonical ``nightly`` pointer task; only *cron* varies across callers."""
   return client.post(
@@ -634,7 +626,7 @@ def _assert_pointer_round_trip(home: Path, prompt_path: Path, name: str) -> None
 def test_api_create_round_trips_prompt_file(temp_home: Path) -> None:
   """POST /tasks with prompt_file persists the pointer, never the body; the
   persisted file reloads through the loader into the resolved body."""
-  prompt_path = _write_nightly_prompt(temp_home, "Rebase omni main and report status.\n")
+  prompt_path = write_nightly_prompt(temp_home, "Rebase omni main and report status.\n")
   cfg = get_config()
   with make_cron_client(cfg, SessionManager(cfg)) as client:
     response = _post_nightly(client, prompt_path)
@@ -647,7 +639,7 @@ def test_api_create_round_trips_prompt_file(temp_home: Path) -> None:
 def test_api_put_round_trips_prompt_file(temp_home: Path) -> None:
   """PUT /tasks/<name> with prompt_file persists the pointer, not a body, and
   the persisted file reloads into the resolved body."""
-  prompt_path = _write_nightly_prompt(temp_home, "Rebase nightly orchestrator and report status.\n")
+  prompt_path = write_nightly_prompt(temp_home, "Rebase nightly orchestrator and report status.\n")
   cfg = get_config()
   with make_cron_client(cfg, SessionManager(cfg)) as client:
     created = _post_nightly(client, prompt_path)
@@ -681,7 +673,7 @@ def test_single_source_inline_and_pointer(temp_home: Path) -> None:
 
 def test_api_create_writes_single_file(temp_home: Path) -> None:
   cfg = get_config()
-  prompt_path = _write_nightly_prompt(temp_home, "run nightly")
+  prompt_path = write_nightly_prompt(temp_home, "run nightly")
   with make_cron_client(cfg, SessionManager(cfg)) as client:
     response = _post_nightly(client, prompt_path)
     assert response.status_code == 200
@@ -699,7 +691,7 @@ def test_api_create_writes_single_file(temp_home: Path) -> None:
 
 def test_api_put_round_trips_single_file(temp_home: Path) -> None:
   cfg = get_config()
-  prompt_path = _write_nightly_prompt(temp_home, "run nightly")
+  prompt_path = write_nightly_prompt(temp_home, "run nightly")
   with make_cron_client(cfg, SessionManager(cfg)) as client:
     _post_nightly(client, prompt_path)
     response = client.put("/api/cron/tasks/nightly", json={"cron": "0 4 * * *"})

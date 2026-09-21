@@ -556,7 +556,7 @@ def _anchors_from_full_parse(source: str) -> tuple[tuple | None, tuple | None]:
 
   parser = _parse(source)
 
-  def quad(node: "_Node | None") -> tuple | None:
+  def quad(node: _Node | None) -> tuple | None:
     return (node.start, node.start_end, node.end, node.end_end) if node is not None else None
 
   return quad(_first_descendant(parser.root, "head")), quad(_first_descendant(parser.root, "body"))

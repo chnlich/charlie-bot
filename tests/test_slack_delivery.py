@@ -694,8 +694,10 @@ class _RouteSessions:
   async def get_session(self, session_id: str) -> SessionMetadata | None:
     return self.meta if self.meta is not None and self.meta.id == session_id else None
 
-  async def read_metadata_fresh(self, session_id: str) -> SessionMetadata | None:
-    return self.meta if self.meta is not None and self.meta.id == session_id else None
+  # The double carries one canned session, so the fresh read answers exactly what
+  # the cached read does; the listener's binding-identity read reaches it through
+  # read_metadata_fresh, the reply route through get_session.
+  read_metadata_fresh = get_session
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:
     return self.events

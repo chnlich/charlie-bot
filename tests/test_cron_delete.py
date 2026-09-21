@@ -13,6 +13,7 @@ from conftest import (
     read_chat_events,
     user_event,
     write_cron_task,
+    write_nightly_prompt,
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -39,9 +40,7 @@ def make_cron_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager
 def write_nightly_task(home: Path) -> Path:
   """Seed one healthy 'nightly' cron job (pointer-backed host file, as production files look)
   and return its yaml path."""
-  prompt_path = home / "prompts" / "nightly.md"
-  prompt_path.parent.mkdir(parents=True, exist_ok=True)
-  prompt_path.write_text("nightly prompt", encoding="utf-8")
+  prompt_path = write_nightly_prompt(home, "nightly prompt")
   return write_cron_task(
       home,
       "nightly",

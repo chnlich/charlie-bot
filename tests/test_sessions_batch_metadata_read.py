@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 
 import pytest
-from conftest import count_path_read_text
+from conftest import count_path_read_text, count_save_metadata_calls
 from conftest import make_session_mgr as _make_session_mgr
 from structlog.testing import capture_logs
 
@@ -211,20 +211,12 @@ async def test_batch_migrates_legacy_round_ratings(
   mgr = _make_session_mgr(tmp_path)
   legacy = SessionMetadata(name="legacy", round_ratings={key: rating})
   await seed(mgr, legacy)
-  real_save = mgr.save_metadata
-  save_calls = 0
-
-  async def counting_save(meta: SessionMetadata, **_kwargs: bool) -> None:
-    nonlocal save_calls
-    save_calls += 1
-    await real_save(meta, **_kwargs)
-
-  monkeypatch.setattr(mgr, "save_metadata", counting_save)
+  save_calls = count_save_metadata_calls(mgr, monkeypatch)
 
   result = await mgr._load_session_metas()
 
   migrated = {f"legacy:{key}": rating}
-  assert save_calls == 1
+  assert len(save_calls) == 1
   assert result[0].round_ratings == migrated
   on_disk = json.loads(mgr._metadata_path(legacy.id).read_text(encoding="utf-8"))
   assert on_disk["round_ratings"] == migrated

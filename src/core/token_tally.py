@@ -2112,10 +2112,10 @@ def _materialize_rows(rows: list[dict]) -> list[ModelRow]:
 
 
 def collect_token_usage(
+    cache_path: Path | None,
     claude_homes: dict[str, Path] | None = None,
     codex_homes: dict[str, Path] | None = None,
     opencode_db: Path | None = None,
-    cache_path: Path | None = None,
     sessions_dir: Path | None = None,
 ) -> TokenTally:
   """A failing source records a note instead of raising; see the module docstring for the cache.

@@ -2753,6 +2753,23 @@ class JudgmentShim(SuccessorDeliveryShim):
     return Path("/nonexistent-thread-dir") / session_id / thread_id
 
 
+class EventCaptureSessionManager(SuccessorDeliveryShim):
+  """SessionManager double capturing broadcast chat events into ``self.events``.
+
+  ``persist_and_broadcast`` appends the event; ``mark_unread`` is a no-op.
+  Subclasses add JudgmentShim when their producer path reads the finalize gates.
+  """
+
+  def __init__(self) -> None:
+    self.events: list[dict[str, Any]] = []
+
+  async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
+    self.events.append(event)
+
+  async def mark_unread(self, session_id: str) -> None:
+    pass
+
+
 class CapturingThreadManager(JudgmentShim):
   """ThreadManager double recording spawn/finalize-path calls into a captures dict.
 

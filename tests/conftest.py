@@ -758,6 +758,32 @@ def assert_cli_reject_exit2(
   _assert_stderr_fragments(capsys, *err_fragments)
 
 
+def voice_models_cached(cfg: CharlieBotConfig) -> bool:
+  """True when the configured engine's speech models sit complete on local disk.
+
+  The local_only voice suites' download-free skip gate: reads the model paths
+  ensure_models_cached would fill, judging completeness by the transcriber's own
+  snapshot and file-list rules, and never downloads. False sends the suite to
+  pytest.skip.
+  """
+  from src.agents import transcriber
+
+  paths = transcriber.voice_model_paths(cfg)
+  if not paths.silero_vad.is_file():
+    return False
+  if cfg.voice.engine == "qwen3_hf":
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    try:
+      snapshot = Path(
+          snapshot_download(repo_id=cfg.voice.model_id, cache_dir=str(paths.cache_dir), local_files_only=True))
+    except LocalEntryNotFoundError:
+      return False
+    return transcriber._snapshot_complete(snapshot)
+  return all(path.is_file() for path in transcriber._qwen3_model_files(paths))
+
+
 def voice_fixture_pair(cfg: CharlieBotConfig) -> tuple[Path, str]:
   """A persisted (recording, persisted transcript) pair under cfg.sessions_dir, for the
   local_only voice suites: the transcript is what the production pipeline wrote for that

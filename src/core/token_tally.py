@@ -10,7 +10,7 @@ Sources, all local logs (no vendor usage API is called):
   charlie-bot  ~/.charliebot/sessions/*/threads/*/data/events.jsonl thread result events, and
                ~/.charliebot/sessions/*/data/master_runs/*/agent.raw.ndjson master-run captures
 
-Two accounting traps this handles:
+Three accounting traps this handles:
   1. Claude Code replays history verbatim on resume and fork, so responses are deduped on
      message.id (falling back to requestId, then uuid). About half of all usage lines on this
      host are replays.
@@ -26,8 +26,9 @@ Two accounting traps this handles:
 
 Cache — one JSON document of per-file Claude, Codex and charlie-bot contributions (the
 gigabyte-scale, hundred-megabyte-scale and many-small-files sources) plus the opencode db's
-whole contribution, so a page load re-parses only the sources that changed. On top of that
-document, an in-process aggregate memo holds the merged Claude+Codex partial of the last
+entry, so a page load re-parses only the sources that changed. The db's rows map lives in a
+sidecar document beside the cache (see ``rows`` below). On top of that document, an in-process
+aggregate memo holds the merged Claude+Codex partial of the last
 collect, keyed on the walk signature:
 the home pairs, every log file's (path, mtime_ns, size), and the walk's own error strings.
 A hit serves the sums, spans and notes without replaying a single cached record; misses to

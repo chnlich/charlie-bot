@@ -448,7 +448,7 @@ def _latest_token_count_event(
 def _read_latest_token_count_event(
     path: Path,
     size: int,
-    match: Callable[[dict[str, Any]], bool] | None = None,
+    match: Callable[[dict[str, Any]], bool],
 ) -> dict[str, Any] | None:
   """Read the newest token_count event in *path*, from a tail window first.
 

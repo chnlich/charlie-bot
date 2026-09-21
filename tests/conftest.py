@@ -60,6 +60,7 @@ from src.core import thinking_state  # noqa: E402
 from src.core import init_worker_recovery as worker_recovery_module  # noqa: E402
 from src.core import models  # noqa: E402
 from src.core import review  # noqa: E402
+from src.core.init_seed import DEFAULT_MEMORY_TOPICS  # noqa: E402
 from src.api.deps import get_config_on_loop  # noqa: E402
 from src.core.config import CharlieBotConfig, get_config  # noqa: E402
 from src.core.git import BaseResolution  # noqa: E402
@@ -1557,7 +1558,7 @@ class FakeSlackClient:
     self.reply_calls += 1
     return list(self.thread)
 
-  async def post_message(self, channel: str, text: str, thread_ts: str | None = None) -> dict:
+  async def post_message(self, channel: str, text: str, thread_ts: str) -> dict:
     if self.fail_posts:
       raise RuntimeError("chat.postMessage failed")
     self.calls.append(("post_message", {"channel": channel, "text": text, "thread_ts": thread_ts}))
@@ -2023,16 +2024,6 @@ def write_nightly_prompt(home: Path, body: str) -> Path:
   return p
 
 
-MEMORY_DEFAULT_TOPICS = [
-    "profile resident",
-    "communication resident",
-    "workflow resident",
-    "rulings resident",
-    "host resident",
-    "charliebot",
-]
-
-
 def memory_entry_text(
     topic: str,
     slug: str,
@@ -2081,12 +2072,13 @@ def legacy_memory_entry_text(
 
 
 def write_memory_topics(memory_dir: Path, lines: list[str] | None = None) -> None:
-  """Write a memory store's ``topics`` file (one topic per line, default ``MEMORY_DEFAULT_TOPICS``)
-  and create the ``entries/`` dir the loader scans."""
+  """Write a memory store's ``topics`` file (one topic per line; the default is the
+  seeded production vocabulary DEFAULT_MEMORY_TOPICS) and create the ``entries/``
+  dir the loader scans."""
   memory_dir.mkdir(parents=True, exist_ok=True)
   (memory_dir / "entries").mkdir(exist_ok=True)
   (memory_dir / "topics").write_text(
-      "".join(line + "\n" for line in (lines or MEMORY_DEFAULT_TOPICS)), encoding="utf-8")
+      "".join(line + "\n" for line in (lines or DEFAULT_MEMORY_TOPICS.splitlines())), encoding="utf-8")
 
 
 def write_memory_entry(memory_dir: Path, topic: str, slug: str, legacy: bool = False, **kw: Any) -> Path:

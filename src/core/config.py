@@ -943,7 +943,7 @@ def _load_cron_file(path: Path, repo: Path, stem: str) -> tuple[ScheduledTaskCon
   hot-reload fingerprint). Raises :class:`ValueError` on any failure; the caller
   records it as a per-file error rather than propagating it.
   """
-  body = load_yaml(path)
+  body = load_yaml(path, default=None)
   if not isinstance(body, dict):
     raise ValueError("cron config must be a mapping")
   if "name" in body:
@@ -970,7 +970,7 @@ def _read_cron_file_enabled(path: Path) -> bool | None:
   no truthful raw value, and inventing a default would misstate it.
   """
   try:
-    body = load_yaml(path)
+    body = load_yaml(path, default=None)
   except Exception as e:
     log.debug("cron_file_enabled_unreadable", path=str(path), error=str(e))
     return None
@@ -1011,7 +1011,7 @@ def _reload_cron_snapshot() -> _CronSnapshot:
         # restored without touching the host yaml, the next call must retry
         # the file and clear the error instead of serving a cached failure.
         try:
-          failed_body = load_yaml(path)
+          failed_body = load_yaml(path, default=None)
         except Exception as read_error:
           log.debug("cron_failed_file_prompt_path_unreadable", path=str(path), error=str(read_error))
         else:

@@ -194,7 +194,7 @@ class ScheduledSessionStore:
     recreating one.
     """
     path = cron_path(task_name)
-    data = load_yaml(path)
+    data = load_yaml(path, default=None)
     if not isinstance(data, dict):
       raise FileNotFoundError(f"scheduled task '{task_name}' has no readable cron yaml at {path}")
     data[key] = value

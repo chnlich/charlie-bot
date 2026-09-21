@@ -196,7 +196,7 @@ def load_project_bodies(home: Path, group: str, *, manager: bool) -> ProjectBodi
     raise ProjectInstructionError(f"project config is a broken symlink: {config_path} -> {config_path.readlink()}")
   _resolve_confined(dir_, config_path, "config")
   try:
-    data = load_yaml(config_path)
+    data = load_yaml(config_path, default=None)
   except (OSError, UnicodeDecodeError, yaml.YAMLError) as e:
     raise ProjectInstructionError(f"project config unreadable: {config_path} ({e})") from e
   if not isinstance(data, dict):

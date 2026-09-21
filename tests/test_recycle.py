@@ -500,7 +500,7 @@ async def test_live_range_walk_delete_race_returns_empty_page(tmp_path: Path) ->
     raise FileNotFoundError(2, "No such file or directory")
 
   # A delete landing inside the walk's count bracket must not escape as an
-  # exception; the old whole-file build's guarded open returned an empty page.
+  # exception: the read returns an empty page.
   with patch("src.core.chat_events.count_ndjson_lines", side_effect=delete_mid_count):
     got, _has_more = mgr.load_chat_events_range(session.id, 6, 8)
   assert got == []

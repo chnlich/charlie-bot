@@ -499,8 +499,7 @@ def _failed_iteration_judgments(events_newest_first: Iterator[dict], iteration: 
   """Both failed-iteration judgments from one newest-first pass: the blocker at
   the first quota-shaped event or exhaustion, the summary at the first
   result/assistant text. The walk stops once both are settled, so a no-match
-  exhaustion parses the log once — the shape the shared full parse this
-  replaced ran.
+  exhaustion parses the log once.
   """
   blocker_reason = None
   summary = None

@@ -706,20 +706,19 @@ def _stream_reference_lines(out: BinaryIO, data: "bytes | mmap.mmap", take: int)
   """Copy the non-blank lines among the first ``take`` raw line frames of ``data`` into ``out``.
 
   Returns ``(raw, appended)``: raw frames spent against the budget (blank
-  frames included, mirroring the text-mode line iteration this replaces) and
-  lines written. Bytes move without per-line copies: a bulk vectorized pass
-  answers the common all-``{}`` shape with one window write, and the per-frame
-  fallback keeps CR folding and corrupt-line rejection exact. A corrupt corpus
-  stays loud exactly as the text-mode read did: a non-blank frame whose
+  frames included) and lines written. Bytes move without per-line copies: a
+  bulk vectorized pass answers the common all-``{}`` shape with one window
+  write, and the per-frame fallback keeps CR folding and corrupt-line
+  rejection exact. A corrupt corpus stays loud: a non-blank frame whose
   stripped content is not wrapped in ``{}`` raises, and so do undecodable
   bytes anywhere in the file.
   """
-  # Validity parity with the text-mode read this replaces: it raised the same
-  # UnicodeDecodeError on undecodable bytes, so the decoded result is unused.
-  # ASCII bytes are always valid UTF-8, so an ASCII proof passes validity and
-  # only a non-ASCII corpus pays the full decode. An mmap lacks isascii(); the
-  # numpy sweep answers for the whole mapping, and a non-ASCII mapping
-  # materializes once so the decode raises the identical error.
+  # Validity gate: undecodable bytes must raise UnicodeDecodeError, and the
+  # decoded result is otherwise unused. ASCII bytes are always valid UTF-8, so
+  # an ASCII proof passes validity and only a non-ASCII corpus pays the full
+  # decode. An mmap lacks isascii(); the numpy sweep answers for the whole
+  # mapping, and a non-ASCII mapping materializes once so the decode raises
+  # the identical error.
   ascii_ok = _mapping_ascii(data) if isinstance(data, mmap.mmap) else data.isascii()
   if not ascii_ok:
     if isinstance(data, mmap.mmap):
@@ -758,8 +757,7 @@ def _stream_reference_lines(out: BinaryIO, data: "bytes | mmap.mmap", take: int)
       if data[first] != ord("{") or data[last] != ord("}"):
         snippet = data[pos:end].decode("utf-8", errors="replace").strip()[:80]
         raise ValueError(f"parent event line is not a serialized event object: {snippet!r}")
-      # The CR of a CRLF pair folds before the write, matching the
-      # universal-newline translation of the text-mode read; every other
+      # The CR of a CRLF pair folds before the write; every other
       # original byte (edge whitespace included) is kept. The per-line slice
       # keeps no pointer exported past the write (an mmap closes after this
       # stream returns, and closing refuses while a view exists).
@@ -2268,9 +2266,9 @@ class SessionManager:
     stat proves the parsed bytes unchanged (every writer publishes through the
     atomic tmp rename, so a content change always moves ``st_mtime_ns``) and
     re-times the entry, while a moved or unprovable signature (``None``, the
-    write-funnel populate) evicts for the caller's disk read. The stat is
-    strictly fresher than the TTL it replaces: the old form re-read at best
-    every 30 s, this one serves only while the bytes provably stand. The two
+    write-funnel populate) evicts for the caller's disk read. The stat
+    revalidation keeps an active entry serving only while its bytes provably
+    stand, not on the clock alone. The two
     TTL-checked metadata readers (``get_session`` and ``_load_session_metas``)
     route through this one check, and a stale entry is evicted here, so the
     two cannot drift on freshness semantics. ``list_active_session_metas``

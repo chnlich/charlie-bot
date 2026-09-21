@@ -1,8 +1,10 @@
 """Artifact check — the single owner of "genre -> assertion set -> probe".
 
 An artifact genre (plan, understanding, sitrep, debug, explain) maps to an assertion set
-here and nowhere else: adding a genre means registering its assertion set in this module,
-and nothing else in the codebase enumerates genres. Each assertion is the DOM-decidable
+here and nowhere else: adding a genre means registering its assertion set in this module
+and naming it in ``src.core.constants.ARTIFACT_GENRES`` (the vocabulary the artifact CLI
+parses; the import-time equality check below fails a missed step), and nothing else in the
+codebase enumerates genres. Each assertion is the DOM-decidable
 half of the genre's GRAMMAR; rules needing judgment stay with the reader and the probe.
 
 ``run_assertions`` runs every applicable assertion and returns one printable outcome per
@@ -32,7 +34,9 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.core.constants import REPO_ROOT
+from src.core.artifact_shared import GENRE_TEMPLATES as _GENRE_TEMPLATES
+from src.core.artifact_shared import named_control_bytes, non_lf_control_bytes
+from src.core.constants import ARTIFACT_GENRES, REPO_ROOT
 from src.core.plan_diff import VOID_TAGS
 from src.core.timeouts import ARTIFACT_PROBE_TIMEOUT
 
@@ -273,14 +277,6 @@ class _Context:
   root: _Element
   cfg: CharlieBotConfig | None
 
-
-_GENRE_TEMPLATES = {
-    "plan": "plan_template.html",
-    "understanding": "plan_template.html",
-    "sitrep": "sitrep_template.html",
-    "debug": "debug_template.html",
-    "explain": "explain_template.html",
-}
 
 # Numbered-h2 count per genre as (required, exact): plan/sitrep/debug/explain demand exactly their
 # count; understanding demands at least its five mandatory blocks (the repo-tracked Linear block is optional).
@@ -628,25 +624,6 @@ def _check_ordinal_named(ctx: _Context) -> list[AssertionOutcome]:
   return failures
 
 
-def non_lf_control_bytes(data: bytes) -> list[tuple[int, int]]:
-  """Every control byte other than LF (0x0A) in *data*, as (offset, byte value) pairs.
-
-  Single source for the byte-integrity gate: the assertion runner feeds it the
-  artifact's raw file bytes (re-read from disk, not the parsed DOM — the DOM
-  layer drops comment bytes and normalizes whitespace, which hides mangled
-  bytes), and the ``artifact wrap`` self-check feeds it the assembled page
-  bytes, so both judge the identical rule on identical input. The damaged
-  4914c102 pages hold 8 and 12 such bytes (TAB from a decoded \t, formfeed
-  from a decoded \f); the clean pages and the five genre templates hold zero.
-  """
-  return [(offset, value) for offset, value in enumerate(data) if value < 0x20 and value != 0x0A]
-
-
-def named_control_bytes(bad: list[tuple[int, int]]) -> str:
-  """The byte-integrity failure location string, shared by the gate and the wrap self-check."""
-  return ", ".join(f"0x{value:02x} at offset {offset}" for offset, value in bad)
-
-
 def _check_byte_integrity(ctx: _Context) -> list[AssertionOutcome]:
   name = BYTE_INTEGRITY
   bad = non_lf_control_bytes(ctx.artifact.read_bytes())
@@ -736,7 +713,14 @@ _ASSERTION_SETS: dict[str, tuple[str, ...]] = {
         (BYTE_INTEGRITY, STYLE_VERBATIM, RENDER_PATH, SECTIONS_NUMBERED, EXPLAIN_TRIAD, FORK_OPEN_SHAPE, ORDINAL_NAMED),
 }
 
-GENRES: tuple[str, ...] = tuple(_ASSERTION_SETS)
+# The CLI parses GENRES from src.core.constants (the artifact chain must not load this
+# module to build its parser), so the registry and the parsed vocabulary must state the
+# same genres; a registration that skips the constants tuple fails here, at import.
+GENRES: tuple[str, ...] = ARTIFACT_GENRES
+if GENRES != tuple(_ASSERTION_SETS):
+  raise ValueError(
+      f"src.core.constants.ARTIFACT_GENRES {GENRES} drifted from _ASSERTION_SETS "
+      f"{tuple(_ASSERTION_SETS)}; name every registered genre in both")
 
 
 def run_assertions(genre: str, artifact: Path, cfg: CharlieBotConfig | None = None) -> list[AssertionOutcome]:

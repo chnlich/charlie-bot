@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from src.core import artifact_check
+from src.core.artifact_shared import GENRE_TEMPLATES, named_control_bytes, non_lf_control_bytes
 from src.core.constants import REPO_ROOT
 from src.core.deferred import deferred_module_getattr
 from src.core.http import load_requests
@@ -87,16 +87,16 @@ def wrap_fragment(genre: str, fragment: Path, output: Path, math: bool, vendor_p
   the fragment (when *math*) -> splice the fragment into the template -> run the
   byte-integrity rule on the assembled bytes -> write. The self-check aborts
   before any write and names the offending byte offsets."""
-  template_rel = f"prompts/{artifact_check._GENRE_TEMPLATES[genre]}"
+  template_rel = f"prompts/{GENRE_TEMPLATES[genre]}"
   template = (REPO_ROOT / template_rel).read_text(encoding="utf-8")
   fragment_text = fragment.read_bytes().decode("utf-8")  # strict: a non-UTF-8 fragment fails loudly here
   body = _prerender_math(fragment, vendor_path) if math else fragment_text
   assembled = _splice(template, body).encode("utf-8")
-  bad = artifact_check.non_lf_control_bytes(assembled)
+  bad = non_lf_control_bytes(assembled)
   if bad:
     raise ValueError(
         f"assembled {genre} page has {len(bad)} non-LF control bytes; write aborted: "
-        f"{artifact_check.named_control_bytes(bad)}")
+        f"{named_control_bytes(bad)}")
   output.parent.mkdir(parents=True, exist_ok=True)
   output.write_bytes(assembled)
   return output

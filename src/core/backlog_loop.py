@@ -17,13 +17,11 @@ _BACKLOG_DESCRIPTION_RULE = (
 
 
 def _load_backlog(backlog_path: Path) -> list[dict]:
-  """Load backlog items from YAML. Returns empty list if file missing."""
-  if not backlog_path.exists():
-    return []
+  """Load backlog items from YAML. Returns an empty list when the file is missing or empty."""
   data = load_yaml(backlog_path, default=[])
-  if isinstance(data, list):
-    return data
-  return data.get('items', data.get('backlog', []))
+  if not isinstance(data, list):
+    raise ValueError(f"{backlog_path}: expected a YAML list of backlog items, got {type(data).__name__}")
+  return data
 
 
 def _save_backlog(backlog_path: Path, items: list[dict]) -> None:

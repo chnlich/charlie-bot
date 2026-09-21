@@ -1,6 +1,7 @@
 """Scheduler — runs cron-like tasks that produce results in dedicated sessions."""
 
 import asyncio
+import functools
 import traceback
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -76,7 +77,7 @@ async def _cool_storage_handler() -> str:
   from src.core.storage_cool import format_sweep_line, run_cool_sweep
 
   loop = asyncio.get_running_loop()
-  result = await loop.run_in_executor(None, run_cool_sweep)
+  result = await loop.run_in_executor(None, functools.partial(run_cool_sweep, cfg=get_config()))
   summary = format_sweep_line(result)
   log.info('cool_storage_handler_done', total_bytes=result.total_bytes)
   return summary

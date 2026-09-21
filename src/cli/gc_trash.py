@@ -14,13 +14,15 @@ import argparse
 import shutil
 import sys
 
+from src.cli.help_formatter import CliHelpFormatter
 from src.core.config import get_config
 from src.core.human_size import format_size
 from src.core.worktree_trash import list_trash_entries, trash_dir
 
 
 def main() -> None:
-  parser = argparse.ArgumentParser(description="List or purge the CharlieBot worktree quarantine trash")
+  parser = argparse.ArgumentParser(
+      description="List or purge the CharlieBot worktree quarantine trash", formatter_class=CliHelpFormatter)
   parser.add_argument(
       "--yes",
       action="store_true",

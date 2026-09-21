@@ -25,6 +25,7 @@ from src.cli.common import (
     validate_repo_path,
     validate_task_spec_markdown,
 )
+from src.cli.help_formatter import CliRawDescriptionHelpFormatter
 
 DELEGATE_EPILOG = """\
 Task spec format (--task-spec-file):
@@ -74,7 +75,7 @@ def main() -> None:
   parser = argparse.ArgumentParser(
       description="Delegate a task to a CharlieBot worker agent",
       epilog=DELEGATE_EPILOG,
-      formatter_class=argparse.RawDescriptionHelpFormatter,
+      formatter_class=CliRawDescriptionHelpFormatter,
   )
   add_session_arg(parser)
   parser.add_argument(

@@ -183,6 +183,24 @@ def make_work_item(
 ConsumerRound = Callable[[master_cc_state._WorkItem], Awaitable[tuple[str | None, int, str | None, dict]]]
 
 
+def make_sound_round(cc_session_id: str) -> ConsumerRound:
+  """One consumer round whose CC answers with *cc_session_id* and a clean exit."""
+
+  async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
+    return (cc_session_id, 0, None, {})
+
+  return fake_run_cc
+
+
+def make_failed_round(cc_session_id: str) -> ConsumerRound:
+  """One consumer round whose CC keeps *cc_session_id* but exits with an error."""
+
+  async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
+    return (cc_session_id, 1, "backend died", {})
+
+  return fake_run_cc
+
+
 async def _run_seeded_consumer(
     session_id: str,
     work_items: list[master_cc_state._WorkItem],

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from conftest import fresh_state_fixture
+from conftest import fresh_state_fixture, voice_models_cached
 
 from src.agents import transcriber
 from src.core import voice_setup
@@ -23,7 +23,7 @@ def _require_gpu_assets(cfg: CharlieBotConfig) -> None:
   torch = pytest.importorskip("torch")
   if not torch.cuda.is_available():
     pytest.skip("no CUDA device on this host")
-  if not transcriber.models_are_cached(cfg):
+  if not voice_models_cached(cfg):
     pytest.skip("qwen3_hf weights are not present locally")
   transcriber.ensure_models_cached(cfg)
 

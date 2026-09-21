@@ -237,28 +237,6 @@ def _ensure_sherpa_paths_cached(cfg: CharlieBotConfig) -> VoiceModelPaths:
   return paths
 
 
-def models_are_cached(cfg: CharlieBotConfig) -> bool:
-  paths = voice_model_paths(cfg)
-  if not paths.silero_vad.is_file():
-    return False
-  if cfg.voice.engine == "qwen3_hf":
-    return _qwen3_hf_snapshot_cached(cfg, paths) is not None
-  return all(path.is_file() for path in _qwen3_model_files(paths))
-
-
-def _qwen3_hf_snapshot_cached(cfg: CharlieBotConfig, paths: VoiceModelPaths) -> Path | None:
-  """The locally complete HF snapshot dir, or None when it is not (fully) downloaded."""
-  from huggingface_hub import snapshot_download
-  from huggingface_hub.errors import LocalEntryNotFoundError
-
-  try:
-    snapshot = Path(
-        snapshot_download(repo_id=cfg.voice.model_id, cache_dir=str(paths.cache_dir), local_files_only=True))
-  except LocalEntryNotFoundError:
-    return None
-  return snapshot if _snapshot_complete(snapshot) else None
-
-
 def _open_vad(vad_config: object, buffer_seconds: float) -> object:
   """One VAD instance over the bundle's config; the seam tests stub to feed fake segments."""
   import sherpa_onnx

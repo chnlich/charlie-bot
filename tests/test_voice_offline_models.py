@@ -14,7 +14,7 @@ import wave
 
 import numpy as np
 import pytest
-from conftest import voice_fixture_pair
+from conftest import voice_fixture_pair, voice_models_cached
 
 from src.agents import transcriber
 from src.core.config import CharlieBotConfig
@@ -36,7 +36,7 @@ def _real_cfg() -> CharlieBotConfig:
 
 
 def _require_models(cfg: CharlieBotConfig) -> None:
-  if not transcriber.models_are_cached(cfg):
+  if not voice_models_cached(cfg):
     pytest.skip("speech models are not present locally")
   transcriber.ensure_models_cached(cfg)
 

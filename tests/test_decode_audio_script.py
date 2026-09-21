@@ -12,7 +12,7 @@ import wave
 from pathlib import Path
 
 import pytest
-from conftest import voice_fixture_pair
+from conftest import voice_fixture_pair, voice_models_cached
 
 from src.agents import transcriber
 from src.core.config import CharlieBotConfig
@@ -63,7 +63,7 @@ def test_decode_audio_script_feeds_the_offline_function(
 @pytest.mark.local_only
 def test_decode_audio_script_decodes_a_real_fixture(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=_REAL_HOME)
-  if not transcriber.models_are_cached(cfg):
+  if not voice_models_cached(cfg):
     pytest.skip("speech models are not present locally")
   wav_path, _expected = voice_fixture_pair(cfg)
   fixture = _write_s16_fixture(wav_path, tmp_path / "voice-decode-fixture.s16")

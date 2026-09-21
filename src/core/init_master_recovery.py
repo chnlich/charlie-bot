@@ -73,7 +73,7 @@ async def run_crash_recovery(
   exception is logged loudly and the replay pass is skipped entirely — a
   replay on a partial exclusion map double-answers turns — while the rest of
   startup continues. Standalone callers (tests) pass nothing and get both
-  passes inline, as before the split.
+  passes inline.
 
   Returns the number of interrupted runs dispatched for recovery.
   """

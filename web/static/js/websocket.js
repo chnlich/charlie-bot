@@ -4,8 +4,8 @@
 // Wire format: the server feeds raw chat events through MessageAggregator and
 // broadcasts `message` and `stream` deltas in addition to non-aggregated
 // events. Rendering is fully driven by deltas; raw assistant/user/
-// scheduled_trigger events are no longer sent. Other raw events (master_done,
-// task_delegated, …) still flow but only for state side-effects (stopThinking,
+// scheduled_trigger events are not sent. Other raw events (master_done,
+// task_delegated, …) flow but only for state side-effects (stopThinking,
 // spinner, etc).
 let ws = null;
 let reconnectDelay = 1000;

@@ -30,7 +30,12 @@ from src.core.config import CharlieBotConfig
 from src.core.constants import BackendType
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo, StatSignatureMemo
-from src.core.message_aggregator import TOOL_PREVIEW_CHARS, extract_text_from_message, extract_tool_result_text
+from src.core.message_aggregator import (
+    TOOL_PREVIEW_CHARS,
+    extract_text_from_message,
+    extract_tool_result_text,
+    tool_preview,
+)
 from src.core.models import (
     CcClaudeBackend,
     PendingTrigger,
@@ -678,7 +683,14 @@ def _append_worker_events(
               WorkerEvent(
                   type=ET.TOOL_USE,
                   tool_name=block['name'],
-                  input=block.get('input', {}),
+                  # The panel renders the same one-line input summary the chat
+                  # wire's renderer reads (toolInputSummary), so the row's
+                  # input rides the same preview bound; the persisted events
+                  # log keeps the full input.
+                  input=tool_preview({
+                      "name": block["name"],
+                      "input": block.get('input', {})
+                  })["input"],
                   timestamp=event_timestamp,
               ))
     elif event_type == ET.USER and isinstance(data.get('message'), dict):

@@ -559,7 +559,9 @@ Known-alive symbols:
   assignment whose autouse fixture empties the six api-side list/view memos and gates plus the
   sidebar mark state around every test in its module; pytest applies it with no in-file reference.
   Vulture stays silent on the assignment form (its underscore-name ignore covers underscore-prefixed
-  variables), so fixture-name discovery is the only thing reaching it. It is load-bearing: the
-  plain-request test asserts `len(threads_api._list_gzip_memo) == 0` and the walk-skip test counts
-  full source walks, both of which hold only because the reset cleared what earlier tests stored.
-  Same autouse class as `_fresh_detail_memo` above.
+  variables), so fixture-name discovery is the only thing reaching it. It is load-bearing for the
+  module's memo-count assertions — the plain-request test asserts `len(threads_api._list_gzip_memo)
+  == 0` and the no-recompress test asserts `len(...) == 1`, both true only because the reset cleared
+  the entries earlier gzip tests stored; the walk-skip test's counts stay correct on their own
+  (session-keyed memos under fresh session ids never collide). Same autouse class as
+  `_fresh_detail_memo` above.

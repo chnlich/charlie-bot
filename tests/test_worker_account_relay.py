@@ -15,6 +15,7 @@ from conftest import (
     FABLE_MODEL,
     POOLED_FABLE_ID,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
+    EventCaptureSessionManager,
     JudgmentShim,
     ScriptedRelayBackend,
     assistant_text_event,
@@ -290,16 +291,8 @@ async def test_worker_relay_compacts_a_large_fable_context_on_the_new_account(
 # ---------------------------------------------------------------------------
 
 
-class _SessionManager(JudgmentShim):
-
-  def __init__(self) -> None:
-    self.events: list[dict] = []
-
-  async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
-    self.events.append(event)
-
-  async def mark_unread(self, session_id: str) -> None:
-    del session_id
+class _SessionManager(EventCaptureSessionManager, JudgmentShim):
+  """Captures relay-path broadcasts into ``self.events``; finalize gates stay no-ops."""
 
 
 class _LifecycleThreadManager(_ThreadManager):

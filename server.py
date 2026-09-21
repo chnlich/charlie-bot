@@ -49,7 +49,7 @@ from src.core.init import (
     reconcile_master_identity,
     run_crash_recovery,
 )
-from src.core.log_once import LazyStructlogLogger, ensure_lean_renderer
+from src.core.log_once import LazyStructlogLogger, ensure_lean_renderer, log_http_request_line
 from src.core.message_aggregator import MessageAggregator
 from src.core.models import SessionMetadata, utc_now
 from src.core.process import log_session_cgroup_startup, sweep_stale_session_cgroups
@@ -232,7 +232,7 @@ class _RequestLogMiddleware:
     }
     if error is not None:
       fields["error"] = error
-    log.info("http_request", **fields)
+    log_http_request_line(fields)
 
 
 async def _check_ws_auth(websocket: WebSocket) -> bool:

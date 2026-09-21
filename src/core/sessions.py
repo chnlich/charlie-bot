@@ -2744,8 +2744,7 @@ class SessionManager:
     The guard behind the authorized-channel model: the two resume anchors change
     only through their channels (``persist_cc_session_id``, ``persist_claude_account``,
     ``clear_cc_session_anchor``), so a whole-object save built from a stale cached
-    meta must not roll them back -- the 2026-09-14 incident's whole-object
-    write-back did exactly that. Reads metadata.json fresh (a cached view is the
+    meta must not roll them back. Reads metadata.json fresh (a cached view is the
     very staleness this guard exists for) and mutates *meta* in place; a
     correction logs ``session_anchor_write_corrected`` and the save proceeds
     write-through rather than refusing. Runs under the per-session lock: inside

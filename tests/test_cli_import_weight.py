@@ -123,10 +123,13 @@ def test_plan_constants_match_the_model_literals() -> None:
 # The artifact chain's ban set: the probe's registry stack (backends.registry →
 # fastapi + sessions, autonamer → sessions + streaming), asyncio (~35 ms —
 # pydantic_core is absent from this chain, so asyncio's import is unshared),
-# the headless renderer (its websockets stack ~60 ms), and the KaTeX fetch's
-# HTTP client serve only the check/wrap verb bodies — the probe imports its
-# stack inside run_probe, the page-height assertion imports the renderer inside
-# _measure_page_height, and the vendored-KaTeX steady state never fetches.
+# the headless renderer (its websockets stack ~60 ms), the KaTeX fetch's
+# HTTP client, and the assertion stack (dataclasses→inspect + plan_diff + html,
+# ~23 ms — the wrap verb's wall must not pay the check verb's machinery) serve
+# only the check/wrap verb bodies — the probe imports its stack inside run_probe,
+# the page-height assertion imports the renderer inside _measure_page_height,
+# the vendored-KaTeX steady state never fetches, and the assertion stack loads
+# inside the check verb's dispatch.
 ARTIFACT_HEAVY_MODULES = (
     *HEAVY_MODULES,
     "fastapi",
@@ -138,6 +141,7 @@ ARTIFACT_HEAVY_MODULES = (
     "src.core.autonamer",
     "src.core.sessions",
     "src.core.streaming",
+    "src.core.artifact_check",
 )
 
 
@@ -150,6 +154,22 @@ def test_artifact_chain_imports_without_the_heavy_chains() -> None:
       "(docs/perf_baseline.md) depends on these staying out — run_probe imports "
       "the registry stack inside the probe, and ensure_vendored_katex imports "
       "requests on the CDN-fetch path only")
+
+
+def test_artifact_genres_match_the_assertion_registry() -> None:
+  # The CLI parses the constants tuple; the registry decides what a genre means.
+  # artifact_check's import-time equality check fails the drift at import; this pin
+  # states the contract where the plan vocabulary's lockstep pin lives.
+  code = (
+      "import json; "
+      "import src.core.constants as c; "
+      "import src.core.artifact_check as ac; "
+      "print(json.dumps([list(c.ARTIFACT_GENRES), list(ac.GENRES)]))")
+  proc = _run_probe(code)
+  constants_tuple, registry_tuple = json.loads(proc.stdout)
+  assert constants_tuple == registry_tuple, (
+      "src.core.constants.ARTIFACT_GENRES drifted from the assertion registry: "
+      f"{constants_tuple} vs {registry_tuple}")
 
 
 def test_artifact_wrap_verb_runs_off_the_config_stack() -> None:

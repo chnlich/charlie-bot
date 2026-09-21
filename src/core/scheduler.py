@@ -280,7 +280,7 @@ class Scheduler:
       task_cfg: ScheduledTaskConfig,
       session_mgr: SessionManager,
       session_cache: dict[str, list[SessionMetadata]],
-      cfg: CharlieBotConfig | None = None,
+      cfg: CharlieBotConfig | None,
   ) -> None:
     cfg = cfg or self._cfg
     tz = ZoneInfo(task_cfg.timezone)

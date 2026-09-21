@@ -39,6 +39,14 @@ PLAN_CLOSE_ABANDONED = "abandoned"
 PLAN_CLOSE_COMPLETED = "completed"
 PLAN_CLOSE_MODES = (PLAN_CLOSE_SUPERSEDED, PLAN_CLOSE_ABANDONED, PLAN_CLOSE_COMPLETED)
 
+# Artifact genre vocabulary: the artifact CLI's argparse choices (src.cli.artifact) and
+# the assertion registry (src.core.artifact_check _ASSERTION_SETS) share one tuple, so
+# the artifact chain parses args without loading the assertion machinery (the M102 wrap
+# wall). The registry is the home of what a genre means: adding a genre means registering
+# its assertion set there AND naming it here; artifact_check's import-time equality check
+# makes a missed step fail loud.
+ARTIFACT_GENRES = ("plan", "understanding", "sitrep", "debug", "explain")
+
 # opencode's own compaction output-reserve default ($d = 20000 in the opencode binary,
 # applied as `compaction.reserved ?? min($d, maxOutputTokens)`; checkable via
 # `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`). The only reader is the

@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const https = require('node:https');
 
 const { readStatic } = require('./read_static');
-const { hljsStub } = require('./hljs_stub');
+const { buildRendererContext } = require('./renderer_vm_context');
 
 // Fetch the exact marked build the browser serves (web/templates/index.html).
 // No version is pinned, so resolving the range today and caching it keeps the
@@ -42,16 +42,13 @@ async function loadMarkedSrc() {
 // Load the REAL markdown-renderer.js against the REAL marked in a shared vm
 // context, mirroring the browser page order: marked.min.js defines the global
 // marked first, then markdown-renderer.js registers its renderer + tokenizer
-// via marked.use. Stubs cover only the non-marked globals (hljs, document)
-// that the file touches; a caller-passed hljs replaces the stub so
-// tests can count or shape highlight calls.
+// via marked.use. The renderer-context base stubs the non-marked globals
+// (console, hljs, document) that the file touches; a caller-passed hljs
+// replaces the stub so tests can count or shape highlight calls.
 async function loadRendererContext(hljs) {
   const markedSrc = await loadMarkedSrc();
-  const context = {
-    console,
-    hljs: hljs || hljsStub,
-    document: { querySelectorAll: () => [] },
-  };
+  const context = buildRendererContext();
+  if (hljs) context.hljs = hljs;
   vm.createContext(context);
   vm.runInContext(markedSrc, context, { filename: 'marked.min.js' });
   // The page's load order: math-scanner.js defines the mathSpan global the

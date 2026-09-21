@@ -3,24 +3,19 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
-const { hljsStub } = require('./hljs_stub');
+const { buildRendererContext } = require('./renderer_vm_context');
 
-// Load markdown-renderer.js in a fake environment that supplies marked, hljs,
-// and a stub document. Stubbing marked.use captures the renderer the file
+// Load markdown-renderer.js on the shared renderer-context base, with a fake
+// marked layered on. Stubbing marked.use captures the renderer the file
 // registers, so each hook can be driven directly (mechanism-level, not output
 // string matching). The fake marked.Renderer is a no-op constructor so the
 // IIFE's `new marked.Renderer()` yields a plain object the IIFE then decorates.
 function loadRenderer() {
   let captured = null;
-  const context = {
-    marked: {
-      Renderer: function() {},
-      use: function(opts) { captured = opts.renderer; },
-    },
-    hljs: hljsStub,
-    document: {
-      querySelectorAll: () => [],
-    },
+  const context = buildRendererContext();
+  context.marked = {
+    Renderer: function() {},
+    use: function(opts) { captured = opts.renderer; },
   };
   vm.createContext(context);
   vm.runInContext(readStatic('math-scanner.js'), context, { filename: 'math-scanner.js' });

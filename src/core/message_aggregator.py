@@ -481,11 +481,11 @@ class MessageAggregator:
     """Store one tool_result's renderable output on the newest buffered tool.
 
     The row rides every render path (each page payload re-serializes the whole
-    buffered draft), so ``tool_preview`` bounds it at ingestion: a string
-    output or input value over TOOL_PREVIEW_CHARS trims to the cap with its
-    truncation marker, and the persisted event keeps the full content.
-    Non-string output (a tool_result whose content is not text) is stored
-    as-is.
+    buffered draft), so ``tool_preview`` bounds it at ingestion: the string
+    output and the input's renderer-read fields cap at TOOL_PREVIEW_CHARS, the
+    input's other string values at the dead-field bound, with the truncation
+    marker, and the persisted event keeps the full content. Non-string output
+    (a tool_result whose content is not text) is stored as-is.
     """
     row = {**self._tools_buf[-1], "output": output, "is_error": bool(is_error)}
     self._tools_buf[-1] = tool_preview(row)

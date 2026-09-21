@@ -1049,13 +1049,6 @@ def test_input_read_fields_keep_the_wire_cap() -> None:
   assert task["input"]["description"] == "d" * TOOL_PREVIEW_CHARS
   assert task["input"]["prompt"] == "p" * _TOOL_INPUT_DEAD_FIELD_CHARS
   assert task["input_truncated"] is True
-  # The unnamed tool's first value renders through the show-more toggle up to
-  # the wire length, so it keeps TOOL_PREVIEW_CHARS; its second value renders
-  # nowhere.
-  task = by_name["Task"]
-  assert task["input"]["description"] == "d" * TOOL_PREVIEW_CHARS
-  assert task["input"]["prompt"] == "p" * _TOOL_INPUT_DEAD_FIELD_CHARS
-  assert task["input_truncated"] is True
 
 
 def test_committed_message_tool_rows_carry_the_preview_shape() -> None:

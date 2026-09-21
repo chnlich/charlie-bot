@@ -20,8 +20,8 @@ the output and emits no ``message`` delta. The next ``stream`` delta
 
 from collections.abc import Callable, Iterator
 
+from src.core import claude_accounts
 from src.core import event_types as ET
-from src.core.claude_accounts import model_family
 from src.core.message_events import normalize_user_message_event
 
 # The renderer's preview bound for one tool row (renderToolActivity,
@@ -152,7 +152,7 @@ def _compacting_model_note(ev: dict) -> str:
   model = ev.get('model')
   if not isinstance(model, str) or not model:
     return ''
-  return f'by {model_family(model).capitalize()}'
+  return f'by {claude_accounts.model_family(model).capitalize()}'
 
 
 def _format_k_tokens(count: float) -> str:

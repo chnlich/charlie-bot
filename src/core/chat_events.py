@@ -318,7 +318,7 @@ class ChatEventStore:
     """O(1) fold read of the master-woke judgment (glossary on _FinalizeFold)."""
     return self._finalize_folds[session_id].master_woke(thread_id)
 
-  def load_chat_events_tail(self, session_id: str, limit: int = 200) -> tuple[list[dict], int, bool]:
+  def load_chat_events_tail(self, session_id: str, limit: int) -> tuple[list[dict], int, bool]:
     """Load only the last *limit* events from disk. Does NOT populate _events_cache.
 
     Returns (events, total_line_count, has_more).

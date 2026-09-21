@@ -29,7 +29,7 @@ _TAKEOFF = {"v": 1, "at": "2026-07-20T00:00:00+00:00"}
 _CLOSED_SUPERSEDED = {"as": "superseded", "at": "2026-07-20T00:00:00+00:00"}
 
 
-def _make_version(v: int, file: str, verify_state: str = "pending") -> dict:
+def _make_version(v: int, file: str, verify_state: str) -> dict:
   return {
       "v": v,
       "file": file,

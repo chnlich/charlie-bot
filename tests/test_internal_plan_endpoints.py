@@ -182,6 +182,9 @@ async def test_get_plans_endpoint_returns_registry(tmp_path: Path) -> None:
   assert len(body["plans"]) == 1
   assert body["plans"][0]["state"] == "awaiting approval"
   assert body["plans"][0]["id"] == 1
+  # The A2 contract's "normal file" leg: a readable plans.json lists its plans
+  # and carries no error entries (the corrupt-file leg below is the contrast).
+  assert body["errors"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +361,8 @@ async def test_delegate_sets_task_type_on_thread(tmp_path: Path, monkeypatch: py
 
 
 # ---------------------------------------------------------------------------
-# List endpoint contract (A2) — 404 unknown / 200+errors corrupt / 200+empty errors normal
+# List endpoint contract (A2) — 404 unknown / 200+errors corrupt; the
+# "200+empty errors normal" leg is asserted by test_get_plans_endpoint_returns_registry
 # ---------------------------------------------------------------------------
 
 
@@ -387,14 +391,3 @@ async def test_get_plans_endpoint_corrupt_file_200_with_error_entry(tmp_path: Pa
   assert len(body["errors"]) == 1
   assert body["errors"][0]["plan_id"] is None
   assert body["errors"][0]["session_id"] == meta.id
-
-
-@pytest.mark.asyncio
-async def test_get_plans_endpoint_normal_file_200_with_empty_errors(tmp_path: Path) -> None:
-  app, _cfg, _plan_mgr, meta = await _presented_rig(tmp_path)
-  with TestClient(app) as client:
-    resp = client.get(f"/api/sessions/{meta.id}/plans")
-  assert resp.status_code == 200
-  body = resp.json()
-  assert len(body["plans"]) == 1
-  assert body["errors"] == []

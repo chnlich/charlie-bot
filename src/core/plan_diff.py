@@ -493,38 +493,48 @@ def _add_insertion(insertions: dict[int, list[str]], offset: int, value: str) ->
   insertions.setdefault(offset, []).append(value)
 
 
-def _add_class(source: str, node: _Node, class_name: str, insertions: dict[int, list[str]]) -> None:
+def _start_tag_raw(source: str, node: _Node) -> tuple[int, str]:
+  """The node's start-tag offset in *source* and the tag's raw text.
+
+  Raises when the annotation has no start tag to attach to.
+  """
   if node.start is None or node.start_end is None:
     raise ValueError("cannot annotate an element without a start tag")
-  raw = source[node.start:node.start_end]
+  return node.start, source[node.start:node.start_end]
+
+
+def _attr_insert_offset(raw: str) -> int:
+  """Offset inside a start tag's raw text where a new attribute attaches.
+
+  A self-closing tag takes the insertion before its ``/>``, any other tag
+  before its final ``>``.
+  """
+  close = raw.rfind("/>")
+  return close if close >= 0 else raw.rfind(">")
+
+
+def _add_class(source: str, node: _Node, class_name: str, insertions: dict[int, list[str]]) -> None:
+  start, raw = _start_tag_raw(source, node)
   class_match = _CLASS_RE.search(raw)
   if class_match is not None:
     classes = class_match.group("value").split()
     if class_name not in classes:
-      _add_insertion(insertions, node.start + class_match.end("value"), " " + class_name)
+      _add_insertion(insertions, start + class_match.end("value"), " " + class_name)
     return
   unquoted = _UNQUOTED_CLASS_RE.search(raw)
   if unquoted is not None:
     if class_name not in unquoted.group("value").split():
-      _add_insertion(insertions, node.start + unquoted.end("value"), f"&#32;{class_name}")
+      _add_insertion(insertions, start + unquoted.end("value"), f"&#32;{class_name}")
     return
-  close = raw.rfind("/>")
-  if close < 0:
-    close = raw.rfind(">")
-  _add_insertion(insertions, node.start + close, f' class="{class_name}"')
+  _add_insertion(insertions, start + _attr_insert_offset(raw), f' class="{class_name}"')
 
 
 def _add_attr(source: str, node: _Node, name: str, value: str | None, insertions: dict[int, list[str]]) -> None:
-  if node.start is None or node.start_end is None:
-    raise ValueError("cannot annotate an element without a start tag")
-  raw = source[node.start:node.start_end]
+  start, raw = _start_tag_raw(source, node)
   if re.search(rf"(?<![\w:-]){re.escape(name)}\s*(?:=|\s|/?>)", raw, re.IGNORECASE):
     return
-  close = raw.rfind("/>")
-  if close < 0:
-    close = raw.rfind(">")
   addition = f" {name}" if value is None else f' {name}="{_html.escape(value, quote=True)}"'
-  _add_insertion(insertions, node.start + close, addition)
+  _add_insertion(insertions, start + _attr_insert_offset(raw), addition)
 
 
 def _anchor_offset(tokens: list[_Token], start: int, leaf: _Leaf) -> int:

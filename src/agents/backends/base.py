@@ -21,6 +21,12 @@ from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 
+from src.agents.backends.claude_launch import (  # noqa: F401  (re-export: the established base import path)
+    DISALLOWED_TOOLS_FLAG,
+    SKIP_PERMISSIONS_FLAG,
+    SKIP_PERMISSIONS_SETTINGS,
+    build_claude_argv,
+)
 from src.core import event_types as ET
 from src.core import runs
 from src.core.log_once import LazyStructlogLogger
@@ -88,22 +94,6 @@ async def _tee_stream(
   if fd is not None and buffer:
     await _write_chunk(fd, bytes(buffer))
 
-
-# The flag that suppresses the CLI's interactive permission prompt. Its
-# spelling is fixed by the vendor CLI contract, not by this repo, so every
-# Claude-compatible launcher here (claude headless/TUI, claude-sub, agy,
-# opencode) must pass the same literal.
-SKIP_PERMISSIONS_FLAG = "--dangerously-skip-permissions"
-
-# Settings-side companion of SKIP_PERMISSIONS_FLAG: with the flag passed, an
-# interactive launch still pops a one-time dangerous-mode confirmation unless
-# this key is set. Same vendor-fixed spelling, so the claude TUI and
-# claude-sub both pin the same dict.
-SKIP_PERMISSIONS_SETTINGS = {"skipDangerousModePermissionPrompt": True}
-
-# The tool-deny flag's spelling is vendor-fixed like SKIP_PERMISSIONS_FLAG's; the
-# CLI also accepts a camelCase alias, which only the claude-sub parser mirrors.
-DISALLOWED_TOOLS_FLAG = "--disallowed-tools"
 
 # Poll cadence of the tail-follow read loop. Event volume is low (median
 # inter-event gap ~54 s measured), so a fixed poll beats an inotify dependency.
@@ -230,49 +220,6 @@ def strip_google_api_keys(env: dict[str, str]) -> dict[str, str]:
   stripped.pop("GEMINI_API_KEY", None)
   stripped.pop("GOOGLE_API_KEY", None)
   return stripped
-
-
-def build_claude_argv(
-    session_id: str,
-    resume: bool,
-    *,
-    settings: str,
-    plugin_dir: str | None = None,
-    model: str | None = None,
-    effort: str | None = None,
-    disallowed_tools: list[str] | None = None,
-    prompt: str | None = None,
-) -> list[str]:
-  """Assemble the `claude` CLI launch argv shared by the interactive launchers.
-
-  *settings* is the pre-serialized ``--settings`` JSON value. *resume*
-  selects ``--resume`` over ``--session-id``. *plugin_dir*, *model*,
-  *effort*, *disallowed_tools*, and *prompt* are appended only when
-  provided; an empty *prompt* still gets its ``--`` separator.
-  """
-  argv = [
-      "claude",
-      "--settings",
-      settings,
-      SKIP_PERMISSIONS_FLAG,
-  ]
-  if plugin_dir is not None:
-    argv.extend(["--plugin-dir", plugin_dir])
-  argv.extend(["--resume" if resume else "--session-id", session_id])
-  if model:
-    argv.extend(["--model", model])
-  if effort:
-    argv.extend(["--effort", effort])
-  # Collapse every incoming entry into one comma-joined value: the launched `claude`
-  # reliably honors a single disallowed-tools flag, not repeated ones.
-  if disallowed_tools:
-    argv.extend([DISALLOWED_TOOLS_FLAG, ",".join(disallowed_tools)])
-  if prompt is not None:
-    # Claude Code 2.1.212 accepts `--` and treats the following value as the prompt,
-    # even when it starts with '-'.  tmux respawn-pane passes these argv entries
-    # directly to Claude; it does not invoke a shell for the command after the target.
-    argv.extend(["--", prompt])
-  return argv
 
 
 def make_text_event(text: str) -> dict:

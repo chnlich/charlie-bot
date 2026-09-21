@@ -23,8 +23,12 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from src.agents.backends.base import SKIP_PERMISSIONS_FLAG, SKIP_PERMISSIONS_SETTINGS, build_claude_argv
-from src.agents.backends.claude_code import headless_claude_env
+from src.agents.backends.claude_launch import (
+    SKIP_PERMISSIONS_FLAG,
+    SKIP_PERMISSIONS_SETTINGS,
+    build_claude_argv,
+    headless_claude_env,
+)
 from src.agents.backends.pty_common import (
     _run_tmux,
     _tmux_client_env,
@@ -41,7 +45,6 @@ from src.cli.claude_sub_bridge import (
 from src.core import event_types as ET
 from src.core.home import CLAUDE_CONFIG_DIR_ENV_VAR, CREDENTIALS_FILE, charliebot_home_dir, default_claude_dir
 from src.core.json_utils import write_json_atomically
-from src.core.process import kill_process_group
 from src.core.timeouts import (
     CLAUDE_SUB_CONFIRMATION_TIMEOUT,
     CLAUDE_SUB_TERMINATE_TIMEOUT,
@@ -588,6 +591,11 @@ async def _respawn_claude(
 
 
 async def _terminate_foreground(session_id: str) -> None:
+  # The terminate path is the launch chain's only src.core.process reader; the
+  # import rides this call so the M108 launch floor (docs/perf_baseline.md)
+  # builds no ctypes machinery the argv-parse probe never reaches.
+  from src.core.process import kill_process_group
+
   info = await _pane_info(session_id)
   if info.dead or not info.is_claude:
     return

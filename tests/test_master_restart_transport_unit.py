@@ -34,6 +34,7 @@ from conftest import (
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
     _async_wait_for,
     backend_option,
+    make_sound_round,
     make_work_item,
     mocked_callback_fields,
     patch_instructions_content,
@@ -192,11 +193,8 @@ async def test_consumer_clears_master_run_after_master_done() -> None:
   callbacks = _make_callbacks(persist_order)
   session_meta = SessionMetadata(id="session-clear", name="t")
 
-  async def fake_run_cc(item: master_cc._WorkItem) -> tuple[str | None, int, str | None, dict]:
-    return "cc-1", 0, None, {}
-
   item = make_work_item(_cfg(Path("/tmp/charliebot-unit")), session_meta, None, user_content="hi", callbacks=callbacks)
-  await run_session_consumer(session_meta.id, [item], fake_run_cc)
+  await run_session_consumer(session_meta.id, [item], make_sound_round("cc-1"))
 
   assert persist_order == ["master_done", "master_run_cleared"], (
       "the restart identity must outlive the result boundary: clearing it first "

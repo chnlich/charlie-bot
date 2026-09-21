@@ -11,6 +11,7 @@ from conftest import (
     POOLED_FABLE_ID,
     backend_option,
     fresh_state_fixture,
+    make_sound_round,
     make_transcript,
     make_work_item,
     mock_session_callbacks,
@@ -694,10 +695,7 @@ async def test_consumer_skips_account_persistence_when_no_account_was_assigned(t
   callbacks = mock_session_callbacks()
   item = make_work_item(cfg, session_meta, cfg.backends.options[0], callbacks=callbacks)
 
-  async def fake_run_cc(work_item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
-    return "uuid-9", 0, None, {}
-
-  await run_session_consumer(session_meta.id, [item], fake_run_cc)
+  await run_session_consumer(session_meta.id, [item], make_sound_round("uuid-9"))
 
   callbacks.persist_claude_account.assert_not_awaited()
   assert asyncio.iscoroutinefunction(SessionManager.persist_claude_account)

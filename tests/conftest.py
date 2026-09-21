@@ -407,6 +407,23 @@ def count_path_read_text(monkeypatch: pytest.MonkeyPatch, include: Callable[[Pat
   return reads
 
 
+def count_save_metadata_calls(mgr: SessionManager, monkeypatch: pytest.MonkeyPatch) -> list[models.SessionMetadata]:
+  """Reinstall ``mgr.save_metadata`` as a delegate that records each saved meta; returns the live list.
+
+  The list grows with every save until monkeypatch reverts at teardown; the migration suites
+  assert on its length to pin how many metadata writes an exercised path issued.
+  """
+  real_save = mgr.save_metadata
+  saved: list[models.SessionMetadata] = []
+
+  async def counting_save(meta: models.SessionMetadata, **_kwargs: bool) -> None:
+    saved.append(meta)
+    await real_save(meta, **_kwargs)
+
+  monkeypatch.setattr(mgr, "save_metadata", counting_save)
+  return saved
+
+
 def fresh_state_fixture(reset: Callable[[], None]) -> Callable[[], Iterator[None]]:
   """Build an autouse fixture that runs *reset* before and after every test of the module
   assigning it, so process-wide memos and warn-once registries cannot leak between tests.

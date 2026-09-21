@@ -2,13 +2,13 @@
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import aiofiles
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from src.agents.backends.base import make_master_done_event, make_text_event
-from src.agents.master_cc import cancel_master, run_message
 from src.api.deps import get_config_on_loop, get_session_manager, require_found, require_session
 from src.api.message_utils import (
     build_agent_input_content,
@@ -18,6 +18,7 @@ from src.core import event_types as ET
 from src.core.autonamer import is_default_session_name, maybe_auto_name
 from src.core.config import CharlieBotConfig
 from src.core.constants import BackendType
+from src.core.deferred import deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
 from src.core.message_aggregator import extract_text_from_message
 from src.core.message_events import serialize_uploaded_files
@@ -33,6 +34,26 @@ from src.core.tasks import create_logged_task
 log = LazyStructlogLogger()
 
 router = APIRouter()
+
+
+def _load_cancel_master(namespace: dict[str, Any]) -> Any:
+  """Bind the master-cancel entry point into *namespace* on first use.
+
+  An existing binding — a test's stand-in on the ``src.api.chat.cancel_master``
+  patch target — is returned untouched.
+  """
+  bound = namespace.get("cancel_master")
+  if bound is not None:
+    return bound
+  from src.agents.master_cc import cancel_master
+
+  namespace["cancel_master"] = cancel_master
+  return cancel_master
+
+
+def __getattr__(name: str) -> Any:
+  # The "src.api.chat.cancel_master" patch target resolves through this hook.
+  return deferred_module_getattr(name, __name__, globals(), "cancel_master", _load_cancel_master)
 
 
 @router.post("/{session_id}/upload")
@@ -152,7 +173,7 @@ async def cancel_master_agent(
     session_mgr: SessionManager = Depends(get_session_manager),
 ) -> dict:
   """Send SIGTERM to the running master CC agent for this session."""
-  found = await cancel_master(session_id, meta=meta, session_mgr=session_mgr)
+  found = await _load_cancel_master(globals())(session_id, meta=meta, session_mgr=session_mgr)
   if not found:
     await session_mgr.persist_and_broadcast(
         session_id, {
@@ -179,6 +200,8 @@ async def run_and_finalize(
   log.info("run_and_finalize_start", session=meta.id, backend=meta.backend)
   backend_id = meta.backend
   backend_option = cfg.get_backend_option(backend_id)
+  # lazy: keeps the master-turn chain off the M99 server import floor (docs/perf_baseline.md)
+  from src.agents.master_cc import run_message
   try:
     await run_message(
         cfg,

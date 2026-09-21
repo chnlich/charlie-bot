@@ -18,7 +18,7 @@ from src.agents.backends.base import (
 )
 from src.agents.backends.claude_code import ClaudeCodeBackend, claude_supervisor_env
 from src.agents.backends.deferred_build import load_build_backend
-from src.core import claude_accounts, claude_compaction, claude_relay, runs
+from src.core import claude_accounts, claude_relay, runs
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.constants import BackendType
@@ -345,6 +345,8 @@ class Worker:
         from_account=current.label,
         to_account=nxt.label,
         relays=self._relays + 1)
+    # lazy: keeps the compaction stack off the M99 server import floor (docs/perf_baseline.md)
+    from src.core import claude_compaction
     if claude_compaction.relay_compaction_wanted(self._cfg, self._backend_option.model, self._context_tokens):
 
       async def persist(evt: dict) -> None:

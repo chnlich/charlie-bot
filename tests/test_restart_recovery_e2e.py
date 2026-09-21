@@ -939,10 +939,7 @@ async def test_ui_cancel_endpoint_still_finalizes_cancelled(tmp_path: Path, monk
       return False
     return m.get("pid") is not None and m.get("status") == "running"
 
-  deadline = time.monotonic() + 20.0
-  while not started():
-    assert time.monotonic() < deadline, "worker never started"
-    await asyncio.sleep(0.05)
+  await _async_wait_for(started, 20.0, "worker never started")
 
   await cancel_thread(ids["session"], ids["thread"], thread_mgr)
   await task  # completes normally: this path never cancels the spawn task

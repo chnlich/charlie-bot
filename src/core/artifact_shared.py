@@ -24,7 +24,7 @@ def non_lf_control_bytes(data: bytes) -> list[tuple[int, int]]:
   layer drops comment bytes and normalizes whitespace, which hides mangled
   bytes), and the ``artifact wrap`` self-check feeds it the assembled page
   bytes, so both judge the identical rule on identical input. The damaged
-  4914c102 pages hold 8 and 12 such bytes (TAB from a decoded \t, formfeed
+  pages hold 8 and 12 such bytes (TAB from a decoded \t, formfeed
   from a decoded \f); the clean pages and the five genre templates hold zero.
   """
   return [(offset, value) for offset, value in enumerate(data) if value < 0x20 and value != 0x0A]

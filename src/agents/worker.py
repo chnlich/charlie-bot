@@ -247,7 +247,7 @@ class Worker:
       self,
       *,
       is_alive: Callable[[], bool],
-      on_silence: Callable[[], Awaitable[None]] | None = None,
+      on_silence: Callable[[], Awaitable[None]] | None,
   ) -> int:
     """Re-attach to an interrupted run and stream its remaining output.
 

@@ -6,7 +6,7 @@ from typing import Any
 import yaml
 
 
-def load_yaml(path: Path, *, default: Any = None) -> Any:
+def load_yaml(path: Path, *, default: Any) -> Any:
   """Read a YAML file with consistent UTF-8 encoding. Returns *default* if the file is missing or empty."""
   if not path.exists():
     return default

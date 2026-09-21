@@ -436,9 +436,11 @@ Known-alive symbols:
   production code calls it, so a production-scope vulture scan flags it as an unused function.
 - `__getattr__` (`src/agents/backends/opencode.py`, `src/agents/worker.py`, `src/api/chat.py`,
   `src/api/cron.py`, `src/core/autonamer.py`, `src/core/master_trigger.py`, `src/core/recap.py`)
-  — the PEP 562 lazy-import hooks, one-line delegates to the shared `deferred_module_getattr`
-  (`src/core/deferred.py`); same class as the `src/core/artifact_wrap.py` hook entry above. Each
-  serves one external string patch target: `src.agents.backends.opencode.httpx.*`
+  — the PEP 562 lazy-import hooks; same class as the `src/core/artifact_wrap.py` hook entry
+  above. All but the opencode hook are one-line delegates to the shared `deferred_module_getattr`
+  (`src/core/deferred.py`); the opencode hook writes the same match-or-AttributeError shape
+  inline (`if name == "httpx": import httpx`) because it binds one import rather than a loader.
+  Each serves one external string patch target: `src.agents.backends.opencode.httpx.*`
   (`tests/test_opencode_backend.py`), the `WORKER_BUILD_BACKEND_PATCH_TARGET` spelling
   `src.agents.worker.build_backend` (`tests/conftest.py`), the `CHAT_CANCEL_MASTER_PATCH_TARGET`
   spelling `src.api.chat.cancel_master` (`tests/test_chat_cancel.py`, constant defined in

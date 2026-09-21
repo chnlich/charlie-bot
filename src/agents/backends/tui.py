@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src.agents.backends.base import SKIP_PERMISSIONS_SETTINGS, build_claude_argv
+from src.agents.backends.claude_launch import SKIP_PERMISSIONS_SETTINGS, build_claude_argv
 from src.agents.backends.pty_common import (
     PTY_EXIT,
     PtyAttachment,

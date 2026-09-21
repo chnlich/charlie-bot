@@ -44,7 +44,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from src.core.codex_usage import default_codex_home
-from src.core.config import CharlieBotConfig, claude_config_dir, default_claude_dir, get_config
+from src.core.config import CharlieBotConfig, claude_config_dir, default_claude_dir
 from src.core.json_utils import load_json_meta
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus, parse_utc_datetime
@@ -868,7 +868,7 @@ def run_cool_sweep(
     session_id: str | None = None,
     vacuum: bool = False,
     force: bool = False,
-    cfg: CharlieBotConfig | None = None,
+    cfg: CharlieBotConfig,
     now: datetime | None = None,
 ) -> SweepResult:
   """Run one storage sweep over cold sessions and unreferenced backend records.
@@ -884,14 +884,12 @@ def run_cool_sweep(
       the filesystem. Refuses (stderr + SystemExit) while an ``opencode serve``
       writer is alive, unless *force*.
     force: Vacuum past live-writer refusal; no effect without *vacuum*.
-    cfg: Config to read paths and backend options from; defaults to the process
-      config.
+    cfg: Config to read paths and backend options from.
     now: Current time override for tests.
 
   Returns:
     Per-category counts and freed bytes, plus the opencode store's freelist bytes.
   """
-  cfg = cfg or get_config()
   now = now or datetime.now(UTC)
   facts = _scan_sessions(cfg, now, min_idle_days)
   references = _scan_references(cfg, facts)

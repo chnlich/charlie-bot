@@ -491,6 +491,11 @@ def assistant_text_event(text: str) -> dict:
   }
 
 
+def user_tool_result_event() -> dict:
+  """The wrapped-format user event carrying one tool_result: the safe point the relay paths fire at."""
+  return {"type": ET.USER, "message": {"content": [{"type": ET.TOOL_RESULT, "tool_use_id": "t1", "content": "ok"}]}}
+
+
 def assistant_text_tool_use_event(text: str, tool_name: str, tool_input: dict, timestamp: str) -> dict:
   """An ASSISTANT event whose message is one text block followed by one tool_use block: the
   draft-with-tools shape the aggregator tool_result tests feed through both entry points."""

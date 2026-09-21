@@ -15,6 +15,7 @@ from conftest import (
     LITELLM_FEEDBACK_BANNER_STDERR,
     POOLED_FABLE_ID,
     ScriptedRelayBackend,
+    assistant_text_event,
     backend_option,
     fable_pool_cfg,
     fresh_state_fixture,
@@ -26,6 +27,7 @@ from conftest import (
     patch_instructions_content,
     rate_limit_event,
     seed_transcript_copy,
+    user_tool_result_event,
     write_pool_credentials,
 )
 from structlog.testing import capture_logs
@@ -44,14 +46,6 @@ NOW = datetime(2026, 9, 6, 20, 0, tzinfo=UTC)
 UUID = "uuid-relay-1"
 
 _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
-
-
-def _tool_result() -> dict:
-  return {"type": ET.USER, "message": {"role": "user", "content": [{"type": ET.TOOL_RESULT, "content": "ok"}]}}
-
-
-def _assistant(text: str) -> dict:
-  return {"type": ET.ASSISTANT, "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
 
 
 def _install_backends(monkeypatch: pytest.MonkeyPatch, backends: list[ScriptedRelayBackend]) -> list[dict]:
@@ -199,7 +193,7 @@ async def test_place_turn_moves_the_transcript_when_the_account_changes(tmp_path
 def test_relay_watch_rejection_relays_without_waiting_for_a_safe_point() -> None:
   watch = claude_relay.RelayWatch("main", FABLE_MODEL)
   assert watch.observe(rate_limit_event("rejected", 1.0)) is False
-  assert watch.observe(_tool_result()) is False
+  assert watch.observe(user_tool_result_event()) is False
   assert watch.decision(1, "") == claude_relay.RELAY_REJECTED
   assert claude_accounts.headroom("main", FABLE_MODEL) == 0.0
 
@@ -207,26 +201,26 @@ def test_relay_watch_rejection_relays_without_waiting_for_a_safe_point() -> None
 def test_relay_watch_arms_on_a_far_warning_and_fires_at_the_next_tool_result() -> None:
   watch = claude_relay.RelayWatch("main", FABLE_MODEL)
   assert watch.observe(rate_limit_event("allowed_warning", 0.92)) is False
-  assert watch.observe(_assistant("working")) is False
-  assert watch.observe(_tool_result()) is True
-  assert watch.observe(_tool_result()) is False, "fires once"
+  assert watch.observe(assistant_text_event("working")) is False
+  assert watch.observe(user_tool_result_event()) is True
+  assert watch.observe(user_tool_result_event()) is False, "fires once"
   assert watch.decision(-15, "") == claude_relay.RELAY_WARNING
 
 
 def test_relay_watch_ignores_a_warning_whose_reset_is_near_or_under_the_line() -> None:
   near = claude_relay.RelayWatch("main", FABLE_MODEL)
   near.observe(rate_limit_event("allowed_warning", 0.95, resets_in=timedelta(minutes=20)))
-  assert near.observe(_tool_result()) is False
+  assert near.observe(user_tool_result_event()) is False
   assert near.decision(0, "") is None
 
   low = claude_relay.RelayWatch("main", FABLE_MODEL)
   low.observe(rate_limit_event("allowed_warning", 0.85))
-  assert low.observe(_tool_result()) is False
+  assert low.observe(user_tool_result_event()) is False
 
 
 def test_relay_watch_reports_a_login_failure_from_text_or_stderr() -> None:
   watch = claude_relay.RelayWatch("main", FABLE_MODEL)
-  watch.observe(_assistant("Failed to authenticate: OAuth session expired and could not be refreshed"))
+  watch.observe(assistant_text_event("Failed to authenticate: OAuth session expired and could not be refreshed"))
   assert watch.decision(1, "") == claude_relay.LOGIN_FAILED
   assert watch.decision(0, "") is None, "a run that still exited 0 is not a login failure"
   assert claude_relay.RelayWatch("main", FABLE_MODEL).decision(1, "Failed to authenticate") == claude_relay.LOGIN_FAILED
@@ -271,10 +265,12 @@ async def test_run_cc_terminates_at_the_safe_point_after_a_warning_and_relays(
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   first = ScriptedRelayBackend(
-      [rate_limit_event("allowed_warning", 0.92),
-       _assistant("step 1"),
-       _tool_result(),
-       _assistant("never streamed")],
+      [
+          rate_limit_event("allowed_warning", 0.92),
+          assistant_text_event("step 1"),
+          user_tool_result_event(),
+          assistant_text_event("never streamed")
+      ],
       exit_code=0)
   second = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
@@ -339,7 +335,7 @@ async def test_run_cc_marks_a_login_failure_and_relays(tmp_path: Path, monkeypat
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   first = ScriptedRelayBackend(
-      [_assistant("Failed to authenticate: OAuth session expired and could not be refreshed")], exit_code=1)
+      [assistant_text_event("Failed to authenticate: OAuth session expired and could not be refreshed")], exit_code=1)
   second = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
   item = make_work_item(cfg, meta, cfg.backends.options[0])

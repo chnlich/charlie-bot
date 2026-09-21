@@ -25,6 +25,7 @@ from src.cli.common import (
     post_internal_api,
     resolve_session_id,
 )
+from src.cli.help_formatter import CliHelpFormatter
 from src.core.constants import PLAN_AMEND_TRIGGERS, PLAN_CLOSE_MODES
 from src.core.plans import require_plan
 
@@ -143,17 +144,27 @@ def _add_diff(parser: argparse.ArgumentParser) -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parent = argparse.ArgumentParser(add_help=False)
+  parent = argparse.ArgumentParser(add_help=False, formatter_class=CliHelpFormatter)
   add_session_arg(parent)
-  parser = argparse.ArgumentParser(prog="charliebot plan", description="Plan registry verbs")
+  parser = argparse.ArgumentParser(
+      prog="charliebot plan", description="Plan registry verbs", formatter_class=CliHelpFormatter)
   sub = parser.add_subparsers(dest="verb", required=True)
-  _add_present(sub.add_parser("present", parents=[parent], help="Register a new plan lineage"))
-  _add_amend(sub.add_parser("amend", parents=[parent], help="Append the next version to a plan lineage"))
-  _add_approve(sub.add_parser("approve", parents=[parent], help="Record a takeoff"))
-  _add_close(sub.add_parser("close", parents=[parent], help="Terminate a plan lineage"))
+  _add_present(
+      sub.add_parser("present", parents=[parent], help="Register a new plan lineage", formatter_class=CliHelpFormatter))
+  _add_amend(
+      sub.add_parser(
+          "amend", parents=[parent], help="Append the next version to a plan lineage",
+          formatter_class=CliHelpFormatter))
+  _add_approve(sub.add_parser("approve", parents=[parent], help="Record a takeoff", formatter_class=CliHelpFormatter))
+  _add_close(
+      sub.add_parser("close", parents=[parent], help="Terminate a plan lineage", formatter_class=CliHelpFormatter))
   _add_diff(
-      sub.add_parser("diff", parents=[parent], help="Print the local diff of one version against its predecessor"))
-  sub.add_parser("list", parents=[parent], help="Print the session's plan registry")
+      sub.add_parser(
+          "diff",
+          parents=[parent],
+          help="Print the local diff of one version against its predecessor",
+          formatter_class=CliHelpFormatter))
+  sub.add_parser("list", parents=[parent], help="Print the session's plan registry", formatter_class=CliHelpFormatter)
   return parser
 
 

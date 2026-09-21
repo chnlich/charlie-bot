@@ -15,12 +15,14 @@ import json
 import sys
 
 from src.cli import common as cli_common
+from src.cli.help_formatter import CliHelpFormatter
 from src.core.config import get_config
 from src.core.publish import PublishError, publish_artifact
 
 
 def main() -> None:
-  parser = argparse.ArgumentParser(description="Publish an artifact and print the URL readers outside use")
+  parser = argparse.ArgumentParser(
+      description="Publish an artifact and print the URL readers outside use", formatter_class=CliHelpFormatter)
   parser.add_argument("artifact", help="Path of the artifact file to publish")
   args = parser.parse_args()
 

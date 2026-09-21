@@ -18,14 +18,17 @@ import sys
 
 from pydantic import BaseModel
 
+from src.cli.help_formatter import CliHelpFormatter
 from src.core.config import CharlieBotConfig, get_config
 
 
 def main() -> None:
-  parser = argparse.ArgumentParser(description="Read a CharlieBot config key through the loader")
+  parser = argparse.ArgumentParser(
+      description="Read a CharlieBot config key through the loader", formatter_class=CliHelpFormatter)
   sub = parser.add_subparsers(dest="command", required=True)
 
-  p_get = sub.add_parser("get", help="Print a config key's value to stdout (nothing else)")
+  p_get = sub.add_parser(
+      "get", help="Print a config key's value to stdout (nothing else)", formatter_class=CliHelpFormatter)
   p_get.add_argument("key", help="Top-level CharlieBotConfig field name")
 
   args = parser.parse_args()

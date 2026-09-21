@@ -196,6 +196,57 @@ def test_artifact_wrap_verb_runs_off_the_config_stack() -> None:
       "wrap verb resolving its home from src.core.home, not the config")
 
 
+# argparse's HelpFormatter resolves the terminal width through a lazy
+# `import shutil` on the first parser build, and shutil pulls its archive
+# backends (bz2, lzma) with it — ~2.4 ms of every fresh-process verb's wall.
+# The shared CliHelpFormatter (src/cli/help_formatter.py) passes the width
+# itself under shutil.get_terminal_size's documented precedence, so the verb
+# parsers build with neither module loaded.
+_PARSER_BUILD_BANNED = ("shutil", "bz2", "lzma")
+_PARSER_BUILD_MODULES = (
+    pytest.param("src.cli.plan", id="plan"),
+    pytest.param("src.cli.artifact", id="artifact"),
+    pytest.param("src.cli.schedule_trigger", id="schedule-trigger"),
+)
+
+
+@pytest.mark.parametrize("module_name", _PARSER_BUILD_MODULES)
+def test_verb_parser_build_never_loads_the_archive_backends(module_name: str) -> None:
+  code = (
+      "import json, sys; "
+      f"import {module_name}; "
+      f"{module_name}._build_parser(); "
+      f"print(json.dumps(sorted(set(sys.modules) & {set(_PARSER_BUILD_BANNED)!r})))")
+  loaded = json.loads(_run_probe(code).stdout)
+  assert loaded == [], (
+      f"{module_name}'s parser build loaded the shutil archive chain: {loaded}; "
+      "every fresh-process verb wall (docs/perf_baseline.md M92/M97/M98/M102) "
+      "depends on CliHelpFormatter keeping the terminal width off shutil")
+
+
+def test_cli_help_formatter_width_matches_shutil_precedence() -> None:
+  # The formatted help must stay byte-identical to the stock formatter: the
+  # width equals shutil.get_terminal_size().columns - 2 under every COLUMNS
+  # shape, and the no-terminal fallback matches shutil's 80-column default.
+  code = (
+      "import json, os, shutil\n"
+      "from src.cli.help_formatter import CliHelpFormatter\n"
+      "readings = {}\n"
+      "for columns in ('40', '200', '0', '-5', 'abc'):\n"
+      "    os.environ['COLUMNS'] = columns\n"
+      "    readings[columns] = CliHelpFormatter('probe')._width\n"
+      "del os.environ['COLUMNS']\n"
+      "readings['unset'] = CliHelpFormatter('probe')._width\n"
+      "readings['explicit'] = CliHelpFormatter('probe', width=50)._width\n"
+      "print(json.dumps(readings))")
+  readings = json.loads(_run_probe(code).stdout)
+  assert readings["40"] == 38 and readings["200"] == 198, readings
+  # COLUMNS=0/-5/abc and the no-terminal probe stdout all take shutil's
+  # 80-column fallback, so the stock formatter renders the same width.
+  assert readings["0"] == readings["-5"] == readings["abc"] == readings["unset"] == 78, readings
+  assert readings["explicit"] == 50, "an explicit width must pass through"
+
+
 def test_memory_chain_imports_without_the_heavy_chains() -> None:
   loaded = _modules_loaded_after_import("import src.cli.memory", MEMORY_HEAVY_MODULES)
   assert loaded == [], (

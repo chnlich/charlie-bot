@@ -17,6 +17,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from src.cli.help_formatter import CliHelpFormatter
 from src.core import memory
 from src.core.home import charliebot_home_dir
 
@@ -27,10 +28,12 @@ def _memory_dir() -> Path:
 
 
 def main() -> None:
-  parser = argparse.ArgumentParser(description="Labeled-entry memory store: query, add captures, and lint")
+  parser = argparse.ArgumentParser(
+      description="Labeled-entry memory store: query, add captures, and lint", formatter_class=CliHelpFormatter)
   sub = parser.add_subparsers(dest="command", required=True)
 
-  p_query = sub.add_parser("query", help="Print matched entries' full text (or index lines with --index)")
+  p_query = sub.add_parser(
+      "query", help="Print matched entries' full text (or index lines with --index)", formatter_class=CliHelpFormatter)
   p_query.add_argument(
       "--topic", action="append", required=True, help="Topic to match (repeatable); must exist in the vocabulary")
   p_query.add_argument(
@@ -38,10 +41,11 @@ def main() -> None:
   p_query.add_argument("--index", action="store_true", help="Print index lines only")
   p_query.add_argument("--resident", action="store_true", help="Only entries in resident topics")
 
-  p_add = sub.add_parser("add", help="Stage a free-form capture (never touches entries/)")
+  p_add = sub.add_parser(
+      "add", help="Stage a free-form capture (never touches entries/)", formatter_class=CliHelpFormatter)
   p_add.add_argument("--file", default=None, help="Read body from file (default: stdin)")
 
-  sub.add_parser("lint", help="Validate the store; exit nonzero on violations")
+  sub.add_parser("lint", help="Validate the store; exit nonzero on violations", formatter_class=CliHelpFormatter)
 
   args = parser.parse_args()
   if args.command == "query":

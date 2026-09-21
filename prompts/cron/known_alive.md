@@ -555,3 +555,11 @@ Known-alive symbols:
   `src/agents/transcriber.py`. A tests-only vulture scan flags each write as an unused attribute;
   the combined src+tests scan sees the reads and stays silent, the `base_html`/`new_html` case.
   Same class as the `_cron_snapshot`/`_user_agent_cache`/`_token_usage_task` entry above.
+- `_fresh_list_state` (`tests/test_threads_list_api.py`) — a `fresh_state_fixture(_reset_list_state)`
+  assignment whose autouse fixture empties the six api-side list/view memos and gates plus the
+  sidebar mark state around every test in its module; pytest applies it with no in-file reference.
+  Vulture stays silent on the assignment form (its underscore-name ignore covers underscore-prefixed
+  variables), so fixture-name discovery is the only thing reaching it. It is load-bearing: the
+  plain-request test asserts `len(threads_api._list_gzip_memo) == 0` and the walk-skip test counts
+  full source walks, both of which hold only because the reset cleared what earlier tests stored.
+  Same autouse class as `_fresh_detail_memo` above.

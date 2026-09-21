@@ -76,7 +76,7 @@ function submitAccessKey() {
   const input = document.getElementById('auth-key-input');
   const key = (input && input.value || '').trim();
   if (!key) return;
-    localStorage.setItem(ACCESS_KEY_NAME, key);
+  localStorage.setItem(ACCESS_KEY_NAME, key);
   writeAccessCookie(key);
   // Reload so all connections use the new key. If invalid, 401 will re-show the overlay.
   hideAuthOverlay();

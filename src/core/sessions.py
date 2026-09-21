@@ -182,6 +182,34 @@ def _stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
   return meta
 
 
+def _sidebar_entry(
+    include_running_status: bool,
+    include_pending_trigger_status: bool,
+    include_pending_plan_approval: bool,
+    *,
+    running: bool,
+    trigger_count: int,
+    next_trigger_at: datetime | None,
+    plan_approval: bool,
+) -> dict:
+  """Build one session's derived sidebar entry: the include-gated key set.
+
+  Both build sites in :meth:`SessionManager.resolve_sidebar_state` — the
+  archived shortcut and the probed path — must carry the same keys, so the
+  set lives here. ``has_pending_trigger`` derives from the count.
+  """
+  entry: dict = {}
+  if include_running_status:
+    entry[sidebar_state.HAS_RUNNING_TASKS] = running
+  if include_pending_trigger_status:
+    entry[sidebar_state.HAS_PENDING_TRIGGER] = trigger_count > 0
+    entry[sidebar_state.PENDING_TRIGGER_COUNT] = trigger_count
+    entry[sidebar_state.NEXT_TRIGGER_AT] = next_trigger_at
+  if include_pending_plan_approval:
+    entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL] = plan_approval
+  return entry
+
+
 def _apply_sidebar_state(
     sessions: list[SessionMetadata],
     derived: dict[str, dict],
@@ -2539,16 +2567,14 @@ class SessionManager:
 
     derived: dict[str, dict] = {}
     for meta in archived_sessions:
-      entry: dict = {}
-      if include_running_status:
-        entry[sidebar_state.HAS_RUNNING_TASKS] = False
-      if include_pending_trigger_status:
-        entry[sidebar_state.HAS_PENDING_TRIGGER] = False
-        entry[sidebar_state.PENDING_TRIGGER_COUNT] = 0
-        entry[sidebar_state.NEXT_TRIGGER_AT] = None
-      if include_pending_plan_approval:
-        entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL] = False
-      derived[meta.id] = entry
+      derived[meta.id] = _sidebar_entry(
+          include_running_status,
+          include_pending_trigger_status,
+          include_pending_plan_approval,
+          running=False,
+          trigger_count=0,
+          next_trigger_at=None,
+          plan_approval=False)
 
     if not active_sessions:
       return derived
@@ -2590,16 +2616,15 @@ class SessionManager:
 
     for meta in active_sessions:
       probed = sidebar_state.required_snapshot_entry(meta.id)
-      entry = {}
-      if include_running_status:
-        entry[sidebar_state.HAS_RUNNING_TASKS] = bool(busy_since(meta.id)) or bool(probed[sidebar_state.THREAD_RUNNING])
-      if include_pending_trigger_status:
-        entry[sidebar_state.HAS_PENDING_TRIGGER] = probed[sidebar_state.PENDING_TRIGGER_COUNT] > 0
-        entry[sidebar_state.PENDING_TRIGGER_COUNT] = probed[sidebar_state.PENDING_TRIGGER_COUNT]
-        entry[sidebar_state.NEXT_TRIGGER_AT] = probed[sidebar_state.NEXT_TRIGGER_AT]
-      if include_pending_plan_approval:
-        entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL] = bool(probed[sidebar_state.HAS_PENDING_PLAN_APPROVAL])
-      derived[meta.id] = entry
+      derived[meta.id] = _sidebar_entry(
+          include_running_status,
+          include_pending_trigger_status,
+          include_pending_plan_approval,
+          running=bool(busy_since(meta.id)) or bool(probed[sidebar_state.THREAD_RUNNING]),
+          trigger_count=probed[sidebar_state.PENDING_TRIGGER_COUNT],
+          next_trigger_at=probed[sidebar_state.NEXT_TRIGGER_AT],
+          plan_approval=bool(probed[sidebar_state.HAS_PENDING_PLAN_APPROVAL]),
+      )
     return derived
 
   def _schedule_sidebar_sweep(self, sessions: list[SessionMetadata]) -> None:

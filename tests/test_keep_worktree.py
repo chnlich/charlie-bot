@@ -29,6 +29,10 @@ from src.core.models import (
 )
 
 
+async def _forbid_git_worktree_remove(*args: Any, **kwargs: Any) -> bool:
+  raise AssertionError("git_worktree_remove must not be called when keep_worktree=True")
+
+
 def test_build_worker_prompt_includes_keep_worktree_note(tmp_path: Path) -> None:
   prompt = build_worker_prompt("Run SLURM benchmark", cfg=build_codex_worktree_cfg(tmp_path), keep_worktree=True)
   assert "This worktree will persist after the reviewer merges." in prompt
@@ -64,11 +68,8 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
 
   captures: dict[str, Any] = {}
 
-  async def fail_git_worktree_remove(*args: Any, **kwargs: Any) -> bool:
-    raise AssertionError("git_worktree_remove must not be called when keep_worktree=True")
-
   monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
-  monkeypatch.setattr(git_module, "git_worktree_remove", fail_git_worktree_remove)
+  monkeypatch.setattr(git_module, "git_worktree_remove", _forbid_git_worktree_remove)
 
   ctx = build_finalize_ctx(thread, CLEAN_EXIT_OUTCOME, CapturingThreadManager(thread, captures), object(), cfg)
   await spawner._finalize_worker(ctx, skip_notify=False, task_type=TaskType.IMPLEMENT, completed_at=None)
@@ -100,10 +101,7 @@ async def test_finalize_review_chain_skips_when_keep_worktree(
       keep_worktree=True,
   )
 
-  async def fail_git_worktree_remove(*args: Any, **kwargs: Any) -> bool:
-    raise AssertionError("git_worktree_remove must not be called when keep_worktree=True")
-
-  monkeypatch.setattr(git_module, "git_worktree_remove", fail_git_worktree_remove)
+  monkeypatch.setattr(git_module, "git_worktree_remove", _forbid_git_worktree_remove)
 
   await review.finalize_review_chain("session-id", original, worktree_parent=tmp_path / "worktrees")
 

@@ -709,8 +709,8 @@ _ADMITTED_OPENCODE_ROWS = [
 
 
 def test_opencode_scan_row_filters(tmp_path: Path) -> None:
-  # Every row shape the LIKE prefilter admits must land exactly where the old fetch-and-parse
-  # path put it: counted, skipped as non-contributing, or skipped as malformed.
+  # Every row shape the LIKE prefilter admits must land in exactly one class:
+  # counted, skipped as non-contributing, or skipped as malformed.
   db = tmp_path / "db.sqlite"
   con = sqlite3.connect(db)
   _create_message_table(con)

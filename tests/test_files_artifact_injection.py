@@ -161,7 +161,7 @@ def test_serve_file_binary_body_is_byte_identical_across_chunks(sessions_root: P
 
 
 def test_serve_file_injects_deeper_nested_artifact(sessions_root: Path) -> None:
-  # A depth the old path-shape regex never matched: the predicate only cares that the
+  # A deeply nested page: the predicate only cares that the
   # page sits under <session>/... with an `artifacts` parent, not how deep.
   page = _write(sessions_root / "S" / "threads" / "T" / "sub" / "artifacts" / "x.html")
 

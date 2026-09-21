@@ -142,8 +142,8 @@ def _serialize(event: dict[str, Any]) -> str:
   """The wire render of one broadcast frame, shared with the response endpoints'
   FastJsonResponse home (fast_json_bytes).
 
-  The parsed content equals the stdlib ``send_json`` render this fan-out
-  replaced; only the raw bytes differ, at the two boundaries responses.py pins:
+  The parsed content equals the stdlib ``send_json`` render; only the raw
+  bytes differ, at the two boundaries responses.py pins:
   a NaN/Infinity float renders as null instead of the stdlib's invalid-JSON
   literal, and a non-str dict key raises instead of the silent str coercion.
   """

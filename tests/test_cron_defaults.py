@@ -619,8 +619,8 @@ def test_list_tasks_omits_resolved_prompt(temp_home: Path) -> None:
 def _assert_pointer_round_trip(home: Path, prompt_path: Path, name: str) -> None:
   """Both halves of the round-trip regression: the persisted file still carries
   prompt_file (and no prompt), AND it reloads through the loader into the
-  resolved body. Asserting only the reload would pass the old inlining behavior
-  too, so both halves are required."""
+  resolved body. Asserting only the reload would also pass a stored prompt
+  inlined into the file, so both halves are required."""
   cron_dir = _cron_d_dir(home)
   stored = load_yaml(cron_dir / f"{name}.yaml", default={})
   assert stored["prompt_file"] == str(prompt_path)

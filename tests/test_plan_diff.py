@@ -487,8 +487,8 @@ def test_header_lands_after_the_anchor_the_fallback_chain_selects(new: str, anch
 
 def test_header_offset_matches_a_full_reparse_of_the_spliced_page() -> None:
   # The arithmetic header anchor (_offset_after_insertions over the pre-splice
-  # parse) must read the same position the replaced full re-parse of the
-  # spliced page read, on every capture that reaches the wrap lookup. The
+  # parse) must read the same position a full re-parse of the
+  # spliced page reads, on every capture that reaches the wrap lookup. The
   # corpus wraps each fuzz document in the wrap and main chrome the anchor
   # needs — the shared fuzz vocabulary carries neither, so an unwrapped fuzz
   # document only exercises the body fallback.
@@ -539,7 +539,7 @@ def test_header_offset_matches_a_full_reparse_of_the_spliced_page() -> None:
 
 def test_header_keeps_outside_a_deleted_bare_main_ghost() -> None:
   # A deleted bare main becomes a ghost carrying the tag, so the main-tag
-  # fallback can diverge from the replaced re-parse (which anchored the header
+  # fallback can diverge from the spliced-page re-parse (which anchors the header
   # inside the strikethrough ghost); the wrap-chrome artifact pages the route
   # serves never reach the fallback. Pin the saner placement: outside the ghost.
   base = '<html><body><main>alpha</main><p>keep</p></body></html>'

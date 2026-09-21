@@ -121,9 +121,9 @@ async def iter_sse_lines(response: Any, *, lines_as_bytes: bool = False) -> Asyn
   framing never splits a multibyte character (the terminators are ASCII), so
   the consumer's JSON parse sees the reassembled characters — and an invalid
   byte raises at that parse instead of degrading. The byte mode exists to
-  skip the chunk decode the pre-byte framer paid on the JSON-parse consumers
-  (8.7 ms per 16 MB measured there): the default mode decodes once per
-  completed line, the byte mode never decodes.
+  skip decoding on the JSON-parse consumers — a per-chunk decode measured
+  8.7 ms per 16 MB: the default mode decodes once per completed line, the
+  byte mode never decodes.
   """
   framer = _ChunkedFramer()
   async for chunk in response.aiter_bytes():

@@ -190,7 +190,7 @@ def record_auth_failure(label: str, now: datetime | None = None) -> None:
   _auth_failures[label] = now_or(now)
 
 
-def auth_failed_recently(label: str, now: datetime | None = None) -> bool:
+def auth_failed_recently(label: str, now: datetime | None) -> bool:
   failed_at = _auth_failures.get(label)
   return failed_at is not None and now_or(now) - failed_at < AUTH_FAILURE_COOLDOWN
 
@@ -328,7 +328,7 @@ def _live_windows(label: str, model: str | None, now: datetime) -> list[dict[str
   return live
 
 
-def _panel_reading(label: str, model: str | None, now: datetime | None = None) -> RateLimitReading | None:
+def _panel_reading(label: str, model: str | None, now: datetime | None) -> RateLimitReading | None:
   """The panel reading folded for *model* over its live windows."""
   stored = _panel_readings.get(label)
   if stored is None:
@@ -469,7 +469,7 @@ def _reset_bonus(label: str, model: str | None, moment: datetime, headroom_left:
   return _RESET_BONUS_SCALE * (1.0 - ttr / _RESET_BONUS_HORIZON)
 
 
-def earliest_reset(cfg: CharlieBotConfig, now: datetime | None = None) -> datetime | None:
+def earliest_reset(cfg: CharlieBotConfig, now: datetime | None) -> datetime | None:
   """The nearest rejection reset among pool accounts, for the pool-exhausted error."""
   moment = now_or(now)
   resets = [

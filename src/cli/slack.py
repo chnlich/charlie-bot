@@ -33,17 +33,19 @@ from src.cli.common import (
     read_required_text_file,
     resolve_session_id,
 )
+from src.cli.help_formatter import CliHelpFormatter
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(description="CharlieBot Slack thread verbs")
+  parser = argparse.ArgumentParser(description="CharlieBot Slack thread verbs", formatter_class=CliHelpFormatter)
   sub = parser.add_subparsers(dest="slack_command", required=True)
 
-  reply = sub.add_parser("reply", help="Post a reply to this session's Slack thread")
+  reply = sub.add_parser("reply", help="Post a reply to this session's Slack thread", formatter_class=CliHelpFormatter)
   reply.add_argument("--file", required=True, help="File holding the reply text; - reads stdin")
   add_session_arg(reply)
 
-  ack = sub.add_parser("ack", help="Mark read thread messages, advancing the read watermark")
+  ack = sub.add_parser(
+      "ack", help="Mark read thread messages, advancing the read watermark", formatter_class=CliHelpFormatter)
   ack.add_argument(
       "--message-id",
       nargs="+",

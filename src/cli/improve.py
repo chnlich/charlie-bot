@@ -28,6 +28,7 @@ from src.cli.common import (
     resolve_session_id,
     validate_repo_path,
 )
+from src.cli.help_formatter import CliRawDescriptionHelpFormatter
 from src.core.config import get_config
 
 
@@ -59,7 +60,7 @@ def main() -> None:
   parser = argparse.ArgumentParser(
       description="Run an iterative improvement loop via CharlieBot workers",
       epilog=IMPROVE_EPILOG,
-      formatter_class=argparse.RawDescriptionHelpFormatter,
+      formatter_class=CliRawDescriptionHelpFormatter,
   )
   add_session_arg(parser)
   parser.add_argument("--repo", required=True, help="Path to the git repo workers should operate on")

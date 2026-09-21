@@ -20,19 +20,22 @@ from src.cli.common import (
     read_required_text_file,
     resolve_session_id,
 )
+from src.cli.help_formatter import CliHelpFormatter
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(description="CharlieBot session mutations")
+  parser = argparse.ArgumentParser(description="CharlieBot session mutations", formatter_class=CliHelpFormatter)
   sub = parser.add_subparsers(dest="session_command", required=True)
 
-  create = sub.add_parser("create", help="Create a session (metadata only, no first message)")
+  create = sub.add_parser(
+      "create", help="Create a session (metadata only, no first message)", formatter_class=CliHelpFormatter)
   create.add_argument("--name", required=True, help="Session name")
   create.add_argument("--backend", default=None, help="Backend id (optional)")
   create.add_argument("--group", default=None, help="Group name to assign after creation (optional)")
   create.add_argument("--role", default=None, help="Session role (optional)")
 
-  send = sub.add_parser("send", help="Relay a message to another session as an agent_message")
+  send = sub.add_parser(
+      "send", help="Relay a message to another session as an agent_message", formatter_class=CliHelpFormatter)
   send.add_argument("target", help="Target session id")
   source = send.add_mutually_exclusive_group(required=True)
   source.add_argument("--message", default=None, help="Message text")

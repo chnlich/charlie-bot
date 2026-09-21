@@ -15,6 +15,7 @@ from conftest import (
     apply_config_overrides,
     assert_gzip_served,
     fake_backends,
+    fresh_state_fixture,
     gzip_explode_compress,
 )
 from fastapi import FastAPI
@@ -38,6 +39,22 @@ from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
 
 LONG_DESCRIPTION = "spec " * 300  # 1500 chars, over the list cap
+
+
+def _reset_list_state() -> None:
+  """Empty the api module's process-wide list/view memos, gates, and the sidebar
+  mark state around every test: the memo-count assertions below read lengths, and
+  the sweep-gate countdowns advance per process-wide poll."""
+  threads_api._list_body_memo.clear()
+  threads_api._sig_gate.clear()
+  threads_api._thread_row_memo.clear()
+  threads_api._list_gzip_memo.clear()
+  threads_api._view_rows_memo.clear()
+  threads_api._view_rows_gate.clear()
+  sidebar_state.reset_for_tests()
+
+
+_fresh_list_state = fresh_state_fixture(_reset_list_state)
 
 
 def _seeded_client(tmp_path: Path) -> tuple[TestClient, str, str]:
@@ -118,13 +135,11 @@ def test_session_view_ships_the_same_truncated_rows(tmp_path: Path) -> None:
 
 _WALK_SKIP_ENDPOINTS = [
     pytest.param(
-        ("_view_rows_memo", "_view_rows_gate"),
         "/api/sessions/{session_id}/view",
         "threads",
         id="session-view",
     ),
     pytest.param(
-        ("_list_body_memo", "_sig_gate"),
         "/api/threads/{session_id}/list",
         None,
         id="list-poll",
@@ -150,17 +165,14 @@ def _count_walks(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
   return walks
 
 
-@pytest.mark.parametrize(("memos", "url_pattern", "rows_key"), _WALK_SKIP_ENDPOINTS)
+@pytest.mark.parametrize(("url_pattern", "rows_key"), _WALK_SKIP_ENDPOINTS)
 def test_rows_skip_the_walk_until_a_mark_or_the_sweep(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    memos: tuple[str, ...],
     url_pattern: str,
     rows_key: str | None,
 ) -> None:
   client, session_id, _ = _seeded_client(tmp_path)
-  for memo in memos:
-    getattr(threads_api, memo).clear()
   url = url_pattern.format(session_id=session_id)
 
   def response_rows(response: httpx.Response) -> list[dict]:
@@ -208,7 +220,6 @@ def test_session_view_rows_match_the_list_rows_order(tmp_path: Path) -> None:
 
 def test_list_body_memo_invalidates_on_metadata_rewrite(tmp_path: Path) -> None:
   client, session_id, _ = _seeded_client(tmp_path)
-  threads_api._list_body_memo.clear()
   url = f"/api/threads/{session_id}/list"
 
   first = client.get(url)
@@ -227,7 +238,6 @@ def test_list_body_memo_invalidates_on_metadata_rewrite(tmp_path: Path) -> None:
 
 def test_list_poll_repeating_the_rendered_etag_gets_a_bodyless_204(tmp_path: Path) -> None:
   client, session_id, _ = _seeded_client(tmp_path)
-  threads_api._list_body_memo.clear()
   url = f"/api/threads/{session_id}/list"
 
   first = client.get(url)
@@ -254,9 +264,6 @@ def test_marked_rebuild_reuses_rows_and_parses_from_one_walk(tmp_path: Path) -> 
   """A marked rebuild rebuilds only the moved file's row, and the rows parse from
   the walked pairs (the signature and the rows describe one file instant)."""
   client, session_id, _ = _seeded_client(tmp_path)
-  threads_api._list_body_memo.clear()
-  threads_api._sig_gate.clear()
-  threads_api._thread_row_memo.clear()
   url = f"/api/threads/{session_id}/list"
 
   first = client.get(url)
@@ -437,17 +444,9 @@ def test_list_threads_from_stats_matches_list_threads(tmp_path: Path) -> None:
   assert {t.description for t in from_stats} == {"one", "two"}
 
 
-def _cleared_memos() -> None:
-  threads_api._list_body_memo.clear()
-  threads_api._sig_gate.clear()
-  threads_api._thread_row_memo.clear()
-  sidebar_state.reset_for_tests()
-
-
 def test_marked_incremental_body_matches_the_full_walk_body(tmp_path: Path) -> None:
   """The marked poll's spliced body is byte-identical to the full walk's, tag included."""
   client, session_id, _ = _seeded_client(tmp_path)
-  _cleared_memos()
   url = f"/api/threads/{session_id}/list"
 
   client.get(url)
@@ -468,7 +467,6 @@ def test_marked_incremental_body_matches_the_full_walk_body(tmp_path: Path) -> N
 def test_marked_vanished_file_drops_the_row(tmp_path: Path) -> None:
   """A mark whose file vanished between the mark and the poll drops the row, and the full walk agrees."""
   client, session_id, _ = _seeded_client(tmp_path)
-  _cleared_memos()
   url = f"/api/threads/{session_id}/list"
   rows = {row["id"]: row for row in client.get(url).json()}
   thread_id = next(iter(rows))
@@ -488,7 +486,6 @@ def test_marked_vanished_file_drops_the_row(tmp_path: Path) -> None:
 def test_sweep_survives_continuous_marked_polls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Incremental proofs advance the sweep countdown: a full walk still lands within the 10-poll window."""
   client, session_id, _ = _seeded_client(tmp_path)
-  _cleared_memos()
   url = f"/api/threads/{session_id}/list"
 
   walks = _count_walks(monkeypatch)
@@ -511,7 +508,6 @@ def test_list_gzip_ships_precompressed_body(tmp_path: Path) -> None:
   decompress to the plain body, the tag names the plain render, and the
   conditional 204 stays bodyless under a gzip-accepting client."""
   client, session_id, _ = _seeded_client(tmp_path)
-  threads_api._list_gzip_memo.clear()
   url = f"/api/threads/{session_id}/list"
 
   gz = client.get(url)
@@ -529,7 +525,6 @@ def test_list_gzip_ships_precompressed_body(tmp_path: Path) -> None:
 def test_list_gzip_repeat_serves_memo_without_recompress(tmp_path: Path) -> None:
   """A repeat poll of the same body serves the memo's bytes and re-compresses nothing."""
   client, session_id, _ = _seeded_client(tmp_path)
-  threads_api._list_gzip_memo.clear()
   url = f"/api/threads/{session_id}/list"
 
   first = client.get(url)
@@ -545,7 +540,6 @@ def test_list_gzip_changed_body_recompresses(tmp_path: Path) -> None:
   """A row-source rewrite changes the body: the next gzip poll compresses that
   body once and its decompressed bytes carry the new status."""
   client, session_id, _ = _seeded_client(tmp_path)
-  threads_api._list_gzip_memo.clear()
   url = f"/api/threads/{session_id}/list"
 
   first = client.get(url)
@@ -565,7 +559,6 @@ def test_list_plain_request_stays_uncompressed(tmp_path: Path) -> None:
   """A client sending no Accept-Encoding reads the plain render, and the gzip
   memo gains no entry."""
   client, session_id, _ = _seeded_client(tmp_path)
-  threads_api._list_gzip_memo.clear()
   url = f"/api/threads/{session_id}/list"
 
   plain = client.get(url, headers={"accept-encoding": "identity"})

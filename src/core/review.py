@@ -19,7 +19,7 @@ from src.core.models import (
     BackendOption,
     SpawnRequest,
     ThreadMetadata,
-    backend_type_allows_missing_model,
+    option_default_model,
 )
 from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events, iter_ndjson_events_from_end, type_line_filter
 from src.core.sessions import SessionManager
@@ -288,11 +288,7 @@ def _resolve_preference_option(cfg: CharlieBotConfig, option_id: str) -> Backend
   Raises ValueError if the option_id is not in backends.options or requires but lacks a model.
   """
   option = require_backend_option(cfg, option_id, subject="backends.preference entry ")
-  if backend_type_allows_missing_model(option.type):
-    return option.model_copy(update={"model": None})
-  if not option.model:
-    raise ValueError(f"backends.preference entry '{option_id}' has no default model")
-  return option
+  return option.model_copy(update={"model": option_default_model(option, subject="backends.preference entry ")})
 
 
 def select_reviewer_backend(

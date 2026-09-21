@@ -1,9 +1,9 @@
 """Stateful aggregator that turns raw chat events into renderable message deltas.
 
 The aggregator is the single source of truth for chat-event aggregation. All
-three render paths (SSR, WS catchup, WS live broadcast) feed events through
-the same logic, eliminating the previous duplication between
-`events_to_messages` (Python) and `handleWSEvent` (JavaScript).
+three render paths (SSR, WS catchup, WS live broadcast) serve its output:
+the Python paths call it directly, and the browser's ``handleWSEvent``
+renders the deltas it emits.
 
 Two delta shapes are emitted:
   * ``{"type": "message", "message": {role, content, ...}}`` -- a finalized

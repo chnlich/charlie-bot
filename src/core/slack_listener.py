@@ -200,11 +200,9 @@ class SlackClient:
     resp = await self._http.post("https://slack.com/api/apps.connections.open", headers=self._app_headers)
     return self._checked_payload(resp, "apps.connections.open")["url"]
 
-  async def post_message(self, channel: str, text: str, thread_ts: str | None = None) -> dict:
-    """POST chat.postMessage; returns the API payload."""
-    body: dict[str, Any] = {"channel": channel, "text": text}
-    if thread_ts is not None:
-      body["thread_ts"] = thread_ts
+  async def post_message(self, channel: str, text: str, thread_ts: str) -> dict:
+    """POST chat.postMessage as a thread reply; returns the API payload."""
+    body: dict[str, Any] = {"channel": channel, "text": text, "thread_ts": thread_ts}
     resp = await self._http.post("https://slack.com/api/chat.postMessage", headers=self._bot_headers, json=body)
     return self._checked_payload(resp, "chat.postMessage")
 

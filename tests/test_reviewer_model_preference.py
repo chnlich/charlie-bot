@@ -372,7 +372,7 @@ async def _fake_read_events_summary(
   return "(test events)"
 
 
-def _make_review_thread(tried_backends: list[str] | None = None) -> ThreadMetadata:
+def _make_review_thread(tried_backends: list[str]) -> ThreadMetadata:
   return ThreadMetadata(
       id="review-thread-id",
       session_id="session-id",
@@ -380,7 +380,7 @@ def _make_review_thread(tried_backends: list[str] | None = None) -> ThreadMetada
       review_of="origin-thread-id",
       backend="kimi-k2.5",
       model="kimi-k2.5",
-      tried_backends=tried_backends or [],
+      tried_backends=tried_backends,
       branch_name="charliebot/task-1",
       repo_path="/tmp/repo",
       worktree_path=_WORKTREE_PATH,

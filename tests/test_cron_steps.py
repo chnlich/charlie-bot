@@ -119,7 +119,7 @@ def test_load_cron_file_loads_steps(tmp_path: Path) -> None:
   assert set(mtimes) == {sel_path, rev_path}
 
 
-def _load_error(cron_dir: Path, tmp_path: Path, extra_body: dict | None = None) -> str:
+def _load_error(cron_dir: Path, tmp_path: Path, extra_body: dict) -> str:
   cfg = build_scheduler_cfg(tmp_path)
   yaml_path, _sel, _rev, _sel_body, _rev_body = _seed_steps_task(cron_dir, tmp_path, extra_body)
   with pytest.raises(ValueError) as exc_info:

@@ -81,6 +81,6 @@ async def test_scheduler_maybe_run_accepts_naive_last_scheduled_run(
   monkeypatch.setattr(scheduler, "_get_or_create_session", AsyncMock(return_value=session))
   monkeypatch.setattr(scheduler, "_execute_task", execute_task)
 
-  await scheduler._maybe_run(task_cfg, AsyncMock(), {})
+  await scheduler._maybe_run(task_cfg, AsyncMock(), {}, None)
 
   execute_task.assert_not_awaited()

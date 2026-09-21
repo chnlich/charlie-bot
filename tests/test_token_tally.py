@@ -1772,8 +1772,8 @@ class Charliebot:
       tid: str,
       results: list[tuple[str, dict]],
       session_ids: list[str],
-      backend: str | None = None,
-      model: str | None = None,
+      backend: str | None,
+      model: str | None,
       meta: bool = True,
   ) -> Path:
     """One thread dir with its metadata.json (unless *meta* is False) and events.jsonl whose

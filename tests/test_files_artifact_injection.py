@@ -274,15 +274,14 @@ def test_serve_file_clean_reinjects_when_page_is_rewritten(sessions_root: Path) 
 # middleware skips its own whole-body deflate ---
 
 
-def _build_gzip_client(access_key: str | None = None) -> TestClient:
+def _build_gzip_client(access_key: str) -> TestClient:
   """The files router behind the production gzip mount, so the test sees the
   skip the pre-compressed response buys. The credential argument mirrors
   _build_client: the router never reads it."""
   app = FastAPI()
   app.include_router(files_api.router, prefix="/absolute_filepath")
   mount_production_gzip(app)
-  cookies = {"charliebot_access_key": access_key} if access_key is not None else None
-  return TestClient(app, cookies=cookies)
+  return TestClient(app, cookies={"charliebot_access_key": access_key})
 
 
 def test_serve_file_gzip_view_ships_precompressed_injected_page(sessions_root: Path) -> None:

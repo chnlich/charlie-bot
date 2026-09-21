@@ -1663,7 +1663,7 @@ def collect_charliebot(
 
 # The cold-pass scan projects each matching row's tally fields inside SQLite: json_extract
 # in C there beats a Python round trip plus json.loads per row (measured ~4x slower over this
-# host's 36k-row message table). json_valid keeps the old json.loads failure mode: the LIKE
+# host's 36k-row message table). json_valid guards the query: the LIKE
 # prefilter can match a malformed row, and skipping it must not error the query. Non-object
 # tokens project NULLs, dropped by the row filter below. The trailing id/time_updated columns
 # seed the row memo; rows the WHERE clause drops are known non-contributors and memoize as

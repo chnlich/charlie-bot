@@ -1063,11 +1063,10 @@ test('gutter cards are positioned by the stackCards pure function (render glue)'
 });
 
 test('gutter mode never writes the artifact\'s own layout', async () => {
-  // The mechanism that replaces the removed body-padding reserve: the layer
-  // writes no artifact style at all. The body's and documentElement's style
-  // attribute strings (el.attributes.style is this double's getAttribute) are
-  // captured at entry and asserted identical at every step, including after
-  // entry, which is where the old code reserved 316px of padding.
+  // The gutter layer writes no artifact style at all. The body's and
+  // documentElement's style attribute strings (el.attributes.style is this
+  // double's getAttribute) are captured at entry and asserted identical at
+  // every step.
   const block = makeBlock('anchored section');
   block.getBoundingClientRect = () => ({left: 0, top: 200, right: 640, bottom: 250, width: 640, height: 50});
   const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {

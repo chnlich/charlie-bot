@@ -7,9 +7,7 @@
 // sequence split across a reconnect at ANY point.
 //
 // This is the mechanism-level statement of "the last reply must not show twice":
-// the old code kept a `catchupDone` flag that suppressed preview clearing and
-// dropped `stream` / `separator` frames while it was false, so the split
-// delivery diverged from the unsplit one.
+// split delivery must equal unsplit delivery.
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -99,7 +97,7 @@ test('splitting the frame sequence at any point renders the same screen', () => 
 });
 
 test('a reconnect mid-stream does not leave the reply on screen twice', () => {
-  // Split exactly where the old code duplicated: the preview holds the whole
+  // Split mid-reply: the preview holds the whole
   // reply and the commit arrives on the next connection.
   const rendered = renderSplitAt(FRAMES, 3);
   assert.equal(rendered.filter(x => x === 'assistant:' + REPLY).length, 1);

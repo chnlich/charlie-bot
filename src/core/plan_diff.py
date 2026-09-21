@@ -791,8 +791,7 @@ def _offset_after_insertions(offset: int, insertions: dict[int, list[str]]) -> i
 
   ``_splice`` only ever inserts bytes, so a position shifts by the total length
   inserted before it; insertions at the offset itself share its source boundary
-  and sit ahead of it, which is where the replaced full re-parse read the
-  position too.
+  and sit ahead of it.
   """
   return offset + sum(sum(len(piece) for piece in pieces) for at, pieces in insertions.items() if at < offset)
 
@@ -810,7 +809,7 @@ def _append_style_and_header(source: str, insertions: dict[int, list[str]], root
   # the element's tag bytes stay contiguous and its spliced position is the
   # pre-splice one shifted by the inserted length before it
   # (_offset_after_insertions). The main-tag fallback can diverge from the
-  # replaced re-parse — a deleted bare main or body becomes a ghost carrying
+  # spliced-page re-parse — a deleted bare main or body becomes a ghost carrying
   # that tag — but the artifact pages the route serves share the wrap chrome,
   # which answers the lookup first; there the header moves outside the
   # deleted ghost, the saner placement.

@@ -615,8 +615,8 @@ def _render_frames(frames: list[dict]) -> list[str]:
 
   The render rides the shared orjson home (src.api.responses.fast_json_bytes,
   the same render the broadcast fan-out uses); the parsed content equals the
-  stdlib ``send_json`` form this replay replaced, only the raw bytes differ at
-  the boundaries responses.py pins.
+  stdlib ``send_json`` form, only the raw bytes differ at the boundaries
+  responses.py pins.
   """
   return [responses.fast_json_bytes(frame).decode("utf-8") for frame in frames]
 

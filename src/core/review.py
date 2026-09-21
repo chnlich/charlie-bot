@@ -154,8 +154,7 @@ def _first_delegation_description(chat_log: Path, thread_id: str) -> str | None:
   """First task_delegated description naming *thread_id*, in file order, or None.
 
   Streams the log and stops at the first matching event whether its description
-  carries text or not — the first-match contract of the full-parse loop this
-  replaced; blank and malformed lines are skipped by the shared
+  carries text or not; blank and malformed lines are skipped by the shared
   ``iter_ndjson_events`` contract. A missing file means no match, never an error.
   """
   if not chat_log.exists():
@@ -177,9 +176,8 @@ def _worker_summary_from_events_log(worker_log: Path) -> str | None:
   text, whichever kind is newer, or None.
 
   Streams the log from the end and stops at the first event that settles the
-  answer — the newest-first contract of the full-parse loop this replaced;
-  blank, malformed and missing-file cases follow the shared walk's skip
-  contract (None, never an error). Only result and assistant events can
+  answer; blank, malformed and missing-file cases follow the shared walk's
+  skip contract (None, never an error). Only result and assistant events can
   settle the answer, so the walk parses nothing else — the multi-megabyte
   tool_result lines between the answer and the tail would otherwise parse
   whole.

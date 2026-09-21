@@ -82,7 +82,7 @@ router = APIRouter()
 
 # The search route's read-only overlay serializes derived datetimes through the
 # model's own JSON scheme: a hand-rolled isoformat() emits +00:00 where the
-# UtcDatetime fields the old response-model render serialized emit Z.
+# model's UtcDatetime fields emit Z.
 _UTC_DATETIME_JSON = TypeAdapter(UtcDatetime | None)
 
 

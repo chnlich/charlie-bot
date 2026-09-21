@@ -323,9 +323,8 @@ def make_context_compacted_event(trigger: str, compact_metadata: dict | None, mo
   """Build the synthesized ``context_compacted`` event producers persist and broadcast.
 
   ``compact_metadata`` is the upstream compaction payload, carried whole: which
-  inner keys exist is the upstream's business, and a filter here would be the
-  field-by-field projection loss this parameter replaced, written a second
-  time. ``model`` names the model that ran the compaction; a producer relaying
+  inner keys exist is the upstream's business, and a filter here would project
+  fields away. ``model`` names the model that ran the compaction; a producer relaying
   Claude Code's own compaction passes None. Either argument None omits its key,
   so the aggregator renders the line from what the event actually carries.
   """

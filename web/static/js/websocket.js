@@ -127,7 +127,7 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
   }
   if (t === 'ping') return;
 
-  // Session rename can arrive at any time — handle before catchup guard
+  // Session rename can arrive at any time
   if (t === 'session_renamed') {
     const sid = ev.session_id || SESSION_ID;
     if (typeof updateSidebarSessionName === 'function') {
@@ -151,7 +151,7 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     return;
   }
 
-  // Sidebar unread indicator — handle before catchup guard
+  // Sidebar unread indicator
   if (t === 'unread_changed') {
     sessionUnread[ev.session_id] = ev.has_unread;
     if (ev.session_id === SESSION_ID) return;
@@ -162,7 +162,7 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     return;
   }
 
-  // Sidebar spinner update — handle before catchup guard
+  // Sidebar spinner update
   if (t === 'running_changed') {
     setSessionIndicator(ev.session_id, getSessionIndicatorState({
       thinking_since: ev.thinking_since,

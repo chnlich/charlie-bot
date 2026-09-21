@@ -494,7 +494,7 @@ def _patch_improve_loop_io(monkeypatch: pytest.MonkeyPatch) -> tuple[list[SpawnR
   return spawn_requests, triggered_payloads
 
 
-def _patch_git(monkeypatch: pytest.MonkeyPatch, *, count: str = "0", tip: str = "a" * 40) -> list[tuple]:
+def _patch_git(monkeypatch: pytest.MonkeyPatch, *, count: str, tip: str = "a" * 40) -> list[tuple]:
   """Monkeypatch the shared-worktree git helpers used for the commit delta.
 
   ``rev-parse HEAD`` returns ``tip`` on every call, ``rev-list --count`` returns
@@ -1034,7 +1034,7 @@ async def _gate_loop(
     *,
     iterations: int,
     reports: dict[int, str | None],
-    count: str = "1",
+    count: str,
 ) -> tuple[Any, _FakeImproveSessionManager, list[dict], list[str]]:
   """Run a loop writing the given per-iteration reports.
 

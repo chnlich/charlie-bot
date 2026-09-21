@@ -17,6 +17,7 @@ from conftest import (
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     JudgmentShim,
     ScriptedRelayBackend,
+    assistant_text_event,
     backend_option,
     build_finalize_ctx,
     fable_pool_cfg,
@@ -24,6 +25,7 @@ from conftest import (
     install_scripted_backends,
     make_transcript,
     rate_limit_event,
+    user_tool_result_event,
 )
 
 from src.agents.worker import QuotaExhaustedError, Worker
@@ -46,17 +48,6 @@ _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
 
 def _reject(label: str) -> None:
   claude_accounts.observe_rate_limit(label, rate_limit_event("rejected", 1.0)["rate_limit_info"])
-
-
-def _tool_result() -> dict:
-  return {"type": ET.USER, "message": {"content": [{"type": ET.TOOL_RESULT, "tool_use_id": "t1", "content": "ok"}]}}
-
-
-def _assistant(text: str, prompt_tokens: int | None = None) -> dict:
-  message: dict[str, Any] = {"content": [{"type": "text", "text": text}]}
-  if prompt_tokens is not None:
-    message["usage"] = {"input_tokens": 10, "cache_read_input_tokens": prompt_tokens - 10}
-  return {"type": ET.ASSISTANT, "message": message}
 
 
 def _result() -> dict:
@@ -160,8 +151,8 @@ async def test_worker_relays_a_rejected_run_onto_another_account(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path)
   source_transcript = make_transcript(tmp_path / "claude-main", CC_ID)
-  first = ScriptedRelayBackend([_assistant("working"), rate_limit_event("rejected", 1.0)], exit_code=1)
-  second = ScriptedRelayBackend([_assistant("done"), _result()], exit_code=0)
+  first = ScriptedRelayBackend([assistant_text_event("working"), rate_limit_event("rejected", 1.0)], exit_code=1)
+  second = ScriptedRelayBackend([assistant_text_event("done"), _result()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
   worker = _worker(tmp_path, cfg, "main")
 
@@ -187,7 +178,9 @@ async def test_worker_terminates_at_the_safe_point_after_a_far_warning_and_relay
   make_transcript(tmp_path / "claude-main", CC_ID)
   first = ScriptedRelayBackend(
       [rate_limit_event("allowed_warning", 0.92),
-       _tool_result(), _assistant("never streamed")], exit_code=0)
+       user_tool_result_event(),
+       assistant_text_event("never streamed")],
+      exit_code=0)
   second = ScriptedRelayBackend([_result()], exit_code=0)
   _install_backends(monkeypatch, [first, second])
   worker = _worker(tmp_path, cfg, "main")
@@ -248,7 +241,7 @@ async def test_worker_login_failure_marks_the_account_and_notifies_the_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", CC_ID)
-  first = ScriptedRelayBackend([_assistant("Failed to authenticate. Please run /login")], exit_code=1)
+  first = ScriptedRelayBackend([assistant_text_event("Failed to authenticate. Please run /login")], exit_code=1)
   second = ScriptedRelayBackend([_result()], exit_code=0)
   _install_backends(monkeypatch, [first, second])
   worker = _worker(tmp_path, cfg, "main")
@@ -273,9 +266,9 @@ async def test_worker_relay_compacts_a_large_fable_context_on_the_new_account(
   make_transcript(tmp_path / "claude-main", CC_ID)
   compact = AsyncMock()
   monkeypatch.setattr(claude_compaction, "compact_with_sonnet", compact)
-  first = ScriptedRelayBackend(
-      [_assistant("big", prompt_tokens=prompt_tokens),
-       rate_limit_event("rejected", 1.0)], exit_code=1)
+  big = assistant_text_event("big")
+  big["message"]["usage"] = {"input_tokens": 10, "cache_read_input_tokens": prompt_tokens - 10}
+  first = ScriptedRelayBackend([big, rate_limit_event("rejected", 1.0)], exit_code=1)
   second = ScriptedRelayBackend([_result()], exit_code=0)
   _install_backends(monkeypatch, [first, second])
   worker = _worker(tmp_path, cfg, "main")

@@ -21,24 +21,15 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
-from conftest import SuccessorDeliveryShim, _async_wait_for, cancel_and_drain, fresh_state_fixture
+from conftest import EventCaptureSessionManager, _async_wait_for, cancel_and_drain, fresh_state_fixture
 
 from src.agents.backends.base import tail_follow_events
 from src.core import init as init_module
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 
 
-class _FakeSessionMgr(SuccessorDeliveryShim):
+class _FakeSessionMgr(EventCaptureSessionManager):
   """Captures recovery reports instead of persisting them."""
-
-  def __init__(self) -> None:
-    self.events: list[dict] = []
-
-  async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
-    self.events.append(event)
-
-  async def mark_unread(self, session_id: str) -> None:
-    pass
 
 
 _clear_once_keys = fresh_state_fixture(init_module._silence_reported_thread_ids.clear)

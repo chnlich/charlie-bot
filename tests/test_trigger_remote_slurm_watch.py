@@ -38,9 +38,10 @@ def _mk_sacct_mock(scripted: dict[tuple[str | None, int], list[str]]) -> AsyncMo
 
   async def _factory(*args: Any, **kwargs: Any) -> FakeAsyncProcess:
     if args[0] == "ssh":
-      # Layout: ssh -o BatchMode=yes -o ConnectTimeout=10 HOST "sacct -j ID ..."
-      host = args[5]
-      sacct_cmd = args[6]
+      # Layout: ssh -o <pairs...> HOST "sacct -j ID ..."; the host is the last
+      # bare word before the quoted remote command.
+      host = args[-2]
+      sacct_cmd = args[-1]
       job_id = int(sacct_cmd.split()[2])
     else:
       # Layout: sacct -j ID -X -n -P --format=JobID,State,ExitCode

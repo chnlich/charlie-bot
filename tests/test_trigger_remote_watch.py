@@ -55,9 +55,10 @@ def _mk_subprocess_mock(scripted: dict[tuple[str, int], list[str]]) -> AsyncMock
 
   async def _factory(*args: Any, **kwargs: Any) -> FakeAsyncProcess:
     # Extract host and `kill -0 PID 2>&1 ...` payload from cmd.
-    # Layout: ssh -o BatchMode=yes -o ConnectTimeout=10 HOST "kill -0 PID ..."
-    host = args[5]
-    payload = args[6]
+    # Layout: ssh -o <pairs...> HOST "kill -0 PID ..."; the host is the last
+    # bare word before the quoted remote command.
+    host = args[-2]
+    payload = args[-1]
     pid = int(payload.split()[2])
     queue = scripted[(host, pid)]
     status = queue[0] if len(queue) == 1 else queue.pop(0)

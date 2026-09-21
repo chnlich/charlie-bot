@@ -118,6 +118,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M106 switch-during-stream repaint | M106 collector below | ms per synchronous paint of the hide+re-show a session switch performs on a mid-stream pending draft (the largest on-disk assistant draft grown one 200 B delta per switch, the page's marked build, node vm harness — live state read-only); the painted frame's parity against a direct full-draft parse rides every reading | median < 0.005 s | — (introduced with its first history row) |
 | M107 multi-trace merged-trace build wall, worst on-disk trace dir | M107 collector below | seconds per `_cached_merge` build over the worst on-disk multi-trace dir (the merged view's dir shape: one merge-pool task per trace, the single gzip run streaming each member's fragment as it completes; scratch cache home, live home read-only) | median < max(8 s, bytes ÷ 200 MB/s) (recalibrated from max(14 s, bytes ÷ 150 MB/s): the 2026-09-17 landing's wave model left the level-1 `gzip` subprocess on the ordered fragment stream — 201 MB/s against the four members' 63 MB/s write — and the stream became the wall after each wave; the isal igzip swap reads 797 MB/s, the wall is the member waves again, and 2.09 GB / 12 traces measures 7.35-8.34 s, 250-284 MB/s effective; the bytes line tracks the corpus the way M78/M84/M101 track theirs) | — (introduced with its first history row) |
 | M108 claude-sub launch import+dispatch floor, fresh process | M108 collector below | seconds per `claude-sub --<unsupported-probe-flag>` wall (the subscription-mode worker binary's console script: every cc-claude subscription worker and reviewer launch pays this import floor before the claude CLI starts; the probe flag rejects after argv parse, so no launch work runs — the nonzero exit is the assert; the checkout under test rides PYTHONPATH because the venv's editable finder pins src to the main checkout) | median < 0.15 s (the residual floor is the launch chain's own asyncio plus the backends raw-log machinery — ~36 ms asyncio measured standalone; the pydantic model stacks, the web framework, and the config model stack stay out — the ban-set contract test pins it) | — (introduced with its first history row) |
+| M110 remote ssh probe, warm-master steady state | M110 collector below | seconds per `ssh <host> "sacct …"` probe through `ssh_cmd` against the standing watches' SLURM login host, quiet-cluster steady state; the re-master round (the first probe after the persist window expired or the master died — the shape a create-time verify pays when the previous watch's last probe is older than the window) | warm median < 0.3 s; re-master median < 1.5 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -7525,10 +7526,93 @@ print(f"claude-sub launch floor median {times[3]:.3f} s, max {times[-1]:.3f} s o
 EOF
 ```
 
+M110 — remote ssh probe, warm-master steady state. The remote-probe family (the schedule-trigger
+verify-on-create, the remote-pid waiter's probes, the remote sacct watch's probes, the host-auth
+standing probe, the remote launch) takes every ssh argv from `ssh_cmd`, and each subprocess paid
+one full ssh handshake — TCP + KEX + auth, ~0.85 s to this deployment's SLURM login host. The
+probe family now rides one ControlMaster per (local user, host, port): probes multiplex over the
+master while it lives, the master exits after 1200 s idle (the remote watch ladder's 600 s
+plateau plus its ≤10 s noise stays inside, so a watched host's probes never re-master while the
+watch lives), and a stale socket (a master killed uncleanly) costs one re-master on the next
+probe. The cost is subprocess latency invisible to the HTTP probes; the verify-on-create probe
+sits on every remote-watch trigger creation's request. The collector drives the real probe — a
+read-only `sacct` query against the standing watches' SLURM login host (read-only; a probe never
+writes) — through both argv shapes from the checkout under test: the plain pre-fix argv (every
+probe a full handshake) and the module's `ssh_cmd` (master reuse; one timed re-master round after
+a clean `ssh -O exit`, then five timed warm rounds), three interleaved rounds, asserting rc 0 on
+every probe:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, subprocess, sys, time
+
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.ssh import ssh_cmd
+from src.core.timeouts import SSH_CONNECT_TIMEOUT
+
+# The standing remote watches' SLURM login host; the watched job id rides the
+# live watch (read-only sacct query — a probe never writes, and the job's state
+# moving between arms is the remote's business: the pass condition is rc 0).
+HOST = "host2"
+JOB = "285547"
+SACCT = f"sacct -j {JOB} -X -n -P --format=JobID,State,ExitCode"
+# The pre-fix argv: every probe one full handshake (the shape the served code
+# ran before the ControlMaster landing; kept verbatim as the reference arm).
+# Both arms are full argv prefixes ending in the host; probe() appends the command.
+PLAIN_ARGV = ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={SSH_CONNECT_TIMEOUT}", HOST]
+
+
+def probe(argv: list[str]) -> tuple[float, int]:
+    t0 = time.perf_counter()
+    proc = subprocess.run([*argv, SACCT], capture_output=True)
+    return time.perf_counter() - t0, proc.returncode
+
+
+def mux_cleanup() -> None:
+    # -O exit is an option, so it rides before the destination; the mux arm's
+    # argv is [options..., HOST, command], and the cleanup drops the command.
+    argv = ssh_cmd(HOST)
+    subprocess.run([*argv[:-1], "-O", "exit", HOST], capture_output=True)
+
+
+plain_medians, warm_medians, colds = [], [], []
+for _ in range(3):
+    plain = []
+    for _ in range(5):
+        dt, rc = probe(PLAIN_ARGV)
+        assert rc == 0, f"plain probe rc {rc}"
+        plain.append(dt)
+    plain.sort()
+    plain_medians.append(plain[2])
+
+    mux_cleanup()
+    dt, rc = probe(ssh_cmd(HOST))  # the re-master round: no master exists here
+    assert rc == 0, f"re-master probe rc {rc}"
+    colds.append(dt)
+    warm = []
+    for _ in range(5):
+        dt, rc = probe(ssh_cmd(HOST))
+        assert rc == 0, f"warm probe rc {rc}"
+        warm.append(dt)
+    warm.sort()
+    warm_medians.append(warm[2])
+mux_cleanup()
+plain_medians.sort(); warm_medians.sort(); colds.sort()
+print(f"remote ssh probe to {HOST}: plain median {plain_medians[1]:.3f} s, "
+      f"warm-master median {warm_medians[1]:.3f} s, re-master median {colds[1]:.3f} s "
+      f"over 3 interleaved rounds")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-21 | this PR | M110 remote ssh probe, connection reuse via ssh ControlMaster (the probe family's argv single-home `ssh_cmd` now carries ControlMaster=auto, a 0700 ControlPath under ~/.ssh/controlmasters, and ControlPersist=1200 s — the remote watch ladder's 600 s plateau plus its ≤10 s noise stays inside the window, so a watched host's probes never re-master while the watch lives): warm-master probe median 0.121/0.124/0.120/0.121 → plain (pre-fix shape) median 0.842/0.837/0.847/0.842 s (−85.6 % to −85.8 %), re-master median 0.841/0.842/0.846/0.853 s (parity with the plain arm — the master setup adds nothing to the cold shape), every paired round faster (four back-to-back invocations of the verbatim collector — branch
+worktree after vs main checkout before, each invocation three interleaved rounds of 5 plain +
+1 re-master + 5 warm probes against the standing watches' SLURM login host, read-only sacct,
+rc 0 asserted on every probe — 33 per invocation, 132 branch probes plus the main invocation's
+33, load 1.35-1.41 one-minute; the main checkout's own module arm reads 0.847/0.851/0.849 s — its argv carries no mux options, the before shape from the module); production carriers: the schedule-trigger verify-on-create probe — the hourly cron's remote-watch POST logged 1064-1255 ms server-side across 8/8 creations in the live server log (event loop idle, sibling requests 1-3 ms in the same windows) — and every remote watch-loop probe; stale-socket recovery verified standalone (kill -9 of the [mux] master → one 0.80 s recovery probe, rc 0, warmth after; ssh creates the socket 0600, the parent dir 0700); the argv-shape mocks in the remote watch tests re-pinned on the new layout (host/remote-command at argv[-2]/argv[-1]) and the new test_ssh_cmd.py pins the policy options plus the 0700 dir creation; 5914-passed suite + 9 skipped, ruff and yapf clean; M110 definition, collector, healthy ranges (warm median < 0.3 s, re-master median < 1.5 s), and history row introduced with this PR — the live server picks the fix up from its next deploy on | every remote probe paid one full ssh handshake — TCP + KEX + auth, ~0.85 s to the SLURM login host — on the verify path of every remote-watch trigger creation and again on each watch-loop probe (the backoff ladder's plateau re-pays it every ~600 s); one master per (local user, host, port) amortizes the handshake across the probes inside its idle window, the watched-host probe stream keeps the master warm, and the expire-or-stale cases degrade to at most the old single-handshake shape |
 | 2026-09-21 | this PR | M92/M97/M98/M102 CLI verb walls, argparse's parser-build `shutil` import priced out (the shared `CliHelpFormatter`, src/cli/help_formatter.py, passes the terminal width itself under `shutil.get_terminal_size`'s documented precedence — `COLUMNS`, then the stdout terminal, then 80 — so the lazy `import shutil` inside `HelpFormatter.__init__`, whose module body drags `bz2` + `lzma` for archive support no verb uses, never runs; applied at every `ArgumentParser`/`add_parser` site in `src/cli/`): M92 schedule-trigger --help 0.039/0.039/0.039 → 0.036/0.036/0.036 s (−7.7 %), M97 plan list 0.061/0.060/0.060 → 0.058/0.057/0.058 s, M98 memory query 0.052/0.052/0.051 → 0.050/0.049/0.049 s, M102 artifact wrap 0.040/0.040/0.041 → 0.038/0.038/0.039 s (−5 %), every paired round faster (three interleaved rounds of the verbatim collectors — main checkout before vs branch worktree after back-to-back, seven fresh processes per arm per round, load 1.2-1.6 one-minute); component attribution, fresh-process `-X importtime`: the before arm's schedule-trigger parser build carries `shutil` 2.16 ms cumulative (`bz2` 0.87 + `lzma` 0.73 inside), the after arm's carries none; help byte-identity across arms: every covered verb's `--help` and the usage-error path render identical bytes at COLUMNS=40/200/0/abc and unset (the width pin in tests/test_cli_import_weight.py asserts the shutil-precedence readings, and the parser-build probe bans shutil/bz2/lzma for the plan/artifact/schedule-trigger chains); no-regression witnesses interleaved: M99 import server 0.529/0.529/0.517 → 0.530/0.530/0.532 s and M108 claude-sub 0.077/0.077/0.075 → 0.076/0.076/0.074 s medians (bands both, ×3 — neither chain builds a CLI parser); 5913-passed suite + 9 skipped, ruff and yapf clean; M92/M97/M98/M102 healthy ranges unchanged (the after medians sit at 36 %/39 %/16 %/11 % of their lines) | every `charliebot` verb is a fresh process, and the verb's first parser build paid argparse's lazy `import shutil` — the HelpFormatter width resolution — while shutil's module body imports `bz2` + `lzma` for archive support no CLI verb touches; the width is a pure derivation of `COLUMNS` and the stdout terminal, so the shared formatter computes it directly, the memory chain keeps its pure-local property (the leaf is stdlib-only), and the archive chain stays out of every parser build |
 | 2026-09-21 | this PR | M97 plan-CLI command wall, the credentials read's `dataclasses` import left the verb chain (the last slice the M97 landing named after the client cut): wall median 0.074/0.069/0.071 → 0.063/0.060/0.061 s (−11 to −14 %), maxima 0.074/0.071/0.071 → 0.064/0.061/0.069 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, seven fresh processes per arm per round, load 1.56-1.66 one-minute); component attribution, fresh-process `-X importtime`: `src.core.credentials` cumulative 26.0 → 21.8 ms and the chain's `dataclasses`/`inspect` entries are gone (the standalone `dataclasses` chain measures 8.5 ms cumulative, of which `typing` stays as the module's direct import for `_HotReloadCache`'s `Generic`; the in-chain marginal is ~4-5 ms of inspect/copy plus the parser-build displacement); `Credentials` is a plain `__slots__` class — two keyword construction sites (the loader and the test seed), no dataclass machinery anywhere (no asdict/fields/replace), and the identity/equality pin in tests/test_cli_base_url_cache.py still passes; every internal-API verb (plan, delegate, improve, schedule-trigger with a request) reads credentials in its fresh process and sheds the same slice; no-regression witnesses interleaved: M92 schedule-trigger --help 0.039/0.038/0.039 → 0.039/0.038/0.039 s (bands both, ×3 — the --help chain imports no credentials), M98 memory query 0.053/0.051 → 0.051/0.050 s and M102 artifact wrap 0.040/0.040 → 0.040/0.040 s (bands both, ×2 each — neither chain imports credentials); 5909-passed suite + 9 skipped, ruff and yapf clean; M97 healthy range unchanged (the after medians sit at ~40 % of the 0.15 s line) | the credentials read was the one remaining pydantic-free module whose value object still cost the dataclasses machinery: the verb walls load the secrets file for the request's auth header in a fresh process, so the import is per-invocation, and `dataclasses` drags `inspect` for a two-field record no consumer reflects on |
 | 2026-09-21 | this PR | M3 in-server 401 floor, the http_request access line left structlog's dispatch: floor median 47.94/45.49/48.70 → 25.35/24.62/24.48 µs (−45 % to −50 %), p10 46.27-47.31 → 23.49-23.90 µs, p90 54.43-61.95 → 28.17-35.18 µs, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, 1000 raw-ASGI 401 drives per arm, the branch arm installing the renderer its lifespan installs, load 1.56-1.59 one-minute); line attribution in-context: muting the whole line drops the drive 47.6 → 12.1 µs, the per-line proxy resolution (`LazyStructlogLogger.__getattr__` → `get_logger` + getattr) plus BoundLogger dispatch plus the five-processor chain price ~34 µs of it, and the direct render — stamp, the same `_LeanLineRenderer` instance, print — reads ~20; the chain keeps every other line, its TimeStamper replaced by the shared `_LocalStampProcessor` (localtime + f-string, 1.7 vs 4.2 µs standalone) and the value-render quote check moved from a per-value set build to one regex search (0.84 → 0.41 µs on a 55-char path); byte-identity: the access line compares equal to the chain's render from the level column on (pinned per middleware case in tests/test_request_logging.py), the lean-render battery is unchanged, and the stamp processor's output matches `TimeStamper(utc=False)` within one second (pinned in tests/test_log_line_renderer.py); no-regression witnesses interleaved: M92 schedule-trigger --help 0.039-0.042 → 0.040-0.041 s medians (bands both, ×3) and import-server 0.649-0.651 → 0.642-0.650 s (bands both, ×2); 5904-passed suite + 9 skipped, ruff and yapf clean; M3 healthy range unchanged (the after band sits 2.3x inside the 60 µs line) | the lean-renderer landing byte-identified the line but left it on structlog's per-line machinery — proxy resolution, BoundLogger dispatch, and five processor calls per request — 73 % of the floor it had just cut; the access line is a formatting task, so the middleware hands its fields to `log_http_request_line`, which stamps and renders through the same renderer instance the chain ends in; capture-based readers re-pin: the middleware tests capture the fields dict at the new seam and the rendered bytes against the chain |

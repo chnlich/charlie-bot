@@ -24,8 +24,6 @@ from pathlib import Path
 from src.agents.backends.claude_launch import (  # noqa: F401  (re-export: the established base import path)
     DISALLOWED_TOOLS_FLAG,
     SKIP_PERMISSIONS_FLAG,
-    SKIP_PERMISSIONS_SETTINGS,
-    build_claude_argv,
 )
 from src.core import event_types as ET
 from src.core import runs

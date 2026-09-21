@@ -7,14 +7,12 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from src.agents.backends.base import DISALLOWED_TOOLS_FLAG, SKIP_PERMISSIONS_FLAG, AgentBackend
-from src.agents.backends.claude_launch import (  # noqa: F401  (re-export: the established claude_code import path)
+from src.agents.backends.claude_launch import (
     AUTO_COMPACT_WINDOW_ENV,
     AUTOCOMPACT_PCT_OVERRIDE_ENV,
     CLAUDE_COMPACT_CONTEXT_RESERVE,
     CLAUDE_COMPACT_OUTPUT_RESERVE,
     HEADLESS_CLAUDE_DEFAULT_ENV,
-    HEADLESS_CLAUDE_FORWARDED_ENV_NAMES,
-    HEADLESS_CLAUDE_INVARIANT_ENV,
     MAX_CONTEXT_TOKENS_ENV,
     headless_claude_env,
 )

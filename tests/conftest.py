@@ -1702,8 +1702,7 @@ def write_artifact(tmp_path: Path, name: str = "page.html", body: str = "<p>hell
   return path
 
 
-def write_plan_artifact(
-    cfg: CharlieBotConfig, session_id: str, name: str, content: str | None = None) -> str:
+def write_plan_artifact(cfg: CharlieBotConfig, session_id: str, name: str, content: str | None = None) -> str:
   """Write one plan artifact under cfg's sessions dir and return its plan-relative path; the default content
   passes the plan assertion set so tests can present/approve directly."""
   if content is None:

@@ -659,28 +659,12 @@
     const textarea = document.createElement('textarea');
     textarea.className = `${PREFIX}-edit`;
     textarea.value = entry.comment;
-    let done = false;
-
-    const cancel = () => {
-      if (done) return;
-      done = true;
-      refreshTray();
-    };
-    const save = () => {
-      if (done) return;
-      if (!textarea.value.trim()) {
-        cancel();
-        return;
-      }
-      done = true;
-      entry.comment = entry.isSuggestion ? textarea.value : textarea.value.trim();
-      refreshTray();
-    };
-    bindEditorKeys(textarea, cancel, save);
-    textarea.addEventListener('blur', save);
-    preview.parentNode.replaceChild(textarea, preview);
-    textarea.focus();
-    textarea.select();
+    swapInInlineEditor(
+        textarea, preview,
+        (value) => {
+          entry.comment = entry.isSuggestion ? value : value.trim();
+        },
+        refreshTray);
   }
 
   function refreshTray() {

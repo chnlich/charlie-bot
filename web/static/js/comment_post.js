@@ -47,3 +47,31 @@ function bindEditorKeys(textarea, onCancel, onSubmit) {
     }
   });
 }
+
+// Both trays' inline edit runs the same one-shot discipline: whichever of
+// cancel/save fires first wins, an edit that is empty or whitespace counts as
+// a cancel, and finish() runs after either end. commit receives the raw text —
+// each tray applies its own trim rule (a suggestion edit keeps its whitespace).
+function swapInInlineEditor(textarea, oldNode, commit, finish) {
+  let done = false;
+  const cancel = () => {
+    if (done) return;
+    done = true;
+    finish();
+  };
+  const save = () => {
+    if (done) return;
+    if (!textarea.value.trim()) {
+      cancel();
+      return;
+    }
+    done = true;
+    commit(textarea.value);
+    finish();
+  };
+  bindEditorKeys(textarea, cancel, save);
+  textarea.addEventListener('blur', save);
+  oldNode.parentNode.replaceChild(textarea, oldNode);
+  textarea.focus();
+  textarea.select();
+}

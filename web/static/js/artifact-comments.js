@@ -1017,32 +1017,13 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       textarea.className = GLOBAL_PREFIX + '-tray-edit';
       textarea.value = entry.comment;
       textarea.setAttribute('aria-label', 'Edit comment');
-      var done = false;
-
-      function cancel() {
-        if (done) return;
-        done = true;
-        refreshTray();
-      }
-
-      function save() {
-        if (done) return;
-        var next = textarea.value.trim();
-        if (!next) {
-          cancel();
-          return;
-        }
-        done = true;
-        pending[idx].comment = next;
-        saveDraft(pending, artifactPath);
-        refreshTray();
-      }
-
-      bindEditorKeys(textarea, cancel, save);
-      textarea.addEventListener('blur', save);
-      draftNode.parentNode.replaceChild(textarea, draftNode);
-      textarea.focus();
-      textarea.select();
+      swapInInlineEditor(
+          textarea, draftNode,
+          function(value) {
+            pending[idx].comment = value.trim();
+            saveDraft(pending, artifactPath);
+          },
+          refreshTray);
     }
 
     function refreshTray() {

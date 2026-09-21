@@ -2157,7 +2157,7 @@ class SessionManager:
     await self._ensure_chat_events_cached(session_id)
     return self._chat_events.finalize_master_woke(session_id, thread_id)
 
-  def load_chat_events_tail(self, session_id: str, limit: int = 200) -> tuple[list[dict], int, bool]:
+  def load_chat_events_tail(self, session_id: str, limit: int) -> tuple[list[dict], int, bool]:
     """Load only the last *limit* events from disk, bypassing the read-through cache.
 
     See ``src/core/chat_events.py`` for the return shape.

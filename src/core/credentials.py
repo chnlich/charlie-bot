@@ -10,7 +10,6 @@ working; new CLI-side readers import from here.
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Generic, TypeVar
 
@@ -120,18 +119,25 @@ def _file_fingerprint(name: str) -> tuple[float, int]:
   return (st.st_mtime, st.st_size)
 
 
-@dataclass
 class Credentials:
   """One profile's ``credentials.yaml``: ``section -> key -> scalar`` secret values.
 
-    Deliberately outside :class:`CharlieBotConfig`: the structure file never
-    carries secrets, so nothing holding a config can leak one. :meth:`get`
-    answers "is it set"; :meth:`require` turns a missing value into a
-    :class:`ValueError` naming the key path and the file it is missing from.
-    """
+    ``path`` is the file the sections were read from; ``sections`` maps each
+    top-level section to its scalar values (strings or integers, ``None``
+    dropped). Deliberately outside :class:`CharlieBotConfig`: the structure
+    file never carries secrets, so nothing holding a config can leak one.
+    :meth:`get` answers "is it set"; :meth:`require` turns a missing value
+    into a :class:`ValueError` naming the key path and the file it is missing
+    from. A plain class, not a dataclass: the CLI verbs that read credentials
+    are fresh processes, and the ``dataclasses`` import pulls ``inspect``
+    (~9 ms of the M97 verb wall) for machinery no consumer calls.
+  """
 
-  path: Path
-  sections: dict[str, dict[str, str | int]]
+  __slots__ = ("path", "sections")
+
+  def __init__(self, path: Path, sections: dict[str, dict[str, str | int]]) -> None:
+    self.path = path
+    self.sections = sections
 
   def get(self, section: str, key: str) -> str | int | None:
     """Return the value under *section*/*key*, or None when it is unset."""

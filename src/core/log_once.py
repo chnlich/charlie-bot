@@ -7,7 +7,9 @@ structlog staying out until first use.
 """
 
 import os
+import re
 import sys
+import time
 from collections.abc import Callable, Hashable
 from typing import Any
 
@@ -90,6 +92,12 @@ def _pad_log_field(field: str, width: int) -> str:
   return field + " " * max(0, missing)
 
 
+# The characters whose presence sends a str value through repr(): the dev
+# KeyValueColumnFormatter's quote rule, matched by one search instead of a
+# per-value set build on the hot render path.
+_QUOTE_NEEDED = re.compile(r"[ \t=\r\n\"']")
+
+
 def _render_log_value(value: object) -> str:
   """structlog.dev's KeyValueColumnFormatter value rule for the non-color path.
 
@@ -97,10 +105,34 @@ def _render_log_value(value: object) -> str:
   everything else renders through repr().
   """
   if isinstance(value, str):
-    if set(value) & {" ", "\t", "=", "\r", "\n", '"', "'"}:
+    if _QUOTE_NEEDED.search(value):
       return repr(value)
     return value
   return repr(value)
+
+
+def _local_timestamp() -> str:
+  """The chain's stamp: local wall time in the TimeStamper's %Y-%m-%d %H:%M:%S shape.
+
+  ``time.localtime`` reads the same tz rules ``datetime.now().astimezone()``
+  does and formats without strftime — the stamp is on every log line's hot
+  path (the M3 access line renders one per request).
+  """
+  t = time.localtime()
+  return f"{t.tm_year:04d}-{t.tm_mon:02d}-{t.tm_mday:02d} {t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d}"
+
+
+class _LocalStampProcessor:
+  """The chain's TimeStamper equivalent: stamps ``timestamp`` with :func:`_local_timestamp`.
+
+  The default chain's TimeStamper(utc=False) stamps local time; this processor
+  produces the same string faster (the format is fixed, so strftime's parse of
+  it is dead work). The utc=True variant would shift every served stamp to UTC.
+  """
+
+  def __call__(self, logger: object, name: str, event_dict: dict) -> dict:
+    event_dict["timestamp"] = _local_timestamp()
+    return event_dict
 
 
 class _LeanLineRenderer:
@@ -151,6 +183,7 @@ class _LeanLineRenderer:
 
 
 _lean_renderer_installed = False
+_lean_renderer: _LeanLineRenderer | None = None
 
 
 def ensure_lean_renderer() -> None:
@@ -162,20 +195,43 @@ def ensure_lean_renderer() -> None:
   M92/M98 collectors measure, and never inside a structlog.testing.capture_logs
   context, whose exit restores the config it entered with.
   """
-  global _lean_renderer_installed
+  global _lean_renderer_installed, _lean_renderer
   if _lean_renderer_installed:
     return
   _lean_renderer_installed = True
   import structlog
 
+  _lean_renderer = _LeanLineRenderer()
   structlog.configure(
       processors=[
           structlog.contextvars.merge_contextvars,
           structlog.processors.add_log_level,
           structlog.processors.StackInfoRenderer(),
           structlog.dev.set_exc_info,
-          # utc=False is the default chain's choice (local time); TimeStamper
-          # itself defaults to utc=True, which would shift every served stamp.
-          structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S", utc=False),
-          _LeanLineRenderer(),
+          _LocalStampProcessor(),
+          _lean_renderer,
       ])
+
+
+def _installed_lean_renderer() -> _LeanLineRenderer:
+  """The installed lean renderer, installing the chain first when absent."""
+  if _lean_renderer is None:
+    ensure_lean_renderer()
+  assert _lean_renderer is not None
+  return _lean_renderer
+
+
+def log_http_request_line(fields: dict[str, object]) -> None:
+  """Print the access log line the configured chain renders for this event.
+
+  The chain's other processors do nothing for this shape — the middleware
+  never sets exc_info or stack_info, and nothing in the process binds
+  contextvars (a future bind_contextvars would silently drop its keys from
+  this line) — so the line is the stamp, the level, the event, and the fields
+  through the same _LeanLineRenderer instance the chain ends in. The
+  per-line proxy and processor dispatch (measured ~20 us of the raw-ASGI 401
+  floor the M3 sub-reading prices) stays off the request path; capture-based
+  readers see the line on stdout, not in structlog's capture list.
+  """
+  event = {"timestamp": _local_timestamp(), "level": "info", "event": "http_request", **fields}
+  print(_installed_lean_renderer()(None, "info", event))

@@ -1,18 +1,31 @@
-"""_RequestLogMiddleware tests: one structlog http_request event per HTTP response.
+"""_RequestLogMiddleware tests: one access log line per HTTP response.
 
 The middleware is driven with fake ASGI scopes/apps directly — no uvicorn boot,
-no FastAPI app — so each test pins exactly one log event against one response.
+no FastAPI app — so each test pins exactly one log line against one response.
+The line renders through ``log_http_request_line``; the field contract pins the
+dict that helper receives, and the render contract pins the helper's bytes
+against the configured structlog chain's own render of the same event.
 """
 
 from __future__ import annotations
 
+import contextlib
+import io
 from typing import Any
 
 import pytest
+import structlog
 from starlette.types import Message, Receive, Scope, Send
-from structlog.testing import capture_logs
 
 from server import _RequestLogMiddleware
+
+
+@pytest.fixture
+def logged_fields(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+  """The fields dicts the middleware hands to the access-line renderer."""
+  captured: list[dict[str, object]] = []
+  monkeypatch.setattr("server.log_http_request_line", lambda fields: captured.append(fields))
+  return captured
 
 
 def _http_scope(
@@ -65,56 +78,56 @@ async def _drive(app: Any, scope: Scope) -> None:
   await _RequestLogMiddleware(app)(scope, _receive, _send)
 
 
-@pytest.mark.asyncio
-async def test_200_response_logs_one_event_with_five_fields() -> None:
-  with capture_logs() as events:
-    await _drive(_ok_app, _http_scope())
-
-  assert len(events) == 1
-  event = events[0]
-  # log_level is capture_logs' own addition; the middleware itself contributes
-  # the event name plus exactly the five contract fields.
-  assert set(event) == {"event", "log_level", "method", "path", "status", "duration_ms", "client"}
-  assert event["event"] == "http_request"
-  assert event["method"] == "GET"
-  assert event["path"] == "/api/sessions/"
-  assert event["status"] == 200
-  assert isinstance(event["status"], int)
-  assert isinstance(event["duration_ms"], int)
-  assert event["client"] == "127.0.0.1"
+def _rendered_fields(line: str) -> dict[str, str]:
+  """The key=value fields of one rendered access line, after the level column."""
+  fields_part = line.rstrip("\n")[line.index("]") + 1:].split(None, 1)[1]
+  return dict(token.split("=", 1) for token in fields_part.split(" "))
 
 
 @pytest.mark.asyncio
-async def test_401_response_logs_one_event_with_status_401() -> None:
-  with capture_logs() as events:
-    await _drive(_unauthorized_app, _http_scope(path="/api/chat"))
+async def test_200_response_logs_one_line_with_five_fields(logged_fields: list[dict[str, object]]) -> None:
+  await _drive(_ok_app, _http_scope())
 
-  assert len(events) == 1
-  assert events[0]["event"] == "http_request"
-  assert events[0]["status"] == 401
+  assert len(logged_fields) == 1
+  fields = logged_fields[0]
+  # The middleware contributes the event name (in the renderer) plus exactly
+  # the five contract fields.
+  assert set(fields) == {"method", "path", "status", "duration_ms", "client"}
+  assert fields["method"] == "GET"
+  assert fields["path"] == "/api/sessions/"
+  assert fields["status"] == 200
+  assert isinstance(fields["status"], int)
+  assert isinstance(fields["duration_ms"], int)
+  assert fields["client"] == "127.0.0.1"
 
 
 @pytest.mark.asyncio
-async def test_inner_app_exception_logs_500_and_reraises() -> None:
-  with pytest.raises(ValueError, match="boom"), capture_logs() as events:
+async def test_401_response_logs_one_line_with_status_401(logged_fields: list[dict[str, object]]) -> None:
+  await _drive(_unauthorized_app, _http_scope(path="/api/chat"))
+
+  assert len(logged_fields) == 1
+  assert logged_fields[0]["status"] == 401
+
+
+@pytest.mark.asyncio
+async def test_inner_app_exception_logs_500_and_reraises(logged_fields: list[dict[str, object]]) -> None:
+  with pytest.raises(ValueError, match="boom"):
     await _drive(_raising_app, _http_scope(method="POST"))
 
-  assert len(events) == 1
-  event = events[0]
-  assert event["event"] == "http_request"
-  assert event["status"] == 500
-  assert event["error"] == "ValueError"
-  assert event["method"] == "POST"
+  assert len(logged_fields) == 1
+  fields = logged_fields[0]
+  assert fields["status"] == 500
+  assert fields["error"] == "ValueError"
+  assert fields["method"] == "POST"
 
 
 @pytest.mark.asyncio
-async def test_path_excludes_query_string() -> None:
-  with capture_logs() as events:
-    await _drive(_ok_app, _http_scope(path="/ws/terminal", query_string=b"token=secret-token"))
+async def test_path_excludes_query_string(logged_fields: list[dict[str, object]]) -> None:
+  await _drive(_ok_app, _http_scope(path="/ws/terminal", query_string=b"token=secret-token"))
 
-  assert len(events) == 1
-  assert events[0]["path"] == "/ws/terminal"
-  assert "secret-token" not in str(events[0])
+  assert len(logged_fields) == 1
+  assert logged_fields[0]["path"] == "/ws/terminal"
+  assert "secret-token" not in str(logged_fields[0])
 
 
 @pytest.mark.asyncio
@@ -125,27 +138,54 @@ async def test_websocket_scope_passes_through_without_logging() -> None:
     seen.append(scope)
 
   scope: Scope = {"type": "websocket", "path": "/ws/sessions/s1", "headers": []}
-  with capture_logs() as events:
+  sink = io.StringIO()
+  with contextlib.redirect_stdout(sink):
     await _RequestLogMiddleware(ws_app)(scope, _receive, _send)
 
   assert seen == [scope]
-  assert events == []
+  assert sink.getvalue() == ""
 
 
 @pytest.mark.asyncio
-async def test_streaming_body_logs_exactly_one_event() -> None:
-  with capture_logs() as events:
-    await _drive(_streaming_app, _http_scope(path="/absolute_filepath/big.bin"))
+async def test_streaming_body_logs_exactly_one_line(logged_fields: list[dict[str, object]]) -> None:
+  await _drive(_streaming_app, _http_scope(path="/absolute_filepath/big.bin"))
 
-  assert len(events) == 1
-  assert events[0]["event"] == "http_request"
-  assert events[0]["status"] == 200
+  assert len(logged_fields) == 1
+  assert logged_fields[0]["status"] == 200
 
 
 @pytest.mark.asyncio
-async def test_missing_client_falls_back_to_dash() -> None:
-  with capture_logs() as events:
-    await _drive(_ok_app, _http_scope(client=None))
+async def test_missing_client_falls_back_to_dash(logged_fields: list[dict[str, object]]) -> None:
+  await _drive(_ok_app, _http_scope(client=None))
 
-  assert len(events) == 1
-  assert events[0]["client"] == "-"
+  assert len(logged_fields) == 1
+  assert logged_fields[0]["client"] == "-"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("app", "path", "expected_status"), [
+        (_ok_app, "/api/sessions/", 200),
+        (_unauthorized_app, "/api/chat", 401),
+        (_streaming_app, "/absolute_filepath/big.bin", 200),
+    ],
+    ids=["200", "401", "streaming"])
+async def test_rendered_line_matches_the_configured_chain(app: Any, path: str, expected_status: int) -> None:
+  """The direct render's bytes equal the structlog chain's render of the same event."""
+  sink = io.StringIO()
+  with contextlib.redirect_stdout(sink):
+    await _drive(app, _http_scope(path=path))
+  middleware_line = sink.getvalue()
+
+  rendered = _rendered_fields(middleware_line)
+  assert rendered["status"] == str(expected_status)
+  # The parsed values ride the chain render unchanged: ints and bare strings
+  # render identically either way, so the parsed line rebuilds the event.
+  chain_sink = io.StringIO()
+  with contextlib.redirect_stdout(chain_sink):
+    structlog.get_logger().info("http_request", **rendered)
+  chain_line = chain_sink.getvalue()
+
+  # Both stamps are local wall time in the same format; the comparison starts
+  # at the level column, the first renderer-shaped part.
+  assert middleware_line[middleware_line.index("["):] == chain_line[chain_line.index("["):]

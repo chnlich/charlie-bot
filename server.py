@@ -49,7 +49,7 @@ from src.core.init import (
     reconcile_master_identity,
     run_crash_recovery,
 )
-from src.core.log_once import LazyStructlogLogger, ensure_lean_renderer
+from src.core.log_once import LazyStructlogLogger, ensure_lean_renderer, log_http_request_line
 from src.core.message_aggregator import MessageAggregator
 from src.core.models import SessionMetadata, utc_now
 from src.core.process import log_session_cgroup_startup, sweep_stale_session_cgroups
@@ -183,12 +183,14 @@ class _CharlieBotGZipMiddleware(GZipMiddleware):
 
 
 class _RequestLogMiddleware:
-  """Emit exactly one structlog http_request event per HTTP response.
+  """Emit exactly one http_request log line per HTTP response.
 
   Pure ASGI like the GZip middleware above: send is wrapped only to capture the
   status off http.response.start (nothing is buffered, so streaming and
-  StaticFiles bodies still log exactly once), and the event fires when the
-  inner app returns. The query string is deliberately excluded from `path` —
+  StaticFiles bodies still log exactly once), and the line renders when the
+  inner app returns — through log_http_request_line's direct render, not
+  structlog's event dispatch (capture-based readers see the line on stdout).
+  The query string is deliberately excluded from `path` —
   the terminal WS carries its access credential in ?token= — so credentials
   never reach the log. Mounted last, hence outermost, so AuthMiddleware's 401s
   are logged too. An inner-app exception logs status=500 with the exception's
@@ -232,7 +234,7 @@ class _RequestLogMiddleware:
     }
     if error is not None:
       fields["error"] = error
-    log.info("http_request", **fields)
+    log_http_request_line(fields)
 
 
 async def _check_ws_auth(websocket: WebSocket) -> bool:

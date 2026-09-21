@@ -136,14 +136,21 @@ def test_configured_renderer_serves_the_lean_path() -> None:
 
 
 def test_configured_chain_stamps_local_time_like_the_default_chain() -> None:
-  from src.core.log_once import ensure_lean_renderer
+  from datetime import datetime, timedelta
+
+  from src.core.log_once import _LocalStampProcessor, ensure_lean_renderer
 
   ensure_lean_renderer()
-  stampers = [p for p in structlog.get_config()["processors"] if isinstance(p, structlog.processors.TimeStamper)]
-  assert len(stampers) == 1
-  # TimeStamper defaults to utc=True; the default chain passes utc=False, and
-  # dropping it shifts every served stamp to UTC.
-  assert stampers[0].fmt == "%Y-%m-%d %H:%M:%S" and stampers[0].utc is False
+  stamps = [p for p in structlog.get_config()["processors"] if isinstance(p, _LocalStampProcessor)]
+  assert len(stamps) == 1
+  # TimeStamper's utc=True default would shift every served stamp to UTC; the
+  # processor's stamp must read local wall time like the default chain's
+  # TimeStamper(utc=False) does. The stamps can straddle a second boundary,
+  # so the clocks compare within one second instead of byte-for-byte.
+  fmt = "%Y-%m-%d %H:%M:%S"
+  stamped = stamps[0](None, "info", {"event": "x"})["timestamp"]
+  reference = structlog.processors.TimeStamper(fmt=fmt, utc=False)(None, "info", {})["timestamp"]
+  assert abs(datetime.strptime(stamped, fmt) - datetime.strptime(reference, fmt)) <= timedelta(seconds=1)
 
 
 @pytest.mark.parametrize(

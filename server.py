@@ -294,7 +294,7 @@ def _provision_speech_models(cfg: CharlieBotConfig) -> None:
   log.info("voice_warmup_complete", elapsed_ms=round((time.monotonic() - started) * 1000))
 
 
-async def _run_crash_recovery(cfg: CharlieBotConfig, boot_time: datetime, identity: asyncio.Task | None = None) -> None:
+async def _run_crash_recovery(cfg: CharlieBotConfig, boot_time: datetime, identity: asyncio.Task) -> None:
   """Background startup recovery; logs completion and never swallows failures.
 
   Wraps init.run_crash_recovery so an exception surfaces loudly instead of

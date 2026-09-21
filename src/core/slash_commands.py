@@ -75,7 +75,7 @@ async def execute_shell_command(
     args: str,
     session_dir: str,
     timeout: int,
-    cwd: str | None = None,
+    cwd: str | None,
 ) -> dict:
   """Run a shell command template and return {stdout, stderr, exit_code}.
 

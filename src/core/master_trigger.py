@@ -20,7 +20,7 @@ async def run_message_with_resume_recovery(
     summary: str,
     session_mgr: SessionManager,
     expect_fresh_session: bool,
-    user_event_id: str | None = None,
+    user_event_id: str | None,
 ) -> str | None:
   """Call run_message, retrying once with cc_session_id cleared on stale-resume errors.
 

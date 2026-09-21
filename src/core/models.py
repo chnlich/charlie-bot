@@ -28,6 +28,7 @@ from src.core.backend_models import (  # noqa: F401  (re-export)
     OpencodeBackend,
     TuiCliBackend,
     backend_type_allows_missing_model,
+    option_default_model,
 )
 from src.core.constants import MAX_TRIGGER_MESSAGE_CHARS, WatchKind
 

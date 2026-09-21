@@ -125,6 +125,22 @@ def backend_type_allows_missing_model(backend_type: str) -> bool:
   return backend_type in MODEL_OPTIONAL_ROUTING_BACKEND_TYPES
 
 
+def option_default_model(option: BackendOption, *, subject: str) -> str | None:
+  """Return the option's default model, or None when its type routes without one.
+
+  Raises ValueError when the type requires a model and the option carries none —
+  an empty string counts as none, which the load-time ``require_model`` validator
+  does not catch (it rejects only a None model). *subject* prefixes the raise's
+  frame with the caller's role and carries its own trailing space, the same
+  convention as ``require_backend_option`` ("backend ", "session backend ").
+  """
+  if backend_type_allows_missing_model(option.type):
+    return None
+  if not option.model:
+    raise ValueError(f"{subject}'{option.id}' has no default model")
+  return option.model
+
+
 class ClaudeAccount(BaseModel):
   """One Claude subscription login in the account pool (src/core/claude_accounts.py).
 

@@ -107,9 +107,10 @@ def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dic
   }
 
 
-# The bootstrap payload's tool rows render through tool_preview: string output
-# and input values over TOOL_PREVIEW_CHARS trim to the cap with their
-# truncation markers set, one home shared with the stream delta's tool shape.
+# The bootstrap payload's tool rows render through tool_preview: the output and
+# the input fields the renderer reads cap at TOOL_PREVIEW_CHARS with their
+# truncation markers set, and the input's other string values carry the
+# dead-field bound — one home shared with the stream delta's tool shape.
 # The projection memo's dicts stay shared with the events pages and the M26
 # digest, so a message copies only when one of its tools actually trims.
 

@@ -43,8 +43,9 @@ async function loadMarkedSrc() {
 // context, mirroring the browser page order: marked.min.js defines the global
 // marked first, then markdown-renderer.js registers its renderer + tokenizer
 // via marked.use. The renderer-context base stubs the non-marked globals
-// (console, hljs, document) that the file touches; a caller-passed hljs
-// replaces the stub so tests can count or shape highlight calls.
+// (console, hljs, document): markdown-renderer.js touches hljs and document,
+// and the marked build logs its error paths through console. A caller-passed
+// hljs replaces the stub so tests can count or shape highlight calls.
 async function loadRendererContext(hljs) {
   const markedSrc = await loadMarkedSrc();
   const context = buildRendererContext();

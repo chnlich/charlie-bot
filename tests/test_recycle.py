@@ -61,6 +61,16 @@ async def _walk_rig(tmp_path: Path) -> tuple[SessionManager, SessionMetadata, Pa
   return mgr, session, live_path, cutoff
 
 
+async def _live_range_rig(tmp_path: Path) -> tuple[SessionManager, SessionMetadata, Path, datetime]:
+  """One recycled session named "t" whose live range 5:8 reads f0/f1/f2; the baseline is asserted
+  here so each caller's asserts measure only its own mutation's effect."""
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
+  before, _ = mgr.load_chat_events_range(session.id, 5, 8)
+  assert [e["content"] for e in before] == ["f0", "f1", "f2"]
+  return mgr, session, live_path, cutoff
+
+
 @pytest.mark.asyncio
 async def test_recycle_deletes_only_old_terminal_threads(tmp_path: Path) -> None:
   cfg, mgr, session = await make_home_session(tmp_path, name="t")
@@ -302,11 +312,7 @@ async def test_live_range_repeat_reads_reuse_memo(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_live_range_reparses_after_append(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
-
-  before, _ = mgr.load_chat_events_range(session.id, 5, 8)
-  assert [e["content"] for e in before] == ["f0", "f1", "f2"]
+  mgr, session, live_path, cutoff = await _live_range_rig(tmp_path)
 
   # An appended live file's changed (mtime, size) must invalidate the memo.
   _append_events(live_path, [{"type": "user", "content": "f3", "timestamp": (cutoff + timedelta(days=2)).isoformat()}])
@@ -352,11 +358,7 @@ def _count_reads_of(live_path: Path, real_open: Any, reads: list[int]) -> Any:
 
 @pytest.mark.asyncio
 async def test_live_range_append_extends_memo_without_full_reparse(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
-
-  before, _ = mgr.load_chat_events_range(session.id, 5, 8)
-  assert [e["content"] for e in before] == ["f0", "f1", "f2"]
+  mgr, session, live_path, cutoff = await _live_range_rig(tmp_path)
 
   _append_events(live_path, [{"type": "user", "content": "f3", "timestamp": (cutoff + timedelta(days=2)).isoformat()}])
   appended_line = json.dumps(
@@ -385,11 +387,7 @@ async def test_live_range_append_extends_memo_without_full_reparse(tmp_path: Pat
 
 @pytest.mark.asyncio
 async def test_live_range_rewrite_with_larger_size_reparses_fully(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
-
-  before, _ = mgr.load_chat_events_range(session.id, 5, 8)
-  assert [e["content"] for e in before] == ["f0", "f1", "f2"]
+  mgr, session, live_path, cutoff = await _live_range_rig(tmp_path)
 
   # An archive-style rewrite publishes a new inode via os.replace; a larger
   # size must never read as append growth, or the stale prefix would glue onto
@@ -411,11 +409,7 @@ async def test_live_range_rewrite_with_larger_size_reparses_fully(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_live_range_completed_partial_line_reparses_fully(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
-
-  before, _ = mgr.load_chat_events_range(session.id, 5, 8)
-  assert [e["content"] for e in before] == ["f0", "f1", "f2"]
+  mgr, session, live_path, cutoff = await _live_range_rig(tmp_path)
 
   # A read that raced a mid-flight append covers a trailing partial line; the
   # completed line must surface once a full re-parse lands on the newline.

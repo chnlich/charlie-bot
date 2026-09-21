@@ -22,6 +22,8 @@ from conftest import (
     crashed_run_record,
     drain_session_consumer,
     fresh_master_state,
+    make_failed_round,
+    make_sound_round,
     make_work_item,
     manager_backed_callbacks,
     mock_session_callbacks,
@@ -462,10 +464,7 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
   session = await session_mgr.create_session(CreateSessionRequest(name="anchor-on-disk"))
   backend_returned_id = "cc-backend-session-42"
 
-  async def fake_run_cc(item: master_cc._WorkItem) -> tuple:
-    return (backend_returned_id, 0, None, {})
-
-  monkeypatch.setattr(master_cc_run, "_run_cc", fake_run_cc)
+  monkeypatch.setattr(master_cc_run, "_run_cc", make_sound_round(backend_returned_id))
   monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
 
@@ -859,22 +858,6 @@ async def test_handle_event_keeps_an_already_adopted_session_id_over_the_signal(
 # ---------------------------------------------------------------------------
 
 
-def _sound_round(cc_session_id: str) -> ConsumerRound:
-
-  async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
-    return (cc_session_id, 0, None, {})
-
-  return fake_run_cc
-
-
-def _failed_round(cc_session_id: str) -> ConsumerRound:
-
-  async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
-    return (cc_session_id, 1, "backend died", {})
-
-  return fake_run_cc
-
-
 @pytest.mark.asyncio
 async def test_stale_enqueue_snapshot_wakes_after_move_and_persist_and_does_not_overwrite(tmp_path: Path) -> None:
   """The 2026-09-14 incident shape as a regression: an enqueue-time stale snapshot
@@ -907,7 +890,7 @@ async def test_stale_enqueue_snapshot_wakes_after_move_and_persist_and_does_not_
 
   item = stale_snapshot_item()
   live_before = live.stat()
-  await run_consumer_over_real_disk(session.id, [item], _sound_round(cc_id))
+  await run_consumer_over_real_disk(session.id, [item], make_sound_round(cc_id))
 
   disk = await mgr.read_metadata_fresh(session.id)
   assert disk.claude_account == "pool-b", "the refresh overwrote the stale label with the disk value"
@@ -918,7 +901,7 @@ async def test_stale_enqueue_snapshot_wakes_after_move_and_persist_and_does_not_
 
   # Replay the same stale wake: the refresh reads disk again, still harmless.
   replay = stale_snapshot_item()
-  await run_consumer_over_real_disk(session.id, [replay], _sound_round(cc_id))
+  await run_consumer_over_real_disk(session.id, [replay], make_sound_round(cc_id))
   disk = await mgr.read_metadata_fresh(session.id)
   assert disk.claude_account == "pool-b"
   live_replayed = live.stat()
@@ -970,7 +953,7 @@ async def test_consumer_refreshes_a_stale_label_and_cc_id_from_disk(tmp_path: Pa
   snapshot.claude_account = "pool-a"
   item = make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
 
-  await run_consumer_over_real_disk(session.id, [item], _sound_round("cc-new"))
+  await run_consumer_over_real_disk(session.id, [item], make_sound_round("cc-new"))
 
   assert item.session_meta.cc_session_id == "cc-new"
   assert item.session_meta.claude_account == "pool-b"
@@ -994,9 +977,6 @@ async def test_consumer_disk_read_failure_falls_back_to_fill_empty_only(tmp_path
   second_snapshot = snapshot.model_copy(deep=True)
   second = make_work_item(cfg, second_snapshot, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
 
-  async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
-    return ("cc-1", 0, None, {})
-
   real_read = SessionManager.read_metadata_fresh
   reads = {"n": 0}
 
@@ -1007,7 +987,7 @@ async def test_consumer_disk_read_failure_falls_back_to_fill_empty_only(tmp_path
     return await real_read(self, session_id)
 
   with patch.object(SessionManager, "read_metadata_fresh", flaky_read):
-    await run_consumer_over_real_disk(session.id, [first, second], fake_run_cc)
+    await run_consumer_over_real_disk(session.id, [first, second], make_sound_round("cc-1"))
 
   # The failed read fell back to fill-empty-only from the first round's values.
   assert second.session_meta.cc_session_id == "cc-1"
@@ -1037,7 +1017,7 @@ async def test_consumer_retires_transcript_copies_after_a_sound_round(tmp_path: 
 
   item = make_work_item(
       cfg, (await mgr.get_session(session.id)), cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
-  await run_consumer_over_real_disk(session.id, [item], _sound_round(cc_id))
+  await run_consumer_over_real_disk(session.id, [item], make_sound_round(cc_id))
 
   assert not copies["pool-c"].exists(), "the oldest copy retired"
   assert copies["pool-b"].exists() and copies["pool-a"].exists(), "the newest two stay"
@@ -1046,7 +1026,7 @@ async def test_consumer_retires_transcript_copies_after_a_sound_round(tmp_path: 
   failed = make_work_item(
       cfg, (await mgr.get_session(session.id)), cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
   make_transcript(tmp_path / "claude-pool-c", cc_id)
-  await run_consumer_over_real_disk(session.id, [failed], _failed_round(cc_id))
+  await run_consumer_over_real_disk(session.id, [failed], make_failed_round(cc_id))
 
   assert copies["pool-c"].exists(), "a failed round keeps every copy as its fallback"
   assert copies["pool-b"].exists() and copies["pool-a"].exists()

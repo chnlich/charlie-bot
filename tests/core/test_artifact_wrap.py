@@ -248,7 +248,7 @@ def test_cli_no_math_disables_prerender_for_explain(
 
 
 def _damaged_fragment() -> bytes:
-  r"""TAB standing in for the \t of \text, formfeed for the \f of \frac — the 4914c102 damage."""
+  r"""TAB standing in for the \t of \text, formfeed for the \f of \frac — the damaged-page shape."""
   prose = "<p>\u524d\u5411\u4e2d TABext{out_routed} \u5c5e\u6027\u3002</p>\n"
   display = "<p>$$\\x0crac{\\partial L}{\\partial TABext{weights}} = 0$$</p>\n"
   return (prose + display).replace("TAB", "\t").replace("\\x0c", "\x0c").encode("utf-8")

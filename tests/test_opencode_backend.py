@@ -151,7 +151,7 @@ async def test_iter_sse_events_ignores_comments_and_metadata(monkeypatch: pytest
 @pytest.mark.asyncio
 async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """Regression for run 6dc42358: a message.part.updated frame whose JSON string
+  """A message.part.updated frame whose JSON string
   carries raw U+0085/U+2028 (which JSON.stringify leaves unescaped and the SSE
   spec keeps inside the line) must parse as exactly one event through the full
   backend chain instead of dying with 'Unterminated string'."""

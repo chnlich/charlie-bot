@@ -1144,7 +1144,8 @@ def test_cool_storage_scheduler_handler_runs_the_real_sweep(
   write_session_meta(cfg, SID_COLD, cold_meta())
   transport = thread_data_dir(cfg, SID_COLD) / "stdout.log"
   transport.write_bytes(b"transport")
-  monkeypatch.setattr(storage_cool, "get_config", lambda: cfg)
+  # The handler resolves the config on the loop before the executor dispatch.
+  monkeypatch.setattr(scheduler_module, "get_config", lambda: cfg)
 
   summary = asyncio.run(scheduler_module._cool_storage_handler())
 

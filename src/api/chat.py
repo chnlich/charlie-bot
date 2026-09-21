@@ -18,7 +18,7 @@ from src.core import event_types as ET
 from src.core.autonamer import is_default_session_name, maybe_auto_name
 from src.core.config import CharlieBotConfig
 from src.core.constants import BackendType
-from src.core.deferred import deferred_module_getattr
+from src.core.deferred import deferred_import_loader, deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
 from src.core.message_aggregator import extract_text_from_message
 from src.core.message_events import serialize_uploaded_files
@@ -35,20 +35,7 @@ log = LazyStructlogLogger()
 
 router = APIRouter()
 
-
-def _load_cancel_master(namespace: dict[str, Any]) -> Any:
-  """Bind the master-cancel entry point into *namespace* on first use.
-
-  An existing binding — a test's stand-in on the ``src.api.chat.cancel_master``
-  patch target — is returned untouched.
-  """
-  bound = namespace.get("cancel_master")
-  if bound is not None:
-    return bound
-  from src.agents.master_cc import cancel_master
-
-  namespace["cancel_master"] = cancel_master
-  return cancel_master
+_load_cancel_master = deferred_import_loader("cancel_master", "src.agents.master_cc")
 
 
 def __getattr__(name: str) -> Any:

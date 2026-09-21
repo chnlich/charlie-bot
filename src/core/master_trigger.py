@@ -7,27 +7,14 @@ from zoneinfo import ZoneInfo
 
 from src.core import event_types as ET
 from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig
-from src.core.deferred import deferred_module_getattr
+from src.core.deferred import deferred_import_loader, deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionMetadata, SessionStatus
 from src.core.sessions import SessionManager
 
 log = LazyStructlogLogger()
 
-
-def _load_run_message(namespace: dict[str, Any]) -> Any:
-  """Bind the master turn's entry point into *namespace* on first use.
-
-  An existing binding — a test's stand-in on the
-  ``src.core.master_trigger.run_message`` patch target — is returned untouched.
-  """
-  bound = namespace.get("run_message")
-  if bound is not None:
-    return bound
-  from src.agents.master_cc import run_message
-
-  namespace["run_message"] = run_message
-  return run_message
+_load_run_message = deferred_import_loader("run_message", "src.agents.master_cc")
 
 
 def __getattr__(name: str) -> Any:

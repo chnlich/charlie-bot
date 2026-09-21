@@ -25,7 +25,7 @@ backend produced it, later events overriding earlier ones in event order. The
 codex rollout tier runs before the slot and only for codex backends; an empty
 slot keeps the context fields unknown.
 
-The usage dict carries four context fields plus cost and model:
+The usage dict carries three context fields plus cost and model:
 
     {
       "context_tokens":     int | None,   # used
@@ -232,7 +232,7 @@ def _usage_dict(
 ) -> dict:
   """Single construction site for the usage-dict shape declared in the module docstring.
 
-  Every tier fills the four context fields from its own source; the cost field
+  Every tier fills the three context fields from its own source; the cost field
   is the shared scan's sum over result events.
   """
   return {

@@ -1,10 +1,12 @@
 """Artifact check — the single owner of "genre -> assertion set -> probe".
 
 An artifact genre (plan, understanding, sitrep, debug, explain) maps to an assertion set
-here and nowhere else: adding a genre means registering its assertion set in this module
-and naming it in ``src.core.constants.ARTIFACT_GENRES`` (the vocabulary the artifact CLI
-parses; the import-time equality check below fails a missed step), and nothing else in the
-codebase enumerates genres. Each assertion is the DOM-decidable
+here and nowhere else: adding a genre means registering its assertion set in this module,
+naming it in ``src.core.constants.ARTIFACT_GENRES`` (the vocabulary the artifact CLI parses;
+the import-time equality check below fails a missed step), and giving it a template mapping
+in ``src.core.artifact_shared.GENRE_TEMPLATES`` (set-equality with the registry is pinned by
+test_artifact_check, so a missed entry fails there, not as a KeyError when style-verbatim
+reads the template). Each assertion is the DOM-decidable
 half of the genre's GRAMMAR; rules needing judgment stay with the reader and the probe.
 
 ``run_assertions`` runs every applicable assertion and returns one printable outcome per

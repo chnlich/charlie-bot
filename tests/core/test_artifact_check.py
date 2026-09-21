@@ -1004,7 +1004,7 @@ def test_render_path_fails_on_a_partial_injection(tmp_path: Path) -> None:
 
 
 def test_render_path_fails_on_a_historical_shaped_page(tmp_path: Path) -> None:
-  """The 4914c102 network_architecture page shape: head with no scripts, no katex markup."""
+  """A historical damaged page's shape: head with no scripts, no katex markup."""
   doc = _genre_doc("explain", _sections([f"S{i}" for i in range(1, 6)]))
   (outcome,) = _run("explain", _write(tmp_path, doc))["render-path"]
   assert not outcome.passed

@@ -96,14 +96,13 @@ def load_state(state_path: Path | None = None) -> dict:
   return state
 
 
-def save_state(state: dict, state_path: Path | None = None) -> None:
+def save_state(state: dict, state_path: Path) -> None:
   """Publish the state through a temporary file and an atomic rename."""
-  path = state_path if state_path is not None else default_state_path()
-  path.parent.mkdir(parents=True, exist_ok=True)
+  state_path.parent.mkdir(parents=True, exist_ok=True)
   try:
-    write_json_atomically(path, state, indent=2, newline=True)
+    write_json_atomically(state_path, state, indent=2, newline=True)
   except OSError as e:
-    log.error("host_auth_state_write_failed", path=str(path), error=str(e))
+    log.error("host_auth_state_write_failed", path=str(state_path), error=str(e))
     raise
 
 
@@ -231,7 +230,7 @@ def _unquote(value: str) -> str:
   return value
 
 
-def parse_ssh_config_hosts(path: Path | None = None) -> list[tuple[str, str]]:
+def parse_ssh_config_hosts(path: Path) -> list[tuple[str, str]]:
   """``(alias, hostname)`` for every collectable Host block in the ssh config.
 
   A block is collected only when its ``Host`` line names exactly one alias with
@@ -240,8 +239,7 @@ def parse_ssh_config_hosts(path: Path | None = None) -> list[tuple[str, str]]:
   block for an alias wins, matching ssh's own first-value rule. Under-collection
   is the accepted failure mode: the panel may miss a host, never misreport one.
   """
-  config_path = path if path is not None else Path.home() / ".ssh" / "config"
-  if not config_path.exists():
+  if not path.exists():
     return []
   hosts: list[tuple[str, str]] = []
   seen: set[str] = set()
@@ -254,7 +252,7 @@ def parse_ssh_config_hosts(path: Path | None = None) -> list[tuple[str, str]]:
       hosts.append((patterns[0], hostname))
       seen.add(patterns[0])
 
-  for raw_line in config_path.read_text(encoding="utf-8").splitlines():
+  for raw_line in path.read_text(encoding="utf-8").splitlines():
     line = raw_line.split("#", 1)[0].strip()
     if not line:
       continue

@@ -200,14 +200,11 @@ async def maybe_auto_name(
     user_message: str,
     assistant_response: str,
     session_mgr: SessionManager,
-    existing_groups: list[str] | None = None,
+    existing_groups: list[str],
 ) -> None:
   """If the session still has a default name, generate a descriptive name and group."""
   if not is_default_session_name(session_meta.name):
     return
-
-  if existing_groups is None:
-    existing_groups = []
 
   try:
     groups_clause = _build_groups_clause(existing_groups)

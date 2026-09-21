@@ -29,15 +29,15 @@ __all__ = [
 ]
 
 
-def build_agent_input_content(content: str, uploaded_files: list[dict] | None = None) -> str:
+def build_agent_input_content(content: str, uploaded_files: list[dict]) -> str:
   """Append absolute attachment paths to the agent-visible message."""
-  paths = [str(f.get("path", "")).strip() for f in uploaded_files or [] if str(f.get("path", "")).strip()]
+  paths = [str(f.get("path", "")).strip() for f in uploaded_files if str(f.get("path", "")).strip()]
   if not paths:
     return content
   return content + _ATTACHED_FILES_MARKER + "\n".join(f"- {path}" for path in paths)
 
 
-def build_user_event(content: str, uploaded_files: list[dict] | None = None) -> dict:
+def build_user_event(content: str, uploaded_files: list[dict]) -> dict:
   """Build the persisted user event payload for chat history and websocket updates."""
   event = {
       "type": ET.USER,

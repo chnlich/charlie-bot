@@ -518,7 +518,7 @@ async def test_identity_judgment_runs_before_any_new_turn_door(tmp_path: Path, m
     calls.append("identity")
     return {}
 
-  async def fake_recovery(cfg: CharlieBotConfig, boot_time: datetime, identity: asyncio.Task | None = None) -> None:
+  async def fake_recovery(cfg: CharlieBotConfig, boot_time: datetime, identity: asyncio.Task) -> None:
     calls.append("crash_recovery")
 
   async def fake_scheduler_start(self) -> None:

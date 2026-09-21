@@ -235,7 +235,7 @@ def count_ndjson_lines(path: Path) -> int:
   return total
 
 
-def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bool]:
+def parse_ndjson_tail(path: Path, limit: int) -> tuple[list[dict], int, bool]:
   """Read the last *limit* lines from an NDJSON file using seek-from-end.
 
   Returns (events, total_line_count, has_more). The whole page memoizes on

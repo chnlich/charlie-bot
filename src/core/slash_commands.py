@@ -72,9 +72,9 @@ def load_slash_commands() -> list[SlashCommand]:
 
 async def execute_shell_command(
     cmd_template: str,
-    args: str = '',
-    session_dir: str = '',
-    timeout: int = SLASH_COMMAND_DEFAULT_TIMEOUT,
+    args: str,
+    session_dir: str,
+    timeout: int,
     cwd: str | None = None,
 ) -> dict:
   """Run a shell command template and return {stdout, stderr, exit_code}.

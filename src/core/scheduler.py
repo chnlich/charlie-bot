@@ -473,7 +473,7 @@ class Scheduler:
     await session_mgr.persist_and_broadcast(session.id, event)
     return {'session_id': session.id, 'thread_id': None}
 
-  async def _execute_prompt_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
+  async def _execute_prompt_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool) -> dict:
     """Find-or-create session, create thread, fire-and-forget worker."""
     cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status=LastRunStatus.RUNNING)
     return await self._spawn_scheduled_worker(
@@ -487,7 +487,7 @@ class Scheduler:
         require_review=False,
         record_handle=record_handle)
 
-  async def _execute_steps_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
+  async def _execute_steps_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool) -> dict:
     """Fire step 0 of a steps task; later steps advance from the finalize chain."""
     cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status=LastRunStatus.RUNNING)
     thread_mgr = ThreadManager(cfg)
@@ -496,7 +496,7 @@ class Scheduler:
       self._handles[task_cfg.name] = result["handle"]
     return result
 
-  async def _execute_loop_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
+  async def _execute_loop_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool) -> dict:
     """Run an improvement-loop task: determine action, then spawn worker if needed."""
     cfg, session_mgr, session = await self._prepare_task_execution(task_cfg)
 

@@ -331,7 +331,7 @@ async def test_tried_backends_propagated_to_review_thread(monkeypatch: pytest.Mo
   assert saved[0].tried_backends == ["kimi-k2.5", OPUS_BACKEND_ID]
 
 
-def _make_fake_spawn_review(spawn_calls: list[dict], result: bool = True) -> Callable[..., Awaitable[bool]]:
+def _make_fake_spawn_review(spawn_calls: list[dict], result: bool) -> Callable[..., Awaitable[bool]]:
   """A ``review.spawn_review_worker`` stand-in recording the backend preference per call.
 
   The signature mirrors the production call; each test reads its own ``spawn_calls``.

@@ -131,7 +131,7 @@ class Credentials:
     from. A plain class, not a dataclass: the CLI verbs that read credentials
     are fresh processes, and the ``dataclasses`` import pulls ``inspect``
     (~9 ms of the M97 verb wall) for machinery no consumer calls.
-  """
+    """
 
   __slots__ = ("path", "sections")
 

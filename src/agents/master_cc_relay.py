@@ -85,7 +85,7 @@ def choose_turn_account(
     session_meta: SessionMetadata,
     model: str | None,
     last_request_at: datetime | None,
-    now: datetime | None = None,
+    now: datetime | None,
 ) -> tuple[ClaudeAccount | None, bool]:
   """The account this turn runs on and whether the cache is cold.
 

@@ -85,7 +85,7 @@ def is_fable(model: str | None) -> bool:
   return claude_accounts.model_family(model) == FABLE_FAMILY
 
 
-def cache_expired(last_request_at: datetime | None, now: datetime | None = None) -> bool:
+def cache_expired(last_request_at: datetime | None, now: datetime | None) -> bool:
   """True when the previous request is more than CACHE_TTL old; None (no request yet) is not expired."""
   return last_request_at is not None and claude_accounts.now_or(now) - last_request_at > CACHE_TTL
 
@@ -95,7 +95,7 @@ def expired_cache_compaction_wanted(
     model: str | None,
     context_tokens: int | None,
     last_request_at: datetime | None,
-    now: datetime | None = None,
+    now: datetime | None,
 ) -> bool:
   """A Fable turn starting on an expired cache with a context at or above the floor."""
   return (

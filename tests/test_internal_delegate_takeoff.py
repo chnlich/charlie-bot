@@ -126,6 +126,44 @@ def _patch_delegate_spawn_rig(
   monkeypatch.setattr(internal, "get_config", lambda: object())
 
 
+def _improve_request() -> internal.ImproveRequest:
+  return internal.ImproveRequest(
+      session_id="session-id",
+      repo_path="/tmp/repo",
+      base_branch="main",
+      backend="codex-o3",
+      goal="Improve this",
+  )
+
+
+def _patch_resolve_rig(monkeypatch: pytest.MonkeyPatch) -> object:
+  """Install the resolve/config pair the _authorize_spawn_request tests share.
+
+  Returns the stubbed cfg so each test asserts its resolved_cfg is this object.
+  """
+  cfg = object()
+
+  async def fake_resolve(*args: Any, **kwargs: Any) -> tuple[str, str]:
+    del args, kwargs
+    return "codex-o3", "o3"
+
+  monkeypatch.setattr(internal, "get_config", lambda: cfg)
+  monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve)
+  return cfg
+
+
+def _assert_delegated_task_event(session_mgr: Any, req: DelegateRequest, invocation: dict[str, Any]) -> None:
+  """Assert the one TASK_DELEGATED persist the delegate_task flow tests pin."""
+  session_mgr.persist_and_broadcast.assert_awaited_once()
+  task_event = session_mgr.persist_and_broadcast.await_args.args[1]
+  assert task_event["type"] == ET.TASK_DELEGATED
+  assert task_event["thread_id"] == "thread-id"
+  assert task_event["description"] == req.description
+  assert task_event["backend"] == "codex-o3"
+  assert task_event["model"] == "o3"
+  assert task_event["delegate_invocation"] == invocation
+
+
 def test_takeoff_gate_blocks_takeoff_followed_by_ordinary_user_message() -> None:
   session_mgr = FakeSessionManager([
       user_event("Take Off"),
@@ -628,13 +666,7 @@ async def test_delegate_task_repo_task_types_block_without_takeoff(task_type: Ta
 
 @pytest.mark.asyncio
 async def test_improve_stays_blocked_without_takeoff() -> None:
-  req = internal.ImproveRequest(
-      session_id="session-id",
-      repo_path="/tmp/repo",
-      base_branch="main",
-      backend="codex-o3",
-      goal="Improve this",
-  )
+  req = _improve_request()
   session_mgr = FakeSessionManager([{"type": ET.USER, "content": "please proceed"}])
   thread_mgr = AsyncMock()
 
@@ -653,14 +685,7 @@ async def test_all_nonverify_delegate_types_can_reuse_ordinary_takeoff(
 ) -> None:
   req = _build_request(task_type=task_type)
   session_mgr = FakeSessionManager([user_event("take off")])
-  cfg = object()
-
-  async def fake_resolve(*args: Any, **kwargs: Any) -> tuple[str, str]:
-    del args, kwargs
-    return "codex-o3", "o3"
-
-  monkeypatch.setattr(internal, "get_config", lambda: cfg)
-  monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve)
+  cfg = _patch_resolve_rig(monkeypatch)
 
   for _ in range(3):
     _meta, resolved_cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(req, session_mgr)
@@ -671,26 +696,13 @@ async def test_all_nonverify_delegate_types_can_reuse_ordinary_takeoff(
 @pytest.mark.asyncio
 async def test_improve_uses_the_same_pre_takeoff_gate(monkeypatch: pytest.MonkeyPatch) -> None:
   issued_at = datetime.now(UTC) - timedelta(hours=1)
-  req = internal.ImproveRequest(
-      session_id="session-id",
-      repo_path="/tmp/repo",
-      base_branch="main",
-      backend="codex-o3",
-      goal="Improve this",
-  )
+  req = _improve_request()
   session_mgr = FakeSessionManager(
       [
           user_event("pre take off", issued_at.isoformat()),
           user_event("continue with the approved work"),
       ])
-  cfg = object()
-
-  async def fake_resolve(*args: Any, **kwargs: Any) -> tuple[str, str]:
-    del args, kwargs
-    return "codex-o3", "o3"
-
-  monkeypatch.setattr(internal, "get_config", lambda: cfg)
-  monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve)
+  cfg = _patch_resolve_rig(monkeypatch)
   _meta, resolved_cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(req, session_mgr)
 
   assert resolved_cfg is cfg
@@ -727,14 +739,8 @@ async def test_delegate_task_verify_skips_takeoff_gate_and_spawns_repoless(monke
       resolved_model="o3",
       task_type=TaskType.VERIFY,
   )
-  session_mgr.persist_and_broadcast.assert_awaited_once()
-  task_event = session_mgr.persist_and_broadcast.await_args.args[1]
-  assert task_event["type"] == ET.TASK_DELEGATED
-  assert task_event["thread_id"] == "thread-id"
-  assert task_event["description"] == req.description
-  assert task_event["backend"] == "codex-o3"
-  assert task_event["model"] == "o3"
-  assert task_event["delegate_invocation"] == delegate_invocation(task_type="verify", repo_path=None, base_branch=None)
+  _assert_delegated_task_event(
+      session_mgr, req, delegate_invocation(task_type="verify", repo_path=None, base_branch=None))
 
 
 @pytest.mark.asyncio
@@ -788,14 +794,7 @@ async def test_delegate_task_does_not_pass_takeoff_gate_to_spawn_worker(monkeypa
       task_type=TaskType.IMPLEMENT,
   )
   assert not hasattr(captured["request"], "require_takeoff")
-  session_mgr.persist_and_broadcast.assert_awaited_once()
-  task_event = session_mgr.persist_and_broadcast.await_args.args[1]
-  assert task_event["type"] == ET.TASK_DELEGATED
-  assert task_event["thread_id"] == "thread-id"
-  assert task_event["description"] == req.description
-  assert task_event["backend"] == "codex-o3"
-  assert task_event["model"] == "o3"
-  assert task_event["delegate_invocation"] == delegate_invocation()
+  _assert_delegated_task_event(session_mgr, req, delegate_invocation())
 
 
 @pytest.mark.asyncio

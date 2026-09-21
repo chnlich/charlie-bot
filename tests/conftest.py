@@ -2014,6 +2014,15 @@ def write_cron_task(home: Path, name: str, text: str) -> Path:
   return p
 
 
+def write_nightly_prompt(home: Path, body: str) -> Path:
+  """Write the nightly job's prompt source ``<home>/prompts/nightly.md`` and return its path; a
+  pointer-backed host file's ``prompt_file`` names this path and the pointed file owns the body."""
+  p = Path(home) / "prompts" / "nightly.md"
+  p.parent.mkdir(parents=True, exist_ok=True)
+  p.write_text(body, encoding="utf-8")
+  return p
+
+
 MEMORY_DEFAULT_TOPICS = [
     "profile resident",
     "communication resident",

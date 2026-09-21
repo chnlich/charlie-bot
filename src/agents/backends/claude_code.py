@@ -1,13 +1,23 @@
 """ClaudeCodeBackend — concrete AgentBackend wrapping the Claude Code CLI."""
 
 import asyncio
-import os
 import re
 import signal
 from collections.abc import Mapping
 from pathlib import Path
 
 from src.agents.backends.base import DISALLOWED_TOOLS_FLAG, SKIP_PERMISSIONS_FLAG, AgentBackend
+from src.agents.backends.claude_launch import (  # noqa: F401  (re-export: the established claude_code import path)
+    AUTO_COMPACT_WINDOW_ENV,
+    AUTOCOMPACT_PCT_OVERRIDE_ENV,
+    CLAUDE_COMPACT_CONTEXT_RESERVE,
+    CLAUDE_COMPACT_OUTPUT_RESERVE,
+    HEADLESS_CLAUDE_DEFAULT_ENV,
+    HEADLESS_CLAUDE_FORWARDED_ENV_NAMES,
+    HEADLESS_CLAUDE_INVARIANT_ENV,
+    MAX_CONTEXT_TOKENS_ENV,
+    headless_claude_env,
+)
 from src.core import event_types as ET
 from src.core.constants import SESSION_ID_ENV_VAR
 from src.core.home import CLAUDE_CONFIG_DIR_ENV_VAR
@@ -41,36 +51,6 @@ BASE_COMMAND: list[str] = [
 # tmux and cannot answer arrow-key menus. Additionally disallow the tools that raise
 # such menus so the model emits plain-text choices instead of deadlocking the session.
 SUBSCRIPTION_DISALLOWED_TOOLS = "AskUserQuestion,ExitPlanMode"
-
-HEADLESS_CLAUDE_INVARIANT_ENV: dict[str, str] = {
-    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
-}
-# One spelling per Claude Code variable the declared-window logic touches: the
-# default pin, the forward allowlist, and the degradation checks must agree.
-AUTO_COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
-AUTOCOMPACT_PCT_OVERRIDE_ENV = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"
-MAX_CONTEXT_TOKENS_ENV = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
-
-# CharlieBot-chosen defaults, applied only when the host has not set the variable.
-# Claude Code compacts at window - min(max_output_tokens, 20000) - 13000, so declaring
-# a 433000 window puts the compaction point at 400000 tokens (433000 = 400000 + 13000
-# + 20000) instead of ~967000 under the model's full 1M window. The 13000 and 20000
-# terms are Claude Code internals: if a CLI upgrade changes them the compaction point
-# drifts silently and this constant has to be recomputed.
-HEADLESS_CLAUDE_DEFAULT_ENV: dict[str, str] = {
-    AUTO_COMPACT_WINDOW_ENV: "433000",
-}
-HEADLESS_CLAUDE_FORWARDED_ENV_NAMES: tuple[str, ...] = (
-    AUTOCOMPACT_PCT_OVERRIDE_ENV,
-    MAX_CONTEXT_TOKENS_ENV,
-    AUTO_COMPACT_WINDOW_ENV,
-    "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT",
-)
-
-# The two Claude Code internals subtracted from the declared auto-compact window to
-# reach the real compaction point (see comment above HEADLESS_CLAUDE_DEFAULT_ENV).
-CLAUDE_COMPACT_OUTPUT_RESERVE = 20_000
-CLAUDE_COMPACT_CONTEXT_RESERVE = 13_000
 
 # Usage resolution re-derives the declared window per call while the environment a
 # degradation warning reports is fixed for the process's life, so the first sighting
@@ -109,19 +89,6 @@ def claude_supervisor_env(env: Mapping[str, str]) -> dict[str, str]:
   out.pop(SESSION_ID_ENV_VAR, None)
   out["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
   return out
-
-
-def headless_claude_env() -> dict[str, str]:
-  """Environment for every headless Claude Code subprocess.
-
-  Layered so a host export beats CharlieBot's own default: invariants first,
-  CharlieBot defaults next, allowlisted host values last.
-  """
-  env = {**HEADLESS_CLAUDE_INVARIANT_ENV, **HEADLESS_CLAUDE_DEFAULT_ENV}
-  for name in HEADLESS_CLAUDE_FORWARDED_ENV_NAMES:
-    if name in os.environ:
-      env[name] = os.environ[name]
-  return env
 
 
 def claude_model_env(model: str) -> dict[str, str]:

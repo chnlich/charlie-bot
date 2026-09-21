@@ -326,7 +326,10 @@ def test_autonamer_and_recap_defer_the_registry_until_first_use() -> None:
 # vocabulary constants (BackendType, SESSION_ID_ENV_VAR) single-home in
 # src.core.constants, the credential filename in src.core.home, and the account
 # pool itself loads only at the call site that reads transcripts — its module
-# scope builds the account models the launch never reads.
+# scope builds the account models the launch never reads. The launch argv/env
+# assembly single-homes in src.agents.backends.claude_launch (stdlib-only), so
+# the backend ABC — and the runs/process/pty stacks only its run path reads —
+# stay out of the import too.
 CLAUDE_SUB_HEAVY_MODULES = (
     "fastapi",
     "src.core.config",
@@ -336,6 +339,11 @@ CLAUDE_SUB_HEAVY_MODULES = (
     "src.core.models",
     "src.core.backend_models",
     "src.core.claude_accounts",
+    "src.agents.backends.base",
+    "src.agents.backends.claude_code",
+    "src.core.runs",
+    "src.core.process",
+    "pty",
 )
 
 

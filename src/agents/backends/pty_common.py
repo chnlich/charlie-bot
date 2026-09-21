@@ -8,7 +8,6 @@ import contextlib
 import fcntl
 import json
 import os
-import pty
 import shutil
 import signal
 import struct
@@ -163,6 +162,12 @@ class PtyAttachment:
 
   def spawn(self) -> None:
     """Fork a PTY child that execs `tmux attach` for this session."""
+    # pty drags tty+termios into every pty_common importer's import; only this
+    # server-side attachment forks one, so the import rides the call (the M108
+    # launch floor in docs/perf_baseline.md prices pty_common on every
+    # claude-sub worker launch).
+    import pty
+
     tmux = _tmux_binary()
     name = tmux_session_name(self.session_id)
     pid, fd = pty.fork()

@@ -2919,7 +2919,7 @@ def stage_worktree_spawn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    description: str = "Do work",
+    description: str,
     git_fake_mkdir: bool = False,
 ) -> WorktreeSpawnRig:
   """Stage the worktree spawn_worker e2e rig on a fresh codex-backend cfg.

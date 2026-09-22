@@ -119,6 +119,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M107 multi-trace merged-trace build wall, worst on-disk trace dir | M107 collector below | seconds per `_cached_merge` build over the worst on-disk multi-trace dir (the merged view's dir shape: one merge-pool task per trace, the single gzip run streaming each member's fragment as it completes; scratch cache home, live home read-only) | median < max(8 s, bytes ÷ 200 MB/s) (recalibrated from max(14 s, bytes ÷ 150 MB/s): the 2026-09-17 landing's wave model left the level-1 `gzip` subprocess on the ordered fragment stream — 201 MB/s against the four members' 63 MB/s write — and the stream became the wall after each wave; the isal igzip swap reads 797 MB/s, the wall is the member waves again, and 2.09 GB / 12 traces measures 7.35-8.34 s, 250-284 MB/s effective; the bytes line tracks the corpus the way M78/M84/M101 track theirs) | — (introduced with its first history row) |
 | M108 claude-sub launch import+dispatch floor, fresh process | M108 collector below | seconds per `claude-sub --<unsupported-probe-flag>` wall (the subscription-mode worker binary's console script: every cc-claude subscription worker and reviewer launch pays this import floor before the claude CLI starts; the probe flag rejects after argv parse, so no launch work runs — the nonzero exit is the assert; the checkout under test rides PYTHONPATH because the venv's editable finder pins src to the main checkout) | median < 0.15 s (the residual floor is the launch chain's own asyncio plus the backends raw-log machinery — ~36 ms asyncio measured standalone; the pydantic model stacks, the web framework, and the config model stack stay out — the ban-set contract test pins it) | — (introduced with its first history row) |
 | M110 remote ssh probe, warm-master steady state | M110 collector below | seconds per `ssh <host> "sacct …"` probe through `ssh_cmd` against the standing watches' SLURM login host, quiet-cluster steady state; the re-master round (the first probe after the persist window expired or the master died — the shape a create-time verify pays when the previous watch's last probe is older than the window) | warm median < 0.3 s; re-master median < 1.5 s | — (introduced with its first history row) |
+| M111 review-context chat-log scan, worker completion | M111 collector below | seconds per `_first_delegation_description` scan, worst active live chat corpus carrying a delegation, deepest needle (the newest thread's completion — its match sits at the file's tail) and absent needle (a thread id no event names — the whole-corpus proof) | median < max(0.005 s, bytes ÷ 2000 MB/s) both shapes | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -7604,10 +7605,91 @@ print(f"remote ssh probe to {HOST}: plain median {plain_medians[1]:.3f} s, "
 EOF
 ```
 
+M111 — review-context chat-log scan, worker completion. Every worker and reviewer completion
+runs `_first_delegation_description` over the session's live `chat_events.jsonl` (the reviewer
+prompt's user-request line; the improve chain runs the same extract twice more), and the
+pre-landing scan parsed every line text-mode from the file start — ~35-39 ms on the 20.1 MB worst
+active corpus, the needle's position setting the parse count (the newest thread's delegation sits
+at the file's tail). The reader skips by proof: a line whose bytes lack the thread id cannot name
+it, so one C-level find rides the mapping and only a hit's enclosing line parses. The collector
+times both shapes — the deepest needle (the last task_delegated's thread id) and an absent id —
+over the worst active (non-archived) live chat corpus that carries at least one task_delegated
+event (the scan's workload; a corpus without one never runs this scan for a thread), five runs
+each:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import json, os, statistics, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.review import _first_delegation_description
+
+# Worst active live chat corpus: the non-archived session whose live chat
+# file carries the most bytes among the files that hold at least one
+# task_delegated event (the scan's workload: sessions whose workers complete
+# name a delegation; a corpus without one never runs this scan for a thread).
+root = Path.home() / ".charliebot" / "sessions"
+best, best_size = None, -1
+for d in root.iterdir():
+    p = d / "data" / "chat_events.jsonl"
+    if not p.is_file():
+        continue
+    meta = d / "metadata.json"
+    if meta.is_file():
+        try:
+            if json.loads(meta.read_text()).get("status") == "archived":
+                continue
+        except (OSError, ValueError):
+            pass
+    has_delegation = False
+    with open(p, "rb") as f:
+        for line in f:
+            if b'"task_delegated"' in line:
+                has_delegation = True
+                break
+    if not has_delegation:
+        continue
+    n = p.stat().st_size
+    if n > best_size:
+        best, best_size = p, n
+
+# Needle-at-end: the LAST task_delegated's thread id, the newest-thread
+# completion shape whose match sits deepest in the file.
+import orjson
+tid = None
+with open(best, "rb") as f:
+    for line in f:
+        if b'"task_delegated"' not in line:
+            continue
+        try:
+            ev = orjson.loads(line)
+        except ValueError:
+            continue
+        if ev.get("type") == "task_delegated" and ev.get("thread_id"):
+            tid = ev["thread_id"]
+ABSENT = "zzq9xneverpresentthread0000000000000000"
+
+def median_scan(needle_id: str) -> float:
+    times = []
+    for _ in range(5):
+        t0 = time.perf_counter()
+        _first_delegation_description(best, needle_id)
+        times.append(time.perf_counter() - t0)
+    return statistics.median(times)
+
+at_end = median_scan(tid)
+absent = median_scan(ABSENT)
+print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {best_size / 1e6:.1f} MB active live chat file "
+      f"({tid[:8]} deepest needle); review-context scan median {at_end * 1000:.2f} ms needle-at-end, "
+      f"{absent * 1000:.2f} ms absent-needle over 5 each")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-21 | this PR | M111 review-context chat-log scan, introduced with this PR: needle-at-end median 34.76/34.14/34.47 → 4.34/4.38/4.19 ms (−87 % to −88 %), absent-needle 39.38/34.84/34.35 → 3.44/3.55/3.44 ms (−91 %), every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, the 20.1 MB / 8158-line worst active live chat corpus of session fd80e6e7, load 1.07-1.51 one-minute); component attribution: the before scan parsed every line text-mode from the file start (the match for the newest thread sits at the file's tail, so the worker-completion shape paid a near-whole-file parse per completion, ~4.3 µs/line on this corpus) where the after scan rides one C-level `mm.find` over the mapping — the absent-needle arm is the pure scan, 3.44 ms / 20.1 MB ≈ 5.8 GB/s — and parses only a hit's enclosing line as a zero-copy view (the same provable-skip class the `type_line_filter` parse_filter sanctions, without the per-line Python loop); no-regression witnesses interleaved ×3: M95 newest-first scans review 0.09-0.11 ms / judgment-pair 1.05-1.19 ms (bands both) and M99 import server 0.498-0.543 → 0.499-0.522 s (band parity); 5923-passed suite + 9 skipped, ruff and yapf clean, plus 9 new reader tests (file-order hits, laziness, the unparsed needle-free skip, the hit-line skip contract, missing/empty files, the unterminated tail, multi-hit single yield, the empty-needle raise, mixed-corpus parity with the escaped-needle proof boundary pinned); M111 definition, collector, healthy range (median < max(0.005 s, bytes ÷ 2000 MB/s) both shapes — the line sits ~3x under the measured 5.8 GB/s scan floor and ~4x over the pre-fix 0.51 GB/s shape), and history row introduced with this PR | the review-context extract ran the one remaining whole-parse text-mode scanner on the worker-completion path: every delegation's reviewer and every improve round re-parsed the session's live chat log from byte 0 although the answer names one thread id — the needle proof cuts the scan to the C-level find plus the matching lines, and a corpus that grows re-prices the line automatically through its bytes term |
 | 2026-09-21 | this PR | M110 remote ssh probe, connection reuse via ssh ControlMaster (the probe family's argv single-home `ssh_cmd` now carries ControlMaster=auto, a 0700 ControlPath under ~/.ssh/controlmasters, and ControlPersist=1200 s — the remote watch ladder's 600 s plateau plus its ≤10 s noise stays inside the window, so a watched host's probes never re-master while the watch lives): warm-master probe median 0.121/0.124/0.120/0.121 → plain (pre-fix shape) median 0.842/0.837/0.847/0.842 s (−85.6 % to −85.8 %), re-master median 0.841/0.842/0.846/0.853 s (parity with the plain arm — the master setup adds nothing to the cold shape), every paired round faster (four back-to-back invocations of the verbatim collector — branch
 worktree after vs main checkout before, each invocation three interleaved rounds of 5 plain +
 1 re-master + 5 warm probes against the standing watches' SLURM login host, read-only sacct,

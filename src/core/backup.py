@@ -19,8 +19,6 @@ log = LazyStructlogLogger()
 # collector documents).
 _BACKUP_COMPRESS_LEVEL = 1
 
-log = LazyStructlogLogger()
-
 
 def charliebot_dir() -> Path:
   """The state directory being backed up: this profile's home."""

@@ -12,7 +12,6 @@ Run once per host before the M112 collector (the corpus persists under
 """
 
 import json
-import random
 import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -103,7 +102,6 @@ def _write_lines(path: Path, target_bytes: int, session_id: str, start: int = 0)
 def main() -> None:
   if HOME.exists():
     shutil.rmtree(HOME)
-  random.seed(1790)
   first_sid = None
   for s in range(6):
     sid = str(uuid.uuid4())

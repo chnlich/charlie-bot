@@ -2,11 +2,14 @@
 
 import os
 import stat
+from pathlib import Path
+
+import pytest
 
 from src.core.ssh import ssh_cmd
 
 
-def test_argv_carries_the_policy_options(tmp_path, monkeypatch) -> None:
+def test_argv_carries_the_policy_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   control_dir = tmp_path / "controlmasters"
   monkeypatch.setattr("src.core.ssh._CONTROL_DIR", str(control_dir))
 
@@ -23,7 +26,7 @@ def test_argv_carries_the_policy_options(tmp_path, monkeypatch) -> None:
   assert argv[-1] == "sacct -j 1 -X -n -P"
 
 
-def test_control_dir_created_owner_only(tmp_path, monkeypatch) -> None:
+def test_control_dir_created_owner_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   control_dir = tmp_path / "nested" / "controlmasters"
   monkeypatch.setattr("src.core.ssh._CONTROL_DIR", str(control_dir))
 

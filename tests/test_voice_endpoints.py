@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from src.agents import transcriber
 from src.api import voice
+from src.core.config import CharlieBotConfig
 
 
 def _wav_body(sample_count: int, rate: int = 16_000, channels: int = 1, width: int = 2) -> bytes:
@@ -31,7 +32,7 @@ def _wav_body(sample_count: int, rate: int = 16_000, channels: int = 1, width: i
 
 
 @pytest.fixture
-def voice_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def voice_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, CharlieBotConfig, list[bytes]]:
   """The voice router over a tmp config, with the speech bundle stubbed ready."""
   cfg = make_home_config(tmp_path)
   bundle = transcriber._SpeechModelBundle(
@@ -57,7 +58,7 @@ def voice_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   return client, cfg, decoded
 
 
-def test_confirm_returns_text_and_persists_nothing(voice_env) -> None:
+def test_confirm_returns_text_and_persists_nothing(voice_env: tuple[TestClient, CharlieBotConfig, list[bytes]]) -> None:
   client, cfg, decoded = voice_env
 
   response = client.post("/api/voice/session-a/confirm", content=_wav_body(160_000))
@@ -68,7 +69,7 @@ def test_confirm_returns_text_and_persists_nothing(voice_env) -> None:
   assert not (cfg.sessions_dir / "session-a").exists()
 
 
-def test_confirm_accepts_exactly_ten_seconds(voice_env) -> None:
+def test_confirm_accepts_exactly_ten_seconds(voice_env: tuple[TestClient, CharlieBotConfig, list[bytes]]) -> None:
   client, _cfg, _decoded = voice_env
 
   response = client.post("/api/voice/session-a/confirm", content=_wav_body(160_000))
@@ -76,7 +77,7 @@ def test_confirm_accepts_exactly_ten_seconds(voice_env) -> None:
   assert response.status_code == 200
 
 
-def test_confirm_rejects_over_limit_duration(voice_env) -> None:
+def test_confirm_rejects_over_limit_duration(voice_env: tuple[TestClient, CharlieBotConfig, list[bytes]]) -> None:
   client, cfg, decoded = voice_env
 
   response = client.post("/api/voice/session-a/confirm", content=_wav_body(160_001))
@@ -87,7 +88,7 @@ def test_confirm_rejects_over_limit_duration(voice_env) -> None:
   assert not (cfg.sessions_dir / "session-a").exists()
 
 
-def test_confirm_rejects_malformed_body(voice_env) -> None:
+def test_confirm_rejects_malformed_body(voice_env: tuple[TestClient, CharlieBotConfig, list[bytes]]) -> None:
   client, _cfg, decoded = voice_env
 
   response = client.post("/api/voice/session-a/confirm", content=b"not a wav at all")
@@ -97,7 +98,7 @@ def test_confirm_rejects_malformed_body(voice_env) -> None:
   assert decoded == []
 
 
-def test_confirm_rejects_wrong_format(voice_env) -> None:
+def test_confirm_rejects_wrong_format(voice_env: tuple[TestClient, CharlieBotConfig, list[bytes]]) -> None:
   client, _cfg, decoded = voice_env
 
   response = client.post("/api/voice/session-a/confirm", content=_wav_body(1000, rate=44_100))
@@ -107,7 +108,8 @@ def test_confirm_rejects_wrong_format(voice_env) -> None:
   assert decoded == []
 
 
-def test_confirm_maps_models_not_ready_to_503(voice_env, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_confirm_maps_models_not_ready_to_503(
+    voice_env: tuple[TestClient, CharlieBotConfig, list[bytes]], monkeypatch: pytest.MonkeyPatch) -> None:
   client, cfg, _decoded = voice_env
 
   def not_ready() -> object:
@@ -121,7 +123,8 @@ def test_confirm_maps_models_not_ready_to_503(voice_env, monkeypatch: pytest.Mon
   assert not (cfg.sessions_dir / "session-a").exists()
 
 
-def test_confirm_maps_decode_failure_to_500(voice_env, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_confirm_maps_decode_failure_to_500(
+    voice_env: tuple[TestClient, CharlieBotConfig, list[bytes]], monkeypatch: pytest.MonkeyPatch) -> None:
   client, _cfg, _decoded = voice_env
 
   def broken(_bundle: object, _pcm: bytes) -> str:
@@ -134,7 +137,7 @@ def test_confirm_maps_decode_failure_to_500(voice_env, monkeypatch: pytest.Monke
   assert "decode exploded" in response.json()["error"]
 
 
-def test_full_upload_persists_then_returns_text(voice_env) -> None:
+def test_full_upload_persists_then_returns_text(voice_env: tuple[TestClient, CharlieBotConfig, list[bytes]]) -> None:
   client, cfg, decoded = voice_env
 
   response = client.post("/api/voice/session-a", content=_wav_body(48_000))
@@ -152,7 +155,8 @@ def test_full_upload_persists_then_returns_text(voice_env) -> None:
     assert wav.getnframes() == 48_000
 
 
-def test_full_upload_decode_failure_leaves_the_wav_on_disk(voice_env, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_full_upload_decode_failure_leaves_the_wav_on_disk(
+    voice_env: tuple[TestClient, CharlieBotConfig, list[bytes]], monkeypatch: pytest.MonkeyPatch) -> None:
   client, cfg, _decoded = voice_env
 
   def broken(_bundle: object, _pcm: bytes) -> str:
@@ -170,7 +174,7 @@ def test_full_upload_decode_failure_leaves_the_wav_on_disk(voice_env, monkeypatc
   assert list(voice_dir.glob("*.txt")) == []
 
 
-def test_full_upload_rejects_over_five_minutes(voice_env) -> None:
+def test_full_upload_rejects_over_five_minutes(voice_env: tuple[TestClient, CharlieBotConfig, list[bytes]]) -> None:
   client, cfg, decoded = voice_env
 
   response = client.post("/api/voice/session-a", content=_wav_body(transcriber.MAX_RECORDING_SAMPLES + 1))
@@ -181,7 +185,8 @@ def test_full_upload_rejects_over_five_minutes(voice_env) -> None:
   assert not (cfg.sessions_dir / "session-a").exists()
 
 
-def test_full_upload_models_not_ready_persists_nothing(voice_env, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_full_upload_models_not_ready_persists_nothing(
+    voice_env: tuple[TestClient, CharlieBotConfig, list[bytes]], monkeypatch: pytest.MonkeyPatch) -> None:
   client, cfg, _decoded = voice_env
 
   def not_ready() -> object:
@@ -194,7 +199,7 @@ def test_full_upload_models_not_ready_persists_nothing(voice_env, monkeypatch: p
   assert not (cfg.sessions_dir / "session-a").exists()
 
 
-def test_full_upload_accepts_exactly_five_minutes(voice_env) -> None:
+def test_full_upload_accepts_exactly_five_minutes(voice_env: tuple[TestClient, CharlieBotConfig, list[bytes]]) -> None:
   client, cfg, _decoded = voice_env
 
   response = client.post("/api/voice/session-a", content=_wav_body(transcriber.MAX_RECORDING_SAMPLES))

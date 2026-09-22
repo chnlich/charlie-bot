@@ -854,13 +854,13 @@ async def test_handle_event_keeps_an_already_adopted_session_id_over_the_signal(
 
 
 # ---------------------------------------------------------------------------
-# Dequeue anchor refresh, post-round copy retirement, and the 9-14 incident shape
+# Dequeue anchor refresh, post-round copy retirement, and the stale-enqueue-snapshot shape
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_stale_enqueue_snapshot_wakes_after_move_and_persist_and_does_not_overwrite(tmp_path: Path) -> None:
-  """The 2026-09-14 incident shape as a regression: an enqueue-time stale snapshot
+  """Regression: an enqueue-time stale snapshot
   wakes after a successful move+persist. The dequeue refresh reads disk, the round
   runs from the disk-true account, no second move is attempted, and replaying the
   same stale wake is harmless. Fully synthetic fixtures (pool-a/pool-b style

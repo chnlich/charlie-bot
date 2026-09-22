@@ -41,7 +41,7 @@ def _make_version(v: int, file: str, verify_state: str) -> dict:
   }
 
 
-def _write_artifact(cfg: CharlieBotConfig, session_id: str, file: str, content: str = "<html></html>") -> Path:
+def _write_artifact(cfg: CharlieBotConfig, session_id: str, file: str, content: str) -> Path:
   path = cfg.sessions_dir / session_id / file
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(content, encoding="utf-8")

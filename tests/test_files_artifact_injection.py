@@ -30,7 +30,7 @@ def sessions_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   return tmp_path
 
 
-def _build_client(access_key: str | None = None) -> TestClient:
+def _build_client(access_key: str | None) -> TestClient:
   """A files-router client that sends *access_key* as the charliebot_access_key
   cookie; None sends no credential. The cookie rides the client because httpx
   deprecates per-request cookies. The router ignores the credential either way —

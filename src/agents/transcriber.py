@@ -48,8 +48,8 @@ SEGMENT_DECODE_PAD_SAMPLES = 6_400
 # min_speech_duration = 2*512 + 4000 = 5024 samples (~0.31 s) before the end of the
 # feed where speech is first detected, so a feed larger than that clips the sentence
 # onset (one whole-recording feed loses everything before tail - 5024); at 128 ms any
-# onset alignment stays inside the back-dated window. Seen live on 2026-09-19: a
-# single large feed dropped a replayed sentence's opening.
+# onset alignment stays inside the back-dated window, while a single large feed drops
+# a replayed sentence's opening.
 OFFLINE_VAD_FEED_SAMPLES = 2048
 
 QWEN3_ASR_DIR_NAME = "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"

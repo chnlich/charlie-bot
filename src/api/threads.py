@@ -48,7 +48,7 @@ from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events
 from src.core.process import kill_process_group
 from src.core.sidebar_state import RevisionSweepGate, session_revision, take_marked_paths
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME, ThreadManager, iter_thread_meta_stats
-from src.core.triggers import TriggerManager
+from src.core.triggers import TriggerManager, iter_trigger_file_stats
 
 log = LazyStructlogLogger()
 
@@ -256,16 +256,8 @@ def _row_source_stats(threads_dir: str,
   with contextlib.suppress(OSError):
     thread_pairs.extend(iter_thread_meta_stats(threads_dir))
   trigger_pairs: list[tuple[str, os.stat_result]] = []
-  try:
-    for entry in os.scandir(triggers_dir):
-      if not entry.is_file() or not entry.name.endswith(".json"):
-        continue
-      try:
-        trigger_pairs.append((entry.path, entry.stat()))
-      except OSError:
-        continue
-  except OSError:
-    pass
+  with contextlib.suppress(OSError):
+    trigger_pairs.extend(iter_trigger_file_stats(triggers_dir))
   return thread_pairs, trigger_pairs
 
 

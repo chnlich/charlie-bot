@@ -7,6 +7,7 @@ const {dockOf, findChildByClass, makeElement, clickElement, flushPromises} =
   require('./artifact_comments_dom_stub');
 
 const {loadArtifactCommentsContext} = require('./artifact_comments_vm_context');
+const {mulberry32} = require('./mulberry32');
 
 // Source of the script under test, for the assertions that pin constants in it.
 const ARTIFACT_COMMENTS_JS = readStatic('artifact-comments.js');
@@ -768,16 +769,6 @@ test('each shortcut dedups on its own kind without blocking the other shortcuts'
 // with 200 randomised anchor/height sets; the property is asserted, never a
 // pixel literal.
 // ---------------------------------------------------------------------------
-
-function mulberry32(seed) {
-  let s = seed | 0;
-  return function () {
-    s = (s + 0x6D2B79F5) | 0;
-    let t = Math.imul(s ^ (s >>> 15), 1 | s);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 function loadStackCards() {
   const {window} = loadArtifactCommentsScript(

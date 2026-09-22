@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const test = require('node:test');
 const { loadRendererContext, paint } = require('./marked_renderer_harness');
 const { LIVE_CHAT_ROOT, largestAssistantDraft } = require('./stream_collector_common');
+const { mulberry32 } = require('./mulberry32');
 
 // The pre-incremental streaming render: lex the whole draft, record the code
 // tokens, render — the behavior the incremental parse must reproduce byte for
@@ -32,17 +33,6 @@ function streamedPaints(context, text, rng) {
     paints += 1;
   }
   return paints;
-}
-
-// A deterministic PRNG so a failure reproduces from the seed in the message.
-function mulberry32(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
 }
 
 const BLOCKS = [

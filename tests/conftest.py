@@ -1059,7 +1059,7 @@ def pool_cfg(
     *,
     home: Path,
     worktree_dir: Path,
-    labels: tuple[str, ...] = ("main", "ext-1", "ext-2"),
+    labels: tuple[str, ...],
 ) -> CharlieBotConfig:
   """A pooled CharlieBotConfig: one ClaudeAccount per label, pool credentials planted in each config dir."""
   accounts = [models.ClaudeAccount(label=label, config_dir=str(tmp_path / f"claude-{label}")) for label in labels]

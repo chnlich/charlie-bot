@@ -65,9 +65,9 @@ def _write_fragment(tmp_path: Path, fragment: str | bytes, name: str = "fragment
 def _wrap(
     tmp_path: Path,
     fragment: str | bytes,
+    vendored_katex: Path,
     genre: str = "explain",
     math: bool = True,
-    vendored_katex: Path | None = None,
     name: str = "fragment.html") -> Path:
   output = tmp_path / "page.html"
   wrap_fragment(

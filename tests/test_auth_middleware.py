@@ -55,8 +55,8 @@ def _response(sent: list[dict]) -> tuple[int, str, str]:
 # Rows are the request shapes that must reach the downstream app: the gate is a
 # no-op while no key is configured, a valid cookie or Bearer credential passes it
 # (the file server and the trace/report viewers included), and /api/auth/status
-# plus the SPA shell are the public paths. The fields mirror _scope's parameters
-# in order.
+# plus the SPA shell are the public paths. The fields mirror _scope's
+# method, path, headers, and cookies parameters in that order.
 _PASS_THROUGH_ROWS = [
     pytest.param("", "GET", "/api/chat", {"accept": "application/json"}, None, id="empty-key-is-noop"),
     pytest.param("secret", "GET", "/api/chat", None, {"charliebot_access_key": "secret"}, id="cookie-accepted"),

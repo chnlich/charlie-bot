@@ -33,6 +33,7 @@ from src.core.process import (
     SessionCgroup,
     compose_preexec,
     kill_process_group,
+    make_nice_preexec,
     make_pdeathsig_kill_preexec,
     make_session_cgroup_preexec,
     prepare_session_cgroup,
@@ -46,6 +47,11 @@ log = LazyStructlogLogger()
 
 DEFAULT_BUFFER_LIMIT = 1024 * 1024 * 1024  # 1 GB
 _STDERR_TAIL_BYTES = 64 * 1024
+
+# The nice raise every turn child spawns with (the _spawn_preexec composition):
+# the turn's process tree is background relative to the server's interactive
+# paths, and only a contended box arbitrates.
+TURN_TREE_NICE = 10
 
 
 # One executor hop per flush, on the stderr tee and the stdout pumps alike:
@@ -798,20 +804,23 @@ class AgentBackend(ABC):
     )
 
   def _spawn_preexec(self, pdeathsig: bool) -> Callable[[], None] | None:
-    """Preexec for one subprocess spawn: session cgroup move, optionally pdeathsig.
+    """Preexec for one subprocess spawn: nice, session cgroup move, optionally pdeathsig.
 
     Also snapshots this spawn's cgroup into ``_active_session_cgroup``, so
     call it exactly once per spawn, directly as the ``preexec_fn`` argument.
     The cgroup move is behavior-neutral when cgroup control is off (the
-    backend was built with cgroup_session_id=None): the preexec is None, or
-    the pdeathsig preexec alone.
+    backend was built with cgroup_session_id=None). The nice raise puts the
+    turn's whole process tree (agent CLI plus the tool subprocesses it
+    spawns) background relative to this server's interactive paths — the
+    voice decode and the HTTP handlers the user waits on; nice is
+    contention-only arbitration, so an uncontended box schedules identically.
     """
     self._active_session_cgroup = self._prepare_session_cgroup()
     cgroup_preexec = make_session_cgroup_preexec(
         self._active_session_cgroup.path if self._active_session_cgroup else None)
     if pdeathsig:
-      return compose_preexec(make_pdeathsig_kill_preexec(), cgroup_preexec)
-    return cgroup_preexec
+      return compose_preexec(make_pdeathsig_kill_preexec(), make_nice_preexec(TURN_TREE_NICE), cgroup_preexec)
+    return compose_preexec(make_nice_preexec(TURN_TREE_NICE), cgroup_preexec)
 
   def cgroup_exit_report(self) -> str | None:
     """Cap / host-OOM attribution message for this run's exit, or None.

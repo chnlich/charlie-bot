@@ -19,9 +19,9 @@ def asgi_downstream_called() -> bool:
 
 
 def _scope(
+    headers: dict[str, str] | None,
     method: str = "GET",
     path: str = "/api/chat",
-    headers: dict[str, str] | None = None,
     cookies: dict[str, str] | None = None,
 ) -> dict:
   raw_headers: list[tuple[bytes, bytes]] = []

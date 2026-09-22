@@ -1434,7 +1434,7 @@ def _thread_records(objects: list[dict], meta: dict | None, registry: dict) -> t
   return records, sorted(set(ids))
 
 
-def _thread_contribution(path: str, registry: dict, prev: dict | None = None) -> tuple[dict, int]:
+def _thread_contribution(path: str, registry: dict, prev: dict | None) -> tuple[dict, int]:
   """Parse one thread event log into its cache entry; return (entry, bytes read).
 
   *prev* is the file's cached entry under an older signature; when the guard proves the

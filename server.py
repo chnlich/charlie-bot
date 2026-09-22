@@ -114,7 +114,7 @@ class _OffLoopWholeBodyGZipResponder(GZipResponder):
   not cross threads between writes.
   """
 
-  def __init__(self, app: ASGIApp, minimum_size: int, compresslevel: int = 1) -> None:
+  def __init__(self, app: ASGIApp, minimum_size: int, compresslevel: int) -> None:
     # IdentityResponder.__init__ binds the chain without the zlib file the
     # GZipResponder layer would construct per request and this responder
     # replaces; the deflate state builds at the first deflated body instead

@@ -7749,7 +7749,6 @@ stored-text equality):
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
 import os, subprocess, sys, time, wave
-import numpy as np
 sys.path.insert(0, os.environ["CHECKOUT"])
 from pathlib import Path
 from src.core.config import CharlieBotConfig

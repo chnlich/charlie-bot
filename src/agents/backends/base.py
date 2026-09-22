@@ -902,7 +902,8 @@ class AgentBackend(ABC):
       try:
         # Covered (raw-log) transport: no pdeathsig by design — but the child
         # still lands in the session's memory-cap cgroup when cgroup control
-        # is on (preexec is None, i.e. behavior unchanged, when it is off).
+        # is on, and at TURN_TREE_NICE either way (the spawn preexec always
+        # carries the nice raise).
         self._proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=cwd,

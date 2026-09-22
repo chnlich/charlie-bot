@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
   sys.path.insert(0, str(ROOT))
 
-# The Gemini 503 incident's two error channels, verbatim shapes: the failed
+# The two Gemini-503 error channels, verbatim shapes: the failed
 # invocation's structured error event (the real failure) and the stderr tail
 # (the LiteLLM help banner that used to mask it in chat). Shared by the suites
 # covering the error-hint selection, the live exit, and the restart re-attach.

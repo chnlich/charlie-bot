@@ -9,6 +9,7 @@ import os
 import shutil
 import stat
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO, NamedTuple
@@ -983,13 +984,13 @@ class SessionManager:
   async def _get_session_bypassing_cache(self, session_id: str) -> SessionMetadata | None:
     """get_session forced past the TTL cache, so the read lands on disk.
 
-    The single-field mutators (``_save_field_fresh``, ``persist_cc_session_id``,
-    ``persist_claude_account``) and their post-save read-backs must act on the
-    latest on-disk state, not a TTL-cached view: a stale view would clobber a
-    concurrent writer's save. Unlike ``read_metadata_fresh`` this stays a
-    ``get_session`` call — the rating-key migration still runs and the cache
-    is re-populated from the read. Hold ``self._lock_for(session_id)`` around
-    the whole mutate-save; without the lock the fresh view races other writers.
+    The single-field mutators (``_save_field_fresh``, ``_persist_anchor_fresh``)
+    and their post-save read-backs must act on the latest on-disk state, not a
+    TTL-cached view: a stale view would clobber a concurrent writer's save.
+    Unlike ``read_metadata_fresh`` this stays a ``get_session`` call — the
+    rating-key migration still runs and the cache is re-populated from the
+    read. Hold ``self._lock_for(session_id)`` around the whole mutate-save;
+    without the lock the fresh view races other writers.
     """
     self._invalidate_cache(session_id)
     return await self.get_session(session_id)
@@ -1820,60 +1821,77 @@ class SessionManager:
       count += 1
     return count
 
-  async def persist_cc_session_id(self, session_id: str, cc_session_id: str) -> str | None:
-    """Persist a cc_session_id without clobbering unrelated metadata fields.
+  async def _persist_anchor_fresh(
+      self, session_id: str, mutate: Callable[[SessionMetadata], bool]) -> SessionMetadata | None:
+    """Run one authorized anchor channel: fresh read-modify-write under the per-session lock.
 
-    Re-reads fresh metadata from disk under the per-session lock, mutates only
-    ``cc_session_id`` (and ``cc_session_started_at`` when the on-disk id actually
-    changes), saves, then re-reads and returns the ``cc_session_id`` now on
-    disk. Never falls back to a whole-object save — that clobbers concurrent
-    single-field writes like ``has_unread``. ``update_thinking_state`` is the
-    reference pattern.
+    *mutate* projects the new anchor values onto the fresh metadata and returns
+    whether anything changed — only a changed save goes to disk. The read-back
+    re-reads disk under the same lock, so what a channel returns is the on-disk
+    state at return time, not the written value (a concurrent writer landing in
+    between wins). ``anchor_write=True`` marks the save an authorized anchor
+    channel (see ``save_metadata``). Returns the re-read metadata, None when
+    the session does not exist.
     """
     async with self._lock_for(session_id):
       fresh = await self._get_session_bypassing_cache(session_id)
       if fresh is None:
         return None
-      if fresh.cc_session_id != cc_session_id:
-        fresh.cc_session_id = cc_session_id
-        fresh.cc_session_started_at = utc_now()
-      await self.save_metadata(fresh, lock_held=True, anchor_write=True)
-      read_back = await self._get_session_bypassing_cache(session_id)
-    return read_back.cc_session_id if read_back is not None else None
+      if mutate(fresh):
+        await self.save_metadata(fresh, lock_held=True, anchor_write=True)
+      return await self._get_session_bypassing_cache(session_id)
+
+  async def persist_cc_session_id(self, session_id: str, cc_session_id: str) -> str | None:
+    """Persist a cc_session_id without clobbering unrelated metadata fields.
+
+    Only ``cc_session_id`` changes (and ``cc_session_started_at`` when the
+    on-disk id actually changes); the save runs on every call, id changed or
+    not — the consumer owns the resume anchor and hands it every round (the
+    persist-with-readback step in ``master_cc_queue``). Never falls back to a
+    whole-object save — that clobbers concurrent single-field writes like
+    ``has_unread``.
+    """
+
+    def set_anchor(meta: SessionMetadata) -> bool:
+      if meta.cc_session_id != cc_session_id:
+        meta.cc_session_id = cc_session_id
+        meta.cc_session_started_at = utc_now()
+      return True
+
+    saved = await self._persist_anchor_fresh(session_id, set_anchor)
+    return saved.cc_session_id if saved is not None else None
 
   async def persist_claude_account(self, session_id: str, claude_account: str) -> str | None:
     """Persist the pool account holding the session's transcript; returns the label on disk.
 
-    Same read-modify-write-under-lock pattern as ``persist_cc_session_id``: only
-    ``claude_account`` changes, so concurrent single-field writes survive.
+    Only ``claude_account`` changes, so concurrent single-field writes survive;
+    an unchanged label writes nothing.
     """
-    async with self._lock_for(session_id):
-      fresh = await self._get_session_bypassing_cache(session_id)
-      if fresh is None:
-        return None
-      if fresh.claude_account != claude_account:
-        fresh.claude_account = claude_account
-        await self.save_metadata(fresh, lock_held=True, anchor_write=True)
-      read_back = await self._get_session_bypassing_cache(session_id)
-    return read_back.claude_account if read_back is not None else None
+
+    def set_label(meta: SessionMetadata) -> bool:
+      if meta.claude_account == claude_account:
+        return False
+      meta.claude_account = claude_account
+      return True
+
+    saved = await self._persist_anchor_fresh(session_id, set_label)
+    return saved.claude_account if saved is not None else None
 
   async def clear_cc_session_anchor(self, session_id: str) -> None:
     """Intentionally clear the session's resume anchor; the authorized clear channel.
 
-    Lock-holding read-modify-write semantics identical to the single-field
-    funnels: fresh read under the per-session lock, both anchor fields cleared,
-    saved with anchor authority. The weekly recycle's deliberate fresh start
-    goes through here -- an unchanneled whole-object save would leave the old
-    anchor on disk (the guard corrects it back) and the recycle would silently
-    do nothing behind its suppressed next-round alarm.
+    The weekly recycle's deliberate fresh start goes through here -- an
+    unchanneled whole-object save would leave the old anchor on disk (the guard
+    corrects it back) and the recycle would silently do nothing behind its
+    suppressed next-round alarm.
     """
-    async with self._lock_for(session_id):
-      fresh = await self._get_session_bypassing_cache(session_id)
-      if fresh is None:
-        return
-      fresh.cc_session_id = None
-      fresh.cc_session_started_at = None
-      await self.save_metadata(fresh, lock_held=True, anchor_write=True)
+
+    def clear(meta: SessionMetadata) -> bool:
+      meta.cc_session_id = None
+      meta.cc_session_started_at = None
+      return True
+
+    await self._persist_anchor_fresh(session_id, clear)
 
   async def claude_context_state(self, session_id: str,
                                  session_meta: SessionMetadata) -> tuple[int | None, datetime | None]:

@@ -435,8 +435,7 @@ class _FakeImproveThreadManager:
     return self._tmp_path / f"{thread_id}.jsonl"
 
 
-def _completed_thread_mgr(
-    tmp_path: Path, iterations: int, results: dict[int, str] | None = None) -> _FakeImproveThreadManager:
+def _completed_thread_mgr(tmp_path: Path, iterations: int, results: dict[int, str] | None) -> _FakeImproveThreadManager:
   """Thread manager running `iterations` threads that complete with one result event each.
 
   results overrides the canned `"iterN done"` text by 1-based iteration number, for tests
@@ -455,7 +454,7 @@ def _completed_thread_mgr(
 
 def _capture_descriptions(
     monkeypatch: pytest.MonkeyPatch,
-    on_spawn: Callable[[SpawnRequest], None] | None = None,
+    on_spawn: Callable[[SpawnRequest], None] | None,
 ) -> list[str]:
   """Record each worker description, replacing the stub _patch_improve_loop_io installed.
 

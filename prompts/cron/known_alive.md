@@ -568,3 +568,14 @@ Known-alive symbols:
   the entries earlier gzip tests stored; the walk-skip test's counts stay correct on their own
   (session-keyed memos under fresh session ids never collide). Same autouse class as
   `_fresh_detail_memo` above.
+- `history` (the `MessageProjection` property in `src/core/message_projection.py`) — kept
+  deliberately as the projection's semantics oracle, not an orphan. No production reader consumes
+  it: the pagination paths read `tail`/`slice_before`/`cached_page_body`/`pending_draft` and the
+  gzip body memos instead. Its consumer is the definitional pin in `tests/test_message_projection.py`
+  (`test_projection_history_equals_events_to_messages`, parametrized): `history` must equal
+  `events_to_messages(all_events)` because it feeds the same reference path, and that module's
+  page-walk and draft-identity tests read it as that reference. `tests/test_scheduler_shared_session_manager.py`
+  reads its length once, and `docs/perf_baseline.md`'s projection-parity collector digests it. A
+  src-only vulture scan flags it as an unused property; a whole-repo grep finds only the definition,
+  the class docstring's definitional sentence, those tests, and the perf doc. Same
+  deliberately-retained-oracle class as the `search_sessions` entry above.

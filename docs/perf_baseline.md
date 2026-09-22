@@ -120,6 +120,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M108 claude-sub launch import+dispatch floor, fresh process | M108 collector below | seconds per `claude-sub --<unsupported-probe-flag>` wall (the subscription-mode worker binary's console script: every cc-claude subscription worker and reviewer launch pays this import floor before the claude CLI starts; the probe flag rejects after argv parse, so no launch work runs — the nonzero exit is the assert; the checkout under test rides PYTHONPATH because the venv's editable finder pins src to the main checkout) | median < 0.15 s (the residual floor is the launch chain's own asyncio plus the backends raw-log machinery — ~36 ms asyncio measured standalone; the pydantic model stacks, the web framework, and the config model stack stay out — the ban-set contract test pins it) | — (introduced with its first history row) |
 | M110 remote ssh probe, warm-master steady state | M110 collector below | seconds per `ssh <host> "sacct …"` probe through `ssh_cmd` against the standing watches' SLURM login host, quiet-cluster steady state; the re-master round (the first probe after the persist window expired or the master died — the shape a create-time verify pays when the previous watch's last probe is older than the window) | warm median < 0.3 s; re-master median < 1.5 s | — (introduced with its first history row) |
 | M111 review-context chat-log scan, worker completion | M111 collector below | seconds per `_first_delegation_description` scan, worst active live chat corpus carrying a delegation, deepest needle (the newest thread's completion — its match sits at the file's tail) and absent needle (a thread id no event names — the whole-corpus proof) | median < max(0.005 s, bytes ÷ 2000 MB/s) both shapes | — (introduced with its first history row) |
+| M112 backup archive build, whole-home corpus | M112 collector below | seconds per `create_backup` build over the scratch synthetic-home corpus (the builder block below; fresh random ids, no `cc_session_id`), with the archive's wire bytes and ratio riding the reading; the wire sits ~16 % over the level-9 stream it replaced (36.9× vs 42.8× on this corpus — the level-1 isal trade the landing priced, not a regression) | median < max(2.0 s, corpus bytes ÷ 1200 MB/s) | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -7685,10 +7686,61 @@ print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {best_size / 1e6:.
 EOF
 ```
 
+M112 — backup archive build, whole-home corpus. `create_backup` compresses the whole profile
+home (sessions `data/`, cache, memory, config.d — the gigabyte-scale sessions corpus included)
+into one `.tar.gz` on every `backup` handler fire; the pre-fix form rode tarfile's `w:gz`
+stdlib-zlib stream at its default level 9. The cost is an executor-thread wall invisible to
+every standing probe (the handler may never fire on a given host), so the collector rebuilds
+the scratch synthetic home — the isolation rule's fresh random ids, no `cc_session_id`, one
+token threads subtree priced out by the backup's own exclusion — then times `create_backup`
+from the checkout under test: one cold pass, as at the handler's first fire on a fresh host,
+then three timed builds, each archive deleted after its reading. Corpus built once (the
+committed builder rebuilds it from scratch each run):
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python /home/chaoli/workspace/charlie-bot/tests/backup_corpus_builder.py
+```
+
+Then run per checkout (`CHECKOUT` at the worktree root; the scratch home persists at
+/tmp/opencode/m112/home):
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, sys, time
+sys.path.insert(0, os.environ["CHECKOUT"])
+os.environ["CHARLIEBOT_HOME"] = "/tmp/opencode/m112/home"
+from pathlib import Path
+from src.core.backup import create_backup
+
+home = Path(os.environ["CHARLIEBOT_HOME"])
+corpus = sum(p.stat().st_size for p in home.rglob("*") if p.is_file())
+
+def one():
+    t0 = time.perf_counter()
+    archive = create_backup()
+    dt = time.perf_counter() - t0
+    wire = archive.stat().st_size
+    archive.unlink()
+    return dt, wire
+
+one()  # cold pass, as at the handler's first fire on a fresh host; not timed
+times = []
+for _ in range(3):
+    dt, wire = one()
+    times.append(dt)
+times.sort()
+print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: corpus {corpus / 1e9:.2f} GB, "
+      f"archive {wire / 1e6:.0f} MB ({corpus / wire:.1f}x); "
+      f"create_backup median {times[1]:.1f} s, max {times[-1]:.1f} s over 3, "
+      f"{corpus / 1e6 / times[1]:.0f} MB/s effective")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-21 | this PR | M112 backup archive build, introduced with this PR: the tar stream's stdlib level-9 zlib replaced by isal's IGzipFile at the request path's level 1 — build median 43.8/43.1/42.8 → 2.6/2.5/2.5 s (−94 %, ~16.8×), maxima 43.8/43.7/43.0 → 2.6/2.5/2.5 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back over the committed builder's 4.71 GB / 67-file scratch synthetic home, each archive deleted after its reading, load 1.26-1.70 one-minute); effective rate 108-110 → 1844-1883 MB/s; component attribution, standalone compressor ladder over the corpus's largest file (577 MB chat-events JSON): zlib-9 (the before shape) 5.25 s / 110 MB/s / 40.0×, zlib-1 1.13 s / 512 MB/s / 30.7×, isal-1 0.30 s / 1913 MB/s / 34.3×, isal-2 0.30 s / 1924 MB/s / 34.3× (isal's level 2 prices as level 1), isal-3 2.06 s / 280 MB/s / 36.4× — isal-1 dominates zlib-1 outright (faster and smaller), and the wire trade is 42.8× → 36.9× (+16 %, 110 → 128 MB on the whole corpus), the price of the level the request path's `gzip_level1` already runs; archive parity: 56 members, name/size/mtime identical, member content digest ebc2644f4392 identical across arms, exclusions hold (threads subtree, credentials); live-home scale note: this host's included corpus is ~20.5 GB (sessions data 20 GB + cache 399 MB + memory 7.6 MB), pricing the pre-fix build at ~3.2 min of one core per handler fire and the after at ~11 s; 5924-passed suite + 9 skipped (the 3-passed backup suite among them: exclusions, secrets omission, plus a new round-trip test pinning the container reads back through `tarfile.open(r:gz)`), ruff and yapf clean; M112 definition, corpus builder (tests/backup_corpus_builder.py), collector, healthy range (median < max(2.0 s, corpus bytes ÷ 1200 MB/s) — the after band sits ~1.6× inside the bytes line), and history row introduced with this PR | the backup was the one compression holdout after the ISA-L landing moved the seven request-path memos, the middleware responder, and the trace-merge subprocess: tarfile's `w:gz` stream rides stdlib zlib at its default compresslevel 9, pricing the state dir's gigabyte-scale sessions corpus at ~110 MB/s — minutes of one pinned core per backup handler fire on every host that enables the built-in `backup` cron handler; the tar stream now rides one isal IGzipFile at level 1, the same level the request path's one-shot deflator runs |
 | 2026-09-21 | this PR | M111 review-context chat-log scan, introduced with this PR: needle-at-end median 34.76/34.14/34.47 → 4.34/4.38/4.19 ms (−87 % to −88 %), absent-needle 39.38/34.84/34.35 → 3.44/3.55/3.44 ms (−91 %), every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, the 20.1 MB / 8158-line worst active live chat corpus of session fd80e6e7, load 1.07-1.51 one-minute); component attribution: the before scan parsed every line text-mode from the file start (the match for the newest thread sits at the file's tail, so the worker-completion shape paid a near-whole-file parse per completion, ~4.3 µs/line on this corpus) where the after scan rides one C-level `mm.find` over the mapping — the absent-needle arm is the pure scan, 3.44 ms / 20.1 MB ≈ 5.8 GB/s — and parses only a hit's enclosing line as a zero-copy view (the same provable-skip class the `type_line_filter` parse_filter sanctions, without the per-line Python loop); no-regression witnesses interleaved ×3: M95 newest-first scans review 0.09-0.11 ms / judgment-pair 1.05-1.19 ms (bands both) and M99 import server 0.498-0.543 → 0.499-0.522 s (band parity); 5923-passed suite + 9 skipped, ruff and yapf clean, plus 9 new reader tests (file-order hits, laziness, the unparsed needle-free skip, the hit-line skip contract, missing/empty files, the unterminated tail, multi-hit single yield, the empty-needle raise, mixed-corpus parity with the escaped-needle proof boundary pinned); M111 definition, collector, healthy range (median < max(0.005 s, bytes ÷ 2000 MB/s) both shapes — the line sits ~3x under the measured 5.8 GB/s scan floor and ~4x over the pre-fix 0.51 GB/s shape), and history row introduced with this PR | the review-context extract ran the one remaining whole-parse text-mode scanner on the worker-completion path: every delegation's reviewer and every improve round re-parsed the session's live chat log from byte 0 although the answer names one thread id — the needle proof cuts the scan to the C-level find plus the matching lines, and a corpus that grows re-prices the line automatically through its bytes term |
 | 2026-09-21 | this PR | M110 remote ssh probe, connection reuse via ssh ControlMaster (the probe family's argv single-home `ssh_cmd` now carries ControlMaster=auto, a 0700 ControlPath under ~/.ssh/controlmasters, and ControlPersist=1200 s — the remote watch ladder's 600 s plateau plus its ≤10 s noise stays inside the window, so a watched host's probes never re-master while the watch lives): warm-master probe median 0.121/0.124/0.120/0.121 → plain (pre-fix shape) median 0.842/0.837/0.847/0.842 s (−85.6 % to −85.8 %), re-master median 0.841/0.842/0.846/0.853 s (parity with the plain arm — the master setup adds nothing to the cold shape), every paired round faster (four back-to-back invocations of the verbatim collector — branch
 worktree after vs main checkout before, each invocation three interleaved rounds of 5 plain +

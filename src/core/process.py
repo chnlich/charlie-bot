@@ -232,6 +232,21 @@ def make_session_cgroup_preexec(cgroup_dir: Path | None) -> Callable[[], None] |
   return _preexec
 
 
+def make_nice_preexec(increment: int) -> Callable[[], None]:
+  """preexec_fn raising the forked child's nice value by *increment*.
+
+  Runs in the child between fork and exec, where ``os.nice`` is one syscall
+  with no locks. A positive increment needs no privilege, and the child's
+  whole process tree (the agent CLI and the tool subprocesses it spawns)
+  inherits the value.
+  """
+
+  def _preexec() -> None:
+    os.nice(increment)
+
+  return _preexec
+
+
 def compose_preexec(*preexecs: Callable[[], None] | None) -> Callable[[], None] | None:
   """One preexec_fn running every non-None *preexecs* in order; None when all are None.
 

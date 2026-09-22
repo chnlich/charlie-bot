@@ -151,6 +151,52 @@ def iter_ndjson_events(
       yield event
 
 
+def iter_ndjson_events_containing(path: Path, needle: bytes, *, log_event: str,
+                                  log_fields: dict[str, Any]) -> Iterator[dict]:
+  """Yield parsed events whose raw line contains *needle*, in file order, lazily.
+
+  The needle proof is the whole skip: a line whose bytes lack *needle* cannot
+  carry the value it names, so only a hit's enclosing line parses and the scan
+  rides one C-level find over the mapping instead of a per-line Python loop —
+  a whole-file scan pays memchr's byte rate, not the parse's. Blank lines
+  contain no non-empty needle and skip; a hit line that fails to parse follows
+  the shared reader skip contract (logged via *log_event*, answered None).
+  A missing file yields nothing. *needle* must be non-empty: an empty needle
+  matches at every offset and the scan would never advance, so a caller
+  passing one is a bug — raised.
+  """
+  if not needle:
+    raise ValueError("needle must be non-empty")
+  if not path.exists():
+    return
+  with open(path, "rb") as f, _mapped_lines(path, f) as (mm, size):
+    if mm is None:
+      return
+    view: memoryview | None = None
+    pos = 0
+    find = mm.find
+    try:
+      while True:
+        hit = find(needle, pos)
+        if hit < 0:
+          return
+        # The hit's enclosing physical line; a second needle occurrence in the
+        # same line maps to the yielded line, so the cursor jumps past the
+        # whole line and never yields one event twice.
+        line_start = mm.rfind(b"\n", 0, hit) + 1
+        line_end = find(b"\n", hit)
+        if line_end < 0:
+          line_end = size
+        if view is None:
+          view = memoryview(mm)
+        event = parse_ndjson_line(view[line_start:line_end], log_event=log_event, log_fields=log_fields)
+        if event is not None:
+          yield event
+        pos = line_end + 1
+    finally:
+      del view
+
+
 def parse_ndjson_file(path: Path) -> list[dict]:
   """Sync read+parse an NDJSON file. Skips blank/malformed lines."""
   return parse_ndjson_events(path, log_event=PARSE_SKIP_LOG_EVENT, log_fields={})

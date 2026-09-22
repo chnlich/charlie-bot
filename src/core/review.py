@@ -21,7 +21,12 @@ from src.core.models import (
     ThreadMetadata,
     option_default_model,
 )
-from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events, iter_ndjson_events_from_end, type_line_filter
+from src.core.ndjson import (
+    PARSE_SKIP_LOG_EVENT,
+    iter_ndjson_events_containing,
+    iter_ndjson_events_from_end,
+    type_line_filter,
+)
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager, thread_events_log_path
@@ -153,21 +158,21 @@ def build_review_prompt(
 def _first_delegation_description(chat_log: Path, thread_id: str) -> str | None:
   """First task_delegated description naming *thread_id*, in file order, or None.
 
-  Streams the log and stops at the first matching event whether its description
-  carries text or not; blank and malformed lines are skipped by the shared
-  ``iter_ndjson_events`` contract. A missing file means no match, never an error.
+  Stops at the first matching event whether its description carries text or
+  not; blank and malformed lines are skipped by the shared reader skip
+  contract. A missing file means no match, never an error. Thread ids are
+  ``str(uuid.uuid4())`` — ASCII, serialized verbatim — so the raw id bytes
+  are the needle the containing reader may skip by.
   """
-  if not chat_log.exists():
-    return None
-  with open(chat_log, encoding="utf-8") as stream:
-    for event in iter_ndjson_events(stream, log_event=PARSE_SKIP_LOG_EVENT, log_fields={}):
-      if event.get("type") == ET.TASK_DELEGATED and event.get("thread_id") == thread_id:
-        value = event.get("description")
-        if isinstance(value, str):
-          normalized = value.strip()
-          if normalized:
-            return normalized
-        return None
+  needle = thread_id.encode("utf-8")
+  for event in iter_ndjson_events_containing(chat_log, needle, log_event=PARSE_SKIP_LOG_EVENT, log_fields={}):
+    if event.get("type") == ET.TASK_DELEGATED and event.get("thread_id") == thread_id:
+      value = event.get("description")
+      if isinstance(value, str):
+        normalized = value.strip()
+        if normalized:
+          return normalized
+      return None
   return None
 
 

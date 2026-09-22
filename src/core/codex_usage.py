@@ -227,14 +227,13 @@ class CodexUsageResolver:
       self,
       session_id: str,
       persisted_session_id: str | None,
-      events: list[dict] | None = None,
+      events: list[dict],
   ) -> str | None:
     if persisted_session_id:
       return persisted_session_id
-    if events is not None:
-      live_session_id = self._extract_translated_session_id(events)
-      if live_session_id:
-        return live_session_id
+    live_session_id = self._extract_translated_session_id(events)
+    if live_session_id:
+      return live_session_id
     return self._read_translated_session_id(session_id)
 
   def _find_codex_rollout_path(self, native_thread_id: str) -> Path | None:

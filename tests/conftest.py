@@ -1398,7 +1398,7 @@ def build_cli_backend(
     backend_cls: type[backend_base.AgentBackend],
     resolve_patch_target: str,
     fake_binary: str,
-    defaults: dict[str, Any] | None = None,
+    defaults: dict[str, Any],
     **kwargs: Any,
 ) -> backend_base.AgentBackend:
   """Construct a CLI backend with its resolve_binary pinned to *fake_binary*.
@@ -1409,7 +1409,7 @@ def build_cli_backend(
   never probes PATH, and *defaults* fill kwargs the caller left out.
   """
   monkeypatch.setattr(resolve_patch_target, lambda name, fallback: fake_binary)
-  for key, value in (defaults or {}).items():
+  for key, value in defaults.items():
     kwargs.setdefault(key, value)
   return backend_cls(**kwargs)
 

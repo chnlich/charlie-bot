@@ -60,8 +60,10 @@ OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
 # what has to follow it — the absolute filesystem path with its leading `/` removed — so a
 # path that dropped its leading segments reads as wrong where it is written. The legacy /files
 # (and singular /file) spellings are hard-offline: nothing is mounted there, both answer 404.
-# Every Python reader derives its form (auth whitelist entries, trace parsing, listing roots,
-# slack URL rewriting) from this tuple; the frontend gate (web/static/js/chat/artifacts.js)
+# Every Python reader derives its form from this tuple — the pages URLs and trace inputs,
+# the files listing root and entry URLs, the slack URL rewriting. The auth whitelist
+# deliberately derives nothing: the file server sits behind the access key, and deriving
+# the prefix there would re-open the gate. The frontend gate (web/static/js/chat/artifacts.js)
 # mirrors the single element, pinned by tests/test_frontend_file_server_prefixes.py.
 FILE_SERVER_MOUNTS = ("/absolute_filepath",)
 

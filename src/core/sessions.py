@@ -289,6 +289,17 @@ def _reset_trigger_meta_memo_for_tests() -> None:
   _trigger_state_verdicts.clear()
 
 
+def _iter_trigger_stats(triggers_dir: str) -> list[tuple[str, os.stat_result]]:
+  """The shared trigger-dir stat walk (src.core.triggers.iter_trigger_file_stats).
+
+  Reached lazily because src.core.triggers imports SessionManager from this
+  module, the same lazy seam the recap import below uses.
+  """
+  from src.core.triggers import iter_trigger_file_stats
+
+  return iter_trigger_file_stats(triggers_dir)
+
+
 def pending_trigger_state_sync(
     triggers_dir: Path,
     walked: list[tuple[str, os.stat_result]] | None = None,
@@ -329,24 +340,15 @@ def pending_trigger_state_sync(
     if verdict is not None and verdict[0] == dir_sig:
       return verdict[1], verdict[2]
   if walked is None:
-    walked = []
-    with os.scandir(triggers_str) as entries:
-      for entry in entries:
-        if not entry.name.endswith(".json") or not entry.is_file():
-          continue
-        try:
-          st = os.stat(entry.path)
-        except OSError:
-          continue  # vanished between scandir and stat — nothing to read
-        walked.append((entry.path, st))
+    walked = _iter_trigger_stats(triggers_str)
 
   pending_count = 0
   next_trigger_at: datetime | None = None
   for trigger_path, st in walked:
     if not stat.S_ISREG(st.st_mode):
       continue
-    # entry.path is the str join scandir already built; the memo keys on it
-    # directly, the same string-path pattern the thread-metadata memo uses.
+    # The memo keys on the walked string path directly, the same string-path
+    # pattern the thread-metadata memo uses.
     trigger = _trigger_meta_memo.fresh(trigger_path, st)
     if trigger is None:
       trigger = load_json_meta(
@@ -571,17 +573,8 @@ def _sidebar_probe_walk(threads_dir: Path, triggers_dir: Path, plans_path: Path)
     dir_st = None
   if dir_st is not None and stat.S_ISDIR(dir_st.st_mode):
     trigger_dir_sig = (dir_st.st_mtime_ns, dir_st.st_size)
-    trigger_pairs = []
-    with os.scandir(triggers_str) as entries:
-      for entry in entries:
-        if not entry.name.endswith(".json"):
-          continue
-        try:
-          st = entry.stat()
-        except OSError:
-          continue
-        trigger_pairs.append((entry.path, st))
-        trigger_sig.append((entry.name, st.st_mtime_ns, st.st_size))
+    trigger_pairs = _iter_trigger_stats(triggers_str)
+    trigger_sig = [(os.path.basename(path), st.st_mtime_ns, st.st_size) for path, st in trigger_pairs]
   try:
     plans_st = os.stat(os.fspath(plans_path))
     plans_sig: tuple | None = (plans_st.st_mtime_ns, plans_st.st_size)

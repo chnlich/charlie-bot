@@ -9,55 +9,64 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.staticfiles import StaticFiles
-from isal.igzip import IGzipFile
-from starlette.datastructures import Headers, MutableHeaders, QueryParams
-from starlette.middleware.gzip import GZipMiddleware, GZipResponder, IdentityResponder
-from starlette.responses import Response
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from src.core.gc_control import gc_off
 
-from src.api import (
-    anthropic_proxy,
-    backlog,
-    chat,
-    code_server,
-    cron,
-    diag,
-    ext_usage,
-    files,
-    git,
-    host_auth,
-    internal,
-    latex,
-    pages,
-    responses,
-    sessions,
-    slash,
-    threads,
-    voice,
-)
-from src.api.auth import AuthMiddleware, _credential_matches
-from src.api.deps import session_manager, set_trigger_manager, thread_manager
-from src.core import timeouts
-from src.core.buildinfo import init_build_info
-from src.core.config import CharlieBotConfig, configured_access_key, get_config, get_credentials, require_backends
-from src.core.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH, REPO_ROOT, BackendType
-from src.core.http import close_http_client
-from src.core.init import (
-    init_charliebot_home,
-    reconcile_master_identity,
-    run_crash_recovery,
-)
-from src.core.log_once import LazyStructlogLogger, ensure_lean_renderer, log_http_request_line
-from src.core.message_aggregator import MessageAggregator
-from src.core.models import SessionMetadata, utc_now
-from src.core.process import log_session_cgroup_startup, sweep_stale_session_cgroups
-from src.core.scheduler import Scheduler
-from src.core.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager
-from src.core.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
-from src.core.tasks import cancel_and_wait, create_logged_task
-from src.core.triggers import TriggerManager
+# The import chain is the server's largest bulk build: ~560 modules — fastapi's
+# own chain, every router, and the pydantic models every route registers
+# against. GC is global, and the chain's gen-2 walks re-traverse a heap that
+# only grows — ~43 ms of the import wall (the M99 floor) that reclaims nothing
+# the process keeps, so the whole chain runs inside the same bounded span the
+# server's other bulk builds use; gc is back on before any request can arrive.
+with gc_off(collect=False):
+  from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+  from fastapi.staticfiles import StaticFiles
+  from isal.igzip import IGzipFile
+  from starlette.datastructures import Headers, MutableHeaders, QueryParams
+  from starlette.middleware.gzip import GZipMiddleware, GZipResponder, IdentityResponder
+  from starlette.responses import Response
+  from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+  from src.api import (
+      anthropic_proxy,
+      backlog,
+      chat,
+      code_server,
+      cron,
+      diag,
+      ext_usage,
+      files,
+      git,
+      host_auth,
+      internal,
+      latex,
+      pages,
+      responses,
+      sessions,
+      slash,
+      threads,
+      voice,
+  )
+  from src.api.auth import AuthMiddleware, _credential_matches
+  from src.api.deps import session_manager, set_trigger_manager, thread_manager
+  from src.core import timeouts
+  from src.core.buildinfo import init_build_info
+  from src.core.config import CharlieBotConfig, configured_access_key, get_config, get_credentials, require_backends
+  from src.core.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH, REPO_ROOT, BackendType
+  from src.core.http import close_http_client
+  from src.core.init import (
+      init_charliebot_home,
+      reconcile_master_identity,
+      run_crash_recovery,
+  )
+  from src.core.log_once import LazyStructlogLogger, ensure_lean_renderer, log_http_request_line
+  from src.core.message_aggregator import MessageAggregator
+  from src.core.models import SessionMetadata, utc_now
+  from src.core.process import log_session_cgroup_startup, sweep_stale_session_cgroups
+  from src.core.scheduler import Scheduler
+  from src.core.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager
+  from src.core.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
+  from src.core.tasks import cancel_and_wait, create_logged_task
+  from src.core.triggers import TriggerManager
 
 log = LazyStructlogLogger()
 
@@ -425,48 +434,52 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   log.info("charliebot_shutdown")
 
 
-app = FastAPI(
-    title="CharlieBot",
-    description="Multi-agent Claude Code orchestration system",
-    version="0.1.0",
-    lifespan=lifespan,
-)
+# The app assembly is the import's second bulk build: FastAPI's route
+# registration analyzes every endpoint's annotations and builds the pydantic
+# response models — the same gen-2-heavy allocation shape as the import chain.
+with gc_off(collect=False):
+  app = FastAPI(
+      title="CharlieBot",
+      description="Multi-agent Claude Code orchestration system",
+      version="0.1.0",
+      lifespan=lifespan,
+  )
 
-# The deflate sits on the client-visible send path (send awaits the off-loop
-# compression), so every big page pays it per fetch: the 633 KB events page
-# measures 15.0 ms at level 6 vs 5.5 ms at level 1 (wire 165.7 KB vs 201.1 KB).
-app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
-app.add_middleware(AuthMiddleware)
-# Added last, so starlette's insert(0)/reversed build order makes it the
-# outermost user middleware: AuthMiddleware's 401 responses are logged too.
-app.add_middleware(_RequestLogMiddleware)
+  # The deflate sits on the client-visible send path (send awaits the off-loop
+  # compression), so every big page pays it per fetch: the 633 KB events page
+  # measures 15.0 ms at level 6 vs 5.5 ms at level 1 (wire 165.7 KB vs 201.1 KB).
+  app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
+  app.add_middleware(AuthMiddleware)
+  # Added last, so starlette's insert(0)/reversed build order makes it the
+  # outermost user middleware: AuthMiddleware's 401 responses are logged too.
+  app.add_middleware(_RequestLogMiddleware)
 
-# Page router (GET / — Jinja2 rendered)
-app.include_router(pages.router, tags=["pages"])
-app.include_router(host_auth.router, tags=["host-auth"])
+  # Page router (GET / — Jinja2 rendered)
+  app.include_router(pages.router, tags=["pages"])
+  app.include_router(host_auth.router, tags=["host-auth"])
 
-# API routers
-app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
-app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
-app.include_router(threads.router, prefix="/api/threads", tags=["threads"])
-app.include_router(latex.router, prefix="/api/latex", tags=["latex"])
-app.include_router(backlog.router, prefix="/api/backlog", tags=["backlog"])
-app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
-app.include_router(slash.router, prefix="/api/slash", tags=["slash"])
-app.include_router(cron.router, prefix="/api/cron", tags=["cron"])
-app.include_router(diag.router, prefix="/api/diag", tags=["diag"])
-app.include_router(git.router, prefix="/api/git", tags=["git"])
-app.include_router(code_server.router, prefix="/api/code-server", tags=["code-server"])
-app.include_router(ext_usage.router, prefix="/api", tags=["ext-usage"])
-app.include_router(anthropic_proxy.router, prefix="/api/anthropic-proxy", tags=["anthropic-proxy"])
-app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
+  # API routers
+  app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
+  app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
+  app.include_router(threads.router, prefix="/api/threads", tags=["threads"])
+  app.include_router(latex.router, prefix="/api/latex", tags=["latex"])
+  app.include_router(backlog.router, prefix="/api/backlog", tags=["backlog"])
+  app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
+  app.include_router(slash.router, prefix="/api/slash", tags=["slash"])
+  app.include_router(cron.router, prefix="/api/cron", tags=["cron"])
+  app.include_router(diag.router, prefix="/api/diag", tags=["diag"])
+  app.include_router(git.router, prefix="/api/git", tags=["git"])
+  app.include_router(code_server.router, prefix="/api/code-server", tags=["code-server"])
+  app.include_router(ext_usage.router, prefix="/api", tags=["ext-usage"])
+  app.include_router(anthropic_proxy.router, prefix="/api/anthropic-proxy", tags=["anthropic-proxy"])
+  app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
 
-# File server (filesystem browser), mounted under the one canonical prefix FILE_SERVER_MOUNTS
-# holds: "/absolute_filepath", the form written into chat text — the prefix names what has to
-# follow it, so a link missing its absolute prefix reads as wrong where it is written. The
-# legacy "/files" and "/file" spellings are unmounted: nothing answers there, both 404.
-for mount in FILE_SERVER_MOUNTS:
-  app.include_router(files.router, prefix=mount, tags=["files"])
+  # File server (filesystem browser), mounted under the one canonical prefix FILE_SERVER_MOUNTS
+  # holds: "/absolute_filepath", the form written into chat text — the prefix names what has to
+  # follow it, so a link missing its absolute prefix reads as wrong where it is written. The
+  # legacy "/files" and "/file" spellings are unmounted: nothing answers there, both 404.
+  for mount in FILE_SERVER_MOUNTS:
+    app.include_router(files.router, prefix=mount, tags=["files"])
 
 # ---------------------------------------------------------------------------
 # WebSocket endpoint for session-level events (master CC + worker summaries)

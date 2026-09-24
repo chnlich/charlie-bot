@@ -281,9 +281,9 @@ async def test_run_passes_proxy_environment_to_serve_subprocess(
 
 
 def _assert_pdeathsig_preexec(kwargs: dict) -> None:
-  """The shared piped spawn passes the PDEATHSIG preexec on Linux, an untouched spawn elsewhere."""
+  """The shared piped spawn rides the vfork seam's pdeathsig on Linux, an untouched spawn elsewhere."""
   if sys.platform == "linux":
-    assert callable(kwargs["preexec_fn"])
+    assert kwargs["pdeathsig"] is True and kwargs["preexec_fn"] is None
   else:
     assert kwargs["preexec_fn"] is None
 

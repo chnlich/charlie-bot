@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -138,3 +139,82 @@ async def test_fork_parks_off_the_event_loop(tmp_path: Path) -> None:
   os.kill(proc.pid, signal.SIGKILL)
   await asyncio.wait_for(proc.wait(), timeout=5)
   assert max(gaps) < 0.15  # the loop never waited for the child's preexec sleep
+
+
+# The vfork spawn seam (pdeathsig=True): the piped transports' clone(CLONE_VM|
+# CLONE_VFORK) path. The compiled stub is Linux-only and needs an install with
+# a C toolchain, so these tests fail loud when the module is missing.
+@pytest.mark.skipif(sys.platform != "linux", reason="the vfork stub is Linux-only")
+@pytest.mark.asyncio
+async def test_vfork_piped_streams_cwd_env_and_exit_code() -> None:
+  proc = await _spawn(
+      sys.executable,
+      "-c", "import sys, os; sys.stdout.write(os.getcwd() + '\\n')"
+      "; sys.stderr.write(os.environ['MARKER'] + '\\n')",
+      cwd="/usr",
+      env={
+          **os.environ, "MARKER": "vfk"
+      },
+      pdeathsig=True)
+  assert await proc.stdout.readline() == b"/usr\n"
+  assert await proc.stderr.readline() == b"vfk\n"
+  assert await proc.wait() == 0 and proc.returncode == 0
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="the vfork stub is Linux-only")
+@pytest.mark.asyncio
+async def test_vfork_exec_failure_raises_child_errno() -> None:
+  with pytest.raises(OSError) as excinfo:
+    await _spawn("/nonexistent/vfkspawn-binary", pdeathsig=True)
+  assert excinfo.value.errno == 2  # ENOENT, the child's execve errno
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="the vfork stub is Linux-only")
+@pytest.mark.asyncio
+async def test_vfork_close_fds_leaves_only_stdio() -> None:
+  held = os.open("/etc/hostname", os.O_RDONLY)
+  try:
+    proc = await _spawn(sys.executable, "-c", "import os; print(sorted(os.listdir('/proc/self/fd')))", pdeathsig=True)
+    listing = await proc.stdout.readline()
+    await proc.wait()
+    assert str(held).encode() not in listing  # the caller's own fds never reach the child
+    assert b"'0'" in listing and b"'1'" in listing and b"'2'" in listing
+  finally:
+    os.close(held)
+
+
+_VFK_SPAWNER = (
+    "import asyncio, os, sys"
+    "; sys.path.insert(0, sys.argv[1])"
+    "; from src.agents.backends.spawn import spawn_subprocess"
+    "; proc = asyncio.run(spawn_subprocess("
+    "'/bin/sleep', '30', cwd='/tmp', env=dict(os.environ),"
+    "stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,"
+    "stderr=asyncio.subprocess.PIPE, limit=1024 * 1024,"
+    "start_new_session=True, preexec_fn=None, pdeathsig=True))"
+    "; print(proc.pid, flush=True)"
+    "; proc.stdout.close()")
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="the vfork stub is Linux-only")
+@pytest.mark.asyncio
+async def test_vfork_pdeathsig_kills_child_when_spawner_dies() -> None:
+  """The piped transports' guarantee: the child cannot outlive its spawner."""
+  spawner = subprocess.Popen([sys.executable, "-c", _VFK_SPAWNER, os.getcwd()], stdout=subprocess.PIPE, text=True)
+  child_pid = int(spawner.stdout.readline().strip())
+  spawner.wait()
+  for _ in range(100):
+    if not os.path.exists(f"/proc/{child_pid}"):
+      break
+    await asyncio.sleep(0.05)
+  assert not os.path.exists(f"/proc/{child_pid}"), "the child survived its spawner"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="the vfork stub is Linux-only")
+@pytest.mark.asyncio
+async def test_vfork_killed_child_reports_signal_exit() -> None:
+  proc = await _spawn(sys.executable, "-c", "import time; time.sleep(30)", pdeathsig=True)
+  await asyncio.sleep(0.05)
+  os.kill(proc.pid, signal.SIGKILL)
+  assert await asyncio.wait_for(proc.wait(), timeout=5) == -signal.SIGKILL
+  assert await proc.stdout.read() == b""

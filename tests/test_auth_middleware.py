@@ -5,17 +5,13 @@ import json
 import pytest
 from conftest import (
     _ok_asgi_downstream,
+    asgi_downstream_called,
     asgi_response,
     run_through_asgi_middleware,
     stub_credentials,
 )
 
 from src.api.auth import AuthMiddleware
-
-
-def asgi_downstream_called() -> bool:
-  """Whether the shared downstream ran during the last run_through_asgi_middleware call."""
-  return _ok_asgi_downstream.called
 
 
 def _scope(

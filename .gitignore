@@ -25,6 +25,9 @@ node_modules/
 # Logs
 *.log
 
+# Built in place by the editable install's build_ext step
+src/agents/backends/_vfkspawn*.so
+
 # OS
 .DS_Store
 Thumbs.db

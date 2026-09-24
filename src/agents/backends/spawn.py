@@ -21,12 +21,14 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import os
 import subprocess
 import threading
 from collections.abc import Callable
 
 
-def _reap(popen: subprocess.Popen, loop: asyncio.AbstractEventLoop, exit_future: asyncio.Future[int]) -> None:
+def _reap(
+    popen: subprocess.Popen | _VforkHandle, loop: asyncio.AbstractEventLoop, exit_future: asyncio.Future[int]) -> None:
   """Park on waitpid until the child exits, then resolve the exit future.
 
   The reaper thread owns this child's status: no other code path waitpid()s
@@ -38,12 +40,39 @@ def _reap(popen: subprocess.Popen, loop: asyncio.AbstractEventLoop, exit_future:
   loop.call_soon_threadsafe(exit_future.set_result, code)
 
 
+class _VforkHandle:
+  """Minimal Popen-twin over a vfork-spawned pid: pid, returncode, wait()."""
+
+  def __init__(self, pid: int) -> None:
+    self.pid = pid
+    self.returncode: int | None = None
+
+  def wait(self) -> int:
+    if self.returncode is None:
+      _, status = os.waitpid(self.pid, 0)
+      self.returncode = os.waitstatus_to_exitcode(status)
+    return self.returncode
+
+
+def _vfork_exec(argv: list[str], cwd: str | None, env: dict, stdin_fd: int, stdout_fd: int, stderr_fd: int) -> int:
+  """Run the clone(CLONE_VM|CLONE_VFORK) handshake, returning the child's pid.
+
+  Lazy import: the compiled module exists where the package was installed with
+  a C toolchain, so a missing build surfaces here, at the first pdeathsig
+  spawn, instead of at startup.
+  """
+  from src.agents.backends._vfkspawn import spawn as vfork_spawn
+
+  env_items = [f"{key}={value}" for key, value in env.items()]
+  return vfork_spawn(argv, env_items, cwd, stdin_fd, stdout_fd, stderr_fd, os.getpid())
+
+
 class SpawnedProcess:
   """Thread-spawned Popen with its pipes riding the caller's event loop."""
 
   def __init__(
       self,
-      popen: subprocess.Popen,
+      popen: subprocess.Popen | _VforkHandle,
       *,
       stdin: asyncio.StreamWriter | None,
       stdout: asyncio.StreamReader | None,
@@ -116,6 +145,7 @@ async def spawn_subprocess(
     limit: int,
     start_new_session: bool = True,
     preexec_fn: Callable[[], None] | None = None,
+    pdeathsig: bool = False,
 ) -> SpawnedProcess:
   """Spawn *cmd* with the fork+exec handshake off the event loop.
 
@@ -124,7 +154,35 @@ async def spawn_subprocess(
   itself parked on a worker thread. ``bufsize=0`` keeps the piped fds raw for
   the selector-driven transports, the same unbuffered shape the asyncio
   subprocess transport wires.
+
+  ``pdeathsig=True`` is the piped family's shape: stdin devnull, both outputs
+  piped, a new session, no preexec hook — the child-side setup is the vfork
+  stub's fixed sequence, and the fork rides clone(CLONE_VM|CLONE_VFORK) so the
+  page-table copy the preexec fork pays never happens. The nice raise and the
+  session cgroup move stay parent-side at the caller
+  (:meth:`AgentBackend._apply_turn_tree_limits`), the run()'s raw-log shape.
   """
+  if pdeathsig:
+    # The stub's child-side setup is a fixed sequence: the shape and the hook
+    # absence are the seam's contract, not caller options.
+    assert stdin == subprocess.DEVNULL and stdout == subprocess.PIPE and stderr == subprocess.PIPE
+    assert start_new_session and preexec_fn is None
+    loop = asyncio.get_running_loop()
+    devnull = os.open(os.devnull, os.O_RDONLY)
+    out_r, out_w = os.pipe()
+    err_r, err_w = os.pipe()
+    try:
+      pid = await loop.run_in_executor(
+          None, functools.partial(_vfork_exec, list(cmd), cwd, env, devnull, out_w, err_w))
+    except BaseException:
+      for fd in (devnull, out_w, err_w, out_r, err_r):
+        os.close(fd)
+      raise
+    for fd in (devnull, out_w, err_w):
+      os.close(fd)
+    stdout_stream = await _wire_reader(os.fdopen(out_r, "rb", buffering=0), limit=limit, loop=loop)
+    stderr_stream = await _wire_reader(os.fdopen(err_r, "rb", buffering=0), limit=limit, loop=loop)
+    return SpawnedProcess(_VforkHandle(pid), stdin=None, stdout=stdout_stream, stderr=stderr_stream, loop=loop)
   loop = asyncio.get_running_loop()
   popen = await loop.run_in_executor(
       None,

@@ -38,7 +38,7 @@ def test_make_nice_preexec_raises_child_nice() -> None:
 
 def test_spawn_preexec_lands_turn_tree_nice(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = build_cli_backend_rig(monkeypatch, OpenCodeBackend, cgroup_session_id=None)
-  preexec = backend._spawn_preexec(pdeathsig=False)
+  preexec = backend._spawn_preexec()
   assert callable(preexec)
   assert _child_nice(preexec) == backend_base.TURN_TREE_NICE
 

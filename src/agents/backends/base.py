@@ -35,7 +35,6 @@ from src.core.process import (
     compose_preexec,
     kill_process_group,
     make_nice_preexec,
-    make_pdeathsig_kill_preexec,
     make_session_cgroup_preexec,
     prepare_session_cgroup,
 )
@@ -745,10 +744,12 @@ class AgentBackend(ABC):
     Pipe-transport counterpart to run()'s raw-log spawn, for backends that read
     the child's stdout/stderr directly instead of tail-following log files.
     Piped children serve this process alone, so the kernel holds them to our
-    death (PR_SET_PDEATHSIG): run()'s raw-log spawn is the exact opposite —
-    covered transports are designed to survive parent death. The pdeathsig
-    preexec is merged with the session cgroup move (not replaced by it).
+    death (PR_SET_PDEATHSIG, the vfork spawn seam's child-side prctl); run()'s
+    raw-log spawn is the exact opposite — covered transports are designed to
+    survive parent death. The nice raise and the session cgroup move apply
+    parent-side after the handshake, the raw-log shape's ordering.
     """
+    self._active_session_cgroup = self._prepare_session_cgroup()
     self._proc = await spawn_subprocess(
         *cmd,
         cwd=cwd,
@@ -758,8 +759,10 @@ class AgentBackend(ABC):
         env=final_env,
         limit=self._buffer_limit,
         start_new_session=True,
-        preexec_fn=self._spawn_preexec(pdeathsig=True),
+        preexec_fn=None,
+        pdeathsig=True,
     )
+    self._apply_turn_tree_limits(self._proc.pid)
     await self._pin_identity_and_fire_on_spawn()
 
   async def _spawn_one_shot_subprocess(self, cmd: list[str], env: dict, *, pdeathsig: bool) -> SpawnedProcess:
@@ -767,12 +770,14 @@ class AgentBackend(ABC):
 
     The unpinned counterpart of :meth:`_spawn_piped_and_pin_identity`: the
     prompt rides argv, no spawn identity is pinned. A pdeathsig one-shot keeps
-    the child-side preexec (the cgroup move merged with it, exactly once); a
-    pdeathsig-free one-shot spawns preexec-free for the vfork fast path and
-    applies the turn-tree limits parent-side, the run()'s raw-log shape.
+    the kernel-held-to-our-death guarantee through the vfork spawn seam's
+    child-side prctl; a pdeathsig-free one-shot spawns preexec-free for the
+    vfork fast path and applies the turn-tree limits parent-side, the run()'s
+    raw-log shape. Both apply the nice raise and the cgroup move parent-side.
     """
+    self._active_session_cgroup = self._prepare_session_cgroup()
     if pdeathsig:
-      return await spawn_subprocess(
+      proc = await spawn_subprocess(
           *cmd,
           stdin=asyncio.subprocess.DEVNULL,
           stdout=asyncio.subprocess.PIPE,
@@ -780,9 +785,11 @@ class AgentBackend(ABC):
           env=env,
           limit=self._buffer_limit,
           start_new_session=True,
-          preexec_fn=self._spawn_preexec(pdeathsig=True),
+          preexec_fn=None,
+          pdeathsig=True,
       )
-    self._active_session_cgroup = self._prepare_session_cgroup()
+      self._apply_turn_tree_limits(proc.pid)
+      return proc
     proc = await spawn_subprocess(
         *cmd,
         stdin=asyncio.subprocess.DEVNULL,
@@ -819,14 +826,14 @@ class AgentBackend(ABC):
         swap_max_mb=cfg.server.session_swap_max_mb,
     )
 
-  def _spawn_preexec(self, pdeathsig: bool) -> Callable[[], None] | None:
-    """Preexec for spawns that keep child-side setup: nice, cgroup move, optionally pdeathsig.
+  def _spawn_preexec(self) -> Callable[[], None] | None:
+    """Preexec for spawns that keep child-side setup: nice and the session cgroup move.
 
-    The piped transports and the pdeathsig one-shots call it exactly once per
-    spawn, directly as the ``preexec_fn`` argument; spawns without a pdeathsig
-    requirement (run()'s raw-log transport, the pdeathsig-free one-shots) spawn
-    preexec-free for the vfork fast path and apply the same limits parent-side
-    through :meth:`_apply_turn_tree_limits` instead.
+    Spawns without a pdeathsig requirement spawn preexec-free for the vfork
+    fast path and apply the same limits parent-side through
+    :meth:`_apply_turn_tree_limits` instead; the piped transports and the
+    pdeathsig one-shots carry pdeathsig through the vfork spawn seam's
+    child-side prctl and apply these limits parent-side too.
     The cgroup move is behavior-neutral when cgroup control is off (the
     backend was built with cgroup_session_id=None). The nice raise puts the
     turn's whole process tree (agent CLI plus the tool subprocesses it
@@ -837,8 +844,6 @@ class AgentBackend(ABC):
     self._active_session_cgroup = self._prepare_session_cgroup()
     cgroup_preexec = make_session_cgroup_preexec(
         self._active_session_cgroup.path if self._active_session_cgroup else None)
-    if pdeathsig:
-      return compose_preexec(make_pdeathsig_kill_preexec(), make_nice_preexec(TURN_TREE_NICE), cgroup_preexec)
     return compose_preexec(make_nice_preexec(TURN_TREE_NICE), cgroup_preexec)
 
   def _apply_turn_tree_limits(self, pid: int) -> None:

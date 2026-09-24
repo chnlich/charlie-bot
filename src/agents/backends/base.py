@@ -25,6 +25,7 @@ from src.agents.backends.claude_launch import (  # noqa: F401  (re-export: the e
     DISALLOWED_TOOLS_FLAG,
     SKIP_PERMISSIONS_FLAG,
 )
+from src.agents.backends.spawn import SpawnedProcess, spawn_subprocess
 from src.core import event_types as ET
 from src.core import runs
 from src.core.log_once import LazyStructlogLogger
@@ -648,7 +649,7 @@ class AgentBackend(ABC):
     # (a backend with no session home — an unowned one-shot) never enters one.
     self._cgroup_session_id = cgroup_session_id
     self._active_session_cgroup: SessionCgroup | None = None
-    self._proc: asyncio.subprocess.Process | None = None
+    self._proc: SpawnedProcess | None = None
     self._stderr_task: asyncio.Task | None = None
     self._stdin_task: asyncio.Task | None = None
     self._stderr_tail = bytearray()
@@ -748,7 +749,7 @@ class AgentBackend(ABC):
     covered transports are designed to survive parent death. The pdeathsig
     preexec is merged with the session cgroup move (not replaced by it).
     """
-    self._proc = await asyncio.create_subprocess_exec(
+    self._proc = await spawn_subprocess(
         *cmd,
         cwd=cwd,
         stdin=asyncio.subprocess.DEVNULL,
@@ -761,15 +762,28 @@ class AgentBackend(ABC):
     )
     await self._pin_identity_and_fire_on_spawn()
 
-  async def _spawn_one_shot_subprocess(
-      self, cmd: list[str], env: dict, *, pdeathsig: bool) -> asyncio.subprocess.Process:
+  async def _spawn_one_shot_subprocess(self, cmd: list[str], env: dict, *, pdeathsig: bool) -> SpawnedProcess:
     """Spawn the one-shot child: devnull stdin, piped stdout/stderr for the collector.
 
     The unpinned counterpart of :meth:`_spawn_piped_and_pin_identity`: the
-    prompt rides argv, no spawn identity is pinned, and the preexec wires the
-    session cgroup move plus the caller's pdeathsig choice exactly once.
+    prompt rides argv, no spawn identity is pinned. A pdeathsig one-shot keeps
+    the child-side preexec (the cgroup move merged with it, exactly once); a
+    pdeathsig-free one-shot spawns preexec-free for the vfork fast path and
+    applies the turn-tree limits parent-side, the run()'s raw-log shape.
     """
-    return await asyncio.create_subprocess_exec(
+    if pdeathsig:
+      return await spawn_subprocess(
+          *cmd,
+          stdin=asyncio.subprocess.DEVNULL,
+          stdout=asyncio.subprocess.PIPE,
+          stderr=asyncio.subprocess.PIPE,
+          env=env,
+          limit=self._buffer_limit,
+          start_new_session=True,
+          preexec_fn=self._spawn_preexec(pdeathsig=True),
+      )
+    self._active_session_cgroup = self._prepare_session_cgroup()
+    proc = await spawn_subprocess(
         *cmd,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
@@ -777,8 +791,10 @@ class AgentBackend(ABC):
         env=env,
         limit=self._buffer_limit,
         start_new_session=True,
-        preexec_fn=self._spawn_preexec(pdeathsig=pdeathsig),
+        preexec_fn=None,
     )
+    self._apply_turn_tree_limits(proc.pid)
+    return proc
 
   def _prepare_session_cgroup(self) -> SessionCgroup | None:
     """Ensure this backend's session cgroup exists and snapshot its counters; None when off.
@@ -804,10 +820,13 @@ class AgentBackend(ABC):
     )
 
   def _spawn_preexec(self, pdeathsig: bool) -> Callable[[], None] | None:
-    """Preexec for one subprocess spawn: nice, session cgroup move, optionally pdeathsig.
+    """Preexec for spawns that keep child-side setup: nice, cgroup move, optionally pdeathsig.
 
-    Also snapshots this spawn's cgroup into ``_active_session_cgroup``, so
-    call it exactly once per spawn, directly as the ``preexec_fn`` argument.
+    The piped transports and the pdeathsig one-shots call it exactly once per
+    spawn, directly as the ``preexec_fn`` argument; spawns without a pdeathsig
+    requirement (run()'s raw-log transport, the pdeathsig-free one-shots) spawn
+    preexec-free for the vfork fast path and apply the same limits parent-side
+    through :meth:`_apply_turn_tree_limits` instead.
     The cgroup move is behavior-neutral when cgroup control is off (the
     backend was built with cgroup_session_id=None). The nice raise puts the
     turn's whole process tree (agent CLI plus the tool subprocesses it
@@ -821,6 +840,33 @@ class AgentBackend(ABC):
     if pdeathsig:
       return compose_preexec(make_pdeathsig_kill_preexec(), make_nice_preexec(TURN_TREE_NICE), cgroup_preexec)
     return compose_preexec(make_nice_preexec(TURN_TREE_NICE), cgroup_preexec)
+
+  def _apply_turn_tree_limits(self, pid: int) -> None:
+    """Apply the turn-tree limits parent-side for spawns that carry no preexec.
+
+    A spawn without ``preexec_fn`` keeps the kernel's vfork fast path — the
+    fork's page-table copy never touches the event loop — so the nice raise
+    and the session cgroup move apply to the already-exec'd child here, the
+    parent-observable effects of the preexec composition. A failure logs loud
+    and continues: the child is already running, and killing a healthy turn
+    over a renice failure trades a real stall for a self-inflicted one. The
+    move targets a directory the parent just created and verified writable,
+    so an error is a system-level anomaly, not a degraded mode.
+    """
+    if self._active_session_cgroup is not None:
+      procs_path = self._active_session_cgroup.path / "cgroup.procs"
+      try:
+        fd = os.open(str(procs_path), os.O_WRONLY)
+        try:
+          os.write(fd, str(pid).encode())
+        finally:
+          os.close(fd)
+      except OSError as e:
+        log.warning("session_cgroup_move_failed", pid=pid, path=str(procs_path), error=str(e))
+    try:
+      os.setpriority(os.PRIO_PROCESS, pid, TURN_TREE_NICE)
+    except OSError as e:
+      log.warning("turn_tree_nice_failed", pid=pid, error=str(e))
 
   def cgroup_exit_report(self) -> str | None:
     """Cap / host-OOM attribution message for this run's exit, or None.
@@ -900,20 +946,27 @@ class AgentBackend(ABC):
         os.close(raw_fd)
         raise
       try:
-        # Covered (raw-log) transport: no pdeathsig by design — but the child
-        # still lands in the session's memory-cap cgroup when cgroup control
-        # is on, and at TURN_TREE_NICE either way (the spawn preexec always
-        # carries the nice raise).
-        self._proc = await asyncio.create_subprocess_exec(
+        # Covered (raw-log) transport: no pdeathsig by design — the child is
+        # designed to survive parent death and be re-attached — and no
+        # child-side preexec either: a preexec_fn forces the kernel's full
+        # fork (its page-table copy scales with this process's resident set,
+        # ~0.1-0.2 s of event-loop stall per launch on the multi-GB server),
+        # where the preexec-free form keeps the vfork fast path. The turn-tree
+        # limits (nice raise, session cgroup move) apply parent-side right
+        # after the exec handshake, via _apply_turn_tree_limits.
+        self._active_session_cgroup = self._prepare_session_cgroup()
+        self._proc = await spawn_subprocess(
             *cmd,
             cwd=cwd,
             stdin=asyncio.subprocess.PIPE if stdin_prompt is not None else asyncio.subprocess.DEVNULL,
             stdout=raw_fd,
             stderr=stderr_fd,
             env=final_env,
+            limit=self._buffer_limit,
             start_new_session=True,
-            preexec_fn=self._spawn_preexec(pdeathsig=False),
+            preexec_fn=None,
         )
+        self._apply_turn_tree_limits(self._proc.pid)
       finally:
         # The child holds its own copies of both fds.
         os.close(raw_fd)

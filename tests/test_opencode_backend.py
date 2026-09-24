@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from conftest import (
-    OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
+    OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET,
     SYNTHETIC_MODEL,
     FakeChunkedResponse,
     assistant_text_event,
@@ -54,7 +54,7 @@ def _rig_end_to_end_run(
 ) -> MagicMock:
   """Mock the serve-and-connect path so backend.run() consumes `response` as the
   /event stream end-to-end; returns the spawned process mock for spawn assertions."""
-  process = stub_subprocess_spawn(monkeypatch, OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, 4321)
+  process = stub_subprocess_spawn(monkeypatch, OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, 4321)
   process.returncode = 0
   process.wait = AsyncMock(return_value=0)
   monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
@@ -254,7 +254,7 @@ async def test_run_passes_proxy_environment_to_serve_subprocess(
   process = MagicMock()
   process.pid = 1234
   create_process = AsyncMock(return_value=process)
-  monkeypatch.setattr(OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, create_process)
+  monkeypatch.setattr(OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, create_process)
   monkeypatch.setattr(backend, "_read_server_url", AsyncMock(side_effect=RuntimeError("stop after spawn")))
   monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
   cleanup = AsyncMock()
@@ -297,7 +297,7 @@ async def test_one_shot_text_passes_proxy_environment_and_deny_policy(monkeypatc
   process = fake_one_shot_proc([], pid=5678)
   create_process = AsyncMock(return_value=process)
 
-  with patch(OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=create_process):
+  with patch(OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, new=create_process):
     result = await backend.one_shot_text("prompt", "system", timeout=5.0)
 
   child_env = create_process.await_args.kwargs["env"]
@@ -1317,7 +1317,7 @@ def _rig_stub_serve_run(
   """
   processes = [_StubServeProcess(chunks) for chunks in stderr_chunks_per_attempt]
   create_process = AsyncMock(side_effect=processes)
-  monkeypatch.setattr(OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, create_process)
+  monkeypatch.setattr(OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, create_process)
   monkeypatch.setattr(_OPENCODE_HTTPX_ASYNC_CLIENT_PATCH_TARGET, lambda **kwargs: _StubServeHttpClient(script))
   sleep_calls: list[float] = []
 
@@ -1669,7 +1669,7 @@ async def test_per_call_clients_carry_shared_ssl_context(monkeypatch: pytest.Mon
   monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
   monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
   monkeypatch.setattr(backend, "_stream_stdout", AsyncMock())
-  process = stub_subprocess_spawn(monkeypatch, OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, 4321)
+  process = stub_subprocess_spawn(monkeypatch, OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, 4321)
   process.returncode = 0
   process.wait = AsyncMock(return_value=0)
 

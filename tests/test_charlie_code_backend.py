@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import (
-    BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
+    BASE_SPAWN_SUBPROCESS_PATCH_TARGET,
     CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
     FLAG_LIKE_PROMPT,
     LITELLM_503_ERROR_MESSAGE,
@@ -533,7 +533,7 @@ class _OrderRecordingBackend(AgentBackend):
 async def _drive_run_halted_at_spawn(backend: AgentBackend, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """Drive backend.run() with the conftest stub spawn; on_spawn raises the sentinel."""
   monkeypatch.setattr(RUNS_READ_PID_STAT_PATCH_TARGET, lambda pid: ("ordering-test-start", "R"))
-  stub_subprocess_spawn(monkeypatch, BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, 4242)
+  stub_subprocess_spawn(monkeypatch, BASE_SPAWN_SUBPROCESS_PATCH_TARGET, 4242)
 
   async def on_spawn(pid: int) -> None:
     raise _HaltAtSpawnError
@@ -740,7 +740,7 @@ async def _drive_run_halted_at_spawn_with_attachments(
   # A locally built AsyncMock (per the conftest stub's own docstring) so the test holds
   # the call reference `await_args` reads.
   spawn = AsyncMock(return_value=process)
-  monkeypatch.setattr(BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, spawn)
+  monkeypatch.setattr(BASE_SPAWN_SUBPROCESS_PATCH_TARGET, spawn)
 
   async def on_spawn(pid: int) -> None:
     raise _HaltAtSpawnError
@@ -788,7 +788,7 @@ async def test_run_refuses_images_with_image_input_false(monkeypatch: pytest.Mon
   # A locally built AsyncMock (per the conftest stub's own docstring) so the test holds
   # the call reference `await_args` reads.
   spawn = AsyncMock(return_value=process)
-  monkeypatch.setattr(BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, spawn)
+  monkeypatch.setattr(BASE_SPAWN_SUBPROCESS_PATCH_TARGET, spawn)
 
   events = [
       event async for event in backend.run(

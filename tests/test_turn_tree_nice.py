@@ -5,6 +5,7 @@ every turn's CLI and tool subprocesses; the spawn preexec backgrounds the turn
 tree so a contended box arbitrates in the interactive path's favor.
 """
 
+import os
 import subprocess
 import sys
 
@@ -40,3 +41,43 @@ def test_spawn_preexec_lands_turn_tree_nice(monkeypatch: pytest.MonkeyPatch) -> 
   preexec = backend._spawn_preexec(pdeathsig=False)
   assert callable(preexec)
   assert _child_nice(preexec) == backend_base.TURN_TREE_NICE
+
+
+def test_apply_turn_tree_limits_writes_pid_and_renices(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The parent-side application: the child's pid lands in cgroup.procs and the nice raise lands."""
+  from src.core.process import SessionCgroup
+
+  procs = tmp_path / "cgroup.procs"
+  procs.write_text("")
+
+  class _LimitsBackend(backend_base.AgentBackend):
+
+    def _build_command(self, prompt: str) -> list[str]:
+      return ["bash", "-c", "exit 0"]
+
+  backend = _LimitsBackend()
+  backend._active_session_cgroup = SessionCgroup(path=tmp_path, memory_max_mb=64, events_before=None)
+  seen: dict[str, tuple[int, int]] = {}
+  monkeypatch.setattr(os, "setpriority", lambda which, who, prio: seen.setdefault("nice", (who, prio)))
+  backend._apply_turn_tree_limits(4242)
+  assert procs.read_text() == "4242"
+  assert seen["nice"] == (4242, backend_base.TURN_TREE_NICE)
+
+
+@pytest.mark.asyncio
+async def test_raw_log_spawn_lands_turn_tree_nice_parent_side(tmp_path) -> None:
+  """The preexec-free raw-log spawn still lands the child at TURN_TREE_NICE.
+
+  run()'s transport spawns without preexec_fn (the vfork fast path) and applies
+  the limits parent-side; the child's own nice reading is the contract.
+  """
+
+  class _NiceReportingBackend(backend_base.AgentBackend):
+
+    def _build_command(self, prompt: str) -> list[str]:
+      return ["bash", "-c", "printf '%s' \"$(python3 -c 'import os; print(os.nice(0))')\""]
+
+  backend = _NiceReportingBackend(log_dir=tmp_path / "logs")
+  raw_log = tmp_path / "logs" / "agent.raw.ndjson"
+  [event async for event in backend.run("ignored", str(tmp_path), {"PATH": "/usr/bin:/bin"})]
+  assert raw_log.read_text().strip() == str(backend_base.TURN_TREE_NICE)

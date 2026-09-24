@@ -6350,12 +6350,14 @@ EOF
 ```
 
 M87 — opencode abort client round-trip. `_abort_session` runs at every
-opencode turn's cleanup (and `terminate`), posting to the run's local serve;
-the run-start client (`_check_health` through the SSE stream) pays the same
-per-call construction. httpx builds a fresh default SSL context per
-AsyncClient when `verify` is left at its default — ~20 ms of event-loop CPU
-per construction on this host, paid twice per opencode turn — while the serve
-URL is plain localhost HTTP and never uses the context for TLS. The cost is
+opencode turn's cleanup (and `terminate`), posting to the run's local serve
+over the shared outbound client (`src.core.http.get_http_client`); the
+run-start attempt client (`_check_health` through the SSE stream) keeps its
+own per-attempt construction and passes the process-wide prebuilt SSL
+context (`_SERVE_SSL_CONTEXT` — httpx builds a fresh default SSL context
+per AsyncClient when `verify` is left at its default, ~20 ms of event-loop
+CPU per construction on this host), while the serve URL is plain localhost
+HTTP and never uses the context for TLS. The cost is
 turn-boundary event-loop work invisible to HTTP probes, so the collector
 drives the real `_abort_session` (read-only: the run's session id is a
 collector literal) against a local stub serve with a concurrent 5 ms ticker,

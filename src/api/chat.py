@@ -96,11 +96,6 @@ async def send_message(
   uploaded_files = serialize_uploaded_files(req.uploaded_files)
   content = build_agent_input_content(req.content, uploaded_files)
 
-  # The slash stack (M99 server import floor) loads at its only request-time
-  # call site; every server process that never dispatches a slash command
-  # skips the module's pydantic command-model construction entirely.
-  from src.core.slash_commands import SlashDispatchKind, dispatch_slash_command
-
   is_slash = req.content.startswith('/')
   log.info(
       "send_message",
@@ -112,6 +107,11 @@ async def send_message(
 
   # Slash command interception
   if is_slash:
+    # The slash stack (M99 server import floor) loads at the first slash-form
+    # message; servers whose traffic never dispatches a slash command skip the
+    # module's pydantic command-model construction entirely.
+    from src.core.slash_commands import SlashDispatchKind, dispatch_slash_command
+
     space_idx = req.content.find(' ')
     name = req.content[1:space_idx] if space_idx != -1 else req.content[1:]
     args = req.content[space_idx + 1:].strip() if space_idx != -1 else ''

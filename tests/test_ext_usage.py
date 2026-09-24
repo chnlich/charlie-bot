@@ -1820,15 +1820,8 @@ class _FakeUsageHTTP:
     return _FakeResponse(self._renewal_status, self._renewal, text=self._renewal_body)
 
 
-def _write_credentials(
-    path: Path,
-    *,
-    access: str = "tok-stored",
-    refresh: str = "ref-stored",
-    expires_at: int | None = _STALE_EXPIRES_AT_MS) -> None:
-  payload = {"claudeAiOauth": {"accessToken": access, "refreshToken": refresh}}
-  if expires_at is not None:
-    payload["claudeAiOauth"]["expiresAt"] = expires_at
+def _write_credentials(path: Path, *, access: str = "tok-stored", refresh: str = "ref-stored") -> None:
+  payload = {"claudeAiOauth": {"accessToken": access, "refreshToken": refresh, "expiresAt": _STALE_EXPIRES_AT_MS}}
   path.write_text(json.dumps(payload))
 
 

@@ -22,7 +22,7 @@ before running it. Isolation contract:
   explicit failure — never a faked pass) driven over CDP with a private
   ``--user-data-dir`` profile inside the harness temp dir. Screenshots,
   per-scenario assertion results and the exact tested commit land in
-  --evidence-dir (default: this session's research/ directory, never in git).
+  --evidence-dir (default: a directory under the host temp dir, never in git).
 
 Run:  uv run python scripts/browser_harness_session_tree.py \
         [--evidence-dir DIR] [--keep] [--chrome BIN]
@@ -49,7 +49,9 @@ import tempfile  # noqa: E402
 import time  # noqa: E402
 import urllib.request  # noqa: E402
 
-RESEARCH_DEFAULT = Path("/home/chaoli/.charliebot/sessions/8a7964a3-8e53-4fa3-9145-893bac307ddc/research")
+# Evidence defaults to a host temp directory so the public repo carries no
+# host path; pass --evidence-dir to keep evidence with its owning session.
+EVIDENCE_ROOT_DEFAULT = Path(tempfile.gettempdir()) / "charliebot-session-tree-evidence"
 
 
 def log(message: str) -> None:
@@ -2020,7 +2022,7 @@ async def run_harness(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--evidence-dir", default=str(RESEARCH_DEFAULT))
+    parser.add_argument("--evidence-dir", default=str(EVIDENCE_ROOT_DEFAULT))
     parser.add_argument("--chrome", default=None)
     parser.add_argument("--keep", action="store_true", help="keep the temp dir (debugging)")
     args = parser.parse_args()

@@ -19,8 +19,8 @@ GLM backend over the instance's HTTP API:
 - an independent second instance's sentinel files stay untouched throughout.
 
 Every check is a real observation; a provider or network failure is an
-explicit failed run, never a scripted pass. Evidence lands in the owning
-session's research directory.
+explicit failed run, never a scripted pass. Evidence lands in --evidence-dir
+(default: a directory under the host temp dir).
 """
 
 from __future__ import annotations
@@ -44,7 +44,9 @@ import time  # noqa: E402
 import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 
-RESEARCH_DEFAULT = Path("/home/chaoli/.charliebot/sessions/8a7964a3-8e53-4fa3-9145-893bac307ddc/research")
+# Evidence defaults to a host temp directory so the public repo carries no
+# host path; pass --evidence-dir to keep evidence with its owning session.
+EVIDENCE_ROOT_DEFAULT = Path(tempfile.gettempdir()) / "charliebot-session-tree-evidence"
 DEFAULT_BACKEND = "charlie-code-glm53-flash"
 MANAGER_PHRASE = "LIVE-PREVIEW-MANAGER-OK-7Q4F"
 WORKER_PHRASE = "LIVE-PREVIEW-WORKER-OK-9K2D"
@@ -569,7 +571,7 @@ async def run_harness(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--evidence-dir", default=str(RESEARCH_DEFAULT / "preview_live_evidence"),
+    parser.add_argument("--evidence-dir", default=str(EVIDENCE_ROOT_DEFAULT / "preview_live_evidence"),
                         help="Where the results JSON lands")
     parser.add_argument("--backend", default=DEFAULT_BACKEND,
                         help="The charlie-code backend id the trial instance runs")

@@ -63,8 +63,8 @@ const PREVIEW = {
   blocks: [
     {sources: [{scope: 'base', source_ref: 'prompts/task_manager.md', source_session_id: null}],
       body_ref: 'b1', delivery: 'full', text: 'x'.repeat(1200)},
-    {sources: [{scope: 'memory', source_ref: 'charliebot/workspace-repos', source_session_id: null},
-      {scope: 'memory', source_ref: 'meshy-research/branch-flow', source_session_id: null}],
+    {sources: [{scope: 'memory', source_ref: 'tooling/repo-layout', source_session_id: null},
+      {scope: 'memory', source_ref: 'research/branch-flow', source_session_id: null}],
       body_ref: 'b2', delivery: 'index', text: 'y'.repeat(340)},
     {sources: [{scope: 'subtree', source_ref: 'rule:evidence', source_session_id: 'root-1'}],
       body_ref: 'b3', delivery: 'full', text: 'z'.repeat(62)},
@@ -90,7 +90,7 @@ test('opening the dialog renders the task record and one row per assembled block
   assert.match(html, /<li>docs\/auth\.md<\/li>/);
   assert.match(html, /manager_turn · 1,602 chars/, 'the run kind and the measured total');
   assert.match(html, /base<\/span> prompts\/task_manager\.md[\s\S]*?>full<[\s\S]*?>1,200</);
-  assert.match(html, /charliebot\/workspace-repos<br>[\s\S]*?meshy-research\/branch-flow[\s\S]*?>index<[\s\S]*?>340</);
+  assert.match(html, /tooling\/repo-layout<br>[\s\S]*?research\/branch-flow[\s\S]*?>index<[\s\S]*?>340</);
   assert.match(html, /rule:evidence <span[^>]*>from root-1<\/span>[\s\S]*?>62</, 'a subtree rule names its owning node');
   assert.doesNotMatch(html, /Launch overlay unavailable|\(none\)/);
 });

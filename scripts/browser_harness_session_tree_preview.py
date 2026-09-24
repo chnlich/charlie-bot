@@ -77,7 +77,9 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     wait_for,
 )
 
-RESEARCH_DEFAULT = Path("/home/chaoli/.charliebot/sessions/8a7964a3-8e53-4fa3-9145-893bac307ddc/research")
+# Evidence defaults to a host temp directory so the public repo carries no
+# host path; pass --evidence-dir to keep evidence with its owning session.
+EVIDENCE_ROOT_DEFAULT = Path(tempfile.gettempdir()) / "charliebot-session-tree-evidence"
 
 # The dropdown's id->label map, read from the live page after login.
 BACKEND_LABELS: dict[str, str] = {}
@@ -1818,7 +1820,7 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--evidence-dir", default=str(RESEARCH_DEFAULT / "preview_browser_evidence"),
+    parser.add_argument("--evidence-dir", default=str(EVIDENCE_ROOT_DEFAULT / "preview_browser_evidence"),
                         help="Where screenshots and results land")
     parser.add_argument("--backends", required=True,
                         help="Comma-separated charlie-code backend ids: the first is the "

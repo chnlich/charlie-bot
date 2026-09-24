@@ -7812,30 +7812,25 @@ server's standing RSS class, then drives the checkout's spawn seam in both produ
 shapes under a 5 ms ticker, from the checkout under test: the raw-log shape
 (devnull stdin, stdout/stderr to file fds, preexec-free — the claude family's master
 turns and every worker launch) and the piped shape (piped stdout/stderr through the
-pdeathsig spawn seam, preexec-free — the piped transports and pdeathsig one-shots; on a
-checkout that predates the seam, the collector falls back to the composed pdeathsig +
-nice preexec the seam replaced, so the same command prices both sides of the A/B); one
+pdeathsig spawn seam, preexec-free — the piped transports and pdeathsig one-shots); one
 cold pass, then five timed spawns per shape. A checkout still spawning on the loop
 resolves the seam to `asyncio.create_subprocess_exec` (the pre-fix shape):
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, inspect, os, sys, time
+import asyncio, os, sys, time
 sys.path.insert(0, os.environ["CHECKOUT"])
 import src.agents.backends.base as base_module
-from src.core.process import compose_preexec, make_nice_preexec, make_pdeathsig_kill_preexec
 
 spawn = getattr(base_module, "spawn_subprocess", None)
 if spawn is None:
     spawn = asyncio.create_subprocess_exec  # the pre-fix on-loop spawn
-NEW_SEAM = "pdeathsig" in inspect.signature(spawn).parameters
 
 GB = 3.5
 blob = bytearray(int(GB * 1e9))
 for i in range(0, len(blob), 4096):
     blob[i] = 1
 
-preexec = compose_preexec(make_pdeathsig_kill_preexec(), make_nice_preexec(base_module.TURN_TREE_NICE))
 raw_log = os.open("/tmp/opencode/m114_raw.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
 raw_err = os.open("/tmp/opencode/m114_err.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
 
@@ -7865,7 +7860,7 @@ async def run_once(shape):
             start_new_session=True,
             preexec_fn=None,
         )
-    elif NEW_SEAM:
+    else:
         proc = await spawn(
             "/bin/true",
             stdin=asyncio.subprocess.DEVNULL,
@@ -7876,17 +7871,6 @@ async def run_once(shape):
             start_new_session=True,
             preexec_fn=None,
             pdeathsig=True,
-        )
-    else:
-        proc = await spawn(
-            "/bin/true",
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=dict(os.environ),
-            limit=1024 * 1024,
-            start_new_session=True,
-            preexec_fn=preexec,
         )
     wall = time.perf_counter() - t0
     code = await proc.wait()

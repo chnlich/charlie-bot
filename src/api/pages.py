@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from starlette.responses import Response
 
+from src.agents.transcription.registry import build_transcription_backends
 from src.api.code_server import is_code_server_available
 from src.api.deps import SESSION_NOT_FOUND_DETAIL, get_config_on_loop, get_session_manager
 from src.api.message_utils import build_session_bootstrap_data
@@ -877,6 +878,16 @@ async def index(
           "event_count": event_count,
           "session_bootstrap": session_bootstrap,
           "backend_options": cfg.backends.options,
+          "voice_backends": [
+              {
+                  "id": backend.id,
+                  "label": backend.label,
+                  "live_partials": backend.live_partials,
+                  "unavailable_reason": backend.unavailable_reason(),
+              }
+              for backend in build_transcription_backends(cfg)
+          ],
+          "voice_default_backend": cfg.voice.default_backend,
           "active_backend": active_backend,
           "active_backend_label": active_backend_label,
           "active_backend_type": active_backend_type,

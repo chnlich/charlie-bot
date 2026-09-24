@@ -11,7 +11,7 @@
 ---
 
 ## 2. Technical Stack
-- **Language**: Python 3.12+
+- **Language**: Python 3.14
 - **Master Agent**: Claude Code session (pluggable backends)
 - **Worker Agent**: Claude Code (local CLI invocation, non-interactive mode)
 - **Backend**: FastAPI, WebSockets for real-time streaming, asyncio for concurrency

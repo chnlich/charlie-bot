@@ -62,7 +62,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 
 ## Prerequisites
 
-- Python ≥ 3.12 and git (worker tasks run in git worktrees)
+- Python 3.14 (uv installs it) and git (worker tasks run in git worktrees)
 - Node.js is only needed for frontend development
 
 ## Quick start

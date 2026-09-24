@@ -333,6 +333,12 @@ class EloneSessionRequest(BaseModel):
   backend: str | None = None
 
 
+class ExplainRequest(BaseModel):
+  """One explain (btw-style) request for a divider: the chosen backend is required."""
+  event_index: int
+  backend: str
+
+
 class UploadedFileRef(BaseModel):
   filename: str
   path: str

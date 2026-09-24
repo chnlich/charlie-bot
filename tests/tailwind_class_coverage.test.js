@@ -47,6 +47,7 @@ function loadChatContext(elements) {
   vm.runInContext(readStatic('chat/shared.js'), context, { filename: 'chat/shared.js' });
   vm.runInContext(readStatic('chat/attachments.js'), context, { filename: 'chat/attachments.js' });
   context.Chat.renderRoundRatingButtons = () => '<button class="round-rating-btn text-slate-500 hover:text-green-400"></button>';
+  context.Chat.renderExplainButton = () => '<button class="explain-toggle p-0.5 text-slate-500" title="Explain this round with a chosen model"></button>';
   context.Chat.embedLinkedHtmlArtifacts = () => {};
   vm.runInContext(readStatic('chat/rendering.js'), context, { filename: 'chat/rendering.js' });
   return context;

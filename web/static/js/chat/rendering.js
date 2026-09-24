@@ -5,6 +5,7 @@
   const escapeHtmlAttr = Chat.escapeHtmlAttr;
   const messageIdentityAttrs = Chat.messageIdentityAttrs;
   const renderRoundRatingButtons = Chat.renderRoundRatingButtons;
+  const renderExplainButton = Chat.renderExplainButton;
   const embedLinkedHtmlArtifacts = Chat.embedLinkedHtmlArtifacts;
   const toolInputSummary = Chat.toolInputSummary;
 
@@ -563,15 +564,18 @@ function openMessageWrapper(layoutClass, msg) {
   return "<div class=\"" + layoutClass + "\"" + messageIdentityAttrs(msg) + ">";
 }
 
+// The one markdown bubble body: chat bubbles and the explain panel's answer body
+// render through the same escape + renderProseMarkdown + data-raw round-trip.
+function mdDiv(text) {
+  var raw = escapeHtml(text || "").replace(/"/g, "&quot;");
+  return "<div class=\"prose-msg\" data-raw=\"" + raw + "\">" + renderProseMarkdown(text || "") + "</div>";
+}
+
 function renderMessage(msg, sessionId) {
   function timeDiv(colorClass) {
     if (!msg.timestamp) return "";
     var cls = colorClass || "text-slate-400/60";
     return "<div class=\"text-[10px] " + cls + " mt-1\">" + formatBubbleTime(msg.timestamp) + "</div>";
-  }
-  function mdDiv(text) {
-    var raw = escapeHtml(text || "").replace(/"/g, "&quot;");
-    return "<div class=\"prose-msg\" data-raw=\"" + raw + "\">" + renderProseMarkdown(text || "") + "</div>";
   }
 
   if (msg.role === "user") {
@@ -661,6 +665,7 @@ function renderMessage(msg, sessionId) {
           + " class=\"p-0.5 text-slate-500 hover:text-yellow-400\" title=\"Elon-e: retry with a fresh perspective\">"
           + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 10V3L4 14h7v7l9-11h-7z\"/></svg>"
           + "</button>"
+          + renderExplainButton(sessionId, msg.event_index)
           + "<button onclick=\"toggleRecapPanel(this, \x27" + sessionId + "\x27, " + msg.event_index + ")\""
           + " class=\"recap-toggle p-0.5 text-slate-500 hover:text-sky-400\" title=\"Recap: what this section covered\">"
           + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M3.75 6h16.5M3.75 12h16.5M3.75 18h10.5\"/></svg>"
@@ -670,8 +675,9 @@ function renderMessage(msg, sessionId) {
         buttons += renderRoundRatingButtons(sessionId, msg.id);
       }
     }
+    var eventIndexAttr = msg.event_index != null ? " data-event-index=\"" + msg.event_index + "\"" : "";
     return "<div class=\"flex items-center gap-3 py-2 px-4 separator-line group/sep\""
-      + messageIdentityAttrs(msg) + secondsAttr + ">"
+      + messageIdentityAttrs(msg) + eventIndexAttr + secondsAttr + ">"
       + "<div class=\"flex-1 border-t border-slate-600/40\"></div>"
       + "<span class=\"text-xs text-slate-500 whitespace-nowrap\">response complete" + timeStr + "</span>"
       + buttons
@@ -728,6 +734,7 @@ function appendMessage(role, content, isVoice, timestamp, uploadedFiles) {
 }
 
 const GLOBALS = {
+  mdDiv,
   renderMessage,
   renderMessagesIntoContainer,
   postProcessRenderedMessages,

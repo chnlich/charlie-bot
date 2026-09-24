@@ -21,13 +21,13 @@ from src.api import voice
 from src.core.config import CharlieBotConfig
 
 
-def _wav_body(sample_count: int, rate: int = 16_000, channels: int = 1, width: int = 2) -> bytes:
+def _wav_body(sample_count: int, rate: int = 16_000) -> bytes:
   buf = io.BytesIO()
   with wave.open(buf, "wb") as wav:
-    wav.setnchannels(channels)
-    wav.setsampwidth(width)
+    wav.setnchannels(1)
+    wav.setsampwidth(2)
     wav.setframerate(rate)
-    wav.writeframes(b"\x01\x02" * sample_count * channels)
+    wav.writeframes(b"\x01\x02" * sample_count)
   return buf.getvalue()
 
 

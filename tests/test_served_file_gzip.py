@@ -25,9 +25,9 @@ def _build_client() -> TestClient:
   return TestClient(app)
 
 
-def _write_page(tmp_path: Path, body: str = "<html><body><h1>Plan</h1></body></html>") -> Path:
+def _write_page(tmp_path: Path) -> Path:
   path = tmp_path / "page.html"
-  path.write_text(body, encoding="utf-8")
+  path.write_text("<html><body><h1>Plan</h1></body></html>", encoding="utf-8")
   return path
 
 

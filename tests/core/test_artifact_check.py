@@ -61,8 +61,8 @@ def _run(
   return _by_name(run_assertions(genre, artifact, cfg))
 
 
-def _chrome_cfg(tmp_path: Path, height: int = 800) -> SimpleNamespace:
-  return SimpleNamespace(headless_chrome_bin=write_stub_chrome(tmp_path, height))
+def _chrome_cfg(tmp_path: Path) -> SimpleNamespace:
+  return SimpleNamespace(headless_chrome_bin=write_stub_chrome(tmp_path, 800))
 
 
 def _sections(genre_titles: list[str]) -> str:

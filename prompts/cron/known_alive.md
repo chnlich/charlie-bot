@@ -579,6 +579,13 @@ Known-alive symbols:
   src-only vulture scan flags it as an unused property; a whole-repo grep finds only the definition,
   the class docstring's definitional sentence, those tests, and the perf doc. Same
   deliberately-retained-oracle class as the `search_sessions` entry above.
+- `_active_session_cgroup` (the attribute write on the `_LimitsBackend` double in
+  `tests/test_turn_tree_nice.py`) — production reads it back: `_apply_turn_tree_limits` writes
+  the child's pid into `self._active_session_cgroup.path / "cgroup.procs"` and
+  `cgroup_exit_report` classifies the exit through it (`src/agents/backends/base.py`), both on
+  whatever backend instance runs; the test installs its tmp-path `SessionCgroup` by attribute
+  write so the pid lands in the cgroup.procs file the test asserts on. Vulture flags the write
+  as an unused attribute. Same class as the `_proc`/`_ws` entry above.
 - `_get_close_waiter` (and its `stream` parameter) (`src/agents/backends/spawn.py`) — reached by
   the stdlib's duck-typed close contract: `asyncio.StreamWriter.wait_closed()` resolves
   `self._protocol._get_close_waiter(self)` (CPython 3.12.3 `asyncio.streams`), and

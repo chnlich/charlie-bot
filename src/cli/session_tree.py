@@ -41,16 +41,17 @@ cutover integration, and production apply authorization.
 import argparse
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 
 from src.core.config import get_config
 from src.core.session_tree_migration import (
-    MigrationError,
-    MigrationRefusedError,
-    apply_manifest,
-    build_manifest,
-    rollback_manifest,
-    scan_source,
+  MigrationError,
+  MigrationRefusedError,
+  apply_manifest,
+  build_manifest,
+  rollback_manifest,
+  scan_source,
 )
 
 
@@ -155,6 +156,9 @@ def _cmd_migrate(args: argparse.Namespace) -> None:
         "mappings": len(manifest.mappings),
         "unresolved": [u.model_dump() for u in manifest.unresolved],
         "unresolved_count": len(manifest.unresolved),
+        "import_report_count": len(manifest.import_report),
+        "import_report_by_kind": dict(sorted(
+            Counter(entry.source_kind for entry in manifest.import_report).items())),
         "pending_inputs": sum(len(m.pending_inputs) for m in plan.managers),
         "input_summary": plan.input_summary,
         "organization_pending": plan.organization_pending,

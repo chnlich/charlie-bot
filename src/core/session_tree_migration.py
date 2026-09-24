@@ -35,11 +35,18 @@ What it converts, per the approved table:
    archived) with an explicit unproven-delivery report.
 9. Group/project labels and ledger survive as history; old public rule bodies
    import once into immutable prompt storage within their old proven scope;
-   ambiguous PM-supplement prose is an unresolved review item.
+   ambiguous PM-supplement prose is an unresolved review item. A project
+   directory without project.yaml (the pre-project state) is not an enabled
+   project: its files stay as read-only history. A PM session is recognized by
+   its role before its scheduled origin, and a pm cron task binds the group's
+   one active PM session.
 10. Old event types, timestamps and body bytes are history; ``task_imported``
-    lands only after all of a node's conversion facts are durable, and only
-    explicitly proven unhandled inputs enter ``pending_inputs``. No USER event
-    is reissued and no authorization window is created.
+    lands only after all of a node's conversion facts are durable. Every old
+    input imports as read-only history (the history-only input policy):
+    ``pending_inputs`` stays empty, so nothing old auto-executes, and each input
+    whose handling the retained evidence cannot prove is listed in the
+    manifest's ``import_report``. No USER event is reissued and no
+    authorization window is created.
 11. Slack origins, plan/file links and TUI references keep resolving; nothing
     external is sent and silence is never read as completion.
 
@@ -65,9 +72,14 @@ such identity the input stays a proven-but-unbound handling fact; identical
 text in a later transcript, an assistant quote, or a second request transfers
 nothing. Scheduled wakes (which the old producer admits without a named
 input) are proven handled only by an identity-backed launch echo of the wake
-text in the bound round's own raw log; anything less is unresolved. Uncertain
-handling stays explicitly unresolved with source references; only inputs the
-old system's own replay rule proves unhandled enter ``pending_inputs``.
+text in the bound round's own raw log; anything less is unproven. Unproven
+handling and inputs the old system's own replay rule proves unhandled are both
+listed in ``import_report`` with source references and never enter
+``pending_inputs``: the old system never recorded which round consumed a queued
+input, so replaying history would auto-execute requests on ambiguous evidence.
+Corrupt chat-history lines and improve iterations without one provable loop
+association are reported the same way: the parseable record converts, the
+original files stay in place, and the report names each gap.
 
 Durability contract: apply runs under the home writer fence
 (:mod:`src.core.home_writer_fence`), refuses unresolved conversions, source or
@@ -267,6 +279,9 @@ class MigrationManifest(BaseModel):
   applied_at: datetime | None = None
   rolled_back_at: datetime | None = None
   input_summary: dict = Field(default_factory=dict)
+  # Non-blocking import report: history-only inputs, skipped corrupt chat lines
+  # and unassociated improve iterations (see the module docstring, row 10).
+  import_report: list[UnresolvedEntry] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -914,6 +929,11 @@ def _scan_projects(snap: SourceSnapshot) -> None:
       continue
     info = ProjectInfo(group=child.name, dir=child, config=None)
     config_path = child / PROJECT_CONFIG_FILENAME
+    if not config_path.exists():
+      # No project.yaml: the pre-project state (a ledger-only directory), not
+      # an enabled project; the planner keeps its files as read-only history.
+      snap.projects[child.name] = info
+      continue
     rel = snap.add_file(config_path, snap.home)
     if rel is None:
       info.parse_error = f"{config_path}: unreadable"
@@ -1043,6 +1063,7 @@ class ConversionPlan:
   # rows, the store's own serialization). Deterministic per snapshot, so a
   # resumed apply recognizes its own landed aliases product byte-exactly.
   aliases_text: str | None = None
+  import_report: list[UnresolvedEntry] = field(default_factory=list)
 
 
 def _run_id_for(owner_or_target: str, request_id: str) -> str:
@@ -1510,11 +1531,19 @@ def _migration_appended_event_ids(info: SessionInfo, migrated_run_ids: set[str])
 
 
 def _session_kind(meta: SessionMetadata) -> str:
-  if meta.scheduled_task:
-    return "scheduled"
+  # A PM session is created by its pm cron task, so it also carries
+  # scheduled_task: the role decides first.
   if meta.role == "project":
     return "pm"
+  if meta.scheduled_task:
+    return "scheduled"
   return "ordinary"
+
+
+# Plan entries of these kinds are reported, never blocking (module docstring,
+# row 10): history-only inputs, skipped corrupt chat lines, unassociated
+# improve iterations.
+_IMPORT_REPORT_KINDS = frozenset({"old_input", "chat_history", "improve_association"})
 
 
 def _classify_pm_supplement(text: str) -> tuple[str | None, str | None, str | None]:
@@ -1601,8 +1630,9 @@ def build_conversion_plan(cfg: CharlieBotConfig, snap: SourceSnapshot) -> Conver
     if errors:
       unresolved.append(UnresolvedEntry(
           source_kind="chat_history", source_id=sid,
-          reason=f"chat history holds {len(errors)} unparseable line(s); the old record set must "
-                 "be complete before conversion (first: " + errors[0][:160] + ")",
+          reason=f"chat history holds {len(errors)} unparseable line(s), skipped; the parseable "
+                 "record converts and the original file stays in place (first: "
+                 + errors[0][:160] + ")",
           refs=[snap.sessions[sid].chat_rel_path or f"sessions/{sid}/data/chat_events.jsonl"]))
 
   # --- canonical elone tails -------------------------------------------------
@@ -1626,7 +1656,12 @@ def build_conversion_plan(cfg: CharlieBotConfig, snap: SourceSnapshot) -> Conver
     if info.meta is None:
       continue
     if _session_kind(info.meta) == "pm" and info.meta.group:
-      pm_of_group.setdefault(info.meta.group, sid)
+      # A group keeps its rotated PM sessions; the active one is the PM.
+      current = pm_of_group.get(info.meta.group)
+      current_meta = snap.sessions[current].meta if current is not None else None
+      if current_meta is None or (
+          info.meta.status.value == "active" and current_meta.status.value != "active"):
+        pm_of_group[info.meta.group] = sid
 
   project_bodies: dict[str, str] = {}  # group -> subtree body text (enabled projects)
   for group, project in snap.projects.items():
@@ -1634,6 +1669,13 @@ def build_conversion_plan(cfg: CharlieBotConfig, snap: SourceSnapshot) -> Conver
       unresolved.append(UnresolvedEntry(
           source_kind="project_rules", source_id=group, reason=project.parse_error,
           refs=[f"projects/{group}/project.yaml"]))
+      continue
+    if project.config is None:
+      organization_pending.append({
+          "group": group,
+          "item": "project directory without project.yaml retained as read-only history "
+                  "(ledger and other files are not converted)",
+          "refs": [f"projects/{group}/"]})
       continue
     common = project.common_body
     if common is None:
@@ -1861,6 +1903,8 @@ def build_conversion_plan(cfg: CharlieBotConfig, snap: SourceSnapshot) -> Conver
   _check_target_collisions(snap, workers, managers, unresolved)
   _check_alias_conflicts(snap, alias_old_sessions, alias_old_threads, unresolved)
 
+  import_report = [u for u in unresolved if u.source_kind in _IMPORT_REPORT_KINDS]
+  unresolved = [u for u in unresolved if u.source_kind not in _IMPORT_REPORT_KINDS]
   plan = ConversionPlan(
       managers=managers, workers=workers, prompt_bodies=sorted(prompt_bodies.values(), key=lambda b: b.ref),
       alias_old_sessions=alias_old_sessions, alias_old_threads=alias_old_threads,
@@ -1868,7 +1912,8 @@ def build_conversion_plan(cfg: CharlieBotConfig, snap: SourceSnapshot) -> Conver
       cron_rewrites=cron_rewrites, trigger_moves=trigger_moves,
       mappings=mappings, unresolved=unresolved,
       organization_pending=organization_pending,
-      input_summary=_input_summary(mappings, managers, workers))
+      input_summary=_input_summary(mappings, managers, workers),
+      import_report=import_report)
   return plan
 
 
@@ -1926,14 +1971,17 @@ def _resolve_cron_target(snap: SourceSnapshot, body: dict, managers: list[Manage
   if body.get("type") == "pm":
     project = body.get("project")
     if isinstance(project, str) and project:
-      pm = next((m for m in managers if m.kind == "pm" and m.metadata.project_key == project), None)
-      if pm is None:
+      pms = [m for m in managers if m.kind == "pm" and m.metadata.project_key == project]
+      active_pms = [m for m in pms if m.metadata.status.value == "active"]
+      if len(active_pms) != 1:
         unresolved.append(UnresolvedEntry(
             source_kind="cron_config", source_id=rel_path,
-            reason=f"type pm task declares project {project!r} but no PM session carries that group",
+            reason=(f"type pm task declares project {project!r}: {len(active_pms)} active PM "
+                    f"session(s) carry that group ({len(pms)} including archived); exactly one "
+                    "active binding target is required"),
             refs=[rel_path]))
         return None
-      return pm.session_id
+      return active_pms[0].session_id
     unresolved.append(UnresolvedEntry(
         source_kind="cron_config", source_id=rel_path,
         reason="type pm task has neither an explicit session_id nor a project group to bind",
@@ -2136,10 +2184,15 @@ def _plan_thread(
   if match:
     loop, ambiguity = _improve_loop_association(snap, session, thread, match)
     if loop is None:
+      # No single provable loop: the iteration imports as a standalone worker
+      # under its session, and the report names the missing association.
       unresolved.append(UnresolvedEntry(
-          source_kind="improve_iteration", source_id=f"{original_owner}/{meta.id}",
-          reason=ambiguity or "iteration association is ambiguous",
+          source_kind="improve_association", source_id=f"{original_owner}/{meta.id}",
+          reason=(ambiguity or "iteration association is ambiguous")
+          + "; imported as a standalone worker without a loop association",
           refs=[str(thread.meta_path)]))
+      _plan_work_thread(snap, session, thread, owner_canonical, managers, workers,
+                        thread_targets, mappings, unresolved, alias_old_threads)
       return
     _plan_improve_iteration(snap, session, thread, owner_canonical, managers, workers, loop, match,
                             thread_targets, mappings, unresolved, alias_old_threads, prompt_bodies)
@@ -2219,8 +2272,8 @@ def _plan_manager_conversion(
   converted.task = TaskSpec(goal=goal)
   converted.project_key = meta.group
   converted.presentation = "hidden" if archived else "auto"
-  if kind == "scheduled" and archived:
-    converted.automation_paused = True  # old archived scheduled sessions import paused
+  if meta.scheduled_task and archived:
+    converted.automation_paused = True  # old archived scheduled (and PM) sessions import paused
   converted.subtree_prompt_ref = subtree_ref
   converted.node_prompt_ref = node_ref
   converted.native_prompt_hash = None  # never manufacture prompt provenance
@@ -2286,8 +2339,15 @@ def _plan_manager_conversion(
       info, classified_events, meta, proven_logs,
       meta.master_run if meta.profile is None else None,
   )
+  # History-only input policy (module docstring, row 10): unproven handling
+  # and replay-rule-unhandled inputs are reported, and none re-enters the queue.
   unresolved.extend(disposition.uncertain)
-  pending = disposition.pending
+  unresolved.extend(UnresolvedEntry(
+      source_kind="old_input", source_id=f"{sid}:{entry['input_id']}",
+      reason="the old replay rule reads this input as unhandled; imported as history "
+             "under the history-only input policy, never re-executed",
+      refs=[entry["source_ref"]]) for entry in disposition.pending)
+  pending: list[dict] = []
 
   # A run whose bound round's MASTER_DONE recorded a failed or zero-output
   # round imports as that failed execution: the round's own completion fact
@@ -2339,10 +2399,10 @@ def _plan_manager_conversion(
   kind_disposition = {
       "ordinary": "manager_root", "pm": "manager_pm", "scheduled": "manager_scheduled"}[kind]
   detail: dict = {"archived": archived}
-  if kind == "scheduled":
-    detail["scheduled_task"] = meta.scheduled_task or ""
+  if meta.scheduled_task:
+    detail["scheduled_task"] = meta.scheduled_task
     detail["import_paused"] = bool(archived)
-  if archived and kind != "scheduled":
+  if archived and not meta.scheduled_task:
     unproven = ("old archived session metadata alone does not prove delivery; the task "
                 "stays open (hidden) with its original evidence")
     detail["unproven_delivery"] = unproven
@@ -3445,6 +3505,7 @@ def build_manifest(cfg: CharlieBotConfig, snap: SourceSnapshot) -> tuple[Migrati
       unresolved=plan.unresolved,
       created_files=sorted(set(created)),
       input_summary=plan.input_summary,
+      import_report=plan.import_report,
   )
   return manifest, plan
 

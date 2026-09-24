@@ -34,6 +34,7 @@ from src.agents.backends.opencode import (
     OpenCodeSseSilenceError,
 )
 from src.core import event_types as ET
+from src.core import http as src_core_http
 from src.core.streaming import handle_compaction_events
 from src.core.timeouts import OPENCODE_ABORT_TIMEOUT, OPENCODE_HTTP_API_TIMEOUT
 
@@ -1620,10 +1621,11 @@ async def test_run_lock_failure_never_retries_after_terminate(
 
 @pytest.mark.asyncio
 async def test_per_call_clients_carry_shared_ssl_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """Both per-call client constructions — the run-start client (health through
-  the SSE stream) and the cleanup abort POST — pass the process-wide context:
-  httpx's default verify builds a fresh default SSL context per AsyncClient,
-  ~20 ms of event-loop CPU per call on this host."""
+  """The run-start client (health through the SSE stream) passes the process-wide
+  context: httpx's default verify builds a fresh default SSL context per
+  AsyncClient, ~20 ms of event-loop CPU per call on this host. The cleanup abort
+  POST rides the shared outbound client (src.core.http) instead of constructing
+  one — the serve URL is pinned plain localhost HTTP, so no verify choice applies."""
   captured: list[dict] = []
 
   class _KwargsClient(_ClientContextDouble):
@@ -1665,6 +1667,15 @@ async def test_per_call_clients_carry_shared_ssl_context(monkeypatch: pytest.Mon
               ]))
 
   monkeypatch.setattr(_OPENCODE_HTTPX_ASYNC_CLIENT_PATCH_TARGET, _KwargsClient)
+  abort_posts: list[tuple[str, float]] = []
+
+  class _SharedAbortClient:
+
+    async def post(self, url: str, timeout: float | None = None) -> _StubHttpResponse:
+      abort_posts.append((url, timeout))
+      return _StubHttpResponse(200)
+
+  monkeypatch.setattr(src_core_http, "_client", _SharedAbortClient())
   backend = _build_backend(monkeypatch, model="provider/model")
   monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
   monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
@@ -1683,12 +1694,8 @@ async def test_per_call_clients_carry_shared_ssl_context(monkeypatch: pytest.Mon
           "timeout": OPENCODE_HTTP_API_TIMEOUT,
           "verify": opencode_mod._SERVE_SSL_CONTEXT,
       },
-      {
-          "base_url": "http://127.0.0.1:4242",
-          "timeout": OPENCODE_ABORT_TIMEOUT,
-          "verify": opencode_mod._SERVE_SSL_CONTEXT,
-      },
   ]
+  assert abort_posts == [("http://127.0.0.1:4242/session/session-1/abort", OPENCODE_ABORT_TIMEOUT)]
 
 
 # ---------------------------------------------------------------------------

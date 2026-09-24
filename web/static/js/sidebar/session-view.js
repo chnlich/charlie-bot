@@ -178,6 +178,10 @@ function scheduleLazySessionDataLoad() {
     lazySessionDataTimer = null;
     pollActiveSessionView({force: true});
     ensureWorkersLoadedForActiveSession();
+    // One explain/status GET per session load/switch paints every divider's
+    // explain button from persisted truth; turns the engine materializes later
+    // read the map at render time, so no per-divider request is ever needed.
+    loadExplainStatuses(SESSION_ID);
   });
 }
 
@@ -476,6 +480,22 @@ function renderSessionView(data) {
   // no scroll event ever fires and the idle sentinel would wait forever. This
   // attempt returns immediately when the container is already scrollable.
   if (sessionHasMore) loadOlderIfNeeded(container);
+}
+
+async function loadExplainStatuses(sessionId) {
+  // In-flight token: only the session and switch generation that own the view
+  // when the response lands may install the map (same rule as loadOlderMessages).
+  const flight = {sessionId, generation: switchGeneration};
+  try {
+    const res = await fetch('/api/sessions/' + sessionId + '/explain/status');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const statuses = await res.json();
+    if (flight.generation !== switchGeneration || flight.sessionId !== SESSION_ID) return;
+    setActiveExplainStatuses(statuses);
+    applyExplainStatusesToDom();
+  } catch (err) {
+    console.error('Load explain statuses failed:', err);
+  }
 }
 
 // ---------------------------------------------------------------------------

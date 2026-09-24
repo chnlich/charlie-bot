@@ -143,6 +143,13 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     return;
   }
 
+  // Explain (btw-style) state change for one divider: repaint the button from the
+  // frame; a frame carries no body, so an open panel re-fetches the single entry.
+  if (t === 'explain_status') {
+    updateExplainStatus(SESSION_ID, ev.upto, ev.state, ev.backend);
+    return;
+  }
+
   if (t === 'session_group_changed') {
     const searchInput = document.getElementById('sidebar-search');
     const query = searchInput ? searchInput.value.trim() : '';

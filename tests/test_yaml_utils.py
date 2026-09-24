@@ -44,3 +44,13 @@ def test_save_and_load_round_trip(tmp_path):
   expected = yaml.safe_dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False)
   assert path.read_text(encoding="utf-8") == expected
   assert load_yaml(path, default=None) == data
+
+
+def test_degenerate_top_level_documents_do_not_crash_the_slash_loader(tmp_path, monkeypatch):
+  import src.core.slash_commands as sc
+
+  for raw in ("false", "[]", "0", '""', "- a\n- b"):
+    path = tmp_path / "slash_commands.yaml"
+    path.write_text(raw, encoding="utf-8")
+    monkeypatch.setattr(sc, "_slash_commands_file", lambda p=path: p)
+    assert sc.load_slash_commands() == []

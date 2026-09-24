@@ -24,7 +24,7 @@ from server import _RequestLogMiddleware
 def logged_fields(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
   """The fields dicts the middleware hands to the access-line renderer."""
   captured: list[dict[str, object]] = []
-  monkeypatch.setattr("server.log_http_request_line", lambda fields: captured.append(fields))
+  monkeypatch.setattr("server.log_http_request_line", lambda **fields: captured.append(fields))
   return captured
 
 
@@ -90,9 +90,11 @@ async def test_200_response_logs_one_line_with_five_fields(logged_fields: list[d
 
   assert len(logged_fields) == 1
   fields = logged_fields[0]
-  # The middleware contributes the event name (in the renderer) plus exactly
-  # the five contract fields.
-  assert set(fields) == {"method", "path", "status", "duration_ms", "client"}
+  # The middleware passes every field explicitly — error=None on the happy
+  # path — and the renderer omits a None error, so the line carries exactly
+  # the five contract fields (pinned on the rendered bytes downstream).
+  assert set(fields) == {"method", "path", "status", "duration_ms", "client", "error"}
+  assert fields["error"] is None
   assert fields["method"] == "GET"
   assert fields["path"] == "/api/sessions/"
   assert fields["status"] == 200

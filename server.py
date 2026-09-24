@@ -234,16 +234,14 @@ class _RequestLogMiddleware:
   def _log_http_request(self, scope: Scope, status: int | None, started: float, *, error: str | None = None) -> None:
     """The one http_request log site: five fields, plus `error` on the exception path only."""
     client = scope.get("client")
-    fields: dict[str, object] = {
-        "method": scope["method"],
-        "path": scope["path"],
-        "status": status,
-        "duration_ms": round((time.monotonic() - started) * 1000),
-        "client": client[0] if client else "-",
-    }
-    if error is not None:
-      fields["error"] = error
-    log_http_request_line(fields)
+    log_http_request_line(
+        method=scope["method"],
+        path=scope["path"],
+        status=status,
+        duration_ms=round((time.monotonic() - started) * 1000),
+        client=client[0] if client else "-",
+        error=error,
+    )
 
 
 async def _check_ws_auth(websocket: WebSocket) -> bool:

@@ -8,6 +8,7 @@ tree so a contended box arbitrates in the interactive path's favor.
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from conftest import build_cli_backend_rig
@@ -43,7 +44,7 @@ def test_spawn_preexec_lands_turn_tree_nice(monkeypatch: pytest.MonkeyPatch) -> 
   assert _child_nice(preexec) == backend_base.TURN_TREE_NICE
 
 
-def test_apply_turn_tree_limits_writes_pid_and_renices(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_apply_turn_tree_limits_writes_pid_and_renices(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The parent-side application: the child's pid lands in cgroup.procs and the nice raise lands."""
   from src.core.process import SessionCgroup
 
@@ -65,7 +66,7 @@ def test_apply_turn_tree_limits_writes_pid_and_renices(tmp_path, monkeypatch: py
 
 
 @pytest.mark.asyncio
-async def test_raw_log_spawn_lands_turn_tree_nice_parent_side(tmp_path) -> None:
+async def test_raw_log_spawn_lands_turn_tree_nice_parent_side(tmp_path: Path) -> None:
   """The preexec-free raw-log spawn still lands the child at TURN_TREE_NICE.
 
   run()'s transport spawns without preexec_fn (the vfork fast path) and applies

@@ -664,7 +664,7 @@ class AgentBackend(ABC):
   def _effective_prompt(self, prompt: str) -> str:
     """Return prompt with instructions prepended, if any are configured."""
     if self._instructions_content:
-      return f"<system-instructions>\n{self._instructions_content}\n</system-instructions>\n\n{prompt}"
+      return self._frame_system_prompt(self._instructions_content, prompt)
     return prompt
 
   @staticmethod

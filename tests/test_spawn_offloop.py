@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 import pytest
+from conftest import loop_stall_gaps
 
 from src.agents.backends.spawn import SpawnedProcess, spawn_subprocess
 
@@ -124,20 +125,7 @@ async def test_fork_parks_off_the_event_loop(tmp_path: Path) -> None:
     while not block.exists() and time.monotonic() < deadline:
       time.sleep(0.01)
 
-  gaps: list[float] = []
-  stop = False
-
-  async def ticker() -> None:
-    prev = time.perf_counter()
-    while not stop:
-      await asyncio.sleep(0.005)
-      now = time.perf_counter()
-      gaps.append(now - prev)
-      prev = now
-
-  ticker_task = asyncio.create_task(ticker())
-  try:
-    await asyncio.sleep(0.01)  # the ticker's first slice lands before the spawn starts
+  async with loop_stall_gaps() as gaps:
     spawn_task = asyncio.ensure_future(
         _spawn(sys.executable, "-c", "import time; time.sleep(1)", preexec_fn=sleeping_preexec))
     deadline = time.monotonic() + 10
@@ -147,9 +135,6 @@ async def test_fork_parks_off_the_event_loop(tmp_path: Path) -> None:
     await asyncio.sleep(0.2)  # the loop ticks while the child's preexec sleeps
     block.write_text("1")  # release the preexec; the spawn proceeds to exec and wiring
     proc = await asyncio.wait_for(spawn_task, timeout=10)
-  finally:
-    stop = True
-    await ticker_task
   os.kill(proc.pid, signal.SIGKILL)
   await asyncio.wait_for(proc.wait(), timeout=5)
   assert max(gaps) < 0.15  # the loop never waited for the child's preexec sleep

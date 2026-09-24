@@ -12,10 +12,10 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
   import httpx
 
-_client: "httpx.AsyncClient | None" = None
+_client: httpx.AsyncClient | None = None
 
 
-def get_http_client() -> "httpx.AsyncClient":
+def get_http_client() -> httpx.AsyncClient:
   """Return the shared AsyncClient, creating it lazily on first call."""
   global _client
   if _client is None:

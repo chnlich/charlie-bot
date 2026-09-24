@@ -94,7 +94,7 @@ class MessageProjection:
     self.event_count = event_index_offset
     self._ingest(events)
 
-  def advanced(self, events: list[dict]) -> 'MessageProjection':
+  def advanced(self, events: list[dict]) -> MessageProjection:
     """Return a copy of this projection advanced by the appended *events*.
 
     The copy shares no mutable state with the original — racing callers each

@@ -37,7 +37,7 @@ class BackendBase(BaseModel):
   prompt_overlay: str | None = None
 
   @model_validator(mode='after')
-  def require_model(self) -> 'BackendBase':
+  def require_model(self) -> BackendBase:
     if self.model is None and self.type not in MODEL_OPTIONAL_ROUTING_BACKEND_TYPES:
       raise ValueError(f"backend '{self.id}' (type '{self.type}') requires 'model'")
     return self

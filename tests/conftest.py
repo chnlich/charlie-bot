@@ -2206,7 +2206,7 @@ class FakeStdout:
   def __init__(self, lines: list[bytes]) -> None:
     self._lines = list(lines)
 
-  def __aiter__(self) -> "FakeStdout":
+  def __aiter__(self) -> FakeStdout:
     return self
 
   async def __anext__(self) -> bytes:

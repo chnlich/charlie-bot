@@ -497,7 +497,7 @@ async def test_one_shot_text_kills_process_group_on_timeout(monkeypatch: pytest.
 
   class _BlockingStdout:
 
-    def __aiter__(self) -> "_BlockingStdout":
+    def __aiter__(self) -> _BlockingStdout:
       return self
 
     async def __anext__(self) -> bytes:

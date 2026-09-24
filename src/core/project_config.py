@@ -81,7 +81,7 @@ class ProjectConfig(BaseModel):
     return v
 
   @model_validator(mode="after")
-  def _no_explicit_null_supplement(self) -> "ProjectConfig":
+  def _no_explicit_null_supplement(self) -> ProjectConfig:
     if "manager_prompt_file" in self.model_fields_set and self.manager_prompt_file is None:
       raise ValueError("manager_prompt_file must be omitted or a nonempty string, not null")
     return self

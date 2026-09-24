@@ -42,7 +42,7 @@ router = APIRouter()
 _cached_usage: dict[str, dict] = {}
 # Per-instance provider state, keyed by (provider, expanded dir path), kept
 # across cycles so per-instance 429 backoff survives between polls.
-_instances: dict[tuple[str, str], "_UsageInstance"] = {}
+_instances: dict[tuple[str, str], _UsageInstance] = {}
 
 # A token_count event closes every Codex turn, so the newest one sits in the
 # rollout file's trailing bytes; a tail miss (a turn in flight appended more

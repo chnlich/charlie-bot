@@ -767,16 +767,15 @@ def _resolve_prompt_file(entry: dict, repo_root: Path) -> Path | None:
 # readers) is stated once, on CLAUDE_CONFIG_DIR_ENV_VAR in src.core.home.
 
 
-def claude_config_dir(account: ClaudeAccount | None = None) -> Path:
+def claude_config_dir() -> Path:
   """Resolve the CLAUDE_CONFIG_DIR a cc-claude process will use.
 
-  Single source of truth for the resolution order: the pool account's
-  ``config_dir`` when one is pinned, then ``$CLAUDE_CONFIG_DIR``, then
-  ``~/.claude``. Both the API backend-switch guard and the runtime resume
-  resolver call this — do not restate the order anywhere else.
+  Single source of truth for the resolution order: ``$CLAUDE_CONFIG_DIR``
+  first, then ``~/.claude``. Both the API backend-switch guard and the
+  runtime resume resolver call this — do not restate the order anywhere
+  else. A pool account's pinned ``config_dir`` rides the ``CLAUDE_CONFIG_DIR``
+  value the backend sets on the process environment, never this call.
   """
-  if account is not None:
-    return Path(account.config_dir).expanduser()
   env_dir = os.environ.get(CLAUDE_CONFIG_DIR_ENV_VAR)
   if env_dir:
     return Path(env_dir).expanduser()

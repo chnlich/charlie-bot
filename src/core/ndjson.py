@@ -129,23 +129,14 @@ def parse_ndjson_line(
     return None
 
 
-def iter_ndjson_events(
-    lines: Iterable[str | bytes],
-    *,
-    log_event: str,
-    log_fields: dict[str, Any],
-    parse_filter: Callable[[bytes], bool] | None = None) -> Iterator[dict]:
+def iter_ndjson_events(lines: Iterable[str | bytes], *, log_event: str, log_fields: dict[str, Any]) -> Iterator[dict]:
   """Yield the JSON objects parsed from *lines*, skipping blank and malformed lines.
 
   Rides :func:`parse_ndjson_line`, the one definition of the reader skip
   contract. Lazy, so first-match and early-stop readers terminate without
-  reading the rest. *parse_filter*, when given, decides from the raw line
-  bytes before any parse work: a False line is skipped unparsed and
-  unlogged — the caller's proof it cannot match, not a parse failure.
+  reading the rest.
   """
   for raw_line in lines:
-    if parse_filter is not None and not parse_filter(raw_line):
-      continue
     event = parse_ndjson_line(raw_line, log_event=log_event, log_fields=log_fields)
     if event is not None:
       yield event

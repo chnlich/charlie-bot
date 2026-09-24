@@ -51,7 +51,7 @@ def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> OpenCodeBa
 def _rig_end_to_end_run(
     monkeypatch: pytest.MonkeyPatch,
     backend: OpenCodeBackend,
-    response: "_FakeDelayedStreamResponse | FakeChunkedResponse",
+    response: _FakeDelayedStreamResponse | FakeChunkedResponse,
 ) -> MagicMock:
   """Mock the serve-and-connect path so backend.run() consumes `response` as the
   /event stream end-to-end; returns the spawned process mock for spawn assertions."""

@@ -632,7 +632,7 @@ _REFERENCE_LINE_WS = b" \t\r\n\x0b\x0c"
 _REFERENCE_SCAN_CHUNK = 1 << 20
 
 
-def _reference_newlines(arr: "np.ndarray") -> "np.ndarray":
+def _reference_newlines(arr: np.ndarray) -> np.ndarray:
   """Return the positions of 0x0A bytes in ``arr`` (uint8 view of the corpus)."""
   # numpy rides the fork's parent-reference stream (the M99 server import floor):
   # the module sits on the sessions chain every server start pulls, and the
@@ -649,7 +649,7 @@ def _reference_newlines(arr: "np.ndarray") -> "np.ndarray":
   return parts[0] if len(parts) == 1 else np.concatenate(parts)
 
 
-def _mapping_ascii(data: "mmap.mmap") -> bool:
+def _mapping_ascii(data: mmap.mmap) -> bool:
   """Whole-mapping ASCII sweep, chunked so the compare's scratch stays in cache."""
   import numpy as np
   arr = np.frombuffer(data, dtype=np.uint8)
@@ -659,7 +659,7 @@ def _mapping_ascii(data: "mmap.mmap") -> bool:
   return True
 
 
-def _fast_reference_frames(data: "bytes | mmap.mmap", take: int) -> tuple[int, int, int, bool] | None:
+def _fast_reference_frames(data: bytes | mmap.mmap, take: int) -> tuple[int, int, int, bool] | None:
   """Vectorized frame check for the first ``take`` raw lines of ``data``.
 
   Returns ``(raw, start, end, needs_newline)`` when every in-budget frame is a
@@ -696,7 +696,7 @@ def _fast_reference_frames(data: "bytes | mmap.mmap", take: int) -> tuple[int, i
   return (raw, int(starts[0]), end, needs_newline)
 
 
-def _stream_reference_lines(out: BinaryIO, data: "bytes | mmap.mmap", take: int) -> tuple[int, int]:
+def _stream_reference_lines(out: BinaryIO, data: bytes | mmap.mmap, take: int) -> tuple[int, int]:
   """Copy the non-blank lines among the first ``take`` raw line frames of ``data`` into ``out``.
 
   Returns ``(raw, appended)``: raw frames spent against the budget (blank

@@ -83,7 +83,7 @@ def build_agent_message_event(content: str, *, from_session: str, from_session_n
 @dataclass
 class SessionBootstrapData:
   """Critical data needed to make one chat session usable."""
-  session: 'SessionMetadata'
+  session: SessionMetadata
   messages: list[dict]
   pending_draft: dict | None = None
   total_event_count: int = 0
@@ -104,9 +104,9 @@ class SessionViewData:
 
 
 async def get_message_projection_fast(
-    session_mgr: 'SessionManager',
+    session_mgr: SessionManager,
     session_id: str,
-) -> 'MessageProjection | None':
+) -> MessageProjection | None:
   """Return the session's message projection via the warm-hit fast path.
 
   A warm projection hit is a dict read + len compare answered on the event
@@ -121,7 +121,7 @@ async def get_message_projection_fast(
 
 
 async def _projection_page(
-    session_mgr: 'SessionManager',
+    session_mgr: SessionManager,
     session_id: str,
     message_limit: int,
 ) -> tuple[list[dict], dict | None, int, int, bool] | None:
@@ -139,7 +139,7 @@ async def _projection_page(
 
 
 async def _tail_events_page(
-    session_mgr: 'SessionManager',
+    session_mgr: SessionManager,
     session_id: str,
     archive_offset: int,
     message_limit: int,
@@ -159,7 +159,7 @@ async def _tail_events_page(
 
 
 async def _messages_page(
-    session_mgr: 'SessionManager',
+    session_mgr: SessionManager,
     session_id: str,
     archive_offset: int,
     message_limit: int,
@@ -182,7 +182,7 @@ async def _messages_page(
 
 async def build_session_bootstrap_data(
     session_id: str,
-    session_mgr: 'SessionManager',
+    session_mgr: SessionManager,
     *,
     message_limit: int = 40,
 ) -> SessionBootstrapData:
@@ -211,7 +211,7 @@ async def build_session_bootstrap_data(
 
 async def build_session_view_data(
     session_id: str,
-    session_mgr: 'SessionManager',
+    session_mgr: SessionManager,
     thread_rows: list[dict],
     *,
     message_limit: int | None = 40,

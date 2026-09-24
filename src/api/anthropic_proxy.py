@@ -447,7 +447,7 @@ class OpenAIChatStreamToAnthropic:
     return events
 
 
-async def _iter_anthropic_sse(upstream: "httpx.Response", model: str) -> AsyncIterator[bytes]:
+async def _iter_anthropic_sse(upstream: httpx.Response, model: str) -> AsyncIterator[bytes]:
   translator = OpenAIChatStreamToAnthropic(model)
   try:
     for event, data in translator.start_events():
@@ -487,7 +487,7 @@ def _upstream_headers(credential: str | None, backend_id: str) -> dict[str, str]
   return headers
 
 
-async def _upstream_error(response: "httpx.Response") -> HTTPException:
+async def _upstream_error(response: httpx.Response) -> HTTPException:
   body = (await response.aread()).decode("utf-8", errors="replace")
   await response.aclose()
   return HTTPException(status_code=response.status_code, detail=body)

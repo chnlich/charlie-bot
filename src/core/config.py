@@ -152,7 +152,7 @@ class ScheduledTaskConfig(ScheduledTaskFields):
   notify: str | None = None  # 'telegram' or None
 
   @model_validator(mode='after')
-  def check_type_and_sources(self) -> 'ScheduledTaskConfig':
+  def check_type_and_sources(self) -> ScheduledTaskConfig:
     if self.type == 'pm':
       if self.steps is not None or self.handler or self.loop:
         raise ValueError("type 'pm' forbids 'steps', 'handler', and 'loop'; the PM wake is a prompt")
@@ -264,7 +264,7 @@ class PathsConfig(BaseModel):
   worktree_dir: str = "~/worktrees"
 
   @model_validator(mode="after")
-  def _expand_tilde(self) -> "PathsConfig":
+  def _expand_tilde(self) -> PathsConfig:
     """Expand ``~`` in both path settings against the process HOME."""
     self.workspace_dirs = [os.path.expanduser(p) for p in self.workspace_dirs]
     self.worktree_dir = os.path.expanduser(self.worktree_dir)
@@ -344,7 +344,7 @@ class UiConfig(BaseModel):
   home_services: list[HomeService] = []
 
   @model_validator(mode="after")
-  def _expand_tilde(self) -> "UiConfig":
+  def _expand_tilde(self) -> UiConfig:
     """Expand ``~`` in each backlog repo path."""
     for entry in self.backlog_repos:
       entry.path = os.path.expanduser(entry.path)
@@ -374,7 +374,7 @@ class PublishConfig(BaseModel):
   public_base_url: str | None = None
 
   @model_validator(mode="after")
-  def _expand_tilde(self) -> "PublishConfig":
+  def _expand_tilde(self) -> PublishConfig:
     """Expand ``~`` in the publish directory."""
     if self.dir is not None:
       self.dir = self.dir.expanduser()
@@ -435,7 +435,7 @@ class CharlieBotConfig(BaseModel):
   telegram: TelegramConfig = Field(default_factory=TelegramConfig)
 
   @classmethod
-  def model_construct(cls, _fields_set: set[str] | None = None, **values: object) -> "CharlieBotConfig":
+  def model_construct(cls, _fields_set: set[str] | None = None, **values: object) -> CharlieBotConfig:
     """``model_construct`` that rejects unknown keyword arguments by name.
 
     pydantic 2.12.5's ``model_construct`` silently drops kwargs that match no

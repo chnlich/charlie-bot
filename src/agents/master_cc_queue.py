@@ -429,7 +429,7 @@ async def cancel_master(
     session_id: str,
     *,
     meta: SessionMetadata | None,
-    session_mgr: "SessionManager | None",
+    session_mgr: SessionManager | None,
 ) -> bool:
   """Terminate the running master CC turn for this session.
 

@@ -188,7 +188,7 @@ class _FinalizeFold:
     self.master_outputs = 0
 
   @classmethod
-  def build(cls, events: list[dict]) -> "_FinalizeFold":
+  def build(cls, events: list[dict]) -> _FinalizeFold:
     """Derive the fold from a freshly parsed event list (one pass, in the loading thread)."""
     fold = cls()
     for event in events:

@@ -228,7 +228,7 @@ async def run_and_finalize(
 def launch_prompt_dispatch(
     cfg: CharlieBotConfig,
     meta: SessionMetadata,
-    dispatch: "SlashDispatchResult",
+    dispatch: SlashDispatchResult,
     session_mgr: SessionManager,
     display_content: str,
     uploaded_files: list[dict],

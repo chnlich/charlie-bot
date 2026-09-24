@@ -48,7 +48,7 @@ _STAGING_DIRNAME = "staging"
 # dir in steady state (tests hold several), so a small cap bounds memoized
 # Store payloads. An entry holds the stat-only signature alongside the Store.
 _STORE_MEMO_LIMIT = 8
-_store_memo: BoundedMemo[Path, tuple[tuple[tuple[str, int, int], ...], "Store"]] = BoundedMemo(_STORE_MEMO_LIMIT)
+_store_memo: BoundedMemo[Path, tuple[tuple[tuple[str, int, int], ...], Store]] = BoundedMemo(_STORE_MEMO_LIMIT)
 
 # Header line: ``field: value`` where field is lower_snake. Value charset is
 # validated per field below (slug-charset for most, free text for ``title``).

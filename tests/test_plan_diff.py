@@ -35,8 +35,8 @@ _VOID_TAGS = {
 class _Element:
   tag: str
   attrs: dict[str, str | None]
-  parent: "_Element | None"
-  children: list["_Element | str"] = field(default_factory=list)
+  parent: _Element | None
+  children: list[_Element | str] = field(default_factory=list)
 
   def text(self) -> str:
     if self.tag in _IGNORED_TAGS:

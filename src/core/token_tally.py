@@ -94,14 +94,15 @@ Vocabulary:
               ``rows_file`` names (beside the cache, one stable name per db path) so the main
               document stays at the Claude+Codex corpus's size. A process restart parses the
               sidecar only when a signature miss demands a seed, rebuilds the row memo from
-              it, and gates the key diff on the entry's ``probe`` aggregates: a matching
-              ``(count, sum(time_updated))`` pair proves the rows unchanged and the key pass
-              skips, so only a proof miss or a moved row fetches rows that moved since the
-              sidecar was written instead of re-reading every data blob
-   probe      the opencode db's proof aggregates ``[count, sum(time_updated)]`` at the time
-              the entry's rows were stored — the seeded restart's gate input (see ``rows``);
-              the row memo's in-process gate carries a third field, ``max(time_updated)``,
-              the tail fetch's floor (see _increment_opencode_rows)
+               it, and gates the key diff on the entry's ``probe`` aggregates: a matching
+               proof tuple proves the rows unchanged and the key pass skips, so only a proof
+               miss or a moved row fetches rows that moved since the sidecar was written
+               instead of re-reading every data blob
+    probe      the opencode db's proof aggregates ``[count, sum(time_updated), max(time_updated),
+               max(rowid)]`` at the time the entry's rows were stored — the seeded restart's
+               gate input (see ``rows``) and the tail fetch's floor (see
+               _increment_opencode_rows); a document from a build that stored only the first
+               two fields seeds without a max and takes the full key diff once
    records    Claude: ``[key, model, ts, in_fresh, cache_write, cache_read, output]`` per
                response, replay-deduped within the file; Codex: ``[model, ts, in_fresh,
                cache_read, output]`` per token_count event, model resolved by file position;
@@ -1862,7 +1863,7 @@ def _increment_opencode_rows(
 def _advance_opencode_rows(
     db: Path,
     seed: dict | None = None,
-    seed_probe: tuple[int, int] | None = None,
+    seed_probe: tuple[int, ...] | None = None,
 ) -> _OpencodeScan:
   """Advance the db's row memo to its message table's current rows, bumping the epoch when any
   row moved. Read-only: the scan never writes. Absent or unreadable dbs advance nothing and
@@ -1873,8 +1874,10 @@ def _advance_opencode_rows(
   miss on a warm gate advances from the tail fetch (see _increment_opencode_rows) and falls
   back to the full key scan when the fetch cannot prove itself complete or when the miss is
   the self-heal round (every _OPENCODE_FULL_SCAN_EVERY-th); a seeded memo's stored proof
-  carries no max, so its first proof miss takes the full key scan and the gate it stores
-  carries one for every round after.
+  tail-fetches from the same maxes when the document carried them all, while a two-field
+  seed — a document from a build before the maxes were persisted — has no max to fetch
+  from, so its first proof miss takes the full key scan and the gate it stores carries
+  one for every round after.
 
   *seed* is the persisted document's ``rows`` map for this db. A cold memo seeded from it
   skips the whole-blob cold scan: the memo starts at the document's rows and the warm key
@@ -2001,8 +2004,10 @@ def _merge_opencode(
       if not _opencode_row_memos.get(key):
         seed = cache.entry_rows(prev, t.notes)
         stored_probe = prev.get("probe")
-        if isinstance(stored_probe, list) and len(stored_probe) == 2:
-          seed_probe = (stored_probe[0], stored_probe[1])
+        # A four-field proof carries the tail fetch's maxes; a two-field one is a legacy
+        # document — it seeds without a max and its first miss takes the full key diff.
+        if isinstance(stored_probe, list) and len(stored_probe) in (2, 4):
+          seed_probe = tuple(stored_probe)
       _adopt_stored_partial(key, prev)
     scan = _advance_opencode_rows(db, seed, seed_probe)
   if not scan.ok:
@@ -2035,11 +2040,13 @@ def _merge_opencode(
           "partial": _partial_to_doc(_opencode_partials[key]),
       }
       # The proof aggregates ride the entry beside the rows they describe: the restart seed
-      # gates its key diff on them, so a restart whose rows did not move skips the scan.
-      # The persisted pair stays (count, sum); the in-process gate's max is restart-local.
+      # gates its key diff on them, so a restart whose rows did not move skips the scan and
+      # a moved round tail-fetches from the stored maxes like the warm gate does. The
+      # sidecar name is stable and the sidecar writes before the entry stores, so the
+      # stored proof always describes the rows the named sidecar holds.
       probe = _opencode_probes.get(key)
       if probe is not None:
-        stored["probe"] = list(probe[:2])
+        stored["probe"] = list(probe)
       prev_rows_file = entry.get("rows_file") if entry is not None else None
       # The sidecar rewrites only when the rows moved under it (a cold scan rebuilds them
       # whole): a scan with no row move leaves the stored rows exact, so the stored name

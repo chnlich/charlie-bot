@@ -1210,8 +1210,8 @@ def _replay_parity(db: Path, tally: tt.TokenTally) -> None:
 
 def test_row_memo_gate_advances_from_the_tail_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # The warm gate's proof miss answers from the tail fetch: rows written after the stored
-  # max re-read, the full key scan never runs, and the persisted entry's probe stays the
-  # two-field (count, sum) pair the restart seed gates on.
+  # max re-read, the full key scan never runs, and the persisted entry carries the proof
+  # complete so the next restart's seed gates on the same maxes.
   db, cache = _db_and_cache(tmp_path)
   _write_opencode(db, [_oc_row()])
   first = _collect(None, None, db, cache)
@@ -1233,7 +1233,7 @@ def test_row_memo_gate_advances_from_the_tail_fetch(tmp_path: Path, monkeypatch:
   assert _row(second, "opencode", "oc-m").total == _row(first, "opencode", "oc-m").total - 6 + 102 + 102
   assert _row(second, "opencode", "oc-m").calls == 2
   entry = json.loads(cache.read_bytes())["sources"]["opencode"][str(db)]
-  assert len(entry["probe"]) == 2  # the store wrote the proof back
+  assert len(entry["probe"]) == 4  # the store wrote the proof back, maxes included
 
 
 def test_row_memo_gate_self_corrects_a_net_zero_delete_insert(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1375,7 +1375,8 @@ def test_cache_document_parses_once_per_process(tmp_path: Path, monkeypatch: pyt
 
 def test_reset_drops_the_probe_and_document_memos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # _reset_aggregate_memo owns every process-wide memo the collection adds; after it, a
-  # fresh round re-parses the document and re-runs the row scan from an empty memo.
+  # fresh round re-parses the document and re-seeds the row memo from it — the seeded
+  # proof's miss tail-fetches the rows that moved since the document was written.
   db, cache = _db_and_cache(tmp_path)
   _write_opencode(db, [_oc_row()])
   _collect(None, None, db, cache)
@@ -1386,8 +1387,10 @@ def test_reset_drops_the_probe_and_document_memos(tmp_path: Path, monkeypatch: p
 
   scans = _spy_opencode_scans(monkeypatch)
   loads = _spy_cache_loads(monkeypatch)
+  projected = _spy_row_blobs(monkeypatch)
   _collect(None, None, db, cache)
-  assert scans == [1]  # empty row memo: the cold scan ran
+  assert scans == []  # empty row memo seeds from the document; the seeded proof carries the maxes
+  assert len(projected) == 1  # the appended row only re-entered the parser
   assert loads == [cache]  # empty document memo: the document re-parsed
 
 
@@ -1655,10 +1658,40 @@ def test_seeded_restart_probe_skips_the_key_scan(tmp_path: Path, monkeypatch: py
   con.close()
 
 
-def test_seeded_restart_scans_when_the_stored_probe_misses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  # A row move between the document's write and the restart changes count and sum, so the
-  # stored proof misses and the seeded key diff runs — fetching only the moved row's blob.
+def test_seeded_restart_tail_fetches_when_the_stored_probe_misses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # A row move between the document's write and the restart changes the proof, so the
+  # seeded gate misses and the restart advances from the tail fetch — rows written after
+  # the stored max re-read, the full key scan never runs, and only the moved row's blob
+  # re-enters the parser.
   db, cache, con, first = _seeded_restart_rig(tmp_path)
+
+  _insert_opencode_raw(con, [({}, _padded_opencode_row(500))])
+  con.commit()
+
+  def boom(*args: Any, **kwargs: Any) -> None:
+    raise AssertionError("full key scan ran although the seeded proof carried the maxes")
+
+  monkeypatch.setattr(tt, "_scan_opencode_rows", boom)
+  projected = _spy_row_blobs(monkeypatch)
+  second = _collect(None, None, db, cache)
+  assert len(projected) == 1  # the moved row only
+  after = _row(second, "opencode", "oc-m")
+  assert after.calls == 2 and after.total == _row(first, "opencode", "oc-m").total + 102
+  con.close()
+
+
+def test_legacy_two_field_probe_seeds_and_scans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # A document from the build that stored the two-field (count, sum) proof (the prior
+  # deploy) seeds without a max: the first miss takes the full key diff, the served tally
+  # stays exact, and the round's own store writes the four-field proof back.
+  db, cache, con, first = _seeded_restart_rig(tmp_path)
+
+  doc = json.loads(cache.read_text())
+  entry = doc["sources"]["opencode"][str(db)]
+  assert len(entry["probe"]) == 4
+  entry["probe"] = entry["probe"][:2]
+  cache.write_text(json.dumps(doc))
 
   _insert_opencode_raw(con, [({}, _padded_opencode_row(500))])
   con.commit()
@@ -1666,10 +1699,13 @@ def test_seeded_restart_scans_when_the_stored_probe_misses(tmp_path: Path, monke
   scans = _spy_opencode_scans(monkeypatch)
   projected = _spy_row_blobs(monkeypatch)
   second = _collect(None, None, db, cache)
-  assert scans == [1]  # the proof miss sent the restart down the key diff
+  assert scans == [1]  # a two-field seed has no max to fetch from: the legacy contract
   assert len(projected) == 1  # the moved row only
   after = _row(second, "opencode", "oc-m")
   assert after.calls == 2 and after.total == _row(first, "opencode", "oc-m").total + 102
+
+  doc = json.loads(cache.read_text())
+  assert len(doc["sources"]["opencode"][str(db)]["probe"]) == 4  # the store wrote the proof back
   con.close()
 
 
@@ -1696,7 +1732,7 @@ def test_legacy_entry_without_probe_seeds_and_scans(tmp_path: Path, monkeypatch:
   assert _tally_snapshot(second) == _tally_snapshot(first)
 
   doc = json.loads(cache.read_text())
-  assert len(doc["sources"]["opencode"][str(db)]["probe"]) == 2  # the store wrote the proof back
+  assert len(doc["sources"]["opencode"][str(db)]["probe"]) == 4  # the store wrote the proof back
   con.close()
 
 
@@ -1732,7 +1768,7 @@ def test_current_entry_keeps_the_rows_bulk_in_the_sidecar(tmp_path: Path) -> Non
   doc = json.loads(cache.read_text())
   entry = doc["sources"]["opencode"][str(db)]
   assert set(entry) == {"sig", "rows_file", "partial", "probe"}
-  assert isinstance(entry["probe"], list) and len(entry["probe"]) == 2
+  assert isinstance(entry["probe"], list) and len(entry["probe"]) == 4
   sidecar = json.loads((cache.parent / entry["rows_file"]).read_text())
   assert set(sidecar) == {"version", "rows"}
   seeded = sidecar["rows"]

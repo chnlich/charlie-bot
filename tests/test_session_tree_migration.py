@@ -135,8 +135,11 @@ def test_full_home_dry_run_covers_all_eleven_categories(
   assert ("worker_thread", "worker_work_unproven") in dispositions
   assert ("worker_thread", "worker_work_completed") in dispositions
   # Row 9: project bodies (PM node carries subtree + node prompt refs).
-  # Row 10: one proven-pending input.
-  assert summary["pending_inputs"] == 1
+  # Row 10: history-only inputs — the replay-rule-unhandled input is reported,
+  # never queued.
+  assert summary["pending_inputs"] == 0
+  assert any(u.source_kind == "old_input" and u.source_id.startswith(fx.S_PENDING)
+             and "history-only input policy" in u.reason for u in manifest.import_report)
   # Mixed v2 data preserved.
   assert ("v2_task", "already_v2") in dispositions
   # Historical manager turn logs.
@@ -331,10 +334,10 @@ def test_import_boundary_and_recovery_facts(
   # Old handled USER is NOT a pending input of the migrated manager.
   pending = tree.dispatch.pending_inputs(fx.S_ORDINARY)
   assert [e["id"] for e in pending] == []
-  # The confirmed unhandled USER enters pending_inputs with a precise source ref.
+  # History-only inputs: the replay-rule-unhandled USER imports as history and
+  # is never queued (the manifest's import_report names it).
   pending_pending = tree.dispatch.pending_inputs(fx.S_PENDING)
-  assert [e["id"] for e in pending_pending] == [
-      f"{fx.S_PENDING[:8]}-0000-0000-0000-00000000000a"]
+  assert [e["id"] for e in pending_pending] == []
   # The old child report (worker_summary) is history, not an input candidate.
   # No old USER event is reissued and no new USER event exists at migration time.
   user_events = [e for e in tree.facts_of(fx.S_ORDINARY).events_by_id.values()
@@ -354,8 +357,7 @@ def test_import_boundary_and_recovery_facts(
   tree2 = tree_of(full_home)
   asyncio.run(tree2._get_index(force=True))
   pending_after = tree2.dispatch.pending_inputs(fx.S_PENDING)
-  assert [e["id"] for e in pending_after] == [
-      f"{fx.S_PENDING[:8]}-0000-0000-0000-00000000000a", "post-import-1"]
+  assert [e["id"] for e in pending_after] == ["post-import-1"]
   # A fresh fold/recovery does not replay the historical handled event.
   from src.core.init_master_recovery import unanswered_user_events
   events = tree2.fact_history(fx.S_ORDINARY)
@@ -837,3 +839,39 @@ def test_mixed_v2_run_activity_blocks_apply(
   code, manifest, _ = dry_run(monkeypatch, home, manifest_path)
   assert code == 0 and manifest.unresolved == []
   assert run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))[0] == 0
+
+
+def test_production_pm_shapes_and_ledger_only_project_convert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Production shapes the synthetic home lacked: the active PM was created by its
+  pm cron task (role project plus scheduled_task), the group keeps a rotated
+  archived PM, and another project directory holds only its ledger."""
+  home = fx.build_full_home(tmp_path / "home")
+  builder = fx.FixtureBuilder(home)
+  pm = fx.SessionMetadata.model_validate_json(
+      (home / "sessions" / fx.S_PM / "metadata.json").read_text())
+  pm.scheduled_task = "pm_ops"
+  builder.session(pm)
+  old_pm_id = "3a3a3333-0000-4000-8000-0000000000f1"
+  builder.session(fx.SessionMetadata(
+      id=old_pm_id, name="Scheduled: pm_ops", backend="synth", role="project",
+      group=fx.GROUP, scheduled_task="pm_ops", status="archived",
+      created_at=fx.BASE, updated_at=fx.BASE))
+  builder.cron_config(
+      "pm_ops",
+      f"cron: '0 9 * * *'\ntype: pm\nproject: {fx.GROUP}\nprompt_file: prompts/project_manager.md\n"
+      "backend: synth\n")
+  ledger_dir = home / "projects" / "ledger-only"
+  ledger_dir.mkdir(parents=True)
+  (ledger_dir / "ledger.md").write_text("# Ledger\n", encoding="utf-8")
+
+  code, manifest, summary = dry_run(monkeypatch, home, tmp_path / "manifest.json")
+  assert code == 0, manifest.unresolved
+  managers = {m.source_id: m for m in manifest.mappings if m.source_kind in ("pm", "scheduled")}
+  assert managers[fx.S_PM].disposition == "manager_pm"
+  assert managers[old_pm_id].disposition == "manager_pm"
+  assert managers[old_pm_id].detail["import_paused"] is True
+  binding = next(m for m in manifest.mappings
+                 if m.source_kind == "cron_config" and m.source_id.endswith("pm_ops.yaml"))
+  assert binding.target_session_id == fx.S_PM  # the active PM, never the rotated one
+  assert any(item["group"] == "ledger-only" for item in summary["organization_pending"])

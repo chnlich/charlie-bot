@@ -51,16 +51,6 @@ def test_cli_help_and_usage_exit_codes(monkeypatch: pytest.MonkeyPatch, full_hom
 
 def test_unresolved_categories_produce_actionable_output_and_refuse(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cases = {}
-  # Ambiguous improve-loop association.
-  home = fx.build_ambiguous_loop_home(tmp_path / "ambiguous")
-  point_home(monkeypatch, home)
-  code, manifest, _summary = dry_run(monkeypatch, home, tmp_path / "a.json")
-  assert code == 1
-  kinds = {u.source_kind for u in manifest.unresolved}
-  assert "improve_iteration" in kinds
-  cases["ambiguous_loop"] = manifest.unresolved[0].reason
-
   # Cyclic elone succession.
   home = fx.build_full_home(tmp_path / "cycle")
   meta_path = home / "sessions" / fx.S_TAIL / "metadata.json"
@@ -99,22 +89,14 @@ def test_unresolved_categories_produce_actionable_output_and_refuse(
   assert code == 1
   assert any(u.source_kind == "alias" for u in manifest.unresolved)
 
-  # Uncertain input handling (a later unrelated round does not name it).
-  home = fx.build_uncertain_input_home(tmp_path / "uncertain")
-  point_home(monkeypatch, home)
-  code, manifest, _ = dry_run(monkeypatch, home, tmp_path / "e.json")
-  assert code == 1
-  assert any(u.source_kind == "old_input" for u in manifest.unresolved)
-
   # Every case: apply refuses without changing any input.
-  for name in ("ambiguous", "cycle", "review", "alias", "uncertain"):
+  for name in ("cycle", "review", "alias"):
     home = tmp_path / name
     point_home(monkeypatch, home)
     before = _tree_snapshot(home)
     code, _, err = run_cli(monkeypatch, home, "--apply", "--manifest",
-                           str(tmp_path / {"ambiguous": "a.json", "cycle": "b.json",
-                                           "review": "c.json", "alias": "d.json",
-                                           "uncertain": "e.json"}[name]))
+                           str(tmp_path / {"cycle": "b.json", "review": "c.json",
+                                           "alias": "d.json"}[name]))
     assert code == 1, name
     payload = cli_json(err)
     assert "unresolved" in payload["error"], name
@@ -174,7 +156,31 @@ def test_corrupt_alias_file_and_missing_targets_are_unresolved_and_refuse(
     assert _tree_snapshot(home) == before, name
 
 
-def test_corrupt_history_line_is_unresolved(
+def test_reported_categories_convert_without_blocking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Unproven input handling and an ambiguous improve association are reported,
+  never blocking: the dry-run is clean, the report names each gap, nothing queues."""
+  # Ambiguous improve-loop association: a standalone worker plus a report entry.
+  home = fx.build_ambiguous_loop_home(tmp_path / "ambiguous")
+  point_home(monkeypatch, home)
+  code, manifest, summary = dry_run(monkeypatch, home, tmp_path / "a.json")
+  assert code == 0, manifest.unresolved
+  report = [u for u in manifest.import_report if u.source_kind == "improve_association"]
+  assert report and "standalone worker" in report[0].reason
+  thread_id = report[0].source_id
+  assert any(m.source_kind == "worker_thread" and m.source_id == thread_id
+             for m in manifest.mappings)
+
+  # Uncertain input handling (a later unrelated round does not name it).
+  home = fx.build_uncertain_input_home(tmp_path / "uncertain")
+  point_home(monkeypatch, home)
+  code, manifest, summary = dry_run(monkeypatch, home, tmp_path / "e.json")
+  assert code == 0, manifest.unresolved
+  assert any(u.source_kind == "old_input" for u in manifest.import_report)
+  assert summary["pending_inputs"] == 0
+
+
+def test_corrupt_history_line_is_reported(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   home = fx.build_full_home(tmp_path / "home")
   log = home / "sessions" / fx.S_ORDINARY / "data" / "chat_events.jsonl"
@@ -182,10 +188,11 @@ def test_corrupt_history_line_is_unresolved(
     f.write("not-json\n")
   point_home(monkeypatch, home)
   code, manifest, _ = dry_run(monkeypatch, home, tmp_path / "m.json")
-  assert code == 1
-  entry = next(u for u in manifest.unresolved if u.source_kind == "chat_history")
+  assert code == 0, manifest.unresolved
+  entry = next(u for u in manifest.import_report if u.source_kind == "chat_history")
   assert fx.S_ORDINARY in entry.source_id
-  assert "unparseable" in entry.reason
+  assert "unparseable" in entry.reason and "skipped" in entry.reason
+  assert log.read_text(encoding="utf-8").endswith("not-json\n")  # original kept in place
 
 
 def test_apply_refuses_source_drift(

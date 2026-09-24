@@ -133,15 +133,13 @@ def test_failed_named_round_preserved_and_retry_confirms(tmp_path, monkeypatch):
   assert sorted(retry_outcomes.values()) == ["failed", "success"]
   zero_runs = [r for r in turns if u_zero in input_ids_of(tree, sid, r.id)]
   assert len(zero_runs) == 1 and outcomes[zero_runs[0].id] == "failed"
-  # The zero-output input re-enters pending behind the standing failed run:
-  # the ordinary recovery fold admits it but the unresolved failure blocks
-  # fresh dispatch (no silent re-execution of the failed request).
+  # History-only inputs: the zero-output input stays a failed execution with
+  # its exact log and imports as history, never re-queued; the report names it.
   events = tree.fact_history(sid)
   boundary = [e for e in events if e.get("type") == ET.TASK_IMPORTED]
   assert len(boundary) == 1
-  assert boundary[0]["pending_inputs"] == [
-      {"source_ref": f"sessions/{sid}/data/chat_events.jsonl#{u_zero}",
-       "input_id": u_zero, "event_type": ET.USER}]
+  assert boundary[0]["pending_inputs"] == []
+  assert f"{sid}:{u_zero}" in [u.source_id for u in manifest.import_report]
 
 
 def test_failed_inflight_result_is_not_an_acknowledgement(tmp_path, monkeypatch):
@@ -190,47 +188,46 @@ def test_malformed_input_times_follow_the_positional_replay_rule(tmp_path, monke
   """Missing/unparseable input timestamps never decide the disposition.
 
   The old system's replay rule (unanswered_user_events) is positional: an
-  input with no MASTER_DONE after it is proven unhandled even when its own
+  input with no MASTER_DONE after it is read as unhandled even when its own
   timestamp is unparseable; one shadowed by a later completed unnamed round
-  stays uncertain.
+  is unproven. Under the history-only input policy both import as reported
+  history and neither queues.
   """
   home = fx.build_malformed_times_home(tmp_path / "home")
   point_home(monkeypatch, home)
   manifest_path = tmp_path / "m.json"
-  # The uncertain input blocks apply; the dry-run still writes the reviewable
-  # manifest (exit 1 with the unresolved list).
   code, manifest, _ = dry_run(monkeypatch, home, manifest_path)
-  assert code == 1
+  assert code == 0, manifest.unresolved
   sid = fx.S_TIMES
   u1 = f"{sid[:8]}-0000-0000-0000-00000000000a"
   u2 = f"{sid[:8]}-0000-0000-0000-00000000000b"
   summary = manager_mapping(manifest, sid).detail["input_disposition"]
   assert summary["pending"] == 1
   assert summary["uncertain"] == 1
-  unresolved_ids = [u.source_id for u in manifest.unresolved]
-  assert f"{sid}:{u2}" in unresolved_ids
-  assert f"{sid}:{u1}" not in unresolved_ids
-  # Apply refuses while an unresolved mapping is open (the uncertain input
-  # must not auto-execute).
-  assert run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))[0] == 1
+  report = {u.source_id: u.reason for u in manifest.import_report}
+  assert "replay rule" in report[f"{sid}:{u1}"]
+  assert "replay rule" not in report[f"{sid}:{u2}"]
+  assert run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))[0] == 0
+  boundary = [e for e in tree_of(home).fact_history(sid) if e.get("type") == ET.TASK_IMPORTED]
+  assert boundary[0]["pending_inputs"] == []
 
 
-def test_scheduled_wake_without_proven_handling_stays_unresolved(tmp_path, monkeypatch):
-  """A scheduled wake consumed by nothing provable never becomes a pending input."""
+def test_scheduled_wake_without_proven_handling_is_reported(tmp_path, monkeypatch):
+  """A scheduled wake consumed by nothing provable is reported history, never a pending input."""
   home = fx.build_scheduled_unproven_home(tmp_path / "home")
   point_home(monkeypatch, home)
   manifest_path = tmp_path / "m.json"
   code, manifest, _ = dry_run(monkeypatch, home, manifest_path)
-  assert code == 1  # unresolved scheduled handling blocks apply, manifest written
+  assert code == 0, manifest.unresolved
   sid = fx.S_SCHED_UNPROVEN
   st_int = f"{sid[:8]}-0000-0000-0000-00000000000a"
   st_echo = f"{sid[:8]}-0000-0000-0000-00000000000b"
-  unresolved_ids = [u.source_id for u in manifest.unresolved]
-  assert f"{sid}:{st_int}" in unresolved_ids  # its round started and never completed
-  assert f"{sid}:{st_echo}" in unresolved_ids  # no identity-backed launch echo
+  report_ids = [u.source_id for u in manifest.import_report]
+  assert f"{sid}:{st_int}" in report_ids  # its round started and never completed
+  assert f"{sid}:{st_echo}" in report_ids  # no identity-backed launch echo
   summary = manager_mapping(manifest, sid).detail["input_disposition"]
   assert summary["pending"] == 0 and summary["confirmed_bound"] == 0
-  assert run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))[0] == 1
+  assert run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))[0] == 0
 
 
 def test_identical_request_bodies_bind_to_their_own_rounds(tmp_path, monkeypatch):
@@ -321,7 +318,8 @@ def test_straddled_scheduled_wake_binds_its_own_round(tmp_path, monkeypatch):
 
 
 def test_loop_association_requires_controller_identity(tmp_path, monkeypatch):
-  """A matching report filename + description without causal identity stays unresolved."""
+  """A matching report filename + description without causal identity is never
+  associated: the iteration imports as a standalone worker and is reported."""
   home = fx.build_full_home(tmp_path / "home")
   # Strip the controller identity the full home's iterations carry: the
   # thread keeps the description and the loop keeps its report, but the
@@ -337,15 +335,17 @@ def test_loop_association_requires_controller_identity(tmp_path, monkeypatch):
   point_home(monkeypatch, home)
   manifest_path = tmp_path / "m.json"
   code, manifest, _ = dry_run(monkeypatch, home, manifest_path)
-  assert code == 1
-  unresolved = [u for u in manifest.unresolved if u.source_kind == "improve_iteration"]
-  assert len(unresolved) == 1
-  assert "identity" in unresolved[0].reason
-  # The positively proven iteration keeps its mapping; the stripped one is
-  # unresolved, not guessed.
+  assert code == 0, manifest.unresolved
+  report = [u for u in manifest.import_report if u.source_kind == "improve_association"]
+  assert len(report) == 1
+  assert "identity" in report[0].reason
+  # The positively proven iteration keeps its mapping; the stripped one is a
+  # standalone worker, not guessed into the loop.
   mappings = [m for m in manifest.mappings if m.source_kind == "improve_iteration"]
   assert len(mappings) == 1
   assert mappings[0].detail["iteration"] == 2
+  assert any(m.source_kind == "worker_thread" and m.source_id == report[0].source_id
+             for m in manifest.mappings)
 
 
 def test_loop_association_rejects_foreign_launch_echo(tmp_path, monkeypatch):
@@ -354,9 +354,9 @@ def test_loop_association_rejects_foreign_launch_echo(tmp_path, monkeypatch):
   point_home(monkeypatch, home)
   manifest_path = tmp_path / "m.json"
   code, manifest, _ = dry_run(monkeypatch, home, manifest_path)
-  assert code == 1
-  unresolved = [u for u in manifest.unresolved if u.source_kind == "improve_iteration"]
-  assert len(unresolved) == 1 and "ambiguous" in unresolved[0].reason
+  assert code == 0, manifest.unresolved
+  report = [u for u in manifest.import_report if u.source_kind == "improve_association"]
+  assert len(report) == 1 and "ambiguous" in report[0].reason
 
 
 # ---------------------------------------------------------------------------

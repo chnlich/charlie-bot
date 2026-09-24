@@ -183,17 +183,14 @@ def _result_event(
     total_cost_usd: float,
     model_usage: dict | None = None,
     input_tokens: int = 0,
-    cache_creation: int = 0,
-    cache_read: int = 0,
     context_snapshot: dict | None = None) -> dict:
   return {
       "type": "result",
-      "usage":
-          {
-              "input_tokens": input_tokens,
-              "cache_creation_input_tokens": cache_creation,
-              "cache_read_input_tokens": cache_read,
-          },
+      "usage": {
+          "input_tokens": input_tokens,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+      },
       "modelUsage": model_usage or {},
       "total_cost_usd": total_cost_usd,
       **({

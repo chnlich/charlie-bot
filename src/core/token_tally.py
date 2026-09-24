@@ -94,15 +94,15 @@ Vocabulary:
               ``rows_file`` names (beside the cache, one stable name per db path) so the main
               document stays at the Claude+Codex corpus's size. A process restart parses the
               sidecar only when a signature miss demands a seed, rebuilds the row memo from
-               it, and gates the key diff on the entry's ``probe`` aggregates: a matching
-               proof tuple proves the rows unchanged and the key pass skips, so only a proof
-               miss or a moved row fetches rows that moved since the sidecar was written
-               instead of re-reading every data blob
-    probe      the opencode db's proof aggregates ``[count, sum(time_updated), max(time_updated),
-               max(rowid)]`` at the time the entry's rows were stored — the seeded restart's
-               gate input (see ``rows``) and the tail fetch's floor (see
-               _increment_opencode_rows); a document from a build that stored only the first
-               two fields seeds without a max and takes the full key diff once
+              it, and gates the key diff on the entry's ``probe`` aggregates: a matching
+              proof tuple proves the rows unchanged and the key pass skips, so only a proof
+              miss or a moved row fetches rows that moved since the sidecar was written
+              instead of re-reading every data blob
+   probe      the opencode db's proof aggregates ``[count, sum(time_updated), max(time_updated),
+              max(rowid)]`` at the time the entry's rows were stored — the seeded restart's
+              gate input (see ``rows``) and the tail fetch's floor (see
+              _increment_opencode_rows); a document from a build that stored only the first
+              two fields seeds without a max and takes the full key diff once
    records    Claude: ``[key, model, ts, in_fresh, cache_write, cache_read, output]`` per
                response, replay-deduped within the file; Codex: ``[model, ts, in_fresh,
                cache_read, output]`` per token_count event, model resolved by file position;

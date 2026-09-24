@@ -3,9 +3,10 @@
 The chat UI's explain button picks a configured backend for one divider; this module
 owns the whole server side. The round text comes out of the recap extraction pipeline
 (``load_chat_events_range`` + ``events_to_messages`` over ``[0, upto+1)``), the
-invocation rides the backend's default agent-run ``one_shot_text``, and the session
-history reaches the explaining agent only as a chmod-0444 copy whose path — never the
-real ``chat_events.jsonl`` path — the prompt carries.
+invocation rides the base agent-run ``AgentBackend.one_shot_text`` for every
+backend (CLI-native overrides bypassed), and the session history reaches the
+explaining agent only as a chmod-0444 copy whose path — never the real
+``chat_events.jsonl`` path — the prompt carries.
 
 Persisted truth is one file, ``explain_results.json`` next to ``chat_events.jsonl``,
 keyed by the divider's ``event_index`` (``upto``); one entry per divider, and a re-run
@@ -40,8 +41,26 @@ log = structlog.get_logger()
 
 
 def __getattr__(name: str) -> Any:
-  # The "src.core.explain.build_backend" patch target resolves through this hook.
+  # The "src.core.explain.build_backend" and ".base_one_shot_text" patch targets resolve here.
+  if name == "base_one_shot_text":
+    return deferred_module_getattr(name, __name__, globals(), "base_one_shot_text", _load_base_one_shot_text)
   return deferred_module_getattr(name, __name__, globals(), "build_backend", load_build_backend)
+
+
+def _load_base_one_shot_text(namespace: dict[str, Any]) -> Any:
+  """Bind the BASE ``AgentBackend.one_shot_text`` into *namespace* on first use.
+
+  The backend modules stay off the server import chain (the deferred_build rule),
+  so the base class resolves inside this call; an existing binding — a test's
+  stand-in — returns untouched, keeping ``src.core.explain.base_one_shot_text``
+  the patch target, exactly as ``load_build_backend`` does for ``build_backend``.
+  """
+  bound = namespace.get("base_one_shot_text")
+  if bound is not None:
+    return bound
+  from src.agents.backends.base import AgentBackend
+  namespace["base_one_shot_text"] = AgentBackend.one_shot_text
+  return AgentBackend.one_shot_text
 
 
 _NO_ROUND_TEXT_ERROR = "This round has no explainable answer text."
@@ -210,7 +229,13 @@ async def _generate(
     try:
       prompt = _EXPLAIN_USER_PROMPT.format(upto=upto, round_text=round_text, history_path=copy_path)
       backend = load_build_backend(globals())(option, cfg, cgroup_session_id=session_id)
-      answer = await backend.one_shot_text(prompt, _EXPLAIN_SYSTEM_PROMPT, timeout=EXPLAIN_ONESHOT_TIMEOUT)
+      # Trade-off 1 (unified agent-run): call the BASE one_shot_text on the instance,
+      # never the subclass's CLI-native override — the claude/codex/opencode overrides
+      # run print-mode CLIs with Read denied, which cannot follow the read-only
+      # history copy the prompt hands over, and the plan holds every configured
+      # backend to the identical agent-run channel.
+      answer = await _load_base_one_shot_text(globals())(
+          backend, prompt, _EXPLAIN_SYSTEM_PROMPT, timeout=EXPLAIN_ONESHOT_TIMEOUT)
     finally:
       await asyncio.to_thread(shutil.rmtree, copy_path.parent, ignore_errors=True)
     if not answer:

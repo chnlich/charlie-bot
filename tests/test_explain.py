@@ -21,7 +21,6 @@ from conftest import (
     append_events,
     assistant_text_event,
     make_home_session,
-    make_one_shot_backend,
     make_os_replace_spy,
     user_event,
 )
@@ -37,6 +36,7 @@ from src.core.timeouts import EXPLAIN_ONESHOT_TIMEOUT
 # the streaming_manager singleton at module scope, so each patch() lands its stand-in
 # on the src.core.explain module attribute the generation path reads at call time.
 _BUILD_BACKEND_PATCH_TARGET = "src.core.explain.build_backend"
+_BASE_ONE_SHOT_PATCH_TARGET = "src.core.explain.base_one_shot_text"
 _BROADCAST_PATCH_TARGET = "src.core.explain.streaming_manager.broadcast"
 
 _MASTER_DONE_EVENT = {"type": "master_done"}
@@ -230,7 +230,7 @@ class _BlockedOneShot:
     self.release = asyncio.Event()
     self.loop: asyncio.AbstractEventLoop | None = None
 
-  async def call(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
+  async def call(self, backend: object, prompt: str, system_prompt: str, *, timeout: float) -> str:
     self.calls.append({"prompt": prompt, "system_prompt": system_prompt, "timeout": timeout})
     self.loop = asyncio.get_running_loop()
     await self.release.wait()
@@ -266,10 +266,12 @@ async def test_post_registers_then_is_idempotent_while_pending(tmp_path: Path) -
   """202 on the fresh registration, 200 on the repeat, exactly one generation."""
   cfg, mgr, session, upto = await _home_with_round(tmp_path)
   blocked = _BlockedOneShot()
-  build = MagicMock(return_value=make_one_shot_backend(AsyncMock(side_effect=blocked.call)))
+  one_shot = AsyncMock(side_effect=blocked.call)
+  build = MagicMock(return_value=MagicMock())
 
-  with (patch(_BUILD_BACKEND_PATCH_TARGET, build), patch(_BROADCAST_PATCH_TARGET, new=AsyncMock()) as
-        broadcast, _build_client(cfg, mgr) as client):
+  with (patch(_BUILD_BACKEND_PATCH_TARGET, build), patch(_BASE_ONE_SHOT_PATCH_TARGET,
+                                                         new=one_shot), patch(_BROADCAST_PATCH_TARGET, new=AsyncMock())
+        as broadcast, _build_client(cfg, mgr) as client):
     first = client.post(f"/api/sessions/{session.id}/explain", json={"event_index": upto, "backend": OPUS_BACKEND_ID})
     assert first.status_code == 202
     assert first.json()["state"] == "pending"
@@ -303,10 +305,11 @@ async def test_rerun_after_ready_reregisters_and_overwrites(tmp_path: Path) -> N
   """A terminal entry re-clicked registers a fresh pending and the re-run overwrites the entry."""
   cfg, mgr, session, upto = await _home_with_round(tmp_path)
   one_shot = AsyncMock(return_value="the rerun explanation")
-  build = MagicMock(return_value=make_one_shot_backend(one_shot))
+  build = MagicMock(return_value=MagicMock())
 
   with (
       patch(_BUILD_BACKEND_PATCH_TARGET, build),
+      patch(_BASE_ONE_SHOT_PATCH_TARGET, new=one_shot),
       patch(_BROADCAST_PATCH_TARGET, new=AsyncMock()),
       _build_client(cfg, mgr) as client,
   ):
@@ -335,10 +338,12 @@ async def test_prompt_carries_the_ro_copy_and_never_the_real_events_path(tmp_pat
   """The user prompt names the 0444 copy; the real chat_events.jsonl path appears nowhere."""
   cfg, mgr, session, upto = await _home_with_round(tmp_path)
   blocked = _BlockedOneShot()
-  build = MagicMock(return_value=make_one_shot_backend(AsyncMock(side_effect=blocked.call)))
+  one_shot = AsyncMock(side_effect=blocked.call)
+  build = MagicMock(return_value=MagicMock())
 
   with (
       patch(_BUILD_BACKEND_PATCH_TARGET, build),
+      patch(_BASE_ONE_SHOT_PATCH_TARGET, new=one_shot),
       patch(_BROADCAST_PATCH_TARGET, new=AsyncMock()),
       _build_client(cfg, mgr) as client,
   ):
@@ -375,10 +380,12 @@ async def test_ro_copy_is_cleaned_up_after_the_generation(tmp_path: Path) -> Non
   cfg, mgr, session, upto = await _home_with_round(tmp_path)
   before = _charliebot_explain_dirs()
   blocked = _BlockedOneShot()
-  build = MagicMock(return_value=make_one_shot_backend(AsyncMock(side_effect=blocked.call)))
+  one_shot = AsyncMock(side_effect=blocked.call)
+  build = MagicMock(return_value=MagicMock())
 
   with (
       patch(_BUILD_BACKEND_PATCH_TARGET, build),
+      patch(_BASE_ONE_SHOT_PATCH_TARGET, new=one_shot),
       patch(_BROADCAST_PATCH_TARGET, new=AsyncMock()),
       _build_client(cfg, mgr) as client,
   ):
@@ -408,13 +415,12 @@ async def test_explain_writes_no_chat_event_and_never_persists_one(tmp_path: Pat
   events_path = mgr.get_chat_events_path(session.id)
   before_bytes = events_path.read_bytes()
   one_shot = AsyncMock(return_value="the explanation")
-  build = MagicMock(return_value=make_one_shot_backend(one_shot))
+  build = MagicMock(return_value=MagicMock())
   persist = AsyncMock(wraps=mgr.persist_and_broadcast)
 
-  with (patch(_BUILD_BACKEND_PATCH_TARGET,
-              build), patch(_BROADCAST_PATCH_TARGET, new=AsyncMock()), patch.object(mgr, "persist_and_broadcast",
-                                                                                    persist), _build_client(cfg, mgr) as
-        client):
+  with (patch(_BUILD_BACKEND_PATCH_TARGET, build), patch(_BASE_ONE_SHOT_PATCH_TARGET, new=one_shot),
+        patch(_BROADCAST_PATCH_TARGET, new=AsyncMock()), patch.object(mgr, "persist_and_broadcast",
+                                                                      persist), _build_client(cfg, mgr) as client):
     response = client.post(
         f"/api/sessions/{session.id}/explain", json={
             "event_index": upto,
@@ -435,10 +441,11 @@ async def test_no_round_text_lands_an_error_entry(tmp_path: Path) -> None:
   path.parent.mkdir(parents=True, exist_ok=True)
   append_events(path, [user_event("run it"), _MASTER_DONE_EVENT])
   one_shot = AsyncMock(return_value="should never be asked")
-  build = MagicMock(return_value=make_one_shot_backend(one_shot))
+  build = MagicMock(return_value=MagicMock())
 
   with (
       patch(_BUILD_BACKEND_PATCH_TARGET, build),
+      patch(_BASE_ONE_SHOT_PATCH_TARGET, new=one_shot),
       patch(_BROADCAST_PATCH_TARGET, new=AsyncMock()) as broadcast,
       _build_client(cfg, mgr) as client,
   ):
@@ -457,10 +464,11 @@ async def test_failed_one_shot_lands_the_error_entry_and_broadcasts(tmp_path: Pa
   """A backend failure lands an error entry whose body never rides the frame."""
   cfg, mgr, session, upto = await _home_with_round(tmp_path)
   one_shot = AsyncMock(side_effect=RuntimeError("backend exploded"))
-  build = MagicMock(return_value=make_one_shot_backend(one_shot))
+  build = MagicMock(return_value=MagicMock())
 
   with (
       patch(_BUILD_BACKEND_PATCH_TARGET, build),
+      patch(_BASE_ONE_SHOT_PATCH_TARGET, new=one_shot),
       patch(_BROADCAST_PATCH_TARGET, new=AsyncMock()) as broadcast,
       _build_client(cfg, mgr) as client,
   ):
@@ -482,6 +490,43 @@ async def test_failed_one_shot_lands_the_error_entry_and_broadcasts(tmp_path: Pa
   }
 
 
+@pytest.mark.asyncio
+async def test_generation_bypasses_cli_native_overrides_for_the_base_agent_run(tmp_path: Path) -> None:
+  """Trade-off 1: the call rides the BASE one_shot_text, never the instance's own override.
+
+  The claude/codex/opencode one_shot_text overrides run print-mode CLIs with Read
+  denied, which cannot follow the read-only history copy the prompt hands over; the
+  plan holds every configured backend to the identical agent-run channel, so the
+  generation must reach the base implementation even when the built backend has an
+  override of its own.
+  """
+  cfg, mgr, session, upto = await _home_with_round(tmp_path)
+  backend = MagicMock()
+  backend.one_shot_text = AsyncMock(side_effect=AssertionError("the CLI-native override must not run"))
+  build = MagicMock(return_value=backend)
+  one_shot = AsyncMock(return_value="the explanation")
+
+  with (
+      patch(_BUILD_BACKEND_PATCH_TARGET, build),
+      patch(_BASE_ONE_SHOT_PATCH_TARGET, new=one_shot),
+      patch(_BROADCAST_PATCH_TARGET, new=AsyncMock()),
+      _build_client(cfg, mgr) as client,
+  ):
+    response = client.post(
+        f"/api/sessions/{session.id}/explain", json={
+            "event_index": upto,
+            "backend": OPUS_BACKEND_ID
+        })
+    assert response.status_code == 202
+    entry = _wait_for_state(mgr, session.id, upto, "ready")
+
+  assert entry["answer"] == "the explanation"
+  backend.one_shot_text.assert_not_awaited()
+  one_shot.assert_awaited_once()
+  assert one_shot.await_args.args[0] is backend
+  assert one_shot.await_args.kwargs["timeout"] == EXPLAIN_ONESHOT_TIMEOUT
+
+
 # ---------------------------------------------------------------------------
 # GET endpoints
 # ---------------------------------------------------------------------------
@@ -491,10 +536,11 @@ async def test_failed_one_shot_lands_the_error_entry_and_broadcasts(tmp_path: Pa
 async def test_get_single_entry_returns_stored_entry(tmp_path: Path) -> None:
   cfg, mgr, session, upto = await _home_with_round(tmp_path)
   one_shot = AsyncMock(return_value="the explanation")
-  build = MagicMock(return_value=make_one_shot_backend(one_shot))
+  build = MagicMock(return_value=MagicMock())
 
   with (
       patch(_BUILD_BACKEND_PATCH_TARGET, build),
+      patch(_BASE_ONE_SHOT_PATCH_TARGET, new=one_shot),
       patch(_BROADCAST_PATCH_TARGET, new=AsyncMock()),
       _build_client(cfg, mgr) as client,
   ):

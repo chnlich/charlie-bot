@@ -101,11 +101,11 @@ def _listener_seam(
     yield
 
 
-async def _slack_session(session_mgr: SessionManager, *, thread_ts: str = _THREAD) -> str:
+async def _slack_session(session_mgr: SessionManager) -> str:
   """Create a Slack-born session and return its id."""
   meta = await session_mgr.create_session(
       CreateSessionRequest(
-          name="slack session", slack_origin=SlackOrigin(team_id=_TEAM, channel_id=_CHANNEL, thread_ts=thread_ts)))
+          name="slack session", slack_origin=SlackOrigin(team_id=_TEAM, channel_id=_CHANNEL, thread_ts=_THREAD)))
   return meta.id
 
 
@@ -139,7 +139,7 @@ def _running_item(
       user_event_id=user_event_id)
 
 
-def _summon(thread_ts: str = _THREAD, content: str = _SUMMON_CONTENT) -> dict:
+def _summon(content: str = _SUMMON_CONTENT) -> dict:
   return {
       "type": ET.AGENT_MESSAGE,
       "content": content,
@@ -147,8 +147,8 @@ def _summon(thread_ts: str = _THREAD, content: str = _SUMMON_CONTENT) -> dict:
       "from_session_name": "Slack",
       "slack": {
           "channel_id": _CHANNEL,
-          "thread_ts": thread_ts,
-          "mention_ts": thread_ts
+          "thread_ts": _THREAD,
+          "mention_ts": _THREAD
       },
   }
 

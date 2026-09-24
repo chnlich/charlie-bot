@@ -47,14 +47,13 @@ def _make_project(
     *,
     yaml_body: str | None = None,
     files: dict[str, str] | None = None,
-    group: str = "proj",
     write_contract: bool = True,
 ) -> SimpleNamespace:
   """An enabled fake project: project.yaml plus the body files it names."""
   cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
   if not write_contract:
     (cfg.charlie_bot_repo / "prompts" / "project_manager.md").unlink()
-  project_dir = cfg.charliebot_home / "projects" / group
+  project_dir = cfg.charliebot_home / "projects" / "proj"
   project_dir.mkdir(parents=True)
   if yaml_body is None:
     yaml_body = "prompt_file: common.md\nmanager_prompt_file: manager.md\n"

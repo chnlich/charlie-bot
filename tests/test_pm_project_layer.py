@@ -176,13 +176,7 @@ def pm_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   return home
 
 
-def _write_pm_yaml(
-    home: Path,
-    name: str = "pm_bp_eval",
-    *,
-    body_overrides: dict[str, Any] | None = None,
-    enabled: bool = True,
-) -> Path:
+def _write_pm_yaml(home: Path, name: str = "pm_bp_eval", *, body_overrides: dict[str, Any] | None = None) -> Path:
   """Seed one type: pm host cron file (prompt_file pointer + project), shaped like production."""
   prompt_path = home / "pm_contract.md"
   prompt_path.write_text(PM_TASK_PROMPT + "\n", encoding="utf-8")
@@ -191,7 +185,7 @@ def _write_pm_yaml(
       "cron": "30 8 * * *",
       "prompt_file": str(prompt_path),
       "timezone": "America/Los_Angeles",
-      "enabled": enabled,
+      "enabled": True,
       "project": "bp-eval",
   }
   body.update(body_overrides or {})
@@ -238,10 +232,9 @@ async def _create_member(
     *,
     name: str = "member",
     archived: bool = False,
-    group: str = "bp-eval",
 ) -> Any:
   member = await session_mgr.create_session(CreateSessionRequest(name=name), backend=OPUS_BACKEND_ID)
-  await session_mgr.set_group(member.id, group)
+  await session_mgr.set_group(member.id, "bp-eval")
   if archived:
     await session_mgr.archive_session(member.id)
   return member

@@ -493,10 +493,10 @@ def _patch_improve_loop_io(monkeypatch: pytest.MonkeyPatch) -> tuple[list[SpawnR
   return spawn_requests, triggered_payloads
 
 
-def _patch_git(monkeypatch: pytest.MonkeyPatch, *, count: str, tip: str = "a" * 40) -> list[tuple]:
+def _patch_git(monkeypatch: pytest.MonkeyPatch, *, count: str) -> list[tuple]:
   """Monkeypatch the shared-worktree git helpers used for the commit delta.
 
-  ``rev-parse HEAD`` returns ``tip`` on every call, ``rev-list --count`` returns
+  ``rev-parse HEAD`` returns the same 40-``a`` sha on every call, ``rev-list --count`` returns
   ``count``, and ``diff --shortstat`` returns a fixed line. Returns the recorded
   args so tests can assert the git commands that actually ran.
   """
@@ -504,7 +504,7 @@ def _patch_git(monkeypatch: pytest.MonkeyPatch, *, count: str, tip: str = "a" * 
 
   async def fake_rev_parse(repo_path: Path, ref: str) -> str:
     del repo_path, ref
-    return tip
+    return "a" * 40
 
   async def fake_stdout(repo_path: Path, *args: str, **_kwargs: object) -> tuple[bool, str, str]:
     del repo_path, _kwargs

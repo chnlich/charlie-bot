@@ -1721,20 +1721,18 @@ def build_light_cc_cfg() -> CharlieBotConfig:
 PUBLISH_BASE_URL = "https://pub.example.test/charliebot_pub"
 
 
-def build_publish_cfg(
-    tmp_path: Path, *, publish_dir: Path | None = None, public_base_url: str | None = None) -> CharlieBotConfig:
-  """CharlieBotConfig with the publish lane deployed under tmp_path: publish_dir (default
-  ``tmp_path / "publish"``) created the way the host's deployment step leaves it, public_base_url
-  (default ``PUBLISH_BASE_URL``) set; each argument overridable.
+def build_publish_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """CharlieBotConfig with the publish lane deployed under tmp_path: publish_dir
+  (``tmp_path / "publish"``) created the way the host's deployment step leaves it,
+  ``PUBLISH_BASE_URL`` set.
   """
-  resolved_dir = publish_dir if publish_dir is not None else tmp_path / "publish"
-  resolved_dir.mkdir(parents=True, exist_ok=True)
-  resolved_url = public_base_url if public_base_url is not None else PUBLISH_BASE_URL
+  publish_dir = tmp_path / "publish"
+  publish_dir.mkdir(parents=True, exist_ok=True)
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       publish={
-          "dir": resolved_dir,
-          "public_base_url": resolved_url
+          "dir": publish_dir,
+          "public_base_url": PUBLISH_BASE_URL
       },
   )
 

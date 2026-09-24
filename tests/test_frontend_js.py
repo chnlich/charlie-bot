@@ -51,6 +51,7 @@ _NODE_TESTS = [
     "stream_incremental_parse.test.js",
     "stream_tail_skip.test.js",
     "tailwind_class_coverage.test.js",
+    "task_context_dialog.test.js",
     "terminal_b64.test.js",
     "terminal_mount.test.js",
     "test_archived_view.test.js",

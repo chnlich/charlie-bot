@@ -209,6 +209,19 @@ test('a logical row offers New child session; a worker leaf does not', () => {
   assert.doesNotMatch(rowHtml(nav.innerHTML, 'w-new'), /New child session|createChildSession/);
 });
 
+test('a logical row offers Task & context between New child session and Archive; a worker leaf does not', () => {
+  const {context, nav} = buildContext();
+
+  context.renderSessionList([manager('r1', null, 10), worker('w-new', 'r1', 11), meta('legacy')], 'all');
+
+  const r1 = rowHtml(nav.innerHTML, 'r1');
+  assert.match(r1, /title="Task &amp; context"/);
+  assert.ok(r1.indexOf("createChildSession('r1')") < r1.indexOf("openTaskContextModal('r1')"));
+  assert.ok(r1.indexOf("openTaskContextModal('r1')") < r1.indexOf("archiveSession('r1')"));
+  assert.match(rowHtml(nav.innerHTML, 'legacy'), /openTaskContextModal\('legacy'\)/);
+  assert.doesNotMatch(rowHtml(nav.innerHTML, 'w-new'), /Task &amp; context|openTaskContextModal/);
+});
+
 test('the active session’s ancestors open once per switch and a manual collapse then holds', () => {
   const {context, nav} = buildContext();
   context.SESSION_ID = 'g1';

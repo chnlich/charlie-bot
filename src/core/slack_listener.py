@@ -175,7 +175,7 @@ class SlackClient:
   """Thin Slack Web API wrapper: open_connection / post_message / get_permalink / get_thread_replies /
   add_reaction / remove_reaction / get_channel_name."""
 
-  def __init__(self, http: "httpx.AsyncClient", *, bot_token: str, app_token: str) -> None:
+  def __init__(self, http: httpx.AsyncClient, *, bot_token: str, app_token: str) -> None:
     self._http = http
     self._bot_headers = {"Authorization": f"Bearer {bot_token}"}
     self._app_headers = {"Authorization": f"Bearer {app_token}"}
@@ -183,7 +183,7 @@ class SlackClient:
     self._channel_name_cache: dict[str, str | None] = {}
 
   @staticmethod
-  def _checked_payload(resp: "httpx.Response", method: str) -> dict[str, Any]:
+  def _checked_payload(resp: httpx.Response, method: str) -> dict[str, Any]:
     """Slack Web API envelope rule for the raise-on-failure methods: HTTP errors
     raise through httpx; an ok=false payload raises RuntimeError naming the
     Slack method. get_channel_name folds failures into its None cache instead,
@@ -200,11 +200,9 @@ class SlackClient:
     resp = await self._http.post("https://slack.com/api/apps.connections.open", headers=self._app_headers)
     return self._checked_payload(resp, "apps.connections.open")["url"]
 
-  async def post_message(self, channel: str, text: str, thread_ts: str | None = None) -> dict:
-    """POST chat.postMessage; returns the API payload."""
-    body: dict[str, Any] = {"channel": channel, "text": text}
-    if thread_ts is not None:
-      body["thread_ts"] = thread_ts
+  async def post_message(self, channel: str, text: str, thread_ts: str) -> dict:
+    """POST chat.postMessage as a thread reply; returns the API payload."""
+    body: dict[str, Any] = {"channel": channel, "text": text, "thread_ts": thread_ts}
     resp = await self._http.post("https://slack.com/api/chat.postMessage", headers=self._bot_headers, json=body)
     return self._checked_payload(resp, "chat.postMessage")
 
@@ -548,8 +546,9 @@ async def _consume_mention(
     session_mgr: SessionManager, trigger_mgr: TriggerManager, session_id: str, mention_ts: str) -> None:
   """The mention round consumes its own ts: advance the watermark to it and cancel armed follows."""
   meta = await session_mgr.get_session(session_id)
-  if meta is None:  # unreachable from the summon path; the session was just resolved there
-    return
+  # A None here would silently skip the watermark advance, leaving the summon's own
+  # mention permanently unread; the invariant break fails loudly instead.
+  assert meta is not None, "unreachable: the summon path resolves the session just before this call"
   if meta.slack_watermark_ts is None or meta.slack_watermark_ts < mention_ts:
     meta.slack_watermark_ts = mention_ts
     meta.updated_at = utc_now()
@@ -1154,7 +1153,7 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
   """Boot pass over every Slack session; returns how many notices and nudges it produced.
 
   First the summons lost while queued: the startup replay covers ``ET.USER``
-  only (src/core/init.py), so a Slack injection sitting in the queue when the
+  only (src/core/init_master_recovery.py), so a Slack injection sitting in the queue when the
   process died is picked up by nothing else and gets the lost-summon notice.
   Then the round-end audit over every finished round, which closes the crash
   windows between a done and its nudge, and between a nudge round's done and
@@ -1210,7 +1209,7 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
   return reported
 
 
-async def _expect_hello(ws: "ClientConnection") -> None:
+async def _expect_hello(ws: ClientConnection) -> None:
   """Consume the Socket Mode connection's ``hello`` frame."""
   raw = await ws.recv()
   envelope = json.loads(raw)

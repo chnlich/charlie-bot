@@ -14,8 +14,9 @@ from typing import Any
 from src.core import event_types as ET
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
 from src.core.config import CharlieBotConfig
+from src.core.constants import BackendType
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import BackendType
+from src.core.models import SessionMetadata
 from src.core.ndjson import iter_ndjson_events, iter_ndjson_events_from_end
 
 log = LazyStructlogLogger()
@@ -27,6 +28,21 @@ CODEX_SESSION_META = "session_meta"
 CODEX_TURN_CONTEXT = "turn_context"
 CODEX_EVENT_MSG = "event_msg"
 CODEX_TOKEN_COUNT = "token_count"
+
+
+def codex_token_count_payload(event: dict[str, Any]) -> dict[str, Any] | None:
+  """The ``token_count`` payload an ``event_msg`` record wraps, else None.
+
+  The unwrap gate every rollout reader applies before reading token numbers:
+  a non-event_msg record, a null payload, or a payload of another type is not
+  a token_count record.
+  """
+  if event.get("type") != CODEX_EVENT_MSG:
+    return None
+  payload = event.get("payload") or {}
+  if payload.get("type") != CODEX_TOKEN_COUNT:
+    return None
+  return payload
 
 
 def default_codex_home() -> Path:
@@ -44,10 +60,8 @@ DEFAULT_CODEX_HOME = default_codex_home()
 
 def _extract_codex_rollout_usage_event(event: dict[str, Any]) -> dict[str, Any] | None:
   """Return context usage from a native Codex token_count event."""
-  if event.get("type") != CODEX_EVENT_MSG:
-    return None
-  payload = event.get("payload") or {}
-  if payload.get("type") != CODEX_TOKEN_COUNT:
+  payload = codex_token_count_payload(event)
+  if payload is None:
     return None
   info = payload.get("info") or {}
   last_usage = info.get("last_token_usage") or {}
@@ -135,7 +149,7 @@ class CodexUsageResolver:
   def resolve(
       self,
       session_id: str,
-      session_meta: Any,
+      session_meta: SessionMetadata,
       events: list[dict],
   ) -> dict | None:
     """Resolve Codex-native usage and merge with base usage.
@@ -213,14 +227,13 @@ class CodexUsageResolver:
       self,
       session_id: str,
       persisted_session_id: str | None,
-      events: list[dict] | None = None,
+      events: list[dict],
   ) -> str | None:
     if persisted_session_id:
       return persisted_session_id
-    if events is not None:
-      live_session_id = self._extract_translated_session_id(events)
-      if live_session_id:
-        return live_session_id
+    live_session_id = self._extract_translated_session_id(events)
+    if live_session_id:
+      return live_session_id
     return self._read_translated_session_id(session_id)
 
   def _find_codex_rollout_path(self, native_thread_id: str) -> Path | None:

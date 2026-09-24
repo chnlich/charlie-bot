@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
-from unittest.mock import patch
 from urllib.parse import quote
 
 import pytest
+from conftest import count_save_metadata_calls
 from conftest import make_session_mgr as _make_session_mgr
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -37,7 +37,7 @@ async def test_save_chat_event_assigns_unique_uuid_ids(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_round_rating_metadata_migration_is_idempotent(tmp_path: Path) -> None:
+async def test_round_rating_metadata_migration_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   seed_mgr = _make_session_mgr(tmp_path)
   meta = SessionMetadata(
       name="Rated session",
@@ -49,17 +49,10 @@ async def test_round_rating_metadata_migration_is_idempotent(tmp_path: Path) -> 
   await seed_mgr.save_metadata(meta)
 
   load_mgr = SessionManager(seed_mgr._cfg)
-  real_save = load_mgr.save_metadata
-  save_calls = 0
+  save_calls = count_save_metadata_calls(load_mgr, monkeypatch)
 
-  async def counting_save(updated: SessionMetadata, **_kwargs: bool) -> None:
-    nonlocal save_calls
-    save_calls += 1
-    await real_save(updated, **_kwargs)
-
-  with patch.object(load_mgr, "save_metadata", side_effect=counting_save):
-    first = await load_mgr.get_session(meta.id)
-    second = await load_mgr.get_session(meta.id)
+  first = await load_mgr.get_session(meta.id)
+  second = await load_mgr.get_session(meta.id)
 
   assert first is not None
   assert second is not None
@@ -68,7 +61,7 @@ async def test_round_rating_metadata_migration_is_idempotent(tmp_path: Path) -> 
       "event-uuid": "thumbs_down",
   }
   assert second.round_ratings == first.round_ratings
-  assert save_calls == 1
+  assert len(save_calls) == 1
 
   raw = json.loads((seed_mgr._cfg.sessions_dir / meta.id / "metadata.json").read_text(encoding="utf-8"))
   assert raw["round_ratings"] == first.round_ratings

@@ -16,7 +16,7 @@ test('lookupRegisteredPlanVersion returns the plan+version when absPath matches 
   const plan = makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')], {title: 'My Plan', state: 'awaiting approval'});
   const snapshot = {plans: [plan]};
   const absPath = SESSION_DIR + '/artifacts/plan_01.html';
-  const result = ctx.lookupRegisteredPlanVersion(snapshot, absPath, SESSION_ID, SESSIONS_ROOT);
+  const result = ctx.Chat.lookupRegisteredPlanVersion(snapshot, absPath, SESSION_ID, SESSIONS_ROOT);
   assert.equal(result.planId, 1);
   assert.equal(result.v, 1);
   assert.equal(result.title, 'My Plan');
@@ -32,7 +32,7 @@ test('lookupRegisteredPlanVersion matches the latest of multiple versions by fil
   ], {state: 'in flight'});
   const snapshot = {plans: [plan]};
   const absPath = SESSION_DIR + '/artifacts/plan_02.html';
-  const result = ctx.lookupRegisteredPlanVersion(snapshot, absPath, SESSION_ID, SESSIONS_ROOT);
+  const result = ctx.Chat.lookupRegisteredPlanVersion(snapshot, absPath, SESSION_ID, SESSIONS_ROOT);
   assert.equal(result.planId, 2);
   assert.equal(result.v, 2);
   assert.equal(result.file, 'artifacts/plan_02.html');
@@ -43,7 +43,7 @@ test('lookupRegisteredPlanVersion returns null when the absPath is not in the re
   const plan = makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')]);
   const snapshot = {plans: [plan]};
   const unregistered = SESSION_DIR + '/artifacts/other_report.html';
-  assert.equal(ctx.lookupRegisteredPlanVersion(snapshot, unregistered, SESSION_ID, SESSIONS_ROOT), null);
+  assert.equal(ctx.Chat.lookupRegisteredPlanVersion(snapshot, unregistered, SESSION_ID, SESSIONS_ROOT), null);
 });
 
 test('lookupRegisteredPlanVersion returns null for a link to another session dir (never in this registry)', () => {
@@ -51,39 +51,15 @@ test('lookupRegisteredPlanVersion returns null for a link to another session dir
   const plan = makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')]);
   const snapshot = {plans: [plan]};
   const otherSessionDir = SESSIONS_ROOT + '/other-sess/artifacts/plan_01.html';
-  assert.equal(ctx.lookupRegisteredPlanVersion(snapshot, otherSessionDir, SESSION_ID, SESSIONS_ROOT), null);
+  assert.equal(ctx.Chat.lookupRegisteredPlanVersion(snapshot, otherSessionDir, SESSION_ID, SESSIONS_ROOT), null);
 });
 
 test('lookupRegisteredPlanVersion returns null for an empty or missing snapshot', () => {
   const ctx = loadArtifactsScript();
   const absPath = SESSION_DIR + '/artifacts/plan_01.html';
-  assert.equal(ctx.lookupRegisteredPlanVersion(null, absPath, SESSION_ID, SESSIONS_ROOT), null);
-  assert.equal(ctx.lookupRegisteredPlanVersion({plans: []}, absPath, SESSION_ID, SESSIONS_ROOT), null);
-  assert.equal(ctx.lookupRegisteredPlanVersion({}, absPath, SESSION_ID, SESSIONS_ROOT), null);
-});
-
-// ---------------------------------------------------------------------------
-// decidePlanCardRender (render decision: compact vs legacy)
-// ---------------------------------------------------------------------------
-
-test('decidePlanCardRender returns compact when the absPath is a registered plan version', () => {
-  const ctx = loadArtifactsScript();
-  const snapshot = {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')])]};
-  const absPath = SESSION_DIR + '/artifacts/plan_01.html';
-  assert.equal(ctx.decidePlanCardRender(snapshot, absPath, SESSION_ID, SESSIONS_ROOT), 'compact');
-});
-
-test('decidePlanCardRender returns legacy when the absPath is not registered', () => {
-  const ctx = loadArtifactsScript();
-  const snapshot = {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')])]};
-  const absPath = SESSION_DIR + '/artifacts/other.html';
-  assert.equal(ctx.decidePlanCardRender(snapshot, absPath, SESSION_ID, SESSIONS_ROOT), 'legacy');
-});
-
-test('decidePlanCardRender returns legacy when there is no snapshot (planPanel unavailable)', () => {
-  const ctx = loadArtifactsScript();
-  const absPath = SESSION_DIR + '/artifacts/plan_01.html';
-  assert.equal(ctx.decidePlanCardRender(null, absPath, SESSION_ID, SESSIONS_ROOT), 'legacy');
+  assert.equal(ctx.Chat.lookupRegisteredPlanVersion(null, absPath, SESSION_ID, SESSIONS_ROOT), null);
+  assert.equal(ctx.Chat.lookupRegisteredPlanVersion({plans: []}, absPath, SESSION_ID, SESSIONS_ROOT), null);
+  assert.equal(ctx.Chat.lookupRegisteredPlanVersion({}, absPath, SESSION_ID, SESSIONS_ROOT), null);
 });
 
 // ---------------------------------------------------------------------------
@@ -93,7 +69,7 @@ test('decidePlanCardRender returns legacy when there is no snapshot (planPanel u
 test('lookupPlanVersionState returns the live state for a plan+version from the snapshot', () => {
   const ctx = loadArtifactsScript();
   const before = {plans: [makePlan(1, [makeVersion(1)], {state: 'in flight'})]};
-  const info = ctx.lookupPlanVersionState(before, 1, 1);
+  const info = ctx.Chat.lookupPlanVersionState(before, 1, 1);
   assert.equal(info.planId, 1);
   assert.equal(info.v, 1);
   assert.equal(info.title, 'Plan 1');
@@ -104,9 +80,9 @@ test('lookupPlanVersionState returns the live state for a plan+version from the 
 test('lookupPlanVersionState returns null for an unknown plan or version', () => {
   const ctx = loadArtifactsScript();
   const snapshot = {plans: [makePlan(1, [makeVersion(1)])]};
-  assert.equal(ctx.lookupPlanVersionState(snapshot, 99, 1), null);
-  assert.equal(ctx.lookupPlanVersionState(snapshot, 1, 99), null);
-  assert.equal(ctx.lookupPlanVersionState(null, 1, 1), null);
+  assert.equal(ctx.Chat.lookupPlanVersionState(snapshot, 99, 1), null);
+  assert.equal(ctx.Chat.lookupPlanVersionState(snapshot, 1, 99), null);
+  assert.equal(ctx.Chat.lookupPlanVersionState(null, 1, 1), null);
 });
 
 test('lookupPlanVersionState reflects the refreshed state after a plan_updated refresh (badge update)', () => {
@@ -116,10 +92,10 @@ test('lookupPlanVersionState reflects the refreshed state after a plan_updated r
   // After refresh: verify_state clean → derived "awaiting approval".
   const after = {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html', 'clean')], {state: 'awaiting approval'})]};
 
-  const beforeInfo = ctx.lookupPlanVersionState(before, 1, 1);
+  const beforeInfo = ctx.Chat.lookupPlanVersionState(before, 1, 1);
   assert.equal(beforeInfo.state, 'in flight');
 
-  const afterInfo = ctx.lookupPlanVersionState(after, 1, 1);
+  const afterInfo = ctx.Chat.lookupPlanVersionState(after, 1, 1);
   assert.equal(afterInfo.state, 'awaiting approval');
 
   // The badge update reads the server string verbatim from the refreshed snapshot.
@@ -133,25 +109,25 @@ test('lookupPlanVersionState reflects the refreshed state after a plan_updated r
 test('_planStateLabel appends the approved takeoff version when state is approved and takeoff exists', () => {
   const ctx = loadArtifactsScript();
   const plan = makePlan(1, [makeVersion(1), makeVersion(2)], {state: 'approved', takeoff: {v: 2, at: 'x'}});
-  assert.equal(ctx._planStateLabel(plan), 'approved \u00B7 v2');
+  assert.equal(ctx.Chat._planStateLabel(plan), 'approved \u00B7 v2');
 });
 
 test('_planStateLabel leaves awaiting-approval state unchanged', () => {
   const ctx = loadArtifactsScript();
   const plan = makePlan(1, [makeVersion(1)], {state: 'awaiting approval'});
-  assert.equal(ctx._planStateLabel(plan), 'awaiting approval');
+  assert.equal(ctx.Chat._planStateLabel(plan), 'awaiting approval');
 });
 
 test('_planStateLabel leaves closed state unchanged', () => {
   const ctx = loadArtifactsScript();
   const plan = makePlan(2, [makeVersion(1)], {state: 'abandoned', closed: {as: 'abandoned', at: 'x'}});
-  assert.equal(ctx._planStateLabel(plan), 'abandoned');
+  assert.equal(ctx.Chat._planStateLabel(plan), 'abandoned');
 });
 
 test('_planStateLabel leaves approved state unchanged when takeoff is absent', () => {
   const ctx = loadArtifactsScript();
   const plan = makePlan(1, [makeVersion(1)], {state: 'approved'});
-  assert.equal(ctx._planStateLabel(plan), 'approved');
+  assert.equal(ctx.Chat._planStateLabel(plan), 'approved');
 });
 
 test('_planStateLabel prefers planPanel.formatPlanStateLabel when available', () => {
@@ -161,19 +137,19 @@ test('_planStateLabel prefers planPanel.formatPlanStateLabel when available', ()
   };
   const ctx = loadArtifactsScript({planPanel});
   const plan = makePlan(7, [makeVersion(1)], {state: 'approved', takeoff: {v: 1, at: 'x'}});
-  assert.equal(ctx._planStateLabel(plan), 'panel-label');
+  assert.equal(ctx.Chat._planStateLabel(plan), 'panel-label');
   assert.deepEqual(calls, [7]);
 });
 
 test('_planStateLabel falls back when planPanel exists but formatPlanStateLabel is missing', () => {
   const ctx = loadArtifactsScript({planPanel: {}});
   const plan = makePlan(1, [makeVersion(1)], {state: 'approved', takeoff: {v: 1, at: 'x'}});
-  assert.equal(ctx._planStateLabel(plan), 'approved \u00B7 v1');
+  assert.equal(ctx.Chat._planStateLabel(plan), 'approved \u00B7 v1');
 });
 
 test('_planStateLabel returns empty string for a null plan', () => {
   const ctx = loadArtifactsScript();
-  assert.equal(ctx._planStateLabel(null), '');
+  assert.equal(ctx.Chat._planStateLabel(null), '');
 });
 
 // ---------------------------------------------------------------------------
@@ -185,7 +161,7 @@ test('lookupRegisteredPlanVersion returns the labeled state for an approved plan
   const plan = makePlan(1, [makeVersion(2, 'artifacts/plan_02.html')], {state: 'approved', takeoff: {v: 2, at: 'x'}});
   const snapshot = {plans: [plan]};
   const absPath = SESSION_DIR + '/artifacts/plan_02.html';
-  const result = ctx.lookupRegisteredPlanVersion(snapshot, absPath, SESSION_ID, SESSIONS_ROOT);
+  const result = ctx.Chat.lookupRegisteredPlanVersion(snapshot, absPath, SESSION_ID, SESSIONS_ROOT);
   assert.equal(result.state, 'approved \u00B7 v2');
 });
 
@@ -193,7 +169,7 @@ test('lookupPlanVersionState returns the labeled state for an approved plan with
   const ctx = loadArtifactsScript();
   const plan = makePlan(1, [makeVersion(2)], {state: 'approved', takeoff: {v: 2, at: 'x'}});
   const snapshot = {plans: [plan]};
-  const info = ctx.lookupPlanVersionState(snapshot, 1, 2);
+  const info = ctx.Chat.lookupPlanVersionState(snapshot, 1, 2);
   assert.equal(info.state, 'approved \u00B7 v2');
 });
 
@@ -203,7 +179,7 @@ test('lookupPlanVersionState returns the labeled state for an approved plan with
 
 test('buildPlanCompactCardHtml includes the title, vN, verbatim state, and Open panel button', () => {
   const ctx = loadArtifactsScript();
-  const html = ctx.buildPlanCompactCardHtml(3, 2, 'Refactor the registry', 'awaiting approval', '/abs/path/plan.html');
+  const html = ctx.Chat.buildPlanCompactCardHtml(3, 2, 'Refactor the registry', 'awaiting approval', '/abs/path/plan.html');
   assert.match(html, /class="plan-compact-card html-artifact"/, 'card carries plan-compact-card and html-artifact classes');
   assert.match(html, /data-artifact-path="\/abs\/path\/plan\.html"/, 'card carries the artifact abs path for dedup');
   assert.match(html, /data-plan-card-plan="3"/, 'card carries the plan id');
@@ -218,7 +194,7 @@ test('buildPlanCompactCardHtml includes the title, vN, verbatim state, and Open 
 test('buildPlanCompactCardHtml includes an Open in tab anchor whose href carries #cbsession= and no cbpanel', () => {
   const ctx = loadArtifactsScript();
   const absPath = SESSION_DIR + '/artifacts/plan_03.html';
-  const html = ctx.buildPlanCompactCardHtml(3, 2, 'Refactor the registry', 'awaiting approval', absPath);
+  const html = ctx.Chat.buildPlanCompactCardHtml(3, 2, 'Refactor the registry', 'awaiting approval', absPath);
   // Anchor is present, opens in a new tab with the standard rel attributes.
   const anchorMatch = html.match(/<a[^>]*href="([^"]+)"[^>]*target="_blank"[^>]*rel="noopener noreferrer"[^>]*>Open in tab<\/a>/);
   assert.ok(anchorMatch, 'Open in tab anchor present with target=_blank and rel=noopener noreferrer');
@@ -234,7 +210,7 @@ test('buildPlanCompactCardHtml renders the derived state string verbatim with no
   const ctx = loadArtifactsScript();
   const states = ['in flight', 'awaiting approval', 'needs amendment', 'approved', 'approved \u00B7 awaiting clean verify', 'superseded'];
   for (const state of states) {
-    const html = ctx.buildPlanCompactCardHtml(1, 1, 'P', state, '/x.html');
+    const html = ctx.Chat.buildPlanCompactCardHtml(1, 1, 'P', state, '/x.html');
     const badgeMatch = html.match(/<span class="plan-compact-state">([^<]*)<\/span>/);
     assert.ok(badgeMatch, 'badge span present for state ' + state);
     assert.equal(badgeMatch[1], state, 'state string rendered verbatim for ' + state);
@@ -243,7 +219,7 @@ test('buildPlanCompactCardHtml renders the derived state string verbatim with no
 
 test('buildPlanCompactCardHtml falls back to (untitled) when the title is missing', () => {
   const ctx = loadArtifactsScript();
-  const html = ctx.buildPlanCompactCardHtml(1, 1, null, 'in flight', '/x.html');
+  const html = ctx.Chat.buildPlanCompactCardHtml(1, 1, null, 'in flight', '/x.html');
   assert.match(html, /<span class="filename">\(untitled\)<\/span>/, 'missing title renders as (untitled)');
 });
 
@@ -266,7 +242,7 @@ test('updatePlanCardBadges writes the labeled state into the plan-compact-state 
   const ctx = loadArtifactsScript({document});
   const plan = makePlan(1, [makeVersion(2)], {state: 'approved', takeoff: {v: 2, at: 'x'}});
   const snapshot = {plans: [plan]};
-  ctx.updatePlanCardBadges(snapshot);
+  ctx.Chat.updatePlanCardBadges(snapshot);
   assert.equal(card._badge.textContent, 'approved \u00B7 v2');
 });
 
@@ -276,7 +252,7 @@ test('updatePlanCardBadges leaves the badge untouched when the plan version is n
   const document = {querySelectorAll: () => [card]};
   const ctx = loadArtifactsScript({document});
   const snapshot = {plans: [makePlan(1, [makeVersion(1)], {state: 'in flight'})]};
-  ctx.updatePlanCardBadges(snapshot);
+  ctx.Chat.updatePlanCardBadges(snapshot);
   assert.equal(card._badge.textContent, 'old');
 });
 
@@ -286,6 +262,6 @@ test('updatePlanCardBadges writes the plain state when the plan is not approved'
   const ctx = loadArtifactsScript({document});
   const plan = makePlan(1, [makeVersion(1)], {state: 'awaiting approval'});
   const snapshot = {plans: [plan]};
-  ctx.updatePlanCardBadges(snapshot);
+  ctx.Chat.updatePlanCardBadges(snapshot);
   assert.equal(card._badge.textContent, 'awaiting approval');
 });

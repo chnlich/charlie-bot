@@ -2,16 +2,24 @@
 
 import traceback
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
-from src.agents.master_cc import run_message
 from src.core import event_types as ET
 from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig
+from src.core.deferred import deferred_import_loader, deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionMetadata, SessionStatus
 from src.core.sessions import SessionManager
 
 log = LazyStructlogLogger()
+
+_load_run_message = deferred_import_loader("run_message", "src.agents.master_cc")
+
+
+def __getattr__(name: str) -> Any:
+  # The "src.core.master_trigger.run_message" patch target resolves through this hook.
+  return deferred_module_getattr(name, __name__, globals(), "run_message", _load_run_message)
 
 
 async def run_message_with_resume_recovery(
@@ -19,8 +27,8 @@ async def run_message_with_resume_recovery(
     session_meta: SessionMetadata,
     summary: str,
     session_mgr: SessionManager,
-    expect_fresh_session: bool = False,
-    user_event_id: str | None = None,
+    expect_fresh_session: bool,
+    user_event_id: str | None,
 ) -> str | None:
   """Call run_message, retrying once with cc_session_id cleared on stale-resume errors.
 
@@ -31,6 +39,7 @@ async def run_message_with_resume_recovery(
   """
   backend_id = session_meta.backend
   backend_option = cfg.get_backend_option(backend_id)
+  run_message = _load_run_message(globals())
   try:
     return await run_message(
         cfg,

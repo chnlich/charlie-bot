@@ -46,16 +46,13 @@ from src.core.sessions import SessionManager
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
 
 
-def _agent_message_event(content: str, timestamp: str | None = None) -> dict[str, Any]:
-  event: dict[str, Any] = {
+def _agent_message_event(content: str) -> dict[str, Any]:
+  return {
       "type": ET.AGENT_MESSAGE,
       "content": content,
       "from_session": "caller-id",
       "from_session_name": "Caller",
   }
-  if timestamp is not None:
-    event["timestamp"] = timestamp
-  return event
 
 
 # ---------------------------------------------------------------------------
@@ -116,8 +113,8 @@ class RouteSessionManager:
     self.persisted.append((session_id, event))
 
 
-def _payload(session_id: str = "caller", target: str = "target") -> dict[str, str]:
-  return {"session_id": session_id, "target_session_id": target, "content": "status please"}
+def _payload() -> dict[str, str]:
+  return {"session_id": "caller", "target_session_id": "target", "content": "status please"}
 
 
 @pytest.mark.parametrize(

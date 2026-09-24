@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 import yaml
-from conftest import make_home_config
+from conftest import BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET, make_home_config
 
 from src.core.backlog_loop import _handle_stale
 from src.core.config import ImprovementLoopConfig, ScheduledTaskConfig
@@ -45,7 +45,7 @@ async def test_handle_stale_accepts_z_timestamp(
   )
   commit_mock = AsyncMock()
 
-  monkeypatch.setattr("src.core.backlog_loop.git_add_commit_push", commit_mock)
+  monkeypatch.setattr(BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET, commit_mock)
   monkeypatch.setattr(
       "src.core.backlog_loop.datetime", SimpleNamespace(now=lambda tz: datetime(2026, 4, 17, 2, 30, tzinfo=tz)))
 
@@ -81,6 +81,6 @@ async def test_scheduler_maybe_run_accepts_naive_last_scheduled_run(
   monkeypatch.setattr(scheduler, "_get_or_create_session", AsyncMock(return_value=session))
   monkeypatch.setattr(scheduler, "_execute_task", execute_task)
 
-  await scheduler._maybe_run(task_cfg, AsyncMock(), {})
+  await scheduler._maybe_run(task_cfg, AsyncMock(), {}, None)
 
   execute_task.assert_not_awaited()

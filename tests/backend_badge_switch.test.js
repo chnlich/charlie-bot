@@ -131,7 +131,7 @@ test('switchBackend POSTs the target and updates the active id on success', asyn
   });
   context.setSwitchableBackends(['claude-opus-5', 'claude-fable-5']);
   context.setActiveBackendId('claude-opus-5');
-  await context.switchBackend('claude-fable-5');
+  await context.Sidebar.switchBackend('claude-fable-5');
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, '/api/sessions/session-a/backend');
   assert.equal(calls[0].opts.method, 'POST');
@@ -159,7 +159,7 @@ test('switchBackend surfaces the server detail and reverts the active id on fail
   context.showToast = (msg, err) => toasts.push({ msg, err });
   context.setSwitchableBackends(['claude-opus-5', 'claude-fable-5']);
   context.setActiveBackendId('claude-opus-5');
-  await context.switchBackend('claude-fable-5');
+  await context.Sidebar.switchBackend('claude-fable-5');
   assert.equal(context.getActiveBackendId(), 'claude-opus-5', 'active id reverts on failure');
   assert.ok(toasts.some((t) => t.msg.includes('clone/fork')), 'server detail is surfaced');
 });

@@ -47,23 +47,25 @@ def test_ensure_claude_project_trusted_marks_session_dir(monkeypatch: pytest.Mon
   project = data["projects"][str(working_dir.resolve())]
   assert project["hasTrustDialogAccepted"] is True
   assert project["projectOnboardingSeenCount"] == 1
+  # The config can carry API-key state, so the atomic swap must publish it 0600.
+  assert ((config_dir / ".claude.json").stat().st_mode & 0o777) == 0o600
 
 
 def _patch_tmux_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> tuple[Path, Path, list[tuple[str, ...]]]:
-  """Redirect Path.home and CLAUDE_CONFIG_DIR into tmp_path; return (config_dir, working_dir, tmux calls).
+  """Redirect CLAUDE_CONFIG_DIR into tmp_path and tmux calls into fakes; return (config_dir, working_dir, tmux calls).
 
   ensure_tmux_session's tmux calls flow through pty_common globals (the has-session
   probe via tmux_session_exists, the spawn via _start_tmux_session); an unpatched
-  pty_common global would reach the real tmux binary.
+  pty_common global would reach the real tmux binary. Request the ``path_home``
+  fixture alongside this rig when the code under test resolves ``Path.home()``.
   """
   config_dir = tmp_path / "claude-config"
   working_dir = tmp_path / "session"
   calls: list[tuple[str, ...]] = []
   monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
-  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: tmp_path / "home"))
   monkeypatch.setattr(pty_common, "_run_tmux", make_fake_run_tmux(calls))
   return config_dir, working_dir, calls
 
@@ -72,6 +74,7 @@ def _patch_tmux_env(
 async def test_ensure_tmux_session_uses_claude_tui_startup_args(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    path_home: Path,
 ) -> None:
   config_dir, working_dir, calls = _patch_tmux_env(monkeypatch, tmp_path)
 
@@ -95,6 +98,7 @@ async def test_ensure_tmux_session_uses_claude_tui_startup_args(
 async def test_ensure_tmux_session_resumes_when_claude_jsonl_exists(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    path_home: Path,
 ) -> None:
   _, working_dir, calls = _patch_tmux_env(monkeypatch, tmp_path)
   jsonl_path = tui.Path.home() / ".claude" / "projects" / "project-a" / "session-id.jsonl"
@@ -113,6 +117,7 @@ async def test_ensure_tmux_session_resumes_when_claude_jsonl_exists(
 async def test_ensure_tmux_session_passes_optional_claude_args(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    path_home: Path,
 ) -> None:
   _, working_dir, calls = _patch_tmux_env(monkeypatch, tmp_path)
 
@@ -139,6 +144,7 @@ async def test_ensure_tmux_session_passes_optional_claude_args(
 async def test_ensure_tmux_session_injects_new_session_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    path_home: Path,
 ) -> None:
   _, working_dir, calls = _patch_tmux_env(monkeypatch, tmp_path)
 
@@ -161,22 +167,17 @@ async def test_ensure_tmux_session_injects_new_session_env(
   )
 
 
-def test_find_existing_claude_jsonl_returns_first_match(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  home_dir = tmp_path / "home"
-  first = home_dir / ".claude" / "projects" / "a" / "session-id.jsonl"
+def test_find_existing_claude_jsonl_returns_first_match(path_home: Path) -> None:
+  first = path_home / ".claude" / "projects" / "a" / "session-id.jsonl"
   first.parent.mkdir(parents=True)
   first.write_text("", encoding="utf-8")
-  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
 
   assert tui._find_existing_claude_jsonl("session-id") == first
 
 
-def test_find_existing_claude_jsonl_memoizes_hit_and_miss(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  home_dir = tmp_path / "home"
-  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
-
+def test_find_existing_claude_jsonl_memoizes_hit_and_miss(path_home: Path) -> None:
   assert tui._find_existing_claude_jsonl("session-id") is None
-  jsonl = home_dir / ".claude" / "projects" / "a" / "session-id.jsonl"
+  jsonl = path_home / ".claude" / "projects" / "a" / "session-id.jsonl"
   jsonl.parent.mkdir(parents=True)
   jsonl.write_text("", encoding="utf-8")
   assert tui._find_existing_claude_jsonl("session-id") is None  # memoized miss, inside the TTL
@@ -186,26 +187,18 @@ def test_find_existing_claude_jsonl_memoizes_hit_and_miss(monkeypatch: pytest.Mo
   assert tui._find_existing_claude_jsonl("session-id") is None  # exists() recheck re-globs after deletion
 
 
-def test_claude_jsonl_busy_uses_recent_mtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  home_dir = tmp_path / "home"
-  jsonl_path = home_dir / ".claude" / "projects" / "a" / "session-id.jsonl"
+def test_claude_jsonl_busy_uses_recent_mtime(path_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  jsonl_path = path_home / ".claude" / "projects" / "a" / "session-id.jsonl"
   jsonl_path.parent.mkdir(parents=True)
   jsonl_path.write_text("", encoding="utf-8")
   os.utime(jsonl_path, (98.0, 98.0))
-  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
   monkeypatch.setattr(tui.time, "time", lambda: 100.0)
 
   assert tui._claude_jsonl_busy("session-id") is True
   assert tui._claude_jsonl_busy("session-id", threshold_seconds=1.0) is False
 
 
-def test_claude_jsonl_busy_returns_false_when_jsonl_missing(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-  home_dir = tmp_path / "home"
-  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
-
+def test_claude_jsonl_busy_returns_false_when_jsonl_missing(path_home: Path) -> None:
   assert tui._claude_jsonl_busy("missing-session") is False
 
 

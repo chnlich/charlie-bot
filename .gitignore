@@ -1,8 +1,6 @@
 # Python
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
 .Python
 *.egg-info/
 dist/
@@ -14,10 +12,8 @@ env/
 
 # Frontend
 node_modules/
-web/node_modules/
 
 # Environment & secrets
-.env
 *.env
 
 # IDE
@@ -28,6 +24,9 @@ web/node_modules/
 
 # Logs
 *.log
+
+# Built in place by the editable install's build_ext step
+src/agents/backends/_vfkspawn*.so
 
 # OS
 .DS_Store

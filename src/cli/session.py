@@ -31,8 +31,7 @@ exact input ids, idempotent replay; later arrivals keep blocking closure.
 
 ``send`` relays a message into the target session as an ``agent_message``
 event (never a ``user`` event), so it neither mints nor revokes a takeoff
-authorization window. The caller session comes from the server-written
-CHARLIEBOT_SESSION_ID per the usual CLI convention (see ``resolve_session_id``).
+authorization window. The caller session resolves per ``resolve_session_id``.
 
 Authentication: with CHARLIEBOT_RUN_TOKEN set (an agent running inside a Run)
 every request carries that token and nothing else — a rejection surfaces the
@@ -44,6 +43,7 @@ import json
 import uuid
 
 from src.cli.common import (
+    add_session_arg,
     exit_usage_error,
     get_api,
     patch_internal_api,
@@ -51,13 +51,15 @@ from src.cli.common import (
     read_required_text_file,
     resolve_session_id,
 )
+from src.cli.help_formatter import CliHelpFormatter
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(description="CharlieBot session mutations")
+  parser = argparse.ArgumentParser(description="CharlieBot session mutations", formatter_class=CliHelpFormatter)
   sub = parser.add_subparsers(dest="session_command", required=True)
 
-  create = sub.add_parser("create", help="Create a session (metadata only, no first message)")
+  create = sub.add_parser(
+      "create", help="Create a session (metadata only, no first message)", formatter_class=CliHelpFormatter)
   create.add_argument("--name", default=None, help="Session/task name (optional)")
   create.add_argument("--backend", default=None, help="Backend id (optional)")
   create.add_argument("--group", default=None, help="Group name to assign after creation (optional)")
@@ -129,16 +131,13 @@ def _build_parser() -> argparse.ArgumentParser:
       "--closed-event", default=None,
       help="The task_closed event id to reopen (default: the latest close fact)")
 
-  send = sub.add_parser("send", help="Relay a message to another session as an agent_message")
+  send = sub.add_parser(
+      "send", help="Relay a message to another session as an agent_message", formatter_class=CliHelpFormatter)
   send.add_argument("target", help="Target session id")
   source = send.add_mutually_exclusive_group(required=True)
   source.add_argument("--message", default=None, help="Message text")
   source.add_argument("--file", default=None, help="Read the message text from this file")
-  send.add_argument(
-      "--session",
-      required=False,
-      default=None,
-      help="Caller session id (optional; taken from the CHARLIEBOT_SESSION_ID the server writes)")
+  add_session_arg(send)
   return parser
 
 

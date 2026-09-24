@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from src.core import event_types as ET
-from src.core.log_once import LazyStructlogLogger
 from src.core.message_aggregator import MessageAggregator
 from src.core.message_events import _ATTACHED_FILES_MARKER, _stable_history_projection
 
@@ -14,8 +13,6 @@ if TYPE_CHECKING:
   from src.core.message_projection import MessageProjection
   from src.core.models import SessionMetadata
   from src.core.sessions import SessionManager
-
-log = LazyStructlogLogger()
 
 __all__ = [
     "SessionBootstrapData",
@@ -32,15 +29,15 @@ __all__ = [
 ]
 
 
-def build_agent_input_content(content: str, uploaded_files: list[dict] | None = None) -> str:
+def build_agent_input_content(content: str, uploaded_files: list[dict]) -> str:
   """Append absolute attachment paths to the agent-visible message."""
-  paths = [str(f.get("path", "")).strip() for f in uploaded_files or [] if str(f.get("path", "")).strip()]
+  paths = [str(f.get("path", "")).strip() for f in uploaded_files if str(f.get("path", "")).strip()]
   if not paths:
     return content
   return content + _ATTACHED_FILES_MARKER + "\n".join(f"- {path}" for path in paths)
 
 
-def build_user_event(content: str, uploaded_files: list[dict] | None = None) -> dict:
+def build_user_event(content: str, uploaded_files: list[dict]) -> dict:
   """Build the persisted user event payload for chat history and websocket updates."""
   event = {
       "type": ET.USER,
@@ -86,7 +83,7 @@ def build_agent_message_event(content: str, *, from_session: str, from_session_n
 @dataclass
 class SessionBootstrapData:
   """Critical data needed to make one chat session usable."""
-  session: 'SessionMetadata'
+  session: SessionMetadata
   messages: list[dict]
   pending_draft: dict | None = None
   total_event_count: int = 0
@@ -107,9 +104,9 @@ class SessionViewData:
 
 
 async def get_message_projection_fast(
-    session_mgr: 'SessionManager',
+    session_mgr: SessionManager,
     session_id: str,
-) -> 'MessageProjection | None':
+) -> MessageProjection | None:
   """Return the session's message projection via the warm-hit fast path.
 
   A warm projection hit is a dict read + len compare answered on the event
@@ -124,7 +121,7 @@ async def get_message_projection_fast(
 
 
 async def _projection_page(
-    session_mgr: 'SessionManager',
+    session_mgr: SessionManager,
     session_id: str,
     message_limit: int,
 ) -> tuple[list[dict], dict | None, int, int, bool] | None:
@@ -142,7 +139,7 @@ async def _projection_page(
 
 
 async def _tail_events_page(
-    session_mgr: 'SessionManager',
+    session_mgr: SessionManager,
     session_id: str,
     archive_offset: int,
     message_limit: int,
@@ -162,7 +159,7 @@ async def _tail_events_page(
 
 
 async def _messages_page(
-    session_mgr: 'SessionManager',
+    session_mgr: SessionManager,
     session_id: str,
     archive_offset: int,
     message_limit: int,
@@ -183,22 +180,9 @@ async def _messages_page(
   return await _tail_events_page(session_mgr, session_id, archive_offset, message_limit)
 
 
-async def _mark_read_best_effort(session_mgr: 'SessionManager', session_id: str) -> 'SessionMetadata | None':
-  """mark_read whose failure degrades to a logged warning.
-
-  These readers must keep serving on a bookkeeping-write failure, so the
-  exception is swallowed here; callers treat ``None`` as "metadata unchanged".
-  """
-  try:
-    return await session_mgr.mark_read(session_id)
-  except Exception:
-    log.warning("mark_read_failed", session_id=session_id, exc_info=True)
-    return None
-
-
 async def build_session_bootstrap_data(
     session_id: str,
-    session_mgr: 'SessionManager',
+    session_mgr: SessionManager,
     *,
     message_limit: int = 40,
 ) -> SessionBootstrapData:
@@ -215,10 +199,6 @@ async def build_session_bootstrap_data(
   messages, pending_draft, total_event_count, oldest_ordinal, has_more = await _messages_page(
       session_mgr, session_id, session_meta.archive_offset, message_limit)
 
-  read_meta = await _mark_read_best_effort(session_mgr, session_id)
-  if read_meta is not None:
-    session_meta = read_meta
-
   return SessionBootstrapData(
       session=session_meta,
       messages=messages,
@@ -231,12 +211,12 @@ async def build_session_bootstrap_data(
 
 async def build_session_view_data(
     session_id: str,
-    session_mgr: 'SessionManager',
+    session_mgr: SessionManager,
     thread_rows: list[dict],
     *,
     message_limit: int | None = 40,
 ) -> SessionViewData:
-  """Build the view's messages and usage, and mark read.
+  """Build the view's messages and usage.
 
   *thread_rows* are the session view's thread rows (``view_thread_rows``'s
   shape), resolved by the caller so the view's row proof is shared with the
@@ -268,7 +248,6 @@ async def build_session_view_data(
         session_mgr, session_id, session_meta.archive_offset, message_limit)
 
   usage = await session_mgr.resolve_session_usage(session_id, session_meta)
-  await _mark_read_best_effort(session_mgr, session_id)
 
   return SessionViewData(
       messages=messages,

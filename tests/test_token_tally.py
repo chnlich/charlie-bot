@@ -192,6 +192,11 @@ def _spy_cache_loads(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
   return loads
 
 
+def _db_and_cache(tmp_path: Path) -> tuple[Path, Path]:
+  """The scratch on-disk layout every collect round reads: the opencode db and the tally cache."""
+  return tmp_path / "db.sqlite", tmp_path / "cache.json"
+
+
 def _collect(
     claude: Claude | None,
     codex: Codex | None,
@@ -429,7 +434,7 @@ def _claude_rig(tmp_path: Path) -> Claude:
 
 def test_cache_serves_unchanged_files(tmp_path: Path) -> None:
   claude = _claude_rig(tmp_path)
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   first = _collect(claude, None, db, cache)
   assert first.scanned_bytes > 0
 
@@ -441,7 +446,7 @@ def test_cache_serves_unchanged_files(tmp_path: Path) -> None:
 
 def test_cache_invalidates_on_append(tmp_path: Path) -> None:
   claude = _claude_rig(tmp_path)
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   before = _row(_collect(claude, None, db, cache), "Claude Code", NAME)
 
   log_file = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
@@ -455,7 +460,7 @@ def test_cache_invalidates_on_append(tmp_path: Path) -> None:
 
 def test_corrupt_cache_is_rebuilt_with_note(tmp_path: Path) -> None:
   claude = _claude_rig(tmp_path)
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   cache.write_text("{ not json")
 
   tally = _collect(claude, None, db, cache)
@@ -487,7 +492,7 @@ def test_codex_cache_serves_unchanged_files(tmp_path: Path) -> None:
               "output_tokens": 1
           }, {"total_tokens": 47}),
       ])
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   first = _collect(None, codex, db, cache)
   assert first.scanned_bytes > 0
 
@@ -510,7 +515,7 @@ def test_codex_cache_invalidates_on_append(tmp_path: Path) -> None:
               "output_tokens": 3
           }, {"total_tokens": 43}),
       ])
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   before = _row(_collect(None, codex, db, cache), "Codex", "gpt-a")
 
   rollout = codex.home / "sessions" / "rollout" / "rollout.jsonl"
@@ -530,7 +535,7 @@ def test_codex_cache_invalidates_on_append(tmp_path: Path) -> None:
 
 def test_aggregate_memo_serves_unchanged_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   claude = _claude_rig(tmp_path)
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   first = _collect(claude, None, db, cache)
 
   def boom(path: Path, prev: dict | None = None) -> None:
@@ -571,7 +576,7 @@ def test_aggregate_memo_keeps_sources_when_only_opencode_moves(tmp_path: Path, m
   # The host pattern behind the memo: the opencode db's WAL moves under plain serve traffic
   # while the Claude/Codex logs sit unchanged, so the expensive partial must survive.
   claude = _claude_rig(tmp_path)
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   _write_opencode(db, [_oc_row()])
   first = _collect(claude, None, db, cache)
 
@@ -588,7 +593,7 @@ def test_aggregate_memo_keeps_sources_when_only_opencode_moves(tmp_path: Path, m
 
 def test_opencode_only_change_is_not_persisted(tmp_path: Path) -> None:
   claude = _claude_rig(tmp_path)
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   _write_opencode(db, [_oc_row()])
   _collect(claude, None, db, cache)
   first_doc = json.loads(cache.read_text())
@@ -605,7 +610,7 @@ def test_opencode_only_change_is_not_persisted(tmp_path: Path) -> None:
 
 def test_non_opencode_change_still_persists(tmp_path: Path) -> None:
   claude = _claude_rig(tmp_path)
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   _write_opencode(db, [_oc_row()])
   _collect(claude, None, db, cache)
 
@@ -626,7 +631,7 @@ def _append_opencode(path: Path, rows: list[tuple[dict, str, str]]) -> None:
 
 def test_tally_memo_serves_unchanged_collect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   claude = _claude_rig(tmp_path)
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   _write_opencode(db, [_oc_row()])
   first = _collect(claude, None, db, cache)
 
@@ -643,7 +648,7 @@ def test_tally_memo_serves_unchanged_collect(tmp_path: Path, monkeypatch: pytest
 
 
 def test_opencode_cache_serves_unchanged_db(tmp_path: Path) -> None:
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 4, "write": 2}}, "oc-m", "prov")])
   first = _collect(None, None, db, cache)
   assert first.scanned_bytes > 0
@@ -704,8 +709,8 @@ _ADMITTED_OPENCODE_ROWS = [
 
 
 def test_opencode_scan_row_filters(tmp_path: Path) -> None:
-  # Every row shape the LIKE prefilter admits must land exactly where the old fetch-and-parse
-  # path put it: counted, skipped as non-contributing, or skipped as malformed.
+  # Every row shape the LIKE prefilter admits must land in exactly one class:
+  # counted, skipped as non-contributing, or skipped as malformed.
   db = tmp_path / "db.sqlite"
   con = sqlite3.connect(db)
   _create_message_table(con)
@@ -802,7 +807,7 @@ def test_opencode_row_data_matches_the_scan_projection() -> None:
 
 
 def test_opencode_cache_invalidates_on_insert(tmp_path: Path) -> None:
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   _write_opencode(db, [_oc_row()])
   before = _row(_collect(None, None, db, cache), "opencode", "oc-m")
 
@@ -816,7 +821,7 @@ def test_opencode_cache_invalidates_on_insert(tmp_path: Path) -> None:
 def test_opencode_row_memo_rereads_only_moved_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # Steady state: an append invalidates the file signature, but the row memo re-reads only
   # the new row's blob — the untouched rows' data must not re-enter the parser.
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   _write_opencode(db, [_oc_row()])
   first = _collect(None, None, db, cache)
   assert first.scanned_bytes > 0
@@ -855,7 +860,7 @@ def test_opencode_cache_invalidates_on_wal_write(tmp_path: Path) -> None:
   # A WAL-mode commit grows the -wal sidecar and leaves the main file untouched; the main
   # file's stat alone can never see it. The writer stays open across the second collect so
   # no checkpoint folds the sidecar into the main file first.
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   con = sqlite3.connect(db)
   con.execute("pragma journal_mode=WAL")
   _create_message_table(con)
@@ -878,7 +883,7 @@ def test_opencode_cache_invalidates_on_wal_write(tmp_path: Path) -> None:
 def _wal_db_with_noise_table(tmp_path: Path) -> tuple[Path, Path, sqlite3.Connection]:
   """A WAL-mode db holding one contributing message row plus a second table the noise
   writes land in — the production shape behind WAL-sidecar signature moves."""
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   con = sqlite3.connect(db)
   con.execute("pragma journal_mode=WAL")
   _create_message_table(con)
@@ -886,6 +891,15 @@ def _wal_db_with_noise_table(tmp_path: Path) -> tuple[Path, Path, sqlite3.Connec
   _insert_opencode_raw(con, [({}, _oc_row())])
   con.commit()
   return db, cache, con
+
+
+def _seeded_restart_rig(tmp_path: Path) -> tuple[Path, Path, sqlite3.Connection, tt.TokenTally]:
+  """Build the WAL rig, seed the document with one cold collect, then drop the aggregate
+  memo: the next collect is a restart — memo cold, persisted document warm."""
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+  tt._reset_aggregate_memo()
+  return db, cache, con, first
 
 
 def test_tally_memo_survives_wal_noise_without_row_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -981,7 +995,7 @@ def test_entry_served_changed_round_adopts_the_partial(tmp_path: Path, monkeypat
   # in place of the per-record fold; a process's first entry-served round replays once to
   # build the partial.
   claude = _claude_rig(tmp_path)
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 4, "write": 2}}, "oc-m", "prov")])
   cold = _collect(claude, None, db, cache)
 
@@ -1178,11 +1192,177 @@ def test_row_memo_probe_skips_the_key_scan_on_wal_noise(tmp_path: Path, monkeypa
   con.close()
 
 
+def _opencode_model_rows(tally: tt.TokenTally) -> list:
+  return [
+      (r.model, r.calls, r.in_fresh, r.cache_write, r.cache_read, r.output, r.first, r.last)
+      for r in tally.rows
+      if r.source == "opencode"
+  ]
+
+
+def _replay_parity(db: Path, tally: tt.TokenTally) -> None:
+  """A cold full replay must land the rows the incremental round served."""
+  tt._opencode_row_memos.clear()
+  tt._opencode_partials.clear()
+  tt._opencode_row_epochs.clear()
+  assert _opencode_model_rows(_collect(None, None, db)) == _opencode_model_rows(tally)
+
+
+def test_row_memo_gate_advances_from_the_tail_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The warm gate's proof miss answers from the tail fetch: rows written after the stored
+  # max re-read, the full key scan never runs, and the persisted entry carries the proof
+  # complete so the next restart's seed gates on the same maxes.
+  db, cache = _db_and_cache(tmp_path)
+  _write_opencode(db, [_oc_row()])
+  first = _collect(None, None, db, cache)
+
+  def boom(*args: Any, **kwargs: Any) -> None:
+    raise AssertionError("full key scan ran although the tail fetch proved the round complete")
+
+  monkeypatch.setattr(tt, "_scan_opencode_rows", boom)
+  con = sqlite3.connect(db)
+  mid, = con.execute("select id from message").fetchone()
+  con.execute(
+      "update message set data = ?, time_updated = time_updated + 1 where id = ?",
+      (json.dumps(_step_finish_record()), mid))
+  con.commit()
+  con.close()
+  _append_opencode(db, [_padded_opencode_row(500)])
+  second = _collect(None, None, db, cache)
+
+  assert _row(second, "opencode", "oc-m").total == _row(first, "opencode", "oc-m").total - 6 + 102 + 102
+  assert _row(second, "opencode", "oc-m").calls == 2
+  entry = json.loads(cache.read_bytes())["sources"]["opencode"][str(db)]
+  assert len(entry["probe"]) == 4  # the store wrote the proof back, maxes included
+
+
+def test_row_memo_gate_self_corrects_a_net_zero_delete_insert(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The residual proof's dodge class, reproduced: a delete and an insert landing at the same
+  # time_updated net the (count, sum) pair to zero. The insert's fresh rowid moves the
+  # triple's max, the residual rejects the tail fetch, and the very round that dodged the
+  # pair self-corrects through the full key scan.
+  db = tmp_path / "db.sqlite"
+  _write_opencode(db, [_oc_row(), _oc_row()])
+  first = _collect(None, None, db)
+  assert _row(first, "opencode", "oc-m").calls == 2
+
+  con = sqlite3.connect(db)
+  victim, = con.execute("select id from message order by rowid limit 1").fetchone()
+  tu, = con.execute("select time_updated from message where id = ?", (victim,)).fetchone()
+  con.execute("delete from message where id = ?", (victim,))
+  con.execute(
+      "insert into message (id, session_id, time_created, time_updated, data) "
+      "values ('same-ms', 'sess', ?, ?, ?)", (tu, tu, json.dumps(_step_finish_record())))
+  con.commit()
+  con.close()
+  scans = _spy_opencode_scans(monkeypatch)
+  second = _collect(None, None, db)
+
+  assert scans == [1]  # the dodge round fell back and self-corrected
+  assert _row(second, "opencode", "oc-m").calls == 2
+  _replay_parity(db, second)
+
+
+def test_row_memo_gate_self_heal_bounds_the_residual_dodge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The one shape the triple cannot see: the deleted row held the max rowid, the insert
+  # reuses it, and a later append in the same round masks the rowid move. The wrong serve
+  # stands until the self-heal round re-scans — the lifetime bound the pre-tail gate's
+  # next-miss re-scan provided.
+  monkeypatch.setattr(tt, "_OPENCODE_FULL_SCAN_EVERY", 3)  # cold miss 1, dodge miss 2, heal miss 3
+  db = tmp_path / "db.sqlite"
+  _write_opencode(db, [_oc_row()])
+  first = _collect(None, None, db)
+  truth = _row(first, "opencode", "oc-m").total
+
+  con = sqlite3.connect(db)
+  tu, = con.execute("select time_updated from message").fetchone()
+  con.execute("delete from message")  # the max-rowid row goes; the insert reuses its rowid
+  con.execute(
+      "insert into message (id, session_id, time_created, time_updated, data) "
+      "values ('same-ms', 'sess', ?, ?, ?)", (tu, tu, json.dumps(_step_finish_record())))
+  con.commit()
+  con.close()
+  _append_opencode(db, [_padded_opencode_row(500)])  # the masking append, same round
+  scans = _spy_opencode_scans(monkeypatch)
+  dodged = _collect(None, None, db)
+
+  assert scans == []  # the triple netted: the round took the tail fetch
+  stale = _row(dodged, "opencode", "oc-m").total
+  assert stale != truth - 6 + 102 + 102  # the memo still carries the deleted row's tokens
+
+  _append_opencode(db, [_padded_opencode_row(500)])  # miss 2: the self-heal round
+  healed = _collect(None, None, db)
+  assert scans == [1]
+  assert _row(healed, "opencode", "oc-m").total == truth - 6 + 102 + 102 + 102
+  _replay_parity(db, healed)
+
+
+def test_row_memo_gate_falls_back_to_the_key_scan_on_a_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # A cascade delete subtracts a term the tail fetch never saw, so the residual check
+  # rejects the incremental round and the full key scan drops the vanished id.
+  db = tmp_path / "db.sqlite"
+  _write_opencode(db, [_oc_row(), _oc_row()])
+  first = _collect(None, None, db)
+  assert _row(first, "opencode", "oc-m").calls == 2
+
+  con = sqlite3.connect(db)
+  con.execute("delete from message where id = (select min(id) from message)")
+  con.commit()
+  con.close()
+  scans = _spy_opencode_scans(monkeypatch)
+  second = _collect(None, None, db)
+
+  assert scans == [1]
+  assert _row(second, "opencode", "oc-m").calls == 1
+  _replay_parity(db, second)
+
+
+def test_row_memo_gate_falls_back_on_a_backward_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # A row whose time_updated moved below the stored max sits outside every tail fetch; the
+  # sum residual catches it and the full key scan re-reads the row.
+  db = tmp_path / "db.sqlite"
+  _write_opencode(db, [_oc_row()])
+  first = _collect(None, None, db)
+
+  con = sqlite3.connect(db)
+  mid, = con.execute("select id from message").fetchone()
+  con.execute("update message set data = ?, time_updated = 100 where id = ?", (json.dumps(_step_finish_record()), mid))
+  con.commit()
+  con.close()
+  scans = _spy_opencode_scans(monkeypatch)
+  second = _collect(None, None, db)
+
+  assert scans == [1]
+  assert _row(second, "opencode", "oc-m").total == _row(first, "opencode", "oc-m").total - 6 + 102
+  _replay_parity(db, second)
+
+
+def test_row_memo_gate_falls_back_on_a_delete_insert_round(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # One delete and one insert in one round nets the count to zero and moves the sum; the
+  # count residual rejects the incremental round, and the key scan lands both moves.
+  db = tmp_path / "db.sqlite"
+  _write_opencode(db, [_oc_row(), _oc_row()])
+  first = _collect(None, None, db)
+
+  con = sqlite3.connect(db)
+  con.execute("delete from message where id = (select min(id) from message)")
+  con.commit()
+  con.close()
+  _append_opencode(db, [_padded_opencode_row(500)])
+  scans = _spy_opencode_scans(monkeypatch)
+  second = _collect(None, None, db)
+
+  assert scans == [1]
+  assert _row(second, "opencode", "oc-m").total == _row(first, "opencode", "oc-m").total - 6 + 102
+  assert _row(second, "opencode", "oc-m").calls == 2
+  _replay_parity(db, second)
+
+
 def test_cache_document_parses_once_per_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # The parsed document memoizes per cache path: a changed round re-parses zero document
   # bytes; the per-file signature still forces the moved file's own re-read.
   claude = _claude_rig(tmp_path)
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   _write_opencode(db, [_oc_row()])
   _collect(claude, None, db, cache)
 
@@ -1195,8 +1375,9 @@ def test_cache_document_parses_once_per_process(tmp_path: Path, monkeypatch: pyt
 
 def test_reset_drops_the_probe_and_document_memos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # _reset_aggregate_memo owns every process-wide memo the collection adds; after it, a
-  # fresh round re-parses the document and re-runs the row scan from an empty memo.
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  # fresh round re-parses the document and re-seeds the row memo from it — the seeded
+  # proof's miss tail-fetches the rows that moved since the document was written.
+  db, cache = _db_and_cache(tmp_path)
   _write_opencode(db, [_oc_row()])
   _collect(None, None, db, cache)
 
@@ -1206,8 +1387,10 @@ def test_reset_drops_the_probe_and_document_memos(tmp_path: Path, monkeypatch: p
 
   scans = _spy_opencode_scans(monkeypatch)
   loads = _spy_cache_loads(monkeypatch)
+  projected = _spy_row_blobs(monkeypatch)
   _collect(None, None, db, cache)
-  assert scans == [1]  # empty row memo: the cold scan ran
+  assert scans == []  # empty row memo seeds from the document; the seeded proof carries the maxes
+  assert len(projected) == 1  # the appended row only re-entered the parser
   assert loads == [cache]  # empty document memo: the document re-parsed
 
 
@@ -1239,7 +1422,7 @@ def test_incremental_partials_match_a_fresh_fold(tmp_path: Path) -> None:
   an earlier-walked newcomer taking a replayed key's credit, a contributor dropping a key
   (orphan transfer), the last copy dropping, a deletion, a relabel and a cacheless round."""
   work, ext = tmp_path / ".claude", tmp_path / ".claude-ext-1"
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
 
   def write(home: Path, session: str, records: list[dict]) -> None:
     d = home / "projects" / "rel" / session
@@ -1283,7 +1466,7 @@ def test_incremental_partials_match_a_fresh_fold(tmp_path: Path) -> None:
 def test_append_tail_claude_parity(tmp_path: Path) -> None:
   """An appended tail parses only the tail: rows, dupes and the entry match a full re-parse."""
   claude = _claude_rig(tmp_path)
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   _collect(claude, None, db, cache)
   log_file = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
   with log_file.open("a") as fh:
@@ -1308,7 +1491,7 @@ def test_append_tail_codex_parity(tmp_path: Path) -> None:
       "rollout",
       [_codex_meta(), _codex_turn("gpt-a"),
        _codex_count({"input_tokens": 10}, {"total_tokens": 11})])
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   _collect(None, codex, db, cache)
   log_file = codex.home / "sessions" / "rollout" / "rollout.jsonl"
   with log_file.open("a") as fh:
@@ -1329,7 +1512,7 @@ def test_append_tail_codex_parity(tmp_path: Path) -> None:
 def test_append_tail_parses_a_completed_partial_line_once(tmp_path: Path) -> None:
   """A trailing fragment stays unparsed; the round whose tail covers it whole counts it once."""
   claude = _claude_rig(tmp_path)
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   _collect(claude, None, db, cache)
   log_file = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
   record = json.dumps(_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(100, 2)))
@@ -1382,7 +1565,7 @@ def test_charliebot_master_tail_spans_a_giant_observation_line(tmp_path: Path, m
           _master_context(10, "openai/zai-org/GLM-5.3-Flash"),
           _master_result(500, 25),
       ])
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   first = _collect(None, None, db, cache, sessions=cb.root)
   assert _row(first, "charlie-bot", "GLM-5.3-Flash").total == 525
   with log_file.open("a") as fh:  # the streamed-turn shape: a giant observation line, then the result
@@ -1402,7 +1585,7 @@ def test_charliebot_master_tail_spans_a_giant_observation_line(tmp_path: Path, m
 def test_append_tail_rejects_a_replaced_or_shrunk_file(tmp_path: Path) -> None:
   """A rewrite the guard cannot prove — replaced prefix or shrink — re-parses whole."""
   claude = _claude_rig(tmp_path)
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   _collect(claude, None, db, cache)
   claude.write(  # whole-file rewrite: early content replaced, last line preserved
       claude.work, "sess1",
@@ -1422,7 +1605,7 @@ def test_append_tail_rejects_a_replaced_or_shrunk_file(tmp_path: Path) -> None:
 def test_append_tail_skips_entries_without_a_guard(tmp_path: Path) -> None:
   """A pre-tail-schema entry (no guard/end) re-parses whole instead of crashing."""
   claude = _claude_rig(tmp_path)
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   _collect(claude, None, db, cache)
   doc = json.loads(cache.read_text())
   log_file = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
@@ -1443,9 +1626,7 @@ def test_restart_cold_seeds_the_row_memo_from_the_document(tmp_path: Path, monke
   # A process restart rebuilds the row memo from the document's rows map and proves it with
   # one key pass: the restart-cold round re-reads zero message blobs and zero corpus bytes
   # where the unseeded cold scan re-read every contributing row's data.
-  db, cache, con = _wal_db_with_noise_table(tmp_path)
-  first = _collect(None, None, db, cache)
-  tt._reset_aggregate_memo()
+  db, cache, con, first = _seeded_restart_rig(tmp_path)
 
   con.execute("insert into other values ('noise2', 'x')")
   con.commit()  # the WAL moves, so the entry's stored signature misses and the scan path runs
@@ -1462,9 +1643,7 @@ def test_seeded_restart_probe_skips_the_key_scan(tmp_path: Path, monkeypatch: py
   # The seeded memo gates on the entry's stored proof aggregates: a signature-stale restart
   # whose rows did not move matches the stored (count, sum) and never runs the key scan —
   # the same weaker-proof trade the warm memo's gate makes on the WAL-noise rounds.
-  db, cache, con = _wal_db_with_noise_table(tmp_path)
-  first = _collect(None, None, db, cache)
-  tt._reset_aggregate_memo()
+  db, cache, con, first = _seeded_restart_rig(tmp_path)
 
   con.execute("insert into other values ('noise2', 'x')")
   con.commit()  # the WAL moves; the message table sits unchanged
@@ -1479,12 +1658,40 @@ def test_seeded_restart_probe_skips_the_key_scan(tmp_path: Path, monkeypatch: py
   con.close()
 
 
-def test_seeded_restart_scans_when_the_stored_probe_misses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  # A row move between the document's write and the restart changes count and sum, so the
-  # stored proof misses and the seeded key diff runs — fetching only the moved row's blob.
-  db, cache, con = _wal_db_with_noise_table(tmp_path)
-  first = _collect(None, None, db, cache)
-  tt._reset_aggregate_memo()
+def test_seeded_restart_tail_fetches_when_the_stored_probe_misses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # A row move between the document's write and the restart changes the proof, so the
+  # seeded gate misses and the restart advances from the tail fetch — rows written after
+  # the stored max re-read, the full key scan never runs, and only the moved row's blob
+  # re-enters the parser.
+  db, cache, con, first = _seeded_restart_rig(tmp_path)
+
+  _insert_opencode_raw(con, [({}, _padded_opencode_row(500))])
+  con.commit()
+
+  def boom(*args: Any, **kwargs: Any) -> None:
+    raise AssertionError("full key scan ran although the seeded proof carried the maxes")
+
+  monkeypatch.setattr(tt, "_scan_opencode_rows", boom)
+  projected = _spy_row_blobs(monkeypatch)
+  second = _collect(None, None, db, cache)
+  assert len(projected) == 1  # the moved row only
+  after = _row(second, "opencode", "oc-m")
+  assert after.calls == 2 and after.total == _row(first, "opencode", "oc-m").total + 102
+  con.close()
+
+
+def test_legacy_two_field_probe_seeds_and_scans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # A document from the build that stored the two-field (count, sum) proof (the prior
+  # deploy) seeds without a max: the first miss takes the full key diff, the served tally
+  # stays exact, and the round's own store writes the four-field proof back.
+  db, cache, con, first = _seeded_restart_rig(tmp_path)
+
+  doc = json.loads(cache.read_text())
+  entry = doc["sources"]["opencode"][str(db)]
+  assert len(entry["probe"]) == 4
+  entry["probe"] = entry["probe"][:2]
+  cache.write_text(json.dumps(doc))
 
   _insert_opencode_raw(con, [({}, _padded_opencode_row(500))])
   con.commit()
@@ -1492,10 +1699,13 @@ def test_seeded_restart_scans_when_the_stored_probe_misses(tmp_path: Path, monke
   scans = _spy_opencode_scans(monkeypatch)
   projected = _spy_row_blobs(monkeypatch)
   second = _collect(None, None, db, cache)
-  assert scans == [1]  # the proof miss sent the restart down the key diff
+  assert scans == [1]  # a two-field seed has no max to fetch from: the legacy contract
   assert len(projected) == 1  # the moved row only
   after = _row(second, "opencode", "oc-m")
   assert after.calls == 2 and after.total == _row(first, "opencode", "oc-m").total + 102
+
+  doc = json.loads(cache.read_text())
+  assert len(doc["sources"]["opencode"][str(db)]["probe"]) == 4  # the store wrote the proof back
   con.close()
 
 
@@ -1503,9 +1713,7 @@ def test_legacy_entry_without_probe_seeds_and_scans(tmp_path: Path, monkeypatch:
   # An entry stored before the probe field existed (a document from the prior deploy)
   # seeds without a gate: the key diff runs, the served tally stays exact, and the round's
   # own store writes the proof back for the next restart.
-  db, cache, con = _wal_db_with_noise_table(tmp_path)
-  first = _collect(None, None, db, cache)
-  tt._reset_aggregate_memo()
+  db, cache, con, first = _seeded_restart_rig(tmp_path)
 
   doc = json.loads(cache.read_text())
   entry = doc["sources"]["opencode"][str(db)]
@@ -1524,7 +1732,7 @@ def test_legacy_entry_without_probe_seeds_and_scans(tmp_path: Path, monkeypatch:
   assert _tally_snapshot(second) == _tally_snapshot(first)
 
   doc = json.loads(cache.read_text())
-  assert len(doc["sources"]["opencode"][str(db)]["probe"]) == 2  # the store wrote the proof back
+  assert len(doc["sources"]["opencode"][str(db)]["probe"]) == 4  # the store wrote the proof back
   con.close()
 
 
@@ -1532,9 +1740,7 @@ def test_restart_cold_recounts_only_moved_rows(tmp_path: Path, monkeypatch: pyte
   # The seeded memo diffs the live key set: only rows whose (id, time_updated) moved since the
   # document was written re-enter the parser — one insert and one in-place step-finish upsert,
   # the production write shapes, and both deltas fold out of and into the stored partial.
-  db, cache, con = _wal_db_with_noise_table(tmp_path)
-  first = _collect(None, None, db, cache)
-  tt._reset_aggregate_memo()
+  db, cache, con, first = _seeded_restart_rig(tmp_path)
 
   _insert_opencode_raw(con, [({}, _padded_opencode_row(500))])
   mid, = con.execute("select id from message where data not like '%pad%'").fetchone()
@@ -1562,7 +1768,7 @@ def test_current_entry_keeps_the_rows_bulk_in_the_sidecar(tmp_path: Path) -> Non
   doc = json.loads(cache.read_text())
   entry = doc["sources"]["opencode"][str(db)]
   assert set(entry) == {"sig", "rows_file", "partial", "probe"}
-  assert isinstance(entry["probe"], list) and len(entry["probe"]) == 2
+  assert isinstance(entry["probe"], list) and len(entry["probe"]) == 4
   sidecar = json.loads((cache.parent / entry["rows_file"]).read_text())
   assert set(sidecar) == {"version", "rows"}
   seeded = sidecar["rows"]
@@ -1575,9 +1781,7 @@ def test_zero_movement_restart_never_reads_the_sidecar(tmp_path: Path, monkeypat
   # A restart whose db signature still matches the stored entry serves from the stored
   # partial: neither the sidecar parse nor the db read runs, so the restart-cold collect is
   # the document parse plus the corpus walk.
-  db, cache, con = _wal_db_with_noise_table(tmp_path)
-  first = _collect(None, None, db, cache)
-  tt._reset_aggregate_memo()
+  db, cache, con, first = _seeded_restart_rig(tmp_path)
 
   reads: list[str] = []
   monkeypatch.setattr(tt, "_read_rows_sidecar", lambda *args: reads.append(args) or None)
@@ -1660,7 +1864,7 @@ def test_dropped_db_leaves_no_orphan_sidecar(tmp_path: Path) -> None:
 def test_stored_partial_adopts_without_replay(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # The v2 entry's stored partial serves the buckets without folding the records; the replay
   # builder runs only for an entry that carries no partial (the v1 shape).
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   _write_opencode(db, [_oc_row()])
   _collect(None, None, db, cache)
 
@@ -1682,7 +1886,7 @@ def test_stored_partial_adopts_without_replay(tmp_path: Path, monkeypatch: pytes
 def test_legacy_records_entry_still_serves(tmp_path: Path) -> None:
   # A v1 entry (records list, no rows/partial) serves through the replay path; the first
   # scan-path store rewrites it in the current shape.
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   _write_opencode(db, [_oc_row()])
   _collect(None, None, db, cache)
 
@@ -1715,7 +1919,7 @@ def test_legacy_records_entry_still_serves(tmp_path: Path) -> None:
 def test_document_with_nan_literal_rebuilds_with_note(tmp_path: Path) -> None:
   # The document parser rejects the NaN/Infinity extensions stdlib json admits; a corrupted
   # document fails loud into the existing cold-rebuild note instead of half-serving.
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   _write_opencode(db, [_oc_row()])
   cache.write_text('{"version": 2, "sources": {"opencode": {"x": {"sig": [], "records": [[1, NaN]]}}}}')
 
@@ -1770,8 +1974,8 @@ class Charliebot:
       tid: str,
       results: list[tuple[str, dict]],
       session_ids: list[str],
-      backend: str | None = None,
-      model: str | None = None,
+      backend: str | None,
+      model: str | None,
       meta: bool = True,
   ) -> Path:
     """One thread dir with its metadata.json (unless *meta* is False) and events.jsonl whose
@@ -2101,7 +2305,7 @@ def test_charliebot_cache_serves_and_appends(tmp_path: Path, monkeypatch: pytest
   capture = cb.master(
       "s1", "2026-09-11T21:00:00+00:00", [_master_context(1, "openai/gemini-3.8-flash"),
                                           _master_result(100, 5)])
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   first = _collect(None, None, db, cache, sessions=cb.root)
   assert _row(first, "charlie-bot", "gemini-3.8-flash").calls == 2
 
@@ -2138,7 +2342,7 @@ def test_charliebot_dir_listing_memo(tmp_path: Path, monkeypatch: pytest.MonkeyP
   _stub_registry(monkeypatch, _CLC_GEMINI)
   cb = Charliebot(tmp_path)
   _seed_gemini_thread(cb)
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  db, cache = _db_and_cache(tmp_path)
   first = _collect(None, None, db, cache, sessions=cb.root)
   assert _row(first, "charlie-bot", "gemini-3.8-flash").calls == 1
 

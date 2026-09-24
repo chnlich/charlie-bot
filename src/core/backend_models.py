@@ -6,29 +6,18 @@ invocation's first ``get_config``) never constructs the session/API models in
 import path.
 """
 
-from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
+# The vocabulary single-homes in the stdlib-only constants module so readers that
+# need only the enum (src.core.runs, the claude-sub launch chain) skip the pydantic
+# model construction this module exists for; this import is the re-export.
+from src.core.constants import BackendType
+
 # ---------------------------------------------------------------------------
 # Backend Models
 # ---------------------------------------------------------------------------
-
-
-class BackendType(StrEnum):
-  """The BackendOption.type vocabulary; config.yaml carries the same strings."""
-
-  CC_CLAUDE = "cc-claude"
-  CC_KIMI = "cc-kimi"
-  CC_OPENAI_COMPATIBLE = "cc-openai-compatible"
-  CODEX = "codex"
-  CHARLIE_CODE = "charlie-code"
-  GEMINI = "gemini"
-  OPENCODE = "opencode"
-  ANTIGRAVITY = "antigravity"
-  TUI_CLI = "tui-cli"
-
 
 MODEL_OPTIONAL_ROUTING_BACKEND_TYPES: frozenset[BackendType] = frozenset({BackendType.ANTIGRAVITY, BackendType.TUI_CLI})
 
@@ -48,7 +37,7 @@ class BackendBase(BaseModel):
   prompt_overlay: str | None = None
 
   @model_validator(mode='after')
-  def require_model(self) -> 'BackendBase':
+  def require_model(self) -> BackendBase:
     if self.model is None and self.type not in MODEL_OPTIONAL_ROUTING_BACKEND_TYPES:
       raise ValueError(f"backend '{self.id}' (type '{self.type}') requires 'model'")
     return self
@@ -134,6 +123,22 @@ BACKEND_OPTION_ADAPTER = TypeAdapter(BackendOption)
 
 def backend_type_allows_missing_model(backend_type: str) -> bool:
   return backend_type in MODEL_OPTIONAL_ROUTING_BACKEND_TYPES
+
+
+def option_default_model(option: BackendOption, *, subject: str) -> str | None:
+  """Return the option's default model, or None when its type routes without one.
+
+  Raises ValueError when the type requires a model and the option carries none —
+  an empty string counts as none, which the load-time ``require_model`` validator
+  does not catch (it rejects only a None model). *subject* prefixes the raise's
+  frame with the caller's role and carries its own trailing space, the same
+  convention as ``require_backend_option`` ("backend ", "session backend ").
+  """
+  if backend_type_allows_missing_model(option.type):
+    return None
+  if not option.model:
+    raise ValueError(f"{subject}'{option.id}' has no default model")
+  return option.model
 
 
 class ClaudeAccount(BaseModel):

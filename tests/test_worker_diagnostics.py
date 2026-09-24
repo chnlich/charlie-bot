@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET, WORKER_BUILD_BACKEND_PATCH_TARGET
+from conftest import BROADCAST_PATCH_TARGET, WORKER_BUILD_BACKEND_PATCH_TARGET, WORKER_CLAUDE_CODE_BACKEND_PATCH_TARGET
 
 from src.agents.backends.base import AgentBackend
 from src.agents.worker import Worker
@@ -58,7 +58,7 @@ async def test_worker_writes_hang_diagnostics_and_emits_event(tmp_path: Path) ->
   with (
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock_broadcast,
       patch(WORKER_BUILD_BACKEND_PATCH_TARGET, return_value=fake_backend),
-      patch("src.agents.worker.ClaudeCodeBackend", return_value=fake_backend),
+      patch(WORKER_CLAUDE_CODE_BACKEND_PATCH_TARGET, return_value=fake_backend),
   ):
     exit_code = await worker.run()
 
@@ -99,7 +99,7 @@ async def test_worker_no_hang_diagnostics_does_not_write_file(tmp_path: Path) ->
   with (
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
       patch(WORKER_BUILD_BACKEND_PATCH_TARGET, return_value=fake_backend),
-      patch("src.agents.worker.ClaudeCodeBackend", return_value=fake_backend),
+      patch(WORKER_CLAUDE_CODE_BACKEND_PATCH_TARGET, return_value=fake_backend),
   ):
     exit_code = await worker.run()
 

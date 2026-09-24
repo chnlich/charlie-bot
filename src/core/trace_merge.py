@@ -15,6 +15,9 @@ from typing import BinaryIO
 import orjson
 
 from src.core.gc_control import gc_off
+from src.core.log_once import LazyStructlogLogger
+
+log = LazyStructlogLogger()
 
 # Compression level for the merged gzip output. Measured on a 191.2 MB /
 # 496,099-event input: level 1 builds in 0.57 s / 15.5 MB against level 6's
@@ -47,6 +50,14 @@ _MERGE_MEMBER_ID_STRIDE = 1 << 24
 _MERGE_PIPE_BYTES = 1 << 20
 
 
+class NotATraceError(ValueError):
+  """JSON that parses cleanly but carries no Chrome-JSON ``traceEvents`` array.
+
+  The direct-pass validator and the sequential merge fail the build on it; the
+  multi-trace merge classifies discovered members with it and skips the file.
+  """
+
+
 def _trace_events_or_raise(trace: object, path: Path) -> list[dict]:
   """Return a Chrome trace's event list; raise on JSON that parses but is not a trace.
 
@@ -60,7 +71,7 @@ def _trace_events_or_raise(trace: object, path: Path) -> list[dict]:
     return trace
   if isinstance(trace, dict) and isinstance(trace.get("traceEvents"), list):
     return trace["traceEvents"]
-  raise ValueError(f"Not a Chrome-JSON trace (no traceEvents array): {path}")
+  raise NotATraceError(f"Not a Chrome-JSON trace (no traceEvents array): {path}")
 
 
 def _gzip_exit_or_raise(gzip_proc: subprocess.Popen, context: str) -> None:
@@ -357,6 +368,23 @@ def build_trace_member(path: Path, out_path: Path, file_index: int, slim: bool) 
     return batcher.emitted
 
 
+def _member_outcome(path: Path, fragment: Path, file_index: int, slim: bool) -> int | None:
+  """Build one merge member; return its event count, or None for a skipped member.
+
+  The dir shape's ``*.json`` discovery cannot tell an analysis sidecar from a
+  trace before the parse (the route's sniff reads the first byte only), so the
+  classification happens where the parse runs. A member that parses but is not
+  a Chrome-JSON trace skips with a logged warning instead of taking the merged
+  view down. Surviving members keep their own file indexes, so a sidecar never
+  reorders or relabels the traces around it.
+  """
+  try:
+    return build_trace_member(path, fragment, file_index, slim)
+  except NotATraceError as exc:
+    log.warning("perfetto_merge_member_skipped", path=str(path), error=str(exc))
+    return None
+
+
 def build_multi_trace_merge(
     paths: list[Path], out_path: Path, slim: bool, executor: concurrent.futures.Executor | None) -> None:
   """Build the multi-trace merged artifact: one pool task per trace, streamed as each completes.
@@ -365,26 +393,33 @@ def build_multi_trace_merge(
   the single gzip run streams each member's fragment the moment its task
   returns, in merge order — the compress overlaps the members still building.
   A comma precedes a fragment only when an earlier one emitted, so empty
-  members stay invisible to the JSON. A failed member raises out of the walk
-  order and kills the gzip run; the caller owns artifact atomicity.
+  members stay invisible to the JSON. A member that parses but is not a
+  Chrome-JSON trace skips with a logged warning; a merge that skips every
+  member raises instead of shipping an empty artifact. Any other member
+  failure raises out of the walk order and kills the gzip run; the caller owns
+  artifact atomicity.
   """
   member_dir = Path(tempfile.mkdtemp(prefix="merge-members-"))
   try:
     fragments = [member_dir / f"{index}.jsonl" for index in range(len(paths))]
     if executor is None:
-      counts: Iterator[int] = iter(
-          build_trace_member(path, fragment, index, slim)
+      counts: Iterator[int | None] = iter(
+          _member_outcome(path, fragment, index, slim)
           for index, (path, fragment) in enumerate(zip(paths, fragments, strict=True)))
     else:
       futures = [
-          executor.submit(build_trace_member, path, fragment, index, slim)
+          executor.submit(_member_outcome, path, fragment, index, slim)
           for index, (path, fragment) in enumerate(zip(paths, fragments, strict=True))
       ]
       counts = (future.result() for future in futures)
     with _gzip_output_stream(out_path) as output:
       output.write(b'{"traceEvents":[')
       emitted = False
+      skipped = 0
       for fragment, count in zip(fragments, counts, strict=True):
+        if count is None:
+          skipped += 1
+          continue
         if not count:
           continue
         if emitted:
@@ -393,5 +428,9 @@ def build_multi_trace_merge(
           shutil.copyfileobj(fragment_file, output)
         emitted = True
       output.write(b"]}")
+    if paths and skipped == len(paths):
+      raise ValueError(
+          f"multi-trace merge rejected every member as a non-Chrome-JSON trace: "
+          f"{', '.join(str(path) for path in paths)}")
   finally:
     shutil.rmtree(member_dir, ignore_errors=True)

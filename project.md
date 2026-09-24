@@ -11,7 +11,7 @@
 ---
 
 ## 2. Technical Stack
-- **Language**: Python 3.12+
+- **Language**: Python 3.14
 - **Master Agent**: Claude Code session (pluggable backends)
 - **Worker Agent**: Claude Code (local CLI invocation, non-interactive mode)
 - **Backend**: FastAPI, WebSockets for real-time streaming, asyncio for concurrency
@@ -87,7 +87,7 @@ charlie-bot/
 | **Worker Agent** | Claude Code CLI (`src/agents/worker.py`) | Code analysis, implementation, file editing, git operations, testing. Runs in an isolated git worktree on a dedicated branch. Told NOT to rebase/merge/remove the worktree — a reviewer handles that. |
 | **Review Agent** | Claude Code CLI (same Worker class) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto the remote base, pushes the branch to the base (git rejects a non-fast-forward push), and cleans up the worktree. Intentionally uses a DIFFERENT backend than the Worker (cross-backend review via `backends.preference` config). |
 
-**Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/agents/backends/base.py`). The `BackendType` vocabulary (`src/core/backend_models.py`) names the backends, and `src/agents/backends/registry.py` dispatches each `BackendOption.type` to its implementation. Backend selection is configured via `backends.options` and `backends.preference` in `config.yaml`.
+**Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/agents/backends/base.py`). The `BackendType` vocabulary (`src/core/constants.py`) names the backends, and `src/agents/backends/registry.py` dispatches each `BackendOption.type` to its implementation. Backend selection is configured via `backends.options` and `backends.preference` in `config.yaml`.
 
 ### 4.2 Session & Thread Model
 - **Session**: Represents a project/workspace. Each Session has:
@@ -186,7 +186,7 @@ A local git repo at `~/.charliebot/memory/` holds one durable fact or rule set p
 1. User presses/clicks button to start recording
 2. Presses/clicks again to stop and send
 3. Audio uploaded to backend
-4. **Local sherpa-onnx Qwen3-ASR** transcribes (VAD + simulated-streaming partials; supports Chinese, English, mixed, and ~30 languages)
+4. **Local speech transcription** decodes the complete recording offline: the VAD segments it and each segment decodes in one shot (sherpa-onnx Qwen3-ASR on CPU by default, `voice.engine=qwen3_hf` on GPU hosts; supports Chinese, English, mixed, and ~30 languages)
 5. Transcription displayed in UI first
 6. Passed to Master with a disclaimer prefix: the displayed message stays verbatim, and the prompt the agent receives carries the fixed voice note from `_VOICE_DISCLAIMER` (`src/agents/master_cc_run.py`)
 
@@ -274,8 +274,11 @@ it to the session cwd (CLAUDE.md for Claude Code, AGENTS.md for the other backen
 
 **WebSocket Endpoints**
 - `/ws/sessions/{session_id}` — session-level events (worker completion summaries pushed to chat)
-- `/ws/voice/{session_id}` — voice input: recorded audio streams to the local transcriber, partials and final text stream back
 - `/ws/terminal` — the profile's tmux-backed web terminal
+
+Voice input rides HTTP, not a WebSocket: `POST /api/voice/{session_id}/confirm` decodes the
+opening clip as a recognition probe, and `POST /api/voice/{session_id}` takes the full
+recording on release (persisted under `sessions/{id}/voice/`, then decoded offline).
 
 **Frontend**
 - Vanilla-JS UI under `web/static/js/`, served by FastAPI StaticFiles (Node.js/npm is build-time only: Tailwind CSS)

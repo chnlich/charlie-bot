@@ -50,13 +50,12 @@ CODEX_COLD = "0f0e1d2c-3b4a-4c5d-8e9f-0a1b2c3d4e5f"
 CODEX_LIVE = "10203040-5060-4708-90a0-b0c0d0e0f010"
 
 
-def build_cfg(tmp_path: Path, *, with_codex: bool = True) -> CharlieBotConfig:
+def build_cfg(tmp_path: Path) -> CharlieBotConfig:
   """Config isolated under tmp_path: sessions, worktrees, claude and codex trees all inside it.
 
   Codex runs from the default home, so the codex option carries no directory of its own."""
   options = [backend_option(id="opus", label="Opus", type="cc-claude", model="m")]
-  if with_codex:
-    options.append(backend_option(id="codex-test", label="Codex", type="codex", model="m"))
+  options.append(backend_option(id="codex-test", label="Codex", type="codex", model="m"))
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       paths={"worktree_dir": str(tmp_path / "worktrees")},
@@ -90,8 +89,8 @@ def live_meta(**extra: object) -> dict:
   return {"status": "active", "updated_at": RECENT, **extra}
 
 
-def thread_data_dir(cfg: CharlieBotConfig, sid: str, tid: str = TID) -> Path:
-  data_dir = cfg.sessions_dir / sid / "threads" / tid / "data"
+def thread_data_dir(cfg: CharlieBotConfig, sid: str) -> Path:
+  data_dir = cfg.sessions_dir / sid / "threads" / TID / "data"
   data_dir.mkdir(parents=True, exist_ok=True)
   return data_dir
 
@@ -415,9 +414,9 @@ def codex_sessions_tree(tmp_path: Path) -> Path:
   return tree
 
 
-def write_rollout(tree: Path, name: str, payload: bytes = b"rollout", *, mtime: timedelta | None = None) -> Path:
+def write_rollout(tree: Path, name: str, *, mtime: timedelta | None = None) -> Path:
   path = tree / name
-  path.write_bytes(payload)
+  path.write_bytes(b"rollout")
   if mtime is not None:
     age_file(path, mtime)
   return path
@@ -1145,7 +1144,8 @@ def test_cool_storage_scheduler_handler_runs_the_real_sweep(
   write_session_meta(cfg, SID_COLD, cold_meta())
   transport = thread_data_dir(cfg, SID_COLD) / "stdout.log"
   transport.write_bytes(b"transport")
-  monkeypatch.setattr(storage_cool, "get_config", lambda: cfg)
+  # The handler resolves the config on the loop before the executor dispatch.
+  monkeypatch.setattr(scheduler_module, "get_config", lambda: cfg)
 
   summary = asyncio.run(scheduler_module._cool_storage_handler())
 

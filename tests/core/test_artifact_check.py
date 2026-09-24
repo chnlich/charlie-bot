@@ -15,6 +15,8 @@ from unittest.mock import patch
 
 import pytest
 from conftest import (
+    BUILD_BACKEND_PATCH_TARGET,
+    CLI_COMMON_GET_CONFIG_PATCH_TARGET,
     ROOT,
     make_plan_setup,
     open_fork_html,
@@ -29,8 +31,6 @@ from src.core.artifact_check import run_assertions, run_probe
 from src.core.artifact_wrap import KATEX_VERSION
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption
-
-_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET = "src.cli.common.get_config"
 
 
 def _genre_doc(genre: str, body: str) -> str:
@@ -61,8 +61,8 @@ def _run(
   return _by_name(run_assertions(genre, artifact, cfg))
 
 
-def _chrome_cfg(tmp_path: Path, height: int = 800) -> SimpleNamespace:
-  return SimpleNamespace(headless_chrome_bin=write_stub_chrome(tmp_path, height))
+def _chrome_cfg(tmp_path: Path) -> SimpleNamespace:
+  return SimpleNamespace(headless_chrome_bin=write_stub_chrome(tmp_path, 800))
 
 
 def _sections(genre_titles: list[str]) -> str:
@@ -662,7 +662,7 @@ def _run_cli(argv_tail: list[str]) -> int:
 def test_cli_plan_template_assertions_only_passes_and_prints_ok_lines(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   artifact = _write(tmp_path, plan_page_html())
-  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
   assert _run_cli([str(artifact), "--genre", "plan", "--assertions-only"]) == 0
   assert capsys.readouterr().out.splitlines() == [
       "ok byte-integrity",
@@ -712,8 +712,8 @@ def test_cli_two_open_forks_without_explainer_report_two_locations_and_skip_the_
     factory_called.append(option.id)
     raise AssertionError("the probe must never run when an assertion failed")
 
-  monkeypatch.setattr("src.agents.backends.registry.build_backend", factory)
-  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, factory)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
   assert _run_cli([str(artifact), "--genre", genre, "--trigger", "where are we?"]) == 1
   out = capsys.readouterr().out
   fail_lines = [line for line in out.splitlines() if line.startswith("FAIL fork-explainer")]
@@ -751,7 +751,7 @@ class _FakeBackend:
 
 
 def _patch_backends(monkeypatch: pytest.MonkeyPatch, backends: dict[str, _FakeBackend]) -> None:
-  monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda option, cfg: backends[option.id])
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda option, cfg: backends[option.id])
 
 
 def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
@@ -763,7 +763,7 @@ def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
       "beta": _FakeBackend(answer="(1) The reader's problem.\n(2)-(6) fine.")
   }
   _patch_backends(monkeypatch, backends)
-  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 0
   lines = capsys.readouterr().out.splitlines()
   assert lines[-5:] == [
@@ -792,7 +792,7 @@ def test_cli_probe_runs_after_assertions_pass_on_plan_and_understanding(
       "beta": _FakeBackend(answer="(1) The reader's problem.\n(2)-(7) fine.")
   }
   _patch_backends(monkeypatch, backends)
-  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   assert _run_cli([str(artifact), "--genre", genre, "--trigger", "where are we?"]) == 0
   lines = capsys.readouterr().out.splitlines()
   assert lines[-5:] == [
@@ -809,7 +809,7 @@ def test_cli_probe_exit_1_when_every_backend_fails(
   artifact = _write(tmp_path, _debug_ok_doc())
   cfg, _options = _probe_cfg(tmp_path)
   _patch_backends(monkeypatch, {"alpha": _FakeBackend(error="down"), "beta": _FakeBackend(error="dead")})
-  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   assert _run_cli([str(artifact), "--genre", "debug", "--trigger", "what broke?"]) == 1
 
   out = capsys.readouterr().out
@@ -830,9 +830,8 @@ def test_cli_assertions_only_skips_probe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], genre: str,
     make_doc: Callable[[], str]) -> None:
   artifact = _write(tmp_path, make_doc())
-  monkeypatch.setattr(
-      "src.agents.backends.registry.build_backend", lambda option, cfg: pytest.fail("probe must not run"))
-  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda option, cfg: pytest.fail("probe must not run"))
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
   assert _run_cli([str(artifact), "--genre", genre, "--assertions-only"]) == 0
   assert "--- cold read ---" not in capsys.readouterr().out
 
@@ -853,7 +852,7 @@ def test_cli_unknown_genre_is_usage_error() -> None:
 
 def test_cli_missing_file_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
   assert _run_cli([str(tmp_path / "nope.html"), "--genre", "plan", "--assertions-only"]) == 1
   assert "artifact not found" in capsys.readouterr().err
 
@@ -886,8 +885,7 @@ async def test_plan_present_and_artifact_check_reject_the_same_assertions_on_one
 async def test_plan_present_never_calls_build_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Registration stays model-free: present runs the assertions and constructs no backend."""
   monkeypatch.setattr(
-      "src.agents.backends.registry.build_backend",
-      lambda option, cfg: pytest.fail("registration must not build a backend"))
+      BUILD_BACKEND_PATCH_TARGET, lambda option, cfg: pytest.fail("registration must not build a backend"))
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await make_plan_setup(tmp_path)
   file_rel = write_plan_artifact(cfg, meta.id, "plan_01.html")
   result = await plan_mgr.present(meta.id, file=file_rel, title="P1")
@@ -1006,7 +1004,7 @@ def test_render_path_fails_on_a_partial_injection(tmp_path: Path) -> None:
 
 
 def test_render_path_fails_on_a_historical_shaped_page(tmp_path: Path) -> None:
-  """The 4914c102 network_architecture page shape: head with no scripts, no katex markup."""
+  """A historical damaged page's shape: head with no scripts, no katex markup."""
   doc = _genre_doc("explain", _sections([f"S{i}" for i in range(1, 6)]))
   (outcome,) = _run("explain", _write(tmp_path, doc))["render-path"]
   assert not outcome.passed

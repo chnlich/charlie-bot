@@ -25,23 +25,16 @@ from conftest import (
     SCHEDULER_THREAD_MANAGER_PATCH_TARGET,
     FakeThreadManager,
     _noop,
+    build_option_worktree_cfg,
     close_create_logged_task,
     make_task_spawner,
 )
 
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig, ScheduledTaskConfig
+from src.core.config import ScheduledTaskConfig
 from src.core.models import CreateSessionRequest, SessionStatus
 from src.core.scheduler import TASK_HANDLERS, Scheduler
 from src.core.sessions import SessionManager
-
-
-def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      paths={"worktree_dir": str(tmp_path / "worktrees")},
-      backends={"options": [OPUS_BACKEND_OPTION]},
-  )
 
 
 def _count_event_lines(path: Path) -> int:
@@ -56,7 +49,7 @@ async def test_scheduled_prompt_task_hands_injected_session_manager_to_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   """The worker (and through it the master wake) must write on the injected instance."""
-  cfg = _build_cfg(tmp_path)
+  cfg = build_option_worktree_cfg(tmp_path, OPUS_BACKEND_OPTION)
   session_mgr = SessionManager(cfg)
   await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
@@ -92,7 +85,7 @@ async def test_scheduled_round_events_reach_shared_read_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   """After a scheduled round, the read-path cache must still match the file on disk."""
-  cfg = _build_cfg(tmp_path)
+  cfg = build_option_worktree_cfg(tmp_path, OPUS_BACKEND_OPTION)
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: probe", scheduled_task="probe"),
@@ -124,7 +117,7 @@ async def test_cron_pm_wake_leaves_an_archived_session_archived(
 ) -> None:
   """The cron wake is a timed wake (pull_back=False): a resolved session that is
   archived stays archived, with no run and no event."""
-  cfg = _build_cfg(tmp_path)
+  cfg = build_option_worktree_cfg(tmp_path, OPUS_BACKEND_OPTION)
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),

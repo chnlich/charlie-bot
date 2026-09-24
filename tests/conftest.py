@@ -4,7 +4,6 @@ import json
 import mmap
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -26,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
   sys.path.insert(0, str(ROOT))
 
-# The Gemini 503 incident's two error channels, verbatim shapes: the failed
+# The two Gemini-503 error channels, verbatim shapes: the failed
 # invocation's structured error event (the real failure) and the stderr tail
 # (the LiteLLM help banner that used to mask it in chat). Shared by the suites
 # covering the error-hint selection, the live exit, and the restart re-attach.
@@ -43,12 +42,16 @@ LITELLM_FEEDBACK_BANNER_STDERR = (
 import src.core.config as core_config  # noqa: E402,I001
 from src.agents import master_cc_queue, master_cc_run, master_cc_state, worker as worker_module  # noqa: E402
 from src.agents.backends import base as backend_base  # noqa: E402
+from src.agents.backends.antigravity_cli import AntigravityCliBackend  # noqa: E402
+from src.agents.backends.charlie_code import CharlieCodeBackend  # noqa: E402
+from src.agents.backends.codex import CodexBackend  # noqa: E402
+from src.agents.backends.gemini_cli import GeminiCliBackend  # noqa: E402
+from src.agents.backends.opencode import OpenCodeBackend  # noqa: E402
 from src.agents.worker import Worker  # noqa: E402
 from src.api.cron import router as cron_router  # noqa: E402
 from src.api.deps import get_session_manager  # noqa: E402
 from src.api.internal import router as internal_router  # noqa: E402
 from src.api.sessions import router as sessions_router  # noqa: E402
-from src.core import claude_accounts  # noqa: E402
 from src.core import event_types as ET  # noqa: E402
 from src.core import improve_command  # noqa: E402
 from src.core import init as init_module  # noqa: E402
@@ -57,9 +60,11 @@ from src.core import thinking_state  # noqa: E402
 from src.core import init_worker_recovery as worker_recovery_module  # noqa: E402
 from src.core import models  # noqa: E402
 from src.core import review  # noqa: E402
+from src.core.init_seed import DEFAULT_MEMORY_TOPICS  # noqa: E402
 from src.api.deps import get_config_on_loop  # noqa: E402
 from src.core.config import CharlieBotConfig, get_config  # noqa: E402
 from src.core.git import BaseResolution  # noqa: E402
+from src.core.home import CREDENTIALS_FILE  # noqa: E402
 from src.core.plans import PlanRegistryManager  # noqa: E402
 from src.core.scheduler import Scheduler  # noqa: E402
 from src.core.sessions import SessionManager  # noqa: E402
@@ -178,6 +183,24 @@ def make_work_item(
 ConsumerRound = Callable[[master_cc_state._WorkItem], Awaitable[tuple[str | None, int, str | None, dict]]]
 
 
+def make_sound_round(cc_session_id: str) -> ConsumerRound:
+  """One consumer round whose CC answers with *cc_session_id* and a clean exit."""
+
+  async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
+    return (cc_session_id, 0, None, {})
+
+  return fake_run_cc
+
+
+def make_failed_round(cc_session_id: str) -> ConsumerRound:
+  """One consumer round whose CC keeps *cc_session_id* but exits with an error."""
+
+  async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
+    return (cc_session_id, 1, "backend died", {})
+
+  return fake_run_cc
+
+
 async def _run_seeded_consumer(
     session_id: str,
     work_items: list[master_cc_state._WorkItem],
@@ -219,22 +242,6 @@ async def run_session_consumer(
       work_items,
       fake_run_cc,
       patch(SESSIONS_SESSION_MANAGER_PATCH_TARGET, return_value=workers_mock),
-  )
-
-
-async def run_consumer_over_real_disk(
-    session_id: str,
-    work_items: list[master_cc_state._WorkItem],
-    fake_run_cc: ConsumerRound,
-) -> None:
-  """run_session_consumer with the SessionManager class kept real: the dequeue refresh reads disk
-  through it, the teardown probe is silenced at the method, and no class-level patch can shadow
-  the refresh's own local import."""
-  await _run_seeded_consumer(
-      session_id,
-      work_items,
-      fake_run_cc,
-      patch.object(SessionManager, "_has_running_tasks", AsyncMock(return_value=False)),
   )
 
 
@@ -321,6 +328,21 @@ async def run_resume_round(
     await drain_session_consumer(meta.id, timeout=5)
 
 
+def crashed_run_record(raw_log: Path) -> models.MasterRunRecord:
+  """MasterRunRecord for the re-attach tests' crashed run: raw log on disk, no process left behind.
+
+  pid=None leaves the record with no liveness probe and no kill path, so a test pairs it with
+  ``run_resume_round(..., is_alive=lambda: False)`` and the follower drains the raw file and
+  stops instead of waiting out the post-result timeout.
+  """
+  return models.MasterRunRecord(
+      pid=None,
+      pid_start=None,
+      started_at=datetime.now(UTC) - timedelta(seconds=60),
+      raw_log=str(raw_log),
+  )
+
+
 def stall_before_call(delay: float, real: Callable[..., Any]) -> Callable[..., Any]:
   """A drop-in stand-in that blocks *delay* seconds, then delegates to *real*.
 
@@ -404,6 +426,23 @@ def count_path_read_text(monkeypatch: pytest.MonkeyPatch, include: Callable[[Pat
   return reads
 
 
+def count_save_metadata_calls(mgr: SessionManager, monkeypatch: pytest.MonkeyPatch) -> list[models.SessionMetadata]:
+  """Reinstall ``mgr.save_metadata`` as a delegate that records each saved meta; returns the live list.
+
+  The list grows with every save until monkeypatch reverts at teardown; the migration suites
+  assert on its length to pin how many metadata writes an exercised path issued.
+  """
+  real_save = mgr.save_metadata
+  saved: list[models.SessionMetadata] = []
+
+  async def counting_save(meta: models.SessionMetadata, **_kwargs: bool) -> None:
+    saved.append(meta)
+    await real_save(meta, **_kwargs)
+
+  monkeypatch.setattr(mgr, "save_metadata", counting_save)
+  return saved
+
+
 def fresh_state_fixture(reset: Callable[[], None]) -> Callable[[], Iterator[None]]:
   """Build an autouse fixture that runs *reset* before and after every test of the module
   assigning it, so process-wide memos and warn-once registries cannot leak between tests.
@@ -431,7 +470,7 @@ def recording_mmap_shim(extents: list[tuple[int, int]]) -> type:
 
   class _RecordingMmap(mmap.mmap):
 
-    def rfind(self, sub, start=0, end=None):  # noqa: ANN001, ANN202
+    def rfind(self, sub: bytes, start: int = 0, end: int | None = None) -> int:
       extents.append((start, len(self) if end is None else end))
       return mmap.mmap.rfind(self, sub, start, end)
 
@@ -486,6 +525,11 @@ def assistant_text_event(text: str) -> dict:
           }],
       },
   }
+
+
+def user_tool_result_event() -> dict:
+  """The wrapped-format user event carrying one tool_result: the safe point the relay paths fire at."""
+  return {"type": ET.USER, "message": {"content": [{"type": ET.TOOL_RESULT, "tool_use_id": "t1", "content": "ok"}]}}
 
 
 def assistant_text_tool_use_event(text: str, tool_name: str, tool_input: dict, timestamp: str) -> dict:
@@ -733,37 +777,73 @@ def assert_cli_reject_exit2(
   _assert_stderr_fragments(capsys, *err_fragments)
 
 
-def run_node_js_test(node_test: Path, skip_reason: str) -> None:
-  """Run one node --test file; hosts without node skip rather than fail, and cwd=ROOT keeps repo-relative asset
-  loads working."""
-  node = shutil.which('node')
-  if node is None:
-    pytest.skip(skip_reason)
+def voice_models_cached(cfg: CharlieBotConfig) -> bool:
+  """True when the configured engine's speech models sit complete on local disk.
 
-  result = subprocess.run(
-      [node, '--test', str(node_test)],
-      cwd=ROOT,
-      capture_output=True,
-      text=True,
-      check=False,
-      # The suites finish in ~1s; the bound turns a hung node child into a test failure instead of a CI hang.
-      timeout=300,
-  )
-  if result.returncode != 0:
-    pytest.fail(f'Node tests failed.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}')
+  The local_only voice suites' download-free skip gate: reads the model paths
+  ensure_models_cached would fill, judging completeness by the transcriber's own
+  snapshot and file-list rules, and never downloads. False sends the suite to
+  pytest.skip.
+  """
+  from src.agents import transcriber
+
+  paths = transcriber.voice_model_paths(cfg)
+  if not paths.silero_vad.is_file():
+    return False
+  if cfg.voice.engine == "qwen3_hf":
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    try:
+      snapshot = Path(
+          snapshot_download(repo_id=cfg.voice.model_id, cache_dir=str(paths.cache_dir), local_files_only=True))
+    except LocalEntryNotFoundError:
+      return False
+    return transcriber._snapshot_complete(snapshot)
+  return all(path.is_file() for path in transcriber._qwen3_model_files(paths))
+
+
+def voice_fixture_pair(cfg: CharlieBotConfig) -> tuple[Path, str]:
+  """A persisted (recording, persisted transcript) pair under cfg.sessions_dir, for the
+  local_only voice suites: the transcript is what the production pipeline wrote for that
+  recording. Picks the pair closest to 8 s; skips degenerate transcripts (< 20 chars)
+  that came from the broken streaming path. Skips the test when the host has none."""
+  import wave as wave_mod
+
+  best: tuple[tuple[float, str], Path, str] | None = None
+  for wav_path in sorted(cfg.sessions_dir.glob("*/voice/*.wav")):
+    txt_path = wav_path.with_suffix(".txt")
+    if not txt_path.is_file():
+      continue
+    try:
+      with wave_mod.open(str(wav_path), "rb") as wav:
+        if (wav.getnchannels(), wav.getsampwidth(), wav.getframerate()) != (1, 2, 16_000):
+          continue
+        duration = wav.getnframes() / wav.getframerate()
+    except (wave_mod.Error, OSError):
+      continue
+    transcript = txt_path.read_text(encoding="utf-8")
+    if len(transcript) < 20 or not 3 <= duration <= 60:
+      continue
+    key = (abs(duration - 8.0), wav_path.name)
+    if best is None or key < best[0]:
+      best = (key, wav_path, transcript)
+  if best is None:
+    pytest.skip("no persisted voice recording with its transcript under the session home")
+  return best[1], best[2]
 
 
 def make_home_config(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig rooted at tmp_path/"charliebot-home". Leaves the home dir un-created:
-  one call site (the sherpa streaming test) mkdirs it itself, and most sites never touch disk.
-  One Opus backend registered so SessionManager.create_session's default (backends.options[0])
-  resolves."""
+  most sites never touch disk, and a site that does mkdirs it itself. One Opus backend
+  registered so SessionManager.create_session's default (backends.options[0]) resolves."""
   return CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home", backends={"options": [OPUS_BACKEND_OPTION]})
 
 
 def build_master_cc_cfg(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig rooted at tmp_path/".charliebot" with one fake codex backend registered: the
-  shape the master-cc round tests drive run_message, replay_user_message, and _run_cc against."""
+  shape the master-cc round tests drive run_message, replay_user_message, _run_cc, and
+  _session_consumer against."""
   return CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backends={"options": [backend_option(id="fake", label="Fake", type="codex", model="fake-model")]},
@@ -793,6 +873,18 @@ async def make_home_session(
   return cfg, mgr, session
 
 
+def apply_config_overrides(app: FastAPI, cfg: CharlieBotConfig) -> None:
+  """Bind both config dependency keys to the one instance on *app*.
+
+  A mounted route resolves cfg through either dependency (get_config_on_loop
+  on the polled routes, get_config on the sync ones), so a rig must carry the
+  override on both keys — one key alone leaves routes on the other resolving
+  the real config.
+  """
+  app.dependency_overrides[get_config] = lambda: cfg
+  app.dependency_overrides[get_config_on_loop] = lambda: cfg
+
+
 def make_router_client(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
@@ -803,10 +895,7 @@ def make_router_client(
   extra routers or overrides builds its own FastAPI app."""
   app = FastAPI()
   app.include_router(router, prefix=prefix)
-  app.dependency_overrides[get_config] = lambda: cfg
-  # The polled routes resolve cfg through the on-loop dependency (same instance
-  # the sync key serves), so both keys carry the override.
-  app.dependency_overrides[get_config_on_loop] = lambda: cfg
+  apply_config_overrides(app, cfg)
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   return TestClient(app)
 
@@ -876,6 +965,14 @@ def _page_request(accept_encoding: str = "") -> Request:
   FastAPI's injection, and the empty default is the no-gzip client shape."""
   headers = [(b"accept-encoding", accept_encoding.encode())] if accept_encoding else []
   return Request({"type": "http", "headers": headers})
+
+
+# Import-path patch target for the response-render deflator. src/api/responses.py binds the
+# name at import scope (`from src.core.compression import gzip_level1`), so patch lands the
+# stand-in on the src.api.responses module attribute and gzip_body_response reads it at call
+# time. Sibling API modules binding their own copy (files.py, sessions.py, cron.py) are patched
+# through their module objects instead — a deflate driven there never touches this route.
+RESPONSES_GZIP_LEVEL1_PATCH_TARGET = "src.api.responses.gzip_level1"
 
 
 def gzip_explode_compress(message: str) -> Callable[..., bytes]:
@@ -950,7 +1047,7 @@ def seed_transcript_copy(config_dir: Path, cc_session_id: str, body: str, *, mti
 def write_pool_credentials(config_dir: Path, access_token: str = "token") -> None:
   """Write Claude OAuth credentials into a pool account's config dir, marking the login present."""
   config_dir.mkdir(parents=True, exist_ok=True)
-  (config_dir / claude_accounts.CREDENTIALS_FILE).write_text(
+  (config_dir / CREDENTIALS_FILE).write_text(
       json.dumps({"claudeAiOauth": {
           "accessToken": access_token,
           "refreshToken": "r"
@@ -963,7 +1060,7 @@ def pool_cfg(
     *,
     home: Path,
     worktree_dir: Path,
-    labels: tuple[str, ...] = ("main", "ext-1", "ext-2"),
+    labels: tuple[str, ...],
 ) -> CharlieBotConfig:
   """A pooled CharlieBotConfig: one ClaudeAccount per label, pool credentials planted in each config dir."""
   accounts = [models.ClaudeAccount(label=label, config_dir=str(tmp_path / f"claude-{label}")) for label in labels]
@@ -1071,6 +1168,11 @@ TRIGGER_MASTER_PATCH_TARGET = "src.core.triggers.trigger_master"
 MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET = (
     "src.core.master_trigger.run_message_with_resume_recovery")
 
+# The resume-free sibling of the inner run above: trigger_master's resume path reads run_message
+# as the same defining module's global, so the stand-in lands on the same module attribute and
+# the note above's interception argument carries over.
+MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET = "src.core.master_trigger.run_message"
+
 # Import-path patch target for the config re-read a firing trigger passes to the master wake.
 # src/core/triggers.py binds the name at import scope (`from src.core.config import get_config`),
 # so mock setattrs the stand-in on the src.core.triggers module attribute and _wait_and_fire's
@@ -1099,6 +1201,11 @@ ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "asyncio.create_subprocess_exec"
 # patch setattrs the stand-in on the src.core.triggers module attribute.
 TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET = "src.core.triggers._SACCT_AVAILABLE"
 
+# Import-path patch target for the watchdog's poll interval. src/core/triggers.py defines
+# _DORMANCY_CHECK_SECONDS at module scope, and the dormancy-watch loop reads it inside
+# _watch_dormancy at call time, so tests compress the wait by setting the module attribute.
+TRIGGERS_DORMANCY_CHECK_SECONDS_PATCH_TARGET = "src.core.triggers._DORMANCY_CHECK_SECONDS"
+
 # Import-path patch target for the CLI HTTP layer's config read. src/cli/common.py defines a
 # get_config forwarder (config's module imports lazily on first call, the M92 floor rule), so
 # mock setattrs the stand-in on the src.cli.common module attribute and every helper defined
@@ -1125,17 +1232,11 @@ CLI_COMMON_SESSIONS_DIR_PATCH_TARGET = "src.cli.common._sessions_dir"
 # time, so mock setattrs the stand-in on the src.cli.common module attribute.
 CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET = "src.cli.common._maybe_version_skew_hint"
 
-# Import-path patch target for the publish command's config read. src/cli/publish.py binds the
-# name with `from src.core.config import get_config`, so mock setattrs the stand-in on the
-# src.cli.publish module attribute and main's preflight reads it at call time.
-CLI_PUBLISH_GET_CONFIG_PATCH_TARGET = "src.cli.publish.get_config"
-
-# Import-path patch target for the Telegram delivery the cron-load alert posts. The alert helper
-# in src/core/config.py imports send_telegram at call time (lazy, notifications imports config),
-# so that import resolves the stand-in landed on the src.core.notifications module attribute;
-# import-scope binders of the same function (spawner_finalize) keep their own bound object and
-# are not intercepted through this route.
-NOTIFICATIONS_SEND_TELEGRAM_PATCH_TARGET = "src.core.notifications.send_telegram"
+# Import-path patch target for the CLI connect-retry budget. src/cli/common.py binds the name
+# at import scope (`from src.core.timeouts import CLI_CONNECT_TOTAL_TIMEOUT`), so mock setattrs
+# the test budget on the src.cli.common module attribute and post_internal_api's retry loop
+# reads it as a module global at call time; the source value stays the timeouts module's own.
+CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET = "src.cli.common.CLI_CONNECT_TOTAL_TIMEOUT"
 
 # Import-path patch targets for the master wake a Slack message fires. src/core/slack_listener.py
 # binds both names at import scope (`from src.core.master_trigger import trigger_master`,
@@ -1160,13 +1261,16 @@ SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.core.slack_listener._bot_client"
 SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.scheduler.create_logged_task"
 
 # Import-path patch targets for the seams a scheduled run fires through. src/core/scheduler.py
-# binds each name at import scope (`from src.core.config import get_config`, `from
-# src.core.master_trigger import trigger_master`, `from src.core.spawner import
+# binds each name at import scope (`from src.core.config import get_config, get_scheduled_tasks`,
+# `from src.core.master_trigger import trigger_master`, `from src.core.spawner import
 # resolve_requested_subagent_backend_model, spawn_worker`, `from src.core.threads import
 # ThreadManager`), so monkeypatch.setattr lands the stand-in on the src.core.scheduler module
-# attribute and _reload_config, _execute_pm_task, and _spawn_scheduled_worker read it at
-# call time; sibling modules binding the same functions keep their own routes.
+# attribute and the call-time readers — _reload_config, _execute_pm_task, and
+# _spawn_scheduled_worker for the bindings above; _tick and run_task_now for
+# get_scheduled_tasks — read it there; sibling modules binding the same functions keep their
+# own routes.
 SCHEDULER_GET_CONFIG_PATCH_TARGET = "src.core.scheduler.get_config"
+SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.core.scheduler.get_scheduled_tasks"
 SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = ("src.core.scheduler.resolve_requested_subagent_backend_model")
 SCHEDULER_SPAWN_WORKER_PATCH_TARGET = "src.core.scheduler.spawn_worker"
 SCHEDULER_THREAD_MANAGER_PATCH_TARGET = "src.core.scheduler.ThreadManager"
@@ -1193,22 +1297,23 @@ SPAWNER_RESUME_WORKER_PATCH_TARGET = "src.core.spawner.resume_worker"
 
 # Import-path patch targets for the chat API's message bootstrap and cancel route.
 # src/api/chat.py defines run_and_finalize itself and binds create_logged_task
-# (`from src.core.tasks import create_logged_task`) and cancel_master (`from
-# src.agents.master_cc import cancel_master`) at import scope, so mock and
-# monkeypatch.setattr land the stand-ins on the src.api.chat module attributes and
-# send_message's fire-and-forget bootstrap, launch_prompt_dispatch's slash-dispatch
-# run, run_and_finalize's auto-name task, and cancel_master_agent read them at call
-# time. src/api/slash.py binds launch_prompt_dispatch at import scope and
-# src/api/sessions.py re-imports run_and_finalize at call time, so both reach the
-# same src.api.chat namespace attributes; src.core.tasks.create_logged_task stays a
-# separate route.
+# (`from src.core.tasks import create_logged_task`) at import scope; cancel_master
+# binds lazily (PEP 562 __getattr__ + _load_cancel_master's globals-first loader,
+# the M99 server import floor), and the module attribute stays the seam either way —
+# mock and monkeypatch.setattr land the stand-ins on the src.api.chat module
+# attributes and send_message's fire-and-forget bootstrap, launch_prompt_dispatch's
+# slash-dispatch run, run_and_finalize's auto-name task, and cancel_master_agent
+# read them at call time. src/api/slash.py binds launch_prompt_dispatch at import
+# scope and src/api/sessions.py re-imports run_and_finalize at call time, so both
+# reach the same src.api.chat namespace attributes; src.core.tasks.create_logged_task
+# stays a separate route.
 CHAT_RUN_AND_FINALIZE_PATCH_TARGET = "src.api.chat.run_and_finalize"
 CHAT_CREATE_LOGGED_TASK_PATCH_TARGET = "src.api.chat.create_logged_task"
 CHAT_CANCEL_MASTER_PATCH_TARGET = "src.api.chat.cancel_master"
 
 # Import-path patch targets for the CLI HTTP layer's transport. src/cli/common.py exposes one
-# adapter per verb (`_request_post`/`_request_get`, both over the phase-separated http.client
-# client `_send_request`), and `_request_with_contract` reads the adapter as a module global at
+# adapter per verb (`_request_post`/`_request_get`, both over the phase-separated client
+# `_send_request`), and `_request_with_contract` reads the adapter as a module global at
 # call time, so mock and monkeypatch.setattr land the stand-in on the src.cli.common module
 # attribute and every helper defined there picks it up at call time.
 CLI_COMMON_TRANSPORT_POST_PATCH_TARGET = "src.cli.common._request_post"
@@ -1230,6 +1335,14 @@ BUILD_BACKEND_PATCH_TARGET = "src.agents.backends.registry.build_backend"
 # exactly the semantics the master-cc registry route relies on.
 WORKER_BUILD_BACKEND_PATCH_TARGET = "src.agents.worker.build_backend"
 
+# Import-path patch target for the worker's default-backend fallback. src/agents/worker.py
+# binds the class at import scope (`from src.agents.backends.claude_code import
+# ClaudeCodeBackend, claude_supervisor_env`), and _build_backend's fallback return — reached
+# when no backend_option is set or a translate-only build fails — reads it as a module global
+# at call time, so tests that drive that fallback set the stand-in on the src.agents.worker
+# module attribute.
+WORKER_CLAUDE_CODE_BACKEND_PATCH_TARGET = "src.agents.worker.ClaudeCodeBackend"
+
 # Import-path patch target for the /proc stat read the backend start contract pins. src/core/runs.py
 # defines read_pid_stat; src/agents/backends/base.py binds the module (`from src.core import runs`)
 # and reads runs.read_pid_stat at call time, so monkeypatch.setattr lands the stand-in on the
@@ -1242,18 +1355,23 @@ RUNS_READ_PID_STAT_PATCH_TARGET = "src.core.runs.read_pid_stat"
 # the stand-in on that backend module's own attribute, where its __init__ reads the
 # helper at call time and never probes PATH, while sibling backends binding the same
 # helper keep their own namespaces. The backend start contract spawns through the
-# library each spawning module binds with module-scope `import asyncio`, so every
-# ``*_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET`` spelling below — the library root
-# (ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET above) and the caller-qualified forms —
-# reaches that one shared attribute at the run loop's call-time spawn read; the
-# caller-qualified form records which backend's spawn a test drives.
-BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.agents.backends.base.asyncio.create_subprocess_exec"
+# off-loop spawn seam (src/agents/backends/spawn.py), which base.py imports and reads
+# as a module global at call time, so both ``*_SPAWN_SUBPROCESS_PATCH_TARGET`` spellings
+# land the stand-in on that one shared attribute; the caller-qualified form records
+# which backend's spawn a test drives.
+BASE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.agents.backends.base.spawn_subprocess"
 OPENCODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.opencode.resolve_binary"
-OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.agents.backends.opencode.asyncio.create_subprocess_exec"
+OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.agents.backends.base.spawn_subprocess"
 CODEX_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.codex.resolve_binary"
 ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.antigravity_cli.resolve_binary"
 CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.charlie_code.resolve_binary"
 GEMINI_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.gemini_cli.resolve_binary"
+
+# Import-path patch target for the improve loop's commit step. src/core/backlog_loop.py binds
+# the name at import scope (`from src.core.git import git_add_commit_push`), so mock setattrs
+# the stand-in on the src.core.backlog_loop module attribute and the stale-item handler's
+# commit call reads it there.
+BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET = "src.core.backlog_loop.git_add_commit_push"
 
 # Patch target for the atomic-write swap hook. src/core/json_utils.py publishes each staged
 # payload with an ``os.replace`` attribute lookup on its module-scope ``import os`` binding, and
@@ -1274,21 +1392,13 @@ TUI_KILL_TMUX_SESSION_PATCH_TARGET = "src.agents.backends.tui.kill_tmux_session"
 TUI_TMUX_SESSION_EXISTS_PATCH_TARGET = "src.agents.backends.tui.tmux_session_exists"
 TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET = "src.agents.backends.tui._claude_jsonl_busy"
 
-# Import-path patch targets for the server's terminal websocket. server.py defines _check_ws_auth
-# and its websocket handlers read it as a module global at call time, and the terminal handler
-# imports run_terminal_attachment at call time (`from src.agents.backends.terminal import
-# run_terminal_attachment` inside terminal_websocket), so monkeypatch.setattr lands both stand-ins
-# on their defining module attributes and the handler's reads resolve them.
-SERVER_CHECK_WS_AUTH_PATCH_TARGET = "server._check_ws_auth"
-TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET = "src.agents.backends.terminal.run_terminal_attachment"
-
 
 def build_cli_backend(
     monkeypatch: pytest.MonkeyPatch,
     backend_cls: type[backend_base.AgentBackend],
     resolve_patch_target: str,
     fake_binary: str,
-    defaults: dict[str, Any] | None = None,
+    defaults: dict[str, Any],
     **kwargs: Any,
 ) -> backend_base.AgentBackend:
   """Construct a CLI backend with its resolve_binary pinned to *fake_binary*.
@@ -1299,9 +1409,49 @@ def build_cli_backend(
   never probes PATH, and *defaults* fill kwargs the caller left out.
   """
   monkeypatch.setattr(resolve_patch_target, lambda name, fallback: fake_binary)
-  for key, value in (defaults or {}).items():
+  for key, value in defaults.items():
     kwargs.setdefault(key, value)
   return backend_cls(**kwargs)
+
+
+# One row per CLI backend: the resolve_binary patch target, the fake binary
+# build_cli_backend pins on it, and the constructor defaults a plain test build
+# relies on. The per-backend test modules build through build_cli_backend_rig and
+# the cross-backend contract tables read these rows, so the (target, binary,
+# defaults) triple is spelled exactly once per backend.
+CLI_BACKEND_RIGS: dict[type[backend_base.AgentBackend], tuple[str, str, dict[str, Any]]] = {
+    AntigravityCliBackend: (ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/agy", {}),
+    CharlieCodeBackend:
+        (
+            CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
+            "/usr/bin/charlie-code",
+            {
+                "model": "charlie-code-test-model",
+                "api_base": "http://test.invalid/v1"
+            },
+        ),
+    CodexBackend: (CODEX_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/codex", {
+        "model": "codex-test-model"
+    }),
+    GeminiCliBackend: (GEMINI_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/gemini", {
+        "model": "gemini-test-model"
+    }),
+    OpenCodeBackend: (OPENCODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/opencode", {}),
+}
+
+
+def build_cli_backend_rig(
+    monkeypatch: pytest.MonkeyPatch,
+    backend_cls: type[backend_base.AgentBackend],
+    **kwargs: Any,
+) -> backend_base.AgentBackend:
+  """Construct *backend_cls* through its CLI_BACKEND_RIGS row.
+
+  A caller relies on the row's fake binary being pinned and the row's defaults
+  filling kwargs it leaves out; *kwargs* override the defaults per test.
+  """
+  patch_target, fake_binary, defaults = CLI_BACKEND_RIGS[backend_cls]
+  return build_cli_backend(monkeypatch, backend_cls, patch_target, fake_binary, defaults=defaults, **kwargs)
 
 
 def stub_subprocess_spawn(monkeypatch: pytest.MonkeyPatch, patch_target: str, pid: int) -> MagicMock:
@@ -1394,6 +1544,71 @@ def build_slack_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
+class FakeSlackClient:
+  """Recording Slack Web API double for slack_listener tests; never touches the network.
+
+  Every call lands in ``calls`` as ``(method, kwargs)`` — the completeness
+  assertions built on it fail on any call a path was not expected to make.
+  ``reactions`` models the live per-message reaction set the ack-clear path
+  reads back, ``thread`` is what the conversations.replies seam returns, and
+  permalinks and channel names are fabricated. Implements only what the
+  listener paths may call: a regression to reading anything else fails here
+  with an AttributeError by construction.
+  """
+
+  def __init__(self, *, fail_posts: bool = False, fail_remove: bool = False) -> None:
+    self.calls: list[tuple[str, dict]] = []
+    self.posts: list[dict] = []
+    self.remove_calls: list[dict] = []
+    self.reactions: dict[str, set[str]] = {}
+    self.thread: list[dict] = []
+    self.reply_calls = 0
+    self.fail_posts = fail_posts
+    self._fail_remove = fail_remove
+
+  async def open_connection(self) -> str:
+    self.calls.append(("open_connection", {"channel": None}))
+    return "wss://fake.example/socket"
+
+  async def get_thread_replies(self, channel: str, thread_ts: str) -> list[dict]:
+    """The thread-read seam the reply gate consumes; the seeded ``thread`` as a copy."""
+    self.calls.append(("get_thread_replies", {"channel": channel, "thread_ts": thread_ts}))
+    self.reply_calls += 1
+    return list(self.thread)
+
+  async def post_message(self, channel: str, text: str, thread_ts: str) -> dict:
+    if self.fail_posts:
+      raise RuntimeError("chat.postMessage failed")
+    self.calls.append(("post_message", {"channel": channel, "text": text, "thread_ts": thread_ts}))
+    self.posts.append({"channel": channel, "text": text, "thread_ts": thread_ts})
+    return {"ok": True}
+
+  async def add_reaction(self, channel: str, name: str, ts: str) -> dict:
+    self.calls.append(("add_reaction", {"channel": channel, "name": name, "ts": ts}))
+    self.reactions.setdefault(ts, set()).add(name)
+    return {"ok": True}
+
+  async def remove_reaction(self, channel: str, name: str, ts: str) -> dict:
+    """Mirror SlackClient's contract: no_reaction is a payload, other failures raise."""
+    self.calls.append(("remove_reaction", {"channel": channel, "name": name, "ts": ts}))
+    self.remove_calls.append({"channel": channel, "name": name, "ts": ts})
+    if self._fail_remove:
+      raise RuntimeError("reactions.remove failed: missing_scope")
+    names = self.reactions.setdefault(ts, set())
+    if name not in names:
+      return {"ok": False, "error": "no_reaction"}
+    names.discard(name)
+    return {"ok": True}
+
+  async def get_permalink(self, channel: str, ts: str) -> str:
+    self.calls.append(("get_permalink", {"channel": channel, "ts": ts}))
+    return f"https://fake.slack.test/archives/{channel}/p{ts}"
+
+  async def get_channel_name(self, channel_id: str) -> str | None:
+    self.calls.append(("get_channel_name", {"channel": channel_id}))
+    return f"name-of-{channel_id}"
+
+
 def make_instruction_cfg(tmp_path: Path, *, manager_contract: str | None) -> SimpleNamespace:
   """Fake instruction inputs for the master-instruction builder: a repo whose prompts/master.md
   reads "BASE PROMPT", plus prompts/project_manager.md carrying the manager_contract text when
@@ -1425,16 +1640,6 @@ def cfg_with_repo(repo_root: Path) -> CharlieBotConfig:
   return _Cfg()  # type: ignore[return-value]
 
 
-def build_antigravity_cfg(tmp_path: Path) -> CharlieBotConfig:
-  """CharlieBotConfig for antigravity-routing tests: the .charliebot home lives under tmp_path so each
-  test owns its own tree, and the backend list registers the model-less antigravity option the
-  resume-id routing resolves against."""
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backends={"options": [AGY_BACKEND_OPTION]},
-  )
-
-
 def build_two_backend_cfg(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig for cross-backend tests: the .charliebot home lives under tmp_path so each test owns its
   own tree, and the backend list registers the opus-then-codex pair that pin-resolution and fallback-ordering
@@ -1457,15 +1662,22 @@ def build_tui_sessions_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
-def build_codex_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
-  """CharlieBotConfig for spawner worktree-launch tests: the charliebot-home and worktrees dirs live
-  under tmp_path so each test owns its own tree, and the backend list registers the codex option the
-  launch paths resolve."""
+def build_option_worktree_cfg(tmp_path: Path, option: models.BackendBase) -> CharlieBotConfig:
+  """CharlieBotConfig for tests that pick their backend option: the charliebot-home and worktrees
+  dirs live under tmp_path so each test owns its own tree, and the backend list registers exactly
+  the one option the caller names."""
   return CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
       paths={"worktree_dir": str(tmp_path / "worktrees")},
-      backends={"options": [CODEX_BACKEND_OPTION]},
+      backends={"options": [option]},
   )
+
+
+def build_codex_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """CharlieBotConfig for spawner worktree-launch tests: the charliebot-home and worktrees dirs live
+  under tmp_path so each test owns its own tree, and the backend list registers the codex option the
+  launch paths resolve. The codex preset of build_option_worktree_cfg."""
+  return build_option_worktree_cfg(tmp_path, CODEX_BACKEND_OPTION)
 
 
 def build_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
@@ -1506,33 +1718,21 @@ def build_light_cc_cfg() -> CharlieBotConfig:
       })
 
 
-def build_chain_cfg(*options: models.BackendOption) -> CharlieBotConfig:
-  """CharlieBotConfig whose backends.preference chains the given options in the order given.
-
-  One-shot fallback tests read the chain off backends.options and backends.preference
-  together, so the pair must not drift; deriving the preference list here is what
-  keeps the order stated once per test.
-  """
-  return CharlieBotConfig(backends={"options": list(options), "preference": [option.id for option in options]})
-
-
 PUBLISH_BASE_URL = "https://pub.example.test/charliebot_pub"
 
 
-def build_publish_cfg(
-    tmp_path: Path, *, publish_dir: Path | None = None, public_base_url: str | None = None) -> CharlieBotConfig:
-  """CharlieBotConfig with the publish lane deployed under tmp_path: publish_dir (default
-  ``tmp_path / "publish"``) created the way the host's deployment step leaves it, public_base_url
-  (default ``PUBLISH_BASE_URL``) set; each argument overridable.
+def build_publish_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """CharlieBotConfig with the publish lane deployed under tmp_path: publish_dir
+  (``tmp_path / "publish"``) created the way the host's deployment step leaves it,
+  ``PUBLISH_BASE_URL`` set.
   """
-  resolved_dir = publish_dir if publish_dir is not None else tmp_path / "publish"
-  resolved_dir.mkdir(parents=True, exist_ok=True)
-  resolved_url = public_base_url if public_base_url is not None else PUBLISH_BASE_URL
+  publish_dir = tmp_path / "publish"
+  publish_dir.mkdir(parents=True, exist_ok=True)
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       publish={
-          "dir": resolved_dir,
-          "public_base_url": resolved_url
+          "dir": publish_dir,
+          "public_base_url": PUBLISH_BASE_URL
       },
   )
 
@@ -1546,8 +1746,7 @@ def write_artifact(tmp_path: Path, name: str = "page.html", body: str = "<p>hell
   return path
 
 
-def write_plan_artifact(
-    cfg: CharlieBotConfig, session_id: str, name: str = "plan_01.html", content: str | None = None) -> str:
+def write_plan_artifact(cfg: CharlieBotConfig, session_id: str, name: str, content: str | None = None) -> str:
   """Write one plan artifact under cfg's sessions dir and return its plan-relative path; the default content
   passes the plan assertion set so tests can present/approve directly."""
   if content is None:
@@ -1714,13 +1913,6 @@ def patched_cli_post(cfg: object, argv: list[str], **post_kw: object) -> Iterato
   yield from _patched_cli_transport(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, cfg, argv, **post_kw)
 
 
-@contextlib.contextmanager
-def patched_cli_get(cfg: object, argv: list[str], **get_kw: object) -> Iterator[MagicMock]:
-  """_patched_cli_transport with _request_get as the patched verb (the GET-only commands, e.g.
-  plan list/diff)."""
-  yield from _patched_cli_transport(CLI_COMMON_TRANSPORT_GET_PATCH_TARGET, cfg, argv, **get_kw)
-
-
 def schedule_trigger_argv(message: str, *extra: str) -> list[str]:
   """The schedule_trigger CLI argv the CLI tests share: session s1, --max-wait 60, --message."""
   return ["schedule_trigger", "--session", "s1", "--max-wait", "60", "--message", message, *extra]
@@ -1797,6 +1989,21 @@ def temp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
+def path_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+  """Point ``Path.home()`` at a created ``tmp_path / "home"`` and return it.
+
+  ``Path.home()`` honors a redirected ``HOME`` env (the ``temp_home`` route), so this
+  fixture exists for its layout: the home sits in its own ``tmp_path / "home"``
+  subdirectory, distinct from the sibling trees (config dirs, spec files) a test puts
+  directly under ``tmp_path``.
+  """
+  home = tmp_path / "home"
+  home.mkdir()
+  monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+  return home
+
+
+@pytest.fixture
 def profile_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
   """Point ``CHARLIEBOT_HOME`` at a fresh tmp dir and clear the config module caches around it.
 
@@ -1824,14 +2031,13 @@ def write_cron_task(home: Path, name: str, text: str) -> Path:
   return p
 
 
-MEMORY_DEFAULT_TOPICS = [
-    "profile resident",
-    "communication resident",
-    "workflow resident",
-    "rulings resident",
-    "host resident",
-    "charliebot",
-]
+def write_nightly_prompt(home: Path, body: str) -> Path:
+  """Write the nightly job's prompt source ``<home>/prompts/nightly.md`` and return its path; a
+  pointer-backed host file's ``prompt_file`` names this path and the pointed file owns the body."""
+  p = Path(home) / "prompts" / "nightly.md"
+  p.parent.mkdir(parents=True, exist_ok=True)
+  p.write_text(body, encoding="utf-8")
+  return p
 
 
 def memory_entry_text(
@@ -1882,12 +2088,13 @@ def legacy_memory_entry_text(
 
 
 def write_memory_topics(memory_dir: Path, lines: list[str] | None = None) -> None:
-  """Write a memory store's ``topics`` file (one topic per line, default ``MEMORY_DEFAULT_TOPICS``)
-  and create the ``entries/`` dir the loader scans."""
+  """Write a memory store's ``topics`` file (one topic per line; the default is the
+  seeded production vocabulary DEFAULT_MEMORY_TOPICS) and create the ``entries/``
+  dir the loader scans."""
   memory_dir.mkdir(parents=True, exist_ok=True)
   (memory_dir / "entries").mkdir(exist_ok=True)
   (memory_dir / "topics").write_text(
-      "".join(line + "\n" for line in (lines or MEMORY_DEFAULT_TOPICS)), encoding="utf-8")
+      "".join(line + "\n" for line in (lines or DEFAULT_MEMORY_TOPICS.splitlines())), encoding="utf-8")
 
 
 def write_memory_entry(memory_dir: Path, topic: str, slug: str, legacy: bool = False, **kw: Any) -> Path:
@@ -1896,15 +2103,6 @@ def write_memory_entry(memory_dir: Path, topic: str, slug: str, legacy: bool = F
   d = memory_dir / "entries" / topic
   d.mkdir(parents=True, exist_ok=True)
   p = d / f"{slug}.md"
-  text = legacy_memory_entry_text(topic, slug, **kw) if legacy else memory_entry_text(topic, slug, **kw)
-  p.write_text(text, encoding="utf-8")
-  return p
-
-
-def write_memory_staging(memory_dir: Path, name: str, topic: str, slug: str, legacy: bool = False, **kw: Any) -> Path:
-  """Write one staging candidate ``staging/<name>.md``; same text rules as write_memory_entry."""
-  memory_dir.joinpath("staging").mkdir(parents=True, exist_ok=True)
-  p = memory_dir / "staging" / f"{name}.md"
   text = legacy_memory_entry_text(topic, slug, **kw) if legacy else memory_entry_text(topic, slug, **kw)
   p.write_text(text, encoding="utf-8")
   return p
@@ -2008,7 +2206,7 @@ class FakeStdout:
   def __init__(self, lines: list[bytes]) -> None:
     self._lines = list(lines)
 
-  def __aiter__(self) -> "FakeStdout":
+  def __aiter__(self) -> FakeStdout:
     return self
 
   async def __anext__(self) -> bytes:
@@ -2265,6 +2463,31 @@ async def run_captured_round(
   return callbacks
 
 
+def make_sacct_mock(scripted: dict[tuple[str | None, int], list[str]]) -> AsyncMock:
+  """Mock ``asyncio.create_subprocess_exec`` answering each sacct probe's scripted stdout.
+
+  *scripted* maps ``(host, job_id)`` to that probe's sacct stdout payloads; each call pops the
+  next entry, and the last entry repeats indefinitely. The factory identifies the probe from the
+  argv the production caller builds (``src/core/triggers.py``): a remote ssh call keeps the host
+  in its second-to-last word and the quoted ``sacct -j ID ...`` command last; a local call is
+  ``sacct -j ID ...`` with the id third.
+  """
+  queues: dict[tuple[str | None, int], list[str]] = {k: list(v) for k, v in scripted.items()}
+
+  async def _factory(*args: Any, **kwargs: Any) -> FakeAsyncProcess:
+    if args[0] == "ssh":
+      host = args[-2]
+      job_id = int(args[-1].split()[2])
+    else:
+      host = None
+      job_id = int(args[2])
+    queue = queues[(host, job_id)]
+    out = queue[0] if len(queue) == 1 else queue.pop(0)
+    return FakeAsyncProcess(stdout=out.encode())
+
+  return AsyncMock(side_effect=_factory)
+
+
 @contextlib.contextmanager
 def patch_trigger_fire(
     subprocess_mock: AsyncMock, sacct_available: bool | None,
@@ -2407,12 +2630,12 @@ def make_fake_git_create_worktree(*,
 def patch_improve_git_ops(monkeypatch: pytest.MonkeyPatch) -> None:
   """Install the pass-through git fakes a run_improve_loop test needs without a real repo.
 
-  create_worktree and push_branch are patched on src.core.improve_command (create_worktree
-  reuses make_fake_git_create_worktree(mkdir=True), push_branch succeeds). remove and prune
-  are patched on src.core.git: the finally-cleanup resolves them there through
-  git_worktree_remove_reporting, so the faked remove still clears the worktree dir and
-  prune runs. The fakes mirror the real signatures so each patch stays a drop-in
-  replacement.
+  git_create_worktree and git_push_branch are patched on src.core.improve_command
+  (git_create_worktree reuses make_fake_git_create_worktree(mkdir=True), git_push_branch
+  succeeds). remove and prune are patched on src.core.git: the finally-cleanup resolves
+  them there through git_worktree_remove_reporting, so the faked remove still clears the
+  worktree dir and prune runs. The fakes mirror the real signatures so each patch stays a
+  drop-in replacement.
   """
 
   async def fake_git_push_branch(repo_path: Path, branch_name: str) -> tuple[bool, str]:
@@ -2558,16 +2781,6 @@ def make_one_shot_backend(one_shot: AsyncMock) -> MagicMock:
   return backend
 
 
-def make_one_shot_chain(*one_shots: AsyncMock) -> list[MagicMock]:
-  """One-shot backends for a full preference-chain walk: one per candidate, in preference order.
-
-  Chain tests hand this list to patch(build_backend, side_effect=...) so each
-  build_backend call serves the next candidate, and a chain that stops early
-  leaves the surplus backends unbuilt.
-  """
-  return [make_one_shot_backend(one_shot) for one_shot in one_shots]
-
-
 class SuccessorDeliveryShim:
   """Default succession delivery for test fakes: no successor, persist into the owning session.
 
@@ -2607,6 +2820,23 @@ class JudgmentShim(SuccessorDeliveryShim):
 
   def thread_dir(self, session_id: str, thread_id: str) -> Path:
     return Path("/nonexistent-thread-dir") / session_id / thread_id
+
+
+class EventCaptureSessionManager(SuccessorDeliveryShim):
+  """SessionManager double capturing broadcast chat events into ``self.events``.
+
+  ``persist_and_broadcast`` appends the event; ``mark_unread`` is a no-op.
+  Subclasses add JudgmentShim when their producer path reads the finalize gates.
+  """
+
+  def __init__(self) -> None:
+    self.events: list[dict[str, Any]] = []
+
+  async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
+    self.events.append(event)
+
+  async def mark_unread(self, session_id: str) -> None:
+    pass
 
 
 class CapturingThreadManager(JudgmentShim):
@@ -2712,7 +2942,7 @@ def stage_worktree_spawn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    description: str = "Do work",
+    description: str,
     git_fake_mkdir: bool = False,
 ) -> WorktreeSpawnRig:
   """Stage the worktree spawn_worker e2e rig on a fresh codex-backend cfg.
@@ -2770,7 +3000,6 @@ class ReviewSpawnThreadManager(JudgmentShim):
       self,
       session_meta: models.SessionMetadata,
       description: str,
-      branch_name: str | None = None,
       review_of: str | None = None,
       require_review: bool = True,
   ) -> models.ThreadMetadata:
@@ -2778,7 +3007,7 @@ class ReviewSpawnThreadManager(JudgmentShim):
         id="review-thread-id",
         session_id=session_meta.id,
         description=description,
-        branch_name=branch_name,
+        branch_name=None,
         review_of=review_of,
     )
 
@@ -2834,14 +3063,31 @@ async def run_through_asgi_middleware(middleware: Any, scope: dict) -> list[dict
   return sent
 
 
-def asgi_downstream_called() -> bool:
-  """Whether the shared downstream ran during the last run_through_asgi_middleware call."""
-  return _ok_asgi_downstream.called
+def asgi_response(sent: list[dict]) -> tuple[int, dict[bytes, bytes], bytes]:
+  """Flatten the messages run_through_asgi_middleware collected into (status, headers, body)."""
+  start = next(m for m in sent if m["type"] == "http.response.start")
+  headers = dict(start["headers"])
+  body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+  return start["status"], headers, body
 
 
 def close_create_logged_task(coro: Any, *, name: str | None = None) -> None:
   """create_logged_task stand-in: closes the coroutine instead of scheduling it as a task."""
   coro.close()
+
+
+async def cancel_and_drain(task: asyncio.Task) -> None:
+  """Cancel *task*, then await it under a suppressed CancelledError so the task's
+  own finally block finishes before the caller continues.
+
+  Deliberately no None-guard, unlike src.core.tasks.cancel_and_wait: shutdown's
+  optional task is legitimately quiet, while a test teardown holding None where
+  a task was expected is a bug to fail loudly on. An already-finished task's
+  pending exception still surfaces here — the suppressed await re-raises it.
+  """
+  task.cancel()
+  with contextlib.suppress(asyncio.CancelledError):
+    await task
 
 
 def capture_create_logged_task(captured: dict[str, Any]) -> Callable[..., Any]:
@@ -2937,6 +3183,17 @@ def _wait_for(predicate: Callable[[], bool], timeout: float, what: str) -> None:
     if predicate():
       return
     time.sleep(0.05)
+  raise TimeoutError(what)
+
+
+async def _async_wait_for(predicate: Callable[[], bool], timeout: float, what: str) -> None:
+  # Async sibling of _wait_for: the tasks an async test waits on advance only while
+  # the test yields to the event loop, so the poll must asyncio.sleep, not block.
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    if predicate():
+      return
+    await asyncio.sleep(0.05)
   raise TimeoutError(what)
 
 

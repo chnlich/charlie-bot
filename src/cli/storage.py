@@ -10,6 +10,7 @@ handler calls the same function, so the two cannot drift.
 import argparse
 import sys
 
+from src.cli.help_formatter import CliHelpFormatter
 from src.core.config import get_config
 from src.core.storage_cool import MIN_IDLE_DAYS, format_sweep_table, run_cool_sweep
 
@@ -31,13 +32,13 @@ def _cmd_cool(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-  parser = argparse.ArgumentParser(description="CharlieBot storage reclamation")
-  sub = parser.add_subparsers(dest="command")
-  sub.required = True
+  parser = argparse.ArgumentParser(description="CharlieBot storage reclamation", formatter_class=CliHelpFormatter)
+  sub = parser.add_subparsers(dest="command", required=True)
 
   cool = sub.add_parser(
       "cool",
       help="Delete transport logs and backend records of cold sessions",
+      formatter_class=CliHelpFormatter,
       description="Delete the bytes no reader can reach again: cold sessions' raw transport files and backend "
       "conversation stores of cold or orphaned sessions.")
   cool.add_argument("--dry-run", action="store_true", help="Report what would be freed; write nothing, delete nothing.")

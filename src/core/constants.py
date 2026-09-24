@@ -39,20 +39,31 @@ PLAN_CLOSE_ABANDONED = "abandoned"
 PLAN_CLOSE_COMPLETED = "completed"
 PLAN_CLOSE_MODES = (PLAN_CLOSE_SUPERSEDED, PLAN_CLOSE_ABANDONED, PLAN_CLOSE_COMPLETED)
 
+# Artifact genre vocabulary: the artifact CLI's argparse choices (src.cli.artifact) and
+# the assertion registry (src.core.artifact_check _ASSERTION_SETS) share one tuple, so
+# the artifact chain parses args without loading the assertion machinery (the M102 wrap
+# wall). The registry is the home of what a genre means: adding a genre means registering
+# its assertion set there AND naming it here; artifact_check's import-time equality check
+# makes a missed step fail loud.
+ARTIFACT_GENRES = ("plan", "understanding", "sitrep", "debug", "explain")
+
 # opencode's own compaction output-reserve default ($d = 20000 in the opencode binary,
 # applied as `compaction.reserved ?? min($d, maxOutputTokens)`; checkable via
-# `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`). The opencode backend
-# (src.agents.backends.opencode) and the usage resolver's compact-point math
-# (src.core.session_usage) share one spelling, so the usage chain imports no backend
-# module for it (the M99 server import floor).
+# `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`). The only reader is the
+# usage resolver's compact-point math (src.core.session_usage); the opencode backend
+# (src.agents.backends.opencode) never reads it — the binary's own default applies, and the
+# backend's module note carries the fact without an import. The stdlib-only home is what
+# keeps the usage chain off the backends stack (the M99 server import floor).
 OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
 
 # File-server URL prefix: server.py mounts the one files router under it. The prefix names
 # what has to follow it — the absolute filesystem path with its leading `/` removed — so a
 # path that dropped its leading segments reads as wrong where it is written. The legacy /files
 # (and singular /file) spellings are hard-offline: nothing is mounted there, both answer 404.
-# Every Python reader derives its form (auth whitelist entries, trace parsing, listing roots,
-# slack URL rewriting) from this tuple; the frontend gate (web/static/js/chat/artifacts.js)
+# Every Python reader derives its form from this tuple — the pages URLs and trace inputs,
+# the files listing root and entry URLs, the slack URL rewriting. The auth whitelist
+# deliberately derives nothing: the file server sits behind the access key, and deriving
+# the prefix there would re-open the gate. The frontend gate (web/static/js/chat/artifacts.js)
 # mirrors the single element, pinned by tests/test_frontend_file_server_prefixes.py.
 FILE_SERVER_MOUNTS = ("/absolute_filepath",)
 
@@ -66,9 +77,33 @@ PERFETTO_MERGED_PATH = "/perfetto/merged"
 NCU_VIEWER_PATH = "/ncu"
 AUTH_STATUS_PATH = "/api/auth/status"
 
+# Usage-source vocabulary: the token tally (src/core/token_tally.py) tags every row with
+# one of these corpus sources, and the usage panel (src/api/pages.py) keys its per-source
+# tiles and row slots on the same spellings. The panel reads rows the tally produces but
+# must not import it — the tally pulls the config and model stack onto every page render —
+# so the shared spellings live in this stdlib-only module.
+USAGE_SOURCE_CLAUDE_CODE = "Claude Code"
+USAGE_SOURCE_CODEX = "Codex"
+USAGE_SOURCE_OPENCODE = "opencode"
+USAGE_SOURCE_CHARLIE_BOT = "charlie-bot"
+
 
 class WatchKind(StrEnum):
   UNKNOWN = "unknown"  # fail-loud sentinel; never a valid target, no default
   LOCAL_PID = "local_pid"
   REMOTE_PID = "remote_pid"
   SLURM_JOB = "slurm_job"
+
+
+class BackendType(StrEnum):
+  """The BackendOption.type vocabulary; config.yaml carries the same strings."""
+
+  CC_CLAUDE = "cc-claude"
+  CC_KIMI = "cc-kimi"
+  CC_OPENAI_COMPATIBLE = "cc-openai-compatible"
+  CODEX = "codex"
+  CHARLIE_CODE = "charlie-code"
+  GEMINI = "gemini"
+  OPENCODE = "opencode"
+  ANTIGRAVITY = "antigravity"
+  TUI_CLI = "tui-cli"

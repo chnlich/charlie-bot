@@ -61,7 +61,7 @@ def _load_all_items(repo_path: Path) -> list[dict]:
   return items
 
 
-def _find_item_file(repo_path: Path, item_id: str, source: str | None = None) -> tuple[Path | None, list | None]:
+def _find_item_file(repo_path: Path, item_id: str, source: str | None) -> tuple[Path | None, list | None]:
   """Return (yaml_path, items) for the store file containing item_id, or (None, None).
 
   In a per-module store, a given *source* (e.g. 'alpha-lab-backtest') restricts

@@ -1,8 +1,7 @@
 """CLI script for master CC to schedule a delayed trigger.
 
-Called by the master Claude Code instance as a shell command. ``--session``
-is optional; the server-written CHARLIEBOT_SESSION_ID supplies it in normal master
-use (see ``resolve_session_id``).
+Called by the master Claude Code instance as a shell command (session
+identity resolves per ``resolve_session_id``).
 
   charliebot schedule-trigger \
     --max-wait 3600 \
@@ -33,6 +32,7 @@ import argparse
 import json
 
 from src.cli.common import add_session_arg, get_config, post_internal_api, resolve_session_id
+from src.cli.help_formatter import CliHelpFormatter
 from src.core.constants import MAX_TRIGGER_MESSAGE_CHARS, WatchKind
 
 # Exit code returned when trigger creation is rejected: remote-PID verify-on-create
@@ -91,7 +91,8 @@ def _validate_message(value: str) -> str:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(description="Schedule a delayed trigger for a CharlieBot session")
+  parser = argparse.ArgumentParser(
+      description="Schedule a delayed trigger for a CharlieBot session", formatter_class=CliHelpFormatter)
   add_session_arg(parser)
   parser.add_argument(
       "--max-wait",

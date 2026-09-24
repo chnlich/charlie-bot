@@ -10,7 +10,7 @@ Sources, all local logs (no vendor usage API is called):
   charlie-bot  ~/.charliebot/sessions/*/threads/*/data/events.jsonl thread result events, and
                ~/.charliebot/sessions/*/data/master_runs/*/agent.raw.ndjson master-run captures
 
-Two accounting traps this handles:
+Three accounting traps this handles:
   1. Claude Code replays history verbatim on resume and fork, so responses are deduped on
      message.id (falling back to requestId, then uuid). About half of all usage lines on this
      host are replays.
@@ -26,8 +26,9 @@ Two accounting traps this handles:
 
 Cache — one JSON document of per-file Claude, Codex and charlie-bot contributions (the
 gigabyte-scale, hundred-megabyte-scale and many-small-files sources) plus the opencode db's
-whole contribution, so a page load re-parses only the sources that changed. On top of that
-document, an in-process aggregate memo holds the merged Claude+Codex partial of the last
+entry, so a page load re-parses only the sources that changed. The db's rows map lives in a
+sidecar document beside the cache (see ``rows`` below). On top of that document, an in-process
+aggregate memo holds the merged Claude+Codex partial of the last
 collect, keyed on the walk signature:
 the home pairs, every log file's (path, mtime_ns, size), and the walk's own error strings.
 A hit serves the sums, spans and notes without replaying a single cached record; misses to
@@ -94,11 +95,14 @@ Vocabulary:
               document stays at the Claude+Codex corpus's size. A process restart parses the
               sidecar only when a signature miss demands a seed, rebuilds the row memo from
               it, and gates the key diff on the entry's ``probe`` aggregates: a matching
-              ``(count, sum(time_updated))`` pair proves the rows unchanged and the key pass
-              skips, so only a proof miss or a moved row fetches rows that moved since the
-              sidecar was written instead of re-reading every data blob
-   probe      the opencode db's proof aggregates ``[count, sum(time_updated)]`` at the time
-              the entry's rows were stored — the seeded restart's gate input (see ``rows``)
+              proof tuple proves the rows unchanged and the key pass skips, so only a proof
+              miss or a moved row fetches rows that moved since the sidecar was written
+              instead of re-reading every data blob
+   probe      the opencode db's proof aggregates ``[count, sum(time_updated), max(time_updated),
+              max(rowid)]`` at the time the entry's rows were stored — the seeded restart's
+              gate input (see ``rows``) and the tail fetch's floor (see
+              _increment_opencode_rows); a document from a build that stored only the first
+              two fields seeds without a max and takes the full key diff once
    records    Claude: ``[key, model, ts, in_fresh, cache_write, cache_read, output]`` per
                response, replay-deduped within the file; Codex: ``[model, ts, in_fresh,
                cache_read, output]`` per token_count event, model resolved by file position;
@@ -139,21 +143,27 @@ from collections import defaultdict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import BinaryIO, NamedTuple
+from typing import BinaryIO, NamedTuple, TypeVar
 
 import orjson
 
 from src.core import event_types as ET
 from src.core.codex_usage import (
-    CODEX_EVENT_MSG,
     CODEX_SESSION_META,
     CODEX_TOKEN_COUNT,
     CODEX_TURN_CONTEXT,
     DEFAULT_CODEX_HOME,
+    codex_token_count_payload,
 )
 from src.core.config import default_claude_dir, get_config
+from src.core.constants import (
+    USAGE_SOURCE_CHARLIE_BOT,
+    USAGE_SOURCE_CLAUDE_CODE,
+    USAGE_SOURCE_CODEX,
+    USAGE_SOURCE_OPENCODE,
+    BackendType,
+)
 from src.core.json_utils import atomic_write_stream
-from src.core.models import BackendType
 from src.core.runs import DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RAW_LOG_NAME
 from src.core.threads import EVENTS_LOG_NAME, METADATA_NAME, THREADS_DIR_NAME
 
@@ -405,75 +415,118 @@ def _walk_error_hook(t: _Tally, source: str, label: str, root_name: str) -> Call
   return _onerror
 
 
-def _iter_jsonl_stats(
-    root: Path, t: _Tally, source: str, label: str,
-    suffixes: tuple[str, ...] = (".jsonl",)) -> Iterator[tuple[str, os.stat_result | None, str | None]]:
-  """Yield ``(path, stat, error)`` for every file under *root* whose name ends in one of
-  *suffixes*, recording a note when a directory is unreadable.
+# The claude+codex walk's per-directory listing memo: (dirpath, suffixes) ->
+# ((mtime_ns, size), (subdir paths, candidate file paths)). The candidate file names are
+# stored suffix-filtered, so *suffixes* rides the memo key. Paths are absolute so a memo hit
+# joins nothing. Entries are bounded by the historical directory set of the walked trees; a
+# subtree that stops being walked leaves its entries until the process restarts.
+_jsonl_dir_memo: dict[tuple[str, tuple[str, ...]], tuple[tuple[int, int], tuple[list[str], list[str]]]] = {}
+
+_MemoKey = TypeVar("_MemoKey")
+_MemoValue = TypeVar("_MemoValue")
+
+
+def _memoized_listing(
+    memo: dict[_MemoKey, tuple[tuple[int, int], _MemoValue]],
+    lookup_key: _MemoKey,
+    dirpath: str,
+    scan: Callable[[], _MemoValue],
+) -> _MemoValue:
+  """Serve *scan*'s listing through *memo*, validated by the directory's own stat pair.
+
+  A remembered listing costs one stat to validate; a miss re-scandirs. A vanished directory
+  drops its memo entry and raises FileNotFoundError; any other read failure raises OSError
+  for the caller to note. The stored pair is ((mtime_ns, size), value): one stat validates a
+  remembered listing, since an entry's create, delete or rename moves the containing
+  directory's own mtime_ns, while a file append moves only the file's mtime, which the
+  walk's per-file stat takes every pass.
+  """
+  try:
+    st = os.stat(dirpath)
+    stat_key = (st.st_mtime_ns, st.st_size)
+  except OSError:
+    memo.pop(lookup_key, None)
+    raise
+  hit = memo.get(lookup_key)
+  if hit is not None and hit[0] == stat_key:
+    return hit[1]
+  try:
+    value = scan()
+  except OSError:
+    memo.pop(lookup_key, None)
+    raise
+  memo[lookup_key] = (stat_key, value)
+  return value
+
+
+def _jsonl_listing(dirpath: str, suffixes: tuple[str, ...]) -> tuple[list[str], list[str]]:
+  """The directory's subdirectory paths and suffix-matching file paths, memoized on the
+  directory's own stat pair (``_memoized_listing`` owns the stat-and-fail contract)."""
+
+  def scan() -> tuple[list[str], list[str]]:
+    subdirs: list[str] = []
+    files: list[str] = []
+    with os.scandir(dirpath) as scandir:
+      for entry in scandir:
+        if entry.is_dir():
+          if not entry.is_symlink():
+            subdirs.append(entry.path)
+        elif entry.name.endswith(suffixes):
+          files.append(entry.path)
+    return subdirs, files
+
+  return _memoized_listing(_jsonl_dir_memo, (dirpath, suffixes), dirpath, scan)
+
+
+def _iter_jsonl_stats(root: Path, t: _Tally, source: str,
+                      label: str) -> Iterator[tuple[str, os.stat_result | None, str | None]]:
+  """Yield ``(path, stat, error)`` for every ``.jsonl`` file under *root*, recording
+  a note when a directory is unreadable.
 
   ``Path.rglob`` swallows ``PermissionError`` while walking (shell-glob semantics), so an
   unreadable directory would vanish silently instead of surfacing. ``os.walk``'s ``onerror`` hook
   gets the error instead, which becomes a per-account note; a missing directory is not an error
   here (``discover_homes`` already filters those out for the real on-disk layout). Paths are
   plain strings carrying each file's stat, so both consumers — the corpus signature and the
-  per-file serve walk — pay one syscall per file and never build a Path per entry.
+  per-file serve walk — pay one syscall per file and never build a Path per entry. Each
+  directory's listing is memoized on the directory's own stat pair (``_jsonl_listing``), so a
+  repeat walk over an unchanged tree pays one stat per directory and one per candidate file.
   """
   hook = _walk_error_hook(t, source, label, root.name)
   stack = [str(root)]
   while stack:
     dirpath = stack.pop()
     try:
-      scandir = os.scandir(dirpath)
+      subdirs, files = _jsonl_listing(dirpath, (".jsonl",))
     except OSError as exc:
       hook(exc)
       continue
-    with scandir:
-      for entry in scandir:
-        if entry.is_dir():
-          if not entry.is_symlink():
-            stack.append(entry.path)
-        elif entry.name.endswith(suffixes):
-          try:
-            yield entry.path, entry.stat(follow_symlinks=True), None
-          except OSError as exc:
-            yield entry.path, None, repr(exc)
+    stack.extend(subdirs)
+    for path in files:
+      try:
+        yield path, os.stat(path, follow_symlinks=True), None
+      except OSError as exc:
+        yield path, None, repr(exc)
 
 
 # The charlie-bot walk's per-directory listing memo: dirpath -> ((mtime_ns, size),
-# [subdir path]). One stat validates a remembered listing, since an entry's create, delete
-# or rename moves the containing directory's own mtime_ns, while a file append moves only
-# the file's mtime, which the walk's per-file stat takes every round. Only subdirectories
-# are listed: the walk's sole consumer stats candidate files one level below these
-# directories, and an entry's dir-ness changes only through a parent-directory rename the
-# stat pair catches. Paths are absolute so a memo hit joins nothing. Entries are bounded by
-# the historical directory set of the sessions tree; a subtree that stops being listed
-# leaves its entries until the process restarts.
+# [subdir path]). Only subdirectories are listed: the walk's sole consumer stats candidate
+# files one level below these directories, and an entry's dir-ness changes only through a
+# parent-directory rename the stat pair catches. Paths are absolute so a memo hit joins
+# nothing. Entries are bounded by the historical directory set of the sessions tree; a
+# subtree that stops being listed leaves its entries until the process restarts.
 _charliebot_dir_memo: dict[str, tuple[tuple[int, int], list[str]]] = {}
 
 
 def _charliebot_listing(dirpath: str) -> list[str]:
-  """The directory's subdirectory paths, memoized on the directory's own stat pair.
+  """The directory's subdirectory paths, memoized on the directory's own stat pair
+  (``_memoized_listing`` owns the stat-and-fail contract)."""
 
-  A remembered listing costs one stat to validate; a miss re-scandirs. A vanished directory
-  drops its memo entry and raises FileNotFoundError; any other read failure raises OSError
-  for the caller to note."""
-  try:
-    st = os.stat(dirpath)
-    key = (st.st_mtime_ns, st.st_size)
-  except OSError:
-    _charliebot_dir_memo.pop(dirpath, None)
-    raise
-  memo = _charliebot_dir_memo.get(dirpath)
-  if memo is not None and memo[0] == key:
-    return memo[1]
-  try:
+  def scan() -> list[str]:
     with os.scandir(dirpath) as scandir:
-      listing = [entry.path for entry in scandir if entry.is_dir() and not entry.is_symlink()]
-  except OSError:
-    _charliebot_dir_memo.pop(dirpath, None)
-    raise
-  _charliebot_dir_memo[dirpath] = (key, listing)
-  return listing
+      return [entry.path for entry in scandir if entry.is_dir() and not entry.is_symlink()]
+
+  return _memoized_listing(_charliebot_dir_memo, dirpath, dirpath, scan)
 
 
 # The walk's per-kind (kind, container under the session dir, candidate file name), built
@@ -512,7 +565,7 @@ def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str,
     session_listing = _charliebot_listing(str(sessions))
   except OSError as exc:
     if not isinstance(exc, FileNotFoundError):
-      _unreadable_note(t.notes, "charlie-bot", str(sessions), exc)
+      _unreadable_note(t.notes, USAGE_SOURCE_CHARLIE_BOT, str(sessions), exc)
     return
   for session_path in session_listing:
     for kind, container, name in _WALK_KINDS:
@@ -520,7 +573,7 @@ def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str,
         listing = _charliebot_listing(session_path + _WALK_SEP + container)
       except OSError as exc:
         if not isinstance(exc, FileNotFoundError):
-          _unreadable_note(t.notes, "charlie-bot", f"{session_path}/{container}", exc)
+          _unreadable_note(t.notes, USAGE_SOURCE_CHARLIE_BOT, f"{session_path}/{container}", exc)
         continue
       for entry_path in listing:
         path = entry_path + _WALK_SEP + name
@@ -553,28 +606,33 @@ def _charliebot_signature(
   are write-once, and the parse reads them on the round the log itself moves)."""
   entries = tuple(
       sorted((kind, path, m, s) if m is not None else (kind, path, None, err) for kind, path, m, s, err in rows))
-  return ("charlie-bot", str(sessions), entries, notes)
+  return (USAGE_SOURCE_CHARLIE_BOT, str(sessions), entries, notes)
 
 
 def _corpus_signature(
-    claude_homes: dict[str, Path], codex_homes: dict[str, Path], sessions: Path,
-    charliebot_rows: list[tuple[str, str, int | None, int | None, str | None]], charliebot_notes: tuple[str,
-                                                                                                        ...]) -> tuple:
-  """Walk signature of the Claude+Codex+charlie-bot corpus: home pairs, every log file's stat
-  pair, and the walk's own error strings. Any corpus or permission move changes the tuple.
-  The charlie-bot component arrives pre-walked: the caller's one pass feeds both this
-  signature and the serve, so a collect never walks that corpus twice."""
+    claude_homes: dict[str, Path], codex_homes: dict[str, Path], sessions: Path, claude_rows: _JsonlRows,
+    codex_rows: _JsonlRows, charliebot_rows: list[tuple[str, str, int | None, int | None, str | None]],
+    charliebot_notes: tuple[str, ...], claude_notes: tuple[str, ...], codex_notes: tuple[str, ...]) -> tuple:
+  """Walk signature of the Claude+Codex+charlie-bot corpus from the shared walks' rows: home
+  pairs, every log file's stat pair, and the walks' own error strings. Any corpus or
+  permission move changes the tuple. The claude, codex and charlie-bot components arrive
+  pre-walked: the caller's one pass per tree feeds both this signature and the serve, so a
+  collect never walks a corpus twice."""
   sig = []
-  for source, homes, sub in (("Claude Code", claude_homes, "projects"), ("Codex", codex_homes, "sessions")):
-    probe = _Tally()
-    entries = []
-    for label, home in homes.items():
-      per_home = []
-      for path, st, error in _iter_jsonl_stats(home / sub, probe, source, label):
-        per_home.append((path, st.st_mtime_ns, st.st_size) if st is not None else (path, None, error))
-      entries.append((label, tuple(sorted(per_home))))
+  for source, homes, rows_by_account, walk_notes in (
+      (USAGE_SOURCE_CLAUDE_CODE, claude_homes, claude_rows, claude_notes),
+      (USAGE_SOURCE_CODEX, codex_homes, codex_rows, codex_notes),
+  ):
+    entries = tuple(
+        (
+            label,
+            tuple(
+                sorted(
+                    (path, mtime_ns, size) if mtime_ns is not None else (path, None, error)
+                    for path, mtime_ns, size, error in rows_by_account[label])))
+        for label in homes)
     home_pairs = tuple(sorted((label, str(path)) for label, path in homes.items()))
-    sig.append((source, home_pairs, tuple(entries), tuple(probe.notes)))
+    sig.append((source, home_pairs, entries, walk_notes))
   sig.append(_charliebot_signature(sessions, charliebot_rows, charliebot_notes))
   return tuple(sig)
 
@@ -601,19 +659,37 @@ _opencode_row_memos: dict[str, dict[str, tuple[int, list | None] | list]] = {}
 # an equal epoch proves the memo's records — and the rows built from them — still current.
 _opencode_row_epochs: dict[str, int] = {}
 
-# Per-db proof aggregates of the row memo's last full scan: (row count, sum of time_updated).
-# The pair is a strictly weaker proof than the key scan's per-id diff: every single-row move
-# changes it — an insert or delete moves the count, and a moved row rewrites time_updated so
-# the sum changes with it, while a data-only rewrite with an unchanged time_updated is
-# invisible to the key scan itself — but a multi-row coincidence whose count and sum both net
-# to zero (a delete and an insert landing in the same millisecond, the only window where the
-# inserted row's time_updated can equal the deleted row's last write) dodges the probe where
-# the per-id diff would see it, and that wrong serve stands until the next proof miss
-# re-scans. The one same-row shape both miss is a terminal pair of writes inside one
-# millisecond, the class the row memo vocabulary documents above. Equal aggregates skip the
-# per-row key read.
-_OPENCODE_PROBE_SQL = "select count(*), coalesce(sum(time_updated), 0) from message"
-_opencode_probes: dict[str, tuple[int, int]] = {}
+# Per-db proof aggregates of the row memo's last advance: (row count, sum of time_updated,
+# max of time_updated). The pair (count, sum) is a strictly weaker proof than the key scan's
+# per-id diff: every single-row move changes it, while a data-only rewrite with an unchanged
+# time_updated is invisible to the key scan itself — but a multi-row coincidence whose count
+# and sum both net to zero (a delete and an insert landing in the same millisecond, the only
+# window where the inserted row's time_updated can equal the deleted row's last write) dodges
+# the probe where the per-id diff would see it, and that wrong serve stands until a proof
+# miss's full key scan — the self-heal round, a residual mismatch, or a restart seed. The one
+# same-row shape both miss is a terminal pair of writes inside
+# one millisecond, the class the row memo vocabulary documents above. Equal aggregates skip
+# the per-row key read; a miss whose gate carries the max advances from the tail fetch below
+# and proves itself with the same triple — see _increment_opencode_rows. The rowid max rides
+# the scan for free (the table is a rowid table) and closes the plain delete-and-insert
+# dodge: the insert's fresh rowid moves it unless the deleted row held the max rowid and the
+# insert reuses it, the one shape _OPENCODE_FULL_SCAN_EVERY's self-heal exists for.
+_OPENCODE_PROBE_SQL = (
+    "select count(*), coalesce(sum(time_updated), 0), "
+    "coalesce(max(time_updated), 0), coalesce(max(rowid), 0) from message")
+# Rows written after the stored gate's max, with their blobs: every insert and every
+# time_updated bump carries the write's own wall-clock ms (drizzle $onUpdate), so a row the
+# memo has not seen must sit above that max unless the clock stepped backward — a shape the
+# residual check hands to the full key scan.
+_OPENCODE_TAIL_SQL = "select rowid, id, time_updated, data from message where time_updated > ?"
+# Every Nth warm proof miss takes the full key scan instead of the tail fetch: the residual
+# proof's dodge classes (a triple-netting delete-and-insert, a clock stepped backward) leave
+# a wrong serve no later round can see, and this bounds its lifetime the way the pre-tail
+# gate's next-miss re-scan did. One full scan per N changed rounds prices ~0.3 s at the
+# 221k-row corpus against a gate that never re-reads it otherwise.
+_OPENCODE_FULL_SCAN_EVERY = 16
+_opencode_probes: dict[str, tuple[int, int, int, int]] = {}
+_opencode_miss_counts: dict[str, int] = {}
 
 # Per-db opencode partial of the last merge, corresponding to the row memo's current state
 # (buckets by model and account, per-model spans, contributing-record count). A scan that
@@ -636,13 +712,13 @@ def _snapshot_opencode_partial(t: _Tally, count: int) -> _OpencodePartial:
   alias a served tally's containers, so every bucket copies."""
   return _OpencodePartial(
       by_model={
-          k: dict(v) for k, v in t.by_model.items() if k[0] == "opencode"
+          k: dict(v) for k, v in t.by_model.items() if k[0] == USAGE_SOURCE_OPENCODE
       },
       by_account={
-          k: dict(v) for k, v in t.by_account.items() if k[0] == "opencode"
+          k: dict(v) for k, v in t.by_account.items() if k[0] == USAGE_SOURCE_OPENCODE
       },
       span={
-          k: tuple(v) for k, v in t.span.items() if k[0] == "opencode"
+          k: tuple(v) for k, v in t.span.items() if k[0] == USAGE_SOURCE_OPENCODE
       },
       count=count)
 
@@ -674,14 +750,14 @@ def _partial_from_doc(doc: object) -> _OpencodePartial | None:
     return None
   return _OpencodePartial(
       by_model={
-          ("opencode", model): bucket for model, bucket in doc["by_model"].items()
+          (USAGE_SOURCE_OPENCODE, model): bucket for model, bucket in doc["by_model"].items()
       },
       by_account={
-          ("opencode", model, account): bucket for model, buckets in doc["by_account"].items()
+          (USAGE_SOURCE_OPENCODE, model, account): bucket for model, buckets in doc["by_account"].items()
           for account, bucket in buckets.items()
       },
       span={
-          ("opencode", model): tuple(pair) for model, pair in doc["span"].items()
+          (USAGE_SOURCE_OPENCODE, model): tuple(pair) for model, pair in doc["span"].items()
       },
       count=doc["count"])
 
@@ -756,6 +832,7 @@ def _reset_aggregate_memo() -> None:
   _opencode_row_epochs.clear()
   _opencode_partials.clear()
   _opencode_probes.clear()
+  _opencode_miss_counts.clear()
   _tally_cache_docs.clear()
   _opencode_doc_synced.clear()
   _source_partials.clear()
@@ -1016,7 +1093,7 @@ def _fold_file_partial(source: str, account: str, path_key: tuple, entry: dict, 
   corpus counts; Claude dedupes corpus-wide (first fold wins), Codex always contributes."""
   fold = _Tally()
   keys = None
-  if source == "Claude Code":
+  if source == USAGE_SOURCE_CLAUDE_CODE:
     keys = {}
     for rec in entry["records"]:
       key = rec[0]
@@ -1097,7 +1174,7 @@ def _reconcile_partials(t: _Tally, source: str, walked: list[tuple[str, str, dic
   for state_key, partial in _source_partials.items():
     if state_key[0] == source:
       _apply_partial(t, partial)
-  if source == "Claude Code":
+  if source == USAGE_SOURCE_CLAUDE_CODE:
     for key, record in _claude_orphan.items():
       holders = _claude_key_holders.get(key)
       if not holders:
@@ -1107,32 +1184,56 @@ def _reconcile_partials(t: _Tally, source: str, walked: list[tuple[str, str, dic
       _add_record(t, source, anchor[1], record)
 
 
+# One source walk's rows: account -> (path, mtime_ns, size, error) per file, the stat pair
+# None with the error string on an unreadable file. The shared shape of _walk_jsonl_logs's
+# return and the consumers that take it pre-walked.
+_JsonlRows = dict[str, list[tuple[str, int | None, int | None, str | None]]]
+
+
+def _walk_jsonl_logs(
+    sub: str,
+    homes: dict[str, Path],
+    source: str,
+    t: _Tally,
+) -> _JsonlRows:
+  """Walk every home's *sub* tree once: ``account -> [(path, mtime_ns, size, error)]`` per
+  file, the stat pair None with the error string on an unreadable file. The corpus signature
+  and ``_walk_source`` consume the same rows, so a collect walks each tree once — the
+  charlie-bot walk's one-pass contract (``_walk_charliebot``)."""
+  rows: dict[str, list[tuple[str, int | None, int | None, str | None]]] = {}
+  for account, home in homes.items():
+    per_home: list[tuple[str, int | None, int | None, str | None]] = []
+    for path, st, error in _iter_jsonl_stats(home / sub, t, source, account):
+      per_home.append((path, st.st_mtime_ns, st.st_size, None) if st is not None else (path, None, None, error))
+    rows[account] = per_home
+  return rows
+
+
 def _walk_source(
     t: _Tally,
     source: str,
     cache_key: str,
-    sub: str,
     homes: dict[str, Path],
+    rows_by_account: _JsonlRows,
     cache: TallyCache | None,
     parse: Callable,
 ) -> tuple[list[tuple[str, str, dict | None, bool]], dict]:
-  """Walk every log file, serving cache hits and parsing misses; returns one row per file —
+  """Serve every walked log file, cache hits and parse misses; returns one row per file —
   (path, account, entry or None on a failed parse, cache-hit flag) — plus the walk order.
 
-  The walk is ``_iter_jsonl_stats``: each file arrives as its str path plus the stat the
-  walker took before yielding, so a serve pays one syscall per file and no Path build — the
-  same stat pair both proves the cached entry and keys its store. Only a cache miss builds
-  anything heavier than dict lookups.
+  The rows arrive pre-walked (``_walk_jsonl_logs``), the same pass the corpus signature
+  consumed, so the serve pays no directory listing at all — one cache-gated lookup per file,
+  a parse only on a miss.
   """
   walked: list[tuple[str, str, dict | None, bool]] = []
   order: dict[tuple, int] = {}
-  for account, home in homes.items():
-    for path, st, error in _iter_jsonl_stats(home / sub, t, source, account):
-      if st is None:
+  for account in homes:
+    for path, mtime_ns, size, error in rows_by_account[account]:
+      if mtime_ns is None:
         _unreadable_note(t.notes, source, f"{account}/{os.path.basename(path)}", error)
         walked.append((path, account, None, False))
         continue
-      entry = (cache.lookup_sig(cache_key, path, [st.st_mtime_ns, st.st_size]) if cache is not None else None)
+      entry = (cache.lookup_sig(cache_key, path, [mtime_ns, size]) if cache is not None else None)
       hit = entry is not None
       if entry is None:
         prev = cache.prev(cache_key, path) if cache is not None else None
@@ -1151,11 +1252,12 @@ def _walk_source(
   return walked, order
 
 
-def collect_claude(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -> None:
-  walked, order = _walk_source(t, "Claude Code", "claude", "projects", homes, cache, _claude_file_contribution)
-  _reconcile_partials(t, "Claude Code", walked, order)
-  n_records = sum(p.n_records for k, p in _source_partials.items() if k[0] == "Claude Code")
-  entry_dupes = sum(p.entry_dupes for k, p in _source_partials.items() if k[0] == "Claude Code")
+def collect_claude(t: _Tally, homes: dict[str, Path], cache: TallyCache | None, rows_by_account: _JsonlRows) -> None:
+  walked, order = _walk_source(
+      t, USAGE_SOURCE_CLAUDE_CODE, "claude", homes, rows_by_account, cache, _claude_file_contribution)
+  _reconcile_partials(t, USAGE_SOURCE_CLAUDE_CODE, walked, order)
+  n_records = sum(p.n_records for k, p in _source_partials.items() if k[0] == USAGE_SOURCE_CLAUDE_CODE)
+  entry_dupes = sum(p.entry_dupes for k, p in _source_partials.items() if k[0] == USAGE_SOURCE_CLAUDE_CODE)
   distinct = len(_claude_key_counts)
   t.notes.append(
       f"Claude Code: {distinct:,} unique API responses over {len(homes)} config dirs, "
@@ -1179,11 +1281,11 @@ def _codex_records(recs: list[dict], model: str | None, records: list[list]) -> 
   walked = 0
   final_total = 0
   for rec in recs:
-    payload = rec.get("payload") or {}
     if rec.get("type") in (CODEX_SESSION_META, CODEX_TURN_CONTEXT):
-      model = payload.get("model") or model
+      model = (rec.get("payload") or {}).get("model") or model
       continue
-    if rec.get("type") != CODEX_EVENT_MSG or payload.get("type") != CODEX_TOKEN_COUNT:
+    payload = codex_token_count_payload(rec)
+    if payload is None:
       continue
     info = payload.get("info") or {}
     last, total = info.get("last_token_usage") or {}, info.get("total_token_usage") or {}
@@ -1254,9 +1356,9 @@ def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict,
   return entry, end
 
 
-def collect_codex(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -> None:
-  walked, order = _walk_source(t, "Codex", "codex", "sessions", homes, cache, _codex_file_contribution)
-  _reconcile_partials(t, "Codex", walked, order)
+def collect_codex(t: _Tally, homes: dict[str, Path], cache: TallyCache | None, rows_by_account: _JsonlRows) -> None:
+  walked, order = _walk_source(t, USAGE_SOURCE_CODEX, "codex", homes, rows_by_account, cache, _codex_file_contribution)
+  _reconcile_partials(t, USAGE_SOURCE_CODEX, walked, order)
   check = [tuple(entry["check"]) for _, _, entry, _ in walked if entry is not None and entry["check"] is not None]
   if check:
     w = sum(x for x, _ in check)
@@ -1353,7 +1455,7 @@ def _thread_records(objects: list[dict], meta: dict | None, registry: dict) -> t
   return records, sorted(set(ids))
 
 
-def _thread_contribution(path: str, registry: dict, prev: dict | None = None) -> tuple[dict, int]:
+def _thread_contribution(path: str, registry: dict, prev: dict | None) -> tuple[dict, int]:
   """Parse one thread event log into its cache entry; return (entry, bytes read).
 
   *prev* is the file's cached entry under an older signature; when the guard proves the
@@ -1453,7 +1555,7 @@ def _rollout_session_ids(codex_homes: dict[str, Path], t: _Tally) -> set[str]:
   can see."""
   ids: set[str] = set()
   for label, home in codex_homes.items():
-    for path, _st, _error in _iter_jsonl_stats(home / "sessions", t, "charlie-bot", f"{label} rollouts"):
+    for path, _st, _error in _iter_jsonl_stats(home / "sessions", t, USAGE_SOURCE_CHARLIE_BOT, f"{label} rollouts"):
       name = os.path.basename(path)
       if not name.startswith("rollout-") or not name.endswith(".jsonl"):
         continue
@@ -1494,7 +1596,7 @@ def _fold_records(t: _Tally, source: str, records: list) -> int:
 
 def _fold_charliebot_records(t: _Tally, records: list[list]) -> int:
   """Fold one charlie-bot entry's records into the accumulator; returns the folded count."""
-  return _fold_records(t, "charlie-bot", records)
+  return _fold_records(t, USAGE_SOURCE_CHARLIE_BOT, records)
 
 
 def collect_charliebot(
@@ -1517,20 +1619,20 @@ def collect_charliebot(
   clc_master = 0
   for kind, path, mtime_ns, size, error in rows:
     if mtime_ns is None:
-      _unreadable_note(t.notes, "charlie-bot", path, error)
+      _unreadable_note(t.notes, USAGE_SOURCE_CHARLIE_BOT, path, error)
       continue
-    entry = cache.lookup_sig("charlie-bot", path, [mtime_ns, size]) if cache is not None else None
+    entry = cache.lookup_sig(USAGE_SOURCE_CHARLIE_BOT, path, [mtime_ns, size]) if cache is not None else None
     if entry is None:
-      prev = cache.prev("charlie-bot", path) if cache is not None else None
+      prev = cache.prev(USAGE_SOURCE_CHARLIE_BOT, path) if cache is not None else None
       parse = _thread_contribution if kind == "thread" else _master_contribution
       try:
         entry, nbytes = parse(path, registry, prev)
       except (OSError, ValueError) as exc:
-        _unreadable_note(t.notes, "charlie-bot", path, exc)
+        _unreadable_note(t.notes, USAGE_SOURCE_CHARLIE_BOT, path, exc)
         continue
       t.scanned_bytes += nbytes
       if cache is not None:
-        cache.store_sig("charlie-bot", path, entry)
+        cache.store_sig(USAGE_SOURCE_CHARLIE_BOT, path, entry)
     if kind == "master":
       folded += _fold_charliebot_records(t, entry["records"])
       clc_master += sum(1 for rec in entry["records"] if rec[1] == _CLC_MASTER_ACCOUNT)
@@ -1582,7 +1684,7 @@ def collect_charliebot(
 
 # The cold-pass scan projects each matching row's tally fields inside SQLite: json_extract
 # in C there beats a Python round trip plus json.loads per row (measured ~4x slower over this
-# host's 36k-row message table). json_valid keeps the old json.loads failure mode: the LIKE
+# host's 36k-row message table). json_valid guards the query: the LIKE
 # prefilter can match a malformed row, and skipping it must not error the query. Non-object
 # tokens project NULLs, dropped by the row filter below. The trailing id/time_updated columns
 # seed the row memo; rows the WHERE clause drops are known non-contributors and memoize as
@@ -1717,17 +1819,65 @@ def _write_rows_sidecar(cache_dir: Path, name: str, rows: dict, notes: list[str]
   return True
 
 
+def _increment_opencode_rows(
+    con: sqlite3.Connection,
+    memo: dict[str, tuple[int, list | None] | list],
+    gate: tuple[int, int, int, int],
+) -> tuple[int, list[tuple[list | None, list | None]], tuple[int, int, int, int]] | None:
+  """Advance the warm memo from a proof-miss round by re-reading only rows written after the
+  stored gate's max time_updated. Returns (bytes read, per-row deltas, the round's probe) or
+  None when the read cannot prove the memo complete — the caller then runs the full key scan.
+
+  Every insert and every time_updated bump carries the write's own wall-clock ms, so a row
+  the memo has not seen sits above the stored max unless the clock stepped backward; a delete
+  or a backward write subtracts a sum term the fetch never saw. A matching (count, sum,
+  max rowid) residual therefore proves the fetch was the whole move of everything the triple
+  can see. The triple's coincidence classes (a delete and an insert landing in the same
+  millisecond with the deleted row holding the max rowid; a clock stepped backward) dodge it
+  where the full key scan's per-id diff would see the moves — the wrong serve then stands
+  until a residual mismatch, the _OPENCODE_FULL_SCAN_EVERY self-heal, or a restart re-scan.
+  """
+  expected_sum = gate[1]
+  expected_count = gate[0]
+  expected_max_rowid = gate[3]
+  fetched: list[tuple[str, int, list | None, list | None]] = []
+  nbytes = 0
+  for rowid, mid, tu, data in con.execute(_OPENCODE_TAIL_SQL, (gate[2],)):
+    rec, n = _opencode_row_data(data)
+    nbytes += n
+    old = memo.get(mid)
+    if old is None:
+      expected_count += 1
+      expected_max_rowid = max(expected_max_rowid, rowid)
+    expected_sum += tu - (old[0] if old is not None else 0)
+    fetched.append((mid, tu, rec, old[1] if old is not None else None))
+  probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone())
+  if (probe[0], probe[1], probe[3]) != (expected_count, expected_sum, expected_max_rowid):
+    return None
+  deltas = [(old_rec, rec) for _mid, _tu, rec, old_rec in fetched]
+  for mid, tu, rec, _old_rec in fetched:
+    memo[mid] = (tu, rec)
+  return nbytes, deltas, probe
+
+
 def _advance_opencode_rows(
     db: Path,
     seed: dict | None = None,
-    seed_probe: tuple[int, int] | None = None,
+    seed_probe: tuple[int, ...] | None = None,
 ) -> _OpencodeScan:
   """Advance the db's row memo to its message table's current rows, bumping the epoch when any
   row moved. Read-only: the scan never writes. Absent or unreadable dbs advance nothing and
   return ``ok=False``. A warm memo first checks the proof aggregates: unchanged (count, sum)
   proves every row move the aggregates can see is absent and the scan is skipped — a weaker
   proof than the key scan's per-id diff (see the probe comment), traded for not reading
-  85k keys on the WAL-noise rounds that are the steady state this gate exists for.
+  221k keys on the WAL-noise rounds that are the steady state this gate exists for. A proof
+  miss on a warm gate advances from the tail fetch (see _increment_opencode_rows) and falls
+  back to the full key scan when the fetch cannot prove itself complete or when the miss is
+  the self-heal round (every _OPENCODE_FULL_SCAN_EVERY-th); a seeded memo's stored proof
+  tail-fetches from the same maxes when the document carried them all, while a two-field
+  seed — a document from a build before the maxes were persisted — has no max to fetch
+  from, so its first proof miss takes the full key scan and the gate it stores carries
+  one for every round after.
 
   *seed* is the persisted document's ``rows`` map for this db. A cold memo seeded from it
   skips the whole-blob cold scan: the memo starts at the document's rows and the warm key
@@ -1753,20 +1903,30 @@ def _advance_opencode_rows(
       con.execute("begin")  # one snapshot: the stored proof must describe the scanned state
       probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone()) if memo else None
       gate = seed_probe if seeded else _opencode_probes.get(key)
-      if probe is not None and gate is not None and tuple(gate) == probe:
+      if probe is not None and gate is not None and tuple(gate) == probe[:len(gate)]:
         # The stored proof matches the snapshot: the seeded memo describes the live rows
         # and the key scan skips, the same trade the warm gate makes.
         _opencode_probes[key] = probe
         con.commit()
         return _OpencodeScan(sig, _opencode_row_epochs.get(key, 0), 0, ok=True, error=None, deltas=[])
-      nbytes, deltas = _scan_opencode_rows(con, memo)
-      if probe is None:  # cold memo: the scan's snapshot is the state the memo now describes
-        probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone())
-        _opencode_doc_synced[key] = False
-      elif any(old is not None or new is not None for old, new in deltas):
-        # (None, None) pairs are non-contributing rows whose key moved; the records the
-        # document holds are unchanged, so only a record-bearing move unsyncs the entry.
-        _opencode_doc_synced[key] = False
+      misses = _opencode_miss_counts.get(key, 0) + 1
+      _opencode_miss_counts[key] = misses
+      advanced = _increment_opencode_rows(con, memo, gate) \
+          if (probe is not None and gate is not None and len(gate) == 4
+              and misses % _OPENCODE_FULL_SCAN_EVERY != 0) else None
+      if advanced is not None:
+        nbytes, deltas, probe = advanced
+        if any(old is not None or new is not None for old, new in deltas):
+          # (None, None) pairs are non-contributing rows whose key moved; the records the
+          # document holds are unchanged, so only a record-bearing move unsyncs the entry.
+          _opencode_doc_synced[key] = False
+      else:
+        nbytes, deltas = _scan_opencode_rows(con, memo)
+        if probe is None:  # cold memo: the scan's snapshot is the state the memo now describes
+          probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone())
+          _opencode_doc_synced[key] = False
+        elif any(old is not None or new is not None for old, new in deltas):
+          _opencode_doc_synced[key] = False
       _opencode_probes[key] = probe
       con.commit()
     finally:
@@ -1776,6 +1936,7 @@ def _advance_opencode_rows(
     # the next merge down the full replay, which rebuilds both from whatever the memo holds.
     # The stored proof describes a state the failed scan never reached, so it drops too.
     _opencode_probes.pop(key, None)
+    _opencode_miss_counts.pop(key, None)
     _opencode_partials[key] = None
     return _OpencodeScan(sig, 0, 0, ok=False, error=str(exc))
   epoch = _opencode_row_epochs.get(key, 0)
@@ -1787,7 +1948,7 @@ def _advance_opencode_rows(
 
 def _replay_opencode_records(t: _Tally, records: list) -> None:
   """Fold an opencode record list into the accumulator (the cold and cache-document paths)."""
-  _fold_records(t, "opencode", records)
+  _fold_records(t, USAGE_SOURCE_OPENCODE, records)
 
 
 def _merge_opencode(
@@ -1809,7 +1970,7 @@ def _merge_opencode(
     return None, 0, False
   sig = _opencode_db_signature(db)
   key = str(db)
-  entry = cache.lookup_sig("opencode", key, sig) if cache is not None and sig is not None else None
+  entry = cache.lookup_sig(USAGE_SOURCE_OPENCODE, key, sig) if cache is not None and sig is not None else None
   epoch = 0
   from_scan = False
   if entry is not None:
@@ -1836,15 +1997,17 @@ def _merge_opencode(
   if scan is None:
     seed = None
     seed_probe = None
-    prev = cache.prev("opencode", key) if cache is not None else None
+    prev = cache.prev(USAGE_SOURCE_OPENCODE, key) if cache is not None else None
     if prev is not None:
       # The seed is a cold-memo device: a warm row memo is already at least as fresh as any
       # stored rows, so reading the multi-MB sidecar here would serve nothing.
       if not _opencode_row_memos.get(key):
         seed = cache.entry_rows(prev, t.notes)
         stored_probe = prev.get("probe")
-        if isinstance(stored_probe, list) and len(stored_probe) == 2:
-          seed_probe = (stored_probe[0], stored_probe[1])
+        # A four-field proof carries the tail fetch's maxes; a two-field one is a legacy
+        # document — it seeds without a max and its first miss takes the full key diff.
+        if isinstance(stored_probe, list) and len(stored_probe) in (2, 4):
+          seed_probe = tuple(stored_probe)
       _adopt_stored_partial(key, prev)
     scan = _advance_opencode_rows(db, seed, seed_probe)
   if not scan.ok:
@@ -1865,19 +2028,22 @@ def _merge_opencode(
   # store below persists it, so it lands before the entry is built.
   _opencode_partials[key] = _snapshot_opencode_partial(t, count)
   if cache is not None and sig is not None:
-    entry = cache.prev("opencode", key)
+    entry = cache.prev(USAGE_SOURCE_OPENCODE, key)
     if entry is not None and _opencode_doc_synced.get(key):
       # The probe proved the rows unchanged since this entry was stored: its signature is
       # stale only by WAL writes to rows the tally never reads, and re-signing it would
       # rewrite the multi-MB sidecar for a signature the next WAL write stales anyway.
-      cache.store_sig("opencode", key, entry)
+      cache.store_sig(USAGE_SOURCE_OPENCODE, key, entry)
     else:
       stored = {
           "sig": sig,
           "partial": _partial_to_doc(_opencode_partials[key]),
       }
       # The proof aggregates ride the entry beside the rows they describe: the restart seed
-      # gates its key diff on them, so a restart whose rows did not move skips the scan.
+      # gates its key diff on them, so a restart whose rows did not move skips the scan and
+      # a moved round tail-fetches from the stored maxes like the warm gate does. The
+      # sidecar name is stable and the sidecar writes before the entry stores, so the
+      # stored proof always describes the rows the named sidecar holds.
       probe = _opencode_probes.get(key)
       if probe is not None:
         stored["probe"] = list(probe)
@@ -1891,7 +2057,7 @@ def _merge_opencode(
           stored["rows_file"] = name
       else:
         stored["rows_file"] = prev_rows_file
-      cache.store_sig("opencode", key, stored)
+      cache.store_sig(USAGE_SOURCE_OPENCODE, key, stored)
       _opencode_doc_synced[key] = True
   t.notes.append(f"opencode: {count:,} assistant messages with token counts")
   return sig, epoch, from_scan
@@ -1919,17 +2085,18 @@ def _adjust_opencode_partial(
       # the bucket for re-derivation from the row memo.
       model, account, ts, in_fresh, cache_write, cache_read, output = rec
       vals = {"in_fresh": in_fresh, "cache_write": cache_write, "cache_read": cache_read, "output": output}
-      for key, bucket in ((("opencode", model), by_model), (("opencode", model, account), by_account)):
+      model_key = (USAGE_SOURCE_OPENCODE, model)
+      for key, bucket in ((model_key, by_model), ((USAGE_SOURCE_OPENCODE, model, account), by_account)):
         tgt = bucket.setdefault(key, dict.fromkeys(FIELDS, 0)) if sign > 0 else bucket[key]
         for name, value in vals.items():
           tgt[name] += sign * value
         tgt["calls"] += sign
       if ts:
-        lo, hi = span.get(("opencode", model), (None, None))
+        lo, hi = span.get(model_key, (None, None))
         if sign > 0:
-          span[("opencode", model)] = (ts if lo is None or ts < lo else lo, ts if hi is None or ts > hi else hi)
+          span[model_key] = (ts if lo is None or ts < lo else lo, ts if hi is None or ts > hi else hi)
         elif ts in (lo, hi):
-          rederive.add(("opencode", model))
+          rederive.add(model_key)
   for span_key in rederive:
     lo = hi = None
     for _, rec in memo.values():
@@ -2030,10 +2197,10 @@ def _materialize_rows(rows: list[dict]) -> list[ModelRow]:
 
 
 def collect_token_usage(
+    cache_path: Path | None,
     claude_homes: dict[str, Path] | None = None,
     codex_homes: dict[str, Path] | None = None,
     opencode_db: Path | None = None,
-    cache_path: Path | None = None,
     sessions_dir: Path | None = None,
 ) -> TokenTally:
   """A failing source records a note instead of raising; see the module docstring for the cache.
@@ -2057,7 +2224,13 @@ def collect_token_usage(
   global _aggregate_memo, _tally_memo
   charliebot_probe = _Tally()
   charliebot_rows = _walk_charliebot(sessions_dir, charliebot_probe)
-  signature = _corpus_signature(claude_homes, codex_homes, sessions_dir, charliebot_rows, tuple(charliebot_probe.notes))
+  claude_probe = _Tally()
+  codex_probe = _Tally()
+  claude_rows = _walk_jsonl_logs("projects", claude_homes, USAGE_SOURCE_CLAUDE_CODE, claude_probe)
+  codex_rows = _walk_jsonl_logs("sessions", codex_homes, USAGE_SOURCE_CODEX, codex_probe)
+  signature = _corpus_signature(
+      claude_homes, codex_homes, sessions_dir, claude_rows, codex_rows, charliebot_rows, tuple(charliebot_probe.notes),
+      tuple(claude_probe.notes), tuple(codex_probe.notes))
   lookup_sig = _opencode_db_signature(opencode_db)
   tally_memo = _tally_memo
   if lookup_sig is not None and tally_memo is not None and tally_memo[0][:2] == (signature, lookup_sig):
@@ -2101,8 +2274,10 @@ def collect_token_usage(
     # The shared walk's dir-level error notes ride the fresh round (the rows carry only
     # per-file errors); the memo captures them here and serves them on hit rounds.
     t.notes.extend(charliebot_probe.notes)
-    collect_claude(t, claude_homes, cache)
-    collect_codex(t, codex_homes, cache)
+    t.notes.extend(claude_probe.notes)
+    t.notes.extend(codex_probe.notes)
+    collect_claude(t, claude_homes, cache, claude_rows)
+    collect_codex(t, codex_homes, cache, codex_rows)
     collect_charliebot(t, codex_homes, cache, charliebot_rows)
     _aggregate_memo = (signature, _SourceAggregate.snapshot(t, notes_from))
   else:

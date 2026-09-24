@@ -1,9 +1,12 @@
-"""Local streaming-style speech transcription with a dual engine: sherpa (CPU) or qwen3_hf (GPU).
+"""Record-then-upload speech transcription with a dual engine: sherpa (CPU) or qwen3_hf (GPU).
 
 The default 'sherpa' engine runs the int8 sherpa-onnx Qwen3-ASR pipeline on CPU. The
 'qwen3_hf' engine (cfg.voice.engine) runs the official transformers Qwen3-ASR weights on
 NVIDIA GPUs; it needs the gpu-voice dependency group, which only GPU hosts install, so
 every torch/transformers import here is lazy and branch-local.
+
+Decoding is offline: transcribe_pcm_offline takes a complete recording, segments it with
+the bundle's VAD, and decodes each segment in one shot. There is no incremental state.
 """
 
 from __future__ import annotations
@@ -32,17 +35,22 @@ log = structlog.get_logger()
 SAMPLE_RATE = 16_000
 MAX_RECORDING_SECONDS = 5 * 60
 MAX_RECORDING_SAMPLES = SAMPLE_RATE * MAX_RECORDING_SECONDS
-# Partial refresh re-decodes the open VAD segment, and decode cost grows with the
-# segment. Measured on this host (x86_64 WSL2, RTX 3080 box; measurements in
-# ab_voice_decode_v1.py, session artifacts): the CPU sherpa engine decodes a 10.1s
-# segment in ~3.1s and a 26.6s segment in ~7.9s (num_threads=4); the GPU qwen3_hf
-# engine decodes the 26.6s segment in ~2.0-2.3s. At a 2s refresh the 20s-cap segment
-# would pin the decode thread (duty > 100%), and even at 5s the duty peaks near half
-# on the longest segments, so partials refresh every 5s of speech.
-LIVE_DECODE_INTERVAL_SAMPLES = SAMPLE_RATE * 5
-LIVE_DECODE_MIN_SAMPLES = SAMPLE_RATE // 2
+# A segment's decode starts where the previous one's ended, pause included, so quiet
+# speech the detector labels silence still reaches the model. The cap bounds one
+# decode at 5s pause + the detector's 20s max_speech_duration + 0.4s tail = 25.4s,
+# about 330 audio positions plus 256 new tokens, inside the CPU engine's
+# max_total_len=1024.
+SEGMENT_DECODE_PAUSE_SAMPLES = 5 * SAMPLE_RATE
+# Padding after a segment's speech end, so a word tail just past the cut still decodes.
 SEGMENT_DECODE_PAD_SAMPLES = 6_400
-VAD_BUFFER_SECONDS = MAX_RECORDING_SECONDS + 10
+# The offline path feeds the VAD in 128 ms steps, the browser worklet's capture-chunk
+# cadence. sherpa marks a segment's start at most 2*WindowSize +
+# min_speech_duration = 2*512 + 4000 = 5024 samples (~0.31 s) before the end of the
+# feed where speech is first detected, so a feed larger than that clips the sentence
+# onset (one whole-recording feed loses everything before tail - 5024); at 128 ms any
+# onset alignment stays inside the back-dated window, while a single large feed drops
+# a replayed sentence's opening.
+OFFLINE_VAD_FEED_SAMPLES = 2048
 
 QWEN3_ASR_DIR_NAME = "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"
 QWEN3_ASR_ARCHIVE_NAME = f"{QWEN3_ASR_DIR_NAME}.tar.bz2"
@@ -57,7 +65,7 @@ SILERO_VAD_SHA256 = "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cb
 
 
 class SpeechModelsNotReadyError(RuntimeError):
-  """Raised when a voice stream starts before model provisioning is complete."""
+  """Raised when a voice request arrives before model provisioning is complete."""
 
 
 @dataclass(frozen=True)
@@ -76,12 +84,6 @@ class VoiceModelPaths:
 
 
 @dataclass
-class TranscriptionUpdate:
-  text: str | None
-  cap_reached: bool = False
-
-
-@dataclass
 class _SpeechModelBundle:
   recognizer: object
   vad_config: object
@@ -93,6 +95,9 @@ class _SpeechModelBundle:
 
 
 _state_lock = threading.Lock()
+# Dedicated build lock for _get_model_bundle: a ~7 s model build holds this, never
+# _state_lock, so readiness readers (get_ready_model_paths) never wait on a build.
+_bundle_build_lock = threading.Lock()
 _provisioning_started = False
 _ready_paths: VoiceModelPaths | None = None
 _provisioning_error: str | None = None
@@ -232,32 +237,79 @@ def _ensure_sherpa_paths_cached(cfg: CharlieBotConfig) -> VoiceModelPaths:
   return paths
 
 
-def models_are_cached(cfg: CharlieBotConfig) -> bool:
-  paths = voice_model_paths(cfg)
-  if not paths.silero_vad.is_file():
-    return False
-  if cfg.voice.engine == "qwen3_hf":
-    return _qwen3_hf_snapshot_cached(cfg, paths) is not None
-  return all(path.is_file() for path in _qwen3_model_files(paths))
+def _open_vad(vad_config: object, buffer_seconds: float) -> object:
+  """One VAD instance over the bundle's config; the seam tests stub to feed fake segments."""
+  import sherpa_onnx
+
+  return sherpa_onnx.VoiceActivityDetector(vad_config, buffer_size_in_seconds=buffer_seconds)
 
 
-def _qwen3_hf_snapshot_cached(cfg: CharlieBotConfig, paths: VoiceModelPaths) -> Path | None:
-  """The locally complete HF snapshot dir, or None when it is not (fully) downloaded."""
-  from huggingface_hub import snapshot_download
-  from huggingface_hub.errors import LocalEntryNotFoundError
+def get_transcription_bundle(cfg: CharlieBotConfig) -> _SpeechModelBundle:
+  """The resident recognizer + VAD bundle for offline transcription calls.
 
-  try:
-    snapshot = Path(
-        snapshot_download(repo_id=cfg.voice.model_id, cache_dir=str(paths.cache_dir), local_files_only=True))
-  except LocalEntryNotFoundError:
-    return None
-  return snapshot if _snapshot_complete(snapshot) else None
+  Raises SpeechModelsNotReadyError while provisioning is incomplete; the voice
+  endpoints map that to 503 and decode_audio.py lets it fail loudly.
+  """
+  return _get_model_bundle(cfg, get_ready_model_paths())
 
 
-def create_transcription_session(cfg: CharlieBotConfig) -> SimulatedStreamingTranscriptionSession:
-  paths = get_ready_model_paths()
-  bundle = _get_model_bundle(cfg, paths)
-  return SimulatedStreamingTranscriptionSession(bundle)
+def _offline_vad_segments(vad: object, samples: np.ndarray) -> list[tuple[int, int]]:
+  """Feed the VAD the whole recording in OFFLINE_VAD_FEED_SAMPLES steps, flush, and
+  return the closed speech segments as (start, end) sample offsets."""
+  feed = samples.astype(np.float32) / 32768.0
+  for pos in range(0, feed.size, OFFLINE_VAD_FEED_SAMPLES):
+    vad.accept_waveform(feed[pos:pos + OFFLINE_VAD_FEED_SAMPLES])
+  vad.flush()
+  segments: list[tuple[int, int]] = []
+  while not vad.empty():
+    segment = vad.front
+    start = int(segment.start)
+    segments.append((start, start + len(segment.samples)))
+    vad.pop()
+  return segments
+
+
+def offline_decode_windows(vad: object, samples: np.ndarray) -> list[tuple[int, int, int, int]]:
+  """Segment a recording through the opened VAD and return each segment's decode window.
+
+  One entry per closed speech segment: ``(start, end, left, right)`` sample offsets,
+  where ``start``/``end`` are the detector's speech bounds and ``left``/``right`` the
+  padded decode window (5 s of pause before the segment, 0.4 s tail after, the left
+  edge clipped against the previous window's right edge so windows never overlap).
+  The single owner of the window arithmetic: transcribe_pcm_offline and the replay
+  evaluation decode byte-identical spans.
+  """
+  windows: list[tuple[int, int, int, int]] = []
+  decoded_region_end = 0
+  for start, end in _offline_vad_segments(vad, samples):
+    left = max(decoded_region_end, start - SEGMENT_DECODE_PAUSE_SAMPLES)
+    right = min(samples.size, end + SEGMENT_DECODE_PAD_SAMPLES)
+    windows.append((start, end, left, right))
+    decoded_region_end = right
+  return windows
+
+
+def transcribe_pcm_offline(bundle: _SpeechModelBundle, pcm_bytes: bytes) -> str:
+  """Decode a complete 16 kHz mono PCM16 recording in one pass and return the text.
+
+  The bundle's VAD segments the audio offline (production 128 ms feed steps), every
+  segment decodes in one shot over the padded window the pipeline has always used
+  (5 s of pause before the segment, 0.4 s tail after, the left edge clipped against
+  the previous segment's right edge so windows never overlap), and the segment texts
+  join in order. No state survives the call.
+  """
+  if len(pcm_bytes) % 2 != 0:
+    raise ValueError("invalid PCM frame: byte length must be even")
+  samples = np.frombuffer(pcm_bytes, dtype="<i2")
+  # The buffer is sized to the whole recording, so the detector's internal buffer
+  # cannot wrap no matter how long the input is.
+  vad = _open_vad(bundle.vad_config, samples.size / SAMPLE_RATE + 10)
+  texts: list[str] = []
+  for _start, _end, left, right in offline_decode_windows(vad, samples):
+    text = _decode_samples(bundle, samples[left:right].astype(np.float32) / 32768.0)
+    if text:
+      texts.append(text)
+  return _join_segments(*texts)
 
 
 def _ensure_artifact(path: Path, url: str, expected_sha256: str) -> None:
@@ -336,28 +388,42 @@ def _get_model_bundle(cfg: CharlieBotConfig, paths: VoiceModelPaths) -> _SpeechM
   if bundle is not None and bundle_engine == cfg.voice.engine:
     return bundle
 
-  if cfg.voice.engine == "qwen3_hf":
-    try:
-      bundle = create_qwen3_hf_bundle(cfg, paths)
-    except Exception as exc:
-      # GPU engine down (missing packages, no card, load error): keep voice alive on
-      # the CPU engine. The ready log below names the actually active engine, and the
-      # deployment preflight re-asserts the GPU path, so the downgrade is visible.
-      log.warning("voice_gpu_engine_init_failed", error=str(exc), engine="qwen3_hf", fallback="sherpa")
-      bundle = create_sherpa_bundle(_ensure_sherpa_paths_cached(cfg))
-  else:
-    bundle = create_sherpa_bundle(paths)
+  # Double-checked single-flight: concurrent first accesses queue on the dedicated
+  # build lock, and the in-lock re-check lets the losers return the winner's bundle
+  # instead of building a second recognizer. The build never holds _state_lock.
+  with _bundle_build_lock:
+    with _state_lock:
+      bundle = _bundle
+      bundle_engine = _bundle_engine
+    if bundle is not None and bundle_engine == cfg.voice.engine:
+      return bundle
 
-  log.info("voice_model_bundle_ready", engine=bundle.engine, model_id=bundle.model_id)
-  with _state_lock:
-    if _bundle is None or _bundle_engine != cfg.voice.engine:
-      _bundle = bundle
-      _bundle_engine = cfg.voice.engine
-    return _bundle
+    if cfg.voice.engine == "qwen3_hf":
+      try:
+        bundle = create_qwen3_hf_bundle(cfg, paths)
+      except Exception as exc:
+        # GPU engine down (missing packages, no card, load error): keep voice alive on
+        # the CPU engine. The ready log below names the actually active engine, and the
+        # deployment preflight re-asserts the GPU path, so the downgrade is visible.
+        log.warning("voice_gpu_engine_init_failed", error=str(exc), engine="qwen3_hf", fallback="sherpa")
+        bundle = create_sherpa_bundle(_ensure_sherpa_paths_cached(cfg))
+    else:
+      bundle = create_sherpa_bundle(paths)
+
+    log.info("voice_model_bundle_ready", engine=bundle.engine, model_id=bundle.model_id)
+    with _state_lock:
+      if _bundle is None or _bundle_engine != cfg.voice.engine:
+        _bundle = bundle
+        _bundle_engine = cfg.voice.engine
+      return _bundle
 
 
-def create_sherpa_bundle(paths: VoiceModelPaths) -> _SpeechModelBundle:
-  """Build the CPU sherpa-onnx bundle. Also the fallback decoder when the GPU engine fails."""
+def create_sherpa_bundle(paths: VoiceModelPaths, hotwords: str = "") -> _SpeechModelBundle:
+  """Build the CPU sherpa-onnx bundle. Also the fallback decoder when the GPU engine fails.
+
+  ``hotwords`` reaches the recognizer's biasing parameter verbatim; production callers
+  pass nothing, so production decoding is unchanged.
+  """
   import sherpa_onnx
 
   # Dense 20s Chinese segments decode to ~140 tokens, so the 128-token sherpa
@@ -372,6 +438,7 @@ def create_sherpa_bundle(paths: VoiceModelPaths) -> _SpeechModelBundle:
       sample_rate=SAMPLE_RATE,
       max_total_len=1024,
       max_new_tokens=256,
+      hotwords=hotwords,
   )
   return _SpeechModelBundle(
       recognizer=recognizer,
@@ -410,7 +477,9 @@ def _create_vad_config(paths: VoiceModelPaths) -> object:
   vad_config = sherpa_onnx.VadModelConfig()
   vad_config.silero_vad.model = str(paths.silero_vad)
   vad_config.silero_vad.threshold = 0.5
-  vad_config.silero_vad.min_silence_duration = 0.35
+  # A measured 0.93s mid-sentence pause split a phrase into a 1.35s fragment the
+  # model misrecognized; only pauses of 1.0s or more end a segment.
+  vad_config.silero_vad.min_silence_duration = 1.0
   vad_config.silero_vad.min_speech_duration = 0.25
   vad_config.silero_vad.max_speech_duration = 20.0
   vad_config.sample_rate = SAMPLE_RATE
@@ -470,104 +539,21 @@ def _join_segments(*parts: str) -> str:
   return " ".join(part for part in (p.strip() for p in parts) if part)
 
 
-class SimulatedStreamingTranscriptionSession:
-  """Buffers PCM, runs VAD continuously, and re-decodes the open segment."""
+# The warm decode's shape: the cold cost it pays is kernel compilation and allocation
+# keyed to the input's size and dtypes, not its content, so the parameters are
+# hard-coded boot constants, not a tuning surface.
+WARMUP_SECONDS = 0.5
+WARMUP_FREQUENCY_HZ = 440.0
 
-  def __init__(self, bundle: _SpeechModelBundle) -> None:
-    import sherpa_onnx
 
-    self._bundle = bundle
-    self._vad = sherpa_onnx.VoiceActivityDetector(bundle.vad_config, buffer_size_in_seconds=VAD_BUFFER_SECONDS)
-    self._pcm_chunks: list[bytes] = []
-    self._frozen_segments: list[str] = []
-    self._fed_samples = 0
-    self._last_partial = ""
-    self._last_live_text = ""
-    self._last_live_decode_at = -LIVE_DECODE_INTERVAL_SAMPLES
-    self._saw_speech = False
-    self._decoded_region_end = 0
-    self._finished = False
+def warm_up_bundle(bundle: _SpeechModelBundle) -> None:
+  """Decode one deterministic 0.5 s 440 Hz sine through the bundle and discard the text.
 
-  @property
-  def audio_bytes(self) -> bytes:
-    return b"".join(self._pcm_chunks)
-
-  def accept_pcm(self, pcm: bytes) -> TranscriptionUpdate:
-    if self._finished:
-      raise RuntimeError("voice transcription session already finished")
-    if len(pcm) % 2 != 0:
-      raise ValueError("invalid PCM frame: byte length must be even")
-    if self._fed_samples >= MAX_RECORDING_SAMPLES:
-      return TranscriptionUpdate(text=None, cap_reached=True)
-
-    samples_to_accept = min(len(pcm) // 2, MAX_RECORDING_SAMPLES - self._fed_samples)
-    accepted_bytes = pcm[:samples_to_accept * 2]
-    if accepted_bytes:
-      self._pcm_chunks.append(accepted_bytes)
-      samples = np.frombuffer(accepted_bytes, dtype="<i2").astype(np.float32) / 32768.0
-      self._vad.accept_waveform(samples)
-      self._fed_samples += samples.size
-
-    closed_changed = self._drain_closed_segments()
-    if closed_changed:
-      self._last_live_text = ""
-    live_text = self._decode_live_segment_if_due()
-    if live_text is not None:
-      self._last_live_text = live_text
-    partial = self._compose_partial(self._last_live_text)
-    cap_reached = self._fed_samples >= MAX_RECORDING_SAMPLES
-    if closed_changed or (partial and partial != self._last_partial):
-      self._last_partial = partial
-      return TranscriptionUpdate(text=partial, cap_reached=cap_reached)
-    return TranscriptionUpdate(text=None, cap_reached=cap_reached)
-
-  def finish(self) -> str:
-    if self._finished:
-      raise RuntimeError("voice transcription session already finished")
-    self._finished = True
-    self._vad.flush()
-    self._drain_closed_segments()
-    if not self._saw_speech:
-      return ""
-    return _join_segments(*self._frozen_segments)
-
-  def _drain_closed_segments(self) -> bool:
-    changed = False
-    while not self._vad.empty():
-      segment = self._vad.front
-      segment_start = int(segment.start)
-      segment_end = segment_start + len(segment.samples)
-      samples, decoded_right = self._raw_samples_for_decode(segment_start, segment_end)
-      self._saw_speech = True
-      text = _decode_samples(self._bundle, samples)
-      self._decoded_region_end = decoded_right
-      if text:
-        self._frozen_segments.append(text)
-      self._vad.pop()
-      changed = True
-    return changed
-
-  def _decode_live_segment_if_due(self) -> str | None:
-    if not self._vad.is_speech_detected():
-      return ""
-    self._saw_speech = True
-    segment = self._vad.current_segment
-    segment_start = int(segment.start)
-    if self._fed_samples - segment_start < LIVE_DECODE_MIN_SAMPLES:
-      return None
-    if self._fed_samples - self._last_live_decode_at < LIVE_DECODE_INTERVAL_SAMPLES:
-      return None
-    self._last_live_decode_at = self._fed_samples
-    samples, _ = self._raw_samples_for_decode(segment_start, self._fed_samples)
-    return _decode_samples(self._bundle, samples)
-
-  def _raw_samples_for_decode(self, start_sample: int, end_sample: int) -> tuple[np.ndarray, int]:
-    left = max(self._decoded_region_end, start_sample - SEGMENT_DECODE_PAD_SAMPLES)
-    right = min(self._fed_samples, end_sample + SEGMENT_DECODE_PAD_SAMPLES)
-    if right <= left:
-      return np.empty(0, dtype=np.float32), left
-    raw_samples = np.frombuffer(self.audio_bytes, dtype="<i2", count=right - left, offset=left * 2)
-    return raw_samples.astype(np.float32) / 32768.0, right
-
-  def _compose_partial(self, live_text: str) -> str:
-    return _join_segments(*self._frozen_segments, live_text)
+  Serves server._provision_speech_models: it moves the first-decode cold cost (CUDA
+  kernel init + memory allocation, measured ~5 s) from the first real request to
+  boot. The decoded text carries no signal — a same-shape sine pays the identical
+  cold cost — so it is dropped; this is not a transcription correctness check.
+  """
+  positions = np.arange(int(SAMPLE_RATE * WARMUP_SECONDS), dtype=np.float64)
+  samples = np.sin(2 * np.pi * WARMUP_FREQUENCY_HZ * positions / SAMPLE_RATE)
+  _decode_samples(bundle, samples.astype(np.float32))

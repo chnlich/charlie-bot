@@ -10,7 +10,6 @@ section sources are shared: the common execution rules moved to ``prompts/task_b
 from pathlib import Path
 
 from src.core.config import CharlieBotConfig
-from src.core.memory import assemble_worker
 from src.core.models import SessionMetadata, TaskType
 
 _PROMPT_SECTION_MARKER_PREFIX = "<!-- section: "
@@ -184,6 +183,8 @@ def _build_worker_prompt(
     iteration_reports_section = f"\n\n{iteration_body}"
 
   memory_section = ""
+  # lazy: keeps the memory store off the M99 server import floor (docs/perf_baseline.md)
+  from src.core.memory import assemble_worker
   memory_block = assemble_worker(cfg.memory_dir, repo_path.name)
   if memory_block:
     memory_section = "\n" + sections["memory"].replace("{{memory_block}}", memory_block)

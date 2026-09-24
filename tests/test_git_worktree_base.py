@@ -437,8 +437,8 @@ async def test_crash_respawn_reaches_the_same_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   """Crash-respawn of a scheduled task whose worktree never existed: the rebuilt
-  request carries no base (init.py's `invocation.get(...) or meta.get(...)` is
-  None), so respawn and first launch share the same fallback."""
+  request carries no base (init_worker_recovery.py's `invocation.get(...) or
+  meta.get(...)` is None), so respawn and first launch share the same fallback."""
   clone = remote_default_repo["clone"]
 
   invocation: dict[str, Any] = {}

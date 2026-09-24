@@ -18,6 +18,8 @@ document.addEventListener('DOMContentLoaded', () => {
     recordUnreadFact(SESSION_ID, false);
     const unreadDot = document.getElementById('unread-' + SESSION_ID);
     if (unreadDot) unreadDot.classList.add('hidden');
+    // "Read" means rendered: a render throw above skips this POST.
+    markSessionRead(SESSION_ID);
   }
 
   // Belt-and-suspenders: helper already formats these; catch anything Jinja still emits.

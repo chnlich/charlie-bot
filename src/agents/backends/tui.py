@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src.agents.backends.base import SKIP_PERMISSIONS_SETTINGS, build_claude_argv
+from src.agents.backends.claude_launch import SKIP_PERMISSIONS_SETTINGS, build_claude_argv
 from src.agents.backends.pty_common import (
     PTY_EXIT,
     PtyAttachment,
@@ -29,10 +29,10 @@ from src.agents.backends.pty_common import (
     tmux_session_exists,
     tmux_session_name,
 )
-from src.core import claude_accounts
+from src.core.constants import BackendType
 from src.core.home import CLAUDE_CONFIG_DIR_ENV_VAR, default_claude_dir
+from src.core.json_utils import write_json_atomically
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import BackendType
 
 log = LazyStructlogLogger()
 
@@ -65,6 +65,10 @@ def _find_existing_claude_jsonl(session_id: str) -> Path | None:
         return path
     elif time.monotonic() < miss_deadline:
       return None
+  # Imported at the one call site: the account pool's module scope builds the
+  # pydantic account models, and this module rides the claude-sub launch (M108).
+  from src.core import claude_accounts
+
   matches = claude_accounts.transcript_matches(default_claude_dir(), session_id)
   path = matches[0] if matches else None
   _jsonl_path_memo[session_id] = (path, time.monotonic() + _JSONL_MISS_TTL_SECONDS)
@@ -116,7 +120,10 @@ def _ensure_claude_project_trusted(working_dir: Path) -> None:
   if not mark_project_trusted(config, project_path):
     return
   config_path.parent.mkdir(parents=True, exist_ok=True)
-  config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+  # private: the swap publishes a fresh inode, and the config can carry API-key
+  # state, so the file lands 0600 instead of the umask default — matching the
+  # claude_sub session-overlay writer of this same file.
+  write_json_atomically(config_path, config, indent=2, newline=True, private=True)
   log.info("tui_claude_project_trusted", path=project_path, config_path=str(config_path))
 
 

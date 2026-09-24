@@ -14,7 +14,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from conftest import CLI_COMMON_SESSIONS_DIR_PATCH_TARGET
+from conftest import CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, _wait_for
 
 from src.cli.remote_launch import main
 from src.core.timeouts import SSH_CONNECT_TIMEOUT
@@ -110,9 +110,7 @@ def test_end_to_end_localhost(tmp_path: Path, capsys: pytest.CaptureFixture[str]
   try:
     time.sleep(0.3)
     os.kill(meta["remote_pid"], 0)
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and not (remote_dir / "sentinel").exists():
-      time.sleep(0.1)
+    _wait_for(lambda: (remote_dir / "sentinel").exists(), 5, "the remote launch sentinel never appeared")
     assert (remote_dir / "log").exists()
     assert (remote_dir / "sentinel").exists()
     assert (remote_dir / "sentinel").read_text().strip() == "0"

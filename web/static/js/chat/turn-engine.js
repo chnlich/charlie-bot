@@ -190,7 +190,7 @@
     state(key) {
       let state = this.registry.get(key);
       if (!state) {
-        state = {override: null, nStepsExpanded: false, recapOpen: false};
+        state = {override: null, nStepsExpanded: false, recapOpen: false, explainOpen: false};
         this.registry.set(key, state);
       }
       return state;
@@ -353,7 +353,7 @@
       wrap.className = 'turn-wrap';
       wrap.dataset.turnKey = seg.key;
       wrap.dataset.turnOpen = String(open);
-      wrap.appendChild(Chat.buildTurnRowFromSpec(seg.rowSpec, seg.key));
+      wrap.appendChild(Chat.buildTurnRowFromSpec(seg.rowSpec));
       if (!open) return wrap;
 
       seg.entries.forEach((entry) => wrap.appendChild(entry.node));
@@ -364,6 +364,7 @@
         if (bar) Chat.setTurnFoldExpanded(bar, true);
       }
       this.restoreRecapPanel(wrap, seg);
+      this.restoreExplainPanel(wrap, seg);
       this.stats.segmentMaterializations++;
       return wrap;
     }
@@ -376,6 +377,16 @@
       const btn = seg.separatorEntry.node.querySelector('.recap-toggle');
       if (!btn) throw new Error('recap toggle button missing on separator');
       Chat.toggleRecapPanel(btn, this.sessionId, eventIndex);
+    }
+
+    restoreExplainPanel(wrap, seg) {
+      const state = this.registry.get(seg.key);
+      if (!state || !state.explainOpen) return;
+      const eventIndex = seg.separatorEntry.msg.event_index;
+      if (eventIndex == null) throw new Error('explain-open turn without separator event_index');
+      const btn = seg.separatorEntry.node.querySelector('.explain-toggle');
+      if (!btn) throw new Error('explain toggle button missing on separator');
+      Chat.toggleExplainPanel(btn, this.sessionId, eventIndex);
     }
 
     buildPlaceholder(seg) {
@@ -977,6 +988,16 @@
       this.state(wrap.dataset.turnKey).recapOpen = open;
     }
 
+    noteExplainToggle(btn) {
+      if (!this.alive || !btn.closest) return;
+      const wrap = btn.closest('.turn-wrap');
+      if (!wrap || !wrap.dataset.turnKey) return;
+      const sep = btn.closest('.separator-line');
+      const open = Boolean(
+        sep && sep.nextElementSibling && sep.nextElementSibling.classList.contains('explain-panel'));
+      this.state(wrap.dataset.turnKey).explainOpen = open;
+    }
+
     setDepth(depth) {
       if (depth !== 'expanded') {
         this.registry.forEach((state) => { state.nStepsExpanded = false; });
@@ -1004,6 +1025,19 @@
   }
   Chat.toggleRecapPanel = toggleRecapPanelTracked;
   globalThis.toggleRecapPanel = toggleRecapPanelTracked;
+
+  // Explain toggle wrapping: the same recording rule as the recap toggle above,
+  // so the explain panel's open state restores on re-materialization too.
+  const originalToggleExplainPanel = Chat.toggleExplainPanel;
+  function toggleExplainPanelTracked(btn, sessionId, eventIndex) {
+    const result = originalToggleExplainPanel.apply(this, arguments);
+    const container = document.getElementById('messages');
+    const engine = activeEngines().get(container);
+    if (engine) engine.noteExplainToggle(btn);
+    return result;
+  }
+  Chat.toggleExplainPanel = toggleExplainPanelTracked;
+  globalThis.toggleExplainPanel = toggleExplainPanelTracked;
 
   function mountIfAvailable(container, messages, sessionId) {
     if (!supportsTurnEngine(container)) return null;

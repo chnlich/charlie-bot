@@ -1,0 +1,153 @@
+{% include 'partials/prologue.html' %}
+{% if probe_running %}<meta http-equiv="refresh" content="3">{% endif %}
+<title>Host login authorization</title>
+<style>
+  {% include 'partials/standalone_base_styles.html' %}
+  :root {
+    --ok:#1baf7a; --warn:#d29922; --bad:#d1242f; --off:#8b949e;
+    --warn-soft:#7a5a00; --warn-tint:rgba(210,153,34,.16); --warn-line:rgba(210,153,34,.45);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      --ok:#199e70; --warn:#d8a13a; --bad:#e5534b; --off:#8b8b84;
+      --warn-soft:#e0be74; --warn-tint:rgba(210,153,34,.16); --warn-line:rgba(210,153,34,.45);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ok:#199e70; --warn:#d8a13a; --bad:#e5534b; --off:#8b8b84;
+    --warn-soft:#e0be74; --warn-tint:rgba(210,153,34,.16); --warn-line:rgba(210,153,34,.45);
+  }
+  .sub { color:var(--mut); margin:0 0 16px; font-size:13.5px; max-width:82ch }
+  .meta { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 20px }
+  .mtag { font-size:11.5px; font-family:var(--mono); background:var(--panel2);
+    border:1px solid var(--bd); border-radius:6px; padding:3px 9px; color:var(--tx) }
+  .bar { display:flex; flex-wrap:wrap; gap:14px; align-items:center; justify-content:space-between;
+    background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:14px 18px; margin:0 0 16px }
+  .bar .line { font-size:14.5px }
+  .bar .line .hot { color:var(--bad); font-weight:640 }
+  .bar .line .soon { color:var(--warn); font-weight:640 }
+  .btn { font:inherit; font-size:13px; background:var(--acc); color:#fff; border:0; border-radius:8px;
+    padding:8px 15px; cursor:pointer }
+  table { width:100%; border-collapse:collapse; background:var(--panel);
+    border:1px solid var(--bd); border-radius:12px; overflow:hidden }
+  th { text-align:left; font-size:11.5px; font-weight:620; color:var(--mut); text-transform:uppercase;
+    letter-spacing:.4px; padding:10px 14px; background:var(--panel2); border-bottom:1px solid var(--bd) }
+  td { padding:12px 14px; border-bottom:1px solid var(--bd); vertical-align:top; font-size:13px }
+  tr:last-child td { border-bottom:0 }
+  .alias { font-family:var(--mono); font-size:13px; font-weight:600 }
+  .fqdn { font-family:var(--mono); font-size:11.5px; color:var(--mut2); display:block }
+  .st { display:inline-flex; align-items:center; gap:7px; font-size:12.5px; font-weight:600; white-space:nowrap }
+  .dot { width:9px; height:9px; border-radius:50%; flex:0 0 auto }
+  .st.ok { color:var(--ok) } .st.ok .dot { background:var(--ok) }
+  .st.okta { color:var(--bad) } .st.okta .dot { background:var(--bad) }
+  .st.iact { color:var(--warn) } .st.iact .dot { background:var(--warn) }
+  .st.down { color:var(--off) } .st.down .dot { background:var(--off) }
+  .cd { font-variant-numeric:tabular-nums; font-weight:620; font-size:14px }
+  .cd.amber { color:var(--warn) }
+  .at { display:block; font-weight:400; font-size:11.5px; color:var(--mut2); font-variant-numeric:tabular-nums }
+  .none { color:var(--mut2); font-size:12.5px }
+  .badge { display:inline-block; font-size:10.5px; font-weight:700; letter-spacing:.3px; border-radius:5px;
+    padding:1px 6px; background:var(--warn-tint); color:var(--warn-soft); border:1px solid var(--warn-line) }
+  .det { font-family:var(--mono); font-size:11.5px; color:var(--mut); word-break:break-all }
+  .next { margin-top:5px; font-size:12.5px; color:var(--tx) }
+  .cap { color:var(--mut); font-size:12.5px; max-width:86ch; margin:12px 0 0 }
+  .legend { display:flex; flex-wrap:wrap; gap:18px; margin:14px 0 0; font-size:12.5px; color:var(--mut) }
+  .legend .k { display:inline-flex; align-items:center; gap:7px }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Host login authorization</h1>
+  <p class="sub">Where each host stands right now, and how long the Okta trust cache entry behind it is
+  estimated to last, so a renewal can be scheduled before a session is blocked rather than after.</p>
+  <div class="meta">
+    <span class="mtag">last probe &middot; {{ last_probe or "not yet" }}</span>
+    <span class="mtag">probe every &middot; {{ interval_label }} ({{ backoff_label }} once blocked)</span>
+    <span class="mtag">trust cache lifetime &middot; {{ ttl_label }}</span>
+    <span class="mtag">remote writes &middot; none</span>
+  </div>
+
+  <div class="bar">
+    <div class="line">
+      {%- if summary.blocked %}Blocked now: <span class="hot">{{ summary.blocked|join(", ") }}</span>. {% endif -%}
+      {%- if summary.soonest_alias %}Soonest estimated expiry: <span class="soon">{{ summary.soonest_alias }}, in {{ summary.soonest_remaining }}</span> (estimate, upper bound).{%- else %}No estimate available.{%- endif %}
+    </div>
+    <form method="post" action="/api/host-auth/probe"><button class="btn" type="submit">Probe now</button></form>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width:17%">Host</th>
+        <th style="width:16%">Status</th>
+        <th style="width:21%">Renewal deadline &middot; estimate, upper bound</th>
+        <th>Detail and next step</th>
+        <th style="width:11%">Last probe</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for h in hosts %}
+      <tr>
+        <td><span class="alias">{{ h.alias }}</span><span class="fqdn">{{ h.hostname }}</span></td>
+        <td><span class="st {{ h.status_class }}"><i class="dot"></i>{{ h.status_label }}</span></td>
+        <td>
+          {% if h.deadline_kind == "counting" %}
+          <span class="cd{% if h.under_24h %} amber{% endif %}">{{ h.remaining }}<span class="at">by {{ h.expires }}</span></span>
+          {% elif h.deadline_kind == "expired" %}
+          <span class="badge">ESTIMATE EXPIRED</span><span class="at">{{ h.expires }} has passed</span>
+          {% elif h.deadline_kind == "no_baseline" %}
+          <span class="none">Not estimated</span>
+          {% elif h.deadline_kind == "pending_okta" %}
+          <span class="none">Counting starts at the first probe that sees this host come back.</span>
+          {% else %}
+          <span class="none">Not applicable{% if h.status == "needs-interactive-auth" %}: this host is not held by the Okta cache{% endif %}.</span>
+          {% endif %}
+        </td>
+        <td>
+          <div class="det">{% for line in h.detail_lines %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}</div>
+          <div class="next">
+            {% if h.status == "needs-okta" %}
+            Run <code>{{ h.renew_cmd }}</code>, finish the browser check, then press <b>Probe now</b> here: the
+            countdown starts immediately.
+            {% elif h.deadline_kind == "counting" %}
+            {% if h.under_24h %}Baseline: renewal seen {{ h.baseline }}. Under a day left, so renew at a moment you
+            choose.{% else %}Baseline: renewal seen {{ h.baseline }}. A login pod restart can end it sooner.{% endif %}
+            {% elif h.deadline_kind == "expired" %}
+            The host still answers past its estimated deadline, so a renewal probably happened between two probes and
+            was not seen. The countdown stops and the baseline stays where it was: the estimate keeps its upper-bound
+            meaning rather than being quietly refreshed into an optimistic one.
+            {% elif h.deadline_kind == "no_baseline" %}
+            No blocked&rarr;direct transition observed yet, so there is nothing to count from. Either the cache is still
+            valid from a renewal made before this panel existed, or this host is not served by the cache at all.
+            {% elif h.status == "needs-interactive-auth" %}
+            {% if h.has_url %}Open that link, approve, then press <b>Probe now</b>.{% else %}Approve the check this
+            host asks for, then press <b>Probe now</b>.{% endif %}
+            {% else %}
+            Nothing to renew: the host answered nothing, so its authorization state is unknown.
+            {% endif %}
+          </div>
+        </td>
+        <td class="det">{{ h.last_probe or "not yet" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if not hosts %}
+  <p class="cap">No host is listed yet: the first probe round has not completed, or the ssh config names none.</p>
+  {% endif %}
+
+  <p class="cap"><b>What the deadline column means.</b> The clock starts at a blocked&rarr;direct transition this panel
+  saw with its own probe, which means a cache entry had just been written only if you renewed through the browser
+  enrollment flow. Signing in with an Okta SSH CA certificate bypasses the cache entirely and makes the number wrong.
+  The figure is an upper bound in the other direction too: a login pod restart wipes the cache early, so the real
+  deadline is never later than shown and can be sooner.</p>
+
+  <div class="legend">
+    <span class="k"><i class="dot" style="background:var(--ok)"></i>Direct: ssh answered, exit 0</span>
+    <span class="k"><i class="dot" style="background:var(--bad)"></i>Needs Okta: renew the public key enrollment</span>
+    <span class="k"><i class="dot" style="background:var(--warn)"></i>Needs interactive auth: a human check in a browser or terminal</span>
+    <span class="k"><i class="dot" style="background:var(--off)"></i>Unreachable: no usable answer</span>
+  </div>
+</div>
+</body>
+</html>

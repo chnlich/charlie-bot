@@ -46,6 +46,12 @@ SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT = 120  # seconds
 # same 30 s budget.
 LIGHT_ONESHOT_TIMEOUT = 30.0  # seconds
 
+# One one_shot_text call for the explain (btw-style) divider explanation. The
+# agent-run shape may spend model round-trips reading the session history from
+# its read-only copy, so the budget sits an order of magnitude above the light
+# one-shot's; a hit marks the divider's entry failed and the UI can retry.
+EXPLAIN_ONESHOT_TIMEOUT = 600.0  # seconds
+
 # ---------------------------------------------------------------------------
 # Artifact cold-read probe
 # ---------------------------------------------------------------------------

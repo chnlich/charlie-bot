@@ -40,7 +40,6 @@
   exposeState('workersListEtag', null);
   exposeState('thinkingStart', null);
 
-  Sidebar.expose = expose;
   Sidebar.wire = wire;
   global.Sidebar = Sidebar;
 })(globalThis);

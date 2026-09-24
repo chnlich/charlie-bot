@@ -37,6 +37,9 @@ from src.core.timeouts import SUBPROCESS_GIT_READ_TIMEOUT_ASYNC
 
 log = LazyStructlogLogger()
 
+# The first matching substring names the blocker, so an entry contained in an
+# earlier one can never be named: keep the shorter form ("out of token" covers
+# "out of tokens").
 _QUOTA_BLOCKER_TEXT_PATTERNS = (
     "quota exhausted",
     "quota exceeded",
@@ -56,7 +59,6 @@ _QUOTA_BLOCKER_TEXT_PATTERNS = (
     "429",
     "out of token",
     "out-of-token",
-    "out of tokens",
     "insufficient tokens",
     "tokens exhausted",
 )
@@ -507,8 +509,7 @@ def _failed_iteration_judgments(events_newest_first: Iterator[dict], iteration: 
   """Both failed-iteration judgments from one newest-first pass: the blocker at
   the first quota-shaped event or exhaustion, the summary at the first
   result/assistant text. The walk stops once both are settled, so a no-match
-  exhaustion parses the log once — the shape the shared full parse this
-  replaced ran.
+  exhaustion parses the log once.
   """
   blocker_reason = None
   summary = None

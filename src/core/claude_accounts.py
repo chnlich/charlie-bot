@@ -35,12 +35,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from src.core.constants import BackendType
+from src.core.home import CREDENTIALS_FILE
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import BackendOption, BackendType, ClaudeAccount
+from src.core.models import BackendOption, ClaudeAccount
 
 # future-annotations keep every cfg: CharlieBotConfig hint unevaluated; the config
-# model stack must stay out of the claude-sub worker binary's import (it imports
-# this module for CREDENTIALS_FILE).
+# model stack must stay out of the claude-sub worker binary's import.
 if TYPE_CHECKING:
   from src.core.config import CharlieBotConfig
 
@@ -57,8 +58,6 @@ WARNING_UTILIZATION = 0.90
 # An account whose last authentication failure is younger than this is skipped:
 # a failed OAuth refresh is not cleared by retrying within minutes.
 AUTH_FAILURE_COOLDOWN = timedelta(minutes=15)
-
-CREDENTIALS_FILE = ".credentials.json"
 
 # The two binding windows every ``rate_limit_event`` carries under
 # ``unifiedWindows``; the overage window is not a limit on the subscription.
@@ -191,7 +190,7 @@ def record_auth_failure(label: str, now: datetime | None = None) -> None:
   _auth_failures[label] = now_or(now)
 
 
-def auth_failed_recently(label: str, now: datetime | None = None) -> bool:
+def auth_failed_recently(label: str, now: datetime | None) -> bool:
   failed_at = _auth_failures.get(label)
   return failed_at is not None and now_or(now) - failed_at < AUTH_FAILURE_COOLDOWN
 
@@ -256,7 +255,7 @@ def observe_rate_limit(label: str, info: dict, now: datetime | None = None) -> R
   return reading
 
 
-def observe_usage_panel(label: str, usage: dict, now: datetime | None = None) -> None:
+def observe_usage_panel(label: str, usage: dict) -> None:
   """Store a usage-panel result (``ext_usage`` window list) as the account's panel reading.
 
   Panel utilizations are percentages; they are kept as reported and scaled when
@@ -267,9 +266,9 @@ def observe_usage_panel(label: str, usage: dict, now: datetime | None = None) ->
     return
   fetched_at = usage.get(PANEL_FETCHED_AT)
   try:
-    at = datetime.fromisoformat(fetched_at) if isinstance(fetched_at, str) else now_or(now)
+    at = datetime.fromisoformat(fetched_at) if isinstance(fetched_at, str) else datetime.now(UTC)
   except ValueError:
-    at = now_or(now)
+    at = datetime.now(UTC)
   if at.tzinfo is None:
     at = at.replace(tzinfo=UTC)
   _panel_readings[label] = {"at": at, PANEL_WINDOWS: [w for w in windows if isinstance(w, dict)]}
@@ -329,7 +328,7 @@ def _live_windows(label: str, model: str | None, now: datetime) -> list[dict[str
   return live
 
 
-def _panel_reading(label: str, model: str | None, now: datetime | None = None) -> RateLimitReading | None:
+def _panel_reading(label: str, model: str | None, now: datetime | None) -> RateLimitReading | None:
   """The panel reading folded for *model* over its live windows."""
   stored = _panel_readings.get(label)
   if stored is None:
@@ -470,7 +469,7 @@ def _reset_bonus(label: str, model: str | None, moment: datetime, headroom_left:
   return _RESET_BONUS_SCALE * (1.0 - ttr / _RESET_BONUS_HORIZON)
 
 
-def earliest_reset(cfg: CharlieBotConfig, now: datetime | None = None) -> datetime | None:
+def earliest_reset(cfg: CharlieBotConfig, now: datetime | None) -> datetime | None:
   """The nearest rejection reset among pool accounts, for the pool-exhausted error."""
   moment = now_or(now)
   resets = [

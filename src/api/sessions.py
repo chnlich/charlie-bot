@@ -38,6 +38,7 @@ from src.api.responses import (
     PreencodedJSONResponse,
     fast_json_bytes,
     gzip_body_response,
+    gzip_file_fresh,
     request_wants_gzip,
 )
 from src.api.threads import view_thread_rows
@@ -50,6 +51,7 @@ from src.core.config import (
   get_config,
   get_scheduled_tasks,
 )
+from src.core.constants import BackendType
 from src.core.control_events import sha256_hex
 from src.core.event_types import BACKEND_SWITCHED
 from src.core.log_once import LazyStructlogLogger
@@ -59,13 +61,13 @@ from src.core.models import (
   AcknowledgeTaskInputsRequest,
   AncestorRef,
   BackendOption,
-  BackendType,
   CancelRunRequest,
   CancelTaskRequest,
   CompleteTaskRequest,
   CreateSessionRequest,
   DeleteGroupRequest,
   EloneSessionRequest,
+  ExplainRequest,
   ForkSessionRequest,
   PatchSessionTaskRequest,
   RateRoundRequest,
@@ -112,7 +114,7 @@ router = APIRouter()
 
 # The search route's read-only overlay serializes derived datetimes through the
 # model's own JSON scheme: a hand-rolled isoformat() emits +00:00 where the
-# UtcDatetime fields the old response-model render serialized emit Z.
+# model's UtcDatetime fields emit Z.
 _UTC_DATETIME_JSON = TypeAdapter(UtcDatetime | None)
 
 
@@ -137,9 +139,10 @@ def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dic
   }
 
 
-# The bootstrap payload's tool rows render through tool_preview: string output
-# and input values over TOOL_PREVIEW_CHARS trim to the cap with their
-# truncation markers set, one home shared with the stream delta's tool shape.
+# The bootstrap payload's tool rows render through tool_preview: the output and
+# the input fields the renderer reads cap at TOOL_PREVIEW_CHARS with their
+# truncation markers set, and the input's other string values carry the
+# dead-field bound — one home shared with the stream delta's tool shape.
 # The projection memo's dicts stay shared with the events pages and the M26
 # digest, so a message copies only when one of its tools actually trims.
 
@@ -508,8 +511,7 @@ async def all_sessions_status(
         sidebar_state.HAS_PENDING_PLAN_APPROVAL: entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL],
     }
   # The sidebar's 3 s poll is this host's second-busiest route; the gzip form
-  # rides the body-keyed memo (_switch_payload_response) for the message-page
-  # cost reason in get_session_events_page.
+  # rides the body-keyed memo (_switch_payload_response).
   return await _switch_payload_response(request, result)
 
 
@@ -884,9 +886,8 @@ def _search_row_body(meta: SessionMetadata, row_key: tuple) -> bytes:
 # gzip-accepting fetch pays the middleware's whole-body level-1 deflate in the
 # send path, the M35 events-page cost the projection fix removed there.
 # Content-Encoding set upstream is what makes that middleware skip its own
-# pass (the M72 listing mechanism), and mtime=0 keeps the bytes deterministic
-# (the M101 serve's rule). The limit covers one steady-state body per open
-# tab's id set plus the other callers'.
+# pass (the M72 listing mechanism). The limit covers one steady-state body per
+# open tab's id set plus the other callers'.
 _SWITCH_GZIP_MEMO_LIMIT = 16
 _switch_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SWITCH_GZIP_MEMO_LIMIT)
 
@@ -922,7 +923,6 @@ async def get_session_view(
   view = await build_session_view_data(session_id, session_mgr, thread_rows)
   trigger_mgr = trigger_manager()
   triggers = await trigger_mgr.list_triggers(session_id)
-  # FastJsonResponse for the message-page cost reason in get_session_events_page.
   # The workers tab paints one CSS-truncated description line per card and its
   # full-text modal fetches the thread row on click (the workers-panel list's
   # truncation contract), so the view ships the same prefixed rows — the
@@ -939,8 +939,7 @@ async def get_session_view(
       "has_more": view.has_more,
   }
   payload.update(_active_backend_payload(meta, cfg))
-  # FastJsonResponse for the message-page cost reason in get_session_events_page;
-  # the switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
+  # The switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
   return await _switch_payload_response(request, payload)
 
 
@@ -954,9 +953,25 @@ async def get_session_bootstrap(
 ) -> Response:
   """Return the minimal data needed to make one chat session usable."""
   bootstrap = await build_session_bootstrap_data(session_id, session_mgr)
-  # FastJsonResponse for the message-page cost reason in get_session_events_page;
-  # the switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
+  # The switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
   return await _switch_payload_response(request, _bootstrap_payload(bootstrap, cfg))
+
+
+@router.post('/{session_id}/read')
+async def mark_session_read(
+    session_id: str,
+    _meta: SessionMetadata = Depends(require_session),
+    session_mgr: SessionManager = Depends(get_session_manager),
+) -> dict:
+  """Clear the session's unread flag; the client posts this after a render lands.
+
+  "Read" means "content rendered": the view/bootstrap GETs stay side-effect-free
+  and this explicit POST is the only flip-off path, so a bare data fetch can no
+  longer wipe the sidebar's unread dot. Flip semantics and the unread_changed
+  broadcast (only on an actual flip) are SessionManager.mark_read's own.
+  """
+  await session_mgr.mark_read(session_id)
+  return {"session_id": session_id, "has_unread": False}
 
 
 @router.get('/{session_id}/usage')
@@ -973,7 +988,6 @@ async def get_session_usage(
       "usage": usage,
   }
   payload.update(_active_backend_payload(meta, cfg))
-  # FastJsonResponse for the message-page cost reason in get_session_events_page.
   return FastJsonResponse(payload)
 
 
@@ -1020,8 +1034,7 @@ async def get_session_events_page(
         gz = projection.cached_page_body_gzip(before, limit)
         if gz is None:
           # One deflate per page per projection generation, in the executor the
-          # middleware's replaced pass also used; mtime=0 keeps the bytes
-          # deterministic (the M101 serve's rule).
+          # middleware's replaced pass also used.
           gz = await asyncio.to_thread(gzip_level1, body)
           projection.store_page_body_gzip(before, limit, gz)
         return PreencodedJSONResponse(gz, headers=GZIP_RESPONSE_HEADERS)
@@ -1073,6 +1086,58 @@ async def summarize_session_recap(
   from src.core import recap
   summary = await recap.generate_and_cache_summary(session_mgr, session_id, upto, cfg)
   return {"summary": summary}
+
+
+@router.post('/{session_id}/explain')
+async def request_session_explain(
+    session_id: str,
+    body: ExplainRequest,
+    _meta: SessionMetadata = Depends(require_session),
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+) -> FastJsonResponse:
+  """Register (or return) the explain task for a divider; generation runs detached.
+
+  A divider with no entry, or a terminal one (re-run overwrites), returns 202 with
+  the fresh pending entry; a pending one returns 200 with the stored entry so one
+  divider never runs a second concurrent generation.
+  """
+  from src.core import explain
+  option = cfg.get_backend_option(body.backend)
+  if option is None:
+    raise bad_request(ValueError(f"unknown backend: {body.backend}"))
+  entry, created = await explain.request_explain(session_mgr, session_id, body.event_index, option, cfg)
+  return FastJsonResponse(entry, status_code=202 if created else 200)
+
+
+@router.get('/{session_id}/explain')
+async def get_session_explain(
+    session_id: str,
+    upto: int,
+    _meta: SessionMetadata = Depends(require_session),
+    session_mgr: SessionManager = Depends(get_session_manager),
+) -> FastJsonResponse:
+  """The single explain entry for a divider; answer and error bodies included."""
+  from src.core import explain
+  entry = await explain.get_explain_entry(session_mgr, session_id, upto)
+  if entry is None:
+    raise HTTPException(status_code=404, detail=f"no explain entry for event_index {upto}")
+  return FastJsonResponse(entry)
+
+
+@router.get('/{session_id}/explain/status')
+async def get_session_explain_status(
+    session_id: str,
+    _meta: SessionMetadata = Depends(require_session),
+    session_mgr: SessionManager = Depends(get_session_manager),
+) -> FastJsonResponse:
+  """Every explain entry's ``{upto: {state, backend, generated_at}}`` summary; bodies excluded.
+
+  The chat page pulls this once per session load/switch to render each divider's
+  explain button from persisted truth.
+  """
+  from src.core import explain
+  return FastJsonResponse(await explain.explain_status(session_mgr, session_id))
 
 
 def _reference_instructions(reference_path: Path) -> str:
@@ -1413,22 +1478,6 @@ _EVENTS_GZIP_MEMO_LIMIT = 2
 _events_gzip_memo: StatSignatureMemo[Path, bytes] = StatSignatureMemo(_EVENTS_GZIP_MEMO_LIMIT)
 
 
-def _events_file_gzip(path: Path) -> bytes:
-  """The events file's gzip level-1 form, memoized on the stat pair the read served.
-
-  stat precedes the read in the same call, so the signature proves the bytes a
-  repeat hit serves; an append between requests only makes the next caller miss
-  and re-read. mtime=0 keeps the compressed bytes deterministic across processes.
-  """
-  st = path.stat()
-  hit = _events_gzip_memo.fresh(path, st)
-  if hit is not None:
-    return hit
-  compressed = gzip_level1(path.read_bytes())
-  _events_gzip_memo.record(path, st, compressed)
-  return compressed
-
-
 @router.get("/{session_id}/events.jsonl")
 async def get_events_jsonl(session_id: str, request: Request) -> Response:
   """Serve the raw chat_events.jsonl file for a session."""
@@ -1441,7 +1490,7 @@ async def get_events_jsonl(session_id: str, request: Request) -> Response:
   # The read and the deflate ride one executor hop: FileResponse streams 64 KiB
   # chunks and the gzip middleware compresses every chunk inline on the event
   # loop (the M101 loop-lag readings).
-  body = await asyncio.to_thread(_events_file_gzip, path)
+  body = await asyncio.to_thread(gzip_file_fresh, _events_gzip_memo, path, None)
   return Response(content=body, media_type="application/x-ndjson", headers=GZIP_RESPONSE_HEADERS)
 
 
@@ -1462,8 +1511,7 @@ async def list_plans(
   Unknown session → 404. Known session → always 200 with ``{"plans": [...], "errors": [...]}``;
   a corrupt registry produces 200 with empty plans and one error entry, never 5xx.
   """
-  # The plan panel polls this route; FastJsonResponse for the message-page cost
-  # reason in get_session_events_page.
+  # The plan panel polls this route.
   return FastJsonResponse(await plan_mgr.list_plans(session_id))
 
 

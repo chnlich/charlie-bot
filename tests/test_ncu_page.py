@@ -6,11 +6,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api import pages
-from src.core.ncu_parsing import _extract_rules, parse_ncu_report
+from src.core.ncu_parsing import _ROOFLINE_PLACEHOLDER, _extract_rules, parse_ncu_report
 
 _SAMPLE_REPORT = Path("/data/home/chaoli/scripts/20260528_rmsnorm_ncu/out/ncu_cuda.ncu-rep")
 _FULL_REPORT = Path("/data/home/chaoli/scripts/20260528_rmsnorm_ncu_s1856/out/ncu_cuda_full.ncu-rep")
-_ROOFLINE_PLACEHOLDER = "No roofline data in this report (requires --set full/detailed)"
 
 _requires_sample = pytest.mark.skipif(not _SAMPLE_REPORT.is_file(), reason="sample ncu-rep not present on this host")
 _requires_full_report = pytest.mark.skipif(not _FULL_REPORT.is_file(), reason="full ncu-rep not present on this host")
@@ -51,6 +50,34 @@ def test_ncu_junk_file_returns_clean_4xx(client: TestClient, tmp_path: Path) -> 
   assert 400 <= resp.status_code < 500
   assert 'id="error"' in resp.text
   assert "Traceback" not in resp.text
+
+
+def test_ncu_page_serves_the_parser_roofline_message(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The unavailable-roofline note is the parser constant's wording, served through
+  the report JSON; the template keeps no copy of the string and no fallback shape."""
+  from src.core import ncu_parsing
+
+  report = {
+      "parser": "csv",
+      "device": None,
+      "kernels": [],
+      "roofline": {
+          "available": False,
+          "message": ncu_parsing._ROOFLINE_PLACEHOLDER,
+          "rooflines": []
+      },
+  }
+  fake = tmp_path / "narrow.ncu-rep"
+  fake.write_bytes(b"stub")
+  monkeypatch.setattr(ncu_parsing, "parse_ncu_report", lambda _path: report)
+  body = client.get("/ncu", params={"file": str(fake)}).text
+  assert _ROOFLINE_PLACEHOLDER in body
+  assert '"available": false' in body
+  # The template carries no placeholder copy: the one body occurrence is the
+  # embedded report JSON's message value.
+  assert "const ROOFLINE_PLACEHOLDER" not in body
+  assert body.count(_ROOFLINE_PLACEHOLDER) == 1
 
 
 @_requires_sample

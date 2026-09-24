@@ -94,7 +94,7 @@ def _validate_backend_id(backend: str | None, cfg: CharlieBotConfig) -> None:
     raise bad_request(e) from e
 
 
-def _apply_task_update(task: dict, req: "TaskUpdate") -> dict:
+def _apply_task_update(task: dict, req: TaskUpdate) -> dict:
   updated = dict(task)
   if req.cron is not None:
     updated['cron'] = req.cron
@@ -128,7 +128,7 @@ def _apply_task_update(task: dict, req: "TaskUpdate") -> dict:
 async def _ensure_backend_update_session(
     name: str,
     cand_model: ScheduledTaskConfig,
-    req: "TaskUpdate",
+    req: TaskUpdate,
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
 ) -> SessionMetadata | None:

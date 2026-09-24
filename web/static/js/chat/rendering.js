@@ -5,6 +5,7 @@
   const escapeHtmlAttr = Chat.escapeHtmlAttr;
   const messageIdentityAttrs = Chat.messageIdentityAttrs;
   const renderRoundRatingButtons = Chat.renderRoundRatingButtons;
+  const renderExplainButton = Chat.renderExplainButton;
   const embedLinkedHtmlArtifacts = Chat.embedLinkedHtmlArtifacts;
   const toolInputSummary = Chat.toolInputSummary;
 
@@ -12,7 +13,7 @@
 // separator's "Clone to here" fork button below.
 const CLONE_SVG = '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6"/></svg>';
 
-// The one down-chevron glyph, path-only because its two sites keep different
+// The one down-chevron glyph, path-only because its consuming sites keep different
 // <svg> wrappers: renderToolActivity's "N tool calls" toggle (w-3 h-3) and
 // buildTurnFoldBar's turn-fold chevron.
 const CHEVRON_DOWN_SVG_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>';
@@ -556,19 +557,29 @@ function renderDelegateMetadata(msg) {
     + '</div>';
 }
 
+// Every rendered message wrapper carries messageIdentityAttrs: the turn fold,
+// scroll anchoring, and the render harnesses address rows through the
+// data-message-* hooks, so a role branch must not hand-build the open tag.
+function openMessageWrapper(layoutClass, msg) {
+  return "<div class=\"" + layoutClass + "\"" + messageIdentityAttrs(msg) + ">";
+}
+
+// The one markdown bubble body: chat bubbles and the explain panel's answer body
+// render through the same escape + renderProseMarkdown + data-raw round-trip.
+function mdDiv(text) {
+  var raw = escapeHtml(text || "").replace(/"/g, "&quot;");
+  return "<div class=\"prose-msg\" data-raw=\"" + raw + "\">" + renderProseMarkdown(text || "") + "</div>";
+}
+
 function renderMessage(msg, sessionId) {
   function timeDiv(colorClass) {
     if (!msg.timestamp) return "";
     var cls = colorClass || "text-slate-400/60";
     return "<div class=\"text-[10px] " + cls + " mt-1\">" + formatBubbleTime(msg.timestamp) + "</div>";
   }
-  function mdDiv(text) {
-    var raw = escapeHtml(text || "").replace(/"/g, "&quot;");
-    return "<div class=\"prose-msg\" data-raw=\"" + raw + "\">" + renderProseMarkdown(text || "") + "</div>";
-  }
 
   if (msg.role === "user") {
-    return "<div class=\"flex justify-end\"" + messageIdentityAttrs(msg) + ">"
+    return openMessageWrapper("flex justify-end", msg)
       + renderUserMessageBubble(msg.content, msg.is_voice, msg.timestamp, msg.uploaded_files) + "</div>";
   }
   if (msg.role === "assistant") {
@@ -582,16 +593,16 @@ function renderMessage(msg, sessionId) {
       var thinkId = 'think-' + (msg.id || Math.random().toString(36).slice(2));
       thinkingHtml = thinkingToggleHtml(thinkId, msg.thinking);
     }
-    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
+    return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
       + thinkingHtml + contentHtml + toolsHtml + timeDiv() + "</div></div>";
   }
   if (msg.role === "system") {
     var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";
-    return "<div class=\"flex justify-center\"" + messageIdentityAttrs(msg) + "><div class=\"bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate\"" + titleAttr + ">"
+    return openMessageWrapper("flex justify-center", msg) + "<div class=\"bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate\"" + titleAttr + ">"
       + escapeHtml(msg.content) + "</div></div>";
   }
   if (msg.role === "task_delegated") {
-    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-amber-900/30 border border-amber-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\">"
+    return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-amber-900/30 border border-amber-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\">"
       + "<div class=\"flex items-center gap-2 text-amber-400 text-xs font-semibold mb-2\">"
       + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 5l7 7-7 7M5 5l7 7-7 7\"/></svg>"
       + "Delegated</div>"
@@ -625,18 +636,18 @@ function renderMessage(msg, sessionId) {
         + escapeHtml(msg.origin_session_id) + "</a> &middot; thread " + escapeHtml(msg.thread_id)
         + "</div>";
     }
-    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\">"
+    return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\">"
       + mdDiv(msg.content) + timeDiv("text-emerald-400/50") + originFooter + "</div></div>";
   }
   if (msg.role === "plan") {
-    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm\">"
+    return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm\">"
       + "<div class=\"flex items-center gap-2 text-blue-400 text-xs font-semibold mb-2\">"
       + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4\"/></svg>"
       + "Plan</div>"
       + mdDiv(msg.content) + timeDiv() + "</div></div>";
   }
   if (msg.role === "clone_start") {
-    return "<div class=\"flex items-center gap-3 py-3 px-4\"" + messageIdentityAttrs(msg) + ">"
+    return openMessageWrapper("flex items-center gap-3 py-3 px-4", msg)
       + "<div class=\"flex-1 border-t border-purple-500/40\"></div>"
       + "<div class=\"flex items-center gap-2 text-purple-400 text-xs\">"
       + CLONE_SVG
@@ -646,11 +657,11 @@ function renderMessage(msg, sessionId) {
       + "<div class=\"flex-1 border-t border-purple-500/40\"></div></div>";
   }
   if (msg.role === "scheduled_trigger") {
-    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"w-full bg-slate-700/40 border border-slate-600/30 rounded-lg px-4 py-2 text-xs text-slate-400 whitespace-pre-wrap break-words\">"
+    return openMessageWrapper("flex justify-start", msg) + "<div class=\"w-full bg-slate-700/40 border border-slate-600/30 rounded-lg px-4 py-2 text-xs text-slate-400 whitespace-pre-wrap break-words\">"
       + escapeHtml(msg.content) + timeDiv() + "</div></div>";
   }
   if (msg.role === "agent_message") {
-    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"w-full bg-slate-700/40 border border-slate-600/30 rounded-lg px-4 py-2 text-xs text-slate-300\">"
+    return openMessageWrapper("flex justify-start", msg) + "<div class=\"w-full bg-slate-700/40 border border-slate-600/30 rounded-lg px-4 py-2 text-xs text-slate-300\">"
       + "<div class=\"flex items-center gap-2 mb-1 text-indigo-300 font-semibold\">"
       + "<span class=\"px-1.5 py-0.5 rounded bg-indigo-900 text-[10px] tracking-wide\">AGENT</span>"
       + "<span class=\"truncate\">" + escapeHtml(msg.from_session_name || "") + "</span>"
@@ -673,6 +684,7 @@ function renderMessage(msg, sessionId) {
           + " class=\"p-0.5 text-slate-500 hover:text-yellow-400\" title=\"Elon-e: retry with a fresh perspective\">"
           + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 10V3L4 14h7v7l9-11h-7z\"/></svg>"
           + "</button>"
+          + renderExplainButton(sessionId, msg.event_index)
           + "<button onclick=\"toggleRecapPanel(this, \x27" + sessionId + "\x27, " + msg.event_index + ")\""
           + " class=\"recap-toggle p-0.5 text-slate-500 hover:text-sky-400\" title=\"Recap: what this section covered\">"
           + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M3.75 6h16.5M3.75 12h16.5M3.75 18h10.5\"/></svg>"
@@ -682,8 +694,9 @@ function renderMessage(msg, sessionId) {
         buttons += renderRoundRatingButtons(sessionId, msg.id);
       }
     }
+    var eventIndexAttr = msg.event_index != null ? " data-event-index=\"" + msg.event_index + "\"" : "";
     return "<div class=\"flex items-center gap-3 py-2 px-4 separator-line group/sep\""
-      + messageIdentityAttrs(msg) + secondsAttr + ">"
+      + messageIdentityAttrs(msg) + eventIndexAttr + secondsAttr + ">"
       + "<div class=\"flex-1 border-t border-slate-600/40\"></div>"
       + "<span class=\"text-xs text-slate-500 whitespace-nowrap\">response complete" + timeStr + "</span>"
       + buttons
@@ -740,6 +753,7 @@ function appendMessage(role, content, isVoice, timestamp, uploadedFiles) {
 }
 
 const GLOBALS = {
+  mdDiv,
   renderMessage,
   renderMessagesIntoContainer,
   postProcessRenderedMessages,
@@ -748,15 +762,16 @@ const GLOBALS = {
   appendMessage,
   applyTurnOutline,
   setPageDepth,
-  toggleTurnFold,
 };
-// Turn primitives the window engine builds wraps from. Legacy callers go
+// Turn primitives the window engine builds wraps from and drives through Chat;
+// the fold bar's click handler closes over the module scope. Legacy callers go
 // through wrapTurn / applyTurnOutline above and never touch these directly.
 const CHAT_ONLY = {
   buildTurnRowFromSpec,
   installTurnFold,
   installTurnCollapseControl,
   setTurnFoldExpanded,
+  toggleTurnFold,
 };
 Chat.wire(GLOBALS, CHAT_ONLY);
 

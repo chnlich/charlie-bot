@@ -6,18 +6,20 @@ import pytest
 from conftest import (
     OPUS_BACKEND_ID,
     append_events,
+    apply_config_overrides,
     cron_d_dir,
     dump_yaml,
     make_scheduler_setup,
     read_chat_events,
     user_event,
     write_cron_task,
+    write_nightly_prompt,
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api.cron import router as cron_router
-from src.api.deps import get_config, get_session_manager
+from src.api.deps import get_session_manager
 from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, SessionMetadata, SessionStatus
@@ -30,7 +32,7 @@ def make_cron_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager
   app = FastAPI()
   app.include_router(cron_router, prefix="/api/cron")
   app.include_router(sessions_router, prefix="/api/sessions")
-  app.dependency_overrides[get_config] = lambda: cfg
+  apply_config_overrides(app, cfg)
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   return TestClient(app)
 
@@ -38,9 +40,7 @@ def make_cron_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager
 def write_nightly_task(home: Path) -> Path:
   """Seed one healthy 'nightly' cron job (pointer-backed host file, as production files look)
   and return its yaml path."""
-  prompt_path = home / "prompts" / "nightly.md"
-  prompt_path.parent.mkdir(parents=True, exist_ok=True)
-  prompt_path.write_text("nightly prompt", encoding="utf-8")
+  prompt_path = write_nightly_prompt(home, "nightly prompt")
   return write_cron_task(
       home,
       "nightly",

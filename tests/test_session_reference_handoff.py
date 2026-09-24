@@ -182,8 +182,8 @@ async def test_fork_reference_keeps_utf8_parity_on_non_ascii_and_undecodable_byt
   expected = json.dumps(user_event("ok")) + "\n" + non_ascii + "\n"
   assert _reference_path(mgr, child.id).read_text(encoding="utf-8") == expected
 
-  # Undecodable bytes raise at fork time, as the text-mode read did, and the
-  # failed fork writes no reference.
+  # Undecodable bytes raise at fork time, and the failed fork writes no
+  # reference.
   other = await mgr.create_session(CreateSessionRequest(name="Other"), backend=OPUS_BACKEND_ID)
   _append_events(mgr.get_chat_events_path(other.id), [user_event("ok")])
   with open(mgr.get_chat_events_path(other.id), "ab") as f:

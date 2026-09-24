@@ -21,8 +21,9 @@ from src.core import event_types as ET
 if TYPE_CHECKING:
   import numpy as np
 from src.core import plan_paths, sidebar_state
-from src.core.chat_events import ChatEventStore
+from src.core.chat_events import ARCHIVE_FILE_GLOB, ChatEventStore, chat_event_archives_dir
 from src.core.config import CharlieBotConfig
+from src.core.constants import BackendType
 from src.core.gc_control import gc_off
 from src.core.init import RUNNING_SCAN_WINDOW, iter_recent_thread_metas
 from src.core.init_worker_recovery import walk_thread_meta_stats
@@ -40,7 +41,6 @@ from src.core.message_projection import MessageProjection
 from src.core.models import (
     TERMINAL_THREAD_STATUSES,
     BackendOption,
-    BackendType,
     CreateSessionRequest,
     MasterRunRecord,
     SessionCallbacks,
@@ -53,7 +53,8 @@ from src.core.ndjson import append_ndjson
 from src.core.plans import AWAITING_APPROVAL_STATE, read_plans_tolerant
 from src.core.process import cleanup_session_cgroup
 from src.core.scheduled_sessions import (
-    # re-export: src/api/cron.py imports ScheduledSessionBusyError from this module
+    # re-export: src/api/cron.py and src/api/sessions.py import
+    # ScheduledSessionBusyError from this module
     ScheduledSessionBusyError,
     ScheduledSessionStore,
 )
@@ -183,6 +184,34 @@ def _stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
   return meta
 
 
+def _sidebar_entry(
+    include_running_status: bool,
+    include_pending_trigger_status: bool,
+    include_pending_plan_approval: bool,
+    *,
+    running: bool,
+    trigger_count: int,
+    next_trigger_at: datetime | None,
+    plan_approval: bool,
+) -> dict:
+  """Build one session's derived sidebar entry: the include-gated key set.
+
+  Both build sites in :meth:`SessionManager.resolve_sidebar_state` — the
+  archived shortcut and the probed path — must carry the same keys, so the
+  set lives here. ``has_pending_trigger`` derives from the count.
+  """
+  entry: dict = {}
+  if include_running_status:
+    entry[sidebar_state.HAS_RUNNING_TASKS] = running
+  if include_pending_trigger_status:
+    entry[sidebar_state.HAS_PENDING_TRIGGER] = trigger_count > 0
+    entry[sidebar_state.PENDING_TRIGGER_COUNT] = trigger_count
+    entry[sidebar_state.NEXT_TRIGGER_AT] = next_trigger_at
+  if include_pending_plan_approval:
+    entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL] = plan_approval
+  return entry
+
+
 def _apply_sidebar_state(
     sessions: list[SessionMetadata],
     derived: dict[str, dict],
@@ -261,6 +290,17 @@ def _reset_trigger_meta_memo_for_tests() -> None:
   _trigger_state_verdicts.clear()
 
 
+def _iter_trigger_stats(triggers_dir: str) -> list[tuple[str, os.stat_result]]:
+  """The shared trigger-dir stat walk (src.core.triggers.iter_trigger_file_stats).
+
+  Reached lazily because src.core.triggers imports SessionManager from this
+  module, the same lazy seam the recap import below uses.
+  """
+  from src.core.triggers import iter_trigger_file_stats
+
+  return iter_trigger_file_stats(triggers_dir)
+
+
 def pending_trigger_state_sync(
     triggers_dir: Path,
     walked: list[tuple[str, os.stat_result]] | None = None,
@@ -301,24 +341,15 @@ def pending_trigger_state_sync(
     if verdict is not None and verdict[0] == dir_sig:
       return verdict[1], verdict[2]
   if walked is None:
-    walked = []
-    with os.scandir(triggers_str) as entries:
-      for entry in entries:
-        if not entry.name.endswith(".json") or not entry.is_file():
-          continue
-        try:
-          st = os.stat(entry.path)
-        except OSError:
-          continue  # vanished between scandir and stat — nothing to read
-        walked.append((entry.path, st))
+    walked = _iter_trigger_stats(triggers_str)
 
   pending_count = 0
   next_trigger_at: datetime | None = None
   for trigger_path, st in walked:
     if not stat.S_ISREG(st.st_mode):
       continue
-    # entry.path is the str join scandir already built; the memo keys on it
-    # directly, the same string-path pattern the thread-metadata memo uses.
+    # The memo keys on the walked string path directly, the same string-path
+    # pattern the thread-metadata memo uses.
     trigger = _trigger_meta_memo.fresh(trigger_path, st)
     if trigger is None:
       trigger = load_json_meta(
@@ -543,17 +574,8 @@ def _sidebar_probe_walk(threads_dir: Path, triggers_dir: Path, plans_path: Path)
     dir_st = None
   if dir_st is not None and stat.S_ISDIR(dir_st.st_mode):
     trigger_dir_sig = (dir_st.st_mtime_ns, dir_st.st_size)
-    trigger_pairs = []
-    with os.scandir(triggers_str) as entries:
-      for entry in entries:
-        if not entry.name.endswith(".json"):
-          continue
-        try:
-          st = entry.stat()
-        except OSError:
-          continue
-        trigger_pairs.append((entry.path, st))
-        trigger_sig.append((entry.name, st.st_mtime_ns, st.st_size))
+    trigger_pairs = _iter_trigger_stats(triggers_str)
+    trigger_sig = [(os.path.basename(path), st.st_mtime_ns, st.st_size) for path, st in trigger_pairs]
   try:
     plans_st = os.stat(os.fspath(plans_path))
     plans_sig: tuple | None = (plans_st.st_mtime_ns, plans_st.st_size)
@@ -611,7 +633,7 @@ _REFERENCE_LINE_WS = b" \t\r\n\x0b\x0c"
 _REFERENCE_SCAN_CHUNK = 1 << 20
 
 
-def _reference_newlines(arr: "np.ndarray") -> "np.ndarray":
+def _reference_newlines(arr: np.ndarray) -> np.ndarray:
   """Return the positions of 0x0A bytes in ``arr`` (uint8 view of the corpus)."""
   # numpy rides the fork's parent-reference stream (the M99 server import floor):
   # the module sits on the sessions chain every server start pulls, and the
@@ -628,7 +650,7 @@ def _reference_newlines(arr: "np.ndarray") -> "np.ndarray":
   return parts[0] if len(parts) == 1 else np.concatenate(parts)
 
 
-def _mapping_ascii(data: "mmap.mmap") -> bool:
+def _mapping_ascii(data: mmap.mmap) -> bool:
   """Whole-mapping ASCII sweep, chunked so the compare's scratch stays in cache."""
   import numpy as np
   arr = np.frombuffer(data, dtype=np.uint8)
@@ -638,7 +660,7 @@ def _mapping_ascii(data: "mmap.mmap") -> bool:
   return True
 
 
-def _fast_reference_frames(data: "bytes | mmap.mmap", take: int) -> tuple[int, int, int, bool] | None:
+def _fast_reference_frames(data: bytes | mmap.mmap, take: int) -> tuple[int, int, int, bool] | None:
   """Vectorized frame check for the first ``take`` raw lines of ``data``.
 
   Returns ``(raw, start, end, needs_newline)`` when every in-budget frame is a
@@ -675,24 +697,23 @@ def _fast_reference_frames(data: "bytes | mmap.mmap", take: int) -> tuple[int, i
   return (raw, int(starts[0]), end, needs_newline)
 
 
-def _stream_reference_lines(out: BinaryIO, data: "bytes | mmap.mmap", take: int) -> tuple[int, int]:
+def _stream_reference_lines(out: BinaryIO, data: bytes | mmap.mmap, take: int) -> tuple[int, int]:
   """Copy the non-blank lines among the first ``take`` raw line frames of ``data`` into ``out``.
 
   Returns ``(raw, appended)``: raw frames spent against the budget (blank
-  frames included, mirroring the text-mode line iteration this replaces) and
-  lines written. Bytes move without per-line copies: a bulk vectorized pass
-  answers the common all-``{}`` shape with one window write, and the per-frame
-  fallback keeps CR folding and corrupt-line rejection exact. A corrupt corpus
-  stays loud exactly as the text-mode read did: a non-blank frame whose
+  frames included) and lines written. Bytes move without per-line copies: a
+  bulk vectorized pass answers the common all-``{}`` shape with one window
+  write, and the per-frame fallback keeps CR folding and corrupt-line
+  rejection exact. A corrupt corpus stays loud: a non-blank frame whose
   stripped content is not wrapped in ``{}`` raises, and so do undecodable
   bytes anywhere in the file.
   """
-  # Validity parity with the text-mode read this replaces: it raised the same
-  # UnicodeDecodeError on undecodable bytes, so the decoded result is unused.
-  # ASCII bytes are always valid UTF-8, so an ASCII proof passes validity and
-  # only a non-ASCII corpus pays the full decode. An mmap lacks isascii(); the
-  # numpy sweep answers for the whole mapping, and a non-ASCII mapping
-  # materializes once so the decode raises the identical error.
+  # Validity gate: undecodable bytes must raise UnicodeDecodeError, and the
+  # decoded result is otherwise unused. ASCII bytes are always valid UTF-8, so
+  # an ASCII proof passes validity and only a non-ASCII corpus pays the full
+  # decode. An mmap lacks isascii(); the numpy sweep answers for the whole
+  # mapping, and a non-ASCII mapping materializes once so the decode raises
+  # the identical error.
   ascii_ok = _mapping_ascii(data) if isinstance(data, mmap.mmap) else data.isascii()
   if not ascii_ok:
     if isinstance(data, mmap.mmap):
@@ -731,8 +752,7 @@ def _stream_reference_lines(out: BinaryIO, data: "bytes | mmap.mmap", take: int)
       if data[first] != ord("{") or data[last] != ord("}"):
         snippet = data[pos:end].decode("utf-8", errors="replace").strip()[:80]
         raise ValueError(f"parent event line is not a serialized event object: {snippet!r}")
-      # The CR of a CRLF pair folds before the write, matching the
-      # universal-newline translation of the text-mode read; every other
+      # The CR of a CRLF pair folds before the write; every other
       # original byte (edge whitespace included) is kept. The per-line slice
       # keeps no pointer exported past the write (an mmap closes after this
       # stream returns, and closing refuses while a view exists).
@@ -970,13 +990,13 @@ class SessionManager:
   async def _get_session_bypassing_cache(self, session_id: str) -> SessionMetadata | None:
     """get_session forced past the TTL cache, so the read lands on disk.
 
-    The single-field mutators (``_save_field_fresh``, ``persist_cc_session_id``,
-    ``persist_claude_account``) and their post-save read-backs must act on the
-    latest on-disk state, not a TTL-cached view: a stale view would clobber a
-    concurrent writer's save. Unlike ``read_metadata_fresh`` this stays a
-    ``get_session`` call — the rating-key migration still runs and the cache
-    is re-populated from the read. Hold ``self._lock_for(session_id)`` around
-    the whole mutate-save; without the lock the fresh view races other writers.
+    The single-field mutators (``_save_field_fresh``, ``_persist_anchor_fresh``)
+    and their post-save read-backs must act on the latest on-disk state, not a
+    TTL-cached view: a stale view would clobber a concurrent writer's save.
+    Unlike ``read_metadata_fresh`` this stays a ``get_session`` call — the
+    rating-key migration still runs and the cache is re-populated from the
+    read. Hold ``self._lock_for(session_id)`` around the whole mutate-save;
+    without the lock the fresh view races other writers.
     """
     self._invalidate_cache(session_id)
     return await self.get_session(session_id)
@@ -1564,11 +1584,11 @@ class SessionManager:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     def _write(out: BinaryIO) -> None:
-      archives_dir = parent_dir / "data" / "archives"
+      archives_dir = chat_event_archives_dir(parent_dir)
       raw_left = archive_take
       archived = 0
       if raw_left and archives_dir.is_dir():
-        for source in sorted(archives_dir.glob("chat_events.*.jsonl")):
+        for source in sorted(archives_dir.glob(ARCHIVE_FILE_GLOB)):
           if raw_left <= 0:
             break
           # A full-corpus budget spans nearly the whole file (only an archive
@@ -1813,60 +1833,77 @@ class SessionManager:
       count += 1
     return count
 
-  async def persist_cc_session_id(self, session_id: str, cc_session_id: str) -> str | None:
-    """Persist a cc_session_id without clobbering unrelated metadata fields.
+  async def _persist_anchor_fresh(
+      self, session_id: str, mutate: Callable[[SessionMetadata], bool]) -> SessionMetadata | None:
+    """Run one authorized anchor channel: fresh read-modify-write under the per-session lock.
 
-    Re-reads fresh metadata from disk under the per-session lock, mutates only
-    ``cc_session_id`` (and ``cc_session_started_at`` when the on-disk id actually
-    changes), saves, then re-reads and returns the ``cc_session_id`` now on
-    disk. Never falls back to a whole-object save — that clobbers concurrent
-    single-field writes like ``has_unread``. ``update_thinking_state`` is the
-    reference pattern.
+    *mutate* projects the new anchor values onto the fresh metadata and returns
+    whether anything changed — only a changed save goes to disk. The read-back
+    re-reads disk under the same lock, so what a channel returns is the on-disk
+    state at return time, not the written value (a concurrent writer landing in
+    between wins). ``anchor_write=True`` marks the save an authorized anchor
+    channel (see ``save_metadata``). Returns the re-read metadata, None when
+    the session does not exist.
     """
     async with self._lock_for(session_id):
       fresh = await self._get_session_bypassing_cache(session_id)
       if fresh is None:
         return None
-      if fresh.cc_session_id != cc_session_id:
-        fresh.cc_session_id = cc_session_id
-        fresh.cc_session_started_at = utc_now()
-      await self.save_metadata(fresh, lock_held=True, anchor_write=True)
-      read_back = await self._get_session_bypassing_cache(session_id)
-    return read_back.cc_session_id if read_back is not None else None
+      if mutate(fresh):
+        await self.save_metadata(fresh, lock_held=True, anchor_write=True)
+      return await self._get_session_bypassing_cache(session_id)
+
+  async def persist_cc_session_id(self, session_id: str, cc_session_id: str) -> str | None:
+    """Persist a cc_session_id without clobbering unrelated metadata fields.
+
+    Only ``cc_session_id`` changes (and ``cc_session_started_at`` when the
+    on-disk id actually changes); the save runs on every call, id changed or
+    not — the consumer owns the resume anchor and hands it every round (the
+    persist-with-readback step in ``master_cc_queue``). Never falls back to a
+    whole-object save — that clobbers concurrent single-field writes like
+    ``has_unread``.
+    """
+
+    def set_anchor(meta: SessionMetadata) -> bool:
+      if meta.cc_session_id != cc_session_id:
+        meta.cc_session_id = cc_session_id
+        meta.cc_session_started_at = utc_now()
+      return True
+
+    saved = await self._persist_anchor_fresh(session_id, set_anchor)
+    return saved.cc_session_id if saved is not None else None
 
   async def persist_claude_account(self, session_id: str, claude_account: str) -> str | None:
     """Persist the pool account holding the session's transcript; returns the label on disk.
 
-    Same read-modify-write-under-lock pattern as ``persist_cc_session_id``: only
-    ``claude_account`` changes, so concurrent single-field writes survive.
+    Only ``claude_account`` changes, so concurrent single-field writes survive;
+    an unchanged label writes nothing.
     """
-    async with self._lock_for(session_id):
-      fresh = await self._get_session_bypassing_cache(session_id)
-      if fresh is None:
-        return None
-      if fresh.claude_account != claude_account:
-        fresh.claude_account = claude_account
-        await self.save_metadata(fresh, lock_held=True, anchor_write=True)
-      read_back = await self._get_session_bypassing_cache(session_id)
-    return read_back.claude_account if read_back is not None else None
+
+    def set_label(meta: SessionMetadata) -> bool:
+      if meta.claude_account == claude_account:
+        return False
+      meta.claude_account = claude_account
+      return True
+
+    saved = await self._persist_anchor_fresh(session_id, set_label)
+    return saved.claude_account if saved is not None else None
 
   async def clear_cc_session_anchor(self, session_id: str) -> None:
     """Intentionally clear the session's resume anchor; the authorized clear channel.
 
-    Lock-holding read-modify-write semantics identical to the single-field
-    funnels: fresh read under the per-session lock, both anchor fields cleared,
-    saved with anchor authority. The weekly recycle's deliberate fresh start
-    goes through here -- an unchanneled whole-object save would leave the old
-    anchor on disk (the guard corrects it back) and the recycle would silently
-    do nothing behind its suppressed next-round alarm.
+    The weekly recycle's deliberate fresh start goes through here -- an
+    unchanneled whole-object save would leave the old anchor on disk (the guard
+    corrects it back) and the recycle would silently do nothing behind its
+    suppressed next-round alarm.
     """
-    async with self._lock_for(session_id):
-      fresh = await self._get_session_bypassing_cache(session_id)
-      if fresh is None:
-        return
-      fresh.cc_session_id = None
-      fresh.cc_session_started_at = None
-      await self.save_metadata(fresh, lock_held=True, anchor_write=True)
+
+    def clear(meta: SessionMetadata) -> bool:
+      meta.cc_session_id = None
+      meta.cc_session_started_at = None
+      return True
+
+    await self._persist_anchor_fresh(session_id, clear)
 
   async def claude_context_state(self, session_id: str,
                                  session_meta: SessionMetadata) -> tuple[int | None, datetime | None]:
@@ -1968,11 +2005,10 @@ class SessionManager:
   async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
     """Persist event, run it through the session's aggregator, broadcast deltas + raw event.
 
-    Raw events whose type is in ``_RAW_EVENTS_REPLACED_BY_DELTAS`` are no
-    longer broadcast on the wire; the aggregator emits ``message``/``stream``
-    deltas in their place. All other event types still flow as before because
-    clients use them for state side-effects (e.g. ``master_done`` →
-    stopThinking).
+    Raw events whose type is in ``_RAW_EVENTS_REPLACED_BY_DELTAS`` are not
+    broadcast on the wire; the aggregator emits ``message``/``stream`` deltas
+    in their place. Every other event type flows raw because clients use it
+    for state side-effects (e.g. ``master_done`` → stopThinking).
     """
     # Prime the events cache + aggregator before persisting so event_index
     # injection works on the very first call after server start (and so the
@@ -2196,7 +2232,7 @@ class SessionManager:
     await self._ensure_chat_events_cached(session_id)
     return self._chat_events.finalize_master_woke(session_id, thread_id)
 
-  def load_chat_events_tail(self, session_id: str, limit: int = 200) -> tuple[list[dict], int, bool]:
+  def load_chat_events_tail(self, session_id: str, limit: int) -> tuple[list[dict], int, bool]:
     """Load only the last *limit* events from disk, bypassing the read-through cache.
 
     See ``src/core/chat_events.py`` for the return shape.
@@ -2308,9 +2344,9 @@ class SessionManager:
     stat proves the parsed bytes unchanged (every writer publishes through the
     atomic tmp rename, so a content change always moves ``st_mtime_ns``) and
     re-times the entry, while a moved or unprovable signature (``None``, the
-    write-funnel populate) evicts for the caller's disk read. The stat is
-    strictly fresher than the TTL it replaces: the old form re-read at best
-    every 30 s, this one serves only while the bytes provably stand. The two
+    write-funnel populate) evicts for the caller's disk read. The stat
+    revalidation keeps an active entry serving only while its bytes provably
+    stand, not on the clock alone. The two
     TTL-checked metadata readers (``get_session`` and ``_load_session_metas``)
     route through this one check, and a stale entry is evicted here, so the
     two cannot drift on freshness semantics. ``list_active_session_metas``
@@ -2633,16 +2669,14 @@ class SessionManager:
 
     derived: dict[str, dict] = {}
     for meta in archived_sessions:
-      entry: dict = {}
-      if include_running_status:
-        entry[sidebar_state.HAS_RUNNING_TASKS] = False
-      if include_pending_trigger_status:
-        entry[sidebar_state.HAS_PENDING_TRIGGER] = False
-        entry[sidebar_state.PENDING_TRIGGER_COUNT] = 0
-        entry[sidebar_state.NEXT_TRIGGER_AT] = None
-      if include_pending_plan_approval:
-        entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL] = False
-      derived[meta.id] = entry
+      derived[meta.id] = _sidebar_entry(
+          include_running_status,
+          include_pending_trigger_status,
+          include_pending_plan_approval,
+          running=False,
+          trigger_count=0,
+          next_trigger_at=None,
+          plan_approval=False)
 
     if not active_sessions:
       return derived
@@ -2684,16 +2718,15 @@ class SessionManager:
 
     for meta in active_sessions:
       probed = sidebar_state.required_snapshot_entry(meta.id)
-      entry = {}
-      if include_running_status:
-        entry[sidebar_state.HAS_RUNNING_TASKS] = bool(busy_since(meta.id)) or bool(probed[sidebar_state.THREAD_RUNNING])
-      if include_pending_trigger_status:
-        entry[sidebar_state.HAS_PENDING_TRIGGER] = probed[sidebar_state.PENDING_TRIGGER_COUNT] > 0
-        entry[sidebar_state.PENDING_TRIGGER_COUNT] = probed[sidebar_state.PENDING_TRIGGER_COUNT]
-        entry[sidebar_state.NEXT_TRIGGER_AT] = probed[sidebar_state.NEXT_TRIGGER_AT]
-      if include_pending_plan_approval:
-        entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL] = bool(probed[sidebar_state.HAS_PENDING_PLAN_APPROVAL])
-      derived[meta.id] = entry
+      derived[meta.id] = _sidebar_entry(
+          include_running_status,
+          include_pending_trigger_status,
+          include_pending_plan_approval,
+          running=bool(busy_since(meta.id)) or bool(probed[sidebar_state.THREAD_RUNNING]),
+          trigger_count=probed[sidebar_state.PENDING_TRIGGER_COUNT],
+          next_trigger_at=probed[sidebar_state.NEXT_TRIGGER_AT],
+          plan_approval=bool(probed[sidebar_state.HAS_PENDING_PLAN_APPROVAL]),
+      )
     return derived
 
   def _schedule_sidebar_sweep(self, sessions: list[SessionMetadata]) -> None:
@@ -2744,7 +2777,6 @@ class SessionManager:
       include_running_status: bool,
       include_pending_trigger_status: bool,
       include_pending_plan_approval: bool = False,
-      force: bool = False,
   ) -> None:
     """Apply :meth:`resolve_sidebar_state`'s derived fields onto *sessions*.
 
@@ -2757,7 +2789,7 @@ class SessionManager:
         include_running_status=include_running_status,
         include_pending_trigger_status=include_pending_trigger_status,
         include_pending_plan_approval=include_pending_plan_approval,
-        force=force,
+        force=False,
     )
     _apply_sidebar_state(
         sessions, derived, include_running_status, include_pending_trigger_status, include_pending_plan_approval)
@@ -2814,8 +2846,7 @@ class SessionManager:
     The guard behind the authorized-channel model: the two resume anchors change
     only through their channels (``persist_cc_session_id``, ``persist_claude_account``,
     ``clear_cc_session_anchor``), so a whole-object save built from a stale cached
-    meta must not roll them back -- the 2026-09-14 incident's whole-object
-    write-back did exactly that. Reads metadata.json fresh (a cached view is the
+    meta must not roll them back. Reads metadata.json fresh (a cached view is the
     very staleness this guard exists for) and mutates *meta* in place; a
     correction logs ``session_anchor_write_corrected`` and the save proceeds
     write-through rather than refusing. Runs under the per-session lock: inside

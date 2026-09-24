@@ -122,13 +122,13 @@ const GLOBALS = {
   thinkingButtonHtml,
   thinkingToggleHtml,
   toolNameChipHtml,
-  toolInputSummary,
   formatBubbleTime,
   STIMULUS_ROLES,
 };
 const CHAT_ONLY = {
   escapeJsSingleQuoted,
   messageIdentityAttrs,
+  toolInputSummary,
 };
 Chat.wire(GLOBALS, CHAT_ONLY);
 

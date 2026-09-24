@@ -13,11 +13,11 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | --- | --- | --- | --- | --- |
 | M1 host: load + serve CPU | `uptime`; M1 collector below | load 1/5/15; serve count; %CPU total | load < 4 (CPU count); serve CPU total < 300 % | 3.27 / 2.42 / 2.94; 4 serve processes, 237.9 % CPU |
 | M2 UI polls | M2 collector below | polls/h; log MB | < 6000 polls/h | 2755 polls/h; 3.1 MB log |
-| M3 API latency, 401 path | M3 collector below | seconds per request | median < 0.005 s | median 0.002 s, max 0.002 s |
+| M3 API latency, 401 path | M3 collector below | seconds per request; the in-server floor sub-reading (the raw-ASGI drive of the same 401 path through the real app stack — middleware chain plus the http_request log line — the served path uvicorn runs after its lifespan installs the lean log renderer) | median < 0.005 s; in-server floor median < 0.000060 s (the line sits at the pre-fix dev-render floor — a regression to it trips; the cron-collision bias the M56 history documents applies) | median 0.002 s, max 0.002 s |
 | M4 turns | M4 collector below | seconds per turn; hung sessions (an archived session is never hung — `_session_archived`'s rule; neither is a session whose running threads' own worker logs moved within the hour — a delegation's chat file goes quiet for the delegation's whole run, see the 2026-09-14 history row) | median < 600 s (recalibrated from < 300 s: the median tracks the bot's own cron-delegation workload mix, not code health — see the 2026-09-12 history row); hung = 0 | median 53 s, max 1133 s; 0 hung |
 | M5 threads/list latency | M5 collector below | seconds per request, worst session | median < 0.05 s | — (introduced with its first history row) |
 | M6 session usage latency | M6 collector below | seconds per request, worst session; the append-round repeat (one appended event before each timed resolution — the 3 s usage poll during a streamed turn — scratch home) | median < 0.05 s; append-round median < 0.005 s | — (introduced with its first history row) |
-| M7 token-usage page | M7 collector below | seconds per page load; the changed-round collect (one corpus move since the last collect — the hourly cron's shape, scratch cache doc, live corpus read-only); the restart-cold collect (fresh process, the first page load after a server start — scratch copy of the live document, live corpus read-only; the first round after a deploy measures the one-time document-shape upgrade) | median < 3 s; changed-round median < 0.5 s; restart-cold median < max(0.5 s, (document + sidecar bytes) ÷ 25 MB/s) (recalibrated from < 0.5 s: that line priced the matched-signature restart — the db file+WAL signature unchanged since the document was written, the stored partial serving with the sidecar and db unread, 0.29-0.31 s at the 2026-09-15 landing — while the standing collector's copy of the live document is signature-stale whenever an opencode turn ran since the server's last token-usage collect, so under active turns the reading prices the seeded signature-miss path, sidecar parse plus the rows-map per-id key diff, ~1.0 s already at the landing-day corpus; the line tracks that shape's corpus the way M78/M84/M101 track theirs, 25 MB/s ≈ 76-88 % of the measured 28.5-33.0 MB/s end-to-end floor — see the 2026-09-16 history row) | — (introduced with its first history row) |
+| M7 token-usage page | M7 collector below | seconds per page load; the changed-round collect (one corpus move since the last collect — the hourly cron's shape, scratch cache doc, live corpus read-only); the restart-cold collect (fresh process, the first page load after a server start — scratch copy of the live document, live corpus read-only; the first round after a deploy measures the one-time document-shape upgrade); the warm-gate changed round (a persistent process's warm row memo and proof gate advancing over one turn's db writes between collects — the in-server shape behind the standing changed-round reading under active turns; the standing collector re-seeds a fresh process per round, so this shape needs its own harness — scratch corpus sized to the live db's row count, live db read-only) | median < 3 s; changed-round median < 0.5 s; restart-cold median < max(0.5 s, (document + sidecar bytes) ÷ 25 MB/s) (recalibrated from < 0.5 s: that line priced the matched-signature restart — the db file+WAL signature unchanged since the document was written, the stored partial serving with the sidecar and db unread, 0.29-0.31 s at the 2026-09-15 landing — while the standing collector's copy of the live document is signature-stale whenever an opencode turn ran since the server's last token-usage collect, so under active turns the reading prices the seeded signature-miss path — sidecar parse plus, before the 2026-09-24 four-field-proof landing, the rows-map per-id key diff (~1.0 s already at the landing-day corpus) and after it the tail fetch of the moved rows; the line tracks that shape's corpus the way M78/M84/M101 track theirs, 25 MB/s ≈ 76-88 % of the measured 28.5-33.0 MB/s end-to-end floor — see the 2026-09-16 history row); warm-gate changed-round median < max(0.050 s, rows × 0.0000013 s) (introduced with the tail-fetch gate at the 221,854-row corpus: the after band reads 0.82-0.96 µs/row and the pre-fix full-key-scan shape reads 1.50-1.60 µs/row, so the line sits 1.35-1.6x over the after band and trips the fallback shape its own price; a fallback round also prints its full-scan count); quiet round (the db signature moved, no row did — the probe skip) median < 0.10 s | — (introduced with its first history row) |
 | M8 sidebar search, absent needle | M8 collector below | seconds per request | median < 0.5 s | — (introduced with its first history row) |
 | M9 ext-usage codex spend rescan, steady state | M9 collector below | seconds per poll round | median < 0.05 s | — (introduced with its first history row) |
 | M10 thread-metadata torn reads | M10 collector below | torn reads per concurrent save stream | 0 torn reads | — (introduced with its first history row) |
@@ -81,7 +81,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M69 opencode SSE unhandled-event debug stream, steady state | M69 collector below | debug lines per 60 steady-state `_translate_sse_event` calls of one unhandled event type | 0 lines after the first sighting per event type per process | — (introduced with its first history row) |
 | M70 artifact clean-view serve, steady state | M70 collector below | seconds per repeat credentialed view of the worst on-disk artifact page, scratch home | repeat-view median < 0.003 s (recalibrated from < 0.010 s: the old line sat on the TestClient/httpx harness floor the 2026-09-15 repair removed — the served path reads 0.7-2.7 ms across the repair round's loads 3.6-3.9, the cron-collision bias the M56 history documents; see that history row) | — (introduced with its first history row) |
 | M71 sidebar search capped name-match response | M71 collector below | seconds per request, worst capped name-match shape (a one-character query matching the cap), snapshot corpus | median < 0.003 s (recalibrated from < 0.006 s: the old line sat on the TestClient harness floor the 2026-09-17 repair removed — the repaired raw-ASGI+middleware drive reads the served path at 1.66-1.89 ms with the body-keyed gzip memo, 2.99-3.13 ms before it; see the 2026-09-17 history row) | — (introduced with its first history row) |
-| M72 file-browser directory listing | M72 collector below | seconds per `GET /absolute_filepath/<dir>` request, worst on-disk listing corpus (the sessions root), the served path (the production gzip middleware mounted, Accept-Encoding: gzip — the browser shape; a bare app without the middleware reads the walk's floor alone, the vacuous-read class the M70 repair called out); the changed-round rebuild (one corpus move since the stored page keyed — a metadata rename into a session dir; the harness drops the page memo per timed round, row memo warm, builder level) | repeat-view median < 0.008 s (a tripped reading is read as host load and corpus growth first — the walk scales with the listed entry count, the cron-collision bias the M56 history documents; the 2026-09-15 repair split the TestClient harness floor out of the reading); changed-round median < 0.007 s | — (introduced with its first history row) |
+| M72 file-browser directory listing | M72 collector below | seconds per `GET /absolute_filepath/<dir>` request, worst on-disk listing corpus (the sessions root), the served path (the production gzip middleware mounted, Accept-Encoding: gzip — the browser shape; a bare app without the middleware reads the walk's floor alone, the vacuous-read class the M70 repair called out); the changed-round rebuild (one corpus move since the stored page keyed — a metadata rename into a session dir; the harness drops the page memo per timed round, row memo warm, builder level) | repeat-view median < max(0.008 s, entries × 0.000008 s) (recalibrated from < 0.008 s: the fixed line priced the 2026-09-13 corpus of 1165 entries and the walk scales with the listed entry count — 3.7-4.5 µs/entry measured across the 1165→1296 growth, so the line tracks the corpus the way the M61 all-sessions line does; a tripped reading is still read as host load first — the cron-collision bias the M56 history documents; the 2026-09-15 repair split the TestClient harness floor out of the reading); changed-round median < max(0.007 s, entries × 0.000008 s) (recalibrated from < 0.007 s for the same growth: 4.5-5.5 µs/entry measured from the 2026-09-12 introduction corpus of 1159 entries through this round's 1296, and the fixed line sat at 94 % of a quiet-load reading before the corpus moved again) | — (introduced with its first history row) |
 | M73 plan-verb validation event-loop lag | M73 collector below | seconds of loop lag + wall per amend validation (the registration gate: the DOM assertion set plus the headless-Chrome page-height render), scratch home, copied passing plan page (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 0.2 s (warm steady state; the first validation after a process start pays the one-time browser launch) | — (introduced with its first history row) |
 | M74 master turn-end raw-log rescan | M74 collector below | seconds of loop lag + wall per fallback-notice projection (whole read+parse+project of the turn's raw log), worst on-disk master-run raw log among the sessions the turn-end gate scans (backend option claude-family — the `_CLAUDE_RESUME_FLAG_BACKEND_TYPES` check the live call site runs), that session's own fresh translate (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.030 s | — (introduced with its first history row) |
 | M75 live-aggregator catch-up, first streamed event | M75 collector below | seconds of loop lag + wall per first-`persist_and_broadcast` catch-up (whole read+feed of the live corpus), worst on-disk live chat corpus, scratch home (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.020 s | — (introduced with its first history row) |
@@ -96,7 +96,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M84 backend stream-line parse, worst on-disk raw log | M84 collector below | seconds per full replay of the raw-log tail-follow loop and the stdout-stream NDJSON funnel over the worst on-disk raw agent log (scratch copy, live home read-only) | tail-follow median < max(0.060 s, bytes ÷ 250 MB/s) (recalibrated from bytes ÷ 200 MB/s with the 2026-09-18 drain-copy removal: the drain splits its lines from a read-only mapping instead of a whole-backlog readall copy, so both funnels share the orjson+translate parse floor the 250 MB/s figure prices — the after readings sit 344-378 MB/s on the 1051.1 MB corpus — see the 2026-09-18 history row); stdout-stream median < max(0.040 s, bytes ÷ 250 MB/s) (recalibrated from the absolute 0.060/0.040 s lines: the worst on-disk raw log is now a 1050.9 MB / 150-line master-run log whose orjson+translate replay floor measures 2874-3455 ms, 304-366 MB/s, so the line tracks the corpus's own floor; the 0.060/0.040 s max() floors keep the small-corpus watch verbatim — see the 2026-09-16 history row) | — (introduced with its first history row) |
 | M85 verify-finalize report read, steady state | M85 collector below | seconds per `read_verify_final_report` call, worst on-disk worker log | median < 0.005 s | — (introduced with its first history row) |
 | M86 delegation takeoff-gate scan, delegation-flow shape | M86 collector below | seconds per `check_takeoff_gate` call, worst live chat corpus, one authorized user message appended; the blocked-round repeat (the corpus-as-it-stands shape — nine steady-state calls on an unchanged corpus, the parity witness) | median < 0.001 s; blocked-round median < 0.0005 s | — (introduced with its first history row) |
-| M87 opencode abort client round-trip | M87 collector below | seconds per `_abort_session` call against a local stub serve (the per-turn cleanup POST, and the run-start client pays the same construction; loop lag reads the 5 ms ticker floor like M14) | wall median < 0.005 s | — (introduced with its first history row) |
+| M87 opencode abort client round-trip | M87 collector below | seconds per `_abort_session` call against a local stub serve (the per-turn cleanup POST over the shared outbound client — the run-start attempt client keeps its own per-attempt construction; loop lag reads the 5 ms ticker floor like M14) | wall median < 0.005 s | — (introduced with its first history row) |
 | M88 perfetto direct-pass build, worst on-disk trace corpus | M88 collector below | seconds per `_build_direct_pass_gzip` build (validation parse + parallel gzip subprocess over the original bytes), largest Chrome-JSON trace under the documented trace roots (~/data, ~/scripts) | median < 3.5 s (recalibrated from < 6 s: the compress now overlaps the parse in a gzip subprocess, landing at 2.79-2.85 s on the 307.3 MB / 1,068,461-event corpus; the validation parse is the floor — 2.72 s measured standalone — and grows with the corpus) | — (introduced with its first history row) |
 | M89 backend stderr pump, per chunk | M89 collector below | seconds per 8 KB chunk pumped through the stderr tee (the streamed pump shape: buffer work plus amortized log flushes) | median < 0.00005 s | — (introduced with its first history row) |
 | M90 backend stdout pump, per chunk or startup line | M90 collector below | seconds per 8 KB chunk pumped through the opencode stdout pump (the streamed pump shape) and per startup line append (the run-start shape) to the covered backends' stdout.log | chunk median < 0.00003 s; line median < 0.0002 s | — (introduced with its first history row) |
@@ -117,7 +117,13 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M105 binary-file transport serve, gzip-accepted | M105 collector below | seconds per served request over the worst on-disk artifact `.png` and `.pptx` (the already-compressed media the middleware must skip), plus the worst artifact `.html` page (the keep-compressing witness); the transport header each answer carries | skipped-family median < max(0.005 s, bytes ÷ 250 MB/s), transport identity (no `Content-Encoding`, wire == raw bytes); html witness median < max(0.05 s, bytes ÷ 25 MB/s), transport `Content-Encoding: gzip` | — (introduced with its first history row) |
 | M106 switch-during-stream repaint | M106 collector below | ms per synchronous paint of the hide+re-show a session switch performs on a mid-stream pending draft (the largest on-disk assistant draft grown one 200 B delta per switch, the page's marked build, node vm harness — live state read-only); the painted frame's parity against a direct full-draft parse rides every reading | median < 0.005 s | — (introduced with its first history row) |
 | M107 multi-trace merged-trace build wall, worst on-disk trace dir | M107 collector below | seconds per `_cached_merge` build over the worst on-disk multi-trace dir (the merged view's dir shape: one merge-pool task per trace, the single gzip run streaming each member's fragment as it completes; scratch cache home, live home read-only) | median < max(8 s, bytes ÷ 200 MB/s) (recalibrated from max(14 s, bytes ÷ 150 MB/s): the 2026-09-17 landing's wave model left the level-1 `gzip` subprocess on the ordered fragment stream — 201 MB/s against the four members' 63 MB/s write — and the stream became the wall after each wave; the isal igzip swap reads 797 MB/s, the wall is the member waves again, and 2.09 GB / 12 traces measures 7.35-8.34 s, 250-284 MB/s effective; the bytes line tracks the corpus the way M78/M84/M101 track theirs) | — (introduced with its first history row) |
-| M108 claude-sub launch import+dispatch floor, fresh process | M108 collector below | seconds per `claude-sub --<unsupported-probe-flag>` wall (the subscription-mode worker binary's console script: every cc-claude subscription worker and reviewer launch pays this import floor before the claude CLI starts; the probe flag rejects after argv parse, so no launch work runs — the nonzero exit is the assert; the checkout under test rides PYTHONPATH because the venv's editable finder pins src to the main checkout) | median < 0.30 s (the residual floor is the account pool's runtime models — pydantic + backend_models + src.core.models, ~117 ms measured; the web framework and the config model stack stay out — the ban-set contract test pins it) | — (introduced with its first history row) |
+| M108 claude-sub launch import+dispatch floor, fresh process | M108 collector below | seconds per `claude-sub --<unsupported-probe-flag>` wall (the subscription-mode worker binary's console script: every cc-claude subscription worker and reviewer launch pays this import floor before the claude CLI starts; the probe flag rejects after argv parse, so no launch work runs — the nonzero exit is the assert; the checkout under test rides PYTHONPATH because the venv's editable finder pins src to the main checkout) | median < 0.15 s (the residual floor is the launch chain's own asyncio plus the backends raw-log machinery — ~36 ms asyncio measured standalone; the pydantic model stacks, the web framework, and the config model stack stay out — the ban-set contract test pins it) | — (introduced with its first history row) |
+| M110 remote ssh probe, warm-master steady state | M110 collector below | seconds per `ssh <host> "sacct …"` probe through `ssh_cmd` against the standing watches' SLURM login host, quiet-cluster steady state; the re-master round (the first probe after the persist window expired or the master died — the shape a create-time verify pays when the previous watch's last probe is older than the window) | warm median < 0.3 s; re-master median < 1.5 s | — (introduced with its first history row) |
+| M111 review-context chat-log scan, worker completion | M111 collector below | seconds per `_first_delegation_description` scan, worst active live chat corpus carrying a delegation, deepest needle (the newest thread's completion — its match sits at the file's tail) and absent needle (a thread id no event names — the whole-corpus proof) | median < max(0.005 s, bytes ÷ 2000 MB/s) both shapes | — (introduced with its first history row) |
+| M112 backup archive build, whole-home corpus | M112 collector below | seconds per `create_backup` build over the scratch synthetic-home corpus (the builder block below; fresh random ids, no `cc_session_id`), with the archive's wire bytes and ratio riding the reading; the wire sits ~16 % over the level-9 stream it replaced (36.9× vs 42.8× on this corpus — the level-1 isal trade the landing priced, not a regression) | median < max(2.0 s, corpus bytes ÷ 1200 MB/s) | — (introduced with its first history row) |
+| M113 voice transcription wall, worst on-disk recording | M113 collector below | seconds per offline decode of the largest on-disk voice recording (quiet, and contended by 8 spinner processes at the turn tree's nice — the production contention shape), + decode determinism across two fresh decodes; the production walls this prices live in the server log's `http_request` duration for `POST /api/voice/*` | quiet median < audio seconds × 0.4; contended median < 2× the same round's quiet median; determinism true | — (introduced with its first history row) |
+| M114 backend-launch spawn loop stall, big-heap shape | M114 collector below | seconds of event-loop stall per backend spawn through the checkout's spawn seam, both production shapes (the fork's page-table copy scales with the forking process's resident set — the collector inflates a 3.5 GB heap to the server's standing RSS class first; raw-log shape preexec-free, piped shape through the pdeathsig spawn seam's clone(CLONE_VM|CLONE_VFORK) path) | raw-log shape loop-lag median < 0.020 s (the M75 loop-lag line); piped shape < 0.020 s (re-tightened from < 0.150 s: the child-side-prctl follow-up landed — the vfork seam's clone(CLONE_VM|CLONE_VFORK) spawn skips the page-table copy the preexec fork pays, the after reading sits at the 5 ms ticker floor like the raw-log line; a regression to the thread-fork's ~110 ms shape trips it 20×) | — (introduced with its first history row) |
+| M115 cold config+credentials resolution, fresh process | M115 collector below | seconds per fresh-process shared import + `get_config()` + `get_credentials()` wall (the shape a server start, a config-cache-miss verb, and every config/credentials change round pay; a cache-hit CLI verb reads only the credentials half) | median < 0.25 s | 0.148-0.155 s (branch arm, 2026-09-24 landing; main arm read 0.155-0.167 s the same round) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -150,11 +156,16 @@ tracked or untracked, which `switch` would otherwise carry silently — exits be
 and a diverged checkout fails the `--ff-only` merge. The restore runs only on a clean tree, where
 it cannot discard a sibling's work; the branch keeps its commits.
 
-M1 — host load and serve CPU:
+M1 — host load and serve CPU. The grep covers both process shapes the serving path runs: the
+server's own launcher chain (`scripts/start-server.sh` → `uv run python3 server.py` wrapper →
+`python3 server.py` child — the two lines the `server.py` pattern matches; the `tee` and `bash`
+wrappers carry neither pattern), plus the opencode agent daemons the opencode backend family
+spawns (`opencode serve`, the only shape the pre-repair grep counted — the server itself never
+matched it, so a round with no live opencode session read a structurally silent zero):
 
 ```bash
 uptime
-ps -eo pcpu,args | grep '[o]pencode serve' | awk '{n++; s+=$1} END {printf "%d serve processes, %.1f%% cpu total\n", n, s}'
+ps -eo pcpu,args | grep -E '[o]pencode serve|[s]erver\.py' | awk '{n++; s+=$1} END {printf "%d serve processes, %.1f%% cpu total\n", n, s}'
 ```
 
 M2 — UI poll rate and server-log size, from the newest server log (its filename carries the server
@@ -178,6 +189,58 @@ auth header; the timing reads the middleware-and-framework floor of the server p
 ```bash
 curl -s -o /dev/null -w 'http_code=%{http_code} time_total=%{time_total}s\n' http://127.0.0.1:18498/api/sessions/status
 for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{time_total}\n' http://127.0.0.1:18498/api/sessions/status; done | sort -n | awk '{a[NR]=$1} END {printf "median %.3f s, max %.3f s over %d requests\n", a[int((NR+1)/2)], a[NR], NR}'
+```
+
+M3 in-server floor — the same 401 path driven raw-ASGI through the real app stack (the middleware
+chain plus the http_request log line, the served path uvicorn runs after its lifespan installs the
+lean log renderer — the curl reading above is dominated by client overhead and cannot see a
+server-side cut of this size). One cold pass, then the median of 1000 drives with stdout captured
+so the render cost stays in the reading:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, contextlib, io, os, sys, time
+sys.path.insert(0, os.environ["CHECKOUT"])
+import server as srv
+from src.core.log_once import ensure_lean_renderer
+
+ensure_lean_renderer()  # the lifespan's first startup statement
+
+def scope():
+    return {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1", "method": "GET", "scheme": "http",
+            "path": "/api/sessions/status", "raw_path": b"/api/sessions/status",
+            "query_string": b"", "root_path": "",
+            "headers": [(b"host", b"test")],
+            "client": ("t", 1), "server": ("t", 80)}
+
+async def drive():
+    out = {"status": 0}
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+    async def send(msg):
+        if msg["type"] == "http.response.start":
+            out["status"] = msg["status"]
+    await srv.app(scope(), receive, send)
+    return out["status"]
+
+sink = io.StringIO()
+async def main():
+    for _ in range(100):
+        with contextlib.redirect_stdout(sink):
+            await drive()
+    ts = []
+    with contextlib.redirect_stdout(sink):
+        for _ in range(1000):
+            t0 = time.perf_counter()
+            await drive()
+            ts.append(time.perf_counter() - t0)
+    ts.sort()
+    print(f"in-server 401 floor median {ts[500] * 1e6:.2f} us, p10 {ts[100] * 1e6:.2f} us, "
+          f"p90 {ts[900] * 1e6:.2f} us over 1000")
+
+asyncio.run(main())
+EOF
 ```
 
 M4 — turn durations and hung sessions. The projection reads only `type` and `timestamp` from chat
@@ -452,11 +515,131 @@ print(f"changed-round collect median {times[2]:.3f} s, max {times[-1]:.3f} s ove
 EOF
 ```
 
+M7 warm-gate changed round — the in-server shape the standing changed-round collector
+cannot see: that collector re-seeds a fresh process per round, so its gate miss takes the
+full key scan, while the server's row memo and proof gate are warm and the hourly page load
+advances them over one turn's db writes. The harness: a scratch message-table corpus sized
+to the live db's row count (read once, never written; turn rows and cache dropped on
+reuse), one warm-up collect, per timed round ten in-place step-finish upserts plus twenty
+appended rows each bumping time_updated above the table's max like drizzle's `$onUpdate`,
+the full key scan counted (a fallback round prints its count and trips the line through its
+own price), then the quiet round (the signature touched, no row moved — the probe skip) and
+a cold replay carrying the rows digest as the parity witness:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import hashlib, json, os, sqlite3, sys, time
+from pathlib import Path
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+import src.core.token_tally as tt
+
+DB = Path("/home/chaoli/.local/share/opencode/opencode.db")
+SCRATCH = Path("/tmp/opencode/m7-warmgate")
+CORPUS, CACHE = SCRATCH / "db.sqlite", SCRATCH / "cache.json"
+live_rows = sqlite3.connect(f"file:{DB}?mode=ro", uri=True).execute(
+    "select count(*) from message").fetchone()[0]
+
+SCRATCH.mkdir(parents=True, exist_ok=True)
+if not CORPUS.is_file():
+    con = sqlite3.connect(CORPUS)
+    con.execute("create table message (id text primary key, session_id text not null, "
+                "time_created integer not null, time_updated integer not null, data text not null)")
+    rows = [(f"seed-{i}", "sess", 1700000000000 + i, 1700000000000 + i,
+             json.dumps({"role": "assistant" if i % 2 == 0 else "user", "modelID": "oc-m",
+                         "providerID": "prov", "time": {"created": 1700000001000},
+                         "pad": "y" * 120,
+                         **({"tokens": {"input": 100, "output": 20, "cache": {"read": 4, "write": 2}}}
+                            if i % 2 == 0 else {})}))
+            for i in range(live_rows)]
+    con.executemany("insert into message (id, session_id, time_created, time_updated, data) "
+                    "values (?, ?, ?, ?, ?)", rows)
+    con.commit()
+    con.close()
+con = sqlite3.connect(CORPUS)  # a reused corpus drops the last round's turn rows
+con.execute("delete from message where id like 'turn%'")
+con.commit()
+con.close()
+CACHE.unlink(missing_ok=True)
+for stale in SCRATCH.glob("*.opencode_rows.json"):
+    stale.unlink()
+
+KW = dict(opencode_db=CORPUS, cache_path=CACHE, claude_homes={}, codex_homes={},
+          sessions_dir=SCRATCH / "sessions")
+TURN = json.dumps({"role": "assistant", "modelID": "oc-m", "providerID": "prov",
+                   "time": {"created": 1700000001000},
+                   "tokens": {"input": 500, "output": 50, "cache": {"read": 10, "write": 5}}})
+
+
+def synthesize_turn(tag: str) -> None:
+    # Ten in-place step-finish upserts plus twenty appends, every write bumping
+    # time_updated above the table's max like drizzle's $onUpdate.
+    con = sqlite3.connect(CORPUS)
+    tu = con.execute("select max(time_updated) + 1 from message").fetchone()[0]
+    for i, (mid,) in enumerate(con.execute("select id from message limit 10").fetchall()):
+        con.execute("update message set data = ?, time_updated = ? where id = ?", (TURN, tu + i, mid))
+    for i in range(20):
+        con.execute("insert into message (id, session_id, time_created, time_updated, data) "
+                    "values (?, 'sess', ?, ?, ?)", (f"{tag}-{i}", tu + 10 + i, tu + 10 + i, TURN))
+    con.commit()
+    con.close()
+
+
+def rows_digest(tally: tt.TokenTally) -> str:
+    rows = [[r.source, r.model, r.calls, r.in_fresh, r.cache_write, r.cache_read, r.output]
+            for r in tally.rows]
+    return hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()[:12]
+
+
+tt.collect_token_usage(**KW)  # cold pass, as at a process start; not timed
+
+full_scans, orig_scan = 0, tt._scan_opencode_rows
+
+
+def counting_scan(con, memo):
+    global full_scans
+    full_scans += 1
+    return orig_scan(con, memo)
+
+
+tt._scan_opencode_rows = counting_scan
+changed, tally = [], None
+for r in range(5):
+    synthesize_turn(f"turn{r}")
+    tt._aggregate_memo = None
+    tt._tally_memo = None
+    t0 = time.perf_counter()
+    tally = tt.collect_token_usage(**KW)
+    changed.append(time.perf_counter() - t0)
+tt._scan_opencode_rows = orig_scan
+changed.sort()
+digest = rows_digest(tally)
+
+quiet = []
+for _ in range(5):
+    os.utime(CORPUS)  # the WAL-noise shape: the signature moves, no row did
+    tt._aggregate_memo = None
+    tt._tally_memo = None
+    t0 = time.perf_counter()
+    tt.collect_token_usage(**KW)
+    quiet.append(time.perf_counter() - t0)
+quiet.sort()
+
+tt._reset_aggregate_memo()
+replay_digest = rows_digest(tt.collect_token_usage(**KW))
+print(f"{live_rows} corpus rows; warm-gate changed round median "
+      f"{changed[2] * 1000:.1f} ms, max {changed[-1] * 1000:.1f} ms over 5; quiet round "
+      f"(probe skip) median {quiet[2] * 1000:.1f} ms; full key scans {full_scans}; rows "
+      f"digest {digest}, replay digest {replay_digest}, parity {digest == replay_digest}")
+EOF
+```
+
 M7 restart-cold — the collect behind the first page load after a server start: a fresh
 process re-parses the persisted document, rebuilds the row memo from its stored rows map,
-and gates the key diff on the entry's stored proof aggregates — a matching
-(count, sum(time_updated)) pair, the same weaker proof the warm memo's gate takes, skips the
-key pass entirely, so only a proof miss or a moved row re-enters the parser (live home read
+and gates the key diff on the entry's stored proof aggregates — a matching proof tuple, the
+same proof the warm memo's gate takes, skips the key pass entirely, and a miss tail-fetches
+only the rows written after the stored max (a legacy two-field document — a build before the
+maxes were persisted, what the live server writes until its next deploy — seeds without a
+max and its first miss takes the full key diff) (live home read
 once for the copy, never written):
 
 ```bash
@@ -2093,8 +2276,10 @@ middleware and route actually run; a TestClient drive adds ~1.5-2 ms of httpx
 harness per request and skips the middleware whose deflate the browser's fetch
 always pays, the vacuous-read class the M36/M59 repairs called out: one cold pass
 per endpoint, as at first view after a server start, then five timed requests, with
-digests read off the decoded last timed response so the view/bootstrap mark_read
-write-once cannot skew the cross-checkout comparison. Evidence points the same
+digests read off the decoded last timed response. All three endpoints are
+side-effect-free reads — the view/bootstrap mark_read write-once moved off the
+fetch path to the client's post-render ``POST /read`` — so no write side effect
+survives to skew the cross-checkout comparison. Evidence points the same
 collector at the before and after checkouts (``CHECKOUT`` at each root, shared
 ``M35_HOME`` snapshot), asserting identical decoded bodies, the same shape as the
 M7 protocol. Snapshot once:
@@ -3453,8 +3638,8 @@ M53 — config reload failure re-fire, broken steady state. `get_config` is the
 per-request config read (the auth middleware calls it on every HTTP request,
 the scheduler on every tick), and while the corpus stays broken a failed
 reload re-ran the full YAML parse + model validation and re-fired
-`config_reload_failed` on every call — the pre-fix form left `_config_mtime`
-at the old fingerprint, so the reload condition never went false (the live
+`config_reload_failed` on every call — the pre-fix form never recorded the
+failed reload's fingerprint, so the reload condition never went false (the live
 burst: 4431 lines in a 24.9 h server log, ~1/s inside the 16:00-18:00 window
 of 2026-09-04, three distinct error strings). The fixed form memoizes the
 failed reload on its fingerprint — re-parse only when a file moves, the same
@@ -4196,9 +4381,11 @@ session open fetches `GET /api/sessions/{id}/view`, whose `threads` array rode a
 worst corpus — while the workers tab it feeds paints one CSS-truncated description line
 per card and its full-text modal fetches the thread row on click (the M36 list contract,
 which the same card builder already consumes). The fix ships the M36 prefixed rows, so
-the view body carries one prefix per thread instead of the whole metadata. The handler's
-mark_read write rules out driving the live instance, so the collector resolves the session
-whose threads directory carries the most metadata files (the M5 resolution rule), copies
+the view body carries one prefix per thread instead of the whole metadata. The view is a
+side-effect-free read — the old write-once mark_read moved to the client's post-render
+`POST /read` — so the scratch-home copy is pure read-only corpus isolation rather than
+write avoidance: the collector resolves the session whose threads directory carries the
+most metadata files (the M5 resolution rule), copies
 that session (metadata.json, data/, threads/) into a scratch `CHARLIEBOT_HOME` under /tmp
 (live home read once for the copy, never written), and times the handler function from the
 checkout under test: one cold pass, as at first view after a server start, then nine timed
@@ -4232,7 +4419,8 @@ SID = best.name
 
 # Isolation: scratch CHARLIEBOT_HOME under /tmp holding only a copy of that
 # session's metadata.json, data/, and threads/; live home read once for the
-# copy, never written (the view's mark_read lands on the copy).
+# copy, never written (the view is a side-effect-free read; the copy pins the
+# corpus and keeps the timed calls off the live home).
 home = Path(tempfile.mkdtemp(prefix="m63-view-home-", dir="/tmp"))
 dst = home / "sessions" / SID
 dst.mkdir(parents=True)
@@ -6167,12 +6355,14 @@ EOF
 ```
 
 M87 — opencode abort client round-trip. `_abort_session` runs at every
-opencode turn's cleanup (and `terminate`), posting to the run's local serve;
-the run-start client (`_check_health` through the SSE stream) pays the same
-per-call construction. httpx builds a fresh default SSL context per
-AsyncClient when `verify` is left at its default — ~20 ms of event-loop CPU
-per construction on this host, paid twice per opencode turn — while the serve
-URL is plain localhost HTTP and never uses the context for TLS. The cost is
+opencode turn's cleanup (and `terminate`), posting to the run's local serve
+over the shared outbound client (`src.core.http.get_http_client`); the
+run-start attempt client (`_check_health` through the SSE stream) keeps its
+own per-attempt construction and passes the process-wide prebuilt SSL
+context (`_SERVE_SSL_CONTEXT` — httpx builds a fresh default SSL context
+per AsyncClient when `verify` is left at its default, ~20 ms of event-loop
+CPU per construction on this host), while the serve URL is plain localhost
+HTTP and never uses the context for TLS. The cost is
 turn-boundary event-loop work invisible to HTTP probes, so the collector
 drives the real `_abort_session` (read-only: the run's session id is a
 collector literal) against a local stub serve with a concurrent 5 ms ticker,
@@ -7361,7 +7551,11 @@ one merge-pool task per trace and streams each member's fragment into the
 single gzip run as its task completes — the wall becomes the slowest wave of
 members, ids allocate inside per-member strides so parallel members never
 collide, and the artifact stays the single-member deterministic gzip run
-(`-n` keeps the isal igzip header's mtime 0). The
+(`-n` keeps the isal igzip header's mtime 0). A member that parses as JSON but
+carries no `traceEvents` array (an analysis sidecar the `*.json` glob
+over-matches; the route's first-byte sniff cannot see it) skips with a logged
+warning instead of failing the build, and a merge that skips every member
+raises. The
 cost is the first merged view of a trace dir (repeats serve the cache),
 invisible to the standing HTTP probes, so the collector writes only to a
 scratch `CHARLIEBOT_HOME` under /tmp (traces read in place, read-only) and
@@ -7464,10 +7658,442 @@ print(f"claude-sub launch floor median {times[3]:.3f} s, max {times[-1]:.3f} s o
 EOF
 ```
 
+M110 — remote ssh probe, warm-master steady state. The remote-probe family (the schedule-trigger
+verify-on-create, the remote-pid waiter's probes, the remote sacct watch's probes, the host-auth
+standing probe, the remote launch) takes every ssh argv from `ssh_cmd`, and each subprocess paid
+one full ssh handshake — TCP + KEX + auth, ~0.85 s to this deployment's SLURM login host. The
+probe family now rides one ControlMaster per (local user, host, port): probes multiplex over the
+master while it lives, the master exits after 1200 s idle (the remote watch ladder's 600 s
+plateau plus its ≤10 s noise stays inside, so a watched host's probes never re-master while the
+watch lives), and a stale socket (a master killed uncleanly) costs one re-master on the next
+probe. The cost is subprocess latency invisible to the HTTP probes; the verify-on-create probe
+sits on every remote-watch trigger creation's request. The collector drives the real probe — a
+read-only `sacct` query against the standing watches' SLURM login host (read-only; a probe never
+writes) — through both argv shapes from the checkout under test: the plain pre-fix argv (every
+probe a full handshake) and the module's `ssh_cmd` (master reuse; one timed re-master round after
+a clean `ssh -O exit`, then five timed warm rounds), three interleaved rounds, asserting rc 0 on
+every probe:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, subprocess, sys, time
+
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.ssh import ssh_cmd
+from src.core.timeouts import SSH_CONNECT_TIMEOUT
+
+# The standing remote watches' SLURM login host; the watched job id rides the
+# live watch (read-only sacct query — a probe never writes, and the job's state
+# moving between arms is the remote's business: the pass condition is rc 0).
+HOST = "host2"
+JOB = "285547"
+SACCT = f"sacct -j {JOB} -X -n -P --format=JobID,State,ExitCode"
+# The pre-fix argv: every probe one full handshake (the shape the served code
+# ran before the ControlMaster landing; kept verbatim as the reference arm).
+# Both arms are full argv prefixes ending in the host; probe() appends the command.
+PLAIN_ARGV = ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={SSH_CONNECT_TIMEOUT}", HOST]
+
+
+def probe(argv: list[str]) -> tuple[float, int]:
+    t0 = time.perf_counter()
+    proc = subprocess.run([*argv, SACCT], capture_output=True)
+    return time.perf_counter() - t0, proc.returncode
+
+
+def mux_cleanup() -> None:
+    # -O exit is an option, so it rides before the destination; the mux arm's
+    # argv is [options..., HOST, command], and the cleanup drops the command.
+    argv = ssh_cmd(HOST)
+    subprocess.run([*argv[:-1], "-O", "exit", HOST], capture_output=True)
+
+
+plain_medians, warm_medians, colds = [], [], []
+for _ in range(3):
+    plain = []
+    for _ in range(5):
+        dt, rc = probe(PLAIN_ARGV)
+        assert rc == 0, f"plain probe rc {rc}"
+        plain.append(dt)
+    plain.sort()
+    plain_medians.append(plain[2])
+
+    mux_cleanup()
+    dt, rc = probe(ssh_cmd(HOST))  # the re-master round: no master exists here
+    assert rc == 0, f"re-master probe rc {rc}"
+    colds.append(dt)
+    warm = []
+    for _ in range(5):
+        dt, rc = probe(ssh_cmd(HOST))
+        assert rc == 0, f"warm probe rc {rc}"
+        warm.append(dt)
+    warm.sort()
+    warm_medians.append(warm[2])
+mux_cleanup()
+plain_medians.sort(); warm_medians.sort(); colds.sort()
+print(f"remote ssh probe to {HOST}: plain median {plain_medians[1]:.3f} s, "
+      f"warm-master median {warm_medians[1]:.3f} s, re-master median {colds[1]:.3f} s "
+      f"over 3 interleaved rounds")
+EOF
+```
+
+M111 — review-context chat-log scan, worker completion. Every worker and reviewer completion
+runs `_first_delegation_description` over the session's live `chat_events.jsonl` (the reviewer
+prompt's user-request line; the improve chain runs the same extract twice more), and the
+pre-landing scan parsed every line text-mode from the file start — ~35-39 ms on the 20.1 MB worst
+active corpus, the needle's position setting the parse count (the newest thread's delegation sits
+at the file's tail). The reader skips by proof: a line whose bytes lack the thread id cannot name
+it, so one C-level find rides the mapping and only a hit's enclosing line parses. The collector
+times both shapes — the deepest needle (the last task_delegated's thread id) and an absent id —
+over the worst active (non-archived) live chat corpus that carries at least one task_delegated
+event (the scan's workload; a corpus without one never runs this scan for a thread), five runs
+each:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import json, os, statistics, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.review import _first_delegation_description
+
+# Worst active live chat corpus: the non-archived session whose live chat
+# file carries the most bytes among the files that hold at least one
+# task_delegated event (the scan's workload: sessions whose workers complete
+# name a delegation; a corpus without one never runs this scan for a thread).
+root = Path.home() / ".charliebot" / "sessions"
+best, best_size = None, -1
+for d in root.iterdir():
+    p = d / "data" / "chat_events.jsonl"
+    if not p.is_file():
+        continue
+    meta = d / "metadata.json"
+    if meta.is_file():
+        try:
+            if json.loads(meta.read_text()).get("status") == "archived":
+                continue
+        except (OSError, ValueError):
+            pass
+    has_delegation = False
+    with open(p, "rb") as f:
+        for line in f:
+            if b'"task_delegated"' in line:
+                has_delegation = True
+                break
+    if not has_delegation:
+        continue
+    n = p.stat().st_size
+    if n > best_size:
+        best, best_size = p, n
+
+# Needle-at-end: the LAST task_delegated's thread id, the newest-thread
+# completion shape whose match sits deepest in the file.
+import orjson
+tid = None
+with open(best, "rb") as f:
+    for line in f:
+        if b'"task_delegated"' not in line:
+            continue
+        try:
+            ev = orjson.loads(line)
+        except ValueError:
+            continue
+        if ev.get("type") == "task_delegated" and ev.get("thread_id"):
+            tid = ev["thread_id"]
+ABSENT = "zzq9xneverpresentthread0000000000000000"
+
+def median_scan(needle_id: str) -> float:
+    times = []
+    for _ in range(5):
+        t0 = time.perf_counter()
+        _first_delegation_description(best, needle_id)
+        times.append(time.perf_counter() - t0)
+    return statistics.median(times)
+
+at_end = median_scan(tid)
+absent = median_scan(ABSENT)
+print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {best_size / 1e6:.1f} MB active live chat file "
+      f"({tid[:8]} deepest needle); review-context scan median {at_end * 1000:.2f} ms needle-at-end, "
+      f"{absent * 1000:.2f} ms absent-needle over 5 each")
+EOF
+```
+
+M112 — backup archive build, whole-home corpus. `create_backup` compresses the whole profile
+home (sessions `data/`, cache, memory, config.d — the gigabyte-scale sessions corpus included)
+into one `.tar.gz` on every `backup` handler fire; the pre-fix form rode tarfile's `w:gz`
+stdlib-zlib stream at its default level 9. The cost is an executor-thread wall invisible to
+every standing probe (the handler may never fire on a given host), so the collector rebuilds
+the scratch synthetic home — the isolation rule's fresh random ids, no `cc_session_id`, one
+token threads subtree priced out by the backup's own exclusion — then times `create_backup`
+from the checkout under test: one cold pass, as at the handler's first fire on a fresh host,
+then three timed builds, each archive deleted after its reading. Corpus built once (the
+committed builder rebuilds it from scratch each run):
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python /home/chaoli/workspace/charlie-bot/tests/backup_corpus_builder.py
+```
+
+Then run per checkout (`CHECKOUT` at the worktree root; the scratch home persists at
+/tmp/opencode/m112/home):
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, sys, time
+sys.path.insert(0, os.environ["CHECKOUT"])
+os.environ["CHARLIEBOT_HOME"] = "/tmp/opencode/m112/home"
+from pathlib import Path
+from src.core.backup import create_backup
+
+home = Path(os.environ["CHARLIEBOT_HOME"])
+corpus = sum(p.stat().st_size for p in home.rglob("*") if p.is_file())
+
+def one():
+    t0 = time.perf_counter()
+    archive = create_backup()
+    dt = time.perf_counter() - t0
+    wire = archive.stat().st_size
+    archive.unlink()
+    return dt, wire
+
+one()  # cold pass, as at the handler's first fire on a fresh host; not timed
+times = []
+for _ in range(3):
+    dt, wire = one()
+    times.append(dt)
+times.sort()
+print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: corpus {corpus / 1e9:.2f} GB, "
+      f"archive {wire / 1e6:.0f} MB ({corpus / wire:.1f}x); "
+      f"create_backup median {times[1]:.1f} s, max {times[-1]:.1f} s over 3, "
+      f"{corpus / 1e6 / times[1]:.0f} MB/s effective")
+EOF
+```
+
+M113 — voice transcription wall: the offline decode behind `POST /api/voice/*` (the
+server log's slowest served path). The collector decodes the largest on-disk
+recording (read-only) three times quiet and three times under 8 spinner
+processes at the turn tree's nice — the contended shape a master turn's CLI and
+tool subprocesses produce around a voice request — and decodes twice again to
+assert determinism (the persisted transcripts of pre-upgrade recordings render
+punctuation differently, so the parity witness is same-process determinism, not
+stored-text equality):
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, subprocess, sys, time, wave
+sys.path.insert(0, os.environ["CHECKOUT"])
+from pathlib import Path
+from src.core.config import CharlieBotConfig
+from src.agents import transcriber
+from src.agents.backends.base import TURN_TREE_NICE
+
+best = max((Path.home() / ".charliebot" / "sessions").glob("*/voice/*.wav"), key=lambda p: p.stat().st_size)
+with wave.open(str(best), "rb") as reader:
+    pcm = reader.readframes(reader.getnframes())
+audio_s = len(pcm) / 2 / transcriber.SAMPLE_RATE
+cfg = CharlieBotConfig()
+transcriber.provision_models(cfg)
+bundle = transcriber._get_model_bundle(cfg, transcriber.get_ready_model_paths())
+
+def decode_round() -> tuple[float, str]:
+    t0 = time.perf_counter()
+    text = transcriber.transcribe_pcm_offline(bundle, pcm)
+    return time.perf_counter() - t0, text
+
+def spawn_hogs(nice_value: int) -> list[subprocess.Popen]:
+    code = f"import os\nos.nice({nice_value})\nwhile True: pass"
+    procs = [subprocess.Popen(["python3", "-c", code]) for _ in range(8)]
+    time.sleep(0.5)
+    return procs
+
+def stop_hogs(procs: list[subprocess.Popen]) -> None:
+    for proc in procs:
+        proc.kill()
+    for proc in procs:
+        proc.wait()
+
+_, cold_text = decode_round()  # cold pass, as at the first voice request after a server start; not timed
+_, rerun_text = decode_round()
+quiet = []
+for _ in range(3):
+    dt, _ = decode_round()
+    quiet.append(dt)
+quiet.sort()
+contended = []
+for _ in range(3):
+    procs = spawn_hogs(TURN_TREE_NICE)
+    dt, _ = decode_round()
+    stop_hogs(procs)
+    time.sleep(1)
+    contended.append(dt)
+contended.sort()
+print(f"{best.name}: {audio_s:.1f} s audio; quiet decode median {quiet[1]:.2f} s "
+      f"(RTF {quiet[1] / audio_s:.2f}); contended 8 hogs @ nice {TURN_TREE_NICE} median "
+      f"{contended[1]:.2f} s ({contended[1] / quiet[1]:.2f}x quiet); determinism {cold_text == rerun_text}")
+EOF
+```
+
+M114 — backend-launch spawn loop stall, big-heap shape. Every backend spawn site
+(`asyncio.create_subprocess_exec` pre-fix, the off-loop seam after) forks the calling
+process synchronously on the event loop, and the fork's page-table copy scales with the
+forking process's resident set (~55 us/MB measured on this host) — the multi-GB server
+stalls every concurrent request and WebSocket for ~0.1-0.2 s on each master/worker
+launch, invisible to the standing HTTP probes. The collector inflates a heap to the
+server's standing RSS class, then drives the checkout's spawn seam in both production
+shapes under a 5 ms ticker, from the checkout under test: the raw-log shape
+(devnull stdin, stdout/stderr to file fds, preexec-free — the claude family's master
+turns and every worker launch) and the piped shape (piped stdout/stderr through the
+pdeathsig spawn seam, preexec-free — the piped transports and pdeathsig one-shots); one
+cold pass, then five timed spawns per shape:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, sys, time
+sys.path.insert(0, os.environ["CHECKOUT"])
+import src.agents.backends.base as base_module
+
+spawn = base_module.spawn_subprocess
+
+GB = 3.5
+blob = bytearray(int(GB * 1e9))
+for i in range(0, len(blob), 4096):
+    blob[i] = 1
+
+raw_log = os.open("/tmp/opencode/m114_raw.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+raw_err = os.open("/tmp/opencode/m114_err.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+
+async def run_once(shape):
+    gaps = []
+    stop = False
+
+    async def ticker():
+        prev = time.perf_counter()
+        while not stop:
+            await asyncio.sleep(0.005)
+            now = time.perf_counter()
+            gaps.append(now - prev)
+            prev = now
+
+    t = asyncio.create_task(ticker())
+    await asyncio.sleep(0.01)  # the ticker's first slice: a synchronous fork before it would escape the gap list
+    t0 = time.perf_counter()
+    if shape == "raw-log":
+        proc = await spawn(
+            "/bin/true",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=raw_log,
+            stderr=raw_err,
+            env=dict(os.environ),
+            limit=1024 * 1024,
+            start_new_session=True,
+            preexec_fn=None,
+        )
+    else:
+        proc = await spawn(
+            "/bin/true",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=dict(os.environ),
+            limit=1024 * 1024,
+            start_new_session=True,
+            preexec_fn=None,
+            pdeathsig=True,
+        )
+    wall = time.perf_counter() - t0
+    code = await proc.wait()
+    stop = True
+    await t
+    assert code == 0
+    return (max(gaps) if gaps else wall), wall
+
+async def main():
+    for shape in ("raw-log", "piped"):
+        await run_once(shape)  # cold pass, as at the first spawn after a server start; not timed
+        worst, walls = [], []
+        for _ in range(5):
+            gap, wall = await run_once(shape)
+            worst.append(gap)
+            walls.append(wall)
+        worst.sort()
+        walls.sort()
+        print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {GB} GB inflated heap, {shape} spawn shape "
+              f"(loop-lag median {worst[2] * 1000:.1f} ms, max {worst[-1] * 1000:.1f} ms, "
+              f"wall median {walls[2] * 1000:.1f} ms over 5)")
+
+asyncio.run(main())
+EOF
+```
+
+M115 — cold config+credentials resolution, fresh process. Every CLI verb invocation pays the
+credentials read (`get_credentials`), a verb on a config-cache miss (deploy, config edit, first
+run) pays the full `get_config` resolution, every server start pays both, and every
+config/credentials edit re-pays the parse through the reload keys (the M53/M58 fingerprint gates
+make the steady state free; this prices the change rounds). The collector times the shared
+import plus both resolutions in a fresh process, the same shape the M92-family collectors price
+their walls with:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, subprocess
+
+CHECKOUT = os.environ["CHECKOUT"]
+PY = "/home/chaoli/workspace/charlie-bot/.venv/bin/python"
+PROBE = '''
+import sys, time
+sys.path.insert(0, sys.argv[1])
+t0 = time.perf_counter()
+from src.core.config import get_config
+from src.core.credentials import get_credentials
+get_config()
+get_credentials()
+print(f"{time.perf_counter() - t0:.4f}")
+'''
+
+times = []
+for _ in range(7):
+    out = subprocess.run([PY, "-c", PROBE, CHECKOUT], capture_output=True, text=True, check=True)
+    times.append(float(out.stdout.strip()))
+times.sort()
+print(f"checkout {os.path.basename(CHECKOUT)}: cold config+credentials resolution median "
+      f"{times[3]:.4f} s, max {times[-1]:.4f} s over 7")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
+| 2026-09-24 | this PR | M1 serve CPU, the standing collector's process grep widened to both process shapes the serving path runs: before — the verbatim collector read `0 serve processes, 0.0% cpu total` at 12:45 PDT while the live instance answered every other collector's request (the server: `python3 server.py` under the repo's own `scripts/start-server.sh`, up since 11:09 PDT, listening on 127.0.0.1:18498) — a structurally silent zero, the same ghost the repaired command confirms side by side (`old grep: 0 serve processes, 0.0% cpu total`); after (repaired command, same round, load 7.25/7.03/5.99 one/five/fifteen under sibling crons' suites and reviews) — `2 serve processes, 1.8% cpu total` (the `uv run python3 server.py` wrapper at ~0% plus the child); the seed-era grep counted only `opencode serve` — the opencode backend family's agent daemons, present only while an opencode session runs — so the server itself never matched and the serve-CPU half read zero whenever no opencode daemon was alive | the collector's single pattern dated from a seed-era reading taken when an opencode daemon was the only long-lived process the host's serving path ran; the server's own launcher chain carries neither the opencode name nor any other line that pattern matched, so the serve-CPU half of the regression watch has been measuring the opencode daemons alone — zero on this round's sweep — while the actual server's CPU went uncounted; the repaired grep (`-E '[o]pencode serve|[s]erver\.py'`) counts both shapes, the `tee` and `bash` wrappers carry neither pattern |
+| 2026-09-24 | this PR | M99 server import floor, the import chain and the app assembly ride the server's own gc-off bulk-build span and the slash-command stack leaves the chain: import median 0.520-0.524 → 0.499-0.508 s across two eight-round sets (−13 to −21 ms, −2.5 % to −3.9 %), 16/16 paired rounds faster (sets one and two of eight interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, arm order alternating per round to cancel the host's second-position bias (measured +4.5 ms same-checkout), load 1.7-2.3 one-minute with sibling crons' suites live); component attribution: fresh-process `gc.disable()`-from-start on the before checkout reads the GC share at 43.0 ms of the 0.527 s wall (10/10 interleaved pairs, bands disjoint 0.506-0.553 vs 0.471-0.498), and the branch's spans capture it — the branch's own gc-off-from-start probe reads +0.8 ms over its plain import; `src.core.slash_commands` leaves the import (−17.9 ms module self in `-X importtime`, the last module-scope import no import-path reader reads), of which ~15 ms reappears as a GC gen-2 pause relocated into `src.api.chat`'s exec (import-time GC total is roughly constant — allocation thresholds cross mid-body wherever the heap stands — so the module's wall contribution nets −9.6 ms by sum-of-self), the rest of the wall win riding the span; no-regression witnesses interleaved ×3: M92 schedule-trigger --help 0.036/0.036/0.036 → 0.036/0.036/0.036 s (maxima 0.037-0.039 both arms) and M108 claude-sub 0.075/0.076/0.075 → 0.076/0.075/0.078 s (bands both); 5963-passed suite + 9 skipped (the load-sensitive fork-parks pin fails under sibling-suite load and passes in isolation on both arms, the 2026-09-24 M115 row's environmental class), ruff and yapf clean, plus the server ban-set contract test extended (src.core.slash_commands joins SERVER_HEAVY_MODULES); M99 healthy range unchanged (the after reading sits at two-thirds of the 0.75 s line) | every deploy restart paid the import chain's gen-2 GC walks (~43 ms, the largest single repo-owned slice left after the 2026-09-19/21 deferrals) although the span primitive (`src.core.gc_control.gc_off`) already bounded every other bulk build the server runs; the chain and the app assembly now run inside the same bounded span (gc back on before any request can arrive — the deferred cycles collect at the next natural threshold, the `collect=False` shape the span documents for builds whose allocations stay referenced), and the slash-command stack — whose only import-time reader was the chat send handler's module scope — loads at its four request-time call sites like the master-turn chain already does, the `src.api.slash.dispatch_slash_command` patch target kept through the deferred-import loader's globals-first read |
+| 2026-09-24 | this PR | M87 abort wall median 2.2/2.1/1.8 → 1.7/1.5/1.5 ms (−14 % to −29 %), maxima 2.3-5.8 → 1.8-1.9 ms, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, stub serve, load 1.65-2.13 one-minute); loop-lag band parity at the 5 ms ticker floor both arms (5.4-5.9 vs 5.4-5.6 ms); component attribution standalone: the per-call `httpx.AsyncClient(base_url, timeout, verify=_SERVE_SSL_CONTEXT)` construction+aclose reads 260 µs, the rest of the wall the localhost POST both arms share | the per-turn cleanup abort constructed a fresh `httpx.AsyncClient` per call; the POST now rides the process-wide shared outbound client (`src.core.http.get_http_client` — the anthropic-proxy/ext-usage/slack/notifications singleton) with its per-request `OPENCODE_ABORT_TIMEOUT` kept, and the serve URL is pinned plain localhost HTTP (`_SERVER_URL_RE`), so no per-client verify choice applies; the run-start attempt client keeps its own construction (it carries the SSE stream's lifetime) |
+| 2026-09-24 | this PR | M7 restart-cold, the persisted seed's proof now carries the tail fetch's maxes (the completion #2009's landing named: the in-process gate's four-field proof — count, sum(time_updated), max(time_updated), max(rowid) — persists whole beside the sidecar rows it describes, and the seeded miss tail-fetches the rows written after the stored max instead of re-reading all 221k keys; a legacy two-field document — the prior deploy's shape, what the live server writes until its next deploy — seeds without a max and keeps the full key diff, the contract the new test pins): controlled-corpus paired rounds, fresh-process seed + one turn's moves (ten in-place step-finish upserts plus twenty appends at the production bump shape) + fresh-process timed collect per round over a 223,441-row synthetic corpus (the live db's row count, live db read-only): 0.576/0.622/0.572/0.529 → 0.382/0.384/0.359/0.369 s (−30.2 % to −38.3 %), every paired round faster; component attribution, instrumented fresh process: the seeded miss tail-fetched exactly the 30 moved rows (5,190 B, 80.8 ms) where the before shape's full key scan reads 0.272-0.275 s standalone; rows-digest parity True in every round and arm (the incremental serve matches the cold replay); no-regression witnesses interleaved ×3: M7 changed-round 0.095-0.107 → 0.099-0.100 s, M7 warm-gate changed round 193.9-204.6 → 192.5-200.5 ms (quiet round 48.9-52.2 → 48.7-50.3 ms, full key scans 0, parity True), M80 churn 0.1329-0.1519 → 0.1351-0.1361 s (rows digest 501337fee183 both arms); 5988-passed suite (the 21 antigravity/spawn failures the missing _vfkspawn build artifact produced in the worktree pass with it copied — no compiler on this host, the committed C source identical), ruff and yapf clean, plus the seeded-miss test rewritten to the tail fetch, the reset round's scan witness updated, and 1 new test (the legacy two-field seed keeps the full key diff and the store writes the four-field proof back); M7 restart-cold definition and collector intro updated to the four-field proof | the restart seed gated on the two-field (count, sum) proof #2009's landing left it, so every fresh process under active turns — each server start's first page load, each hourly round's standing collector reading — paid the 221k-key diff once although the tail fetch's mechanism was already in place behind a len(gate) == 4 dispatch the seed never satisfied |
+| 2026-09-24 | this PR | M115 cold config+credentials resolution, introduced with this PR: fresh-process shared import + `get_config()` + `get_credentials()` median 0.1575/0.1587/0.1595/0.1670 → 0.1478/0.1487/0.1500/0.1508 s, −9.5 to −16.2 ms per paired round, every paired round faster (four interleaved rounds of 5 fresh processes per arm, main checkout before vs branch worktree after back-to-back); component attribution, the parse itself over the live corpora: config.yaml 6.582 → 0.700 ms, credentials.yaml 1.346 → 0.168 ms, slash_commands.yaml 0.382 → 0.029 ms medians (−88 % to −92 %), parsed output parity across all 13 live yaml documents (config, credentials, 10 cron tasks, slash_commands), byte-identical safe_dump/CSafeDumper output on the live config, the same YAMLError class on a malformed document; no-regression witnesses interleaved ×3: M97 plan list 0.063/0.057/0.061 → 0.059/0.059/0.060 s, M92 schedule-trigger --help 0.041/0.037/0.040 → 0.052/0.037/0.038 s (round 1's branch arm paid the changed modules' first pyc compile; rounds 2-3 clean), M98 memory query 0.082/0.054/0.051 → 0.078/0.055/0.052 s, M102 artifact wrap 0.039/0.041/0.040 → 0.039/0.041/0.039 s; 5959-passed suite + 9 skipped (the 3 pre-existing environmental failures aside — the 2 nice-runner pins plus the load-sensitive fork-parks test, verified failing on stashed origin/main identically; the branch worktree needed the _vfkspawn build artifact copied from the main checkout — no compiler on this host, the committed C source identical), ruff and yapf clean, plus 7 new tests (the C-binding pin, parsed-output parity with safe_load, the missing/empty-document defaults, the YAMLError propagation, the save/load round trip); M115 definition, collector, and healthy range introduced with this PR | every yaml parse in the process rode the pure-Python SafeLoader/SafeDumper — 6.6 ms on the 3.3 KB live config where libyaml's CSafeLoader reads the same document in 0.7 ms; the loader choice single-homes in yaml_utils (load_yaml/load_yaml_text/save_yaml), so the cold config/credentials resolution, the slash-command load (per /slash list and dispatch), the cron-task and config reloads, and the project-config reads all take the C pair; a pyyaml built without libyaml fails the import loud rather than parsing slowly |
+| 2026-09-24 | this PR | M105 file-arm repeat gzip serve memoized on the file signature: the bare-file arm (the /absolute_filepath mount's FileResponse fall-through) serves gzip-accepted GETs of gated media types (text/* plus application/json, application/javascript, text/javascript, application/xml, image/svg+xml) under a 16 MB raw-size cap from a StatSignatureMemo keyed on (path, mtime_ns, size) — stat precedes the read, Content-Encoding set upstream makes the middleware skip — while no-gzip clients, Range requests, unlisted media, and over-cap files keep the streaming arm unchanged: html witness repeat serve median 14.83/15.17/14.69 → 0.63/0.62/0.63 ms (−95.7 % to −95.8 %), maxima 15.58-16.20 → 0.73-0.84 ms, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, the 3,994,219 B worst artifact .html, gzip-accepted, scratch credentials home per arm, load 1.42-2.37 one-minute); wire 2974307 → 2977926 B (+0.12 %, the route's isal level-1 one-shot replaces the middleware's per-chunk zlib at the same level — the decompressed body is byte-identical, the JSON gzip memos' precedent); identity arms band parity (png 1.16-1.20 → 1.26-1.30 ms, pptx 0.87-0.91 → 0.95-1.07 ms medians, wire == raw bytes and transport identity unchanged both arms); the before shape's cost was the stock streaming gzip responder's per-request per-chunk inline deflate — 4 × 1 MiB chunks of the 4 MiB page re-deflated on the event loop every serve, ~1.3 ms of loop stall per chunk — and the memo arm moves the one-shot deflate off the loop behind the existing to_thread hop; 5952-passed suite + 9 skipped (the 3 pre-existing environmental failures aside — the 2 nice-runner pins plus the load-sensitive fork-parks test, verified failing on the main checkout identically; the branch worktree needed the _vfkspawn build artifact copied from the main checkout — no compiler on this host, the committed C source identical), ruff and yapf clean, plus 7 new memo-arm tests (repeat serve stored bytes, rewrite re-deflate, unlisted-media identity, Range streaming, no-gzip raw bytes, over-cap streaming, json memo arm) and the three sibling not-injected tests pinned to the explicit non-gzip client their FileResponse discriminator needs; M105 healthy ranges unchanged (the after reading sits at 0.4 % of the html witness line) | the bare-file arm was the one gzip-able response family still paying the middleware's per-request streaming deflate: every JSON route and both artifact-view arms memoize their gzip form, and the file arm re-deflated the same 4 MB page on every serve, in the event loop, per chunk |
+| 2026-09-23 | this PR | M7 token-usage changed round under active turns, the warm row gate's proof miss advanced from a max-keyed tail fetch instead of the whole-table key scan: the in-process gate stores max(time_updated) and max(rowid) beside the (count, sum) proof pair, the miss fetches only rows written after that max (every insert and every time_updated bump carries the write's own wall-clock ms — drizzle `$onUpdate`), and the fetched rows' own before/after sums reconstruct the pair's expected movement, a (count, sum, max rowid) residual mismatch — a cascade delete, a clock stepped backward, a backward write — falling back to the full key scan, with every 16th warm miss taking the full scan as the self-heal that bounds the residual's triple-netting dodge class (a delete and an insert landing in the same millisecond with the deleted row holding the max rowid) the way the pre-tail gate's next-miss re-scan did; the persisted entry's probe stays the two-field (count, sum) pair the restart seed gates on, the maxes are restart-local, and the seeded restart's gate-skip fast path is unchanged: live-corpus harness changed-round median 417.6/425.3/444.2/427.5/477.5 → 300.7/303.3/302.6/314.6/307.1 ms (−26.4 % to −35.7 %), every paired round faster (five interleaved rounds, main checkout before vs branch worktree after, each a fresh process seeded from the live document+sidecar over a fresh copy of the 5.7 GB / 221,612-row live db, 30 moved rows per round — ten in-place step-finish upserts plus twenty appends at the production bump shape, load 1.2-2.7 one-minute), rows digest cf540435cc53 identical across every arm and the cold replay parity True; the doc collector's own calibration, fresh synthetic corpus per arm sized to the live row count: 333.0 → 199.9 ms (−40.0 %), full key scans 5 → 0, parity True; component attribution, standalone on the live db: the before shape's probe (count,sum) 63.7 ms + full keys scan 183.0 ms + Python per-id diff ~90 ms vs the after shape's probe (count,sum,max,max-rowid) 69.6 ms + tail fetch 59.0 ms — the maxes ride the scan the probe already ran; the quiet round (probe skip) reads 63.9-64.7 → 78.0-79.9 ms on the live-corpus harness and 37.0 → 52.4 ms on the doc collector's corpus (the two extra max aggregates); production corroboration: the live server log's /token-usage page loads read 636-1420 ms server-side across the hourly cron's loads (30 loads over 6.55 h) — the changed-round shape the standing collector's fresh process cannot see (its document copy was seconds stale at sweep time, reading 0.086 s median); the charlie-code review's two findings (the residual docstring's never-narrows overclaim; the probe comment's next-miss-re-scan lifetime) — both reproduced A/B by the reviewer — answered with the rowid max (closes the plain delete-and-insert dodge in the very round that dodged), the 16-miss self-heal, and the two claims rewritten to the true strength, plus 2 tests pinning the reproduced self-correction and the masked dodge's self-heal bound; 78-passed token-tally suite including 6 new gate tests, 5943-passed full suite + 9 skipped (the 3 pre-existing environmental failures aside — the 2 nice-runner pins plus the load-sensitive fork-parks test, verified failing on the main checkout's main branch identically), ruff and yapf clean; M7 warm-gate sub-reading, collector, and healthy range (changed-round median < max(0.050 s, rows × 0.0000013 s), quiet round < 0.10 s) introduced with this PR | the changed collect's largest slice re-read the whole message table's keys and diffed 221k of them in Python on every hourly page load while an opencode turn was active — a cost that grows linearly with the db (85k → 190k → 221k rows across its landing docs) — where the tail fetch reads only the rows that moved and the residual check keeps the full scan for every move the fetch cannot prove complete |
+| 2026-09-23 | this PR | M114 piped-spawn residual eliminated, the child-side-prctl follow-up its landing named: the piped transports (the opencode and antigravity master launches) and the pdeathsig one-shots spawn through a new clone(CLONE_VM|CLONE_VFORK) seam — src/agents/backends/_vfkspawn.c, a compiled stub whose child runs the fixed pre-exec sequence (PR_SET_PDEATHSIG with the getppid race check, setsid, stdio dup2, Popen(restore_signals=True) parity defaults, close-from-3 via close_range, execve) as pure syscalls on a private stack, so the child never allocates in the shared address space; setup and execve failures report the child's errno over a CLOEXEC pipe and the spawn raises it with the filename — piped spawn loop-lag median 109.1/109.4/110.6 → 5.2/5.3/5.4 ms (−95.1% to −95.3%, the after reading is the 5 ms ticker floor; spawn wall 229.3-230.9 → 0.7-1.1 ms), raw-log shape 5.2-5.4 → 5.2-5.4 ms (band parity, the unchanged path), every paired round faster (three interleaved rounds, main checkout before vs branch worktree after back-to-back, the collector's 3.5 GB inflated heap at the server's standing RSS class, load 1.7-2.3 one-minute); the piped preexec's parent-observable effects move parent-side next to the raw-log shape's (the nice raise and the cgroup move through _apply_turn_tree_limits, failures logged as the existing warnings), the child-side pdeathsig guarantee unchanged and race-corrected; 5943-passed suite (the 3 pre-existing environmental failures aside — the 2 nice-runner pins plus the load-sensitive fork-parks test, verified failing on the main checkout's main branch identically), ruff and yapf clean, plus 5 new seam tests (piped wiring with cwd/env, exec-failure errno with the filename, close-fds stdio-only, pdeathsig child death on spawner exit, SIGKILL exit code); M114 healthy range re-tightened (piped < 0.150 → < 0.020 s, the ticker floor the after reading sits on) and the collector's piped arm updated to the seam shape; deploy note: the first piped spawn after a deploy needs the compiled module — run the repo install (uv sync / pip install -e .) so the ext builds, or the spawn fails loud naming the missing module | the M114 landing moved every spawn off the loop but the pdeathsig-carrying piped spawns still paid the full fork's page-table copy (~110 ms of GIL-held stall per opencode/antigravity master launch on the 3.9 GB server); pdeathsig is child-side-only by kernel contract, so the seam moves the fork itself to clone(CLONE_VM|CLONE_VFORK) — no page-table copy — with the fixed child sequence as syscalls, and every piped launch now costs the loop its ~1 ms handshake; the diff runs over the 300-line loop budget (split-series label): the compiled stub plus its contracts are irreducibly ~260 lines |
 | --- | --- | --- | --- |
+| 2026-09-23 | this PR | M114 backend-launch spawn loop stall, introduced with this PR: every covered backend's subprocess spawn moved off the event loop — the raw-log transport (the claude family's master turns plus every worker launch) spawns preexec-free so the kernel takes the vfork fast path (~1 ms even from the 3.5 GB heap class, ~55 µs/MB for the full fork's page-table copy this shape skips) and the preexec composition's parent-observable effects apply parent-side right after the handshake (the nice raise via setpriority, the cgroup move via cgroup.procs, failures logged as `turn_tree_nice_failed` / `session_cgroup_move_failed` warnings), while the pdeathsig-carrying spawns (the piped transports and the pdeathsig one-shots) park the fork on a worker thread and wire the child's pipes onto the caller's loop afterwards (src/agents/backends/spawn.py, the child-side preexec unchanged); measured with the M114 collector's 3.5 GB inflated heap at the server's standing RSS class — raw-log spawn loop-lag median 148.0/155.7/158.5 → 5.2/5.3/5.4 ms (−96.6% to −96.7%, the after reading is the 5 ms ticker floor; spawn wall 143.1-153.6 → 0.8 ms), piped spawn loop-lag median 157.0/157.6/158.1 → 69.5/72.0/72.7 ms (−54% to −55%, the residual is the fork's GIL/mmap-lock hold the worker thread's page-table copy keeps — full elimination needs a child-side-prctl mechanism off the fork path, a follow-up), every paired round faster (three interleaved rounds, main checkout before vs branch worktree after back-to-back, load 1.8-2.2 one-minute); production corroboration: the live server log reads GET /api/sessions/status at 239/386/464 ms inside opencode master launches (the 3 s status poll's quiet steady state is the M56 band) — each launch a full fork of the 3.9 GB server on the loop, 37 launches in the 1.75 h window; 5940-passed suite + 9 skipped (the 2 pre-existing environmental nice-runner failures aside — this worker's own process tree runs at nice 10 from the M113 spawner, so the child-nice pins read 10 where a clean runner reads 0; verified failing on the main checkout's main branch identically), ruff and yapf clean, plus the 6-test spawn-seam suite (pipe wiring, exited-before-read drain, SIGKILL code, raw-fd wiring, stdin drain, fork-parks-off-loop) and the parent-side limits contracts (the cgroup.procs pid write, the child nice pin through the preexec-free raw-log path); M114 definition, collector, healthy ranges (raw-log shape loop-lag median < 0.020 s — the M75 loop-lag line, the regression canary: a re-added preexec or an on-loop spawn trips it 30×; piped shape < 0.150 s — the documented GIL/mmap-lock residual the thread-fork keeps, load-sensitive, re-tightened when the child-side-prctl follow-up lands), and history row introduced with this PR | every backend launch is a full fork of the server's own page tables on the event loop — the fork cost scales with resident memory, so the multi-GB server's launch moment stalls every concurrent request, the status poll renders 386-464 ms, live chat ticks freeze mid-stream and in-flight turn outputs buffer; the vfork-shaped raw-log spawn cuts the stall 30× and the piped spawn halves it, and the residual piped cost is the fork's own GIL/mmap-lock hold, not the loop |
+| 2026-09-23 | this PR | M72 listing lines recalibrated to entries-tracking formulas, docs-only calibration, no code change: the fixed lines priced the corpora their calibrations measured — changed-round 1159 entries at its 2026-09-12 introduction, repeat-view 1165 at its 2026-09-13 repair, last re-read 1234 entries on 2026-09-16 — and the walk scales with the listed entry count; this round's sweep read repeat 5.78 ms / changed-round 7.95 ms at 1295 entries (load 4.10/2.91/1.32 with the sweep's own collectors live), tripping the changed-round line, and the quiet re-reads minutes later (three verbatim collector rounds, load 2.91-6.04 one-minute carrying the same sweep's tail) read changed-round 5.99/6.47/6.61 ms at 1296 entries — inside the old line and 94 % of it, with repeat-view 5.78 ms at 72 % — so the corpus had grown onto the line, the sweep's own load adding the last 20 %; per-entry rates across the file's record: repeat 3.7-4.5 µs/entry (the post-2026-09-13 serve shape — 4.53-5.25 ms @ 1234 on 09-16, 5.78 @ 1295-1296 today), changed-round 4.5-5.5 µs/entry (6.01-6.33 ms @ 1159 at introduction, 5.53-5.89 @ 1234 on 09-16, 5.99-6.61 @ 1296 quiet today plus the 7.95 sweep-hour trip) — the walk's one-stat-per-entry floor at this host's ~3.5 µs stat cost, the same corpus-tracking shape the M61 all-sessions line adopted; new lines repeat < max(0.008 s, entries × 0.000008 s) and changed-round < max(0.007 s, entries × 0.000008 s) — 1.4-2.2x over the measured bands, the small-corpus floors kept verbatim, a corpus reversion re-tightening them automatically | the sessions root grows a few entries a day (1234 → 1296 in the six days since the 2026-09-17 all-sessions calibration), so a fixed 7 ms line false-trips the regression watch every round the corpus crosses it; the entries-tracking line keeps the trip meaning code-regression-or-load only |
+| 2026-09-21 | this PR | M113 voice transcription wall, introduced with this PR: the turn process tree (every covered backend's agent CLI plus the tool subprocesses it spawns) now spawns at nice 10 via the shared `_spawn_preexec` composition, backgrounding it against the server's interactive paths; the contended voice decode — this host's slowest served path — reads 44.68 s → 21.44 s median (0.48×) under 8 nice-0 spinner processes vs 8 nice-10 spinners (three interleaved rounds of the collector's contention harness over the 86.4 s worst on-disk recording, quiet band 18.0-19.4 s RTF 0.21-0.22 both shapes, load 1.2-1.9 one-minute with a sibling cron's suite running), and the quiet wall is untouched by construction (the decode path imports nothing the change adds; quiet medians 18.00 vs 18.00 s band). Production corroboration: the server log's 2026-09-21 08:39 voice round — `POST /api/voice/…/confirm` 30.7 s and the full upload 47.1 s for 25.9 s of audio — reproduces at the pre-fix contended shape (44.7 s harness reading, RTF 0.52) while the same file decodes 6.97 s (RTF 0.27) on the quiet box; the 470 sibling requests in that window stayed sub-500 ms, so the wall was CPU contention on the decode's 4 ONNX threads, not the event loop; contention attribution: 8-core CPU-hog ×2.6, 50 GB memory-hog (swap pressure) ×2.4, stacked ≈ the production 6.8×; determinism witness: two fresh decodes byte-identical (393 chars, the July-era stored transcript renders punctuation differently — the parity witness is determinism, not stored-text equality); the fix's cost side is contention-only by mechanism: nice arbitrates only when the box is oversubscribed, an uncontended box schedules identically (quiet band unchanged across the A/B rounds); 55-passed backend + new nice suite (child-of-preexec nice pin through `make_nice_preexec` and the composed `_spawn_preexec`, cgroup off), ruff and yapf clean; M113 definition, collector, healthy ranges (quiet median < audio seconds × 0.4 — the measured RTF band 0.21-0.29 sits ~1.5x inside; contended median < 2× the same round's quiet median — the after reading sits at 1.19×), and history row introduced with this PR — the live server picks the fix up from its next deploy on | every voice request shares the box with whatever the master turn is running — the user dictates while the previous turn's workers, CLI processes, and cron sweeps burn cores, and the decode's 4 ONNX threads paid 2.5-6.8× the quiet wall (the 08:39 round: 47 s for 26 s of audio); the turn tree now spawns at nice 10, so the interactive server paths keep their cores exactly when there is contention and nothing changes when there is not; the web-terminal/tmux PTY spawns (the user's own terminal) and the in-server merge pool stay untouched |
+| 2026-09-21 | this PR | M112 backup archive build, introduced with this PR: the tar stream's stdlib level-9 zlib replaced by isal's IGzipFile at the request path's level 1 — build median 43.8/43.1/42.8 → 2.6/2.5/2.5 s (−94 %, ~16.8×), maxima 43.8/43.7/43.0 → 2.6/2.5/2.5 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back over the committed builder's 4.71 GB / 67-file scratch synthetic home, each archive deleted after its reading, load 1.26-1.70 one-minute); effective rate 108-110 → 1844-1883 MB/s; component attribution, standalone compressor ladder over the corpus's largest file (577 MB chat-events JSON): zlib-9 (the before shape) 5.25 s / 110 MB/s / 40.0×, zlib-1 1.13 s / 512 MB/s / 30.7×, isal-1 0.30 s / 1913 MB/s / 34.3×, isal-2 0.30 s / 1924 MB/s / 34.3× (isal's level 2 prices as level 1), isal-3 2.06 s / 280 MB/s / 36.4× — isal-1 dominates zlib-1 outright (faster and smaller), and the wire trade is 42.8× → 36.9× (+16 %, 110 → 128 MB on the whole corpus), the price of the level the request path's `gzip_level1` already runs; archive parity: 56 members, name/size/mtime identical, member content digest ebc2644f4392 identical across arms, exclusions hold (threads subtree, credentials); live-home scale note: this host's included corpus is ~20.5 GB (sessions data 20 GB + cache 399 MB + memory 7.6 MB), pricing the pre-fix build at ~3.2 min of one core per handler fire and the after at ~11 s; 5924-passed suite + 9 skipped (the 3-passed backup suite among them: exclusions, secrets omission, plus a new round-trip test pinning the container reads back through `tarfile.open(r:gz)`), ruff and yapf clean; M112 definition, corpus builder (tests/backup_corpus_builder.py), collector, healthy range (median < max(2.0 s, corpus bytes ÷ 1200 MB/s) — the after band sits ~1.6× inside the bytes line), and history row introduced with this PR | the backup was the one compression holdout after the ISA-L landing moved the seven request-path memos, the middleware responder, and the trace-merge subprocess: tarfile's `w:gz` stream rides stdlib zlib at its default compresslevel 9, pricing the state dir's gigabyte-scale sessions corpus at ~110 MB/s — minutes of one pinned core per backup handler fire on every host that enables the built-in `backup` cron handler; the tar stream now rides one isal IGzipFile at level 1, the same level the request path's one-shot deflator runs |
+| 2026-09-21 | this PR | M111 review-context chat-log scan, introduced with this PR: needle-at-end median 34.76/34.14/34.47 → 4.34/4.38/4.19 ms (−87 % to −88 %), absent-needle 39.38/34.84/34.35 → 3.44/3.55/3.44 ms (−91 %), every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, the 20.1 MB / 8158-line worst active live chat corpus of session fd80e6e7, load 1.07-1.51 one-minute); component attribution: the before scan parsed every line text-mode from the file start (the match for the newest thread sits at the file's tail, so the worker-completion shape paid a near-whole-file parse per completion, ~4.3 µs/line on this corpus) where the after scan rides one C-level `mm.find` over the mapping — the absent-needle arm is the pure scan, 3.44 ms / 20.1 MB ≈ 5.8 GB/s — and parses only a hit's enclosing line as a zero-copy view (the same provable-skip class the `type_line_filter` parse_filter sanctions, without the per-line Python loop); no-regression witnesses interleaved ×3: M95 newest-first scans review 0.09-0.11 ms / judgment-pair 1.05-1.19 ms (bands both) and M99 import server 0.498-0.543 → 0.499-0.522 s (band parity); 5923-passed suite + 9 skipped, ruff and yapf clean, plus 9 new reader tests (file-order hits, laziness, the unparsed needle-free skip, the hit-line skip contract, missing/empty files, the unterminated tail, multi-hit single yield, the empty-needle raise, mixed-corpus parity with the escaped-needle proof boundary pinned); M111 definition, collector, healthy range (median < max(0.005 s, bytes ÷ 2000 MB/s) both shapes — the line sits ~3x under the measured 5.8 GB/s scan floor and ~4x over the pre-fix 0.51 GB/s shape), and history row introduced with this PR | the review-context extract ran the one remaining whole-parse text-mode scanner on the worker-completion path: every delegation's reviewer and every improve round re-parsed the session's live chat log from byte 0 although the answer names one thread id — the needle proof cuts the scan to the C-level find plus the matching lines, and a corpus that grows re-prices the line automatically through its bytes term |
+| 2026-09-21 | this PR | M110 remote ssh probe, connection reuse via ssh ControlMaster (the probe family's argv single-home `ssh_cmd` now carries ControlMaster=auto, a 0700 ControlPath under ~/.ssh/controlmasters, and ControlPersist=1200 s — the remote watch ladder's 600 s plateau plus its ≤10 s noise stays inside the window, so a watched host's probes never re-master while the watch lives): warm-master probe median 0.121/0.124/0.120/0.121 → plain (pre-fix shape) median 0.842/0.837/0.847/0.842 s (−85.6 % to −85.8 %), re-master median 0.841/0.842/0.846/0.853 s (parity with the plain arm — the master setup adds nothing to the cold shape), every paired round faster (four back-to-back invocations of the verbatim collector — branch
+worktree after vs main checkout before, each invocation three interleaved rounds of 5 plain +
+1 re-master + 5 warm probes against the standing watches' SLURM login host, read-only sacct,
+rc 0 asserted on every probe — 33 per invocation, 132 branch probes plus the main invocation's
+33, load 1.35-1.41 one-minute; the main checkout's own module arm reads 0.847/0.851/0.849 s — its argv carries no mux options, the before shape from the module); production carriers: the schedule-trigger verify-on-create probe — the hourly cron's remote-watch POST logged 1064-1255 ms server-side across 8/8 creations in the live server log (event loop idle, sibling requests 1-3 ms in the same windows) — and every remote watch-loop probe; stale-socket recovery verified standalone (kill -9 of the [mux] master → one 0.80 s recovery probe, rc 0, warmth after; ssh creates the socket 0600, the parent dir 0700); the argv-shape mocks in the remote watch tests re-pinned on the new layout (host/remote-command at argv[-2]/argv[-1]) and the new test_ssh_cmd.py pins the policy options plus the 0700 dir creation; 5914-passed suite + 9 skipped, ruff and yapf clean; M110 definition, collector, healthy ranges (warm median < 0.3 s, re-master median < 1.5 s), and history row introduced with this PR — the live server picks the fix up from its next deploy on | every remote probe paid one full ssh handshake — TCP + KEX + auth, ~0.85 s to the SLURM login host — on the verify path of every remote-watch trigger creation and again on each watch-loop probe (the backoff ladder's plateau re-pays it every ~600 s); one master per (local user, host, port) amortizes the handshake across the probes inside its idle window, the watched-host probe stream keeps the master warm, and the expire-or-stale cases degrade to at most the old single-handshake shape |
+| 2026-09-21 | this PR | M92/M97/M98/M102 CLI verb walls, argparse's parser-build `shutil` import priced out (the shared `CliHelpFormatter`, src/cli/help_formatter.py, passes the terminal width itself under `shutil.get_terminal_size`'s documented precedence — `COLUMNS`, then the stdout terminal, then 80 — so the lazy `import shutil` inside `HelpFormatter.__init__`, whose module body drags `bz2` + `lzma` for archive support no verb uses, never runs; applied at every `ArgumentParser`/`add_parser` site in `src/cli/`): M92 schedule-trigger --help 0.039/0.039/0.039 → 0.036/0.036/0.036 s (−7.7 %), M97 plan list 0.061/0.060/0.060 → 0.058/0.057/0.058 s, M98 memory query 0.052/0.052/0.051 → 0.050/0.049/0.049 s, M102 artifact wrap 0.040/0.040/0.041 → 0.038/0.038/0.039 s (−5 %), every paired round faster (three interleaved rounds of the verbatim collectors — main checkout before vs branch worktree after back-to-back, seven fresh processes per arm per round, load 1.2-1.6 one-minute); component attribution, fresh-process `-X importtime`: the before arm's schedule-trigger parser build carries `shutil` 2.16 ms cumulative (`bz2` 0.87 + `lzma` 0.73 inside), the after arm's carries none; help byte-identity across arms: every covered verb's `--help` and the usage-error path render identical bytes at COLUMNS=40/200/0/abc and unset (the width pin in tests/test_cli_import_weight.py asserts the shutil-precedence readings, and the parser-build probe bans shutil/bz2/lzma for the plan/artifact/schedule-trigger chains); no-regression witnesses interleaved: M99 import server 0.529/0.529/0.517 → 0.530/0.530/0.532 s and M108 claude-sub 0.077/0.077/0.075 → 0.076/0.076/0.074 s medians (bands both, ×3 — neither chain builds a CLI parser); 5913-passed suite + 9 skipped, ruff and yapf clean; M92/M97/M98/M102 healthy ranges unchanged (the after medians sit at 36 %/39 %/16 %/11 % of their lines) | every `charliebot` verb is a fresh process, and the verb's first parser build paid argparse's lazy `import shutil` — the HelpFormatter width resolution — while shutil's module body imports `bz2` + `lzma` for archive support no CLI verb touches; the width is a pure derivation of `COLUMNS` and the stdout terminal, so the shared formatter computes it directly, the memory chain keeps its pure-local property (the leaf is stdlib-only), and the archive chain stays out of every parser build |
+| 2026-09-21 | this PR | M97 plan-CLI command wall, the credentials read's `dataclasses` import left the verb chain (the last slice the M97 landing named after the client cut): wall median 0.074/0.069/0.071 → 0.063/0.060/0.061 s (−11 to −14 %), maxima 0.074/0.071/0.071 → 0.064/0.061/0.069 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, seven fresh processes per arm per round, load 1.56-1.66 one-minute); component attribution, fresh-process `-X importtime`: `src.core.credentials` cumulative 26.0 → 21.8 ms and the chain's `dataclasses`/`inspect` entries are gone (the standalone `dataclasses` chain measures 8.5 ms cumulative, of which `typing` stays as the module's direct import for `_HotReloadCache`'s `Generic`; the in-chain marginal is ~4-5 ms of inspect/copy plus the parser-build displacement); `Credentials` is a plain `__slots__` class — two keyword construction sites (the loader and the test seed), no dataclass machinery anywhere (no asdict/fields/replace), and the identity/equality pin in tests/test_cli_base_url_cache.py still passes; every internal-API verb (plan, delegate, improve, schedule-trigger with a request) reads credentials in its fresh process and sheds the same slice; no-regression witnesses interleaved: M92 schedule-trigger --help 0.039/0.038/0.039 → 0.039/0.038/0.039 s (bands both, ×3 — the --help chain imports no credentials), M98 memory query 0.053/0.051 → 0.051/0.050 s and M102 artifact wrap 0.040/0.040 → 0.040/0.040 s (bands both, ×2 each — neither chain imports credentials); 5909-passed suite + 9 skipped, ruff and yapf clean; M97 healthy range unchanged (the after medians sit at ~40 % of the 0.15 s line) | the credentials read was the one remaining pydantic-free module whose value object still cost the dataclasses machinery: the verb walls load the secrets file for the request's auth header in a fresh process, so the import is per-invocation, and `dataclasses` drags `inspect` for a two-field record no consumer reflects on |
+| 2026-09-21 | this PR | M3 in-server 401 floor, the http_request access line left structlog's dispatch: floor median 47.94/45.49/48.70 → 25.35/24.62/24.48 µs (−45 % to −50 %), p10 46.27-47.31 → 23.49-23.90 µs, p90 54.43-61.95 → 28.17-35.18 µs, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, 1000 raw-ASGI 401 drives per arm, the branch arm installing the renderer its lifespan installs, load 1.56-1.59 one-minute); line attribution in-context: muting the whole line drops the drive 47.6 → 12.1 µs, the per-line proxy resolution (`LazyStructlogLogger.__getattr__` → `get_logger` + getattr) plus BoundLogger dispatch plus the five-processor chain price ~34 µs of it, and the direct render — stamp, the same `_LeanLineRenderer` instance, print — reads ~20; the chain keeps every other line, its TimeStamper replaced by the shared `_LocalStampProcessor` (localtime + f-string, 1.7 vs 4.2 µs standalone) and the value-render quote check moved from a per-value set build to one regex search (0.84 → 0.41 µs on a 55-char path); byte-identity: the access line compares equal to the chain's render from the level column on (pinned per middleware case in tests/test_request_logging.py), the lean-render battery is unchanged, and the stamp processor's output matches `TimeStamper(utc=False)` within one second (pinned in tests/test_log_line_renderer.py); no-regression witnesses interleaved: M92 schedule-trigger --help 0.039-0.042 → 0.040-0.041 s medians (bands both, ×3) and import-server 0.649-0.651 → 0.642-0.650 s (bands both, ×2); 5904-passed suite + 9 skipped, ruff and yapf clean; M3 healthy range unchanged (the after band sits 2.3x inside the 60 µs line) | the lean-renderer landing byte-identified the line but left it on structlog's per-line machinery — proxy resolution, BoundLogger dispatch, and five processor calls per request — 73 % of the floor it had just cut; the access line is a formatting task, so the middleware hands its fields to `log_http_request_line`, which stamps and renders through the same renderer instance the chain ends in; capture-based readers re-pin: the middleware tests capture the fields dict at the new seam and the rendered bytes against the chain |
+| 2026-09-21 | #1959 (row recorded in this docs-only follow-up per the #1046 precedent, the landing PR shipped without it) | M102 artifact wrap wall, the assertion stack left the wrap verb's import chain: wall median 0.066/0.064/0.067 → 0.040/0.042/0.041 s (−24 to −26 ms, −36 % to −39 %), maxima 0.068-0.071 → 0.042-0.045 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, seven fresh processes per arm per round, load 1.74-1.78 one-minute; the standing sweep's same-hour reading 0.061 s median is the round's before arm); component attribution, fresh-process `-X importtime`: the parser-build chain reads ~8 ms (site excluded) and loads none of artifact_check/dataclasses/inspect/plan_diff, the wrap verb loads only the new stdlib-only `src.core.artifact_shared` — the removed slice was `src.core.artifact_check` at 22.8 ms cumulative (self 4.8, dataclasses 8.1 with inspect 6.8, plan_diff 4.3, html 1.8); the genre vocabulary single-homes in `src.core.constants.ARTIFACT_GENRES` with an import-time equality check against the assertion registry, the check/wrap shared slice (genre template map, byte-integrity rule pair — the single source the checker's gate and the wrap self-check judge identically) single-homes in the leaf, `artifact_check` re-exports, and the check verb imports the stack inside its dispatch (its wall keeps its work, spot run: all nine plan assertions execute); no-regression witness interleaved ×3: M92 schedule-trigger --help 0.041/0.038/0.042 → 0.039/0.041/0.040 s medians (bands both — the schedule-trigger chain imports neither artifact module); 5903-passed suite + 9 skipped, ruff and yapf clean, plus the artifact ban-set contract extended (src.core.artifact_check joins it) and the genres lockstep pin (the plan-vocabulary pattern); the charlie-code review's one finding (the rewritten docstring claimed nothing else enumerates genres while the leaf's GENRE_TEMPLATES is a third enumeration) landed as a same-branch docs commit; M102 healthy range unchanged (the after medians sit ~9x inside the 0.35 s line) | the artifact CLI imported `src.core.artifact_check` at module level for two argparse choices tuples, dragging dataclasses→inspect, plan_diff, and html into every `charliebot artifact wrap` invocation although the wrap verb's only parse-time need is the genre vocabulary; the same deferral shape the M97/M98/M102 landings applied to the config and asyncio stacks |
+| 2026-09-21 | this PR | M99 server import floor, the master-turn chain and its two server-side dependencies left `import server` (the master-cc facade with its run/queue/relay/state modules plus `src.core.project_config` via the chat handlers and the trigger wake; the memory store via the worker prompt build; the compaction stack via the worker's relay decision): import median 0.512/0.512/0.511/0.515/0.510/0.516 → 0.501/0.504/0.502/0.505/0.503/0.502 s (−9.0 ms, −1.8 %), every paired round faster, round-median bands disjoint (before 0.509-0.516, after 0.501-0.505; six interleaved rounds × five fresh processes per arm of the verbatim collector — main checkout before vs branch worktree after back-to-back, PYTHONPATH pinning the checkout under test, load 1.09-1.64 one-minute; a second six-round run at load 1.61-1.89 read −25 ms, 12/12 paired rounds faster across both runs); component attribution, in-server marginal (config+models+streaming preloaded, fresh processes): master_cc chain 9.6 ms of which ~5 ms exclusive (memory 2.1, compaction ~1, relay/latex re-home to their other importers), memory 2.1 ms, compaction 2.3 ms standalone; the patch seams ride the established deferred-module pattern (the `src.core.master_trigger.run_message` and `src.api.chat.cancel_master` targets resolve through PEP 562 `__getattr__` + a globals-first loader, the `load_build_backend` contract — an existing binding returned untouched, materialized on the patch target's first attribute read); `run_and_finalize`'s `run_message` and `_build_worker_prompt`'s `assemble_worker` are plain function-level imports (no seam); no-regression witnesses interleaved ×3: M92 schedule-trigger --help 0.038/0.038/0.038 → 0.038/0.039/0.038 s and M108 claude-sub 0.076/0.075/0.075 → 0.075/0.076/0.076 s medians (bands both); 5902-passed suite + 9 skipped, ruff and yapf clean, plus the server ban-set contract test extended (master_cc + run/queue/relay/state, project_config, memory, claude_compaction join the ban set); M99 healthy range unchanged (the after reading sits at two-thirds of the 0.75 s line) | every server process paid the master-turn chain's import at startup although its only server-side callers are two request-time handlers and the trigger fire, and the worker prompt build and the relay-compaction decision each pulled one more module the import path never reads; the seam hooks are the one place a deferral needed design — the module attribute stays the tests' patch target and the loader's globals-first read is what makes a landed stand-in win |
+| 2026-09-20 | this PR | M108 claude-sub launch floor, the launch argv/env assembly single-homed in a stdlib-only leaf: launch floor median 0.083/0.083/0.084 → 0.075/0.075/0.076 s (−8 to −9 %), maxima 0.086-0.088 → 0.077 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, PYTHONPATH pinning the checkout under test, load 0.64-0.67 one-minute); component attribution, `-X importtime`: the chain reads 55.2 → 48.5 ms — `src.agents.backends.base` (9.2 ms cumulative: runs 4.2 with subprocess+orjson/ndjson, process 2.5 with ctypes, mmap) and `claude_code` (0.4 ms) leave the launch for one argv-constants function and one env-dict builder, plus pty/tty (0.9 ms) lazy at the one PTY fork; the after chain's floor is asyncio (34.3 ms, whose own base_events pulls concurrent.futures/socket/subprocess/ssl) plus the launch's own stdlib imports; no-regression witnesses interleaved ×2 both orders: M92 schedule-trigger --help 0.038-0.039 s medians and M99 import server 0.592-0.599 s (bands both); 5900-passed suite + 9 skipped, ruff and yapf clean, plus the claude-sub ban-set contract test extended (base, claude_code, runs, process, pty join the launch ban set); M108 healthy range unchanged (the after reading sits at half the 0.15 s line) | the 2026-09-19 landing moved the pydantic stacks out but left the chain importing the whole backend ABC for three vendor-fixed flag strings and two pure assembly functions (`build_claude_argv`, `headless_claude_env`) — the ABC drags runs/process/mmap and claude_code the launch never reads; the names single-home in `src.agents.backends.claude_launch` beside the other stdlib-only leaves with base/claude_code re-exporting for their existing readers, the bridge's one event-builder use and the terminate path's `kill_process_group` import at their call sites, and `PtyAttachment.spawn` imports pty where it forks |
+| 2026-09-20 | this PR | chat wire tool-input trim completed to the renderer's read set (toolInputSummary reads Bash command / Read+Edit+Write file_path / Glob pattern / Grep pattern+path / every other tool's first value; read fields keep TOOL_PREVIEW_CHARS, the input's other string values — Edit old_string/new_string, Write content — render nowhere and cap at 60; the workers-events projection's tool_use rows, which carried input uncapped, join the same preview): M96 paired A/B, one scratch snapshot of all 46 active sessions (metadata + data, master_runs excluded), one fresh process per arm driving every session's bootstrap raw-ASGI — total 3927416 → 3876835 B (−1.3 %), median 75791 → 75791 B, max 295085 → 272176 B (−7.8 %), worst sessions −7.8 %/−7.1 %/−1.4 %; M35 verbatim collector on the shared snapshot of the 20534-event worst live corpus: events page decoded 293374 → 272562 B (−7.1 %), wire 108293 → 101118 B (−6.6 %), view 119772 → 118895 B, bootstrap 77540 → 76663 B, handler medians 0.89/1.49/1.00 → 0.89/1.39/1.16 ms (noise); worker-events full-fetch body, input-heaviest on-disk log (5d9639e2/10d7d73c, 2.6 MB / 1285 events): decoded 1554619 → 1429076 B (−8.1 %), wire 393812 → 368842 B, handler median 4.66 → 4.70 ms (noise) — the uncapped input was the latent M34 line-tripper (a worker's whole Write content rode every 5 s poll body); M34 worst log (9.8 MB / 232 events) decoded 112732 B both arms and M94's corpus (658ef901) page 0.07 MB / streamed 2.0 MB both arms — their tool inputs are already small (the big rows are outputs, capped since M94); no-regression witnesses interleaved: M91 full-corpus _process_event replay 0.0140 → 0.0139 s, M38 fan-out 5 frames / 186 serialize calls 1 ms both arms with final-frame parity True; 5900-passed pytest suite + 626-passed node suite, ruff and yapf clean, plus the read-set contract tests (dead fields cap at 60 while read fields keep the wire cap, the worker-events tool_use row rides the same bound); M96/M34/M35/M94 healthy ranges unchanged (body ceilings — every after reading sits lower) | the 2026-09-12 trim (M94) bounded tool outputs and capped input values at 500 chars, but the renderer reads only one bounded summary field per tool row: every other input value — the Edit diff payloads, a Write's whole file content — rode the wire shapes (stream delta, committed message, events pages, view, bootstrap, and on the workers panel wholly uncapped) with nothing ever reading it; the wire now carries exactly the renderer's read set, markers still truthy, full text on the persisted events |
+| 2026-09-20 | #1918 | M84 backend stream-line parse, the NDJSON line reader's errors="replace" repair round trip gated to orjson's invalid-UTF-8 class (replace rewrites invalid UTF-8 sequences and nothing else, so a structural failure — control character, truncation, bad literal — survives the replaced decode unchanged and its re-parse is provably dead work): tail-follow replay median 15048.2/14453.5/14557.7 → 5869.2/5849.3/5909.3 ms (−59 % to −61 %), maxima 15077.6/14527.8/14793.8 → 5963.8/5877.9/5933.8 ms; stdout-stream replay median 13778.1/13756.0/13769.3 → 6587.1/6464.5/6590.7 ms (−52 % to −53 %), maxima 13850.1/13825.4/14363.0 → 6648.1/6533.5/6794.1 ms, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, scratch copy of the 2147.5 MB / 61-line worst on-disk raw log whose single 2.1 GB line fails 'unexpected end of data' at column 2147479553, parity divergences 0 and 60/60 events in all six arms, load 1.77-2.42 one-minute); component attribution, standalone on the 2.1 GB failed line: orjson scan 5.56 s, tobytes 1.27 s, replace-decode 1.52 s, second orjson scan 5.28 s — the repair round trip was 8.0 of the 13.6 s the line costs per replay; the after readings sit 326-367 MB/s, inside the line's bytes ÷ 250 MB/s = 8.59 s corpus floor (before: 144-148 MB/s, the trip this round's sweep opened with — the corpus's giant failed line re-paid the repair every pass since the 2026-09-18 drain-copy landing); no-regression witnesses interleaved ×2: M78 parse_ndjson_file chat 3304.7/3319.9 → 3362.8/3369.2 ms and worker log 35.7/34.4 → 37.6/35.0 ms (run noise, both inside their corpus-floor lines), M31 events-summary read 0.0005 s both arms both rounds, M95 review 0.09-0.10 ms / judgment-pair 0.87-0.91 ms both arms, M13 read+transform 0.0000 s both arms; 5896-passed suite + 9 skipped, ruff and yapf clean, plus a new test pinning that a structural rejection skips with exactly one orjson attempt (the torn-multibyte rescue tests untouched and green); M84 healthy ranges unchanged (the after readings sit well inside their lines) | the standing sweep tripped the line this round and the trip was repair inflation, not the parse floor the line prices: orjson names its invalid-UTF-8 class with a stable message prefix at every position (encoding validated upfront, column 1 — verified against the lockfile-pinned 3.12.0 across structural positions), so the reader runs the repair only when the failure is that class, the only one the repair ever rescues; every line the old path rescued still rescues byte-identically, every structural skip still skips with its log line, and any future giant failed line — a class every covered backend's funnel can meet — stops paying the copy + decode + re-scan |
+| 2026-09-20 | this PR | M7 token-usage changed-round collect, the Claude+Codex corpora walked once per collect and their directory listings memoized on each directory's own (mtime_ns, size) stat pair (the charlie-bot walk's one-pass contract and listing memo, extended to `_iter_jsonl_stats`): changed-round collect median 0.100/0.101/0.102 → 0.092/0.095/0.095 s (−6 to −8 ms, −6 % to −8 %), every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, load 1.8-2.3 one-minute with sibling crons live); component attribution, cProfile matched-shape changed round before vs after in fresh processes: the signature's claude+codex walks plus the serve walks read ~13+9 ms before (2675 claude dirs + 3253 codex dirs, ~15k directory entries re-listed per pass, twice per collect) vs 4 ms after (one pass, one stat per memoized directory); the standing M7 page-load reading moves with it (0.105 s median at the sweep hour, the same fresh-sources shape — the live corpus moves between page loads); M80 changed-round wall unchanged within noise across nine interleaved rounds both orders (before 0.1051-0.1120 s, after 0.1053-0.1130 s — the 2.09 MB churn re-parse dominates that wall, and the row digest 7c35d23a2edb is identical across every arm and the standing sweep, the parity witness); the charliebot walk's own ~70 ms (17,135 candidate + ~2,565 directory stats at this host's ~4 µs stat floor) is untouched and stays the changed round's largest slice — raw stat parallelism measured negative on this host (7,326 warm stats 26.1 ms sequential → 72.1 ms with 4 threads), so no thread pool; 72-passed token-tally suite + pages/accounts/cli-import-weight suites green, ruff and yapf clean; M7 and M80 healthy ranges unchanged (both readings sit well inside their lines) | every fresh collect — each /token-usage page load while logs churn, each changed round — re-listed the claude projects tree (2,675 directories) and the codex sessions tree (3,253 directories) twice, once for the corpus signature and once for the serve walk, ~15k directory entries re-scandir'd per pass; the same one-pass-plus-listing-memo shape the charlie-bot walk has run since its own landing now covers both trees: `_walk_jsonl_logs` walks each tree once into per-account rows that both the signature and `_walk_source` consume, and `_jsonl_listing` remembers each directory's subdirectories and suffix-matching file names on the directory's own stat pair — an entry's create, delete or rename moves that pair, a file append moves only the file's own mtime, which the per-candidate stat still takes every pass; walk order, note wording, and note firing rules are byte-identical (the memo stores names only; the claude replay-key order semantics ride the same scandir sequence as before), so the M80 churn round's row digest is unchanged |
+| 2026-09-19 | this PR | M97 plan-CLI command wall, the verb request's http.client client stack replaced by a minimal socket client on the plain-HTTP path: median 0.090/0.090/0.089 → 0.073/0.074/0.073 s (−16 to −17 ms, −18 % to −19 %), maxima 0.093-0.112 → 0.077-0.083 s, every paired round and every paired max faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, a scratch CHARLIEBOT_HOME holding copies of the live config.yaml + credentials.yaml served both arms, the GET read-only against the live server, live home untouched, load 1.7-2.0 one-minute); component attribution, fresh processes per arm, 9 each: the request slice — client-stack import + round trip — reads 18.0-22.5 ms before vs 4.0-4.3 ms after, and `import src.cli.common` stays in band both arms (7.0-9.1 ms); the standalone measurement that named the slice: `import http.client` 16.3 ms in-process vs 2.3 ms for the socket client's socket+urllib.parse stack (urllib.parse already resident behind the editable finder); no-regression witness interleaved ×3: M92 schedule-trigger --help 0.042/0.042/0.041 → 0.042/0.040/0.041 s medians (standing band, --help makes no request); 5856-passed suite + 11 skipped, ruff and yapf clean, plus a fresh-process wire probe pinning the plain-HTTP request never loads http.client, ssl, or email.parser, and the two real-socket stub tests (the GET readback listener and the wire-shape capture: path+query, Content-Type, Authorization, body bytes) passing against the new client; M97 healthy range unchanged (the after medians sit at ~half the 0.15 s line) | the M97 landing had already cut the config model stack out of the verb wall and named the client its remaining slice: every plan/delegate/schedule-trigger/improve verb is a fresh process whose single internal-API call is plain HTTP against the built `http://localhost:{port}` base, yet `_send_request` imported http.client — dragging email.parser and ssl with it, 16.3 ms — for responses the internal API always frames with Content-Length; the plain-HTTP path now sends the same wire shape (Host, Accept-Encoding: identity, the caller's headers, Content-Length on a body) plus Connection: close over a raw socket and parses the status line, head, and body per framing (chunked, Content-Length, read-to-EOF), with any malformed line, framing mismatch, or short body raising into the sent-but-lost class — never a silent mis-parse — and the https branch (config-owned https base URLs) keeps http.client untouched |
+| 2026-09-19 | this PR | M107 dir-merge member classification, non-trace sidecars skip instead of failing the build: the sweep's verbatim collector crashed on the worst on-disk dir — `ValueError: Not a Chrome-JSON trace (no traceEvents array): …/traces/align.gaps.json` out of the merge pool, the same rejection the `/perfetto/merged?dir=` route 500s on (every `*.json` member passed the route's first-byte sniff, one sidecar's parse killed the whole build, the merged view of that dir never served, M107 unmeasured) — and the verbatim collector on the branch reads 12 members 961.9 MB, 2,601,903 events, build median 3.88 s, max 3.90 s over 3, artifact 77.7 MB, event-identity digest 69328480354c (8 sidecars skipped, one `perfetto_merge_member_skipped` warning each naming the file; inside the unchanged max(8 s, bytes ÷ 200 MB/s) = 4.81 s line); the survivors' subset harness on main (the dir's real traces passed explicitly, the same collector shape) reads 2 traces 484.2 MB, 1,308,808 events, 3.26 s median — the pre-fix code's own build for the members that could build; no-regression witnesses on the branch: M66 single-trace merge 3.02 s (standing sweep 2.85 s, band), M88 direct-pass 2.32 s (standing 2.12 s, band), M99 import server 0.583 s (standing 0.528 s, band, the module-level lazy logger adds nothing at import), M92 schedule-trigger --help 0.041 s (standing 0.040 s, parity); 5852-passed suite + 11 skipped, ruff and yapf clean, plus 2 new member-form tests (a middle sidecar's survivors carry their own indexes and pid labels, an all-sidecar merge raises instead of shipping an empty artifact) | the dir shape merges every `*.json` beside the traces, and the classification of "is a trace" is only decidable at the parse the pool worker runs anyway — the freeze-repro dir's gaps/rows/summary sidecars passed the 64-byte sniff and one of them took the whole view down; the skip is loud (one warning per rejected file), a merge that skips every member still raises, and every ≥2-path merge rides the member form the same way (an explicit `?trace=a&trace=sidecar` request skips the sidecar with the same warning now); the single-path forms keep failing the build on a non-trace unchanged (the direct-pass validator and `merge_traces`' sequential walk over caller-chosen paths) |
+| 2026-09-19 | this PR | M99 server import floor, the cold-storage, tally, spawn-pool, NCU, and trace stacks left `import server`: import median 0.578/0.576/0.574/0.565/0.571/0.584 → 0.548/0.554/0.570/0.555/0.538/0.573 s (−4 to −33 ms), every paired round faster (six interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, five fresh processes per arm per round, load 1.3-2.2 one-minute with sibling crons' collectors live; standing sweep reading the same hour 0.569 s median at load 0.6-1.0); component attribution, `-X importtime` before vs after: 24 modules leave the import and none join — the cold-storage sweep (storage_cool 2.2 + backup 0.1 + tarfile 1.2 ms), the tally stack (token_tally 4.0 + sqlite3/_sqlite3 0.4 ms), the spawn pool (multiprocessing + concurrent.futures.process + queue + _multiprocessing 1.1 ms), NCU report parsing (0.5 ms), the trace-merge stack (0.4 ms), and the wav container (wave 0.5 ms) — ~10.1 ms of module self-time, the rest of the wall win riding the removed dependency edges; the token-usage page's `TokenTally` annotation moves under TYPE_CHECKING and the spawn-pool holder's annotation quotes `concurrent.futures.ProcessPoolExecutor` (the module `__getattr__` whose first read imports .process); ext_usage reads the Claude default dir from src.core.home (the M98 owner) instead of through token_tally; no-regression witnesses interleaved: M92 schedule-trigger --help 0.046 → 0.043 s, M98 memory query 0.060 → 0.058 s, M102 artifact wrap 0.075 → 0.070 s, M108 claude-sub 0.101 → 0.092 s medians (bands), M66 merged build 3.61 s / M88 direct-pass 2.43 s / M107 multi-trace 8.36 s on the branch with the event-identity digest d73f1c00bfd3 identical to the standing sweep's; 5856-passed suite + 11 skipped (the token-usage route tests' collect seam moved with the deferral, the M98 shape), ruff and yapf clean, plus the server ban-set contract test extended (tarfile, backup, sqlite3, token_tally, storage_cool, multiprocessing, ncu_parsing, trace_merge, wave join SERVER_HEAVY_MODULES); M99 healthy range unchanged (the reading moves further inside its < 0.75 s line) | every module-scope import in the changed files serves a use site the import path never touches — the two built-in cron handlers (backup, cool storage), the merge pool and the Perfetto/NCU/token pages, and one wav write — so each now loads at its first call like croniter and jinja2 already do; the ext_usage constant's move also keeps the tally stack off every ext-usage poll process's import floor |
+| 2026-09-19 | this PR | M108 claude-sub launch floor, the pydantic model stacks left the worker binary's import: launch floor median 0.219/0.222/0.231 → 0.090/0.094/0.093 s (−57 % to −61 %), maxima 0.230-0.235 → 0.095-0.098 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, PYTHONPATH pinning the checkout under test, load 1.64-1.70 one-minute); component attribution: `src.core.models` measured 117 ms cumulative on the before arm's `-X importtime` (pydantic + backend_models + the full session/API model construction) riding `backends.base → src.core.runs` for one enum (`BackendType`) and `claude_accounts` for one filename constant (`CREDENTIALS_FILE`) — both names now single-home in the stdlib-only leaves (`src.core.constants`, `src.core.home`) with the model modules re-exporting, so the launch chain builds no pydantic model; the after arm's `-X importtime` shows no pydantic/models entry (asyncio ~36 ms is the floor); no-regression witnesses interleaved ×2: M92 schedule-trigger --help 0.042-0.043 → 0.042-0.043 s medians and M99 import server 0.576-0.589 → 0.576-0.589 s (overlapping bands both); 5856-passed suite + 11 skipped, ruff and yapf clean, plus the claude-sub ban-set contract test extended (pydantic + src.core.models + src.core.backend_models + src.core.claude_accounts join the launch ban set); M108 healthy range recalibrated < 0.30 s → < 0.15 s with this PR | every cc-claude subscription worker and reviewer launch paid the full pydantic model construction twice over for two stdlib-only names — the backend-type enum riding runs' module scope and the credentials filename riding the account pool's — although the launch reads neither account model; the vocabulary single-homes beside the other CLI-parsed constants, the filename beside the login-dir names, and the account pool loads at its one transcript-read call site (tui's jsonl probe, memo-gated) |
+| 2026-09-18 | this PR | M3 in-server 401 floor, the http_request log line's renderer moved from the dev ConsoleRenderer to a byte-identical inline renderer: floor median 57.85/59.36/59.22/59.72/58.24 → 44.35/44.70/43.85/45.09/45.64 µs (−21.6 % to −25.9 %), p10 55.90-57.91 → 41.10-43.60 µs, p90 83.45-94.38 → 63.53-73.90 µs, every paired round faster (five interleaved rounds of the A/B harness — main checkout before vs branch worktree after back-to-back, 1000 raw-ASGI 401 drives per arm, the branch arm installing the renderer its lifespan installs, main arm's drive reading the dev path main serves, load 1.5-1.8 one-minute); the doc collector on the branch reads 42.83 µs median (p10 41.41, p90 63.23); the log line's share measured standalone: muting the http_request line drops the main drive 59.4 → 16.0 µs — the line cost 43.3 µs of the 59.4 µs floor, 73 %; the curl standing collector cannot see a cut this size (client-dominated; the standing reading median 0.001 s at 18:43 stands until deploy); 5838-passed suite + 11 skipped (the byte-identity battery — every render compared against the dev renderer over level and event padding, value repr rules, the fallback shapes, and the configured chain, plus pins on the chain's local-time stamper and the env-aware color decision), ruff and yapf clean; M3 in-server floor healthy range introduced at < 0.000060 s (the after band 42.8-45.6 µs sits 1.3-1.4× inside; the line sits at the pre-fix dev-render floor, so a renderer regression trips it) | structlog's default chain ends in the dev ConsoleRenderer and the server never configured it — every http_request line paid the dev pad/repr machinery on the request path (43.3 µs of the 59.4 µs 401 floor, ~114k requests per 55.8 h of server log); the lean renderer reproduces that non-color line byte for byte for the common shape (timestamp, level, event, sorted key=value fields with the dev quoting rule), keeps the dev renderer for exception/stack/logger-name lines (the traceback formatter is the one shape it does not reproduce) and whenever the dev color decision (NO_COLOR/FORCE_COLOR/tty) selects colors, mirrors the default chain's local-time stamper (TimeStamper's own utc default is True — dropping the default chain's utc=False would shift every served stamp to UTC), and installs from the server lifespan's first startup statement — never at import, where it would tax the CLI floors the M92/M98 collectors measure, and never inside a capture_logs context, whose exit restores the config it entered with; the independent charlie-code review of the PR flagged exactly the two contract drifts (the utc default and the NO_COLOR/FORCE_COLOR mirror) plus a stale module docstring, all fixed before merge |
+| 2026-09-19 | this PR | M105 file-arm serve chunking, 64 KiB → 1 MiB (starlette 1.0.0's FileResponse class attribute): png serve median 7.45/6.59/5.19 → 1.88/1.62/2.02 ms (−61 % to −75 %), maxima 9.36-7.18 → 3.86-4.10 ms; pptx 4.64/4.54/3.68 → 1.40/1.25/1.46 ms (−60 % to −70 %); html witness 28.50/29.19/30.59 → 20.44/17.16/19.20 ms (−29 % to −45 %), maxima 37.96-34.51 → 23.91-24.40 ms, every paired round faster (five interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, the worst on-disk artifact corpora of the live sessions tree, scratch credentials home per drive, live files read-only, load 3.8-4.6 one-minute; transport identity kept on png/pptx, gzip kept on the html witness); wire: identity arms byte-identical across arms, html witness 2972245 → 2974307 B (+0.07 %, the middleware's per-chunk deflate now batches 4 × 1 MiB instead of 61 × 64 KiB — different gzip block boundaries over the same level, decompressed body byte-identical); component context: the 64 KiB default prices the page-cache serve at ~250 MB/s (one executor hop + one ASGI send per chunk; 16 chunks per MB, 21 for the png corpus), and the sweep's png reading had sat at its line (5.64 vs max(5.0, bytes ÷ 250 MB/s) = 5.38 ms) with the live log showing a 1.46 GB trace json served at 7.65 s, both per-chunk-bound; 5805-passed suite + 11 skipped (two new tests: the route builds the 1 MiB-chunk subclass, and a >1 MiB binary serves byte-identical with identity transport), ruff and yapf clean; M105 healthy ranges unchanged (every moved reading went further inside its line) | starlette 1.0.0 exposes the read chunk size only as the FileResponse class attribute, so the file arm serves through a one-attribute subclass; the chunking is transport-only — the served bytes are the file's bytes in both arms, and the Range path's min(chunk, remaining) clamp keeps byte ranges exact; the html witness rides the same FileResponse through the compressing responder (the collector's scratch sessions_dir resolves the live-tree artifact to no session, so it never reaches the injected-page memo), which is why the witness moves with the same change |
 | 2026-09-18 | this PR | M7 restart-cold seeded row-memo build removed (the sidecar's parsed rows map adopts as the memo in place): restart-cold wall median 1.333/1.282/1.277 → 0.947/0.952/1.003 s (−25 % to −29 %), maxima 1.333 → 1.003 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, the live cache document copied per arm with its sidecar and the 23.4 GB live db read in place mode=ro by the collect itself, live home never written, load 1.9-4.1 one-minute with the full test suite running on the host); component attribution standalone: the per-row tuple comprehension over the 190,497-row sidecar measures 348 ms vs 5 ms for the direct `dict.update` of the same map; payload parity on a deterministic scratch corpus (3000-row opencode db + one appended row rebuilt per round, per-arm cache dirs): the opencode row identical across all six arms (oc-m 3001 calls, 15007 in_fresh, 3002 output — the appended row's +7/+2 landing in every arm), the whole-rows digest moving only with the live claude corpora between rounds; 5732-passed suite + 11 skipped (the restart-cold seed tests' exact-record contracts among them), ruff clean; M7 healthy ranges unchanged (the standing collector's reading moves 1.29 s → ~0.98 s medians inside the unchanged max(0.5 s, bytes ÷ 25 MB/s) line) | the seeded restart rebuilt the 190k-entry row memo from the just-parsed sidecar rows one tuple at a time (~0.35 s of the ~1.3 s wall) although the seed's [time_updated, record] lists index positionally exactly like the (time_updated, record) tuples every memo consumer reads — [0]/[1] and two-name unpacking — and a memo value is only ever replaced whole, never mutated, so the parsed lists alias into the memo and the build drops to one C-level dict update; the gate-pass restart shape saves the same build (its memo build ran before the probe check) |
 | 2026-09-18 | this PR | M95 worker-log newest-first scans, the from-the-end walk moved from window reads to a mapped backward scan: review-scan median 0.60/0.59/0.83 → 0.09/0.10/0.09 ms (−85 % to −89 %), failed-iteration judgment-pair median 6.17/6.00/6.46 → 0.93/1.04/0.92 ms (−83 % to −86 %), maxima 6.21-6.81 → 1.01-1.23 ms, every paired round faster (three interleaved rounds of the verbatim collectors — main checkout before vs branch worktree after back-to-back, the 9.8 MB / 232-line worst on-disk worker log carrying one 9.5 MB tool_result line, live home read-only, resolved blocker/summary/report identical across all six arms, load 1.71-1.89 one-minute); no-regression witnesses interleaved: M85 verify-finalize report read 0.6-0.8 → 0.2 ms medians (maxima 1.3-1.5 → 0.3 ms), M31 steady-state events-summary read 0.0008-0.0009 → 0.0005 s medians; 5713-passed suite + 11 skipped (one new test: the plain-filter walk's whole-line contract; the two walk early-stop tests re-pinned on the mapped scan's rfind extents), ruff clean; M95 healthy ranges recalibrated review < 0.005 s → < 0.001 s and judgment-pair < 0.012 s → < 0.004 s with this PR | the from-the-end walker memcpy'd its way through every byte between the consumer's answer and the file start one 512 KiB window at a time — cProfile put 4.0 of the pair's 7.2 ms in BufferedReader.read walking the 9.5 MB tool_result line whose head rejects it, the reads finding the line's opening newline; the backward scan now rides a read-only mapping (the parse_ndjson_file mechanism the #1785 zero-copy walk gave the whole-file parse): lines are zero-copy views between mmap.rfind newlines, a head-provable filter rejects a giant line for one bounded 256-byte probe, and an early stop never scans past its answer; 300 randomized trials × 3 filter shapes (none / head-provable / plain) output-identical to the old walker; the same walk serves the M31 summary read (parse_ndjson_tail_parseable), M85 (_resolve_final_report), the reviewer-completion scan (review.py), verify_trailer, and the codex rollout backward scans |
 | 2026-09-18 | this PR | M107 multi-trace merge compressor moved from `gzip -1` to the isal igzip CLI (same subprocess shape): build median 11.67/11.87/11.57 → 8.34/8.11/7.35 s (−29 % to −36 %), maxima 12.06-12.09 → 8.82-7.37 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, 12 traces / 2089.8 MB / 5,279,591 events of the step002110 dir, scratch cache home per arm, live traces read in place read-only, load 1.7-2.3 one-minute; event-identity digest d73f1c00bfd3 identical across all six arms; artifact 170.3 → 160.5 MB, −5.8 % wire); component attribution standalone: the level-1 `gzip` subprocess reads the members' 131 MB fragments at 201 MB/s single-core while the same level through isal's igzip CLI reads 797 MB/s (−5.7 % wire), and the ordered fragment stream — fragment k copies only after k−1 streams — made the stream's 2.6 s-per-wave drain the wall beside each 2.07 s wave (12 members / 4 workers = 3 waves; stream total 1.57 GB at 201 MB/s = 7.8 s of serialized copy vs 6.2 s of member waves); the isal stream's 2.0 s total returns the wall to the member waves; no-regression witnesses interleaved: M66 single-trace merge 3.87/4.15 → 3.85/3.78 s medians (the walk writes into the live pipe at 63 MB/s, under both compressors' pace — wall unchanged, artifact 21.5 → 20.4 MB) and M88 direct-pass 2.46/2.49 → 2.47/2.45 s (the 2.72 s validation parse is the floor; artifact 23.8 → 23.7 MB); 5712-passed suite + 11 skipped (test_trace_merge's walk-failure kill/reap contract rides the same Popen seam), ruff and yapf clean; M107 healthy range recalibrated max(14 s, bytes ÷ 150 MB/s) → max(8 s, bytes ÷ 200 MB/s) with this PR | the trace merge was the one gzip holdout after the ISA-L landing moved the seven one-shot memos and the middleware to isal — the 2026-09-17 member-parallel landing multiplied the fragments flowing through the ordered stream 4-wide while the subprocess still read 201 MB/s, so every wave's 524 MB burst drained slower than the next wave built |
@@ -7494,7 +8120,7 @@ EOF
 | 2026-09-16 | this PR | M7 restart-cold standing reading classified as shape drift, not a product regression and not corpus growth: wall 0.961-1.111 s, 21 rows, scanned 0.0-1.1 MB over seven fresh-process runs (verbatim collector, live cache document copied per run, load 1.4-3.1 one-minute across the readings) against the < 0.5 s line the 2026-09-15 landing set on the matched-signature shape (readings 0.29-0.31 s, the landing's pinned contract: db file+WAL signature unchanged since the document was written, the stored partial serves with the sidecar and db both unread); the standing collector's copy of the live document is signature-stale whenever an opencode turn ran since the server's last token-usage collect — instrumented proof: a fresh-process collect reads the sidecar once and runs the per-id key scan once, and an immediate re-collect of a just-synced document (fresh-process semantics, in-process memos cleared) still reads the sidecar and runs the key scan (1.118 s, scanned 0.0 MB), because the db's file+WAL signature moves with every streamed turn's writes and the seeded cold memo never takes the probe gate (`probe = None if seeded`, the scan function's own comment); no-regression proof: interleaved fresh-process A/B against the pre-#1676 checkout 9f6e8526, back-to-back rounds main 1.092/1.022/0.961 vs pre 1.089/0.982/0.952 s at load 1.4-2.0 one-minute — every paired round within 4 %, so neither #1676's parse carry nor #1690's cache-store single-homing moved the restart path; corpus check: document 6.1 MB + sidecar 25.6 MB / 175,227 rows today vs 5.8 MB + 24.8 MB / ~170k rows at the landing — ~4 % growth, and the component floor (cProfile, fresh-process shape) was the same shape at the landing corpus: sidecar orjson parse 0.21 s, the seeded per-id key diff 0.55 s (~3.1 µs/row), the memoized sessions walk 0.17 s, the sidecar rewrite 0.08 s; healthy range recalibrated to median < max(0.5 s, (document + sidecar bytes) ÷ 25 MB/s) with this PR — the churned reading sits 1.15-1.35x inside (31.7 MB ÷ 25 MB/s = 1.27 s) while the matched-signature quiet-db shape keeps the landing's 0.29-0.31 s contract under the 0.5 s floor; the collector now prints the document+sidecar bytes the formula reads | the two restart shapes ride one db file+WAL signature the opencode db's own writes move; the follow-up code lever, once the M7 topic's one-day skip window from #1676 passes: persist the post-scan probe beside the rows map so the seeded restart can take the same aggregate-gate skip the warm memo takes — a churned restart whose rows themselves did not move (WAL-only noise, the steady state the warm gate exists for) would drop the 175k-row key diff to a probe read, the weaker-proof trade the warm path's docstring already documents |
 | 2026-09-16 | this PR | M104 per-line tail-follow cursor checkpoint 956.6/959.0/965.1 → 7.2/7.2/7.3 µs (−99.3 %, ~134x), maxima 963.7-968.8 → 7.2-8.0 µs, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, scripted 2000-line scratch stream with a real cursor file under /tmp, live home untouched, cursor offset 210890 B byte-identical across all six arms, load 0.69-0.97 one-minute); real-corpus witness on the branch: the M84 corpus (1051.1 MB / 186-line worst raw master-run log, scratch copy, live home read-only) replayed with the cursor ON records offset 1051067581 = file size exactly, wall median 3410.8 ms — inside the cursor-off band the same hour (interleaved M84 rounds: main 3500.3/3460.3, branch 3505.2/3519.6 ms, parity divergences 0 both arms); component attribution: the per-line open(O_TRUNC)+write+close cycle measured standalone 933.8 µs on this host's storage (a held-fd pwrite of the same payload 1.5 µs, pwrite+ftruncate 10.9 µs); 5644-passed suite + 11 skipped, ruff and yapf clean; M104 definition, collector, healthy range, and history row introduced with this PR | the loop checkpointed the consumed byte offset once per streamed line through a full open+truncate+write+close cycle — ~0.9 ms of synchronous event-loop time per line riding every live master/worker turn (a 2000-line turn ≈ 1.9 s of cumulative loop stall) — invisible to M84, whose replay passes cursor=None; the mount now holds one fd and rewrites a fixed-width zero-padded decimal in place, so a read observes the full old or full new value and the read_raw_cursor replay contract keeps at-most-duplicates-never-loss |
 | 2026-09-16 | this PR | M17 fork median 1.1600/1.1633/1.1698 s → 0.4253/0.4794/0.5031 s, −57 % to −63 %, maxima 1.2172-1.2305 → 0.5162-0.5787 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, the 1051.3 MB / 307-event heaviest fork corpus of session 489e7c31, scratch CHARLIEBOT_HOME, live home read once per arm for the copy, load 0.88-0.95 one-minute; parent_reference.jsonl sha256 digest fcb5de4df91f identical across all six arms); component attribution on the before wall (cProfile): source read_bytes 0.555 s (the whole-corpus memcpy), isascii 0.085 s, numpy newline scan 0.118 s, window write 0.237 s; 5637-passed suite plus a new chunk-boundary test (a 1600-line / >3-chunk corpus forks byte-identically), ruff clean | the full-corpus fork read each source file into one Python bytes object before streaming it — a whole-corpus memcpy that dominated the fork of the gigabyte-class live files — although the fast frame path only reads the mapping through a uint8 view and one window write; the source now rides an mmap (the corpus never enters the Python heap: the scan's memory bandwidth and the kernel's window copy replace the read's memcpy), with the non-ASCII and undecodable-byte error contracts raising identically through a materialized fallback and the per-frame path's memoryviews released before the mapping closes (BufferError-safe teardown); chat files are append-only between atomic os.replace rewrites (the ChatEventStore's stated rule), so the mapping holds an append-only or already-unlinked inode and never truncates under it |
-| 2026-09-16 | this PR | M59 full-row median 1.35/1.37/1.36 → 0.54/0.57/0.52 ms, −60 % to −62 %, maxima 1.60-1.93 → 0.86-1.04 ms, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, the 99.9 KB / 50206 B-decoded worst thread-metadata row, live state read-only, parsed digest 7184f3458354 identical across all six arms, wire 22140 B, load 1.70-1.73 one-minute); attach mode unchanged 0.43-0.45 ms both arms, body 48 B; no-regression witness interleaved ×2: M36 list poll full 0.61-0.71 → 0.64-0.68 ms and conditional 0.58-0.72 → 0.59-0.66 ms (204, 0 B) with parsed digest 8946dac083ec identical — the refactored response half is byte-identical; 5634-passed suite + 11 skipped, ruff and yapf clean, plus 5 new detail-gzip contract tests (precompressed serve with decompressed parity, repeat zero re-compress, changed-body recompress, plain request no memo entry, attach mode stays slim and uncompressed); M59 full-row healthy range recalibrated < 0.003 s → < 0.001 s with this PR | the served full row still paid the gzip middleware's whole-body level-1 deflate on every request — the ~0.85 ms slice the 2026-09-15 collector-repair row attributed (raw-ASGI+gzip 1.27 ms vs bare 0.42 ms on the 50206 B row) — although the rendered bytes are their own invalidation ground; the gzip form now rides the body-keyed memo beside the plain render (a memo hit proves byte equality because the dict key IS the body; the M36 mechanism), one off-loop level-1 deflate per distinct body replaces the middleware's per-request pass, and Content-Encoding set upstream makes the middleware skip (the M72 mechanism); the serve half is single-homed into `_gzip_body_response` beside the list poll's |
+| 2026-09-16 | this PR | M59 full-row median 1.35/1.37/1.36 → 0.54/0.57/0.52 ms, −60 % to −62 %, maxima 1.60-1.93 → 0.86-1.04 ms, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, the 99.9 KB / 50206 B-decoded worst thread-metadata row, live state read-only, parsed digest 7184f3458354 identical across all six arms, wire 22140 B, load 1.70-1.73 one-minute); attach mode unchanged 0.43-0.45 ms both arms, body 48 B; no-regression witness interleaved ×2: M36 list poll full 0.61-0.71 → 0.64-0.68 ms and conditional 0.58-0.72 → 0.59-0.66 ms (204, 0 B) with parsed digest 8946dac083ec identical — the refactored response half is byte-identical; 5634-passed suite + 11 skipped, ruff and yapf clean, plus 5 new detail-gzip contract tests (precompressed serve with decompressed parity, repeat zero re-compress, changed-body recompress, plain request no memo entry, attach mode stays slim and uncompressed); M59 full-row healthy range recalibrated < 0.003 s → < 0.001 s with this PR | the served full row still paid the gzip middleware's whole-body level-1 deflate on every request — the ~0.85 ms slice the 2026-09-15 collector-repair row attributed (raw-ASGI+gzip 1.27 ms vs bare 0.42 ms on the 50206 B row) — although the rendered bytes are their own invalidation ground; the gzip form now rides the body-keyed memo beside the plain render (a memo hit proves byte equality because the dict key IS the body; the M36 mechanism), one off-loop level-1 deflate per distinct body replaces the middleware's per-request pass, and Content-Encoding set upstream makes the middleware skip (the M72 mechanism); the serve half is single-homed into `gzip_body_response` beside the list poll's |
 | 2026-09-16 | this PR | M72 changed-round collector repaired: it crashed on every timed round since the 0c8fb854 rename landed — `AttributeError: module 'src.api.files' has no attribute '_dir_listing_html'` (the #1686 refactor dropped the [0]-view wrapper and renamed the entry to `_dir_listing_page`; the harness's two call sites read the wrapper name) — so the changed-round sub-metric stood unmeasured while the standing repeat-view collector kept reading 5.25 ms (inside its line); the repaired harness calls the renamed entry (the page element is all the harness reads): changed-round rebuild median 5.53/5.89 ms, maxima 6.62/7.14 ms over 9 (two rounds, 1234 entries, live sessions root read-only, load 2.45-2.49 one-minute) — inside the unchanged < 0.007 s line; no-regression witness: the standing served-path repeat collector 4.53 ms median (standing 5.25 ms the same hour, both inside < 0.008 s) | collector command only, no product code; the changed-round half's regression watch (a page-key miss pricing walk + sort + join with the row memo warm) is live again |
 | 2026-09-16 | this PR | M81 page re-render standing reading classified as corpus growth, not a product regression: 29.98 ms, 2 walks, parity true, then 32.65 ms at the round's higher load (verbatim collector, 7 bodies — 5 math-free, 7.5 KB, corpus sha1 e14932d4b7ca — of the 1051.3 MB runaway-turn capture that is now the worst live chat file, live home read-only, load 2.0-3.1 one-minute) against the < 0.020 s line the 2026-09-09 landing set on the 36.3 MB corpus's 40 math-free bodies (33.13/33.64/31.08 → 0.87/1.20/0.95 ms, 40 → 0 walks); the gate works as landed — the 5 math-free bodies skip and the streamed math-free arm stays 0 walks / 0.00 ms inside its unchanged < 0.010 s line, while the 2 delimiter-bearing bodies' walks are the page's own math rendering; healthy range recalibrated to < 0.020 s + 0.020 s per delimiter-bearing body with this PR — the reading sits 1.8-2.0x inside | the worst-corpus move is this week's 489e7c31 runaway-turn capture, the corpus the M78/M84 rows re-based on; no code change renders the walk materially cheaper — katex.render is the per-formula floor (probe over the same corpus: 21.99 + 15.50 ms for the two bodies' 3+4 formulas), and the round priced the memo alternatives against the standing collectors' own contracts: the walked HTML's jsdom innerHTML re-parse costs 23.2-23.8 ms per body — no cheaper than the walk — and baking katex into the parse memo breaks M60's settled-bytes-equal-direct-parse parity, so the line tracks the page's own math and the walked count (2) stays the gate's regression watch |
 | 2026-09-16 | this PR | M101 first-view standing reading classified as corpus growth, not a product regression: first view 4030 ms, then 3930 ms at the round's higher load (verbatim collector, 1051.3 MB / 307-event worst live chat file of session 489e7c31, scratch home, live home read-only, load 2.5-3.1 one-minute) against the < 1.0 s line the 2026-09-14 landing set on the 36.3 MB / 5519-event corpus (first views 741-811 ms); the unchanged sub-metrics stay inside their lines — loop-lag median 5.38-5.44 ms (< 0.010 s), steady-state wall median 0.6-0.7 ms (< 0.10 s), 99.2 MB gzip wire; healthy range recalibrated to first-view wall < max(1.0 s, bytes ÷ 200 MB/s) with this PR — the reading sits 1.3x inside | the first view is the stat-keyed memo's one executor hop — read + level-1 gzip of the whole corpus — whose cost scales with bytes; measured 261-267 MB/s end-to-end on this corpus, so the line tracks the compress floor the same way the M84 tail-follow line tracks the parse floor; the corpus is the runaway-turn capture, and a corpus reversion re-tightens the line automatically |

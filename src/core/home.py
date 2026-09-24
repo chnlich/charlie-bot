@@ -24,6 +24,13 @@ CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
 # the config model stack.
 CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
 
+# The OAuth credential filename inside a login directory: claude-sub snapshots it
+# into the session-only config overlay, the account pool reads it for health, and
+# the usage provider derives its per-account path from it. It lives beside the
+# login-dir names so the claude-sub launch resolves it without the account pool's
+# pydantic models.
+CREDENTIALS_FILE = ".credentials.json"
+
 
 def default_claude_dir() -> Path:
   """The default claude login directory (``~/.claude``), read from HOME on every call.
@@ -74,13 +81,12 @@ def charliebot_home_dir() -> Path:
   """Return the state directory this process belongs to (its profile).
 
   ``CHARLIEBOT_HOME`` selects the profile: unset or empty gives the default
-  ``~/.charliebot``, so an untouched host behaves exactly as before. This is the
-  only place that resolves the home path; every other path is derived
-  from :attr:`CharlieBotConfig.charliebot_home`. The one raw read of the variable
-  outside this function is the web terminal's profile check
-  (``src/agents/backends/terminal.py``): a tmux pane inherits the tmux server's
-  environment rather than this process's, so the terminal checks whether a
-  profile is set and passes the resolved home to new panes explicitly.
+  ``~/.charliebot``. This is the only place that resolves the home path; every
+  other path is derived from :attr:`CharlieBotConfig.charliebot_home`. The one
+  raw read of the variable outside this function is the web terminal's profile
+  check (``src/agents/backends/terminal.py``): a tmux pane inherits the tmux
+  server's environment rather than this process's, so the terminal checks
+  whether a profile is set and passes the resolved home to new panes explicitly.
 
   A set value must be absolute or start with ``~``. A relative value would be
   resolved against each process's own working directory, silently handing the

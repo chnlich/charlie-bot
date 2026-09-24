@@ -18,8 +18,7 @@ the post) exits non-zero with a JSON error on stderr and persists nothing — no
 chunk of the reply posts. ``ack`` marks the given thread messages (Slack ts) as read,
 advancing the session's read watermark, and prints the readback JSON
 (``acked``, ``watermark_ts``); every read message's id must be passed — none
-may be skipped. The session comes from the server-written CHARLIEBOT_SESSION_ID
-per the usual CLI convention (see ``resolve_session_id``);
+may be skipped. The session resolves per ``resolve_session_id``;
 the reply-format contract is prompts/slack_reply_format.md.
 """
 
@@ -34,17 +33,19 @@ from src.cli.common import (
     read_required_text_file,
     resolve_session_id,
 )
+from src.cli.help_formatter import CliHelpFormatter
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(description="CharlieBot Slack thread verbs")
+  parser = argparse.ArgumentParser(description="CharlieBot Slack thread verbs", formatter_class=CliHelpFormatter)
   sub = parser.add_subparsers(dest="slack_command", required=True)
 
-  reply = sub.add_parser("reply", help="Post a reply to this session's Slack thread")
+  reply = sub.add_parser("reply", help="Post a reply to this session's Slack thread", formatter_class=CliHelpFormatter)
   reply.add_argument("--file", required=True, help="File holding the reply text; - reads stdin")
   add_session_arg(reply)
 
-  ack = sub.add_parser("ack", help="Mark read thread messages, advancing the read watermark")
+  ack = sub.add_parser(
+      "ack", help="Mark read thread messages, advancing the read watermark", formatter_class=CliHelpFormatter)
   ack.add_argument(
       "--message-id",
       nargs="+",

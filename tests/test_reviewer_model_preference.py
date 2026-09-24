@@ -331,7 +331,7 @@ async def test_tried_backends_propagated_to_review_thread(monkeypatch: pytest.Mo
   assert saved[0].tried_backends == ["kimi-k2.5", OPUS_BACKEND_ID]
 
 
-def _make_fake_spawn_review(spawn_calls: list[dict], result: bool = True) -> Callable[..., Awaitable[bool]]:
+def _make_fake_spawn_review(spawn_calls: list[dict], result: bool) -> Callable[..., Awaitable[bool]]:
   """A ``review.spawn_review_worker`` stand-in recording the backend preference per call.
 
   The signature mirrors the production call; each test reads its own ``spawn_calls``.
@@ -372,7 +372,7 @@ async def _fake_read_events_summary(
   return "(test events)"
 
 
-def _make_review_thread(tried_backends: list[str] | None = None) -> ThreadMetadata:
+def _make_review_thread(tried_backends: list[str]) -> ThreadMetadata:
   return ThreadMetadata(
       id="review-thread-id",
       session_id="session-id",
@@ -380,7 +380,7 @@ def _make_review_thread(tried_backends: list[str] | None = None) -> ThreadMetada
       review_of="origin-thread-id",
       backend="kimi-k2.5",
       model="kimi-k2.5",
-      tried_backends=tried_backends or [],
+      tried_backends=tried_backends,
       branch_name="charliebot/task-1",
       repo_path="/tmp/repo",
       worktree_path=_WORKTREE_PATH,

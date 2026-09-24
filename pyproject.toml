@@ -2,7 +2,7 @@
 name = "charlie-bot"
 version = "0.1.0"
 description = "Self-hosted multi-agent orchestration system: master/worker/reviewer agents on pluggable LLM CLI backends, operated through a web UI"
-requires-python = ">=3.12"
+requires-python = "==3.14.*"
 dependencies = [
     "aiofiles>=25.1.0",
     "croniter>=6.2.2",
@@ -95,6 +95,18 @@ select = [
 
 [tool.setuptools.packages.find]
 include = ["src", "src.*"]
+
+# The vfork spawn seam's child-side stub (pdeathsig, setsid, stdio dup2,
+# close-from-3, execve as pure syscalls) — a compiled module because the
+# clone(CLONE_VM|CLONE_VFORK) child may run no Python.
+[[tool.setuptools.ext-modules]]
+name = "src.agents.backends._vfkspawn"
+sources = ["src/agents/backends/_vfkspawn.c"]
+
+# Only uv-managed interpreters: they ship Python.h, so building the extension
+# above never depends on the host's python3.x-dev package.
+[tool.uv]
+python-preference = "only-managed"
 
 [tool.ruff]
 line-length = 120

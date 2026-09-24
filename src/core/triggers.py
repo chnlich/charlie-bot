@@ -400,6 +400,30 @@ def _migrate_legacy_watch_pids(raw_text: str) -> tuple[PendingTrigger, bool]:
   return PendingTrigger.model_validate(data), migrated
 
 
+def iter_trigger_file_stats(triggers_dir: str | Path) -> list[tuple[str, os.stat_result]]:
+  """(path, stat) pairs for the regular ``*.json`` trigger files under *triggers_dir*.
+
+  The one scandir+stat walk every trigger read shares: this module's list memo,
+  the sidebar probe's verdict scan (src.core.sessions), and the threads-list
+  body's freshness signature (src.api.threads). Raises OSError when
+  *triggers_dir* itself cannot be scanned — that verdict belongs to the caller.
+  A file that vanishes between scandir and stat is skipped, the same "nothing
+  to read" verdict every stat failure earns. Paths are scandir's plain strings,
+  and the stat rides ``DirEntry.stat`` — this scan runs per poll.
+  """
+  pairs: list[tuple[str, os.stat_result]] = []
+  with os.scandir(triggers_dir) as entries:
+    for entry in entries:
+      if not entry.name.endswith(".json") or not entry.is_file():
+        continue
+      try:
+        st = entry.stat()
+      except OSError:
+        continue  # vanished between scandir and stat — nothing to read
+      pairs.append((entry.path, st))
+  return pairs
+
+
 class TriggerManager:
   """Manages delayed one-shot triggers that wake the master CC."""
 
@@ -526,13 +550,7 @@ class TriggerManager:
   @staticmethod
   def _stat_trigger_files(triggers_dir: Path) -> dict[str, tuple[int, int]]:
     """One scandir snapshot of the session's trigger files: name -> (mtime_ns, size)."""
-    stats: dict[str, tuple[int, int]] = {}
-    with os.scandir(triggers_dir) as entries:
-      for entry in entries:
-        if entry.name.endswith(".json") and entry.is_file():
-          st = entry.stat()
-          stats[entry.name] = (st.st_mtime_ns, st.st_size)
-    return stats
+    return {os.path.basename(path): (st.st_mtime_ns, st.st_size) for path, st in iter_trigger_file_stats(triggers_dir)}
 
   async def list_triggers(self, session_id: str) -> list[PendingTrigger]:
     """Read all triggers for a session from disk, memoized per file.
@@ -645,7 +663,7 @@ class TriggerManager:
     self._tasks[trigger.id] = task
 
   async def _is_dormant_target(self, session_id: str) -> bool:
-    """The one dormancy judgment for all three readers in this module — create-time
+    """The one dormancy judgment for every reader in this module — create-time
     rejection, the wait watchdog, and the fire-time backstop: resolve *session_id*'s
     succession chain and answer whether the chain end is ARCHIVED with no successor,
     the user's explicit "no more wakes" signal. A chain end that has a successor

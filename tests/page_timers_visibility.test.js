@@ -166,7 +166,6 @@ function buildSidebarContext() {
     updateRelativeTimes() {},
     formatTokens: (n) => String(n),
     renderWorkersTab() {},
-    updateWorkersTabBadge() {},
     switchTab() {},
     showToast() {},
     loadedThreads: {clear() {}},
@@ -193,7 +192,7 @@ test('sidebar timers stay dormant while hidden and all start on show', () => {
   context.startThinking({keepSendEnabled: true});
   context.THINKING_SINCE = '2026-08-02T00:00:00Z';
   context.ensureActiveSessionViewPolling();
-  context.restartWorkersPolling();
+  context.Sidebar.restartWorkersPolling();
 
   assert.equal(timers.live().length, 0, 'a hidden tab runs no sidebar timer');
 

@@ -32,3 +32,15 @@ def test_create_backup_omits_the_secrets_file() -> None:
 
   assert "config.yaml" in members
   assert not any("credentials.yaml" in name for name in members)
+
+
+def test_create_backup_archive_round_trips_bytes() -> None:
+  home = charliebot_home_dir()
+  payload = "key: value\nlist:\n  - a\n  - b\n"
+  (home / "config.yaml").write_text(payload, encoding="utf-8")
+
+  archive = create_backup()
+  with tarfile.open(archive, "r:gz") as tar:
+    extracted = tar.extractfile("config.yaml")
+    assert extracted is not None
+    assert extracted.read().decode("utf-8") == payload

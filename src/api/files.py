@@ -7,21 +7,64 @@ import math
 import mimetypes
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from src.api.pages import _static_asset_version
-from src.api.responses import GZIP_RESPONSE_HEADERS, request_wants_gzip
+from src.api.responses import GZIP_RESPONSE_HEADERS, gzip_file_fresh, request_wants_gzip
 from src.core.compression import gzip_level1
 from src.core.config import get_config
 from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.human_size import format_size
-from src.core.memo import BoundedMemo
+from src.core.memo import BoundedMemo, StatSignatureMemo
 
 router = APIRouter()
+
+
+class _ServedFileResponse(FileResponse):
+  # Starlette 1.0.0 exposes the read chunk size as this class attribute (no
+  # __init__ parameter). The 64 KiB default prices a page-cache serve at
+  # ~250 MB/s: one executor hop plus one ASGI send per chunk. A 1 MiB chunk
+  # cuts both ~16x per MB and is the transport's only knob; the wire bytes are
+  # identical, so no served body changes.
+  chunk_size = 1 << 20
+
+
+# Bound on the bare-file arm's gzip memo: the arm serves the file server's
+# repeat views of gzip-able files (artifact pages above all — the M105 html
+# witness's 15.4 ms per repeat serve was the middleware's per-request per-chunk
+# inline deflate). Four slots cover the pages a user re-opens across tabs; one
+# slot holds the compressed form of a file up to the raw-size cap.
+_SERVED_FILE_GZIP_MEMO_LIMIT = 4
+
+# Raw-size cap of the same arm. Above it the serve stays on the streaming
+# _ServedFileResponse arm: a whole-body read plus its gzip form would hold
+# multi-hundred-MB resident per slot for files the middleware already serves
+# chunk-wise without buffering.
+_SERVED_FILE_GZIP_MAX_BYTES = 16 << 20
+
+# Media gate of the same arm: the text formats the transport compresses and
+# repeat-serves. The gzip middleware's skip list (server.py) is this gate's
+# complement in spirit — every prefix here stays outside that list — while
+# unknown and binary media types (application/octet-stream above all) keep the
+# streaming arm: their gzip form is a ratio gamble and their chunked-identity
+# contract is pinned by the suite.
+_SERVED_FILE_GZIP_MEDIA_PREFIXES = ("text/",)
+_SERVED_FILE_GZIP_MEDIA_TYPES = frozenset(
+    {
+        "application/json",
+        "application/javascript",
+        "text/javascript",
+        "application/xml",
+        "image/svg+xml",
+    })
+
+_served_file_gzip_memo: StatSignatureMemo[Path, bytes] = StatSignatureMemo(_SERVED_FILE_GZIP_MEMO_LIMIT)
 
 # Bound on _annotate_memo in annotated diff pages: one compare view reads one
 # page against one base at a time, so the cap covers every compare view open
@@ -129,21 +172,34 @@ def _annotated_diff_page(base_path: Path, page_path: Path, session_id: str) -> s
   return page
 
 
+_K = TypeVar("_K")
+
+
+def _gzip_form(memo: BoundedMemo[_K, bytes], key: _K, build: Callable[[], bytes]) -> bytes:
+  """The level-1 gzip form of the plain body *build* yields, memoized under *key*.
+
+  A hit returns the stored bytes and never calls *build*; a miss deflates
+  *build()* once, stores, and returns. The route ships the result with
+  Content-Encoding: gzip set upstream, which is what makes the server's gzip
+  middleware skip its own whole-body deflate.
+  """
+  hit = memo.get(key)
+  if hit is not None:
+    return hit
+  compressed = gzip_level1(build())
+  memo.store(key, compressed)
+  return compressed
+
+
 def _annotated_diff_page_gzip(base_path: Path, page_path: Path, session_id: str) -> bytes:
   """The annotated diff page's gzip form, memoized beside the plain body.
 
-  The route ships these bytes with Content-Encoding: gzip set upstream, which
-  is what makes the server's gzip middleware skip its own whole-body deflate —
-  level 1 over the multi-MB worst compare view is the per-click cost the memo
-  removes. mtime=0 keeps the compressed bytes deterministic across processes.
+  Level 1 over the multi-MB worst compare view is the per-click cost the memo
+  removes.
   """
   key = _annotate_key(base_path, page_path)
-  hit = _annotate_gzip_memo.get(key)
-  if hit is not None:
-    return hit
-  compressed = gzip_level1(_annotated_diff_page(base_path, page_path, session_id).encode("utf-8"))
-  _annotate_gzip_memo.store(key, compressed)
-  return compressed
+  return _gzip_form(
+      _annotate_gzip_memo, key, lambda: _annotated_diff_page(base_path, page_path, session_id).encode("utf-8"))
 
 
 def _injected_artifact_page(fs_path: Path, session_id: str) -> bytes:
@@ -167,18 +223,10 @@ def _injected_artifact_page(fs_path: Path, session_id: str) -> bytes:
 def _injected_artifact_page_gzip(fs_path: Path, session_id: str) -> bytes:
   """The artifact view's gzip form, memoized beside the plain body.
 
-  The route ships these bytes with Content-Encoding: gzip set upstream, which
-  is what makes the server's gzip middleware skip its own whole-body deflate —
-  level 1 over the ~1 MB worst page measures ~27 ms per view. mtime=0 keeps
-  the compressed bytes deterministic across processes.
+  Level 1 over the ~1 MB worst page measures ~27 ms per view.
   """
   key: _CleanViewKey = (str(fs_path), *_file_signature(fs_path))
-  hit = _clean_view_gzip_memo.get(key)
-  if hit is not None:
-    return hit
-  compressed = gzip_level1(_injected_artifact_page(fs_path, session_id))
-  _clean_view_gzip_memo.store(key, compressed)
-  return compressed
+  return _gzip_form(_clean_view_gzip_memo, key, lambda: _injected_artifact_page(fs_path, session_id))
 
 
 def _artifact_session_id(fs_path: Path) -> str | None:
@@ -303,8 +351,8 @@ _SAFE_ENTRY_RE = re.compile(r"[A-Za-z0-9_.~-]+")
 
 # One home for the listing page's chrome (the rows are built per walk): the
 # dir-listing byte-pin test in tests/test_files_dir_listing.py formats this
-# same template for its reference builder, so a chrome edit cannot desync the
-# two builders.
+# same template for its reference builder, so a chrome edit cannot desync
+# the paired builders.
 _DIR_LISTING_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Index of {display_path}</title>
@@ -403,18 +451,8 @@ def _dir_listing_page(dir_path: Path, url_prefix: str, diff_param: str | None) -
 
 
 def _listing_page_gzip(key: _ListingKey, listing: str) -> bytes:
-  """The listing page's gzip form, memoized beside the plain page.
-
-  The route ships these bytes with Content-Encoding: gzip set upstream, which
-  is what makes the server's gzip middleware skip its own whole-body deflate.
-  mtime=0 keeps the compressed bytes deterministic across processes.
-  """
-  hit = _listing_gzip_memo.get(key)
-  if hit is not None:
-    return hit
-  compressed = gzip_level1(listing.encode("utf-8"))
-  _listing_gzip_memo.store(key, compressed)
-  return compressed
+  """The listing page's gzip form, memoized beside the plain page."""
+  return _gzip_form(_listing_gzip_memo, key, lambda: listing.encode("utf-8"))
 
 
 def _resolve_and_list(path: str, url_prefix: str,
@@ -491,9 +529,19 @@ async def serve_file(path: str, request: Request) -> Response:
     body = await asyncio.to_thread(_injected_artifact_page, fs_path, session_id)
     return HTMLResponse(body, media_type="text/html", headers=_NO_STORE_HEADERS)
 
-  # Serve the file with auto-detected MIME type
+  # Serve the file with auto-detected MIME type. A gzip-accepting GET of a
+  # gated media type under the memo cap rides the memo arm: Content-Encoding
+  # set upstream is what makes the middleware skip its per-request per-chunk
+  # inline deflate, and the stat signature proves a repeat hit's stored bytes.
+  # Every other shape — no-gzip clients, Range requests, unlisted media types,
+  # over-cap files — stays on the streaming arm unchanged.
   media_type, _ = mimetypes.guess_type(str(fs_path))
+  if (request_wants_gzip(request) and "range" not in request.headers and media_type is not None and
+      (media_type.startswith(_SERVED_FILE_GZIP_MEDIA_PREFIXES) or media_type in _SERVED_FILE_GZIP_MEDIA_TYPES)):
+    compressed = await asyncio.to_thread(gzip_file_fresh, _served_file_gzip_memo, fs_path, _SERVED_FILE_GZIP_MAX_BYTES)
+    if compressed is not None:
+      return Response(content=compressed, media_type=media_type, headers=GZIP_RESPONSE_HEADERS)
   try:
-    return FileResponse(str(fs_path), media_type=media_type)
+    return _ServedFileResponse(str(fs_path), media_type=media_type)
   except PermissionError as e:
     raise HTTPException(status_code=403, detail=_PERMISSION_DENIED_DETAIL) from e

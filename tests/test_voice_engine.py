@@ -2,14 +2,16 @@
 
 The GPU bundle factory is mocked in every test here — the real GPU path runs under the
 local_only marker in test_voice_qwen3_hf.py. The module-level bundle cache is reset
-around each test so a stub bundle never leaks into the streaming or websocket suites.
+around each test so a stub bundle never leaks into the other voice suites.
 """
 
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 from conftest import fresh_state_fixture
 from structlog.testing import capture_logs
@@ -136,3 +138,112 @@ def test_bundle_cache_rebuilds_when_engine_changes(monkeypatch: pytest.MonkeyPat
   assert first is sherpa
   assert second is gpu
   assert third is sherpa
+
+
+def test_concurrent_first_access_builds_exactly_once(monkeypatch: pytest.MonkeyPatch) -> None:
+  """Two first accesses racing a slow build: the build runs once and both getters share its bundle."""
+  cfg = CharlieBotConfig()
+  sherpa = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
+  builds: list[str] = []
+  inside_build = threading.Event()
+
+  def slow_build(_paths: transcriber.VoiceModelPaths) -> transcriber._SpeechModelBundle:
+    builds.append("build")
+    inside_build.set()
+    time.sleep(0.2)
+    return sherpa
+
+  monkeypatch.setattr(transcriber, "create_sherpa_bundle", slow_build)
+
+  results: list[transcriber._SpeechModelBundle] = []
+  failures: list[BaseException] = []
+
+  def getter() -> None:
+    try:
+      results.append(transcriber._get_model_bundle(cfg, transcriber.voice_model_paths(cfg)))
+    except BaseException as exc:
+      failures.append(exc)
+
+  first = threading.Thread(target=getter)
+  first.start()
+  assert inside_build.wait(timeout=10), "the first getter never entered the build"
+  second = threading.Thread(target=getter)
+  second.start()
+  first.join(timeout=10)
+  second.join(timeout=10)
+
+  assert failures == []
+  assert builds == ["build"]
+  assert results == [sherpa, sherpa]
+  assert results[0] is results[1] is sherpa
+
+
+def test_build_lock_recheck_honors_a_cache_published_before_acquisition(monkeypatch: pytest.MonkeyPatch) -> None:
+  """A bundle published between the outer miss and the build-lock acquisition wins: no second build."""
+  cfg = CharlieBotConfig()
+  winner = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
+  loser = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
+  builds: list[str] = []
+  real_lock = transcriber._bundle_build_lock
+
+  def fail_build(_paths: transcriber.VoiceModelPaths) -> transcriber._SpeechModelBundle:
+    builds.append("build")
+    return loser
+
+  class PublishThenLock:
+    """Simulates the winner's build publishing before this getter acquires the build lock."""
+
+    def __enter__(self) -> None:
+      with transcriber._state_lock:
+        if transcriber._bundle is None:
+          transcriber._bundle = winner
+          transcriber._bundle_engine = cfg.voice.engine
+      real_lock.acquire()
+
+    def __exit__(self, *_exc: object) -> None:
+      real_lock.release()
+
+  monkeypatch.setattr(transcriber, "_bundle_build_lock", PublishThenLock())
+  monkeypatch.setattr(transcriber, "create_sherpa_bundle", fail_build)
+
+  bundle = transcriber._get_model_bundle(cfg, transcriber.voice_model_paths(cfg))
+
+  assert bundle is winner
+  assert builds == []
+
+
+def test_prepopulated_cache_yields_zero_builds(monkeypatch: pytest.MonkeyPatch) -> None:
+  """A cache already holding the engine's bundle answers without running any factory."""
+  cfg = CharlieBotConfig()
+  cached = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
+  with transcriber._state_lock:
+    transcriber._bundle = cached
+    transcriber._bundle_engine = cfg.voice.engine
+  monkeypatch.setattr(
+      transcriber, "create_sherpa_bundle", lambda *_:
+      (_ for _ in ()).throw(AssertionError("the factory must not run on a cache hit")))
+
+  assert transcriber._get_model_bundle(cfg, transcriber.voice_model_paths(cfg)) is cached
+
+
+def test_warm_up_bundle_decodes_exactly_one_deterministic_sine(monkeypatch: pytest.MonkeyPatch) -> None:
+  """The warm decode is one _decode_samples call over a deterministic 0.5 s sine; the text is dropped."""
+  bundle = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
+  calls: list[np.ndarray] = []
+
+  def fake_decode(received_bundle: transcriber._SpeechModelBundle, samples: np.ndarray) -> str:
+    calls.append(samples)
+    assert received_bundle is bundle
+    return "transcript nobody reads"
+
+  monkeypatch.setattr(transcriber, "_decode_samples", fake_decode)
+
+  assert transcriber.warm_up_bundle(bundle) is None
+  assert transcriber.warm_up_bundle(bundle) is None
+
+  assert len(calls) == 2, "each warm-up decodes exactly once"
+  first, second = calls
+  assert first.dtype == np.float32
+  assert first.size == int(transcriber.SAMPLE_RATE * transcriber.WARMUP_SECONDS) == 8000
+  assert np.all(np.abs(first) <= 1.0), "the sine must stay inside the float decode range"
+  assert np.array_equal(first, second), "the warm input must be deterministic"

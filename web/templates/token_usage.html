@@ -182,8 +182,13 @@
 <script>
 const DATA = {{ payload|safe }};
 const SLOT = {1:'var(--series-1)', 2:'var(--series-2)', 3:'var(--series-3)', 4:'var(--series-4)'};
-const LEG = [[1,"Claude Code"],[2,"Codex"],[3,"opencode"],[4,"charlie-bot"]];
-const SRC_SLOT = {'Claude Code':1,'Codex':2,'opencode':3,'charlie-bot':4};
+// Legend order is the server's source display order (slot 1..n); each payload row
+// carries its own slot number, so no client-side source→slot map exists. The legend key
+// only exists on the python this page ships with: the template reloads from disk while
+// the serving process runs the python it started with, so the key stays absent until
+// that process restarts — an absent key renders an empty legend instead of failing the
+// whole report.
+const LEG = {{ (ctx.usage_sources or []) | tojson }}.map((name, i) => [i + 1, name]);
 const fmt = n => n.toLocaleString('en-US');
 const compact = n => {
   for (const [c,s] of [[1e9,'B'],[1e6,'M'],[1e3,'K']])
@@ -297,7 +302,7 @@ const sums = {calls:0, in_fresh:0, cache_write:0, cache_read:0, output:0, total:
 for (const r of DATA.rows) {
   const tr = el('tr');
   const td0 = el('td','mdl');
-  const sw = el('span','sw'); sw.style.background = SLOT[SRC_SLOT[r.source]];
+  const sw = el('span','sw'); sw.style.background = SLOT[r.slot];
   td0.append(sw, el('span', null, r.model));
   tr.append(td0, el('td', null, r.source));
   for (const k of ['calls','in_fresh','cache_write','cache_read','output','total']) {

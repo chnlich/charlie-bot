@@ -282,13 +282,13 @@ test('sidebarSessionIds sends the rendered session anchors plus the active sessi
       selector === 'a[id^="session-"]' ? sessionAnchors(['session-b', 'session-a', 'session-c']) : [],
   });
 
-  assert.deepEqual(Array.from(context.sidebarSessionIds()), ['session-a', 'session-b', 'session-c']);
+  assert.deepEqual(Array.from(context.Sidebar.sidebarSessionIds()), ['session-a', 'session-b', 'session-c']);
 });
 
 test('sidebarSessionIds includes the active session even when the sidebar has not rendered it', () => {
   const {context} = buildContext();
 
-  assert.deepEqual(Array.from(context.sidebarSessionIds()), ['session-a']);
+  assert.deepEqual(Array.from(context.Sidebar.sidebarSessionIds()), ['session-a']);
 });
 
 test('pollSessionStatus asks only for the sessions the sidebar renders', async () => {
@@ -600,7 +600,7 @@ test('in-place refresh paths preserve group expansion', async () => {
     {
       name: 'setSessionGroup',
       async drive(context) {
-        await context.setSessionGroup('work-1', 'Personal');
+        await context.Sidebar.setSessionGroup('work-1', 'Personal');
       },
     },
     {
@@ -844,7 +844,7 @@ test('missing bootstrap worker data and empty worker tab do not imply idle', () 
     active_backend_type: 'claude-code',
     has_more: false,
   });
-  context.updateSpinner();
+  context.Sidebar.updateSpinner();
 
   // A manager session leaves the worker leaf container alone.
   assert.equal(tabWorkers.innerHTML, '');
@@ -897,7 +897,7 @@ test('loadOlderIfNeeded post-processes prepended messages through the shared hel
   postProcessedHtml.length = 0;
   messages.scrollTop = 0;
 
-  await context.loadOlderIfNeeded(messages);
+  await context.Sidebar.loadOlderIfNeeded(messages);
 
   assert.equal(postProcessedHtml.length, 1);
   assert.match(postProcessedHtml[0], /older \$x\$/);
@@ -957,7 +957,7 @@ test('loadOlderIfNeeded skips messages whose rendered id is already in the DOM',
   });
   messages.scrollTop = 0;
 
-  await context.loadOlderIfNeeded(messages);
+  await context.Sidebar.loadOlderIfNeeded(messages);
 
   assert.deepEqual(renderedMessages, [{
     id: 'user-event-0',
@@ -1014,7 +1014,7 @@ test('renderScheduledSessionItem keeps delayed-trigger and cron indicators disti
     BACKEND_TYPES: {'claude-tui': 'tui-cli'},
   });
 
-  const html = context.renderScheduledSessionItem({
+  const html = context.Sidebar.renderScheduledSessionItem({
     id: 'session-a',
     name: 'Wake later',
     backend: 'claude-tui',
@@ -1217,6 +1217,10 @@ test('archiveSession removes the row inline and switches to the next rendered se
         },
       };
     }
+    if (url === '/api/sessions/session-b/read') {
+      assert.equal(opts.method, 'POST');
+      return {ok: true, async json() { return {}; }};
+    }
     throw new Error('unexpected fetch ' + url);
   };
   context.renderSessionView = (data) => { rendered = data; };
@@ -1229,6 +1233,7 @@ test('archiveSession removes the row inline and switches to the next rendered se
     '/api/sessions/session-a',
     SWITCH_TELEMETRY_URL,
     '/api/sessions/session-b/bootstrap',
+    '/api/sessions/session-b/read',  // the landed switch marks the new session read post-render
     SWITCH_TELEMETRY_URL,
   ]);
   assert.equal(rowA.removed, true);
@@ -1266,7 +1271,7 @@ test('deleteSessionPermanently renders the welcome state inline when no rendered
   };
   context.history.pushState = (_state, _title, url) => { pushedUrl = url; };
 
-  await context.deleteSessionPermanently('session-a');
+  await context.Sidebar.deleteSessionPermanently('session-a');
 
   assert.deepEqual(requests.map((req) => req.url), [
     '/api/sessions/session-a/permanent',
@@ -1503,7 +1508,7 @@ test('switchBackend confirms before POSTing when the switch rotates', async () =
   });
   context.setBackendSwitchRotates(true);
 
-  await context.switchBackend('codex-o3');
+  await context.Sidebar.switchBackend('codex-o3');
 
   assert.equal(confirms.length, 1, 'rotating switch must confirm once');
   assert.deepEqual(fetchRequests, [], 'cancelled switch must not POST');
@@ -1524,7 +1529,7 @@ test('switchBackend does not confirm for a non-rotating switch', async () => {
     return {ok: true, async json() { return {id: 'session-a', backend: 'codex-o3'}; }};
   };
 
-  await context.switchBackend('codex-o3');
+  await context.Sidebar.switchBackend('codex-o3');
 
   assert.equal(confirms.length, 0, 'in-place switch must not confirm');
   assert.equal(context.getActiveBackendId(), 'codex-o3');
@@ -1565,7 +1570,7 @@ test('switchBackend navigates to the new session when the rotation returns a dif
     throw new Error('unexpected fetch ' + url);
   };
 
-  await context.switchBackend('codex-o3');
+  await context.Sidebar.switchBackend('codex-o3');
 
   assert.equal(context.SESSION_ID, 'session-new');
   assert.deepEqual(pushedUrls, ['/?session=session-new']);
@@ -1588,7 +1593,7 @@ test('switchBackend stays in place and skips sidebar refresh when the rotation r
     throw new Error('unexpected fetch ' + url);
   };
 
-  await context.switchBackend('codex-o3');
+  await context.Sidebar.switchBackend('codex-o3');
 
   assert.equal(context.SESSION_ID, 'session-a', 'same id must not navigate');
   assert.deepEqual(filtersRefreshed, [], 'same id must not refresh the sidebar');

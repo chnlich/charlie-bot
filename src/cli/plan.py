@@ -1,10 +1,9 @@
 """CLI script for the ``charliebot plan`` subcommand.
 
-Subcommands (verbs) follow the same caller contract as ``charliebot delegate``:
-session id comes from the server-written CHARLIEBOT_SESSION_ID (explicit
-``--session`` mismatches are rejected; see ``resolve_session_id``),
-the result is a single JSON object on stdout, and server 4xx/5xx ``detail`` is
-written to stderr as a JSON error with a non-zero exit code.
+Subcommands (verbs) follow the same caller contract as ``charliebot delegate``
+(session identity per ``resolve_session_id``): the result is a single JSON
+object on stdout, and server 4xx/5xx ``detail`` is written to stderr as a JSON
+error with a non-zero exit code.
 
   charliebot plan present --file artifacts/plan_01.html --title "…"
   charliebot plan amend --file artifacts/plan_02.html --note "…" [--plan N]
@@ -26,6 +25,7 @@ from src.cli.common import (
     post_internal_api,
     resolve_session_id,
 )
+from src.cli.help_formatter import CliHelpFormatter
 from src.core.constants import PLAN_AMEND_TRIGGERS, PLAN_CLOSE_MODES
 from src.core.plans import require_plan
 
@@ -103,26 +103,34 @@ def _build_base_args(parser: argparse.ArgumentParser) -> None:
   parser.add_argument("--base-sha", default=None, help="Code sha the plan targets")
 
 
-def _add_present(parser: argparse.ArgumentParser) -> None:
+def _add_file_arg(parser: argparse.ArgumentParser) -> None:
   parser.add_argument("--file", required=True, help="Artifact path relative to the session dir")
+
+
+def _add_plan_arg(parser: argparse.ArgumentParser) -> None:
+  parser.add_argument("--plan", type=int, default=None, help="Target plan id (required when ambiguous)")
+
+
+def _add_present(parser: argparse.ArgumentParser) -> None:
+  _add_file_arg(parser)
   parser.add_argument("--title", required=True, help="Plan title")
   _build_base_args(parser)
 
 
 def _add_amend(parser: argparse.ArgumentParser) -> None:
-  parser.add_argument("--file", required=True, help="Artifact path relative to the session dir")
+  _add_file_arg(parser)
   parser.add_argument(
       "--note",
       required=True,
       help="One line saying why this version differs from its predecessor; rides on the version record")
-  parser.add_argument("--plan", type=int, default=None, help="Target plan id (required when ambiguous)")
+  _add_plan_arg(parser)
   parser.add_argument(
       "--trigger", choices=PLAN_AMEND_TRIGGERS, default="feedback", help="Revision trigger (default feedback)")
   _build_base_args(parser)
 
 
 def _add_approve(parser: argparse.ArgumentParser) -> None:
-  parser.add_argument("--plan", type=int, default=None, help="Target plan id (required when ambiguous)")
+  _add_plan_arg(parser)
 
 
 def _add_close(parser: argparse.ArgumentParser) -> None:
@@ -136,17 +144,27 @@ def _add_diff(parser: argparse.ArgumentParser) -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parent = argparse.ArgumentParser(add_help=False)
+  parent = argparse.ArgumentParser(add_help=False, formatter_class=CliHelpFormatter)
   add_session_arg(parent)
-  parser = argparse.ArgumentParser(prog="charliebot plan", description="Plan registry verbs")
+  parser = argparse.ArgumentParser(
+      prog="charliebot plan", description="Plan registry verbs", formatter_class=CliHelpFormatter)
   sub = parser.add_subparsers(dest="verb", required=True)
-  _add_present(sub.add_parser("present", parents=[parent], help="Register a new plan lineage"))
-  _add_amend(sub.add_parser("amend", parents=[parent], help="Append the next version to a plan lineage"))
-  _add_approve(sub.add_parser("approve", parents=[parent], help="Record a takeoff"))
-  _add_close(sub.add_parser("close", parents=[parent], help="Terminate a plan lineage"))
+  _add_present(
+      sub.add_parser("present", parents=[parent], help="Register a new plan lineage", formatter_class=CliHelpFormatter))
+  _add_amend(
+      sub.add_parser(
+          "amend", parents=[parent], help="Append the next version to a plan lineage",
+          formatter_class=CliHelpFormatter))
+  _add_approve(sub.add_parser("approve", parents=[parent], help="Record a takeoff", formatter_class=CliHelpFormatter))
+  _add_close(
+      sub.add_parser("close", parents=[parent], help="Terminate a plan lineage", formatter_class=CliHelpFormatter))
   _add_diff(
-      sub.add_parser("diff", parents=[parent], help="Print the local diff of one version against its predecessor"))
-  sub.add_parser("list", parents=[parent], help="Print the session's plan registry")
+      sub.add_parser(
+          "diff",
+          parents=[parent],
+          help="Print the local diff of one version against its predecessor",
+          formatter_class=CliHelpFormatter))
+  sub.add_parser("list", parents=[parent], help="Print the session's plan registry", formatter_class=CliHelpFormatter)
   return parser
 
 

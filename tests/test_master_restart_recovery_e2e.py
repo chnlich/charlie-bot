@@ -121,6 +121,20 @@ exit 0
 
 FAKE_SHIM = FAKE_SHIM.replace("__LITELLM_503_ERROR_MESSAGE__", LITELLM_503_ERROR_MESSAGE)
 
+# The two drivers' shared turn rig, spliced into each driver source after
+# `home` and `shim` bind. Each driver's imports must cover every name the
+# fragment uses.
+_DRIVER_TURN_SETUP = """\
+  cfg = CharlieBotConfig(
+      charliebot_home=home,
+      paths={"worktree_dir": str(home / "worktrees")},
+      backends={"options": [
+          CcClaudeBackend(id="fake", label="Fake", model="fake-model", cli_binary=shim, prompt_overlay="none")]},
+  )
+  # Prompt assembly is orthogonal to this protocol; keep the turn minimal.
+  master_cc_run._build_instructions_content = lambda session_meta, cfg, prompt_overlay: "instructions"
+"""
+
 DRIVER = """import asyncio
 import json
 import sys
@@ -137,15 +151,7 @@ async def main() -> None:
   home = Path(sys.argv[1])
   shim = sys.argv[2]
   kind = sys.argv[3]
-  cfg = CharlieBotConfig(
-      charliebot_home=home,
-      paths={"worktree_dir": str(home / "worktrees")},
-      backends={"options": [
-          CcClaudeBackend(id="fake", label="Fake", model="fake-model", cli_binary=shim, prompt_overlay="none")]},
-  )
-  # Prompt assembly is orthogonal to this protocol; keep the turn minimal.
-  master_cc_run._build_instructions_content = lambda session_meta, cfg, prompt_overlay: "instructions"
-  session_mgr = SessionManager(cfg)
+""" + _DRIVER_TURN_SETUP + """  session_mgr = SessionManager(cfg)
   thread_mgr = ThreadManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="master-e2e"))
 
@@ -210,15 +216,7 @@ from src.core.sessions import SessionManager
 async def main() -> None:
   home = Path(sys.argv[1])
   shim = sys.argv[2]
-  cfg = CharlieBotConfig(
-      charliebot_home=home,
-      paths={"worktree_dir": str(home / "worktrees")},
-      backends={"options": [
-          CcClaudeBackend(id="fake", label="Fake", model="fake-model", cli_binary=shim, prompt_overlay="none")]},
-  )
-  # Prompt assembly is orthogonal to this protocol; keep the turn minimal.
-  master_cc_run._build_instructions_content = lambda session_meta, cfg, prompt_overlay: "instructions"
-  session_mgr = SessionManager(cfg)
+""" + _DRIVER_TURN_SETUP + """  session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="master-graceful"))
   (home / "driver_ids.json").write_text(json.dumps({"session": meta.id}))
 
@@ -345,8 +343,7 @@ def _launch_driver(
     shim: Path,
     kind: str,
     shim_mode: str,
-    extra_args: list[str] | None = None,
-    extra_env: dict[str, str] | None = None) -> tuple[subprocess.Popen, str]:
+    extra_args: list[str] | None = None) -> tuple[subprocess.Popen, str]:
   shim_dir = tmp_path / "shim"
   driver = shim_dir / "driver.py"
   driver.write_text(DRIVER, encoding="utf-8")
@@ -356,8 +353,6 @@ def _launch_driver(
   env["SHIM_MODE"] = shim_mode
   env["SHIM_STATE"] = str(tmp_path / "shim_state")
   env["SHIM_SLEEP"] = "3"
-  if extra_env:
-    env.update(extra_env)
   proc = subprocess.Popen(
       [sys.executable, str(driver), str(home),
        str(shim), kind, *(extra_args or [])],

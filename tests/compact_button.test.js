@@ -140,7 +140,7 @@ test('compactContext posts the exact same request shape as the shared message-se
   await context.compactContext();
   assert.equal(calls.length, 1);
 
-  await context.postChatMessage('/compact');
+  await context.Chat.postChatMessage('/compact');
   assert.equal(calls.length, 2);
 
   assert.equal(calls[0].url, calls[1].url);

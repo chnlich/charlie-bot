@@ -6,8 +6,16 @@ cd "$repo_root"
 
 staged_files=()
 while IFS= read -r file; do
-  [[ "$file" =~ ^(skills|prompts)/.*\.md$ ]] || continue
-  staged_files+=("$file")
+  case "$file" in
+    skills/*.md | prompts/*.md)
+      staged_files+=("$file")
+      ;;
+    # The host-auth panel files are leak-scanned too; the list mirrors
+    # check-skills-host-leak.sh's host_auth_scan.
+    src/core/host_auth.py | src/api/host_auth.py | web/templates/host_auth.html | tests/test_host_auth.py)
+      staged_files+=("$file")
+      ;;
+  esac
 done < <(git diff --cached --name-only --diff-filter=ACMR)
 
 if [[ ${#staged_files[@]} -eq 0 ]]; then

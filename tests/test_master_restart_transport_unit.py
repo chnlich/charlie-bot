@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import json
 import signal
-import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -33,7 +32,9 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
+    _async_wait_for,
     backend_option,
+    make_sound_round,
     make_work_item,
     mocked_callback_fields,
     patch_instructions_content,
@@ -192,11 +193,8 @@ async def test_consumer_clears_master_run_after_master_done() -> None:
   callbacks = _make_callbacks(persist_order)
   session_meta = SessionMetadata(id="session-clear", name="t")
 
-  async def fake_run_cc(item: master_cc._WorkItem) -> tuple[str | None, int, str | None, dict]:
-    return "cc-1", 0, None, {}
-
   item = make_work_item(_cfg(Path("/tmp/charliebot-unit")), session_meta, None, user_content="hi", callbacks=callbacks)
-  await run_session_consumer(session_meta.id, [item], fake_run_cc)
+  await run_session_consumer(session_meta.id, [item], make_sound_round("cc-1"))
 
   assert persist_order == ["master_done", "master_run_cleared"], (
       "the restart identity must outlive the result boundary: clearing it first "
@@ -518,7 +516,7 @@ async def test_identity_judgment_runs_before_any_new_turn_door(tmp_path: Path, m
     calls.append("identity")
     return {}
 
-  async def fake_recovery(cfg: CharlieBotConfig, boot_time: datetime, identity: asyncio.Task | None = None) -> None:
+  async def fake_recovery(cfg: CharlieBotConfig, boot_time: datetime, identity: asyncio.Task) -> None:
     calls.append("crash_recovery")
 
   async def fake_scheduler_start(self) -> None:
@@ -544,6 +542,77 @@ async def test_identity_judgment_runs_before_any_new_turn_door(tmp_path: Path, m
   for door in ("crash_recovery", "scheduler.start", "trigger.recover_pending"):
     assert door in calls, f"{door} never ran; the ordering assertion would be vacuous"
     assert calls.index("identity") < calls.index(door), f"identity judged after {door}: {calls}"
+
+
+# --- _provision_speech_models: warm segment after provisioning ----------------
+
+
+def test_provision_speech_models_warms_after_provisioning(monkeypatch: pytest.MonkeyPatch) -> None:
+  """The startup thread provisions first, then builds the bundle and runs the one warm decode.
+
+  Asserted on recorded call order and the single warm call, never on the decoded
+  text: the warm segment fetches the resident bundle and hands it to the warm
+  decode exactly once, and a successful pass logs voice_warmup_complete."""
+  from structlog.testing import capture_logs
+
+  import server
+  from src.agents import transcriber
+
+  calls: list[str] = []
+  warm_bundle = object()
+
+  def fake_provision(cfg: CharlieBotConfig) -> None:
+    calls.append("provision")
+
+  def fake_get_bundle(warm_cfg: CharlieBotConfig) -> object:
+    calls.append("bundle")
+    return warm_bundle
+
+  def fake_warm(bundle: object) -> None:
+    calls.append(f"warm:{bundle is warm_bundle}")
+
+  monkeypatch.setattr(transcriber, "provision_models", fake_provision)
+  monkeypatch.setattr(transcriber, "get_transcription_bundle", fake_get_bundle)
+  monkeypatch.setattr(transcriber, "warm_up_bundle", fake_warm)
+
+  with capture_logs() as logs:
+    server._provision_speech_models(CharlieBotConfig())
+
+  assert calls == ["provision", "bundle", "warm:True"]
+  complete = [event for event in logs if event["event"] == "voice_warmup_complete"]
+  assert complete and isinstance(complete[0]["elapsed_ms"], int)
+  assert not [event for event in logs if event["event"] == "voice_warmup_failed"]
+
+
+def test_provision_speech_models_warm_failure_logs_and_continues(monkeypatch: pytest.MonkeyPatch) -> None:
+  """A warm failure (a parked provisioning error's not-ready raise included) is logged, never re-raised.
+
+  The fake provision mirrors the real failure path — the error is parked, no ready
+  paths published — so the warm segment hits the same SpeechModelsNotReadyError the
+  production flow would raise there; readiness itself stays untouched."""
+  from structlog.testing import capture_logs
+
+  import server
+  from src.agents import transcriber
+
+  def parked_provision(cfg: CharlieBotConfig) -> None:
+    with transcriber._state_lock:
+      transcriber._provisioning_error = "model download failed"
+      transcriber._provisioning_started = False
+
+  monkeypatch.setattr(transcriber, "_provisioning_error", None)
+  monkeypatch.setattr(transcriber, "_ready_paths", None)
+  monkeypatch.setattr(transcriber, "provision_models", parked_provision)
+
+  with capture_logs() as logs:
+    server._provision_speech_models(CharlieBotConfig())  # must return, not raise
+
+  failed = [event for event in logs if event["event"] == "voice_warmup_failed"]
+  assert failed and failed[0]["log_level"] == "error"
+  assert not [event for event in logs if event["event"] == "voice_warmup_complete"]
+  # Readiness is exactly as provisioning left it: still parked, 503 path unchanged.
+  with pytest.raises(transcriber.SpeechModelsNotReadyError, match="model download failed"):
+    transcriber.get_ready_model_paths()
 
 
 # --- queued_user_event_ids ----------------------------------------------------
@@ -577,9 +646,8 @@ async def test_queued_user_event_ids_covers_running_and_queued_items() -> None:
       master_cc._enqueue_work_item(session_meta.id, running)
       master_cc._enqueue_work_item(session_meta.id, queued)
       # Let the consumer pick up the first item.
-      deadline = time.monotonic() + 2.0
-      while session_meta.id not in master_cc_state._current_items and time.monotonic() < deadline:
-        await asyncio.sleep(0.01)
+      await _async_wait_for(
+          lambda: session_meta.id in master_cc_state._current_items, 2.0, "the consumer never picked up the first item")
       ids = master_cc.queued_user_event_ids(session_meta.id)
       assert ids == {"evt-running", "evt-queued"}
   finally:

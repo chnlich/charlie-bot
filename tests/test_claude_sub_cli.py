@@ -46,12 +46,12 @@ def _state(prompt: str = PROMPT) -> HookTurnState:
   )
 
 
-def _started_turn(prompt: str = PROMPT) -> HookTurnState:
-  state = _state(prompt)
+def _started_turn() -> HookTurnState:
+  state = _state(PROMPT)
   state.handle("SessionStart", _payload("SessionStart", source="startup"))
   state.handle(
       "UserPromptSubmit",
-      _payload("UserPromptSubmit", prompt=prompt, turn_id="turn-1"),
+      _payload("UserPromptSubmit", prompt=PROMPT, turn_id="turn-1"),
   )
   return state
 
@@ -475,6 +475,14 @@ def _install_config_paths(
   return source_global, source_settings, source_credentials, source_remote
 
 
+def _copied_credentials(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
+  """The credential-copy rig: install the four source paths, run one seed copy, and return
+  (source_credentials, the overlay copy it produced)."""
+  _, _, source_credentials, _ = _install_config_paths(monkeypatch, tmp_path)
+  config_dir = claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
+  return source_credentials, config_dir / ".credentials.json"
+
+
 def _seed_overlay(payload: dict) -> Path:
   """A pre-existing overlay ``.claude.json`` in the session config dir.
 
@@ -570,9 +578,7 @@ def test_session_credentials_recopied_when_source_strictly_newer(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  _, _, source_credentials, _ = _install_config_paths(monkeypatch, tmp_path)
-  config_dir = claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
-  credentials_target = config_dir / ".credentials.json"
+  source_credentials, credentials_target = _copied_credentials(monkeypatch, tmp_path)
   assert credentials_target.read_text() == "credentials"
   os.utime(credentials_target, (1000, 1000))
   source_credentials.write_text("rotated-credentials", encoding="utf-8")
@@ -588,9 +594,7 @@ def test_session_credentials_not_recopied_when_copy_same_age_or_newer(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  _, _, source_credentials, _ = _install_config_paths(monkeypatch, tmp_path)
-  config_dir = claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
-  credentials_target = config_dir / ".credentials.json"
+  source_credentials, credentials_target = _copied_credentials(monkeypatch, tmp_path)
   source_credentials.write_text("should-not-be-copied", encoding="utf-8")
   os.utime(source_credentials, (1000, 1000))
   os.utime(credentials_target, (2000, 2000))
@@ -609,9 +613,7 @@ def test_session_credentials_source_missing_with_copy_present_proceeds(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  _, _, source_credentials, _ = _install_config_paths(monkeypatch, tmp_path)
-  config_dir = claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
-  credentials_target = config_dir / ".credentials.json"
+  source_credentials, credentials_target = _copied_credentials(monkeypatch, tmp_path)
   source_credentials.unlink()
 
   claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))

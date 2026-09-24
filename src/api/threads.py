@@ -35,18 +35,23 @@ from src.api.responses import (
 )
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.constants import BackendType
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo, StatSignatureMemo
-from src.core.message_aggregator import TOOL_PREVIEW_CHARS, extract_text_from_message, extract_tool_result_text
+from src.core.message_aggregator import (
+    TOOL_PREVIEW_CHARS,
+    extract_text_from_message,
+    extract_tool_result_text,
+    tool_preview,
+)
 from src.core.models import (
-  BackendType,
-  CcClaudeBackend,
-  PendingTrigger,
-  RunRecord,
-  ThreadMetadata,
-  ThreadStatus,
-  TuiCliBackend,
-  WorkerEvent,
+    CcClaudeBackend,
+    PendingTrigger,
+    RunRecord,
+    ThreadMetadata,
+    ThreadStatus,
+    TuiCliBackend,
+    WorkerEvent,
 )
 from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events
 from src.core.process import kill_process_group
@@ -54,7 +59,7 @@ from src.core.run_token import CallerIdentity
 from src.core.runs import RunIdentityConflictError, RunNotFoundError
 from src.core.sidebar_state import RevisionSweepGate, session_revision, take_marked_paths
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME, ThreadManager, iter_thread_meta_stats
-from src.core.triggers import TriggerManager
+from src.core.triggers import TriggerManager, iter_trigger_file_stats
 
 log = LazyStructlogLogger()
 
@@ -342,16 +347,8 @@ def _row_source_stats(
   with contextlib.suppress(OSError):
     thread_pairs.extend(iter_thread_meta_stats(threads_dir))
   trigger_pairs: list[tuple[str, os.stat_result]] = []
-  try:
-    for entry in os.scandir(triggers_dir):
-      if not entry.is_file() or not entry.name.endswith(".json"):
-        continue
-      try:
-        trigger_pairs.append((entry.path, entry.stat()))
-      except OSError:
-        continue
-  except OSError:
-    pass
+  with contextlib.suppress(OSError):
+    trigger_pairs.extend(iter_trigger_file_stats(triggers_dir))
   run_pairs: list[tuple[str, os.stat_result]] = []
   if runs_dir:
     try:
@@ -589,10 +586,11 @@ async def _list_response(request: Request, body: bytes, etag_value: str, etag: s
 
 # The session view's threads array rides the same row proof as the list body:
 # sorted rows per session gated on the write revision (every row-source
-# writer marks through mark_sidebar_dirty). The view's mark_read
-# no-ops once the session is read, so repeat views serve rows with zero stats;
-# a writer mark or the sweep walk rebuilds from the walked pairs, the row memo
-# serving the unmoved files' rows.
+# writer marks through mark_sidebar_dirty). The view itself writes nothing
+# (the read mark rides the client's post-render POST /read),
+# so repeat views serve rows with zero stats; a writer mark or the sweep walk
+# rebuilds from the walked pairs, the row memo serving the unmoved files'
+# rows.
 _VIEW_ROWS_MEMO_LIMIT = 8
 _VIEW_ROWS_SWEEP_EVERY = 10
 _view_rows_memo: BoundedMemo[str, list[dict]] = BoundedMemo(_VIEW_ROWS_MEMO_LIMIT)
@@ -876,7 +874,14 @@ def _append_worker_events(
               WorkerEvent(
                   type=ET.TOOL_USE,
                   tool_name=block['name'],
-                  input=block.get('input', {}),
+                  # The panel renders the same one-line input summary the chat
+                  # wire's renderer reads (toolInputSummary), so the row's
+                  # input rides the same preview bound; the persisted events
+                  # log keeps the full input.
+                  input=tool_preview({
+                      "name": block["name"],
+                      "input": block.get('input', {})
+                  })["input"],
                   timestamp=event_timestamp,
               ))
     elif event_type == ET.USER and isinstance(data.get('message'), dict):

@@ -26,6 +26,8 @@ from src.core.models import SessionMetadata, ThreadMetadata, ThreadStatus
 from src.core.ndjson import count_ndjson_lines
 from src.core.sessions import SessionManager
 
+_WALK_CHUNK_BYTES_PATCH_TARGET = "src.core.chat_events._WALK_CHUNK_BYTES"
+
 
 def _write_thread(threads_dir: Path, thread_id: str, status: ThreadStatus, completed_at: datetime | None) -> None:
   thread_dir = threads_dir / thread_id
@@ -56,6 +58,16 @@ async def _walk_rig(tmp_path: Path) -> tuple[SessionManager, SessionMetadata, Pa
               "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
           } for i in range(3, 9)
       ])
+  return mgr, session, live_path, cutoff
+
+
+async def _live_range_rig(tmp_path: Path) -> tuple[SessionManager, SessionMetadata, Path, datetime]:
+  """One recycled session named "t" whose live range 5:8 reads f0/f1/f2; the baseline is asserted
+  here so each caller's asserts measure only its own mutation's effect."""
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
+  before, _ = mgr.load_chat_events_range(session.id, 5, 8)
+  assert [e["content"] for e in before] == ["f0", "f1", "f2"]
   return mgr, session, live_path, cutoff
 
 
@@ -300,11 +312,7 @@ async def test_live_range_repeat_reads_reuse_memo(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_live_range_reparses_after_append(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
-
-  before, _ = mgr.load_chat_events_range(session.id, 5, 8)
-  assert [e["content"] for e in before] == ["f0", "f1", "f2"]
+  mgr, session, live_path, cutoff = await _live_range_rig(tmp_path)
 
   # An appended live file's changed (mtime, size) must invalidate the memo.
   _append_events(live_path, [{"type": "user", "content": "f3", "timestamp": (cutoff + timedelta(days=2)).isoformat()}])
@@ -350,11 +358,7 @@ def _count_reads_of(live_path: Path, real_open: Any, reads: list[int]) -> Any:
 
 @pytest.mark.asyncio
 async def test_live_range_append_extends_memo_without_full_reparse(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
-
-  before, _ = mgr.load_chat_events_range(session.id, 5, 8)
-  assert [e["content"] for e in before] == ["f0", "f1", "f2"]
+  mgr, session, live_path, cutoff = await _live_range_rig(tmp_path)
 
   _append_events(live_path, [{"type": "user", "content": "f3", "timestamp": (cutoff + timedelta(days=2)).isoformat()}])
   appended_line = json.dumps(
@@ -383,11 +387,7 @@ async def test_live_range_append_extends_memo_without_full_reparse(tmp_path: Pat
 
 @pytest.mark.asyncio
 async def test_live_range_rewrite_with_larger_size_reparses_fully(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
-
-  before, _ = mgr.load_chat_events_range(session.id, 5, 8)
-  assert [e["content"] for e in before] == ["f0", "f1", "f2"]
+  mgr, session, live_path, cutoff = await _live_range_rig(tmp_path)
 
   # An archive-style rewrite publishes a new inode via os.replace; a larger
   # size must never read as append growth, or the stale prefix would glue onto
@@ -409,11 +409,7 @@ async def test_live_range_rewrite_with_larger_size_reparses_fully(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_live_range_completed_partial_line_reparses_fully(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
-
-  before, _ = mgr.load_chat_events_range(session.id, 5, 8)
-  assert [e["content"] for e in before] == ["f0", "f1", "f2"]
+  mgr, session, live_path, cutoff = await _live_range_rig(tmp_path)
 
   # A read that raced a mid-flight append covers a trailing partial line; the
   # completed line must surface once a full re-parse lands on the newline.
@@ -452,7 +448,7 @@ async def test_live_range_walk_serves_tail_window_without_full_read(tmp_path: Pa
   real_open = open
   reads: list[int] = []
   with patch("builtins.open", _count_reads_of(live_path, real_open, reads)), \
-          patch("src.core.chat_events._WALK_CHUNK_BYTES", 64):
+          patch(_WALK_CHUNK_BYTES_PATCH_TARGET, 64):
     got, has_more = mgr.load_chat_events_range(session.id, 9, 11)
   # The walk read the window's tail span, not the whole file.
   assert 0 < sum(reads) < file_size
@@ -479,7 +475,7 @@ async def test_live_range_backward_extension_serves_scroll_below_walked_window(t
   real_open = open
   reads: list[int] = []
   with patch("builtins.open", _count_reads_of(live_path, real_open, reads)), \
-          patch("src.core.chat_events._WALK_CHUNK_BYTES", 64):
+          patch(_WALK_CHUNK_BYTES_PATCH_TARGET, 64):
     second, _ = mgr.load_chat_events_range(session.id, 7, 9)
   # The backward extension read the page's span, not the whole file.
   assert 0 < sum(reads) < file_size
@@ -504,7 +500,7 @@ async def test_live_range_walk_delete_race_returns_empty_page(tmp_path: Path) ->
     raise FileNotFoundError(2, "No such file or directory")
 
   # A delete landing inside the walk's count bracket must not escape as an
-  # exception; the old whole-file build's guarded open returned an empty page.
+  # exception: the read returns an empty page.
   with patch("src.core.chat_events.count_ndjson_lines", side_effect=delete_mid_count):
     got, _has_more = mgr.load_chat_events_range(session.id, 6, 8)
   assert got == []
@@ -546,7 +542,7 @@ async def test_live_range_walk_budget_falls_back_to_full_build(tmp_path: Path) -
   reads: list[int] = []
   with patch("builtins.open", _count_reads_of(live_path, real_open, reads)), \
           patch("src.core.chat_events._WALK_BYTE_BUDGET", 128), \
-          patch("src.core.chat_events._WALK_CHUNK_BYTES", 64):
+          patch(_WALK_CHUNK_BYTES_PATCH_TARGET, 64):
     got, _ = mgr.load_chat_events_range(session.id, 9, 11)
   # The over-budget span fell back to the full build, which read the file once.
   assert sum(reads) >= file_size

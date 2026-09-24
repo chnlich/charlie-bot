@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import (
-    BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
+    BASE_SPAWN_SUBPROCESS_PATCH_TARGET,
     CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
     FLAG_LIKE_PROMPT,
     LITELLM_503_ERROR_MESSAGE,
@@ -12,7 +12,7 @@ from conftest import (
     RUNS_READ_PID_STAT_PATCH_TARGET,
     assistant_text_event,
     backend_option,
-    build_cli_backend,
+    build_cli_backend_rig,
     stub_credentials,
     stub_subprocess_spawn,
 )
@@ -28,17 +28,7 @@ from src.core.config import CharlieBotConfig
 
 
 def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> CharlieCodeBackend:
-  return build_cli_backend(
-      monkeypatch,
-      CharlieCodeBackend,
-      CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
-      "/usr/bin/charlie-code",
-      defaults={
-          "model": "charlie-code-test-model",
-          "api_base": "http://test.invalid/v1"
-      },
-      **kwargs,
-  )
+  return build_cli_backend_rig(monkeypatch, CharlieCodeBackend, **kwargs)
 
 
 def test_translate_success_stream_preserves_tool_pair_ids_and_usage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -186,6 +176,77 @@ def test_translate_command_progress_renders_a_system_note_naming_the_command(mon
           "type": ET.SYSTEM,
           "subtype": ET.COMMAND_PROGRESS,
           "content": f"Command terminated after 15 min (pid 4242): {head[:80]}",
+      }
+  ]
+
+
+def test_translate_command_progress_unknown_id_degrades_to_a_text_less_note(monkeypatch: pytest.MonkeyPatch) -> None:
+  # A progress ping replayed mid-stream after a server restart finds the
+  # translator's registered-command state empty; the turn must not crash.
+  backend = _build_backend(monkeypatch)
+  debugs: list[dict] = []
+  monkeypatch.setattr(charlie_code_mod.log, "debug", lambda event, **kw: debugs.append({"event": event, **kw}))
+
+  translated = backend.translate_event(
+      {
+          "type": "command_progress",
+          "step": 5,
+          "id": "s-58-1",
+          "elapsed_seconds": 300,
+          "pid": 693331,
+          "log": "/tmp/s-58-1.log",
+          "killed": False,
+      })
+
+  assert translated == [
+      {
+          "type": ET.SYSTEM,
+          "subtype": ET.COMMAND_PROGRESS,
+          "content": "Command still running after 5 min (pid 693331)",
+      }
+  ]
+  assert debugs == [{"event": "charlie_code_progress_unknown_command", "id": "s-58-1"}]
+
+
+def test_translate_command_progress_registered_id_output_is_byte_identical(monkeypatch: pytest.MonkeyPatch) -> None:
+  backend = _build_backend(monkeypatch)
+  backend.translate_event({"type": "command", "step": 3, "id": "s-3-1", "command": "python train.py --epochs 3"})
+  # The degenerate registered-but-empty command keeps its ": " suffix.
+  backend.translate_event({"type": "command", "step": 4, "id": "s-4-1", "command": ""})
+
+  normal = backend.translate_event(
+      {
+          "type": "command_progress",
+          "step": 3,
+          "id": "s-3-1",
+          "elapsed_seconds": 300,
+          "pid": 693331,
+          "log": "/tmp/s-3-1.log",
+          "killed": False,
+      })
+  empty = backend.translate_event(
+      {
+          "type": "command_progress",
+          "step": 4,
+          "id": "s-4-1",
+          "elapsed_seconds": 300,
+          "pid": 693332,
+          "log": "/tmp/s-4-1.log",
+          "killed": False,
+      })
+
+  assert normal == [
+      {
+          "type": ET.SYSTEM,
+          "subtype": ET.COMMAND_PROGRESS,
+          "content": "Command still running after 5 min (pid 693331): python train.py --epochs 3",
+      }
+  ]
+  assert empty == [
+      {
+          "type": ET.SYSTEM,
+          "subtype": ET.COMMAND_PROGRESS,
+          "content": "Command still running after 5 min (pid 693332): ",
       }
   ]
 
@@ -472,7 +533,7 @@ class _OrderRecordingBackend(AgentBackend):
 async def _drive_run_halted_at_spawn(backend: AgentBackend, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """Drive backend.run() with the conftest stub spawn; on_spawn raises the sentinel."""
   monkeypatch.setattr(RUNS_READ_PID_STAT_PATCH_TARGET, lambda pid: ("ordering-test-start", "R"))
-  stub_subprocess_spawn(monkeypatch, BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, 4242)
+  stub_subprocess_spawn(monkeypatch, BASE_SPAWN_SUBPROCESS_PATCH_TARGET, 4242)
 
   async def on_spawn(pid: int) -> None:
     raise _HaltAtSpawnError
@@ -679,7 +740,7 @@ async def _drive_run_halted_at_spawn_with_attachments(
   # A locally built AsyncMock (per the conftest stub's own docstring) so the test holds
   # the call reference `await_args` reads.
   spawn = AsyncMock(return_value=process)
-  monkeypatch.setattr(BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, spawn)
+  monkeypatch.setattr(BASE_SPAWN_SUBPROCESS_PATCH_TARGET, spawn)
 
   async def on_spawn(pid: int) -> None:
     raise _HaltAtSpawnError
@@ -694,6 +755,29 @@ async def _drive_run_halted_at_spawn_with_attachments(
   return events, spawn
 
 
+def _two_image_refs(tmp_path: Path) -> list[dict]:
+  """The a.png/b.png attachment pair the --image order tests send."""
+  return [
+      {
+          "filename": "a.png",
+          "path": str(tmp_path / "a.png")
+      },
+      {
+          "filename": "b.png",
+          "path": str(tmp_path / "b.png")
+      },
+  ]
+
+
+def _assert_images_in_reference_order_before_task_file(spawn: object, tmp_path: Path) -> None:
+  """Pin the spawn argv: one --image flag per ref, in reference order, before --task-file."""
+  cmd = list(spawn.await_args.args)
+  first = cmd.index("--image")
+  assert cmd[first:first + 4] == ["--image", str(tmp_path / "a.png"), "--image", str(tmp_path / "b.png")]
+  assert cmd.count("--image") == 2
+  assert first < cmd.index("--task-file")
+
+
 @pytest.mark.asyncio
 async def test_run_refuses_images_with_image_input_false(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """image_input: false + an image ref: exactly one error event, no spawn, no result."""
@@ -704,7 +788,7 @@ async def test_run_refuses_images_with_image_input_false(monkeypatch: pytest.Mon
   # A locally built AsyncMock (per the conftest stub's own docstring) so the test holds
   # the call reference `await_args` reads.
   spawn = AsyncMock(return_value=process)
-  monkeypatch.setattr(BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, spawn)
+  monkeypatch.setattr(BASE_SPAWN_SUBPROCESS_PATCH_TARGET, spawn)
 
   events = [
       event async for event in backend.run(
@@ -729,26 +813,8 @@ async def test_run_with_image_input_sends_images_in_reference_order_before_task_
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   backend = _build_backend(monkeypatch, image_input=True, log_dir=tmp_path / "logs")
   _events, spawn = await _drive_run_halted_at_spawn_with_attachments(
-      backend,
-      monkeypatch,
-      tmp_path,
-      uploaded_files=[
-          {
-              "filename": "a.png",
-              "path": str(tmp_path / "a.png")
-          },
-          {
-              "filename": "b.png",
-              "path": str(tmp_path / "b.png")
-          },
-      ],
-  )
-
-  cmd = list(spawn.await_args.args)
-  first = cmd.index("--image")
-  assert cmd[first:first + 4] == ["--image", str(tmp_path / "a.png"), "--image", str(tmp_path / "b.png")]
-  assert cmd.count("--image") == 2
-  assert first < cmd.index("--task-file")
+      backend, monkeypatch, tmp_path, uploaded_files=_two_image_refs(tmp_path))
+  _assert_images_in_reference_order_before_task_file(spawn, tmp_path)
 
 
 @pytest.mark.asyncio
@@ -757,26 +823,8 @@ async def test_run_default_build_sends_images_in_reference_order_before_task_fil
   """No image_input kwarg: images are sent; direct construction pins the constructor default, not the config field."""
   backend = _build_backend(monkeypatch, log_dir=tmp_path / "logs")
   _events, spawn = await _drive_run_halted_at_spawn_with_attachments(
-      backend,
-      monkeypatch,
-      tmp_path,
-      uploaded_files=[
-          {
-              "filename": "a.png",
-              "path": str(tmp_path / "a.png")
-          },
-          {
-              "filename": "b.png",
-              "path": str(tmp_path / "b.png")
-          },
-      ],
-  )
-
-  cmd = list(spawn.await_args.args)
-  first = cmd.index("--image")
-  assert cmd[first:first + 4] == ["--image", str(tmp_path / "a.png"), "--image", str(tmp_path / "b.png")]
-  assert cmd.count("--image") == 2
-  assert first < cmd.index("--task-file")
+      backend, monkeypatch, tmp_path, uploaded_files=_two_image_refs(tmp_path))
+  _assert_images_in_reference_order_before_task_file(spawn, tmp_path)
 
 
 @pytest.mark.asyncio

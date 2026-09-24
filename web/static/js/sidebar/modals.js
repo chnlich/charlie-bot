@@ -306,6 +306,20 @@ async function submitSessionActionModal() {
   const backend = backendSelect ? backendSelect.value : getActiveBackendId();
 
   try {
+    if (action === 'explain') {
+      // Explain stays on this session: POST registers the async generation, the
+      // button goes pending, and the panel skeleton opens under the divider.
+      const res = await fetch('/api/sessions/' + sessionId + '/explain', {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({event_index: eventIndex, backend}),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await res.json();
+      closeSessionActionModal();
+      markExplainPending(sessionId, eventIndex, backend);
+      return;
+    }
     const res = await fetch('/api/sessions/' + sessionId + '/' + action, {
       method: 'POST',
       headers: JSON_HEADERS,
@@ -319,6 +333,18 @@ async function submitSessionActionModal() {
     console.error(failureLabel + ' failed:', err);
     alert(failureLabel + ' failed: ' + err.message);
   }
+}
+
+function explainSession(sessionId, eventIndex) {
+  openSessionActionModal({
+    action: 'explain',
+    sessionId,
+    eventIndex,
+    title: 'Explain This Round',
+    bodyText: 'Choose the model that explains this round. The explanation is kept with the session; nothing is written to the chat history.',
+    confirmLabel: 'Explain',
+    failureLabel: 'Explain',
+  });
 }
 
 function forkSession(sessionId, eventIndex = null) {
@@ -516,6 +542,7 @@ const GLOBALS = {
   eloneSession,
   openTaskContextModal,
   closeTaskContextModal,
+  explainSession,
 };
 const SIDEBAR_ONLY = { applyCronBrokenView };
 Sidebar.wire(GLOBALS, SIDEBAR_ONLY);

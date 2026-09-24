@@ -1,9 +1,10 @@
 """Decode one audio file to text with the charlie-bot voice stack.
 
 Companion to skills/voice-notes/SKILL.md. Resamples any container PyAV reads
-into the 16 kHz mono PCM the transcriber takes, streams it through the local
-Qwen3-ASR engine, and prints the transcript to stdout. Models auto-provision
-into <charliebot_home>/models with pinned sha256 and load from disk later.
+into the 16 kHz mono PCM the transcriber takes, decodes it offline through the
+local Qwen3-ASR engine, and prints the transcript to stdout. Models
+auto-provision into <charliebot_home>/models with pinned sha256 and load from
+disk later.
 
 Run from the repo root so uv picks the project environment (sherpa-onnx);
 --with av adds the container decoder for the invocation:
@@ -22,7 +23,6 @@ import sys
 from pathlib import Path
 
 PCM_SUFFIXES = {".pcm", ".s16"}
-CHUNK_BYTES = 16_000 * 2  # 1.0 s of 16 kHz s16 mono
 
 
 def repo_root() -> Path:
@@ -58,16 +58,14 @@ def main() -> int:
   root = repo_root()
   if str(root) not in sys.path:
     sys.path.insert(0, str(root))
-  from src.agents.transcriber import create_transcription_session, ensure_models_cached
+  from src.agents.transcriber import ensure_models_cached, get_transcription_bundle, transcribe_pcm_offline
   from src.core.config import get_config
 
   cfg = get_config()
   ensure_models_cached(cfg)
-  session = create_transcription_session(cfg)
+  bundle = get_transcription_bundle(cfg)
   pcm = load_pcm(Path(sys.argv[1]))
-  for pos in range(0, len(pcm), CHUNK_BYTES):
-    session.accept_pcm(pcm[pos:pos + CHUNK_BYTES])
-  print(session.finish())
+  print(transcribe_pcm_offline(bundle, pcm))
   return 0
 
 

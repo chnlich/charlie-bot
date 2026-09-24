@@ -100,8 +100,8 @@ async def test_serialize_once_per_fan_out_over_subscribers(
 
 @pytest.mark.asyncio
 async def test_wire_render_parsed_equal_to_stdlib_send_json_form(manager: StreamingManager) -> None:
-  # The fan-out replaced the stdlib send_json render; the frames' parsed
-  # content must equal that form, with raw UTF-8 where both renders agree.
+  # The frames' parsed content must equal the stdlib send_json form, with
+  # raw UTF-8 where both renders agree.
   ws = _Socket()
   await manager.subscribe("s", ws)
   frame = {"type": "stream", "message": {"role": "assistant", "content": "中文 \U0001F600 tail"}}
@@ -113,7 +113,7 @@ async def test_wire_render_parsed_equal_to_stdlib_send_json_form(manager: Stream
 @pytest.mark.asyncio
 async def test_wire_render_nan_boundary(manager: StreamingManager) -> None:
   # A NaN float rides the wire as null — valid JSON the client parses — where
-  # the replaced stdlib form shipped the invalid literal NaN.
+  # the stdlib render ships the invalid literal NaN.
   ws = _Socket()
   await manager.subscribe("s", ws)
   await manager.broadcast("s", {"type": "diag", "ratio": float("nan")})

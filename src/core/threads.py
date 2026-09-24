@@ -91,7 +91,6 @@ class ThreadManager:
       self,
       session_meta: SessionMetadata,
       description: str,
-      branch_name: str | None = None,
       review_of: str | None = None,
       context: str | None = None,
       require_review: bool = True,
@@ -101,7 +100,7 @@ class ThreadManager:
     thread = ThreadMetadata(
         session_id=session_meta.id,
         description=description,
-        branch_name=branch_name,
+        branch_name=None,
         review_of=review_of,
         context=context,
         require_review=require_review,

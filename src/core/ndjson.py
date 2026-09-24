@@ -65,6 +65,16 @@ def _count_lines(f: BinaryIO) -> int:
 # own windows, so a debug log still says which reader skipped the line.
 PARSE_SKIP_LOG_EVENT = "ndjson_parse_skip"
 
+# orjson names its invalid-UTF-8 class with this message prefix at every
+# position (it validates the whole input's encoding upfront, so the error
+# reads column 1 wherever the bad byte sits). The errors="replace" repair
+# below can rescue only that class: replace rewrites invalid UTF-8 sequences
+# and nothing else, so a structural failure (control character in string,
+# truncation, bad literal) survives the replaced decode unchanged and a
+# re-parse of it doubles the scan a giant failed line pays (measured on a
+# 2.1 GB failed line: one scan 5.6 s, the repair round trip 8.0 s more).
+_UTF8_ERROR_PREFIX = "str is not valid UTF-8"
+
 
 def parse_ndjson_line(
     line: str | bytes | bytearray | memoryview, *, log_event: str, log_fields: dict[str, Any]) -> dict | None:
@@ -75,15 +85,18 @@ def parse_ndjson_line(
   *log_event* (plus *log_fields* and the parse error) at debug level and
   answers None. The parse
   rides the raw line — orjson ignores surrounding whitespace, so no strip copy
-  runs — and a bytes line the strict parse rejects gets one errors="replace"
-  decode before the verdict: a torn multibyte char parses as U+FFFD, hard
-  corruption skips as malformed. A memoryview line parses zero-copy (the raw
+  runs — and a bytes line orjson rejects as invalid UTF-8 gets one
+  errors="replace" decode before the verdict: a torn multibyte char parses as
+  U+FFFD, hard corruption skips as malformed. A structural rejection (control
+  character, truncation, bad literal) skips without the repair pass — replace
+  rewrites only invalid UTF-8 sequences, so the re-parse cannot change its
+  verdict (see _UTF8_ERROR_PREFIX). A memoryview line parses zero-copy (the raw
   bytes stay shared with the caller's read buffer); its replace fallback
-  copies once, on the parse-failed path only. The parser is orjson, ~2x
-  stdlib json.loads per line measured on the live corpora; orjson rejects the
-  stdlib json NaN/Infinity extensions and float literals that overflow a
-  double (those lines skip as malformed), and ints at or beyond 2**64 parse
-  as float where stdlib keeps exact precision.
+  copies once, on the utf-8-class parse-failed path only. The parser is
+  orjson, ~2x stdlib json.loads per line measured on the live corpora; orjson
+  rejects the stdlib json NaN/Infinity extensions and float literals that
+  overflow a double (those lines skip as malformed), and ints at or beyond
+  2**64 parse as float where stdlib keeps exact precision.
   """
   if not line:
     return None
@@ -101,6 +114,9 @@ def parse_ndjson_line(
   try:
     return orjson.loads(line)
   except ValueError as e:
+    if not str(e).startswith(_UTF8_ERROR_PREFIX):
+      log.debug(log_event, error=str(e), **log_fields)
+      return None
     if isinstance(line, memoryview):
       line = line.tobytes()
     if not isinstance(line, bytes):
@@ -113,26 +129,63 @@ def parse_ndjson_line(
     return None
 
 
-def iter_ndjson_events(
-    lines: Iterable[str | bytes],
-    *,
-    log_event: str,
-    log_fields: dict[str, Any],
-    parse_filter: Callable[[bytes], bool] | None = None) -> Iterator[dict]:
+def iter_ndjson_events(lines: Iterable[str | bytes], *, log_event: str, log_fields: dict[str, Any]) -> Iterator[dict]:
   """Yield the JSON objects parsed from *lines*, skipping blank and malformed lines.
 
   Rides :func:`parse_ndjson_line`, the one definition of the reader skip
   contract. Lazy, so first-match and early-stop readers terminate without
-  reading the rest. *parse_filter*, when given, decides from the raw line
-  bytes before any parse work: a False line is skipped unparsed and
-  unlogged — the caller's proof it cannot match, not a parse failure.
+  reading the rest.
   """
   for raw_line in lines:
-    if parse_filter is not None and not parse_filter(raw_line):
-      continue
     event = parse_ndjson_line(raw_line, log_event=log_event, log_fields=log_fields)
     if event is not None:
       yield event
+
+
+def iter_ndjson_events_containing(path: Path, needle: bytes, *, log_event: str,
+                                  log_fields: dict[str, Any]) -> Iterator[dict]:
+  """Yield parsed events whose raw line contains *needle*, in file order, lazily.
+
+  The needle proof is the whole skip: a line whose bytes lack *needle* cannot
+  carry the value it names, so only a hit's enclosing line parses and the scan
+  rides one C-level find over the mapping instead of a per-line Python loop —
+  a whole-file scan pays memchr's byte rate, not the parse's. Blank lines
+  contain no non-empty needle and skip; a hit line that fails to parse follows
+  the shared reader skip contract (logged via *log_event*, answered None).
+  A missing file yields nothing. *needle* must be non-empty: an empty needle
+  matches at every offset and the scan would never advance, so a caller
+  passing one is a bug — raised.
+  """
+  if not needle:
+    raise ValueError("needle must be non-empty")
+  if not path.exists():
+    return
+  with open(path, "rb") as f, _mapped_lines(path, f) as (mm, size):
+    if mm is None:
+      return
+    view: memoryview | None = None
+    pos = 0
+    find = mm.find
+    try:
+      while True:
+        hit = find(needle, pos)
+        if hit < 0:
+          return
+        # The hit's enclosing physical line; a second needle occurrence in the
+        # same line maps to the yielded line, so the cursor jumps past the
+        # whole line and never yields one event twice.
+        line_start = mm.rfind(b"\n", 0, hit) + 1
+        line_end = find(b"\n", hit)
+        if line_end < 0:
+          line_end = size
+        if view is None:
+          view = memoryview(mm)
+        event = parse_ndjson_line(view[line_start:line_end], log_event=log_event, log_fields=log_fields)
+        if event is not None:
+          yield event
+        pos = line_end + 1
+    finally:
+      del view
 
 
 def parse_ndjson_file(path: Path) -> list[dict]:
@@ -219,7 +272,7 @@ def count_ndjson_lines(path: Path) -> int:
   return total
 
 
-def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bool]:
+def parse_ndjson_tail(path: Path, limit: int) -> tuple[list[dict], int, bool]:
   """Read the last *limit* lines from an NDJSON file using seek-from-end.
 
   Returns (events, total_line_count, has_more). The whole page memoizes on
@@ -369,7 +422,7 @@ class HeadProvableFilter:
 
 
 def type_line_filter(types: frozenset[str]) -> HeadProvableFilter:
-  """A :func:`iter_ndjson_events` parse_filter keeping only lines whose event
+  """A :func:`iter_ndjson_events_from_end` parse_filter keeping only lines whose event
   type is in *types*.
 
   The proof is the line's head: every writer in this repo serializes each key

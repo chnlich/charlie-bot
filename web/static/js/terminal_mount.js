@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Shared xterm.js mount for the two terminal surfaces (tui_session.js,
+// Shared xterm.js mount for the terminal surfaces (tui_session.js,
 // terminal_panel.js): both mount identical Terminal options, the same
 // open/clipboard/focus sequence, the same touch-drag scroll wiring, the same
 // fit-then-send-resize timing, and the same pty_input / pty_resize message

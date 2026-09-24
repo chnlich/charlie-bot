@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
-// voice-input.js run-structure tests. Each recording is one run object owned
-// through the module-level slot; these tests drive toggleVoice() against fake
-// mic/socket/worklet doubles and assert the click-cadence and stop-ordering
-// contract from the inside.
+// voice-input.js record-then-upload tests. Each recording is one run object
+// owned through the module-level slot; these tests drive toggleVoice() against
+// fake mic/XHR/worklet doubles and assert the click-cadence, upload, and
+// guard contracts from the inside.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -12,24 +12,25 @@ const {readStatic} = require('./read_static');
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-const STOP_FRAME = '{"type":"stop"}';
-const CLOSED_TOAST = 'Voice connection closed before transcription finished';
-const INVALID_TOAST = 'Invalid voice response from server';
+const RATE = 16000;
+const CONFIRM_SAMPLES = 5 * RATE;
+const MAX_SAMPLES = 5 * 60 * RATE;
+const UPLOAD_TIMEOUT_MS = 60 * 1000;
 
 function buildHarness({sessionId = 'session-a', micError = null} = {}) {
   const state = {
     toasts: [],
     micCalls: 0,
     streams: [],
-    sockets: [],
+    xhrs: [],
     workletNodes: [],
+    timers: [],
     input: {value: '', focus() {}},
     chatFlags: [],
     buttonClasses: new Set(['bg-slate-800', 'border-slate-600']),
-    overlay: () => null,
+    overlayMap: new Map(),
+    beforeunloadCount: 0,
   };
-  const overlayElements = new Map();
-  state.overlay = () => overlayElements.get('voice-partial-overlay')?.textContent ?? null;
 
   class FakeStream {
     constructor() {
@@ -40,24 +41,25 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     getTracks() { return this.tracks; }
   }
 
-  class FakeWebSocket {
-    static CONNECTING = 0;
-    static OPEN = 1;
-    static CLOSING = 2;
-    static CLOSED = 3;
-
-    constructor(url) {
-      this.url = url;
-      this.sent = [];
-      this.readyState = 0;
-      this.onopen = this.onmessage = this.onclose = this.onerror = null;
-      state.sockets.push(this);
+  class FakeXHR {
+    constructor() {
+      this.status = 0;
+      this.response = null;
+      this.upload = {};
+      this.aborted = false;
+      this.sentBody = null;
+      this.headers = {};
+      this.onload = this.onerror = this.onabort = null;
+      state.xhrs.push(this);
     }
-    send(payload) { this.sent.push(payload); }
-    close() { this.readyState = 3; }
-    open() { this.readyState = 1; if (this.onopen) this.onopen(); }
-    emitMessage(data) { if (this.onmessage) this.onmessage({data}); }
-    emitClose() { if (this.onclose) this.onclose(); }
+    open(method, url) { this.method = method; this.url = url; }
+    setRequestHeader(name, value) { this.headers[name] = value; }
+    send(body) { this.sentBody = body; }
+    abort() { this.aborted = true; if (this.onabort) this.onabort(); }
+    // Test-side stand-ins for the browser's async events.
+    completeUpload() { if (this.upload.onload) this.upload.onload(); }
+    respond(status, response) { this.status = status; this.response = response; if (this.onload) this.onload(); }
+    failNetwork() { if (this.onerror) this.onerror(); }
   }
 
   class FakeAudioContext {
@@ -88,14 +90,51 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
       state.workletNodes.push(this);
     }
     disconnect() { this.disconnected = true; }
-    // Test-side stand-ins for the worklet thread's replies.
-    emitPcm(byteLength) {
-      if (this.port.onmessage) this.port.onmessage({data: {type: 'pcm', buffer: new ArrayBuffer(byteLength)}});
+    // Test-side stand-in for the worklet thread: emit PCM built from real sample
+    // values so the level math sees them.
+    emitPcm(samples) {
+      const copy = new Int16Array(samples); // a private buffer, like the worklet's transfer
+      if (this.port.onmessage) {
+        this.port.onmessage({data: {type: 'pcm', buffer: copy.buffer}});
+      }
+    }
+    emitPcmCount(count, amplitude = 8000) {
+      const samples = new Int16Array(count);
+      for (let i = 0; i < count; i++) samples[i] = amplitude;
+      this.emitPcm(samples);
     }
     replyFlushed(id) {
       if (this.port.onmessage) this.port.onmessage({data: {type: 'flushed', id}});
     }
   }
+
+  // children mimics a real HTMLCollection: index + length only, none of the
+  // array prototype methods, so code under test must go through Array.from.
+  const makeEl = () => {
+    const kids = [];
+    const el = {id: '', className: '', textContent: '', style: {}, removed: false};
+    const sync = () => {
+      const collection = {length: kids.length};
+      for (let i = 0; i < kids.length; i++) collection[i] = kids[i];
+      el.children = collection;
+    };
+    sync();
+    el.appendChild = (child) => {
+      kids.push(child);
+      sync();
+    };
+    el.remove = () => {
+      el.removed = true;
+      if (el.id) state.overlayMap.delete(el.id);
+    };
+    return el;
+  };
+  const findByClass = (root, name) => {
+    for (let i = 0; i < root.children.length; i++) {
+      if (root.children[i].className === name) return root.children[i];
+    }
+    return null;
+  };
 
   const button = {
     classList: {
@@ -106,11 +145,16 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
   const sandbox = {
     SESSION_ID: sessionId,
     console,
-    setTimeout,
-    clearTimeout,
+    setTimeout: (fn, ms) => {
+      state.timers.push({fn, ms, cleared: false});
+      return state.timers.length - 1;
+    },
+    clearTimeout: (id) => {
+      if (state.timers[id]) state.timers[id].cleared = true;
+    },
     Blob: require('node:buffer').Blob,
     URL: {createObjectURL: () => 'blob:voice-worklet', revokeObjectURL() {}},
-    WebSocket: FakeWebSocket,
+    XMLHttpRequest: FakeXHR,
     navigator: {
       mediaDevices: {
         getUserMedia: async () => {
@@ -120,49 +164,53 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
         },
       },
     },
-    window: {AudioContext: FakeAudioContext},
+    window: {
+      AudioContext: FakeAudioContext,
+      addEventListener: (type) => {
+        if (type === 'beforeunload') state.beforeunloadCount += 1;
+      },
+      removeEventListener: (type) => {
+        if (type === 'beforeunload') state.beforeunloadCount -= 1;
+      },
+    },
     AudioWorkletNode: FakeAudioWorkletNode,
     document: {
       getElementById: (id) => {
         if (id === 'msg-input') return state.input;
         if (id === 'voice-btn') return button;
-        return overlayElements.get(id) || null;
+        return state.overlayMap.get(id) || null;
       },
-      createElement: () => {
-        const el = {id: '', className: '', textContent: ''};
-        el.remove = () => overlayElements.delete(el.id);
-        return el;
-      },
+      createElement: () => makeEl(),
     },
     showToast: (message, isError) => state.toasts.push({msg: message, isError: !!isError}),
-    wsUrlWithToken: (path) => 'ws://test' + path,
+    accessTokenAuthorization: () => null,
     Chat: {setVoiceContributed: (v) => state.chatFlags.push(v)},
     autoResize() {},
     saveDraft() {},
-    detachSocketHandlers: (socket) => {
-      socket.onopen = null;
-      socket.onmessage = null;
-      socket.onclose = null;
-      socket.onerror = null;
+  };
+  state.input.parentElement = {
+    children: [],
+    appendChild: (el) => {
+      state.input.parentElement.children.push(el);
+      if (el.id) state.overlayMap.set(el.id, el);
     },
   };
-  state.input.parentElement = {appendChild: (el) => overlayElements.set(el.id, el)};
 
   const context = vm.createContext(sandbox);
   vm.runInContext(readStatic('voice-input.js'), context, {filename: 'voice-input.js'});
 
-  // Click once and drive the arming chain to `recording`: mic -> socket open
-  // -> audio context + worklet module.
+  // Click once and drive the arming chain to `recording`: mic -> audio context
+  // -> worklet module.
   const arm = async () => {
     context.toggleVoice();
     await tick();
-    state.sockets[state.sockets.length - 1].open();
     await tick();
     await tick();
-    return state.sockets[state.sockets.length - 1];
+    return state.workletNodes[state.workletNodes.length - 1];
   };
 
-  // Click stop and complete the flush handshake the worklet would run.
+  // Click stop and complete the flush handshake the worklet would run; the
+  // upload XHR exists once the flush resolves.
   const stopWithFlush = async () => {
     context.toggleVoice();
     const worklet = state.workletNodes[state.workletNodes.length - 1];
@@ -170,6 +218,21 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     assert.equal(flush.type, 'flush');
     worklet.replyFlushed(flush.id);
     await tick();
+    await tick();
+    return state.xhrs[state.xhrs.length - 1];
+  };
+
+  // The overlay's indicator elements, found through the fake DOM tree.
+  state.voiceUi = () => {
+    const overlay = state.overlayMap.get('voice-partial-overlay');
+    if (!overlay) return null;
+    const bar = findByClass(overlay, 'voice-level-bar');
+    const meta = findByClass(overlay, 'voice-meta');
+    return {
+      fill: bar ? findByClass(bar, 'voice-level-fill') : null,
+      timer: meta ? findByClass(meta, 'voice-timer') : null,
+      hint: meta ? findByClass(meta, 'voice-hint') : null,
+    };
   };
   state.arm = arm;
   state.stopWithFlush = stopWithFlush;
@@ -177,174 +240,322 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
   return {context, state};
 }
 
-test('first click claims the slot synchronously and paints Starting', async () => {
+function parseWavHeader(buffer) {
+  const view = new DataView(buffer);
+  const text = (offset, length) => {
+    let out = '';
+    for (let i = 0; i < length; i++) out += String.fromCharCode(view.getUint8(offset + i));
+    return out;
+  };
+  return {
+    riff: text(0, 4),
+    wave: text(8, 4),
+    pcm: view.getUint16(20, true),
+    channels: view.getUint16(22, true),
+    sampleRate: view.getUint32(24, true),
+    bits: view.getUint16(34, true),
+    dataBytes: view.getUint32(40, true),
+    totalBytes: buffer.byteLength,
+  };
+}
+
+test('arming claims the slot, lights the button, and paints the zeroed indicator', async () => {
   const {context, state} = buildHarness();
 
-  context.toggleVoice();
+  const worklet = await state.arm();
+
   assert.deepEqual([...state.buttonClasses].sort(), ['bg-red-600', 'border-red-500']);
-  assert.equal(state.overlay(), 'Starting...');
   assert.equal(state.micCalls, 1);
-
-  await tick();
-  const socket = state.sockets[0];
-  socket.open();
-  await tick();
-  await tick();
-  assert.equal(state.overlay(), 'Listening...');
-  assert.equal(state.sockets.length, 1);
-  assert.equal(socket.url, 'ws://test/ws/voice/session-a');
+  const ui = state.voiceUi();
+  assert.equal(ui.fill.style.width, undefined); // no chunk yet: level untouched
+  assert.equal(ui.timer.textContent, '0:00');
+  assert.equal(ui.hint.textContent, 'Listening...');
+  assert.equal(worklet.postMessageCalls.length, 0);
 });
 
-test('clicks while a run is arming are ignored, not queued', async () => {
+test('chunks update the level bar and the elapsed timer client-side', async () => {
   const {context, state} = buildHarness();
+  const worklet = await state.arm();
 
-  context.toggleVoice();
-  context.toggleVoice();
-  context.toggleVoice();
-  await tick();
-  state.sockets[0].open();
-  await tick();
-  await tick();
+  worklet.emitPcmCount(RATE, 12000); // 1 s of loud audio
+  let ui = state.voiceUi();
+  assert.equal(ui.fill.style.width, '100%');
+  assert.equal(ui.timer.textContent, '0:01');
 
-  assert.equal(state.micCalls, 1);
-  assert.equal(state.sockets.length, 1);
-  assert.equal(state.overlay(), 'Listening...');
+  worklet.emitPcmCount(RATE, 0); // 1 s of silence: the bar decays, the timer climbs
+  ui = state.voiceUi();
+  assert.equal(ui.fill.style.width, '80%');
+  assert.equal(ui.timer.textContent, '0:02');
 });
 
-test('stop is idempotent: a double stop click sends one stop frame', async () => {
+test('the confirm probe fires exactly once at 5 s and inserts its words', async () => {
   const {context, state} = buildHarness();
-  const socket = await state.arm();
+  const worklet = await state.arm();
 
-  context.toggleVoice();
-  context.toggleVoice();
-  const worklet = state.workletNodes[0];
-  const flushes = worklet.postMessageCalls.filter((m) => m.type === 'flush');
-  assert.equal(flushes.length, 1);
-  worklet.replyFlushed(flushes[0].id);
+  worklet.emitPcmCount(CONFIRM_SAMPLES - 2);
+  assert.equal(state.xhrs.length, 0); // 4.999 s: no probe yet
+
+  worklet.emitPcmCount(2);
   await tick();
-
-  assert.equal(socket.sent.filter((m) => m === STOP_FRAME).length, 1);
-  assert.equal(state.overlay(), 'Finalizing...');
-});
-
-test('stop flushes the tail through the socket before the stop message', async () => {
-  const {context, state} = buildHarness();
-  const socket = await state.arm();
-
-  context.toggleVoice();
-  const worklet = state.workletNodes[0];
-  const flush = worklet.postMessageCalls[worklet.postMessageCalls.length - 1];
-
-  worklet.emitPcm(4096);
-  assert.equal(socket.sent[socket.sent.length - 1].byteLength, 4096);
-
-  worklet.replyFlushed(flush.id);
   await tick();
+  assert.equal(state.xhrs.length, 1);
+  const confirm = state.xhrs[0];
+  assert.equal(confirm.url, '/api/voice/session-a/confirm');
+  const header = parseWavHeader(confirm.sentBody);
+  assert.equal(header.dataBytes, CONFIRM_SAMPLES * 2); // the opening clip only
 
-  assert.equal(socket.sent[socket.sent.length - 1], STOP_FRAME);
-  assert.equal(state.overlay(), 'Finalizing...');
-});
-
-test('clicks during Finalizing create no socket; final fills the input and frees the slot', async () => {
-  const {context, state} = buildHarness();
-  const socket = await state.arm();
-  await state.stopWithFlush();
-
-  context.toggleVoice();
+  worklet.emitPcmCount(CONFIRM_SAMPLES);
   await tick();
-  assert.equal(state.sockets.length, 1);
+  assert.equal(state.xhrs.length, 1); // never a second probe
 
-  socket.emitMessage(JSON.stringify({type: 'final', text: 'hello world'}));
-  assert.equal(state.input.value, 'hello world');
-  assert.equal(state.overlay(), null);
+  confirm.respond(200, {text: '你好今天'});
+  await tick();
+  await tick();
+  assert.equal(state.input.value, '你好今天');
   assert.deepEqual(state.chatFlags, [true]);
+  assert.equal(state.voiceUi().hint.textContent, '你好今天');
+});
+
+test('a failed confirm probe only hints and never blocks recording', async () => {
+  const {context, state} = buildHarness();
+  const worklet = await state.arm();
+
+  worklet.emitPcmCount(CONFIRM_SAMPLES);
+  await tick();
+  state.xhrs[0].failNetwork();
+  await tick();
+  await tick();
+
+  assert.equal(state.voiceUi().hint.textContent, 'Recognition check failed');
+  assert.equal(state.input.value, '');
+  assert.equal(state.beforeunloadCount, 1); // still recording
+  assert.equal(state.micCalls, 1);
+
+  const upload = await state.stopWithFlush();
+  assert.equal(upload.url, '/api/voice/session-a'); // recording and upload unaffected
+});
+
+test('release assembles one 16 kHz PCM16 mono WAV and walks Uploading -> Decoding -> text', async () => {
+  const {context, state} = buildHarness();
+  const worklet = await state.arm();
+  worklet.emitPcmCount(3 * RATE);
+  worklet.emitPcmCount(CONFIRM_SAMPLES, 0);
+
+  const upload = await state.stopWithFlush();
+
+  assert.equal(upload.url, '/api/voice/session-a');
+  assert.equal(state.voiceUi().hint.textContent, 'Uploading...');
+  assert.equal(upload.method, 'POST');
+  const header = parseWavHeader(upload.sentBody);
+  assert.equal(header.riff, 'RIFF');
+  assert.equal(header.wave, 'WAVE');
+  assert.equal(header.pcm, 1);
+  assert.equal(header.channels, 1);
+  assert.equal(header.sampleRate, RATE);
+  assert.equal(header.bits, 16);
+  assert.equal(header.dataBytes, (3 * RATE + CONFIRM_SAMPLES) * 2);
+  assert.equal(header.totalBytes, 44 + header.dataBytes);
+
+  upload.completeUpload();
+  assert.equal(state.voiceUi().hint.textContent, 'Decoding...');
+
+  upload.respond(200, {text: '你好今天天气不错'});
+  await tick();
+  await tick();
+  assert.equal(state.input.value, '你好今天天气不错');
+  assert.deepEqual(state.chatFlags, [true]); // the unanswered confirm inserted nothing
+  assert.equal(state.beforeunloadCount, 0); // idle again
   assert.deepEqual([...state.buttonClasses].sort(), ['bg-slate-800', 'border-slate-600']);
 
   context.toggleVoice();
   await tick();
-  assert.equal(state.micCalls, 2);
-  assert.equal(state.sockets.length, 2);
-  assert.equal(state.overlay(), 'Starting...');
+  assert.equal(state.micCalls, 2); // success discarded the buffer: the next click re-arms
 });
 
-test('an empty final toasts No speech detected and frees the slot', async () => {
+test('the final text replaces an intact confirm span in place', async () => {
   const {context, state} = buildHarness();
-  const socket = await state.arm();
+  const worklet = await state.arm();
+  worklet.emitPcmCount(CONFIRM_SAMPLES);
 
-  socket.emitMessage(JSON.stringify({type: 'final', text: '   '}));
-  assert.deepEqual(state.toasts, [{msg: 'No speech detected', isError: false}]);
-  assert.equal(state.input.value, '');
-  assert.equal(state.overlay(), null);
-
-  context.toggleVoice();
   await tick();
-  assert.equal(state.micCalls, 2);
-  assert.equal(state.sockets.length, 2);
+  state.xhrs[0].respond(200, {text: '你好今天'});
+  await tick();
+  await tick();
+  state.input.value = '你好今天 手动补充'; // the user typed after the confirm words
+
+  const upload = await state.stopWithFlush();
+  upload.respond(200, {text: '你好今天天气不错'});
+  await tick();
+  await tick();
+
+  // The confirm words are still where the probe put them: the full text takes
+  // their place and the manual tail stays after it.
+  assert.equal(state.input.value, '你好今天天气不错 手动补充');
 });
 
-test('teardown removes the slot first, then aborts connecting socket and unused stream', async () => {
+test('the final text appends when the confirm span was disturbed', async () => {
   const {context, state} = buildHarness();
+  const worklet = await state.arm();
+  worklet.emitPcmCount(CONFIRM_SAMPLES);
 
-  context.toggleVoice();
   await tick();
-  const stream = state.streams[0];
-  const socket = state.sockets[0];
-  assert.equal(socket.readyState, 0);
-
-  context.resetVoiceState();
-  assert.equal(stream.stopped, true);
-  assert.equal(socket.readyState, 3);
-  assert.equal(socket.onopen, null);
-  assert.equal(socket.onmessage, null);
-  assert.equal(socket.onclose, null);
-  assert.deepEqual([...state.buttonClasses].sort(), ['bg-slate-800', 'border-slate-600']);
-  assert.equal(state.overlay(), null);
-
-  socket.open();
-  socket.emitMessage(JSON.stringify({type: 'final', text: 'late'}));
-  socket.emitClose();
+  state.xhrs[0].respond(200, {text: '你好今天'});
   await tick();
-  assert.deepEqual(state.toasts, []);
-  assert.equal(state.input.value, '');
-
-  context.toggleVoice();
   await tick();
-  assert.equal(state.micCalls, 2);
-  assert.equal(state.sockets.length, 2);
+  state.input.value = '你好吗'; // the user edited the confirm words away
+
+  const upload = await state.stopWithFlush();
+  upload.respond(200, {text: '你好今天天气不错'});
+  await tick();
+  await tick();
+
+  assert.equal(state.input.value, '你好吗 你好今天天气不错');
 });
 
-test('socket close during recording discards with the closed-connection toast', async () => {
+test('an HTTP error keeps the buffer and the next click retries the same audio', async () => {
   const {context, state} = buildHarness();
-  const socket = await state.arm();
+  const worklet = await state.arm();
+  worklet.emitPcmCount(CONFIRM_SAMPLES);
 
-  socket.emitClose();
-  assert.deepEqual(state.toasts, [{msg: CLOSED_TOAST, isError: true}]);
-  assert.equal(state.overlay(), null);
-
-  context.toggleVoice();
+  const upload = await state.stopWithFlush();
+  upload.respond(500, {error: 'speech inference failed: boom'});
   await tick();
-  assert.equal(state.micCalls, 2);
-});
+  await tick();
 
-test('undecodable server frames discard with the invalid-response toast', async () => {
-  const {context, state} = buildHarness();
-  const socket = await state.arm();
-
-  socket.emitMessage('not json');
-  assert.deepEqual(state.toasts, [{msg: INVALID_TOAST, isError: true}]);
-  assert.equal(state.overlay(), null);
-});
-
-test('server error frames surface the server text and free the slot', async () => {
-  const {context, state} = buildHarness();
-  const socket = await state.arm();
-
-  socket.emitMessage(JSON.stringify({type: 'error', text: 'speech inference failed: boom'}));
   assert.deepEqual(state.toasts, [{msg: 'speech inference failed: boom', isError: true}]);
+  assert.equal(state.voiceUi().hint.textContent, 'Upload failed — click to retry');
+  assert.equal(state.beforeunloadCount, 0);
+
+  context.toggleVoice();
+  const retry = state.xhrs[state.xhrs.length - 1];
+  assert.notEqual(retry, upload);
+  assert.equal(retry.url, '/api/voice/session-a');
+  assert.deepEqual(retry.sentBody, upload.sentBody); // the same buffered audio re-uploads
+
+  retry.respond(200, {text: '你好今天'});
+  await tick();
+  await tick();
+  assert.equal(state.input.value, '你好今天');
+});
+
+test('a network error and a 60 s upload timeout both land in the retry state', async () => {
+  const {context, state} = buildHarness();
+  let worklet = await state.arm();
+  worklet.emitPcmCount(CONFIRM_SAMPLES);
+
+  let upload = await state.stopWithFlush();
+  upload.failNetwork();
+  await tick();
+  await tick();
+  assert.deepEqual(state.toasts, [{msg: 'Voice request failed: network error', isError: true}]);
+  assert.equal(state.voiceUi().hint.textContent, 'Upload failed — click to retry');
+
+  context.toggleVoice(); // retry
+  upload = state.xhrs[state.xhrs.length - 1];
+  const timeoutTimer = state.timers.find((timer) => timer.ms === UPLOAD_TIMEOUT_MS && !timer.cleared);
+  assert.ok(timeoutTimer, 'the upload arms a 60 s timeout');
+  timeoutTimer.fn();
+  await tick();
+  await tick();
+  assert.ok(upload.aborted);
+  assert.deepEqual(state.toasts.slice(-1), [{msg: 'Voice upload timed out', isError: true}]);
+  assert.equal(state.voiceUi().hint.textContent, 'Upload failed — click to retry');
+});
+
+test('a server 400 or 503 on the upload lands in the retry state with the server text', async () => {
+  const {context, state} = buildHarness();
+  const worklet = await state.arm();
+  worklet.emitPcmCount(CONFIRM_SAMPLES);
+
+  const first = await state.stopWithFlush();
+  first.respond(400, {error: 'voice recording exceeds the 300s limit'});
+  await tick();
+  await tick();
+  assert.deepEqual(state.toasts.slice(-1), [{msg: 'voice recording exceeds the 300s limit', isError: true}]);
+  assert.equal(state.voiceUi().hint.textContent, 'Upload failed — click to retry');
+  assert.equal(state.beforeunloadCount, 0);
+
+  context.toggleVoice(); // retry with the same buffer
+  const second = state.xhrs[state.xhrs.length - 1];
+  second.respond(503, {error: 'speech models are still downloading'});
+  await tick();
+  await tick();
+  assert.deepEqual(state.toasts.slice(-1), [{msg: 'speech models are still downloading', isError: true}]);
+  assert.equal(state.voiceUi().hint.textContent, 'Upload failed — click to retry');
+  assert.equal(state.beforeunloadCount, 0);
+});
+
+test('a click while the upload is in flight cancels it and drops the buffer', async () => {
+  const {context, state} = buildHarness();
+  const worklet = await state.arm();
+  worklet.emitPcmCount(CONFIRM_SAMPLES);
+
+  const upload = await state.stopWithFlush();
+  assert.equal(state.beforeunloadCount, 1); // request in flight
+
+  context.toggleVoice();
+  assert.ok(upload.aborted);
+  assert.deepEqual(state.toasts, [{msg: 'Voice upload canceled', isError: true}]);
+  assert.equal(state.beforeunloadCount, 0);
 
   context.toggleVoice();
   await tick();
-  assert.equal(state.micCalls, 2);
+  assert.equal(state.micCalls, 2); // buffer discarded: the next click re-arms
+});
+
+test('the beforeunload guard engages while recording and disengages when idle', async () => {
+  const {context, state} = buildHarness();
+  const worklet = await state.arm();
+  assert.equal(state.beforeunloadCount, 1);
+
+  const upload = await state.stopWithFlush();
+  assert.equal(state.beforeunloadCount, 1); // still in flight
+
+  upload.respond(200, {text: 'done'});
+  await tick();
+  await tick();
+  assert.equal(state.beforeunloadCount, 0);
+});
+
+test('recording auto-stops at the 5-minute cap and the upload trims to it', async () => {
+  const {context, state} = buildHarness();
+  const worklet = await state.arm();
+
+  worklet.emitPcmCount(MAX_SAMPLES / 2);
+  worklet.emitPcmCount(MAX_SAMPLES / 2);
+  await tick();
+  await tick();
+
+  const upload = await state.stopWithFlush();
+  const header = parseWavHeader(upload.sentBody);
+  assert.equal(header.dataBytes, MAX_SAMPLES * 2); // trimmed to the server's cap
+
+  upload.respond(200, {text: 'long dictation'});
+  await tick();
+  await tick();
+  assert.equal(state.input.value, 'long dictation');
+  assert.equal(state.beforeunloadCount, 0);
+});
+
+test('teardown aborts an in-flight upload and frees the slot', async () => {
+  const {context, state} = buildHarness();
+  const worklet = await state.arm();
+  worklet.emitPcmCount(CONFIRM_SAMPLES);
+
+  const upload = await state.stopWithFlush();
+  context.resetVoiceState();
+
+  assert.ok(upload.aborted);
+  assert.equal(state.streams[0].stopped, true);
+  assert.equal(state.beforeunloadCount, 0);
+  assert.deepEqual([...state.buttonClasses].sort(), ['bg-slate-800', 'border-slate-600']);
+  assert.equal(state.voiceUi(), null);
+  assert.deepEqual(state.chatFlags, [false]);
+
+  upload.respond(200, {text: 'late'});
+  await tick();
+  await tick();
+  assert.equal(state.input.value, ''); // released runs never touch the input
 });
 
 test('arming failure toasts the error, unlights the button, and frees the slot', async () => {
@@ -353,7 +564,8 @@ test('arming failure toasts the error, unlights the button, and frees the slot',
   await context.toggleVoice();
   assert.deepEqual(state.toasts, [{msg: 'Voice input failed: boom', isError: true}]);
   assert.deepEqual([...state.buttonClasses].sort(), ['bg-slate-800', 'border-slate-600']);
-  assert.equal(state.overlay(), null);
+  assert.equal(state.voiceUi(), null);
+  assert.equal(state.beforeunloadCount, 0);
 
   context.toggleVoice();
   await tick();

@@ -119,11 +119,11 @@ async function compactContext() {
 
 const GLOBALS = {
   bumpCurrentSessionToTop,
-  postChatMessage,
   sendMessage,
   compactContext,
 };
 const CHAT_ONLY = {
+  postChatMessage,
   setVoiceContributed,
 };
 Chat.wire(GLOBALS, CHAT_ONLY);

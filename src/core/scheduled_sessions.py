@@ -1,7 +1,9 @@
 """Scheduled-session backend rotation, succession bookkeeping, and task-yaml backend persistence."""
 
+from __future__ import annotations
+
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING
 
 from src.core.config import cron_path
 from src.core.log_once import LazyStructlogLogger
@@ -13,6 +15,9 @@ from src.core.models import (
 )
 from src.core.yaml_utils import load_yaml, save_yaml
 
+if TYPE_CHECKING:
+  from src.core.sessions import SessionManager
+
 log = LazyStructlogLogger()
 
 
@@ -23,7 +28,7 @@ class ScheduledSessionBusyError(RuntimeError):
 class ScheduledSessionStore:
   """Scheduled-session rotation operations."""
 
-  def __init__(self, session_manager: Any) -> None:
+  def __init__(self, session_manager: SessionManager) -> None:
     self._session_manager = session_manager
 
   async def _create_generation(
@@ -189,7 +194,7 @@ class ScheduledSessionStore:
     recreating one.
     """
     path = cron_path(task_name)
-    data = load_yaml(path)
+    data = load_yaml(path, default=None)
     if not isinstance(data, dict):
       raise FileNotFoundError(f"scheduled task '{task_name}' has no readable cron yaml at {path}")
     data[key] = value

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
+    MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET,
     MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET,
     OPUS_BACKEND_ID,
     build_sessions_cfg,
@@ -54,7 +55,7 @@ async def test_whole_object_save_with_a_stale_label_is_corrected_back_to_disk(tm
 
 @pytest.mark.asyncio
 async def test_stale_writer_after_a_funnel_persist_keeps_the_funnel_value(tmp_path: Path) -> None:
-  """The 9-14 race, realized sequentially: the funnel persists the moved-to label,
+  """The stale-writer race, realized sequentially: the funnel persists the moved-to label,
   then a stale whole-object writer lands -- the anchor on disk stays the funnel's."""
   mgr = SessionManager(build_sessions_cfg(tmp_path))
   session = await mgr.create_session(CreateSessionRequest(name="race"))
@@ -199,7 +200,7 @@ async def test_weekly_recycle_clears_the_anchor_through_the_channel(tmp_path: Pa
   with (
       patch("src.core.master_trigger.datetime", _FakeDatetime),
       patch(MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET, run_message_mock),
-      patch("src.core.master_trigger.run_message", run_message_mock),
+      patch(MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET, run_message_mock),
   ):
     await trigger_master(session.id, "worker summary", mgr._cfg, mgr)
 

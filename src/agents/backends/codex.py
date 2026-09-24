@@ -71,25 +71,19 @@ class CodexBackend(AgentBackend):
         *self._model_config_args(),
     ]
 
-  def _build_command(self, prompt: str) -> list[str]:
-    effective_prompt = prompt
+  def _exec_command_head(self) -> list[str]:
+    """The ``codex exec`` argv head shared by the streaming and one-shot paths."""
+    return [self._codex_bin, "exec", *self._exec_args()]
 
+  def _build_command(self, prompt: str) -> list[str]:
+    cmd = self._exec_command_head()
     if self._resume_session_id:
-      cmd = [
-          self._codex_bin,
-          "exec",
-          "resume",
-          *self._exec_args(),
-          self._resume_session_id,
-      ]
-    else:
-      cmd = [
-          self._codex_bin,
-          "exec",
-          *self._exec_args(),
-      ]
+      # codex exec's resume form splices the subcommand after "exec" and the
+      # session id after the exec flags: `codex exec resume <flags> <session-id>`.
+      cmd.insert(2, "resume")
+      cmd.append(self._resume_session_id)
     cmd.extend(self._extra_flags)
-    cmd.extend(["--", effective_prompt])
+    cmd.extend(["--", prompt])
 
     self._last_agent_text.clear()
     self._last_reasoning_text.clear()
@@ -113,13 +107,7 @@ class CodexBackend(AgentBackend):
     from src.core.message_aggregator import extract_text_from_message
 
     framed = self._frame_system_prompt(system_prompt, prompt)
-    cmd = [
-        self._codex_bin,
-        "exec",
-        *self._exec_args(),
-        "--",
-        framed,
-    ]
+    cmd = [*self._exec_command_head(), "--", framed]
     self._last_agent_text.clear()
     proc = await self._spawn_one_shot_subprocess(cmd, self._prepare_env(dict(os.environ)), pdeathsig=False)
 

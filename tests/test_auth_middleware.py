@@ -5,7 +5,7 @@ import json
 import pytest
 from conftest import (
     _ok_asgi_downstream,
-    asgi_downstream_called,
+    asgi_response,
     run_through_asgi_middleware,
     stub_credentials,
 )
@@ -13,10 +13,15 @@ from conftest import (
 from src.api.auth import AuthMiddleware
 
 
+def asgi_downstream_called() -> bool:
+  """Whether the shared downstream ran during the last run_through_asgi_middleware call."""
+  return _ok_asgi_downstream.called
+
+
 def _scope(
+    headers: dict[str, str] | None,
     method: str = "GET",
     path: str = "/api/chat",
-    headers: dict[str, str] | None = None,
     cookies: dict[str, str] | None = None,
 ) -> dict:
   raw_headers: list[tuple[bytes, bytes]] = []
@@ -42,18 +47,16 @@ def _middleware(key: str) -> AuthMiddleware:
 
 
 def _response(sent: list[dict]) -> tuple[int, str, str]:
-  """Flatten the ASGI messages into (status, content-type, body)."""
-  start = next(m for m in sent if m["type"] == "http.response.start")
-  headers = dict(start["headers"])
-  body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
-  return start["status"], headers.get(b"content-type", b"").decode(), body.decode()
+  """Reshape the shared flatten into (status, content-type, body), decoded."""
+  status, headers, body = asgi_response(sent)
+  return status, headers.get(b"content-type", b"").decode(), body.decode()
 
 
 # Rows are the request shapes that must reach the downstream app: the gate is a
 # no-op while no key is configured, a valid cookie or Bearer credential passes it
 # (the file server and the trace/report viewers included), and /api/auth/status
-# plus the SPA shell are the public paths. The fields mirror _scope's parameters
-# in order.
+# plus the SPA shell are the public paths. The fields mirror _scope's
+# method, path, headers, and cookies parameters in that order.
 _PASS_THROUGH_ROWS = [
     pytest.param("", "GET", "/api/chat", {"accept": "application/json"}, None, id="empty-key-is-noop"),
     pytest.param("secret", "GET", "/api/chat", None, {"charliebot_access_key": "secret"}, id="cookie-accepted"),

@@ -8,6 +8,7 @@ from src.core.models import (
     SessionMetadata,
     ThreadMetadata,
     backend_type_allows_missing_model,
+    option_default_model,
 )
 from src.core.sessions import SessionManager
 
@@ -26,15 +27,6 @@ def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: str | 
   else:
     resolved_model = model
   return option.model_copy(update={"model": resolved_model})
-
-
-def _option_default_backend_model(option: BackendOption, *, source: str) -> tuple[str, str | None]:
-  """Pair a configured option with its own default model, or raise when it needs one and has none."""
-  if backend_type_allows_missing_model(option.type):
-    return option.id, None
-  if not option.model:
-    raise ValueError(f"{source} backend '{option.id}' has no default model")
-  return option.id, option.model
 
 
 def unknown_backend_pin_refusal(backend_id: str, fallback_id: str) -> str:
@@ -73,7 +65,7 @@ def _resolve_session_default_backend_model(
       raise ValueError(
           f"session backend {unknown_backend_pin_refusal(session_meta.backend, cfg.backends.options[0].id)}")
     option = cfg.backends.options[0]
-  return _option_default_backend_model(option, source="session")
+  return option.id, option_default_model(option, subject="session backend ")
 
 
 async def _require_session(session_mgr: SessionManager, session_id: str) -> SessionMetadata:
@@ -101,7 +93,7 @@ async def resolve_requested_subagent_backend_model(
     if not requested_backend:
       raise ValueError("requested backend is required")
     option = require_backend_option(cfg, requested_backend, subject="requested ")
-    return _option_default_backend_model(option, source="requested")
+    return option.id, option_default_model(option, subject="requested backend ")
   return _resolve_session_default_backend_model(cfg, session_meta)
 
 

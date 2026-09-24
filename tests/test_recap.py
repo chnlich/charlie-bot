@@ -9,11 +9,9 @@ from conftest import (
     JSON_UTILS_OS_REPLACE_PATCH_TARGET,
     assistant_text_event,
     backend_option,
-    build_chain_cfg,
     build_light_cc_cfg,
     make_home_session,
     make_one_shot_backend,
-    make_one_shot_chain,
     make_os_replace_spy,
     make_read_at_os_replace,
     user_event,
@@ -22,7 +20,7 @@ from conftest import append_events as _append_events
 
 from src.core import recap
 from src.core.config import CharlieBotConfig
-from src.core.models import SessionMetadata
+from src.core.models import BackendOption, SessionMetadata
 from src.core.recap import generate_and_cache_summary
 
 # Import-path patch targets for the recap seams. src/core/recap.py binds build_backend
@@ -35,6 +33,26 @@ _BUILD_BACKEND_PATCH_TARGET = "src.core.recap.build_backend"
 _EXTRACT_RECAP_PATCH_TARGET = "src.core.recap.extract_recap"
 _WRITE_CACHE_ENTRY_PATCH_TARGET = "src.core.recap._write_cache_entry"
 _LOG_PATCH_TARGET = "src.core.recap.log"
+
+
+def build_chain_cfg(*options: BackendOption) -> CharlieBotConfig:
+  """CharlieBotConfig whose backends.preference chains the given options in the order given.
+
+  One-shot fallback tests read the chain off backends.options and backends.preference
+  together, so the pair must not drift; deriving the preference list here is what
+  keeps the order stated once per test.
+  """
+  return CharlieBotConfig(backends={"options": list(options), "preference": [option.id for option in options]})
+
+
+def make_one_shot_chain(*one_shots: AsyncMock) -> list[MagicMock]:
+  """One-shot backends for a full preference-chain walk: one per candidate, in preference order.
+
+  Chain tests hand this list to patch(build_backend, side_effect=...) so each
+  build_backend call serves the next candidate, and a chain that stops early
+  leaves the surplus backends unbuilt.
+  """
+  return [make_one_shot_backend(one_shot) for one_shot in one_shots]
 
 
 @pytest.mark.asyncio

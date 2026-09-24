@@ -1,9 +1,8 @@
 """CLI script for master CC to delegate tasks to worker agents.
 
-Called by the master Claude Code instance as a shell command:
+Called by the master Claude Code instance as a shell command (session
+identity resolves per ``resolve_session_id``):
 
-  # --session is optional; the server-written CHARLIEBOT_SESSION_ID supplies it
-  # in normal master use (see ``resolve_session_id``).
   charliebot delegate \
     --repo /path/to/repo \
     --base-branch main \
@@ -27,6 +26,7 @@ from src.cli.common import (
     validate_repo_path,
     validate_task_spec_markdown,
 )
+from src.cli.help_formatter import CliRawDescriptionHelpFormatter
 
 DELEGATE_EPILOG = """\
 Task spec format (--task-spec-file):
@@ -76,7 +76,7 @@ def main() -> None:
   parser = argparse.ArgumentParser(
       description="Delegate a task to a CharlieBot worker agent",
       epilog=DELEGATE_EPILOG,
-      formatter_class=argparse.RawDescriptionHelpFormatter,
+      formatter_class=CliRawDescriptionHelpFormatter,
   )
   add_session_arg(parser)
   parser.add_argument(

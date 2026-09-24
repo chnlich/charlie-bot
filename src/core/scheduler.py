@@ -1,7 +1,7 @@
 """Scheduler — runs cron-like tasks that produce results in dedicated sessions."""
 
 import asyncio
-import contextlib
+import functools
 import traceback
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -11,7 +11,6 @@ from zoneinfo import ZoneInfo
 from src.core import event_types as ET
 from src.core import task_chain
 from src.core.backlog_loop import determine_action
-from src.core.backup import apply_retention, create_backup
 from src.core.config import (
     CharlieBotConfig,
     ScheduledTaskConfig,
@@ -33,8 +32,7 @@ from src.core.models import (
 )
 from src.core.sessions import SessionManager
 from src.core.spawner import resolve_requested_subagent_backend_model, spawn_worker
-from src.core.storage_cool import format_sweep_line, run_cool_sweep
-from src.core.tasks import create_logged_task
+from src.core.tasks import cancel_and_wait, create_logged_task
 from src.core.threads import ThreadManager
 
 log = LazyStructlogLogger()
@@ -60,6 +58,10 @@ def load_croniter(namespace: dict[str, Any]) -> Any:
 
 async def _backup_handler() -> str:
   """Built-in handler: create a backup and apply retention policy."""
+  # backup (tarfile) rides the handler like croniter: the M99 server import
+  # floor carries no tar archive stack for a handler that may never fire.
+  from src.core.backup import apply_retention, create_backup
+
   loop = asyncio.get_running_loop()
   archive = await loop.run_in_executor(None, create_backup)
   await loop.run_in_executor(None, apply_retention)
@@ -69,8 +71,13 @@ async def _backup_handler() -> str:
 
 async def _cool_storage_handler() -> str:
   """Built-in handler: reclaim cold sessions' readerless bytes (real run, no dry run)."""
+  # storage_cool (sqlite3, token_tally) rides the handler like croniter: the
+  # M99 server import floor carries no cold-sweep stack for a handler that may
+  # never fire.
+  from src.core.storage_cool import format_sweep_line, run_cool_sweep
+
   loop = asyncio.get_running_loop()
-  result = await loop.run_in_executor(None, run_cool_sweep)
+  result = await loop.run_in_executor(None, functools.partial(run_cool_sweep, cfg=get_config()))
   summary = format_sweep_line(result)
   log.info('cool_storage_handler_done', total_bytes=result.total_bytes)
   return summary
@@ -197,10 +204,7 @@ class Scheduler:
     log.info("scheduler_started")
 
   async def stop(self) -> None:
-    if self._task and not self._task.done():
-      self._task.cancel()
-      with contextlib.suppress(asyncio.CancelledError):
-        await self._task
+    await cancel_and_wait(self._task)
     log.info("scheduler_stopped")
 
   async def run_task_now(self, task_name: str) -> dict:
@@ -279,7 +283,7 @@ class Scheduler:
       task_cfg: ScheduledTaskConfig,
       session_mgr: SessionManager,
       session_cache: dict[str, list[SessionMetadata]],
-      cfg: CharlieBotConfig | None = None,
+      cfg: CharlieBotConfig | None,
   ) -> None:
     cfg = cfg or self._cfg
     tz = ZoneInfo(task_cfg.timezone)
@@ -688,7 +692,7 @@ class Scheduler:
     await session_mgr.persist_and_broadcast(session.id, event)
     return {'session_id': session.id, 'thread_id': None}
 
-  async def _execute_prompt_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
+  async def _execute_prompt_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool) -> dict:
     """Find-or-create session, create thread, fire-and-forget worker."""
     cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status=LastRunStatus.RUNNING)
     return await self._spawn_scheduled_worker(
@@ -702,7 +706,7 @@ class Scheduler:
         require_review=False,
         record_handle=record_handle)
 
-  async def _execute_steps_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
+  async def _execute_steps_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool) -> dict:
     """Fire step 0 of a steps task; later steps advance from the finalize chain."""
     cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status=LastRunStatus.RUNNING)
     thread_mgr = ThreadManager(cfg)
@@ -711,7 +715,7 @@ class Scheduler:
       self._handles[task_cfg.name] = result["handle"]
     return result
 
-  async def _execute_loop_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
+  async def _execute_loop_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool) -> dict:
     """Run an improvement-loop task: determine action, then spawn worker if needed."""
     cfg, session_mgr, session = await self._prepare_task_execution(task_cfg)
 

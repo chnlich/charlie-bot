@@ -1,11 +1,25 @@
 // ---------------------------------------------------------------------------
 // Auth: global fetch wrapper to attach Bearer token and handle 401s
 // ---------------------------------------------------------------------------
+// The access key's one browser name: the localStorage key the fetch wrapper and
+// the WS token read, and the cookie name a top-level navigation authenticates
+// with. The server middleware reads the cookie by the same name
+// (src/api/auth.py _ACCESS_KEY_COOKIE); the served login page keeps its own
+// literal because it is HTML, not this file.
+const ACCESS_KEY_NAME = 'charliebot_access_key';
+
+// The one reader of the access key for request auth: the fetch wrapper below and
+// the voice upload's XHR (which no wrapper patches) both send this header.
+function accessTokenAuthorization() {
+  const key = localStorage.getItem(ACCESS_KEY_NAME);
+  return key ? 'Bearer ' + key : null;
+}
+
 const _origFetch = window.fetch;
 window.fetch = function(url, opts = {}) {
-  const key = localStorage.getItem('charliebot_access_key');
-  if (key) {
-    opts.headers = { ...(opts.headers || {}), 'Authorization': 'Bearer ' + key };
+  const authorization = accessTokenAuthorization();
+  if (authorization) {
+    opts.headers = { ...(opts.headers || {}), 'Authorization': authorization };
   }
   return _origFetch.call(window, url, opts).then(res => {
     if (res.status === 401) { showAuthOverlay(); }
@@ -33,7 +47,7 @@ const PROGRESS_BAR_FILL_CLASS = 'h-full rounded-full transition-all duration-300
 // browser WebSocket API exposes no header channel for the fetch wrapper's
 // Bearer header. Loads before the websocket/voice/terminal connectors.
 function withAccessToken(url) {
-  const key = localStorage.getItem('charliebot_access_key');
+  const key = localStorage.getItem(ACCESS_KEY_NAME);
   return key ? url + '?token=' + encodeURIComponent(key) : url;
 }
 
@@ -59,14 +73,14 @@ function writeAccessCookie(key) {
   // cannot set Secure cookies, and without the cookie every top-level
   // navigation would 401 back to the login page.
   const secure = location.protocol === 'https:' ? '; Secure' : '';
-  document.cookie = 'charliebot_access_key=' + key + '; path=/; SameSite=Strict' + secure;
+  document.cookie = ACCESS_KEY_NAME + '=' + key + '; path=/; SameSite=Strict' + secure;
 }
 
 function submitAccessKey() {
   const input = document.getElementById('auth-key-input');
   const key = (input && input.value || '').trim();
   if (!key) return;
-  localStorage.setItem('charliebot_access_key', key);
+  localStorage.setItem(ACCESS_KEY_NAME, key);
   writeAccessCookie(key);
   // Reload so all connections use the new key. If invalid, 401 will re-show the overlay.
   hideAuthOverlay();
@@ -75,7 +89,7 @@ function submitAccessKey() {
 
 function initAuth() {
   if (typeof AUTH_ENABLED === 'undefined' || !AUTH_ENABLED) return;
-  const key = localStorage.getItem('charliebot_access_key');
+  const key = localStorage.getItem(ACCESS_KEY_NAME);
   if (key) {
     // Already-authenticated users get the cookie automatically so navigations start passing.
     writeAccessCookie(key);

@@ -365,6 +365,17 @@ function refreshTreeIndicators() {
   });
 }
 
+// "Read" means rendered: the session's server-side unread flag clears only
+// through this POST, which the render paths fire after content painted
+// (app.js's initial render, switchSession's winning generation). A bare data
+// fetch never clears it. Fire-and-forget: a lost POST leaves the dot up until
+// the next render reposts, so no retry or state mutation lives here.
+function markSessionRead(sessionId) {
+  fetch('/api/sessions/' + sessionId + '/read', {method: 'POST'}).catch((err) => {
+    console.error('markSessionRead failed:', err);
+  });
+}
+
 function setSessionPendingTriggerIndicator(sid, status) {
   const icon = document.getElementById('pending-trigger-' + sid);
   if (!icon) return;
@@ -556,8 +567,6 @@ async function cancelMaster() {
 
 const API = {
   recordRenderedSessionStatus,
-  sidebarSessionIds,
-  tuiSidebarSessionIds,
   renderTuiStatusDot,
   fetchTuiStatus,
   refreshTuiDots,
@@ -578,9 +587,9 @@ const API = {
   refreshTreeIndicators,
   effectiveIndicatorState,
   effectiveUnread,
+  markSessionRead,
   setSessionPendingTriggerIndicator,
   setSessionPendingPlanApprovalIndicator,
-  updateSpinner,
   stopActiveSessionViewPolling,
   ensureActiveSessionViewPolling,
   pollActiveSessionView,
@@ -592,6 +601,10 @@ const API = {
   updateThinkingTime,
   cancelMaster,
 };
-Sidebar.wire(API);
+Sidebar.wire(API, {
+  tuiSidebarSessionIds,
+  sidebarSessionIds,
+  updateSpinner,
+});
 
 })();

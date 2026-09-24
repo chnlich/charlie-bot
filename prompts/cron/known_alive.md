@@ -248,8 +248,8 @@ Known-alive symbols:
   tested recovery path reaches `kill_process_group`), so deleting `sig` stays green, but it
   keeps the lambda a drop-in mirror of `kill_process_group(pid, sig=signal.SIGTERM)`
   (src/core/process.py), which `src/core/init_worker_recovery.py` already calls with
-  two positional arguments. Vulture flags each site at 100% confidence as an unused
-  variable. Same class as the `check`/`format` signature-mirror entry above.
+   two positional arguments. Vulture flags each site at 100% confidence as an unused
+   variable. Same class as the `format` signature-mirror entry above.
 - `panel-summary`, `panel-details`, `panel-roofline`, `panel-source`, `panel-session`,
   `panel-raw` (`web/templates/ncu.html`, the six tab-panel element ids) — reached by
   string construction: the inline tab switcher activates panels with
@@ -325,7 +325,7 @@ Known-alive symbols:
   than a TypeError. A tests-only vulture scan flags both at 100% confidence as unused
   variables (a combined src+tests scan does not: the production `annotate` parameters carry
   the same names, so the names are not zero-match repo-wide — the flags only appear in a
-  tests-only scan). Same class as the `check`/`format` signature-mirror entry above. The
+   tests-only scan). Same class as the `format` signature-mirror entry above. The
   same file's `html_text` (first parameter of the `explode` stub installed for
   `files_api._inject_artifact_ui`) joins this class: the replaced function is called with
   two positional arguments at both production call sites (src/api/files.py), so the stub

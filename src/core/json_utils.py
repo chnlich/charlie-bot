@@ -38,6 +38,18 @@ def load_json_meta(
     return None
 
 
+def load_json_dict(path: Path) -> dict:
+  """The parsed JSON object at *path*, or ``{}`` when the file does not exist yet.
+
+  The callers' documents are machine-written caches (the paired write is
+  :func:`write_json_atomically`), so a malformed parse raises;
+  :func:`load_json_meta` is the tolerant reader for optional metadata files.
+  """
+  if not path.exists():
+    return {}
+  return json.loads(path.read_text(encoding="utf-8"))
+
+
 def atomic_write_text(path: Path, text: str, *, private: bool = False) -> None:
   """Write *text* to *path* atomically, UTF-8 encoded.
 

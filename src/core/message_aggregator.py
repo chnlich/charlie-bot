@@ -409,7 +409,7 @@ class MessageAggregator:
       self._processed += 1
       yield from self._feed(ev, self._idx_offset + idx)
 
-  def clone(self) -> 'MessageAggregator':
+  def clone(self) -> MessageAggregator:
     """Independent copy of this aggregator's feed state.
 
     Feeding the clone continues from the same position without mutating the

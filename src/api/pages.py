@@ -127,7 +127,7 @@ _merge_tasks: dict[str, asyncio.Task] = {}
 # The annotation stays quoted: concurrent.futures resolves ProcessPoolExecutor through a
 # module __getattr__ whose first read imports .process (multiprocessing rides it), and the
 # M99 server import floor carries no spawn-pool stack for a pool that may never build.
-_merge_executor_instance: "concurrent.futures.ProcessPoolExecutor | None" = None
+_merge_executor_instance: concurrent.futures.ProcessPoolExecutor | None = None
 _MERGE_POOL_WORKERS = min(4, os.cpu_count() or 2)
 
 
@@ -246,10 +246,10 @@ router = APIRouter()
 # import floor, marginal over the already-loaded fastapi) and no import-time
 # path touches a template, so the engine builds on first render; the test that
 # pins this is tests/test_cli_import_weight.py's server ban set.
-_templates_instance: "Jinja2Templates | None" = None
+_templates_instance: Jinja2Templates | None = None
 
 
-def _templates() -> "Jinja2Templates":
+def _templates() -> Jinja2Templates:
   """The request-time template engine, built on first use and reused after."""
   global _templates_instance
   if _templates_instance is None:
@@ -410,7 +410,7 @@ def _prune_perfetto_merge_cache(fresh_path: Path) -> None:
     stale_path.unlink()
 
 
-def _merge_executor() -> "concurrent.futures.ProcessPoolExecutor | None":
+def _merge_executor() -> concurrent.futures.ProcessPoolExecutor | None:
   """Return the shared merge process pool, building it on first use."""
   global _merge_executor_instance
   if _merge_executor_instance is None:
@@ -657,7 +657,7 @@ _USAGE_SOURCES = (USAGE_SOURCE_CLAUDE_CODE, USAGE_SOURCE_CODEX, USAGE_SOURCE_OPE
 _USAGE_SLOT = {src: slot for slot, src in enumerate(_USAGE_SOURCES, 1)}
 
 
-def _token_usage_context(tally: "TokenTally") -> dict:
+def _token_usage_context(tally: TokenTally) -> dict:
   """Prepare the display context for the token_usage template from one tally.
 
   Computes the aggregate stats the page renders server-side (hero, tiles, conclusions),

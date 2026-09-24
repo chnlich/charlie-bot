@@ -175,7 +175,7 @@ class SlackClient:
   """Thin Slack Web API wrapper: open_connection / post_message / get_permalink / get_thread_replies /
   add_reaction / remove_reaction / get_channel_name."""
 
-  def __init__(self, http: "httpx.AsyncClient", *, bot_token: str, app_token: str) -> None:
+  def __init__(self, http: httpx.AsyncClient, *, bot_token: str, app_token: str) -> None:
     self._http = http
     self._bot_headers = {"Authorization": f"Bearer {bot_token}"}
     self._app_headers = {"Authorization": f"Bearer {app_token}"}
@@ -183,7 +183,7 @@ class SlackClient:
     self._channel_name_cache: dict[str, str | None] = {}
 
   @staticmethod
-  def _checked_payload(resp: "httpx.Response", method: str) -> dict[str, Any]:
+  def _checked_payload(resp: httpx.Response, method: str) -> dict[str, Any]:
     """Slack Web API envelope rule for the raise-on-failure methods: HTTP errors
     raise through httpx; an ok=false payload raises RuntimeError naming the
     Slack method. get_channel_name folds failures into its None cache instead,
@@ -1209,7 +1209,7 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
   return reported
 
 
-async def _expect_hello(ws: "ClientConnection") -> None:
+async def _expect_hello(ws: ClientConnection) -> None:
   """Consume the Socket Mode connection's ``hello`` frame."""
   raw = await ws.recv()
   envelope = json.loads(raw)

@@ -57,7 +57,7 @@ class _AcceptingWebSocket:
 
 
 class _FakeAttachment:
-  instances: ClassVar[list["_FakeAttachment"]] = []
+  instances: ClassVar[list[_FakeAttachment]] = []
 
   def __init__(self, session_id: str) -> None:
     self.session_id = session_id

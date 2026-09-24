@@ -34,6 +34,7 @@ from src.api.responses import (
     PreencodedJSONResponse,
     fast_json_bytes,
     gzip_body_response,
+    gzip_file_fresh,
     request_wants_gzip,
 )
 from src.api.threads import view_thread_rows
@@ -1175,22 +1176,6 @@ _EVENTS_GZIP_MEMO_LIMIT = 2
 _events_gzip_memo: StatSignatureMemo[Path, bytes] = StatSignatureMemo(_EVENTS_GZIP_MEMO_LIMIT)
 
 
-def _events_file_gzip(path: Path) -> bytes:
-  """The events file's gzip level-1 form, memoized on the stat pair the read served.
-
-  stat precedes the read in the same call, so the signature proves the bytes a
-  repeat hit serves; an append between requests only makes the next caller miss
-  and re-read.
-  """
-  st = path.stat()
-  hit = _events_gzip_memo.fresh(path, st)
-  if hit is not None:
-    return hit
-  compressed = gzip_level1(path.read_bytes())
-  _events_gzip_memo.record(path, st, compressed)
-  return compressed
-
-
 @router.get("/{session_id}/events.jsonl")
 async def get_events_jsonl(session_id: str, request: Request) -> Response:
   """Serve the raw chat_events.jsonl file for a session."""
@@ -1203,7 +1188,7 @@ async def get_events_jsonl(session_id: str, request: Request) -> Response:
   # The read and the deflate ride one executor hop: FileResponse streams 64 KiB
   # chunks and the gzip middleware compresses every chunk inline on the event
   # loop (the M101 loop-lag readings).
-  body = await asyncio.to_thread(_events_file_gzip, path)
+  body = await asyncio.to_thread(gzip_file_fresh, _events_gzip_memo, path, None)
   return Response(content=body, media_type="application/x-ndjson", headers=GZIP_RESPONSE_HEADERS)
 
 

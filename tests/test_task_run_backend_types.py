@@ -60,7 +60,7 @@ def session_attached_event(native_id: str) -> dict:
     return {"type": "system", "subtype": "init", "session_id": native_id}
 
 
-BACKEND_TYPES = [t for t in BackendType]
+BACKEND_TYPES = list(BackendType)
 # The master queue only runs streaming backends: a manager turn on a TUI
 # backend is refused by the existing guard (recorded in the manager-queue
 # tests), so the identity assertions cover the eight executable types.

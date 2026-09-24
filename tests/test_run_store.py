@@ -82,7 +82,7 @@ async def test_register_is_idempotent_and_registers_alias(tmp_path: Path) -> Non
 @pytest.mark.asyncio
 async def test_retry_binding_is_stable_across_requests_and_reload(tmp_path: Path) -> None:
   env = build_env(tmp_path)
-  cfg, session_mgr, mgr, store = env
+  cfg, session_mgr, _mgr, store = env
   session_id = await make_task(env, "t1")
   original = await store.register_run(
       RunRecord(id="r-orig", session_id=session_id, kind="work", backend="opus"))
@@ -221,16 +221,16 @@ async def test_stop_request_can_return_null_outcome_and_recovery_closes_it(
   monkeypatch.setattr("src.core.runs.STOP_EXIT_WAIT_SECONDS", 0.2)
   monkeypatch.setattr("src.core.runs.STOP_EXIT_POLL_SECONDS", 0.02)
   env = build_env(tmp_path)
-  cfg, session_mgr, mgr, store = env
+  cfg, session_mgr, _mgr, store = env
   session_id = await make_task(env, "t1")
   # A process that ignores SIGTERM: the request stays durable, outcome stays null.
   ready = tmp_path / "sigterm_ready"
   proc = subprocess.Popen(
       ["python3", "-c",
-       "import signal, time, sys; "
-       "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-       f"open({str(ready)!r}, 'w').close(); "
-       "time.sleep(30)"])
+       ("import signal, time, sys; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        f"open({str(ready)!r}, 'w').close(); "
+        "time.sleep(30)")])
   deadline = time.monotonic() + 10
   while not ready.exists():
     assert time.monotonic() < deadline, "helper process never armed its SIGTERM handler"

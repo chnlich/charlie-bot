@@ -194,12 +194,12 @@ async def seed_scenario(home: Path) -> dict:
     task_sessions owner the APIs serve, in-process only.
     """
     os.environ["CHARLIEBOT_HOME"] = str(home)
+    from src.core import event_types as ET
     from src.core.config import get_config
-    from src.core.sessions import SessionManager
-    from src.core.task_sessions import TaskTreeManager
     from src.core.models import PatchSessionTaskRequest, RunRecord, TaskSpec
     from src.core.run_token import CallerIdentity
-    from src.core import event_types as ET
+    from src.core.sessions import SessionManager
+    from src.core.task_sessions import TaskTreeManager
 
     cfg = get_config()
     session_mgr = SessionManager(cfg)
@@ -277,8 +277,9 @@ async def seed_scenario(home: Path) -> dict:
         # reservations. The current-run Context selection must show generation
         # 0150 — the whole-history latest launch — not the first page's tail.
         from datetime import datetime, timedelta, timezone
-        from src.core.task_prompts import PromptBlock, PromptSnapshot, PromptSource
+
         from src.core.control_events import sha256_hex
+        from src.core.task_prompts import PromptBlock, PromptSnapshot, PromptSource
         long_worker = await tree.create_task(
             request_id="seed-long", task_parent_id=feature.id, profile="worker",
             task=TaskSpec(goal="carry a long run history", task_type="implement"),
@@ -601,6 +602,7 @@ async def run_harness(args: argparse.Namespace) -> None:
 
         # Isolated server: the real app, lifespan disabled.
         import uvicorn
+
         from server import app as server_app
 
         server_config = uvicorn.Config(server_app, host="127.0.0.1", port=server_port,
@@ -662,55 +664,55 @@ async def run_harness(args: argparse.Namespace) -> None:
             # harness must never attach to (or create) it — /ws/terminal is
             # answered with an immediately-closed socket; every other app
             # websocket passes through untouched.
-            guard_source = """
-                (function () {
-                  try { localStorage.setItem('charliebot_access_key', %s); } catch (e) {}
+            guard_source = f"""
+                (function () {{
+                  try {{ localStorage.setItem('charliebot_access_key', {json.dumps(access_key)}); }} catch (e) {{}}
                   window.__treeEvents = 0;
                   window.__errs = [];
                   window.addEventListener('error', (e) => window.__errs.push(String(e.message).slice(0, 200)));
                   window.addEventListener('unhandledrejection', (e) => window.__errs.push('rej: ' + String(e.reason).slice(0, 200)));
                   const origConsoleError = console.error;
-                  console.error = function () {
+                  console.error = function () {{
                     window.__errs.push([...arguments].map((a) => String(a && a.message ? a.message : a)).join(' ').slice(0, 200));
                     origConsoleError.apply(console, arguments);
-                  };
+                  }};
                   const RealWebSocket = window.WebSocket;
-                  function GuardedWebSocket(url, protocols) {
+                  function GuardedWebSocket(url, protocols) {{
                     const u = String(url);
-                    if (u.includes('/ws/terminal')) {
-                      const fake = {
-                        readyState: 3, CLOSED: 3, send() {}, close() {},
-                        addEventListener() {}, removeEventListener() {},
+                    if (u.includes('/ws/terminal')) {{
+                      const fake = {{
+                        readyState: 3, CLOSED: 3, send() {{}}, close() {{}},
+                        addEventListener() {{}}, removeEventListener() {{}},
                         onopen: null, onmessage: null, onclose: null, onerror: null,
-                      };
-                      setTimeout(() => { if (fake.onclose) fake.onclose({type: 'close'}); }, 0);
+                      }};
+                      setTimeout(() => {{ if (fake.onclose) fake.onclose({{type: 'close'}}); }}, 0);
                       return fake;
-                    }
+                    }}
                     const sock = protocols !== undefined
                       ? new RealWebSocket(url, protocols)
                       : new RealWebSocket(url);
                     window.__wsTotal = (window.__wsTotal || 0) + 1;
-                    sock.addEventListener('message', (m) => {
-                      try {
+                    sock.addEventListener('message', (m) => {{
+                      try {{
                         window.__wsMsgs = (window.__wsMsgs || 0) + 1;
                         const d = String(m.data);
-                        if (d.includes('task_tree_changed')) {
+                        if (d.includes('task_tree_changed')) {{
                           window.__treeEvents += 1;
                           window.__wsLog = (window.__wsLog || []);
                           window.__wsLog.push(d.slice(0, 140) + ' @sock' + (window.__wsTotal));
-                        }
-                      } catch (e) {}
-                    });
+                        }}
+                      }} catch (e) {{}}
+                    }});
                     return sock;
-                  }
+                  }}
                   GuardedWebSocket.prototype = RealWebSocket.prototype;
                   GuardedWebSocket.OPEN = RealWebSocket.OPEN;
                   GuardedWebSocket.CONNECTING = RealWebSocket.CONNECTING;
                   GuardedWebSocket.CLOSING = RealWebSocket.CLOSING;
                   GuardedWebSocket.CLOSED = RealWebSocket.CLOSED;
                   window.WebSocket = GuardedWebSocket;
-                })();
-            """ % (json.dumps(access_key),)
+                }})();
+            """
             await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": guard_source}, session_id=session_id)
             await cdp.send("Network.setCookie", {
                 "name": "charliebot_access_key", "value": access_key,
@@ -747,11 +749,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                     "!!document.querySelector('#session-list')?.textContent.match(/PM|project manager/i)"),
                     "no fixed PM/group layer")
                 shot = await screenshot(cdp, session_id, results, "s1_desktop_tree")
-                results.record("desktop tree primary navigation", True,
-                               f"4 task nodes, role labels, no PM layer", shot)
+                results.record("desktop tree primary navigation", ok=True,
+                               detail="4 task nodes, role labels, no PM layer", screenshot=shot)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s1_desktop_tree_FAILED")
-                results.record("desktop tree primary navigation", False, repr(exc), shot)
+                results.record("desktop tree primary navigation", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S2: node page Task panel; canonical task edit + drafts ------
             try:
@@ -790,13 +792,13 @@ async def run_harness(args: argparse.Namespace) -> None:
                 log("  s2: draft across switches")
                 try:
                     await asyncio.wait_for(evaluate(cdp, session_id, """
-                    (async () => {
+                    (async () => {{
                       const el = document.getElementById('task-goal-input');
                       el.value = 'unsaved draft text';
                       el.dispatchEvent(new Event('input'));
-                      switchSession('%s');
-                    })()
-                """ % ids["worker1"]), timeout=8)
+                      switchSession('{}');
+                    }})()
+                """.format(ids["worker1"])), timeout=8)
                 except asyncio.TimeoutError:
                     log("  s2 TRACE: the switch-to-worker evaluate did not return within 8s")
                 await wait_for(cdp, session_id,
@@ -806,8 +808,8 @@ async def run_harness(args: argparse.Namespace) -> None:
                 await evaluate(cdp, session_id, "switchTab('task')")
                 await wait_for(cdp, session_id, "document.getElementById('task-goal-input')?.value === 'unsaved draft text'")
                 shot = await screenshot(cdp, session_id, results, "s2_task_panel")
-                results.record("task panel edit + draft preservation", True,
-                               "PATCH lands on the task record; unsaved draft survives node switches", shot)
+                results.record("task panel edit + draft preservation", ok=True,
+                               detail="PATCH lands on the task record; unsaved draft survives node switches", screenshot=shot)
             except Exception as exc:
                 alive = None
                 try:
@@ -816,7 +818,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                     alive = f"page unresponsive: {probe_exc!r}"
                 log(f"  s2 diagnostic: page evaluate 1+1 -> {alive}")
                 shot = await screenshot(cdp, session_id, results, "s2_task_panel_FAILED")
-                results.record("task panel edit + draft preservation", False, repr(exc), shot)
+                results.record("task panel edit + draft preservation", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S3: Context panel ------------------------------------------
             try:
@@ -855,11 +857,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                 """)
                 await wait_for(cdp, session_id, "!document.getElementById('task-rule-draft-note')?.textContent")
                 shot = await screenshot(cdp, session_id, results, "s3_context_panel")
-                results.record("context panel + rule scope editor", True,
-                               f"preview sources, index label, hash, subtree scope ({count_text!r}), UI PATCH", shot)
+                results.record("context panel + rule scope editor", ok=True,
+                               detail=f"preview sources, index label, hash, subtree scope ({count_text!r}), UI PATCH", screenshot=shot)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s3_context_panel_FAILED")
-                results.record("context panel + rule scope editor", False, repr(exc), shot)
+                results.record("context panel + rule scope editor", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S4: Runs panel ----------------------------------------------
             try:
@@ -873,11 +875,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                 # on a finished row (stop only rides running/queued/attention).
                 assert_true("Stop" not in text, "no stop button on terminal run rows")
                 shot = await screenshot(cdp, session_id, results, "s4_runs_panel")
-                results.record("runs panel (replaces Workers for v2)", True,
-                               "paged runs with kind/outcome/timing and N/A measurements", shot)
+                results.record("runs panel (replaces Workers for v2)", ok=True,
+                               detail="paged runs with kind/outcome/timing and N/A measurements", screenshot=shot)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s4_runs_panel_FAILED")
-                results.record("runs panel (replaces Workers for v2)", False, repr(exc), shot)
+                results.record("runs panel (replaces Workers for v2)", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S5: completion through the UI (with pending-input blocker) ---
             try:
@@ -960,11 +962,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                                "document.getElementById('tab-task').textContent.includes('task: completed')",
                                timeout=15, label="s5 completion landed")
                 shot = await screenshot(cdp, session_id, results, "s5b_complete_success")
-                results.record("blockers + exact acknowledgement + completion", True,
-                               "pending input blocked with a visible blocker; exact-id ack; completion then landed", shot)
+                results.record("blockers + exact acknowledgement + completion", ok=True,
+                               detail="pending input blocked with a visible blocker; exact-id ack; completion then landed", screenshot=shot)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s5_complete_FAILED")
-                results.record("blockers + exact acknowledgement + completion", False, repr(exc), shot)
+                results.record("blockers + exact acknowledgement + completion", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S6: archived ancestry: search + deep link ---------------------
             try:
@@ -974,8 +976,8 @@ async def run_harness(args: argparse.Namespace) -> None:
                                {"url": f"{base}/?session={ids['worker2']}"}, session_id=session_id)
                 await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .tree-row').length >= 1")
                 await wait_for(cdp, session_id, """
-                    [...document.querySelectorAll('#session-list .tree-row')].some(el => el.dataset.nodeId === '%s')
-                """ % ids["worker2"], timeout=15)
+                    [...document.querySelectorAll('#session-list .tree-row')].some(el => el.dataset.nodeId === '{}')
+                """.format(ids["worker2"]), timeout=15)
                 revealed = await evaluate(cdp, session_id, """
                     [...document.querySelectorAll('#session-list .tree-row')].map(el => el.dataset.nodeId)
                 """)
@@ -998,11 +1000,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                     })()
                 """)
                 shot = await screenshot(cdp, session_id, results, "s6_archived_deep_link_search")
-                results.record("archived child deep link + search path reveal", True,
-                               "archived child reachable; full ancestor path expanded and highlighted", shot)
+                results.record("archived child deep link + search path reveal", ok=True,
+                               detail="archived child reachable; full ancestor path expanded and highlighted", screenshot=shot)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s6_archived_FAILED")
-                results.record("archived child deep link + search path reveal", False, repr(exc), shot)
+                results.record("archived child deep link + search path reveal", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S7: keyboard navigation ---------------------------------------
             try:
@@ -1031,11 +1033,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                 """)
                 assert_true(expanded >= 1, "ArrowRight expanded the focused node")
                 shot = await screenshot(cdp, session_id, results, "s7_keyboard")
-                results.record("keyboard tree navigation", True,
-                               "rows focusable; ArrowRight expands; focus visible", shot)
+                results.record("keyboard tree navigation", ok=True,
+                               detail="rows focusable; ArrowRight expands; focus visible", screenshot=shot)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s7_keyboard_FAILED")
-                results.record("keyboard tree navigation", False, repr(exc), shot)
+                results.record("keyboard tree navigation", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S8: 390px mobile ------------------------------------------------
             try:
@@ -1077,12 +1079,12 @@ async def run_harness(args: argparse.Namespace) -> None:
                       [...overlay.querySelectorAll('button')].find(b => b.textContent === 'Cancel')?.click();
                     })()
                 """)
-                results.record("390px mobile usability", True,
-                               "tree, task panel and completion dialog fit without horizontal overflow",
-                               shot3)
+                results.record("390px mobile usability", ok=True,
+                               detail="tree, task panel and completion dialog fit without horizontal overflow",
+                               screenshot=shot3)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s8_mobile_FAILED")
-                results.record("390px mobile usability", False, repr(exc), shot)
+                results.record("390px mobile usability", ok=False, detail=repr(exc), screenshot=shot)
             finally:
                 await cdp.send("Emulation.setDeviceMetricsOverride", {
                     "width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False,
@@ -1126,8 +1128,8 @@ async def run_harness(args: argparse.Namespace) -> None:
                 active_ok = await evaluate(cdp, session_id, "SESSION_ID")
                 assert_true(active_ok == ids["root"], "an update to another node never switches the active session")
                 shot = await screenshot(cdp, session_id, results, "s9_live_update")
-                results.record("live task_tree_changed handling", True,
-                               f"row refreshed in place; bounded tree fetches for the change; session unchanged", shot)
+                results.record("live task_tree_changed handling", ok=True,
+                               detail="row refreshed in place; bounded tree fetches for the change; session unchanged", screenshot=shot)
             except Exception as exc:
                 # Distinguish the event-delivery path from the refresh path.
                 manual = None
@@ -1143,7 +1145,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                     manual = f"probe failed: {probe_exc!r}"
                 log(f"  s9 manual onTreeChanged refresh -> {manual}")
                 shot = await screenshot(cdp, session_id, results, "s9_live_FAILED")
-                results.record("live task_tree_changed handling", False, repr(exc), shot)
+                results.record("live task_tree_changed handling", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S10: reload agreement ---------------------------------------
             try:
@@ -1171,11 +1173,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                 assert_true("program-wide rule from UI" in (rule_text or ""),
                             "the UI-saved subtree rule is the authoritative text after reload")
                 shot = await screenshot(cdp, session_id, results, "s10_reload")
-                results.record("reload agreement", True,
-                               "reload shows the same tree facts and the saved rule", shot)
+                results.record("reload agreement", ok=True,
+                               detail="reload shows the same tree facts and the saved rule", screenshot=shot)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s10_reload_FAILED")
-                results.record("reload agreement", False, repr(exc), shot)
+                results.record("reload agreement", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S11: long-history current-run context ------------------------
             try:
@@ -1207,11 +1209,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                 assert_true(len(runs_fetches) <= 3,
                             f"selection stays bounded as history grows ({len(runs_fetches)} /runs requests)")
                 shot = await screenshot(cdp, session_id, results, "s11_long_history_context")
-                results.record("long-history current-run context", True,
-                               f"generation 0150 + its hash shown; {len(runs_fetches)} bounded /runs reads", shot)
+                results.record("long-history current-run context", ok=True,
+                               detail=f"generation 0150 + its hash shown; {len(runs_fetches)} bounded /runs reads", screenshot=shot)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s11_long_history_FAILED")
-                results.record("long-history current-run context", False, repr(exc), shot)
+                results.record("long-history current-run context", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S12: creation from a separate client reaches the observer ----
             created: dict[str, str] = {}  # node ids the cross-client scenarios made
@@ -1247,11 +1249,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                 """)
                 assert_true(names.count("Remote root") == 1, "exactly one row for the new root")
                 shot = await screenshot(cdp, session_id, results, "s12_cross_client_root")
-                results.record("cross-client root creation reaches a connected observer", True,
-                               "row appeared from the publication notification alone; bounded fetches; session unchanged", shot)
+                results.record("cross-client root creation reaches a connected observer", ok=True,
+                               detail="row appeared from the publication notification alone; bounded fetches; session unchanged", screenshot=shot)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s12_cross_client_FAILED")
-                results.record("cross-client root creation reaches a connected observer", False, repr(exc), shot)
+                results.record("cross-client root creation reaches a connected observer", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S13: deeper-than-one-level creation and collapsed levels -----
             try:
@@ -1280,11 +1282,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                 created["leaf"] = leaf["id"]
                 await wait_for(cdp, session_id, """
                     [...document.querySelectorAll('#session-list .tree-row')]
-                      .filter(el => el.dataset.nodeId === '%s')
+                      .filter(el => el.dataset.nodeId === '{}')
                       .every(el => el.textContent.includes('1 open'))
-                """ % mid["id"], timeout=10, label="s13 mid row gained the leaf count while collapsed")
+                """.format(mid["id"]), timeout=10, label="s13 mid row gained the leaf count while collapsed")
                 collapsed_ok = await evaluate(cdp, session_id,
-                    "!document.getElementById('tree-children-%s')" % mid["id"])
+                    "!document.getElementById('tree-children-{}')".format(mid["id"]))
                 assert_true(collapsed_ok, "the collapsed level stays collapsed")
                 fetches = cdp.drain_tree_fetches()
                 assert_true(1 <= len(fetches) <= 5,
@@ -1295,11 +1297,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                       .some(el => el.textContent === 'Remote leaf')
                 """, timeout=8, label="s13 leaf visible after expanding the mid")
                 shot = await screenshot(cdp, session_id, results, "s13_deep_creation")
-                results.record("deeper-than-one-level creation from a separate client", True,
-                               "mid appeared under the expanded parent; collapsed mid gained the count; expansion reveals the idle leaf", shot)
+                results.record("deeper-than-one-level creation from a separate client", ok=True,
+                               detail="mid appeared under the expanded parent; collapsed mid gained the count; expansion reveals the idle leaf", screenshot=shot)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s13_deep_creation_FAILED")
-                results.record("deeper-than-one-level creation from a separate client", False, repr(exc), shot)
+                results.record("deeper-than-one-level creation from a separate client", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S14: agent-scoped creation reaches the observer --------------
             try:
@@ -1321,11 +1323,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                       .some(el => el.textContent === 'Agent worker')
                 """, timeout=10, label="s14 agent-created worker appeared")
                 shot = await screenshot(cdp, session_id, results, "s14_agent_creation")
-                results.record("agent-scoped creation reaches a connected observer", True,
-                               "run-token agent created a worker under its manager; the observer saw it live", shot)
+                results.record("agent-scoped creation reaches a connected observer", ok=True,
+                               detail="run-token agent created a worker under its manager; the observer saw it live", screenshot=shot)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s14_agent_creation_FAILED")
-                results.record("agent-scoped creation reaches a connected observer", False, repr(exc), shot)
+                results.record("agent-scoped creation reaches a connected observer", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S15: replay, refusal, drafts and selection preservation ------
             try:
@@ -1361,7 +1363,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 observer_errors_before = await evaluate(cdp, session_id, "(window.__errs || []).length")
                 rows_before = await evaluate(cdp, session_id,
                     "document.querySelectorAll('#session-list .tree-row').length")
-                status, refusal = await asyncio.to_thread(
+                status, _refusal = await asyncio.to_thread(
                     api_request, base, access_key, "POST", "/api/sessions/",
                     {"request_id": "harness-refused-1", "task_parent_id": created["leaf"],
                      "profile": "worker", "name": "Should not exist",
@@ -1382,11 +1384,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                     "document.getElementById('task-goal-input')?.value === 'unsaved draft during remote creations'",
                     label="s15 draft preserved")
                 shot = await screenshot(cdp, session_id, results, "s15_replay_refusal_draft")
-                results.record("replay, refusal, draft and selection preservation", True,
-                               "one node one fact after replay; refusal emitted nothing; draft and selection intact", shot)
+                results.record("replay, refusal, draft and selection preservation", ok=True,
+                               detail="one node one fact after replay; refusal emitted nothing; draft and selection intact", screenshot=shot)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s15_replay_refusal_FAILED")
-                results.record("replay, refusal, draft and selection preservation", False, repr(exc), shot)
+                results.record("replay, refusal, draft and selection preservation", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S16: completion evidence beyond the first page ---------------
             try:
@@ -1496,12 +1498,12 @@ async def run_harness(args: argparse.Namespace) -> None:
                 assert_true(status == 200 and detail["task_state"] == "completed",
                             f"the server closed the task ({status}, {detail.get('task_state')})")
                 shot2 = await screenshot(cdp, session_id, results, "s16b_completion_submitted")
-                results.record("completion evidence beyond the first page", True,
-                               "desc-first picker paged to run-e0003 (beyond the old 100-read); selection+draft held across page load and a live event; exact run_ids submitted and closed server-side",
-                               shot2)
+                results.record("completion evidence beyond the first page", ok=True,
+                               detail="desc-first picker paged to run-e0003 (beyond the old 100-read); selection+draft held across page load and a live event; exact run_ids submitted and closed server-side",
+                               screenshot=shot2)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s16_completion_FAILED")
-                results.record("completion evidence beyond the first page", False, repr(exc), shot)
+                results.record("completion evidence beyond the first page", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S16c: a failed evidence read is an error, never "no runs" ----
             try:
@@ -1550,12 +1552,12 @@ async def run_harness(args: argparse.Namespace) -> None:
                     "document.getElementById('task-complete-runs').textContent.includes('No finished runs yet.')",
                     timeout=10, label="s16c retry reached the truthful empty state")
                 shot2 = await screenshot(cdp, session_id, results, "s16c2_complete_empty_state")
-                results.record("failed evidence read surfaces as an error", True,
-                               "one injected 503 rendered 'Failed to load runs' + Retry, never 'No finished runs'; retry reached the truthful empty state",
-                               shot2)
+                results.record("failed evidence read surfaces as an error", ok=True,
+                               detail="one injected 503 rendered 'Failed to load runs' + Retry, never 'No finished runs'; retry reached the truthful empty state",
+                               screenshot=shot2)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s16c_fetch_error_FAILED")
-                results.record("failed evidence read surfaces as an error", False, repr(exc), shot)
+                results.record("failed evidence read surfaces as an error", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S17: the move chooser across root pages, depths and search ---
             try:
@@ -1726,12 +1728,12 @@ async def run_harness(args: argparse.Namespace) -> None:
                     api_request, base, access_key, "GET", f"/api/sessions/{ids['bulk3']}")
                 assert_true(status == 200 and detail["task_parent_id"] == ids["late_mid"],
                             f"the search-chosen move submitted its real id ({detail.get('task_parent_id')})")
-                results.record("move chooser across pages, depths and search", True,
-                               "later-page roots reached; intermediate manager chosen under a later-page root and read back via task_parent_id; revision change mid-pagination explained and reloaded; invalidated-target refusal kept the chosen selection; explicit root submitted a real null parent; search hit submitted its real id",
-                               shot2)
+                results.record("move chooser across pages, depths and search", ok=True,
+                               detail="later-page roots reached; intermediate manager chosen under a later-page root and read back via task_parent_id; revision change mid-pagination explained and reloaded; invalidated-target refusal kept the chosen selection; explicit root submitted a real null parent; search hit submitted its real id",
+                               screenshot=shot2)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s17_move_FAILED")
-                results.record("move chooser across pages, depths and search", False, repr(exc), shot)
+                results.record("move chooser across pages, depths and search", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S18: the child list pages past the old 100-record read -------
             try:
@@ -1767,8 +1769,8 @@ async def run_harness(args: argparse.Namespace) -> None:
                     "document.getElementById('tab-runs').textContent.includes('task tree changed')",
                     timeout=10, label="s18 revision-change explanation visible")
                 await wait_for(cdp, session_id, """
-                    [...document.querySelectorAll('#tab-runs a')].some(a => a.href.endsWith('session=%s'))
-                """ % new_child["id"], timeout=10, label="s18 the mid-paging child appeared")
+                    [...document.querySelectorAll('#tab-runs a')].some(a => a.href.endsWith('session={}'))
+                """.format(new_child["id"]), timeout=10, label="s18 the mid-paging child appeared")
                 hrefs = await evaluate(cdp, session_id, """
                     [...document.querySelectorAll('#tab-runs a')].filter(a => a.href.includes('session=')).map(a => a.href)
                 """)
@@ -1785,12 +1787,12 @@ async def run_harness(args: argparse.Namespace) -> None:
                 """, timeout=10, label="s18 deep link switched to the child")
                 active = await evaluate(cdp, session_id, "SESSION_ID")
                 assert_true(active != ids["wide"], "the deep link left the wide manager")
-                results.record("child list pages past 100 with revision recovery", True,
-                               "50 -> 100 -> 106 children through the continuation; 409 explained and reloaded without duplicates/omissions; deep link followed",
-                               shot)
+                results.record("child list pages past 100 with revision recovery", ok=True,
+                               detail="50 -> 100 -> 106 children through the continuation; 409 explained and reloaded without duplicates/omissions; deep link followed",
+                               screenshot=shot)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s18_children_FAILED")
-                results.record("child list pages past 100 with revision recovery", False, repr(exc), shot)
+                results.record("child list pages past 100 with revision recovery", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S19: dialogs bind to their task across a real session switch -
             try:
@@ -1898,35 +1900,35 @@ async def run_harness(args: argparse.Namespace) -> None:
                         .find(b => b.textContent === 'Cancel').click();
                     })()
                 """)
-                results.record("dialogs bind to their task across session switches", True,
-                               "A's dialog dismissed with zero requests; the late cancel targeted B only and was dropped; the re-opened dialog submitted against the root and surfaced its blockers",
-                               shot)
+                results.record("dialogs bind to their task across session switches", ok=True,
+                               detail="A's dialog dismissed with zero requests; the late cancel targeted B only and was dropped; the re-opened dialog submitted against the root and surfaced its blockers",
+                               screenshot=shot)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s19_dialog_binding_FAILED")
-                results.record("dialogs bind to their task across session switches", False, repr(exc), shot)
+                results.record("dialogs bind to their task across session switches", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S20: the name keeps visible width at any depth ----------------
             try:
                 log("  s20: name readability")
                 await evaluate(cdp, session_id, f"switchSession('{ids['ops_root']}')")
-                await wait_for(cdp, session_id, "!!document.getElementById('tree-node-%s')" % ids["ops_root"])
+                await wait_for(cdp, session_id, "!!document.getElementById('tree-node-{}')".format(ids["ops_root"]))
                 # The nested manager's row exists once its parent is expanded.
                 await evaluate(cdp, session_id, f"Sidebar.SessionTree.ensureExpanded('{ids['ops_root']}')")
-                await wait_for(cdp, session_id, "!!document.getElementById('tree-node-%s')" % ids["ops_mid"])
+                await wait_for(cdp, session_id, "!!document.getElementById('tree-node-{}')".format(ids["ops_mid"]))
 
                 def geometry_expr(node_id):
-                    return """
-                    (() => {
-                      const row = document.getElementById('tree-node-%s');
+                    return f"""
+                    (() => {{
+                      const row = document.getElementById('tree-node-{node_id}');
                       if (!row) return null;
                       const inner = row.firstElementChild;
                       const name = row.querySelector('.session-name');
                       const meta = row.querySelector('.tree-meta-row');
-                      const r = (el) => { const b = el.getBoundingClientRect(); return {x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height)}; };
-                      return {name: r(name), meta: meta ? r(meta) : null, inner: r(inner),
-                              nameText: name.textContent};
-                    })()
-                    """ % node_id
+                      const r = (el) => {{ const b = el.getBoundingClientRect(); return {{x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height)}}; }};
+                      return {{name: r(name), meta: meta ? r(meta) : null, inner: r(inner),
+                              nameText: name.textContent}};
+                    }})()
+                    """
 
                 async def assert_readable(node_id, label):
                     geo = await evaluate(cdp, session_id, geometry_expr(node_id))
@@ -1948,14 +1950,14 @@ async def run_harness(args: argparse.Namespace) -> None:
                 focused = await evaluate(cdp, session_id, "document.activeElement && document.activeElement.dataset.nodeId")
                 assert_true(focused == ids["ops_root"], f"the row is keyboard-focusable ({focused})")
                 controls = await evaluate(cdp, session_id, """
-                    (() => {
-                      const row = document.getElementById('tree-node-%s');
+                    (() => {{
+                      const row = document.getElementById('tree-node-{}');
                       const add = row.querySelector('.tree-add-child');
                       const addRect = add.getBoundingClientRect();
-                      return {addVisible: addRect.width > 0 && addRect.height > 0,
-                              addLabel: add.getAttribute('aria-label')};
-                    })()
-                """ % ids["ops_mid"])
+                      return {{addVisible: addRect.width > 0 && addRect.height > 0,
+                              addLabel: add.getAttribute('aria-label')}};
+                    }})()
+                """.format(ids["ops_mid"]))
                 assert_true(controls["addVisible"] and "New subtask" in (controls["addLabel"] or ""),
                             f"the nested manager keeps its actionable add control ({controls})")
                 shot = await screenshot(cdp, session_id, results, "s20_desktop_readability")
@@ -1972,20 +1974,20 @@ async def run_harness(args: argparse.Namespace) -> None:
                     "document.documentElement.scrollWidth - document.documentElement.clientWidth")
                 assert_true(overflow <= 1, f"no horizontal overflow at 390px (delta={overflow})")
                 mob_geo = await assert_readable(ids["ops_root"], "ops root @390px")
-                mob_mid = await assert_readable(ids["ops_mid"], "nested ops manager @390px")
+                await assert_readable(ids["ops_mid"], "nested ops manager @390px")
                 shot2 = await screenshot(cdp, session_id, results, "s20b_mobile_readability")
                 await cdp.send("Emulation.setDeviceMetricsOverride", {
                     "width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False,
                 }, session_id=session_id)
-                results.record("tree names stay readable at any depth", True,
-                               f"desktop name {ops_geo['name']['w']}px / mobile {mob_geo['name']['w']}px of a {ops_geo['inner']['w']}px row; badges on their own line; focus and add control actionable",
-                               shot2)
+                results.record("tree names stay readable at any depth", ok=True,
+                               detail=f"desktop name {ops_geo['name']['w']}px / mobile {mob_geo['name']['w']}px of a {ops_geo['inner']['w']}px row; badges on their own line; focus and add control actionable",
+                               screenshot=shot2)
             except Exception as exc:
                 await cdp.send("Emulation.setDeviceMetricsOverride", {
                     "width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False,
                 }, session_id=session_id)
                 shot = await screenshot(cdp, session_id, results, "s20_readability_FAILED")
-                results.record("tree names stay readable at any depth", False, repr(exc), shot)
+                results.record("tree names stay readable at any depth", ok=False, detail=repr(exc), screenshot=shot)
 
             # The CDP collector records console.error calls and uncaught page
             # exceptions from Runtime.enable onward — this list is the only

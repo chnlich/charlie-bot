@@ -64,8 +64,8 @@ class SpawningScriptedBackend:
     and yields a scripted event list ending in a result event."""
 
     def __init__(self, events: list[dict], exit_code: int = 0, stderr_text: str = "",
-                 pre_run: "Callable[[], None] | None" = None,
-                 gate: "Callable[[], object] | None" = None) -> None:
+                 pre_run: Callable[[], None] | None = None,
+                 gate: Callable[[], object] | None = None) -> None:
         self._events = events
         self.exit_code = exit_code
         self.stderr_text = stderr_text
@@ -546,7 +546,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
         # contract) resolves to the child's Run — not to a run on the parent.
         resolved = tree.aliases.resolve_thread(manager.id, run_id)
         assert resolved == {"session_id": child_id, "run_id": run_id}
-        import src.api.deps as deps
+        from src.api import deps
         monkeypatch.setattr(deps, "_task_manager", tree)
         row = client.get(f"/api/threads/{manager.id}/threads/{run_id}", headers=OPERATOR)
         assert row.status_code == 200, row.text
@@ -655,7 +655,7 @@ async def test_stopped_queued_retry_never_launches_and_fresh_retry_launches(
 @pytest.mark.asyncio
 async def test_first_terminal_fact_wins_governs_followups(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+    _cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
     root = await create_task(tree, parent=None, request_id="root")
     worker = await create_task(tree, parent=root.id, request_id="w", profile="worker")
     await tree.runs.register_run(RunRecord(id="run-w", session_id=worker.id, kind="work"))
@@ -680,7 +680,7 @@ async def test_first_terminal_fact_wins_governs_followups(
 async def test_implement_delivery_requires_review_and_real_landing(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    repo, origin = init_repo_with_origin(tmp_path)
+    repo, _origin = init_repo_with_origin(tmp_path)
     manager = await create_task(tree, parent=None, request_id="root")
     task_spec = {
         "goal": "## Goal\n\nadd a marker file\n",
@@ -880,7 +880,7 @@ async def test_manual_complete_with_forged_landing_ref_stays_open(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from src.core.task_completion import CompletionEvidence
 
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+    _cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
     repo, _origin = init_repo_with_origin(tmp_path)
     worker = await create_task(
         tree, parent=None, request_id="w", profile="worker",
@@ -950,7 +950,7 @@ async def test_manager_turn_launch_delivers_the_snapshot_bytes(
     manager = await create_task(tree, parent=None, request_id="root")
     await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="the node rule"),
                           caller=OP_CALLER)
-    backends, builds = _manager_backend(
+    _backends, builds = _manager_backend(
         monkeypatch, tree, cfg, session_mgr,
         events=[result_event("manager turn done")])
 
@@ -1159,7 +1159,7 @@ async def test_missing_rule_fails_before_launch_and_leaves_input_unconsumed(
     meta = await tree.load_meta(manager.id)
     body = cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md"
     body.unlink()  # the rule vanished before the launch
-    backends, builds = _manager_backend(
+    _backends, builds = _manager_backend(
         monkeypatch, tree, cfg, session_mgr, events=[result_event("never")])
     admitted = await tree.dispatch.admit_input(
         manager.id, event_type=ET.USER, content="launch me", actor="user")
@@ -1200,7 +1200,7 @@ async def test_corrupt_rule_fails_before_launch_with_the_reason(
     meta = await tree.load_meta(manager.id)
     body = cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md"
     body.write_text("tampered bytes", encoding="utf-8")
-    backends, builds = _manager_backend(
+    _backends, builds = _manager_backend(
         monkeypatch, tree, cfg, session_mgr, events=[result_event("never")])
     await tree.dispatch.admit_input(
         manager.id, event_type=ET.USER, content="launch me", actor="user")
@@ -1220,7 +1220,7 @@ async def test_recovery_after_rule_deletion_uses_the_original_snapshot(
     manager = await create_task(tree, parent=None, request_id="root")
     await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="original rule"),
                           caller=OP_CALLER)
-    backends, builds = _manager_backend(
+    _backends, _builds = _manager_backend(
         monkeypatch, tree, cfg, session_mgr, events=[result_event("turn")])
     run_id = await _admit_and_dispatch(tree, manager.id, "go", "in-1")
     run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
@@ -1252,9 +1252,9 @@ async def test_snapshot_publish_failure_is_a_definitely_unlaunched_preparation_f
     manager = await create_task(tree, parent=None, request_id="root")
     await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="the rule"),
                           caller=OP_CALLER)
-    backends, builds = _manager_backend(
+    _backends, builds = _manager_backend(
         monkeypatch, tree, cfg, session_mgr, events=[result_event("never")])
-    import src.core.json_utils as json_utils
+    from src.core import json_utils
     real_atomic = json_utils.atomic_write_text
     calls = {"n": 0}
 
@@ -1295,7 +1295,7 @@ async def test_own_subtree_rule_launch_parity_and_edit_boundary(
     await tree.patch_task(
         manager.id, PatchSessionTaskRequest(subtree_prompt="program-wide rule"),
         caller=OP_CALLER)
-    backends, builds = _manager_backend(
+    _backends, _builds = _manager_backend(
         monkeypatch, tree, cfg, session_mgr,
         events=[result_event("manager turn done")])
 

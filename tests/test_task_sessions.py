@@ -197,7 +197,7 @@ async def test_create_is_stable_across_duplicate_request_and_fresh_reload(tmp_pa
 
 @pytest.mark.asyncio
 async def test_create_is_atomic_at_the_publish_seam(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  _, session_mgr, mgr = build_env(tmp_path)
+  _, _session_mgr, mgr = build_env(tmp_path)
 
   def explode(src: object, dst: object) -> None:
     raise OSError("crash before publication")
@@ -210,7 +210,7 @@ async def test_create_is_atomic_at_the_publish_seam(tmp_path: Path, monkeypatch:
   # No node, no temp leftovers; the same request then creates cleanly.
   cfg = make_home_config(tmp_path)
   assert not (cfg.sessions_dir / stable_task_id(None, "crashy")).exists()
-  assert not [p for p in cfg.sessions_dir.glob(".task-*")]
+  assert not list(cfg.sessions_dir.glob(".task-*"))
   created = await create_task(mgr, parent=None, request_id="crashy", name="X")
   assert created.id == stable_task_id(None, "crashy")
 
@@ -260,7 +260,7 @@ async def test_reparent_rejects_cycles_and_closed_targets(tmp_path: Path) -> Non
 
 @pytest.mark.asyncio
 async def test_tree_pagination_counts_and_attention_ancestor_path(tmp_path: Path) -> None:
-  _, session_mgr, mgr = build_env(tmp_path)
+  _, _session_mgr, mgr = build_env(tmp_path)
   ids = await build_three_levels(mgr)
 
   # One attention descendant: a launched run nobody observed exiting.

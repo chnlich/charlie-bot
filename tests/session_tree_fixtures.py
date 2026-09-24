@@ -82,9 +82,9 @@ def _meta_json(meta: SessionMetadata) -> str:
   return meta.model_dump_json(indent=2, exclude=_TRANSIENT)
 
 
-def ev(type: str, offset: float, event_id: str, *, actor: str = "user",
+def ev(event_type: str, offset: float, event_id: str, *, actor: str = "user",
        source_session_id: str | None = None, **extra: Any) -> dict:
-  event = {"id": event_id, "type": type, "timestamp": iso(offset),
+  event = {"id": event_id, "type": event_type, "timestamp": iso(offset),
            "actor": actor, "source_session_id": source_session_id}
   event.update(extra)
   return event
@@ -196,10 +196,10 @@ class FixtureBuilder:
     subprocess.run(
         ["git", "init", "-q", "-b", "main", str(repo)], check=True, env=env)
     git = ["git", "-C", str(repo)]
-    subprocess.run(git + ["config", "user.email", "synth@example.invalid"], check=True)
-    subprocess.run(git + ["config", "user.name", "Synth Tester"], check=True)
-    subprocess.run(git + ["add", "-A"], check=True)
-    subprocess.run(git + ["commit", "-qm", "synthetic base"], check=True)
+    subprocess.run([*git, "config", "user.email", "synth@example.invalid"], check=True)
+    subprocess.run([*git, "config", "user.name", "Synth Tester"], check=True)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-qm", "synthetic base"], check=True)
 
 
 def build_full_home(home: Path) -> Path:

@@ -112,7 +112,7 @@ async def test_restart_before_launch_requeues_through_the_same_launch_checks(
     """A run registered (reservation) but never launched: recovery dispatches it
     through the executor — one process, the exact registered provenance."""
     from src.core.task_recovery import reconcile_task_tree
-    cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+    cfg, session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
     backend = SpawningScriptedBackend([result_event("recovered work")])
     builds = install_resume_ready_backends(monkeypatch, [backend])
     patch_instructions_content(monkeypatch)
@@ -143,7 +143,7 @@ async def test_restart_after_launch_reattaches_live_process(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A recorded live (pid, pid_start) process is followed, never relaunched."""
     from src.core.task_recovery import reconcile_task_tree
-    cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+    cfg, session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
     gate = asyncio.Event()
     backend = SpawningScriptedBackend([result_event("late result")], gate=gate.wait)
     builds = install_resume_ready_backends(monkeypatch, [backend])
@@ -167,7 +167,7 @@ async def test_restart_after_launch_reattaches_live_process(
 
     asyncio.get_event_loop().create_task(_release_soon())
     await reconcile_task_tree(cfg, tree, session_mgr)
-    run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
+    _run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
     # The follow observed the recorded process ENDING (true→false) and the run
     # converged to its durable result instead of staying falsely running. The
     # scripted double never wrote a raw stream (no launcher drove it), so the
@@ -183,7 +183,7 @@ async def test_dead_process_drains_to_its_durable_result(
     """A process that ended before its terminal fact lands converges to the
     raw stream's result — never stuck 'running', never relaunched."""
     from src.core.task_recovery import reconcile_task_tree
-    cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+    cfg, session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
     backend = SpawningScriptedBackend([result_event("finished before the crash")])
     builds = install_resume_ready_backends(monkeypatch, [backend])
     run_id = "run-dead"
@@ -208,7 +208,7 @@ async def test_dead_process_drains_to_its_durable_result(
         tree.runs.load_events_sync(worker.id), run_id) is None, "the crash window was not simulated"
 
     await reconcile_task_tree(cfg, tree, session_mgr)
-    run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
+    _run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
     # The ended process converged to its durable result from the raw stream.
     assert outcome == "success"
     assert len(builds) == 1  # drained, never relaunched
@@ -222,7 +222,7 @@ async def test_dead_process_drains_to_its_durable_result(
 async def test_stop_request_wins_over_launch_and_recovery(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from src.core.task_recovery import reconcile_task_tree
-    cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+    cfg, session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
     builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])],
                               "src.agents.worker.build_backend")
     patch_instructions_content(monkeypatch)
@@ -254,7 +254,7 @@ async def test_terminal_append_crash_replays_review_and_close_once(
     from src.core.run_token import CallerIdentity
     from src.core.task_recovery import reconcile_task_tree
     from tests.test_task_execution import init_repo_with_origin
-    cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+    cfg, session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
     repo, _origin = init_repo_with_origin(tmp_path / "repo")
     await tree.patch_task(
         worker.id,
@@ -354,7 +354,7 @@ async def test_recovery_scopes_to_this_instance_only(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A second synthetic instance's data and owned process are unaffected."""
     from src.core.task_recovery import reconcile_task_tree
-    cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+    cfg, session_mgr, tree, _manager, _worker = await _manager_and_worker(tmp_path, monkeypatch)
     # A second instance under the same tmp tree: its own home, its own live run.
     from src.core.config import CharlieBotConfig
     other_home = tmp_path / "other-home"
@@ -439,7 +439,7 @@ async def test_live_resume_attaches_without_blocking_the_startup_pass(
     (the server lifespan awaits it): the pass returns with the follow
     attached, and the follow converges when the process actually ends."""
     from src.core.task_recovery import reconcile_task_tree
-    cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+    cfg, session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
     builds = install_resume_ready_backends(monkeypatch, [])
     gate = asyncio.Event()  # the recorded process stays "alive" until released
     import src.core.runs as runs_mod

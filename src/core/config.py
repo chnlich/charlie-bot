@@ -91,7 +91,7 @@ def pm_task_project_error(task_type: str | None, project: str | None, session_id
   return None
 
 
-def scheduled_binding_error(task: 'ScheduledTaskFields') -> str | None:
+def scheduled_binding_error(task: ScheduledTaskFields) -> str | None:
   """The config-level binding error of one scheduled task, or None.
 
   A bound task opts out of the role/group PM discovery entirely, so it must

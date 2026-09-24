@@ -226,7 +226,7 @@ async def test_exact_body_dedup_merges_every_source_at_first_position(tmp_path: 
   assert [(s.source_session_id) for s in matching[0].sources] == [ids["root"], ids["mid"]]
   # The block carries the first ordered position: before later subtree rules.
   position = snapshot.blocks.index(matching[0])
-  later = [b for b in snapshot.blocks[position + 1:]]
+  later = list(snapshot.blocks[position + 1:])
   assert all(b.text != same_rule for b in later)
   # Merely similar rules are never merged: the low node's own rule differs.
   await patched_refs(mgr, ids["low"], subtree=None, node=same_rule + " (variant)")
@@ -248,7 +248,7 @@ async def test_task_goal_and_context_refs_are_not_copied_into_persistent_rules(
   assert meta.task is not None and meta.task.goal == "worker goal"
   assert meta.subtree_prompt_ref is None and meta.node_prompt_ref is None
   goal_text = meta.task.goal
-  snapshot, _err = preview_snapshot(
+  _snapshot, _err = preview_snapshot(
       cfg, meta, "manager_turn", chain=((ids["root"], None),), node_ref=None, overlay=None)
   # Nothing about the goal is manufactured into any node rule.
   patched = await mgr.patch_task(

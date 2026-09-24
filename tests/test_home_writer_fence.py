@@ -93,10 +93,10 @@ def test_external_process_holding_fence_is_visible(tmp_path: Path) -> None:
   home.mkdir()
   holder_code = (
       "import sys, time\n"
-      "sys.path.insert(0, %r)\n"
+      f"sys.path.insert(0, {str(Path(__file__).parent.parent)!r})\n"
       "from src.core.home_writer_fence import acquire_home_writer_fence\n"
-      "fence = acquire_home_writer_fence(%r, purpose='external')\n"
-      "time.sleep(60)\n" % (str(Path(__file__).parent.parent), str(home))
+      f"fence = acquire_home_writer_fence({str(home)!r}, purpose='external')\n"
+      "time.sleep(60)\n"
   )
   proc = subprocess.Popen([sys.executable, "-c", holder_code],
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -195,7 +195,7 @@ def lifespan_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   monkeypatch.setattr(server_module.streaming_manager, "close_all", _AsyncStub())
   monkeypatch.setattr(server_module.ext_usage, "start_poller", _AsyncStub())
   monkeypatch.setattr(server_module.ext_usage, "stop_poller", _AsyncStub())
-  import src.core.task_recovery as task_recovery
+  from src.core import task_recovery
   monkeypatch.setattr(task_recovery, "reconcile_task_tree", _AsyncStub(return_value={}))
   return server_module
 

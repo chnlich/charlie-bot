@@ -504,7 +504,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 # masked by the failed-scenario exit below; the finally block's
                 # SystemExit would otherwise swallow this traceback.
                 log("harness exception traceback: " + traceback.format_exc())
-                results.record("harness-error", False, f"{type(exc).__name__}: {exc}", None)
+                results.record("harness-error", ok=False, detail=f"{type(exc).__name__}: {exc}", screenshot=None)
                 raise
             finally:
                 chrome_proc.terminate()
@@ -709,13 +709,13 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         await wait_row_activity(cdp, sid, root_id, {"spinner": True}, 120,
                                 "root row spinner during the manager turn", row_states)
         during_shot = await screenshot(cdp, sid, results, "s02c-running-row-desktop")
-        results.record("s02c-manager-turn-row-spinner", True,
-                       f"root row spinner visible without reload; observed label sequence: "
+        results.record("s02c-manager-turn-row-spinner", ok=True,
+                       detail=f"root row spinner visible without reload; observed label sequence: "
                        f"{[t[:28] for t in row_states]}",
-                       during_shot)
+                       screenshot=during_shot)
     except TimeoutError as exc:
-        results.record("s02c-manager-turn-row-spinner", False, str(exc)[:300],
-                       await screenshot(cdp, sid, results, "s02c-fail"))
+        results.record("s02c-manager-turn-row-spinner", ok=False, detail=str(exc)[:300],
+                       screenshot=await screenshot(cdp, sid, results, "s02c-fail"))
     # --- S3: child manager under the root ----------------------------------
     await open_task_tab(cdp, sid, "task")
     await wait_for(cdp, sid, "!!document.getElementById('task-action-child')", timeout=10,
@@ -735,8 +735,8 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     await evaluate(cdp, sid, f"Sidebar.SessionTree.ensureExpanded({json.dumps(root_id)})")
     await wait_for(cdp, sid, f"!!document.getElementById('tree-node-{child_id}')", timeout=15,
                    label="child row visible")
-    results.record("s03-create-child-manager", True, f"child={child_id[:8]} under root",
-                   await screenshot(cdp, sid, results, "s03-child-manager"))
+    results.record("s03-create-child-manager", ok=True, detail=f"child={child_id[:8]} under root",
+                   screenshot=await screenshot(cdp, sid, results, "s03-child-manager"))
 
     # --- S4: worker under the child manager --------------------------------
     await click(cdp, sid, "#task-action-child")
@@ -754,8 +754,8 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     await evaluate(cdp, sid, f"Sidebar.SessionTree.ensureExpanded({json.dumps(child_id)})")
     await wait_for(cdp, sid, f"!!document.getElementById('tree-node-{worker_id}')", timeout=15,
                    label="worker row visible")
-    results.record("s04-create-worker", True, f"worker={worker_id[:8]} under child",
-                   await screenshot(cdp, sid, results, "s04-worker-created"))
+    results.record("s04-create-worker", ok=True, detail=f"worker={worker_id[:8]} under child",
+                   screenshot=await screenshot(cdp, sid, results, "s04-worker-created"))
 
     # --- S5: goal editing on the Task tab ----------------------------------
     await open_task_tab(cdp, sid, "task")
@@ -768,8 +768,8 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                    "fetch('/api/sessions/' + SESSION_ID, {cache: 'no-store'})"
                    ".then(r => r.json()).then(d => (d.task && d.task.goal || '').includes('(edited)'))",
                    timeout=15, label="goal persisted")
-    results.record("s05-edit-goal", True, "goal edited and persisted through the Task tab",
-                   await screenshot(cdp, sid, results, "s05-goal-edited"))
+    results.record("s05-edit-goal", ok=True, detail="goal edited and persisted through the Task tab",
+                   screenshot=await screenshot(cdp, sid, results, "s05-goal-edited"))
 
 
     # --- S6: node switching preserves the unsaved draft --------------------
@@ -920,9 +920,9 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                        ".then(r => r.json()).then(d => !!(d.prompt_rules && d.prompt_rules.subtree &&"
                        " (d.prompt_rules.subtree.text || '').includes('one summary line')))",
                        timeout=15, label="subtree rule persisted")
-    results.record("s07-rules-editing", True,
-                   f"local rule on worker, subtree rule on child (scope radio={has_scope_radio})",
-                   await screenshot(cdp, sid, results, "s07-rules"))
+    results.record("s07-rules-editing", ok=True,
+                   detail=f"local rule on worker, subtree rule on child (scope radio={has_scope_radio})",
+                   screenshot=await screenshot(cdp, sid, results, "s07-rules"))
 
     # --- S8: the real GLM manager turn from the first message --------------
     # S2b's first message already rode the normal durable input path on the
@@ -943,9 +943,9 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
             break
         await asyncio.sleep(2)
     if run is None:
-        results.record("s08-real-glm-manager-turn", False,
-                       "no terminal manager_turn run within 180s (provider/network failure is an "
-                       "explicit failed live check)", await screenshot(cdp, sid, results, "s08-fail"))
+        results.record("s08-real-glm-manager-turn", ok=False,
+                       detail="no terminal manager_turn run within 180s (provider/network failure is an "
+                       "explicit failed live check)", screenshot=await screenshot(cdp, sid, results, "s08-fail"))
     else:
         native_dir = home / "clc-sessions"
         native_entries = sorted(p.name for p in native_dir.iterdir())
@@ -966,8 +966,8 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                            f"spinner cleared; row label reads: {after.get('label', '')[:60]!r}",
                            await screenshot(cdp, sid, results, "s08b-row-idle"))
         except TimeoutError as exc:
-            results.record("s08b-manager-turn-row-cleared", False, str(exc)[:300],
-                           await screenshot(cdp, sid, results, "s08b-fail"))
+            results.record("s08b-manager-turn-row-cleared", ok=False, detail=str(exc)[:300],
+                           screenshot=await screenshot(cdp, sid, results, "s08b-fail"))
         # --- S9: Run history and stored Context on the launched run --------
         await open_task_tab(cdp, sid, "runs")
         # The panel renders after its own fetch; an immediate textContent read
@@ -1194,9 +1194,9 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                        f"spinner inside the row, adjacent to a readable name, animated: {geometry}",
                        None)
     except TimeoutError as exc:
-        results.record("s14b-worker-run-activity-cues", False, str(exc)[:300],
-                       await screenshot(cdp, sid, results, "s14b-fail"))
-        results.record("s14c-activity-geometry", False, "skipped: no running row observed", None)
+        results.record("s14b-worker-run-activity-cues", ok=False, detail=str(exc)[:300],
+                       screenshot=await screenshot(cdp, sid, results, "s14b-fail"))
+        results.record("s14c-activity-geometry", ok=False, detail="skipped: no running row observed", screenshot=None)
 
     # --- Temporal motion proof on the live cues (the user-restored animation) ---
     # The worker row's spinner and the root row's delegated gear are genuinely
@@ -1222,7 +1222,7 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         return {kind: motion_timeline_verdict(samples, kind, min_span) for kind in ("spinner", "gear")}
 
     async def active_run_of(session_id: str) -> str | None:
-        status, page = api_request(base, access_key, "GET",
+        _status, page = api_request(base, access_key, "GET",
                                    f"/api/sessions/{session_id}/runs?order=desc&limit=1")
         items = (page.get("items") or []) if isinstance(page, dict) else []
         return items[0]["id"] if items and items[0].get("state") in ("running", "queued") else None
@@ -1283,9 +1283,9 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
             + f"; pulse cues under reduce: {reduced_scoped}",
             await screenshot(cdp, sid, results, "s14h-motion-reduced"))
     except (TimeoutError, RuntimeError) as exc:
-        results.record("s14g-motion-timeline-desktop", False, f"{run_label}: {str(exc)[:280]}", None)
-        results.record("s14h-motion-timeline-reduced-motion", False,
-                       "skipped: the desktop window failed", None)
+        results.record("s14g-motion-timeline-desktop", ok=False, detail=f"{run_label}: {str(exc)[:280]}", screenshot=None)
+        results.record("s14h-motion-timeline-reduced-motion", ok=False,
+                       detail="skipped: the desktop window failed", screenshot=None)
 
     # --- Late live windows and the stop ride the child manager's runs ---------
     # The worker Run's lifetime is the model's own (observed ~17-45s for a
@@ -1349,8 +1349,8 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
             + "; ".join(detail for _, detail in reload_verdicts.values()),
             await screenshot(cdp, sid, results, "s14i-motion-after-reload"))
     except (TimeoutError, RuntimeError) as exc:
-        results.record("s14i-motion-timeline-after-reload", False,
-                       f"{late_label} ({reload_send}): {str(exc)[:280]}", None)
+        results.record("s14i-motion-timeline-after-reload", ok=False,
+                       detail=f"{late_label} ({reload_send}): {str(exc)[:280]}", screenshot=None)
 
     # Narrow viewport: the same live cues at 390px, names still readable. The
     # drawer is opened here and NO reload follows, so the tree stays rendered
@@ -1368,10 +1368,10 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     narrow_child = await tree_row_activity_tolerant(cdp, sid, child_id)
     narrow_root = await tree_row_activity_tolerant(cdp, sid, root_id)
     if narrow_child is None:
-        results.record("s14d-narrow-during-activity", False,
-                       "the child row left the open tree before the narrow check; not "
+        results.record("s14d-narrow-during-activity", ok=False,
+                       detail="the child row left the open tree before the narrow check; not "
                        "painted as a pass",
-                       await screenshot(cdp, sid, results, "s14d-child-row-gone"))
+                       screenshot=await screenshot(cdp, sid, results, "s14d-child-row-gone"))
     else:
         narrow_readability = await evaluate(cdp, sid, f"""
             (() => {{
@@ -1424,9 +1424,9 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         except (TimeoutError, RuntimeError) as exc:
             narrow_details.append(f"attempt {narrow_attempt} ({narrow_send}): {str(exc)[:220]}")
     if not narrow_recorded:
-        results.record("s14j-motion-timeline-narrow", False,
-                       " | ".join(narrow_details)[:700],
-                       await screenshot(cdp, sid, results, "s14j-motion-narrow"))
+        results.record("s14j-motion-timeline-narrow", ok=False,
+                       detail=" | ".join(narrow_details)[:700],
+                       screenshot=await screenshot(cdp, sid, results, "s14j-motion-narrow"))
 
     # The real stop: durable request, signal, observed exit -> interrupted, on
     # the child manager's own bounded turn. The stop message rides the same
@@ -1444,9 +1444,9 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         stop_stage = "stop request"
         stop_target = await active_run_of(child_id)
         if stop_target is None:
-            results.record("s14e-stop-clears-activity", False,
-                           f"no active child run remained to stop ({stop_send}); stop clearing "
-                           "not evidenced this round", None)
+            results.record("s14e-stop-clears-activity", ok=False,
+                           detail=f"no active child run remained to stop ({stop_send}); stop clearing "
+                           "not evidenced this round", screenshot=None)
         else:
             status, cancel = api_request(base, access_key, "POST",
                                          f"/api/sessions/{child_id}/runs/{stop_target}/cancel",
@@ -1466,7 +1466,7 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                 after = await tree_row_activity(cdp, sid, child_id)
                 label = after.get("label", "")
             root_after = await tree_row_activity_tolerant(cdp, sid, root_id)
-            w_status, w_page = api_request(base, access_key, "GET",
+            _w_status, w_page = api_request(base, access_key, "GET",
                                            f"/api/sessions/{worker_id}/runs?order=desc&limit=1")
             w_runs = (w_page.get("items") or []) if isinstance(w_page, dict) else []
             worker_row_after = await tree_row_activity_tolerant(cdp, sid, worker_id)
@@ -1487,15 +1487,15 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         runs = (runs_page.get("items") or []) if isinstance(runs_page, dict) else []
         run_summary = "; ".join(f"{r.get('id', '')[:8]}={r.get('state')}/pid={r.get('pid')}"
                                 for r in runs[:5])
-        results.record("s14e-stop-clears-activity", False,
-                       f"stop stage {stop_stage} ({stop_send}): {str(exc)[:220]}; "
+        results.record("s14e-stop-clears-activity", ok=False,
+                       detail=f"stop stage {stop_stage} ({stop_send}): {str(exc)[:220]}; "
                        f"child runs last5: {run_summary}",
-                       await screenshot(cdp, sid, results, "s14e-fail"))
+                       screenshot=await screenshot(cdp, sid, results, "s14e-fail"))
     await cdp.send("Emulation.clearDeviceMetricsOverride", session_id=sid)
     await asyncio.sleep(0.4)
     results.record("s14f-desktop-after-stop",
-                   True, "cleared device override; final desktop state recorded",
-                   await screenshot(cdp, sid, results, "s14f-after-desktop"))
+                   ok=True, detail="cleared device override; final desktop state recorded",
+                   screenshot=await screenshot(cdp, sid, results, "s14f-after-desktop"))
 
     # --- S15: unread-reply feedback on the real writer path -----------------
     # The unread writer is the finalize chain's summary delivery
@@ -1551,12 +1551,12 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         await wait_row_activity(cdp, sid, fresh_root_id, {"spinner": True, "unread": False}, 120,
                                 "trial root spinner during its manager turn")
         results.record("s15b-spinner-hides-unread",
-                       True,
-                       "the trial row spins live; the dot stays hidden while work runs",
-                       await screenshot(cdp, sid, results, "s15b-during-spinner"))
+                       ok=True,
+                       detail="the trial row spins live; the dot stays hidden while work runs",
+                       screenshot=await screenshot(cdp, sid, results, "s15b-during-spinner"))
     except TimeoutError as exc:
-        results.record("s15b-spinner-hides-unread", False, str(exc)[:300],
-                       await screenshot_tolerant(sid, "s15b-fail"))
+        results.record("s15b-spinner-hides-unread", ok=False, detail=str(exc)[:300],
+                       screenshot=await screenshot_tolerant(sid, "s15b-fail"))
 
     # Reduced-motion scope after the user's icon-motion correction: with the
     # OS preference emulated the running badge pulse and the unread dot pulse
@@ -1617,7 +1617,7 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
     async def wait_terminal_run(node_id: str, bound: float = 240.0) -> dict | None:
         deadline = time.monotonic() + bound
         while time.monotonic() < deadline:
-            status, page = api_request(base, access_key, "GET",
+            _status, page = api_request(base, access_key, "GET",
                                        f"/api/sessions/{node_id}/runs?order=desc&limit=1")
             runs = (page.get("items") or []) if isinstance(page, dict) else []
             if runs and runs[0].get("state") in ("success", "failed", "stopped", "interrupted"):
@@ -1644,9 +1644,9 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                        f"dot animation {dot_anim!r})",
                        await screenshot(cdp, sid, results, "s15c-unread"))
     except TimeoutError as exc:
-        results.record("s15c-unread-dot-after-turn", False,
-                       f"{str(exc)[:240]}; run terminal: {one_run and one_run.get('state')}",
-                       await screenshot_tolerant(sid, "s15c-fail"))
+        results.record("s15c-unread-dot-after-turn", ok=False,
+                       detail=f"{str(exc)[:240]}; run terminal: {one_run and one_run.get('state')}",
+                       screenshot=await screenshot_tolerant(sid, "s15c-fail"))
 
     # The second trial root gets its own real reply: two unread tasks at once.
     await send_manager_turn(rapid_root_id)
@@ -1662,9 +1662,9 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                        f"({two_run and two_run.get('state')}): two idle rows, two unread dots",
                        await screenshot(cdp, sid, results, "s15d-two-unread"))
     except TimeoutError as exc:
-        results.record("s15d-two-unread-tasks", False,
-                       f"{str(exc)[:240]}; run terminal: {two_run and two_run.get('state')}",
-                       await screenshot_tolerant(sid, "s15d-fail"))
+        results.record("s15d-two-unread-tasks", ok=False,
+                       detail=f"{str(exc)[:240]}; run terminal: {two_run and two_run.get('state')}",
+                       screenshot=await screenshot_tolerant(sid, "s15d-fail"))
 
     # Second client: a real second tab on the same profile (its own WebSocket).
     # It deep-links to the neutral worker: the deep link marks THAT session
@@ -1691,8 +1691,8 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
                        f"({two_two.get('label', '')[:24]!r})",
                        await screenshot(cdp, sid2, results, "s15e-second-client-unread"))
     except (TimeoutError, AssertionError) as exc:
-        results.record("s15e-second-client-unread", False, str(exc)[:300],
-                       await screenshot_tolerant(sid2, "s15e-fail"))
+        results.record("s15e-second-client-unread", ok=False, detail=str(exc)[:300],
+                       screenshot=await screenshot_tolerant(sid2, "s15e-fail"))
 
     # Opening one trial root clears exactly its dot everywhere; the other
     # root's dot survives (another task remaining unread).
@@ -1707,13 +1707,13 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
         await wait_row_activity(cdp, sid2, rapid_root_id, {"unread": True}, 20,
                                 "the other root remains unread in the second client")
         results.record("s15f-open-clears-one-keeps-other",
-                       True,
-                       "opening the first trial root cleared its dot in both clients; "
+                       ok=True,
+                       detail="opening the first trial root cleared its dot in both clients; "
                        "the second root remains unread",
-                       await screenshot(cdp, sid2, results, "s15f-opened-read"))
+                       screenshot=await screenshot(cdp, sid2, results, "s15f-opened-read"))
     except TimeoutError as exc:
-        results.record("s15f-open-clears-one-keeps-other", False, str(exc)[:300],
-                       await screenshot_tolerant(sid, "s15f-fail"))
+        results.record("s15f-open-clears-one-keeps-other", ok=False, detail=str(exc)[:300],
+                       screenshot=await screenshot_tolerant(sid, "s15f-fail"))
     finally:
         tab2_errs = await evaluate(cdp, sid2, "window.__errs || []")
         cdp.console_errors = list(cdp.console_errors or []) + [f"tab2: {e}" for e in (tab2_errs or [])]
@@ -1785,10 +1785,10 @@ async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
             await asyncio.sleep(2)
         native_entries = sorted(p.name for p in (home / "clc-sessions").iterdir())
         if model_run is None:
-            results.record(f"s13-live-{model_id}", False,
-                           "no terminal manager_turn run within 180s (provider/network failure "
+            results.record(f"s13-live-{model_id}", ok=False,
+                           detail="no terminal manager_turn run within 180s (provider/network failure "
                            "is an explicit failed live check)",
-                           await screenshot(cdp, sid, results, f"s13-fail-{model_id}"))
+                           screenshot=await screenshot(cdp, sid, results, f"s13-fail-{model_id}"))
         else:
             # Same live-claim bar as the default model's s08: only a successful
             # turn with the selected backend and a native session inside the

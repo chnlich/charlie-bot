@@ -233,7 +233,7 @@ def test_read_source_backend_requires_referenced_credential(tmp_path: Path,
       "id": "clc-cred", "label": "CLC", "type": "charlie-code", "model": "openai/fake",
       "api_base": "http://127.0.0.1:9/v1", "credential": "missing-section"})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
-  with pytest.raises(PreviewRefusedError, match="credentials.missing-section.api_key"):
+  with pytest.raises(PreviewRefusedError, match=r"credentials\.missing-section\.api_key"):
     read_source_backend("clc-cred")
 
 
@@ -333,7 +333,7 @@ def test_validate_existing_config_requires_the_backend_credential(tmp_path: Path
   home = _existing_preview_home(tmp_path, backend={
       "id": "clc-cred", "label": "CLC", "type": "charlie-code", "model": "openai/fake",
       "api_base": "http://127.0.0.1:9/v1", "credential": "provider"})
-  with pytest.raises(PreviewRefusedError, match="provider.api_key"):
+  with pytest.raises(PreviewRefusedError, match=r"provider\.api_key"):
     validate_existing_config(home)
 
 
@@ -342,7 +342,7 @@ def test_validate_existing_config_requires_the_backend_credential(tmp_path: Path
 # ---------------------------------------------------------------------------
 
 
-def _setup_for(home: Path, port: int, *, fresh: bool) -> "preview_module.PreviewSetup":
+def _setup_for(home: Path, port: int, *, fresh: bool) -> preview_module.PreviewSetup:
   return preview_module.PreviewSetup(
       home=home, port=port, url=f"http://127.0.0.1:{port}", backend_id="clc-test",
       backend_entry={"id": "clc-test", "label": "CLC", "type": "charlie-code",
@@ -476,7 +476,7 @@ def test_read_source_backend_additions_refuse_unisolated_type_missing_credential
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
   with pytest.raises(PreviewRefusedError, match="only for charlie-code"):
     read_source_backend_additions(["other-family"], exclude_ids=set())
-  with pytest.raises(PreviewRefusedError, match="credentials.missing-section.api_key"):
+  with pytest.raises(PreviewRefusedError, match=r"credentials\.missing-section\.api_key"):
     read_source_backend_additions(["clc-cred"], exclude_ids=set())
   with pytest.raises(PreviewRefusedError, match="declares no api_base"):
     read_source_backend_additions(["clc-noapi"], exclude_ids=set())
@@ -975,9 +975,8 @@ def test_preview_gate_closes_the_host_global_terminal_websocket() -> None:
   from starlette.websockets import WebSocketDisconnect
 
   client = TestClient(_gated_probe_app())
-  with pytest.raises(WebSocketDisconnect):
-    with client.websocket_connect("/ws/terminal"):
-      pass
+  with pytest.raises(WebSocketDisconnect), client.websocket_connect("/ws/terminal"):
+    pass
 
 
 def test_preview_gate_leaves_ordinary_websockets_connected() -> None:
@@ -1001,7 +1000,7 @@ def test_preview_mode_flag() -> None:
 
 
 def _cli_env(source: Path, *, strip_launcher: bool = False) -> dict:
-  env = {k: v for k, v in os.environ.items()}
+  env = dict(os.environ.items())
   env["CHARLIEBOT_HOME"] = str(source)
   env["PYTHONUNBUFFERED"] = "1"
   if strip_launcher:

@@ -62,8 +62,8 @@ def band_metrics(img, x0, x1, band):
     badge_ys = []
     for y in range(band[1] + 1, min(band[1] + 26, img.height)):
         for x in range(x0, x1):
-            l = lum(px[x, y])
-            if BADGE_LUM_LO <= l <= BADGE_LUM_HI:
+            pixel_lum = lum(px[x, y])
+            if BADGE_LUM_LO <= pixel_lum <= BADGE_LUM_HI:
                 badge_count += 1
                 badge_ys.append(y)
     return {

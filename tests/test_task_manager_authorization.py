@@ -502,7 +502,7 @@ async def test_queued_retry_launch_recheck_and_verify_exemption_remain_effective
       RunRecord(id="verify-run", session_id=verify.id, kind="work", backend="fake", model="fake-model"))
   observation = await tree.dispatch.executor.launch_and_settle(verify.id, verify_run.id)
   assert observation.withheld is None
-  run, outcome = await wait_for_terminal_run(tree, verify.id, verify_run.id)
+  _run, outcome = await wait_for_terminal_run(tree, verify.id, verify_run.id)
   assert outcome == "success"
   assert len(builds) == 1
 

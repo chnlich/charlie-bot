@@ -111,7 +111,7 @@ async def test_unread_is_independent_of_work_state_across_a_run(env) -> None:
 
 @pytest.mark.asyncio
 async def test_terminal_states_never_infer_unread(env) -> None:
-  tree, session_mgr, _root_id, worker_a_id, _worker_b_id = env
+  tree, _session_mgr, _root_id, worker_a_id, _worker_b_id = env
   # A successful run ends idle, still not unread.
   run_ok = await tree.runs.register_run(RunRecord(id="run-o", session_id=worker_a_id, kind="work"))
   await tree.dispatch.finish_run(worker_a_id, run_ok.id, outcome="success", exit_code=0)

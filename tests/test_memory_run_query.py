@@ -82,7 +82,7 @@ def _run_cli(monkeypatch: pytest.MonkeyPatch, cfg, argv: list[str], token: str |
 
 
 async def test_active_run_token_fixes_the_audience(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
+  cfg, _tree, _session_id, _run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
   try:
     # No --audience: the worker run's token filters to the worker audience.
     out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "beta"], token)
@@ -103,7 +103,7 @@ async def test_active_run_token_fixes_the_audience(tmp_path: Path, monkeypatch: 
 
 
 async def test_manager_run_token_maps_to_master_audience(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="manager")
+  cfg, _tree, _session_id, _run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="manager")
   try:
     out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "alpha"], token)
     assert code == 0, err
@@ -131,19 +131,19 @@ async def test_ended_run_token_refuses(tmp_path: Path, monkeypatch: pytest.Monke
 
 async def test_invalid_and_not_launched_tokens_refuse(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
+  cfg, tree, session_id, run_id, _token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
   try:
     # A token signed with a different key fails verification.
     foreign = sign_run_token(
         RunTokenClaims(session_id=session_id, run_id=run_id, agent="worker"), "other-key")
-    out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "beta"], foreign)
+    _out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "beta"], foreign)
     assert code == 1
     assert "invalid run token" in err
     # A run registered but never launched has no process identity to stand for.
     await tree.runs.register_run(RunRecord(id="idle-run", session_id=session_id, kind="work"))
     idle_token = sign_run_token(
         RunTokenClaims(session_id=session_id, run_id="idle-run", agent="worker"), "query-op-key")
-    out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "beta"], idle_token)
+    _out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "beta"], idle_token)
     assert code == 1
     assert "has not launched" in err
   finally:
@@ -151,14 +151,14 @@ async def test_invalid_and_not_launched_tokens_refuse(
 
 
 async def test_wrong_instance_token_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
+  cfg, _tree, _session_id, _run_id, _token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
   try:
     # A token for a session this instance never heard of.
     stranger = sign_run_token(
         RunTokenClaims(session_id="00000000-0000-0000-0000-00000000beef",
                        run_id="r", agent="worker"),
         "query-op-key")
-    out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "beta"], stranger)
+    _out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "beta"], stranger)
     assert code == 1
     assert "active run" in err
   finally:
@@ -166,7 +166,7 @@ async def test_wrong_instance_token_refuses(tmp_path: Path, monkeypatch: pytest.
 
 
 async def test_no_token_keeps_operator_semantics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
+  cfg, _tree, _session_id, _run_id, _token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
   try:
     out, err, code = _run_cli(
         monkeypatch, cfg, ["query", "--topic", "alpha", "--audience", "master"], None)

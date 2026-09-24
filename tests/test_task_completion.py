@@ -59,7 +59,7 @@ async def finish_worker_run(tree: TaskTreeManager, session_id: str, run_id: str)
 
 @pytest.mark.asyncio
 async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_path: Path) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_mgr, tree = build_env(tmp_path)
   project = await create_task(tree, parent=None, request_id="project")
   feature = await create_task(tree, parent=project.id, request_id="feature")
   worker_1 = await create_task(tree, parent=feature.id, request_id="w1", profile="worker")
@@ -122,7 +122,7 @@ async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_pa
 
 @pytest.mark.asyncio
 async def test_implement_completion_requires_review_and_landing_evidence(tmp_path: Path) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   worker = await create_task(
       tree, parent=root.id, request_id="w", profile="worker",
@@ -213,7 +213,7 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
     await tree.completion.complete_task(
         worker.id, request_id="close-forged", evidence=forged, caller=OPERATOR)
   assert tree.task_state(worker.id) == "open"
-  status, payload = await tree.completion.complete_task(
+  status, _payload = await tree.completion.complete_task(
       worker.id, request_id="close-implement", evidence=good, caller=OPERATOR)
   assert status == 200
   assert tree.task_state(worker.id) == "completed"
@@ -224,7 +224,7 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
 
 @pytest.mark.asyncio
 async def test_failed_child_reports_remain_visible(tmp_path: Path) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   child = await create_task(tree, parent=root.id, request_id="child", profile="worker")
   await tree.runs.register_run(RunRecord(id="run-f", session_id=child.id, kind="work"))
@@ -257,7 +257,7 @@ async def test_failed_only_universe_still_refuses_completion_on_a_bare_claim(tmp
   a delivery universe with neither a successful nor a failed Run to cite — the
   terminal-driven node, cancelled-only or interrupted-only child work. A
   failed-only subtree still refuses to be called completed on a bare claim."""
-  cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   failed_child = await create_task(tree, parent=root.id, request_id="failed", profile="worker")
   await tree.runs.register_run(RunRecord(id="run-f", session_id=failed_child.id, kind="work"))
@@ -306,7 +306,7 @@ def manager_agent_headers(tree: TaskTreeManager, session_id: str, run_id: str, c
 
 @pytest.mark.asyncio
 async def test_own_manager_close_returns_202_and_rechecks_after_run_finish(tmp_path: Path) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   manager = await create_task(tree, parent=root.id, request_id="mgr")
   pid, pid_start, started_at = live_identity()
@@ -353,7 +353,7 @@ async def test_own_manager_close_returns_202_and_rechecks_after_run_finish(tmp_p
   await tree.dispatch.finish_run(manager.id, "run-consume", outcome="success")
   assert tree.dispatch.pending_inputs(manager.id) == []
   # Repeated crash recovery does not double-close once conditions clear.
-  status_now, payload_now = await tree.completion.complete_task(
+  status_now, _payload_now = await tree.completion.complete_task(
       manager.id, request_id="close-own-2",
       evidence=CompletionEvidence(summary="wrap", result_refs=["run:run-consume"],
                                   run_ids=["run-consume"]),
@@ -366,7 +366,7 @@ async def test_own_manager_close_returns_202_and_rechecks_after_run_finish(tmp_p
 
 @pytest.mark.asyncio
 async def test_own_run_close_scope_attacks_fail(tmp_path: Path) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   manager = await create_task(tree, parent=root.id, request_id="mgr")
   worker = await create_task(tree, parent=root.id, request_id="worker", profile="worker")
@@ -411,7 +411,7 @@ async def test_own_run_close_scope_attacks_fail(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_cancel_refuses_active_runs_and_open_children(tmp_path: Path) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   child = await create_task(tree, parent=root.id, request_id="child", profile="worker")
 
@@ -454,7 +454,7 @@ async def test_cancel_refuses_active_runs_and_open_children(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_reopen_contract(tmp_path: Path) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_mgr, tree = build_env(tmp_path)
   project = await create_task(tree, parent=None, request_id="project")
   feature = await create_task(tree, parent=project.id, request_id="feature")
   worker = await create_task(tree, parent=feature.id, request_id="worker", profile="worker")
@@ -549,7 +549,7 @@ async def test_reopen_contract(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_hidden_ancestor_keeps_descendant_path_navigable(tmp_path: Path) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   mid = await create_task(tree, parent=root.id, request_id="mid")
   leaf = await create_task(tree, parent=mid.id, request_id="leaf", profile="worker")
@@ -602,7 +602,7 @@ async def test_child_report_renders_once_across_paths(tmp_path: Path) -> None:
   from src.api.message_utils import events_to_view
   from src.core.message_aggregator import MessageAggregator
 
-  cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   child = await create_task(tree, parent=root.id, request_id="child", profile="worker")
   await tree.runs.register_run(RunRecord(id="run-c", session_id=child.id, kind="work"))
@@ -636,7 +636,7 @@ async def test_cancel_with_unprocessed_input_keeps_it_as_preserved_history(tmp_p
   refuses active/unresolved execution and open children only. Otherwise a
   task whose input nothing consumed yet is uncancellable. The input stays
   preserved as pending history on the cancelled node."""
-  cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   await tree.dispatch.admit_input(
       root.id, event_type=ET.USER, content="later input", actor="user", input_id="late-1")
@@ -662,7 +662,7 @@ async def test_reopen_announces_after_the_durable_append(tmp_path: Path) -> None
   too, so live clients see the same single system line catch-up restores."""
   import src.core.sessions as sessions_module
 
-  cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   await tree.runs.register_run(RunRecord(id="run-r", session_id=root.id, kind="work"))
   await tree.dispatch.finish_run(root.id, "run-r", outcome="success")

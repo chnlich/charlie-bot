@@ -185,7 +185,7 @@ async def test_failed_prepublication_create_emits_no_signal(env) -> None:
 
 @pytest.mark.asyncio
 async def test_agent_scoped_creation_notifies_the_tree(env) -> None:
-  tree, session_mgr, root_id = env
+  tree, _session_mgr, root_id = env
   import os
 
   from src.core.runs import read_pid_stat

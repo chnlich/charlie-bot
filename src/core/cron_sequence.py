@@ -470,13 +470,13 @@ def resolved_backend_model(
   """(backend, model) for one fire's run: the step's or task's backend, resolved
   strictly to its configured default model (the same resolution the legacy
   scheduled worker spawn rode)."""
-  from src.core.spawner_backends import _option_default_backend_model
+  from src.core.backend_models import option_default_model
 
   effective = backend_id or effective_backend(task_cfg, tree)
   option = tree._cfg.get_backend_option(effective)
   if option is None:
     raise ValueError(f"scheduled task '{task_cfg.name}' backend '{effective}' is not configured")
-  return _option_default_backend_model(option, source="scheduled task ")
+  return option.id, option_default_model(option, subject="scheduled task backend ")
 
 
 def _adapter_of(tree: TaskTreeManager) -> object:

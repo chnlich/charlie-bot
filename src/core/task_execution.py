@@ -50,12 +50,11 @@ from src.core import claude_relay, git, review, runs, task_prompts
 from src.core import event_types as ET
 from src.core.chat_events import chat_events_path
 from src.core.config import CharlieBotConfig, get_credentials
+from src.core.constants import SESSION_ID_ENV_VAR, BackendType
 from src.core.control_events import sha256_hex, stable_run_id
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import (
-    SESSION_ID_ENV_VAR,
     BackendOption,
-    BackendType,
     RunRecord,
     SessionMetadata,
     TaskType,

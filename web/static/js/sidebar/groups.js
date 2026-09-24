@@ -262,6 +262,7 @@ const PENCIL_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" st
 // and, through the namespace, workers.js's trigger-card icon
 // (Sidebar.CLOCK_SVG_BODY). Each call site keeps its own <svg> wrapper.
 const PLUS_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>`;
+const DOC_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414A1 1 0 0121 9.414V19a2 2 0 01-2 2z"/>`;
 const CLOCK_SVG_BODY = `<circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/>`;
 
 // The one modal chrome for the sidebar's JS-built overlays: showGroupSelector's
@@ -327,6 +328,17 @@ function renderNewChildButton(s, activeBtnClass) {
       'hover:text-green-400',
       'New child session',
       PLUS_SVG_PATH,
+      activeBtnClass);
+}
+
+// A logical session row opens the read-only Task & context dialog
+// (modals.js): its task record over the context its next Run assembles.
+function renderTaskContextButton(s, activeBtnClass) {
+  return renderRowActionButton(
+      `event.preventDefault(); event.stopPropagation(); openTaskContextModal('${s.id}')`,
+      'hover:text-blue-300',
+      'Task &amp; context',
+      DOC_SVG_PATH,
       activeBtnClass);
 }
 
@@ -954,6 +966,7 @@ function renderSessionItem(s, filter, options = {}) {
       ${renderRenameButton(s, activeBtnClass)}
       ${groupBtn}
       ${renderNewChildButton(s, activeBtnClass)}
+      ${renderTaskContextButton(s, activeBtnClass)}
       ${renderArchiveButton(s, activeBtnClass)}
       ${renderCronGearButton(filter === 'scheduled' ? s.scheduled_task : '', activeBtnClass)}`;
   }

@@ -2,7 +2,7 @@
 
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiofiles
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -28,8 +28,10 @@ from src.core.models import (
     SessionStatus,
 )
 from src.core.sessions import SessionManager
-from src.core.slash_commands import SlashDispatchKind, SlashDispatchResult, dispatch_slash_command
 from src.core.tasks import create_logged_task
+
+if TYPE_CHECKING:
+  from src.core.slash_commands import SlashDispatchResult
 
 log = LazyStructlogLogger()
 
@@ -93,6 +95,11 @@ async def send_message(
 
   uploaded_files = serialize_uploaded_files(req.uploaded_files)
   content = build_agent_input_content(req.content, uploaded_files)
+
+  # The slash stack (M99 server import floor) loads at its only request-time
+  # call site; every server process that never dispatches a slash command
+  # skips the module's pydantic command-model construction entirely.
+  from src.core.slash_commands import SlashDispatchKind, dispatch_slash_command
 
   is_slash = req.content.startswith('/')
   log.info(
@@ -221,7 +228,7 @@ async def run_and_finalize(
 def launch_prompt_dispatch(
     cfg: CharlieBotConfig,
     meta: SessionMetadata,
-    dispatch: SlashDispatchResult,
+    dispatch: "SlashDispatchResult",
     session_mgr: SessionManager,
     display_content: str,
     uploaded_files: list[dict],

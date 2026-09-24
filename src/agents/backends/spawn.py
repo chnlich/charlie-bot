@@ -6,9 +6,11 @@ process's resident set (~55 us/MB measured on this host) — a multi-GB server
 stalls every concurrent request and WebSocket for ~0.1-0.2 s on each
 master/worker launch. This module parks the fork+exec handshake on a worker
 thread and wires the child's pipes onto the caller's loop afterwards; the
-preexec composition (nice, session cgroup, pdeathsig) still runs in the child
-after fork exactly as ``create_subprocess_exec`` ran it, so the child-side
-semantics are unchanged.
+preexec composition (nice, session cgroup) still runs in the child after fork
+exactly as ``create_subprocess_exec`` ran it, so the child-side semantics are
+unchanged. The pdeathsig spawns (``pdeathsig=True``) ride the compiled
+clone(CLONE_VM|CLONE_VFORK) stub instead: no page-table copy, pdeathsig
+child-side, nice and the cgroup move parent-side at the caller.
 
 The returned handle mirrors the ``asyncio.subprocess.Process`` surface the
 backend launch path reads: ``pid``, ``stdin`` (StreamWriter | None),
@@ -61,10 +63,10 @@ def _vfork_exec(argv: list[str], cwd: str | None, env: dict, stdin_fd: int, stdo
   a C toolchain, so a missing build surfaces here, at the first pdeathsig
   spawn, instead of at startup.
   """
-  from src.agents.backends._vfkspawn import spawn as vfork_spawn
+  import src.agents.backends._vfkspawn as vfkspawn
 
   env_items = [f"{key}={value}" for key, value in env.items()]
-  return vfork_spawn(argv, env_items, cwd, stdin_fd, stdout_fd, stderr_fd, os.getpid())
+  return vfkspawn.spawn(argv, env_items, cwd, stdin_fd, stdout_fd, stderr_fd, os.getpid())
 
 
 class SpawnedProcess:
@@ -172,8 +174,7 @@ async def spawn_subprocess(
     out_r, out_w = os.pipe()
     err_r, err_w = os.pipe()
     try:
-      pid = await loop.run_in_executor(
-          None, functools.partial(_vfork_exec, list(cmd), cwd, env, devnull, out_w, err_w))
+      pid = await loop.run_in_executor(None, functools.partial(_vfork_exec, list(cmd), cwd, env, devnull, out_w, err_w))
     except BaseException:
       for fd in (devnull, out_w, err_w, out_r, err_r):
         os.close(fd)

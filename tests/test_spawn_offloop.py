@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -146,10 +147,15 @@ async def test_fork_parks_off_the_event_loop(tmp_path: Path) -> None:
 @pytest.mark.skipif(sys.platform != "linux", reason="the vfork stub is Linux-only")
 @pytest.mark.asyncio
 async def test_vfork_piped_streams_cwd_env_and_exit_code() -> None:
-  proc = await _spawn(sys.executable, "-c",
-                      "import sys, os; sys.stdout.write(os.getcwd() + '\\n')"
-                      "; sys.stderr.write(os.environ['MARKER'] + '\\n')",
-                      cwd="/usr", env={**os.environ, "MARKER": "vfk"}, pdeathsig=True)
+  proc = await _spawn(
+      sys.executable,
+      "-c", "import sys, os; sys.stdout.write(os.getcwd() + '\\n')"
+      "; sys.stderr.write(os.environ['MARKER'] + '\\n')",
+      cwd="/usr",
+      env={
+          **os.environ, "MARKER": "vfk"
+      },
+      pdeathsig=True)
   assert await proc.stdout.readline() == b"/usr\n"
   assert await proc.stderr.readline() == b"vfk\n"
   assert await proc.wait() == 0 and proc.returncode == 0
@@ -168,8 +174,7 @@ async def test_vfork_exec_failure_raises_child_errno() -> None:
 async def test_vfork_close_fds_leaves_only_stdio() -> None:
   held = os.open("/etc/hostname", os.O_RDONLY)
   try:
-    proc = await _spawn(sys.executable, "-c", "import os; print(sorted(os.listdir('/proc/self/fd')))",
-                        pdeathsig=True)
+    proc = await _spawn(sys.executable, "-c", "import os; print(sorted(os.listdir('/proc/self/fd')))", pdeathsig=True)
     listing = await proc.stdout.readline()
     await proc.wait()
     assert str(held).encode() not in listing  # the caller's own fds never reach the child
@@ -195,9 +200,7 @@ _VFK_SPAWNER = (
 @pytest.mark.asyncio
 async def test_vfork_pdeathsig_kills_child_when_spawner_dies() -> None:
   """The piped transports' guarantee: the child cannot outlive its spawner."""
-  from subprocess import PIPE, Popen
-
-  spawner = Popen([sys.executable, "-c", _VFK_SPAWNER, os.getcwd()], stdout=PIPE, text=True)
+  spawner = subprocess.Popen([sys.executable, "-c", _VFK_SPAWNER, os.getcwd()], stdout=subprocess.PIPE, text=True)
   child_pid = int(spawner.stdout.readline().strip())
   spawner.wait()
   for _ in range(100):

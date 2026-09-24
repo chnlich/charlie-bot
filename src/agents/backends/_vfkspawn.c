@@ -162,8 +162,11 @@ static PyObject *py_spawn(PyObject *self, PyObject *args) {
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, argv[0]);
     goto fail;
   }
-  if (got == 0)
+  if (got == 0) {
+    PyMem_Free(argv);
+    PyMem_Free(envp);
     return PyLong_FromLong((long)pid);
+  }
   PyErr_SetFromErrno(PyExc_OSError);
 
 fail:

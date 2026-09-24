@@ -636,12 +636,12 @@ async def test_elone_of_pm_session_takes_inheriting_succession(
 # ---------------------------------------------------------------------------
 
 
-def _pm_task_payload(name: str, project: str = "bp-eval", **overrides: Any) -> dict[str, Any]:
+def _pm_task_payload(name: str, **overrides: Any) -> dict[str, Any]:
   payload: dict[str, Any] = {
       "name": name,
       "cron": "30 8 * * *",
       "type": "pm",
-      "project": project,
+      "project": "bp-eval",
   }
   payload.update(overrides)
   return payload

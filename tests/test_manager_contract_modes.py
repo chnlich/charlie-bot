@@ -39,10 +39,10 @@ COMMON_TEXT = "COMMON RULES: scoring standards and resources"
 SUPPLEMENT_TEXT = "MANAGER SUPPLEMENT"
 
 
-def _enabled_project(tmp_path: Path, group: str = "group-alpha") -> SimpleNamespace:
+def _enabled_project(tmp_path: Path) -> SimpleNamespace:
   """An enabled fake project: project.yaml naming a common body and a manager supplement."""
   cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_TEXT)
-  project_dir = cfg.charliebot_home / "projects" / group
+  project_dir = cfg.charliebot_home / "projects" / "group-alpha"
   project_dir.mkdir(parents=True)
   (project_dir / "project.yaml").write_text(
       "prompt_file: project.md\nmanager_prompt_file: manager.md\n", encoding="utf-8")
@@ -51,11 +51,11 @@ def _enabled_project(tmp_path: Path, group: str = "group-alpha") -> SimpleNamesp
   return cfg
 
 
-def _unconfigured_project(tmp_path: Path, group: str = "group-beta") -> SimpleNamespace:
+def _unconfigured_project(tmp_path: Path) -> SimpleNamespace:
   """An unconfigured fake project: a project directory without project.yaml."""
   cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_TEXT)
-  (cfg.charliebot_home / "projects" / group).mkdir(parents=True)
-  (cfg.charliebot_home / "projects" / group / "notes.md").write_text("UNCONFIGURED NOTES", encoding="utf-8")
+  (cfg.charliebot_home / "projects" / "group-beta").mkdir(parents=True)
+  (cfg.charliebot_home / "projects" / "group-beta" / "notes.md").write_text("UNCONFIGURED NOTES", encoding="utf-8")
   return cfg
 
 

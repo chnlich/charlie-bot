@@ -637,14 +637,14 @@ def post_internal_api(
   )
 
 
-def get_api(endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+def get_api(endpoint: str) -> dict[str, Any]:
   """GET a CharlieBot API endpoint and return the parsed JSON response.
 
   Mirrors ``post_internal_api`` error handling (including the bounded connect
   retry and version-skew hint). A read-only call mutates nothing, so the
   sent-but-lost class reports effect ``none`` and needs no readback.
   """
-  return _request_with_contract("GET", endpoint, params=params, unknown_effect="none")
+  return _request_with_contract("GET", endpoint, unknown_effect="none")
 
 
 def find_local_thread(

@@ -3002,7 +3002,6 @@ class ReviewSpawnThreadManager(JudgmentShim):
       self,
       session_meta: models.SessionMetadata,
       description: str,
-      branch_name: str | None = None,
       review_of: str | None = None,
       require_review: bool = True,
   ) -> models.ThreadMetadata:
@@ -3010,7 +3009,7 @@ class ReviewSpawnThreadManager(JudgmentShim):
         id="review-thread-id",
         session_id=session_meta.id,
         description=description,
-        branch_name=branch_name,
+        branch_name=None,
         review_of=review_of,
     )
 

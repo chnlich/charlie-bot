@@ -14,7 +14,6 @@ def load_yaml(path: Path, *, default: Any) -> Any:
   return data if data is not None else default
 
 
-def save_yaml(path: Path, data: Any, *, sort_keys: bool = False) -> None:
+def save_yaml(path: Path, data: Any) -> None:
   """Write data to a YAML file with consistent UTF-8 encoding and formatting."""
-  path.write_text(
-      yaml.safe_dump(data, allow_unicode=True, default_flow_style=False, sort_keys=sort_keys), encoding='utf-8')
+  path.write_text(yaml.safe_dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False), encoding='utf-8')

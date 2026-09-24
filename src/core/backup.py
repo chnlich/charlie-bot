@@ -117,16 +117,15 @@ def create_backup() -> Path:
   return archive_path
 
 
-def apply_retention(target_dir: Path | None = None) -> None:
-  """Apply tiered retention policy to backups in target_dir (default: this profile's).
+def apply_retention() -> None:
+  """Apply tiered retention policy to this profile's backups.
 
   - Keep all backups from the last 7 days.
   - Keep Sunday-only backups from 7-30 days ago.
   - Keep 1st-of-month backups from 30-90 days ago.
   - Delete everything older than 90 days.
   """
-  if target_dir is None:
-    target_dir = backup_dir()
+  target_dir = backup_dir()
   if not target_dir.exists():
     return
   now = datetime.now()

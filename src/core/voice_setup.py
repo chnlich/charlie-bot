@@ -39,7 +39,7 @@ PREFLIGHT_RECORDING_MAX_SECONDS = 15.0
 PREFLIGHT_RECORDING_TARGET_SECONDS = 10.0
 
 
-def write_voice_engine(home: Path, engine: str = "qwen3_hf") -> str:
+def write_voice_engine(home: Path) -> str:
   """Idempotently set ``voice.engine`` in ``<home>/config.yaml``; return the action taken.
 
   Reads the file textually so comments and formatting survive: the ``engine:`` line
@@ -47,6 +47,9 @@ def write_voice_engine(home: Path, engine: str = "qwen3_hf") -> str:
   after ``voice:`` when the block lacks one, and the whole block is appended when
   ``voice:`` is missing. Nothing is written when the effective value already matches.
   """
+  # The GPU enable flow pins the GPU pipeline: setup.sh runs enable only on
+  # nvidia-smi hosts, so there is nothing to choose between.
+  engine = "qwen3_hf"
   config_path = home / "config.yaml"
   text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
   lines = text.splitlines(keepends=True)

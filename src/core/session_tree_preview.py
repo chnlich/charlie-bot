@@ -521,7 +521,7 @@ def _prepare_preview(home_raw: str, port: int, backend_id: str | None,
 def validate_existing_config(home: Path) -> dict:
   """Load and structurally validate the preview home's config; refuse unrelated shapes."""
   path = home / "config.yaml"
-  data = load_yaml(path)
+  data = load_yaml(path, default=None)
   if not isinstance(data, dict):
     raise PreviewRefusedError(f"{path} is not a config mapping; this is not a usable preview home")
   unexpected = sorted(set(data) - _ALLOWED_CONFIG_TOP_KEYS)

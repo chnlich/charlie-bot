@@ -1,7 +1,11 @@
 """_LeanLineRenderer tests: byte-identical output against the dev ConsoleRenderer.
 
-Every test drives both renderers over the same event dict and asserts the strings
-are equal, so a structlog upgrade that moves a padding or quoting rule fails here.
+Every renderer test drives both renderers over the same event dict and asserts
+the strings are equal, so a structlog upgrade that moves a padding or quoting
+rule fails here. The composed access line (``log_http_request_line``) and the
+per-minute stamp memo have their own sections below: the access line pins its
+bytes against the lean renderer per value shape, the memo tests drive no
+renderer at all.
 """
 
 import contextlib
@@ -13,7 +17,8 @@ import pytest
 import structlog
 from structlog.dev import ConsoleRenderer
 
-from src.core.log_once import _LeanLineRenderer
+from src.core import log_once
+from src.core.log_once import _LeanLineRenderer, _local_timestamp, log_http_request_line
 
 
 def _render_both(event_dict: dict) -> tuple[str, str]:
@@ -184,9 +189,6 @@ def test_color_decision_mirrors_the_default_chain(
 # ---------------------------------------------------------------------------
 # The composed access line (log_http_request_line)
 # ---------------------------------------------------------------------------
-
-from src.core import log_once
-from src.core.log_once import _local_timestamp, log_http_request_line
 
 
 def _composed_line(method: object, path: object, status: object, duration_ms: object, client: object,

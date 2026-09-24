@@ -260,12 +260,13 @@ async def muse_transcribe(
       await socket.send(json.dumps({"type": "endStream"}))
       await reader
     except ConnectionClosed as exc:
+      # Reap the reader so its own close exception is not lost to the GC.
       reader.cancel()
+      await asyncio.gather(reader, return_exceptions=True)
+      code = exc.rcvd.code if exc.rcvd is not None else None
+      reason = exc.rcvd.reason if exc.rcvd is not None else ""
       return MuseResult(
-          ok=False,
-          close_code=exc.code,
-          close_reason=exc.reason,
-          error=f"connection closed mid-stream (code {exc.code}: {exc.reason})")
+          ok=False, close_code=code, close_reason=reason, error=f"connection closed mid-stream (code {code}: {reason})")
 
     if socket.close_code not in (1000, 1001):
       return MuseResult(

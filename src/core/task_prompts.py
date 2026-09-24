@@ -56,12 +56,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from src.core.config import CharlieBotConfig
 from src.core.control_events import sha256_hex
 from src.core.log_once import LazyStructlogLogger
-from src.core.memory import MemorySelection, select_master_memory, select_worker_memory
 from src.core.models import SessionMetadata, TaskType
+
+if TYPE_CHECKING:
+  from src.core.memory import MemorySelection
 
 log = LazyStructlogLogger()
 
@@ -418,6 +421,9 @@ def memory_selection_for(meta: SessionMetadata, kind: str, cfg: CharlieBotConfig
   The selection (filtering and formatting) stays owned by :mod:`src.core.memory`.
   Repo-less workers get the worker index only — never a guessed project.
   """
+  # lazy: keeps the memory store off the M99 server import floor (docs/perf_baseline.md)
+  from src.core.memory import select_master_memory, select_worker_memory
+
   if kind in MANAGER_KINDS:
     return select_master_memory(cfg.memory_dir)
   # A repo-less worker matches no repo topic: worker index only, never a guessed project.

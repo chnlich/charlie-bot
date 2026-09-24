@@ -887,7 +887,7 @@ def _scan_cron(cfg: CharlieBotConfig, snap: SourceSnapshot) -> None:
       else:
         try:
           from src.core.yaml_utils import load_yaml
-          body = load_yaml(child)
+          body = load_yaml(child, default=None)
         except Exception as e:  # yaml errors are the loader's per-file error class of problem
           info.parse_error = str(e)
           snap.unreadable.append(f"{child}: {e}")
@@ -920,7 +920,7 @@ def _scan_projects(snap: SourceSnapshot) -> None:
     else:
       try:
         from src.core.yaml_utils import load_yaml
-        body = load_yaml(config_path)
+        body = load_yaml(config_path, default=None)
       except Exception as e:
         info.parse_error = str(e)
         snap.unreadable.append(f"{config_path}: {e}")

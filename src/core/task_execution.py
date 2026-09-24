@@ -1254,7 +1254,7 @@ class TaskExecutionAdapter:
         )
         # Session-level notices reach the session chat exactly as a fresh run's do.
         worker.on_session_event = functools.partial(self._sessions.deliver_to_successor, session_id)
-        exit_code = await worker.resume(is_alive=is_alive)
+        exit_code = await worker.resume(is_alive=is_alive, on_silence=None)
         durable_outcome = await self._finalize_worker_run(
             meta, run, option, exit_code=exit_code, error="")
         await self._after_worker_run(meta, run, durable_outcome)

@@ -21,7 +21,7 @@ from src.core.compression import gzip_level1
 from src.core.config import get_config
 from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.human_size import format_size
-from src.core.memo import BoundedMemo
+from src.core.memo import BoundedMemo, StatSignatureMemo
 
 router = APIRouter()
 
@@ -33,6 +33,56 @@ class _ServedFileResponse(FileResponse):
   # cuts both ~16x per MB and is the transport's only knob; the wire bytes are
   # identical, so no served body changes.
   chunk_size = 1 << 20
+
+
+# Bound on the bare-file arm's gzip memo: the arm serves the file server's
+# repeat views of gzip-able files (artifact pages above all — the M105 html
+# witness's 15.4 ms per repeat serve was the middleware's per-request per-chunk
+# inline deflate). Four slots cover the pages a user re-opens across tabs; one
+# slot holds the compressed form of a file up to the raw-size cap.
+_SERVED_FILE_GZIP_MEMO_LIMIT = 4
+
+# Raw-size cap of the same arm. Above it the serve stays on the streaming
+# _ServedFileResponse arm: a whole-body read plus its gzip form would hold
+# multi-hundred-MB resident per slot for files the middleware already serves
+# chunk-wise without buffering.
+_SERVED_FILE_GZIP_MAX_BYTES = 16 << 20
+
+# Media gate of the same arm: the text formats the transport compresses and
+# repeat-serves. The gzip middleware's skip list (server.py) is this gate's
+# complement in spirit — every prefix here stays outside that list — while
+# unknown and binary media types (application/octet-stream above all) keep the
+# streaming arm: their gzip form is a ratio gamble and their chunked-identity
+# contract is pinned by the suite.
+_SERVED_FILE_GZIP_MEDIA_PREFIXES = ("text/",)
+_SERVED_FILE_GZIP_MEDIA_TYPES = frozenset(
+    {
+        "application/json",
+        "application/javascript",
+        "text/javascript",
+        "application/xml",
+        "image/svg+xml",
+    })
+
+_served_file_gzip_memo: StatSignatureMemo[Path, bytes] = StatSignatureMemo(_SERVED_FILE_GZIP_MEMO_LIMIT)
+
+
+def _served_file_gzip(fs_path: Path) -> bytes | None:
+  """The bare-file arm's gzip form under the size cap, memoized on the file signature.
+
+  stat precedes the read in the same call (the StatSignatureMemo contract), so a
+  repeat hit serves only bytes its signature proves current. ``None`` sends the
+  request to the streaming arm: the file is over the cap.
+  """
+  st = fs_path.stat()
+  if st.st_size > _SERVED_FILE_GZIP_MAX_BYTES:
+    return None
+  hit = _served_file_gzip_memo.fresh(fs_path, st)
+  if hit is not None:
+    return hit
+  compressed = gzip_level1(fs_path.read_bytes())
+  _served_file_gzip_memo.record(fs_path, st, compressed)
+  return compressed
 
 
 # Bound on _annotate_memo in annotated diff pages: one compare view reads one
@@ -498,8 +548,18 @@ async def serve_file(path: str, request: Request) -> Response:
     body = await asyncio.to_thread(_injected_artifact_page, fs_path, session_id)
     return HTMLResponse(body, media_type="text/html", headers=_NO_STORE_HEADERS)
 
-  # Serve the file with auto-detected MIME type
+  # Serve the file with auto-detected MIME type. A gzip-accepting GET of a
+  # gated media type under the memo cap rides the memo arm: Content-Encoding
+  # set upstream is what makes the middleware skip its per-request per-chunk
+  # inline deflate, and the stat signature proves a repeat hit's stored bytes.
+  # Every other shape — no-gzip clients, Range requests, unlisted media types,
+  # over-cap files — stays on the streaming arm unchanged.
   media_type, _ = mimetypes.guess_type(str(fs_path))
+  if (request_wants_gzip(request) and "range" not in request.headers and media_type is not None and
+      (media_type.startswith(_SERVED_FILE_GZIP_MEDIA_PREFIXES) or media_type in _SERVED_FILE_GZIP_MEDIA_TYPES)):
+    compressed = await asyncio.to_thread(_served_file_gzip, fs_path)
+    if compressed is not None:
+      return Response(content=compressed, media_type=media_type, headers=GZIP_RESPONSE_HEADERS)
   try:
     return _ServedFileResponse(str(fs_path), media_type=media_type)
   except PermissionError as e:

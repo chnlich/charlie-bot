@@ -199,7 +199,10 @@ def test_serve_file_empty_configured_key_injects(sessions_root: Path, monkeypatc
 def test_serve_file_session_html_outside_artifacts_not_injected(sessions_root: Path) -> None:
   page = _write(sessions_root / "S" / "notes" / "x.html")
 
-  resp = _build_client("secret").get("/absolute_filepath" + str(page))
+  # A no-gzip client rides the streaming FileResponse arm — the request makes
+  # that explicit, since a gzip-accepting client of the same file answers from
+  # the bare-file arm's gzip memo (test_served_file_gzip.py).
+  resp = _build_client("secret").get("/absolute_filepath" + str(page), headers={"Accept-Encoding": "br"})
   assert resp.status_code == 200
   assert "artifact-comments.js" not in resp.text
   # Kept as a FileResponse: served from disk with a last-modified validator.
@@ -210,7 +213,7 @@ def test_serve_file_root_level_artifacts_dir_not_injected(sessions_root: Path) -
   # <root>/artifacts/x.html belongs to no session — there is no session component.
   page = _write(sessions_root / "artifacts" / "x.html")
 
-  resp = _build_client("secret").get("/absolute_filepath" + str(page))
+  resp = _build_client("secret").get("/absolute_filepath" + str(page), headers={"Accept-Encoding": "br"})
   assert resp.status_code == 200
   assert "artifact-comments.js" not in resp.text
   assert "last-modified" in resp.headers
@@ -225,7 +228,7 @@ def test_serve_file_artifact_shape_outside_sessions_root_not_injected(
   outside = tmp_path_factory.mktemp("outside")
   page = _write(outside / "a" / "sessions" / "S" / "artifacts" / "x.html")
 
-  resp = _build_client("secret").get("/absolute_filepath" + str(page))
+  resp = _build_client("secret").get("/absolute_filepath" + str(page), headers={"Accept-Encoding": "br"})
   assert resp.status_code == 200
   assert "artifact-comments.js" not in resp.text
   assert "last-modified" in resp.headers

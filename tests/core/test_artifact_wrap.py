@@ -62,19 +62,13 @@ def _write_fragment(tmp_path: Path, fragment: str | bytes, name: str = "fragment
   return fragment_path
 
 
-def _wrap(
-    tmp_path: Path,
-    fragment: str | bytes,
-    vendored_katex: Path,
-    genre: str = "explain",
-    math: bool = True,
-    name: str = "fragment.html") -> Path:
+def _wrap(tmp_path: Path, fragment: str | bytes, vendored_katex: Path) -> Path:
   output = tmp_path / "page.html"
   wrap_fragment(
-      genre=genre,
-      fragment=_write_fragment(tmp_path, fragment, name),
+      genre="explain",
+      fragment=_write_fragment(tmp_path, fragment),
       output=output,
-      math=math,
+      math=True,
       vendor_path=vendored_katex,
   )
   return output

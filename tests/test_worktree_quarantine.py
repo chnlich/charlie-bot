@@ -55,20 +55,17 @@ def _thread(
     branch_name: str = "charliebot/task-x",
     age_days: float = 30.0,
     keep_worktree: bool = False,
-    repo_path: str = "/tmp/repo",
-    session_id: str = "s1",
-    description: str = "test task",
     completed_at: Any = "__auto__",
 ) -> dict:
   if completed_at == "__auto__":
     completed_at = (utc_now() - timedelta(days=age_days)).isoformat()
   return {
       "id": thread_id,
-      "session_id": session_id,
-      "description": description,
+      "session_id": "s1",
+      "description": "test task",
       "status": status,
       "branch_name": branch_name,
-      "repo_path": repo_path,
+      "repo_path": "/tmp/repo",
       "worktree_path": str(worktree_path),
       "keep_worktree": keep_worktree,
       "completed_at": completed_at,

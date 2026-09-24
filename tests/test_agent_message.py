@@ -113,8 +113,8 @@ class RouteSessionManager:
     self.persisted.append((session_id, event))
 
 
-def _payload(session_id: str = "caller", target: str = "target") -> dict[str, str]:
-  return {"session_id": session_id, "target_session_id": target, "content": "status please"}
+def _payload() -> dict[str, str]:
+  return {"session_id": "caller", "target_session_id": "target", "content": "status please"}
 
 
 @pytest.mark.parametrize(

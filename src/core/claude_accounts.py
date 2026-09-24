@@ -255,7 +255,7 @@ def observe_rate_limit(label: str, info: dict, now: datetime | None = None) -> R
   return reading
 
 
-def observe_usage_panel(label: str, usage: dict, now: datetime | None = None) -> None:
+def observe_usage_panel(label: str, usage: dict) -> None:
   """Store a usage-panel result (``ext_usage`` window list) as the account's panel reading.
 
   Panel utilizations are percentages; they are kept as reported and scaled when
@@ -266,9 +266,9 @@ def observe_usage_panel(label: str, usage: dict, now: datetime | None = None) ->
     return
   fetched_at = usage.get(PANEL_FETCHED_AT)
   try:
-    at = datetime.fromisoformat(fetched_at) if isinstance(fetched_at, str) else now_or(now)
+    at = datetime.fromisoformat(fetched_at) if isinstance(fetched_at, str) else datetime.now(UTC)
   except ValueError:
-    at = now_or(now)
+    at = datetime.now(UTC)
   if at.tzinfo is None:
     at = at.replace(tzinfo=UTC)
   _panel_readings[label] = {"at": at, PANEL_WINDOWS: [w for w in windows if isinstance(w, dict)]}

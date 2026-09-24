@@ -1,8 +1,11 @@
-"""The turn process tree's nice raise: spawned children land at TURN_TREE_NICE.
+"""The turn process tree's nice raise: the turn tree runs TURN_TREE_NICE backgrounded.
 
 The interactive server paths (voice decode, HTTP handlers) share the box with
 every turn's CLI and tool subprocesses; the spawn preexec backgrounds the turn
-tree so a contended box arbitrates in the interactive path's favor.
+tree so a contended box arbitrates in the interactive path's favor. The
+preexec raise is an increment over the spawner's own nice and saturates at the
+kernel's nice ceiling (19); the preexec-free path renices the child to
+TURN_TREE_NICE absolute.
 """
 
 import os
@@ -19,6 +22,10 @@ from src.core.process import make_nice_preexec
 
 _CHILD_PRINTS_NICE = "import os; print(os.nice(0))"
 
+# The kernel's nice(2) ceiling: os.nice clamps silently, so a spawner already
+# at nice 10 cannot reach baseline + TURN_TREE_NICE (10 + 10 clamps to 19).
+_KERNEL_NICE_MAX = 19
+
 
 def _child_nice(preexec: object) -> int:
   result = subprocess.run(
@@ -33,15 +40,20 @@ def _child_nice(preexec: object) -> int:
 
 
 def test_make_nice_preexec_raises_child_nice() -> None:
-  assert _child_nice(None) == 0
-  assert _child_nice(make_nice_preexec(backend_base.TURN_TREE_NICE)) == backend_base.TURN_TREE_NICE
+  # os.nice in the preexec is an increment: the expectation rides a preexec-free
+  # sibling's reading because the spawner's own nice is not assumed 0 (the host
+  # cron runs this suite niced).
+  baseline = _child_nice(None)
+  expected = min(baseline + backend_base.TURN_TREE_NICE, _KERNEL_NICE_MAX)
+  assert _child_nice(make_nice_preexec(backend_base.TURN_TREE_NICE)) == expected
 
 
 def test_spawn_preexec_lands_turn_tree_nice(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = build_cli_backend_rig(monkeypatch, OpenCodeBackend, cgroup_session_id=None)
   preexec = backend._spawn_preexec()
   assert callable(preexec)
-  assert _child_nice(preexec) == backend_base.TURN_TREE_NICE
+  expected = min(_child_nice(None) + backend_base.TURN_TREE_NICE, _KERNEL_NICE_MAX)
+  assert _child_nice(preexec) == expected
 
 
 def test_apply_turn_tree_limits_writes_pid_and_renices(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

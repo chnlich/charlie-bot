@@ -1,18 +1,24 @@
 """_LeanLineRenderer tests: byte-identical output against the dev ConsoleRenderer.
 
-Every test drives both renderers over the same event dict and asserts the strings
-are equal, so a structlog upgrade that moves a padding or quoting rule fails here.
+Every renderer test drives both renderers over the same event dict and asserts
+the strings are equal, so a structlog upgrade that moves a padding or quoting
+rule fails here. The composed access line (``log_http_request_line``) and the
+per-minute stamp memo have their own sections below: the access line pins its
+bytes against the lean renderer per value shape, the memo tests drive no
+renderer at all.
 """
 
 import contextlib
 import io
 import sys
+import time
 
 import pytest
 import structlog
 from structlog.dev import ConsoleRenderer
 
-from src.core.log_once import _LeanLineRenderer
+from src.core import log_once
+from src.core.log_once import _LeanLineRenderer, _local_timestamp, log_http_request_line
 
 
 def _render_both(event_dict: dict) -> tuple[str, str]:
@@ -178,3 +184,107 @@ def test_color_decision_mirrors_the_default_chain(
   from src.core.log_once import _LeanLineRenderer as lean_cls
 
   assert lean_cls()._colors == expected
+
+
+# ---------------------------------------------------------------------------
+# The composed access line (log_http_request_line)
+# ---------------------------------------------------------------------------
+
+
+def _composed_line(method: object, path: object, status: object, duration_ms: object, client: object,
+                   error: str | None = None) -> str:
+  sink = io.StringIO()
+  with contextlib.redirect_stdout(sink):
+    log_http_request_line(method=method, path=path, status=status, duration_ms=duration_ms,
+                          client=client, error=error)
+  return sink.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "status", "duration_ms", "client", "error"), [
+        ("GET", "/api/sessions/status", 401, 1, "127.0.0.1", None),
+        ("POST", "/api/chat/s1/cancel", 200, 12, "100.84.122.38", None),
+        ("GET", "/x", 500, 3, "-", "ModuleNotFoundError"),
+        ("GET", "/path with spaces", 404, 0, "client=odd", None),
+        ("GET", '/path"quoted', 200, 5, "ümläut-✓", None),
+        ("GET", "/api/x", None, 0, "t", None),
+        ("GET", "/api/x", 204, 3.5, "t", "e=mc^2"),
+    ],
+    ids=["401", "200", "error", "spaces", "quotes-unicode", "status-none", "float-duration"])
+def test_composed_access_line_matches_the_lean_renderer(method: object, path: object, status: object,
+                                                        duration_ms: object, client: object,
+                                                        error: str | None) -> None:
+  line = _composed_line(method, path, status, duration_ms, client, error)
+  assert line.endswith("\n")
+  timestamp = line[:19]
+  event_dict = {
+      "timestamp": timestamp,
+      "level": "info",
+      "event": "http_request",
+      "client": client,
+      "duration_ms": duration_ms,
+      "method": method,
+      "path": path,
+      "status": status,
+  }
+  if error is not None:
+    event_dict["error"] = error
+  lean = _LeanLineRenderer()
+  assert line.rstrip("\n") == lean(None, "info", dict(event_dict))
+
+
+def test_composed_access_line_writes_once() -> None:
+  writes: list[str] = []
+
+  class _Recorder:
+    def write(self, s: str) -> int:
+      writes.append(s)
+      return len(s)
+
+  with contextlib.redirect_stdout(_Recorder()):
+    log_http_request_line(method="GET", path="/x", status=200, duration_ms=1, client="t")
+  assert len(writes) == 1
+  assert writes[0].endswith("\n")
+  assert not writes[0].endswith("\n\n")
+
+
+# ---------------------------------------------------------------------------
+# The per-minute stamp prefix memo
+# ---------------------------------------------------------------------------
+
+def _stamp_struct(year: int, month: int, day: int, hour: int, minute: int, second: int) -> time.struct_time:
+  return time.struct_time((year, month, day, hour, minute, second, 0, 1, -1))
+
+
+@pytest.fixture
+def _stamp_memo_isolated(monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setattr(log_once, "_stamp_prefix_memo", ((0, 0, 0, 0, 0), ""))
+
+
+def test_stamp_prefix_reused_within_a_minute(_stamp_memo_isolated: None, monkeypatch: pytest.MonkeyPatch) -> None:
+  current = _stamp_struct(2026, 9, 24, 15, 1, 7)
+  monkeypatch.setattr(log_once.time, "localtime", lambda: current)
+  assert _local_timestamp() == "2026-09-24 15:01:07"
+  current = _stamp_struct(2026, 9, 24, 15, 1, 59)
+  assert _local_timestamp() == "2026-09-24 15:01:59"
+
+
+def test_stamp_prefix_rebuilt_on_minute_rollover(_stamp_memo_isolated: None,
+                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+  current = _stamp_struct(2026, 9, 24, 15, 1, 59)
+  monkeypatch.setattr(log_once.time, "localtime", lambda: current)
+  assert _local_timestamp() == "2026-09-24 15:01:59"
+  current = _stamp_struct(2026, 9, 24, 15, 2, 0)
+  assert _local_timestamp() == "2026-09-24 15:02:00"
+
+
+def test_stamp_survives_a_stale_minute_after_rollover(_stamp_memo_isolated: None,
+                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+  """A reader whose minute lost the memo race still renders its own minute."""
+  current = _stamp_struct(2026, 9, 24, 15, 1, 7)
+  monkeypatch.setattr(log_once.time, "localtime", lambda: current)
+  assert _local_timestamp() == "2026-09-24 15:01:07"
+  current = _stamp_struct(2026, 9, 24, 15, 2, 30)
+  assert _local_timestamp() == "2026-09-24 15:02:30"
+  current = _stamp_struct(2026, 9, 24, 15, 1, 42)
+  assert _local_timestamp() == "2026-09-24 15:01:42"

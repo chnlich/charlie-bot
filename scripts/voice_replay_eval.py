@@ -376,12 +376,12 @@ def _fmt(value: float | None) -> str:
   return "N/A" if value is None else f"{value:.3f}"
 
 
-def _snippet(text: str, term: str, width: int = 40) -> str:
+def _snippet(text: str, term: str) -> str:
   if not text:
     return "(empty)"
   position = text.casefold().find(term.casefold())
-  start = 0 if position < 0 else max(0, position - width // 2)
-  return text[start:start + width]
+  start = 0 if position < 0 else max(0, position - 20)
+  return text[start:start + 40]
 
 
 def write_outputs(

@@ -42,22 +42,18 @@ _BROADCAST_PATCH_TARGET = "src.core.explain.streaming_manager.broadcast"
 _MASTER_DONE_EVENT = {"type": "master_done"}
 
 
-def _stage_round(session_mgr: SessionManager, session_id: str, *, assistant_text: str = "the answer") -> Path:
+def _stage_round(session_mgr: SessionManager, session_id: str) -> Path:
   """Stage one complete round (user ask, assistant answer, divider) from event index 0."""
   path = session_mgr.get_chat_events_path(session_id)
   path.parent.mkdir(parents=True, exist_ok=True)
-  append_events(path, [user_event("what is this?"), assistant_text_event(assistant_text), _MASTER_DONE_EVENT])
+  append_events(path, [user_event("what is this?"), assistant_text_event("the answer"), _MASTER_DONE_EVENT])
   return path
 
 
-async def _home_with_round(
-    tmp_path: Path,
-    *,
-    assistant_text: str = "the answer",
-) -> tuple[CharlieBotConfig, SessionManager, object, int]:
+async def _home_with_round(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, object, int]:
   """(cfg, mgr, session, upto) for one session whose only round's divider sits at index 2."""
   cfg, mgr, session = await make_home_session(tmp_path, name="explain")
-  _stage_round(mgr, session.id, assistant_text=assistant_text)
+  _stage_round(mgr, session.id)
   return cfg, mgr, session, 2
 
 
@@ -241,18 +237,18 @@ class _BlockedOneShot:
     self.loop.call_soon_threadsafe(self.release.set)
 
 
-def _wait_for_calls(blocked: _BlockedOneShot, count: int, *, seconds: float = 5.0) -> None:
+def _wait_for_calls(blocked: _BlockedOneShot, count: int) -> None:
   """Poll from the test thread until the blocked one-shot has *count* recorded calls."""
-  deadline = time.monotonic() + seconds
+  deadline = time.monotonic() + 5.0
   while len(blocked.calls) < count:
     if time.monotonic() > deadline:
       raise AssertionError(f"one-shot never reached {count} calls: {len(blocked.calls)}")
     time.sleep(0.02)
 
 
-def _wait_for_state(mgr: SessionManager, session_id: str, upto: int, state: str, *, seconds: float = 5.0) -> dict:
+def _wait_for_state(mgr: SessionManager, session_id: str, upto: int, state: str) -> dict:
   """Poll the persisted file from the test thread until the entry lands in *state*."""
-  deadline = time.monotonic() + seconds
+  deadline = time.monotonic() + 5.0
   while time.monotonic() < deadline:
     entry = _read_results(mgr, session_id).get(str(upto))
     if entry is not None and entry["state"] == state:

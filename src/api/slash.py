@@ -1,6 +1,7 @@
 """Slash command API routes."""
 
 import asyncio
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -11,15 +12,23 @@ from src.api.deps import get_config_on_loop, get_session_manager, require_sessio
 from src.api.message_utils import build_user_event
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_scheduled_tasks
+from src.core.deferred import deferred_import_loader, deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
 from src.core.message_events import serialize_uploaded_files
 from src.core.models import SessionMetadata, UploadedFileRef
 from src.core.sessions import SessionManager
-from src.core.slash_commands import SlashDispatchKind, dispatch_slash_command, load_slash_commands
 
 log = LazyStructlogLogger()
 
 router = APIRouter()
+
+_load_dispatch_slash_command = deferred_import_loader("dispatch_slash_command", "src.core.slash_commands")
+
+
+def __getattr__(name: str) -> Any:
+  # The "src.api.slash.dispatch_slash_command" patch target resolves through
+  # this hook; the loader's globals-first read keeps a landed stand-in winning.
+  return deferred_module_getattr(name, __name__, globals(), "dispatch_slash_command", _load_dispatch_slash_command)
 
 
 async def _persist_command_message(
@@ -74,6 +83,8 @@ _STOP_IMPROVE_ENTRY = {
 
 async def _build_command_list() -> list[dict]:
   """Return the full command list: YAML commands + built-ins."""
+  from src.core.slash_commands import load_slash_commands
+
   cmds = await asyncio.to_thread(load_slash_commands)
   result = [
       {
@@ -147,6 +158,8 @@ async def execute_command(
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict | JSONResponse:
   """Execute a slash command for a session."""
+  from src.core.slash_commands import SlashDispatchKind
+
   name = req.command.lstrip('/')
   args_text = req.args.strip()
   uploaded_files = serialize_uploaded_files(req.uploaded_files)
@@ -171,6 +184,7 @@ async def execute_command(
     return await _handle_run_command(args_text, request, session_id, session_mgr, display_text, uploaded_files)
 
   # Look up and dispatch via shared helper
+  dispatch_slash_command = _load_dispatch_slash_command(globals())
   dispatch = await dispatch_slash_command(name, req.args, session_dir=str(cfg.sessions_dir / session_id))
 
   if dispatch.kind == SlashDispatchKind.NOT_FOUND:

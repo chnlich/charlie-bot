@@ -7813,8 +7813,7 @@ shapes under a 5 ms ticker, from the checkout under test: the raw-log shape
 (devnull stdin, stdout/stderr to file fds, preexec-free — the claude family's master
 turns and every worker launch) and the piped shape (piped stdout/stderr through the
 pdeathsig spawn seam, preexec-free — the piped transports and pdeathsig one-shots); one
-cold pass, then five timed spawns per shape. A checkout still spawning on the loop
-resolves the seam to `asyncio.create_subprocess_exec` (the pre-fix shape):
+cold pass, then five timed spawns per shape:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
@@ -7822,9 +7821,7 @@ import asyncio, os, sys, time
 sys.path.insert(0, os.environ["CHECKOUT"])
 import src.agents.backends.base as base_module
 
-spawn = getattr(base_module, "spawn_subprocess", None)
-if spawn is None:
-    spawn = asyncio.create_subprocess_exec  # the pre-fix on-loop spawn
+spawn = base_module.spawn_subprocess
 
 GB = 3.5
 blob = bytearray(int(GB * 1e9))

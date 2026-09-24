@@ -257,3 +257,19 @@ test('expandTreeNode opens a collapsed parent and is a no-op on an open one', ()
   context.Sidebar.expandTreeNode('p1');
   assert.equal(refreshes, 1, 'an already open node is left alone');
 });
+
+test('an archived worker row shows the delivered check in place of the leaf icon', () => {
+  const {context, nav} = buildContext();
+  context.renderSessionList([
+    manager('r1', null, 10, {name: 'Root'}),
+    worker('w1', 'r1', 9, {name: 'Live worker'}),
+    worker('w2', 'r1', 8, {name: 'Done worker', status: 'archived'}),
+  ], 'all');
+  const html = nav.innerHTML;
+  const liveRow = html.slice(html.indexOf('id="session-w1"'), html.indexOf('id="session-w2"'));
+  const doneRow = html.slice(html.indexOf('id="session-w2"'));
+  assert.match(liveRow, /title="Worker \(implementation leaf\)"/);
+  assert.doesNotMatch(liveRow, /title="Worker \(delivered\)"/);
+  assert.match(doneRow, /title="Worker \(delivered\)"[^>]*>[\s\S]*?M5 13l4 4L19 7/);
+  assert.doesNotMatch(doneRow, /title="Worker \(implementation leaf\)"/);
+});

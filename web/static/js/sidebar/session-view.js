@@ -399,6 +399,19 @@ async function switchSession(sessionId) {
   scheduleLazySessionDataLoad();
 }
 
+// A worker leaf's closing line in its own chat projection: the close event
+// projects to the system message "Task <outcome>: <summary>", and the leaf's
+// delivery banner shows that summary.
+function leafClosingSummary(messages) {
+  for (let i = (messages || []).length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (!m || m.role !== 'system' || typeof m.content !== 'string') continue;
+    const match = m.content.match(/^Task \w+:\s*([\s\S]*)$/);
+    if (match) return match[1].trim();
+  }
+  return '';
+}
+
 function renderSessionView(data) {
   const session = data.session;
   const messages = data.messages || [];
@@ -459,14 +472,15 @@ function renderSessionView(data) {
   // Scroll to bottom — the engine already pinned its projection at mount.
   if (!turnEngine) container.scrollTop = container.scrollHeight;
 
-  if (Array.isArray(data.threads) || Array.isArray(data.triggers)) {
-    renderWorkersTab(data.threads || [], session.id, data.triggers || []);
-  } else {
-    renderWorkersTabUnknown();
-  }
+  // A worker leaf shows its Run list in place of the chat (sidebar/workers.js):
+  // name the leaf before the tab switch below swaps the containers, and reset
+  // the container so the load paints fresh instead of the previous leaf.
+  const isLeaf = session.profile === 'worker';
+  setLeafSession(isLeaf ? session.id : null, isLeaf ? leafClosingSummary(messages) : '');
+  if (isLeaf) renderWorkersTabUnknown();
 
   // Restore whichever tab was active before the session switch
-  const activeBtn = document.querySelector('#btn-terminal.bg-blue-600\\/20, #btn-chat-tex.bg-blue-600\\/20, #btn-chat.bg-blue-600\\/20, #btn-workers.bg-blue-600\\/20, #btn-chat-backlog.bg-blue-600\\/20');
+  const activeBtn = document.querySelector('#btn-terminal.bg-blue-600\\/20, #btn-chat-tex.bg-blue-600\\/20, #btn-chat.bg-blue-600\\/20, #btn-chat-backlog.bg-blue-600\\/20');
   const activeTab = activeBtn ? activeBtn.id.replace('btn-', '') : 'chat';
   switchTab(activeTab);
 
@@ -849,6 +863,7 @@ const API = {
   scheduleLazySessionDataLoad,
   switchSession,
   renderSessionView,
+  leafClosingSummary,
   initScrollPagination,
   loadOlderIfNeeded,
   renderUsageFromData,

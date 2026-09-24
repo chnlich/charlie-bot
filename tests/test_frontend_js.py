@@ -40,6 +40,7 @@ _NODE_TESTS = [
     "rendering_worker_summary_origin.test.js",
     "session_switch_stale_pagination.test.js",
     "session_view_create_task.test.js",
+    "session_view_leaf.test.js",
     "session_view_sentinel.test.js",
     "show_more_toggle.test.js",
     "sidebar_indicator_priority.test.js",

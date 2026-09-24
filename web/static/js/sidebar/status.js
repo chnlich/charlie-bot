@@ -20,10 +20,20 @@ const STATUS_QUERY_MAX_BYTES = 8192;
 // volume tracks the active rows on screen, not the archived list length.
 const renderedSessionStatuses = {};
 
+// Rows painted with profile=worker: a leaf runs its own work, so its running
+// state paints as the spinner rather than the delegated-work gear.
+const renderedWorkerRows = new Set();
+
 function recordRenderedSessionStatus(session) {
   renderedSessionStatuses[session.id] = (session && session.status) || 'active';
   // The row's own activity as painted; the indicator aggregation reads it.
   ownIndicatorState[session.id] = getSessionIndicatorState(session);
+  if (session && session.profile === 'worker') renderedWorkerRows.add(session.id);
+  else renderedWorkerRows.delete(session.id);
+}
+
+function displayIndicatorState(sid, state) {
+  return state === 'worker_only' && renderedWorkerRows.has(sid) ? 'thinking' : state;
 }
 
 function sidebarSessionIds() {
@@ -240,7 +250,8 @@ const UNREAD_TITLE = 'Unread reply';
 // Thinking spinner, worker gear, unread dot: one session row's header indicators.
 // setSessionIndicator toggles each element by id, so the three id prefixes are pinned.
 function renderSessionIndicators(session) {
-  const indicatorState = getSessionIndicatorState(session);
+  const ownState = getSessionIndicatorState(session);
+  const indicatorState = session.profile === 'worker' && ownState === 'worker_only' ? 'thinking' : ownState;
   return `<svg id="spinner-${session.id}" title="${escapeHtmlAttr(SPINNER_TITLE)}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24">${SPINNER_SVG_INNER}</svg>
     <svg id="worker-indicator-${session.id}" title="${escapeHtmlAttr(GEAR_TITLE)}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">${gearSvgContent()}</svg>
     <span id="unread-${session.id}" data-has-unread="${session.has_unread ? 1 : 0}" title="${escapeHtmlAttr(UNREAD_TITLE)}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${session.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>`;
@@ -323,7 +334,7 @@ function effectiveUnread(sid) {
 }
 
 function paintSessionIndicator(sid) {
-  const state = effectiveIndicatorState(sid);
+  const state = displayIndicatorState(sid, effectiveIndicatorState(sid));
   const spinner = document.getElementById('spinner-' + sid);
   const worker = document.getElementById('worker-indicator-' + sid);
   const dot = document.getElementById('unread-' + sid);

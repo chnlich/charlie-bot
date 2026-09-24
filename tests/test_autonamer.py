@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from conftest import (
     ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
+    BASE_SPAWN_SUBPROCESS_PATCH_TARGET,
     CODEX_RESOLVE_BINARY_PATCH_TARGET,
     OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
     SYNTHETIC_MODEL,
@@ -639,7 +640,7 @@ async def test_codex_one_shot_text_accumulates_agent_message(monkeypatch: pytest
   ]
   proc = fake_one_shot_proc(lines, pid=9999)
 
-  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)) as mock_exec:
+  with patch(BASE_SPAWN_SUBPROCESS_PATCH_TARGET, new=AsyncMock(return_value=proc)) as mock_exec:
     backend = CodexBackend(model="gpt-x", model_reasoning_effort="high")
     result = await backend.one_shot_text("hello prompt", "sys prompt", timeout=5.0)
 
@@ -667,7 +668,7 @@ async def test_codex_one_shot_text_returns_empty_when_no_agent_message(monkeypat
   ]
   proc = fake_one_shot_proc(lines, pid=9998)
 
-  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
+  with patch(BASE_SPAWN_SUBPROCESS_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = CodexBackend(model="gpt-x")
     with pytest.raises(RuntimeError, match="no assistant text"):
       await backend.one_shot_text("hi", "sys", timeout=5.0)
@@ -703,7 +704,7 @@ async def _run_opencode_one_shot(
       lambda name, fallback: "/usr/bin/opencode",
   )
   proc = fake_one_shot_proc(lines, pid=pid)
-  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)) as mock_exec:
+  with patch(BASE_SPAWN_SUBPROCESS_PATCH_TARGET, new=AsyncMock(return_value=proc)) as mock_exec:
     backend = OpenCodeBackend(model=SYNTHETIC_MODEL)
     result = await backend.one_shot_text(prompt, system_prompt, timeout=5.0)
   return result, proc, mock_exec

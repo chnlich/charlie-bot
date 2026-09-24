@@ -1354,14 +1354,13 @@ RUNS_READ_PID_STAT_PATCH_TARGET = "src.core.runs.read_pid_stat"
 # the stand-in on that backend module's own attribute, where its __init__ reads the
 # helper at call time and never probes PATH, while sibling backends binding the same
 # helper keep their own namespaces. The backend start contract spawns through the
-# library each spawning module binds with module-scope `import asyncio`, so every
-# ``*_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET`` spelling below — the library root
-# (ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET above) and the caller-qualified forms —
-# reaches that one shared attribute at the run loop's call-time spawn read; the
-# caller-qualified form records which backend's spawn a test drives.
-BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.agents.backends.base.asyncio.create_subprocess_exec"
+# off-loop spawn seam (src/agents/backends/spawn.py), which base.py imports and reads
+# as a module global at call time, so both ``*_SPAWN_SUBPROCESS_PATCH_TARGET`` spellings
+# land the stand-in on that one shared attribute; the caller-qualified form records
+# which backend's spawn a test drives.
+BASE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.agents.backends.base.spawn_subprocess"
 OPENCODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.opencode.resolve_binary"
-OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.agents.backends.opencode.asyncio.create_subprocess_exec"
+OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.agents.backends.base.spawn_subprocess"
 CODEX_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.codex.resolve_binary"
 ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.antigravity_cli.resolve_binary"
 CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.charlie_code.resolve_binary"

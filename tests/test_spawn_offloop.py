@@ -120,7 +120,7 @@ async def test_fork_parks_off_the_event_loop(tmp_path: Path) -> None:
 
   def sleeping_preexec() -> None:
     preexec_ran.write_text("1")
-    deadline = time.monotonic() + 5.0
+    deadline = time.monotonic() + 10.0
     while not block.exists() and time.monotonic() < deadline:
       time.sleep(0.01)
 
@@ -135,14 +135,21 @@ async def test_fork_parks_off_the_event_loop(tmp_path: Path) -> None:
       gaps.append(now - prev)
       prev = now
 
-  proc = await _spawn(sys.executable, "-c", "import time; time.sleep(1)", preexec_fn=sleeping_preexec)
   ticker_task = asyncio.create_task(ticker())
   try:
-    await asyncio.sleep(0.2)  # span the child's preexec sleep from the loop
+    await asyncio.sleep(0.01)  # the ticker's first slice lands before the spawn starts
+    spawn_task = asyncio.ensure_future(
+        _spawn(sys.executable, "-c", "import time; time.sleep(1)", preexec_fn=sleeping_preexec))
+    deadline = time.monotonic() + 10
+    while not preexec_ran.exists() and time.monotonic() < deadline:
+      await asyncio.sleep(0.01)
+    assert preexec_ran.exists()  # the preexec ran, in the child
+    await asyncio.sleep(0.2)  # the loop ticks while the child's preexec sleeps
+    block.write_text("1")  # release the preexec; the spawn proceeds to exec and wiring
+    proc = await asyncio.wait_for(spawn_task, timeout=10)
   finally:
     stop = True
     await ticker_task
-  assert preexec_ran.exists()  # the preexec ran, in the child
   os.kill(proc.pid, signal.SIGKILL)
   await asyncio.wait_for(proc.wait(), timeout=5)
   assert max(gaps) < 0.15  # the loop never waited for the child's preexec sleep

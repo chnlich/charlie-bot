@@ -695,7 +695,7 @@ async def _run_opencode_one_shot(
 
   Resolves the backend binary to /usr/bin/opencode and serves *lines* as the
   process stdout (fake_one_shot_proc, *pid*); returns the result, the process,
-  and the captured asyncio.create_subprocess_exec mock for the test's asserts.
+  and the captured spawn-subprocess mock for the test's asserts.
   """
   from src.agents.backends.opencode import OpenCodeBackend
 

@@ -122,7 +122,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M111 review-context chat-log scan, worker completion | M111 collector below | seconds per `_first_delegation_description` scan, worst active live chat corpus carrying a delegation, deepest needle (the newest thread's completion — its match sits at the file's tail) and absent needle (a thread id no event names — the whole-corpus proof) | median < max(0.005 s, bytes ÷ 2000 MB/s) both shapes | — (introduced with its first history row) |
 | M112 backup archive build, whole-home corpus | M112 collector below | seconds per `create_backup` build over the scratch synthetic-home corpus (the builder block below; fresh random ids, no `cc_session_id`), with the archive's wire bytes and ratio riding the reading; the wire sits ~16 % over the level-9 stream it replaced (36.9× vs 42.8× on this corpus — the level-1 isal trade the landing priced, not a regression) | median < max(2.0 s, corpus bytes ÷ 1200 MB/s) | — (introduced with its first history row) |
 | M113 voice transcription wall, worst on-disk recording | M113 collector below | seconds per offline decode of the largest on-disk voice recording (quiet, and contended by 8 spinner processes at the turn tree's nice — the production contention shape), + decode determinism across two fresh decodes; the production walls this prices live in the server log's `http_request` duration for `POST /api/voice/*` | quiet median < audio seconds × 0.4; contended median < 2× the same round's quiet median; determinism true | — (introduced with its first history row) |
-| M114 backend-launch spawn loop stall, big-heap shape | M114 collector below | seconds of event-loop stall per piped spawn through the checkout's spawn seam (the fork's page-table copy scales with the forking process's resident set — the collector inflates a 3.5 GB heap to the server's standing RSS class first; the preexec composition is the production piped-spawn one, pdeathsig + nice 10) | spawn loop-lag median < 0.020 s | — (introduced with its first history row) |
+| M114 backend-launch spawn loop stall, big-heap shape | M114 collector below | seconds of event-loop stall per backend spawn through the checkout's spawn seam, both production shapes (the fork's page-table copy scales with the forking process's resident set — the collector inflates a 3.5 GB heap to the server's standing RSS class first; raw-log shape preexec-free, piped shape with the production pdeathsig + nice 10 preexec) | raw-log shape loop-lag median < 0.020 s (the M75 loop-lag line); piped shape < 0.150 s (the fork's GIL/mmap-lock hold the worker thread keeps, load-sensitive — a child-side-prctl follow-up would re-tighten it) | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -7808,11 +7808,14 @@ process synchronously on the event loop, and the fork's page-table copy scales w
 forking process's resident set (~55 us/MB measured on this host) — the multi-GB server
 stalls every concurrent request and WebSocket for ~0.1-0.2 s on each master/worker
 launch, invisible to the standing HTTP probes. The collector inflates a heap to the
-server's standing RSS class, then drives the checkout's spawn seam with the production
-piped-spawn shape (devnull stdin, piped stdout/stderr, the pdeathsig + nice preexec)
-under a 5 ms ticker, from the checkout under test: one cold pass, then five timed spawns.
-A checkout still spawning on the loop resolves the seam to `asyncio.create_subprocess_exec`
-(the pre-fix shape), so the same command prices both sides of the A/B:
+server's standing RSS class, then drives the checkout's spawn seam in both production
+shapes under a 5 ms ticker, from the checkout under test: the raw-log shape
+(devnull stdin, stdout/stderr to file fds, preexec-free — the claude family's master
+turns and every worker launch) and the piped shape (piped stdout/stderr, the pdeathsig
++ nice preexec — the piped transports and pdeathsig one-shots); one cold pass, then
+five timed spawns per shape. A checkout still spawning on the loop resolves the seam
+to `asyncio.create_subprocess_exec` (the pre-fix shape), so the same command prices
+both sides of the A/B:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
@@ -7831,8 +7834,10 @@ for i in range(0, len(blob), 4096):
     blob[i] = 1
 
 preexec = compose_preexec(make_pdeathsig_kill_preexec(), make_nice_preexec(base_module.TURN_TREE_NICE))
+raw_log = os.open("/tmp/opencode/m114_raw.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+raw_err = os.open("/tmp/opencode/m114_err.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
 
-async def run_once():
+async def run_once(shape):
     gaps = []
     stop = False
 
@@ -7847,16 +7852,28 @@ async def run_once():
     t = asyncio.create_task(ticker())
     await asyncio.sleep(0.01)  # the ticker's first slice: a synchronous fork before it would escape the gap list
     t0 = time.perf_counter()
-    proc = await spawn(
-        "/bin/true",
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=dict(os.environ),
-        limit=1024 * 1024,
-        start_new_session=True,
-        preexec_fn=preexec,
-    )
+    if shape == "raw-log":
+        proc = await spawn(
+            "/bin/true",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=raw_log,
+            stderr=raw_err,
+            env=dict(os.environ),
+            limit=1024 * 1024,
+            start_new_session=True,
+            preexec_fn=None,
+        )
+    else:
+        proc = await spawn(
+            "/bin/true",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=dict(os.environ),
+            limit=1024 * 1024,
+            start_new_session=True,
+            preexec_fn=preexec,
+        )
     wall = time.perf_counter() - t0
     code = await proc.wait()
     stop = True
@@ -7865,17 +7882,18 @@ async def run_once():
     return (max(gaps) if gaps else wall), wall
 
 async def main():
-    await run_once()  # cold pass, as at the first spawn after a server start; not timed
-    worst, walls = [], []
-    for _ in range(5):
-        gap, wall = await run_once()
-        worst.append(gap)
-        walls.append(wall)
-    worst.sort()
-    walls.sort()
-    print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {GB} GB inflated heap, piped spawn shape "
-          f"(pdeathsig + nice {base_module.TURN_TREE_NICE} preexec); spawn loop-lag median {worst[2] * 1000:.1f} ms, "
-          f"max {worst[-1] * 1000:.1f} ms, wall median {walls[2] * 1000:.1f} ms over 5")
+    for shape in ("raw-log", "piped"):
+        await run_once(shape)  # cold pass, as at the first spawn after a server start; not timed
+        worst, walls = [], []
+        for _ in range(5):
+            gap, wall = await run_once(shape)
+            worst.append(gap)
+            walls.append(wall)
+        worst.sort()
+        walls.sort()
+        print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {GB} GB inflated heap, {shape} spawn shape "
+              f"(loop-lag median {worst[2] * 1000:.1f} ms, max {worst[-1] * 1000:.1f} ms, "
+              f"wall median {walls[2] * 1000:.1f} ms over 5)")
 
 asyncio.run(main())
 EOF
@@ -7885,7 +7903,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
-| 2026-09-23 | this PR | M114 backend-launch spawn loop stall, introduced with this PR: every covered backend's subprocess spawn moved off the event loop — the raw-log transport (the claude family's master turns plus every worker launch) spawns preexec-free so the kernel takes the vfork fast path (~1 ms even from the 3.5 GB heap class, ~55 µs/MB for the full fork's page-table copy this shape skips) and the preexec composition's parent-observable effects apply parent-side right after the handshake (the nice raise via setpriority, the cgroup move via cgroup.procs, failures logged as `turn_tree_nice_failed` / `session_cgroup_move_failed` warnings), while the pdeathsig-carrying spawns (the piped transports and the pdeathsig one-shots) park the fork on a worker thread and wire the child's pipes onto the caller's loop afterwards (src/agents/backends/spawn.py, the child-side preexec unchanged); measured with the M114 collector's 3.5 GB inflated heap at the server's standing RSS class — raw-log spawn loop-lag median 148.0/155.7/158.5 → 5.2/5.3/5.4 ms (−96.6% to −96.7%, the after reading is the 5 ms ticker floor; spawn wall 143.1-153.6 → 0.8 ms), piped spawn loop-lag median 157.0/157.6/158.1 → 69.5/72.0/72.7 ms (−54% to −55%, the residual is the fork's GIL/mmap-lock hold the worker thread's page-table copy keeps — full elimination needs a child-side-prctl mechanism off the fork path, a follow-up), every paired round faster (three interleaved rounds, main checkout before vs branch worktree after back-to-back, load 1.8-2.2 one-minute); production corroboration: the live server log reads GET /api/sessions/status at 239/386/464 ms inside opencode master launches (the 3 s status poll's quiet steady state is the M56 band) — each launch a full fork of the 3.9 GB server on the loop, 37 launches in the 1.75 h window; 5940-passed suite + 9 skipped (the 2 pre-existing environmental nice-runner failures aside — this worker's own process tree runs at nice 10 from the M113 spawner, so the child-nice pins read 10 where a clean runner reads 0; verified failing on the main checkout's main branch identically), ruff and yapf clean, plus the 6-test spawn-seam suite (pipe wiring, exited-before-read drain, SIGKILL code, raw-fd wiring, stdin drain, fork-parks-off-loop) and the parent-side limits contracts (the cgroup.procs pid write, the child nice pin through the preexec-free raw-log path); M114 definition, collector, healthy range (spawn loop-lag median < 0.020 s at the big-heap shape — the M75 loop-lag line), and history row introduced with this PR | every backend launch is a full fork of the server's own page tables on the event loop — the fork cost scales with resident memory, so the multi-GB server's launch moment stalls every concurrent request, the status poll renders 386-464 ms, live chat ticks freeze mid-stream and in-flight turn outputs buffer; the vfork-shaped raw-log spawn cuts the stall 30× and the piped spawn halves it, and the residual piped cost is the fork's own GIL/mmap-lock hold, not the loop |
+| 2026-09-23 | this PR | M114 backend-launch spawn loop stall, introduced with this PR: every covered backend's subprocess spawn moved off the event loop — the raw-log transport (the claude family's master turns plus every worker launch) spawns preexec-free so the kernel takes the vfork fast path (~1 ms even from the 3.5 GB heap class, ~55 µs/MB for the full fork's page-table copy this shape skips) and the preexec composition's parent-observable effects apply parent-side right after the handshake (the nice raise via setpriority, the cgroup move via cgroup.procs, failures logged as `turn_tree_nice_failed` / `session_cgroup_move_failed` warnings), while the pdeathsig-carrying spawns (the piped transports and the pdeathsig one-shots) park the fork on a worker thread and wire the child's pipes onto the caller's loop afterwards (src/agents/backends/spawn.py, the child-side preexec unchanged); measured with the M114 collector's 3.5 GB inflated heap at the server's standing RSS class — raw-log spawn loop-lag median 148.0/155.7/158.5 → 5.2/5.3/5.4 ms (−96.6% to −96.7%, the after reading is the 5 ms ticker floor; spawn wall 143.1-153.6 → 0.8 ms), piped spawn loop-lag median 157.0/157.6/158.1 → 69.5/72.0/72.7 ms (−54% to −55%, the residual is the fork's GIL/mmap-lock hold the worker thread's page-table copy keeps — full elimination needs a child-side-prctl mechanism off the fork path, a follow-up), every paired round faster (three interleaved rounds, main checkout before vs branch worktree after back-to-back, load 1.8-2.2 one-minute); production corroboration: the live server log reads GET /api/sessions/status at 239/386/464 ms inside opencode master launches (the 3 s status poll's quiet steady state is the M56 band) — each launch a full fork of the 3.9 GB server on the loop, 37 launches in the 1.75 h window; 5940-passed suite + 9 skipped (the 2 pre-existing environmental nice-runner failures aside — this worker's own process tree runs at nice 10 from the M113 spawner, so the child-nice pins read 10 where a clean runner reads 0; verified failing on the main checkout's main branch identically), ruff and yapf clean, plus the 6-test spawn-seam suite (pipe wiring, exited-before-read drain, SIGKILL code, raw-fd wiring, stdin drain, fork-parks-off-loop) and the parent-side limits contracts (the cgroup.procs pid write, the child nice pin through the preexec-free raw-log path); M114 definition, collector, healthy ranges (raw-log shape loop-lag median < 0.020 s — the M75 loop-lag line, the regression canary: a re-added preexec or an on-loop spawn trips it 30×; piped shape < 0.150 s — the documented GIL/mmap-lock residual the thread-fork keeps, load-sensitive, re-tightened when the child-side-prctl follow-up lands), and history row introduced with this PR | every backend launch is a full fork of the server's own page tables on the event loop — the fork cost scales with resident memory, so the multi-GB server's launch moment stalls every concurrent request, the status poll renders 386-464 ms, live chat ticks freeze mid-stream and in-flight turn outputs buffer; the vfork-shaped raw-log spawn cuts the stall 30× and the piped spawn halves it, and the residual piped cost is the fork's own GIL/mmap-lock hold, not the loop |
 | 2026-09-23 | this PR | M72 listing lines recalibrated to entries-tracking formulas, docs-only calibration, no code change: the fixed lines priced the corpora their calibrations measured — changed-round 1159 entries at its 2026-09-12 introduction, repeat-view 1165 at its 2026-09-13 repair, last re-read 1234 entries on 2026-09-16 — and the walk scales with the listed entry count; this round's sweep read repeat 5.78 ms / changed-round 7.95 ms at 1295 entries (load 4.10/2.91/1.32 with the sweep's own collectors live), tripping the changed-round line, and the quiet re-reads minutes later (three verbatim collector rounds, load 2.91-6.04 one-minute carrying the same sweep's tail) read changed-round 5.99/6.47/6.61 ms at 1296 entries — inside the old line and 94 % of it, with repeat-view 5.78 ms at 72 % — so the corpus had grown onto the line, the sweep's own load adding the last 20 %; per-entry rates across the file's record: repeat 3.7-4.5 µs/entry (the post-2026-09-13 serve shape — 4.53-5.25 ms @ 1234 on 09-16, 5.78 @ 1295-1296 today), changed-round 4.5-5.5 µs/entry (6.01-6.33 ms @ 1159 at introduction, 5.53-5.89 @ 1234 on 09-16, 5.99-6.61 @ 1296 quiet today plus the 7.95 sweep-hour trip) — the walk's one-stat-per-entry floor at this host's ~3.5 µs stat cost, the same corpus-tracking shape the M61 all-sessions line adopted; new lines repeat < max(0.008 s, entries × 0.000008 s) and changed-round < max(0.007 s, entries × 0.000008 s) — 1.4-2.2x over the measured bands, the small-corpus floors kept verbatim, a corpus reversion re-tightening them automatically | the sessions root grows a few entries a day (1234 → 1296 in the six days since the 2026-09-17 all-sessions calibration), so a fixed 7 ms line false-trips the regression watch every round the corpus crosses it; the entries-tracking line keeps the trip meaning code-regression-or-load only |
 | 2026-09-21 | this PR | M113 voice transcription wall, introduced with this PR: the turn process tree (every covered backend's agent CLI plus the tool subprocesses it spawns) now spawns at nice 10 via the shared `_spawn_preexec` composition, backgrounding it against the server's interactive paths; the contended voice decode — this host's slowest served path — reads 44.68 s → 21.44 s median (0.48×) under 8 nice-0 spinner processes vs 8 nice-10 spinners (three interleaved rounds of the collector's contention harness over the 86.4 s worst on-disk recording, quiet band 18.0-19.4 s RTF 0.21-0.22 both shapes, load 1.2-1.9 one-minute with a sibling cron's suite running), and the quiet wall is untouched by construction (the decode path imports nothing the change adds; quiet medians 18.00 vs 18.00 s band). Production corroboration: the server log's 2026-09-21 08:39 voice round — `POST /api/voice/…/confirm` 30.7 s and the full upload 47.1 s for 25.9 s of audio — reproduces at the pre-fix contended shape (44.7 s harness reading, RTF 0.52) while the same file decodes 6.97 s (RTF 0.27) on the quiet box; the 470 sibling requests in that window stayed sub-500 ms, so the wall was CPU contention on the decode's 4 ONNX threads, not the event loop; contention attribution: 8-core CPU-hog ×2.6, 50 GB memory-hog (swap pressure) ×2.4, stacked ≈ the production 6.8×; determinism witness: two fresh decodes byte-identical (393 chars, the July-era stored transcript renders punctuation differently — the parity witness is determinism, not stored-text equality); the fix's cost side is contention-only by mechanism: nice arbitrates only when the box is oversubscribed, an uncontended box schedules identically (quiet band unchanged across the A/B rounds); 55-passed backend + new nice suite (child-of-preexec nice pin through `make_nice_preexec` and the composed `_spawn_preexec`, cgroup off), ruff and yapf clean; M113 definition, collector, healthy ranges (quiet median < audio seconds × 0.4 — the measured RTF band 0.21-0.29 sits ~1.5x inside; contended median < 2× the same round's quiet median — the after reading sits at 1.19×), and history row introduced with this PR — the live server picks the fix up from its next deploy on | every voice request shares the box with whatever the master turn is running — the user dictates while the previous turn's workers, CLI processes, and cron sweeps burn cores, and the decode's 4 ONNX threads paid 2.5-6.8× the quiet wall (the 08:39 round: 47 s for 26 s of audio); the turn tree now spawns at nice 10, so the interactive server paths keep their cores exactly when there is contention and nothing changes when there is not; the web-terminal/tmux PTY spawns (the user's own terminal) and the in-server merge pool stay untouched |
 | 2026-09-21 | this PR | M112 backup archive build, introduced with this PR: the tar stream's stdlib level-9 zlib replaced by isal's IGzipFile at the request path's level 1 — build median 43.8/43.1/42.8 → 2.6/2.5/2.5 s (−94 %, ~16.8×), maxima 43.8/43.7/43.0 → 2.6/2.5/2.5 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back over the committed builder's 4.71 GB / 67-file scratch synthetic home, each archive deleted after its reading, load 1.26-1.70 one-minute); effective rate 108-110 → 1844-1883 MB/s; component attribution, standalone compressor ladder over the corpus's largest file (577 MB chat-events JSON): zlib-9 (the before shape) 5.25 s / 110 MB/s / 40.0×, zlib-1 1.13 s / 512 MB/s / 30.7×, isal-1 0.30 s / 1913 MB/s / 34.3×, isal-2 0.30 s / 1924 MB/s / 34.3× (isal's level 2 prices as level 1), isal-3 2.06 s / 280 MB/s / 36.4× — isal-1 dominates zlib-1 outright (faster and smaller), and the wire trade is 42.8× → 36.9× (+16 %, 110 → 128 MB on the whole corpus), the price of the level the request path's `gzip_level1` already runs; archive parity: 56 members, name/size/mtime identical, member content digest ebc2644f4392 identical across arms, exclusions hold (threads subtree, credentials); live-home scale note: this host's included corpus is ~20.5 GB (sessions data 20 GB + cache 399 MB + memory 7.6 MB), pricing the pre-fix build at ~3.2 min of one core per handler fire and the after at ~11 s; 5924-passed suite + 9 skipped (the 3-passed backup suite among them: exclusions, secrets omission, plus a new round-trip test pinning the container reads back through `tarfile.open(r:gz)`), ruff and yapf clean; M112 definition, corpus builder (tests/backup_corpus_builder.py), collector, healthy range (median < max(2.0 s, corpus bytes ÷ 1200 MB/s) — the after band sits ~1.6× inside the bytes line), and history row introduced with this PR | the backup was the one compression holdout after the ISA-L landing moved the seven request-path memos, the middleware responder, and the trace-merge subprocess: tarfile's `w:gz` stream rides stdlib zlib at its default compresslevel 9, pricing the state dir's gigabyte-scale sessions corpus at ~110 MB/s — minutes of one pinned core per backup handler fire on every host that enables the built-in `backup` cron handler; the tar stream now rides one isal IGzipFile at level 1, the same level the request path's one-shot deflator runs |

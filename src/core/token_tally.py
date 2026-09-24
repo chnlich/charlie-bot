@@ -99,7 +99,9 @@ Vocabulary:
               skips, so only a proof miss or a moved row fetches rows that moved since the
               sidecar was written instead of re-reading every data blob
    probe      the opencode db's proof aggregates ``[count, sum(time_updated)]`` at the time
-              the entry's rows were stored — the seeded restart's gate input (see ``rows``)
+              the entry's rows were stored — the seeded restart's gate input (see ``rows``);
+              the row memo's in-process gate carries a third field, ``max(time_updated)``,
+              the tail fetch's floor (see _increment_opencode_rows)
    records    Claude: ``[key, model, ts, in_fresh, cache_write, cache_read, output]`` per
                response, replay-deduped within the file; Codex: ``[model, ts, in_fresh,
                cache_read, output]`` per token_count event, model resolved by file position;
@@ -656,19 +658,37 @@ _opencode_row_memos: dict[str, dict[str, tuple[int, list | None] | list]] = {}
 # an equal epoch proves the memo's records — and the rows built from them — still current.
 _opencode_row_epochs: dict[str, int] = {}
 
-# Per-db proof aggregates of the row memo's last full scan: (row count, sum of time_updated).
-# The pair is a strictly weaker proof than the key scan's per-id diff: every single-row move
-# changes it — an insert or delete moves the count, and a moved row rewrites time_updated so
-# the sum changes with it, while a data-only rewrite with an unchanged time_updated is
-# invisible to the key scan itself — but a multi-row coincidence whose count and sum both net
-# to zero (a delete and an insert landing in the same millisecond, the only window where the
-# inserted row's time_updated can equal the deleted row's last write) dodges the probe where
-# the per-id diff would see it, and that wrong serve stands until the next proof miss
-# re-scans. The one same-row shape both miss is a terminal pair of writes inside one
-# millisecond, the class the row memo vocabulary documents above. Equal aggregates skip the
-# per-row key read.
-_OPENCODE_PROBE_SQL = "select count(*), coalesce(sum(time_updated), 0) from message"
-_opencode_probes: dict[str, tuple[int, int]] = {}
+# Per-db proof aggregates of the row memo's last advance: (row count, sum of time_updated,
+# max of time_updated). The pair (count, sum) is a strictly weaker proof than the key scan's
+# per-id diff: every single-row move changes it, while a data-only rewrite with an unchanged
+# time_updated is invisible to the key scan itself — but a multi-row coincidence whose count
+# and sum both net to zero (a delete and an insert landing in the same millisecond, the only
+# window where the inserted row's time_updated can equal the deleted row's last write) dodges
+# the probe where the per-id diff would see it, and that wrong serve stands until a proof
+# miss's full key scan — the self-heal round, a residual mismatch, or a restart seed. The one
+# same-row shape both miss is a terminal pair of writes inside
+# one millisecond, the class the row memo vocabulary documents above. Equal aggregates skip
+# the per-row key read; a miss whose gate carries the max advances from the tail fetch below
+# and proves itself with the same triple — see _increment_opencode_rows. The rowid max rides
+# the scan for free (the table is a rowid table) and closes the plain delete-and-insert
+# dodge: the insert's fresh rowid moves it unless the deleted row held the max rowid and the
+# insert reuses it, the one shape _OPENCODE_FULL_SCAN_EVERY's self-heal exists for.
+_OPENCODE_PROBE_SQL = (
+    "select count(*), coalesce(sum(time_updated), 0), "
+    "coalesce(max(time_updated), 0), coalesce(max(rowid), 0) from message")
+# Rows written after the stored gate's max, with their blobs: every insert and every
+# time_updated bump carries the write's own wall-clock ms (drizzle $onUpdate), so a row the
+# memo has not seen must sit above that max unless the clock stepped backward — a shape the
+# residual check hands to the full key scan.
+_OPENCODE_TAIL_SQL = "select rowid, id, time_updated, data from message where time_updated > ?"
+# Every Nth warm proof miss takes the full key scan instead of the tail fetch: the residual
+# proof's dodge classes (a triple-netting delete-and-insert, a clock stepped backward) leave
+# a wrong serve no later round can see, and this bounds its lifetime the way the pre-tail
+# gate's next-miss re-scan did. One full scan per N changed rounds prices ~0.3 s at the
+# 221k-row corpus against a gate that never re-reads it otherwise.
+_OPENCODE_FULL_SCAN_EVERY = 16
+_opencode_probes: dict[str, tuple[int, int, int, int]] = {}
+_opencode_miss_counts: dict[str, int] = {}
 
 # Per-db opencode partial of the last merge, corresponding to the row memo's current state
 # (buckets by model and account, per-model spans, contributing-record count). A scan that
@@ -811,6 +831,7 @@ def _reset_aggregate_memo() -> None:
   _opencode_row_epochs.clear()
   _opencode_partials.clear()
   _opencode_probes.clear()
+  _opencode_miss_counts.clear()
   _tally_cache_docs.clear()
   _opencode_doc_synced.clear()
   _source_partials.clear()
@@ -1797,6 +1818,47 @@ def _write_rows_sidecar(cache_dir: Path, name: str, rows: dict, notes: list[str]
   return True
 
 
+def _increment_opencode_rows(
+    con: sqlite3.Connection,
+    memo: dict[str, tuple[int, list | None] | list],
+    gate: tuple[int, int, int, int],
+) -> tuple[int, list[tuple[list | None, list | None]], tuple[int, int, int, int]] | None:
+  """Advance the warm memo from a proof-miss round by re-reading only rows written after the
+  stored gate's max time_updated. Returns (bytes read, per-row deltas, the round's probe) or
+  None when the read cannot prove the memo complete — the caller then runs the full key scan.
+
+  Every insert and every time_updated bump carries the write's own wall-clock ms, so a row
+  the memo has not seen sits above the stored max unless the clock stepped backward; a delete
+  or a backward write subtracts a sum term the fetch never saw. A matching (count, sum,
+  max rowid) residual therefore proves the fetch was the whole move of everything the triple
+  can see. The triple's coincidence classes (a delete and an insert landing in the same
+  millisecond with the deleted row holding the max rowid; a clock stepped backward) dodge it
+  where the full key scan's per-id diff would see the moves — the wrong serve then stands
+  until a residual mismatch, the _OPENCODE_FULL_SCAN_EVERY self-heal, or a restart re-scan.
+  """
+  expected_sum = gate[1]
+  expected_count = gate[0]
+  expected_max_rowid = gate[3]
+  fetched: list[tuple[str, int, list | None, list | None]] = []
+  nbytes = 0
+  for rowid, mid, tu, data in con.execute(_OPENCODE_TAIL_SQL, (gate[2],)):
+    rec, n = _opencode_row_data(data)
+    nbytes += n
+    old = memo.get(mid)
+    if old is None:
+      expected_count += 1
+      expected_max_rowid = max(expected_max_rowid, rowid)
+    expected_sum += tu - (old[0] if old is not None else 0)
+    fetched.append((mid, tu, rec, old[1] if old is not None else None))
+  probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone())
+  if (probe[0], probe[1], probe[3]) != (expected_count, expected_sum, expected_max_rowid):
+    return None
+  deltas = [(old_rec, rec) for _mid, _tu, rec, old_rec in fetched]
+  for mid, tu, rec, _old_rec in fetched:
+    memo[mid] = (tu, rec)
+  return nbytes, deltas, probe
+
+
 def _advance_opencode_rows(
     db: Path,
     seed: dict | None = None,
@@ -1807,7 +1869,12 @@ def _advance_opencode_rows(
   return ``ok=False``. A warm memo first checks the proof aggregates: unchanged (count, sum)
   proves every row move the aggregates can see is absent and the scan is skipped — a weaker
   proof than the key scan's per-id diff (see the probe comment), traded for not reading
-  85k keys on the WAL-noise rounds that are the steady state this gate exists for.
+  221k keys on the WAL-noise rounds that are the steady state this gate exists for. A proof
+  miss on a warm gate advances from the tail fetch (see _increment_opencode_rows) and falls
+  back to the full key scan when the fetch cannot prove itself complete or when the miss is
+  the self-heal round (every _OPENCODE_FULL_SCAN_EVERY-th); a seeded memo's stored proof
+  carries no max, so its first proof miss takes the full key scan and the gate it stores
+  carries one for every round after.
 
   *seed* is the persisted document's ``rows`` map for this db. A cold memo seeded from it
   skips the whole-blob cold scan: the memo starts at the document's rows and the warm key
@@ -1833,20 +1900,30 @@ def _advance_opencode_rows(
       con.execute("begin")  # one snapshot: the stored proof must describe the scanned state
       probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone()) if memo else None
       gate = seed_probe if seeded else _opencode_probes.get(key)
-      if probe is not None and gate is not None and tuple(gate) == probe:
+      if probe is not None and gate is not None and tuple(gate) == probe[:len(gate)]:
         # The stored proof matches the snapshot: the seeded memo describes the live rows
         # and the key scan skips, the same trade the warm gate makes.
         _opencode_probes[key] = probe
         con.commit()
         return _OpencodeScan(sig, _opencode_row_epochs.get(key, 0), 0, ok=True, error=None, deltas=[])
-      nbytes, deltas = _scan_opencode_rows(con, memo)
-      if probe is None:  # cold memo: the scan's snapshot is the state the memo now describes
-        probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone())
-        _opencode_doc_synced[key] = False
-      elif any(old is not None or new is not None for old, new in deltas):
-        # (None, None) pairs are non-contributing rows whose key moved; the records the
-        # document holds are unchanged, so only a record-bearing move unsyncs the entry.
-        _opencode_doc_synced[key] = False
+      misses = _opencode_miss_counts.get(key, 0) + 1
+      _opencode_miss_counts[key] = misses
+      advanced = _increment_opencode_rows(con, memo, gate) \
+          if (probe is not None and gate is not None and len(gate) == 4
+              and misses % _OPENCODE_FULL_SCAN_EVERY != 0) else None
+      if advanced is not None:
+        nbytes, deltas, probe = advanced
+        if any(old is not None or new is not None for old, new in deltas):
+          # (None, None) pairs are non-contributing rows whose key moved; the records the
+          # document holds are unchanged, so only a record-bearing move unsyncs the entry.
+          _opencode_doc_synced[key] = False
+      else:
+        nbytes, deltas = _scan_opencode_rows(con, memo)
+        if probe is None:  # cold memo: the scan's snapshot is the state the memo now describes
+          probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone())
+          _opencode_doc_synced[key] = False
+        elif any(old is not None or new is not None for old, new in deltas):
+          _opencode_doc_synced[key] = False
       _opencode_probes[key] = probe
       con.commit()
     finally:
@@ -1856,6 +1933,7 @@ def _advance_opencode_rows(
     # the next merge down the full replay, which rebuilds both from whatever the memo holds.
     # The stored proof describes a state the failed scan never reached, so it drops too.
     _opencode_probes.pop(key, None)
+    _opencode_miss_counts.pop(key, None)
     _opencode_partials[key] = None
     return _OpencodeScan(sig, 0, 0, ok=False, error=str(exc))
   epoch = _opencode_row_epochs.get(key, 0)
@@ -1958,9 +2036,10 @@ def _merge_opencode(
       }
       # The proof aggregates ride the entry beside the rows they describe: the restart seed
       # gates its key diff on them, so a restart whose rows did not move skips the scan.
+      # The persisted pair stays (count, sum); the in-process gate's max is restart-local.
       probe = _opencode_probes.get(key)
       if probe is not None:
-        stored["probe"] = list(probe)
+        stored["probe"] = list(probe[:2])
       prev_rows_file = entry.get("rows_file") if entry is not None else None
       # The sidecar rewrites only when the rows moved under it (a cold scan rebuilds them
       # whole): a scan with no row move leaves the stored rows exact, so the stored name

@@ -1192,6 +1192,115 @@ def test_row_memo_probe_skips_the_key_scan_on_wal_noise(tmp_path: Path, monkeypa
   con.close()
 
 
+def _opencode_model_rows(tally: tt.TokenTally) -> list:
+  return [
+      (r.model, r.calls, r.in_fresh, r.cache_write, r.cache_read, r.output, r.first, r.last)
+      for r in tally.rows
+      if r.source == "opencode"
+  ]
+
+
+def test_row_memo_gate_advances_from_the_tail_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The warm gate's proof miss answers from the tail fetch: rows written after the stored
+  # max re-read, the full key scan never runs, and the persisted entry's probe stays the
+  # two-field (count, sum) pair the restart seed gates on.
+  db, cache = _db_and_cache(tmp_path)
+  _write_opencode(db, [_oc_row()])
+  first = _collect(None, None, db, cache)
+
+  def boom(*args: Any, **kwargs: Any) -> None:
+    raise AssertionError("full key scan ran although the tail fetch proved the round complete")
+
+  monkeypatch.setattr(tt, "_scan_opencode_rows", boom)
+  con = sqlite3.connect(db)
+  mid, = con.execute("select id from message").fetchone()
+  con.execute(
+      "update message set data = ?, time_updated = time_updated + 1 where id = ?",
+      (json.dumps(_step_finish_record()), mid))
+  con.commit()
+  con.close()
+  _append_opencode(db, [_padded_opencode_row(500)])
+  second = _collect(None, None, db, cache)
+
+  assert _row(second, "opencode", "oc-m").total == _row(first, "opencode", "oc-m").total - 6 + 102 + 102
+  assert _row(second, "opencode", "oc-m").calls == 2
+  entry = json.loads(cache.read_bytes())["sources"]["opencode"][str(db)]
+  assert len(entry["probe"]) == 2  # the store wrote the proof back
+
+
+def test_row_memo_gate_falls_back_to_the_key_scan_on_a_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # A cascade delete subtracts a term the tail fetch never saw, so the residual check
+  # rejects the incremental round and the full key scan drops the vanished id.
+  db = tmp_path / "db.sqlite"
+  _write_opencode(db, [_oc_row(), _oc_row()])
+  first = _collect(None, None, db)
+  assert _row(first, "opencode", "oc-m").calls == 2
+
+  con = sqlite3.connect(db)
+  con.execute("delete from message where id = (select min(id) from message)")
+  con.commit()
+  con.close()
+  scans = _spy_opencode_scans(monkeypatch)
+  second = _collect(None, None, db)
+
+  assert scans == [1]
+  assert _row(second, "opencode", "oc-m").calls == 1
+
+  tt._opencode_row_memos.clear()
+  tt._opencode_partials.clear()
+  tt._opencode_row_epochs.clear()
+  assert _opencode_model_rows(_collect(None, None, db)) == _opencode_model_rows(second)
+
+
+def test_row_memo_gate_falls_back_on_a_backward_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # A row whose time_updated moved below the stored max sits outside every tail fetch; the
+  # sum residual catches it and the full key scan re-reads the row.
+  db = tmp_path / "db.sqlite"
+  _write_opencode(db, [_oc_row()])
+  first = _collect(None, None, db)
+
+  con = sqlite3.connect(db)
+  mid, = con.execute("select id from message").fetchone()
+  con.execute("update message set data = ?, time_updated = 100 where id = ?", (json.dumps(_step_finish_record()), mid))
+  con.commit()
+  con.close()
+  scans = _spy_opencode_scans(monkeypatch)
+  second = _collect(None, None, db)
+
+  assert scans == [1]
+  assert _row(second, "opencode", "oc-m").total == _row(first, "opencode", "oc-m").total - 6 + 102
+
+  tt._opencode_row_memos.clear()
+  tt._opencode_partials.clear()
+  tt._opencode_row_epochs.clear()
+  assert _opencode_model_rows(_collect(None, None, db)) == _opencode_model_rows(second)
+
+
+def test_row_memo_gate_falls_back_on_a_delete_insert_round(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # One delete and one insert in one round nets the count to zero and moves the sum; the
+  # count residual rejects the incremental round, and the key scan lands both moves.
+  db = tmp_path / "db.sqlite"
+  _write_opencode(db, [_oc_row(), _oc_row()])
+  first = _collect(None, None, db)
+
+  con = sqlite3.connect(db)
+  con.execute("delete from message where id = (select min(id) from message)")
+  con.commit()
+  con.close()
+  _append_opencode(db, [_padded_opencode_row(500)])
+  scans = _spy_opencode_scans(monkeypatch)
+  second = _collect(None, None, db)
+
+  assert scans == [1]
+  assert _row(second, "opencode", "oc-m").total == _row(first, "opencode", "oc-m").total - 6 + 102
+  assert _row(second, "opencode", "oc-m").calls == 2
+
+  tt._opencode_row_memos.clear()
+  tt._opencode_partials.clear()
+  tt._opencode_row_epochs.clear()
+  assert _opencode_model_rows(_collect(None, None, db)) == _opencode_model_rows(second)
+
+
 def test_cache_document_parses_once_per_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # The parsed document memoizes per cache path: a changed round re-parses zero document
   # bytes; the per-file signature still forces the moved file's own re-read.

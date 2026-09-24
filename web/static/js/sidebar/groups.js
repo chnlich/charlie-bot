@@ -860,6 +860,14 @@ function renderWorkerLeafIcon() {
   return `<svg class="w-3.5 h-3.5 text-slate-500 flex-shrink-0" title="Worker (implementation leaf)" fill="none" stroke="currentColor" viewBox="0 0 24 24">${LEAF_SVG_PATH}</svg>`;
 }
 
+// An archived worker delivered its work: the row shows a check in the leaf
+// icon's place.
+const CHECK_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>`;
+
+function renderWorkerDeliveredIcon() {
+  return `<svg class="w-3.5 h-3.5 text-green-500 flex-shrink-0" title="Worker (delivered)" fill="none" stroke="currentColor" viewBox="0 0 24 24">${CHECK_SVG_PATH}</svg>`;
+}
+
 // One row followed by its subtree. The outer wrapper carries the row's
 // group-limit class and attributes, so a root hidden by the 5-row preview
 // hides its subtree with it and Show all reveals both; the inner container
@@ -963,7 +971,7 @@ function renderSessionItem(s, filter, options = {}) {
      id="session-${s.id}"${extraAttrs}>
     ${options.treeChildCount ? renderTreeChevron(s.id, options.treeChildCount) : ''}
     ${indicators}
-    ${isWorker ? renderWorkerLeafIcon() : ''}
+    ${isWorker ? (isArchivedRow ? renderWorkerDeliveredIcon() : renderWorkerLeafIcon()) : ''}
     <span class="flex-1 min-w-0">
       <span class="truncate block session-name">${escapeHtml(s.name)}</span>
       ${filter === 'scheduled' && s.schedule_cron ? renderSessionScheduleLine(s) : renderSessionTimeLine(s, timeIso, timeStr, !!options.staticTime)}

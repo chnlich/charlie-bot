@@ -113,7 +113,8 @@ test('a status poll reply for a leaf repaints its collapsed ancestors', async ()
   await context.Sidebar.pollSessionStatus();
   assert.deepEqual(shown('p'), {spinner: false, gear: true, dot: false});
   assert.deepEqual(shown('c'), {spinner: false, gear: true, dot: false});
-  assert.deepEqual(shown('g'), {spinner: false, gear: true, dot: false});
+  // The leaf itself runs the work: its own row shows the spinner.
+  assert.deepEqual(shown('g'), {spinner: true, gear: false, dot: false});
 
   reply = {g: {has_running_tasks: false, has_unread: true}};
   await context.Sidebar.pollSessionStatus();
@@ -133,4 +134,22 @@ test('a childless row keeps main’s behavior: its own state and unread flag onl
   assert.deepEqual(shown('solo'), {spinner: false, gear: true, dot: false});
   context.setSessionIndicator('solo', 'idle');
   assert.deepEqual(shown('solo'), {spinner: false, gear: false, dot: true});
+});
+
+test('a running worker leaf paints the spinner, not the delegated-work gear', () => {
+  const {context, nav, shown} = buildContext(['p', 'w']);
+  context.renderSessionList([row('p', null), row('w', 'p', {has_running_tasks: true})], 'all');
+  const spinnerClass = nav.innerHTML.match(/<svg id="spinner-w"[^>]*class="([^"]*)"/)[1];
+  const gearClass = nav.innerHTML.match(/<svg id="worker-indicator-w"[^>]*class="([^"]*)"/)[1];
+  assert.equal(/\bhidden\b/.test(spinnerClass), false, 'the leaf\u2019s own run shows as the spinner at paint');
+  assert.equal(/\bhidden\b/.test(gearClass), true);
+
+  // The status poll reports the same fact through the shared seam.
+  context.setSessionIndicator('w', 'worker_only');
+  assert.deepEqual(shown('w'), {spinner: true, gear: false, dot: false});
+  // The collapsed parent still stands in with its gear: it delegates.
+  assert.deepEqual(shown('p'), {spinner: false, gear: true, dot: false});
+
+  context.setSessionIndicator('w', 'idle');
+  assert.deepEqual(shown('w'), {spinner: false, gear: false, dot: false});
 });

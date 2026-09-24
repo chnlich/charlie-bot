@@ -808,7 +808,8 @@ test('switchSession preserves worker icon until authoritative status returns', a
   await context.switchSession('session-b');
 
   assert.equal(workerIcon.classList.contains('hidden'), false);
-  assert.match(tabWorkers.innerHTML, /Loading worker threads/);
+  // A manager session leaves the worker leaf container alone.
+  assert.equal(tabWorkers.innerHTML, '');
   assert.equal(context.location.href, '');
 });
 
@@ -845,7 +846,8 @@ test('missing bootstrap worker data and empty worker tab do not imply idle', () 
   });
   context.updateSpinner();
 
-  assert.match(tabWorkers.innerHTML, /Loading worker threads/);
+  // A manager session leaves the worker leaf container alone.
+  assert.equal(tabWorkers.innerHTML, '');
   assert.equal(workerIcon.classList.contains('hidden'), false);
   assert.equal(statusPolls, 1);
 });

@@ -233,7 +233,7 @@ def test_term_scoring_ignores_spaces_and_takes_the_minimum() -> None:
 # Muse client against a loopback fake server.
 import json  # noqa: E402
 
-from websockets.asyncio.server import Server, ServerConnection, serve  # noqa: E402
+from websockets.asyncio.server import ServerConnection, serve  # noqa: E402
 
 EXPECTED_HANDSHAKE = {
     "mode": "PUSH_TO_TALK",
@@ -247,7 +247,7 @@ EXPECTED_HANDSHAKE = {
 }
 
 
-def _serve(handler: Callable[[ServerConnection], Awaitable[None]]) -> Server:
+def _serve(handler: Callable[[ServerConnection], Awaitable[None]]) -> serve:
   return serve(handler, "127.0.0.1", 0)
 
 

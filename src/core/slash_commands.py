@@ -13,6 +13,7 @@ from src.core.config import charliebot_home_dir
 from src.core.log_once import LazyStructlogLogger
 from src.core.process import kill_process_group
 from src.core.timeouts import SLASH_COMMAND_DEFAULT_TIMEOUT
+from src.core.yaml_utils import load_yaml_text
 
 log = LazyStructlogLogger()
 
@@ -52,7 +53,7 @@ def load_slash_commands() -> list[SlashCommand]:
     return []
   try:
     raw = path.read_text(encoding='utf-8')
-    data = yaml.safe_load(raw) or {}
+    data = load_yaml_text(raw, default={})
   except (OSError, yaml.YAMLError) as e:
     log.warning('slash_commands_load_failed', path=str(path), error=str(e))
     return []

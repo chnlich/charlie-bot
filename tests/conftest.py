@@ -842,7 +842,8 @@ def make_home_config(tmp_path: Path) -> CharlieBotConfig:
 
 def build_master_cc_cfg(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig rooted at tmp_path/".charliebot" with one fake codex backend registered: the
-  shape the master-cc round tests drive run_message, replay_user_message, and _run_cc against."""
+  shape the master-cc round tests drive run_message, replay_user_message, _run_cc, and
+  _session_consumer against."""
   return CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backends={"options": [backend_option(id="fake", label="Fake", type="codex", model="fake-model")]},

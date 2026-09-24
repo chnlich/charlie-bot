@@ -104,8 +104,9 @@ def test_offline_windows_parity_with_transcribe_pcm_offline(monkeypatch: pytest.
   vad = _FakeVad(segments)
   windows = transcriber.offline_decode_windows(vad, source)
   replay_text = transcriber._join_segments(
-      *(transcriber._decode_samples(_stub_bundle(), source[left:right].astype(np.float32) / 32768.0)
-        for _start, _end, left, right in windows))
+      *(
+          transcriber._decode_samples(_stub_bundle(), source[left:right].astype(np.float32) / 32768.0)
+          for _start, _end, left, right in windows))
   assert replay_text == production_text
   # Both passes decoded byte-identical spans, in order.
   assert len(captured) == len(production_windows)

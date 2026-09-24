@@ -59,9 +59,7 @@ def _seed_scheduled_task(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    task_name: str = "nightly",
     cron: str = "0 2 * * *",
-    backend: str = OPUS_BACKEND_ID,
 ) -> Path:
   """Seed a prompt_file-backed host cron file and point the core backend-write helper at it.
 
@@ -70,12 +68,12 @@ def _seed_scheduled_task(
   scheduler tick can rebuild the task config from what the write-back left on
   disk.
   """
-  prompt = tmp_path / "prompts" / f"{task_name}.md"
+  prompt = tmp_path / "prompts" / "nightly.md"
   prompt.parent.mkdir(parents=True, exist_ok=True)
   prompt.write_text("run nightly", encoding="utf-8")
   cron_d = tmp_path / "cron.d"
   cron_d.mkdir(parents=True, exist_ok=True)
-  path = cron_d / f"{task_name}.yaml"
+  path = cron_d / "nightly.yaml"
   path.write_text(
       yaml.safe_dump(
           {
@@ -83,7 +81,7 @@ def _seed_scheduled_task(
               "cron": cron,
               "prompt_file": str(prompt),
               "timezone": "America/Los_Angeles",
-              "backend": backend,
+              "backend": OPUS_BACKEND_ID,
           }),
       encoding="utf-8")
   monkeypatch.setattr("src.core.scheduled_sessions.cron_path", lambda name: cron_d / f"{name}.yaml")
@@ -105,15 +103,15 @@ def _scheduled_succession_rig(
 async def _make_scheduled_parent(
     mgr: SessionManager,
     *,
-    task: str = "nightly",
-    name: str = "Scheduled: nightly",
-    backend: str = OPUS_BACKEND_ID,
     role: str | None = None,
     group: str | None = None,
     events: int = 3,
 ) -> SessionMetadata:
-  """Create the active scheduled session for *task*, with *events* chat events."""
-  parent = await mgr.create_session(CreateSessionRequest(name=name, scheduled_task=task, role=role), backend=backend)
+  """Create the active scheduled session for the nightly task, with *events* chat events."""
+  parent = await mgr.create_session(
+      CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly", role=role),
+      backend=OPUS_BACKEND_ID,
+  )
   if group is not None:
     parent.group = group
     await mgr.save_metadata(parent)

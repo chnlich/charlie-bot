@@ -156,8 +156,8 @@ async def _seed(session_mgr: SessionManager, *, backend: str) -> str:
   return meta.id
 
 
-async def _seed_role(session_mgr: SessionManager, *, backend: str, role: str = "project") -> SessionMetadata:
-  return await session_mgr.create_session(CreateSessionRequest(name="Role session", role=role), backend=backend)
+async def _seed_role(session_mgr: SessionManager, *, backend: str) -> SessionMetadata:
+  return await session_mgr.create_session(CreateSessionRequest(name="Role session", role="project"), backend=backend)
 
 
 def _capture_persisted_events(monkeypatch: pytest.MonkeyPatch, session_mgr: SessionManager) -> list[dict]:

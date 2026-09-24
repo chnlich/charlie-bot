@@ -46,12 +46,12 @@ def _state(prompt: str = PROMPT) -> HookTurnState:
   )
 
 
-def _started_turn(prompt: str = PROMPT) -> HookTurnState:
-  state = _state(prompt)
+def _started_turn() -> HookTurnState:
+  state = _state(PROMPT)
   state.handle("SessionStart", _payload("SessionStart", source="startup"))
   state.handle(
       "UserPromptSubmit",
-      _payload("UserPromptSubmit", prompt=prompt, turn_id="turn-1"),
+      _payload("UserPromptSubmit", prompt=PROMPT, turn_id="turn-1"),
   )
   return state
 

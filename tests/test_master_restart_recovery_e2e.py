@@ -343,8 +343,7 @@ def _launch_driver(
     shim: Path,
     kind: str,
     shim_mode: str,
-    extra_args: list[str] | None = None,
-    extra_env: dict[str, str] | None = None) -> tuple[subprocess.Popen, str]:
+    extra_args: list[str] | None = None) -> tuple[subprocess.Popen, str]:
   shim_dir = tmp_path / "shim"
   driver = shim_dir / "driver.py"
   driver.write_text(DRIVER, encoding="utf-8")
@@ -354,8 +353,6 @@ def _launch_driver(
   env["SHIM_MODE"] = shim_mode
   env["SHIM_STATE"] = str(tmp_path / "shim_state")
   env["SHIM_SLEEP"] = "3"
-  if extra_env:
-    env.update(extra_env)
   proc = subprocess.Popen(
       [sys.executable, str(driver), str(home),
        str(shim), kind, *(extra_args or [])],

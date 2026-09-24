@@ -83,10 +83,10 @@ def _event_line(i: int, ts: str, session_id: str) -> str:
   return json.dumps(event, separators=(",", ":"))
 
 
-def _write_lines(path: Path, target_bytes: int, session_id: str, start: int = 0) -> int:
+def _write_lines(path: Path, target_bytes: int, session_id: str) -> int:
   base = datetime(2026, 9, 1, 8, 0, 0, tzinfo=timezone.utc)
   size = 0
-  i = start
+  i = 0
   with open(path, "w", encoding="utf-8") as stream:
     while size < target_bytes:
       lines = []

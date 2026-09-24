@@ -360,9 +360,9 @@ def _run_git(cwd: Path, *args: str) -> None:
   subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True)
 
 
-def _origin_commit_count(origin: Path, branch: str = "main") -> int:
+def _origin_commit_count(origin: Path) -> int:
   result = subprocess.run(
-      ["git", "log", "--oneline", branch], cwd=str(origin), check=True, capture_output=True, text=True)
+      ["git", "log", "--oneline", "main"], cwd=str(origin), check=True, capture_output=True, text=True)
   return len(result.stdout.splitlines())
 
 

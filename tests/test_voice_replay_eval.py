@@ -11,7 +11,9 @@ from __future__ import annotations
 import importlib.util
 import sys
 import threading
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from types import ModuleType
 
 import numpy as np
 import pytest
@@ -21,7 +23,7 @@ from src.agents import transcriber
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _load_script():
+def _load_script() -> ModuleType:
   """Import scripts/voice_replay_eval.py as a module (it is an entry point, not a package)."""
   path = ROOT / "scripts" / "voice_replay_eval.py"
   spec = importlib.util.spec_from_file_location("voice_replay_eval", path)
@@ -231,7 +233,7 @@ def test_term_scoring_ignores_spaces_and_takes_the_minimum() -> None:
 # Muse client against a loopback fake server.
 import json  # noqa: E402
 
-from websockets.asyncio.server import serve  # noqa: E402
+from websockets.asyncio.server import Server, ServerConnection, serve  # noqa: E402
 
 EXPECTED_HANDSHAKE = {
     "mode": "PUSH_TO_TALK",
@@ -245,7 +247,7 @@ EXPECTED_HANDSHAKE = {
 }
 
 
-def _serve(handler):
+def _serve(handler: Callable[[ServerConnection], Awaitable[None]]) -> Server:
   return serve(handler, "127.0.0.1", 0)
 
 
@@ -253,7 +255,7 @@ def _serve(handler):
 async def test_muse_client_handshake_frames_and_final() -> None:
   observed: dict = {}
 
-  async def handler(socket) -> None:
+  async def handler(socket: ServerConnection) -> None:
     observed["handshake"] = json.loads(await socket.recv())
     await socket.send(json.dumps({"type": "ready"}))
     frames = []
@@ -296,7 +298,7 @@ async def test_muse_client_handshake_frames_and_final() -> None:
 async def test_muse_client_sends_keywords_and_language_bias_when_set() -> None:
   observed: dict = {}
 
-  async def handler(socket) -> None:
+  async def handler(socket: ServerConnection) -> None:
     observed["handshake"] = json.loads(await socket.recv())
     await socket.send(json.dumps({"type": "ready"}))
     async for _message in socket:
@@ -319,7 +321,7 @@ async def test_muse_client_sends_keywords_and_language_bias_when_set() -> None:
 async def test_muse_handshake_error_records_failure_and_run_continues() -> None:
   connections = {"count": 0}
 
-  async def handler(socket) -> None:
+  async def handler(socket: ServerConnection) -> None:
     connections["count"] += 1
     await socket.recv()
     if connections["count"] == 1:
@@ -350,7 +352,7 @@ async def test_muse_handshake_error_records_failure_and_run_continues() -> None:
 @pytest.mark.asyncio
 async def test_muse_abnormal_close_mid_stream_is_a_failure_with_code() -> None:
 
-  async def handler(socket) -> None:
+  async def handler(socket: ServerConnection) -> None:
     await socket.recv()
     await socket.send(json.dumps({"type": "ready"}))
     async for _message in socket:

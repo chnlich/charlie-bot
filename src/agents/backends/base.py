@@ -776,20 +776,6 @@ class AgentBackend(ABC):
     raw-log shape. Both apply the nice raise and the cgroup move parent-side.
     """
     self._active_session_cgroup = self._prepare_session_cgroup()
-    if pdeathsig:
-      proc = await spawn_subprocess(
-          *cmd,
-          stdin=asyncio.subprocess.DEVNULL,
-          stdout=asyncio.subprocess.PIPE,
-          stderr=asyncio.subprocess.PIPE,
-          env=env,
-          limit=self._buffer_limit,
-          start_new_session=True,
-          preexec_fn=None,
-          pdeathsig=True,
-      )
-      self._apply_turn_tree_limits(proc.pid)
-      return proc
     proc = await spawn_subprocess(
         *cmd,
         stdin=asyncio.subprocess.DEVNULL,
@@ -799,6 +785,7 @@ class AgentBackend(ABC):
         limit=self._buffer_limit,
         start_new_session=True,
         preexec_fn=None,
+        pdeathsig=pdeathsig,
     )
     self._apply_turn_tree_limits(proc.pid)
     return proc

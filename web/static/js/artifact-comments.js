@@ -41,7 +41,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       {
         kind: 'improve',
         label: 'Improve',
-        prompt: 'Think from scratch, how to improve this?',
+        prompt: 'Keep this page\'s goal and resolved choices fixed; raise doubts about them as ' +
+          'questions. Think from scratch for a better implementation: compare each candidate ' +
+          'with the current design, adopt one that wins, otherwise keep the current design.',
       },
       {
         kind: 'shorten',

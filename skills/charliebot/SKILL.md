@@ -292,4 +292,6 @@ The fired message is prefixed with the reason; per-target detail is in the suffi
 | Sessions | `sessions.py` |
 | Config | `config.py` |
 
+**A one-shot call dispatches to the per-backend CLI-native overrides.** `backend.one_shot_text` resolves to the claude/codex/opencode overrides, which run tool-less — claude's override even disallows Read — so any one-shot that needs file or tool access must bind the base `AgentBackend.one_shot_text` explicitly for every backend, as `src/core/explain.py` does (the `base_one_shot_text` binding).
+
 Never guess how CharlieBot works — the source code is always available.

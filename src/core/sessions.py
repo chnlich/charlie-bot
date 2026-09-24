@@ -9,7 +9,7 @@ import os
 import shutil
 import stat
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO, NamedTuple
@@ -799,6 +799,12 @@ class SessionManager:
     # policy the task owner applies to its own metadata writes; None only
     # before that wiring exists (no tree consumer constructed in this process).
     self.tree_index_invalidator: Callable[[], None] | None = None
+    # The task tree derives a node's archive state from facts (a delivered
+    # worker archives once its parent's receipt is on disk) and never writes
+    # it into status; the sidebar lists read status. The task-tree owner
+    # registers this read-time overlay at wiring time: the ids it returns list
+    # as archived. None before that wiring exists (stored status only).
+    self.archive_overlay: Callable[[], Awaitable[set[str]]] | None = None
     # Listing-preamble memo: ((mtime_ns, size) of the sessions root, its subdirectory names).
     # The root's own mtime moves exactly when a session entry is created or removed (metadata
     # writes land one level below), so an unchanged signature proves the name set current.
@@ -1102,7 +1108,7 @@ class SessionManager:
     so only surviving rows pay the model_copy and thinking stamp that mark a meta
     as having left the manager.
     """
-    metas = await self._load_session_metas(status)
+    metas = await self._with_derived_archive(await self._load_session_metas(status), status)
     sessions = [
         _stamp_thinking_since(meta.model_copy()) for meta in metas if (starred is None or meta.starred == starred) and
         (scheduled is None or bool(meta.scheduled_task) == scheduled)
@@ -1146,7 +1152,8 @@ class SessionManager:
     explicit cursor stops with the error instead of silently serving page 1.
     """
     limit = max(1, min(500, limit))
-    metas = await self._load_session_metas(status=SessionStatus.ARCHIVED)
+    metas = await self._with_derived_archive(
+        await self._load_session_metas(status=SessionStatus.ARCHIVED), SessionStatus.ARCHIVED)
 
     counts: dict[str | None, int] = {}
     for meta in metas:
@@ -2366,6 +2373,33 @@ class SessionManager:
     if changed:
       meta.round_ratings = migrated
     return changed
+
+  async def _with_derived_archive(
+      self, metas: list[SessionMetadata], status: SessionStatus | None) -> list[SessionMetadata]:
+    """Apply the task tree's fact-derived archive to one stored-status listing.
+
+    The listing memo keys stored status; the derived set moves with facts, so
+    the overlay applies after the memo, per call. An active listing drops the
+    derived ids, an archived listing gains them (their rows copied with status
+    archived, the stored objects untouched), and an unfiltered listing shows
+    them as archived. Without a registered overlay the listing stands as is.
+    """
+    if self.archive_overlay is None:
+      return metas
+    derived = await self.archive_overlay()
+    if not derived:
+      return metas
+
+    def as_archived(meta: SessionMetadata) -> SessionMetadata:
+      return meta.model_copy(update={"status": SessionStatus.ARCHIVED})
+
+    if status == SessionStatus.ACTIVE:
+      return [meta for meta in metas if meta.id not in derived]
+    if status == SessionStatus.ARCHIVED:
+      active = await self._load_session_metas(SessionStatus.ACTIVE)
+      return metas + [as_archived(meta) for meta in active if meta.id in derived]
+    return [as_archived(meta) if meta.id in derived and meta.status != SessionStatus.ARCHIVED else meta
+            for meta in metas]
 
   async def _load_session_metas(self, status: SessionStatus | None = None) -> list[SessionMetadata]:
     """Load session metadata, batching disk reads and parses for cache misses.

@@ -124,9 +124,10 @@ _merge_tasks: dict[str, asyncio.Task] = {}
 # from the server lifespan's shutdown half. Sized to the CPUs: a multi-trace merge runs one
 # member per trace on this pool and the wall is parse-bound, so more workers than the CPUs
 # only add contention; a single-trace merge uses one worker regardless.
-# The annotation stays quoted: concurrent.futures resolves ProcessPoolExecutor through a
-# module __getattr__ whose first read imports .process (multiprocessing rides it), and the
-# M99 server import floor carries no spawn-pool stack for a pool that may never build.
+# PEP 649 defers this annotation's evaluation to first introspection, so the bare name does
+# not import concurrent.futures at module load. Its module __getattr__ imports .process on
+# first read (multiprocessing rides it), and the M99 server import floor carries no spawn-pool
+# stack for a pool that may never build.
 _merge_executor_instance: concurrent.futures.ProcessPoolExecutor | None = None
 _MERGE_POOL_WORKERS = min(4, os.cpu_count() or 2)
 

@@ -35,7 +35,7 @@ _PY_ECHO_STDIN = (
     "; sys.stdout.buffer.write(b'echo:' + data); sys.stdout.buffer.flush()")
 
 
-async def _spawn(*args: str, **kwargs) -> SpawnedProcess:
+async def _spawn(*args: str, **kwargs: object) -> SpawnedProcess:
   defaults: dict = dict(
       cwd="/tmp",
       env=dict(os.environ),

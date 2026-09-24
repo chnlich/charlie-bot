@@ -3048,6 +3048,11 @@ async def _ok_asgi_downstream(scope: Any, receive: Any, send: Any) -> None:
 _ok_asgi_downstream.called = False
 
 
+def asgi_downstream_called() -> bool:
+  """Whether the shared downstream ran during the last run_through_asgi_middleware call."""
+  return _ok_asgi_downstream.called
+
+
 async def run_through_asgi_middleware(middleware: Any, scope: dict) -> list[dict]:
   """Drive one ASGI middleware over *scope* with the shared OK downstream; return the sent messages."""
   _ok_asgi_downstream.called = False

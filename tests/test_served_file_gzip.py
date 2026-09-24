@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api import files as files_api
+from src.api import responses as responses_api
 
 
 def _bare_app() -> FastAPI:
@@ -43,7 +44,7 @@ def test_repeat_serve_answers_from_stored_gzip(tmp_path: Path, monkeypatch: pyte
   assert_gzip_served(first)
   assert first.content == page.read_bytes()
 
-  monkeypatch.setattr(files_api, "gzip_level1", gzip_explode_compress("repeat file serve re-ran the deflate"))
+  monkeypatch.setattr(responses_api, "gzip_level1", gzip_explode_compress("repeat file serve re-ran the deflate"))
   second = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert second.status_code == 200
   assert_gzip_served(second)
@@ -69,7 +70,7 @@ def test_skip_listed_media_never_enters_the_memo_arm(tmp_path: Path, monkeypatch
   """A media type outside the text gate must never leave the route as a
   pre-compressed body: unknown and binary formats keep the streaming arm's
   identity contract (wire == raw bytes)."""
-  monkeypatch.setattr(files_api, "gzip_level1", gzip_explode_compress("unlisted media re-ran the deflate"))
+  monkeypatch.setattr(responses_api, "gzip_level1", gzip_explode_compress("unlisted media re-ran the deflate"))
   blob = tmp_path / "img.png"
   blob.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 2000)
   resp = TestClient(_bare_app()).get("/absolute_filepath" + str(blob), headers={"Accept-Encoding": "gzip"})
@@ -89,7 +90,7 @@ def test_json_file_rides_the_memo_arm(tmp_path: Path, monkeypatch: pytest.Monkey
   assert first.status_code == 200
   assert_gzip_served(first)
   assert first.content == blob.read_bytes()
-  monkeypatch.setattr(files_api, "gzip_level1", gzip_explode_compress("repeat json serve re-ran the deflate"))
+  monkeypatch.setattr(responses_api, "gzip_level1", gzip_explode_compress("repeat json serve re-ran the deflate"))
   second = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert second.status_code == 200
   assert second.content == first.content
@@ -99,7 +100,7 @@ def test_range_request_stays_on_streaming_arm(tmp_path: Path, monkeypatch: pytes
   """A Range request never takes the memo arm: byte ranges address the raw
   representation, so the request rides the streaming FileResponse unchanged."""
   page = _write_page(tmp_path)
-  monkeypatch.setattr(files_api, "gzip_level1", gzip_explode_compress("range serve re-ran the deflate"))
+  monkeypatch.setattr(responses_api, "gzip_level1", gzip_explode_compress("range serve re-ran the deflate"))
   resp = _build_client().get(
       "/absolute_filepath" + str(page), headers={
           "Accept-Encoding": "gzip",
@@ -125,7 +126,7 @@ def test_oversize_file_stays_on_streaming_arm(tmp_path: Path, monkeypatch: pytes
   serves chunk-wise without buffering."""
   monkeypatch.setattr(files_api, "_SERVED_FILE_GZIP_MAX_BYTES", 8)
   page = _write_page(tmp_path)
-  monkeypatch.setattr(files_api, "gzip_level1", gzip_explode_compress("oversize serve re-ran the deflate"))
+  monkeypatch.setattr(responses_api, "gzip_level1", gzip_explode_compress("oversize serve re-ran the deflate"))
   resp = _build_client().get("/absolute_filepath" + str(page), headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
   assert "content-encoding" not in resp.headers

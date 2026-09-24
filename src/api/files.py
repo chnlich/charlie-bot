@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from src.api.pages import _static_asset_version
-from src.api.responses import GZIP_RESPONSE_HEADERS, request_wants_gzip
+from src.api.responses import GZIP_RESPONSE_HEADERS, gzip_file_fresh, request_wants_gzip
 from src.core.compression import gzip_level1
 from src.core.config import get_config
 from src.core.constants import FILE_SERVER_MOUNTS
@@ -65,25 +65,6 @@ _SERVED_FILE_GZIP_MEDIA_TYPES = frozenset(
     })
 
 _served_file_gzip_memo: StatSignatureMemo[Path, bytes] = StatSignatureMemo(_SERVED_FILE_GZIP_MEMO_LIMIT)
-
-
-def _served_file_gzip(fs_path: Path) -> bytes | None:
-  """The bare-file arm's gzip form under the size cap, memoized on the file signature.
-
-  stat precedes the read in the same call (the StatSignatureMemo contract), so a
-  repeat hit serves only bytes its signature proves current. ``None`` sends the
-  request to the streaming arm: the file is over the cap.
-  """
-  st = fs_path.stat()
-  if st.st_size > _SERVED_FILE_GZIP_MAX_BYTES:
-    return None
-  hit = _served_file_gzip_memo.fresh(fs_path, st)
-  if hit is not None:
-    return hit
-  compressed = gzip_level1(fs_path.read_bytes())
-  _served_file_gzip_memo.record(fs_path, st, compressed)
-  return compressed
-
 
 # Bound on _annotate_memo in annotated diff pages: one compare view reads one
 # page against one base at a time, so the cap covers every compare view open
@@ -557,7 +538,7 @@ async def serve_file(path: str, request: Request) -> Response:
   media_type, _ = mimetypes.guess_type(str(fs_path))
   if (request_wants_gzip(request) and "range" not in request.headers and media_type is not None and
       (media_type.startswith(_SERVED_FILE_GZIP_MEDIA_PREFIXES) or media_type in _SERVED_FILE_GZIP_MEDIA_TYPES)):
-    compressed = await asyncio.to_thread(_served_file_gzip, fs_path)
+    compressed = await asyncio.to_thread(gzip_file_fresh, _served_file_gzip_memo, fs_path, _SERVED_FILE_GZIP_MAX_BYTES)
     if compressed is not None:
       return Response(content=compressed, media_type=media_type, headers=GZIP_RESPONSE_HEADERS)
   try:

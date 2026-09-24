@@ -294,7 +294,10 @@ def test_module_defers_structlog_until_the_first_log_call(module_name: str, impo
 # The server import floor's ban set (docs/perf_baseline.md M99): numpy rides
 # src.agents.transcriber (voice) and the two SIMD scanners (ndjson's count,
 # sessions' parent-reference frames), all of which load lazily at their use
-# sites; structlog rides the log proxy (~77 ms of the floor, lines the import
+# sites; the transcription backend modules (src.agents.transcription.local /
+# gemini / muse) ride their registry builds at the voice use sites, their numpy
+# and websockets imports living inside transcriber and the connect calls;
+# structlog rides the log proxy (~77 ms of the floor, lines the import
 # path never emits); httpx (~60 ms with rich) rides src.core.http and the
 # backends' outbound clients, which load it on first use; croniter rides its
 # two next-run resolutions (the scheduler tick, the /scheduled handler, ~21 ms
@@ -320,6 +323,9 @@ def test_module_defers_structlog_until_the_first_log_call(module_name: str, impo
 SERVER_HEAVY_MODULES = (
     "numpy",
     "src.agents.transcriber",
+    "src.agents.transcription.local",
+    "src.agents.transcription.gemini",
+    "src.agents.transcription.muse",
     "structlog",
     "httpx",
     "croniter",

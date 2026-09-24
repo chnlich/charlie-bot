@@ -258,8 +258,13 @@ def _prepare_local_backends(backends: dict[str, TranscriptionBackend], cfg: Char
 
   The server does both on its provisioning thread at boot; the replay process
   has no boot, so the first timed clip would otherwise pay the cold decode.
-  Each sine goes through the public transcribe and the text is discarded.
+  Each sine goes through the public transcribe and the text is discarded. A run
+  without a local backend provisions nothing: the speech models are the local
+  backend's alone.
   """
+  local_backends = [backend for backend in backends.values() if isinstance(backend, LocalTranscriptionBackend)]
+  if not local_backends:
+    return
   transcriber.ensure_models_cached(cfg)
   sine = _warmup_pcm()
 
@@ -271,9 +276,8 @@ def _prepare_local_backends(backends: dict[str, TranscriptionBackend], cfg: Char
     async for _event in backend.transcribe(one_chunk(), vocabulary=[], languages=[]):
       pass
 
-  for backend in backends.values():
-    if isinstance(backend, LocalTranscriptionBackend):
-      asyncio.run(warm(backend))
+  for backend in local_backends:
+    asyncio.run(warm(backend))
 
 
 def _percentile(values: list[float], q: float) -> float | None:

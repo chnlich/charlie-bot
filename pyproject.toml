@@ -96,5 +96,12 @@ select = [
 [tool.setuptools.packages.find]
 include = ["src", "src.*"]
 
+# The vfork spawn seam's child-side stub (pdeathsig, setsid, stdio dup2,
+# close-from-3, execve as pure syscalls) — a compiled module because the
+# clone(CLONE_VM|CLONE_VFORK) child may run no Python.
+[[tool.setuptools.ext-modules]]
+name = "src.agents.backends._vfkspawn"
+sources = ["src/agents/backends/_vfkspawn.c"]
+
 [tool.ruff]
 line-length = 120

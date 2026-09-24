@@ -2550,7 +2550,7 @@ def make_fake_run_tmux(calls: list[tuple[str, ...]]) -> Callable[..., Awaitable[
   drop-in replacement.
   """
 
-  async def fake_run_tmux(*args: str, capture: bool = False, check: bool = False) -> tuple[int, str]:
+  async def fake_run_tmux(*args: str, capture: bool = False) -> tuple[int, str]:
     calls.append(args)
     if args[0] == "has-session":
       return 1, ""

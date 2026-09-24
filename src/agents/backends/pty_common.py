@@ -71,11 +71,10 @@ def _tmux_pty_env() -> dict[str, str]:
   return {**_tmux_client_env(), "TERM": _PTY_CLIENT_TERM}
 
 
-async def _run_tmux(*args: str, capture: bool = False, check: bool = False) -> tuple[int, str]:
+async def _run_tmux(*args: str, capture: bool = False) -> tuple[int, str]:
   """Run a tmux command on the isolated socket. Returns (exit_code, text).
 
-  The text is stderr; with capture=True a zero exit swaps in stdout. With
-  check=True a nonzero exit raises RuntimeError.
+  The text is stderr; with capture=True a zero exit swaps in stdout.
   """
   tmux = _tmux_binary()
   env = _tmux_client_env()
@@ -97,8 +96,6 @@ async def _run_tmux(*args: str, capture: bool = False, check: bool = False) -> t
   stderr = stderr_b.decode("utf-8", errors="replace").strip() if stderr_b else ""
   out = stdout.decode("utf-8", errors="replace") if stdout else ""
   rc = proc.returncode or 0
-  if check and rc != 0:
-    raise RuntimeError(f"tmux {' '.join(args)} failed (rc={rc}): {stderr}")
   return rc, out if capture and rc == 0 else stderr or out
 
 

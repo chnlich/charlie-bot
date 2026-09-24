@@ -7556,8 +7556,11 @@ invisible to the standing HTTP probes, so the collector writes only to a
 scratch `CHARLIEBOT_HOME` under /tmp (traces read in place, read-only) and
 drives `_cached_merge` from the checkout under test: one cold pass, then
 three timed builds, each round's cache entry dropped so every round pays the
-build; the decompressed event identity (ph, name, pid, ts — the fields the
-member form does not re-number) must match across rounds. The harness
+build; each round's artifact bytes sha1 to one digest (byte-identical builds,
+the stronger witness), and the decompressed event identity (ph, name, pid, ts
+— the fields the member form does not re-number) is computed once for the
+report because its full 2.6M-event projection prices tens of seconds per
+call. The harness
 materializes itself as a file because the spawn pool's workers re-import
 `__main__`, which a stdin heredoc cannot provide.
 
@@ -7580,27 +7583,33 @@ def find_corpus() -> tuple[Path, int]:
 
 
 async def main(paths: list[Path], best_n: int, home: str) -> None:
-    def event_identity(path: Path) -> tuple[str, int]:
-        events = json.loads(gzip.decompress(path.read_bytes()))["traceEvents"]
+    def event_identity(raw: bytes) -> tuple[str, int]:
+        events = json.loads(gzip.decompress(raw))["traceEvents"]
         ident = [[e.get("ph"), e.get("name"), e.get("pid"), e.get("ts")] for e in events]
         return hashlib.sha1(json.dumps(ident).encode()).hexdigest()[:12], len(events)
 
     cache_dir = pages._perfetto_merge_cache_dir()
     await pages._cached_merge(paths, slim=False)  # cold pass, as at the first merged view; not timed
-    times, digests, count = [], set(), 0
+    times, byte_digests, count = [], set(), 0
+    event_digest = ""
     for _ in range(3):
         for stale in cache_dir.glob("*.json.gz"):
             stale.unlink()
         t0 = time.perf_counter()
         artifact = await pages._cached_merge(paths, slim=False)
         times.append(time.perf_counter() - t0)
-        digest, count = event_identity(artifact)
-        digests.add(digest)
+        # The round witness is a sha1 of the artifact bytes (~0.2 s at the
+        # 77.7 MB artifact); the full identity projection prices ~28 s per call
+        # at a 2.6M-event corpus, so it runs once for the report.
+        raw = artifact.read_bytes()
+        byte_digests.add(hashlib.sha1(raw).hexdigest()[:12])
+        if not event_digest:
+            event_digest, count = event_identity(raw)
     times.sort()
-    assert len(digests) == 1, f"unstable artifact across rounds: {digests}"
+    assert len(byte_digests) == 1, f"unstable artifact across rounds: {byte_digests}"
     print(f"{len(paths)} traces {best_n / 1e6:.1f} MB, {count} events; multi-trace merge build "
           f"median {times[1]:.2f} s, max {times[-1]:.2f} s over 3; artifact "
-          f"{artifact.stat().st_size / 1e6:.1f} MB, event-identity digest {digests.pop()}")
+          f"{artifact.stat().st_size / 1e6:.1f} MB, event-identity digest {event_digest}")
     shutil.rmtree(home, ignore_errors=True)
 
 
@@ -8055,6 +8064,7 @@ EOF
 ## Sampling history
 
 | Date | PR | Before → after | Note |
+| 2026-09-24 | this PR | M107 standing-collector repair, the round witness recomputed the full 2.6M-event identity projection three times per round: collector wall 110.8 → 51.5 s back-to-back (−53 %; verbatim collector, origin/main docs block before vs this branch's after, the same 961.9 MB / 12-trace / 2,601,903-event corpus, load 4.29-4.93 one-minute), build medians 4.55 → 4.54 s (band parity), event-identity digest 69328480354c and event count 2,601,903 identical across arms, artifact 77.7 MB both; at this round's sweep-hour load the before arm exceeded its 110/120/280 s bounds and lost its reading twice in the sweep (rescued detached at ~3 min at load 5.16), while the after arm completes in 52.4 s at load 4.29; the standing M107 build reading this round: 5.30 s median at load 5.16 (detached run), 4.70 s on the repaired collector — inside the max(8 s, bytes ÷ 200 MB/s) line, unchanged; component attribution standalone: one event_identity call reads 28.1 s (json.loads of the 77.7 MB artifact + the 2.6M-row projection + json.dumps + sha1), three calls 84 s of the before arm's 110.8 s wall; the byte-sha1 witness is the stronger check (verified byte-identical across two fresh builds, digest e334c1bbdbe6 both); collector command only, no product code, no metric movement (the M81 2026-09-11 repair precedent) | the round witness priced the corpus's own floor three times: the full identity projection is the same json.loads+project+dump+hash work the metric never times, ~28 s per call at the 2.6M-event corpus the 09-19 landing seeded, and three of them put the collector past every sweep budget so the round loses M107 exactly when the box is loaded; a sha1 of the artifact bytes carries the same across-rounds guarantee at ~0.2 s, and the projection runs once for the report |
 | 2026-09-24 | this PR | M99 server import floor, the import chain and the app assembly ride the server's own gc-off bulk-build span and the slash-command stack leaves the chain: import median 0.520-0.524 → 0.499-0.508 s across two eight-round sets (−13 to −21 ms, −2.5 % to −3.9 %), 16/16 paired rounds faster (sets one and two of eight interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, arm order alternating per round to cancel the host's second-position bias (measured +4.5 ms same-checkout), load 1.7-2.3 one-minute with sibling crons' suites live); component attribution: fresh-process `gc.disable()`-from-start on the before checkout reads the GC share at 43.0 ms of the 0.527 s wall (10/10 interleaved pairs, bands disjoint 0.506-0.553 vs 0.471-0.498), and the branch's spans capture it — the branch's own gc-off-from-start probe reads +0.8 ms over its plain import; `src.core.slash_commands` leaves the import (−17.9 ms module self in `-X importtime`, the last module-scope import no import-path reader reads), of which ~15 ms reappears as a GC gen-2 pause relocated into `src.api.chat`'s exec (import-time GC total is roughly constant — allocation thresholds cross mid-body wherever the heap stands — so the module's wall contribution nets −9.6 ms by sum-of-self), the rest of the wall win riding the span; no-regression witnesses interleaved ×3: M92 schedule-trigger --help 0.036/0.036/0.036 → 0.036/0.036/0.036 s (maxima 0.037-0.039 both arms) and M108 claude-sub 0.075/0.076/0.075 → 0.076/0.075/0.078 s (bands both); 5963-passed suite + 9 skipped (the load-sensitive fork-parks pin fails under sibling-suite load and passes in isolation on both arms, the 2026-09-24 M115 row's environmental class), ruff and yapf clean, plus the server ban-set contract test extended (src.core.slash_commands joins SERVER_HEAVY_MODULES); M99 healthy range unchanged (the after reading sits at two-thirds of the 0.75 s line) | every deploy restart paid the import chain's gen-2 GC walks (~43 ms, the largest single repo-owned slice left after the 2026-09-19/21 deferrals) although the span primitive (`src.core.gc_control.gc_off`) already bounded every other bulk build the server runs; the chain and the app assembly now run inside the same bounded span (gc back on before any request can arrive — the deferred cycles collect at the next natural threshold, the `collect=False` shape the span documents for builds whose allocations stay referenced), and the slash-command stack — whose only import-time reader was the chat send handler's module scope — loads at its four request-time call sites like the master-turn chain already does, the `src.api.slash.dispatch_slash_command` patch target kept through the deferred-import loader's globals-first read |
 | 2026-09-24 | this PR | M87 abort wall median 2.2/2.1/1.8 → 1.7/1.5/1.5 ms (−14 % to −29 %), maxima 2.3-5.8 → 1.8-1.9 ms, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, stub serve, load 1.65-2.13 one-minute); loop-lag band parity at the 5 ms ticker floor both arms (5.4-5.9 vs 5.4-5.6 ms); component attribution standalone: the per-call `httpx.AsyncClient(base_url, timeout, verify=_SERVE_SSL_CONTEXT)` construction+aclose reads 260 µs, the rest of the wall the localhost POST both arms share | the per-turn cleanup abort constructed a fresh `httpx.AsyncClient` per call; the POST now rides the process-wide shared outbound client (`src.core.http.get_http_client` — the anthropic-proxy/ext-usage/slack/notifications singleton) with its per-request `OPENCODE_ABORT_TIMEOUT` kept, and the serve URL is pinned plain localhost HTTP (`_SERVER_URL_RE`), so no per-client verify choice applies; the run-start attempt client keeps its own construction (it carries the SSE stream's lifetime) |
 | 2026-09-24 | this PR | M7 restart-cold, the persisted seed's proof now carries the tail fetch's maxes (the completion #2009's landing named: the in-process gate's four-field proof — count, sum(time_updated), max(time_updated), max(rowid) — persists whole beside the sidecar rows it describes, and the seeded miss tail-fetches the rows written after the stored max instead of re-reading all 221k keys; a legacy two-field document — the prior deploy's shape, what the live server writes until its next deploy — seeds without a max and keeps the full key diff, the contract the new test pins): controlled-corpus paired rounds, fresh-process seed + one turn's moves (ten in-place step-finish upserts plus twenty appends at the production bump shape) + fresh-process timed collect per round over a 223,441-row synthetic corpus (the live db's row count, live db read-only): 0.576/0.622/0.572/0.529 → 0.382/0.384/0.359/0.369 s (−30.2 % to −38.3 %), every paired round faster; component attribution, instrumented fresh process: the seeded miss tail-fetched exactly the 30 moved rows (5,190 B, 80.8 ms) where the before shape's full key scan reads 0.272-0.275 s standalone; rows-digest parity True in every round and arm (the incremental serve matches the cold replay); no-regression witnesses interleaved ×3: M7 changed-round 0.095-0.107 → 0.099-0.100 s, M7 warm-gate changed round 193.9-204.6 → 192.5-200.5 ms (quiet round 48.9-52.2 → 48.7-50.3 ms, full key scans 0, parity True), M80 churn 0.1329-0.1519 → 0.1351-0.1361 s (rows digest 501337fee183 both arms); 5988-passed suite (the 21 antigravity/spawn failures the missing _vfkspawn build artifact produced in the worktree pass with it copied — no compiler on this host, the committed C source identical), ruff and yapf clean, plus the seeded-miss test rewritten to the tail fetch, the reset round's scan witness updated, and 1 new test (the legacy two-field seed keeps the full key diff and the store writes the four-field proof back); M7 restart-cold definition and collector intro updated to the four-field proof | the restart seed gated on the two-field (count, sum) proof #2009's landing left it, so every fresh process under active turns — each server start's first page load, each hourly round's standing collector reading — paid the 221k-key diff once although the tail fetch's mechanism was already in place behind a len(gate) == 4 dispatch the seed never satisfied |

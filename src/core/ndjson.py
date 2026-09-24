@@ -422,7 +422,7 @@ class HeadProvableFilter:
 
 
 def type_line_filter(types: frozenset[str]) -> HeadProvableFilter:
-  """A :func:`iter_ndjson_events` parse_filter keeping only lines whose event
+  """A :func:`iter_ndjson_events_from_end` parse_filter keeping only lines whose event
   type is in *types*.
 
   The proof is the line's head: every writer in this repo serializes each key

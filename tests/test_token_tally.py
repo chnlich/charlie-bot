@@ -1236,6 +1236,67 @@ def test_row_memo_gate_advances_from_the_tail_fetch(tmp_path: Path, monkeypatch:
   assert len(entry["probe"]) == 2  # the store wrote the proof back
 
 
+def test_row_memo_gate_self_corrects_a_net_zero_delete_insert(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The residual proof's dodge class, reproduced: a delete and an insert landing at the same
+  # time_updated net the (count, sum) pair to zero. The insert's fresh rowid moves the
+  # triple's max, the residual rejects the tail fetch, and the very round that dodged the
+  # pair self-corrects through the full key scan.
+  db = tmp_path / "db.sqlite"
+  _write_opencode(db, [_oc_row(), _oc_row()])
+  first = _collect(None, None, db)
+  assert _row(first, "opencode", "oc-m").calls == 2
+
+  con = sqlite3.connect(db)
+  victim, = con.execute("select id from message order by rowid limit 1").fetchone()
+  tu, = con.execute("select time_updated from message where id = ?", (victim,)).fetchone()
+  con.execute("delete from message where id = ?", (victim,))
+  con.execute(
+      "insert into message (id, session_id, time_created, time_updated, data) "
+      "values ('same-ms', 'sess', ?, ?, ?)", (tu, tu, json.dumps(_step_finish_record())))
+  con.commit()
+  con.close()
+  scans = _spy_opencode_scans(monkeypatch)
+  second = _collect(None, None, db)
+
+  assert scans == [1]  # the dodge round fell back and self-corrected
+  assert _row(second, "opencode", "oc-m").calls == 2
+  _replay_parity(db, second)
+
+
+def test_row_memo_gate_self_heal_bounds_the_residual_dodge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The one shape the triple cannot see: the deleted row held the max rowid, the insert
+  # reuses it, and a later append in the same round masks the rowid move. The wrong serve
+  # stands until the self-heal round re-scans — the lifetime bound the pre-tail gate's
+  # next-miss re-scan provided.
+  monkeypatch.setattr(tt, "_OPENCODE_FULL_SCAN_EVERY", 3)  # cold miss 1, dodge miss 2, heal miss 3
+  db = tmp_path / "db.sqlite"
+  _write_opencode(db, [_oc_row()])
+  first = _collect(None, None, db)
+  truth = _row(first, "opencode", "oc-m").total
+
+  con = sqlite3.connect(db)
+  tu, = con.execute("select time_updated from message").fetchone()
+  con.execute("delete from message")  # the max-rowid row goes; the insert reuses its rowid
+  con.execute(
+      "insert into message (id, session_id, time_created, time_updated, data) "
+      "values ('same-ms', 'sess', ?, ?, ?)", (tu, tu, json.dumps(_step_finish_record())))
+  con.commit()
+  con.close()
+  _append_opencode(db, [_padded_opencode_row(500)])  # the masking append, same round
+  scans = _spy_opencode_scans(monkeypatch)
+  dodged = _collect(None, None, db)
+
+  assert scans == []  # the triple netted: the round took the tail fetch
+  stale = _row(dodged, "opencode", "oc-m").total
+  assert stale != truth - 6 + 102 + 102  # the memo still carries the deleted row's tokens
+
+  _append_opencode(db, [_padded_opencode_row(500)])  # miss 2: the self-heal round
+  healed = _collect(None, None, db)
+  assert scans == [1]
+  assert _row(healed, "opencode", "oc-m").total == truth - 6 + 102 + 102 + 102
+  _replay_parity(db, healed)
+
+
 def test_row_memo_gate_falls_back_to_the_key_scan_on_a_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # A cascade delete subtracts a term the tail fetch never saw, so the residual check
   # rejects the incremental round and the full key scan drops the vanished id.

@@ -382,6 +382,35 @@ def _bootstrap_stub(session: SessionMetadata) -> Callable[..., Awaitable[SimpleN
 
 
 @pytest.mark.asyncio
+async def test_index_embeds_the_voice_backend_menu_data(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """The caret menu's whole world rides the page: ids, labels, partials flags,
+  the missing-credential reasons, and the server default. No extra endpoint."""
+  cfg = make_home_config(tmp_path)
+  stub_credentials({"charliebot": {"access_key": ""}})  # no gemini/meta keys: both name their key
+
+  response = await pages.index(
+      request=make_page_request("/"),
+      session=None,
+      session_mgr=FakeSessionManager(),
+      cfg=cfg,
+  )
+
+  body = response.body.decode("utf-8")
+  scripts = _inline_scripts(body)
+  voice_script = next(script for script in scripts if "const VOICE_BACKENDS = [" in script)
+  assert '{id: "local", label: "Local (sherpa)", livePartials: false, unavailableReason: null}' in voice_script
+  assert 'livePartials: true' in voice_script
+  assert 'unavailableReason: "needs gemini.api_key"' in voice_script
+  assert 'unavailableReason: "needs meta.model_api_key"' in voice_script
+  assert 'label: "Gemini 3.5 Transcribe Live"' in voice_script
+  assert 'label: "Muse Voice Transcribe"' in voice_script
+  assert "const VOICE_DEFAULT_BACKEND = \"local\"" in voice_script
+  # The chat backend list stays untouched next to it.
+  assert "const BACKEND_OPTIONS = {" in voice_script
+
+
+@pytest.mark.asyncio
 async def test_index_embeds_initial_sessions_for_client_sidebar_render(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   cfg = make_home_config(tmp_path)

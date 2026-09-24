@@ -480,6 +480,20 @@ with gc_off(collect=False):
     app.include_router(files.router, prefix=mount, tags=["files"])
 
 # ---------------------------------------------------------------------------
+# WebSocket preview relay for voice input (one streaming transcription backend's
+# live partials for one recording; the handler lives with the voice endpoints)
+# ---------------------------------------------------------------------------
+
+
+@app.websocket("/ws/voice/{session_id}")
+async def voice_preview_websocket(websocket: WebSocket, session_id: str, backend: str = "") -> None:
+  """Stream one recording's live partials from the ?backend= transcription backend."""
+  if not await _check_ws_auth(websocket):
+    return
+  await voice.voice_preview_relay(websocket, session_id, backend)
+
+
+# ---------------------------------------------------------------------------
 # WebSocket endpoint for session-level events (master CC + worker summaries)
 # ---------------------------------------------------------------------------
 

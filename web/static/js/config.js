@@ -48,7 +48,10 @@ const PROGRESS_BAR_FILL_CLASS = 'h-full rounded-full transition-all duration-300
 // Bearer header. Loads before the websocket/voice/terminal connectors.
 function withAccessToken(url) {
   const key = localStorage.getItem(ACCESS_KEY_NAME);
-  return key ? url + '?token=' + encodeURIComponent(key) : url;
+  if (!key) return url;
+  // A path may already carry a query of its own (the voice relay's ?backend=).
+  const separator = url.includes('?') ? '&' : '?';
+  return url + separator + 'token=' + encodeURIComponent(key);
 }
 
 // The socket scheme must track the page scheme: an https page cannot open a

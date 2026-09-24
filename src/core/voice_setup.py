@@ -121,11 +121,7 @@ def _load_wav_samples(path: Path) -> np.ndarray:
   return np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
 
 
-def run_gpu_preflight(
-    cfg: CharlieBotConfig,
-    *,
-    decode_threshold_seconds: float = PREFLIGHT_DECODE_THRESHOLD_SECONDS,
-) -> dict:
+def run_gpu_preflight(cfg: CharlieBotConfig) -> dict:
   """Assert the four GPU-voice preflight conditions; raise on the first failure.
 
   (a) torch and transformers import (an ImportError is the failure); (b) the model
@@ -161,17 +157,17 @@ def run_gpu_preflight(
   audio_seconds = len(samples) / transcriber.SAMPLE_RATE
   if not text:
     raise RuntimeError(f"preflight (c) failed: GPU decode of {wav_path.name} returned empty text")
-  if decode_seconds >= decode_threshold_seconds:
+  if decode_seconds >= PREFLIGHT_DECODE_THRESHOLD_SECONDS:
     raise RuntimeError(
         f"preflight (c) failed: {audio_seconds:.1f}s audio decoded in {decode_seconds:.3f}s, "
-        f"threshold {decode_threshold_seconds:.3f}s")
+        f"threshold {PREFLIGHT_DECODE_THRESHOLD_SECONDS:.3f}s")
 
   free_bytes, total_bytes = torch.cuda.mem_get_info()
   report = {
       "recording": str(wav_path),
       "audio_seconds": round(audio_seconds, 2),
       "decode_seconds": round(decode_seconds, 3),
-      "threshold_seconds": decode_threshold_seconds,
+      "threshold_seconds": PREFLIGHT_DECODE_THRESHOLD_SECONDS,
       "free_vram_gib": round(free_bytes / 2**30, 2),
       "total_vram_gib": round(total_bytes / 2**30, 2),
   }

@@ -475,11 +475,10 @@ def _jsonl_listing(dirpath: str, suffixes: tuple[str, ...]) -> tuple[list[str], 
   return _memoized_listing(_jsonl_dir_memo, (dirpath, suffixes), dirpath, scan)
 
 
-def _iter_jsonl_stats(
-    root: Path, t: _Tally, source: str, label: str,
-    suffixes: tuple[str, ...] = (".jsonl",)) -> Iterator[tuple[str, os.stat_result | None, str | None]]:
-  """Yield ``(path, stat, error)`` for every file under *root* whose name ends in one of
-  *suffixes*, recording a note when a directory is unreadable.
+def _iter_jsonl_stats(root: Path, t: _Tally, source: str,
+                      label: str) -> Iterator[tuple[str, os.stat_result | None, str | None]]:
+  """Yield ``(path, stat, error)`` for every ``.jsonl`` file under *root*, recording
+  a note when a directory is unreadable.
 
   ``Path.rglob`` swallows ``PermissionError`` while walking (shell-glob semantics), so an
   unreadable directory would vanish silently instead of surfacing. ``os.walk``'s ``onerror`` hook
@@ -495,7 +494,7 @@ def _iter_jsonl_stats(
   while stack:
     dirpath = stack.pop()
     try:
-      subdirs, files = _jsonl_listing(dirpath, suffixes)
+      subdirs, files = _jsonl_listing(dirpath, (".jsonl",))
     except OSError as exc:
       hook(exc)
       continue

@@ -500,7 +500,6 @@ def resolve_run(
     translate: Callable[[dict], list[dict]],
     host_boot_time: datetime,
     holders_scan: dict[tuple[int, int], list[HolderProcess]] | None = None,
-    now: datetime | None = None,
 ) -> RunResolution:
   """Resolve an interrupted run's outcome purely from on-disk facts.
 
@@ -519,7 +518,7 @@ def resolve_run(
   descendants are attached to the resolution (the outcome itself still comes
   from the other rows).
   """
-  now = now or datetime.now(UTC)
+  now = datetime.now(UTC)
   raw_exists = raw_path.is_file()
 
   if not raw_exists and pid is None:

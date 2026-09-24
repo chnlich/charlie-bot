@@ -2683,7 +2683,6 @@ class SessionManager:
       include_running_status: bool,
       include_pending_trigger_status: bool,
       include_pending_plan_approval: bool = False,
-      force: bool = False,
   ) -> None:
     """Apply :meth:`resolve_sidebar_state`'s derived fields onto *sessions*.
 
@@ -2696,7 +2695,7 @@ class SessionManager:
         include_running_status=include_running_status,
         include_pending_trigger_status=include_pending_trigger_status,
         include_pending_plan_approval=include_pending_plan_approval,
-        force=force,
+        force=False,
     )
     _apply_sidebar_state(
         sessions, derived, include_running_status, include_pending_trigger_status, include_pending_plan_approval)

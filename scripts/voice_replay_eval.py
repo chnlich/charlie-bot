@@ -293,7 +293,7 @@ async def muse_transcribe(
                 first_frame_at) if first_partial_at is not None and first_frame_at is not None else None))
 
 
-def build_local_bundle(cfg: CharlieBotConfig, hotwords: str):
+def build_local_bundle(cfg: CharlieBotConfig, hotwords: str) -> transcriber._SpeechModelBundle:
   """One sherpa recognizer for the whole run; the provisioning path is the
   transcriber's own fallback loader (downloads/verifies the CPU artifacts)."""
   paths = transcriber._ensure_sherpa_paths_cached(cfg)
@@ -302,7 +302,7 @@ def build_local_bundle(cfg: CharlieBotConfig, hotwords: str):
   return bundle
 
 
-def run_local(bundle, clip: Clip) -> dict:
+def run_local(bundle: transcriber._SpeechModelBundle, clip: Clip) -> dict:
   """Decode each VAD window with wall-clock timing; join exactly as production does."""
   vad = transcriber._open_vad(bundle.vad_config, clip.samples.size / SAMPLE_RATE + 10)
   windows = transcriber.offline_decode_windows(vad, clip.samples)
@@ -321,7 +321,9 @@ def run_local(bundle, clip: Clip) -> dict:
   }
 
 
-def _incremental_wait(bundle, clip: Clip, windows: list[tuple[int, int, int, int]], decode_s: list[float]) -> float:
+def _incremental_wait(
+    bundle: transcriber._SpeechModelBundle, clip: Clip, windows: list[tuple[int, int, int, int]],
+    decode_s: list[float]) -> float:
   """Sequential-decoder simulation: a segment becomes available at its end plus the
   VAD's min_silence_duration (capped at the clip duration); wait = how far past the
   clip's end the last decode completes."""

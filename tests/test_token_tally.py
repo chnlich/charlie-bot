@@ -1200,6 +1200,14 @@ def _opencode_model_rows(tally: tt.TokenTally) -> list:
   ]
 
 
+def _replay_parity(db: Path, tally: tt.TokenTally) -> None:
+  """A cold full replay must land the rows the incremental round served."""
+  tt._opencode_row_memos.clear()
+  tt._opencode_partials.clear()
+  tt._opencode_row_epochs.clear()
+  assert _opencode_model_rows(_collect(None, None, db)) == _opencode_model_rows(tally)
+
+
 def test_row_memo_gate_advances_from_the_tail_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # The warm gate's proof miss answers from the tail fetch: rows written after the stored
   # max re-read, the full key scan never runs, and the persisted entry's probe stays the
@@ -1245,11 +1253,7 @@ def test_row_memo_gate_falls_back_to_the_key_scan_on_a_delete(tmp_path: Path, mo
 
   assert scans == [1]
   assert _row(second, "opencode", "oc-m").calls == 1
-
-  tt._opencode_row_memos.clear()
-  tt._opencode_partials.clear()
-  tt._opencode_row_epochs.clear()
-  assert _opencode_model_rows(_collect(None, None, db)) == _opencode_model_rows(second)
+  _replay_parity(db, second)
 
 
 def test_row_memo_gate_falls_back_on_a_backward_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1269,11 +1273,7 @@ def test_row_memo_gate_falls_back_on_a_backward_write(tmp_path: Path, monkeypatc
 
   assert scans == [1]
   assert _row(second, "opencode", "oc-m").total == _row(first, "opencode", "oc-m").total - 6 + 102
-
-  tt._opencode_row_memos.clear()
-  tt._opencode_partials.clear()
-  tt._opencode_row_epochs.clear()
-  assert _opencode_model_rows(_collect(None, None, db)) == _opencode_model_rows(second)
+  _replay_parity(db, second)
 
 
 def test_row_memo_gate_falls_back_on_a_delete_insert_round(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1294,11 +1294,7 @@ def test_row_memo_gate_falls_back_on_a_delete_insert_round(tmp_path: Path, monke
   assert scans == [1]
   assert _row(second, "opencode", "oc-m").total == _row(first, "opencode", "oc-m").total - 6 + 102
   assert _row(second, "opencode", "oc-m").calls == 2
-
-  tt._opencode_row_memos.clear()
-  tt._opencode_partials.clear()
-  tt._opencode_row_epochs.clear()
-  assert _opencode_model_rows(_collect(None, None, db)) == _opencode_model_rows(second)
+  _replay_parity(db, second)
 
 
 def test_cache_document_parses_once_per_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

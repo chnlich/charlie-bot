@@ -660,17 +660,15 @@ _opencode_row_epochs: dict[str, int] = {}
 
 # Per-db proof aggregates of the row memo's last advance: (row count, sum of time_updated,
 # max of time_updated). The pair (count, sum) is a strictly weaker proof than the key scan's
-# per-id diff: every single-row move changes it — an insert or delete moves the count, and a
-# moved row rewrites time_updated so the sum changes with it, while a data-only rewrite with
-# an unchanged time_updated is invisible to the key scan itself — but a multi-row coincidence
-# whose count and sum both net to zero (a delete and an insert landing in the same
-# millisecond, the only window where the inserted row's time_updated can equal the deleted
-# row's last write) dodges the probe where the per-id diff would see it, and that wrong serve
-# stands until the next proof miss re-scans. The one same-row shape both miss is a terminal
-# pair of writes inside one millisecond, the class the row memo vocabulary documents above.
-# Equal aggregates skip the per-row key read. On a proof miss whose stored gate carries the
-# max, the tail fetch below re-reads only rows written after that max and proves them
-# complete with the same pair — see _increment_opencode_rows.
+# per-id diff: every single-row move changes it, while a data-only rewrite with an unchanged
+# time_updated is invisible to the key scan itself — but a multi-row coincidence whose count
+# and sum both net to zero (a delete and an insert landing in the same millisecond, the only
+# window where the inserted row's time_updated can equal the deleted row's last write) dodges
+# the probe where the per-id diff would see it, and that wrong serve stands until the next
+# proof miss re-scans. The one same-row shape both miss is a terminal pair of writes inside
+# one millisecond, the class the row memo vocabulary documents above. Equal aggregates skip
+# the per-row key read; a miss whose gate carries the max advances from the tail fetch below
+# and proves itself with the same pair — see _increment_opencode_rows.
 _OPENCODE_PROBE_SQL = (
     "select count(*), coalesce(sum(time_updated), 0), "
     "coalesce(max(time_updated), 0) from message")
@@ -1817,14 +1815,11 @@ def _increment_opencode_rows(
   stored gate's max time_updated. Returns (bytes read, per-row deltas, the round's probe) or
   None when the read cannot prove the memo complete — the caller then runs the full key scan.
 
-  The proof: every insert and every time_updated bump carries the write's own wall-clock ms,
-  so a row the memo has not seen sits above the stored max unless the clock stepped backward.
-  The fetched rows' own before/after sums reconstruct the pair's expected movement; a delete
-  or a backward write subtracts a term the fetch never saw, so a matching (count, sum)
-  residual proves the fetch was the whole move. The same multi-row coincidence class the
-  stored probe documents (count and sum both netting to zero) dodges this proof the way it
-  dodges the probe skip; the residual check only ever widens what the full key scan would
-  catch, never narrows it.
+  Every insert and every time_updated bump carries the write's own wall-clock ms, so a row
+  the memo has not seen sits above the stored max unless the clock stepped backward; a delete
+  or a backward write subtracts a sum term the fetch never saw. A matching (count, sum)
+  residual therefore proves the fetch was the whole move, and the residual check only ever
+  widens what the full key scan would catch, never narrows it.
   """
   expected_sum = gate[1]
   expected_count = gate[0]
@@ -1858,11 +1853,10 @@ def _advance_opencode_rows(
   proves every row move the aggregates can see is absent and the scan is skipped — a weaker
   proof than the key scan's per-id diff (see the probe comment), traded for not reading
   221k keys on the WAL-noise rounds that are the steady state this gate exists for. A proof
-  miss on a warm gate advances the memo from the tail fetch (_increment_opencode_rows), rows
-  above the stored max only, and falls back to the full key scan when the fetch cannot prove
-  itself complete (a delete, a clock stepped backward); a seeded memo's stored proof carries
-  no max, so its first proof miss takes the full key scan and the in-process gate it stores
-  carries one for every round after.
+  miss on a warm gate advances from the tail fetch (see _increment_opencode_rows) and falls
+  back to the full key scan when the fetch cannot prove itself complete; a seeded memo's
+  stored proof carries no max, so its first proof miss takes the full key scan and the gate
+  it stores carries one for every round after.
 
   *seed* is the persisted document's ``rows`` map for this db. A cold memo seeded from it
   skips the whole-blob cold scan: the memo starts at the document's rows and the warm key

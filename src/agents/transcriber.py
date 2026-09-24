@@ -269,6 +269,26 @@ def _offline_vad_segments(vad: object, samples: np.ndarray) -> list[tuple[int, i
   return segments
 
 
+def offline_decode_windows(vad: object, samples: np.ndarray) -> list[tuple[int, int, int, int]]:
+  """Segment a recording through the opened VAD and return each segment's decode window.
+
+  One entry per closed speech segment: ``(start, end, left, right)`` sample offsets,
+  where ``start``/``end`` are the detector's speech bounds and ``left``/``right`` the
+  padded decode window (5 s of pause before the segment, 0.4 s tail after, the left
+  edge clipped against the previous window's right edge so windows never overlap).
+  The single owner of the window arithmetic: transcribe_pcm_offline and the replay
+  evaluation decode byte-identical spans.
+  """
+  windows: list[tuple[int, int, int, int]] = []
+  decoded_region_end = 0
+  for start, end in _offline_vad_segments(vad, samples):
+    left = max(decoded_region_end, start - SEGMENT_DECODE_PAUSE_SAMPLES)
+    right = min(samples.size, end + SEGMENT_DECODE_PAD_SAMPLES)
+    windows.append((start, end, left, right))
+    decoded_region_end = right
+  return windows
+
+
 def transcribe_pcm_offline(bundle: _SpeechModelBundle, pcm_bytes: bytes) -> str:
   """Decode a complete 16 kHz mono PCM16 recording in one pass and return the text.
 
@@ -285,12 +305,8 @@ def transcribe_pcm_offline(bundle: _SpeechModelBundle, pcm_bytes: bytes) -> str:
   # cannot wrap no matter how long the input is.
   vad = _open_vad(bundle.vad_config, samples.size / SAMPLE_RATE + 10)
   texts: list[str] = []
-  decoded_region_end = 0
-  for start, end in _offline_vad_segments(vad, samples):
-    left = max(decoded_region_end, start - SEGMENT_DECODE_PAUSE_SAMPLES)
-    right = min(samples.size, end + SEGMENT_DECODE_PAD_SAMPLES)
+  for _start, _end, left, right in offline_decode_windows(vad, samples):
     text = _decode_samples(bundle, samples[left:right].astype(np.float32) / 32768.0)
-    decoded_region_end = right
     if text:
       texts.append(text)
   return _join_segments(*texts)
@@ -402,8 +418,12 @@ def _get_model_bundle(cfg: CharlieBotConfig, paths: VoiceModelPaths) -> _SpeechM
       return _bundle
 
 
-def create_sherpa_bundle(paths: VoiceModelPaths) -> _SpeechModelBundle:
-  """Build the CPU sherpa-onnx bundle. Also the fallback decoder when the GPU engine fails."""
+def create_sherpa_bundle(paths: VoiceModelPaths, hotwords: str = "") -> _SpeechModelBundle:
+  """Build the CPU sherpa-onnx bundle. Also the fallback decoder when the GPU engine fails.
+
+  ``hotwords`` reaches the recognizer's biasing parameter verbatim; production callers
+  pass nothing, so production decoding is unchanged.
+  """
   import sherpa_onnx
 
   # Dense 20s Chinese segments decode to ~140 tokens, so the 128-token sherpa
@@ -418,6 +438,7 @@ def create_sherpa_bundle(paths: VoiceModelPaths) -> _SpeechModelBundle:
       sample_rate=SAMPLE_RATE,
       max_total_len=1024,
       max_new_tokens=256,
+      hotwords=hotwords,
   )
   return _SpeechModelBundle(
       recognizer=recognizer,

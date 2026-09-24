@@ -103,5 +103,10 @@ include = ["src", "src.*"]
 name = "src.agents.backends._vfkspawn"
 sources = ["src/agents/backends/_vfkspawn.c"]
 
+# Only uv-managed interpreters: they ship Python.h, so building the extension
+# above never depends on the host's python3.x-dev package.
+[tool.uv]
+python-preference = "only-managed"
+
 [tool.ruff]
 line-length = 120

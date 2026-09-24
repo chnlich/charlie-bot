@@ -1,5 +1,7 @@
 """The bare-file arm's gzip memo (src/api/files.py): repeat serves answer stored bytes."""
 
+from pathlib import Path
+
 import pytest
 from conftest import assert_gzip_served, gzip_explode_compress, mount_production_gzip
 from fastapi import FastAPI
@@ -23,13 +25,13 @@ def _build_client() -> TestClient:
   return TestClient(app)
 
 
-def _write_page(tmp_path: pytest.TempdirFactory, body: str = "<html><body><h1>Plan</h1></body></html>"):
+def _write_page(tmp_path: Path, body: str = "<html><body><h1>Plan</h1></body></html>") -> Path:
   path = tmp_path / "page.html"
   path.write_text(body, encoding="utf-8")
   return path
 
 
-def test_repeat_serve_answers_from_stored_gzip(tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_repeat_serve_answers_from_stored_gzip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A repeat gzip serve of an unchanged file must serve the stored compressed
   body with zero deflate calls — the middleware's per-request per-chunk pass is
   what the memo removes."""
@@ -48,7 +50,7 @@ def test_repeat_serve_answers_from_stored_gzip(tmp_path: object, monkeypatch: py
   assert second.content == first.content
 
 
-def test_rewritten_file_serves_fresh_bytes(tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rewritten_file_serves_fresh_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A rewrite moves the (mtime_ns, size) signature the memo keys on — the
   compressed form must never serve bytes it was not built from."""
   page = _write_page(tmp_path)
@@ -63,7 +65,7 @@ def test_rewritten_file_serves_fresh_bytes(tmp_path: object, monkeypatch: pytest
   assert resp.content == page.read_bytes()
 
 
-def test_skip_listed_media_never_enters_the_memo_arm(tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_skip_listed_media_never_enters_the_memo_arm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A media type outside the text gate must never leave the route as a
   pre-compressed body: unknown and binary formats keep the streaming arm's
   identity contract (wire == raw bytes)."""
@@ -76,7 +78,7 @@ def test_skip_listed_media_never_enters_the_memo_arm(tmp_path: object, monkeypat
   assert resp.content == blob.read_bytes()
 
 
-def test_json_file_rides_the_memo_arm(tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_json_file_rides_the_memo_arm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """application/json sits in the gate's named set: a trace-sized repeat serve
   answers from the stored gzip form with zero deflate calls."""
   blob = tmp_path / "trace.json"
@@ -93,7 +95,7 @@ def test_json_file_rides_the_memo_arm(tmp_path: object, monkeypatch: pytest.Monk
   assert second.content == first.content
 
 
-def test_range_request_stays_on_streaming_arm(tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_range_request_stays_on_streaming_arm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A Range request never takes the memo arm: byte ranges address the raw
   representation, so the request rides the streaming FileResponse unchanged."""
   page = _write_page(tmp_path)
@@ -107,7 +109,7 @@ def test_range_request_stays_on_streaming_arm(tmp_path: object, monkeypatch: pyt
   assert resp.content == page.read_bytes()[:10]
 
 
-def test_no_gzip_accept_gets_raw_bytes(tmp_path: object) -> None:
+def test_no_gzip_accept_gets_raw_bytes(tmp_path: Path) -> None:
   """A client whose Accept-Encoding names no gzip reads the raw file bytes, no
   encoding set — the negotiation gate the memo arm sits behind."""
   page = _write_page(tmp_path)
@@ -117,7 +119,7 @@ def test_no_gzip_accept_gets_raw_bytes(tmp_path: object) -> None:
   assert resp.content == page.read_bytes()
 
 
-def test_oversize_file_stays_on_streaming_arm(tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_oversize_file_stays_on_streaming_arm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A file over the memo cap must not enter the memo arm: a whole-body read
   plus its gzip form would hold both resident for a file the streaming arm
   serves chunk-wise without buffering."""

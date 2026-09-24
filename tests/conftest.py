@@ -2465,6 +2465,31 @@ async def run_captured_round(
   return callbacks
 
 
+def make_sacct_mock(scripted: dict[tuple[str | None, int], list[str]]) -> AsyncMock:
+  """Mock ``asyncio.create_subprocess_exec`` answering each sacct probe's scripted stdout.
+
+  *scripted* maps ``(host, job_id)`` to that probe's sacct stdout payloads; each call pops the
+  next entry, and the last entry repeats indefinitely. The factory identifies the probe from the
+  argv the production caller builds (``src/core/triggers.py``): a remote ssh call keeps the host
+  in its second-to-last word and the quoted ``sacct -j ID ...`` command last; a local call is
+  ``sacct -j ID ...`` with the id third.
+  """
+  queues: dict[tuple[str | None, int], list[str]] = {k: list(v) for k, v in scripted.items()}
+
+  async def _factory(*args: Any, **kwargs: Any) -> FakeAsyncProcess:
+    if args[0] == "ssh":
+      host = args[-2]
+      job_id = int(args[-1].split()[2])
+    else:
+      host = None
+      job_id = int(args[2])
+    queue = queues[(host, job_id)]
+    out = queue[0] if len(queue) == 1 else queue.pop(0)
+    return FakeAsyncProcess(stdout=out.encode())
+
+  return AsyncMock(side_effect=_factory)
+
+
 @contextlib.contextmanager
 def patch_trigger_fire(
     subprocess_mock: AsyncMock, sacct_available: bool | None,

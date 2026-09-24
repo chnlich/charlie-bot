@@ -7,14 +7,13 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from conftest import (
     TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET,
-    FakeAsyncProcess,
     assert_trigger_fired,
+    make_sacct_mock,
     patch_trigger_fire,
 )
 from conftest import make_trigger_setup as _make_mgr
@@ -26,25 +25,6 @@ from src.core.models import (
     SlurmJob,
 )
 from src.core.triggers import TriggerManager
-
-# ---------------------------------------------------------------------------
-# Mock helpers
-# ---------------------------------------------------------------------------
-
-
-def _mk_sacct_mock(outputs: list[str]) -> AsyncMock:
-  """Mock ``asyncio.create_subprocess_exec`` returning successive sacct stdouts.
-
-  Each call pops the next entry; the last entry repeats indefinitely.
-  """
-  queue = list(outputs)
-
-  async def _factory(*args: Any, **kwargs: Any) -> FakeAsyncProcess:
-    out = queue[0] if len(queue) == 1 else queue.pop(0)
-    return FakeAsyncProcess(stdout=out.encode())
-
-  return AsyncMock(side_effect=_factory)
-
 
 # ---------------------------------------------------------------------------
 # Single slurm job: terminal-state detection
@@ -110,7 +90,7 @@ async def test_slurm_single_job_terminal_state(
   polling until a terminal state arrives, which min_polls pins for those rows.
   """
   _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  sacct = _mk_sacct_mock(sacct_lines)
+  sacct = make_sacct_mock({(None, job_id): sacct_lines})
 
   with patch_trigger_fire(sacct, sacct_available=True, sleep_mock=_no_sleep) as mock_master:
     trigger = await trigger_mgr.create_trigger(
@@ -129,7 +109,7 @@ async def test_slurm_single_job_terminal_state(
 @pytest.mark.asyncio
 async def test_slurm_timeout_while_still_active(tmp_path: Path) -> None:
   _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  sacct = _mk_sacct_mock(["12345|RUNNING|0:0\n"])  # never leaves RUNNING
+  sacct = make_sacct_mock({(None, 12345): ["12345|RUNNING|0:0\n"]})  # never leaves RUNNING
 
   with patch_trigger_fire(sacct, sacct_available=True, sleep_mock=_no_sleep) as mock_master:
     trigger = await trigger_mgr.create_trigger(
@@ -156,7 +136,7 @@ async def test_mixed_local_and_slurm_and_semantics(tmp_path: Path, pidfd_open_av
   # Slurm completes on the first probe; the local pid outlives it. The trigger
   # must wait for BOTH (AND), so it fires only after the local pid exits.
   proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.6)"])
-  sacct = _mk_sacct_mock(["77|COMPLETED|0:0\n"])
+  sacct = make_sacct_mock({(None, 77): ["77|COMPLETED|0:0\n"]})
 
   try:
     with patch_trigger_fire(sacct, sacct_available=True, sleep_mock=None) as mock_master:
@@ -229,7 +209,7 @@ async def test_recovery_no_sacct_skips_without_spinning(tmp_path: Path) -> None:
       watch_targets=[SlurmJob(job_id=12345)],
   )
   await trigger_mgr._save_trigger(trigger)
-  sacct = _mk_sacct_mock(["12345|COMPLETED|0:0\n"])
+  sacct = make_sacct_mock({(None, 12345): ["12345|COMPLETED|0:0\n"]})
 
   with patch_trigger_fire(sacct, sacct_available=False, sleep_mock=None) as mock_master:
     await trigger_mgr._wait_and_fire(trigger)

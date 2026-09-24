@@ -12,6 +12,7 @@ from conftest import (
     TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET,
     FakeAsyncProcess,
     assert_trigger_fired,
+    make_sacct_mock,
     patch_trigger_fire,
 )
 from conftest import make_trigger_setup as _make_mgr
@@ -21,40 +22,6 @@ from src.core.models import SlurmJob
 from src.core.triggers import RemoteVerifyError, _probe_sacct
 
 # ---------------------------------------------------------------------------
-# Mock helpers
-# ---------------------------------------------------------------------------
-
-
-def _mk_sacct_mock(scripted: dict[tuple[str | None, int], list[str]]) -> AsyncMock:
-  """Build a mock for ``asyncio.create_subprocess_exec`` returning sacct stdouts.
-
-  Inspects argv to identify the probe: a local sacct call
-  (``sacct -j ID ...``) or a remote ssh call
-  (``ssh ... HOST "sacct -j ID ..."``). ``scripted`` maps ``(host, job_id)`` to a
-  list of sacct stdout payloads (host is None for local probes); each call pops
-  the next entry, and the last entry repeats indefinitely.
-  """
-  queues: dict[tuple[str | None, int], list[str]] = {k: list(v) for k, v in scripted.items()}
-
-  async def _factory(*args: Any, **kwargs: Any) -> FakeAsyncProcess:
-    if args[0] == "ssh":
-      # Layout: ssh -o <pairs...> HOST "sacct -j ID ..."; the host is the last
-      # bare word before the quoted remote command.
-      host = args[-2]
-      sacct_cmd = args[-1]
-      job_id = int(sacct_cmd.split()[2])
-    else:
-      # Layout: sacct -j ID -X -n -P --format=JobID,State,ExitCode
-      host = None
-      job_id = int(args[2])
-    queue = queues[(host, job_id)]
-    out = queue[0] if len(queue) == 1 else queue.pop(0)
-    return FakeAsyncProcess(stdout=out.encode())
-
-  return AsyncMock(side_effect=_factory)
-
-
-# ---------------------------------------------------------------------------
 # Remote SLURM watch: completion and timeout
 # ---------------------------------------------------------------------------
 
@@ -62,7 +29,7 @@ def _mk_sacct_mock(scripted: dict[tuple[str | None, int], list[str]]) -> AsyncMo
 @pytest.mark.asyncio
 async def test_remote_slurm_completes(tmp_path: Path) -> None:
   _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  sacct = _mk_sacct_mock({("host2", 122111): ["122111|COMPLETED|0:0\n"]})
+  sacct = make_sacct_mock({("host2", 122111): ["122111|COMPLETED|0:0\n"]})
 
   with patch_trigger_fire(sacct, sacct_available=False, sleep_mock=_no_sleep) as mock_master:
     trigger = await trigger_mgr.create_trigger(
@@ -80,7 +47,7 @@ async def test_remote_slurm_completes(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_remote_slurm_timeout_while_running(tmp_path: Path) -> None:
   _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  sacct = _mk_sacct_mock({("host2", 122111): ["122111|RUNNING|0:0\n"]})
+  sacct = make_sacct_mock({("host2", 122111): ["122111|RUNNING|0:0\n"]})
 
   with patch_trigger_fire(sacct, sacct_available=False, sleep_mock=_no_sleep) as mock_master:
     trigger = await trigger_mgr.create_trigger(
@@ -102,7 +69,7 @@ async def test_remote_slurm_timeout_while_running(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_probe_sacct_skips_array_task_rows() -> None:
-  sacct = _mk_sacct_mock({(None, 122111): ["122111_3|COMPLETED|0:0\n122111|RUNNING|0:0\n"]})
+  sacct = make_sacct_mock({(None, 122111): ["122111_3|COMPLETED|0:0\n122111|RUNNING|0:0\n"]})
 
   with patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=sacct):
     states, error = await _probe_sacct([122111], "trig-test", host=None)
@@ -157,7 +124,7 @@ _VERIFY_ON_CREATE_PROBE_ROWS = [
 async def test_verify_on_create_reports_probe_state(
     tmp_path: Path, sacct_rows: list[str], message: str, expected_probe: str) -> None:
   _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  sacct = _mk_sacct_mock({("host2", 122111): sacct_rows})
+  sacct = make_sacct_mock({("host2", 122111): sacct_rows})
   probe_out: dict[str, str] = {}
 
   with patch_trigger_fire(sacct, sacct_available=False, sleep_mock=_no_sleep):

@@ -10,11 +10,11 @@ from src.agents.backends.base import make_error_event, make_master_done_event
 from src.core import claude_accounts, runs, sidebar_state
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.constants import BackendType
 from src.core.latex import get_tex_path, snapshot_tex
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import (
     BackendOption,
-    BackendType,
     MasterRunRecord,
     SessionCallbacks,
     SessionMetadata,
@@ -128,19 +128,18 @@ async def _refresh_anchors_from_disk(
 
   The queue item carries the session metadata as it stood at enqueue time; by
   the time it dequeues, disk is the authority -- the previous round's placement
-  funnel-persisted the account holding the transcript (a stale snapshot was
-  the 2026-09-14 overwrite's trigger), and a weekly recycle clears the anchor.
-  The read is the bypass-cache fresh read (``read_metadata_fresh``: no cache
-  populate, so no second cache). A snapshot anchor that is set is refreshed to
-  the disk value, including a disk-cleared one; a snapshot anchor that is None
-  is never resurrected from disk -- a snapshot dequeuing without an anchor
-  declares this round starts without one (a fresh session, or the stale-resume
-  retry's deliberately cleared copy). Empty fields fill only from the consumer's
-  own just-finished round (the pre-change ``last_*`` relay): a follow-up
-  enqueued mid-round carries a snapshot taken before that round's anchor persist
-  existed, and the relay -- not disk -- is what resumes the same conversation.
-  On a failed disk read (raised or missing metadata) the relay alone applies,
-  which is exactly the enqueue loop's previous behavior.
+  funnel-persisted the account holding the transcript, and a weekly recycle
+  clears the anchor. The read is the bypass-cache fresh read
+  (``read_metadata_fresh``: no cache populate, so no second cache). A snapshot
+  anchor that is set is refreshed to the disk value, including a disk-cleared
+  one; a snapshot anchor that is None is never resurrected from disk -- a
+  snapshot dequeuing without an anchor declares this round starts without one
+  (a fresh session, or the stale-resume retry's deliberately cleared copy).
+  Empty fields fill only from the consumer's own just-finished round (the
+  consumer loop's ``last_*`` locals): a follow-up enqueued mid-round carries a
+  snapshot taken before that round's anchor persist lands, and the relay --
+  not disk -- is what resumes the same conversation. On a failed disk read
+  (raised or missing metadata) the relay alone applies.
   """
   fresh: SessionMetadata | None = None
   try:
@@ -455,7 +454,7 @@ async def cancel_master(
     session_id: str,
     *,
     meta: SessionMetadata | None,
-    session_mgr: "SessionManager | None",
+    session_mgr: SessionManager | None,
 ) -> bool:
   """Terminate the running master CC turn for this session.
 

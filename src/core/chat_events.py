@@ -51,6 +51,16 @@ def chat_events_path(session_dir: Path) -> Path:
   return session_dir / "data" / "chat_events.jsonl"
 
 
+def chat_event_archives_dir(session_dir: Path) -> Path:
+  """Return the directory holding a session's rotated chat-event archive files."""
+  return session_dir / "data" / "archives"
+
+
+# The rotation writer below names archive files f"chat_events.{iso.year}-W{iso.week:02d}.jsonl";
+# that format must keep matching this glob.
+ARCHIVE_FILE_GLOB = "chat_events.*.jsonl"
+
+
 def _universal_newline_segments(buf: bytes) -> tuple[list[str], bool]:
   """Split *buf* into physical lines the way text-mode iteration would, and say whether the
   content ends on a line boundary.
@@ -178,7 +188,7 @@ class _FinalizeFold:
     self.master_outputs = 0
 
   @classmethod
-  def build(cls, events: list[dict]) -> "_FinalizeFold":
+  def build(cls, events: list[dict]) -> _FinalizeFold:
     """Derive the fold from a freshly parsed event list (one pass, in the loading thread)."""
     fold = cls()
     for event in events:
@@ -308,7 +318,7 @@ class ChatEventStore:
     """O(1) fold read of the master-woke judgment (glossary on _FinalizeFold)."""
     return self._finalize_folds[session_id].master_woke(thread_id)
 
-  def load_chat_events_tail(self, session_id: str, limit: int = 200) -> tuple[list[dict], int, bool]:
+  def load_chat_events_tail(self, session_id: str, limit: int) -> tuple[list[dict], int, bool]:
     """Load only the last *limit* events from disk. Does NOT populate _events_cache.
 
     Returns (events, total_line_count, has_more).
@@ -425,7 +435,7 @@ class ChatEventStore:
     The signature is taken before the glob, so a rotation racing this read keys
     its entry to the older directory state and the next call re-scans.
     """
-    archives_dir = self._session_dir(session_id) / "data" / "archives"
+    archives_dir = chat_event_archives_dir(self._session_dir(session_id))
     try:
       st = archives_dir.stat()
     except OSError as e:
@@ -433,7 +443,7 @@ class ChatEventStore:
       return []
     paths = self._archive_files_memo.fresh(archives_dir, st)
     if paths is None:
-      paths = sorted(archives_dir.glob("chat_events.*.jsonl"))
+      paths = sorted(archives_dir.glob(ARCHIVE_FILE_GLOB))
       self._archive_files_memo.record(archives_dir, st, paths)
     return paths
 
@@ -631,7 +641,7 @@ class ChatEventStore:
       return {"events_archived": 0, "archive_file": None}
 
     iso = cutoff_utc.isocalendar()
-    archives_dir = self._session_dir(session_id) / "data" / "archives"
+    archives_dir = chat_event_archives_dir(self._session_dir(session_id))
     archives_dir.mkdir(parents=True, exist_ok=True)
     archive_path = archives_dir / f"chat_events.{iso.year}-W{iso.week:02d}.jsonl"
     with open(archive_path, "a", encoding="utf-8") as f:

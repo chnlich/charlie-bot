@@ -85,7 +85,7 @@ def choose_turn_account(
     session_meta: SessionMetadata,
     model: str | None,
     last_request_at: datetime | None,
-    now: datetime | None = None,
+    now: datetime | None,
 ) -> tuple[ClaudeAccount | None, bool]:
   """The account this turn runs on and whether the cache is cold.
 
@@ -129,7 +129,7 @@ async def adopt_transcript_holder(
   """Make *holder* the session's account label: funnel-persist it, then warn.
 
   The one adoption reaction the plan's reconciliation paths share -- the
-  placement probe (forked or stale lineage) and the two guard-refusal consumers
+  placement probe (forked or stale lineage) and the guard-refusal consumers
   (the placement move, the mid-turn relay): the label follows the holder that
   actually carries the newest transcript, the turn continues from it with no
   copy, and every trigger lands a persistent grep-able row.
@@ -264,10 +264,9 @@ async def _report_login_required(item: master_cc_state._WorkItem, account: Claud
 async def report_login_failure(
     item: master_cc_state._WorkItem,
     account: ClaudeAccount,
-    now: datetime | None = None,
 ) -> None:
   """Mark *account* unhealthy for the cooldown and tell the operator (account-free in chat)."""
-  claude_accounts.record_auth_failure(account.label, now)
+  claude_accounts.record_auth_failure(account.label, None)
   await _report_login_required(item, account, claude_relay.LOGIN_REASON_AUTH_FAILED)
 
 
@@ -287,7 +286,6 @@ async def prepare_relay(
     current: ClaudeAccount,
     cwd: str,
     reason: str,
-    now: datetime | None = None,
 ) -> tuple[ClaudeAccount | None, str | None, ClaudeAccount | None]:
   """Move the turn to the next account and compact a large Fable context there.
 
@@ -297,7 +295,7 @@ async def prepare_relay(
   holding the newer transcript, for the consumer's adoption decision.
   """
   session_meta = item.session_meta
-  nxt, error, refused_holder = claude_relay.move_to_next_account(cfg, option.model, current, cc_session_id, now)
+  nxt, error, refused_holder = claude_relay.move_to_next_account(cfg, option.model, current, cc_session_id, None)
   if nxt is None:
     return None, error, refused_holder
   log.warning(

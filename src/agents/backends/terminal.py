@@ -14,8 +14,8 @@ from src.agents.backends.pty_common import (
     PTY_EXIT,
     PtyAttachment,
     _run_pty_relay,
-    _run_tmux,
     _start_tmux_session,
+    tmux_session_exists,
     tmux_session_name,
 )
 from src.core.config import (
@@ -50,17 +50,12 @@ def terminal_tmux_name() -> str:
   return tmux_session_name(terminal_session_id())
 
 
-async def _terminal_session_exists(name: str) -> bool:
-  rc, _ = await _run_tmux("has-session", "-t", name)
-  return rc == 0
-
-
 async def ensure_terminal_session() -> None:
   """Idempotently create this profile's terminal tmux session."""
   async with _ensure_lock:
-    name = terminal_tmux_name()
-    if await _terminal_session_exists(name):
+    if await tmux_session_exists(terminal_session_id()):
       return
+    name = terminal_tmux_name()
     home = Path.home()
     # A pane inherits the tmux *server's* environment, not this process's, and that
     # server may have been started by another profile. Pass the profile explicitly so

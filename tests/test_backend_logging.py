@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
+from conftest import cancel_and_drain
 
 from src.agents.backends.base import AgentBackend
 
@@ -103,9 +103,7 @@ async def test_stderr_streams_live(tmp_path: Path) -> None:
 
   poll_task = asyncio.create_task(_poll_mtime())
   await _consume(backend, tmp_path)
-  poll_task.cancel()
-  with contextlib.suppress(asyncio.CancelledError):
-    await poll_task
+  await cancel_and_drain(poll_task)
 
   assert stderr_log.exists()
   contents = stderr_log.read_text(encoding="utf-8")

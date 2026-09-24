@@ -436,8 +436,7 @@ class _FakeImproveThreadManager:
     return self._tmp_path / f"{thread_id}.jsonl"
 
 
-def _completed_thread_mgr(
-    tmp_path: Path, iterations: int, results: dict[int, str] | None = None) -> _FakeImproveThreadManager:
+def _completed_thread_mgr(tmp_path: Path, iterations: int, results: dict[int, str] | None) -> _FakeImproveThreadManager:
   """Thread manager running `iterations` threads that complete with one result event each.
 
   results overrides the canned `"iterN done"` text by 1-based iteration number, for tests
@@ -456,7 +455,7 @@ def _completed_thread_mgr(
 
 def _capture_descriptions(
     monkeypatch: pytest.MonkeyPatch,
-    on_spawn: Callable[[SpawnRequest], None] | None = None,
+    on_spawn: Callable[[SpawnRequest], None] | None,
 ) -> list[str]:
   """Record each worker description, replacing the stub _patch_improve_loop_io installed.
 
@@ -495,10 +494,10 @@ def _patch_improve_loop_io(monkeypatch: pytest.MonkeyPatch) -> tuple[list[SpawnR
   return spawn_requests, triggered_payloads
 
 
-def _patch_git(monkeypatch: pytest.MonkeyPatch, *, count: str = "0", tip: str = "a" * 40) -> list[tuple]:
+def _patch_git(monkeypatch: pytest.MonkeyPatch, *, count: str) -> list[tuple]:
   """Monkeypatch the shared-worktree git helpers used for the commit delta.
 
-  ``rev-parse HEAD`` returns ``tip`` on every call, ``rev-list --count`` returns
+  ``rev-parse HEAD`` returns the same 40-``a`` sha on every call, ``rev-list --count`` returns
   ``count``, and ``diff --shortstat`` returns a fixed line. Returns the recorded
   args so tests can assert the git commands that actually ran.
   """
@@ -506,7 +505,7 @@ def _patch_git(monkeypatch: pytest.MonkeyPatch, *, count: str = "0", tip: str = 
 
   async def fake_rev_parse(repo_path: Path, ref: str) -> str:
     del repo_path, ref
-    return tip
+    return "a" * 40
 
   async def fake_stdout(repo_path: Path, *args: str, **_kwargs: object) -> tuple[bool, str, str]:
     del repo_path, _kwargs
@@ -1035,7 +1034,7 @@ async def _gate_loop(
     *,
     iterations: int,
     reports: dict[int, str | None],
-    count: str = "1",
+    count: str,
 ) -> tuple[Any, _FakeImproveSessionManager, list[dict], list[str]]:
   """Run a loop writing the given per-iteration reports.
 

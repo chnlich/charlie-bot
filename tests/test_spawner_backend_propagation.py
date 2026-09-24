@@ -14,6 +14,7 @@ from conftest import (
     SpawnFlowSessionManager,
     backend_option,
     build_finalize_ctx,
+    build_option_worktree_cfg,
     build_worker_prompt,
     capturing_worker,
     make_fake_git_create_worktree,
@@ -26,7 +27,6 @@ from conftest import (
 from src.core import review, spawner, spawner_events, spawner_finalize, spawner_launch
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-    BackendOption,
     SessionMetadata,
     SpawnRequest,
     TaskType,
@@ -53,14 +53,6 @@ def _build_cfg() -> CharlieBotConfig:
                   CODEX_BACKEND_OPTION,
               ]
       },
-  )
-
-
-def _build_tmp_cfg(tmp_path: Path, option: BackendOption) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      paths={"worktree_dir": str(tmp_path / "worktrees")},
-      backends={"options": [option]},
   )
 
 
@@ -353,7 +345,7 @@ async def test_create_worktree_and_process_raises_when_session_missing(
     reuse_worktree: bool,
 ) -> None:
   """Both worktree-provisioning paths refuse to spawn when the session is gone."""
-  cfg = _build_tmp_cfg(tmp_path, CODEX_BACKEND_OPTION)
+  cfg = build_option_worktree_cfg(tmp_path, CODEX_BACKEND_OPTION)
   repo_path = (tmp_path / "repo").resolve()
   repo_path.mkdir(parents=True, exist_ok=True)
   thread = ThreadMetadata(
@@ -491,7 +483,7 @@ async def test_create_repoless_non_verify_profiles_propagate_antigravity_and_kee
     monkeypatch: pytest.MonkeyPatch,
     task_type: TaskType,
 ) -> None:
-  cfg = _build_tmp_cfg(tmp_path, AGY_BACKEND_OPTION)
+  cfg = build_option_worktree_cfg(tmp_path, AGY_BACKEND_OPTION)
   thread = ThreadMetadata(
       id="thread-1",
       session_id="session-id",
@@ -522,7 +514,7 @@ async def test_create_repoless_worker_assigns_claude_session_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_tmp_cfg(
+  cfg = build_option_worktree_cfg(
       tmp_path, backend_option(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"))
   thread = ThreadMetadata(
       id="thread-1",
@@ -552,7 +544,7 @@ async def test_create_repoless_worker_prepends_verify_preamble(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_tmp_cfg(tmp_path, CODEX_BACKEND_OPTION)
+  cfg = build_option_worktree_cfg(tmp_path, CODEX_BACKEND_OPTION)
   thread = ThreadMetadata(
       id="thread-1",
       session_id="session-id",
@@ -638,7 +630,7 @@ async def test_create_repoless_worker_prepends_verify_preamble(
 
 @pytest.mark.asyncio
 async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_path: Path) -> None:
-  cfg = _build_tmp_cfg(tmp_path, CODEX_BACKEND_OPTION)
+  cfg = build_option_worktree_cfg(tmp_path, CODEX_BACKEND_OPTION)
   events_log = tmp_path / "events.jsonl"
   thread = ThreadMetadata(
       id="thread-1",

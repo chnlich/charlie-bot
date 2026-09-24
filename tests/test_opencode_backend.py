@@ -3,7 +3,7 @@ import base64
 import json
 import re
 import sys
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,13 +11,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from conftest import (
-    OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
-    OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
+    OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET,
     SYNTHETIC_MODEL,
     FakeChunkedResponse,
     assistant_text_event,
-    build_cli_backend,
+    build_cli_backend_rig,
     fake_one_shot_proc,
+    fresh_state_fixture,
     stub_subprocess_spawn,
 )
 
@@ -34,23 +34,28 @@ from src.agents.backends.opencode import (
     OpenCodeSseSilenceError,
 )
 from src.core import event_types as ET
+from src.core import http as src_core_http
 from src.core.streaming import handle_compaction_events
 from src.core.timeouts import OPENCODE_ABORT_TIMEOUT, OPENCODE_HTTP_API_TIMEOUT
 
+# The opencode backend's httpx seam: the module's PEP 562 hook serves `httpx` as a
+# module attribute, so pytest's string-target resolution lands the stand-in on the
+# shared httpx module where the backend's local `import httpx` sites read it.
+_OPENCODE_HTTPX_ASYNC_CLIENT_PATCH_TARGET = "src.agents.backends.opencode.httpx.AsyncClient"
+
 
 def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> OpenCodeBackend:
-  return build_cli_backend(
-      monkeypatch, OpenCodeBackend, OPENCODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/opencode", **kwargs)
+  return build_cli_backend_rig(monkeypatch, OpenCodeBackend, **kwargs)
 
 
 def _rig_end_to_end_run(
     monkeypatch: pytest.MonkeyPatch,
     backend: OpenCodeBackend,
-    response: "_FakeDelayedStreamResponse | FakeChunkedResponse",
+    response: _FakeDelayedStreamResponse | FakeChunkedResponse,
 ) -> MagicMock:
   """Mock the serve-and-connect path so backend.run() consumes `response` as the
   /event stream end-to-end; returns the spawned process mock for spawn assertions."""
-  process = stub_subprocess_spawn(monkeypatch, OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, 4321)
+  process = stub_subprocess_spawn(monkeypatch, OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, 4321)
   process.returncode = 0
   process.wait = AsyncMock(return_value=0)
   monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
@@ -60,7 +65,7 @@ def _rig_end_to_end_run(
   monkeypatch.setattr(backend, "_fetch_model_limit", AsyncMock(return_value=None))
   monkeypatch.setattr(backend, "_create_session", AsyncMock(return_value="session-1"))
   monkeypatch.setattr(backend, "_send_prompt", AsyncMock())
-  monkeypatch.setattr("src.agents.backends.opencode.httpx.AsyncClient", lambda **kwargs: _FakeRunHttpClient(response))
+  monkeypatch.setattr(_OPENCODE_HTTPX_ASYNC_CLIENT_PATCH_TARGET, lambda **kwargs: _FakeRunHttpClient(response))
   return process
 
 
@@ -147,7 +152,7 @@ async def test_iter_sse_events_ignores_comments_and_metadata(monkeypatch: pytest
 @pytest.mark.asyncio
 async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """Regression for run 6dc42358: a message.part.updated frame whose JSON string
+  """A message.part.updated frame whose JSON string
   carries raw U+0085/U+2028 (which JSON.stringify leaves unescaped and the SSE
   spec keeps inside the line) must parse as exactly one event through the full
   backend chain instead of dying with 'Unterminated string'."""
@@ -250,7 +255,7 @@ async def test_run_passes_proxy_environment_to_serve_subprocess(
   process = MagicMock()
   process.pid = 1234
   create_process = AsyncMock(return_value=process)
-  monkeypatch.setattr(OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, create_process)
+  monkeypatch.setattr(OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, create_process)
   monkeypatch.setattr(backend, "_read_server_url", AsyncMock(side_effect=RuntimeError("stop after spawn")))
   monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
   cleanup = AsyncMock()
@@ -277,9 +282,9 @@ async def test_run_passes_proxy_environment_to_serve_subprocess(
 
 
 def _assert_pdeathsig_preexec(kwargs: dict) -> None:
-  """The shared piped spawn passes the PDEATHSIG preexec on Linux, an untouched spawn elsewhere."""
+  """The shared piped spawn rides the vfork seam's pdeathsig on Linux, an untouched spawn elsewhere."""
   if sys.platform == "linux":
-    assert callable(kwargs["preexec_fn"])
+    assert kwargs["pdeathsig"] is True and kwargs["preexec_fn"] is None
   else:
     assert kwargs["preexec_fn"] is None
 
@@ -293,7 +298,7 @@ async def test_one_shot_text_passes_proxy_environment_and_deny_policy(monkeypatc
   process = fake_one_shot_proc([], pid=5678)
   create_process = AsyncMock(return_value=process)
 
-  with patch(OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=create_process):
+  with patch(OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, new=create_process):
     result = await backend.one_shot_text("prompt", "system", timeout=5.0)
 
   child_env = create_process.await_args.kwargs["env"]
@@ -1129,15 +1134,13 @@ async def test_sse_watchdog_timeout_fails_run_end_to_end(
   assert "opencode_sse_silence_timeout" in capsys.readouterr().out
 
 
-@pytest.fixture(autouse=True)
-def _fresh_unhandled_part_type_registry() -> Iterator[None]:
-  """Keep the process-wide warn-once registry from leaking across tests."""
-  opencode_mod._UNHANDLED_PART_TYPES.clear()
-  opencode_mod._UNHANDLED_SSE_EVENT_TYPES.clear()
-  yield
+def _clear_unhandled_part_registries() -> None:
+  """Keep the process-wide warn-once registries from leaking across tests."""
   opencode_mod._UNHANDLED_PART_TYPES.clear()
   opencode_mod._UNHANDLED_SSE_EVENT_TYPES.clear()
 
+
+_fresh_unhandled_part_type_registry = fresh_state_fixture(_clear_unhandled_part_registries)
 
 _UNHANDLED_PART_EVENTS = [
     {
@@ -1315,8 +1318,8 @@ def _rig_stub_serve_run(
   """
   processes = [_StubServeProcess(chunks) for chunks in stderr_chunks_per_attempt]
   create_process = AsyncMock(side_effect=processes)
-  monkeypatch.setattr(OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, create_process)
-  monkeypatch.setattr("src.agents.backends.opencode.httpx.AsyncClient", lambda **kwargs: _StubServeHttpClient(script))
+  monkeypatch.setattr(OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, create_process)
+  monkeypatch.setattr(_OPENCODE_HTTPX_ASYNC_CLIENT_PATCH_TARGET, lambda **kwargs: _StubServeHttpClient(script))
   sleep_calls: list[float] = []
 
   async def _record_sleep(seconds: float) -> None:
@@ -1618,10 +1621,11 @@ async def test_run_lock_failure_never_retries_after_terminate(
 
 @pytest.mark.asyncio
 async def test_per_call_clients_carry_shared_ssl_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """Both per-call client constructions — the run-start client (health through
-  the SSE stream) and the cleanup abort POST — pass the process-wide context:
-  httpx's default verify builds a fresh default SSL context per AsyncClient,
-  ~20 ms of event-loop CPU per call on this host."""
+  """The run-start client (health through the SSE stream) passes the process-wide
+  context: httpx's default verify builds a fresh default SSL context per
+  AsyncClient, ~20 ms of event-loop CPU per call on this host. The cleanup abort
+  POST rides the shared outbound client (src.core.http) instead of constructing
+  one — the serve URL is pinned plain localhost HTTP, so no verify choice applies."""
   captured: list[dict] = []
 
   class _KwargsClient(_ClientContextDouble):
@@ -1662,12 +1666,21 @@ async def test_per_call_clients_carry_shared_ssl_context(monkeypatch: pytest.Mon
                   (0.0, ""),
               ]))
 
-  monkeypatch.setattr("src.agents.backends.opencode.httpx.AsyncClient", _KwargsClient)
+  monkeypatch.setattr(_OPENCODE_HTTPX_ASYNC_CLIENT_PATCH_TARGET, _KwargsClient)
+  abort_posts: list[tuple[str, float]] = []
+
+  class _SharedAbortClient:
+
+    async def post(self, url: str, timeout: float | None = None) -> _StubHttpResponse:
+      abort_posts.append((url, timeout))
+      return _StubHttpResponse(200)
+
+  monkeypatch.setattr(src_core_http, "_client", _SharedAbortClient())
   backend = _build_backend(monkeypatch, model="provider/model")
   monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
   monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
   monkeypatch.setattr(backend, "_stream_stdout", AsyncMock())
-  process = stub_subprocess_spawn(monkeypatch, OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, 4321)
+  process = stub_subprocess_spawn(monkeypatch, OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, 4321)
   process.returncode = 0
   process.wait = AsyncMock(return_value=0)
 
@@ -1681,12 +1694,8 @@ async def test_per_call_clients_carry_shared_ssl_context(monkeypatch: pytest.Mon
           "timeout": OPENCODE_HTTP_API_TIMEOUT,
           "verify": opencode_mod._SERVE_SSL_CONTEXT,
       },
-      {
-          "base_url": "http://127.0.0.1:4242",
-          "timeout": OPENCODE_ABORT_TIMEOUT,
-          "verify": opencode_mod._SERVE_SSL_CONTEXT,
-      },
   ]
+  assert abort_posts == [("http://127.0.0.1:4242/session/session-1/abort", OPENCODE_ABORT_TIMEOUT)]
 
 
 # ---------------------------------------------------------------------------

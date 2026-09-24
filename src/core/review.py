@@ -19,9 +19,14 @@ from src.core.models import (
     BackendOption,
     SpawnRequest,
     ThreadMetadata,
-    backend_type_allows_missing_model,
+    option_default_model,
 )
-from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events, iter_ndjson_events_from_end, type_line_filter
+from src.core.ndjson import (
+    PARSE_SKIP_LOG_EVENT,
+    iter_ndjson_events_containing,
+    iter_ndjson_events_from_end,
+    type_line_filter,
+)
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager, thread_events_log_path
@@ -229,22 +234,21 @@ def _compose_review_prompt(
 def _first_delegation_description(chat_log: Path, thread_id: str) -> str | None:
   """First task_delegated description naming *thread_id*, in file order, or None.
 
-  Streams the log and stops at the first matching event whether its description
-  carries text or not — the first-match contract of the full-parse loop this
-  replaced; blank and malformed lines are skipped by the shared
-  ``iter_ndjson_events`` contract. A missing file means no match, never an error.
+  Stops at the first matching event whether its description carries text or
+  not; blank and malformed lines are skipped by the shared reader skip
+  contract. A missing file means no match, never an error. Thread ids are
+  ``str(uuid.uuid4())`` — ASCII, serialized verbatim — so the raw id bytes
+  are the needle the containing reader may skip by.
   """
-  if not chat_log.exists():
-    return None
-  with open(chat_log, encoding="utf-8") as stream:
-    for event in iter_ndjson_events(stream, log_event=PARSE_SKIP_LOG_EVENT, log_fields={}):
-      if event.get("type") == ET.TASK_DELEGATED and event.get("thread_id") == thread_id:
-        value = event.get("description")
-        if isinstance(value, str):
-          normalized = value.strip()
-          if normalized:
-            return normalized
-        return None
+  needle = thread_id.encode("utf-8")
+  for event in iter_ndjson_events_containing(chat_log, needle, log_event=PARSE_SKIP_LOG_EVENT, log_fields={}):
+    if event.get("type") == ET.TASK_DELEGATED and event.get("thread_id") == thread_id:
+      value = event.get("description")
+      if isinstance(value, str):
+        normalized = value.strip()
+        if normalized:
+          return normalized
+      return None
   return None
 
 
@@ -253,9 +257,8 @@ def _worker_summary_from_events_log(worker_log: Path) -> str | None:
   text, whichever kind is newer, or None.
 
   Streams the log from the end and stops at the first event that settles the
-  answer — the newest-first contract of the full-parse loop this replaced;
-  blank, malformed and missing-file cases follow the shared walk's skip
-  contract (None, never an error). Only result and assistant events can
+  answer; blank, malformed and missing-file cases follow the shared walk's
+  skip contract (None, never an error). Only result and assistant events can
   settle the answer, so the walk parses nothing else — the multi-megabyte
   tool_result lines between the answer and the tail would otherwise parse
   whole.
@@ -367,11 +370,7 @@ def _resolve_preference_option(cfg: CharlieBotConfig, option_id: str) -> Backend
   Raises ValueError if the option_id is not in backends.options or requires but lacks a model.
   """
   option = require_backend_option(cfg, option_id, subject="backends.preference entry ")
-  if backend_type_allows_missing_model(option.type):
-    return option.model_copy(update={"model": None})
-  if not option.model:
-    raise ValueError(f"backends.preference entry '{option_id}' has no default model")
-  return option
+  return option.model_copy(update={"model": option_default_model(option, subject="backends.preference entry ")})
 
 
 def select_reviewer_backend(

@@ -21,6 +21,11 @@ from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 
+from src.agents.backends.claude_launch import (  # noqa: F401  (re-export: the established base import path)
+    DISALLOWED_TOOLS_FLAG,
+    SKIP_PERMISSIONS_FLAG,
+)
+from src.agents.backends.spawn import SpawnedProcess, spawn_subprocess
 from src.core import event_types as ET
 from src.core import runs
 from src.core.log_once import LazyStructlogLogger
@@ -29,7 +34,7 @@ from src.core.process import (
     SessionCgroup,
     compose_preexec,
     kill_process_group,
-    make_pdeathsig_kill_preexec,
+    make_nice_preexec,
     make_session_cgroup_preexec,
     prepare_session_cgroup,
 )
@@ -42,6 +47,11 @@ log = LazyStructlogLogger()
 
 DEFAULT_BUFFER_LIMIT = 1024 * 1024 * 1024  # 1 GB
 _STDERR_TAIL_BYTES = 64 * 1024
+
+# The nice raise every turn child spawns with (the _spawn_preexec composition):
+# the turn's process tree is background relative to the server's interactive
+# paths, and only a contended box arbitrates.
+TURN_TREE_NICE = 10
 
 
 # One executor hop per flush, on the stderr tee and the stdout pumps alike:
@@ -88,22 +98,6 @@ async def _tee_stream(
   if fd is not None and buffer:
     await _write_chunk(fd, bytes(buffer))
 
-
-# The flag that suppresses the CLI's interactive permission prompt. Its
-# spelling is fixed by the vendor CLI contract, not by this repo, so every
-# Claude-compatible launcher here (claude headless/TUI, claude-sub, agy,
-# opencode) must pass the same literal.
-SKIP_PERMISSIONS_FLAG = "--dangerously-skip-permissions"
-
-# Settings-side companion of SKIP_PERMISSIONS_FLAG: with the flag passed, an
-# interactive launch still pops a one-time dangerous-mode confirmation unless
-# this key is set. Same vendor-fixed spelling, so the claude TUI and
-# claude-sub both pin the same dict.
-SKIP_PERMISSIONS_SETTINGS = {"skipDangerousModePermissionPrompt": True}
-
-# The tool-deny flag's spelling is vendor-fixed like SKIP_PERMISSIONS_FLAG's; the
-# CLI also accepts a camelCase alias, which only the claude-sub parser mirrors.
-DISALLOWED_TOOLS_FLAG = "--disallowed-tools"
 
 # Poll cadence of the tail-follow read loop. Event volume is low (median
 # inter-event gap ~54 s measured), so a fixed poll beats an inotify dependency.
@@ -232,49 +226,6 @@ def strip_google_api_keys(env: dict[str, str]) -> dict[str, str]:
   return stripped
 
 
-def build_claude_argv(
-    session_id: str,
-    resume: bool,
-    *,
-    settings: str,
-    plugin_dir: str | None = None,
-    model: str | None = None,
-    effort: str | None = None,
-    disallowed_tools: list[str] | None = None,
-    prompt: str | None = None,
-) -> list[str]:
-  """Assemble the `claude` CLI launch argv shared by the interactive launchers.
-
-  *settings* is the pre-serialized ``--settings`` JSON value. *resume*
-  selects ``--resume`` over ``--session-id``. *plugin_dir*, *model*,
-  *effort*, *disallowed_tools*, and *prompt* are appended only when
-  provided; an empty *prompt* still gets its ``--`` separator.
-  """
-  argv = [
-      "claude",
-      "--settings",
-      settings,
-      SKIP_PERMISSIONS_FLAG,
-  ]
-  if plugin_dir is not None:
-    argv.extend(["--plugin-dir", plugin_dir])
-  argv.extend(["--resume" if resume else "--session-id", session_id])
-  if model:
-    argv.extend(["--model", model])
-  if effort:
-    argv.extend(["--effort", effort])
-  # Collapse every incoming entry into one comma-joined value: the launched `claude`
-  # reliably honors a single disallowed-tools flag, not repeated ones.
-  if disallowed_tools:
-    argv.extend([DISALLOWED_TOOLS_FLAG, ",".join(disallowed_tools)])
-  if prompt is not None:
-    # Claude Code 2.1.212 accepts `--` and treats the following value as the prompt,
-    # even when it starts with '-'.  tmux respawn-pane passes these argv entries
-    # directly to Claude; it does not invoke a shell for the command after the target.
-    argv.extend(["--", prompt])
-  return argv
-
-
 def make_text_event(text: str) -> dict:
   """Build a CC-compatible assistant-text event."""
   return {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": text}]}}
@@ -378,9 +329,8 @@ def make_context_compacted_event(trigger: str, compact_metadata: dict | None, mo
   """Build the synthesized ``context_compacted`` event producers persist and broadcast.
 
   ``compact_metadata`` is the upstream compaction payload, carried whole: which
-  inner keys exist is the upstream's business, and a filter here would be the
-  field-by-field projection loss this parameter replaced, written a second
-  time. ``model`` names the model that ran the compaction; a producer relaying
+  inner keys exist is the upstream's business, and a filter here would project
+  fields away. ``model`` names the model that ran the compaction; a producer relaying
   Claude Code's own compaction passes None. Either argument None omits its key,
   so the aggregator renders the line from what the event actually carries.
   """
@@ -698,7 +648,7 @@ class AgentBackend(ABC):
     # (a backend with no session home — an unowned one-shot) never enters one.
     self._cgroup_session_id = cgroup_session_id
     self._active_session_cgroup: SessionCgroup | None = None
-    self._proc: asyncio.subprocess.Process | None = None
+    self._proc: SpawnedProcess | None = None
     self._stderr_task: asyncio.Task | None = None
     self._stdin_task: asyncio.Task | None = None
     self._stderr_tail = bytearray()
@@ -714,7 +664,7 @@ class AgentBackend(ABC):
   def _effective_prompt(self, prompt: str) -> str:
     """Return prompt with instructions prepended, if any are configured."""
     if self._instructions_content:
-      return f"<system-instructions>\n{self._instructions_content}\n</system-instructions>\n\n{prompt}"
+      return self._frame_system_prompt(self._instructions_content, prompt)
     return prompt
 
   @staticmethod
@@ -794,11 +744,13 @@ class AgentBackend(ABC):
     Pipe-transport counterpart to run()'s raw-log spawn, for backends that read
     the child's stdout/stderr directly instead of tail-following log files.
     Piped children serve this process alone, so the kernel holds them to our
-    death (PR_SET_PDEATHSIG): run()'s raw-log spawn is the exact opposite —
-    covered transports are designed to survive parent death. The pdeathsig
-    preexec is merged with the session cgroup move (not replaced by it).
+    death (PR_SET_PDEATHSIG, the vfork spawn seam's child-side prctl); run()'s
+    raw-log spawn is the exact opposite — covered transports are designed to
+    survive parent death. The nice raise and the session cgroup move apply
+    parent-side after the handshake, the raw-log shape's ordering.
     """
-    self._proc = await asyncio.create_subprocess_exec(
+    self._active_session_cgroup = self._prepare_session_cgroup()
+    self._proc = await spawn_subprocess(
         *cmd,
         cwd=cwd,
         stdin=asyncio.subprocess.DEVNULL,
@@ -807,19 +759,24 @@ class AgentBackend(ABC):
         env=final_env,
         limit=self._buffer_limit,
         start_new_session=True,
-        preexec_fn=self._spawn_preexec(pdeathsig=True),
+        preexec_fn=None,
+        pdeathsig=True,
     )
+    self._apply_turn_tree_limits(self._proc.pid)
     await self._pin_identity_and_fire_on_spawn()
 
-  async def _spawn_one_shot_subprocess(
-      self, cmd: list[str], env: dict, *, pdeathsig: bool) -> asyncio.subprocess.Process:
+  async def _spawn_one_shot_subprocess(self, cmd: list[str], env: dict, *, pdeathsig: bool) -> SpawnedProcess:
     """Spawn the one-shot child: devnull stdin, piped stdout/stderr for the collector.
 
     The unpinned counterpart of :meth:`_spawn_piped_and_pin_identity`: the
-    prompt rides argv, no spawn identity is pinned, and the preexec wires the
-    session cgroup move plus the caller's pdeathsig choice exactly once.
+    prompt rides argv, no spawn identity is pinned. A pdeathsig one-shot keeps
+    the kernel-held-to-our-death guarantee through the vfork spawn seam's
+    child-side prctl; a pdeathsig-free one-shot spawns preexec-free for the
+    vfork fast path and applies the turn-tree limits parent-side, the run()'s
+    raw-log shape. Both apply the nice raise and the cgroup move parent-side.
     """
-    return await asyncio.create_subprocess_exec(
+    self._active_session_cgroup = self._prepare_session_cgroup()
+    proc = await spawn_subprocess(
         *cmd,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
@@ -827,8 +784,11 @@ class AgentBackend(ABC):
         env=env,
         limit=self._buffer_limit,
         start_new_session=True,
-        preexec_fn=self._spawn_preexec(pdeathsig=pdeathsig),
+        preexec_fn=None,
+        pdeathsig=pdeathsig,
     )
+    self._apply_turn_tree_limits(proc.pid)
+    return proc
 
   def _prepare_session_cgroup(self) -> SessionCgroup | None:
     """Ensure this backend's session cgroup exists and snapshot its counters; None when off.
@@ -853,21 +813,52 @@ class AgentBackend(ABC):
         swap_max_mb=cfg.server.session_swap_max_mb,
     )
 
-  def _spawn_preexec(self, pdeathsig: bool) -> Callable[[], None] | None:
-    """Preexec for one subprocess spawn: session cgroup move, optionally pdeathsig.
+  def _spawn_preexec(self) -> Callable[[], None] | None:
+    """Preexec for spawns that keep child-side setup: nice and the session cgroup move.
 
-    Also snapshots this spawn's cgroup into ``_active_session_cgroup``, so
-    call it exactly once per spawn, directly as the ``preexec_fn`` argument.
+    Spawns without a pdeathsig requirement spawn preexec-free for the vfork
+    fast path and apply the same limits parent-side through
+    :meth:`_apply_turn_tree_limits` instead; the piped transports and the
+    pdeathsig one-shots carry pdeathsig through the vfork spawn seam's
+    child-side prctl and apply these limits parent-side too.
     The cgroup move is behavior-neutral when cgroup control is off (the
-    backend was built with cgroup_session_id=None): the preexec is None, or
-    the pdeathsig preexec alone.
+    backend was built with cgroup_session_id=None). The nice raise puts the
+    turn's whole process tree (agent CLI plus the tool subprocesses it
+    spawns) background relative to this server's interactive paths — the
+    voice decode and the HTTP handlers the user waits on; nice is
+    contention-only arbitration, so an uncontended box schedules identically.
     """
     self._active_session_cgroup = self._prepare_session_cgroup()
     cgroup_preexec = make_session_cgroup_preexec(
         self._active_session_cgroup.path if self._active_session_cgroup else None)
-    if pdeathsig:
-      return compose_preexec(make_pdeathsig_kill_preexec(), cgroup_preexec)
-    return cgroup_preexec
+    return compose_preexec(make_nice_preexec(TURN_TREE_NICE), cgroup_preexec)
+
+  def _apply_turn_tree_limits(self, pid: int) -> None:
+    """Apply the turn-tree limits parent-side for spawns that carry no preexec.
+
+    A spawn without ``preexec_fn`` keeps the kernel's vfork fast path — the
+    fork's page-table copy never touches the event loop — so the nice raise
+    and the session cgroup move apply to the already-exec'd child here, the
+    parent-observable effects of the preexec composition. A failure logs loud
+    and continues: the child is already running, and killing a healthy turn
+    over a renice failure trades a real stall for a self-inflicted one. The
+    move targets a directory the parent just created and verified writable,
+    so an error is a system-level anomaly, not a degraded mode.
+    """
+    if self._active_session_cgroup is not None:
+      procs_path = self._active_session_cgroup.path / "cgroup.procs"
+      try:
+        fd = os.open(str(procs_path), os.O_WRONLY)
+        try:
+          os.write(fd, str(pid).encode())
+        finally:
+          os.close(fd)
+      except OSError as e:
+        log.warning("session_cgroup_move_failed", pid=pid, path=str(procs_path), error=str(e))
+    try:
+      os.setpriority(os.PRIO_PROCESS, pid, TURN_TREE_NICE)
+    except OSError as e:
+      log.warning("turn_tree_nice_failed", pid=pid, error=str(e))
 
   def cgroup_exit_report(self) -> str | None:
     """Cap / host-OOM attribution message for this run's exit, or None.
@@ -947,19 +938,27 @@ class AgentBackend(ABC):
         os.close(raw_fd)
         raise
       try:
-        # Covered (raw-log) transport: no pdeathsig by design — but the child
-        # still lands in the session's memory-cap cgroup when cgroup control
-        # is on (preexec is None, i.e. behavior unchanged, when it is off).
-        self._proc = await asyncio.create_subprocess_exec(
+        # Covered (raw-log) transport: no pdeathsig by design — the child is
+        # designed to survive parent death and be re-attached — and no
+        # child-side preexec either: a preexec_fn forces the kernel's full
+        # fork (its page-table copy scales with this process's resident set,
+        # ~0.1-0.2 s of event-loop stall per launch on the multi-GB server),
+        # where the preexec-free form keeps the vfork fast path. The turn-tree
+        # limits (nice raise, session cgroup move) apply parent-side right
+        # after the exec handshake, via _apply_turn_tree_limits.
+        self._active_session_cgroup = self._prepare_session_cgroup()
+        self._proc = await spawn_subprocess(
             *cmd,
             cwd=cwd,
             stdin=asyncio.subprocess.PIPE if stdin_prompt is not None else asyncio.subprocess.DEVNULL,
             stdout=raw_fd,
             stderr=stderr_fd,
             env=final_env,
+            limit=self._buffer_limit,
             start_new_session=True,
-            preexec_fn=self._spawn_preexec(pdeathsig=False),
+            preexec_fn=None,
         )
+        self._apply_turn_tree_limits(self._proc.pid)
       finally:
         # The child holds its own copies of both fds.
         os.close(raw_fd)

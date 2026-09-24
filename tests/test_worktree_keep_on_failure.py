@@ -20,6 +20,10 @@ def _thread(**overrides: Any) -> ThreadMetadata:
   return ThreadMetadata(**base)
 
 
+async def _failing_git_worktree_remove(*args: Any, **kwargs: Any) -> bool:
+  return False
+
+
 # ---------------------------------------------------------------------------
 # Part 5: artifact name set
 # ---------------------------------------------------------------------------
@@ -69,10 +73,7 @@ async def test_cleanup_worker_directory_returns_error_when_remove_fails(
   wt.mkdir(parents=True)
   thread = _thread(id="t1", repo_path=str(tmp_path / "repo"), branch_name="charliebot/task-x", worktree_path=str(wt))
 
-  async def fake_remove(*args: Any, **kwargs: Any) -> bool:
-    return False
-
-  monkeypatch.setattr(git_module, "git_worktree_remove", fake_remove)
+  monkeypatch.setattr(git_module, "git_worktree_remove", _failing_git_worktree_remove)
   error = await spawner._cleanup_worker_directory(thread, skip_cleanup=False, worktree_parent=tmp_path / "worktrees")
   assert error is not None and "cleanup failed" in error.lower()
   assert wt.exists()
@@ -133,10 +134,7 @@ async def test_finalize_review_chain_returns_error_when_remove_fails(
       worktree_path=str(wt),
       base_branch="main")
 
-  async def fake_remove(*args: Any, **kwargs: Any) -> bool:
-    return False
-
-  monkeypatch.setattr(git_module, "git_worktree_remove", fake_remove)
+  monkeypatch.setattr(git_module, "git_worktree_remove", _failing_git_worktree_remove)
   error = await review.finalize_review_chain("s", original, worktree_parent=tmp_path / "worktrees")
   assert error is not None and "cleanup failed" in error.lower()
   assert wt.exists()

@@ -9,12 +9,22 @@ from conftest import make_plan_setup as _setup
 from conftest import write_plan_artifact as _write_artifact
 from conftest import write_stub_chrome as _write_stub_chrome
 
+from src.core.config import CharlieBotConfig
 from src.core.plans import (
     PlanRegistryManager,
     _DerivedState,
     derive_state_str,
     read_plans_tolerant,
 )
+
+
+async def _present_first_plan(plan_mgr: PlanRegistryManager, cfg: CharlieBotConfig, meta_id: str) -> str:
+  """Write the default plan artifact and register it as plan 1 v1 (title P1); returns the
+  artifact's plan-relative path for the tests that re-present or rebind that file."""
+  file_rel = _write_artifact(cfg, meta_id, "plan_01.html")
+  await plan_mgr.present(meta_id, file=file_rel, title="P1")
+  return file_rel
+
 
 # ---------------------------------------------------------------------------
 # Derived-state truth table (pure function of closed, takeoff)
@@ -121,8 +131,7 @@ async def test_registry_rejects_cross_format_duplicate(tmp_path: Path, first_abs
 @pytest.mark.asyncio
 async def test_approve_returns_approved(tmp_path: Path) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=file_rel, title="P1")
+  await _present_first_plan(plan_mgr, cfg, meta.id)
 
   result = await plan_mgr.approve(meta.id)
   assert result == {"plan": 1, "v": 1, "state": "approved"}
@@ -132,8 +141,7 @@ async def test_approve_returns_approved(tmp_path: Path) -> None:
 async def test_approve_unconditional_no_verify_state_field(tmp_path: Path) -> None:
   """A version dict carrying a legacy verify_state=mismatch field approves unconditionally."""
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=file_rel, title="P1")
+  await _present_first_plan(plan_mgr, cfg, meta.id)
 
   # Mutate the on-disk registry to inject a legacy verify_state=mismatch field on the version,
   # simulating an old-shape registry. approve must still succeed (no verify_state to read).
@@ -150,8 +158,7 @@ async def test_approve_unconditional_no_verify_state_field(tmp_path: Path) -> No
 @pytest.mark.asyncio
 async def test_amend_on_approved_clears_takeoff(tmp_path: Path) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  file_1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=file_1, title="P1")
+  await _present_first_plan(plan_mgr, cfg, meta.id)
   await plan_mgr.approve(meta.id)
 
   file_2 = _write_artifact(cfg, meta.id, "plan_02.html")
@@ -172,8 +179,7 @@ async def test_amend_on_approved_clears_takeoff(tmp_path: Path) -> None:
 async def test_present_records_null_note(tmp_path: Path) -> None:
   """present has no predecessor, so the first version's note is null."""
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=file_rel, title="P1")
+  await _present_first_plan(plan_mgr, cfg, meta.id)
 
   data = json.loads((cfg.sessions_dir / meta.id / "plans.json").read_text(encoding="utf-8"))
   assert data["plans"][0]["versions"][0]["note"] is None
@@ -183,8 +189,7 @@ async def test_present_records_null_note(tmp_path: Path) -> None:
 @pytest.mark.parametrize("note", [None, "", "   "])
 async def test_amend_requires_non_empty_note(tmp_path: Path, note: str | None) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, title="P1")
+  await _present_first_plan(plan_mgr, cfg, meta.id)
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
 
   with pytest.raises(ValueError, match="amend requires a non-empty --note"):
@@ -194,8 +199,7 @@ async def test_amend_requires_non_empty_note(tmp_path: Path, note: str | None) -
 @pytest.mark.asyncio
 async def test_amend_note_reaches_registry_and_survives_list_readback(tmp_path: Path) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, title="P1")
+  await _present_first_plan(plan_mgr, cfg, meta.id)
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
 
   await plan_mgr.amend(meta.id, file=f2, plan_id=1, note="folded the split executor back into one")
@@ -209,8 +213,7 @@ async def test_amend_note_reaches_registry_and_survives_list_readback(tmp_path: 
 @pytest.mark.asyncio
 async def test_close_superseded_and_abandoned(tmp_path: Path) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=file_rel, title="P1")
+  await _present_first_plan(plan_mgr, cfg, meta.id)
 
   result = await plan_mgr.close(meta.id, plan_id=1, close_as="superseded")
   assert result == {"plan": 1, "state": "superseded"}
@@ -224,8 +227,7 @@ async def test_close_superseded_and_abandoned(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_closing_already_closed_rejected(tmp_path: Path) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=file_rel, title="P1")
+  await _present_first_plan(plan_mgr, cfg, meta.id)
   await plan_mgr.close(meta.id, plan_id=1, close_as="superseded")
 
   with pytest.raises(ValueError, match="already closed"):
@@ -254,8 +256,7 @@ async def test_present_rejects_unresolvable_file(tmp_path: Path, file: str, matc
 @pytest.mark.asyncio
 async def test_present_rejects_already_bound_file(tmp_path: Path) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=file_rel, title="P1")
+  file_rel = await _present_first_plan(plan_mgr, cfg, meta.id)
   with pytest.raises(ValueError, match=r"already bound to plan 1 v1"):
     await plan_mgr.present(meta.id, file=file_rel, title="P2")
 
@@ -263,8 +264,7 @@ async def test_present_rejects_already_bound_file(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_approve_ambiguity_requires_plan(tmp_path: Path) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, title="P1")
+  await _present_first_plan(plan_mgr, cfg, meta.id)
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
   await plan_mgr.present(meta.id, file=f2, title="P2")
 
@@ -282,8 +282,7 @@ async def test_approve_ambiguity_requires_plan(tmp_path: Path) -> None:
 )
 async def test_amend_after_close_rejected(tmp_path: Path, plan_id: int | None, match: str) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, title="P1")
+  await _present_first_plan(plan_mgr, cfg, meta.id)
   await plan_mgr.close(meta.id, plan_id=1, close_as="superseded")
 
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
@@ -294,8 +293,7 @@ async def test_amend_after_close_rejected(tmp_path: Path, plan_id: int | None, m
 @pytest.mark.asyncio
 async def test_amend_ambiguity_requires_plan(tmp_path: Path) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, title="P1")
+  await _present_first_plan(plan_mgr, cfg, meta.id)
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
   await plan_mgr.present(meta.id, file=f2, title="P2")
 
@@ -307,8 +305,7 @@ async def test_amend_ambiguity_requires_plan(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_close_rejects_invalid_close_as(tmp_path: Path) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, title="P1")
+  await _present_first_plan(plan_mgr, cfg, meta.id)
   with pytest.raises(ValueError, match=r"--as must be superseded\|abandoned\|completed"):
     await plan_mgr.close(meta.id, plan_id=1, close_as="weird")
 
@@ -430,8 +427,7 @@ async def test_broadcast_called_on_present(tmp_path: Path) -> None:
     calls.append((session_id, event))
 
   session_mgr.broadcast_only = _fake_broadcast  # type: ignore[method-assign]
-  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, title="P1")
+  await _present_first_plan(plan_mgr, cfg, meta.id)
 
   assert calls == [(meta.id, {"type": "plan_updated", "session_id": meta.id, "plan_id": 1})]
 
@@ -622,8 +618,7 @@ async def test_registry_rejects_canonical_duplicate_after_dot_slash_present(tmp_
 @pytest.mark.asyncio
 async def test_amend_rejects_initial_trigger(tmp_path: Path) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, title="P1")
+  await _present_first_plan(plan_mgr, cfg, meta.id)
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
   with pytest.raises(ValueError, match=r"trigger must be one of auto_amend\|feedback"):
     await plan_mgr.amend(meta.id, file=f2, plan_id=1, trigger="initial", note="why changed")
@@ -633,8 +628,7 @@ async def test_amend_rejects_initial_trigger(tmp_path: Path) -> None:
 async def test_present_stores_initial_trigger(tmp_path: Path) -> None:
   """present is the only writer of trigger=initial."""
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, title="P1")
+  await _present_first_plan(plan_mgr, cfg, meta.id)
   data = json.loads((cfg.sessions_dir / meta.id / "plans.json").read_text(encoding="utf-8"))
   assert data["plans"][0]["versions"][0]["trigger"] == "initial"
 
@@ -691,8 +685,7 @@ async def test_present_rejects_artifact_without_goal_section(tmp_path: Path) -> 
 @pytest.mark.asyncio
 async def test_page_budget_rejects_over_budget_naming_measured_height_and_gates_amend(tmp_path: Path) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  at_budget = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=at_budget, title="P1")
+  await _present_first_plan(plan_mgr, cfg, meta.id)
   cfg.headless_chrome_bin = _write_stub_chrome(tmp_path, 2001)
   over = _write_artifact(cfg, meta.id, "plan_02.html")
   with pytest.raises(ValueError, match=r"measures 2001 px as it opens: 1 px over the 2000 px budget"):

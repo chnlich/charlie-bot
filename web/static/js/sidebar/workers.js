@@ -20,7 +20,7 @@ function formatTriggerTimeLabel(status, fireAt) {
   return prefix + formatCardTimestamp(new Date(fireAt !== '' && Number.isFinite(ms) ? ms : fireAt));
 }
 
-// One trigger card gets painted from three sites -- full render, live append,
+// One trigger card gets painted from the full render, the live append,
 // and the poll-driven updateTriggerStatus -- and every site derives the card's
 // border and icon from the status. One mapping keeps an update from flashing a
 // stale palette onto a card painted by another site.
@@ -46,7 +46,7 @@ function cancelButtonHtml(jsCall, title, domId) {
     + '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>';
 }
 
-// The card class chain is written by all three paint/update sites; the border
+// The card class chain is written by every paint/update site; the border
 // segment comes from triggerStatusChrome(status).
 function triggerCardClass(borderClass) {
   return 'bg-slate-800 rounded-xl border ' + borderClass + ' overflow-hidden';
@@ -72,7 +72,7 @@ function triggerCardBodyHtml(triggerId, status, message, fireAt, sessionId) {
 
 const WORKER_CARD_CLASS = 'bg-slate-800 rounded-xl border border-slate-700 overflow-hidden';
 
-// A thread card gets painted from two sites -- the full renderWorkersTab pass
+// A thread card gets painted from the full renderWorkersTab pass
 // and the live addWorkerCard append -- and updateWorkerStatus rewrites the
 // dot, status line, and cancel button by id. One body builder keeps both
 // painters on the ids and class chains the updater looks up.
@@ -473,14 +473,15 @@ const API = {
   runCardRow,
   leafDeliveryHtml,
   renderLeafView,
-  restartWorkersPolling,
   ensureWorkersLoadedForActiveSession,
   pollWorkers,
   updateWorkerStatus,
-  addWorkerCard,
-  updateTriggerStatus,
   cancelTrigger,
 };
-Sidebar.wire(API);
+Sidebar.wire(API, {
+  restartWorkersPolling,
+  addWorkerCard,
+  updateTriggerStatus,
+});
 
 })();

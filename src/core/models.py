@@ -10,8 +10,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 # The cross-layer constants single-home in src/core.constants (stdlib-only, the
-# CLI import floor's contract); the names stay importable from here for every
-# model-layer importer.
+# CLI import floor's contract).
 # The config-field models live in backend_models so the config chain (every CLI
 # invocation's get_config) skips constructing the session/API models; these
 # re-exports keep the established src.core.models import path working.
@@ -21,7 +20,6 @@ from src.core.backend_models import (  # noqa: F401  (re-export)
     MODEL_OPTIONAL_ROUTING_BACKEND_TYPES,
     BackendBase,
     BackendOption,
-    BackendType,
     CcClaudeBackend,
     CharlieCodeBackend,
     ClaudeAccount,
@@ -30,8 +28,9 @@ from src.core.backend_models import (  # noqa: F401  (re-export)
     OpencodeBackend,
     TuiCliBackend,
     backend_type_allows_missing_model,
+    option_default_model,
 )
-from src.core.constants import MAX_TRIGGER_MESSAGE_CHARS, SESSION_ID_ENV_VAR, WatchKind  # noqa: F401  (re-export)
+from src.core.constants import MAX_TRIGGER_MESSAGE_CHARS, WatchKind
 
 
 def ensure_utc(v: datetime | str) -> datetime:
@@ -622,6 +621,12 @@ class ForkSessionRequest(BaseModel):
 class EloneSessionRequest(BaseModel):
   event_index: int
   backend: str | None = None
+
+
+class ExplainRequest(BaseModel):
+  """One explain (btw-style) request for a divider: the chosen backend is required."""
+  event_index: int
+  backend: str
 
 
 class UploadedFileRef(BaseModel):

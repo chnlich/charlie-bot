@@ -25,6 +25,7 @@ from conftest import (
     OPUS_BACKEND_ID,
     SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
     SCHEDULER_GET_CONFIG_PATCH_TARGET,
+    SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET,
     SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
     SCHEDULER_TRIGGER_MASTER_PATCH_TARGET,
     _noop,
@@ -175,13 +176,7 @@ def pm_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   return home
 
 
-def _write_pm_yaml(
-    home: Path,
-    name: str = "pm_bp_eval",
-    *,
-    body_overrides: dict[str, Any] | None = None,
-    enabled: bool = True,
-) -> Path:
+def _write_pm_yaml(home: Path, name: str = "pm_bp_eval", *, body_overrides: dict[str, Any] | None = None) -> Path:
   """Seed one type: pm host cron file (prompt_file pointer + project), shaped like production."""
   prompt_path = home / "pm_contract.md"
   prompt_path.write_text(PM_TASK_PROMPT + "\n", encoding="utf-8")
@@ -190,7 +185,7 @@ def _write_pm_yaml(
       "cron": "30 8 * * *",
       "prompt_file": str(prompt_path),
       "timezone": "America/Los_Angeles",
-      "enabled": enabled,
+      "enabled": True,
       "project": "bp-eval",
   }
   body.update(body_overrides or {})
@@ -237,10 +232,9 @@ async def _create_member(
     *,
     name: str = "member",
     archived: bool = False,
-    group: str = "bp-eval",
 ) -> Any:
   member = await session_mgr.create_session(CreateSessionRequest(name=name), backend=OPUS_BACKEND_ID)
-  await session_mgr.set_group(member.id, group)
+  await session_mgr.set_group(member.id, "bp-eval")
   if archived:
     await session_mgr.archive_session(member.id)
   return member
@@ -515,7 +509,7 @@ async def test_tick_disables_task_on_manual_pm_archive(
   monkeypatch.setattr(scheduler, "_get_or_create_session", get_or_create)
   monkeypatch.setattr(scheduler, "_maybe_run", maybe_run)
   monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr("src.core.scheduler.get_scheduled_tasks", lambda: [task_cfg])
+  monkeypatch.setattr(SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET, lambda: [task_cfg])
 
   await scheduler._tick()
 
@@ -556,7 +550,7 @@ async def test_tick_elone_successor_does_not_trigger_stop_or_dead_group_terminat
   monkeypatch.setattr(scheduler, "_get_or_create_session", get_or_create)
   monkeypatch.setattr(scheduler, "_maybe_run", maybe_run)
   monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr("src.core.scheduler.get_scheduled_tasks", lambda: [task_cfg])
+  monkeypatch.setattr(SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET, lambda: [task_cfg])
 
   await scheduler._tick()
 
@@ -635,12 +629,12 @@ async def test_elone_of_pm_session_takes_inheriting_succession(
 # ---------------------------------------------------------------------------
 
 
-def _pm_task_payload(name: str, project: str = "bp-eval", **overrides: Any) -> dict[str, Any]:
+def _pm_task_payload(name: str, **overrides: Any) -> dict[str, Any]:
   payload: dict[str, Any] = {
       "name": name,
       "cron": "30 8 * * *",
       "type": "pm",
-      "project": project,
+      "project": "bp-eval",
   }
   payload.update(overrides)
   return payload

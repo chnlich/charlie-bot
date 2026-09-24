@@ -24,7 +24,6 @@ resolve_run's explicit reason.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import os
 import signal
@@ -41,6 +40,7 @@ from conftest import (
     REVIEW_TRIGGER_MASTER_PATCH_TARGET,
     ROOT,
     _assert_failed_with_transport_reason,
+    _async_wait_for,
     _await_recovery_tasks,
     _cfg,
     _kill_driver_mid_run,
@@ -50,6 +50,7 @@ from conftest import (
     _terminal_summaries,
     _wait_for,
     build_recovery_cfg,
+    cancel_and_drain,
     read_chat_events,
 )
 
@@ -118,6 +119,19 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"E2E-RESULT
 exit 0
 """
 
+# The two drivers' shared session rig, spliced into each driver source after
+# `home` binds. Each driver's imports must cover every name the fragment uses.
+_DRIVER_SESSION_SETUP = """\
+  cfg = CharlieBotConfig(
+      charliebot_home=home,
+      paths={"worktree_dir": str(home / "worktrees")},
+      backends={"options": [CcClaudeBackend(id="fake", label="Fake", model="fake-model")]},
+  )
+  session_mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
+  meta = await session_mgr.create_session(CreateSessionRequest(name="e2e"))
+"""
+
 DRIVER = """import asyncio
 import json
 import sys
@@ -132,15 +146,7 @@ from src.core.threads import ThreadManager
 
 async def main() -> None:
   home = Path(sys.argv[1])
-  cfg = CharlieBotConfig(
-      charliebot_home=home,
-      paths={"worktree_dir": str(home / "worktrees")},
-      backends={"options": [CcClaudeBackend(id="fake", label="Fake", model="fake-model")]},
-  )
-  session_mgr = SessionManager(cfg)
-  thread_mgr = ThreadManager(cfg)
-  meta = await session_mgr.create_session(CreateSessionRequest(name="e2e"))
-  thread = await thread_mgr.create_thread(meta, "e2e task")
+""" + _DRIVER_SESSION_SETUP + """  thread = await thread_mgr.create_thread(meta, "e2e task")
   # Sync handshake for the test harness (stdout is structlog's, not ours).
   (home / "driver_ids.json").write_text(json.dumps({"session": meta.id, "thread": thread.id}))
   await spawner.spawn_worker(
@@ -354,9 +360,9 @@ def _run_git(cwd: Path, *args: str) -> None:
   subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True)
 
 
-def _origin_commit_count(origin: Path, branch: str = "main") -> int:
+def _origin_commit_count(origin: Path) -> int:
   result = subprocess.run(
-      ["git", "log", "--oneline", branch], cwd=str(origin), check=True, capture_output=True, text=True)
+      ["git", "log", "--oneline", "main"], cwd=str(origin), check=True, capture_output=True, text=True)
   return len(result.stdout.splitlines())
 
 
@@ -383,15 +389,15 @@ async def _settle_finalize_window(home: Path, session_id: str, original_id: str)
   starting before the ack lands would judge it missing and re-fire it.
   """
   await _await_recovery_tasks()
-  deadline = time.monotonic() + 20.0
-  while time.monotonic() < deadline:
+
+  def settled() -> bool:
     reviewers = [m for m in _thread_metas(home, session_id) if m.get("review_of") == original_id]
-    reviewers_settled = reviewers and all(m.get("status") in ("completed", "failed", "cancelled") for m in reviewers)
+    reviewers_settled = bool(reviewers) and all(
+        m.get("status") in ("completed", "failed", "cancelled") for m in reviewers)
     woke = finalize_effects.master_woke_after_summary(read_chat_events(home, session_id), original_id)
-    if reviewers_settled and woke:
-      return
-    await asyncio.sleep(0.05)
-  raise TimeoutError("reviewer thread or its master wake never settled")
+    return reviewers_settled and woke
+
+  await _async_wait_for(settled, 20.0, "reviewer thread or its master wake never settled")
 
 
 @pytest.mark.asyncio
@@ -632,15 +638,7 @@ from src.core.threads import ThreadManager
 async def main() -> None:
   home = Path(sys.argv[1])
   description = sys.argv[2]
-  cfg = CharlieBotConfig(
-      charliebot_home=home,
-      paths={"worktree_dir": str(home / "worktrees")},
-      backends={"options": [CcClaudeBackend(id="fake", label="Fake", model="fake-model")]},
-  )
-  session_mgr = SessionManager(cfg)
-  thread_mgr = ThreadManager(cfg)
-  meta = await session_mgr.create_session(CreateSessionRequest(name="e2e"))
-  thread = await thread_mgr.create_thread(meta, description)
+""" + _DRIVER_SESSION_SETUP + """  thread = await thread_mgr.create_thread(meta, description)
   (home / "driver_ids.json").write_text(json.dumps({"session": meta.id, "thread": thread.id}))
   task = asyncio.create_task(
       spawner.spawn_worker(
@@ -757,9 +755,7 @@ async def test_graceful_shutdown_in_setup_phase_reaches_never_started_row(
           thread_mgr,
           request=SpawnRequest(resolved_backend="fake", resolved_model="fake-model", prompt_override="x")))
   await asyncio.wait_for(setup_entered.wait(), timeout=10.0)
-  task.cancel()
-  with contextlib.suppress(asyncio.CancelledError):
-    await task
+  await cancel_and_drain(task)
 
   meta = _read_meta(home, ids["session"], ids["thread"])
   assert meta["status"] == "idle"  # untouched: no failed/-1 fabricated at shutdown
@@ -943,10 +939,7 @@ async def test_ui_cancel_endpoint_still_finalizes_cancelled(tmp_path: Path, monk
       return False
     return m.get("pid") is not None and m.get("status") == "running"
 
-  deadline = time.monotonic() + 20.0
-  while not started():
-    assert time.monotonic() < deadline, "worker never started"
-    await asyncio.sleep(0.05)
+  await _async_wait_for(started, 20.0, "worker never started")
 
   await cancel_thread(ids["session"], ids["thread"], thread_mgr)
   await task  # completes normally: this path never cancels the spawn task

@@ -48,9 +48,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
 Chat.wire({
   showScrollToBottom,
-  hideScrollToBottom,
   scrollToBottom,
   restoreBottomPin,
+}, {
+  hideScrollToBottom,
 });
 
 })();

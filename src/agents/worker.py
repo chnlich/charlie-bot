@@ -18,12 +18,13 @@ from src.agents.backends.base import (
 )
 from src.agents.backends.claude_code import ClaudeCodeBackend, claude_supervisor_env
 from src.agents.backends.deferred_build import load_build_backend
-from src.core import claude_accounts, claude_compaction, claude_relay, runs
+from src.core import claude_accounts, claude_relay, runs
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.constants import BackendType
 from src.core.deferred import deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import BackendOption, BackendType, ClaudeAccount, ThreadMetadata
+from src.core.models import BackendOption, ClaudeAccount, ThreadMetadata
 from src.core.ndjson import append_ndjson
 from src.core.ndjson import write_all as _write_all
 from src.core.process import kill_group_escalating
@@ -38,8 +39,9 @@ def __getattr__(name: str) -> Any:
   return deferred_module_getattr(name, __name__, globals(), "build_backend", load_build_backend)
 
 
+# Each entry is a substring catch-all for its family: bare "quota" also matches
+# every phrase form ("quota exceeded", ...), so phrase entries stay out.
 QUOTA_ERROR_PATTERNS = [
-    "quota exceeded",
     "rate limit",
     "resource_exhausted",
     "429",
@@ -249,7 +251,7 @@ class Worker:
       self,
       *,
       is_alive: Callable[[], bool],
-      on_silence: Callable[[], Awaitable[None]] | None = None,
+      on_silence: Callable[[], Awaitable[None]] | None,
   ) -> int:
     """Re-attach to an interrupted run and stream its remaining output.
 
@@ -347,6 +349,8 @@ class Worker:
         from_account=current.label,
         to_account=nxt.label,
         relays=self._relays + 1)
+    # lazy: keeps the compaction stack off the M99 server import floor (docs/perf_baseline.md)
+    from src.core import claude_compaction
     if claude_compaction.relay_compaction_wanted(self._cfg, self._backend_option.model, self._context_tokens):
 
       async def persist(evt: dict) -> None:

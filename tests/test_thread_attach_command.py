@@ -1,16 +1,16 @@
 from pathlib import Path
 
 import pytest
-from conftest import backend_option
+from conftest import apply_config_overrides, backend_option
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.agents.backends.pty_common import _TMUX_SOCKET, tmux_session_name
 from src.api import threads as threads_api
-from src.api.deps import get_config_on_loop, get_thread_manager
+from src.api.deps import get_thread_manager
 from src.api.threads import build_attach_command
 from src.api.threads import router as threads_router
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig
 from src.core.models import ThreadMetadata
 from src.core.threads import ThreadManager
 
@@ -102,8 +102,7 @@ async def test_attach_available_uses_tmux_for_claude_sub_config(
 def _build_client(cfg: CharlieBotConfig, thread_mgr: ThreadManager) -> TestClient:
   app = FastAPI()
   app.include_router(threads_router, prefix="/api/threads")
-  app.dependency_overrides[get_config] = lambda: cfg
-  app.dependency_overrides[get_config_on_loop] = lambda: cfg
+  apply_config_overrides(app, cfg)
   app.dependency_overrides[get_thread_manager] = lambda: thread_mgr
   return TestClient(app)
 

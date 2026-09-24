@@ -1,6 +1,6 @@
 """Acceptance tests for repo-owned default cron tasks and the per-job loader.
 
-Covers the seed mechanism in ``src/core/init.py::seed_default_cron_tasks`` (the
+Covers the seed mechanism in ``src/core/init_seed.py::seed_default_cron_tasks`` (the
 seeded host file keeps the ``prompt_file`` pointer, never an inlined body), the
 loader's acceptance of ``prompt_file``, its rejection of an inline ``prompt``
 (and of a body with no prompt source at all), ``timezone: local`` resolution
@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
-from conftest import ROOT
+from conftest import ROOT, make_cron_client, write_nightly_prompt
 from conftest import cron_d_dir as _cron_d_dir
 from conftest import dump_yaml as _dump
 from conftest import write_cron_task as _write_task_text
@@ -28,7 +28,6 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from src.core.config import (
-    CharlieBotConfig,
     ScheduledTaskConfig,
     _load_cron_file,
     _resolve_local_timezone,
@@ -38,6 +37,7 @@ from src.core.config import (
     get_scheduled_tasks,
 )
 from src.core.init import init_charliebot_home, seed_default_cron_tasks
+from src.core.sessions import SessionManager
 from src.core.yaml_utils import load_yaml
 
 # --- helpers -----------------------------------------------------------------
@@ -537,31 +537,6 @@ def test_broken_prompt_file_missing_path(temp_home: Path) -> None:
 # --- API: GET /tasks is total and includes broken entries --------------------
 
 
-def _client(cfg: CharlieBotConfig) -> TestClient:
-  from fastapi import FastAPI
-
-  from src.api import cron as api_cron
-  from src.api.deps import get_config_on_loop, get_session_manager
-  from src.core.sessions import SessionManager
-  session_mgr = SessionManager(cfg)
-  app = FastAPI()
-  app.include_router(api_cron.router, prefix="/api/cron")
-  app.dependency_overrides[get_config] = lambda: cfg
-  # The create/update routes resolve cfg through the on-loop dependency (same
-  # instance the sync key serves), so both keys carry the override.
-  app.dependency_overrides[get_config_on_loop] = lambda: cfg
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  return TestClient(app)
-
-
-def _write_nightly_prompt(temp_home: Path, body: str) -> Path:
-  """The ``prompts/nightly.md`` pointer file the API round-trip tests POST."""
-  prompt_path = temp_home / "prompts" / "nightly.md"
-  prompt_path.parent.mkdir(parents=True, exist_ok=True)
-  prompt_path.write_text(body, encoding="utf-8")
-  return prompt_path
-
-
 def _post_nightly(client: TestClient, prompt_path: Path, cron: str = "0 2 * * *") -> httpx.Response:
   """POST the canonical ``nightly`` pointer task; only *cron* varies across callers."""
   return client.post(
@@ -584,7 +559,7 @@ def test_list_tasks_never_500_with_broken(temp_home: Path, inject: Callable[[Pat
   inject(temp_home)
   cfg = get_config()
 
-  with _client(cfg) as client:
+  with make_cron_client(cfg, SessionManager(cfg)) as client:
     response = client.get("/api/cron/tasks")
     assert response.status_code == 200
     data = response.json()
@@ -618,7 +593,7 @@ def test_list_tasks_omits_resolved_prompt(temp_home: Path) -> None:
       }))
   cfg = get_config()
 
-  with _client(cfg) as client:
+  with make_cron_client(cfg, SessionManager(cfg)) as client:
     response = client.get("/api/cron/tasks")
     assert response.status_code == 200
     data = response.json()
@@ -636,8 +611,8 @@ def test_list_tasks_omits_resolved_prompt(temp_home: Path) -> None:
 def _assert_pointer_round_trip(home: Path, prompt_path: Path, name: str) -> None:
   """Both halves of the round-trip regression: the persisted file still carries
   prompt_file (and no prompt), AND it reloads through the loader into the
-  resolved body. Asserting only the reload would pass the old inlining behavior
-  too, so both halves are required."""
+  resolved body. Asserting only the reload would also pass a stored prompt
+  inlined into the file, so both halves are required."""
   cron_dir = _cron_d_dir(home)
   stored = load_yaml(cron_dir / f"{name}.yaml", default={})
   assert stored["prompt_file"] == str(prompt_path)
@@ -651,9 +626,9 @@ def _assert_pointer_round_trip(home: Path, prompt_path: Path, name: str) -> None
 def test_api_create_round_trips_prompt_file(temp_home: Path) -> None:
   """POST /tasks with prompt_file persists the pointer, never the body; the
   persisted file reloads through the loader into the resolved body."""
-  prompt_path = _write_nightly_prompt(temp_home, "Rebase omni main and report status.\n")
+  prompt_path = write_nightly_prompt(temp_home, "Rebase omni main and report status.\n")
   cfg = get_config()
-  with _client(cfg) as client:
+  with make_cron_client(cfg, SessionManager(cfg)) as client:
     response = _post_nightly(client, prompt_path)
     assert response.status_code == 200
     assert response.json()["prompt_file"] == str(prompt_path)
@@ -664,9 +639,9 @@ def test_api_create_round_trips_prompt_file(temp_home: Path) -> None:
 def test_api_put_round_trips_prompt_file(temp_home: Path) -> None:
   """PUT /tasks/<name> with prompt_file persists the pointer, not a body, and
   the persisted file reloads into the resolved body."""
-  prompt_path = _write_nightly_prompt(temp_home, "Rebase nightly orchestrator and report status.\n")
+  prompt_path = write_nightly_prompt(temp_home, "Rebase nightly orchestrator and report status.\n")
   cfg = get_config()
-  with _client(cfg) as client:
+  with make_cron_client(cfg, SessionManager(cfg)) as client:
     created = _post_nightly(client, prompt_path)
     assert created.status_code == 200
     response = client.put("/api/cron/tasks/nightly", json={"cron": "0 4 * * *", "prompt_file": str(prompt_path)})
@@ -698,8 +673,8 @@ def test_single_source_inline_and_pointer(temp_home: Path) -> None:
 
 def test_api_create_writes_single_file(temp_home: Path) -> None:
   cfg = get_config()
-  prompt_path = _write_nightly_prompt(temp_home, "run nightly")
-  with _client(cfg) as client:
+  prompt_path = write_nightly_prompt(temp_home, "run nightly")
+  with make_cron_client(cfg, SessionManager(cfg)) as client:
     response = _post_nightly(client, prompt_path)
     assert response.status_code == 200
     path = _cron_d_dir(temp_home) / "nightly.yaml"
@@ -716,8 +691,8 @@ def test_api_create_writes_single_file(temp_home: Path) -> None:
 
 def test_api_put_round_trips_single_file(temp_home: Path) -> None:
   cfg = get_config()
-  prompt_path = _write_nightly_prompt(temp_home, "run nightly")
-  with _client(cfg) as client:
+  prompt_path = write_nightly_prompt(temp_home, "run nightly")
+  with make_cron_client(cfg, SessionManager(cfg)) as client:
     _post_nightly(client, prompt_path)
     response = client.put("/api/cron/tasks/nightly", json={"cron": "0 4 * * *"})
     assert response.status_code == 200
@@ -732,7 +707,7 @@ def test_api_put_round_trips_single_file(temp_home: Path) -> None:
 def test_api_put_409_on_broken_file(temp_home: Path) -> None:
   cfg = get_config()
   _write_task_text(temp_home, "broken", "cron: [unbalanced\n")
-  with _client(cfg) as client:
+  with make_cron_client(cfg, SessionManager(cfg)) as client:
     response = client.put("/api/cron/tasks/broken", json={"cron": "0 5 * * *"})
     assert response.status_code == 409
     assert response.json()["detail"]
@@ -742,7 +717,7 @@ def test_api_delete_removes_file(temp_home: Path) -> None:
   cfg = get_config()
   _write_healthy(temp_home, "task-a", "0 0 * * *", "a body")
   path = _cron_d_dir(temp_home) / "task-a.yaml"
-  with _client(cfg) as client:
+  with make_cron_client(cfg, SessionManager(cfg)) as client:
     response = client.delete("/api/cron/tasks/task-a")
     assert response.status_code == 200
     assert not path.exists()
@@ -755,7 +730,7 @@ def test_api_delete_broken_file_repairs(temp_home: Path) -> None:
   _write_task_text(temp_home, "broken", "cron: [unbalanced\n")
   path = _cron_d_dir(temp_home) / "broken.yaml"
   assert get_scheduled_task_errors()
-  with _client(cfg) as client:
+  with make_cron_client(cfg, SessionManager(cfg)) as client:
     response = client.delete("/api/cron/tasks/broken")
     assert response.status_code == 200
     assert not path.exists()
@@ -774,7 +749,7 @@ def test_api_delete_broken_file_repairs(temp_home: Path) -> None:
 )
 def test_api_rejects_path_traversal_name(temp_home: Path, bad: str) -> None:
   cfg = get_config()
-  with _client(cfg) as client:
+  with make_cron_client(cfg, SessionManager(cfg)) as client:
     r_put = client.put(f"/api/cron/tasks/{bad}", json={"cron": "0 1 * * *"})
     r_del = client.delete(f"/api/cron/tasks/{bad}")
     r_post = client.post(

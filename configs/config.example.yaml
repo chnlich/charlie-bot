@@ -3,8 +3,10 @@
 # secret key or value here.
 # setup.sh copies this file to ~/.charliebot/config.yaml when that file does not
 # exist, and the server startup path (init_charliebot_home) seeds it too if still
-# missing. Every uncommented field below sits at its schema default. Edit per
-# host, and never commit your filled-in config.yaml.
+# missing. Every uncommented field below sits at its schema default, except the
+# backend list. That list's schema default is empty, and an empty list fails
+# server startup (require_backends), so the example carries a working list.
+# Edit per host, and never commit your filled-in config.yaml.
 #
 # Unknown keys fail startup — at the top level and inside every section.
 # Keys from the old flat layout fail startup too: the error names each retired

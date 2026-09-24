@@ -13,13 +13,8 @@ from src.agents.backends.openai_compatible_claude import OpenAICompatibleClaudeB
 from src.agents.backends.opencode import OpenCodeBackend
 from src.agents.backends.tui import TuiBackend
 from src.core.config import CharlieBotConfig, ClaudeAccount, get_credentials
-from src.core.models import BackendOption, BackendType
-
-
-def _require_model(option: BackendOption) -> str:
-  if not option.model:
-    raise ValueError(f"backend '{option.id}' has no default model")
-  return option.model
+from src.core.constants import BackendType
+from src.core.models import BackendOption, option_default_model
 
 
 def build_backend(
@@ -48,7 +43,7 @@ def build_backend(
   """
   if option.type == BackendType.CC_CLAUDE:
     return ClaudeCodeBackend(
-        model=_require_model(option),
+        model=option_default_model(option, subject="backend "),
         effort=option.effort,
         cli_binary=option.cli_binary,
         fast_mode=option.fast_mode,
@@ -56,24 +51,26 @@ def build_backend(
         **kwargs)
   if option.type == BackendType.CC_KIMI:
     return KimiBackend(
-        api_key=str(get_credentials().require(option.credential, "api_key")), model=_require_model(option), **kwargs)
+        api_key=str(get_credentials().require(option.credential, "api_key")),
+        model=option_default_model(option, subject="backend "),
+        **kwargs)
   if option.type == BackendType.CC_OPENAI_COMPATIBLE:
     proxy_base_url = f"{cfg.server_base_url}/api/anthropic-proxy/openai-compatible/{option.id}"
     return OpenAICompatibleClaudeBackend(
         proxy_base_url=proxy_base_url,
         auth_token=str(get_credentials().require("charliebot", "access_key")),
-        model=_require_model(option),
+        model=option_default_model(option, subject="backend "),
         **kwargs,
     )
   if option.type == BackendType.CODEX:
     return CodexBackend(
-        model=_require_model(option),
+        model=option_default_model(option, subject="backend "),
         model_reasoning_effort=option.model_reasoning_effort,
         model_auto_compact_token_limit=option.model_auto_compact_token_limit,
         **kwargs)
   if option.type == BackendType.CHARLIE_CODE:
     return CharlieCodeBackend(
-        model=_require_model(option),
+        model=option_default_model(option, subject="backend "),
         api_base=option.api_base,
         context_window=option.context_window,
         image_input=option.image_input,
@@ -85,9 +82,9 @@ def build_backend(
         api_key=str(get_credentials().require(option.credential, "api_key")) if option.credential else None,
         **kwargs)
   if option.type == BackendType.GEMINI:
-    return GeminiCliBackend(model=_require_model(option), **kwargs)
+    return GeminiCliBackend(model=option_default_model(option, subject="backend "), **kwargs)
   if option.type == BackendType.OPENCODE:
-    return OpenCodeBackend(model=_require_model(option), proxy_url=option.proxy_url, **kwargs)
+    return OpenCodeBackend(model=option_default_model(option, subject="backend "), proxy_url=option.proxy_url, **kwargs)
   if option.type == BackendType.ANTIGRAVITY:
     return AntigravityCliBackend(print_timeout=option.print_timeout, **kwargs)
   if option.type == BackendType.TUI_CLI:

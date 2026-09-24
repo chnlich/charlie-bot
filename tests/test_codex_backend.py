@@ -6,12 +6,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-    ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
+    BASE_SPAWN_SUBPROCESS_PATCH_TARGET,
     CODEX_RESOLVE_BINARY_PATCH_TARGET,
     FLAG_LIKE_PROMPT,
     assistant_text_event,
     backend_option,
-    build_cli_backend,
+    build_cli_backend_rig,
     fake_one_shot_proc,
 )
 
@@ -22,14 +22,7 @@ from src.core.config import CharlieBotConfig
 
 
 def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> CodexBackend:
-  return build_cli_backend(
-      monkeypatch,
-      CodexBackend,
-      CODEX_RESOLVE_BINARY_PATCH_TARGET,
-      "/usr/bin/codex",
-      defaults={"model": "codex-test-model"},
-      **kwargs,
-  )
+  return build_cli_backend_rig(monkeypatch, CodexBackend, **kwargs)
 
 
 @pytest.mark.parametrize("resume_session_id", [
@@ -461,7 +454,7 @@ async def test_one_shot_text_raises_structured_error(
   raise carrying the error message, never the captured stderr."""
   proc = fake_one_shot_proc([event_line], stderr=b"generic stderr")
 
-  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
+  with patch(BASE_SPAWN_SUBPROCESS_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = _build_backend(monkeypatch)
     with pytest.raises(RuntimeError, match=expected_message) as exc_info:
       await backend.one_shot_text("prompt", "system", timeout=5.0)
@@ -474,7 +467,7 @@ async def test_one_shot_text_raises_nonzero_exit_with_bounded_stderr(monkeypatch
   stderr = b"codex process failed\n" + b"x" * 10000
   proc = fake_one_shot_proc([], stderr=stderr, returncode=2)
 
-  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
+  with patch(BASE_SPAWN_SUBPROCESS_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = _build_backend(monkeypatch)
     with pytest.raises(RuntimeError, match="codex process failed") as exc_info:
       await backend.one_shot_text("prompt", "system", timeout=5.0)
@@ -493,7 +486,7 @@ async def test_one_shot_text_ignores_non_agent_assistant_events(monkeypatch: pyt
               b'"items":[{"text":"not an assistant response","status":"completed"}]}}\n'),
       ])
 
-  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
+  with patch(BASE_SPAWN_SUBPROCESS_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = _build_backend(monkeypatch)
     with pytest.raises(RuntimeError, match="no assistant text"):
       await backend.one_shot_text("prompt", "system", timeout=5.0)
@@ -504,7 +497,7 @@ async def test_one_shot_text_kills_process_group_on_timeout(monkeypatch: pytest.
 
   class _BlockingStdout:
 
-    def __aiter__(self) -> "_BlockingStdout":
+    def __aiter__(self) -> _BlockingStdout:
       return self
 
     async def __anext__(self) -> bytes:
@@ -515,7 +508,7 @@ async def test_one_shot_text_kills_process_group_on_timeout(monkeypatch: pytest.
   proc.stdout = _BlockingStdout()
 
   with (
-      patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)),
+      patch(BASE_SPAWN_SUBPROCESS_PATCH_TARGET, new=AsyncMock(return_value=proc)),
       patch("src.core.process.kill_process_group") as mock_kill,
   ):
     backend = _build_backend(monkeypatch)

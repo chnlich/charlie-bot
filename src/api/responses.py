@@ -1,9 +1,11 @@
 """JSON response rendering for the request-path endpoints.
 
-The hot JSON endpoints return pre-built plain payloads, so the remaining
-per-request cost is the render itself. orjson renders the same payload
-parsed-identically several times faster than CPython's C JSON encoder and
-emits raw UTF-8 instead of ``\\uXXXX`` escapes, shrinking non-ASCII-bearing
+The hot JSON endpoints return these Response subclasses directly, not plain
+dicts, so FastAPI skips response_model validation and the jsonable_encoder
+pass it runs on mapped returns. Their payloads are pre-built plain values, so
+the remaining per-request cost is the render itself. orjson renders the same
+payload parsed-identically several times faster than CPython's C JSON encoder
+and emits raw UTF-8 instead of ``\\uXXXX`` escapes, shrinking non-ASCII-bearing
 bodies on the wire. Callers rely on: the parsed content equals the stdlib
 render, splices built from ``fast_json_bytes`` segments stay byte-identical
 to a fresh render of the merged payload, and unsupported payload types raise
@@ -22,6 +24,7 @@ code-fixed types (None, bool, int, ASCII strings).
 """
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import orjson
@@ -30,7 +33,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from src.core.compression import gzip_level1
-from src.core.memo import BoundedMemo
+from src.core.memo import BoundedMemo, StatSignatureMemo
 
 
 def fast_json_bytes(content: Any) -> bytes:
@@ -77,6 +80,26 @@ def request_wants_gzip(request: Request) -> bool:
   middleware skip its per-request deflate.
   """
   return "gzip" in request.headers.get("accept-encoding", "")
+
+
+def gzip_file_fresh(memo: StatSignatureMemo[Path, bytes], path: Path, max_bytes: int | None) -> bytes | None:
+  """The file's level-1 gzip form, memoized on the stat pair the read served.
+
+  stat precedes the read in the same call (the StatSignatureMemo contract), so a
+  repeat hit serves only bytes its signature proves current. *max_bytes* prices
+  the resident whole-body form: an over-cap file returns None unread and
+  uncached, the caller's signal to serve by stream — so None occurs only when
+  *max_bytes* is not None.
+  """
+  st = path.stat()
+  if max_bytes is not None and st.st_size > max_bytes:
+    return None
+  hit = memo.fresh(path, st)
+  if hit is not None:
+    return hit
+  compressed = gzip_level1(path.read_bytes())
+  memo.record(path, st, compressed)
+  return compressed
 
 
 async def gzip_body_response(

@@ -13,7 +13,11 @@ from conftest import queued_user_reorder_events as _reorder_events
 from src.api.message_utils import events_to_messages, events_to_view
 from src.core import event_types as ET
 from src.core import message_aggregator
-from src.core.message_aggregator import TOOL_PREVIEW_CHARS, MessageAggregator
+from src.core.message_aggregator import (
+    _TOOL_INPUT_DEAD_FIELD_CHARS,
+    TOOL_PREVIEW_CHARS,
+    MessageAggregator,
+)
 
 VOICE_KEY = "is_voice"
 
@@ -992,9 +996,59 @@ def test_stream_delta_tool_rows_carry_the_preview_shape() -> None:
   tool = stream["message"]["tools"][0]
   assert tool["output"] == "o" * TOOL_PREVIEW_CHARS
   assert tool["output_truncated"] is True
-  assert tool["input"]["content"] == "c" * TOOL_PREVIEW_CHARS
-  assert tool["input_truncated"] is True
+  # The renderer reads only file_path from a Write row's input; content renders
+  # nowhere and carries the dead-field bound.
   assert tool["input"]["file_path"] == "/tmp/a"
+  assert tool["input"]["content"] == "c" * _TOOL_INPUT_DEAD_FIELD_CHARS
+  assert tool["input_truncated"] is True
+
+
+def test_input_read_fields_keep_the_wire_cap() -> None:
+  agg = MessageAggregator()
+  list(
+      agg.feed(
+          {
+              "type": ET.TOOL_USE,
+              "name": "Edit",
+              "input": {
+                  "file_path": "/tmp/" + "p" * 100,
+                  "old_string": "o" * 5000,
+                  "new_string": "n" * 5000
+              }
+          }))
+  list(
+      agg.feed(
+          {
+              "type": ET.TOOL_USE,
+              "name": "Grep",
+              "input": {
+                  "pattern": "q" * 5000,
+                  "path": "/tmp/" + "r" * 5000,
+                  "unused": "u" * 5000
+              }
+          }))
+  list(agg.feed({"type": ET.TOOL_USE, "name": "Task", "input": {"description": "d" * 5000, "prompt": "p" * 5000}}))
+  stream = next(d for d in agg.feed({"type": ET.THINKING, "content": "t"}) if d["type"] == "stream")
+
+  by_name = {t["name"]: t for t in stream["message"]["tools"]}
+  # A read field keeps its length up to the wire cap (the renderer shows the
+  # whole value); over-cap it trims to 500 like the output does.
+  edit = by_name["Edit"]
+  assert edit["input"]["file_path"] == "/tmp/" + "p" * 100
+  assert edit["input"]["old_string"] == "o" * _TOOL_INPUT_DEAD_FIELD_CHARS
+  assert edit["input"]["new_string"] == "n" * _TOOL_INPUT_DEAD_FIELD_CHARS
+  assert edit["input_truncated"] is True
+  grep = by_name["Grep"]
+  assert grep["input"]["pattern"] == "q" * TOOL_PREVIEW_CHARS
+  assert grep["input"]["path"] == "/tmp/" + "r" * (TOOL_PREVIEW_CHARS - 5)
+  assert grep["input"]["unused"] == "u" * _TOOL_INPUT_DEAD_FIELD_CHARS
+  # The unnamed tool's first value renders through the show-more toggle up to
+  # the wire length, so it keeps TOOL_PREVIEW_CHARS; its second value renders
+  # nowhere.
+  task = by_name["Task"]
+  assert task["input"]["description"] == "d" * TOOL_PREVIEW_CHARS
+  assert task["input"]["prompt"] == "p" * _TOOL_INPUT_DEAD_FIELD_CHARS
+  assert task["input_truncated"] is True
 
 
 def test_committed_message_tool_rows_carry_the_preview_shape() -> None:

@@ -6,57 +6,67 @@ import io
 import json
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.staticfiles import StaticFiles
-from isal.igzip import IGzipFile
-from starlette.datastructures import Headers, MutableHeaders, QueryParams
-from starlette.middleware.gzip import GZipMiddleware, GZipResponder, IdentityResponder
-from starlette.responses import Response
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from src.core.gc_control import gc_off
 
-from src.api import (
-    anthropic_proxy,
-    backlog,
-    chat,
-    code_server,
-    cron,
-    diag,
-    ext_usage,
-    files,
-    git,
-    internal,
-    latex,
-    pages,
-    responses,
-    sessions,
-    slash,
-    threads,
-    voice,
-)
-from src.api.auth import AuthMiddleware, _credential_matches
-from src.api.deps import session_manager, set_trigger_manager, task_manager, thread_manager
-from src.core import timeouts
-from src.core.buildinfo import init_build_info
-from src.core.config import CharlieBotConfig, configured_access_key, get_config, get_credentials, require_backends
-from src.core.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH, REPO_ROOT
-from src.core.http import close_http_client
-from src.core.init import (
-    init_charliebot_home,
-    reconcile_master_identity,
-    run_crash_recovery,
-)
-from src.core.log_once import LazyStructlogLogger
-from src.core.message_aggregator import MessageAggregator
-from src.core.models import BackendType, SessionMetadata, utc_now
-from src.core.process import log_session_cgroup_startup, sweep_stale_session_cgroups
-from src.core.scheduler import Scheduler
-from src.core.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager
-from src.core.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
-from src.core.tasks import create_logged_task
-from src.core.triggers import TriggerManager
+# The import chain is the server's largest bulk build: ~560 modules — fastapi's
+# own chain, every router, and the pydantic models every route registers
+# against. GC is global, and the chain's gen-2 walks re-traverse a heap that
+# only grows — ~43 ms of the import wall (the M99 floor) that reclaims nothing
+# the process keeps, so the whole chain runs inside the same bounded span the
+# server's other bulk builds use; gc is back on before any request can arrive.
+with gc_off(collect=False):
+  from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+  from fastapi.staticfiles import StaticFiles
+  from isal.igzip import IGzipFile
+  from starlette.datastructures import Headers, MutableHeaders, QueryParams
+  from starlette.middleware.gzip import GZipMiddleware, GZipResponder, IdentityResponder
+  from starlette.responses import Response
+  from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+  from src.api import (
+      anthropic_proxy,
+      backlog,
+      chat,
+      code_server,
+      cron,
+      diag,
+      ext_usage,
+      files,
+      git,
+      host_auth,
+      internal,
+      latex,
+      pages,
+      responses,
+      sessions,
+      slash,
+      threads,
+      voice,
+  )
+  from src.api.auth import AuthMiddleware, _credential_matches
+  from src.api.deps import session_manager, set_trigger_manager, task_manager, thread_manager
+  from src.core import timeouts
+  from src.core.buildinfo import init_build_info
+  from src.core.config import CharlieBotConfig, configured_access_key, get_config, get_credentials, require_backends
+  from src.core.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH, REPO_ROOT, BackendType
+  from src.core.http import close_http_client
+  from src.core.init import (
+      init_charliebot_home,
+      reconcile_master_identity,
+      run_crash_recovery,
+  )
+  from src.core.log_once import LazyStructlogLogger, ensure_lean_renderer, log_http_request_line
+  from src.core.message_aggregator import MessageAggregator
+  from src.core.models import SessionMetadata, utc_now
+  from src.core.process import log_session_cgroup_startup, sweep_stale_session_cgroups
+  from src.core.scheduler import Scheduler
+  from src.core.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager
+  from src.core.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
+  from src.core.tasks import cancel_and_wait, create_logged_task
+  from src.core.triggers import TriggerManager
 
 log = LazyStructlogLogger()
 
@@ -97,8 +107,7 @@ _TRANSPORT_GZIP_SKIP_MEDIA_PREFIXES = (
     "application/vnd.openxmlformats-officedocument",
     "application/vnd.ms-powerpoint",
     "application/msword",
-    "font/woff",
-    "font/woff2",
+    "font/woff",  # prefix match also covers font/woff2
     "application/font-woff",
 )
 
@@ -114,7 +123,7 @@ class _OffLoopWholeBodyGZipResponder(GZipResponder):
   not cross threads between writes.
   """
 
-  def __init__(self, app: ASGIApp, minimum_size: int, compresslevel: int = 1) -> None:
+  def __init__(self, app: ASGIApp, minimum_size: int, compresslevel: int) -> None:
     # IdentityResponder.__init__ binds the chain without the zlib file the
     # GZipResponder layer would construct per request and this responder
     # replaces; the deflate state builds at the first deflated body instead
@@ -183,12 +192,14 @@ class _CharlieBotGZipMiddleware(GZipMiddleware):
 
 
 class _RequestLogMiddleware:
-  """Emit exactly one structlog http_request event per HTTP response.
+  """Emit exactly one http_request log line per HTTP response.
 
   Pure ASGI like the GZip middleware above: send is wrapped only to capture the
   status off http.response.start (nothing is buffered, so streaming and
-  StaticFiles bodies still log exactly once), and the event fires when the
-  inner app returns. The query string is deliberately excluded from `path` —
+  StaticFiles bodies still log exactly once), and the line renders when the
+  inner app returns — through log_http_request_line's direct render, not
+  structlog's event dispatch (capture-based readers see the line on stdout).
+  The query string is deliberately excluded from `path` —
   the terminal WS carries its access credential in ?token= — so credentials
   never reach the log. Mounted last, hence outermost, so AuthMiddleware's 401s
   are logged too. An inner-app exception logs status=500 with the exception's
@@ -232,7 +243,7 @@ class _RequestLogMiddleware:
     }
     if error is not None:
       fields["error"] = error
-    log.info("http_request", **fields)
+    log_http_request_line(fields)
 
 
 async def _check_ws_auth(websocket: WebSocket) -> bool:
@@ -266,19 +277,35 @@ async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context: obj
 
 
 def _provision_speech_models(cfg: CharlieBotConfig) -> None:
-  """Provision the speech models on a worker thread.
+  """Provision the speech models on a worker thread, then warm the decode path.
 
   src.agents.transcriber carries the numpy import (~90 ms), so the module loads
   here instead of the event loop's startup path: the M99 import floor
   (docs/perf_baseline.md) prices the import's wall, and this thread's span is
   exactly the cost the metric does not see.
+
+  After provisioning opens readiness, the same thread builds the resident bundle
+  (single-flight, so a concurrent first request shares it) and decodes one
+  synthetic sine, moving the ~12 s one-time cold cost off the first request. A
+  warm failure only logs: readiness stays exactly as provisioning published it
+  and the endpoints keep their lazy path as the fallback.
   """
   from src.agents import transcriber
 
   transcriber.provision_models(cfg)
+  started = time.monotonic()
+  try:
+    bundle = transcriber.get_transcription_bundle(cfg)
+    transcriber.warm_up_bundle(bundle)
+  except Exception:
+    # Includes the not-ready raise of a parked provisioning failure: log it loudly
+    # and keep booting — a warm failure never parks readiness nor kills the thread.
+    log.exception("voice_warmup_failed")
+    return
+  log.info("voice_warmup_complete", elapsed_ms=round((time.monotonic() - started) * 1000))
 
 
-async def _run_crash_recovery(cfg: CharlieBotConfig, boot_time: datetime, identity: asyncio.Task | None = None) -> None:
+async def _run_crash_recovery(cfg: CharlieBotConfig, boot_time: datetime, identity: asyncio.Task) -> None:
   """Background startup recovery; logs completion and never swallows failures.
 
   Wraps init.run_crash_recovery so an exception surfaces loudly instead of
@@ -314,6 +341,9 @@ async def _run_slack_backfill(cfg: CharlieBotConfig, session_mgr: SessionManager
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   """Application lifespan: startup and shutdown tasks."""
+  # Before the first startup log line: every http_request line the server
+  # renders rides this renderer (see src/core/log_once.py).
+  ensure_lean_renderer()
   cfg = get_config()
   boot_time = utc_now()
 
@@ -406,6 +436,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await trigger_mgr.recover_pending()
 
     await ext_usage.start_poller()
+    await host_auth.start_poller()
 
     slack_listener_task = None
     creds = get_credentials()
@@ -426,17 +457,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
     speech_model_task = getattr(app.state, "speech_model_task", None)
-    if speech_model_task is not None and not speech_model_task.done():
-      speech_model_task.cancel()
-      with suppress(asyncio.CancelledError):
-        await speech_model_task
+    await cancel_and_wait(speech_model_task)
     for attr in ("slack_listener_task", "slack_backfill_task"):
-      task = getattr(app.state, attr, None)
-      if task is not None and not task.done():
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-          await task
+      await cancel_and_wait(getattr(app.state, attr, None))
     await ext_usage.stop_poller()
+    await host_auth.stop_poller()
     await close_http_client()
     await scheduler.stop()
     await streaming_manager.close_all()
@@ -447,46 +472,52 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   log.info("charliebot_shutdown")
 
 
-app = FastAPI(
-    title="CharlieBot",
-    description="Multi-agent Claude Code orchestration system",
-    version="0.1.0",
-    lifespan=lifespan,
-)
+# The app assembly is the import's second bulk build: FastAPI's route
+# registration analyzes every endpoint's annotations and builds the pydantic
+# response models — the same gen-2-heavy allocation shape as the import chain.
+with gc_off(collect=False):
+  app = FastAPI(
+      title="CharlieBot",
+      description="Multi-agent Claude Code orchestration system",
+      version="0.1.0",
+      lifespan=lifespan,
+  )
 
-# The deflate sits on the client-visible send path (send awaits the off-loop
-# compression), so every big page pays it per fetch: the 633 KB events page
-# measures 15.0 ms at level 6 vs 5.5 ms at level 1 (wire 165.7 KB vs 201.1 KB).
-app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
-app.add_middleware(AuthMiddleware)
-# Added last, so starlette's insert(0)/reversed build order makes it the
-# outermost user middleware: AuthMiddleware's 401 responses are logged too.
-app.add_middleware(_RequestLogMiddleware)
+  # The deflate sits on the client-visible send path (send awaits the off-loop
+  # compression), so every big page pays it per fetch: the 633 KB events page
+  # measures 15.0 ms at level 6 vs 5.5 ms at level 1 (wire 165.7 KB vs 201.1 KB).
+  app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
+  app.add_middleware(AuthMiddleware)
+  # Added last, so starlette's insert(0)/reversed build order makes it the
+  # outermost user middleware: AuthMiddleware's 401 responses are logged too.
+  app.add_middleware(_RequestLogMiddleware)
 
-# Page router (GET / — Jinja2 rendered)
-app.include_router(pages.router, tags=["pages"])
+  # Page router (GET / — Jinja2 rendered)
+  app.include_router(pages.router, tags=["pages"])
+  app.include_router(host_auth.router, tags=["host-auth"])
 
-# API routers
-app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
-app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
-app.include_router(threads.router, prefix="/api/threads", tags=["threads"])
-app.include_router(latex.router, prefix="/api/latex", tags=["latex"])
-app.include_router(backlog.router, prefix="/api/backlog", tags=["backlog"])
-app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
-app.include_router(slash.router, prefix="/api/slash", tags=["slash"])
-app.include_router(cron.router, prefix="/api/cron", tags=["cron"])
-app.include_router(diag.router, prefix="/api/diag", tags=["diag"])
-app.include_router(git.router, prefix="/api/git", tags=["git"])
-app.include_router(code_server.router, prefix="/api/code-server", tags=["code-server"])
-app.include_router(ext_usage.router, prefix="/api", tags=["ext-usage"])
-app.include_router(anthropic_proxy.router, prefix="/api/anthropic-proxy", tags=["anthropic-proxy"])
+  # API routers
+  app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
+  app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
+  app.include_router(threads.router, prefix="/api/threads", tags=["threads"])
+  app.include_router(latex.router, prefix="/api/latex", tags=["latex"])
+  app.include_router(backlog.router, prefix="/api/backlog", tags=["backlog"])
+  app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
+  app.include_router(slash.router, prefix="/api/slash", tags=["slash"])
+  app.include_router(cron.router, prefix="/api/cron", tags=["cron"])
+  app.include_router(diag.router, prefix="/api/diag", tags=["diag"])
+  app.include_router(git.router, prefix="/api/git", tags=["git"])
+  app.include_router(code_server.router, prefix="/api/code-server", tags=["code-server"])
+  app.include_router(ext_usage.router, prefix="/api", tags=["ext-usage"])
+  app.include_router(anthropic_proxy.router, prefix="/api/anthropic-proxy", tags=["anthropic-proxy"])
+  app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
 
-# File server (filesystem browser), mounted under the one canonical prefix FILE_SERVER_MOUNTS
-# holds: "/absolute_filepath", the form written into chat text — the prefix names what has to
-# follow it, so a link missing its absolute prefix reads as wrong where it is written. The
-# legacy "/files" and "/file" spellings are unmounted: nothing answers there, both 404.
-for mount in FILE_SERVER_MOUNTS:
-  app.include_router(files.router, prefix=mount, tags=["files"])
+  # File server (filesystem browser), mounted under the one canonical prefix FILE_SERVER_MOUNTS
+  # holds: "/absolute_filepath", the form written into chat text — the prefix names what has to
+  # follow it, so a link missing its absolute prefix reads as wrong where it is written. The
+  # legacy "/files" and "/file" spellings are unmounted: nothing answers there, both 404.
+  for mount in FILE_SERVER_MOUNTS:
+    app.include_router(files.router, prefix=mount, tags=["files"])
 
 # ---------------------------------------------------------------------------
 # WebSocket endpoint for session-level events (master CC + worker summaries)
@@ -546,15 +577,6 @@ async def session_websocket(websocket: WebSocket, session_id: str) -> None:
     await streaming_manager.unsubscribe(channel, websocket)
     await streaming_manager.unsubscribe(SIDEBAR_CHANNEL, websocket)
     log.info("session_ws_disconnected", session_id=session_id)
-
-
-@app.websocket("/ws/voice/{session_id}")
-async def voice_websocket(websocket: WebSocket, session_id: str) -> None:
-  """Receive PCM audio and stream local transcription updates to the browser."""
-  if not await _check_ws_auth(websocket):
-    return
-  await websocket.accept()
-  await voice.handle_voice_websocket(websocket, session_id)
 
 
 async def _send_session_catchup(
@@ -646,8 +668,8 @@ def _render_frames(frames: list[dict]) -> list[str]:
 
   The render rides the shared orjson home (src.api.responses.fast_json_bytes,
   the same render the broadcast fan-out uses); the parsed content equals the
-  stdlib ``send_json`` form this replay replaced, only the raw bytes differ at
-  the boundaries responses.py pins.
+  stdlib ``send_json`` form, only the raw bytes differ at the boundaries
+  responses.py pins.
   """
   return [responses.fast_json_bytes(frame).decode("utf-8") for frame in frames]
 

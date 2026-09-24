@@ -1,5 +1,7 @@
 """Shared JSON read/write helpers and the single home of the atomic file-write rule."""
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import json
@@ -7,11 +9,15 @@ import os
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import BinaryIO
-
-from pydantic import BaseModel
+from typing import TYPE_CHECKING, BinaryIO
 
 from src.core.log_once import LazyStructlogLogger
+
+# future-annotations keep the hint unevaluated; the pydantic import rides the one
+# call that needs it, so the claude-sub launch chain (M108) imports this module
+# without the model stack.
+if TYPE_CHECKING:
+  from pydantic import BaseModel
 
 log = LazyStructlogLogger()
 

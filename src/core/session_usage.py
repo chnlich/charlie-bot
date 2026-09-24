@@ -25,7 +25,7 @@ backend produced it, later events overriding earlier ones in event order. The
 codex rollout tier runs before the slot and only for codex backends; an empty
 slot keeps the context fields unknown.
 
-The usage dict carries four context fields plus cost and model:
+The usage dict carries three context fields plus cost and model:
 
     {
       "context_tokens":     int | None,   # used
@@ -208,7 +208,7 @@ class _UsageFold:
         cost=cost,
     )
 
-  def copy(self) -> "_UsageFold":
+  def copy(self) -> _UsageFold:
     """Independent deep-enough copy of the carried state (the dict is copied too)."""
     out = _UsageFold()
     out.chosen_prompt_tokens = self.chosen_prompt_tokens
@@ -232,7 +232,7 @@ def _usage_dict(
 ) -> dict:
   """Single construction site for the usage-dict shape declared in the module docstring.
 
-  Every tier fills the four context fields from its own source; the cost field
+  Every tier fills the three context fields from its own source; the cost field
   is the shared scan's sum over result events.
   """
   return {
@@ -368,7 +368,7 @@ class SessionUsageResolver:
       self,
       cfg: CharlieBotConfig,
       events_cache: dict[str, list[dict]],
-      chat_events_path_fn: Callable[[str], "object"],
+      chat_events_path_fn: Callable[[str], object],
       load_chat_events_sync_fn: Callable[[str], list[dict]],
   ) -> None:
     self._load_chat_events_sync = load_chat_events_sync_fn

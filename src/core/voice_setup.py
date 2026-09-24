@@ -25,14 +25,11 @@ from src.core.yaml_utils import load_yaml
 
 log = structlog.get_logger()
 
-# GPU decode budget for the preflight's ~10s real recording, measured on this host
-# (x86_64 WSL2, RTX 3080 with the ~4.5GB desktop load active) during implementation:
-# 10.1s of speech decoded warm in 1.17-1.57s across Qwen3-ASR-0.6B/1.7B in BF16
-# (ab_voice_decode_stability_v1.py in the session artifacts). The threshold keeps
-# ~1.6x headroom over the worst measured warm decode while still failing a VRAM-
-# paging-style pathology (the one 19s outlier seen on a cold first pass). Note the
-# measured magnitude is above the plan's hoped-for <1s: the host is WSL2 and the
-# Windows desktop holds ~4.5GB of VRAM and ~17% GPU utilization.
+# GPU decode budget for the preflight's ~10s real recording, measured on this host:
+# 10.1s of speech decoded warm in 1.17-1.57s across Qwen3-ASR-0.6B/1.7B in BF16.
+# The threshold keeps ~1.6x headroom over the worst measured warm decode while
+# still failing a VRAM-paging-style pathology (the one 19s outlier seen on a cold
+# first pass).
 PREFLIGHT_DECODE_THRESHOLD_SECONDS = 2.5
 
 # The preflight decode check needs a real user recording near the calibration length:
@@ -42,7 +39,7 @@ PREFLIGHT_RECORDING_MAX_SECONDS = 15.0
 PREFLIGHT_RECORDING_TARGET_SECONDS = 10.0
 
 
-def write_voice_engine(home: Path, engine: str = "qwen3_hf") -> str:
+def write_voice_engine(home: Path) -> str:
   """Idempotently set ``voice.engine`` in ``<home>/config.yaml``; return the action taken.
 
   Reads the file textually so comments and formatting survive: the ``engine:`` line
@@ -50,6 +47,9 @@ def write_voice_engine(home: Path, engine: str = "qwen3_hf") -> str:
   after ``voice:`` when the block lacks one, and the whole block is appended when
   ``voice:`` is missing. Nothing is written when the effective value already matches.
   """
+  # The GPU enable flow pins the GPU pipeline: setup.sh runs enable only on
+  # nvidia-smi hosts, so there is nothing to choose between.
+  engine = "qwen3_hf"
   config_path = home / "config.yaml"
   text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
   lines = text.splitlines(keepends=True)
@@ -124,11 +124,7 @@ def _load_wav_samples(path: Path) -> np.ndarray:
   return np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
 
 
-def run_gpu_preflight(
-    cfg: CharlieBotConfig,
-    *,
-    decode_threshold_seconds: float = PREFLIGHT_DECODE_THRESHOLD_SECONDS,
-) -> dict:
+def run_gpu_preflight(cfg: CharlieBotConfig) -> dict:
   """Assert the four GPU-voice preflight conditions; raise on the first failure.
 
   (a) torch and transformers import (an ImportError is the failure); (b) the model
@@ -164,17 +160,17 @@ def run_gpu_preflight(
   audio_seconds = len(samples) / transcriber.SAMPLE_RATE
   if not text:
     raise RuntimeError(f"preflight (c) failed: GPU decode of {wav_path.name} returned empty text")
-  if decode_seconds >= decode_threshold_seconds:
+  if decode_seconds >= PREFLIGHT_DECODE_THRESHOLD_SECONDS:
     raise RuntimeError(
         f"preflight (c) failed: {audio_seconds:.1f}s audio decoded in {decode_seconds:.3f}s, "
-        f"threshold {decode_threshold_seconds:.3f}s")
+        f"threshold {PREFLIGHT_DECODE_THRESHOLD_SECONDS:.3f}s")
 
   free_bytes, total_bytes = torch.cuda.mem_get_info()
   report = {
       "recording": str(wav_path),
       "audio_seconds": round(audio_seconds, 2),
       "decode_seconds": round(decode_seconds, 3),
-      "threshold_seconds": decode_threshold_seconds,
+      "threshold_seconds": PREFLIGHT_DECODE_THRESHOLD_SECONDS,
       "free_vram_gib": round(free_bytes / 2**30, 2),
       "total_vram_gib": round(total_bytes / 2**30, 2),
   }

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 import yaml
+from conftest import BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET
 
 from src.core.backlog_loop import _next_id, determine_action
 from src.core.config import ImprovementLoopConfig
@@ -94,7 +95,7 @@ async def test_stale_in_progress_reset(tmp_path: Path) -> None:
   _write_backlog(backlog, items)
   cfg = _make_cfg()
 
-  with patch('src.core.backlog_loop.git_add_commit_push', new_callable=AsyncMock) as mock_commit:
+  with patch(BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET, new_callable=AsyncMock) as mock_commit:
     action, prompt = await determine_action(backlog, cfg, tmp_path)
 
   assert action == 'stale_reset'
@@ -254,6 +255,17 @@ async def test_missing_backlog_generates(tmp_path: Path) -> None:
   action, _prompt = await determine_action(backlog, cfg, tmp_path)
 
   assert action == 'generate'
+
+
+@pytest.mark.asyncio
+async def test_malformed_backlog_fails_loud(tmp_path: Path) -> None:
+  """A non-list backlog file errors naming the file instead of silently reading as empty."""
+  backlog = tmp_path / 'backlog.yaml'
+  backlog.write_text('items:\n- id: 001\n', encoding='utf-8')
+  cfg = _make_cfg()
+
+  with pytest.raises(ValueError, match=r'backlog\.yaml: expected a YAML list of backlog items, got dict'):
+    await determine_action(backlog, cfg, tmp_path)
 
 
 # ---------------------------------------------------------------------------

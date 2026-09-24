@@ -31,9 +31,9 @@ from unittest.mock import AsyncMock
 import pytest
 from conftest import (
     ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
-    BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
-    OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
+    BASE_SPAWN_SUBPROCESS_PATCH_TARGET,
     OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
+    OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET,
     RUNS_READ_PID_STAT_PATCH_TARGET,
     stub_subprocess_spawn,
 )
@@ -130,7 +130,7 @@ async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     raise _SpawnObservedError
 
   backend = cls(on_spawn=on_spawn, log_dir=tmp_path / "logs", **_BASE_CTOR_KWARGS[cls])
-  stub_subprocess_spawn(monkeypatch, BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, 31337)
+  stub_subprocess_spawn(monkeypatch, BASE_SPAWN_SUBPROCESS_PATCH_TARGET, 31337)
 
   with pytest.raises(_SpawnObservedError):
     async for _event in backend.run("contract prompt", str(tmp_path), {"PATH": "/usr/bin:/bin"}):
@@ -153,7 +153,7 @@ async def _drive_opencode(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     observed.append((pid, backend.pid_start))
 
   backend = cls(model="provider/model", on_spawn=on_spawn)
-  stub_subprocess_spawn(monkeypatch, OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, 1234)
+  stub_subprocess_spawn(monkeypatch, OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET, 1234)
   monkeypatch.setattr(backend, "_read_server_url", AsyncMock(side_effect=RuntimeError("stop after spawn")))
   monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
   monkeypatch.setattr(backend, "_cleanup_server", AsyncMock())

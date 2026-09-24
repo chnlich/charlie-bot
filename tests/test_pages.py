@@ -9,20 +9,21 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import make_home_config, make_page_request, stub_credentials
+from conftest import fresh_state_fixture, make_home_config, make_page_request, stub_credentials
 
 from src.api import pages
+from src.core import token_tally
 from src.core.config import CharlieBotConfig
 from src.core.models import SessionMetadata, SessionStatus
 from src.core.token_tally import AccountRow, ModelRow, TokenTally
 
 
-@pytest.fixture(autouse=True)
-def _reset_token_usage_single_flight() -> None:
+def _reset_token_usage_task() -> None:
   """Isolate the module-level single-flight holder between route tests."""
   pages._token_usage_task = None
-  yield
-  pages._token_usage_task = None
+
+
+_reset_token_usage_single_flight = fresh_state_fixture(_reset_token_usage_task)
 
 
 @pytest.fixture
@@ -108,7 +109,7 @@ async def test_token_usage_route_returns_rows(monkeypatch: pytest.MonkeyPatch, p
   def fake_collect(**_kwargs: object) -> TokenTally:
     return tally
 
-  monkeypatch.setattr(pages, "collect_token_usage", fake_collect)
+  monkeypatch.setattr(token_tally, "collect_token_usage", fake_collect)
 
   response = await pages.token_usage_viewer(make_page_request("/"))
   assert response.status_code == 200
@@ -134,7 +135,7 @@ async def test_token_usage_route_is_single_flight(
     time.sleep(0.2)  # keep the collection genuinely in flight so both requests share it
     return TokenTally(rows=[], notes=[], elapsed_s=0.2, scanned_bytes=0)
 
-  monkeypatch.setattr(pages, "collect_token_usage", fake_collect)
+  monkeypatch.setattr(token_tally, "collect_token_usage", fake_collect)
 
   request_one = make_page_request("/")
   request_two = make_page_request("/")
@@ -156,7 +157,7 @@ async def test_token_usage_viewer_clears_inflight_task_after_render(
     calls += 1
     return TokenTally(rows=[], notes=[], elapsed_s=0.01, scanned_bytes=0)
 
-  monkeypatch.setattr(pages, "collect_token_usage", fake_collect)
+  monkeypatch.setattr(token_tally, "collect_token_usage", fake_collect)
   await pages.token_usage_viewer(make_page_request("/"))
   assert calls == 1
   await pages.token_usage_viewer(make_page_request("/"))
@@ -185,7 +186,7 @@ async def test_token_usage_route_labels_charliebot_source(
               accounts=[AccountRow(name="charlie-code-gemini-3.8-flash", calls=66, output=8, total=108)]),
       ])
 
-  monkeypatch.setattr(pages, "collect_token_usage", lambda **_kwargs: tally)
+  monkeypatch.setattr(token_tally, "collect_token_usage", lambda **_kwargs: tally)
 
   response = await pages.token_usage_viewer(make_page_request("/"))
   assert response.status_code == 200
@@ -195,7 +196,8 @@ async def test_token_usage_route_labels_charliebot_source(
   assert "charlie-code-gemini-3.8-flash" in body  # the account split row
   assert "charlie-bot reads its own thread event logs" in body  # the Sources bullet
   assert "their per-run usage lives only in the thread event logs" in body  # Not covered
-  assert "'charlie-bot':4" in body  # the JS payload's source slot
+  assert '"slot": 4' in body  # the JS payload's per-row source slot
+  assert 'const LEG = ["Claude Code", "Codex", "opencode", "charlie-bot"]' in body  # the legend rides the server's display order
   scale = body.split("Scale by platform:", 1)[1].split("</li>", 1)[0]
   for src in ("Claude Code", "opencode", "Codex", "charlie-bot"):
     assert src in scale  # every source per_src carries renders its clause
@@ -205,16 +207,17 @@ async def test_token_usage_route_labels_charliebot_source(
 async def test_token_usage_route_renders_when_a_source_key_is_absent(
     monkeypatch: pytest.MonkeyPatch, pages_config: CharlieBotConfig) -> None:
   """The deploy-skew shape renders: the template reloads from disk while the serving
-  process runs the python it started with, so a freshly added source's per_src key stays
-  absent until that process restarts — the page serves the sources it knows instead of
-  failing the whole report."""
+  process runs the python it started with, so a freshly added source's per_src key and a
+  freshly added context key like usage_sources both stay absent until that process
+  restarts — the page serves the sources it knows instead of failing the whole report."""
   tally = _usage_tally([_claude_row("2024-01-01", "2024-01-02")])
-  monkeypatch.setattr(pages, "collect_token_usage", lambda **_kwargs: tally)
+  monkeypatch.setattr(token_tally, "collect_token_usage", lambda **_kwargs: tally)
   real_context = pages._token_usage_context
 
   def skew_context(tally: TokenTally) -> dict:
     ctx = real_context(tally)
     del ctx["ctx"]["per_src"]["charlie-bot"]  # the pre-source serving process's shape
+    del ctx["ctx"]["usage_sources"]  # the pre-legend serving process's shape
     return ctx
 
   monkeypatch.setattr(pages, "_token_usage_context", skew_context)
@@ -225,6 +228,7 @@ async def test_token_usage_route_renders_when_a_source_key_is_absent(
   scale = body.split("Scale by platform:", 1)[1].split("</li>", 1)[0]
   assert "Claude Code 65 (100%, 1 models)" in scale
   assert "charlie-bot" not in scale
+  assert "const LEG = []" in body  # the absent legend key renders an empty legend
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="requires node on PATH")
@@ -240,7 +244,7 @@ async def test_token_usage_inline_script_parses(
   # Window string deliberately carries spaces and a `→` so an unquoted interpolation breaks.
   tally = _usage_tally([_claude_row("2026-06-24", "2026-08-07")])
 
-  monkeypatch.setattr(pages, "collect_token_usage", lambda **_kwargs: tally)
+  monkeypatch.setattr(token_tally, "collect_token_usage", lambda **_kwargs: tally)
 
   response = await pages.token_usage_viewer(make_page_request("/"))
   assert response.status_code == 200

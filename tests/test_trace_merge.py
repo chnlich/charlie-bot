@@ -550,6 +550,63 @@ def test_member_form_handles_empty_members(tmp_path: Path) -> None:
   assert all_empty == []
 
 
+def test_member_form_skips_a_non_trace_member(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The dir shape's *.json discovery over-matches analysis sidecars that sit
+  # beside the traces (the route's sniff reads the first byte only). One sidecar
+  # must skip with a logged warning, and the survivors' merge must equal the
+  # same directory's sidecar-free form.
+  import src.core.trace_merge as trace_merge_module
+
+  rank0 = tmp_path / "trace_rank0.json"
+  rank1 = tmp_path / "trace_rank1.json"
+  _write_trace(rank0, _rank_events(0))
+  _write_trace(rank1, _rank_events(1))
+  manifest = tmp_path / "align.gaps.json"
+  manifest.write_text(json.dumps({"gaps": [{"start": 0, "end": 1}]}), encoding="utf-8")
+
+  warnings: list[dict] = []
+  monkeypatch.setattr(
+      trace_merge_module.log, "warning", lambda event, **fields: warnings.append({
+          "event": event,
+          **fields
+      }))
+
+  with_sidecar_last = _member_form_output([rank0, rank1, manifest], tmp_path, slim=False)
+  clean = _member_form_output([rank0, rank1], tmp_path, slim=False)
+  # Appending the sidecar frees no index, so the survivors ride the same strides
+  # and the whole event list — allocated tid/id values included — matches.
+  assert with_sidecar_last == clean
+
+  with_sidecar_middle = _member_form_output([rank0, manifest, rank1], tmp_path, slim=False)
+  assert [w["event"] for w in warnings] == ["perfetto_merge_member_skipped", "perfetto_merge_member_skipped"]
+  assert all(w["path"].endswith("align.gaps.json") for w in warnings)
+  assert all("no traceEvents array" in w["error"] for w in warnings)
+  # A middle sidecar shifts the later trace's file index (its sort_index and id
+  # stride move with it) but never its identity, order, or pid labels.
+  assert [event.get("name") for event in with_sidecar_middle] == [event.get("name") for event in clean]
+  pids = {str(event.get("pid")) for event in with_sidecar_middle}
+  assert "rank0" in pids and "rank1" in pids
+  assert not any("align.gaps" in pid for pid in pids)
+
+
+def test_member_form_raises_when_every_member_is_a_non_trace(tmp_path: Path) -> None:
+  # A merge that skips every member has nothing to serve: raising names the
+  # rejection instead of shipping an empty artifact the viewer renders as silence.
+  manifest = tmp_path / "analysis_manifest.json"
+  manifest.write_text(json.dumps({"A": [{"rank": 0}]}), encoding="utf-8")
+
+  with pytest.raises(ValueError, match="rejected every member"):
+    _member_form_output([manifest], tmp_path, slim=False)
+
+
+def test_member_form_with_no_members_ships_the_empty_artifact(tmp_path: Path) -> None:
+  # Zero members is not "every member rejected": the pre-skip form shipped the
+  # empty array for it, and the all-skipped raise must not fire there.
+  output = tmp_path / "empty-merge.json.gz"
+  build_multi_trace_merge([], output, slim=False, executor=None)
+  assert _read_merged(output) == []
+
+
 def test_build_trace_member_raises_when_ids_exhaust_the_stride(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   import src.core.trace_merge as trace_merge_module
 

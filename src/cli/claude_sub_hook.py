@@ -15,6 +15,7 @@ import socket
 import sys
 from typing import Any
 
+from src.cli.help_formatter import CliHelpFormatter
 from src.core.timeouts import CLAUDE_SUB_HOOK_SOCKET_TIMEOUT
 
 
@@ -57,7 +58,7 @@ def _send_request(socket_path: str, token: str, gate: bool, payload: dict[str, A
 
 
 def main(argv: list[str] | None = None) -> int:
-  parser = argparse.ArgumentParser()
+  parser = argparse.ArgumentParser(formatter_class=CliHelpFormatter)
   parser.add_argument("--socket", required=True)
   parser.add_argument("--token", required=True)
   parser.add_argument("--gate", action="store_true")

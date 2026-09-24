@@ -99,6 +99,32 @@ def _build_request(
   )
 
 
+def _improve_request() -> internal.ImproveRequest:
+  return internal.ImproveRequest(
+      session_id="session-id",
+      repo_path="/tmp/repo",
+      base_branch="main",
+      backend="codex-o3",
+      goal="Improve this",
+  )
+
+
+def _patch_resolve_rig(monkeypatch: pytest.MonkeyPatch) -> object:
+  """Install the resolve/config pair the _authorize_spawn_request tests share.
+
+  Returns the stubbed cfg so each test asserts its resolved_cfg is this object.
+  """
+  cfg = object()
+
+  async def fake_resolve(*args: Any, **kwargs: Any) -> tuple[str, str]:
+    del args, kwargs
+    return "codex-o3", "o3"
+
+  monkeypatch.setattr(internal, "get_config", lambda: cfg)
+  monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve)
+  return cfg
+
+
 def test_takeoff_gate_blocks_takeoff_followed_by_ordinary_user_message() -> None:
   session_mgr = FakeSessionManager([
       user_event("Take Off"),
@@ -597,13 +623,7 @@ async def test_delegate_task_repo_task_types_block_without_takeoff(task_type: Ta
 
 @pytest.mark.asyncio
 async def test_improve_stays_blocked_without_takeoff() -> None:
-  req = internal.ImproveRequest(
-      session_id="session-id",
-      repo_path="/tmp/repo",
-      base_branch="main",
-      backend="codex-o3",
-      goal="Improve this",
-  )
+  req = _improve_request()
   session_mgr = FakeSessionManager([{"type": ET.USER, "content": "please proceed"}])
 
   with pytest.raises(HTTPException) as exc_info:
@@ -621,14 +641,7 @@ async def test_all_nonverify_delegate_types_can_reuse_ordinary_takeoff(
 ) -> None:
   req = _build_request(task_type=task_type)
   session_mgr = FakeSessionManager([user_event("take off")])
-  cfg = object()
-
-  async def fake_resolve(*args: Any, **kwargs: Any) -> tuple[str, str]:
-    del args, kwargs
-    return "codex-o3", "o3"
-
-  monkeypatch.setattr(internal, "get_config", lambda: cfg)
-  monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve)
+  cfg = _patch_resolve_rig(monkeypatch)
 
   for _ in range(3):
     _meta, resolved_cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(req, session_mgr, _stub_task_manager())
@@ -639,26 +652,13 @@ async def test_all_nonverify_delegate_types_can_reuse_ordinary_takeoff(
 @pytest.mark.asyncio
 async def test_improve_uses_the_same_pre_takeoff_gate(monkeypatch: pytest.MonkeyPatch) -> None:
   issued_at = datetime.now(UTC) - timedelta(hours=1)
-  req = internal.ImproveRequest(
-      session_id="session-id",
-      repo_path="/tmp/repo",
-      base_branch="main",
-      backend="codex-o3",
-      goal="Improve this",
-  )
+  req = _improve_request()
   session_mgr = FakeSessionManager(
       [
           user_event("pre take off", issued_at.isoformat()),
           user_event("continue with the approved work"),
       ])
-  cfg = object()
-
-  async def fake_resolve(*args: Any, **kwargs: Any) -> tuple[str, str]:
-    del args, kwargs
-    return "codex-o3", "o3"
-
-  monkeypatch.setattr(internal, "get_config", lambda: cfg)
-  monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve)
+  cfg = _patch_resolve_rig(monkeypatch)
   _meta, resolved_cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(req, session_mgr, _stub_task_manager())
 
   assert resolved_cfg is cfg

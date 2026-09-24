@@ -16,7 +16,6 @@ from enum import IntEnum
 from pathlib import Path
 from typing import Any
 
-from src.agents.backends.base import make_context_compacted_event
 from src.core import event_types as ET
 
 
@@ -366,6 +365,11 @@ class HookTurnState:
     # The synthesis takes the payload whole; this hook knows only two fields, so
     # it wraps them into the same two-field payload make_compact_boundary_event
     # produces for the opencode and charlie-code backends.
+    # The event builder's home is the backend ABC; the import rides this call so
+    # the M108 launch floor (docs/perf_baseline.md) keeps the ABC out of the
+    # worker binary's import.
+    from src.agents.backends.base import make_context_compacted_event
+
     return [make_context_compacted_event(trigger, {"trigger": trigger, ET.COMPACT_PRE_TOKENS: pre_tokens}, model=None)]
 
   def _handle_stop(self, payload: dict[str, Any]) -> list[dict[str, Any]]:

@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 from typing import IO, Any
 
+import orjson
 import pytest
 from conftest import recording_mmap_shim
 
@@ -22,6 +23,7 @@ from src.core.ndjson import (
     append_ndjson,
     count_ndjson_lines,
     iter_ndjson_events,
+    iter_ndjson_events_containing,
     iter_ndjson_events_from_end,
     parse_ndjson_file,
     parse_ndjson_line,
@@ -120,6 +122,105 @@ def test_iter_ndjson_events_coerces_64bit_ints_to_float() -> None:
   assert isinstance(coerced[0]["a"], float)
 
 
+def test_iter_ndjson_events_containing_yields_hits_in_file_order(tmp_path: Path) -> None:
+  path = tmp_path / "events.jsonl"
+  path.write_bytes(b'{"i": 1}\n{"key": "x", "i": 2}\n{"key": "x", "i": 3}\n{"i": 4}\n')
+  events = list(iter_ndjson_events_containing(path, b'"x"', log_event="t", log_fields={}))
+  assert [event["i"] for event in events] == [2, 3]
+
+
+def test_iter_ndjson_events_containing_is_lazy_and_early_stops(tmp_path: Path) -> None:
+  path = tmp_path / "events.jsonl"
+  path.write_bytes(b'{"key": "x", "i": 1}\n{"key": "x", "i": 2}\n{"key": "x", "i": 3}\n')
+  first = next(iter(ndjson.iter_ndjson_events_containing(path, b'"x"', log_event="t", log_fields={})))
+  assert first["i"] == 1
+
+
+def test_iter_ndjson_events_containing_skips_needle_free_lines_unparsed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  path = tmp_path / "events.jsonl"
+  path.write_bytes(b'{"i": 1}\n{"key": "x", "i": 2}\n')
+  parsed: list[bytes | bytearray | memoryview | str] = []
+  real = ndjson.parse_ndjson_line
+
+  def spy(line: bytes | bytearray | memoryview | str, *, log_event: str, log_fields: dict) -> dict | None:
+    parsed.append(bytes(line) if isinstance(line, memoryview) else line)
+    return real(line, log_event=log_event, log_fields=log_fields)
+
+  monkeypatch.setattr(ndjson, "parse_ndjson_line", spy)
+  events = list(iter_ndjson_events_containing(path, b'"x"', log_event="t", log_fields={}))
+  assert [event["i"] for event in events] == [2]
+  assert len(parsed) == 1
+
+
+def test_iter_ndjson_events_containing_applies_the_skip_contract_to_hits(tmp_path: Path) -> None:
+  path = tmp_path / "events.jsonl"
+  # A malformed line carrying the needle skips like any rejected line; the
+  # needle-free lines around it never reach the parser.
+  path.write_bytes(b'{"key": "x", "broken":\n{"key": "x", "i": 2}\n')
+  events = list(iter_ndjson_events_containing(path, b'"x"', log_event="t", log_fields={}))
+  assert events == [{"key": "x", "i": 2}]
+
+
+def test_iter_ndjson_events_containing_missing_and_empty_files(tmp_path: Path) -> None:
+  assert list(iter_ndjson_events_containing(tmp_path / "absent.jsonl", b"x", log_event="t", log_fields={})) == []
+  empty = tmp_path / "empty.jsonl"
+  empty.write_bytes(b"")
+  assert list(iter_ndjson_events_containing(empty, b"x", log_event="t", log_fields={})) == []
+
+
+def test_iter_ndjson_events_containing_unterminated_final_line(tmp_path: Path) -> None:
+  path = tmp_path / "events.jsonl"
+  path.write_bytes(b'{"i": 1}\n{"key": "x", "i": 2}')
+  events = list(iter_ndjson_events_containing(path, b'"x"', log_event="t", log_fields={}))
+  assert [event["i"] for event in events] == [2]
+
+
+def test_iter_ndjson_events_containing_yields_one_event_per_line_for_multi_hits(tmp_path: Path) -> None:
+  path = tmp_path / "events.jsonl"
+  path.write_bytes(b'{"key": "x", "also": "x", "i": 2}\n{"key": "x", "i": 3}\n')
+  events = list(iter_ndjson_events_containing(path, b'"x"', log_event="t", log_fields={}))
+  assert [event["i"] for event in events] == [2, 3]
+
+
+def test_iter_ndjson_events_containing_empty_needle_raises(tmp_path: Path) -> None:
+  with pytest.raises(ValueError):
+    list(iter_ndjson_events_containing(tmp_path / "events.jsonl", b"", log_event="t", log_fields={}))
+
+
+def test_iter_ndjson_events_containing_matches_the_full_parse_over_a_mixed_corpus(tmp_path: Path) -> None:
+  # The needle read must see exactly what a whole-file parse sees among the
+  # lines it can prove: same events, same order, same skips. A needle rendered
+  # escaped inside a string value (\"x\") is not the raw needle, so that line
+  # stays outside the proof — sound for consumers keyed on structured values,
+  # which serialize verbatim.
+  path = tmp_path / "events.jsonl"
+  lines = [
+      json.dumps({
+          "i": 1,
+          "text": "needle-free"
+      }),
+      "",
+      "  " + json.dumps({
+          "key": "x",
+          "cjk": "引数 — ✅"
+      }) + "  ",
+      "{broken",
+      json.dumps({
+          "key": "x",
+          "i": 2
+      }),
+      json.dumps({
+          "i": 3,
+          "note": 'mentions "x" in text'
+      }),
+  ]
+  path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+  assert list(iter_ndjson_events_containing(
+      path, b'"x"', log_event="t", log_fields={})) == [event for event in parse_ndjson_file(path) if "key" in event]
+  assert any("note" in event for event in parse_ndjson_file(path))
+
+
 def test_parse_ndjson_line_applies_the_skip_contract_per_line() -> None:
   # The one-line contract home: a blank (or whitespace-only) line and a line
   # the parser rejects (including the orjson NaN/Infinity boundary) answer
@@ -149,6 +250,27 @@ def test_parse_ndjson_line_bytes_hard_corruption_skips() -> None:
   # A line the replace decode cannot rescue (invalid UTF-8 AND broken JSON)
   # skips as malformed, like any rejected line.
   assert parse_ndjson_line(b'{"text": "ok\xff', log_event="t", log_fields={}) is None
+
+
+def test_parse_ndjson_line_structural_rejection_skips_without_the_repair_pass() -> None:
+  # errors="replace" rewrites invalid UTF-8 sequences and nothing else, so a
+  # structural failure (control character, truncation) survives the replaced
+  # decode unchanged and the repair round trip cannot change its verdict —
+  # the line skips with exactly one parse attempt, no copy + decode + re-scan.
+  import unittest.mock
+
+  structural = [b'{"a": "x\x01y"}', b'{"a": "x', b'{"a": tru}', b'{"a": NaN}']
+  for line in structural:
+    calls = []
+    real_loads = orjson.loads
+
+    def counting(raw: Any, _real: Any = real_loads, _calls: list[int] = calls) -> Any:
+      _calls.append(1)
+      return _real(raw)
+
+    with unittest.mock.patch.object(orjson, "loads", counting):
+      assert parse_ndjson_line(line, log_event="t", log_fields={}) is None, line
+    assert len(calls) == 1, (line, calls)
 
 
 def test_parse_ndjson_line_bytes_whitespace_only_skips_without_strip_copy() -> None:

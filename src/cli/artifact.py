@@ -21,16 +21,20 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from src.cli import common as cli_common
-from src.core import artifact_check, artifact_wrap
+from src.cli.help_formatter import CliHelpFormatter
+from src.core import artifact_wrap
+from src.core.constants import ARTIFACT_GENRES
 from src.core.home import charliebot_home_dir
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(prog="charliebot artifact", description="Artifact checks (local files only)")
+  parser = argparse.ArgumentParser(
+      prog="charliebot artifact", description="Artifact checks (local files only)", formatter_class=CliHelpFormatter)
   sub = parser.add_subparsers(dest="verb", required=True)
-  check = sub.add_parser("check", help="Run a genre's assertions (and cold-read probe) on a local file")
+  check = sub.add_parser(
+      "check", help="Run a genre's assertions (and cold-read probe) on a local file", formatter_class=CliHelpFormatter)
   check.add_argument("file", help="Artifact path as an ordinary filesystem path (absolute or cwd-relative)")
-  check.add_argument("--genre", required=True, choices=artifact_check.GENRES, help="Genre the page claims to follow")
+  check.add_argument("--genre", required=True, choices=ARTIFACT_GENRES, help="Genre the page claims to follow")
   check.add_argument(
       "--trigger",
       default=None,
@@ -38,10 +42,9 @@ def _build_parser() -> argparse.ArgumentParser:
       "unless --assertions-only is given")
   check.add_argument(
       "--assertions-only", action="store_true", help="Run the assertions alone, skipping the cold-read probe")
-  wrap = sub.add_parser("wrap", help="Assemble a genre page from a content fragment")
+  wrap = sub.add_parser("wrap", help="Assemble a genre page from a content fragment", formatter_class=CliHelpFormatter)
   wrap.add_argument("fragment", help="Content fragment path: the page's <body> content")
-  wrap.add_argument(
-      "--genre", required=True, choices=artifact_check.GENRES, help="Genre whose template shells the page")
+  wrap.add_argument("--genre", required=True, choices=ARTIFACT_GENRES, help="Genre whose template shells the page")
   wrap.add_argument("--output", required=True, help="Assembled page path (the artifacts path to write)")
   wrap.add_argument(
       "--math",
@@ -52,6 +55,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _run_check(args: argparse.Namespace) -> int:
+  # The assertion stack (dataclasses→inspect, plan_diff, html, ~23 ms) serves only this
+  # verb; the wrap verb's import floor (docs/perf_baseline.md M102) must not pay it.
+  from src.core import artifact_check
+
   if args.trigger is None and not args.assertions_only:
     cli_common.exit_usage_error(f"--genre {args.genre} requires --trigger unless --assertions-only is given")
   artifact = Path(args.file).resolve()

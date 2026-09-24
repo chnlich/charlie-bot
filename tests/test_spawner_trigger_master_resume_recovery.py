@@ -4,13 +4,17 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
-from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_ID, OPUS_BACKEND_OPTION
+from conftest import (
+    CODEX_BACKEND_OPTION,
+    MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET,
+    OPUS_BACKEND_ID,
+    OPUS_BACKEND_OPTION,
+)
 
 from src.core.config import CharlieBotConfig
 from src.core.master_trigger import is_resume_not_found_error, trigger_master
 from src.core.models import BackendOption, MasterRunRecord, SessionCallbacks, SessionMetadata
 
-_RUN_MESSAGE_PATCH_TARGET = "src.core.master_trigger.run_message"
 _LOG_PATCH_TARGET = "src.core.master_trigger.log"
 
 
@@ -105,7 +109,7 @@ async def test_stale_resume_id_retries_once_without_resume_and_does_not_persist(
     return "fresh-id"
 
   mock_log = Mock()
-  monkeypatch.setattr(_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
+  monkeypatch.setattr(MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
   monkeypatch.setattr(_LOG_PATCH_TARGET, mock_log)
 
   await trigger_master(session_id, "worker summary", cfg, session_mgr)
@@ -141,7 +145,7 @@ async def test_non_recoverable_error_does_not_retry_and_failure_is_preserved(mon
     raise RuntimeError("backend crashed unexpectedly")
 
   mock_log = Mock()
-  monkeypatch.setattr(_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
+  monkeypatch.setattr(MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
   monkeypatch.setattr(_LOG_PATCH_TARGET, mock_log)
 
   await trigger_master(session_id, "worker summary", cfg, session_mgr)
@@ -173,7 +177,7 @@ async def test_error_echo_persist_failure_is_logged_not_raised(monkeypatch: pyte
     raise RuntimeError("backend crashed unexpectedly")
 
   mock_log = Mock()
-  monkeypatch.setattr(_RUN_MESSAGE_PATCH_TARGET, failing_run_message)
+  monkeypatch.setattr(MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET, failing_run_message)
   monkeypatch.setattr(_LOG_PATCH_TARGET, mock_log)
 
   await trigger_master(session_id, "worker summary", cfg, session_mgr)
@@ -201,7 +205,7 @@ async def test_valid_resume_path_is_unchanged(monkeypatch: pytest.MonkeyPatch) -
     return "valid-id"
 
   mock_log = Mock()
-  monkeypatch.setattr(_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
+  monkeypatch.setattr(MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
   monkeypatch.setattr(_LOG_PATCH_TARGET, mock_log)
 
   await trigger_master(session_id, "worker summary", cfg, session_mgr)
@@ -236,7 +240,7 @@ async def test_scheduled_task_auto_trigger_uses_session_backend(monkeypatch: pyt
     call_backend_options.append(kwargs["backend_option"])
     return "claude-master-id"
 
-  monkeypatch.setattr(_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
+  monkeypatch.setattr(MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
 
   await trigger_master(session_id, "worker summary", cfg, session_mgr)
 

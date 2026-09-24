@@ -6,7 +6,7 @@ NO_OUTPUT_REPORT_THRESHOLD, emits at most one reminder per mount via
 ``on_silence`` — the same text shape as the boot STALLED report. It never
 judges death and never stops the follow.
 
-The once-key (a boot-scoped set in init.py, keyed by thread_id) is shared by
+The once-key (a boot-scoped set in init_worker_recovery.py, keyed by thread_id) is shared by
 the boot STALLED report and every mount's recheck: whichever emits first
 claims the thread for this boot, so repeated re-mounts can never re-emit.
 Nothing is persisted.
@@ -15,31 +15,21 @@ Nothing is persisted.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
-from conftest import SuccessorDeliveryShim, fresh_state_fixture
+from conftest import EventCaptureSessionManager, _async_wait_for, cancel_and_drain, fresh_state_fixture
 
 from src.agents.backends.base import tail_follow_events
 from src.core import init as init_module
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 
 
-class _FakeSessionMgr(SuccessorDeliveryShim):
+class _FakeSessionMgr(EventCaptureSessionManager):
   """Captures recovery reports instead of persisting them."""
-
-  def __init__(self) -> None:
-    self.events: list[dict] = []
-
-  async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
-    self.events.append(event)
-
-  async def mark_unread(self, session_id: str) -> None:
-    pass
 
 
 _clear_once_keys = fresh_state_fixture(init_module._silence_reported_thread_ids.clear)
@@ -81,9 +71,7 @@ async def test_silence_crossing_emits_exactly_one_recheck_and_follow_continues(t
   try:
     # Cross the threshold; exactly one reminder for this mount, even after
     # more idle polling.
-    deadline = time.monotonic() + margin + 3.0
-    while not reports and time.monotonic() < deadline:
-      await asyncio.sleep(0.05)
+    await _async_wait_for(lambda: bool(reports), margin + 3.0, "the silence recheck never reported")
     assert reports == ["recheck"]
     await asyncio.sleep(0.5)
     assert reports == ["recheck"]
@@ -91,14 +79,10 @@ async def test_silence_crossing_emits_exactly_one_recheck_and_follow_continues(t
     # The follow never judged death and never stopped: a late line is consumed.
     with raw.open("ab") as f:
       f.write(b'{"type":"assistant"}\n')
-    deadline = time.monotonic() + 2.0
-    while not events and time.monotonic() < deadline:
-      await asyncio.sleep(0.05)
+    await _async_wait_for(lambda: bool(events), 2.0, "the follow never consumed the late line")
     assert [e.get("type") for e in events] == ["assistant"]
   finally:
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-      await task
+    await cancel_and_drain(task)
 
 
 @pytest.mark.asyncio
@@ -119,9 +103,7 @@ async def test_no_recheck_before_threshold(tmp_path: Path) -> None:
     assert not reports
     assert [e.get("type") for e in events] == ["assistant"]
   finally:
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-      await task
+    await cancel_and_drain(task)
 
 
 @pytest.mark.asyncio
@@ -162,9 +144,7 @@ async def test_remount_cannot_reemit_within_one_boot(tmp_path: Path) -> None:
     task = asyncio.create_task(
         _consume(raw, events, lambda: init_module._follow_silence_recheck(session_mgr, "sess", "tid")))
     await asyncio.sleep(0.4)
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-      await task
+    await cancel_and_drain(task)
 
   await mount_once()
   assert len(session_mgr.events) == 1

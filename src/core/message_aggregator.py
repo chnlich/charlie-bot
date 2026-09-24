@@ -1,9 +1,9 @@
 """Stateful aggregator that turns raw chat events into renderable message deltas.
 
 The aggregator is the single source of truth for chat-event aggregation. All
-three render paths (SSR, WS catchup, WS live broadcast) feed events through
-the same logic, eliminating the previous duplication between
-`events_to_messages` (Python) and `handleWSEvent` (JavaScript).
+three render paths (SSR, WS catchup, WS live broadcast) serve its output:
+the Python paths call it directly, and the browser's ``handleWSEvent``
+renders the deltas it emits.
 
 Two delta shapes are emitted:
   * ``{"type": "message", "message": {role, content, ...}}`` -- a finalized
@@ -20,6 +20,7 @@ the output and emits no ``message`` delta. The next ``stream`` delta
 
 from collections.abc import Callable, Iterator
 
+from src.core import claude_accounts
 from src.core import event_types as ET
 from src.core.message_events import normalize_user_message_event
 
@@ -27,7 +28,9 @@ from src.core.message_events import normalize_user_message_event
 # web/static/js/chat/rendering.js): an output's first 500 characters render
 # plain and an input feeds only a bounded summary (a Bash command renders 80
 # characters, other named tools 60, file tools their path or pattern), so
-# string tool content over this bound never renders from a wire shape. Every
+# string tool content over this bound never renders from a wire shape — the
+# input fields outside the renderer's read set render nowhere at all and carry
+# the dead-field bound below. Every
 # chat wire shape carries the bound — the stream delta, the committed message
 # behind the events pages, and the bootstrap payload — because the trim lands
 # at ingestion (tool_preview on every buffered row); the workers-events
@@ -36,20 +39,53 @@ from src.core.message_events import normalize_user_message_event
 # there).
 TOOL_PREVIEW_CHARS = 500
 
+# The renderer's per-tool input read set (web/static/js/chat/shared.js
+# toolInputSummary): Bash reads command, Read/Edit/Write read file_path, Glob
+# reads pattern, Grep reads pattern and path, and every other tool reads its
+# first value. A read field renders up to the wire length (the renderer's
+# 60/80-char limits are its own show-more splits), so it keeps
+# TOOL_PREVIEW_CHARS; every other string value renders nowhere and carries the
+# dead-field bound.
+_TOOL_INPUT_READ_FIELDS = {
+    "Bash": ("command",),
+    "bash": ("command",),
+    "Read": ("file_path",),
+    "Edit": ("file_path",),
+    "Write": ("file_path",),
+    "Glob": ("pattern",),
+    "Grep": ("pattern", "path"),
+}
+_TOOL_INPUT_DEAD_FIELD_CHARS = 60
+
+
+def _input_read_keys(name: object, input_val: dict) -> frozenset[str]:
+  """The input keys the renderer reads for this tool row."""
+  read = _TOOL_INPUT_READ_FIELDS.get(name)
+  if read is not None:
+    return frozenset(read)
+  for key in input_val:
+    return frozenset((key,))
+  return frozenset()
+
 
 def tool_preview(tool: dict) -> dict:
-  """One tool row's wire-preview shape: string output and input values over
-  ``TOOL_PREVIEW_CHARS`` trim to the cap with their truncation markers set.
+  """One tool row's wire-preview shape: string output and input values bound to
+  what the renderer reads.
 
-  Passes the tool through by reference when nothing trims: the bootstrap
-  payload builder walks the projection memo's shared dicts and a message
-  copies only when one of its tools actually trims.
+  The output and the input's read fields cap at ``TOOL_PREVIEW_CHARS`` with
+  their truncation markers set; the input's other string values render nowhere
+  and cap at ``_TOOL_INPUT_DEAD_FIELD_CHARS``. Passes the tool through by
+  reference when nothing trims: the bootstrap payload builder walks the
+  projection memo's shared dicts and a message copies only when one of its
+  tools actually trims.
   """
   output = tool.get("output")
   input_val = tool.get("input")
   output_trims = isinstance(output, str) and len(output) > TOOL_PREVIEW_CHARS
+  read_keys = _input_read_keys(tool.get("name"), input_val) if isinstance(input_val, dict) else frozenset()
   input_trims = isinstance(input_val, dict) and any(
-      isinstance(value, str) and len(value) > TOOL_PREVIEW_CHARS for value in input_val.values())
+      isinstance(value, str) and len(value) >
+      (TOOL_PREVIEW_CHARS if key in read_keys else _TOOL_INPUT_DEAD_FIELD_CHARS) for key, value in input_val.items())
   if not output_trims and not input_trims:
     return tool
   preview = dict(tool)
@@ -57,10 +93,14 @@ def tool_preview(tool: dict) -> dict:
     preview["output"] = output[:TOOL_PREVIEW_CHARS]
     preview["output_truncated"] = True
   if input_trims:
-    preview["input"] = {
-        key: (value[:TOOL_PREVIEW_CHARS] if isinstance(value, str) and len(value) > TOOL_PREVIEW_CHARS else value)
-        for key, value in input_val.items()
-    }
+    trimmed_input = {}
+    for key, value in input_val.items():
+      if not isinstance(value, str):
+        trimmed_input[key] = value
+        continue
+      bound = TOOL_PREVIEW_CHARS if key in read_keys else _TOOL_INPUT_DEAD_FIELD_CHARS
+      trimmed_input[key] = value[:bound] if len(value) > bound else value
+    preview["input"] = trimmed_input
     preview["input_truncated"] = True
   return preview
 
@@ -112,9 +152,7 @@ def _compacting_model_note(ev: dict) -> str:
   model = ev.get('model')
   if not isinstance(model, str) or not model:
     return ''
-  parts = model.lower().split('-')
-  family = parts[1] if len(parts) > 1 and parts[0] == 'claude' else parts[0]
-  return f'by {family.capitalize()}'
+  return f'by {claude_accounts.model_family(model).capitalize()}'
 
 
 def _format_k_tokens(count: float) -> str:
@@ -414,7 +452,7 @@ class MessageAggregator:
       self._processed += 1
       yield from self._feed(ev, self._idx_offset + idx)
 
-  def clone(self) -> 'MessageAggregator':
+  def clone(self) -> MessageAggregator:
     """Independent copy of this aggregator's feed state.
 
     Feeding the clone continues from the same position without mutating the
@@ -485,11 +523,11 @@ class MessageAggregator:
     """Store one tool_result's renderable output on the newest buffered tool.
 
     The row rides every render path (each page payload re-serializes the whole
-    buffered draft), so ``tool_preview`` bounds it at ingestion: a string
-    output or input value over TOOL_PREVIEW_CHARS trims to the cap with its
-    truncation marker, and the persisted event keeps the full content.
-    Non-string output (a tool_result whose content is not text) is stored
-    as-is.
+    buffered draft), so ``tool_preview`` bounds it at ingestion: the string
+    output and the input's renderer-read fields cap at TOOL_PREVIEW_CHARS, the
+    input's other string values at the dead-field bound, with the truncation
+    marker, and the persisted event keeps the full content. Non-string output
+    (a tool_result whose content is not text) is stored as-is.
     """
     row = {**self._tools_buf[-1], "output": output, "is_error": bool(is_error)}
     self._tools_buf[-1] = tool_preview(row)

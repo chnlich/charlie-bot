@@ -24,20 +24,20 @@ test('trigger fire-time label survives the data-fire-at string round trip', () =
     },
   });
 
-  context.updateTriggerStatus('trg-1', 'pending');
+  context.Sidebar.updateTriggerStatus('trg-1', 'pending');
   assert.ok(!statusText.textContent.includes('NaN'), statusText.textContent);
   assert.match(statusText.textContent, /^fires at /);
 
   statusText.dataset.fireAt = fireAtIso;
-  context.updateTriggerStatus('trg-1', 'pending');
+  context.Sidebar.updateTriggerStatus('trg-1', 'pending');
   const isoLabel = statusText.textContent;
 
   statusText.dataset.fireAt = String(fireAtMs);
-  context.updateTriggerStatus('trg-1', 'pending');
+  context.Sidebar.updateTriggerStatus('trg-1', 'pending');
   assert.equal(statusText.textContent, isoLabel);
 
   statusText.dataset.fireAt = String(fireAtMs);
-  context.updateTriggerStatus('trg-1', 'fired');
+  context.Sidebar.updateTriggerStatus('trg-1', 'fired');
   assert.match(statusText.textContent, /^fired at /);
   assert.ok(!statusText.textContent.includes('NaN'), statusText.textContent);
 });

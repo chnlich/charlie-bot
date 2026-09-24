@@ -1,7 +1,6 @@
 """External tool usage poller and API route (Claude Code, Codex)."""
 
 import asyncio
-import contextlib
 import json
 import os
 import re
@@ -16,20 +15,21 @@ from fastapi import APIRouter
 
 from src.core import claude_accounts
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
-from src.core.codex_usage import CODEX_EVENT_MSG, CODEX_TOKEN_COUNT, CODEX_TURN_CONTEXT, DEFAULT_CODEX_HOME
+from src.core.codex_usage import CODEX_TURN_CONTEXT, DEFAULT_CODEX_HOME, codex_token_count_payload
 from src.core.config import get_config
+from src.core.home import CREDENTIALS_FILE, default_claude_dir
 from src.core.http import get_http_client
 from src.core.json_utils import write_json_atomically
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.memo import StatSignatureMemo
 from src.core.models import ClaudeAccount
 from src.core.streaming import SIDEBAR_CHANNEL, streaming_manager
+from src.core.tasks import SingleTaskPoller
 from src.core.timeouts import (
     EXT_USAGE_ROUND_GAP_SECONDS,
     EXT_USAGE_VERSION_PROBE_TIMEOUT,
     HTTP_OAUTH_TIMEOUT,
 )
-from src.core.token_tally import DEFAULT_CLAUDE_DIR
 
 log = LazyStructlogLogger()
 
@@ -40,10 +40,9 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 _cached_usage: dict[str, dict] = {}
-_poller_task: asyncio.Task | None = None
 # Per-instance provider state, keyed by (provider, expanded dir path), kept
 # across cycles so per-instance 429 backoff survives between polls.
-_instances: dict[tuple[str, str], "_UsageInstance"] = {}
+_instances: dict[tuple[str, str], _UsageInstance] = {}
 
 # A token_count event closes every Codex turn, so the newest one sits in the
 # rollout file's trailing bytes; a tail miss (a turn in flight appended more
@@ -66,7 +65,10 @@ ANTHROPIC_BETA = "oauth-2025-04-20"
 # below); this constant is only the fallback for when that probe fails.
 USER_AGENT_FALLBACK = "claude-code/2.1.219"
 
-CLAUDE_DEFAULT_DIR = str(DEFAULT_CLAUDE_DIR)
+# The default Claude login dir is the home derivation src.core.home owns (the
+# M98 owner module); reading it through token_tally would pull the tally stack
+# onto the M99 server import floor.
+CLAUDE_DEFAULT_DIR = str(default_claude_dir())
 CODEX_DEFAULT_DIR = str(DEFAULT_CODEX_HOME)
 
 # ---------------------------------------------------------------------------
@@ -355,7 +357,7 @@ class _UsageInstance:
 
 def _create_provider(provider: str, label: str, dir_path: str) -> ClaudeUsageProvider | CodexUsageProvider:
   if provider == "claude":
-    return ClaudeUsageProvider(label, Path(dir_path) / claude_accounts.CREDENTIALS_FILE)
+    return ClaudeUsageProvider(label, Path(dir_path) / CREDENTIALS_FILE)
   if provider == "codex":
     return CodexUsageProvider(label, dir_path)
   raise ValueError(f"unknown usage provider: {provider!r}")
@@ -435,10 +437,7 @@ def _latest_token_count_event(
       event = json.loads(line)
     except json.JSONDecodeError:
       continue
-    if event.get("type") != CODEX_EVENT_MSG:
-      continue
-    payload = event.get("payload", {})
-    if payload.get("type") != CODEX_TOKEN_COUNT:
+    if codex_token_count_payload(event) is None:
       continue
     if match is not None and not match(event):
       continue
@@ -449,7 +448,7 @@ def _latest_token_count_event(
 def _read_latest_token_count_event(
     path: Path,
     size: int,
-    match: Callable[[dict[str, Any]], bool] | None = None,
+    match: Callable[[dict[str, Any]], bool],
 ) -> dict[str, Any] | None:
   """Read the newest token_count event in *path*, from a tail window first.
 
@@ -540,7 +539,7 @@ def _extract_codex_spend_events(path: Path) -> list[_SpendEvent] | None:
           if isinstance(model, str):
             current_model = model
           continue
-        if event_type != CODEX_EVENT_MSG or payload.get("type") != CODEX_TOKEN_COUNT:
+        if codex_token_count_payload(event) is None:
           continue
 
         info = payload.get("info") or {}
@@ -1118,21 +1117,6 @@ async def get_ext_usage() -> dict[str, Any]:
 # Startup integration
 # ---------------------------------------------------------------------------
 
-
-async def start_poller() -> None:
-  """Start the background usage poller. Call from the app lifespan."""
-  global _poller_task
-  _poller_task = asyncio.create_task(_poll_loop())
-  log.info("ext_usage_poller_started")
-
-
-async def stop_poller() -> None:
-  """Cancel the background usage poller. Call from the app lifespan shutdown."""
-  global _poller_task
-  task = _poller_task
-  if task is not None:
-    _poller_task = None
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-      await task
-    log.info("ext_usage_poller_stopped")
+_poller = SingleTaskPoller(_poll_loop, log, "ext_usage_poller_started", "ext_usage_poller_stopped")
+start_poller = _poller.start
+stop_poller = _poller.stop

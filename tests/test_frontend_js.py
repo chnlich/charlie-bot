@@ -1,9 +1,33 @@
 """Pytest entry for the node --test frontend suites: one case per listed JS test file."""
 
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import run_node_js_test
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def run_node_js_test(node_test: Path, skip_reason: str) -> None:
+  """Run one node --test file; hosts without node skip rather than fail, and cwd=ROOT keeps repo-relative asset
+  loads working."""
+  node = shutil.which('node')
+  if node is None:
+    pytest.skip(skip_reason)
+
+  result = subprocess.run(
+      [node, '--test', str(node_test)],
+      cwd=ROOT,
+      capture_output=True,
+      text=True,
+      check=False,
+      # The suites finish in ~1s; the bound turns a hung node child into a test failure instead of a CI hang.
+      timeout=300,
+  )
+  if result.returncode != 0:
+    pytest.fail(f'Node tests failed.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}')
+
 
 # One entry per node suite under tests/: an omitted suite silently stops running, a duplicate entry runs twice.
 _NODE_TESTS = [
@@ -44,6 +68,7 @@ _NODE_TESTS = [
     "session_view_sentinel.test.js",
     "show_more_toggle.test.js",
     "sidebar_indicator_priority.test.js",
+    "sidebar_mark_read.test.js",
     "sidebar_rename_prefill.test.js",
     "sidebar_session_model.test.js",
     "sidebar_tree_nesting.test.js",
@@ -66,6 +91,7 @@ _NODE_TESTS = [
     "worker_events_incremental.test.js",
     "worker_events_metadata_failure.test.js",
     "worker_events_truncation_note.test.js",
+    "worker_toggle_collapse.test.js",
     "websocket_catchup_split_invariance.test.js",
     "websocket_session_isolation.test.js",
 ]

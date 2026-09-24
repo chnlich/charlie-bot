@@ -47,6 +47,7 @@ function loadChatContext(elements) {
   vm.runInContext(readStatic('chat/shared.js'), context, { filename: 'chat/shared.js' });
   vm.runInContext(readStatic('chat/attachments.js'), context, { filename: 'chat/attachments.js' });
   context.Chat.renderRoundRatingButtons = () => '<button class="round-rating-btn text-slate-500 hover:text-green-400"></button>';
+  context.Chat.renderExplainButton = () => '<button class="explain-toggle p-0.5 text-slate-500" title="Explain this round with a chosen model"></button>';
   context.Chat.embedLinkedHtmlArtifacts = () => {};
   vm.runInContext(readStatic('chat/rendering.js'), context, { filename: 'chat/rendering.js' });
   return context;
@@ -267,8 +268,8 @@ test('tailwind utility classes used by rendered messages/cards are all present i
 
   // 4. Plan compact card, in both a pending and an approved-with-takeoff state.
   const artifactsCtx = loadArtifactsScript({ sessionId: 'sess-1' });
-  snippets.push(artifactsCtx.buildPlanCompactCardHtml(1, 1, 'Remove the Play CDN', 'awaiting approval', '/abs/plan_01.html'));
-  snippets.push(artifactsCtx.buildPlanCompactCardHtml(2, 3, 'Follow-up plan', 'approved · v3', '/abs/plan_02.html'));
+  snippets.push(artifactsCtx.Chat.buildPlanCompactCardHtml(1, 1, 'Remove the Play CDN', 'awaiting approval', '/abs/plan_01.html'));
+  snippets.push(artifactsCtx.Chat.buildPlanCompactCardHtml(2, 3, 'Follow-up plan', 'approved · v3', '/abs/plan_02.html'));
 
   const tokens = extractClassTokens(snippets);
   assert.ok(tokens.size > 50, `fixture should exercise a healthy number of distinct class tokens (got ${tokens.size})`);

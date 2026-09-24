@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Wide-char 2ch boxing (wrapWideChars in markdown-renderer.js): the range
 // table's membership, the single-pass tag/text scan, the five render mounts,
-// and the session-645 incident fixture. Byte-identity claims are exact: a
+// and the embedded diagram fixture. Byte-identity claims are exact: a
 // block without W/F chars renders byte-identically to the identity wrap, and
 // every pre's textContent survives the wrap unchanged.
 // ---------------------------------------------------------------------------
@@ -293,12 +293,12 @@ test('worker dashboard tool_result pre wraps; the attach-command block does not'
   assert.doesNotMatch(attach, /wc2ch/); // attach block: Latin command line, untouched
 });
 
-// --- the session-645 incident fixture ---
+// --- the embedded diagram fixture ---
 
-// The MoEMLP data-flow box diagram whose right edge drifted in session 645,
-// embedded verbatim from that session's chat_events.jsonl (the test never
-// reads session directories). The author laid it out on the terminal
-// convention "wide char = 2 columns, everything else = 1".
+// The MoEMLP data-flow box diagram whose right edge drifts when a wide char
+// renders 5/3 columns wide, embedded verbatim from a chat transcript (the
+// test never reads session directories). The author laid it out on the
+// terminal convention "wide char = 2 columns, everything else = 1".
 const DIAGRAM = `                              【输入张量 (Inputs)】
    x: [27334, 2048] (无 Batch 纯点云)    cond.values: [2, 1024]    cu_seqlens: [0, 20000, 27334]
           │                                      │                         │
@@ -418,7 +418,7 @@ function vectorToString(name, v) {
   return name + ' [' + v.map((x) => (Number.isInteger(x) ? x : x.toFixed(2))).join(', ') + ']';
 }
 
-test('incident fixture: per-line box-width sums (1ch/2ch) render exactly the authored layout, and textContent is byte-identical', async () => {
+test('diagram fixture: per-line box-width sums (1ch/2ch) render exactly the authored layout, and textContent is byte-identical', async () => {
   const context = await loadRendererContext();
   const isWide = context.wc2chIsWide;
   const html = context.marked.parse('```\n' + DIAGRAM + '\n```');
@@ -437,7 +437,7 @@ test('incident fixture: per-line box-width sums (1ch/2ch) render exactly the aut
   // The alignment structure is preserved exactly: two lines render equal
   // widths exactly when the author laid them out equal. (The verbatim
   // diagram carries the author's own +1/+2 hand-padding on 10 of its 64
-  // rows — the debug session measured the title row's extra column — so
+  // rows — the title row's extra column among them — so
   // "every line equal to every line" is false for the source itself and
   // would assert hand-drawing noise, not the renderer. What the fix
   // guarantees, and this test asserts, is render == authored per line.)
@@ -463,10 +463,9 @@ test('incident fixture: per-line box-width sums (1ch/2ch) render exactly the aut
   assert.equal(textContent(pre), DIAGRAM);
 
   // Verbose re-run: print the failing (browser today) and fixed line-width
-  // vectors. The 步骤-1 title row (index 7, 12 wide chars) shows the
-  // incident: 73.00 rendered columns vs 77 authored — the debug session's
-  // 12 x 0.333-column (~30.7px) shortfall, plus that row's own +1 author
-  // offset.
+  // vectors. The 步骤-1 title row (index 7, 12 wide chars) shows the bug:
+  // 73.00 rendered columns vs 77 authored — the 12 x 0.333-column (~30.7px)
+  // shortfall, plus that row's own +1 author offset.
   const failing = failingLineWidths(DIAGRAM, isWide);
   if (process.env.WC2CH_VERBOSE) {
     console.log(vectorToString('fixed   (1ch/2ch boxes)   ', fixed));

@@ -12,7 +12,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from conftest import _page_request, assert_gzip_served, gzip_explode_compress
+from conftest import (
+    RESPONSES_GZIP_LEVEL1_PATCH_TARGET,
+    _page_request,
+    assert_gzip_served,
+    fresh_state_fixture,
+    gzip_explode_compress,
+)
 
 from src.api.threads import _detail_gzip_memo, get_thread
 from src.core.config import CharlieBotConfig
@@ -43,9 +49,7 @@ async def _saved_thread(tmp_path: Path) -> tuple[CharlieBotConfig, ThreadManager
   return cfg, thread_mgr, thread, worktree
 
 
-@pytest.fixture(autouse=True)
-def _fresh_detail_memo() -> None:
-  _detail_gzip_memo.clear()
+_fresh_detail_memo = fresh_state_fixture(_detail_gzip_memo.clear)
 
 
 @pytest.mark.asyncio
@@ -71,7 +75,7 @@ async def test_detail_gzip_repeat_serves_memo_without_recompress(tmp_path: Path)
   cfg, thread_mgr, thread, _ = await _saved_thread(tmp_path)
   first = await get_thread(thread.session_id, thread.id, _page_request("gzip"), thread_mgr, cfg, attach=False)
 
-  with patch("src.api.responses.gzip_level1", gzip_explode_compress("repeat detail fetch re-ran the deflate")):
+  with patch(RESPONSES_GZIP_LEVEL1_PATCH_TARGET, gzip_explode_compress("repeat detail fetch re-ran the deflate")):
     second = await get_thread(thread.session_id, thread.id, _page_request("gzip"), thread_mgr, cfg, attach=False)
   assert second.body == first.body
 

@@ -16,17 +16,20 @@ from conftest import (
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
     ConsumerRound,
     TerminateFlagBackend,
-    backend_option,
+    _run_seeded_consumer,
+    build_master_cc_cfg,
     compact_boundary_event,
+    crashed_run_record,
     drain_session_consumer,
     fresh_master_state,
+    make_failed_round,
+    make_sound_round,
     make_work_item,
     manager_backed_callbacks,
     mock_session_callbacks,
     mocked_callback_fields,
     patch_instructions_content,
     patch_resume_seams,
-    run_consumer_over_real_disk,
     run_resume_round,
     run_session_consumer,
     user_event,
@@ -41,7 +44,6 @@ from src.api.deps import get_session_manager
 from src.core import event_types as ET
 from src.core import runs, thinking_state
 from src.core import sessions as sessions_module
-from src.core.config import CharlieBotConfig
 from src.core.models import (
     CreateSessionRequest,
     MasterRunRecord,
@@ -53,6 +55,22 @@ from src.core.sessions import SessionManager
 
 def _make_meta(session_id: str) -> SessionMetadata:
   return SessionMetadata(id=session_id, name="t", backend="fake", cc_session_id=None)
+
+
+async def run_consumer_over_real_disk(
+    session_id: str,
+    work_items: list[master_cc_state._WorkItem],
+    fake_run_cc: ConsumerRound,
+) -> None:
+  """run_session_consumer with the SessionManager class kept real: the dequeue refresh reads disk
+  through it, the teardown probe is silenced at the method, and no class-level patch can shadow
+  the refresh's own local import."""
+  await _run_seeded_consumer(
+      session_id,
+      work_items,
+      fake_run_cc,
+      patch.object(SessionManager, "_has_running_tasks", AsyncMock(return_value=False)),
+  )
 
 
 @pytest.mark.asyncio
@@ -90,13 +108,6 @@ async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None
 # ---------------------------------------------------------------------------
 
 
-def _make_consumer_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      backends={"options": [backend_option(id="fake", label="Fake", type="codex", model="fake-model")]},
-  )
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("inject_at", ["run_cc", "master_done_persist", "worker_probe", "idle_broadcast"])
 async def test_busy_invariant_holds_under_adversarial_enqueue(
@@ -113,7 +124,7 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
   ends busy_since must be None.
   """
   session_id = f"t1-{inject_at}"
-  cfg = _make_consumer_cfg(tmp_path)
+  cfg = build_master_cc_cfg(tmp_path)
   monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
 
   entries: list[datetime | None] = []
@@ -204,7 +215,7 @@ def test_thinking_since_listed_as_transient() -> None:
 @pytest.mark.asyncio
 async def test_thinking_since_does_not_survive_save_reload_round_trip(tmp_path: Path) -> None:
   """T2b: a save-then-reload round trip must not carry the derived field."""
-  cfg = _make_consumer_cfg(tmp_path)
+  cfg = build_master_cc_cfg(tmp_path)
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="t2"))
   thinking_state.mark_busy(session.id)
@@ -232,7 +243,7 @@ async def test_thinking_since_does_not_survive_save_reload_round_trip(tmp_path: 
 async def test_busy_cleared_when_run_cc_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """T3a: exception in _run_cc still converges — busy state clears at teardown."""
   session_id = "t3-raise"
-  cfg = _make_consumer_cfg(tmp_path)
+  cfg = build_master_cc_cfg(tmp_path)
   monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
 
   async def exploding_run_cc(item: master_cc._WorkItem) -> tuple:
@@ -278,7 +289,7 @@ async def test_consumer_cancelled_before_first_item_finally_does_not_raise() -> 
 @pytest.mark.asyncio
 async def test_status_endpoint_thinking_since_matches_busy_map(tmp_path: Path) -> None:
   """T4: push and pull agree — /api/sessions/status reports the busy map's value."""
-  cfg = _make_consumer_cfg(tmp_path)
+  cfg = build_master_cc_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="t4"))
   started_at, _created = thinking_state.mark_busy(session.id)
@@ -301,7 +312,7 @@ async def test_status_endpoint_thinking_since_matches_busy_map(tmp_path: Path) -
 @pytest.mark.asyncio
 async def test_busy_session_value_returned_on_all_read_paths(tmp_path: Path) -> None:
   """T5a: for a busy session, every read path returns the live busy value."""
-  cfg = _make_consumer_cfg(tmp_path)
+  cfg = build_master_cc_cfg(tmp_path)
   author = SessionManager(cfg)
   session = await author.create_session(CreateSessionRequest(name="t5-reads"))
   started_at, _created = thinking_state.mark_busy(session.id)
@@ -328,7 +339,7 @@ async def test_busy_session_value_returned_on_all_read_paths(tmp_path: Path) -> 
 async def test_every_metadata_return_path_overwrites_stamp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """T5b: every public method handing out a SessionMetadata applies the stamp,
   including fresh-construction returns that bypass a read of a stored session."""
-  cfg = _make_consumer_cfg(tmp_path)
+  cfg = build_master_cc_cfg(tmp_path)
   mgr = SessionManager(cfg)
   sentinel = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
   monkeypatch.setattr("src.core.sessions.busy_since", lambda _sid: sentinel)
@@ -396,7 +407,7 @@ async def test_stamp_recovers_after_unrelated_save_resets_cached_object(
   """T5c: an unrelated save_metadata rebuilds the cached object from
   transient-excluded JSON; a cache-hit read within the TTL must still return
   the live busy value (no 30s bounded None window)."""
-  cfg = _make_consumer_cfg(tmp_path)
+  cfg = build_master_cc_cfg(tmp_path)
   mgr = SessionManager(cfg)
   monkeypatch.setattr(BROADCAST_PATCH_TARGET, AsyncMock())
   session = await mgr.create_session(CreateSessionRequest(name="t5-cache"))
@@ -440,15 +451,12 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
   cold-cache SessionManager reads the cc_session_id the backend returned —
   an assertion an in-memory-object check cannot make.
   """
-  cfg = _make_consumer_cfg(tmp_path)
+  cfg = build_master_cc_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="anchor-on-disk"))
   backend_returned_id = "cc-backend-session-42"
 
-  async def fake_run_cc(item: master_cc._WorkItem) -> tuple:
-    return (backend_returned_id, 0, None, {})
-
-  monkeypatch.setattr(master_cc_run, "_run_cc", fake_run_cc)
+  monkeypatch.setattr(master_cc_run, "_run_cc", make_sound_round(backend_returned_id))
   monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
 
@@ -471,7 +479,7 @@ async def test_pre_flight_fires_anchor_missing_when_round_done_and_anchor_empty(
 ) -> None:
   """Pre-flight: a resume-capable backend with an empty anchor but a completed
   round emits resume_context_dropped with reason='anchor_missing'."""
-  cfg = _make_consumer_cfg(tmp_path)
+  cfg = build_master_cc_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="pre-flight"))
   # Seed a completed round so has_completed_round returns True; anchor stays empty.
@@ -500,7 +508,7 @@ async def test_pre_flight_fires_anchor_missing_when_round_done_and_anchor_empty(
 async def test_persist_cc_session_id_same_id_does_not_advance_started_at(tmp_path: Path) -> None:
   """started_at records the backend session start: writing the same id on two
   consecutive rounds must not advance cc_session_started_at."""
-  cfg = _make_consumer_cfg(tmp_path)
+  cfg = build_master_cc_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="started-at-drift"))
 
@@ -547,7 +555,7 @@ async def test_resume_reattach_uses_persisted_interval_start(tmp_path: Path, mon
 
   broadcast = patch_resume_seams(monkeypatch, resume_cc=fake_resume_cc)
 
-  cfg = _make_consumer_cfg(tmp_path)
+  cfg = build_master_cc_cfg(tmp_path)
   meta = _make_meta(session_id)
   callbacks = mock_session_callbacks()
 
@@ -606,7 +614,7 @@ async def _run_stream_consumer(
     stderr_text: str = "",
 ) -> SessionCallbacks:
   """Run a simulated event stream through the production consumer path."""
-  cfg = _make_consumer_cfg(tmp_path)
+  cfg = build_master_cc_cfg(tmp_path)
   meta = _make_meta(session_id)
   cb = mock_session_callbacks()
   backend = _EventsBackend(events, exit_code=exit_code, stderr_text=stderr_text)
@@ -675,7 +683,7 @@ async def test_zero_output_guard_covers_resume_path(tmp_path: Path, monkeypatch:
   started_at = datetime.now(UTC) - timedelta(seconds=60)
   record = MasterRunRecord(pid=1234, pid_start="100", started_at=started_at, raw_log="<fake>")
 
-  cfg = _make_consumer_cfg(tmp_path)
+  cfg = build_master_cc_cfg(tmp_path)
   meta = _make_meta(session_id)
   cb = mock_session_callbacks()
 
@@ -754,17 +762,9 @@ async def test_zero_output_guard_resume_exempts_manual_compact(tmp_path: Path, m
   cursor_path = log_dir / runs.CURSOR_NAME
   cursor_path.write_text(str(len(boundary_line.encode("utf-8"))), encoding="utf-8")
 
-  # pid=None: no liveness probe and no kill path; is_alive=False makes the
-  # follower drain the file and stop instead of waiting out the post-result
-  # timeout.
-  record = MasterRunRecord(
-      pid=None,
-      pid_start=None,
-      started_at=datetime.now(UTC) - timedelta(seconds=60),
-      raw_log=str(raw_path),
-  )
+  record = crashed_run_record(raw_path)
 
-  cfg = _make_consumer_cfg(tmp_path)
+  cfg = build_master_cc_cfg(tmp_path)
   meta = _make_meta(session_id)
   cb = mock_session_callbacks()
 
@@ -846,29 +846,13 @@ async def test_handle_event_keeps_an_already_adopted_session_id_over_the_signal(
 
 
 # ---------------------------------------------------------------------------
-# Dequeue anchor refresh, post-round copy retirement, and the 9-14 incident shape
+# Dequeue anchor refresh, post-round copy retirement, and the stale-enqueue-snapshot shape
 # ---------------------------------------------------------------------------
-
-
-def _sound_round(cc_session_id: str) -> ConsumerRound:
-
-  async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
-    return (cc_session_id, 0, None, {})
-
-  return fake_run_cc
-
-
-def _failed_round(cc_session_id: str) -> ConsumerRound:
-
-  async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
-    return (cc_session_id, 1, "backend died", {})
-
-  return fake_run_cc
 
 
 @pytest.mark.asyncio
 async def test_stale_enqueue_snapshot_wakes_after_move_and_persist_and_does_not_overwrite(tmp_path: Path) -> None:
-  """The 2026-09-14 incident shape as a regression: an enqueue-time stale snapshot
+  """Regression: an enqueue-time stale snapshot
   wakes after a successful move+persist. The dequeue refresh reads disk, the round
   runs from the disk-true account, no second move is attempted, and replaying the
   same stale wake is harmless. Fully synthetic fixtures (pool-a/pool-b style
@@ -898,7 +882,7 @@ async def test_stale_enqueue_snapshot_wakes_after_move_and_persist_and_does_not_
 
   item = stale_snapshot_item()
   live_before = live.stat()
-  await run_consumer_over_real_disk(session.id, [item], _sound_round(cc_id))
+  await run_consumer_over_real_disk(session.id, [item], make_sound_round(cc_id))
 
   disk = await mgr.read_metadata_fresh(session.id)
   assert disk.claude_account == "pool-b", "the refresh overwrote the stale label with the disk value"
@@ -909,7 +893,7 @@ async def test_stale_enqueue_snapshot_wakes_after_move_and_persist_and_does_not_
 
   # Replay the same stale wake: the refresh reads disk again, still harmless.
   replay = stale_snapshot_item()
-  await run_consumer_over_real_disk(session.id, [replay], _sound_round(cc_id))
+  await run_consumer_over_real_disk(session.id, [replay], make_sound_round(cc_id))
   disk = await mgr.read_metadata_fresh(session.id)
   assert disk.claude_account == "pool-b"
   live_replayed = live.stat()
@@ -961,7 +945,7 @@ async def test_consumer_refreshes_a_stale_label_and_cc_id_from_disk(tmp_path: Pa
   snapshot.claude_account = "pool-a"
   item = make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
 
-  await run_consumer_over_real_disk(session.id, [item], _sound_round("cc-new"))
+  await run_consumer_over_real_disk(session.id, [item], make_sound_round("cc-new"))
 
   assert item.session_meta.cc_session_id == "cc-new"
   assert item.session_meta.claude_account == "pool-b"
@@ -985,9 +969,6 @@ async def test_consumer_disk_read_failure_falls_back_to_fill_empty_only(tmp_path
   second_snapshot = snapshot.model_copy(deep=True)
   second = make_work_item(cfg, second_snapshot, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
 
-  async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
-    return ("cc-1", 0, None, {})
-
   real_read = SessionManager.read_metadata_fresh
   reads = {"n": 0}
 
@@ -998,7 +979,7 @@ async def test_consumer_disk_read_failure_falls_back_to_fill_empty_only(tmp_path
     return await real_read(self, session_id)
 
   with patch.object(SessionManager, "read_metadata_fresh", flaky_read):
-    await run_consumer_over_real_disk(session.id, [first, second], fake_run_cc)
+    await run_consumer_over_real_disk(session.id, [first, second], make_sound_round("cc-1"))
 
   # The failed read fell back to fill-empty-only from the first round's values.
   assert second.session_meta.cc_session_id == "cc-1"
@@ -1028,7 +1009,7 @@ async def test_consumer_retires_transcript_copies_after_a_sound_round(tmp_path: 
 
   item = make_work_item(
       cfg, (await mgr.get_session(session.id)), cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
-  await run_consumer_over_real_disk(session.id, [item], _sound_round(cc_id))
+  await run_consumer_over_real_disk(session.id, [item], make_sound_round(cc_id))
 
   assert not copies["pool-c"].exists(), "the oldest copy retired"
   assert copies["pool-b"].exists() and copies["pool-a"].exists(), "the newest two stay"
@@ -1037,7 +1018,7 @@ async def test_consumer_retires_transcript_copies_after_a_sound_round(tmp_path: 
   failed = make_work_item(
       cfg, (await mgr.get_session(session.id)), cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
   make_transcript(tmp_path / "claude-pool-c", cc_id)
-  await run_consumer_over_real_disk(session.id, [failed], _failed_round(cc_id))
+  await run_consumer_over_real_disk(session.id, [failed], make_failed_round(cc_id))
 
   assert copies["pool-c"].exists(), "a failed round keeps every copy as its fallback"
   assert copies["pool-b"].exists() and copies["pool-a"].exists()

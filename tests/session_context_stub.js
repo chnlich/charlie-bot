@@ -200,6 +200,43 @@ function stubPageTimers(context) {
   context.clearTimeout = () => {};
 }
 
+// The switch-flow harness skeleton the sidebar switch suites share: a chat
+// container, the five static chrome ids, one row per session, the document
+// lookups, and the stubbed page timers. scrollHeight is per-suite geometry:
+// the switch tail's auto-continue fills only while the painted content is
+// short (scrollHeight <= clientHeight + 80) and the pagination trigger fires
+// only within 80px of the top, so each suite picks the height that parks its
+// scenario. Every fork (fields, fetch, contextTweaks) lands before
+// createChatSidebarContext, whose modules bind or shadow globals at load
+// time; fetch receives the finished harness record so its closures reach the
+// recorded fields.
+function buildSwitchFlowHarness({rows, scrollHeight, fields, fetch, contextTweaks}) {
+  const messages = createElement({id: 'messages'});
+  messages.clientHeight = 500;
+  messages.scrollHeight = scrollHeight;
+  messages.scrollTop = 0;
+  const elements = new Map([
+    ['messages', messages],
+    ['header-session-name', createElement({id: 'header-session-name'})],
+    ['backend-badge', createElement()],
+    ['input-model-badge', createElement()],
+    ['msg-input', createElement()],
+    ...rows.map((row) => [row.id, row]),
+  ]);
+  const h = {messages, elements, ...fields};
+  const {context} = baseSessionContext({elements});
+  context.eventCursor = 0;
+  if (contextTweaks) contextTweaks(context, h);
+  installSessionDocumentLookups(context, elements, messages, rows);
+  // async so the page code may chain .catch on the result even when the
+  // suite's fetch answers a plain object.
+  context.fetch = async (url, opts = {}) => fetch(h, url, opts);
+  stubPageTimers(context);
+  createChatSidebarContext(context);
+  h.context = context;
+  return h;
+}
+
 // The inline-fire twin: every timer callback runs inside the call that
 // schedules it, so a flow's own timer-driven work (a refresh scheduled during
 // a paint) is observed before the assertions run and a leaked fetch cannot
@@ -242,6 +279,7 @@ module.exports = {
   createChatSidebarContext,
   buildSidebarFilterElements,
   buildUsageElements,
+  buildSwitchFlowHarness,
   SWITCH_TELEMETRY_URL,
   makeSidebarRow,
   makeSessionMeta,

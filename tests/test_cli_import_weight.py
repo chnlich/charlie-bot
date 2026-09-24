@@ -47,22 +47,11 @@ PLAN_HEAVY_MODULES = (
     "src.core.plan_diff",
 )
 
-# The memory chain's ban set: structlog (the log proxy defers it to first use)
-# and the config stack (src.core.config + its pydantic/models chains, ~180 ms of
-# the M98 wall) — the verbs read no config file: the store root derives from the
-# env-resolved home (src.core.home), which no config key can move.
-MEMORY_HEAVY_MODULES = (
-    "src.agents.backends.base",
-    "src.core.threads",
-    "src.core.sessions",
-    "src.core.runs",
-    "src.core.config",
-    "src.core.models",
-    "pydantic",
-    "numpy",
-    "structlog",
-    "requests",
-)
+# The memory chain's ban set is the base CLI set: the verbs read no config file
+# (the store root derives from the env-resolved home (src.core.home), which no
+# config key can move) and src.core.memory's log proxy defers structlog to first
+# use, so every chain the base set bans stays out of `import src.cli.memory` too.
+MEMORY_HEAVY_MODULES = HEAVY_MODULES
 
 
 def _run_probe(code: str) -> subprocess.CompletedProcess[str]:
@@ -134,10 +123,13 @@ def test_plan_constants_match_the_model_literals() -> None:
 # The artifact chain's ban set: the probe's registry stack (backends.registry →
 # fastapi + sessions, autonamer → sessions + streaming), asyncio (~35 ms —
 # pydantic_core is absent from this chain, so asyncio's import is unshared),
-# the headless renderer (its websockets stack ~60 ms), and the KaTeX fetch's
-# HTTP client serve only the check/wrap verb bodies — the probe imports its
-# stack inside run_probe, the page-height assertion imports the renderer inside
-# _measure_page_height, and the vendored-KaTeX steady state never fetches.
+# the headless renderer (its websockets stack ~60 ms), the KaTeX fetch's
+# HTTP client, and the assertion stack (dataclasses→inspect + plan_diff + html,
+# ~23 ms — the wrap verb's wall must not pay the check verb's machinery) serve
+# only the check/wrap verb bodies — the probe imports its stack inside run_probe,
+# the page-height assertion imports the renderer inside _measure_page_height,
+# the vendored-KaTeX steady state never fetches, and the assertion stack loads
+# inside the check verb's dispatch.
 ARTIFACT_HEAVY_MODULES = (
     *HEAVY_MODULES,
     "fastapi",
@@ -149,6 +141,7 @@ ARTIFACT_HEAVY_MODULES = (
     "src.core.autonamer",
     "src.core.sessions",
     "src.core.streaming",
+    "src.core.artifact_check",
 )
 
 
@@ -161,6 +154,22 @@ def test_artifact_chain_imports_without_the_heavy_chains() -> None:
       "(docs/perf_baseline.md) depends on these staying out — run_probe imports "
       "the registry stack inside the probe, and ensure_vendored_katex imports "
       "requests on the CDN-fetch path only")
+
+
+def test_artifact_genres_match_the_assertion_registry() -> None:
+  # The CLI parses the constants tuple; the registry decides what a genre means.
+  # artifact_check's import-time equality check fails the drift at import; this pin
+  # states the contract where the plan vocabulary's lockstep pin lives.
+  code = (
+      "import json; "
+      "import src.core.constants as c; "
+      "import src.core.artifact_check as ac; "
+      "print(json.dumps([list(c.ARTIFACT_GENRES), list(ac.GENRES)]))")
+  proc = _run_probe(code)
+  constants_tuple, registry_tuple = json.loads(proc.stdout)
+  assert constants_tuple == registry_tuple, (
+      "src.core.constants.ARTIFACT_GENRES drifted from the assertion registry: "
+      f"{constants_tuple} vs {registry_tuple}")
 
 
 def test_artifact_wrap_verb_runs_off_the_config_stack() -> None:
@@ -185,6 +194,57 @@ def test_artifact_wrap_verb_runs_off_the_config_stack() -> None:
       "the artifact wrap verb loaded the config stack at call time: "
       f"{loaded}; the M102 command wall (docs/perf_baseline.md) depends on the "
       "wrap verb resolving its home from src.core.home, not the config")
+
+
+# argparse's HelpFormatter resolves the terminal width through a lazy
+# `import shutil` on the first parser build, and shutil pulls its archive
+# backends (bz2, lzma) with it — ~2.4 ms of every fresh-process verb's wall.
+# The shared CliHelpFormatter (src/cli/help_formatter.py) passes the width
+# itself under shutil.get_terminal_size's documented precedence, so the verb
+# parsers build with neither module loaded.
+_PARSER_BUILD_BANNED = ("shutil", "bz2", "lzma")
+_PARSER_BUILD_MODULES = (
+    pytest.param("src.cli.plan", id="plan"),
+    pytest.param("src.cli.artifact", id="artifact"),
+    pytest.param("src.cli.schedule_trigger", id="schedule-trigger"),
+)
+
+
+@pytest.mark.parametrize("module_name", _PARSER_BUILD_MODULES)
+def test_verb_parser_build_never_loads_the_archive_backends(module_name: str) -> None:
+  code = (
+      "import json, sys; "
+      f"import {module_name}; "
+      f"{module_name}._build_parser(); "
+      f"print(json.dumps(sorted(set(sys.modules) & {set(_PARSER_BUILD_BANNED)!r})))")
+  loaded = json.loads(_run_probe(code).stdout)
+  assert loaded == [], (
+      f"{module_name}'s parser build loaded the shutil archive chain: {loaded}; "
+      "every fresh-process verb wall (docs/perf_baseline.md M92/M97/M98/M102) "
+      "depends on CliHelpFormatter keeping the terminal width off shutil")
+
+
+def test_cli_help_formatter_width_matches_shutil_precedence() -> None:
+  # The formatted help must stay byte-identical to the stock formatter: the
+  # width equals shutil.get_terminal_size().columns - 2 under every COLUMNS
+  # shape, and the no-terminal fallback matches shutil's 80-column default.
+  code = (
+      "import json, os, shutil\n"
+      "from src.cli.help_formatter import CliHelpFormatter\n"
+      "readings = {}\n"
+      "for columns in ('40', '200', '0', '-5', 'abc'):\n"
+      "    os.environ['COLUMNS'] = columns\n"
+      "    readings[columns] = CliHelpFormatter('probe')._width\n"
+      "del os.environ['COLUMNS']\n"
+      "readings['unset'] = CliHelpFormatter('probe')._width\n"
+      "readings['explicit'] = CliHelpFormatter('probe', width=50)._width\n"
+      "print(json.dumps(readings))")
+  readings = json.loads(_run_probe(code).stdout)
+  assert readings["40"] == 38 and readings["200"] == 198, readings
+  # COLUMNS=0/-5/abc and the no-terminal probe stdout all take shutil's
+  # 80-column fallback, so the stock formatter renders the same width.
+  assert readings["0"] == readings["-5"] == readings["abc"] == readings["unset"] == 78, readings
+  assert readings["explicit"] == 50, "an explicit width must pass through"
 
 
 def test_memory_chain_imports_without_the_heavy_chains() -> None:
@@ -244,7 +304,19 @@ def test_module_defers_structlog_until_the_first_log_call(module_name: str, impo
 # opencode/charlie_code module bodies), which load it on first use via the shared
 # load_build_backend (src/agents/backends/deferred_build.py); jinja2 +
 # fastapi.templating (~35 ms) ride the page renders, which build the engine on
-# first render (src/api/pages.py::_templates).
+# first render (src/api/pages.py::_templates); tarfile + the backup stack ride
+# the backup handler, sqlite3 + token_tally + storage_cool ride the cool-storage
+# handler and the token-usage page, multiprocessing + the spawn pool ride the
+# merge-pool build, ncu_parsing and trace_merge ride the NCU and Perfetto pages,
+# and wave rides the voice wav write — each lazy at its use site, the croniter
+# seam. The master-turn chain (src.agents.master_cc and its run/queue/relay/
+# state modules plus src.core.project_config) rides its three wake call sites
+# (the chat send/cancel handlers, the trigger fire), the memory store rides the
+# worker prompt build, and the compaction stack rides the worker's relay
+# decision — each lazy at its call. The slash-command stack
+# (src.core.slash_commands) rides its four request-time call sites (the chat
+# send handler's dispatch branch and the slash list/execute handlers), lazy at
+# each.
 SERVER_HEAVY_MODULES = (
     "numpy",
     "src.agents.transcriber",
@@ -253,11 +325,29 @@ SERVER_HEAVY_MODULES = (
     "croniter",
     "dateutil",
     "websockets",
+    "src.agents.master_cc",
+    "src.agents.master_cc_run",
+    "src.agents.master_cc_queue",
+    "src.agents.master_cc_relay",
+    "src.agents.master_cc_state",
+    "src.core.project_config",
+    "src.core.memory",
+    "src.core.claude_compaction",
     "src.agents.backends.registry",
     "src.agents.backends.opencode",
     "src.agents.backends.charlie_code",
     "jinja2",
     "fastapi.templating",
+    "tarfile",
+    "src.core.backup",
+    "sqlite3",
+    "src.core.token_tally",
+    "src.core.storage_cool",
+    "multiprocessing",
+    "src.core.ncu_parsing",
+    "src.core.trace_merge",
+    "src.core.slash_commands",
+    "wave",
 )
 
 
@@ -316,11 +406,32 @@ def test_autonamer_and_recap_defer_the_registry_until_first_use() -> None:
 # The claude-sub chain's extra bans: the worker binary launches on every
 # subscription-mode spawn, so its import must stay off the web framework
 # (pty_common/tui carry only TYPE_CHECKING WebSocket hints and the relay imports
-# WebSocketDisconnect inside the function) and off the config model stack (the
+# WebSocketDisconnect inside the function), off the config model stack (the
 # backend ABC defers get_config to its cgroup read; runs and claude_accounts
 # carry the CharlieBotConfig hints under TYPE_CHECKING; the login-dir names
-# single-home in src.core.home).
-CLAUDE_SUB_HEAVY_MODULES = ("fastapi", "src.core.config", "yaml", "src.core.credentials")
+# single-home in src.core.home), and off the pydantic model stacks: the
+# vocabulary constants (BackendType, SESSION_ID_ENV_VAR) single-home in
+# src.core.constants, the credential filename in src.core.home, and the account
+# pool itself loads only at the call site that reads transcripts — its module
+# scope builds the account models the launch never reads. The launch argv/env
+# assembly single-homes in src.agents.backends.claude_launch (stdlib-only), so
+# the backend ABC — and the runs/process/pty stacks only its run path reads —
+# stay out of the import too.
+CLAUDE_SUB_HEAVY_MODULES = (
+    "fastapi",
+    "src.core.config",
+    "yaml",
+    "src.core.credentials",
+    "pydantic",
+    "src.core.models",
+    "src.core.backend_models",
+    "src.core.claude_accounts",
+    "src.agents.backends.base",
+    "src.agents.backends.claude_code",
+    "src.core.runs",
+    "src.core.process",
+    "pty",
+)
 
 
 def test_claude_sub_chain_imports_without_the_web_framework_and_config_stack() -> None:

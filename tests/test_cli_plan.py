@@ -1,7 +1,8 @@
 """Tests for src/cli/plan.py — argument validation, session resolution, stdout/stderr shape."""
 
 import json
-from contextlib import AbstractContextManager
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,8 +12,8 @@ from conftest import (
     CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
     CLI_COMMON_TRANSPORT_GET_PATCH_TARGET,
     CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
+    _patched_cli_transport,
     make_json_response,
-    patched_cli_get,
     patched_cli_post,
     plan_doc,
     plan_page_html,
@@ -23,6 +24,13 @@ from conftest import setup_session_cwd as _setup_session_cwd
 
 from src.cli.plan import _PLAN_REMINDER, main
 from src.core import plan_diff
+
+
+@contextmanager
+def patched_cli_get(cfg: object, argv: list[str], **get_kw: object) -> Iterator[MagicMock]:
+  """_patched_cli_transport with _request_get as the patched verb (the GET-only commands, e.g.
+  plan list/diff)."""
+  yield from _patched_cli_transport(CLI_COMMON_TRANSPORT_GET_PATCH_TARGET, cfg, argv, **get_kw)
 
 
 def _present_post(

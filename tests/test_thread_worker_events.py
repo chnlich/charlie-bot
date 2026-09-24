@@ -100,6 +100,31 @@ def test_tool_result_over_wire_bound_is_trimmed_and_marked(tmp_path: Path) -> No
   assert events[1].content == "small"
 
 
+def test_tool_use_input_rides_the_render_read_bound(tmp_path: Path) -> None:
+  path = tmp_path / "events.jsonl"
+  bound = threads_api.TOOL_PREVIEW_CHARS
+  content = [
+      {
+          "type": "tool_use",
+          "id": "t1",
+          "name": "Write",
+          "input": {
+              "file_path": "/tmp/a",
+              "content": "c" * (bound + 1)
+          },
+      }
+  ]
+  _write_events(path, [json.dumps({"type": "assistant", "timestamp": TS, "message": {"content": content}}) + "\n"])
+
+  row = threads_api.read_thread_worker_events(path)[0]
+  # The panel renders only the one-line input summary the chat renderer reads
+  # (toolInputSummary): file_path keeps its length, the file content it never
+  # reads carries the dead-field bound, and the events log keeps the full text.
+  assert row.type == "tool_use"
+  assert row.input["file_path"] == "/tmp/a"
+  assert len(row.input["content"]) == 60
+
+
 def test_top_level_tool_result_line_is_trimmed_and_marked(tmp_path: Path) -> None:
   path = tmp_path / "events.jsonl"
   bound = threads_api.TOOL_PREVIEW_CHARS

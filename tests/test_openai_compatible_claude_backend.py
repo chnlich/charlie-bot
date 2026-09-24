@@ -4,15 +4,14 @@ from typing import Any
 
 import httpx
 import pytest
-from conftest import backend_option, stub_credentials
+from conftest import apply_config_overrides, backend_option, stub_credentials
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.agents.backends.openai_compatible_claude import OpenAICompatibleClaudeBackend
 from src.agents.backends.registry import build_backend
 from src.api.anthropic_proxy import router as proxy_router
-from src.api.deps import get_config_on_loop
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig
 
 _PROXY_PREFIX = "/api/anthropic-proxy"
 _BACKEND_ID = "cc-glm52"
@@ -91,10 +90,7 @@ def test_registry_requires_access_key_from_credentials() -> None:
 def _build_client(cfg: CharlieBotConfig) -> TestClient:
   app = FastAPI()
   app.include_router(proxy_router, prefix=_PROXY_PREFIX)
-  app.dependency_overrides[get_config] = lambda: cfg
-  # The route resolves cfg through the on-loop dependency (same instance the
-  # sync key serves), so both keys carry the override.
-  app.dependency_overrides[get_config_on_loop] = lambda: cfg
+  apply_config_overrides(app, cfg)
   return TestClient(app)
 
 
@@ -135,6 +131,12 @@ def _anthropic_payload() -> dict:
   }
 
 
+def _post_messages(cfg: CharlieBotConfig, path: str) -> httpx.Response:
+  """Post the shared Anthropic payload to *path* on the proxy TestClient."""
+  with _build_client(cfg) as client:
+    return client.post(path, json=_anthropic_payload())
+
+
 def test_route_forwards_upstream_model_and_bearer_auth_and_translates_response(monkeypatch: pytest.MonkeyPatch) -> None:
   stub_credentials({"glm-upstream": {"api_key": "secret-token"}})
   cfg = _cfg(_option(credential="glm-upstream"))
@@ -148,11 +150,7 @@ def test_route_forwards_upstream_model_and_bearer_auth_and_translates_response(m
 
   _mock_upstream(monkeypatch, handler)
 
-  with _build_client(cfg) as client:
-    response = client.post(
-        _MESSAGES_PATH,
-        json=_anthropic_payload(),
-    )
+  response = _post_messages(cfg, _MESSAGES_PATH)
 
   assert response.status_code == 200
   assert captured["url"] == f"{_UPSTREAM_BASE}/chat/completions"
@@ -174,11 +172,7 @@ def test_route_omits_authorization_when_credential_unset(monkeypatch: pytest.Mon
 
   _mock_upstream(monkeypatch, handler)
 
-  with _build_client(cfg) as client:
-    response = client.post(
-        _MESSAGES_PATH,
-        json=_anthropic_payload(),
-    )
+  response = _post_messages(cfg, _MESSAGES_PATH)
 
   assert response.status_code == 200
   assert captured["authorization"] is None
@@ -188,11 +182,7 @@ def test_route_fails_loud_when_credential_missing() -> None:
   stub_credentials({})
   cfg = _cfg(_option(credential="missing_upstream"))
 
-  with _build_client(cfg) as client:
-    response = client.post(
-        _MESSAGES_PATH,
-        json=_anthropic_payload(),
-    )
+  response = _post_messages(cfg, _MESSAGES_PATH)
 
   assert response.status_code == 400
   assert "missing_upstream" in response.json()["detail"]
@@ -201,11 +191,7 @@ def test_route_fails_loud_when_credential_missing() -> None:
 def test_route_returns_404_for_unknown_backend_id() -> None:
   cfg = CharlieBotConfig(server={"port": 8123}, backends={"options": []})
 
-  with _build_client(cfg) as client:
-    response = client.post(
-        f"{_PROXY_PREFIX}/openai-compatible/nope/v1/messages",
-        json=_anthropic_payload(),
-    )
+  response = _post_messages(cfg, f"{_PROXY_PREFIX}/openai-compatible/nope/v1/messages")
 
   assert response.status_code == 404
   assert "unknown backend id" in response.json()["detail"]
@@ -217,11 +203,7 @@ def test_route_rejects_wrong_backend_type() -> None:
       backends={"options": [backend_option(id="opus", label="Opus", type="cc-claude", model="claude-opus-4-8")]},
   )
 
-  with _build_client(cfg) as client:
-    response = client.post(
-        f"{_PROXY_PREFIX}/openai-compatible/opus/v1/messages",
-        json=_anthropic_payload(),
-    )
+  response = _post_messages(cfg, f"{_PROXY_PREFIX}/openai-compatible/opus/v1/messages")
 
   assert response.status_code == 400
   assert "not type 'cc-openai-compatible'" in response.json()["detail"]

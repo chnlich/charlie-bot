@@ -5,7 +5,7 @@ Both the master turn (src/agents/master_cc_relay.py) and a delegated worker
 (src/agents/worker.py) need the same answers while that process runs: which
 events mean the account is running out, where the process can stop safely, and
 how the run continues on the next account. This module owns those answers so
-the two callers differ only in how they persist events and rebuild the process.
+the callers differ only in how they persist events and rebuild the process.
 
 During a run every ``rate_limit_event`` updates the account's reading. A
 rejection means the process ends on its own and the run relays; a warning at

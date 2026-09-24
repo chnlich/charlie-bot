@@ -133,9 +133,9 @@ def _tool_result_only_user_event() -> list[dict]:
   ]
 
 
-def _many_turns(turns: int = 25) -> list[dict]:
+def _many_turns() -> list[dict]:
   events: list[dict] = []
-  for i in range(turns):
+  for i in range(25):
     events.append(_user(f"u{i}", f"q{i}"))
     events.append(_assistant(f"reply {i} first", f"a{i}x"))
     events.append(_assistant(f"reply {i} second", f"a{i}y"))

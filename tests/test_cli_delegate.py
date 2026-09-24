@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from conftest import (
@@ -40,6 +40,24 @@ def _repo_argv(repo: str, task_spec_file: Path, *extra: str, session: str | None
   ]
 
 
+def _verify_argv(task_spec_file: Path, *extra: str, task_type: str) -> list[str]:
+  """Argv for a repoless delegate main() call: the session/task-spec-file/keep-worktree skeleton
+  plus the flags this test adds (extra); task_type stays explicit because the parametrized sites
+  pass non-verify types."""
+  return [
+      "delegate",
+      "--session",
+      "s1",
+      "--task-spec-file",
+      str(task_spec_file),
+      "--keep-worktree",
+      "0",
+      "--task-type",
+      task_type,
+      *extra,
+  ]
+
+
 def _task_spec(source_line: str = "- (none)") -> str:
   return (
       "## Goal\n"
@@ -60,6 +78,13 @@ def _write_task_spec(tmp_path: Path, content: str | None = None) -> Path:
   task_spec_file = tmp_path / "task_spec.md"
   task_spec_file.write_text(content if content is not None else _task_spec())
   return task_spec_file
+
+
+def _delegate_rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, Path]:
+  """The CLI main() rig: a sessions-dir config with cwd at tmp_path, plus one written task spec."""
+  cfg = make_sessions_dir_config(tmp_path)
+  monkeypatch.chdir(tmp_path)
+  return cfg, _write_task_spec(tmp_path)
 
 
 def test_main_routes_by_session_env_from_another_session_dir(
@@ -108,9 +133,7 @@ def test_main_rejects_explicit_session_against_session_env(
 
 
 def test_main_posts_task_spec_file_to_delegate_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = make_sessions_dir_config(tmp_path)
-  monkeypatch.chdir(tmp_path)
-  task_spec_file = _write_task_spec(tmp_path)
+  cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
   task_spec = task_spec_file.read_text()
 
   with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "codex-o3",
@@ -132,9 +155,7 @@ def test_main_posts_task_spec_file_to_delegate_endpoint(tmp_path: Path, monkeypa
 
 def test_main_prints_async_wake_up_hint_to_stderr(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = make_sessions_dir_config(tmp_path)
-  monkeypatch.chdir(tmp_path)
-  task_spec_file = _write_task_spec(tmp_path)
+  cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
 
   with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, session="s1")) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t1", "description": "do work"}
@@ -147,9 +168,7 @@ def test_main_prints_async_wake_up_hint_to_stderr(
 
 @pytest.mark.parametrize("task_type", ["implement", "quick-edit", "script-run"])
 def test_main_task_type_lands_in_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task_type: str) -> None:
-  cfg = make_sessions_dir_config(tmp_path)
-  monkeypatch.chdir(tmp_path)
-  task_spec_file = _write_task_spec(tmp_path)
+  cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
 
   with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--task-type", task_type,
                                         session="s1")) as post_mock:
@@ -165,21 +184,9 @@ def test_main_task_type_lands_in_payload(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 def test_main_verify_posts_repoless_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = make_sessions_dir_config(tmp_path)
-  monkeypatch.chdir(tmp_path)
-  task_spec_file = _write_task_spec(tmp_path)
+  cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
 
-  with patched_cli_post(cfg, [
-      "delegate",
-      "--session",
-      "s1",
-      "--task-spec-file",
-      str(task_spec_file),
-      "--keep-worktree",
-      "0",
-      "--task-type",
-      "verify",
-  ]) as post_mock:
+  with patched_cli_post(cfg, _verify_argv(task_spec_file, task_type="verify")) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t2", "description": "task"}
     main()
 
@@ -200,19 +207,10 @@ def test_main_verify_rejects_repo_scoped_arguments(
   task_spec_file = _write_task_spec(tmp_path)
   value = str(tmp_path) if flag == "--repo" else "main"
 
-  with patch("sys.argv", [
-      "delegate",
-      "--session",
-      "s1",
-      "--task-spec-file",
-      str(task_spec_file),
-      "--keep-worktree",
-      "0",
-      "--task-type",
-      "verify",
-      flag,
-      value,
-  ]), pytest.raises(SystemExit) as exc_info:
+  with (
+      patch("sys.argv", _verify_argv(task_spec_file, flag, value, task_type="verify")),
+      pytest.raises(SystemExit) as exc_info,
+  ):
     main()
 
   assert_cli_reject(exc_info, capsys, flag, "forbidden")
@@ -236,18 +234,10 @@ def test_main_repo_task_types_require_repo_and_base_branch(
   task_spec_file = _write_task_spec(tmp_path)
   argv_tail = ["--repo", str(tmp_path)] if provide_repo else ["--base-branch", "main"]
 
-  with patch("sys.argv", [
-      "delegate",
-      "--session",
-      "s1",
-      "--task-spec-file",
-      str(task_spec_file),
-      "--keep-worktree",
-      "0",
-      "--task-type",
-      task_type,
-      *argv_tail,
-  ]), pytest.raises(SystemExit) as exc_info:
+  with (
+      patch("sys.argv", _verify_argv(task_spec_file, *argv_tail, task_type=task_type)),
+      pytest.raises(SystemExit) as exc_info,
+  ):
     main()
 
   assert_cli_reject(exc_info, capsys, missing_flag, "required")
@@ -267,9 +257,7 @@ def test_main_rejects_bad_invocation_before_post(
     extra_argv: tuple[str, ...], err_fragments: tuple[str, ...]) -> None:
   """Each malformed invocation names its cause on stderr and rejects before any POST: a relative
   --repo, a nonexistent --repo, and the removed --description/--context flags."""
-  cfg = make_sessions_dir_config(tmp_path)
-  monkeypatch.chdir(tmp_path)
-  task_spec_file = _write_task_spec(tmp_path)
+  cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
   repo_value = repo if repo is not None else str(tmp_path)
 
   with (
@@ -303,9 +291,7 @@ def test_main_help_states_backend_omission_rule(capsys: pytest.CaptureFixture[st
 
 
 def test_main_posts_reviewer_context_file_as_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = make_sessions_dir_config(tmp_path)
-  monkeypatch.chdir(tmp_path)
-  task_spec_file = _write_task_spec(tmp_path)
+  cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
   reviewer_context_file = tmp_path / "reviewer_context.md"
   reviewer_context_file.write_text("review these state-machine edges")
 
@@ -349,9 +335,7 @@ def test_main_rejects_omitted_required_flag(
 
 def test_main_rejects_invalid_task_type(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = make_sessions_dir_config(tmp_path)
-  monkeypatch.chdir(tmp_path)
-  task_spec_file = _write_task_spec(tmp_path)
+  cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
 
   with (
       patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--task-type", "bogus", session="s1")),
@@ -364,9 +348,7 @@ def test_main_rejects_invalid_task_type(
 
 def test_main_rejects_legacy_require_review_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = make_sessions_dir_config(tmp_path)
-  monkeypatch.chdir(tmp_path)
-  task_spec_file = _write_task_spec(tmp_path)
+  cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
 
   with (
       patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--require-review", "0", session="s1")),
@@ -380,9 +362,7 @@ def test_main_rejects_legacy_require_review_flag(
 
 
 def test_main_uses_error_detail_from_response(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = make_sessions_dir_config(tmp_path)
-  monkeypatch.chdir(tmp_path)
-  task_spec_file = _write_task_spec(tmp_path)
+  cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
 
   with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "missing",
                                         session="s1"),

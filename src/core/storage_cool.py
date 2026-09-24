@@ -38,13 +38,13 @@ import shutil
 import sqlite3
 import sys
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from src.core.codex_usage import default_codex_home
-from src.core.config import CharlieBotConfig, claude_config_dir, default_claude_dir, get_config
+from src.core.config import CharlieBotConfig, claude_config_dir, default_claude_dir
 from src.core.json_utils import load_json_meta
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus, parse_utc_datetime
@@ -229,6 +229,18 @@ def _optional_str(value: object) -> str | None:
   return str(value) if value else None
 
 
+def _referenced_and_cold(references: dict[str, list[_SessionFacts]], backend_session: str) -> bool:
+  """The referenced-cold half of the module's one deletion rule: CharlieBot metadata
+  references the record and every referencing owner is cold."""
+  referencing = references.get(backend_session)
+  return bool(referencing) and all(owner.cold for owner in referencing)
+
+
+def _idle_past(idle_since_epoch: float, now: datetime, idle_days: int) -> bool:
+  """The orphan-window half of the rule: the record's own idle clock has passed *idle_days*."""
+  return now.timestamp() - idle_since_epoch >= idle_days * 86400
+
+
 # ---------------------------------------------------------------------------
 # Part 1: raw transport files of cold sessions
 # ---------------------------------------------------------------------------
@@ -253,6 +265,21 @@ def _sorted_scan(root: Path, listing: Iterable[Path]) -> list[Path] | None:
   except OSError as e:
     log.warning("storage_cool_dir_scan_failed", dir=str(root), error=str(e))
     return None
+
+
+def _sweep_root_entries(roots: Iterable[Path], listing: Callable[[Path], Iterable[Path]]) -> Iterator[Path]:
+  """Yield each sweep root's sorted entries, skipping a missing root or an unreadable listing.
+
+  ``_sorted_scan`` already logs a listing failure; the sweep's best-effort
+  contract is that one unreadable directory never stops the run.
+  """
+  for root in roots:
+    if not root.is_dir():
+      continue
+    entries = _sorted_scan(root, listing(root))
+    if entries is None:
+      continue
+    yield from entries
 
 
 def _managed_transport_dirs(session_dir: Path) -> list[Path]:
@@ -310,16 +337,12 @@ def _sweep_raw_transport(session_dir: Path, counter: _Counter, dry_run: bool) ->
   migration, plan 1 v4 section 4.2).
   """
   referenced = _run_referenced_transport(session_dir)
-  for managed_dir in _managed_transport_dirs(session_dir):
-    entries = _sorted_scan(managed_dir, managed_dir.iterdir())
-    if entries is None:
+  for entry in _sweep_root_entries(_managed_transport_dirs(session_dir), lambda root: root.iterdir()):
+    if not entry.is_file() or not _is_transport_name(entry.name):
       continue
-    for entry in entries:
-      if not entry.is_file() or not _is_transport_name(entry.name):
-        continue
-      if os.path.realpath(entry) in referenced:
-        continue
-      _delete_file(entry, counter, dry_run)
+    if os.path.realpath(entry) in referenced:
+      continue
+    _delete_file(entry, counter, dry_run)
 
 
 def _delete_file(path: Path, counter: _Counter, dry_run: bool, *, count: bool = True) -> None:
@@ -421,11 +444,12 @@ def _newest_mtime(path: Path) -> float | None:
 
 
 def _idle_past_window(path: Path, now: datetime, idle_days: int) -> bool:
+  """Newest-mtime form of the idle judgment for a transcript directory; False (logged) on probe failure."""
   newest = _newest_mtime(path)
   if newest is None:
     log.warning("storage_cool_idle_probe_failed", path=str(path))
     return False
-  return now.timestamp() - newest >= idle_days * 86400
+  return _idle_past(newest, now, idle_days)
 
 
 def _live_worktree_dir_names(cfg: CharlieBotConfig) -> set[str]:
@@ -481,33 +505,27 @@ def _sweep_claude_transcripts(
   """
   worktree_prefix = claude_project_dir_name(Path(cfg.paths.worktree_dir)) + "-"
   live_worktrees = _live_worktree_dir_names(cfg) if session_id is None else set()
-  for projects_root in claude_projects_roots(cfg):
-    if not projects_root.is_dir():
+  for entry in _sweep_root_entries(claude_projects_roots(cfg), lambda root: root.iterdir()):
+    if not entry.is_dir():
       continue
-    entries = _sorted_scan(projects_root, projects_root.iterdir())
-    if entries is None:
-      continue
-    for entry in entries:
-      if not entry.is_dir():
+    encoded_session = _encoded_session_id(entry.name)
+    if encoded_session is not None:
+      owner = facts.get(encoded_session)
+      if owner is not None:
+        # The session still exists: only the cold rule decides.
+        if owner.cold:
+          _delete_claude_project_dir(entry, counter, dry_run)
+      elif (cfg.sessions_dir / encoded_session).is_dir():
+        # An unreadable session metadata file is not proof that the session
+        # was deleted; only a missing session directory makes this an orphan.
         continue
-      encoded_session = _encoded_session_id(entry.name)
-      if encoded_session is not None:
-        owner = facts.get(encoded_session)
-        if owner is not None:
-          # The session still exists: only the cold rule decides.
-          if owner.cold:
-            _delete_claude_project_dir(entry, counter, dry_run)
-        elif (cfg.sessions_dir / encoded_session).is_dir():
-          # An unreadable session metadata file is not proof that the session
-          # was deleted; only a missing session directory makes this an orphan.
-          continue
-        elif session_id is None and _idle_past_window(entry, now, ORPHAN_IDLE_DAYS):
-          # No metadata references it any more: orphan past the window.
-          _delete_claude_project_dir(entry, counter, dry_run)
-      elif session_id is None and entry.name.startswith(worktree_prefix) and entry.name not in live_worktrees:
-        # A worktree's transcripts are orphans once the worktree is gone.
-        if _idle_past_window(entry, now, ORPHAN_IDLE_DAYS):
-          _delete_claude_project_dir(entry, counter, dry_run)
+      elif session_id is None and _idle_past_window(entry, now, ORPHAN_IDLE_DAYS):
+        # No metadata references it any more: orphan past the window.
+        _delete_claude_project_dir(entry, counter, dry_run)
+    elif session_id is None and entry.name.startswith(worktree_prefix) and entry.name not in live_worktrees:
+      # A worktree's transcripts are orphans once the worktree is gone.
+      if _idle_past_window(entry, now, ORPHAN_IDLE_DAYS):
+        _delete_claude_project_dir(entry, counter, dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -543,44 +561,39 @@ def _sweep_codex_rollouts(
     session_id: str | None,
 ) -> None:
   """Delete rollout files under the session-cold / unreferenced-plus-window rule."""
-  scoped_backends = _scoped_backend_sessions(facts, references, session_id) if session_id is not None else set()
-  for tree in codex_session_trees():
-    if not tree.is_dir():
+  scoped_backends = _scoped_backend_sessions(facts, references, session_id)
+  for path in _sweep_root_entries(codex_session_trees(), lambda root: root.rglob(f"{_CODEX_ROLLOUT_PREFIX}*.jsonl")):
+    backend_session = codex_rollout_session_id(path)
+    if backend_session is None:
       continue
-    candidates = _sorted_scan(tree, tree.rglob(f"{_CODEX_ROLLOUT_PREFIX}*.jsonl"))
-    if candidates is None:
+    if session_id is not None:
+      # Scoped run: only the named session's own record, already cold-verified,
+      # and never a record also referenced by a live session.
+      if backend_session in scoped_backends and _referenced_and_cold(references, backend_session):
+        _delete_file(path, counter, dry_run)
       continue
-    for path in candidates:
-      backend_session = codex_rollout_session_id(path)
-      if backend_session is None:
-        continue
-      if session_id is not None:
-        # Scoped run: only the named session's own record, already cold-verified,
-        # and never a record also referenced by a live session.
-        referencing = references.get(backend_session)
-        if backend_session in scoped_backends and referencing and all(owner.cold for owner in referencing):
-          _delete_file(path, counter, dry_run)
-        continue
-      referencing = references.get(backend_session)
-      if referencing:
-        if all(owner.cold for owner in referencing):
-          _delete_file(path, counter, dry_run)
-        continue
+    if references.get(backend_session) is None:
+      # Unreferenced: the file's own mtime is the idle clock.
       try:
-        idle_since = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+        idle_since = path.stat().st_mtime
       except OSError as e:
         log.warning("storage_cool_file_stat_failed", path=str(path), error=str(e))
         continue
-      if now - idle_since >= timedelta(days=ORPHAN_IDLE_DAYS):
+      if _idle_past(idle_since, now, ORPHAN_IDLE_DAYS):
         _delete_file(path, counter, dry_run)
+      continue
+    if _referenced_and_cold(references, backend_session):
+      _delete_file(path, counter, dry_run)
 
 
 def _scoped_backend_sessions(
     facts: dict[str, _SessionFacts],
     references: dict[str, list[_SessionFacts]],
-    session_id: str,
+    session_id: str | None,
 ) -> set[str]:
-  """Return every backend id referenced by the one scoped session."""
+  """Every backend id the scoped session references; empty when the run is unscoped."""
+  if session_id is None:
+    return set()
   owner = facts.get(session_id)
   backend_sessions = {owner.cc_session_id} if owner and owner.cc_session_id is not None else set()
   backend_sessions.update(
@@ -663,11 +676,13 @@ def _opencode_targets(
   when every referencing session is cold, and an unreferenced one once the
   backend's own timestamp has been idle past the safety window.
   """
-  scoped_backends = _scoped_backend_sessions(facts, references, session_id) if session_id is not None else set()
+  scoped_backends = _scoped_backend_sessions(facts, references, session_id)
   if session_id is not None and not scoped_backends:
     return {}
   if session_id is None:
     candidates = _opencode_candidate_ids(db, None)
+    if candidates is None:
+      return None
   else:
     candidates = []
     for backend_session in sorted(scoped_backends):
@@ -675,30 +690,24 @@ def _opencode_targets(
       if backend_candidates is None:
         return None
       candidates.extend(backend_candidates)
-  if candidates is None:
-    return None
   if not candidates:
     return {}
   if session_id is not None:
-    safe_candidates = [
-        aggregate_id for aggregate_id in candidates
-        if (referencing := references.get(aggregate_id)) and all(owner.cold for owner in referencing)
-    ]
+    safe_candidates = [aggregate_id for aggregate_id in candidates if _referenced_and_cold(references, aggregate_id)]
     return _opencode_aggregate_sizes(db, safe_candidates)
   referenced_cold: list[str] = []
   unreferenced: list[str] = []
   for aggregate_id in candidates:
-    referencing = references.get(aggregate_id)
-    if referencing is None:
+    if references.get(aggregate_id) is None:
       unreferenced.append(aggregate_id)
-    elif all(owner.cold for owner in referencing):
+    elif _referenced_and_cold(references, aggregate_id):
       referenced_cold.append(aggregate_id)
   updated = _opencode_session_updated(db) if unreferenced else {}
   if updated is None:
     return None
   window_ids = [
       aggregate_id for aggregate_id in unreferenced
-      if aggregate_id in updated and now.timestamp() - updated[aggregate_id] / 1000 >= ORPHAN_IDLE_DAYS * 86400
+      if aggregate_id in updated and _idle_past(updated[aggregate_id] / 1000, now, ORPHAN_IDLE_DAYS)
   ]
   return _opencode_aggregate_sizes(db, referenced_cold + window_ids)
 
@@ -893,7 +902,7 @@ def run_cool_sweep(
     session_id: str | None = None,
     vacuum: bool = False,
     force: bool = False,
-    cfg: CharlieBotConfig | None = None,
+    cfg: CharlieBotConfig,
     now: datetime | None = None,
 ) -> SweepResult:
   """Run one storage sweep over cold sessions and unreferenced backend records.
@@ -909,14 +918,12 @@ def run_cool_sweep(
       the filesystem. Refuses (stderr + SystemExit) while an ``opencode serve``
       writer is alive, unless *force*.
     force: Vacuum past live-writer refusal; no effect without *vacuum*.
-    cfg: Config to read paths and backend options from; defaults to the process
-      config.
+    cfg: Config to read paths and backend options from.
     now: Current time override for tests.
 
   Returns:
     Per-category counts and freed bytes, plus the opencode store's freelist bytes.
   """
-  cfg = cfg or get_config()
   now = now or datetime.now(UTC)
   facts = _scan_sessions(cfg, now, min_idle_days)
   references = _scan_references(cfg, facts)

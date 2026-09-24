@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from conftest import (
     ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
+    BASE_SPAWN_SUBPROCESS_PATCH_TARGET,
     CODEX_RESOLVE_BINARY_PATCH_TARGET,
     OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
     SYNTHETIC_MODEL,
@@ -468,12 +469,7 @@ async def test_maybe_auto_name_skips_loudly_when_no_preference_resolves() -> Non
 
 
 @pytest.mark.asyncio
-async def test_claude_ai_title_returns_when_no_jsonl_exists(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-  home_dir = tmp_path / "home"
-  monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
+async def test_claude_ai_title_returns_when_no_jsonl_exists(path_home: Path) -> None:
   session_mgr = AsyncMock()
   session_meta = SessionMetadata(id="session-no-jsonl", name="Session 1")
 
@@ -483,16 +479,11 @@ async def test_claude_ai_title_returns_when_no_jsonl_exists(
 
 
 @pytest.mark.asyncio
-async def test_claude_ai_title_returns_when_jsonl_has_no_ai_title(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-  home_dir = tmp_path / "home"
-  monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
+async def test_claude_ai_title_returns_when_jsonl_has_no_ai_title(path_home: Path) -> None:
   session_meta = SessionMetadata(id="session-no-title", name="Session 2")
   session_mgr = AsyncMock()
   _write_claude_jsonl(
-      home_dir,
+      path_home,
       session_meta.id,
       [
           {
@@ -517,17 +508,12 @@ async def test_claude_ai_title_returns_when_jsonl_has_no_ai_title(
 
 
 @pytest.mark.asyncio
-async def test_claude_ai_title_applies_title_for_default_session(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-  home_dir = tmp_path / "home"
-  monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
+async def test_claude_ai_title_applies_title_for_default_session(path_home: Path) -> None:
   session_meta = SessionMetadata(id="session-title", name="Session 3")
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="session-title", name="Session 3")
   _write_claude_jsonl(
-      home_dir,
+      path_home,
       session_meta.id,
       [
           {
@@ -552,17 +538,12 @@ async def test_claude_ai_title_applies_title_for_default_session(
 
 
 @pytest.mark.asyncio
-async def test_claude_ai_title_prefixes_default_session_number(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-  home_dir = tmp_path / "home"
-  monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
+async def test_claude_ai_title_prefixes_default_session_number(path_home: Path) -> None:
   session_meta = SessionMetadata(id="session-tui-prefix", name="Session 77")
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="session-tui-prefix", name="Session 77")
   _write_claude_jsonl(
-      home_dir,
+      path_home,
       session_meta.id,
       [{
           "type": "ai-title",
@@ -580,17 +561,12 @@ async def test_claude_ai_title_prefixes_default_session_number(
 
 
 @pytest.mark.asyncio
-async def test_claude_ai_title_does_not_overwrite_manual_session_name(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-  home_dir = tmp_path / "home"
-  monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
+async def test_claude_ai_title_does_not_overwrite_manual_session_name(path_home: Path) -> None:
   session_meta = SessionMetadata(id="session-manual", name="My Custom Name")
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="session-manual", name="My Custom Name")
   _write_claude_jsonl(
-      home_dir,
+      path_home,
       session_meta.id,
       [{
           "type": "ai-title",
@@ -664,7 +640,7 @@ async def test_codex_one_shot_text_accumulates_agent_message(monkeypatch: pytest
   ]
   proc = fake_one_shot_proc(lines, pid=9999)
 
-  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)) as mock_exec:
+  with patch(BASE_SPAWN_SUBPROCESS_PATCH_TARGET, new=AsyncMock(return_value=proc)) as mock_exec:
     backend = CodexBackend(model="gpt-x", model_reasoning_effort="high")
     result = await backend.one_shot_text("hello prompt", "sys prompt", timeout=5.0)
 
@@ -692,39 +668,61 @@ async def test_codex_one_shot_text_returns_empty_when_no_agent_message(monkeypat
   ]
   proc = fake_one_shot_proc(lines, pid=9998)
 
-  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
+  with patch(BASE_SPAWN_SUBPROCESS_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = CodexBackend(model="gpt-x")
     with pytest.raises(RuntimeError, match="no assistant text"):
       await backend.one_shot_text("hi", "sys", timeout=5.0)
 
 
-@pytest.mark.asyncio
-async def test_opencode_one_shot_text_extracts_text_from_flat_part_event(monkeypatch: pytest.MonkeyPatch) -> None:
-  """`opencode run --format json` emits flat part-shaped events
-  ({"type":"text","part":{...}}), not the SSE-bus shape serve uses."""
+_OPENCODE_STEP_START = (
+    b'{"type":"step_start","timestamp":1,"sessionID":"s1","part":{"id":"prt_a","messageID":"m1",'
+    b'"sessionID":"s1","type":"step-start"}}\n')
+_OPENCODE_STEP_FINISH = (
+    b'{"type":"step_finish","timestamp":3,"sessionID":"s1","part":{"id":"prt_c","reason":"stop",'
+    b'"messageID":"m1","sessionID":"s1","type":"step-finish","tokens":{"total":1,"input":1,"output":1,'
+    b'"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}\n')
+
+
+async def _run_opencode_one_shot(
+    monkeypatch: pytest.MonkeyPatch,
+    lines: list[bytes],
+    *,
+    pid: int,
+    prompt: str,
+    system_prompt: str,
+) -> tuple[str, MagicMock, AsyncMock]:
+  """Run one OpenCodeBackend.one_shot_text round on the stubbed-subprocess rig.
+
+  Resolves the backend binary to /usr/bin/opencode and serves *lines* as the
+  process stdout (fake_one_shot_proc, *pid*); returns the result, the process,
+  and the captured spawn-subprocess mock for the test's asserts.
+  """
   from src.agents.backends.opencode import OpenCodeBackend
 
   monkeypatch.setattr(
       OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/opencode",
   )
+  proc = fake_one_shot_proc(lines, pid=pid)
+  with patch(BASE_SPAWN_SUBPROCESS_PATCH_TARGET, new=AsyncMock(return_value=proc)) as mock_exec:
+    backend = OpenCodeBackend(model=SYNTHETIC_MODEL)
+    result = await backend.one_shot_text(prompt, system_prompt, timeout=5.0)
+  return result, proc, mock_exec
+
+
+@pytest.mark.asyncio
+async def test_opencode_one_shot_text_extracts_text_from_flat_part_event(monkeypatch: pytest.MonkeyPatch) -> None:
+  """`opencode run --format json` emits flat part-shaped events
+  ({"type":"text","part":{...}}), not the SSE-bus shape serve uses."""
   lines = [
-      (
-          b'{"type":"step_start","timestamp":1,"sessionID":"s1","part":{"id":"prt_a","messageID":"m1",'
-          b'"sessionID":"s1","type":"step-start"}}\n'),
+      _OPENCODE_STEP_START,
       (
           b'{"type":"text","timestamp":2,"sessionID":"s1","part":{"id":"prt_b","messageID":"m1","sessionID":"s1",'
           b'"type":"text","text":"OK title","time":{"start":1,"end":2}}}\n'),
-      (
-          b'{"type":"step_finish","timestamp":3,"sessionID":"s1","part":{"id":"prt_c","reason":"stop",'
-          b'"messageID":"m1","sessionID":"s1","type":"step-finish","tokens":{"total":1,"input":1,"output":1,'
-          b'"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}\n'),
+      _OPENCODE_STEP_FINISH,
   ]
-  proc = fake_one_shot_proc(lines, pid=7777)
-
-  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)) as mock_exec:
-    backend = OpenCodeBackend(model=SYNTHETIC_MODEL)
-    result = await backend.one_shot_text("hello prompt", "sys prompt", timeout=5.0)
+  result, proc, mock_exec = await _run_opencode_one_shot(
+      monkeypatch, lines, pid=7777, prompt="hello prompt", system_prompt="sys prompt")
 
   assert result == "OK title"
   args = mock_exec.await_args.args
@@ -738,25 +736,7 @@ async def test_opencode_one_shot_text_extracts_text_from_flat_part_event(monkeyp
 
 @pytest.mark.asyncio
 async def test_opencode_one_shot_text_returns_empty_when_no_text_part(monkeypatch: pytest.MonkeyPatch) -> None:
-  from src.agents.backends.opencode import OpenCodeBackend
-
-  monkeypatch.setattr(
-      OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
-      lambda name, fallback: "/usr/bin/opencode",
-  )
-  lines = [
-      (
-          b'{"type":"step_start","timestamp":1,"sessionID":"s1","part":{"id":"prt_a","messageID":"m1",'
-          b'"sessionID":"s1","type":"step-start"}}\n'),
-      (
-          b'{"type":"step_finish","timestamp":3,"sessionID":"s1","part":{"id":"prt_c","reason":"stop",'
-          b'"messageID":"m1","sessionID":"s1","type":"step-finish","tokens":{"total":1,"input":1,"output":1,'
-          b'"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}\n'),
-  ]
-  proc = fake_one_shot_proc(lines, pid=7776)
-
-  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
-    backend = OpenCodeBackend(model=SYNTHETIC_MODEL)
-    result = await backend.one_shot_text("hi", "sys", timeout=5.0)
+  result, _, _ = await _run_opencode_one_shot(
+      monkeypatch, [_OPENCODE_STEP_START, _OPENCODE_STEP_FINISH], pid=7776, prompt="hi", system_prompt="sys")
 
   assert result == ""

@@ -1,9 +1,8 @@
 """CLI script for master CC to start an iterative improvement loop.
 
-Called by the master Claude Code instance as a shell command:
+Called by the master Claude Code instance as a shell command (session
+identity resolves per ``resolve_session_id``):
 
-  # --session is optional; the server-written CHARLIEBOT_SESSION_ID supplies it
-  # in normal master use (see ``resolve_session_id``).
   charliebot improve \
     --repo /path/to/repo \
     --base-branch main \
@@ -30,6 +29,7 @@ from src.cli.common import (
   resolve_session_id,
   validate_repo_path,
 )
+from src.cli.help_formatter import CliRawDescriptionHelpFormatter
 from src.core.config import get_config
 from src.core.improve_sequence import improve_child_request_id
 
@@ -62,7 +62,7 @@ def main() -> None:
   parser = argparse.ArgumentParser(
       description="Run an iterative improvement loop via CharlieBot workers",
       epilog=IMPROVE_EPILOG,
-      formatter_class=argparse.RawDescriptionHelpFormatter,
+      formatter_class=CliRawDescriptionHelpFormatter,
   )
   add_session_arg(parser)
   parser.add_argument("--repo", required=True, help="Path to the git repo workers should operate on")

@@ -12,17 +12,20 @@ from pathlib import Path
 from typing import ClassVar
 
 import pytest
-from conftest import (
-  SERVER_CHECK_WS_AUTH_PATCH_TARGET,
-  TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET,
-  make_fake_run_tmux,
-  make_home_config,
-)
+from conftest import make_fake_run_tmux, make_home_config
 from fastapi import WebSocket, WebSocketDisconnect
 
 from src.agents.backends import pty_common, terminal, tui
 from src.agents.backends.pty_common import PTY_INPUT, PTY_RESIZE, PtyAttachment
 from src.core.config import CHARLIEBOT_HOME_ENV
+
+# Import-path patch targets for the server's terminal websocket. server.py defines _check_ws_auth
+# and its websocket handlers read it as a module global at call time, and the terminal handler
+# imports run_terminal_attachment at call time (`from src.agents.backends.terminal import
+# run_terminal_attachment` inside terminal_websocket), so monkeypatch.setattr lands both stand-ins
+# on their defining module attributes and the handler's reads resolve them.
+SERVER_CHECK_WS_AUTH_PATCH_TARGET = "server._check_ws_auth"
+TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET = "src.agents.backends.terminal.run_terminal_attachment"
 
 
 def _b64(data: bytes) -> str:
@@ -54,7 +57,7 @@ class _AcceptingWebSocket:
 
 
 class _FakeAttachment:
-  instances: ClassVar[list["_FakeAttachment"]] = []
+  instances: ClassVar[list[_FakeAttachment]] = []
 
   def __init__(self, session_id: str) -> None:
     self.session_id = session_id
@@ -161,20 +164,13 @@ def test_run_tmux_new_session_returns_under_uvloop(
 @pytest.mark.asyncio
 async def test_ensure_terminal_session_starts_global_login_shell(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    path_home: Path,
 ) -> None:
   # The default home keeps the historical name; any other home appends a digest of its path.
   monkeypatch.delenv(CHARLIEBOT_HOME_ENV, raising=False)
-  home_dir = tmp_path / "home"
-  home_dir.mkdir()
   calls = []
-  monkeypatch.setattr(terminal.Path, "home", staticmethod(lambda: home_dir))
-
   fake_run_tmux = make_fake_run_tmux(calls)
 
-  # The has-session probe is a terminal-module global; the new-session spawn flows
-  # through pty_common._start_tmux_session.
-  monkeypatch.setattr(terminal, "_run_tmux", fake_run_tmux)
   monkeypatch.setattr(pty_common, "_run_tmux", fake_run_tmux)
 
   await terminal.ensure_terminal_session()
@@ -190,7 +186,7 @@ async def test_ensure_terminal_session_starts_global_login_shell(
       "-y",
       "24",
       "-c",
-      str(home_dir),
+      str(path_home),
       "bash",
       "-l",
   ) in calls
@@ -207,7 +203,7 @@ async def test_ensure_terminal_session_reuses_existing_tmux_session(monkeypatch:
     calls.append(args)
     return 0, ""
 
-  monkeypatch.setattr(terminal, "_run_tmux", fake_run_tmux)
+  monkeypatch.setattr(pty_common, "_run_tmux", fake_run_tmux)
 
   await terminal.ensure_terminal_session()
 

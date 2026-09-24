@@ -30,7 +30,7 @@ def sessions_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   return tmp_path
 
 
-def _build_client(access_key: str | None = None) -> TestClient:
+def _build_client(access_key: str | None) -> TestClient:
   """A files-router client that sends *access_key* as the charliebot_access_key
   cookie; None sends no credential. The cookie rides the client because httpx
   deprecates per-request cookies. The router ignores the credential either way —
@@ -124,8 +124,44 @@ def test_serve_file_injects_thread_artifact_with_session_id_not_thread_id(sessio
   assert '"T"' not in resp.text
 
 
+def test_serve_file_builds_the_1mib_chunk_response(sessions_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The file arm serves through _ServedFileResponse — the 1 MiB-chunk subclass
+  is the route's whole transport knob, so a revert to the base FileResponse must
+  fail this test, not silently re-price every artifact serve."""
+  page = _write(sessions_root / "S" / "artifacts" / "x.png")
+  built = []
+  real = files_api._ServedFileResponse
+
+  class _Recording(real):
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+      built.append(self)
+      super().__init__(*args, **kwargs)
+
+  monkeypatch.setattr(files_api, "_ServedFileResponse", _Recording)
+  resp = _build_client("secret").get("/absolute_filepath" + str(page))
+  assert resp.status_code == 200
+  assert len(built) == 1
+  assert built[0].chunk_size == 1 << 20
+
+
+def test_serve_file_binary_body_is_byte_identical_across_chunks(sessions_root: Path) -> None:
+  """A payload larger than one 1 MiB chunk rides the chunked read path; the
+  served body must be exactly the file's bytes with identity transport."""
+  page = sessions_root / "S" / "artifacts" / "trace.bin"
+  page.parent.mkdir(parents=True, exist_ok=True)
+  payload = bytes(range(256)) * ((2 << 20) // 256) + b"tail"
+  assert len(payload) > (1 << 20)
+  page.write_bytes(payload)
+
+  resp = _build_client("secret").get("/absolute_filepath" + str(page))
+  assert resp.status_code == 200
+  assert "content-encoding" not in resp.headers
+  assert resp.content == payload
+
+
 def test_serve_file_injects_deeper_nested_artifact(sessions_root: Path) -> None:
-  # A depth the old path-shape regex never matched: the predicate only cares that the
+  # A deeply nested page: the predicate only cares that the
   # page sits under <session>/... with an `artifacts` parent, not how deep.
   page = _write(sessions_root / "S" / "threads" / "T" / "sub" / "artifacts" / "x.html")
 
@@ -163,7 +199,10 @@ def test_serve_file_empty_configured_key_injects(sessions_root: Path, monkeypatc
 def test_serve_file_session_html_outside_artifacts_not_injected(sessions_root: Path) -> None:
   page = _write(sessions_root / "S" / "notes" / "x.html")
 
-  resp = _build_client("secret").get("/absolute_filepath" + str(page))
+  # A no-gzip client rides the streaming FileResponse arm — the request makes
+  # that explicit, since a gzip-accepting client of the same file answers from
+  # the bare-file arm's gzip memo (test_served_file_gzip.py).
+  resp = _build_client("secret").get("/absolute_filepath" + str(page), headers={"Accept-Encoding": "br"})
   assert resp.status_code == 200
   assert "artifact-comments.js" not in resp.text
   # Kept as a FileResponse: served from disk with a last-modified validator.
@@ -174,7 +213,7 @@ def test_serve_file_root_level_artifacts_dir_not_injected(sessions_root: Path) -
   # <root>/artifacts/x.html belongs to no session — there is no session component.
   page = _write(sessions_root / "artifacts" / "x.html")
 
-  resp = _build_client("secret").get("/absolute_filepath" + str(page))
+  resp = _build_client("secret").get("/absolute_filepath" + str(page), headers={"Accept-Encoding": "br"})
   assert resp.status_code == 200
   assert "artifact-comments.js" not in resp.text
   assert "last-modified" in resp.headers
@@ -189,7 +228,7 @@ def test_serve_file_artifact_shape_outside_sessions_root_not_injected(
   outside = tmp_path_factory.mktemp("outside")
   page = _write(outside / "a" / "sessions" / "S" / "artifacts" / "x.html")
 
-  resp = _build_client("secret").get("/absolute_filepath" + str(page))
+  resp = _build_client("secret").get("/absolute_filepath" + str(page), headers={"Accept-Encoding": "br"})
   assert resp.status_code == 200
   assert "artifact-comments.js" not in resp.text
   assert "last-modified" in resp.headers
@@ -238,15 +277,14 @@ def test_serve_file_clean_reinjects_when_page_is_rewritten(sessions_root: Path) 
 # middleware skips its own whole-body deflate ---
 
 
-def _build_gzip_client(access_key: str | None = None) -> TestClient:
+def _build_gzip_client(access_key: str) -> TestClient:
   """The files router behind the production gzip mount, so the test sees the
   skip the pre-compressed response buys. The credential argument mirrors
   _build_client: the router never reads it."""
   app = FastAPI()
   app.include_router(files_api.router, prefix="/absolute_filepath")
   mount_production_gzip(app)
-  cookies = {"charliebot_access_key": access_key} if access_key is not None else None
-  return TestClient(app, cookies=cookies)
+  return TestClient(app, cookies={"charliebot_access_key": access_key})
 
 
 def test_serve_file_gzip_view_ships_precompressed_injected_page(sessions_root: Path) -> None:
@@ -291,7 +329,7 @@ def test_serve_file_gzip_repeat_view_recompresses_nothing(sessions_root: Path, m
   monkeypatch.setattr(files_api, "gzip_level1", gzip_explode_compress("repeat gzip view re-ran the deflate"))
   resp = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
-  assert resp.headers["content-encoding"] == "gzip"
+  assert_gzip_served(resp)
   assert resp.text == first.text
 
 
@@ -531,7 +569,7 @@ def test_serve_file_diff_gzip_repeat_view_recompresses_nothing(
   monkeypatch.setattr(files_api, "gzip_level1", gzip_explode_compress("repeat gzip view re-ran the deflate"))
   resp = client.get(url, headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
-  assert resp.headers["content-encoding"] == "gzip"
+  assert_gzip_served(resp)
   assert resp.text == first.text
 
 

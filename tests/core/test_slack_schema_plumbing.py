@@ -9,13 +9,13 @@ from unittest.mock import MagicMock
 import pytest
 from conftest import (
     OPUS_BACKEND_OPTION,
+    make_sound_round,
     make_work_item,
     mock_session_callbacks,
     run_session_consumer,
     stub_credentials,
 )
 
-from src.agents import master_cc
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_credentials
 from src.core.models import (
@@ -82,10 +82,7 @@ async def _run_one_round(user_event_id: str | None) -> dict:
       user_event_id=user_event_id,
   )
 
-  async def fake_run_cc(_item: master_cc._WorkItem) -> tuple:
-    return ("cc-1", 0, None, {})
-
-  await run_session_consumer(session_id, [item], fake_run_cc)
+  await run_session_consumer(session_id, [item], make_sound_round("cc-1"))
 
   done_events = [
       call.args[1]

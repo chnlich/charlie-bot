@@ -7,6 +7,7 @@ const {dockOf, findChildByClass, makeElement, clickElement, flushPromises} =
   require('./artifact_comments_dom_stub');
 
 const {loadArtifactCommentsContext} = require('./artifact_comments_vm_context');
+const {mulberry32} = require('./mulberry32');
 
 // Source of the script under test, for the assertions that pin constants in it.
 const ARTIFACT_COMMENTS_JS = readStatic('artifact-comments.js');
@@ -769,16 +770,6 @@ test('each shortcut dedups on its own kind without blocking the other shortcuts'
 // pixel literal.
 // ---------------------------------------------------------------------------
 
-function mulberry32(seed) {
-  let s = seed | 0;
-  return function () {
-    s = (s + 0x6D2B79F5) | 0;
-    let t = Math.imul(s ^ (s >>> 15), 1 | s);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 function loadStackCards() {
   const {window} = loadArtifactCommentsScript(
     SESSION_270_PLAN_PATH
@@ -1063,11 +1054,10 @@ test('gutter cards are positioned by the stackCards pure function (render glue)'
 });
 
 test('gutter mode never writes the artifact\'s own layout', async () => {
-  // The mechanism that replaces the removed body-padding reserve: the layer
-  // writes no artifact style at all. The body's and documentElement's style
-  // attribute strings (el.attributes.style is this double's getAttribute) are
-  // captured at entry and asserted identical at every step, including after
-  // entry, which is where the old code reserved 316px of padding.
+  // The gutter layer writes no artifact style at all. The body's and
+  // documentElement's style attribute strings (el.attributes.style is this
+  // double's getAttribute) are captured at entry and asserted identical at
+  // every step.
   const block = makeBlock('anchored section');
   block.getBoundingClientRect = () => ({left: 0, top: 200, right: 640, bottom: 250, width: 640, height: 50});
   const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {

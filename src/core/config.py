@@ -53,9 +53,9 @@ log = LazyStructlogLogger()
 HOUSE_TIMEZONE = "America/Los_Angeles"
 
 # The API request model TaskCreate (src/api/cron.py) inherits this default through
-# ScheduledTaskFields; the web UI re-pins the value in three literals
-# (templates/index.html, two fallbacks in sidebar/modals.js) that cannot import
-# from Python — a change moves all three sites.
+# ScheduledTaskFields; the web UI re-pins the value in literals (index.html and
+# fallbacks in sidebar/modals.js) that cannot import from Python — a change moves
+# every re-pinning site.
 DEFAULT_TIMEZONE = HOUSE_TIMEZONE
 
 
@@ -180,7 +180,7 @@ class ScheduledTaskConfig(ScheduledTaskFields):
   notify: str | None = None  # 'telegram' or None
 
   @model_validator(mode='after')
-  def check_type_and_sources(self) -> 'ScheduledTaskConfig':
+  def check_type_and_sources(self) -> ScheduledTaskConfig:
     if self.type == 'pm':
       if self.steps is not None or self.handler or self.loop:
         raise ValueError("type 'pm' forbids 'steps', 'handler', and 'loop'; the PM wake is a prompt")
@@ -294,7 +294,7 @@ class PathsConfig(BaseModel):
   worktree_dir: str = "~/worktrees"
 
   @model_validator(mode="after")
-  def _expand_tilde(self) -> "PathsConfig":
+  def _expand_tilde(self) -> PathsConfig:
     """Expand ``~`` in both path settings against the process HOME."""
     self.workspace_dirs = [os.path.expanduser(p) for p in self.workspace_dirs]
     self.worktree_dir = os.path.expanduser(self.worktree_dir)
@@ -374,7 +374,7 @@ class UiConfig(BaseModel):
   home_services: list[HomeService] = []
 
   @model_validator(mode="after")
-  def _expand_tilde(self) -> "UiConfig":
+  def _expand_tilde(self) -> UiConfig:
     """Expand ``~`` in each backlog repo path."""
     for entry in self.backlog_repos:
       entry.path = os.path.expanduser(entry.path)
@@ -404,7 +404,7 @@ class PublishConfig(BaseModel):
   public_base_url: str | None = None
 
   @model_validator(mode="after")
-  def _expand_tilde(self) -> "PublishConfig":
+  def _expand_tilde(self) -> PublishConfig:
     """Expand ``~`` in the publish directory."""
     if self.dir is not None:
       self.dir = self.dir.expanduser()
@@ -465,7 +465,7 @@ class CharlieBotConfig(BaseModel):
   telegram: TelegramConfig = Field(default_factory=TelegramConfig)
 
   @classmethod
-  def model_construct(cls, _fields_set: set[str] | None = None, **values: object) -> "CharlieBotConfig":
+  def model_construct(cls, _fields_set: set[str] | None = None, **values: object) -> CharlieBotConfig:
     """``model_construct`` that rejects unknown keyword arguments by name.
 
     pydantic 2.12.5's ``model_construct`` silently drops kwargs that match no
@@ -797,16 +797,15 @@ def _resolve_prompt_file(entry: dict, repo_root: Path) -> Path | None:
 # readers) is stated once, on CLAUDE_CONFIG_DIR_ENV_VAR in src.core.home.
 
 
-def claude_config_dir(account: ClaudeAccount | None = None) -> Path:
+def claude_config_dir() -> Path:
   """Resolve the CLAUDE_CONFIG_DIR a cc-claude process will use.
 
-  Single source of truth for the resolution order: the pool account's
-  ``config_dir`` when one is pinned, then ``$CLAUDE_CONFIG_DIR``, then
-  ``~/.claude``. Both the API backend-switch guard and the runtime resume
-  resolver call this — do not restate the order anywhere else.
+  Single source of truth for the resolution order: ``$CLAUDE_CONFIG_DIR``
+  first, then ``~/.claude``. Both the API backend-switch guard and the
+  runtime resume resolver call this — do not restate the order anywhere
+  else. A pool account's pinned ``config_dir`` rides the ``CLAUDE_CONFIG_DIR``
+  value the backend sets on the process environment, never this call.
   """
-  if account is not None:
-    return Path(account.config_dir).expanduser()
   env_dir = os.environ.get(CLAUDE_CONFIG_DIR_ENV_VAR)
   if env_dir:
     return Path(env_dir).expanduser()
@@ -973,7 +972,7 @@ def _load_cron_file(path: Path, repo: Path, stem: str) -> tuple[ScheduledTaskCon
   hot-reload fingerprint). Raises :class:`ValueError` on any failure; the caller
   records it as a per-file error rather than propagating it.
   """
-  body = load_yaml(path)
+  body = load_yaml(path, default=None)
   if not isinstance(body, dict):
     raise ValueError("cron config must be a mapping")
   if "name" in body:
@@ -1000,7 +999,7 @@ def _read_cron_file_enabled(path: Path) -> bool | None:
   no truthful raw value, and inventing a default would misstate it.
   """
   try:
-    body = load_yaml(path)
+    body = load_yaml(path, default=None)
   except Exception as e:
     log.debug("cron_file_enabled_unreadable", path=str(path), error=str(e))
     return None
@@ -1041,7 +1040,7 @@ def _reload_cron_snapshot() -> _CronSnapshot:
         # restored without touching the host yaml, the next call must retry
         # the file and clear the error instead of serving a cached failure.
         try:
-          failed_body = load_yaml(path)
+          failed_body = load_yaml(path, default=None)
         except Exception as read_error:
           log.debug("cron_failed_file_prompt_path_unreadable", path=str(path), error=str(read_error))
         else:
@@ -1137,10 +1136,12 @@ def _fire_cron_error_alert(error_names: list[str]) -> None:
   new_set = frozenset(error_names)
   if new_set == _read_cron_alert_state():
     return
-  # Lazy: both imports ride the event-loop machinery, and this module is every
-  # CLI invocation's shared core — a synchronous CLI path never reaches here.
+  # Lazy: all three imports ride the event-loop machinery, and this module is
+  # every CLI invocation's shared core — a synchronous CLI path never reaches
+  # here.
   import asyncio
 
+  from src.core.json_utils import write_json_atomically
   from src.core.tasks import create_logged_task
 
   try:
@@ -1160,14 +1161,14 @@ def _fire_cron_error_alert(error_names: list[str]) -> None:
   try:
     state_path = _cron_alert_state_path()
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(names, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_json_atomically(state_path, names, newline=True)
   except OSError:
     log.exception("cron_alert_state_write_failed")
 
 
 def _cron_fingerprint(
     prompt_mtimes: dict[Path, float],) -> tuple[tuple[tuple[str, float], ...], dict[Path, float] | None, bool]:
-  """Compute the hot-reload fingerprint over all four re-read inputs.
+  """Compute the hot-reload fingerprint over all three re-read inputs.
 
   The set of ``cron.d/*.yaml`` paths with each file's mtime, the mtime of every
   referenced ``prompt_file`` (a referenced file that has gone missing makes the

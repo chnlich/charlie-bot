@@ -13,6 +13,74 @@ function loadCommentPost(fetchImpl) {
   return context;
 }
 
+// Minimal textarea/old-node double for swapInInlineEditor: records the
+// addEventListener registrations so the test can fire keydown and blur.
+function editorDom(initialValue) {
+  const listeners = {};
+  const textarea = {
+    value: initialValue,
+    addEventListener(name, fn) {
+      listeners[name] = fn;
+    },
+    focus() {},
+    select() {},
+  };
+  const oldNode = {
+    parentNode: {
+      replaceChild(node, ref) {
+        listeners.swapped = node === textarea && ref === oldNode;
+      },
+    },
+  };
+  return {
+    textarea,
+    oldNode,
+    listeners,
+    fireKey(event) {
+      listeners.keydown({...event, preventDefault() {}});
+    },
+    fireBlur() {
+      listeners.blur();
+    },
+  };
+}
+
+test('swapInInlineEditor swaps the node in and treats an empty edit as a cancel', () => {
+  const context = loadCommentPost();
+  const events = [];
+  const finished = [];
+  const editor = editorDom('   ');
+  context.swapInInlineEditor(editor.textarea, editor.oldNode, (value) => events.push(['commit', value]), () => finished.push(1));
+
+  assert.equal(editor.listeners.swapped, true);
+  editor.fireBlur();
+
+  assert.deepEqual(events, [], 'an all-whitespace edit must not commit');
+  assert.equal(finished.length, 1, 'cancel still runs finish once');
+});
+
+test('swapInInlineEditor commits the raw text then finishes exactly once', () => {
+  const context = loadCommentPost();
+  const events = [];
+  const finished = [];
+  const editor = editorDom(' hello ');
+  context.swapInInlineEditor(editor.textarea, editor.oldNode, (value) => events.push(['commit', value]), () => finished.push(1));
+
+  editor.fireKey({key: 'Escape'});
+  assert.deepEqual(events, [], 'Escape is a cancel: no commit');
+  assert.equal(finished.length, 1);
+
+  editor.fireBlur();
+  assert.equal(finished.length, 1, 'the done-once flag keeps the second end inert');
+
+  const retry = editorDom(' hello ');
+  context.swapInInlineEditor(retry.textarea, retry.oldNode, (value) => events.push(['commit', value]), () => finished.push(1));
+  retry.fireKey({key: 'Enter', ctrlKey: true});
+
+  assert.deepEqual(events, [['commit', ' hello ']], 'commit receives the raw text; the tray applies its own trim');
+  assert.equal(finished.length, 2);
+});
+
 test('postCommentMessage sends the comment-tray request shape', async () => {
   const calls = [];
   const context = loadCommentPost(async (url, options = {}) => {

@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING
 import orjson
 
 from src.core import event_types as ET
+from src.core.constants import BackendType
 from src.core.control_events import (
   ACTOR_SYSTEM,
   ControlEventSink,
@@ -48,7 +49,7 @@ from src.core.control_events import (
   stable_run_id,
 )
 from src.core.json_utils import atomic_write_text
-from src.core.models import BackendType, RunRecord, ensure_utc, utc_now
+from src.core.models import RunRecord, ensure_utc, utc_now
 from src.core.ndjson import parse_ndjson_line
 from src.core.session_aliases import SessionAliasStore
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
@@ -83,8 +84,8 @@ DIED_WITHOUT_RESULT_REASON = "process exited without a final result event"
 
 # Effective-alive verdicts: wherever death cannot be PROVEN (a liveness input
 # is missing, or the probe says alive), the run is treated as alive and never
-# finalized failed on missing evidence. These reasons route init.py's
-# report-only branch (no re-attach) for rows that have nothing followable.
+# finalized failed on missing evidence. These reasons route the boot-recovery
+# passes' report-only branch (no re-attach) for rows that have nothing followable.
 UNCOVERED_ALIVE_REASON = "uncovered-alive"
 RAW_MISSING_ALIVE_REASON = "raw-missing-alive"
 
@@ -513,7 +514,6 @@ def resolve_run(
     translate: Callable[[dict], list[dict]],
     host_boot_time: datetime,
     holders_scan: dict[tuple[int, int], list[HolderProcess]] | None = None,
-    now: datetime | None = None,
 ) -> RunResolution:
   """Resolve an interrupted run's outcome purely from on-disk facts.
 
@@ -532,7 +532,7 @@ def resolve_run(
   descendants are attached to the resolution (the outcome itself still comes
   from the other rows).
   """
-  now = now or datetime.now(UTC)
+  now = datetime.now(UTC)
   raw_exists = raw_path.is_file()
 
   if not raw_exists and pid is None:

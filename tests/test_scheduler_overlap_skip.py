@@ -89,8 +89,8 @@ def _install_clock(monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> None:
   )
 
 
-def _task(name: str = "code-health", cron: str = "* * * * *", **kw: Any) -> ScheduledTaskConfig:
-  base: dict = {"name": name, "cron": cron, "timezone": "UTC", "type": "normal", "prompt": "run the round"}
+def _task(name: str = "code-health", **kw: Any) -> ScheduledTaskConfig:
+  base: dict = {"name": name, "cron": "* * * * *", "timezone": "UTC", "type": "normal", "prompt": "run the round"}
   base.update(kw)
   return ScheduledTaskConfig(**base)
 

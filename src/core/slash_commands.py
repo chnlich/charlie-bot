@@ -13,6 +13,7 @@ from src.core.config import charliebot_home_dir
 from src.core.log_once import LazyStructlogLogger
 from src.core.process import kill_process_group
 from src.core.timeouts import SLASH_COMMAND_DEFAULT_TIMEOUT
+from src.core.yaml_utils import load_yaml_text
 
 log = LazyStructlogLogger()
 
@@ -52,9 +53,15 @@ def load_slash_commands() -> list[SlashCommand]:
     return []
   try:
     raw = path.read_text(encoding='utf-8')
-    data = yaml.safe_load(raw) or {}
+    data = load_yaml_text(raw, default={})
   except (OSError, yaml.YAMLError) as e:
     log.warning('slash_commands_load_failed', path=str(path), error=str(e))
+    return []
+  # A degenerate top-level document (an empty `or {}` collapse used to hide
+  # the falsy shapes; a truthy list always crashed here) is a load failure,
+  # the same contract as a malformed document.
+  if not isinstance(data, dict):
+    log.warning('slash_commands_load_failed', path=str(path), error='top-level document is not a mapping')
     return []
 
   commands_raw = data.get('commands') or {}
@@ -72,10 +79,10 @@ def load_slash_commands() -> list[SlashCommand]:
 
 async def execute_shell_command(
     cmd_template: str,
-    args: str = '',
-    session_dir: str = '',
-    timeout: int = SLASH_COMMAND_DEFAULT_TIMEOUT,
-    cwd: str | None = None,
+    args: str,
+    session_dir: str,
+    timeout: int,
+    cwd: str | None,
 ) -> dict:
   """Run a shell command template and return {stdout, stderr, exit_code}.
 

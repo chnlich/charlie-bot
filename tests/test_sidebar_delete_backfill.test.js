@@ -222,7 +222,7 @@ test('deleting on the archived tab stays node-only with the forget bookkeeping',
   };
   const baseline = fetchCalls.length;
 
-  await context.deleteSessionPermanently('arch-a');
+  await context.Sidebar.deleteSessionPermanently('arch-a');
   await settle();
 
   assert.equal(row.removed, true);

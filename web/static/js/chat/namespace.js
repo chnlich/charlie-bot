@@ -16,7 +16,6 @@
     expose(Object.keys(globals));
   }
 
-  Chat.expose = expose;
   Chat.wire = wire;
   global.Chat = Chat;
 })(globalThis);

@@ -41,7 +41,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       {
         kind: 'improve',
         label: 'Improve',
-        prompt: 'Think from scratch, how to improve this?',
+        prompt: 'Keep this page\'s goal and resolved choices fixed; raise doubts about them as ' +
+          'questions. Think from scratch for a better implementation: compare each candidate ' +
+          'with the current design, adopt one that wins, otherwise keep the current design.',
       },
       {
         kind: 'shorten',
@@ -1017,32 +1019,13 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       textarea.className = GLOBAL_PREFIX + '-tray-edit';
       textarea.value = entry.comment;
       textarea.setAttribute('aria-label', 'Edit comment');
-      var done = false;
-
-      function cancel() {
-        if (done) return;
-        done = true;
-        refreshTray();
-      }
-
-      function save() {
-        if (done) return;
-        var next = textarea.value.trim();
-        if (!next) {
-          cancel();
-          return;
-        }
-        done = true;
-        pending[idx].comment = next;
-        saveDraft(pending, artifactPath);
-        refreshTray();
-      }
-
-      bindEditorKeys(textarea, cancel, save);
-      textarea.addEventListener('blur', save);
-      draftNode.parentNode.replaceChild(textarea, draftNode);
-      textarea.focus();
-      textarea.select();
+      swapInInlineEditor(
+          textarea, draftNode,
+          function(value) {
+            pending[idx].comment = value.trim();
+            saveDraft(pending, artifactPath);
+          },
+          refreshTray);
     }
 
     function refreshTray() {

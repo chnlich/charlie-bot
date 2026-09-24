@@ -124,14 +124,13 @@ def iter_recent_thread_metas(
     threads_dir: Path,
     now: datetime,
     log_event: str,
-    window: timedelta = RUNNING_SCAN_WINDOW,
     walked: list[tuple[str, str, os.stat_result]] | None = None,
 ) -> Iterator[tuple[str, str, dict]]:
-  """Yield ``(thread_dir, meta_path, meta)`` for threads modified within *window*.
+  """Yield ``(thread_dir, meta_path, meta)`` for threads modified within RUNNING_SCAN_WINDOW.
 
   Cheap-first: ``os.scandir`` the threads dir and ``os.stat`` each ``metadata.json``,
   only ``load_json_meta`` (read + parse) the ones whose mtime is at least
-  ``now - window``. Threads whose metadata is older than the window are skipped
+  ``now - RUNNING_SCAN_WINDOW``. Threads whose metadata is older than the window are skipped
   with zero content reads, as are dirs with missing/unreadable metadata. In-window
   parses are memoized on (mtime_ns, size) (see the memo above the scan's callers),
   so a repeat scan over unchanged files costs one stat per file. Shared by
@@ -149,7 +148,7 @@ def iter_recent_thread_metas(
   worst corpus (the same finding the sidebar signature pass fixed).
   """
   triples = walked if walked is not None else _iter_thread_meta_stats(threads_dir, log_event)
-  cutoff = (now - window).timestamp()
+  cutoff = (now - RUNNING_SCAN_WINDOW).timestamp()
   for thread_dir, meta_path, st in triples:
     if st.st_mtime < cutoff:
       continue
@@ -487,7 +486,7 @@ def _parse_started_at(meta: dict) -> datetime | None:
 
 
 def _silence_report_text(thread_id: str, reason: str) -> str:
-  """The one-per-boot "alive but silent" report, shared by its two emit paths."""
+  """The one-per-boot "alive but silent" report, shared by its emit paths."""
   return (
       f"Worker thread {thread_id[:8]} is still alive but produced no output for over "
       f"{NO_OUTPUT_REPORT_THRESHOLD // 3600}h ({reason}). Suspected hung; "

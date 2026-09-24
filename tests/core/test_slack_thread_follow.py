@@ -16,6 +16,7 @@ from conftest import (
     SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
     TRIGGER_MASTER_PATCH_TARGET,
     TRIGGERS_GET_CONFIG_PATCH_TARGET,
+    FakeSlackClient,
     build_slack_cfg,
     make_internal_router_client,
     make_json_response,
@@ -97,42 +98,11 @@ def _thread_message(seq: int, text: str, user: str = "U_ALLOWED", bot: bool = Fa
   return message
 
 
-class _FakeSlackClient:
-  """Records calls; serves a seedable thread and fabricates permalinks; never touches the network."""
-
-  def __init__(self) -> None:
-    self.thread: list[dict] = []
-    self.reply_calls = 0
-    self.posts: list[dict] = []
-    self.reactions: list[dict] = []
-
-  async def get_permalink(self, channel: str, ts: str) -> str:
-    return f"https://fake.slack.test/archives/{channel}/p{ts}"
-
-  async def get_channel_name(self, channel_id: str) -> str | None:
-    return f"name-of-{channel_id}"
-
-  async def get_thread_replies(self, channel: str, thread_ts: str) -> list[dict]:
-    self.reply_calls += 1
-    return list(self.thread)
-
-  async def post_message(self, channel: str, text: str, thread_ts: str | None = None) -> dict:
-    self.posts.append({"channel": channel, "text": text, "thread_ts": thread_ts})
-    return {"ok": True}
-
-  async def add_reaction(self, channel: str, name: str, ts: str) -> dict:
-    self.reactions.append({"channel": channel, "name": name, "ts": ts})
-    return {"ok": True}
-
-  async def remove_reaction(self, channel: str, name: str, ts: str) -> dict:
-    return {"ok": True}
-
-
 def _rig(tmp_path: Path) -> tuple:
   """Slack rig: cfg and managers rooted at tmp_path, a recording fake client."""
   cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  return cfg, session_mgr, TriggerManager(cfg, session_mgr), _FakeSlackClient()
+  return cfg, session_mgr, TriggerManager(cfg, session_mgr), FakeSlackClient()
 
 
 def _shut_down(trigger_mgr: TriggerManager) -> None:
@@ -169,7 +139,7 @@ async def _handle_mention(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
     trigger_mgr: TriggerManager,
-    client: _FakeSlackClient,
+    client: FakeSlackClient,
     ts: str,
 ) -> str | None:
   """Run the summon path for one mention (all round machinery mocked out); return the session id."""
@@ -387,7 +357,7 @@ async def test_message_event_first_then_mention_cancels_the_armed_trigger(tmp_pa
 # ---------------------------------------------------------------------------
 
 
-def _seed_gate_thread(client: _FakeSlackClient) -> None:
+def _seed_gate_thread(client: FakeSlackClient) -> None:
   """One unread-eligible pair around noise that must not count."""
   client.thread = [
       {

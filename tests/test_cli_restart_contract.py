@@ -15,6 +15,7 @@ import http.server
 import json
 import socket
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -23,7 +24,15 @@ from types import ModuleType
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import make_json_response, write_trigger
+from conftest import (
+    CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET,
+    CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+    CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
+    CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
+    ROOT,
+    make_json_response,
+    write_trigger,
+)
 
 from src.cli import common
 from src.cli import improve as improve_module
@@ -79,9 +88,10 @@ def _patch_readback_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cli_mod
   patch lands on ``common``'s adapter, which ``_request_with_contract`` reads at call time.
   """
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setattr(cli_module, "get_config", lambda: cfg)
-  monkeypatch.setattr(common, "_request_post", lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
+  monkeypatch.setattr(
+      CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
   return cfg
 
 
@@ -93,10 +103,10 @@ def _patch_readback_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cli_mod
 def test_connect_never_established_retries_with_backoff_then_exhausts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   clock = _FakeClock()
   monkeypatch.setattr(common, "time", clock)
-  monkeypatch.setattr(common, "CLI_CONNECT_TOTAL_TIMEOUT", 2.0)
+  monkeypatch.setattr(CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET, 2.0)
 
   call_count = 0
 
@@ -105,7 +115,7 @@ def test_connect_never_established_retries_with_backoff_then_exhausts(
     call_count += 1
     raise _connect_refused()
 
-  monkeypatch.setattr(common, "_request_post", fake_post)
+  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, fake_post)
 
   with pytest.raises(SystemExit) as exc_info:
     common.post_internal_api("/api/internal/x", {"a": 1})
@@ -129,9 +139,9 @@ def test_connect_never_established_bounded_wall_clock_with_real_clock(
   CLI_CONNECT_TOTAL_TIMEOUT to sub-second keeps the actual wall-clock wait
   small and bounded — never anywhere near the real 60 s default."""
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
-  monkeypatch.setattr(common, "CLI_CONNECT_TOTAL_TIMEOUT", 0.3)
-  monkeypatch.setattr(common, "_request_post", lambda *a, **k: (_ for _ in ()).throw(_connect_refused()))
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET, 0.3)
+  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, lambda *a, **k: (_ for _ in ()).throw(_connect_refused()))
 
   started = time.monotonic()
   with pytest.raises(SystemExit) as exc_info:
@@ -146,10 +156,10 @@ def test_connect_never_established_bounded_wall_clock_with_real_clock(
 def test_listener_absent_then_appears_mid_budget_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The operationally important case: no listener yet, one appears mid-retry, call succeeds."""
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   clock = _FakeClock()
   monkeypatch.setattr(common, "time", clock)
-  monkeypatch.setattr(common, "CLI_CONNECT_TOTAL_TIMEOUT", 5.0)
+  monkeypatch.setattr(CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET, 5.0)
 
   attempts = 0
 
@@ -160,7 +170,7 @@ def test_listener_absent_then_appears_mid_budget_succeeds(tmp_path: Path, monkey
       raise _connect_refused()
     return common._CliResponse(200, "OK", json.dumps({"ok": True}).encode())
 
-  monkeypatch.setattr(common, "_request_post", fake_post)
+  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, fake_post)
 
   result = common.post_internal_api("/api/internal/x", {"a": 1})
 
@@ -182,10 +192,10 @@ def _rejection(status_code: int, detail: str) -> MagicMock:
 def test_server_rejection_reports_full_triple_and_hint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
-  monkeypatch.setattr(common, "_request_post", lambda *a, **k: _rejection(409, "stale version"))
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, lambda *a, **k: _rejection(409, "stale version"))
   monkeypatch.setattr(
-      common, "_maybe_version_skew_hint",
+      CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
       lambda cfg: "server running abc123, repo at def456 — server restart may be required")
 
   with pytest.raises(SystemExit) as exc_info:
@@ -206,9 +216,9 @@ def test_server_rejection_exit_code_override_keeps_code_and_effect(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   """schedule-trigger's 422 -> 2 contract: the override changes only the exit code."""
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
-  monkeypatch.setattr(common, "_request_post", lambda *a, **k: _rejection(422, "no such target"))
-  monkeypatch.setattr(common, "_maybe_version_skew_hint", lambda cfg: None)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, lambda *a, **k: _rejection(422, "no such target"))
+  monkeypatch.setattr(CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET, lambda cfg: None)
 
   with pytest.raises(SystemExit) as exc_info:
     common.post_internal_api("/api/internal/x", {"a": 1}, rejection_exit_codes={422: 2})
@@ -393,7 +403,30 @@ def test_schedule_trigger_readback_picks_pending_over_fired_historical_leg(
   assert out == {"trigger_id": "trg-new", "fire_at": "2024-02-01T00:00:00Z"}
 
 
-class _StubPlanListener:
+class _QuietHandler(http.server.BaseHTTPRequestHandler):
+  """Base for the stub listeners' handlers: silences the per-request stderr log
+  line the stdlib writes; the base class dispatches ``log_message`` by name."""
+
+  def log_message(self, format: str, *args: object) -> None:  # noqa: A002  stdlib signature mirror
+    pass
+
+
+class _StubListener:
+  """Serves one handler class on a free 127.0.0.1 port from a daemon thread;
+  ``close()`` shuts the server down. Subclasses define the handler."""
+
+  def __init__(self, handler: type[http.server.BaseHTTPRequestHandler]) -> None:
+    self._httpd = http.server.HTTPServer(("127.0.0.1", 0), handler)
+    self.port = self._httpd.server_address[1]
+    self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+    self._thread.start()
+
+  def close(self) -> None:
+    self._httpd.shutdown()
+    self._httpd.server_close()
+
+
+class _StubPlanListener(_StubListener):
   """A sibling of test_master_restart_recovery_e2e.py's _BlackHoleServer: POST is
   accepted then reset (sent-but-lost), GET answers with a crafted plans listing —
   exactly the shape ``plan``'s readback needs (a real GET response, not a mock).
@@ -402,7 +435,7 @@ class _StubPlanListener:
   def __init__(self, plans_payload: dict) -> None:
     payload = plans_payload
 
-    class Handler(http.server.BaseHTTPRequestHandler):
+    class Handler(_QuietHandler):
 
       def do_GET(self) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -417,17 +450,7 @@ class _StubPlanListener:
         self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
         self.connection.close()
 
-      def log_message(self, format: str, *args: object) -> None:  # noqa: A002  stdlib signature mirror
-        pass
-
-    self._httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-    self.port = self._httpd.server_address[1]
-    self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
-    self._thread.start()
-
-  def close(self) -> None:
-    self._httpd.shutdown()
-    self._httpd.server_close()
+    super().__init__(Handler)
 
 
 def test_plan_readback_resolves_to_seeded_plan_on_sent_but_lost(
@@ -451,7 +474,7 @@ def test_plan_readback_resolves_to_seeded_plan_on_sent_but_lost(
   stub = _StubPlanListener(plans_payload)
   try:
     cfg = _cfg(tmp_path, server={"port": stub.port})
-    monkeypatch.setattr(common, "get_config", lambda: cfg)
+    monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
 
     plan_module.main(["present", "--session", "sess-plan", "--file", "artifacts/plan_01.html", "--title", "My Plan"])
 
@@ -466,7 +489,7 @@ def test_plan_readback_reports_outcome_unknown_when_nothing_matches(
   stub = _StubPlanListener({"plans": []})
   try:
     cfg = _cfg(tmp_path, server={"port": stub.port})
-    monkeypatch.setattr(common, "get_config", lambda: cfg)
+    monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
 
     with pytest.raises(SystemExit) as exc_info:
       plan_module.main(
@@ -480,16 +503,16 @@ def test_plan_readback_reports_outcome_unknown_when_nothing_matches(
     stub.close()
 
 
-class _CapturePostListener:
-  """A stub that answers 200 to POST and records the wire request: the real
-  http.client client's serialization (Content-Type, body bytes, query string)
-  is this module's own code now, so it needs a real-socket pin."""
+class _CapturePostListener(_StubListener):
+  """A stub that answers 200 to POST and records the wire request: the plain-HTTP
+  client's serialization (Content-Type, body bytes, query string) is this module's
+  own code now, so it needs a real-socket pin."""
 
   def __init__(self) -> None:
     received: dict = {}
     self.received = received
 
-    class Handler(http.server.BaseHTTPRequestHandler):
+    class Handler(_QuietHandler):
 
       def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
@@ -504,17 +527,7 @@ class _CapturePostListener:
         self.end_headers()
         self.wfile.write(body)
 
-      def log_message(self, format: str, *args: object) -> None:  # noqa: A002  stdlib signature mirror
-        pass
-
-    self._httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-    self.port = self._httpd.server_address[1]
-    self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
-    self._thread.start()
-
-  def close(self) -> None:
-    self._httpd.shutdown()
-    self._httpd.server_close()
+    super().__init__(Handler)
 
 
 def test_post_sends_json_body_content_type_and_auth_header_over_the_real_client(
@@ -522,7 +535,7 @@ def test_post_sends_json_body_content_type_and_auth_header_over_the_real_client(
   stub = _CapturePostListener()
   try:
     cfg = _cfg(tmp_path, server={"port": stub.port})
-    monkeypatch.setattr(common, "get_config", lambda: cfg)
+    monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
 
     result = common._request_with_contract(
         "POST", "/api/internal/x", payload={"a": 1}, params={"k": "v"}, unknown_effect="none")
@@ -536,6 +549,65 @@ def test_post_sends_json_body_content_type_and_auth_header_over_the_real_client(
     stub.close()
 
 
+def test_plain_http_request_never_loads_the_http_client_stack() -> None:
+  """The plain-HTTP verb request runs the minimal socket client: http.client (+ssl,
+  email.parser inside it, ~16 ms of every verb's wall) must stay out of the process —
+  the M97 landing's remaining client stack (docs/perf_baseline.md). A raw-socket stub
+  serves the response because http.server's own import would load http.client in the
+  probe, defeating the assertion."""
+  response = (
+      b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+      b"Content-Length: 13\r\nConnection: close\r\n\r\n" + b'{"request":1}')
+
+  probe = '''
+import json, socket, sys, threading
+from src.cli.common import _send_request
+
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.bind(("127.0.0.1", 0))
+server.listen(1)
+served = {}
+
+def serve():
+    conn, _ = server.accept()
+    served["request"] = conn.recv(65536).decode("latin-1")
+    conn.sendall(STUB_RESPONSE)
+    conn.close()
+    server.close()
+
+threading.Thread(target=serve, daemon=True).start()
+resp = _send_request("POST", f"http://127.0.0.1:{server.getsockname()[1]}/api/internal/x?a=b",
+                     payload={"k": 1}, params=None, headers={}, timeout=5.0)
+print(json.dumps({
+    "status": resp.status_code,
+    "reason": resp._reason,
+    "body": json.loads(resp._body),
+    "request": served["request"],
+    "http_client_loaded": "http.client" in sys.modules,
+    "ssl_loaded": "ssl" in sys.modules,
+    "email_loaded": "email.parser" in sys.modules,
+}))
+'''.replace("STUB_RESPONSE", repr(response))
+  result = subprocess.run(
+      [sys.executable, "-c", probe],
+      cwd=ROOT,
+      capture_output=True,
+      text=True,
+      timeout=60,
+      check=True,
+  )
+  out = json.loads(result.stdout)
+  assert out["status"] == 200 and out["reason"] == "OK" and out["body"] == {"request": 1}
+  request_head, _, request_body = out["request"].partition("\r\n\r\n")
+  assert request_head.splitlines()[0] == "POST /api/internal/x?a=b HTTP/1.1"
+  assert "Content-Type: application/json" in request_head
+  assert "Content-Length:" in request_head
+  assert request_body == json.dumps({"k": 1})
+  assert out["http_client_loaded"] is False
+  assert out["ssl_loaded"] is False
+  assert out["email_loaded"] is False
+
+
 # ---------------------------------------------------------------------------
 # Gap 3(b) — readback determinism at the matcher level: concurrent identical
 # specs, and a verify thread never satisfying an implement call's readback.
@@ -547,7 +619,7 @@ def test_find_local_thread_concurrent_identical_specs_resolves_to_newest(
   """Two identical (description, task_type) threads in flight: readback must give a
   definite answer (the newest), not ambiguity — so no second worker gets spawned."""
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
 
   session_id = "sess-concurrent"
   _write_thread(
@@ -578,7 +650,7 @@ def test_find_local_thread_verify_and_implement_never_cross_match(
   """Matching requires description AND task_type: a verify thread must never satisfy
   an implement call's readback, nor the reverse, even with an identical description."""
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
 
   session_id = "sess-verify-vs-implement"
   _write_thread(cfg, session_id, "verify-thread", description="check the plan", task_type="verify", status="running")

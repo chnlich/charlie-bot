@@ -4,11 +4,20 @@ import tarfile
 from datetime import datetime
 from pathlib import Path
 
+from isal import igzip
+
 from src.core.config import CREDENTIALS_FILENAME, charliebot_home_dir
 from src.core.log_once import LazyStructlogLogger
 from src.core.threads import THREADS_DIR_NAME
 
 log = LazyStructlogLogger()
+
+# isal's fast tier: levels 1 and 2 price identically (isal-3 is the slow tier),
+# and level 1 keeps the same compresslevel the request path's gzip_level1 runs.
+# The wire costs ~17% over the stdlib level-9 stream it replaces; the build wall
+# prices ~17x under it (~1.9 GB/s vs ~110 MB/s measured on the corpus the M112
+# collector documents).
+_BACKUP_COMPRESS_LEVEL = 1
 
 
 def charliebot_dir() -> Path:
@@ -61,6 +70,8 @@ def create_backup() -> Path:
   """Create a compressed backup of this profile's state directory.
 
   Excludes: .git, .claude, credentials.yaml, sessions/*/threads, *.pyc, __pycache__.
+  The archive is a valid ``.tar.gz`` (isal level-1 gzip of the tar stream), readable
+  by ``tarfile.open(path, 'r:gz')``.
 
   Returns:
     Path to the created archive.
@@ -87,7 +98,12 @@ def create_backup() -> Path:
       for child in children:
         _add_recursive(tar, child, str(Path(arcname) / child.name))
 
-  with tarfile.open(archive_path, 'w:gz') as tar:
+  # The tar stream rides one isal IGzipFile — the state dir's gigabyte-scale
+  # sessions corpus priced stdlib's level-9 stream at ~110 MB/s (the M112
+  # collector's corpus), minutes of one core per backup run.
+  with open(archive_path, "wb") as raw_out, igzip.IGzipFile(
+      fileobj=raw_out, mode="wb", compresslevel=_BACKUP_COMPRESS_LEVEL) as gz_out, tarfile.open(fileobj=gz_out,
+                                                                                                mode="w") as tar:
     try:
       children = sorted(charliebot_dir().iterdir())
     except Exception as e:
@@ -101,16 +117,15 @@ def create_backup() -> Path:
   return archive_path
 
 
-def apply_retention(target_dir: Path | None = None) -> None:
-  """Apply tiered retention policy to backups in target_dir (default: this profile's).
+def apply_retention() -> None:
+  """Apply tiered retention policy to this profile's backups.
 
   - Keep all backups from the last 7 days.
   - Keep Sunday-only backups from 7-30 days ago.
   - Keep 1st-of-month backups from 30-90 days ago.
   - Delete everything older than 90 days.
   """
-  if target_dir is None:
-    target_dir = backup_dir()
+  target_dir = backup_dir()
   if not target_dir.exists():
     return
   now = datetime.now()

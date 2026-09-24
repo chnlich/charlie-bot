@@ -996,6 +996,22 @@ def _claude_fetch_value(utilization: float) -> dict:
   }
 
 
+def _cycled_claude_accounts(*cycles: list[tuple[str, str]]) -> Callable[[], dict]:
+  """``_derive_accounts`` double serving cycle *i*'s claude accounts on the *i*-th call (1-based).
+
+  The rebuild shape the prune-boundary tests drive: round 1 derives two accounts,
+  round 2 re-derives to a smaller set and the poll must prune the dropped key.
+  Codex stays empty — both tests prune on the claude side only.
+  """
+  call = {"i": 0}
+
+  def accounts_fn() -> dict:
+    call["i"] += 1
+    return {"claude": cycles[call["i"] - 1], "codex": []}
+
+  return accounts_fn
+
+
 def test_poll_multi_account_keys_and_error_placeholder_for_never_fetched(monkeypatch: pytest.MonkeyPatch) -> None:
   main_value = _claude_fetch_value(42.0)
 
@@ -1045,7 +1061,7 @@ def test_poll_stale_keep_on_fetch_failure(monkeypatch: pytest.MonkeyPatch) -> No
   assert state["broadcasts"] == 2
 
 
-def test_poll_drops_removed_account_on_next_rebuild(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_poll_drops_removed_account_and_refetches_the_survivor_on_next_rebuild(monkeypatch: pytest.MonkeyPatch) -> None:
   fetch_no = {"i": 0}
 
   def create_provider(provider: str, label: str, dir_path: str) -> _FakeProvider:
@@ -1056,27 +1072,19 @@ def test_poll_drops_removed_account_on_next_rebuild(monkeypatch: pytest.MonkeyPa
 
     return _FakeProvider(get_value)
 
-  call = {"i": 0}
-  accounts_by_cycle = {
-      1: {
-          "claude": [("main", "/fake/main"), ("invite-1", "/fake/invite-1")],
-          "codex": []
-      },
-      2: {
-          "claude": [("main", "/fake/main")],
-          "codex": []
-      },
-  }
-
-  def accounts_fn() -> dict:
-    call["i"] += 1
-    return accounts_by_cycle[call["i"]]
+  accounts_fn = _cycled_claude_accounts(
+      [("main", "/fake/main"), ("invite-1", "/fake/invite-1")], [("main", "/fake/main")])
 
   # Round 1 spans 2 fetches (2 sleeps); round 2 re-derives to 1 account, prunes
-  # the dropped key, then fetches once (3rd sleep) before stopping.
+  # the dropped key, then fetches once (3rd sleep) before stopping. The survivor
+  # refetches successfully, so its round-1 value (1.0) must give way to the
+  # round-2 one (3.0) — the fresh twin of the stale-keep boundary case below.
   _run_poll_cycles(monkeypatch, accounts_fn=accounts_fn, create_provider=create_provider, n=3)
 
   assert set(ext_usage_mod._cached_usage.keys()) == {"claude:main"}
+  kept = ext_usage_mod._cached_usage["claude:main"]
+  assert kept["windows"][0]["utilization"] == 3.0
+  assert "error" not in kept
 
 
 # ---------------------------------------------------------------------------
@@ -1142,21 +1150,7 @@ def test_poll_prunes_removed_account_cache_key_at_round_boundary(monkeypatch: py
       return _FakeProvider(main_get, error="rate limited")
     return _FakeProvider(lambda: good)
 
-  call = {"i": 0}
-  accounts_by_cycle = {
-      1: {
-          "claude": [("main", "/fake/main"), ("a", "/fake/a")],
-          "codex": []
-      },
-      2: {
-          "claude": [("main", "/fake/main")],
-          "codex": []
-      },
-  }
-
-  def accounts_fn() -> dict:
-    call["i"] += 1
-    return accounts_by_cycle[call["i"]]
+  accounts_fn = _cycled_claude_accounts([("main", "/fake/main"), ("a", "/fake/a")], [("main", "/fake/main")])
 
   # Round 1: main + a both fetch good values (sleeps 1, 2). Round 2 re-derives to
   # just main, prunes "claude:a" at the boundary, then fetches main (None ->
@@ -1826,15 +1820,8 @@ class _FakeUsageHTTP:
     return _FakeResponse(self._renewal_status, self._renewal, text=self._renewal_body)
 
 
-def _write_credentials(
-    path: Path,
-    *,
-    access: str = "tok-stored",
-    refresh: str = "ref-stored",
-    expires_at: int | None = _STALE_EXPIRES_AT_MS) -> None:
-  payload = {"claudeAiOauth": {"accessToken": access, "refreshToken": refresh}}
-  if expires_at is not None:
-    payload["claudeAiOauth"]["expiresAt"] = expires_at
+def _write_credentials(path: Path, *, access: str = "tok-stored", refresh: str = "ref-stored") -> None:
+  payload = {"claudeAiOauth": {"accessToken": access, "refreshToken": refresh, "expiresAt": _STALE_EXPIRES_AT_MS}}
   path.write_text(json.dumps(payload))
 
 

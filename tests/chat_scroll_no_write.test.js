@@ -116,7 +116,7 @@ test('showScrollToBottom writes exactly once when the button needs to become vis
 test('hideScrollToBottom writes nothing when the button is already hidden', () => {
   const btn = makeCountingElement(['hidden'], '');
   const context = loadScrollContext(new Map([['scroll-to-bottom', btn]]));
-  context.hideScrollToBottom();
+  context.Chat.hideScrollToBottom();
   assert.equal(btn.counts.classWrites, 0);
   assert.equal(btn.classList.contains('hidden'), true);
 });
@@ -124,7 +124,7 @@ test('hideScrollToBottom writes nothing when the button is already hidden', () =
 test('hideScrollToBottom writes exactly once when the button needs to become hidden', () => {
   const btn = makeCountingElement([], '');
   const context = loadScrollContext(new Map([['scroll-to-bottom', btn]]));
-  context.hideScrollToBottom();
+  context.Chat.hideScrollToBottom();
   assert.equal(btn.counts.classWrites, 1);
   assert.equal(btn.classList.contains('hidden'), true);
 });
@@ -205,14 +205,14 @@ function loadWorkersContext(elements) {
 test('updateTriggerStatus writes nothing to icon.className when the status is unchanged', () => {
   const icon = makeCountingElement(['w-4', 'h-4', 'flex-shrink-0', 'text-amber-400'], '');
   const context = loadWorkersContext(new Map([['trigger-dot-t1', icon]]));
-  context.updateTriggerStatus('t1', 'pending');
+  context.Sidebar.updateTriggerStatus('t1', 'pending');
   assert.equal(icon.counts.classWrites, 0);
 });
 
 test('updateTriggerStatus writes icon.className exactly once when the status actually changed', () => {
   const icon = makeCountingElement(['w-4', 'h-4', 'flex-shrink-0', 'text-slate-500'], '');
   const context = loadWorkersContext(new Map([['trigger-dot-t1', icon]]));
-  context.updateTriggerStatus('t1', 'pending');
+  context.Sidebar.updateTriggerStatus('t1', 'pending');
   assert.equal(icon.counts.classWrites, 1);
   assert.equal(icon.classList.contains('text-amber-400'), true);
 });

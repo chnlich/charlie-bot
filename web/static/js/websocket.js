@@ -4,8 +4,8 @@
 // Wire format: the server feeds raw chat events through MessageAggregator and
 // broadcasts `message` and `stream` deltas in addition to non-aggregated
 // events. Rendering is fully driven by deltas; raw assistant/user/
-// scheduled_trigger events are no longer sent. Other raw events (master_done,
-// task_delegated, …) still flow but only for state side-effects (stopThinking,
+// scheduled_trigger events are not sent. Other raw events (master_done,
+// task_delegated, …) flow but only for state side-effects (stopThinking,
 // spinner, etc).
 let ws = null;
 let reconnectDelay = 1000;
@@ -127,7 +127,7 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
   }
   if (t === 'ping') return;
 
-  // Session rename can arrive at any time — handle before catchup guard
+  // Session rename can arrive at any time
   if (t === 'session_renamed') {
     const sid = ev.session_id || SESSION_ID;
     if (typeof updateSidebarSessionName === 'function') {
@@ -143,6 +143,13 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     return;
   }
 
+  // Explain (btw-style) state change for one divider: repaint the button from the
+  // frame; a frame carries no body, so an open panel re-fetches the single entry.
+  if (t === 'explain_status') {
+    updateExplainStatus(SESSION_ID, ev.upto, ev.state, ev.backend);
+    return;
+  }
+
   // A changed task node re-fetches the list the same way a group change does.
   if (t === 'session_group_changed' || t === 'task_tree_changed') {
     const searchInput = document.getElementById('sidebar-search');
@@ -152,11 +159,11 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     return;
   }
 
-  // Sidebar unread indicator — handle before catchup guard. Broadcasts are
-  // socket-ordered and always apply (they stamp the newest fact, so any
-  // in-flight poll or tree-page reply captured earlier is refused by the
-  // shared gate). The dot is an idle-state cue for both row kinds: activity
-  // (spinner or delegated gear) hides it without discarding the flag.
+  // Sidebar unread indicator. Broadcasts are socket-ordered and always apply
+  // (they stamp the newest fact, so any in-flight poll or tree-page reply
+  // captured earlier is refused by the shared gate). The dot is an idle-state
+  // cue for both row kinds: activity (spinner or delegated gear) hides it
+  // without discarding the flag.
   if (t === 'unread_changed') {
     recordUnreadFact(ev.session_id, ev.has_unread);
     if (ev.session_id === SESSION_ID) return;
@@ -165,7 +172,7 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     return;
   }
 
-  // Sidebar spinner update — handle before catchup guard
+  // Sidebar spinner update
   if (t === 'running_changed') {
     setSessionIndicator(ev.session_id, getSessionIndicatorState({
       thinking_since: ev.thinking_since,

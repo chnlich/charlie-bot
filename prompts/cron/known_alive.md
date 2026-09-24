@@ -575,10 +575,10 @@ Known-alive symbols:
   (`test_projection_history_equals_events_to_messages`, parametrized): `history` must equal
   `events_to_messages(all_events)` because it feeds the same reference path, and that module's
   page-walk and draft-identity tests read it as that reference. `tests/test_scheduler_shared_session_manager.py`
-   reads its length once, and `docs/perf_baseline.md`'s projection-parity collector digests it. A
-   src-only vulture scan flags it as an unused property; a whole-repo grep finds only the definition,
-   the class docstring's definitional sentence, those tests, and the perf doc. Same
-   deliberately-retained-oracle class as the `search_sessions` entry above.
+  reads its length once, and `docs/perf_baseline.md`'s projection-parity collector digests it. A
+  src-only vulture scan flags it as an unused property; a whole-repo grep finds only the definition,
+  the class docstring's definitional sentence, those tests, and the perf doc. Same
+  deliberately-retained-oracle class as the `search_sessions` entry above.
 - `_get_close_waiter` (and its `stream` parameter) (`src/agents/backends/spawn.py`) — reached by
   the stdlib's duck-typed close contract: `asyncio.StreamWriter.wait_closed()` resolves
   `self._protocol._get_close_waiter(self)` (CPython 3.12.3 `asyncio.streams`), and

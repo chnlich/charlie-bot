@@ -33,8 +33,7 @@ def _cmd_cool(args: argparse.Namespace) -> None:
 
 def main() -> None:
   parser = argparse.ArgumentParser(description="CharlieBot storage reclamation", formatter_class=CliHelpFormatter)
-  sub = parser.add_subparsers(dest="command")
-  sub.required = True
+  sub = parser.add_subparsers(dest="command", required=True)
 
   cool = sub.add_parser(
       "cool",

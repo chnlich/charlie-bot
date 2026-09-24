@@ -125,7 +125,7 @@ class ControlEventSink:
   persistence without changing the owners' call sites.
   """
 
-  def __init__(self, session_mgr: "SessionManager") -> None:
+  def __init__(self, session_mgr: SessionManager) -> None:
     self._session_mgr = session_mgr
 
   async def append(self, session_id: str, event: dict) -> None:

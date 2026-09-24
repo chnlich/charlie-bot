@@ -143,9 +143,9 @@ def build_synthetic_home(home: Path, backend_id: str, entry: dict) -> tuple[int,
     access_key = "smoke-operator-key-" + os.urandom(8).hex()
     (home / "credentials.yaml").write_text(
         f"charliebot:\n  access_key: {access_key}\n", encoding="utf-8")
-    for secret in (access_key, str(entry.get("api_base") or ""), str(entry.get("api_key") or "")):
-        if secret:
-            _REDACTIONS.append(secret)
+    _REDACTIONS.extend(
+        secret for secret in (access_key, str(entry.get("api_base") or ""), str(entry.get("api_key") or ""))
+        if secret)
     return port, access_key
 
 

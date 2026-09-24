@@ -33,7 +33,7 @@ if TYPE_CHECKING:
   from src.core.config import CharlieBotConfig
 
 
-def get_config() -> "CharlieBotConfig":
+def get_config() -> CharlieBotConfig:
   """Deferred config load: the module import stays config-free (the M98 invocation
   wall — a broken config.yaml must not block the store's own verbs), and only the
   run-token path (which must resolve the run credential's fixed audience) calls it.
@@ -122,7 +122,7 @@ def _cmd_query(args: argparse.Namespace) -> None:
     print(memory.full_text(e))
 
 
-def _resolve_run_scoped_audience(cfg: "CharlieBotConfig", token: str) -> str:
+def _resolve_run_scoped_audience(cfg: CharlieBotConfig, token: str) -> str:
   """The audience the verified, active owning Run of *token* fixes — or a visible exit.
 
   Reuses the central run-identity pieces (the signature verifier and the one

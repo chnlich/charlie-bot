@@ -22,7 +22,7 @@ from tests.test_task_execution import build_env
 @pytest.mark.asyncio
 async def test_two_same_spec_siblings_readback_binds_to_request_identity(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+    _cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
     manager = await tree.create_task(
         request_id="root", task_parent_id=None, profile="manager",
         task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
@@ -65,7 +65,7 @@ async def test_two_same_spec_siblings_readback_binds_to_request_identity(
 async def test_readback_returns_none_without_the_bound_child(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """No bound child (or a mismatched one) is outcome-unknown, never a fallback."""
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+    _cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
     manager = await tree.create_task(
         request_id="root", task_parent_id=None, profile="manager",
         task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
@@ -93,7 +93,7 @@ async def test_readback_run_id_is_the_operation_work_run(
     """The returned Run is the delegation's own work Run — not whichever run
     directory sorts first (a review Run of the same child is a different op)."""
     from src.core.control_events import stable_run_id
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+    _cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
     manager = await tree.create_task(
         request_id="root", task_parent_id=None, profile="manager",
         task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")

@@ -261,7 +261,7 @@ async def test_verify_exemption_on_the_v2_route_and_launch(
     """A read-only verify delegation needs no authorization window on the real
     v2 route and still launches (and runs) with no user instruction anywhere —
     while a repo task type under the same tree stays blocked."""
-    cfg, session_mgr, tree, root, child = await make_tree(tmp_path, monkeypatch)
+    cfg, session_mgr, tree, _root, child = await make_tree(tmp_path, monkeypatch)
     builds = install_backends(
         monkeypatch, [SpawningScriptedBackend([result_event("verdict: no")])],
         "src.agents.worker.build_backend")
@@ -302,7 +302,7 @@ async def test_v1_delegate_without_takeoff_stays_blocked(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
     """A legacy session keeps its session-local gate: no take-off, no spawn,
     and the session is not adopted as a task node."""
-    cfg, session_mgr, tree, root, child = await make_tree(tmp_path, monkeypatch)
+    cfg, session_mgr, tree, _root, _child = await make_tree(tmp_path, monkeypatch)
     builds = install_backends(monkeypatch, [], "src.agents.worker.build_backend")
     from src.core.models import CreateSessionRequest
     legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"))

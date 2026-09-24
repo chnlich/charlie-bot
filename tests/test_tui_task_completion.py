@@ -36,7 +36,7 @@ class ScriptedTtyAttachment:
   """The scripted native terminal: a real pipe for the pump, recorded writes,
   no process, no tmux, no real native ids."""
 
-  instances: "dict[str, ScriptedTtyAttachment]" = {}
+  instances: dict[str, ScriptedTtyAttachment] = {}
 
   def __init__(self, session_id: str) -> None:
     self.session_id = session_id
@@ -116,7 +116,7 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
   # The terminal boundary: tmux + the attach PTY are scripted; the relay and
   # the pump run for real against the scripted pipe.
-  import src.agents.backends.tui as tui
+  from src.agents.backends import tui
 
   ensured: list[tuple[str, Path]] = []
   tmux_live: set[str] = set()
@@ -155,7 +155,7 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   monkeypatch.setattr(tui, "tmux_session_exists", fake_tmux_session_exists)
   monkeypatch.setattr(tui, "kill_tmux_session", fake_kill_tmux_session)
   monkeypatch.setattr(tui, "PtyAttachment", ScriptedTtyAttachment)
-  import src.agents.backends.pty_common as pty_common
+  from src.agents.backends import pty_common
   monkeypatch.setattr(pty_common, "tmux_pane_pid", fake_tmux_pane_pid)
 
 
@@ -208,7 +208,7 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
   """Create → attach (stable task identity) → status → stop, then the durable
   input, the operator acknowledgement, and the completion through the ordinary
   guards. A second synthetic instance stays untouched throughout."""
-  cfg, session_mgr, tree, client, ensured, killed, streaming, start_calls, pane_proc = tui_env
+  cfg, _session_mgr, tree, client, ensured, killed, _streaming, start_calls, pane_proc = tui_env
 
   # A second, isolated synthetic instance: its data must never be touched.
   other_home = cfg.charliebot_home.parent / "second-instance-home"
@@ -273,7 +273,7 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
       deadline = asyncio.get_event_loop().time() + timeout
       while asyncio.get_event_loop().time() < deadline:
         try:
-          item = await asyncio.wait_for(asyncio.to_thread(frames.get, True, 0.2), 1.0)
+          item = await asyncio.wait_for(asyncio.to_thread(frames.get, block=True, timeout=0.2), 1.0)
         except TimeoutError:
           continue
         if isinstance(item, BaseException):
@@ -564,7 +564,7 @@ async def test_acknowledged_input_unblocks_a_structural_operation(
   """The acknowledgement is durable task state: the folded pending set loses
   the acknowledged ids, so the same guard set the tree UI reads reports the
   node unblocked without any second model."""
-  cfg, session_mgr, tree, client, ensured, killed, streaming, start_calls, _pane = tui_env
+  _cfg, _session_mgr, tree, client, _ensured, _killed, _streaming, _start_calls, _pane = tui_env
   task = _create_tui_task(client)
   session_id = task["id"]
   first = _send_input(client, session_id, "the instruction", "input-1")
@@ -598,7 +598,7 @@ async def test_tui_attach_prepare_failure_lands_a_terminal_fact_and_retries_clea
   attach, the registered Run records a definite failed terminal fact — never
   a permanently queued ghost — the in-flight marker is released, and the next
   attach after repair launches for real."""
-  cfg, session_mgr, tree, client, ensured, killed, streaming, start_calls, pane_proc = tui_env
+  cfg, _session_mgr, tree, client, _ensured, _killed, _streaming, start_calls, pane_proc = tui_env
   task = _create_tui_task(client)
   session_id = task["id"]
   from src.core.models import PatchSessionTaskRequest
@@ -623,7 +623,7 @@ async def test_tui_attach_prepare_failure_lands_a_terminal_fact_and_retries_clea
   assert start_calls == []  # no tmux was ever started
   assert "unavailable" in failure.get("error", "")
   # In-flight marker released; the registered Run landed its failed fact.
-  import src.core.task_execution as task_execution
+  from src.core import task_execution
   assert session_id not in task_execution._TUI_LAUNCH_INFLIGHT
   runs1 = [r for r in tree.runs.list_run_records_sync(session_id) if r.kind == "manager_turn"]
   assert len(runs1) == 1

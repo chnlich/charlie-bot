@@ -430,7 +430,7 @@ def test_completed_import_requires_evidence(
   home2 = fx.build_unproven_implement_home(tmp_path / "h2")
   point_home(monkeypatch, home2)
   manifest2_path = tmp_path / "m2.json"
-  code, manifest2, summary = dry_run(monkeypatch, home2, manifest2_path)
+  code, manifest2, _summary = dry_run(monkeypatch, home2, manifest2_path)
   assert code == 0 and manifest2.unresolved == []
   verdicts = {m.disposition for m in manifest2.mappings if m.source_kind == "worker_thread"}
   assert "worker_work_unproven" in verdicts
@@ -685,9 +685,9 @@ def test_scan_reports_a_writer_ancestor_and_excludes_launchers(
   scan_script.write_text(_SCAN_CODE, encoding="utf-8")
   launcher = subprocess.Popen(
       ["bash", "-c",
-       f"export CHARLIEBOT_HOME={shlex.quote(str(home))}; "
-       f"{shlex.quote(sys.executable)} {shlex.quote(str(scan_script))} "
-       f"{shlex.quote(str(home))} -"],
+       (f"export CHARLIEBOT_HOME={shlex.quote(str(home))}; "
+        f"{shlex.quote(sys.executable)} {shlex.quote(str(scan_script))} "
+        f"{shlex.quote(str(home))} -")],
       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
   try:
     hits = _wait_for_scan_output(launcher)

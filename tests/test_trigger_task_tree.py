@@ -126,9 +126,9 @@ async def test_trigger_refire_after_crash_does_not_duplicate_input(
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
       patch(TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
       patch.object(TriggerManager, "_fire_task_tree", AsyncMock(side_effect=RuntimeError("crashed"))),
+      pytest.raises(RuntimeError, match="crashed"),
   ):
-    with pytest.raises(RuntimeError, match="crashed"):
-      await trigger_mgr._wait_and_fire(trigger)
+    await trigger_mgr._wait_and_fire(trigger)
   # The trigger stays pending (the crash window): no FIRED stamp.
   fresh = await trigger_mgr._load_trigger(trigger.session_id, trigger.id)
   assert fresh is not None and fresh.status == TriggerStatus.PENDING

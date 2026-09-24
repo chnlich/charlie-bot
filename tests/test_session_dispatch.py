@@ -192,7 +192,7 @@ async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_later_input_during_execution_keeps_id_and_blocks_close(tmp_path: Path) -> None:
-  _, session_mgr, tree = build_env(tmp_path)
+  _, _session_mgr, tree = build_env(tmp_path)
   parent_task = await create_task(tree, parent=None, request_id="parent")
   node = await create_task(tree, parent=parent_task.id, request_id="node", profile="worker")
   first = await admit(tree, node.id, "first input", input_id="input-1")
@@ -556,7 +556,7 @@ async def test_blocked_publish_and_tree_query_show_no_phantom_node(tmp_path: Pat
 
 @pytest.mark.asyncio
 async def test_stale_index_build_never_installs_over_newer_writes(tmp_path: Path) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_mgr, tree = build_env(tmp_path)
   await create_task(tree, parent=None, request_id="root")
   await tree._get_index()
 
@@ -587,7 +587,7 @@ async def test_stale_index_build_never_installs_over_newer_writes(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_deletion_rejects_each_reference_category_and_deletes_the_empty(tmp_path: Path) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   child = await create_task(tree, parent=root.id, request_id="child", profile="worker")
 
@@ -802,7 +802,7 @@ async def test_batchless_finish_never_acknowledges_another_runs_claimed_batch(tm
   lands between the dispatcher's pre-check and the locked finish still fails)."""
   from src.core.runs import RunInputMismatchError
 
-  cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_mgr, tree = build_env(tmp_path)
   task = await create_task(tree, parent=None, request_id="root")
   await admit(tree, task.id, "work", input_id="in-1")
   await tree.runs.register_run(RunRecord(id="run-b", session_id=task.id, kind="work"))

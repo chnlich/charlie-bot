@@ -756,7 +756,7 @@ async def get_thread(
   return await gzip_body_response(request, fast_json_bytes(payload), {}, _detail_gzip_memo)
 
 
-async def _resolve_v2_run(owner_session_id: str, thread_id: str) -> "tuple[str, str] | None":
+async def _resolve_v2_run(owner_session_id: str, thread_id: str) -> tuple[str, str] | None:
   """Resolve a legacy thread address to its owning v2 (session, run), if any.
 
   Both alias entries — the child-session entry and the delegating-parent

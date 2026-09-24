@@ -279,7 +279,7 @@ class TaskTreeManager:
   # Tree index (rebuildable)
   # ------------------------------------------------------------------
 
-  async def _get_index(self, *, force: bool = False) -> "_TreeIndex":
+  async def _get_index(self, *, force: bool = False) -> _TreeIndex:
     now = time.monotonic()
     if not force and self._index is not None and now - self._index[1] < _TREE_INDEX_TTL_SECONDS:
       return self._index[0]
@@ -306,7 +306,7 @@ class TaskTreeManager:
     must drop the projection cache here or tree_page serves a stale name."""
     self._invalidate_index()
 
-  def _build_index_sync(self) -> "_TreeIndex":
+  def _build_index_sync(self) -> _TreeIndex:
     sessions_dir = self._cfg.sessions_dir
     root_sig = (0, 0)
     try:
@@ -350,16 +350,16 @@ class TaskTreeManager:
     revision = sha256_hex(revision_input)
     return _TreeIndex(metas=metas, children=children, revision=revision, root_sig=root_sig)
 
-  def _index_meta(self, index: "_TreeIndex", session_id: str) -> SessionMetadata:
+  def _index_meta(self, index: _TreeIndex, session_id: str) -> SessionMetadata:
     meta = index.metas.get(session_id)
     if meta is None:
       raise TaskNotFoundError(f"task {session_id} not found")
     return meta
 
-  def _children_of(self, index: "_TreeIndex", session_id: str | None) -> list[str]:
+  def _children_of(self, index: _TreeIndex, session_id: str | None) -> list[str]:
     return list(index.children.get(session_id, []))
 
-  def _descendants(self, index: "_TreeIndex", session_id: str) -> list[str]:
+  def _descendants(self, index: _TreeIndex, session_id: str) -> list[str]:
     """All transitive descendants, cycle-guarded (a cycle here is corrupted data, not a tree)."""
     out: list[str] = []
     stack = list(self._children_of(index, session_id))
@@ -375,7 +375,7 @@ class TaskTreeManager:
         raise TaskConflictError([f"subtree of {session_id} exceeds {_ANCESTOR_HOP_LIMIT} nodes"])
     return out
 
-  def _ancestors(self, index: "_TreeIndex", session_id: str) -> list[SessionMetadata]:
+  def _ancestors(self, index: _TreeIndex, session_id: str) -> list[SessionMetadata]:
     """The task-parent chain above *session_id*, nearest first (cycle-guarded)."""
     chain: list[SessionMetadata] = []
     seen = {session_id}
@@ -466,10 +466,10 @@ class TaskTreeManager:
     """The task's derived lifecycle state without a caller-held index."""
     return self._facts_of(session_id).task_state
 
-  def task_state_of(self, index: "_TreeIndex", session_id: str) -> str:
+  def task_state_of(self, index: _TreeIndex, session_id: str) -> str:
     return self._facts_of(session_id).task_state
 
-  def work_state_of(self, index: "_TreeIndex", session_id: str) -> WorkState:
+  def work_state_of(self, index: _TreeIndex, session_id: str) -> WorkState:
     """idle | running | waiting | attention, from CURRENT unresolved facts.
 
     An active run wins, then an unresolved failure, then waiting work. A
@@ -549,7 +549,7 @@ class TaskTreeManager:
         if meta.status != SessionStatus.ARCHIVED and self.archived_of(index, meta)
     }
 
-  def archived_of(self, index: "_TreeIndex", meta: SessionMetadata) -> bool:
+  def archived_of(self, index: _TreeIndex, meta: SessionMetadata) -> bool:
     """Archive visibility: the explicit preference, or auto after successful receipt.
 
     presentation=auto archives a successful task once its parent receipt is on
@@ -558,7 +558,7 @@ class TaskTreeManager:
     """
     return self._archived_facts_based(meta, self._facts_of(meta.id))
 
-  def session_row(self, index: "_TreeIndex", session_id: str) -> SessionRow:
+  def session_row(self, index: _TreeIndex, session_id: str) -> SessionRow:
     meta = self._index_meta(index, session_id)
     child_ids = self._children_of(index, session_id)
     descendants = self._descendants(index, session_id)
@@ -608,7 +608,7 @@ class TaskTreeManager:
         # would silently do nothing.
         await self._sessions.clear_cc_session_anchor(session_id)
 
-  def prompt_rule_summaries(self, meta: SessionMetadata, index: "_TreeIndex") -> dict:
+  def prompt_rule_summaries(self, meta: SessionMetadata, index: _TreeIndex) -> dict:
     """The scope/source/current-rule facts the Task/Context UI reads from the detail.
 
     Body content stays in the immutable store; this names each scope's ref,
@@ -775,7 +775,7 @@ class TaskTreeManager:
 
   async def _authorize_agent_creation(
       self,
-      caller: "object",
+      caller: object,
       profile: str,
       task_parent_id: str | None,
       parent_meta: SessionMetadata | None,
@@ -800,7 +800,7 @@ class TaskTreeManager:
       # the nearest-real-user-ancestor gate (takeoff_gate) decides.
       await self.check_task_authorization(claims.session_id)
 
-  async def _require_open_ancestry_from_index(self, index: "_TreeIndex", session_id: str) -> None:
+  async def _require_open_ancestry_from_index(self, index: _TreeIndex, session_id: str) -> None:
     chain = self._ancestors(index, session_id)
     closed = [a.id for a in chain if self._facts_of(a.id).task_state != "open"]
     if closed:
@@ -1151,7 +1151,7 @@ class TaskTreeManager:
   # Tree queries
   # ------------------------------------------------------------------
 
-  def _has_active_work_descendant(self, index: "_TreeIndex", session_id: str) -> bool:
+  def _has_active_work_descendant(self, index: _TreeIndex, session_id: str) -> bool:
     """True when any descendant's current work is running or needs attention."""
     return any(
         self.work_state_of(index, d) in ("running", "attention")
@@ -1234,7 +1234,7 @@ class TaskTreeManager:
       blockers = self._deletion_blockers_locked(index, session_id)
     return blockers
 
-  def _legacy_deletion_blockers(self, index: "_TreeIndex", session_id: str) -> list[str]:
+  def _legacy_deletion_blockers(self, index: _TreeIndex, session_id: str) -> list[str]:
     """The v1 check set (children via the flat index, runs, triggers, aliases)."""
     blockers: list[str] = []
     children = self._children_of(index, session_id)
@@ -1251,7 +1251,7 @@ class TaskTreeManager:
         for old_id in self.aliases.old_ids_for(session_id))
     return blockers
 
-  def _deletion_blockers_locked(self, index: "_TreeIndex", session_id: str) -> list[str]:
+  def _deletion_blockers_locked(self, index: _TreeIndex, session_id: str) -> list[str]:
     """The v2 empty/unreferenced rule, evaluated under the control lock.
 
     No children, runs, triggers, aliases, or any other saved structured

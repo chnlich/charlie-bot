@@ -452,7 +452,7 @@ async def test_replayed_finalization_does_not_duplicate_child_or_iterations(
     Runs (a replayed admission / a repeated finalization) binds to the same records."""
     from src.core.control_events import stable_run_id
     from src.core.improve_sequence import create_improve_child, iteration_run_request_id, register_iteration_run
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+    cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
     from src.core.models import TaskSpec
     manager = await tree.create_task(
         request_id="root", task_parent_id=None, profile="manager",

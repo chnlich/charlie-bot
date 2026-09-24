@@ -55,7 +55,7 @@ def test_unresolved_categories_produce_actionable_output_and_refuse(
   # Ambiguous improve-loop association.
   home = fx.build_ambiguous_loop_home(tmp_path / "ambiguous")
   point_home(monkeypatch, home)
-  code, manifest, summary = dry_run(monkeypatch, home, tmp_path / "a.json")
+  code, manifest, _summary = dry_run(monkeypatch, home, tmp_path / "a.json")
   assert code == 1
   kinds = {u.source_kind for u in manifest.unresolved}
   assert "improve_iteration" in kinds
@@ -230,7 +230,7 @@ def test_apply_refuses_wrong_home_manifest(
   dry_run(monkeypatch, home_a, manifest_path)
   before = _tree_snapshot(home_b)
   point_home(monkeypatch, home_b)
-  code, _, err = run_cli(monkeypatch, home_b, "--apply", "--manifest", str(manifest_path))
+  code, _, _err = run_cli(monkeypatch, home_b, "--apply", "--manifest", str(manifest_path))
   assert code == 1
   assert _tree_snapshot(home_b) == before
   assert not (home_b / "state" / "session_tree_migration").exists()
@@ -267,7 +267,7 @@ def test_apply_refuses_live_process_and_second_home_untouched(
     sleeper.kill()
     sleeper.wait()
   # Once the process is gone, the same manifest applies.
-  code, out, err = run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))
+  code, _out, err = run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))
   assert code == 0, err
 
 
@@ -327,7 +327,7 @@ def test_symlinked_product_path_never_writes_outside(
   assert bodies
   (home / "prompt_bodies").mkdir(exist_ok=True)
   (home / "prompt_bodies" / Path(bodies[0]).name).symlink_to(outside / "captor.md")
-  code, _, err = run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))
+  code, _, _err = run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))
   assert code == 1
   assert not (outside / "captor.md").exists()
 
@@ -386,7 +386,7 @@ def _plan_of(cfg):
   return migration.build_conversion_plan(cfg, migration.scan_source(cfg))
 
 
-def home_config_of(monkeypatch: pytest.MonkeyPatch, home: Path) -> "CharlieBotConfig":
+def home_config_of(monkeypatch: pytest.MonkeyPatch, home: Path) -> CharlieBotConfig:
   """A real CharlieBotConfig for the given home, scoped to this test."""
   import src.core.config as core_config
   monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(home))
@@ -529,12 +529,12 @@ def test_apply_refuses_while_another_apply_holds_the_home(
     other_manifest = tmp_path / "other.json"
     point_home(monkeypatch, other)
     dry_run(monkeypatch, other, other_manifest)
-    code, out, err = run_cli(monkeypatch, other, "--apply", "--manifest", str(other_manifest))
+    code, _out, err = run_cli(monkeypatch, other, "--apply", "--manifest", str(other_manifest))
     assert code == 0, err
   finally:
     fence.release()
   point_home(monkeypatch, home)
-  code, out, err = run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))
+  code, _out, err = run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))
   assert code == 0, err
 
 
@@ -551,11 +551,11 @@ def test_apply_refuses_while_a_server_holds_the_fence(
   env["CHARLIEBOT_HOME"] = str(home)
   server = subprocess.Popen(
       [sys.executable, "-c",
-       "import sys, time\n"
-       f"sys.path.insert(0, {str(Path(__file__).parent.parent)!r})\n"
-       "from src.core.home_writer_fence import acquire_home_writer_fence\n"
-       f"fence = acquire_home_writer_fence({str(home)!r}, purpose='server startup')\n"
-       "time.sleep(60)\n"],
+       ("import sys, time\n"
+        f"sys.path.insert(0, {str(Path(__file__).parent.parent)!r})\n"
+        "from src.core.home_writer_fence import acquire_home_writer_fence\n"
+        f"fence = acquire_home_writer_fence({str(home)!r}, purpose='server startup')\n"
+        "time.sleep(60)\n")],
       env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
   try:
     deadline = time.monotonic() + 15
@@ -572,7 +572,7 @@ def test_apply_refuses_while_a_server_holds_the_fence(
   finally:
     server.kill()
     server.wait()
-  code, out, err = run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))
+  code, _out, err = run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))
   assert code == 0, err
 
 
@@ -735,7 +735,7 @@ def test_apply_wraps_a_raced_fence_acquisition_as_refusal(
 # ---------------------------------------------------------------------------
 
 
-def _receipted_paths(home: Path, manifest: "migration.MigrationManifest") -> set[str]:
+def _receipted_paths(home: Path, manifest: migration.MigrationManifest) -> set[str]:
   journal = home / "state" / "session_tree_migration" / manifest.source_sha[:16] / "receipts.ndjson"
   if not journal.is_file():
     return set()
@@ -744,7 +744,7 @@ def _receipted_paths(home: Path, manifest: "migration.MigrationManifest") -> set
 
 def _crash_between_append_and_receipt(
     home_path: Path, manifest_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple["migration.MigrationManifest", Path]:
+) -> tuple[migration.MigrationManifest, Path]:
   """Apply until the first fact append lands without its receipt, then crash."""
   cfg = home_config_of(monkeypatch, home_path)
   manifest = migration.MigrationManifest.model_validate_json(manifest_path.read_text())
@@ -768,8 +768,8 @@ def _crash_between_append_and_receipt(
 
 
 def _interrupted_log(
-    home: Path, manifest: "migration.MigrationManifest", cfg: "CharlieBotConfig"
-) -> tuple[Path, "migration.SourceFileRecord"]:
+    home: Path, manifest: migration.MigrationManifest, cfg: CharlieBotConfig
+) -> tuple[Path, migration.SourceFileRecord]:
   """The one manager log holding an unreceipted interrupted append."""
   receipted = _receipted_paths(home, manifest)
   hits = []
@@ -810,7 +810,7 @@ def test_resume_refuses_suffix_event_that_kept_its_run_id_but_altered_payload(
   log_path.write_bytes(original + json.dumps(forged).encode() + b"\n")
   interrupted_inventory = _tree_snapshot(home)
 
-  code, out, err = run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))
+  code, _out, err = run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))
   assert code == 1
   payload = cli_json(err)
   assert "does not match the planned content" in " ".join(payload.get("details", []))

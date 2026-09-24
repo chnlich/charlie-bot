@@ -72,8 +72,7 @@ def tree_of(home: Path) -> TaskTreeManager:
 
 def manager_mapping(manifest, session_id: str):
   return next(m for m in manifest.mappings
-              if m.source_kind != "manager_turn_log" and m.source_kind != "worker_thread"
-              and m.source_id == session_id)
+              if m.source_kind not in {"manager_turn_log", "worker_thread"} and m.source_id == session_id)
 
 
 def worker_mapping(manifest: migration.MigrationManifest, needle: str):
@@ -457,7 +456,7 @@ def test_converter_written_report_stays_outside_input_replay(tmp_path, monkeypat
   home = fx.build_pinned_worktree_home(tmp_path / "home")
   point_home(monkeypatch, home)
   manifest_path = tmp_path / "m.json"
-  code, manifest, _ = dry_run(monkeypatch, home, manifest_path)
+  _code, _manifest, _ = dry_run(monkeypatch, home, manifest_path)
   assert run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))[0] == 0
   tree = tree_of(home)
   owner = fx.S_WORKERS
@@ -517,7 +516,7 @@ def test_altered_payload_with_planned_identity_refuses(tmp_path, monkeypatch, ca
              for key, expected in node_facts.items()
              if key[0] == family]
   assert planned, f"the fixture plans no {family} fact"
-  node, key, expected = planned[0]
+  node, _key, expected = planned[0]
   log_rel = f"sessions/{node}/data/chat_events.jsonl"
   # A migration-created node's log is not a source file: the whole file is
   # the apply's append region (record None).
@@ -557,7 +556,7 @@ def test_suffix_event_with_unplanned_identity_refuses(tmp_path, monkeypatch):
 def test_append_fact_if_absent_verifies_existing_content(tmp_path, monkeypatch):
   """An id already in the log with different content refuses; identical content skips."""
   home = fx.build_unbound_success_home(tmp_path / "home")
-  cfg, snap, plan = _fresh_apply_context(monkeypatch, home)
+  cfg, _snap, plan = _fresh_apply_context(monkeypatch, home)
   manager = plan.managers[0]
   facts = migration._planned_facts(plan)
   key = (str(manager.task_imported["type"]), str(manager.task_imported["id"]))
@@ -578,7 +577,7 @@ def test_append_fact_if_absent_verifies_existing_content(tmp_path, monkeypatch):
 def test_run_finished_existing_fact_content_is_verified(tmp_path, monkeypatch):
   """A landed run_finished with a matching run_id but altered outcome refuses."""
   home = fx.build_failed_rounds_home(tmp_path / "home")
-  cfg, snap, plan = _fresh_apply_context(monkeypatch, home)
+  _cfg, _snap, plan = _fresh_apply_context(monkeypatch, home)
   manager = plan.managers[0]
   run = manager.manager_turn_runs[0]
   run_store = tree_of(home).runs

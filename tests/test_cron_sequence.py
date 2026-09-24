@@ -170,7 +170,7 @@ async def test_bound_master_worker_spoof_cannot_forged_scheduled_input(
         bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
   """The scheduled input's provenance is server-owned: a run-token caller
   cannot mint SCHEDULED_TRIGGER events, and its real messages stay agent ones."""
-  cfg, session_mgr, tree = bound_env
+  _cfg, _session_mgr, tree = bound_env
   manager = await make_manager(tree)
   run_id = stable_run_id(manager.id, "spoof:work")
   await tree.runs.register_run(RunRecord(id=run_id, session_id=manager.id, kind="work"))
@@ -485,7 +485,7 @@ def test_scheduled_config_carries_and_validates_binding(tmp_path: Path) -> None:
 async def test_config_loader_and_api_round_trip_binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   from src.api import cron as cron_api
   from src.core.config import _load_cron_file
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
   manager = await tree.create_task(
       request_id="pm", task_parent_id=None, profile="manager",
       task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
@@ -664,7 +664,7 @@ async def test_withheld_step_launch_settles_the_chain_without_hanging(
   paused) must settle the controller explicitly: the step Run stays queued, the
   actual reason is delivered as the stable blocked boundary report, and the
   scheduler's overlap handle ends with the controller instead of hanging."""
-  cfg, session_mgr, tree = bound_env
+  _cfg, _session_mgr, tree = bound_env
   manager = await make_manager(tree)
   builds = install_backends(monkeypatch, [], "src.agents.worker.build_backend")
   task_cfg = _bound_task(
@@ -910,7 +910,7 @@ async def _successful_two_step_leaf(bound_env, monkeypatch: pytest.MonkeyPatch):
       task_cfg, meta, tree, FIRING, "recovered boundary steps", backend="fake",
       model="fake-model")
   leaf_meta = await tree.load_meta(leaf.id)
-  for position, (name, outcome_text) in enumerate([("zero", "step zero done"),
+  for position, (_name, _outcome_text) in enumerate([("zero", "step zero done"),
                                                    ("one", "step one done")]):
     run = await cron_sequence.register_leaf_run(
         tree, leaf.id, task_cfg, FIRING, kind="scheduled_step", position=position,
@@ -926,7 +926,7 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
   its evidence intact and delivers the SAME stable blocked report the fresh
   chain delivers; repeated recovery is idempotent; the repaired close later
   follows the normal completion/report policy."""
-  cfg, session_mgr, tree, manager, task_cfg, meta, leaf, leaf_meta = (
+  _cfg, _session_mgr, tree, manager, task_cfg, meta, leaf, _leaf_meta = (
       await _successful_two_step_leaf(bound_env, monkeypatch))
   # The blocker: an unclaimed pending input on the leaf.
   await tree.dispatch.admit_input(
@@ -978,7 +978,7 @@ async def test_recovered_final_step_boundary_settles_without_a_new_tick(
         bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
   """Recovery redrives a finished chain's boundary directly: the close and the
   ONE report land in the same pass, with no scheduler tick or restart."""
-  cfg, session_mgr, tree, manager, task_cfg, meta, leaf, leaf_meta = (
+  _cfg, _session_mgr, tree, manager, task_cfg, meta, leaf, _leaf_meta = (
       await _successful_two_step_leaf(bound_env, monkeypatch))
   from src.core import cron_sequence
   await cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id)
@@ -994,7 +994,7 @@ async def test_simultaneous_fresh_and_recovery_followup_produce_no_duplicate(
         bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
   """Two concurrent follow-ups at the frontier (a repeated recovery scan) land
   one next step, one process, one close, one report."""
-  cfg, session_mgr, tree, manager, task_cfg, meta, leaf, leaf_meta = (
+  _cfg, _session_mgr, tree, manager, task_cfg, meta, leaf, _leaf_meta = (
       await _successful_two_step_leaf(bound_env, monkeypatch))
   from src.core import cron_sequence
   await asyncio.gather(
@@ -1023,7 +1023,7 @@ async def test_completed_close_survives_a_failing_parent_wake_without_a_blocked_
   and the automatic-completion caller then delivered a contradictory blocked
   report on top of the completed one (two reports). The close owner now logs
   the wake failure and the close stands; the wake is separately re-drivable."""
-  cfg, session_mgr, tree, manager, task_cfg, meta, leaf, leaf_meta = (
+  _cfg, _session_mgr, tree, manager, task_cfg, meta, leaf, _leaf_meta = (
       await _successful_two_step_leaf(bound_env, monkeypatch))
   # The parent wake fails exactly once, after the close and its report landed:
   # the executor raises before reserving, so the pending batch stays pending.
@@ -1074,7 +1074,7 @@ async def test_noop_loop_consumes_the_occurrence_and_advances_the_checkpoint(
       loop={"backlog": "backlog.yaml", "role": "tester", "scope_files": ["x"],
             "max_pending": 3})
   scheduler = Scheduler(cfg, session_mgr)
-  import src.core.backlog_loop as backlog_loop
+  from src.core import backlog_loop
   async def noop_action(*args, **kwargs):
     return "noop", ""
   monkeypatch.setattr(backlog_loop, "determine_action", noop_action)

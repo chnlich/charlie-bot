@@ -57,7 +57,7 @@ async def test_successful_patch_is_durable_across_both_scopes(tmp_path: Path) ->
 
 async def test_crash_after_metadata_save_before_fact_retry_lands_exactly_one_fact(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, tree, sid = await _leaf(tmp_path)
+  _cfg, tree, sid = await _leaf(tmp_path)
   # Direction 1: the fact append fails after the metadata swap — the PATCH must
   # not report success, and the retry lands the one missing fact.
   real_ensure = tree._ensure_prompt_changed_fact
@@ -66,7 +66,7 @@ async def test_crash_after_metadata_save_before_fact_retry_lands_exactly_one_fac
   async def failing_after_meta(session_id: str, meta, scope: str) -> None:
     # Fail exactly once: the post-edit ensure (the crash window — the metadata
     # already holds the new ref), never the entry repair a retry performs.
-    if scope == "node" and getattr(meta, "node_prompt_ref") is not None and calls["n"] == 0:
+    if scope == "node" and meta.node_prompt_ref is not None and calls["n"] == 0:
       calls["n"] += 1
       raise OSError("injected event append failure")
     await real_ensure(session_id, meta, scope)
@@ -94,7 +94,7 @@ async def test_crash_after_body_before_metadata_retry_does_not_lose_the_edit(
 
   async def failing_save(meta) -> None:
     save_calls["n"] += 1
-    if save_calls["n"] == 1 and getattr(meta, "subtree_prompt_ref") is not None:
+    if save_calls["n"] == 1 and meta.subtree_prompt_ref is not None:
       raise OSError("injected metadata save failure")
     await real_save(meta)
 
@@ -119,7 +119,7 @@ async def test_crash_after_body_before_metadata_retry_does_not_lose_the_edit(
 
 async def test_two_scope_patch_crash_between_scopes_repairs_cleanly(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, tree, sid = await _leaf(tmp_path)
+  _cfg, tree, sid = await _leaf(tmp_path)
   real_save = tree._save_meta
   calls = {"n": 0}
 
@@ -127,7 +127,7 @@ async def test_two_scope_patch_crash_between_scopes_repairs_cleanly(
     # Fail the metadata save after the subtree scope applied but before the
     # node scope did (the second save inside the same PATCH).
     calls["n"] += 1
-    if calls["n"] == 1 and getattr(meta, "subtree_prompt_ref") is not None:
+    if calls["n"] == 1 and meta.subtree_prompt_ref is not None:
       raise OSError("injected mid-patch failure")
     await real_save(meta)
 
@@ -152,7 +152,7 @@ async def test_recovery_sweep_is_idempotent_and_does_not_duplicate(
   real_ensure = tree._ensure_prompt_changed_fact
 
   async def failing_ensure(session_id: str, meta, scope: str) -> None:
-    if scope == "subtree" and getattr(meta, "subtree_prompt_ref") is not None:
+    if scope == "subtree" and meta.subtree_prompt_ref is not None:
       raise OSError("injected")
     await real_ensure(session_id, meta, scope)
 
@@ -172,11 +172,11 @@ async def test_recovery_sweep_is_idempotent_and_does_not_duplicate(
 
 async def test_later_edit_after_interrupted_edit_keeps_a_truthful_chain(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, tree, sid = await _leaf(tmp_path)
+  _cfg, tree, sid = await _leaf(tmp_path)
   real_ensure = tree._ensure_prompt_changed_fact
 
   async def failing_ensure(session_id: str, meta, scope: str) -> None:
-    if scope == "node" and getattr(meta, "node_prompt_ref") is not None:
+    if scope == "node" and meta.node_prompt_ref is not None:
       raise OSError("injected")
     await real_ensure(session_id, meta, scope)
 
@@ -201,7 +201,7 @@ async def test_later_edit_after_interrupted_edit_keeps_a_truthful_chain(
 async def test_concurrent_task_mutation_is_not_overwritten(tmp_path: Path) -> None:
   """A prompt PATCH that also renames saves both under the same lock; a crash
   before the final save loses neither on retry."""
-  cfg, tree, sid = await _leaf(tmp_path)
+  _cfg, tree, sid = await _leaf(tmp_path)
   meta = await tree.patch_task(
       sid,
       PatchSessionTaskRequest(name="renamed", subtree_prompt="rule", node_prompt="node rule"),
@@ -222,7 +222,7 @@ async def test_next_launch_semantics_when_a_rule_is_edited_during_an_active_run(
         tmp_path: Path) -> None:
   """An edit during an active Run changes nothing for that Run; the next launch
   sees the new ref (the chain recheck picks it up at its own launch time)."""
-  cfg, tree, sid = await _leaf(tmp_path)
+  _cfg, tree, sid = await _leaf(tmp_path)
   run_id = "active-run"
   import subprocess
 

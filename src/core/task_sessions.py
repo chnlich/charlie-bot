@@ -236,6 +236,11 @@ class TaskTreeManager:
     # metadata writes — so a tree page read after the flip never serves the
     # stale flag a missed broadcast would have left standing.
     session_mgr.tree_index_invalidator = self.invalidate_tree_index
+    # The session lists read stored status; the archive of a task node is a
+    # derived fact (archived_of). The overlay lets the sidebar's active list
+    # drop a delivered worker and its Archived list show it, with no status
+    # write.
+    session_mgr.archive_overlay = self.derived_archived_ids
     self._index: tuple[_TreeIndex, float] | None = None
     self._index_generation = 0
     self._facts_memo: dict[str, tuple[list[dict], int, _TaskFacts]] = {}
@@ -529,6 +534,20 @@ class TaskTreeManager:
       return True  # a root task archives immediately on its own success
     parent_facts = self._facts_of(str(recipient))
     return (meta.id, str(close.get("id"))) in parent_facts.delivered_reports
+
+  async def derived_archived_ids(self) -> set[str]:
+    """Task nodes the facts archive while their stored status stays active.
+
+    The read-time overlay the SessionManager listings apply (plan 2 v3
+    Trade-off 1: a worker archives after delivery by derivation, never by a
+    status write). Reads the cached index; a node already archived by status
+    needs no overlay and is left out.
+    """
+    index = await self._get_index()
+    return {
+        session_id for session_id, meta in index.metas.items()
+        if meta.status != SessionStatus.ARCHIVED and self.archived_of(index, meta)
+    }
 
   def archived_of(self, index: "_TreeIndex", meta: SessionMetadata) -> bool:
     """Archive visibility: the explicit preference, or auto after successful receipt.

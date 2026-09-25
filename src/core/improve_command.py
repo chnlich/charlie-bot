@@ -402,6 +402,17 @@ def _build_summary_payload(payload_type: str, goal: str, summaries: list[str]) -
   }
 
 
+def blocked_loop_summary(iteration: int, reason: str) -> str:
+  """The reader-facing blocked-loop sentence: what blocked, and the decision left to the reader.
+
+  Both launch paths compose through this one definition -- the v1 loop's failed
+  payload and the v2 sequence's failed summary -- so the instruction to the
+  reader cannot fork between them.
+  """
+  return (f"Improve loop blocked on iteration {iteration}: {reason}. "
+          "No further iterations were spawned; decide whether to wait, switch backend, or relaunch.")
+
+
 async def reserve_loop_state(
     session_id: str,
     goal: str,
@@ -899,9 +910,7 @@ async def run_improve_loop(
       payload['blocked_iteration'] = blocked_error.iteration
       payload['reason'] = blocked_error.reason
       payload['blocked_summary'] = blocked_error.summary[:500]
-      payload['summary'] = (
-          f"Improve loop blocked on iteration {blocked_error.iteration}: {blocked_error.reason}. "
-          "No further iterations were spawned; decide whether to wait, switch backend, or relaunch.")
+      payload['summary'] = blocked_loop_summary(blocked_error.iteration, blocked_error.reason)
     elif stopped_by_user:
       payload = _build_summary_payload(ET.IMPROVE_STOPPED, goal, previous_summaries)
       payload['reason'] = 'Stopped by user'

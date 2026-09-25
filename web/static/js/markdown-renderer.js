@@ -682,6 +682,17 @@ function recordCodeTokens(tokens) {
 // ---------------------------------------------------------------------------
 const PROSE_PARSE_CACHE_CAP = 64;
 const proseParseCache = new Map();
+
+// The walk's input and output per body source, keyed on the same string the
+// parse memo keys on (data-raw decodes back to it). The KaTeX walk is a pure
+// function of the body's pre-walk HTML, so a repeat message render — the
+// session re-entry, the page-depth change, the recap rebuild — serves the
+// walked bytes instead of re-running KaTeX over unchanged nodes. Same cap and
+// recency rule as the parse cache; entries are strictly larger than their
+// keys, so the cap bounds the pair together.
+const PROSE_MATH_CACHE_CAP = 64;
+const proseMathCache = new Map();
+
 function renderProseMarkdown(text) {
   let html = proseParseCache.get(text);
   if (html !== undefined) {
@@ -772,7 +783,18 @@ function flushDeferredCodeHighlights() {
       if (cached !== undefined && cached.includes(rec.plainBlock)) {
         // The replacer function keeps the highlighted bytes literal: String's
         // replacement string would read $$/$&/$`/$' patterns out of them.
-        proseParseCache.set(rec.text, cached.replace(rec.plainBlock, () => rec.settledBlock));
+        const settled = cached.replace(rec.plainBlock, () => rec.settledBlock);
+        proseParseCache.set(rec.text, settled);
+        // The walked pair holds the same plain block in both halves — the
+        // walk never touches code blocks — so the same swap keeps the pair on
+        // the settled bytes and the next render born-walked.
+        const memo = proseMathCache.get(rec.text);
+        if (memo !== undefined) {
+          proseMathCache.set(rec.text, {
+            pre: memo.pre.includes(rec.plainBlock) ? memo.pre.replace(rec.plainBlock, () => rec.settledBlock) : memo.pre,
+            walked: memo.walked.includes(rec.plainBlock) ? memo.walked.replace(rec.plainBlock, () => rec.settledBlock) : memo.walked,
+          });
+        }
       }
     }
     const selector = `code[data-hl="${id}"]`;
@@ -834,6 +856,28 @@ function renderChatMath(el, sourceText) {
   // neither (raw backend output) keeps the unconditional walk.
   const raw = typeof sourceText === 'string' ? sourceText : el.dataset && el.dataset.raw;
   if (typeof raw === 'string' && !hasMathDelimiter(raw)) return;
+  // The streamed paint passes sourceText and its HTML grows every delta — the
+  // eviction shape the parse memo already excludes it for — so it stays off
+  // the cache below. Elements without innerHTML (the gate suite's
+  // plain-object stubs) keep the direct walk.
+  const pre = typeof sourceText === 'string' ? null : el.innerHTML;
+  const cacheable = typeof raw === 'string' && typeof pre === 'string';
+  const memo = cacheable ? proseMathCache.get(raw) : undefined;
+  if (memo !== undefined) {
+    // Born walked: the parse memo served the upgraded entry, so the element
+    // already carries the walked bytes and even the swap is skipped. A plain
+    // parse (the entry evicted and re-parsed, or the flush still pending)
+    // swaps them in without a re-walk. A mismatch with both halves is foreign
+    // markup, and falls through to the walk. A hit is a use: the same
+    // refresh-on-hit recency rule the parse memo runs keeps the working set
+    // resident.
+    if (pre === memo.walked || pre === memo.pre) {
+      proseMathCache.delete(raw);
+      proseMathCache.set(raw, memo);
+      if (pre === memo.pre) el.innerHTML = memo.walked;
+      return;
+    }
+  }
   // throwOnError:false keeps stray dollar amounts ("$5 ... $10") from
   // breaking the whole bubble — invalid math renders as red inline text.
   renderMathInElement(el, {
@@ -847,6 +891,21 @@ function renderChatMath(el, sourceText) {
     ignoredClasses: ['code-block'],
     throwOnError: false,
   });
+  if (cacheable) {
+    const walked = el.innerHTML;
+    proseMathCache.set(raw, { pre, walked });
+    if (proseMathCache.size > PROSE_MATH_CACHE_CAP) {
+      proseMathCache.delete(proseMathCache.keys().next().value);
+    }
+    // The parse memo hands every later render of this body its HTML; serving
+    // the walked bytes from it is what makes the next render born-walked. The
+    // identity check keeps foreign markup — a body not rendered through the
+    // parse memo — out of the parse entry.
+    const parsed = proseParseCache.get(raw);
+    if (parsed !== undefined && parsed === pre) {
+      proseParseCache.set(raw, walked);
+    }
+  }
 }
 
 function renderMarkdown(btn) {

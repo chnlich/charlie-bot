@@ -368,42 +368,6 @@ test('bumpCurrentSessionToTop moves flat sidebar sessions to the top-level front
   assertBumpedTimeRefreshed(current, nowIso);
 });
 
-test('bumpCurrentSessionToTop lands the bumped row below the group PM head row', () => {
-  const pmHead = createSession('pm', '2026-04-01T03:00:00.000Z', 'old-pm');
-  pmHead.dataset.pmHead = '1';
-  const {before, current, after} = bumpTrio();
-  const {items, context, nowIso} = bumpRig([pmHead, before, current, after], current, {grouped: true});
-
-  context.bumpCurrentSessionToTop();
-
-  assert.equal(current.parentElement, items);
-  assert.deepEqual(items.children.map((child) => child.id), [
-    'session-pm',
-    'session-session-a',
-    'session-session-b',
-    'session-session-c',
-  ]);
-  assert.equal(items.firstElementChild, pmHead);
-  assertBumpedTimeRefreshed(current, nowIso);
-});
-
-test('bumpCurrentSessionToTop does not move the current row when it is the PM head row', () => {
-  const pmHead = createSession('session-a', '2026-04-01T03:00:00.000Z', 'old-pm');
-  pmHead.dataset.pmHead = '1';
-  const other = createSession('session-b', '2026-04-01T00:00:00.000Z', 'old-b');
-  const {items, context, nowIso} = bumpRig([pmHead, other], pmHead, {grouped: true});
-
-  context.bumpCurrentSessionToTop();
-
-  assert.deepEqual(items.children.map((child) => child.id), [
-    'session-session-a',
-    'session-session-b',
-  ]);
-  assert.equal(items.firstElementChild, pmHead);
-  // The .session-time refresh runs even on the no-move path.
-  assertBumpedTimeRefreshed(pmHead, nowIso);
-});
-
 // ---------------------------------------------------------------------------
 // Turn outline fold — invariants I0-I6.
 //

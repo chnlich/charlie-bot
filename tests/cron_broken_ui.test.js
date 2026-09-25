@@ -33,20 +33,14 @@ function makeEl() {
 
 // groups.js is an IIFE over globals defined by the other sidebar modules; the
 // sandbox supplies the ones the scheduled-list badge path reaches for.
-function loadGroups(cronTasksPayload) {
+function loadGroups() {
   const elements = {'session-list': makeEl()};
-  const fetches = [];
   const context = {
     Sidebar: {wire(globals, sidebarOnly) { Object.assign(this, globals, sidebarOnly || {}); }},
     console: {error: () => {}},
     localStorage: {getItem: () => null, setItem: () => {}},
     document: {getElementById: (id) => elements[id] || (elements[id] = makeEl())},
     setTimeout,
-    fetch: (url) => {
-      fetches.push(url);
-      const payload = url.includes('/api/cron/tasks') ? cronTasksPayload : [];
-      return Promise.resolve({ok: true, json: () => Promise.resolve(payload)});
-    },
     escapeHtml: escapeHtmlText,
     escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
     SESSION_ID: 'other-session',
@@ -64,21 +58,16 @@ function loadGroups(cronTasksPayload) {
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(GROUPS_JS, context, {filename: 'groups.js'});
-  return {context, elements, fetches};
+  return {context, elements};
 }
 
-async function settle() {
-  await new Promise(r => setTimeout(r, 5));
-}
 
-test('the scheduled list shows the global failure badge derived from the tasks fetch', async () => {
-  const {context, elements} = loadGroups([
-    {name: 'a-ok', cron: '0 0 * * *', prompt: 'p'},
-    {name: 'z-broken', error: 'boom z', broken: true, path: '/h/config.d/cron.d/z-broken.yaml', enabled: null},
+test('the scheduled list shows the global failure badge from the broken tasks the fetch hands it', () => {
+  const {context, elements} = loadGroups();
+  context.Sidebar.renderGroupedScheduledList([], {brokenTasks: [
     {name: 'a-broken', error: 'boom a', broken: true, path: '/h/config.d/cron.d/a-broken.yaml', enabled: false},
-  ]);
-  context.Sidebar.renderGroupedScheduledList([]);
-  await settle();
+    {name: 'z-broken', error: 'boom z', broken: true, path: '/h/config.d/cron.d/z-broken.yaml', enabled: null},
+  ]});
 
   const html = elements['session-list'].innerHTML;
   assert.ok(html.includes('2 scheduled tasks failed to load'), html);
@@ -88,10 +77,9 @@ test('the scheduled list shows the global failure badge derived from the tasks f
   assert.ok(html.indexOf('2 scheduled tasks failed to load') < html.indexOf('No scheduled sessions'), html);
 });
 
-test('no badge when nothing is broken', async () => {
-  const {context, elements} = loadGroups([{name: 'a-ok', cron: '0 0 * * *', prompt: 'p'}]);
+test('no badge when nothing is broken', () => {
+  const {context, elements} = loadGroups();
   context.Sidebar.renderGroupedScheduledList([]);
-  await settle();
 
   assert.ok(!elements['session-list'].innerHTML.includes('scheduled tasks failed to load'), elements['session-list'].innerHTML);
 });

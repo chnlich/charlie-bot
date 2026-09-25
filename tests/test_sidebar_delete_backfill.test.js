@@ -6,8 +6,8 @@
 // list fetches. The archived tab and the search overlay keep node-only row
 // removal, and deleting the viewed session keeps its switch/empty behavior.
 // Harness follows test_archived_view.test.js (session_context_stub +
-// createChatSidebarContext); timers run inline, so the PM refresh fires inside
-// the paint call and a delete-path fetch leak cannot hide behind a timer.
+// createChatSidebarContext); timers run inline, so a delete-path fetch leak
+// cannot hide behind a timer.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -36,9 +36,8 @@ function rowStubs(ids) {
   return ids.map((id) => createElement({tagName: 'A', id: 'session-' + id}));
 }
 
-// Archive / permanent-delete succeed; every other URL (the PM refresh's
-// scheduled + cron pulls, list fetches) throws, so a delete-flow refetch
-// cannot pass silently.
+// Archive / permanent-delete succeed; every other URL (list fetches) throws,
+// so a delete-flow refetch cannot pass silently.
 function deleteOkFetch() {
   return async (url, opts = {}) => {
     if (opts.method === 'DELETE' && /^\/api\/sessions\/[^/]+(\/permanent)?$/.test(url)) {
@@ -94,9 +93,9 @@ async function paintGrouped(context, sessions) {
   await settle();
 }
 
-async function paintScheduled(context, sessions) {
+async function paintScheduled(context, sessions, options = {}) {
   context.currentFilter = 'scheduled';
-  context.renderSessionList(sessions, 'scheduled');
+  context.renderSessionList(sessions, 'scheduled', options);
   await settle();
 }
 
@@ -157,12 +156,14 @@ test('an expanded preview stays expanded across the delete repaint', async () =>
 test('archiving on the scheduled tab backfills cron groups the same way', async () => {
   const sessions = Array.from({length: 6}, (_, i) => makeCronSession(`c${i + 1}`));
   const {context, nav, fetchCalls} = buildContext();
-  await paintScheduled(context, sessions);
+  await paintScheduled(context, sessions,
+      {brokenTasks: [{name: 'z-broken', error: 'boom', broken: true, path: '/h/z.yaml', enabled: null}]});
 
   assert.equal(countRows(nav.innerHTML), 6);
   assert.match(nav.innerHTML, /cron-group-limit-extra hidden/);
   assert.match(nav.innerHTML, /Show all/);
   assert.ok(nav.innerHTML.includes('ml-auto">6/6 enabled</span>'));
+  assert.ok(nav.innerHTML.includes('1 scheduled tasks failed to load'), nav.innerHTML);
 
   const baseline = fetchCalls.length;
   await context.archiveSession('c2');
@@ -173,7 +174,56 @@ test('archiving on the scheduled tab backfills cron groups the same way', async 
   assert.doesNotMatch(nav.innerHTML, /cron-group-limit-toggle/);
   assert.doesNotMatch(nav.innerHTML, /Show all/);
   assert.ok(nav.innerHTML.includes('ml-auto">5/5 enabled</span>'));
+  // The in-place repaint carries the badge's broken tasks through unchanged.
+  assert.ok(nav.innerHTML.includes('1 scheduled tasks failed to load'), nav.innerHTML);
   assert.deepEqual(fetchCalls.slice(baseline), ['/api/sessions/c2']);
+});
+
+test('entering the scheduled tab paints badge and list from one parallel fetch pair', async () => {
+  const sessions = [makeCronSession('c1'), makeCronSession('c2')];
+  const cronTasks = [
+    {name: 'a-ok', cron: '0 9 * * *', prompt: 'p'},
+    {name: 'z-broken', error: 'boom z', broken: true, path: '/h/z.yaml', enabled: null},
+    {name: 'a-broken', error: 'boom a', broken: true, path: '/h/a.yaml', enabled: false},
+  ];
+  const {context, nav, fetchCalls} = buildContext({
+    fetchHandler: async (url) => {
+      if (url === '/api/sessions/scheduled') return {ok: true, json: async () => sessions};
+      if (url === '/api/cron/tasks') return {ok: true, json: async () => cronTasks};
+      throw new Error('unexpected fetch ' + url);
+    },
+  });
+
+  context.switchSidebarFilter('scheduled');
+  await settle();
+
+  assert.deepEqual(fetchCalls, ['/api/sessions/scheduled', '/api/cron/tasks']);
+  assert.equal(countRows(nav.innerHTML), 2);
+  // Broken entries reach the badge name-ordered; the click opens the first.
+  assert.ok(nav.innerHTML.includes('2 scheduled tasks failed to load'), nav.innerHTML);
+  assert.ok(nav.innerHTML.includes("openCronEditor('a-broken')"), nav.innerHTML);
+  assert.ok(nav.innerHTML.includes('Session c1'), nav.innerHTML);
+  assert.ok(nav.innerHTML.includes('Session c2'), nav.innerHTML);
+});
+
+test('a failed cron pull still paints the scheduled list, with no badge', async () => {
+  const sessions = [makeCronSession('c1'), makeCronSession('c2')];
+  const {context, nav, fetchCalls} = buildContext({
+    fetchHandler: async (url) => {
+      if (url === '/api/sessions/scheduled') return {ok: true, json: async () => sessions};
+      if (url === '/api/cron/tasks') throw new Error('cron endpoint down');
+      throw new Error('unexpected fetch ' + url);
+    },
+  });
+
+  context.switchSidebarFilter('scheduled');
+  await settle();
+
+  assert.deepEqual(fetchCalls, ['/api/sessions/scheduled', '/api/cron/tasks']);
+  assert.equal(countRows(nav.innerHTML), 2);
+  assert.ok(nav.innerHTML.includes('Session c1'), nav.innerHTML);
+  assert.ok(nav.innerHTML.includes('Session c2'), nav.innerHTML);
+  assert.ok(!nav.innerHTML.includes('scheduled tasks failed to load'), nav.innerHTML);
 });
 
 test('deleting from the search overlay removes only the row node', async () => {

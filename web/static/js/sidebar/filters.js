@@ -208,6 +208,20 @@ function setSidebarFilterPill(filter) {
   if (addBtn) addBtn.classList.toggle('hidden', filter !== 'scheduled');
 }
 
+// The Scheduled tab's broken-task badge rides this fetch: a failed cron pull
+// yields no badge ([]) but never hides the session list.
+async function fetchBrokenCronTasks() {
+  try {
+    const res = await fetch('/api/cron/tasks');
+    if (!res.ok) throw new Error(`cron tasks fetch failed: ${res.status}`);
+    const tasks = await res.json();
+    return tasks.filter(t => t.broken).sort((a, b) => a.name.localeCompare(b.name));
+  } catch (err) {
+    console.error('Cron tasks fetch failed:', err);
+    return [];
+  }
+}
+
 function switchSidebarFilter(filter) {
   setSidebarFilterPill(filter);
   if (filter === 'archived') {
@@ -219,6 +233,20 @@ function switchSidebarFilter(filter) {
   // Fetch sessions for this filter
   const registeredFilter = getSidebarFilter(filter);
   if (!registeredFilter) throw new Error('Unknown sidebar filter: ' + filter);
+  if (filter === 'scheduled') {
+    // The badge's broken tasks and the session list load in parallel, so badge
+    // and list paint together in the one render call.
+    Promise.all([
+      fetch(registeredFilter.url).then(res => {
+        if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);
+        return res.json();
+      }),
+      fetchBrokenCronTasks(),
+    ])
+      .then(([sessions, brokenTasks]) => renderSessionList(sessions, filter, {brokenTasks}))
+      .catch(err => console.error('Filter fetch failed:', err));
+    return;
+  }
   fetch(registeredFilter.url)
     .then(res => {
       if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);

@@ -62,6 +62,11 @@ import time
 from pathlib import Path
 
 SCRIPT_REPO = Path(__file__).resolve().parent.parent
+if str(SCRIPT_REPO) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_REPO))
+
+from scripts.browser_harness_session_tree import CDP, pick_free_port  # noqa: E402
+
 READY_PREFIX = "PARITY SERVE READY "
 WIDTHS = ((1440, 900, False), (390, 844, True))
 FILTERS = ("all", "archived")
@@ -74,12 +79,6 @@ BUILD_LABEL = re.compile(r"\b[0-9a-f]{7,40} \u00b7 \d{2}-\d{2}\b")
 def fail(message: str) -> None:
     print(f"UI PARITY CHECK COULD NOT RUN: {message}", file=sys.stderr, flush=True)
     raise SystemExit(2)
-
-
-def pick_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
 
 
 # ---------------------------------------------------------------------------
@@ -211,39 +210,8 @@ class Side:
 
 
 # ---------------------------------------------------------------------------
-# Browser: CDP mini-client and the outline export.
+# Browser: CDP helpers and the outline export.
 # ---------------------------------------------------------------------------
-
-
-class CDP:
-    """Minimal Chrome DevTools Protocol client over the browser endpoint."""
-
-    def __init__(self, ws) -> None:
-        self._ws = ws
-        self._next_id = 1
-        self._pending: dict[int, asyncio.Future] = {}
-        self._reader = asyncio.create_task(self._read_loop())
-
-    async def _read_loop(self) -> None:
-        async for raw in self._ws:
-            msg = json.loads(raw)
-            fut = self._pending.pop(msg.get("id"), None) if "id" in msg else None
-            if fut and not fut.done():
-                if "error" in msg:
-                    fut.set_exception(RuntimeError(str(msg["error"])))
-                else:
-                    fut.set_result(msg.get("result", {}))
-
-    async def send(self, method: str, params: dict | None = None, session_id: str | None = None) -> dict:
-        msg_id = self._next_id
-        self._next_id += 1
-        payload = {"id": msg_id, "method": method, "params": params or {}}
-        if session_id:
-            payload["sessionId"] = session_id
-        fut = asyncio.get_running_loop().create_future()
-        self._pending[msg_id] = fut
-        await self._ws.send(json.dumps(payload))
-        return await asyncio.wait_for(fut, timeout=30)
 
 
 # Walks one root and returns [depth, tag, id, classes, text, visible] rows,

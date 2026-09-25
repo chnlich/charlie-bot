@@ -632,35 +632,44 @@ _REFERENCE_LINE_WS = b" \t\r\n\x0b\x0c"
 _REFERENCE_SCAN_CHUNK = 1 << 20
 
 
-def _reference_newlines(arr: np.ndarray) -> np.ndarray:
-  """Return the positions of 0x0A bytes in ``arr`` (uint8 view of the corpus)."""
+def _reference_scan(arr: np.ndarray) -> tuple[np.ndarray, bool]:
+  """Return ``(0x0A positions, every byte <= 0x7F)`` for the corpus's uint8 view.
+
+  Both reductions are position-local, so one chunked sweep answers them
+  together: the ASCII reduction reads the window the newline reduction just
+  pulled into cache instead of paying a second whole-corpus pass (the fork of
+  a gigabyte-class corpus is memory-bandwidth-bound; measured 140 -> 117 ms
+  on the 1051.3 MB heaviest fork corpus). The ASCII verdict must still cover
+  every byte: it is the proof that skips the utf-8 decode whose
+  UnicodeDecodeError an undecodable corpus must raise.
+  """
   # numpy rides the fork's parent-reference stream (the M99 server import floor):
   # the module sits on the sessions chain every server start pulls, and the
   # vectorized scan serves only this reference fast path.
   import numpy as np
   parts: list[np.ndarray] = []
+  ascii_ok = True
   for offset in range(0, arr.size, _REFERENCE_SCAN_CHUNK):
     window = arr[offset:min(offset + _REFERENCE_SCAN_CHUNK, arr.size)]
     found = np.flatnonzero(window == 0x0A)
     if found.size:
       parts.append(found + offset)
+    if ascii_ok and window.max() > 0x7F:
+      ascii_ok = False
   if not parts:
-    return np.empty(0, dtype=np.intp)
-  return parts[0] if len(parts) == 1 else np.concatenate(parts)
+    return np.empty(0, dtype=np.intp), ascii_ok
+  nls = parts[0] if len(parts) == 1 else np.concatenate(parts)
+  return nls, ascii_ok
 
 
-def _mapping_ascii(data: mmap.mmap) -> bool:
-  """Whole-mapping ASCII sweep, chunked so the compare's scratch stays in cache."""
-  import numpy as np
-  arr = np.frombuffer(data, dtype=np.uint8)
-  for offset in range(0, arr.size, _REFERENCE_SCAN_CHUNK):
-    if arr[offset:min(offset + _REFERENCE_SCAN_CHUNK, arr.size)].max() > 0x7F:
-      return False
-  return True
-
-
-def _fast_reference_frames(data: bytes | mmap.mmap, take: int) -> tuple[int, int, int, bool] | None:
+def _fast_reference_frames(
+    data: bytes | mmap.mmap, take: int, nls: np.ndarray
+) -> tuple[int, int, int, bool] | None:
   """Vectorized frame check for the first ``take`` raw lines of ``data``.
+
+  ``nls`` is the corpus's 0x0A positions from the caller's one sweep
+  (:func:`_reference_scan`) — this check only slices them, and recomputing
+  here would buy the sweep's whole-corpus pass back.
 
   Returns ``(raw, start, end, needs_newline)`` when every in-budget frame is a
   non-blank ``{}``-wrapped line: the count of raw frames consumed and the
@@ -671,7 +680,6 @@ def _fast_reference_frames(data: bytes | mmap.mmap, take: int) -> tuple[int, int
   """
   import numpy as np
   arr = np.frombuffer(data, dtype=np.uint8)
-  nls = _reference_newlines(arr)
   if take <= 0:
     return (0, 0, 0, False)
   terminated = nls[:take]
@@ -710,15 +718,20 @@ def _stream_reference_lines(out: BinaryIO, data: bytes | mmap.mmap, take: int) -
   # Validity gate: undecodable bytes must raise UnicodeDecodeError, and the
   # decoded result is otherwise unused. ASCII bytes are always valid UTF-8, so
   # an ASCII proof passes validity and only a non-ASCII corpus pays the full
-  # decode. An mmap lacks isascii(); the numpy sweep answers for the whole
+  # decode. An mmap lacks isascii(); the fused sweep answers for the whole
   # mapping, and a non-ASCII mapping materializes once so the decode raises
   # the identical error.
-  ascii_ok = _mapping_ascii(data) if isinstance(data, mmap.mmap) else data.isascii()
-  if not ascii_ok:
-    if isinstance(data, mmap.mmap):
+  import numpy as np
+  if isinstance(data, mmap.mmap):
+    nls, ascii_ok = _reference_scan(np.frombuffer(data, dtype=np.uint8))
+    if not ascii_ok:
       data = bytes(data)
-    data.decode("utf-8")
-  fast = _fast_reference_frames(data, take)
+      data.decode("utf-8")
+  else:
+    nls = _reference_scan(np.frombuffer(data, dtype=np.uint8))[0]
+    if not data.isascii():
+      data.decode("utf-8")
+  fast = _fast_reference_frames(data, take, nls)
   if fast is not None:
     raw, start, end, needs_newline = fast
     if end > start:

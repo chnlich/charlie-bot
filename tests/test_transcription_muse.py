@@ -17,13 +17,13 @@ import numpy as np
 import pytest
 from websockets.asyncio.server import serve
 
-from src.agents.transcription.base import TranscriptEvent, TranscriptionRejected
-from src.agents.transcription.muse import FRAME_SAMPLES, LEAD_CAP_S, MuseTranscriptionBackend
+from src.agents.transcription.base import VOICE_CHUNK_SAMPLES, TranscriptEvent, TranscriptionRejected
+from src.agents.transcription.muse import LEAD_CAP_S, MuseTranscriptionBackend
 from src.core.config import CharlieBotConfig
 from src.core.credentials import Credentials
 
 SAMPLE_RATE = 16_000
-FRAME_BYTES = FRAME_SAMPLES * 2
+FRAME_BYTES = VOICE_CHUNK_SAMPLES * 2
 
 EXPECTED_HANDSHAKE = {
     "mode": "PUSH_TO_TALK",
@@ -93,7 +93,7 @@ async def test_handshake_frames_partials_and_final(muse_credentials) -> None:
         await socket.close()
     observed["frames"] = frames
 
-  chunks = _frames(_sine_pcm(3 * FRAME_SAMPLES / SAMPLE_RATE))
+  chunks = _frames(_sine_pcm(3 * VOICE_CHUNK_SAMPLES / SAMPLE_RATE))
   async with _serve(handler) as server:
     port = server.sockets[0].getsockname()[1]
     events = await asyncio.wait_for(_collect(_backend(port), _feed_frames(chunks), vocabulary=[], languages=[]), 30)
@@ -253,7 +253,7 @@ async def test_pacing_caps_the_lead_at_four_seconds_and_drains_the_backlog(muse_
   received: list[tuple[float, float]] = []  # (clock time at recv, chunk seconds)
   ready_at: list[float] = []
   total_s = LEAD_CAP_S + 2.0  # a 4 s flush plus a 2 s paced tail
-  frame_s = FRAME_SAMPLES / SAMPLE_RATE
+  frame_s = VOICE_CHUNK_SAMPLES / SAMPLE_RATE
 
   async def handler(socket) -> None:
     await socket.recv()

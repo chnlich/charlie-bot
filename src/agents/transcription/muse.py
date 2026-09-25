@@ -23,8 +23,6 @@ from src.core.credentials import get_credentials
 MODEL = "muse-voice-transcribe-1.0"
 SAMPLE_RATE = 16_000
 BYTES_PER_SECOND = SAMPLE_RATE * 2  # mono PCM16
-# 2048-sample binary frames, 128 ms of PCM16 — the browser worklet's chunk.
-FRAME_SAMPLES = 2048
 DEFAULT_ENDPOINT_URL = "wss://api.meta.ai/v1/asr/realtime"
 # Meta's disconnect sits at a 5 s lead; the schedule caps the lead one second
 # below it, so a slow handshake (D s) still lands the final inside the 2 s

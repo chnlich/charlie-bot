@@ -221,15 +221,12 @@ Known-alive symbols:
   src/core/review.py pass `exclude_thread_id=` by keyword. Vulture flags each at 100%
   confidence as an unused variable. Same class as the `art`/`dir_path`
   stub-parameter entries above.
-- `check` (`tests/conftest.py`, keyword parameter of the `fake_run_tmux` stub) and `format`
-  (`tests/test_cli_restart_contract.py`, the `log_message` override's second parameter)
-  — signature-mirror parameters kept deliberately, not fixed by any call: no caller passes
-  `check=` to `pty_common._run_tmux`, and the stdlib invokes `log_message(format, *args)`
-  positionally into the override's trailing `*args`, so deleting either parameter stays
-  green; both keep the stub a faithful mirror of the signature it replaces (the
-  `fake_run_tmux` factory docstring states that drop-in contract, and `format` mirrors the
-  stdlib `BaseHTTPRequestHandler.log_message(self, format, *args)` signature). Vulture flags
-  each at 100% confidence as an unused variable.
+- `format` (`tests/test_cli_restart_contract.py`, the `log_message` override's second
+  parameter) — signature-mirror parameter kept deliberately, not fixed by any call: the
+  stdlib invokes `log_message(format, *args)` positionally into the override's trailing
+  `*args`, so deleting the parameter stays green; it keeps the override a faithful mirror
+  of the stdlib `BaseHTTPRequestHandler.log_message(self, format, *args)` signature.
+  Vulture flags it at 100% confidence as an unused variable.
 - `interrupt_reason` (`tests/test_worktree_quarantine.py`, keyword parameter of the
   `fake_resume_worker` stub installed for `spawner.resume_worker` via `monkeypatch.setattr`)
   — every production call site (`src/core/init_worker_recovery.py`)
@@ -245,15 +242,7 @@ Known-alive symbols:
   keeps the lambda a drop-in mirror of `kill_process_group(pid, sig=signal.SIGTERM)`
   (src/core/process.py), which `src/core/init_worker_recovery.py` already calls with
   two positional arguments. Vulture flags each site at 100% confidence as an unused
-  variable. Same class as the `check`/`format` signature-mirror entry above.
-- `check` (`tests/test_terminal_backend.py`, keyword parameter of the inline
-  `fake_run_tmux` stub installed for `terminal._run_tmux` via `monkeypatch.setattr`) —
-  second site of the signature-mirror class: the stub mirrors the real `_run_tmux`
-  signature's keyword flags, `capture` and `check` (src/agents/backends/pty_common.py,
-  imported in src/agents/backends/terminal.py), the reuse test's only stub call is
-  `("has-session", "-t", "charliebot-terminal")` with no `check=`, so deleting the parameter
-  stays green; the mirror keeps the stub a faithful drop-in. Vulture flags it at 100%
-  confidence as an unused variable.
+  variable. Same class as the `format` signature-mirror entry above.
 - `panel-summary`, `panel-details`, `panel-roofline`, `panel-source`, `panel-session`,
   `panel-raw` (`web/templates/ncu.html`, the six tab-panel element ids) — reached by
   string construction: the inline tab switcher activates panels with
@@ -329,7 +318,7 @@ Known-alive symbols:
   than a TypeError. A tests-only vulture scan flags both at 100% confidence as unused
   variables (a combined src+tests scan does not: the production `annotate` parameters carry
   the same names, so the names are not zero-match repo-wide — the flags only appear in a
-  tests-only scan). Same class as the `check`/`format` signature-mirror entry above. The
+  tests-only scan). Same class as the `format` signature-mirror entry above. The
   same file's `html_text` (first parameter of the `explode` stub installed for
   `files_api._inject_artifact_ui`) joins this class: the replaced function is called with
   two positional arguments at both production call sites (src/api/files.py), so the stub

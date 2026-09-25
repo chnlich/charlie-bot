@@ -152,15 +152,6 @@ class CDP:
         return len(self.mutations)
 
 
-async def connect_cdp(port: int) -> CDP:
-    import websockets
-
-    # /json/version lists the browser endpoint.
-    with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=10) as resp:
-        info = json.loads(resp.read().decode())
-    ws = await websockets.connect(info["webSocketDebuggerUrl"], max_size=50 * 1024 * 1024)
-    return CDP(ws)
-
 
 # ---------------------------------------------------------------------------
 # Scenario seeding (through the task_sessions owner, in-process only)

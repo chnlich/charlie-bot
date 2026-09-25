@@ -499,7 +499,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                  "about:blank"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             try:
-                await drive_browser(cdp_host=chrome_proc, debug_port=debug_port, base=base,
+                await drive_browser(debug_port=debug_port, base=base,
                                     access_key=access_key, results=results, args=args, home=home)
             except Exception as exc:
                 # A harness error must stay visible in the evidence, not be
@@ -535,7 +535,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 raise SystemExit(f"{len(failed)} scenario(s) failed: {[s['name'] for s in failed]}")
 
 
-async def drive_browser(cdp_host: subprocess.Popen, debug_port: int, base: str,
+async def drive_browser(debug_port: int, base: str,
                         access_key: str, results: Results, args: argparse.Namespace,
                         home: Path) -> None:
     import websockets

@@ -179,13 +179,6 @@ Known-alive symbols:
   definition, and vulture flags each as an unused method. Same class as the
   `do_GET`/`do_POST`/`log_message` `BaseHTTPRequestHandler` entry above, with base-class
   virtual dispatch in place of stdlib string dispatch.
-- `t_mgr` (`tests/test_internal_delegate_takeoff.py`, parameter of the `fake_spawn_worker`
-  stub installed for `internal.spawn_worker` via `monkeypatch.setattr`) — the real
-  `spawn_worker` (src/core/spawner_lifecycle.py) is called with six positional arguments,
-  so the stub's replaced signature fixes the arity and `t_mgr` must stay to receive
-  `thread_mgr`; deleting the parameter makes the stub raise TypeError. Vulture flags it
-  at 100% confidence as an unused variable. Same class as the `art` stub-parameter entry
-  above.
 - `identity` (`tests/test_master_restart_transport_unit.py`, parameter of the
   `fake_recovery` stub installed for `server._run_crash_recovery` via
   `monkeypatch.setattr`) — the real `_run_crash_recovery` is called with three positional
@@ -226,7 +219,7 @@ Known-alive symbols:
   `scheduled=`/`include_running_status=`/`include_pending_trigger_status=` by keyword into
   `list_sessions` (src/api/pages.py). Both `spawn_review_worker` call sites in
   src/core/review.py pass `exclude_thread_id=` by keyword. Vulture flags each at 100%
-  confidence as an unused variable. Same class as the `art`/`t_mgr`/`dir_path`
+  confidence as an unused variable. Same class as the `art`/`dir_path`
   stub-parameter entries above.
 - `check` (`tests/conftest.py`, keyword parameter of the `fake_run_tmux` stub) and `format`
   (`tests/test_cli_restart_contract.py`, the `log_message` override's second parameter)

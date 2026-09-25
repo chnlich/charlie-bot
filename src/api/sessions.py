@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, TypeAdapter
 from starlette.responses import Response
 
-from src.api.cron import TaskUpdate, apply_task_yaml_update, next_run_iso
+from src.api.cron import next_run_iso
 from src.api.deps import (
   SESSION_NOT_FOUND_DETAIL,
   bad_request,
@@ -126,17 +126,10 @@ def _default_backend_id(cfg: CharlieBotConfig) -> str:
 def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dict:
   active_backend = meta.backend or _default_backend_id(cfg)
   active_backend_opt = cfg.get_backend_option(active_backend)
-  # A cron-dedicated role-carrying (PM) session's backend is controlled by the
-  # task yaml: the switch is a write-through that rotates the session, so the
-  # payload offers every backend option and flags that switching rotates.
-  # Same trigger condition as the write-through guard in switch_session_backend.
-  rotates = bool(meta.scheduled_task and meta.role is not None)
-  switchable = [opt.id for opt in cfg.backends.options] if rotates else _switchable_backend_ids(active_backend, cfg)
   return {
       "active_backend": active_backend,
       "active_backend_type": active_backend_opt.type if active_backend_opt else "",
-      "switchable_backends": switchable,
-      "backend_switch_rotates": rotates,
+      "switchable_backends": _switchable_backend_ids(active_backend, cfg),
   }
 
 
@@ -1441,17 +1434,13 @@ async def switch_session_backend(
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> SessionMetadata:
-  """Switch a session's backend, in place or via write-through rotation.
+  """Switch a session's backend in place.
 
   ``meta.backend`` is an effective current backend: the raw field when set,
-  else ``backends.options[0]``. For an ordinary (or role-less dedicated)
-  session, only cc-claude options sharing the session's resume domain — the
-  pool, or the default login directory when the pool is empty — are switchable
-  in place; a session targeting anything else must fork/clone. For a
-  cron-dedicated role-carrying (PM) session the yaml is the single control
-  point, so the request writes through to the task yaml and returns the rotated
-  session (whose ``id`` can differ from the path id), reusing the cron editor's
-  implementation.
+  else ``backends.options[0]``. A scheduled session switches in place like any
+  other session: only cc-claude options sharing the session's resume domain —
+  the pool, or the default login directory when the pool is empty — are
+  switchable; a session targeting anything else must fork/clone.
   """
   valid_ids = {opt.id for opt in cfg.backends.options}
   if body.backend not in valid_ids:
@@ -1466,23 +1455,6 @@ async def switch_session_backend(
   effective_current = parent.backend or _default_backend_id(cfg)
   if body.backend == effective_current:
     return parent
-
-  # The yaml is the single control point for a cron-dedicated PM session's
-  # backend: the scheduler reconciles the dedicated session against the task
-  # file on every fire, so an in-place switch here would be overridden at the
-  # next fire (or trigger an unintended generation rotation). Write through
-  # instead: update the task yaml's backend key and rotate to the fresh
-  # session, reusing the cron editor's implementation. The returned session's
-  # id can differ from the path id; nothing in this class's prior session is
-  # resumed (rotation creates a fresh session), so no resume-domain check runs.
-  if parent.scheduled_task and parent.role is not None:
-    _, rotated = await apply_task_yaml_update(
-        parent.scheduled_task,
-        TaskUpdate(backend=body.backend),
-        cfg,
-        session_mgr,
-    )
-    return rotated
 
   if not _same_backend_domain(effective_current, body.backend, cfg):
     raise HTTPException(

@@ -4,17 +4,14 @@
 # never touches a file that is already there. Host-specific fields (backend,
 # schedule) belong in the host files, not here.
 #
-# Every entry carries an explicit `type`: `pm` wakes a project manager's
-# dedicated session (requires `project` and `prompt_file`); `normal` runs one
-# worker/handler/loop/steps fire. The prompt source of a normal task is exactly
-# one of `prompt_file`, `steps`, `handler`, or `loop`. `steps` is an ordered
-# worker list: each step declares `name`, `prompt_file`, and an optional
-# `backend` (a step without one uses the task-level `backend`), starts after
-# the previous step exits 0 with that step's result, and the session master is
-# woken once at the end with one summary block per step.
+# The prompt source of every task is exactly one of `prompt_file`, `steps`,
+# `handler`, or `loop`. `steps` is an ordered worker list: each step declares
+# `name`, `prompt_file`, and an optional `backend` (a step without one uses the
+# task-level `backend`), starts after the previous step exits 0 with that
+# step's result, and the session master is woken once at the end with one
+# summary block per step.
 scheduled_tasks:
   - name: memory-curator
-    type: normal
     cron: "27 6 * * *"
     timezone: local
     steps:
@@ -23,7 +20,6 @@ scheduled_tasks:
       - name: reviewer
         prompt_file: prompts/cron/memory_curator/memory_reviewer.md
   - name: storage-cool
-    type: normal
     cron: "30 4 * * *"
     timezone: local
     handler: cool_storage

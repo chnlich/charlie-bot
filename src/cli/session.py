@@ -1,6 +1,6 @@
 """CLI verbs for session-level mutations, callable from any agent session.
 
-  charliebot session create --name N [--backend B] [--group G] [--role R]
+  charliebot session create --name N [--backend B] [--group G]
   charliebot session create --parent P --profile manager --task-file FILE
   charliebot session tree [--root ID] [--include-archived] [--limit N] [--cursor C]
   charliebot session pause ID / resume ID
@@ -63,7 +63,6 @@ def _build_parser() -> argparse.ArgumentParser:
   create.add_argument("--name", default=None, help="Session/task name (optional)")
   create.add_argument("--backend", default=None, help="Backend id (optional)")
   create.add_argument("--group", default=None, help="Group name to assign after creation (optional)")
-  create.add_argument("--role", default=None, help="Session role (optional)")
   # ---- v2 task create ----
   create.add_argument("--parent", default=None, help="Parent task id (optional; v2 task create)")
   create.add_argument(
@@ -155,9 +154,6 @@ def _cmd_create(args: argparse.Namespace) -> None:
     payload["task_parent_id"] = args.parent
     payload["profile"] = args.profile
     payload["request_id"] = args.request_id or str(uuid.uuid4())
-  else:
-    if args.role is not None:
-      payload["role"] = args.role
   result = post_internal_api("/api/sessions/", payload)
   if args.group is not None:
     result = post_internal_api(f"/api/sessions/{result['id']}/group", {"group": args.group})

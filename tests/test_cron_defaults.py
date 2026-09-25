@@ -50,7 +50,7 @@ def _write_healthy(home: Path, name: str, cron: str, prompt_body: str) -> Path:
   repo.mkdir(parents=True, exist_ok=True)
   pf = repo / f"{name}.md"
   pf.write_text(prompt_body, encoding="utf-8")
-  _write_task_text(home, name, _dump({"type": "normal", "cron": cron, "prompt_file": str(pf)}))
+  _write_task_text(home, name, _dump({"cron": cron, "prompt_file": str(pf)}))
   return pf
 
 
@@ -79,8 +79,6 @@ def test_seed_idempotence(temp_home: Path) -> None:
   # The seeded host file keeps the repo pointers: the pointed files own the
   # prompt bodies, and the host file carries only the paths to them.
   assert body1 == {
-      "type":
-          "normal",
       "cron":
           "27 6 * * *",
       "timezone":
@@ -116,7 +114,6 @@ def test_existing_entry_untouched(temp_home: Path) -> None:
   for entry in defaults:
     _write_task_text(
         temp_home, entry["name"], _dump({
-            "type": "normal",
             "cron": "5 5 * * *",
             "prompt_file": "prompts/whatever.md"
         }))
@@ -177,12 +174,10 @@ def test_loader_loads_prompt_file_pointer(temp_home: Path) -> None:
     "task_yaml",
     [
         pytest.param({
-            "type": "normal",
             "cron": "* * * * *",
             "prompt": "body v1"
         }, id="inline-prompt"),
         pytest.param({
-            "type": "normal",
             "cron": "* * * * *"
         }, id="no-prompt-source"),
     ],
@@ -199,7 +194,7 @@ def test_loader_rejects_task_without_prompt_file(temp_home: Path, task_yaml: dic
 
 def test_promptless_handler_task_loads(temp_home: Path) -> None:
   """A handler task carries no prompt source of any kind and still loads."""
-  _write_task_text(temp_home, "backup", _dump({"type": "normal", "cron": "0 3 * * *", "handler": "backup"}))
+  _write_task_text(temp_home, "backup", _dump({"cron": "0 3 * * *", "handler": "backup"}))
   tasks = get_scheduled_tasks()
   assert len(tasks) == 1
   assert tasks[0].name == "backup"
@@ -211,7 +206,7 @@ def test_missing_pointer_target_recovers_when_restored(temp_home: Path) -> None:
   """A pointer whose target is missing is a loud per-file error; restoring the
   target flips the file back to healthy on the next load, without a restart."""
   prompt_path = temp_home / "prompt.md"
-  _write_task_text(temp_home, "task-a", _dump({"type": "normal", "cron": "0 0 * * *", "prompt_file": str(prompt_path)}))
+  _write_task_text(temp_home, "task-a", _dump({"cron": "0 0 * * *", "prompt_file": str(prompt_path)}))
   assert [e.name for e in get_scheduled_task_errors()] == ["task-a"]
 
   prompt_path.write_text("v1", encoding="utf-8")
@@ -300,7 +295,6 @@ def test_timezone_local_resolves(temp_home: Path) -> None:
   _write_task_text(
       temp_home, "t",
       _dump({
-          "type": "normal",
           "cron": "* * * * *",
           "timezone": "local",
           "prompt_file": str(prompt_path)
@@ -315,7 +309,6 @@ def test_explicit_timezone_untouched(temp_home: Path) -> None:
   _write_task_text(
       temp_home, "t",
       _dump({
-          "type": "normal",
           "cron": "* * * * *",
           "timezone": "America/New_York",
           "prompt_file": str(prompt_path)
@@ -363,7 +356,6 @@ def _inject_name_key(h: Path) -> Path:
 def _inject_unknown_key(h: Path) -> Path:
   return _write_task_text(
       h, "broken-4", _dump({
-          "type": "normal",
           "cron": "0 0 * * *",
           "prompt_file": "p.md",
           "promt_file": "typo.md"
@@ -371,7 +363,7 @@ def _inject_unknown_key(h: Path) -> Path:
 
 
 def _inject_missing_source(h: Path) -> Path:
-  return _write_task_text(h, "broken-5", _dump({"type": "normal", "cron": "0 0 * * *"}))
+  return _write_task_text(h, "broken-5", _dump({"cron": "0 0 * * *"}))
 
 
 def _inject_missing_prompt_file(h: Path) -> Path:
@@ -387,6 +379,10 @@ def _inject_inline_prompt(h: Path) -> Path:
       }))
 
 
+def _inject_retired_type_key(h: Path) -> Path:
+  return _write_task_text(h, "broken-8", _dump({"type": "normal", "cron": "0 0 * * *", "prompt_file": "p.md"}))
+
+
 # The broken-file taxonomy is defined once, here: both parametrized consumers
 # below (loader isolation and the API total test) read this list, so adding a
 # case happens in this one place.
@@ -398,6 +394,7 @@ _BROKEN_CASES = [
     (_inject_missing_source, "broken-5", "broken-5.yaml"),
     (_inject_missing_prompt_file, "broken-6", "broken-6.yaml"),
     (_inject_inline_prompt, "broken-7", "broken-7.yaml"),
+    (_inject_retired_type_key, "broken-8", "broken-8.yaml"),
 ]
 _BROKEN_CASE_IDS = [
     "whole-file-syntax",
@@ -407,6 +404,7 @@ _BROKEN_CASE_IDS = [
     "missing-required-source",
     "missing-prompt-file",
     "inline-prompt",
+    "retired-type-key",
 ]
 
 
@@ -455,7 +453,6 @@ def test_hot_reload_edit_existing_file(temp_home: Path) -> None:
   _write_task_text(
       temp_home, "task-a",
       _dump({
-          "type": "normal",
           "cron": "0 9 * * *",
           "prompt_file": str(temp_home / "repo" / "task-a.md")
       }))
@@ -542,7 +539,6 @@ def _post_nightly(client: TestClient, prompt_path: Path, cron: str = "0 2 * * *"
   return client.post(
       "/api/cron/tasks", json={
           "name": "nightly",
-          "type": "normal",
           "cron": cron,
           "prompt_file": str(prompt_path)
       })
@@ -584,7 +580,6 @@ def test_list_tasks_omits_resolved_prompt(temp_home: Path) -> None:
   _write_task_text(
       temp_home, "task-chain",
       _dump({
-          "type": "normal",
           "cron": "0 3 * * *",
           "steps": [{
               "name": "one",
@@ -755,7 +750,6 @@ def test_api_rejects_path_traversal_name(temp_home: Path, bad: str) -> None:
     r_post = client.post(
         "/api/cron/tasks", json={
             "name": bad,
-            "type": "normal",
             "cron": "0 1 * * *",
             "prompt_file": "p.md"
         })
@@ -781,4 +775,4 @@ def test_scheduled_task_config_has_no_base_branch_field() -> None:
   assert "base_branch" not in ScheduledTaskConfig.model_fields
   with pytest.raises(ValidationError, match="base_branch"):
     ScheduledTaskConfig(
-        name="t", cron="0 0 * * *", type="normal", prompt="p", base_branch="main")  # type: ignore[call-arg]
+        name="t", cron="0 0 * * *", prompt="p", base_branch="main")  # type: ignore[call-arg]

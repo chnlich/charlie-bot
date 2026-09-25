@@ -90,7 +90,7 @@ def _install_clock(monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> None:
 
 
 def _task(name: str = "code-health", **kw: Any) -> ScheduledTaskConfig:
-  base: dict = {"name": name, "cron": "* * * * *", "timezone": "UTC", "type": "normal", "prompt": "run the round"}
+  base: dict = {"name": name, "cron": "* * * * *", "timezone": "UTC", "prompt": "run the round"}
   base.update(kw)
   return ScheduledTaskConfig(**base)
 
@@ -350,63 +350,6 @@ async def test_manual_run_is_outside_and_leaves_handle_unchanged(
   # The manual execution left the recorded scheduled handle unchanged.
   assert scheduler._handles["code-health"] is scheduled_handle
   scheduled_handle.cancel()
-  await asyncio.sleep(0)
-
-
-# ---------------------------------------------------------------------------
-# 6. A PM fire is skipped by the same rule, not queued for a second wake
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_pm_fire_skips_rather_than_queuing_a_second_wake(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC))
-  _install_clock(monkeypatch, clock)
-  cfg = make_home_config(tmp_path)
-  scheduler = Scheduler(cfg, AsyncMock())
-  session = SessionMetadata(
-      id="session-1",
-      name="Scheduled: pm",
-      role="project",
-      group="bp-eval",
-      scheduled_task="pm",
-  )
-  session.last_scheduled_run = clock.now().isoformat()  # 00:00
-  monkeypatch.setattr(scheduler, "_get_or_create_session", AsyncMock(return_value=session))
-  session_mgr = AsyncMock()
-  task_cfg = _task("pm", type="pm", project="bp-eval", prompt="plan the day")
-
-  woken = asyncio.Event()
-  wake_count = {"n": 0}
-
-  def fake_trigger_master(*_args: Any, **_kwargs: Any) -> Any:
-    wake_count["n"] += 1
-
-    async def _wake() -> None:
-      await woken.wait()
-
-    return _wake()
-
-  monkeypatch.setattr(scheduler_module, "trigger_master", fake_trigger_master)
-  monkeypatch.setattr(scheduler_module, "create_logged_task", asyncio.create_task)
-  monkeypatch.setattr(scheduler_module, "get_config", lambda: cfg)
-
-  # First fire births the master wake and registers its in-flight handle.
-  await _tick(scheduler, task_cfg, session_mgr, clock, minute=1)
-  assert wake_count["n"] == 1
-  handle = scheduler._handles.get(task_cfg.name)
-  assert handle is not None and not handle.done()
-
-  cursor = len(session_mgr.persist_and_broadcast.await_args_list)
-  # A second due tick while the master wake is pending is skipped, not queued.
-  await _tick(scheduler, task_cfg, session_mgr, clock, minute=2)
-  assert wake_count["n"] == 1
-  assert _skip_events_since(session_mgr, cursor) == 1
-
-  woken.set()
   await asyncio.sleep(0)
 
 

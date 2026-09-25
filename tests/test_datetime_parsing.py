@@ -72,7 +72,6 @@ async def test_scheduler_maybe_run_accepts_naive_last_scheduled_run(
   task_cfg = ScheduledTaskConfig(
       name="backup",
       cron="* * * * *",
-      type="normal",
       handler="backup",
       timezone="UTC",
   )

@@ -46,7 +46,6 @@ def write_nightly_task(home: Path) -> Path:
       "nightly",
       dump_yaml(
           {
-              "type": "normal",
               "cron": "0 3 * * *",
               "prompt_file": str(prompt_path),
               "timezone": "America/Los_Angeles",

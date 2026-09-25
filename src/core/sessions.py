@@ -896,7 +896,6 @@ class SessionManager:
     meta = SessionMetadata(
         name=name,
         scheduled_task=req.scheduled_task,
-        role=req.role,
         backend=backend or self._cfg.backends.options[0].id,
         slack_origin=req.slack_origin,
         **overrides)
@@ -921,8 +920,6 @@ class SessionManager:
       backend: str,
       session_cache: dict[str, list[SessionMetadata]] | None = None,
       skip_if_busy: bool = False,
-      role: str | None = None,
-      group: str | None = None,
   ) -> SessionMetadata | None:
     """Return the active scheduled session for task_name/backend, rotating history if needed.
 
@@ -933,8 +930,6 @@ class SessionManager:
         backend,
         session_cache,
         skip_if_busy,
-        role,
-        group,
     )
 
   async def archive_scheduled_sessions(self, task_name: str) -> list[str]:
@@ -943,13 +938,6 @@ class SessionManager:
     See ``src/core/scheduled_sessions.py`` for the lifecycle contract.
     """
     return await self._scheduled_sessions.archive_sessions_for_task(task_name)
-
-  async def write_scheduled_task_enabled(self, task_name: str, enabled: bool) -> None:
-    """Write the ``enabled`` run gate of task_name's cron yaml, preserving every other key.
-
-    See ``src/core/scheduled_sessions.py`` for the persistence contract.
-    """
-    await self._scheduled_sessions.write_scheduled_task_enabled(task_name, enabled)
 
   def _tui_cli_option(self, backend_id: str) -> BackendOption | None:
     # Only tui-cli backends carry tmux lifecycle state, and the create and
@@ -1483,8 +1471,8 @@ class SessionManager:
 
     ``inherit_scheduling`` marks an inheriting scheduler succession: the child
     keeps the parent name verbatim (name_prefix goes unused), takes over
-    scheduled_task and role, and receives the scheduler bookkeeping so the
-    next cron tick sees an unbroken cadence.
+    scheduled_task, and receives the scheduler bookkeeping so the next cron
+    tick sees an unbroken cadence.
     """
     parent = await self.get_session(parent_id)
     if not parent:
@@ -1509,7 +1497,6 @@ class SessionManager:
     )
     if inherit_scheduling:
       meta.scheduled_task = parent.scheduled_task
-      meta.role = parent.role
       self._scheduled_sessions.migrate_scheduler_bookkeeping(parent, meta)
     session_dir = self._session_dir(meta.id)
     self._create_session_dirs(session_dir)

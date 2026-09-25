@@ -132,7 +132,7 @@ async def test_scheduler_uses_task_backend_override_for_scheduled_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   task_cfg = ScheduledTaskConfig(
-      name="nightly", cron="* * * * *", type="normal", prompt="nightly prompt", backend="codex-o3")
+      name="nightly", cron="* * * * *", prompt="nightly prompt", backend="codex-o3")
   result, cfg, session_mgr, resolve_backend, spawns = await _spawn_scheduled_worker_rig(
       tmp_path, monkeypatch, task_cfg=task_cfg, resolved=("codex-o3", "o3"))
 
@@ -151,7 +151,7 @@ async def test_scheduler_uses_default_backend_when_task_backend_unset(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", type="normal", prompt="nightly prompt")
+  task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt")
   _result, cfg, session_mgr, resolve_backend, _spawns = await _spawn_scheduled_worker_rig(
       tmp_path, monkeypatch, task_cfg=task_cfg, resolved=(OPUS_BACKEND_ID, OPUS_BACKEND_OPTION.model))
 
@@ -176,7 +176,6 @@ async def test_scheduler_rotates_scheduled_session_backend_and_copies_bookkeepin
 
   task_cfg = ScheduledTaskConfig(
       name="nightly",
-      type="normal",
       cron="0 2 * * *",
       prompt="nightly prompt",
       backend="codex-o3",
@@ -217,7 +216,6 @@ async def test_scheduler_backend_rotation_preserves_last_run_to_avoid_duplicate_
   await session_mgr.save_metadata(old_session)
   task_cfg = ScheduledTaskConfig(
       name="nightly",
-      type="normal",
       cron="* * * * *",
       prompt="nightly prompt",
       backend="codex-o3",
@@ -256,7 +254,6 @@ async def test_scheduler_skips_backend_rotation_while_old_session_is_running(
     assert old_session_refetched is not None
     task_cfg = ScheduledTaskConfig(
         name="nightly",
-        type="normal",
         cron="* * * * *",
         prompt="nightly prompt",
         backend="codex-o3",
@@ -290,7 +287,6 @@ def test_cron_api_persists_and_clears_backend(
         "/api/cron/tasks",
         json={
             "name": "nightly",
-            "type": "normal",
             "cron": "0 2 * * *",
             "prompt_file": str(md_path),
             "backend": "codex-o3",
@@ -325,7 +321,6 @@ def test_cron_api_rejects_invalid_backend_on_create(
         "/api/cron/tasks",
         json={
             "name": "nightly",
-            "type": "normal",
             "cron": "0 2 * * *",
             "prompt_file": str(md_path),
             "backend": "missing-backend",
@@ -383,7 +378,6 @@ def _seed_prompt_file_task(cron_dir: Path, tmp_path: Path, *, backend: str | Non
   """
   md_path = write_nightly_prompt(tmp_path, _NIGHTLY_PROMPT_MD)
   body: dict[str, Any] = {
-      "type": "normal",
       "cron": "0 3 * * *",
       "prompt_file": str(md_path),  # absolute path, as production files use
       "timezone": "America/Los_Angeles",

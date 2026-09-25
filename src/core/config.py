@@ -76,37 +76,6 @@ class ImprovementLoopConfig(BaseModel):
   extra_rules: list[str] = []  # module-specific rules appended to prompt
 
 
-# Single home of the type: pm project invariant: the cron create route
-# reports the violation as a 400 while the model validator raises it, so the
-# condition and message must not be restated per layer.
-def pm_task_project_error(task_type: str | None, project: str | None, session_id: str | None = None) -> str | None:
-  """Return the error text when a type: pm task lacks a project, else None.
-
-  The explicit session_id binding IS the PM's session (no role/group PM
-  discovery applies to a bound task), so it satisfies type 'pm' without a
-  project. An unbound pm task keeps requiring the project group.
-  """
-  if task_type == 'pm' and not project and not session_id:
-    return "type 'pm' requires 'project' (the group the PM session is bound to)"
-  return None
-
-
-def scheduled_binding_error(task: ScheduledTaskFields) -> str | None:
-  """The config-level binding error of one scheduled task, or None.
-
-  A bound task opts out of the role/group PM discovery entirely, so it must
-  not also declare a project (the discovery binding): the explicit session id
-  is the only binding. Legacy unbound tasks are untouched.
-  """
-  if not task.session_id:
-    return None
-  if task.project:
-    return (
-        f"task binds session_id {task.session_id}; a bound task must not also "
-        "declare 'project' (role/group PM discovery does not apply to a bound task)")
-  return None
-
-
 class StepConfig(BaseModel):
   """One step of a ``steps`` cron task: a named worker in an ordered chain.
 
@@ -136,12 +105,6 @@ class ScheduledTaskFields(BaseModel):
 
   name: str
   cron: str
-  # Execution type, required on every task: 'pm' wakes the project manager's
-  # dedicated session with the task's prompt plus an appended Group line
-  # (requires 'project' and a prompt source); 'normal' runs one worker /
-  # handler / loop / steps fire. A missing or unknown value fails the file's
-  # load loudly instead of silently defaulting.
-  type: Literal['pm', 'normal']
   # Pre-resolution path string a host cron.d file declared. It is an in-process
   # field for transport to the API and UI only; no write path persists it.
   prompt_file: str | None = None
@@ -152,12 +115,15 @@ class ScheduledTaskFields(BaseModel):
   project: str | None = None
   allow_failure: bool = False
   # Explicit task-tree binding (schema_version=2): the stable session id this
-  # task fires against. A bound task never uses the role/group PM discovery —
-  # the binding IS the session — and a missing, closed, paused, non-manager or
-  # otherwise invalid binding fails the fire visibly instead of creating a
-  # replacement session. Unbound configuration keeps the legacy discovery
-  # until explicit migration.
+  # task fires against. The binding IS the session — a missing, closed,
+  # paused, non-manager or otherwise invalid binding fails the fire visibly
+  # instead of creating a replacement session.
   session_id: str | None = None
+  # Execution mode of a bound task: 'master' admits the task's prompt as one
+  # scheduled input to the bound manager node and dispatches it once;
+  # 'worker' (the default when absent) creates one worker leaf per firing. A
+  # 'mode' on an unbound task is a load error.
+  mode: Literal['master', 'worker'] | None = None
 
 
 class ScheduledTaskConfig(ScheduledTaskFields):
@@ -180,19 +146,20 @@ class ScheduledTaskConfig(ScheduledTaskFields):
   notify: str | None = None  # 'telegram' or None
 
   @model_validator(mode='after')
-  def check_type_and_sources(self) -> ScheduledTaskConfig:
-    if self.type == 'pm':
-      if self.steps is not None or self.handler or self.loop:
-        raise ValueError("type 'pm' forbids 'steps', 'handler', and 'loop'; the PM wake is a prompt")
+  def check_sources_and_mode(self) -> ScheduledTaskConfig:
+    sources = sum([bool(self.prompt), bool(self.steps), bool(self.handler), bool(self.loop)])
+    if sources != 1:
+      raise ValueError("task must have exactly one of 'prompt', 'prompt_file', 'steps', 'handler', or 'loop'")
+    if self.mode is not None and not self.session_id:
+      raise ValueError("'mode' requires 'session_id' (mode selects how a bound task fires)")
+    if self.mode == 'master':
       # A prompt_file-style entry is resolved into prompt before model
-      # validation, so an empty prompt here means the PM would wake up with no
-      # message at all.
+      # validation, so an empty prompt here means the manager would wake up
+      # with no message at all.
       if not self.prompt:
-        raise ValueError("type 'pm' requires a prompt source ('prompt' or 'prompt_file')")
-    else:
-      sources = sum([bool(self.prompt), bool(self.steps), bool(self.handler), bool(self.loop)])
-      if sources != 1:
-        raise ValueError("task must have exactly one of 'prompt', 'prompt_file', 'steps', 'handler', or 'loop'")
+        raise ValueError("mode 'master' requires a prompt source ('prompt' or 'prompt_file')")
+      if self.steps is not None or self.handler or self.loop:
+        raise ValueError("mode 'master' forbids 'steps', 'handler', and 'loop'; the manager wake is a prompt")
     if self.steps is not None and not self.steps:
       raise ValueError("steps must be a non-empty list")
     if self.steps:
@@ -207,10 +174,6 @@ class ScheduledTaskConfig(ScheduledTaskFields):
               "'prompt_file' before validation")
     if self.notify and self.notify != 'telegram':
       raise ValueError(f"notify must be 'telegram' or None, got '{self.notify}'")
-    if project_error := pm_task_project_error(self.type, self.project, self.session_id):
-      raise ValueError(project_error)
-    if binding_error := scheduled_binding_error(self):
-      raise ValueError(binding_error)
     return self
 
 

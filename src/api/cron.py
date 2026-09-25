@@ -3,7 +3,7 @@
 import asyncio
 import copy
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -25,14 +25,12 @@ from src.core.config import (
     cron_path,
     get_scheduled_task_errors,
     get_scheduled_tasks,
-    pm_task_project_error,
     require_backend_option,
-    scheduled_binding_error,
 )
 from src.core.deferred import deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionMetadata
-from src.core.scheduler import load_croniter, scheduled_task_session_binding
+from src.core.scheduler import effective_scheduled_task_backend, load_croniter
 from src.core.sessions import ScheduledSessionBusyError, SessionManager
 from src.core.yaml_utils import load_yaml, save_yaml
 
@@ -40,10 +38,9 @@ log = LazyStructlogLogger()
 router = APIRouter()
 
 # Wire sentence of the cron editor's 404 for a missing task file. Both raisers
-# (apply_task_yaml_update's pre-flight, which the cron PUT route and the
-# sessions write-through switch share, and delete_cron_task) must carry the
-# same bytes: tests/test_sessions_api_backend_switch.py and
-# tests/test_cron_delete.py pin each one.
+# (apply_task_yaml_update's pre-flight, which the cron PUT route runs, and
+# delete_cron_task) must carry the same bytes: tests/test_cron_delete.py pins
+# each one.
 _TASK_NOT_FOUND_DETAIL = 'Task "{}" not found'
 
 # get_next is a pure function of (cron, timezone, now), and its answer stays
@@ -111,8 +108,6 @@ def _apply_task_update(task: dict, req: TaskUpdate) -> dict:
     updated['timezone'] = req.timezone
   if req.enabled is not None:
     updated['enabled'] = req.enabled
-  if req.type is not None:
-    updated['type'] = req.type
   if req.project is not None:
     updated['project'] = req.project or None
   if req.allow_failure is not None:
@@ -134,28 +129,11 @@ async def _ensure_backend_update_session(
 ) -> SessionMetadata | None:
   if 'backend' not in req.model_fields_set:
     return None
-  backend, role, group = scheduled_task_session_binding(cand_model, cfg)
+  backend = effective_scheduled_task_backend(cand_model, cfg)
   try:
-    return await session_mgr.ensure_scheduled_session_backend(name, backend, role=role, group=group)
+    return await session_mgr.ensure_scheduled_session_backend(name, backend)
   except ScheduledSessionBusyError as e:
     raise HTTPException(status_code=409, detail=str(e)) from e
-
-
-def _check_pm_project_unique(name: str, task_type: str | None, project: str | None) -> None:
-  """Reject when another type: pm task already carries the same project (group).
-
-  At most one type: pm task per group, so at most one live role=project
-  session per group. The check names the conflicting task.
-  """
-  if task_type != 'pm':
-    return
-  for other in get_scheduled_tasks():
-    if other.name != name and other.type == 'pm' and other.project == project:
-      raise HTTPException(
-          status_code=409,
-          detail=(
-              f"type 'pm' task for project '{project}' already exists: '{other.name}' "
-              "(at most one Project Manager task per group)"))
 
 
 class TaskUpdate(BaseModel):
@@ -165,7 +143,6 @@ class TaskUpdate(BaseModel):
   backend: str | None = None
   timezone: str | None = None
   enabled: bool | None = None
-  type: Literal['pm', 'normal'] | None = None
   project: str | None = None
   allow_failure: bool | None = None
   session_id: str | None = None
@@ -248,7 +225,7 @@ async def apply_task_yaml_update(
 ) -> tuple[dict, SessionMetadata | None]:
   """Apply a ``TaskUpdate`` to one job's yaml: load, validate, rotate, write.
 
-  Shared by the cron PUT route and the sessions write-through switch. Returns
+  The cron PUT route's implementation. Returns
   the candidate task body (the PUT response) and the rotated/ensured
   ``SessionMetadata`` (None when the request carries no backend change or the
   session already matches). Raises HTTPException with the cron editor's exact
@@ -284,8 +261,6 @@ async def apply_task_yaml_update(
     raise HTTPException(status_code=409, detail=str(e)) from e
 
   rotated: SessionMetadata | None = None
-  if cand_model.enabled:
-    _check_pm_project_unique(name, cand_model.type, cand_model.project)
   rotated = await _ensure_backend_update_session(name, cand_model, req, cfg, session_mgr)
   await asyncio.to_thread(_write_cron_yaml, name, candidate)
   log.debug('cron_task_updated', name=name)
@@ -309,11 +284,6 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
   """Add a new scheduled job as its own config.d/cron.d/<name>.yaml file."""
   _validate_cron_name(req.name)
   _validate_backend_id(req.backend, cfg)
-  if project_error := pm_task_project_error(req.type, req.project):
-    raise HTTPException(status_code=400, detail=project_error)
-  if binding_error := scheduled_binding_error(req):
-    raise HTTPException(status_code=400, detail=binding_error)
-  _check_pm_project_unique(req.name, req.type, req.project)
   path = cron_path(req.name)
   if path.exists():
     raise HTTPException(status_code=409, detail=f'Task "{req.name}" already exists')
@@ -326,8 +296,9 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
   # in place — see _validate_cron_body), exactly as the update route does, so
   # the persisted file keeps the submitted prompt_file pointer: the pointed
   # file owns the prompt body and this file carries only the path to it. An
-  # unreadable prompt_file or a type: pm task without a prompt source becomes a
-  # 409 with the loader's error text, and nothing is written to disk.
+  # unreadable prompt_file or a task whose sources or mode fail the loader's
+  # validation becomes a 409 with the loader's error text, and nothing is
+  # written to disk.
   try:
     await asyncio.to_thread(_validate_cron_body, copy.deepcopy(body), cfg.charlie_bot_repo, req.name)
   except Exception as e:

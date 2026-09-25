@@ -104,10 +104,8 @@ async def test_manager_template_identical_at_every_depth_and_no_pm_load(tmp_path
   # Identical managed rules ⇒ identical template selection bytes at every depth.
   for label in ("mid", "low"):
     assert snapshots[label].blocks == snapshots["root"].blocks
-  # No PM identity, no project body, no per-layer manager template on v2.
+  # No per-layer manager template on v2.
   joined = snapshots["root"].instructions_text
-  assert "project_manager" not in joined
-  assert "Project Manager" not in joined
   assert "PM identity" not in joined
 
 

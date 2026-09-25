@@ -32,7 +32,6 @@ from src.core.config import (
     _load_cron_file,
 )
 from src.core.models import (
-    PROJECT_ROLE,
     CreateSessionRequest,
     LastRunStatus,
     SessionMetadata,
@@ -77,7 +76,6 @@ def _seed_scheduled_task(
   path.write_text(
       yaml.safe_dump(
           {
-              "type": "normal",
               "cron": cron,
               "prompt_file": str(prompt),
               "timezone": "America/Los_Angeles",
@@ -103,13 +101,12 @@ def _scheduled_succession_rig(
 async def _make_scheduled_parent(
     mgr: SessionManager,
     *,
-    role: str | None = None,
     group: str | None = None,
     events: int = 3,
 ) -> SessionMetadata:
   """Create the active scheduled session for the nightly task, with *events* chat events."""
   parent = await mgr.create_session(
-      CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly", role=role),
+      CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
       backend=OPUS_BACKEND_ID,
   )
   if group is not None:
@@ -188,7 +185,7 @@ async def test_elone_of_scheduler_owned_session_succeeds_with_full_inheritance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   _cfg, mgr, yaml_path = _scheduled_succession_rig(tmp_path, monkeypatch)
-  parent = await _make_scheduled_parent(mgr, role=PROJECT_ROLE, group="proj-a")
+  parent = await _make_scheduled_parent(mgr, group="proj-a")
   parent.last_scheduled_run = "2026-08-20T02:00:00-07:00"
   parent.last_scheduled_cron = "0 2 * * *"
   parent.last_run_status = LastRunStatus.SUCCESS
@@ -203,7 +200,6 @@ async def test_elone_of_scheduler_owned_session_succeeds_with_full_inheritance(
   assert child.parent_session_id == parent.id
   assert child.backend == "codex-o3"
   assert child.scheduled_task == parent.scheduled_task
-  assert child.role == parent.role
   assert child.group == parent.group
   assert child.name == parent.name
   assert child.last_scheduled_run == parent.last_scheduled_run
@@ -731,7 +727,7 @@ async def _make_recently_run_cadence_parent(mgr: SessionManager) -> SessionMetad
 
 def _cadence_task_cfg() -> ScheduledTaskConfig:
   return ScheduledTaskConfig(
-      name="nightly", cron=_CADENCE_CRON, type="normal", prompt="run nightly", backend="codex-o3")
+      name="nightly", cron=_CADENCE_CRON, prompt="run nightly", backend="codex-o3")
 
 
 @pytest.mark.asyncio

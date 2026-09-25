@@ -11,8 +11,8 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, NamedTuple
+from types import ModuleType, SimpleNamespace
+from typing import TYPE_CHECKING, Any, NamedTuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,6 +21,10 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
+
+if TYPE_CHECKING:
+  # Annotation-only: the fake-VAD seam's feed sizes; the runtimes import numpy locally.
+  import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -811,6 +815,58 @@ def sine_wav_frames(seconds: float, rate: int) -> bytes:
 
   positions = np.arange(int(rate * seconds), dtype=np.float64)
   return (np.sin(2 * np.pi * 440.0 * positions / rate) * 10_000).astype("<i2").tobytes()
+
+
+class FakeVadSegment:
+  """One pre-set speech segment: ``length`` silent samples starting at offset ``start``."""
+
+  def __init__(self, start: int, length: int) -> None:
+    import numpy as np
+
+    self.start = start
+    self.samples = np.zeros(length, dtype=np.float32)
+
+
+class FakeOfflineVad:
+  """The offline transcription suites' fake VAD: caller-set segments, no models.
+
+  The production feed loop's calls land here as records — accept_waveform sizes in
+  feed_sizes, flush in flushed — so the windowing suites can assert the cadence,
+  while the decode-window suites walk only empty/front/pop.
+  """
+
+  def __init__(self, segments: list[tuple[int, int]]) -> None:
+    self._segments = [FakeVadSegment(start, length) for start, length in segments]
+    self.feed_sizes: list[int] = []
+    self.flushed = False
+
+  def accept_waveform(self, samples: np.ndarray) -> None:
+    self.feed_sizes.append(samples.size)
+
+  def flush(self) -> None:
+    self.flushed = True
+
+  def empty(self) -> bool:
+    return not self._segments
+
+  @property
+  def front(self) -> FakeVadSegment:
+    return self._segments[0]
+
+  def pop(self) -> None:
+    self._segments.pop(0)
+
+
+def load_voice_replay_eval_script() -> ModuleType:
+  """Import scripts/voice_replay_eval.py as a module (it is an entry point, not a package)."""
+  import importlib.util
+
+  path = ROOT / "scripts" / "voice_replay_eval.py"
+  spec = importlib.util.spec_from_file_location("voice_replay_eval", path)
+  module = importlib.util.module_from_spec(spec)
+  sys.modules["voice_replay_eval"] = module
+  spec.loader.exec_module(module)
+  return module
 
 
 def voice_models_cached(cfg: CharlieBotConfig) -> bool:

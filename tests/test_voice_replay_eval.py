@@ -9,58 +9,13 @@ or the network, building all fixtures from synthetic PCM under tmp_path.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
-from types import ModuleType
 
 import numpy as np
 import pytest
-from conftest import sine_wav_frames, stub_speech_bundle, write_wav_file
+from conftest import FakeOfflineVad, load_voice_replay_eval_script, sine_wav_frames, stub_speech_bundle, write_wav_file
 
 from src.agents import transcriber
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def _load_script() -> ModuleType:
-  """Import scripts/voice_replay_eval.py as a module (it is an entry point, not a package)."""
-  path = ROOT / "scripts" / "voice_replay_eval.py"
-  spec = importlib.util.spec_from_file_location("voice_replay_eval", path)
-  module = importlib.util.module_from_spec(spec)
-  sys.modules["voice_replay_eval"] = module
-  spec.loader.exec_module(module)
-  return module
-
-
-class _FakeSegment:
-
-  def __init__(self, start: int, length: int) -> None:
-    self.start = start
-    self.samples = np.zeros(length, dtype=np.float32)
-
-
-class _FakeVad:
-  """The fake-VAD seam from test_transcriber_sampling: pre-set segments, no models."""
-
-  def __init__(self, segments: list[tuple[int, int]]) -> None:
-    self._segments = [_FakeSegment(start, length) for start, length in segments]
-
-  def accept_waveform(self, samples: np.ndarray) -> None:
-    pass
-
-  def flush(self) -> None:
-    pass
-
-  def empty(self) -> bool:
-    return not self._segments
-
-  @property
-  def front(self) -> _FakeSegment:
-    return self._segments[0]
-
-  def pop(self) -> None:
-    self._segments.pop(0)
 
 
 def _install_fakes(
@@ -72,8 +27,8 @@ def _install_fakes(
   captured: list[np.ndarray] = []
   texts: list[str] = []
 
-  def fake_open_vad(_config: object, _buffer_seconds: float) -> _FakeVad:
-    return _FakeVad(segments)
+  def fake_open_vad(_config: object, _buffer_seconds: float) -> FakeOfflineVad:
+    return FakeOfflineVad(segments)
 
   def fake_decode(_bundle: object, samples: np.ndarray) -> str:
     captured.append(samples.copy())
@@ -98,7 +53,7 @@ def test_offline_windows_parity_with_transcribe_pcm_offline(monkeypatch: pytest.
   # The replay pass: fresh VAD over the same samples, decode each window the
   # extracted function returns, join exactly as production does.
   captured.clear()
-  vad = _FakeVad(segments)
+  vad = FakeOfflineVad(segments)
   windows = transcriber.offline_decode_windows(vad, source)
   replay_text = transcriber._join_segments(
       *(
@@ -116,7 +71,7 @@ def test_offline_windows_report_segment_and_window_bounds(monkeypatch: pytest.Mo
   source = np.zeros(200_000, dtype="<i2")
   _install_fakes(monkeypatch, [(100_000, 10_000), (130_000, 20_000)], [])
 
-  windows = transcriber.offline_decode_windows(_FakeVad([(100_000, 10_000), (130_000, 20_000)]), source)
+  windows = transcriber.offline_decode_windows(FakeOfflineVad([(100_000, 10_000), (130_000, 20_000)]), source)
 
   pause, pad = transcriber.SEGMENT_DECODE_PAUSE_SAMPLES, transcriber.SEGMENT_DECODE_PAD_SAMPLES
   assert windows[0] == (100_000, 110_000, 100_000 - pause, 110_000 + pad)
@@ -127,7 +82,7 @@ def test_offline_windows_report_segment_and_window_bounds(monkeypatch: pytest.Mo
 # ---------------------------------------------------------------------------
 # Harness module (loaded once the script exists; the parity tests above cover
 # the transcriber seam it depends on).
-script = _load_script()
+script = load_voice_replay_eval_script()
 
 
 def _write_events(session_dir: Path, events: list[dict]) -> None:

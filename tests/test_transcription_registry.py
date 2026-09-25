@@ -9,14 +9,13 @@ script.main unchanged.
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import json
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-from conftest import sine_wav_frames, write_wav_file
+from conftest import load_voice_replay_eval_script, sine_wav_frames, write_wav_file
 from pydantic import ValidationError
 
 from src.agents.transcription import registry
@@ -130,16 +129,6 @@ def test_unknown_voice_key_still_fails() -> None:
 # ---------------------------------------------------------------------------
 # Acceptance (e), replay half: one registered fake backend runs through the
 # script with no script change.
-def _load_script():
-  """Import scripts/voice_replay_eval.py as a module (it is an entry point, not a package)."""
-  path = ROOT / "scripts" / "voice_replay_eval.py"
-  spec = importlib.util.spec_from_file_location("voice_replay_eval", path)
-  module = importlib.util.module_from_spec(spec)
-  sys.modules["voice_replay_eval"] = module
-  spec.loader.exec_module(module)
-  return module
-
-
 class _FakeBackend(TranscriptionBackend):
   id = "fake"
   label = "Fake Backend"
@@ -165,7 +154,7 @@ def test_registered_fake_backend_drives_the_replay_script(
   write_wav_file(voice_dir / "2026-01-01T000000.000Z_deadbeef.wav", sine_wav_frames(0.2, 16_000), 16_000)
   out = tmp_path / "out"
 
-  script = _load_script()
+  script = load_voice_replay_eval_script()
   assert script.main(["--engines", "fake", "--out", str(out)]) == 0
 
   payload = json.loads((out / "results.json").read_text(encoding="utf-8"))

@@ -25,13 +25,10 @@ function bumpCurrentSessionToTop() {
 
   const groupItems = el.closest('.session-group-items');
   const parent = groupItems || nav;
-  // A PM head row (data-pm-head) keeps the first slot of its group: the bumped
-  // row lands before the first child without that marker, i.e. just below it.
-  if (!el.dataset.pmHead) {
-    const anchor = Array.from(parent.children).find((child) => !child.dataset.pmHead);
-    if (anchor && anchor !== el) {
-      parent.insertBefore(el, anchor);
-    }
+  // The bumped row takes the first slot of its group.
+  const anchor = parent.children[0];
+  if (anchor !== el) {
+    parent.insertBefore(el, anchor);
   }
 
   const timeEl = el.querySelector('.session-time');

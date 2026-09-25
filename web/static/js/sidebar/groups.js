@@ -225,10 +225,10 @@ async function setSessionGroup(sessionId, group) {
 // Grouped scheduled task rendering
 // ---------------------------------------------------------------------------
 // Global cron load-failure badge, derived from the sidebar's existing
-// /api/cron/tasks fetch (pmStateCache.brokenTasks, name order); clicking opens
+// /api/cron/tasks fetch (brokenTasksCache, name order); clicking opens
 // the cron editor on the first broken task. Empty when nothing is broken.
 function renderCronErrorBadge() {
-  const broken = (pmStateCache && pmStateCache.brokenTasks) || [];
+  const broken = brokenTasksCache || [];
   if (!broken.length) return '';
   return `<div class="mx-3 my-2 px-3 py-2 rounded-lg bg-red-900/40 border border-red-700/50 text-red-300 text-xs cursor-pointer"
        role="button" title="Open the first failed task"
@@ -365,9 +365,8 @@ function renderSessionScheduleLine(s) {
   return `<span class="block text-xs text-slate-500">${escapeHtml(s.schedule_cron)} (${escapeHtml(s.schedule_timezone || '')})</span><span class="block text-xs text-slate-500">${s.schedule_enabled === false ? 'Disabled' : 'Next: ' + relativeTime(s.schedule_next_run)}</span>`;
 }
 
-// Session-row highlight shared by renderScheduledSessionItem,
-// renderProjectManagerRow, and renderSessionItem: a tint change lands here,
-// not in one renderer.
+// Session-row highlight shared by renderScheduledSessionItem and
+// renderSessionItem: a tint change lands here, not in one renderer.
 function sessionRowActiveClass(isActive) {
   return isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
 }
@@ -437,9 +436,9 @@ function resyncSessionUnread(sessions) {
 function renderGroupedScheduledList(sessions, options = {}) {
   const nav = document.getElementById('session-list');
   lastScheduledRenderArgs = sessions;
-  // The badge's task fetch piggybacks on the PM refresh (same /api/cron/tasks
-  // pull); the repaint guard below routes it back here for the scheduled tab.
-  if (!options.skipRefresh) scheduleProjectManagerRefresh();
+  // The badge's task fetch piggybacks on the broken-tasks refresh; the repaint
+  // guard below routes it back here for the scheduled tab.
+  if (!options.skipRefresh) scheduleBrokenTasksRefresh();
   const badgeHtml = renderCronErrorBadge();
   if (!sessions.length) {
     nav.innerHTML = badgeHtml + renderEmptyNote('No scheduled sessions');
@@ -499,121 +498,21 @@ function toggleCronGroup(key) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Project Manager rows — one role=project session per named group (project layer)
-// ---------------------------------------------------------------------------
-// Cron task names must match src/api/cron.py _CRON_NAME_RE; sanitize a group
-// name into a valid slug (alnum first char).
-function projectManagerSlug(group) {
-  return group.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+/, '');
+
+// Broken cron tasks in the API's name order: the scheduled tab's global
+// load-failure badge source.
+async function fetchBrokenCronTasks() {
+  const res = await fetch('/api/cron/tasks');
+  if (!res.ok) throw new Error(`cron tasks fetch failed: ${res.status}`);
+  const tasks = await res.json();
+  return tasks.filter(t => t.broken).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// Live role=project sessions keyed by group, and type:pm cron tasks keyed
-// by project. At most one each per group (server-enforced); first match wins.
-// brokenTasks carries the cron load-failure entries in the API's name order;
-// the scheduled tab derives its global error badge from them.
-async function fetchProjectManagerState() {
-  const [scheduledRes, tasksRes] = await Promise.all([
-    fetch('/api/sessions/scheduled'),
-    fetch('/api/cron/tasks'),
-  ]);
-  if (!scheduledRes.ok) throw new Error(`scheduled sessions fetch failed: ${scheduledRes.status}`);
-  if (!tasksRes.ok) throw new Error(`cron tasks fetch failed: ${tasksRes.status}`);
-  const scheduled = await scheduledRes.json();
-  const tasks = await tasksRes.json();
-  const pmByGroup = {};
-  scheduled.forEach(s => {
-    if (s.role === 'project' && s.group && !pmByGroup[s.group]) pmByGroup[s.group] = s;
-  });
-  const taskByGroup = {};
-  tasks.forEach(t => {
-    if (!t.broken && t.type === 'pm' && t.project && !taskByGroup[t.project]) taskByGroup[t.project] = t;
-  });
-  const brokenTasks = tasks.filter(t => t.broken).sort((a, b) => a.name.localeCompare(b.name));
-  return {pmByGroup, taskByGroup, brokenTasks};
-}
-
-const PM_BADGE_CLASS = 'px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide flex-shrink-0';
-
-function renderProjectManagerRow(pm) {
-  const isActive = SESSION_ID === pm.id;
-  const activeClass = sessionRowActiveClass(isActive);
-  const timeStr = pm.updated_at ? relativeTime(pm.updated_at) : '';
-  const timeIso = pm.updated_at || '';
-  return `<a href="/?session=${pm.id}"
-     class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}"
-     onclick="event.preventDefault(); switchSession('${pm.id}')"
-     id="session-${pm.id}"
-     data-pm-head="1">
-    ${renderSessionIndicators(pm)}
-    ${renderPendingPlanApprovalIndicator(pm)}
-    <span class="${PM_BADGE_CLASS} bg-indigo-900 text-indigo-300">PM</span>
-    <span class="flex-1 min-w-0 truncate">${escapeHtml(pm.name)}</span>
-    <span class="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" title="enabled"></span>
-    <span class="session-time text-xs text-slate-500 flex-shrink-0" data-time="${timeIso}">${timeStr}</span>
-  </a>`;
-}
-
-function renderProjectManagerSlotRow(group) {
-  const safeKey = escapeHtmlAttr(group);
-  return `<button type="button"
-     class="flex w-full items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors border border-dashed border-slate-700/50 text-slate-500 hover:bg-slate-700/50 hover:text-slate-300"
-     data-group-name="${safeKey}"
-     data-pm-head="1"
-     onclick="event.stopPropagation(); Sidebar.openPmSlotEditor(this.dataset.groupName)"
-     title="Enable the Project Manager for this group">
-    <span class="${PM_BADGE_CLASS} bg-slate-700/30 text-slate-500">PM</span>
-    <span class="flex-1 min-w-0 text-left truncate italic">Disabled · click to enable</span>
-    <span class="w-2 h-2 rounded-full bg-slate-600 flex-shrink-0" title="disabled"></span>
-  </button>`;
-}
-
-// Enable flow from a gray slot row: reuse the existing type:pm task for the
-// group when one exists, otherwise materialize pm_<slug> with
-// prompt_file: 'prompts/project_manager.md' (the yaml is the single control
-// point for the wake text); either way the cron editor opens on the task.
-async function openPmSlotEditor(group) {
-  let tasks;
-  try {
-    const res = await fetch('/api/cron/tasks');
-    if (!res.ok) throw new Error(`cron tasks fetch failed: ${res.status}`);
-    tasks = await res.json();
-  } catch (err) {
-    console.error('PM slot: failed to load cron tasks:', err);
-    return;
-  }
-  const existing = tasks.find(t => !t.broken && t.type === 'pm' && t.project === group);
-  if (existing) {
-    openCronEditor(existing.name);
-    return;
-  }
-  const name = `pm_${projectManagerSlug(group)}`;
-  try {
-    const res = await fetch('/api/cron/tasks', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({
-        name,
-        cron: '30 8 * * *',
-        prompt_file: 'prompts/project_manager.md',
-        type: 'pm',
-        project: group,
-        enabled: true,
-      }),
-    });
-    if (!res.ok) throw new Error(`task create failed: ${res.status} ${await res.text()}`);
-  } catch (err) {
-    console.error('PM slot: failed to create Project Manager task:', err);
-    return;
-  }
-  openCronEditor(name);
-}
-
-// PM state cache: null until the first enrichment resolves. Painted list uses
-// the cache synchronously; enrichment re-paints with fresh state afterwards, so
-// renders never block on PM fetches and the page's first paint issues none.
-let pmStateCache = null;
-let pmRefreshPending = false;
+// Broken-task cache: null until the first fetch resolves. The scheduled paint
+// reads it synchronously; the refresh re-paints with fresh state afterwards,
+// so renders never block on the fetch and the page's first paint issues none.
+let brokenTasksCache = null;
+let brokenTasksRefreshPending = false;
 let lastGroupedRenderArgs = null;
 let lastScheduledRenderArgs = null;
 // Whether the last renderSessionList call painted the search overlay. The
@@ -621,29 +520,22 @@ let lastScheduledRenderArgs = null;
 // state — is what tells the delete path a flat search list is on screen.
 let searchListPainted = false;
 
-function scheduleProjectManagerRefresh() {
-  if (pmRefreshPending) return;
-  pmRefreshPending = true;
+function scheduleBrokenTasksRefresh() {
+  if (brokenTasksRefreshPending) return;
+  brokenTasksRefreshPending = true;
   setTimeout(async () => {
-    pmRefreshPending = false;
-    let fresh;
+    brokenTasksRefreshPending = false;
     try {
-      fresh = await fetchProjectManagerState();
+      brokenTasksCache = await fetchBrokenCronTasks();
     } catch (err) {
       // Keep the last-known state; the next render schedules another attempt.
-      console.error('Project Manager state unavailable:', err);
+      console.error('Cron task state unavailable:', err);
       return;
     }
-    pmStateCache = fresh;
-    // Repaint only the list currently rendered into #session-list: both
-    // renderers write the same element, so repainting a stale sibling would
-    // clobber the visible tab. The archived view renders its own flat list
-    // with no PM rows, so a pending refresh resolving there repaints nothing.
-    if (currentFilter === 'archived') return;
+    // Repaint only the currently rendered scheduled list: the fetch resolving
+    // after the user left the scheduled tab would clobber the visible list.
     if (currentFilter === 'scheduled' && lastScheduledRenderArgs) {
       renderGroupedScheduledList(lastScheduledRenderArgs, {skipRefresh: true});
-    } else if (lastGroupedRenderArgs) {
-      renderGroupedSessionList(lastGroupedRenderArgs.sessions, lastGroupedRenderArgs.filter, {skipRefresh: true});
     }
   }, 0);
 }
@@ -651,14 +543,13 @@ function scheduleProjectManagerRefresh() {
 // ---------------------------------------------------------------------------
 // Grouped session list rendering (by session.group)
 // ---------------------------------------------------------------------------
-function renderGroupedSessionList(sessions, filter, options = {}) {
+function renderGroupedSessionList(sessions, filter) {
   const nav = document.getElementById('session-list');
   if (!sessions.length) {
     nav.innerHTML = renderEmptyNote('No sessions yet');
     return;
   }
   lastGroupedRenderArgs = {sessions, filter};
-  if (!options.skipRefresh) scheduleProjectManagerRefresh();
   // Grouping follows the root rows; a child row nests under its parent
   // whatever its own group field says.
   const {roots, childrenOf, parentOf} = buildSessionTree(sessions);
@@ -673,16 +564,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
   for (const key of sortedKeys) {
     const label = key || '(No group)';
     const isNamedGroup = key !== '';
-    // The PM session is rendered as the group head row, never among task rows.
-    const groupSessions = isNamedGroup ? groups[key].filter(s => s.role !== 'project') : groups[key];
-    // While PM state is unknown (null cache) paint no PM row at all; the
-    // enrichment re-paint fills it in shortly.
-    const pm = isNamedGroup && pmStateCache ? pmStateCache.pmByGroup[key] : null;
-    const pmTask = isNamedGroup && pmStateCache ? pmStateCache.taskByGroup[key] : null;
-    const pmEnabled = !!(pm && pmTask && pmTask.enabled !== false);
-    const pmRowHtml = isNamedGroup && pmStateCache
-      ? (pmEnabled ? renderProjectManagerRow(pm) : renderProjectManagerSlotRow(key))
-      : '';
+    const groupSessions = groups[key];
     const isCollapsed = collapsedState[key] === true; // expanded by default
     const isLimitExpanded = limitState[key] === true;
     const chevronClass = isCollapsed ? '' : 'rotate-90';
@@ -690,7 +572,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     const taskRowOptions = (s, index) => {
       const base = groupLimitItemOptions('session', key, s, index, isLimitExpanded);
       if (!isNamedGroup) return base;
-      // Indent task rows under the PM head row with a connecting line.
+      // Indent task rows under the group head with a connecting line.
       const indent = 'ml-3 border-l border-slate-700/50';
       return {...base, extraClass: [base.extraClass, indent].filter(Boolean).join(' ')};
     };
@@ -719,7 +601,6 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
         <span class="text-xs text-slate-500 ml-auto">${countTreeRows(groupSessions, childrenOf)}</span>
       </div>
       <div class="session-group-items ${isCollapsed ? 'hidden' : ''}" data-sgroup-items="${safeKey}">
-        ${pmRowHtml}
         ${groupSessions.map((s, index) => renderSessionTree(
           s,
           filter,
@@ -732,9 +613,6 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
   }
   nav.innerHTML = html;
   resyncSessionUnread(sessions);
-  if (pmStateCache) {
-    resyncSessionUnread(Object.values(pmStateCache.pmByGroup));
-  }
   // Parent rows take their collapsed-subtree stand-ins now that the rows exist.
   if (typeof Sidebar.refreshTreeIndicators === 'function') Sidebar.refreshTreeIndicators();
   updateRelativeTimes();
@@ -1052,7 +930,7 @@ function renderSessionList(sessions, filter) {
 }
 
 // Inline-delete repaint for the grouped views: filter the removed session out
-// of the last-rendered list and repaint in place (the PM-refresh path), so the
+// of the last-rendered list and repaint in place (the skipRefresh path), so the
 // preview window backfills and counts/toggles resync — with no refetch. The
 // archived tab owns its own paginated list and the search overlay is keyed by
 // the marker above, so both keep the caller's node-only row removal (false).
@@ -1066,7 +944,7 @@ function removeSessionFromRenderedList(sessionId) {
   if (!lastGroupedRenderArgs) return false;
   renderGroupedSessionList(
       lastGroupedRenderArgs.sessions.filter(s => s.id !== sessionId),
-      lastGroupedRenderArgs.filter, {skipRefresh: true});
+      lastGroupedRenderArgs.filter);
   return true;
 }
 
@@ -1094,10 +972,7 @@ const SIDEBAR_ONLY = {
   CLOCK_SVG_BODY,
   MODAL_OVERLAY_CLASS,
   MODAL_DIALOG_CLASS,
-  openPmSlotEditor,
   removeSessionFromRenderedList,
-  renderProjectManagerRow,
-  renderProjectManagerSlotRow,
   resyncSessionUnread,
   buildSessionTree,
   renderSessionTree,

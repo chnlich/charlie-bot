@@ -167,6 +167,12 @@ RUN_FINISHED = "run_finished"
 CHILD_REPORT = "child_report"
 PROMPT_CHANGED = "prompt_changed"
 TASK_IMPORTED = "task_imported"
+# Transcript-projection event types (src/core/worker_transcript.py): the worker
+# node's main-chat view synthesizes one header line per Run and one delivery
+# close after the last one. They exist only in the projected event list and on
+# the wire — never appended to any events file on disk.
+RUN_HEADER = "run_header"
+RUN_DELIVERY = "run_delivery"
 # An operator's durable confirmation that specific task inputs were actually
 # handled out-of-band (the terminal-driven TUI node's normal case). The event
 # names the exact input ids; the fold treats them like a successful run's

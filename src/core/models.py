@@ -349,6 +349,12 @@ class SessionMetadata(BaseModel):
   # Transient runtime fact derived from src.core.thinking_state at read time;
   # never persisted (excluded by _TRANSIENT_METADATA_FIELDS).
   thinking_since: UtcDatetime | None = None
+  # Transient display fact: a task-tree node's newest Run's backend, stamped
+  # at read time from thinking_state's display-backend map. The persisted
+  # metadata.backend keeps its inherited creation value; readers prefer
+  # run_backend and fall back to backend. Never persisted (excluded by
+  # _TRANSIENT_METADATA_FIELDS).
+  run_backend: str | None = None
   # Marks a projected legacy worker-thread row (a sidebar list response row
   # built from one threads/<id>/metadata.json of a legacy session). Response
   # only: never persisted (excluded by _TRANSIENT_METADATA_FIELDS).

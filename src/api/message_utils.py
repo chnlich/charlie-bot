@@ -13,6 +13,7 @@ if TYPE_CHECKING:
   from src.core.message_projection import MessageProjection
   from src.core.models import SessionMetadata
   from src.core.sessions import SessionManager
+  from src.core.task_sessions import TaskTreeManager
 
 __all__ = [
     "SessionBootstrapData",
@@ -158,6 +159,38 @@ async def _tail_events_page(
   return (messages, pending_draft, archive_offset + total_count, offset, has_more or archive_offset > 0)
 
 
+async def _worker_messages_page(
+    tree: TaskTreeManager,
+    session_id: str,
+    message_limit: int,
+) -> tuple[list[dict], dict | None, int, int, bool]:
+  """One tail page of a worker node's Run-transcript projection.
+
+  Same return shape as :func:`_messages_page`: committed messages, pending
+  draft, total event count, oldest message ordinal, has_more. Ordinals live in
+  the transcript's own space (positions in the synthesized event list), so the
+  ``/events`` pagination and the transcript poll speak the same cursor.
+  """
+  from src.core import worker_transcript
+  entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, tree, session_id)
+  messages, oldest_ordinal, has_more = entry.projection.tail(message_limit)
+  return (messages, entry.projection.pending_draft, entry.projection.event_count,
+          oldest_ordinal, has_more)
+
+
+async def _worker_usage(tree: TaskTreeManager, session_id: str) -> dict | None:
+  """Display usage folded over a worker node's Run transcript events.
+
+  The header's context reading is the newest Run's last context_reading event;
+  the same tier resolution the chat usage applies picks it from the projected
+  event list.
+  """
+  from src.core import worker_transcript
+  from src.core.session_usage import resolve_events_usage
+  entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, tree, session_id)
+  return await asyncio.to_thread(resolve_events_usage, entry.events)
+
+
 async def _messages_page(
     session_mgr: SessionManager,
     session_id: str,
@@ -185,19 +218,29 @@ async def build_session_bootstrap_data(
     session_mgr: SessionManager,
     *,
     message_limit: int = 40,
+    tree: TaskTreeManager | None = None,
 ) -> SessionBootstrapData:
   """Load the minimal session data needed for first paint or SPA switching.
 
   A projection-served page is turn-aligned and holds at least *message_limit*
   messages (unless history is exhausted); the legacy tail-events path folds
   the last *message_limit* raw events, which can render fewer messages.
+  A task-tree worker node's messages are its Runs' transcripts
+  (src/core/worker_transcript.py) served through the same page shape, so the
+  caller must pass the owning *tree* for it.
   """
   session_meta = await session_mgr.get_session(session_id)
   if session_meta is None:
     raise ValueError(f"session '{session_id}' metadata missing during bootstrap build")
 
-  messages, pending_draft, total_event_count, oldest_ordinal, has_more = await _messages_page(
-      session_mgr, session_id, session_meta.archive_offset, message_limit)
+  if session_meta.profile == "worker":
+    if tree is None:
+      raise ValueError(f"worker session '{session_id}' bootstrap requires the task tree")
+    messages, pending_draft, total_event_count, oldest_ordinal, has_more = await _worker_messages_page(
+        tree, session_id, message_limit)
+  else:
+    messages, pending_draft, total_event_count, oldest_ordinal, has_more = await _messages_page(
+        session_mgr, session_id, session_meta.archive_offset, message_limit)
 
   return SessionBootstrapData(
       session=session_meta,
@@ -215,6 +258,7 @@ async def build_session_view_data(
     thread_rows: list[dict],
     *,
     message_limit: int | None = 40,
+    tree: TaskTreeManager | None = None,
 ) -> SessionViewData:
   """Build the view's messages and usage.
 
@@ -237,17 +281,23 @@ async def build_session_view_data(
   if session_meta is None:
     raise ValueError(f"session '{session_id}' metadata missing during view build")
 
-  if message_limit is None:
+  if session_meta.profile == "worker":
+    if tree is None:
+      raise ValueError(f"worker session '{session_id}' view requires the task tree")
+    messages, pending_draft, total_event_count, oldest_message_ordinal, has_more = await _worker_messages_page(
+        tree, session_id, message_limit if message_limit is not None else 40)
+    usage = await _worker_usage(tree, session_id)
+  elif message_limit is None:
     raw_events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
     total_event_count = session_meta.archive_offset + len(raw_events)
     oldest_message_ordinal = session_meta.archive_offset
     has_more = session_meta.archive_offset > 0
     messages, pending_draft = events_to_view(raw_events, event_index_offset=session_meta.archive_offset)
+    usage = await session_mgr.resolve_session_usage(session_id, session_meta)
   else:
     messages, pending_draft, total_event_count, oldest_message_ordinal, has_more = await _messages_page(
         session_mgr, session_id, session_meta.archive_offset, message_limit)
-
-  usage = await session_mgr.resolve_session_usage(session_id, session_meta)
+    usage = await session_mgr.resolve_session_usage(session_id, session_meta)
 
   return SessionViewData(
       messages=messages,

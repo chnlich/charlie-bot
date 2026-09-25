@@ -303,6 +303,40 @@ def _task_closed_msg(ev: dict) -> dict:
   }
 
 
+def _run_header_msg(ev: dict) -> dict:
+  """One worker-transcript Run header: kind, backend label and state."""
+  parts = [f"Run {ev.get('kind') or 'run'}"]
+  backend = ev.get("backend_label") or ev.get("backend") or ""
+  if backend:
+    parts.append(backend)
+  state = ev.get("state") or ""
+  if state:
+    parts.append(state)
+  return {
+      "role": "system",
+      "content": " · ".join(parts),
+  }
+
+
+def _run_delivery_msg(ev: dict) -> dict:
+  """The worker transcript's closing delivery summary and evidence links."""
+  task_state = ev.get("task_state") or ""
+  return {
+      "role": ET.RUN_DELIVERY,
+      "content": ev.get("summary") or "",
+      "task_state": task_state,
+      "completed": task_state == "completed",
+      "result_refs": ev.get("result_refs") or [],
+      "raw_log_ref": ev.get("raw_log_ref") or "",
+      "events_ref": ev.get("events_ref") or "",
+      "result_ref": ev.get("result_ref") or "",
+      "repo_path": ev.get("repo_path") or "",
+      "base_branch": ev.get("base_branch") or "",
+      "branch_name": ev.get("branch_name") or "",
+      "run_id": ev.get("run_id") or "",
+  }
+
+
 def _task_delegated_msg(ev: dict) -> dict:
   backend = ev.get("backend") or ev.get("resolved_backend") or ""
   model = ev.get("model") or ev.get("resolved_model") or ""
@@ -404,6 +438,13 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
     # reloaded history render each fact exactly once.
     ET.CHILD_REPORT:
         _child_report_msg,
+    # Worker-transcript projection events (src/core/worker_transcript.py):
+    # synthesized per Run header line and the delivered task's closing
+    # summary. They ride the projected event list only — never an events file.
+    ET.RUN_HEADER:
+        _run_header_msg,
+    ET.RUN_DELIVERY:
+        _run_delivery_msg,
     ET.TASK_CLOSED:
         _task_closed_msg,
     ET.TASK_REOPENED:

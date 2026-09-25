@@ -56,3 +56,54 @@ def clear_busy(session_id: str) -> None:
 def busy_since(session_id: str) -> datetime | None:
   """Current busy interval start for *session_id*, or None."""
   return _busy_since.get(session_id)
+
+
+# ---------------------------------------------------------------------------
+# Task-tree worker Runs (a worker node's thinking_since)
+# ---------------------------------------------------------------------------
+# A worker node has no master queue: its busy interval is its live Run's,
+# opened at the Run's recorded started_at (launch or re-attach) and closed at
+# that Run's terminal fact. The node's has_running_tasks and work_state stay
+# the task-tree activity derivation's (src.core.task_sessions); this map only
+# records which Run opened the node's busy interval, so a finish closes exactly
+# that interval and a Run that opened none (a manager_turn, a queued Run that
+# never launched) closes nothing. Same process-memory shape as _busy_since:
+# written at the transition, read with zero I/O, never persisted.
+#
+# worker session_id -> the id of the Run whose busy interval it holds.
+_run_busy: dict[str, str] = {}
+# session_id -> the newest launched Run's backend id (display only). The
+# persisted metadata.backend is never rewritten by this map; readers fall back
+# to it.
+_run_backends: dict[str, str] = {}
+
+
+def mark_run_busy(session_id: str, run_id: str, *, since: datetime | None) -> None:
+  """Open a worker node's busy interval at its Run's recorded start."""
+  _run_busy[session_id] = run_id
+  mark_busy(session_id, since=since)
+
+
+def clear_run_busy(session_id: str, run_id: str) -> None:
+  """Close the busy interval *run_id* opened; any other Run's finish is a no-op."""
+  if _run_busy.get(session_id) != run_id:
+    return
+  del _run_busy[session_id]
+  clear_busy(session_id)
+
+
+def note_run_backend(session_id: str, backend: str | None) -> None:
+  """Record the newest Run's backend id for *session_id* (display only)."""
+  if backend:
+    _run_backends[session_id] = backend
+
+
+def run_backend(session_id: str) -> str | None:
+  """The newest Run's backend id for *session_id*, or None when no Run is known."""
+  return _run_backends.get(session_id)
+
+
+def reset_run_state_for_tests() -> None:
+  """Clear the worker Run busy map and the display-backend map (tests only)."""
+  _run_busy.clear()
+  _run_backends.clear()

@@ -128,7 +128,9 @@ def _default_backend_id(cfg: CharlieBotConfig) -> str:
 
 
 def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dict:
-  active_backend = meta.backend or _default_backend_id(cfg)
+  # A worker node displays its newest Run's backend (the delegation's target
+  # model), never the inherited creation value the persisted field carries.
+  active_backend = (meta.run_backend or meta.backend) or _default_backend_id(cfg)
   active_backend_opt = cfg.get_backend_option(active_backend)
   return {
       "active_backend": active_backend,
@@ -1125,6 +1127,7 @@ async def get_session_view(
     session_mgr: SessionManager = Depends(get_session_manager),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> Response:
   """Return data needed to render a session chat panel (SPA switch).
 
@@ -1140,7 +1143,7 @@ async def get_session_view(
   # The threads array rides the workers-panel list's row proof (revision gate +
   # row memo): a repeat view of a session no write landed in pays zero stats.
   thread_rows = await view_thread_rows(session_id, cfg, thread_mgr)
-  view = await build_session_view_data(session_id, session_mgr, thread_rows)
+  view = await build_session_view_data(session_id, session_mgr, thread_rows, tree=task_mgr)
   trigger_mgr = trigger_manager()
   triggers = await trigger_mgr.list_triggers(session_id)
   # The workers tab paints one CSS-truncated description line per card and its
@@ -1158,6 +1161,10 @@ async def get_session_view(
       "usage": view.usage,
       "has_more": view.has_more,
   }
+  if meta.profile == "worker":
+    from src.core import worker_transcript
+    entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_mgr, session_id)
+    payload["active_run_id"] = entry.active_run_id
   payload.update(_active_backend_payload(meta, cfg))
   # The switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
   return await _switch_payload_response(request, payload)
@@ -1170,9 +1177,10 @@ async def get_session_bootstrap(
     _meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> Response:
   """Return the minimal data needed to make one chat session usable."""
-  bootstrap = await build_session_bootstrap_data(session_id, session_mgr)
+  bootstrap = await build_session_bootstrap_data(session_id, session_mgr, tree=task_mgr)
   # The switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
   return await _switch_payload_response(request, _bootstrap_payload(bootstrap, cfg))
 
@@ -1200,13 +1208,22 @@ async def get_session_usage(
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> FastJsonResponse:
   """Return lazy session status and usage data for the active header."""
-  usage = await session_mgr.resolve_session_usage(session_id, meta)
+  if meta.profile == "worker":
+    from src.api.message_utils import _worker_usage
+    usage = await _worker_usage(task_mgr, session_id)
+  else:
+    usage = await session_mgr.resolve_session_usage(session_id, meta)
   payload = {
       "session": meta.model_dump(mode="json"),
       "usage": usage,
   }
+  if meta.profile == "worker":
+    from src.core import worker_transcript
+    entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_mgr, session_id)
+    payload["active_run_id"] = entry.active_run_id
   payload.update(_active_backend_payload(meta, cfg))
   return FastJsonResponse(payload)
 
@@ -1219,6 +1236,7 @@ async def get_session_events_page(
     limit: int = 40,
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> Response:
   """Paginate backwards through session messages by message ordinal.
 
@@ -1234,6 +1252,14 @@ async def get_session_events_page(
   and never mix the two cursor domains.
   """
   limit = max(1, min(limit, 200))
+  if meta.profile == "worker":
+    # A worker node's messages are its Runs' transcript; the same turn-aligned
+    # page contract, sliced off the transcript projection (message ordinals in
+    # the transcript's own cursor space).
+    from src.core import worker_transcript
+    entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_mgr, session_id)
+    messages, next_before, has_more = entry.projection.slice_before(before, limit)
+    return FastJsonResponse({"messages": messages, "has_more": has_more, "next_before": next_before})
   # FastJsonResponse skips the jsonable_encoder pass FastAPI runs on mapped
   # returns; on this payload (211 messages / 559 KB) that pass measures ~3x a
   # plain json.dumps, and every field is already a plain parsed-JSON type so
@@ -1263,6 +1289,67 @@ async def get_session_events_page(
   events, has_more = await asyncio.to_thread(session_mgr.load_chat_events_range, session_id, start, before)
   messages = events_to_messages(events, event_index_offset=start)
   return FastJsonResponse({"messages": messages, "has_more": has_more, "next_before": start})
+
+
+@router.get('/{session_id}/transcript')
+async def get_session_transcript(
+    session_id: str,
+    after: int = Query(default=0, ge=0, description="Rendered message count (the client's cursor)"),
+    revision: str = Query(default='', description="The revision the client last rendered"),
+    thread: str | None = Query(default=None, description="Legacy thread id (thread view)"),
+    meta: SessionMetadata = Depends(require_session),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
+) -> FastJsonResponse:
+  """The live-transcript poll for a worker node or a legacy thread view.
+
+  The open chat asks every ~2 s while the view shows one of them. An unchanged
+  transcript costs one stat pass; appended messages ride the append-only
+  committed list past *after*. *revision* moves exactly when the rendered
+  prefix is no longer current (a Run's state line changed, the delivery close
+  appeared), and the response then carries the full history with ``reset``
+  set, so the client re-renders instead of appending.
+  """
+  from src.core import worker_transcript
+  if thread is not None:
+    thread_meta = await thread_mgr.get_thread(session_id, thread)
+    if thread_meta is None:
+      raise HTTPException(status_code=404, detail=f"thread {thread} not found in session {session_id}")
+    entry = await asyncio.to_thread(
+        worker_transcript.load_thread_transcript, cfg,
+        cfg.sessions_dir / session_id, thread_meta,
+        await thread_mgr.get_events_log_path(session_id, thread))
+    reset = _transcript_reset(entry.revision, revision)
+    running_since = worker_transcript.thread_thinking_since(thread_meta)
+    return FastJsonResponse({
+        "messages": entry.projection.committed if reset else entry.projection.committed[after:],
+        "total": len(entry.projection.committed),
+        "pending_draft": entry.projection.pending_draft,
+        "revision": entry.revision,
+        "reset": reset,
+        "active_run_id": entry.active_run_id,
+        "thinking_since": running_since.isoformat() if running_since else None,
+    })
+  if meta.profile != "worker":
+    raise HTTPException(status_code=400, detail=f"session {session_id} has no worker transcript")
+  entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_mgr, session_id)
+  reset = _transcript_reset(entry.revision, revision)
+  busy = thinking_state.busy_since(session_id)
+  return FastJsonResponse({
+      "messages": entry.projection.committed if reset else entry.projection.committed[after:],
+      "total": len(entry.projection.committed),
+      "pending_draft": entry.projection.pending_draft,
+      "revision": entry.revision,
+      "reset": reset,
+      "active_run_id": entry.active_run_id,
+      "thinking_since": busy.isoformat() if busy else None,
+  })
+
+
+def _transcript_reset(latest_revision: str, client_revision: str) -> bool:
+  """True when the client's rendered prefix is no longer current."""
+  return not client_revision or client_revision != latest_revision
 
 
 @router.get('/{session_id}/recap')

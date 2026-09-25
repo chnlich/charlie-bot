@@ -7,7 +7,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-import httpx
 import pytest
 from conftest import (
     RESPONSES_GZIP_LEVEL1_PATCH_TARGET,
@@ -50,6 +49,7 @@ def _reset_list_state() -> None:
   threads_api._list_gzip_memo.clear()
   threads_api._view_rows_memo.clear()
   threads_api._view_rows_gate.clear()
+  threads_api._view_rows_sweeps.clear()
   sidebar_state.reset_for_tests()
 
 
@@ -134,13 +134,7 @@ def test_session_view_ships_the_same_truncated_rows(tmp_path: Path) -> None:
 
 _WALK_SKIP_ENDPOINTS = [
     pytest.param(
-        "/api/sessions/{session_id}/view",
-        "threads",
-        id="session-view",
-    ),
-    pytest.param(
         "/api/threads/{session_id}/list",
-        None,
         id="list-poll",
     ),
 ]
@@ -163,19 +157,14 @@ def _count_walks(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
   return walks
 
 
-@pytest.mark.parametrize(("url_pattern", "rows_key"), _WALK_SKIP_ENDPOINTS)
+@pytest.mark.parametrize(("url_pattern",), _WALK_SKIP_ENDPOINTS)
 def test_rows_skip_the_walk_until_a_mark_or_the_sweep(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     url_pattern: str,
-    rows_key: str | None,
 ) -> None:
   client, session_id, _ = _seeded_client(tmp_path)
   url = url_pattern.format(session_id=session_id)
-
-  def response_rows(response: httpx.Response) -> list[dict]:
-    body = response.json()
-    return body if rows_key is None else body[rows_key]
 
   walks = _count_walks(monkeypatch)
 
@@ -189,21 +178,17 @@ def test_rows_skip_the_walk_until_a_mark_or_the_sweep(
   assert walks["n"] == 2
 
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
-  rows = {row["id"]: row for row in response_rows(client.get(url))}
+  rows = {row["id"]: row for row in client.get(url).json()}
   any_id = next(iter(rows))
   asyncio.run(ThreadManager(cfg).update_status(session_id, any_id, ThreadStatus.RUNNING))
   updated = client.get(url)
-  assert next(row for row in response_rows(updated) if row["id"] == any_id)["status"] == "running"
+  assert next(row for row in updated.json() if row["id"] == any_id)["status"] == "running"
   # The writer's mark carries the published path, so the list poll proves the
-  # body against exactly that file — no walk. (The session view has no marked
-  # proof and still walks.)
-  if url_pattern.endswith("/list"):
-    assert walks["n"] == 2
-    sidebar_state.mark_sidebar_dirty(session_id)
-    client.get(url)
-    assert walks["n"] == 3
-  else:
-    assert walks["n"] == 3
+  # body against exactly that file — no walk.
+  assert walks["n"] == 2
+  sidebar_state.mark_sidebar_dirty(session_id)
+  client.get(url)
+  assert walks["n"] == 3
 
 
 def test_session_view_rows_match_the_list_rows_order(tmp_path: Path) -> None:
@@ -562,3 +547,77 @@ def test_list_plain_request_stays_uncompressed(tmp_path: Path) -> None:
   plain = client.get(url, headers={"accept-encoding": "identity"})
   assert "content-encoding" not in plain.headers
   assert len(threads_api._list_gzip_memo) == 0
+
+
+async def _view_rows_seed(tmp_path: Path, name: str, *thread_texts: str):
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
+  sessions = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
+  session = await sessions.create_session(CreateSessionRequest(name=name))
+  for text in thread_texts:
+    await thread_mgr.create_thread(session, text)
+  return cfg, session.id, thread_mgr
+
+
+@pytest.mark.asyncio
+async def test_view_rows_sweep_runs_detached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The countdown's sweep answers from the stored proof and walks off the calling
+  poll's wall; the fresh proof lands for the polls that follow it."""
+  cfg, session_id, thread_mgr = await _view_rows_seed(tmp_path, "sweep-detach", "a", "b")
+  walks = _count_walks(monkeypatch)
+
+  cold = await threads_api.view_thread_rows(session_id, cfg, thread_mgr)
+  assert walks["n"] == 1
+  for _ in range(9):  # hit polls consume the countdown without a walk
+    assert await threads_api.view_thread_rows(session_id, cfg, thread_mgr) == cold
+  assert walks["n"] == 1
+
+  due = await threads_api.view_thread_rows(session_id, cfg, thread_mgr)  # sweep due
+  assert due == cold  # the stored proof serves the calling poll
+  assert walks["n"] == 1  # the walk left the poll's wall
+  await threads_api._view_rows_sweeps[session_id]  # the detached walk lands
+  assert walks["n"] == 2
+  assert await threads_api.view_thread_rows(session_id, cfg, thread_mgr) == cold
+
+
+@pytest.mark.asyncio
+async def test_view_rows_mark_rebuilds_synchronously_when_the_sweep_is_due(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A mark's revision bump fails sweep_due: the write's rebuild stays on the
+  calling poll and the marked status is never served stale."""
+  cfg, session_id, thread_mgr = await _view_rows_seed(tmp_path, "sweep-mark", "a", "b")
+  walks = _count_walks(monkeypatch)
+  for _ in range(10):  # cold + 9 hits: the next poll is sweep-due
+    await threads_api.view_thread_rows(session_id, cfg, thread_mgr)
+
+  thread = (await thread_mgr.list_threads(session_id))[0]
+  await thread_mgr.update_status(session_id, thread.id, ThreadStatus.RUNNING)
+  rows = await threads_api.view_thread_rows(session_id, cfg, thread_mgr)
+  assert next(row for row in rows if row["id"] == thread.id)["status"] == "running"
+  assert walks["n"] == 2  # the mark's rebuild ran inside this call
+
+
+@pytest.mark.asyncio
+async def test_view_rows_detached_sweep_heals_an_unmarked_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An out-of-funnel write (no mark) heals when the detached sweep's proof
+  lands: the sweep-due poll serves the stored rows, the following poll the
+  healed ones."""
+  cfg, session_id, thread_mgr = await _view_rows_seed(tmp_path, "sweep-heal", "a")
+  walks = _count_walks(monkeypatch)
+  for _ in range(10):
+    await threads_api.view_thread_rows(session_id, cfg, thread_mgr)
+
+  thread = (await thread_mgr.list_threads(session_id))[0]
+  # An out-of-funnel write: the metadata file rewritten behind the managers'
+  # back, no mark — the shape the sweep exists to heal.
+  meta_path = cfg.sessions_dir / session_id / "threads" / thread.id / "metadata.json"
+  doc = json.loads(meta_path.read_text())
+  doc["status"] = "running"
+  meta_path.write_text(json.dumps(doc))
+  stale = await threads_api.view_thread_rows(session_id, cfg, thread_mgr)  # sweep due
+  assert next(row for row in stale if row["id"] == thread.id)["status"] != "running"
+  await threads_api._view_rows_sweeps[session_id]
+  healed = await threads_api.view_thread_rows(session_id, cfg, thread_mgr)
+  assert next(row for row in healed if row["id"] == thread.id)["status"] == "running"
+  assert walks["n"] == 2

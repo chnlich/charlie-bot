@@ -135,6 +135,17 @@ class RevisionSweepGate:
     count = 0 if reset_sweep else self._gates.get(session_id, (revision, 0))[1] + 1
     self._gates[session_id] = (revision, count)
 
+  def sweep_due(self, session_id: str, revision: int) -> bool:
+    """True when a proof stands at *revision* and only the countdown expired.
+
+    The stored value is revision-current here — the scheduled walk is insurance
+    against an unmarked write, so the caller may serve it and run the walk
+    detached. A revision mismatch returns False: that walk answers a seen
+    write and stays synchronous.
+    """
+    gate = self._gates.get(session_id)
+    return gate is not None and gate[0] == revision and gate[1] + 1 >= self._sweep_every
+
   def marked_since_proof(self, session_id: str, revision: int) -> bool:
     """True when a proof stands for an older revision and the sweep is not due.
 

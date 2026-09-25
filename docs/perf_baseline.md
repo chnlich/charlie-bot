@@ -158,6 +158,8 @@ tracked or untracked, which `switch` would otherwise carry silently — exits be
 and a diverged checkout fails the `--ff-only` merge. The restore runs only on a clean tree, where
 it cannot discard a sibling's work; the branch keeps its commits.
 
+The whole-corpus scratch copies (the M35/M55/M70/M71 pair consumers and the M66/M84 builders) are removed by the block that finishes with them, on every exit path: the hourly cadence turns a skipped removal into one leaked copy per round, tmpfiles reaps /tmp only past 30 days, and the leak compounds on the root fs that holds every collector's corpus.
+
 M1 — host load and serve CPU. The grep covers both process shapes the serving path runs: the
 server's own launcher chain (`scripts/start-server.sh` → `uv run python3 server.py` wrapper →
 `python3 server.py` child — the two lines the `server.py` pattern matches; the `tee` and `bash`
@@ -2321,7 +2323,7 @@ Then run per checkout (``eval`` the snapshot export first):
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, gzip, hashlib, json, os, sys, time
+import asyncio, shutil, gzip, hashlib, json, os, sys, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from fastapi import FastAPI
@@ -2417,7 +2419,10 @@ async def main():
           f"bootstrap median {bt_t[2]*1000:.2f} ms, max {bt_t[-1]*1000:.2f} ms (wire {bt_wire} B, decoded {bt_dec} B, digest {bt_d})")
 
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+finally:
+    shutil.rmtree(home)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
 EOF
 ```
 
@@ -3806,7 +3811,7 @@ Then run per checkout (``eval`` the snapshot export first):
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, gzip, hashlib, os, sys, time
+import asyncio, shutil, gzip, hashlib, os, sys, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from fastapi import FastAPI
@@ -3902,7 +3907,10 @@ async def main():
           f"loop-lag median {worst[4]:.4f} s, max {worst[-1]:.4f} s")
 
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+finally:
+    shutil.rmtree(home)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
 EOF
 ```
 
@@ -4588,7 +4596,7 @@ the worktree root), the same shape as the M18 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import os, sys, tempfile, time
+import os, shutil, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 import orjson
@@ -4628,15 +4636,19 @@ if best is None:
     raise SystemExit(0)
 print(f"worst build corpus: {best}, {best_n / 1e6:.1f} MB")
 
-out = Path(tempfile.mkdtemp(prefix="m66-merge-")) / "merged.json.gz"
-merge_traces([best], out, slim=False)  # cold pass, as at the first view of a corpus; not timed
-times = []
-for _ in range(3):
-    t0 = time.perf_counter()
-    merge_traces([best], out, slim=False)
-    times.append(time.perf_counter() - t0)
-times.sort()
-print(f"merged build median {times[1]:.2f} s, max {times[-1]:.2f} s over 3; artifact {out.stat().st_size / 1e6:.1f} MB.gz")
+work = Path(tempfile.mkdtemp(prefix="m66-merge-"))
+out = work / "merged.json.gz"
+try:
+    merge_traces([best], out, slim=False)  # cold pass, as at the first view of a corpus; not timed
+    times = []
+    for _ in range(3):
+        t0 = time.perf_counter()
+        merge_traces([best], out, slim=False)
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    print(f"merged build median {times[1]:.2f} s, max {times[-1]:.2f} s over 3; artifact {out.stat().st_size / 1e6:.1f} MB.gz")
+finally:
+    shutil.rmtree(work)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
 EOF
 ```
 
@@ -4904,7 +4916,7 @@ Then run per checkout (``eval`` the snapshot export first):
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, gzip, hashlib, os, sys, time
+import asyncio, shutil, gzip, hashlib, os, sys, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from fastapi import FastAPI
@@ -4976,7 +4988,10 @@ async def main():
           f"max {times[-1]:.4f} s over 9, gzip body {bodies.pop()} B, digest {digest}")
 
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+finally:
+    shutil.rmtree(home)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
 EOF
 ```
 
@@ -5055,7 +5070,7 @@ pays, the vacuous-read class the M36/M56/M59/M70/M72 repairs called out:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, hashlib, json, os, sys, time
+import asyncio, shutil, hashlib, json, os, sys, time
 sys.path.insert(0, os.environ["CHECKOUT"])
 from pathlib import Path
 from fastapi import FastAPI
@@ -5130,7 +5145,10 @@ async def main():
           f"decoded {len(decoded)} B, wire {wire} B, enc {enc.decode() or 'identity'}, digest {digest(decoded)}; "
           f"capped search median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms")
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+finally:
+    shutil.rmtree(home)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
 EOF
 ```
 
@@ -6203,9 +6221,11 @@ async def main():
           f"tail-follow replay median {times[3] * 1000:.1f} ms, max {times[-1] * 1000:.1f} ms; "
           f"stdout-stream replay median {stimes[3] * 1000:.1f} ms, max {stimes[-1] * 1000:.1f} ms "
           f"({total}/{s_total} events) over 7")
-    shutil.rmtree(work)
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+finally:
+    shutil.rmtree(work)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
 EOF
 ```
 
@@ -8534,3 +8554,4 @@ rc 0 asserted on every probe — 33 per invocation, 132 branch probes plus the m
 | 2026-09-17 | #1757 (row recorded in this docs-only follow-up per the #1046 precedent, the landing PR shipped without it) | M66 merged build median 4.28/4.18/4.29/4.21/4.20/4.40/4.18/3.98/3.97 → 4.05/4.09/4.17/4.24/3.96/4.29/4.06/3.98/4.01 s over nine interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, 307.3 MB / 1,068,461-event worst on-disk trace, scratch output under /tmp, live home read-only, load 2.6-4.0 one-minute: mean −93 ms (−2.2 %), 7 of 9 paired rounds faster, the two laggards within +40 ms; component attribution, same-process walk-phase probe (read+parse+walk of `_merge_one_trace`, null output, gc off, interleaved ×2 per arm): 3.639/3.682 → 3.573/3.635 s medians (−47/−66 ms) against the unchanged parse+read floor; artifact sha1 78347835299a identical across all four cross-checkout builds (deterministic gzip holds); no-regression witnesses interleaved: M88 direct-pass build 2.93/2.76 → 2.72/2.68 s at settled load 3.9-4.8 (its path runs no walk; a +0.1-0.2 s pair at load 5.2-5.5 tracked the run's own collector load); 5699-passed suite plus 2 new tests (the member count contract, the ≤512 batch bound across a 400-pid corpus whose metadata tail outmasses its events) | every event of a merged build paid a `_EventBatcher.add` bound-method round-trip — attribute reads, append, emitted increment, bound check — on top of the append itself; the walk now appends to one local pending list and flushes through the batcher at the same 512-event bound (every append site checks, the trailing process_ metadata loop included — the review's instrumented 400-pid corpus caught the first cut letting that tail ride one 1455-event batch), `emitted` counts at flush, and the tid read probes once via a sentinel; batch boundaries are byte-invisible so the artifact is unchanged, and the M107 member form rides the same walk |
 | 2026-09-24 | this PR | M3 in-server 401 floor median 20.48/19.68/19.96/19.59/19.24/20.64/18.66 → 11.36/11.35/11.33/11.53/11.59/11.45/11.45 µs over seven interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, every paired round faster (−8.1 to −9.3 µs, median −8.2 µs / −42 %), p90 21.4-32.3 → 12.4-19.9 µs, load 5.8-7.0 one-minute (the run's own suite aftermath, both arms alike); component attribution: the renderer round trip (dict merge + sort + field scan + print) ~7.6 µs of the floor, the per-call stamp format ~1.4 µs vs ~0.4 µs with the per-minute prefix memoized, the per-send 401 json.dumps + header build ~1.8 µs; wire bytes unchanged — the composed line equals the lean renderer's output per value shape (tests/test_log_line_renderer.py) and end to end through the middleware (tests/test_request_logging.py), the 401 bodies byte-identical (tests/test_auth_middleware.py); 6017-passed suite plus 11 new tests (the 20 vfork/antigravity/perfetto failures pre-existing on a clean tree in this venv — the compiled _vfkspawn stub and the antigravity CLI are CI-only) | the access line rode the general lean renderer per request — a per-line dict merge, sort, and field scan, plus print's two unbuffered writes (PYTHONUNBUFFERED=1 to the tee pipe) — the largest repo-owned slice left on the 401 floor (measured 40 % of it); the line composes from the fixed column pads and the one shared value rule now, single stdout write; the stamp's year-through-minute prefix memoizes per minute behind an atomically swapped (key, prefix) tuple whose reader builds its own prefix when its minute differs from the memo's (an interleaved rollover never mislabels a line); the auth middleware's 401 bodies and content-length headers are module constants — every unauthenticated request paid a json.dumps and a header build |
 | 2026-09-25 | this PR | M71 capped name-match repeat median 144.39/141.98/139.57 → 2.72/2.74/2.56 ms over three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back at load 0.72-0.99 one-minute, same scratch snapshot (1,326 metas, query 'e', 80 matching legacy parents carrying 940 live thread metadata files), identical 1,140-row bodies and digest 91f384b33138 every round (−97 to −98 %, ~52x); regression window pinned by the same A/B against pre-landing 9f77cc47: 1.81/1.95/2.05 ms at 200 rows (the calibration band) on the same snapshot — the fan-out arrived with d29d44aa's projected worker-leaf rows; mechanism: both per-session row memos were capped at 8 sessions while the fan-out walks one view_thread_rows call per legacy row of a response (80-200 sessions), so every request evicted and re-walked, and the rebuilt row dicts broke the projected-row memo's identity checks and the search route's whole-body memo (profile: 9,400 thread-metadata parses + 9,410 file opens per request); no-regression witnesses, branch vs main interleaved rounds: M36 full poll 0.57 ms (main 0.59), M63 /view handler 0.40 ms (main 0.57), M68 marked changed-poll rebuild 1.19 ms (main 1.09, line < 2 ms), M77 re-entry 0.04 ms 0/36 rebuilds (main 0.05); 6467-passed suite including the new fan-out identity test (the 20 vfork/antigravity failures pre-existing in this venv — the compiled _vfkspawn stub and the antigravity CLI are CI-only); the M96 standing collector 404s since the same landing (82 of 116 listed rows are projected worker-leaf rows whose ids are thread ids — no bootstrap fetch exists for them) and its collector now skips them, re-measured live: 34 session rows, median 88,795 B, p90 176,825 B, max 272,491 B (lines hold); the two session-tree preview tests d29d44aa landed fail on CI (no charlie-code launcher on the runner — one calls the in-process check unstubbed, one runs the CLI subprocess whose PATH carries none) and the PR carries the suite's own check_launcher stub plus a fake --session-dir launcher on the subprocess PATH | the sidebar projection's fan-out outgrew the single-session caps the row memos were sized for: a cap below the fan-out's working set turns every capped search and sidebar list into a full re-walk and re-parse of every matched legacy session's threads and a full re-render of the response, and the cost grows with both the matched-session count and the thread corpus; the shared cap now holds the working set, which puts the repeat back on the whole-body memo's identity path the route was built around |
+| 2026-09-25 | this PR | Collector scratch leak, fixed in this PR: the M35/M55/M70/M71 pair consumers and the M66/M84 builders left their /tmp scratch on every exit path — measured before the fix: 11 `m71-search-home` dirs × 168 MB (one per round since the collector's introduction), 24 `m66-merge` dirs × 20 MB (the merged artifact itself), 7 `m55` + 7 `m70` homes, 5 `m35` homes × 28 MB, `m*` scratch total 5.3 GB against a root fs at 80 % (154/193 GB) — ~200 MB per hourly round, ~4.8 GB/day, against a tmpfiles reap that only removes 30-day-old files; after the fix the six blocks re-run verbatim with zero scratch left: m35 digests byte-identical (8a0ebe24d65f / bf4371606224 / 15209ed7bd16, medians 0.80/1.31/0.98 ms), m55 digest e9447638231a identical, m70 digest bd0194098a8d identical, m71 rows 1163→1164 with the live corpus's one-session growth and median 2.54→2.59 ms (snapshot corpus, digest follows it), m66 build 2.78→2.78 s / 20.2 MB artifact, m84 parity divergences 0 and tail-follow 5926→6016 ms on the same 2.1 GB corpus (both under the bytes line); the ≤1 MB per-round homes (m105, m102, m10, m14, m15, m16, m41, m43, m48, m50, m53, m79, m82, m89, m90, m100) still leak and stay for a later round | the leak is the loop's own tooling: these blocks are this file's verbatim collectors, their scratch copies land in the host's /tmp, and a disk-full measurement host invalidates every metric this file owns — the removal rides the consuming block's exit path (try/finally around the run) so neither a failed round nor a failed build can skip it |

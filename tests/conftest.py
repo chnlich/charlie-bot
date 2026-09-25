@@ -788,6 +788,31 @@ def stub_speech_bundle(engine: str, model_id: str) -> Any:
       recognizer=object(), vad_config=object(), decode_lock=threading.Lock(), engine=engine, model_id=model_id)
 
 
+def write_wav_file(path: Path, frames: bytes, rate: int) -> None:
+  """Write *frames* as a 1-channel 16-bit WAV at *rate* Hz, creating the parent dir.
+
+  The voice suites' single fixture writer: the shape the production pipeline records
+  (``src/api/voice.py``'s writer at ``transcriber.SAMPLE_RATE``), with the rate a
+  parameter so a mismatch fixture states its mismatch.
+  """
+  import wave
+
+  path.parent.mkdir(parents=True, exist_ok=True)
+  with wave.open(str(path), "wb") as wav:
+    wav.setnchannels(1)
+    wav.setsampwidth(2)
+    wav.setframerate(rate)
+    wav.writeframes(frames)
+
+
+def sine_wav_frames(seconds: float, rate: int) -> bytes:
+  """A 440 Hz sine at *rate* Hz as 16-bit little-endian frames: synthetic dictation audio."""
+  import numpy as np
+
+  positions = np.arange(int(rate * seconds), dtype=np.float64)
+  return (np.sin(2 * np.pi * 440.0 * positions / rate) * 10_000).astype("<i2").tobytes()
+
+
 def voice_models_cached(cfg: CharlieBotConfig) -> bool:
   """True when the configured engine's speech models sit complete on local disk.
 

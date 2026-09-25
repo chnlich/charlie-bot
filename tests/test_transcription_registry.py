@@ -15,8 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import numpy as np
 import pytest
+from conftest import sine_wav_frames, write_wav_file
 from pydantic import ValidationError
 
 from src.agents.transcription import registry
@@ -157,27 +157,12 @@ class _FakeBackend(TranscriptionBackend):
     yield TranscriptEvent(kind="final", text="fake final")
 
 
-def _write_wav(path: Path, samples: np.ndarray, rate: int = 16_000) -> None:
-  import wave
-  path.parent.mkdir(parents=True, exist_ok=True)
-  with wave.open(str(path), "wb") as wav:
-    wav.setnchannels(1)
-    wav.setsampwidth(2)
-    wav.setframerate(rate)
-    wav.writeframes(samples.astype("<i2").tobytes())
-
-
-def _sine_samples(seconds: float) -> np.ndarray:
-  positions = np.arange(int(16_000 * seconds), dtype=np.float64)
-  return (np.sin(2 * np.pi * 440.0 * positions / 16_000) * 10_000).astype("<i2")
-
-
 def test_registered_fake_backend_drives_the_replay_script(
     temp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(registry, "_FACTORIES", dict(registry._FACTORIES))
   registry.register_transcription_backend("fake", _FakeBackend)
   voice_dir = temp_home / ".charliebot" / "sessions" / "sess" / "voice"
-  _write_wav(voice_dir / "2026-01-01T000000.000Z_deadbeef.wav", _sine_samples(0.2))
+  write_wav_file(voice_dir / "2026-01-01T000000.000Z_deadbeef.wav", sine_wav_frames(0.2, 16_000), 16_000)
   out = tmp_path / "out"
 
   script = _load_script()

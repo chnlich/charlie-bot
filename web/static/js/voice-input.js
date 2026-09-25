@@ -617,8 +617,8 @@ function postVoiceWav(path, wavBuffer, opts = {}) {
 }
 
 // The upload's transport: a multipart form with the audio plus, when the preview
-// relay already transcribed the recording, the transcript and the backend that
-// produced it — the server then persists both files verbatim and skips decode.
+// relay already transcribed the recording, the transcript and the backend the
+// browser selected — the server then persists both files verbatim and skips decode.
 function postVoiceRecording(path, wavBuffer, {transcript = null, backendId = null, ...opts} = {}) {
   const form = new FormData();
   form.append('audio', new Blob([wavBuffer]), 'recording.wav');

@@ -568,15 +568,6 @@ class CompleteTaskRequest(BaseModel):
   run_ids: list[str] = Field(default_factory=list)
 
 
-class CompleteTaskPendingResponse(BaseModel):
-  # The 202 body of an own-run closure request: re-evaluated after that Run succeeds.
-  model_config = ConfigDict(extra="forbid")
-
-  session_id: str
-  request_id: str
-  status: Literal["pending_run_finish"]
-
-
 class CancelTaskRequest(BaseModel):
   # POST /api/sessions/{id}/cancel body: explicit operator cancellation.
   model_config = ConfigDict(extra="forbid")
@@ -649,10 +640,6 @@ class SendMessageRequest(BaseModel):
   content: str
   uploaded_files: list[UploadedFileRef] = Field(default_factory=list)
   is_voice: bool = False
-
-
-class RenameSessionRequest(BaseModel):
-  name: str
 
 
 class SwitchBackendRequest(BaseModel):

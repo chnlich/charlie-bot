@@ -68,8 +68,8 @@ from src.core.run_token import CallerIdentity
 from src.core.runs import RunStore
 from src.core.session_aliases import SessionAliasStore
 from src.core.session_dispatch import TaskInputDispatcher
-from src.core.takeoff_gate import is_verify_exempt
 from src.core.sessions import _TRANSIENT_METADATA_FIELDS, SessionManager
+from src.core.takeoff_gate import is_verify_exempt
 from src.core.task_completion import TaskCompletionManager
 
 if TYPE_CHECKING:

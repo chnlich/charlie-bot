@@ -55,13 +55,14 @@ import asyncio  # noqa: E402
 import json  # noqa: E402
 import os  # noqa: E402
 import shutil  # noqa: E402
-import socket  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
 import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 from typing import NoReturn  # noqa: E402
+
+from scripts.browser_harness_session_tree import pick_free_port  # noqa: E402
 
 SMOKE_PHRASE = "SMOKE-TASK-TREE-OK-7Q4F"
 RUN_TIMEOUT_SECONDS = 420.0
@@ -82,13 +83,6 @@ def log(message: str) -> None:
 
 def fail(message: str) -> NoReturn:
     raise SystemExit(f"LIVE SMOKE FAILED: {redact(message)}")
-
-
-def pick_free_port() -> int:
-    """One explicit unused local address for the isolated server."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
 
 
 def load_production_backend_entry(backend_id: str) -> dict:

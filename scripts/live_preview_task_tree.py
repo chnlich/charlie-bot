@@ -37,12 +37,13 @@ import asyncio  # noqa: E402
 import hashlib  # noqa: E402
 import json  # noqa: E402
 import os  # noqa: E402
-import socket  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
 import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
+
+from scripts.browser_harness_session_tree import pick_free_port  # noqa: E402
 
 # Evidence defaults to a host temp directory so the public repo carries no
 # host path; pass --evidence-dir to keep evidence with its owning session.
@@ -59,12 +60,6 @@ def log(message: str) -> None:
 
 def fail(message: str) -> None:
     raise SystemExit(f"LIVE PREVIEW HARNESS FAILED: {message}")
-
-
-def pick_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
 
 
 def request(base: str, key: str, method: str, path: str,

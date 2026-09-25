@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -53,13 +54,12 @@ def test_effort_flag_appended_after_model() -> None:
   assert effort_index == model_index + 2
 
 
-@pytest.mark.parametrize("absent_flag", ["--effort", "--settings"], ids=["effort", "fast-mode"])
-def test_optional_flag_absent_when_unset(absent_flag: str) -> None:
+def test_effort_flag_absent_when_unset() -> None:
   backend = ClaudeCodeBackend(model="claude-opus-4-8")
 
   cmd = backend._build_command("hi")
 
-  assert absent_flag not in cmd
+  assert "--effort" not in cmd
 
 
 def test_cli_binary_replaces_only_command_binary() -> None:
@@ -122,11 +122,26 @@ def test_api_backend_does_not_disallow_interactive_menu_tools() -> None:
   assert "Monitor" in tools
 
 
-def test_fast_mode_appends_settings_flag() -> None:
-  backend = ClaudeCodeBackend(model="claude-opus-4-8", fast_mode=True)
+def test_settings_object_carries_connector_key() -> None:
+  backend = ClaudeCodeBackend(model="claude-opus-4-8")
+
   cmd = backend._build_command("hi")
-  settings_index = cmd.index("--settings")
-  assert cmd[settings_index + 1] == '{"fastMode":true}'
+
+  # At most one --settings object: the CLI's behavior for repeated flags is
+  # not a contract, so the headless argv must never rely on it.
+  assert cmd.count("--settings") == 1
+  settings = json.loads(cmd[cmd.index("--settings") + 1])
+  assert settings["disableClaudeAiConnectors"] is True
+
+
+def test_fast_mode_merges_into_the_single_settings_object() -> None:
+  backend = ClaudeCodeBackend(model="claude-opus-4-8", fast_mode=True)
+
+  cmd = backend._build_command("hi")
+
+  assert cmd.count("--settings") == 1
+  settings = json.loads(cmd[cmd.index("--settings") + 1])
+  assert settings == {"disableClaudeAiConnectors": True, "fastMode": True}
 
 
 def test_claude_session_id_appends_session_flag() -> None:

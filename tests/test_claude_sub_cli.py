@@ -421,9 +421,22 @@ def test_session_settings_are_session_scoped_and_lower_idle_threshold() -> None:
   assert settings["skipDangerousModePermissionPrompt"] is True
   assert settings["messageIdleNotifThresholdMs"] == claude_sub._IDLE_NOTIFICATION_THRESHOLD_MS
   assert settings["inputNeededNotifEnabled"] is True
+  assert settings["disableClaudeAiConnectors"] is True
 
   with pytest.raises(claude_sub.ClaudeSubError, match="inline JSON"):
     claude_sub._session_settings(claude_sub.ClaudeSubArgs(output_format="stream-json", settings=["user-settings.json"]))
+
+
+def test_session_settings_override_caller_connector_key() -> None:
+  args = claude_sub.ClaudeSubArgs(
+      output_format="stream-json",
+      settings=['{"disableClaudeAiConnectors":false}'],
+  )
+
+  settings = json.loads(claude_sub._session_settings(args))
+
+  # Silencing connector sync is CharlieBot policy, so the caller's key loses.
+  assert settings["disableClaudeAiConnectors"] is True
 
 
 def test_session_config_overlay_sets_idle_threshold_without_touching_sources(

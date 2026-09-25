@@ -71,10 +71,19 @@ accounts:
     relay_tokens: 100000
     expired_cache_tokens: 50000
 
-# Voice: transcription engine selection.
+# Voice: transcription backend and local-engine selection.
 voice:
   engine: sherpa
   model_id: Qwen/Qwen3-ASR-1.7B-hf
+  # Transcription backend used before a choice is made in the page's dropdown:
+  # one of the transcription registry's ids (local, gemini, muse). The cloud
+  # backends need credentials.yaml keys (gemini.api_key, meta.model_api_key).
+  default_backend: local
+  # Proper-noun vocabulary passed to the backends that support it (Gemini,
+  # Muse); the local engine ignores it.
+  vocabulary: []
+  # Language hints as BCP-47 base codes (zh, en); empty = auto-detect.
+  languages: []
 
 # Code server: code-server integration.
 code_server:

@@ -85,13 +85,20 @@ async def test_ensure_tmux_session_uses_claude_tui_startup_args(
   assert new_session_call[-6:] == (
       "claude",
       "--settings",
-      '{"skipDangerousModePermissionPrompt":true}',
+      '{"skipDangerousModePermissionPrompt":true,"disableClaudeAiConnectors":true}',
       "--dangerously-skip-permissions",
       "--session-id",
       "session-id",
   )
   data = json.loads((config_dir / ".claude.json").read_text(encoding="utf-8"))
   assert data["projects"][str(working_dir.resolve())]["hasTrustDialogAccepted"] is True
+
+
+def test_claude_tui_settings_carries_connector_key() -> None:
+  settings = json.loads(tui._CLAUDE_TUI_SETTINGS)
+
+  assert settings["skipDangerousModePermissionPrompt"] is True
+  assert settings["disableClaudeAiConnectors"] is True
 
 
 @pytest.mark.asyncio

@@ -234,16 +234,14 @@ class _RequestLogMiddleware:
   def _log_http_request(self, scope: Scope, status: int | None, started: float, *, error: str | None = None) -> None:
     """The one http_request log site: five fields, plus `error` on the exception path only."""
     client = scope.get("client")
-    fields: dict[str, object] = {
-        "method": scope["method"],
-        "path": scope["path"],
-        "status": status,
-        "duration_ms": round((time.monotonic() - started) * 1000),
-        "client": client[0] if client else "-",
-    }
-    if error is not None:
-      fields["error"] = error
-    log_http_request_line(fields)
+    log_http_request_line(
+        method=scope["method"],
+        path=scope["path"],
+        status=status,
+        duration_ms=round((time.monotonic() - started) * 1000),
+        client=client[0] if client else "-",
+        error=error,
+    )
 
 
 async def _check_ws_auth(websocket: WebSocket) -> bool:
@@ -518,6 +516,20 @@ with gc_off(collect=False):
   # legacy "/files" and "/file" spellings are unmounted: nothing answers there, both 404.
   for mount in FILE_SERVER_MOUNTS:
     app.include_router(files.router, prefix=mount, tags=["files"])
+
+# ---------------------------------------------------------------------------
+# WebSocket preview relay for voice input (one streaming transcription backend's
+# live partials for one recording; the handler lives with the voice endpoints)
+# ---------------------------------------------------------------------------
+
+
+@app.websocket("/ws/voice/{session_id}")
+async def voice_preview_websocket(websocket: WebSocket, session_id: str, backend: str = "") -> None:
+  """Stream one recording's live partials from the ?backend= transcription backend."""
+  if not await _check_ws_auth(websocket):
+    return
+  await voice.voice_preview_relay(websocket, session_id, backend)
+
 
 # ---------------------------------------------------------------------------
 # WebSocket endpoint for session-level events (master CC + worker summaries)

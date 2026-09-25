@@ -19,7 +19,7 @@ from src.api.message_utils import events_to_messages
 from src.core.autonamer import iter_light_backends
 from src.core.config import CharlieBotConfig
 from src.core.deferred import deferred_module_getattr
-from src.core.json_utils import write_json_atomically
+from src.core.json_utils import load_json_dict, write_json_atomically
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.models import utc_now
 from src.core.sessions import (
@@ -197,12 +197,6 @@ def _cache_path(session_mgr: SessionManager, session_id: str) -> Path:
   return session_mgr.get_chat_events_path(session_id).parent / "recap_summaries.json"
 
 
-def _load_cache(path: Path) -> dict:
-  if not path.exists():
-    return {}
-  return json.loads(path.read_text(encoding="utf-8"))
-
-
 def _load_cache_signed(path: Path) -> dict:
   """The parsed cache document behind a signature memo, or ``{}`` when absent.
 
@@ -263,7 +257,7 @@ def lookup_cached_summary(session_mgr: SessionManager, session_id: str, upto: in
 
 def _write_cache_entry(session_mgr: SessionManager, session_id: str, upto: int, summary: str) -> None:
   path = _cache_path(session_mgr, session_id)
-  cache = _load_cache(path)
+  cache = load_json_dict(path)
   cache[str(upto)] = {"summary": summary, "generated_at": utc_now().isoformat()}
   # The recap GET reads this file from an executor thread with no coordination
   # against this write; the swap keeps every read on one complete document.

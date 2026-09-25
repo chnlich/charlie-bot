@@ -111,6 +111,9 @@ def test_compaction_command_and_env_pin_sonnet_and_the_login_dir(
   assert cmd[:6] == ["claude", "-p", "--resume", "uuid-1", "--model", SONNET]
   assert cmd[cmd.index("--output-format") + 1] == "json"
   assert "Bash" in cmd[cmd.index("--disallowed-tools") + 1].split(",")
+  assert cmd.count("--settings") == 1
+  settings = json.loads(cmd[cmd.index("--settings") + 1])
+  assert settings["disableClaudeAiConnectors"] is True
   assert env["CLAUDE_CONFIG_DIR"] == str(tmp_path / "login")
   assert "CLAUDECODE" not in env
   assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"

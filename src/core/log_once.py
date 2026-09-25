@@ -111,15 +111,33 @@ def _render_log_value(value: object) -> str:
   return repr(value)
 
 
+# The stamp's year-through-minute prefix, memoized per (year, month, day, hour,
+# minute): the prefix moves once a minute while the stamp renders per request
+# (measured 1.4 us full-format vs 0.4 us prefix+seconds). One immutable
+# (key, prefix) tuple swapped atomically; a reader whose minute differs from
+# the memo's builds its own prefix from its own struct, so an interleaved
+# minute rollover never mislabels a line.
+_stamp_prefix_memo: tuple[tuple[int, int, int, int, int], str] = ((0, 0, 0, 0, 0), "")
+
+
 def _local_timestamp() -> str:
   """The chain's stamp: local wall time in the TimeStamper's %Y-%m-%d %H:%M:%S shape.
 
   ``time.localtime`` reads the same tz rules ``datetime.now().astimezone()``
   does and formats without strftime — the stamp is on every log line's hot
-  path (the M3 access line renders one per request).
+  path (the M3 access line renders one per request), so the year-through-minute
+  prefix renders once a minute (see ``_stamp_prefix_memo``) and only the
+  seconds format per call.
   """
+  global _stamp_prefix_memo
   t = time.localtime()
-  return f"{t.tm_year:04d}-{t.tm_mon:02d}-{t.tm_mday:02d} {t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d}"
+  key = (t.tm_year, t.tm_mon, t.tm_mday, t.tm_hour, t.tm_min)
+  memo = _stamp_prefix_memo
+  if memo[0] == key:
+    return f"{memo[1]}{t.tm_sec:02d}"
+  prefix = f"{t.tm_year:04d}-{t.tm_mon:02d}-{t.tm_mday:02d} {t.tm_hour:02d}:{t.tm_min:02d}:"
+  _stamp_prefix_memo = (key, prefix)
+  return f"{prefix}{t.tm_sec:02d}"
 
 
 class _LocalStampProcessor:
@@ -213,25 +231,32 @@ def ensure_lean_renderer() -> None:
       ])
 
 
-def _installed_lean_renderer() -> _LeanLineRenderer:
-  """The installed lean renderer, installing the chain first when absent."""
-  if _lean_renderer is None:
-    ensure_lean_renderer()
-  assert _lean_renderer is not None
-  return _lean_renderer
+# The access line's two fixed columns: the level and event pads are constants
+# of the line's shape, and the byte-identity test against _LeanLineRenderer
+# fails loud when a structlog upgrade moves either width.
+_ACCESS_LEVEL_COLUMN = _pad_log_field("info", _LEVEL_WIDTH)
+_ACCESS_EVENT_COLUMN = _pad_log_field("http_request", _EVENT_WIDTH)
 
 
-def log_http_request_line(fields: dict[str, object]) -> None:
+def log_http_request_line(
+    method: str, path: str, status: object, duration_ms: object, client: object, error: str | None = None) -> None:
   """Print the access log line the configured chain renders for this event.
 
   The chain's other processors do nothing for this shape — the middleware
   never sets exc_info or stack_info, and nothing in the process binds
   contextvars (a future bind_contextvars would silently drop its keys from
-  this line) — so the line is the stamp, the level, the event, and the fields
-  through the same _LeanLineRenderer instance the chain ends in. The
-  per-line proxy and processor dispatch (measured ~20 us of the raw-ASGI 401
-  floor the M3 sub-reading prices) stays off the request path; capture-based
-  readers see the line on stdout, not in structlog's capture list.
+  this line) — so the line composes directly: no per-line dict merge, sort,
+  or field scan, and one stdout write where print's unbuffered shape pays
+  two (measured: the renderer round trip ~7.6 us of the raw-ASGI 401 floor
+  the M3 sub-reading prices, the composed form ~2.5 us). The parameter set
+  fixes the field order — client, duration_ms, error, method, path, status —
+  the sorted order the renderer would emit, and byte identity against
+  _LeanLineRenderer is pinned per value shape in tests/test_log_line_renderer.py
+  and end to end in tests/test_request_logging.py. Capture-based readers see
+  the line on stdout, not in structlog's capture list.
   """
-  event = {"timestamp": _local_timestamp(), "level": "info", "event": "http_request", **fields}
-  print(_installed_lean_renderer()(None, "info", event))
+  fields = f"client={_render_log_value(client)} duration_ms={_render_log_value(duration_ms)}"
+  if error is not None:
+    fields += f" error={_render_log_value(error)}"
+  fields += f" method={_render_log_value(method)} path={_render_log_value(path)} status={_render_log_value(status)}"
+  sys.stdout.write(f"{_local_timestamp()} [{_ACCESS_LEVEL_COLUMN}] {_ACCESS_EVENT_COLUMN} {fields}\n")

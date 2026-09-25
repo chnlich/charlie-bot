@@ -100,16 +100,14 @@ def parse_ndjson_line(
   """
   if not line:
     return None
-  if isinstance(line, str):
-    if line.isspace():
-      return None
-  elif isinstance(line, memoryview):
+  if isinstance(line, memoryview):
     # bytes.isspace() answers from the first byte on a real line; mirror that
     # without a full copy and pay the probe copy only on a line that starts
     # with whitespace.
     if line[0] in b" \t\n\r\v\f" and bytes(line).isspace():
       return None
   elif line.isspace():
+    # str, bytes, and bytearray all carry isspace.
     return None
   try:
     return orjson.loads(line)
@@ -207,10 +205,16 @@ def parse_ndjson_events(path: Path, *, log_event: str, log_fields: dict[str, Any
   """
   if not path.exists():
     return []
+  # The read-everything consumer skips iter_ndjson_events's generator layer:
+  # every line is read, so the laziness the wrapper exists for is pure
+  # per-line resume cost here. The skip rules stay in parse_ndjson_line.
   with open(path, "rb") as f, _mapped_lines(path, f) as (mm, size):
     if mm is None:
       return []
-    return list(iter_ndjson_events(_iter_mmap_lines(mm, size), log_event=log_event, log_fields=log_fields))
+    return [
+        event for line in _iter_mmap_lines(mm, size)
+        if (event := parse_ndjson_line(line, log_event=log_event, log_fields=log_fields)) is not None
+    ]
 
 
 @contextmanager
@@ -240,15 +244,16 @@ def _iter_mmap_lines(mm: mmap.mmap, size: int) -> Iterator[memoryview]:
   Lines split on ``\n`` (a final line without its trailing newline still
   yields), the same domain the count and tail readers count.
   """
+  view = memoryview(mm)
   pos = 0
   find = mm.find
   while True:
     nl = find(b"\n", pos)
     if nl < 0:
       if pos < size:
-        yield memoryview(mm)[pos:]
+        yield view[pos:]
       return
-    yield memoryview(mm)[pos:nl]
+    yield view[pos:nl]
     pos = nl + 1
 
 

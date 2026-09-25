@@ -86,6 +86,7 @@ _NODE_TESTS = [
     "trigger_fire_time_roundtrip.test.js",
     "tui_status_scope.test.js",
     "usage_stream_render.test.js",
+    "voice_backend_menu.test.js",
     "voice_input_run.test.js",
     "worker_description_prefix.test.js",
     "worker_events_incremental.test.js",

@@ -73,6 +73,7 @@ from src.core.home import CREDENTIALS_FILE  # noqa: E402
 from src.core.plans import PlanRegistryManager  # noqa: E402
 from src.core.scheduler import Scheduler  # noqa: E402
 from src.core.sessions import SessionManager  # noqa: E402
+from src.core.task_sessions import TaskTreeManager  # noqa: E402
 from src.core import spawner  # noqa: E402
 from src.core import spawner_finalize  # noqa: E402
 from src.core import spawner_launch  # noqa: E402
@@ -930,6 +931,22 @@ def make_home_config(tmp_path: Path) -> CharlieBotConfig:
   most sites never touch disk, and a site that does mkdirs it itself. One Opus backend
   registered so SessionManager.create_session's default (backends.options[0]) resolves."""
   return CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home", backends={"options": [OPUS_BACKEND_OPTION]})
+
+
+def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:
+  """(cfg, SessionManager, TaskTreeManager) over make_home_config(tmp_path); the tree shares the
+  session manager's cfg, so tree-created sessions land in the same home."""
+  cfg = make_home_config(tmp_path)
+  session_mgr = SessionManager(cfg)
+  return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
+
+
+def identity_of(pid: int) -> tuple[int, str]:
+  """(pid, start_time) for a live pid; asserts the /proc stat read succeeded, so callers can pin
+  a RunRecord to the pair without a None check."""
+  pair = runs.read_pid_stat(pid)
+  assert pair is not None
+  return pid, pair[0]
 
 
 def build_master_cc_cfg(tmp_path: Path) -> CharlieBotConfig:

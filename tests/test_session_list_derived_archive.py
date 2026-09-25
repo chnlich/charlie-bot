@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import make_home_config
+from conftest import build_env, make_home_config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -23,12 +23,6 @@ from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 
 OPERATOR = CallerIdentity(kind="operator")
-
-
-def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:
-  cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
-  return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
 
 
 async def create(tree: TaskTreeManager, *, parent: str | None, request_id: str, profile: str = "manager"):

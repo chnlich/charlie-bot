@@ -8,14 +8,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_ID, make_home_config
+from conftest import OPUS_BACKEND_ID, build_env, make_home_config
 
 from src.core import event_types as ET
 from src.core.control_events import sha256_hex, stable_task_id
 from src.core.models import CreateSessionRequest, EventRef, PatchSessionTaskRequest, RunRecord, TaskSpec
 from src.core.run_token import CallerIdentity
 from src.core.runs import read_pid_stat
-from src.core.sessions import SessionManager
 from src.core.task_sessions import (
   TaskConflictError,
   TaskInvalidError,
@@ -24,12 +23,6 @@ from src.core.task_sessions import (
 )
 
 OPERATOR = CallerIdentity(kind="operator")
-
-
-def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:
-  cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
-  return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
 
 
 def write_session_alias(path: Path, *, old_session_ids: dict[str, str],

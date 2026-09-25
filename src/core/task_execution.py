@@ -63,7 +63,7 @@ from src.core.run_token import RUN_TOKEN_ENV, RunTokenClaims, sign_run_token
 from src.core.runs import RunNotFoundError, scan_result_exit
 from src.core.sessions import SessionManager
 from src.core.spawner_backends import resolve_backend_option
-from src.core.takeoff_gate import DelegationBlockedError
+from src.core.takeoff_gate import DelegationBlockedError, is_verify_exempt
 from src.core.task_prompts import PromptSnapshot, TaskPromptError
 from src.core.task_sessions import (
     TaskConflictError,
@@ -508,8 +508,9 @@ class TaskExecutionAdapter:
     def _verify_exempt(meta: SessionMetadata) -> bool:
         """The established read-only verify exemption: a verify task's run
         never needs a takeoff window (the same exemption the delegation route
-        applies at admission)."""
-        return meta.task is not None and meta.task.task_type == TaskType.VERIFY
+        applies at admission and the agent-creation check applies at create —
+        one shared judgment, takeoff_gate.is_verify_exempt)."""
+        return is_verify_exempt(meta.task)
 
     async def _await_terminal(self, session_id: str, run_id: str) -> str:
         """Await one Run's durable terminal fact; returns its outcome."""

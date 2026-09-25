@@ -58,7 +58,7 @@ from src.core.spawner import (
   resolve_requested_subagent_backend_model,
   select_verify_backend,
 )
-from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
+from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate, is_verify_exempt
 from src.core.task_sessions import TaskTreeManager
 from src.core.tasks import create_logged_task
 from src.core.triggers import ArchivedSessionError, RemoteVerifyError, TriggerManager
@@ -112,7 +112,7 @@ async def _authorize_spawn_request(
   """
   meta = require_found(await session_mgr.get_session(req.session_id))
 
-  if isinstance(req, DelegateRequest) and req.task_type == TaskType.VERIFY:
+  if isinstance(req, DelegateRequest) and is_verify_exempt(req.task_type):
     pass  # the read-only verify exemption (v1 and v2 alike)
   elif meta.profile is not None:
     try:
@@ -183,9 +183,10 @@ async def _delegate_task_tree(
   try:
     # The nearest-user-ancestor gate re-judges at delegation and again at the
     # child run's actual launch, whatever credential carries the request. The
-    # read-only verify exemption rides the same task-type judgment here and at
+    # read-only verify exemption rides the one shared judgment (is_verify_exempt)
+    # here, at the admission check above, at the agent-creation check, and at
     # the launch; the structural create checks still apply to a verify child.
-    if req.task_type != TaskType.VERIFY:
+    if not is_verify_exempt(req.task_type):
       await task_mgr.check_task_authorization(req.session_id)
     request_id = delegate_request_id(req)
     task_spec = TaskSpec(

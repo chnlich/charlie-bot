@@ -4,7 +4,9 @@ A delegation (worker spawn) may proceed only when the session's chat history
 carries either an explicit "take off" in the latest real user message or a
 "pre take off" issued within the last 12 hours. This module owns the full
 gate — phrase matching, timestamp parsing, and the blocking exception —
-extracted from src.core.spawner, which consumes none of it.
+extracted from src.core.spawner, which consumes none of it. The module also
+owns the one verify-exemption judgment (``is_verify_exempt``) that every
+takeoff-exemption site reads.
 
 The verdict reads two answers out of the chat history: the takeoff phrase in
 the file-last real user message, and the file-last parseable pre-takeoff
@@ -23,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from src.core.event_types import is_real_user_message
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo
+from src.core.models import TaskSpec, TaskType
 from src.core.sessions import SessionManager
 
 log = LazyStructlogLogger()
@@ -43,6 +46,22 @@ _gate_answers_memo: BoundedMemo[str, tuple[list[dict], int, bool, datetime | Non
 
 class DelegationBlockedError(Exception):
   """Raised when the takeoff gate rejects a delegation attempt."""
+
+
+def is_verify_exempt(task: TaskSpec | TaskType | None) -> bool:
+  """Whether *task* carries the read-only verify exemption: no takeoff window.
+
+  The one owner of the judgment: the delegation route's admission and
+  tree-delegation checks, the agent-creation check on the task tree, and the
+  Run's actual launch all read this function, so no site keeps its own
+  task-type comparison for the exemption. A verify delegation is read-only and
+  repo-less, which is what the contract excuses from the window. Accepts a
+  task type or a whole task spec (a node's ``task``); no spec or no type is
+  not exempt.
+  """
+  if isinstance(task, TaskSpec):
+    return task.task_type == TaskType.VERIFY
+  return task == TaskType.VERIFY
 
 
 def _normalize_takeoff_content(content: str) -> str:

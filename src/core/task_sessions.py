@@ -68,6 +68,7 @@ from src.core.run_token import CallerIdentity
 from src.core.runs import RunStore
 from src.core.session_aliases import SessionAliasStore
 from src.core.session_dispatch import TaskInputDispatcher
+from src.core.takeoff_gate import is_verify_exempt
 from src.core.sessions import _TRANSIENT_METADATA_FIELDS, SessionManager
 from src.core.task_completion import TaskCompletionManager
 
@@ -779,20 +780,23 @@ class TaskTreeManager:
         # A replayed operation returns its original product only to a caller
         # authorized for that same create — the replay is never an
         # authorization bypass. The judgment reads the ORIGINAL product's
-        # profile, never the replay's requested one: re-labeling a replayed
-        # request must not turn a worker create (a gated implementation
-        # delegation) into an ungated manager create.
+        # profile and task, never the replay's requested ones: re-labeling a
+        # replayed request must not turn a worker create (a gated
+        # implementation delegation) into an ungated manager create, nor
+        # borrow the read-only verify exemption for a node created as
+        # implementation.
         if isinstance(caller, CallerIdentity) and not caller.is_operator:
           parent_meta = await self.load_meta(task_parent_id) if task_parent_id is not None else None
           assert existing.profile is not None  # a (parent, request_id)-bound id only exists via this create
-          await self._authorize_agent_creation(caller, existing.profile, task_parent_id, parent_meta)
+          await self._authorize_agent_creation(
+              caller, existing.profile, existing.task, task_parent_id, parent_meta)
         return existing
       parent_meta: SessionMetadata | None = None
       # Caller scope first: an agent's 403 must not depend on the target's shape.
       if isinstance(caller, CallerIdentity) and not caller.is_operator:
         if task_parent_id is not None:
           parent_meta = await self.load_meta(task_parent_id)
-        await self._authorize_agent_creation(caller, profile, task_parent_id, parent_meta)
+        await self._authorize_agent_creation(caller, profile, task, task_parent_id, parent_meta)
       if task_parent_id is not None:
         parent_meta = await self.load_meta(task_parent_id)
         if parent_meta is None:
@@ -847,6 +851,7 @@ class TaskTreeManager:
       self,
       caller: object,
       profile: str,
+      task: TaskSpec | None,
       task_parent_id: str | None,
       parent_meta: SessionMetadata | None,
   ) -> None:
@@ -855,10 +860,14 @@ class TaskTreeManager:
     A logical manager child directly under the caller's own manager task is
     coordination work and needs no user authorization; a worker child is
     implementation delegation and still rides the nearest-real-user-ancestor
-    gate (takeoff_gate). A legacy session (profile None) counts as the
-    caller's manager task without being rewritten. Any other shape — an
-    unrelated root, a foreign parent, a worker parent — is outside an agent's
-    scope.
+    gate (takeoff_gate) — except the read-only verify delegation, which the
+    one shared judgment (takeoff_gate.is_verify_exempt) excuses here exactly
+    as it does on the route and at the launch. On a replayed create *task* is
+    the ORIGINAL node's spec, so re-labeling a replay cannot borrow the
+    exemption for a node created as implementation. A legacy session (profile
+    None) counts as the caller's manager task without being rewritten. Any
+    other shape — an unrelated root, a foreign parent, a worker parent — is
+    outside an agent's scope.
     """
     assert isinstance(caller, CallerIdentity)
     claims = caller.claims
@@ -867,9 +876,11 @@ class TaskTreeManager:
             parent_meta.profile not in ("manager", None)):
       raise TaskForbiddenError(
           "an agent may only create a task directly under its own open manager task")
-    if profile == "worker":
+    if profile == "worker" and not is_verify_exempt(task):
       # Implementation authorization stays with the caller's own manager task:
-      # the nearest-real-user-ancestor gate (takeoff_gate) decides.
+      # the nearest-real-user-ancestor gate (takeoff_gate) decides. The
+      # read-only verify delegation needs no window, on the same task-type
+      # judgment the route and the launch apply.
       await self.check_task_authorization(claims.session_id)
 
   async def _require_open_ancestry_from_index(self, index: _TreeIndex, session_id: str) -> None:

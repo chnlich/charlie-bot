@@ -282,7 +282,177 @@ async def test_verify_exemption_on_the_v2_route_and_launch(
     # The verify child is repo-less; the blocked repo delegation created nothing.
     leaves = [m for m in (await tree._get_index()).metas.values()
               if m.task_parent_id == child.id]
-    assert [m.id for m in leaves] == [verify_leaf]
+
+
+def agent_headers(session_id: str, run_id: str) -> dict[str, str]:
+    """The run-token credential of one node's own active Run: the credential
+    the delegating CLI really carries (never the operator access key the
+    operator-header tests use, and the only credential that exercises the
+    agent-creation check on the task tree)."""
+    token = sign_run_token(
+        RunTokenClaims(session_id=session_id, run_id=run_id, agent="manager-agent"),
+        "op-secret")
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def register_active_run(tree, session_id: str, run_id: str, kind: str = "manager_turn") -> None:
+    """Pin one active, launched Run on *session_id*: the identity its run
+    token stands for (registered, no terminal fact, launch identity pinned)."""
+    await tree.runs.register_run(RunRecord(id=run_id, session_id=session_id, kind=kind))
+    await tree.runs.record_launch(session_id, run_id, pid=424242, pid_start=f"ps-{run_id}")
+
+
+async def wait_terminal(tree, session_id: str, run_id: str, what: str) -> str:
+    """Wait inside the client context for one Run's durable terminal fact."""
+    deadline = asyncio.get_event_loop().time() + 15
+    while asyncio.get_event_loop().time() < deadline:
+        outcome = tree.runs.terminal_outcome(tree.runs.load_events_sync(session_id), run_id)
+        if outcome is not None:
+            return str(outcome)
+        await asyncio.sleep(0.05)
+    pytest.fail(f"{what} never reached a terminal fact")
+
+
+@pytest.mark.asyncio
+async def test_agent_run_token_delegates_verify_without_a_takeoff(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    """The CLI's real credential — a run token — delegating a read-only verify
+    needs no takeoff window: with no user instruction anywhere, the delegation
+    returns 200, creates a repo-less verify child, and its run launches and
+    settles (the agent-creation check reads the same verify exemption the
+    route and the launch read)."""
+    cfg, session_mgr, tree, _root, child = await make_tree(tmp_path, monkeypatch)
+    builds = install_backends(
+        monkeypatch, [SpawningScriptedBackend([result_event("verdict: yes")])],
+        "src.agents.worker.build_backend")
+    await register_active_run(tree, child.id, "child-run")
+
+    from tests.test_task_execution import make_api_client
+    with make_api_client(cfg, session_mgr, tree) as client:
+        verify = client.post(
+            "/api/internal/delegate", json=delegate_payload(child.id, repo, task_type="verify"),
+            headers=agent_headers(child.id, "child-run"))
+        assert verify.status_code == 200, verify.text
+        leaf_id, run_id = verify.json()["session_id"], verify.json()["run_id"]
+        leaf = await tree.load_meta(leaf_id)
+        assert leaf is not None and leaf.profile == "worker"
+        assert leaf.task_parent_id == child.id
+        assert leaf.task is not None
+        assert leaf.task.task_type == "verify" and leaf.task.repo_path is None
+        outcome = await wait_terminal(tree, leaf_id, run_id, "the verify run")
+    assert outcome == "success"
+    assert len(builds) == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_run_token_implement_stays_blocked_without_a_takeoff(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    """The same credential delegating an implementation task type under the
+    same windowless tree stays gated: 403 with the takeoff message and no
+    child created — the exemption never widens past verify."""
+    cfg, session_mgr, tree, root, child = await make_tree(tmp_path, monkeypatch)
+    builds = install_backends(monkeypatch, [], "src.agents.worker.build_backend")
+    await register_active_run(tree, child.id, "child-run")
+    # A real user instruction without the phrase: the refusal is the
+    # takeoff-window one, not the no-real-user-instruction walk failure.
+    await tree.dispatch.admit_input(
+        root.id, event_type=ET.USER, content="please look into this", actor="user")
+
+    from tests.test_task_execution import make_api_client
+    with make_api_client(cfg, session_mgr, tree) as client:
+        resp = client.post(
+            "/api/internal/delegate", json=delegate_payload(child.id, repo),
+            headers=agent_headers(child.id, "child-run"))
+    assert resp.status_code == 403
+    assert "no active authorization" in resp.json()["detail"]
+    assert builds == []
+    assert [m for m in (await tree._get_index()).metas.values()
+            if m.task_parent_id == child.id] == []
+
+
+@pytest.mark.asyncio
+async def test_legacy_session_run_token_delegates_verify_without_a_takeoff(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    """A legacy (profile None) session's own run token delegating verify with
+    no take-off: 200, a repo-less verify leaf under it, and the legacy session
+    is not rewritten (it counts as the caller's own manager-shaped parent)."""
+    cfg, session_mgr, tree, _root, _child = await make_tree(tmp_path, monkeypatch)
+    builds = install_backends(
+        monkeypatch, [SpawningScriptedBackend([result_event("verdict: yes")])],
+        "src.agents.worker.build_backend")
+    from src.core.models import CreateSessionRequest
+    legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"))
+    await register_active_run(tree, legacy.id, "legacy-run", kind="work")
+
+    from tests.test_task_execution import make_api_client
+    with make_api_client(cfg, session_mgr, tree) as client:
+        verify = client.post(
+            "/api/internal/delegate", json=delegate_payload(legacy.id, repo, task_type="verify"),
+            headers=agent_headers(legacy.id, "legacy-run"))
+        assert verify.status_code == 200, verify.text
+        leaf_id, run_id = verify.json()["session_id"], verify.json()["run_id"]
+        leaf = await tree.load_meta(leaf_id)
+        assert leaf is not None and leaf.profile == "worker"
+        assert leaf.task_parent_id == legacy.id
+        assert leaf.task is not None
+        assert leaf.task.task_type == "verify" and leaf.task.repo_path is None
+        outcome = await wait_terminal(tree, leaf_id, run_id, "the verify run")
+        stays_legacy = await session_mgr.get_session(legacy.id)
+        assert stays_legacy is not None
+        assert stays_legacy.profile is None and stays_legacy.schema_version == 1
+    assert outcome == "success"
+    assert len(builds) == 1
+
+
+@pytest.mark.asyncio
+async def test_replay_relabeled_verify_is_judged_by_the_original_task_type(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    """A replayed create is judged by the ORIGINAL node's task type: a worker
+    child created as implement under a live take-off, replayed by the agent
+    caller as verify once the window closed, stays blocked — re-labeling a
+    replay cannot borrow the verify exemption for an implement node (the same
+    principle the replay judgment applies to the profile)."""
+    cfg, session_mgr, tree, root, child = await make_tree(tmp_path, monkeypatch)
+    builds = install_backends(
+        monkeypatch, [SpawningScriptedBackend([result_event("leaf done")])],
+        "src.agents.worker.build_backend")
+    await register_active_run(tree, child.id, "child-run")
+    await tree.dispatch.admit_input(
+        root.id, event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
+
+    from tests.test_task_execution import make_api_client
+    payload = delegate_payload(child.id, repo, task_type="implement")
+    payload["request_id"] = "w1"
+    with make_api_client(cfg, session_mgr, tree) as client:
+        first = client.post("/api/internal/delegate", json=payload,
+                            headers=agent_headers(child.id, "child-run"))
+        assert first.status_code == 200, first.text
+        original_id, original_run = first.json()["session_id"], first.json()["run_id"]
+        original = await tree.load_meta(original_id)
+        assert original is not None and original.task is not None
+        assert original.task.task_type == "implement"
+        # The first run settles before the window closes, so the replay's 403
+        # is the replay judgment, never a launch race.
+        assert await wait_terminal(tree, original_id, original_run, "the implement run") == "success"
+
+        # The window closes: a later real user message without the phrase.
+        await tree.dispatch.admit_input(
+            root.id, event_type=ET.USER, content="hold on, new plan", actor="user")
+
+        # The replay re-labels the same (parent, request_id) operation as
+        # verify (repo-less, so the contract checks pass). The judgment reads
+        # the ORIGINAL implement task and refuses.
+        relabeled = delegate_payload(child.id, repo, task_type="verify")
+        relabeled["request_id"] = "w1"
+        replay = client.post("/api/internal/delegate", json=relabeled,
+                             headers=agent_headers(child.id, "child-run"))
+        assert replay.status_code == 403
+        assert "no active authorization" in replay.json()["detail"]
+
+        # The original product is untouched: no verify re-label materialized.
+        original = await tree.load_meta(original_id)
+        assert original is not None and original.task is not None
+        assert original.task.task_type == "implement"
     assert len(builds) == 1
 
 

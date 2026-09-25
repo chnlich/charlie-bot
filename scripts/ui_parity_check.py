@@ -66,6 +66,7 @@ if str(SCRIPT_REPO) not in sys.path:
     sys.path.insert(0, str(SCRIPT_REPO))
 
 from scripts.browser_harness_session_tree import CDP, pick_free_port  # noqa: E402
+from src.core.process import terminate_and_wait  # noqa: E402
 
 READY_PREFIX = "PARITY SERVE READY "
 WIDTHS = ((1440, 900, False), (390, 844, True))
@@ -201,12 +202,8 @@ class Side:
                 time.sleep(0.1)
 
     def stop(self) -> None:
-        if self.proc and self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
+        if self.proc:
+            terminate_and_wait(self.proc, term_timeout_s=10, kill_timeout_s=10)
 
 
 # ---------------------------------------------------------------------------
@@ -353,11 +350,7 @@ async def run_browser(chrome: str, sides: list[Side], parent_of: dict) -> dict:
                         await cdp.send("Target.closeTarget", {"targetId": target["targetId"]})
             return captures
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        terminate_and_wait(proc, term_timeout_s=5, kill_timeout_s=5)
         shutil.rmtree(profile, ignore_errors=True)
 
 

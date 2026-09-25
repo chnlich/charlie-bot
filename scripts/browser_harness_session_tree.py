@@ -563,6 +563,8 @@ async def run_harness(args: argparse.Namespace) -> None:
         fail("google-chrome is not installed; install it or pass --chrome (no fake output)")
     import websockets
 
+    from src.core.process import terminate_and_wait
+
     evidence_dir = Path(args.evidence_dir)
     evidence_dir.mkdir(parents=True, exist_ok=True)
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT,
@@ -1993,11 +1995,7 @@ async def run_harness(args: argparse.Namespace) -> None:
 
             await ws.close()
         finally:
-            chrome_proc.terminate()
-            try:
-                chrome_proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                chrome_proc.kill()
+            terminate_and_wait(chrome_proc, term_timeout_s=5, kill_timeout_s=5)
             server.should_exit = True
             try:
                 await asyncio.wait_for(serve_task, timeout=10)

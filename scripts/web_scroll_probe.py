@@ -100,6 +100,7 @@ import websockets  # noqa: E402
 from websockets.asyncio import client  # noqa: E402
 
 from src.core.config import CharlieBotConfig, configured_access_key, get_config  # noqa: E402
+from src.core.process import terminate_and_wait  # noqa: E402
 
 LIST_SELECTOR = "#session-list"
 CHAT_SELECTOR_CANDIDATES = ("#messages", "#chat-messages", "#message-list", "main .overflow-y-auto")
@@ -549,12 +550,7 @@ async def drive_mode(args: argparse.Namespace) -> int:
           recv.cancel()
     finally:
       # Fully reap chrome before the TemporaryDirectory cleanup reads the profile dir.
-      proc.terminate()
-      try:
-        proc.wait(timeout=CHROME_REAP_TIMEOUT_S)
-      except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+      terminate_and_wait(proc, term_timeout_s=CHROME_REAP_TIMEOUT_S, kill_timeout_s=CHROME_REAP_TIMEOUT_S)
 
   with trace_path.open("w") as f:
     json.dump(chunks, f)

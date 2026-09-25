@@ -175,6 +175,7 @@ async def run_harness(args: argparse.Namespace) -> None:
     (independent / "state").mkdir(parents=True)
     (independent / "state" / "independent_sentinel.json").write_text('{"independent": true}')
     from src.core.home_writer_fence import acquire_home_writer_fence, probe_writer_fence
+    from src.core.process import terminate_and_wait
 
     independent_fence = acquire_home_writer_fence(independent, purpose="independent service")
 
@@ -548,13 +549,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             log(f"results written to {evidence_dir / 'preview_live_results.json'}")
             log("LIVE PREVIEW HARNESS PASSED")
         finally:
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=60)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=30)
+            terminate_and_wait(proc, term_timeout_s=60, kill_timeout_s=30)
             holder = probe_writer_fence(home)
             if holder["exclusive_holder_alive"]:
                 fail("the preview writer fence is still held after shutdown")

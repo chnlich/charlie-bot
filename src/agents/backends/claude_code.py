@@ -1,6 +1,7 @@
 """ClaudeCodeBackend — concrete AgentBackend wrapping the Claude Code CLI."""
 
 import asyncio
+import json
 import re
 import signal
 from collections.abc import Mapping
@@ -12,6 +13,7 @@ from src.agents.backends.claude_launch import (
     AUTOCOMPACT_PCT_OVERRIDE_ENV,
     CLAUDE_COMPACT_CONTEXT_RESERVE,
     CLAUDE_COMPACT_OUTPUT_RESERVE,
+    DISABLE_CONNECTOR_SETTINGS,
     HEADLESS_CLAUDE_DEFAULT_ENV,
     MAX_CONTEXT_TOKENS_ENV,
     headless_claude_env,
@@ -259,8 +261,13 @@ class ClaudeCodeBackend(AgentBackend):
       self._cmd += ["--model", self._model]
     if self._effort:
       self._cmd += ["--effort", self._effort]
+    # One merged --settings object, the connector key always on it: the CLI's
+    # handling of repeated --settings flags is not a contract, so the argv
+    # never carries more than one.
+    settings = {**DISABLE_CONNECTOR_SETTINGS}
     if self._fast_mode:
-      self._cmd += ["--settings", '{"fastMode":true}']
+      settings["fastMode"] = True
+    self._cmd += ["--settings", json.dumps(settings, separators=(",", ":"))]
     if self._extra_flags:
       self._cmd += self._extra_flags
 

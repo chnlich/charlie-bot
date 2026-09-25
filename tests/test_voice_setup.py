@@ -2,22 +2,17 @@
 
 from __future__ import annotations
 
-import wave
 from pathlib import Path
 
 import pytest
+from conftest import write_wav_file
 
 from src.core import voice_setup
 from src.core.config import CharlieBotConfig
 
 
-def _write_wav(path: Path, seconds: float, rate: int = 16_000) -> Path:
-  path.parent.mkdir(parents=True, exist_ok=True)
-  with wave.open(str(path), "wb") as wav:
-    wav.setnchannels(1)
-    wav.setsampwidth(2)
-    wav.setframerate(rate)
-    wav.writeframes(b"\x00\x00" * int(rate * seconds))
+def _write_silence(path: Path, seconds: float, rate: int) -> Path:
+  write_wav_file(path, b"\x00\x00" * int(rate * seconds), rate)
   return path
 
 
@@ -91,17 +86,17 @@ def test_write_voice_engine_rejects_malformed_config(tmp_path: Path, config_text
 
 def test_pick_preflight_recording_chooses_closest_to_ten_seconds(tmp_path: Path) -> None:
   sessions = tmp_path / "sessions"
-  _write_wav(sessions / "a" / "voice" / "eight.wav", 8.0)
-  ten = _write_wav(sessions / "b" / "voice" / "ten.wav", 10.0)
-  _write_wav(sessions / "c" / "voice" / "twenty.wav", 20.0)
+  _write_silence(sessions / "a" / "voice" / "eight.wav", 8.0, 16_000)
+  ten = _write_silence(sessions / "b" / "voice" / "ten.wav", 10.0, 16_000)
+  _write_silence(sessions / "c" / "voice" / "twenty.wav", 20.0, 16_000)
 
   assert voice_setup.pick_preflight_recording(sessions) == ten
 
 
 def test_pick_preflight_recording_rejects_out_of_band_only(tmp_path: Path) -> None:
   sessions = tmp_path / "sessions"
-  _write_wav(sessions / "a" / "voice" / "short.wav", 2.0)
-  _write_wav(sessions / "b" / "voice" / "long.wav", 27.0)
+  _write_silence(sessions / "a" / "voice" / "short.wav", 2.0, 16_000)
+  _write_silence(sessions / "b" / "voice" / "long.wav", 27.0, 16_000)
 
   with pytest.raises(RuntimeError, match="voice recording"):
     voice_setup.pick_preflight_recording(sessions)
@@ -109,7 +104,7 @@ def test_pick_preflight_recording_rejects_out_of_band_only(tmp_path: Path) -> No
 
 def test_pick_preflight_recording_skips_non_voice_rate(tmp_path: Path) -> None:
   sessions = tmp_path / "sessions"
-  _write_wav(sessions / "a" / "voice" / "44k.wav", 10.0, rate=44_100)
+  _write_silence(sessions / "a" / "voice" / "44k.wav", 10.0, 44_100)
 
   with pytest.raises(RuntimeError, match="voice recording"):
     voice_setup.pick_preflight_recording(sessions)

@@ -24,6 +24,14 @@ SKIP_PERMISSIONS_FLAG = "--dangerously-skip-permissions"
 # claude-sub both pin the same dict.
 SKIP_PERMISSIONS_SETTINGS = {"skipDangerousModePermissionPrompt": True}
 
+# CharlieBot sessions must not sync claude.ai connectors at all: the CLI
+# announces every unauthorized connector at startup, and its announce-once
+# dedup cache (mcp-needs-auth-cache.json) lives in the config directory —
+# claude-sub gives each session a fresh CLAUDE_CONFIG_DIR, so the cache never
+# carries over and the announcement would replay every launch. Every Claude
+# launch path merges this into its single --settings JSON.
+DISABLE_CONNECTOR_SETTINGS = {"disableClaudeAiConnectors": True}
+
 # The tool-deny flag's spelling is vendor-fixed like SKIP_PERMISSIONS_FLAG's; the
 # CLI also accepts a camelCase alias, which only the claude-sub parser mirrors.
 DISALLOWED_TOOLS_FLAG = "--disallowed-tools"

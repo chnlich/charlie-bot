@@ -43,6 +43,7 @@ from src.agents.backends.claude_code import (
     claude_supervisor_env,
     headless_claude_env,
 )
+from src.agents.backends.claude_launch import DISABLE_CONNECTOR_SETTINGS
 from src.core import claude_accounts
 from src.core import event_types as ET
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig, get_config
@@ -179,6 +180,10 @@ def compaction_command(cc_session_id: str) -> list[str]:
       "json",
       DISALLOWED_TOOLS_FLAG,
       COMPACTION_DISALLOWED_TOOLS,
+      # The compaction subprocess is a CharlieBot-spawned Claude session too,
+      # so connector sync stays off here as well (DISABLE_CONNECTOR_SETTINGS).
+      "--settings",
+      json.dumps(DISABLE_CONNECTOR_SETTINGS),
   ]
 
 

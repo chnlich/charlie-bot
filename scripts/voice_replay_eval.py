@@ -1,10 +1,14 @@
-"""Voice replay evaluation: recorded dictations through the local engine and Muse.
+"""Voice replay evaluation: recorded dictations through the registered transcription backends.
 
-The measurement gate of the Muse streaming-transcription plan: replays every
-recorded dictation under ``<sessions_dir>/*/voice/`` through the local sherpa
-engine (optionally hotword-biased) and Meta's Muse Voice Transcribe realtime
-API, then reports stop-to-final latency and proper-noun accuracy against the
-message the user actually sent.
+Replays every recorded dictation under ``<sessions_dir>/*/voice/`` through the
+transcription backends (src/agents/transcription/), then reports stop-to-final
+latency and proper-noun accuracy against the message the user actually sent.
+Engine names are the registry ids plus variants: ``local-hotwords`` (the local
+backend built with --hotwords) and ``<id>-vocab`` for any backend (the same
+backend called with --vocabulary). Backends with live_partials=False receive
+the whole clip at once; the others receive the capture worklet's chunk cadence
+(VOICE_CHUNK_SAMPLES) on a real-time schedule, so every stop-to-final number
+measures from the recording's end.
 
 Run as ``uv run python scripts/voice_replay_eval.py`` from the repository root.
 ``--dry-run`` prints recording, ground-truth, and audio-minute counts only.
@@ -24,6 +28,7 @@ import re
 import sys
 import time
 import wave
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,29 +40,32 @@ if str(_REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(_REPO_ROOT))
 
 from src.agents import transcriber  # noqa: E402
+from src.agents.transcription import registry  # noqa: E402
+from src.agents.transcription.base import VOICE_CHUNK_SAMPLES, TranscriptionBackend  # noqa: E402
+from src.agents.transcription.local import LocalTranscriptionBackend  # noqa: E402
 from src.core.config import CharlieBotConfig, load_config  # noqa: E402
-from src.core.credentials import get_credentials  # noqa: E402
 
 SAMPLE_RATE = transcriber.SAMPLE_RATE
-# The Muse client sends audio in 2048-sample binary frames (128 ms of PCM16),
-# paced against an absolute real-time schedule.
-MUSE_FRAME_SAMPLES = 2048
-MUSE_MODEL = "muse-voice-transcribe-1.0"
-DEFAULT_MUSE_URL = "wss://api.meta.ai/v1/asr/realtime"
 # A voice recording pairs with the first voice-flagged user message sent within
 # this window after the recording timestamp.
 GROUND_TRUTH_WINDOW_S = 900
 # recordings/<UTC timestamp>_<hex>.wav, written by the voice upload endpoint
 WAV_FILENAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{6}\.\d{3})Z_[0-9a-f]+\.wav$")
-ENGINES = ("local", "local-hotwords", "muse", "muse-keywords")
+HOTWORDS_ENGINE = "local-hotwords"
+VOCAB_SUFFIX = "-vocab"
 SUMMARY_COLUMNS = (
-    "engine", "clips", "failures", "stop_to_final_p50_s", "stop_to_final_p90_s", "first_partial_p50_s",
-    "offline_wait_p50_s", "incremental_wait_p50_s", "term_correct", "term_total", "sim_mean", "better_vs_local",
-    "worse_vs_local")
+    "engine", "clips", "failures", "stop_to_final_p50_s", "stop_to_final_p90_s", "first_partial_p50_s", "term_correct",
+    "term_total", "sim_mean", "better_vs_local", "worse_vs_local")
 
 
 def _note(message: str) -> None:
   print(message, file=sys.stderr, flush=True)
+
+
+def _variant_engine_ids() -> set[str]:
+  """Every engine name the script accepts: registry ids plus the two variant forms."""
+  ids = set(registry.backend_ids())
+  return ids | {HOTWORDS_ENGINE} | {f"{engine_id}{VOCAB_SUFFIX}" for engine_id in ids}
 
 
 @dataclass
@@ -172,194 +180,102 @@ def ensure_out_dir(out: Path, repo_root: Path) -> Path:
   return resolved
 
 
-@dataclass
-class MuseResult:
-  ok: bool
-  text: str = ""
-  stop_to_final_s: float | None = None
-  first_partial_s: float | None = None
-  close_code: int | None = None
-  close_reason: str = ""
-  error: str = ""
+async def _transcribe_clip(backend: TranscriptionBackend, clip: Clip, vocabulary: list[str],
+                           languages: list[str]) -> tuple[str, float | None, float | None]:
+  """Drive one clip through ``transcribe`` and time it against the chunk hand-offs.
 
-
-def build_handshake(access_token: str, keywords: list[str], language_bias: list[str]) -> dict:
-  """The first frame on the Muse socket; keywords/languageBias only when non-empty."""
-  handshake: dict = {
-      "mode": "PUSH_TO_TALK",
-      "authorization": {
-          "accessToken": access_token
-      },
-      "audioEncoding": "PCM_16KHZ",
-      "model": MUSE_MODEL,
-      "partialMode": "CUMULATIVE",
-      "emitAudioProgress": False,
-  }
-  if keywords:
-    handshake["keywords"] = keywords
-  if language_bias:
-    handshake["languageBias"] = language_bias
-  return handshake
-
-
-def _transcript_event(event: dict) -> str | None:
-  if event.get("type") == "transcript":
-    return event.get("text", "")
-  return None
-
-
-async def muse_transcribe(
-    url: str,
-    access_token: str,
-    samples: np.ndarray,
-    keywords: list[str],
-    language_bias: list[str],
-) -> MuseResult:
-  """Replay one clip through the Muse realtime API at real-time pace.
-
-  Handshake first, its reply read before any audio; then 2048-sample binary
-  frames paced against an absolute schedule; then the endStream frame and events
-  until the socket closes. Never logs or returns the handshake, so the access
-  token cannot reach any output.
+  Returns (final text, stop-to-final seconds, first-partial seconds); the
+  latencies measure from the last (respectively first) chunk handed to the
+  backend, so a paced feed measures stop-to-final from the recording's end.
   """
-  from websockets.asyncio.client import connect
-  from websockets.exceptions import ConnectionClosed
+  pcm = clip.samples.astype("<i2").tobytes()
+  handoffs: list[float] = []
 
-  async with connect(url) as socket:
-    await socket.send(json.dumps(build_handshake(access_token, keywords, language_bias)))
-    try:
-      reply = json.loads(await socket.recv())
-    except (json.JSONDecodeError, TypeError) as exc:
-      return MuseResult(ok=False, error=f"handshake reply is not JSON: {exc}")
-    if reply.get("type") == "error" or "error" in reply:
-      return MuseResult(ok=False, error=f"handshake rejected: {reply.get('message', reply)}")
+  async def whole_clip() -> AsyncIterator[bytes]:
+    handoffs.append(time.monotonic())
+    yield pcm
 
-    events: list[tuple[float, dict]] = []
+  async def paced_chunks() -> AsyncIterator[bytes]:
+    frame_bytes = VOICE_CHUNK_SAMPLES * 2
+    started = time.monotonic()
+    for offset in range(0, len(pcm), frame_bytes):
+      target = started + (offset // 2) / SAMPLE_RATE
+      delay = target - time.monotonic()
+      if delay > 0:
+        await asyncio.sleep(delay)
+      handoffs.append(time.monotonic())
+      yield pcm[offset:offset + frame_bytes]
 
-    async def read_events() -> None:
-      async for message in socket:
-        events.append((time.monotonic(), json.loads(message)))  # noqa: PERF401
-
-    reader = asyncio.create_task(read_events())
-    pcm = samples.astype("<i2").tobytes()
-    frame_bytes = MUSE_FRAME_SAMPLES * 2
-    first_frame_at: float | None = None
-    try:
-      stream_start = time.monotonic()
-      for offset in range(0, len(pcm), frame_bytes):
-        # Absolute schedule: sleep to stream_start plus the audio already sent,
-        # never a fixed per-frame pause.
-        target = stream_start + (offset / 2) / SAMPLE_RATE
-        delay = target - time.monotonic()
-        if delay > 0:
-          await asyncio.sleep(delay)
-        if first_frame_at is None:
-          first_frame_at = time.monotonic()
-        await socket.send(pcm[offset:offset + frame_bytes])
-      end_stream_at = time.monotonic()
-      await socket.send(json.dumps({"type": "endStream"}))
-      await reader
-    except ConnectionClosed as exc:
-      # Reap the reader so its own close exception is not lost to the GC.
-      reader.cancel()
-      await asyncio.gather(reader, return_exceptions=True)
-      code = exc.rcvd.code if exc.rcvd is not None else None
-      reason = exc.rcvd.reason if exc.rcvd is not None else ""
-      return MuseResult(
-          ok=False, close_code=code, close_reason=reason, error=f"connection closed mid-stream (code {code}: {reason})")
-
-    if socket.close_code not in (1000, 1001):
-      return MuseResult(
-          ok=False,
-          close_code=socket.close_code,
-          close_reason=socket.close_reason or "",
-          error=f"abnormal close (code {socket.close_code}: {socket.close_reason})")
-    finals = [
-        (at, text) for at, event in events if (text := _transcript_event(event)) is not None and event.get("final")
-    ]
-    if not finals:
-      return MuseResult(ok=False, error="stream closed without a final transcript")
-    speech_complete = next(
-        (event.get("transcript", "") for _, event in events if event.get("type") == "speechComplete"), None)
-    text = speech_complete or " ".join(text for _, text in finals)
-    first_partial_at = next(
-        (at for at, event in events if _transcript_event(event) is not None and not event.get("final")), None)
-    return MuseResult(
-        ok=True,
-        text=text,
-        stop_to_final_s=max(0.0, finals[-1][0] - end_stream_at),
-        first_partial_s=(
-            max(0.0, first_partial_at -
-                first_frame_at) if first_partial_at is not None and first_frame_at is not None else None))
+  feed = paced_chunks() if backend.live_partials else whole_clip()
+  first_partial_at: float | None = None
+  final_at: float | None = None
+  text = ""
+  async for event in backend.transcribe(feed, vocabulary=vocabulary, languages=languages):
+    now = time.monotonic()
+    if event.kind == "partial":
+      if first_partial_at is None:
+        first_partial_at = now
+    else:
+      final_at = now
+      text = event.text
+  if final_at is None or not handoffs:
+    raise RuntimeError("backend produced no final event")
+  first_partial_s = max(0.0, first_partial_at - handoffs[0]) if first_partial_at is not None else None
+  return text, max(0.0, final_at - handoffs[-1]), first_partial_s
 
 
-def build_local_bundle(cfg: CharlieBotConfig, hotwords: str) -> transcriber._SpeechModelBundle:
-  """One sherpa recognizer for the whole run; the provisioning path is the
-  transcriber's own fallback loader (downloads/verifies the CPU artifacts)."""
-  paths = transcriber._ensure_sherpa_paths_cached(cfg)
-  bundle = transcriber.create_sherpa_bundle(paths, hotwords=hotwords)
-  transcriber.warm_up_bundle(bundle)
-  return bundle
-
-
-def run_local(bundle: transcriber._SpeechModelBundle, clip: Clip) -> dict:
-  """Decode each VAD window with wall-clock timing; join exactly as production does."""
-  vad = transcriber._open_vad(bundle.vad_config, clip.samples.size / SAMPLE_RATE + 10)
-  windows = transcriber.offline_decode_windows(vad, clip.samples)
-  texts: list[str] = []
-  decode_s: list[float] = []
-  for _start, _end, left, right in windows:
-    began = time.monotonic()
-    text = transcriber._decode_samples(bundle, clip.samples[left:right].astype(np.float32) / 32768.0)
-    decode_s.append(time.monotonic() - began)
-    texts.append(text)
-  return {
-      "text": transcriber._join_segments(*texts),
-      "offline_wait_s": sum(decode_s),
-      "incremental_wait_s": _incremental_wait(bundle, clip, windows, decode_s),
-      "segments": len(windows),
-  }
-
-
-def _incremental_wait(
-    bundle: transcriber._SpeechModelBundle, clip: Clip, windows: list[tuple[int, int, int, int]],
-    decode_s: list[float]) -> float:
-  """Sequential-decoder simulation: a segment becomes available at its end plus the
-  VAD's min_silence_duration (capped at the clip duration); wait = how far past the
-  clip's end the last decode completes."""
-  min_silence_s = bundle.vad_config.silero_vad.min_silence_duration
-  completion = 0.0
-  for (_start, end, _left, _right), decode_time in zip(windows, decode_s, strict=True):
-    available = min(end / SAMPLE_RATE + min_silence_s, clip.duration_s)
-    completion = max(available, completion) + decode_time
-  return max(0.0, completion - clip.duration_s)
-
-
-async def run_muse_engine(
-    url: str, access_token: str, clips: list[Clip], keywords: list[str], language_bias: list[str]) -> list[dict]:
-  """Replay every clip through Muse; a clip-level failure is recorded, the run continues."""
+async def run_engine(
+    engine: str, backend: TranscriptionBackend, clips: list[Clip], vocabulary: list[str],
+    languages: list[str]) -> list[dict]:
+  """Replay every clip through one backend; a clip-level failure is recorded, the run continues."""
   records: list[dict] = []
   for index, clip in enumerate(clips, start=1):
     began = time.monotonic()
+    record: dict = {"clip": clip.path.name}
     try:
-      result = await muse_transcribe(url, access_token, clip.samples, keywords, language_bias)
-    except Exception as exc:  # noqa: BLE001 — recorded as the clip's failure, then the run continues
-      result = MuseResult(ok=False, error=f"{type(exc).__name__}: {exc}")
-    records.append(
-        {
-            "clip": clip.path.name,
-            "ok": result.ok,
-            "text": result.text if result.ok else "",
-            "stop_to_final_s": result.stop_to_final_s,
-            "first_partial_s": result.first_partial_s,
-            "close_code": result.close_code,
-            "close_reason": result.close_reason,
-            "error": result.error,
-            "wall_s": time.monotonic() - began,
-        })
-    _note(f"[muse {index}/{len(clips)}] {clip.path.name}: "
-          f"{'ok' if result.ok else f'failed ({result.error})'}")
+      text, stop_to_final_s, first_partial_s = await _transcribe_clip(backend, clip, vocabulary, languages)
+      record.update(ok=True, text=text, stop_to_final_s=stop_to_final_s, first_partial_s=first_partial_s)
+    except Exception as exc:  # recorded as the clip's failure, then the run continues
+      record.update(ok=False, error=f"{type(exc).__name__}: {exc}")
+    record["wall_s"] = time.monotonic() - began
+    records.append(record)
+    outcome = (f"stop_to_final={record['stop_to_final_s']:.2f}s" if record.get("ok") else f"failed ({record['error']})")
+    _note(f"[{engine} {index}/{len(clips)}] {clip.path.name}: {outcome}")
   return records
+
+
+def _warmup_pcm() -> bytes:
+  """The transcriber's warm-up sine as PCM16 — its shape pays the cold cost, its content none."""
+  positions = np.arange(int(SAMPLE_RATE * transcriber.WARMUP_SECONDS), dtype=np.float64)
+  samples = np.sin(2 * np.pi * transcriber.WARMUP_FREQUENCY_HZ * positions / SAMPLE_RATE)
+  return samples.astype("<i2").tobytes()
+
+
+def _prepare_local_backends(backends: dict[str, TranscriptionBackend], cfg: CharlieBotConfig) -> None:
+  """Provision the speech models and warm every local backend's bundle before the timed runs.
+
+  The server does both on its provisioning thread at boot; the replay process
+  has no boot, so the first timed clip would otherwise pay the cold decode.
+  Each sine goes through the public transcribe and the text is discarded. A run
+  without a local backend provisions nothing: the speech models are the local
+  backend's alone.
+  """
+  local_backends = [backend for backend in backends.values() if isinstance(backend, LocalTranscriptionBackend)]
+  if not local_backends:
+    return
+  transcriber.ensure_models_cached(cfg)
+  sine = _warmup_pcm()
+
+  async def warm(backend: TranscriptionBackend) -> None:
+
+    async def one_chunk() -> AsyncIterator[bytes]:
+      yield sine
+
+    async for _event in backend.transcribe(one_chunk(), vocabulary=[], languages=[]):
+      pass
+
+  for backend in local_backends:
+    asyncio.run(warm(backend))
 
 
 def _percentile(values: list[float], q: float) -> float | None:
@@ -419,10 +335,6 @@ def write_outputs(
     first_partial = [
         r["first_partial_s"] for r in engine_records if r.get("ok") and r.get("first_partial_s") is not None
     ]
-    offline_wait = [r["offline_wait_s"] for r in engine_records if r.get("ok") and r.get("offline_wait_s") is not None]
-    incremental_wait = [
-        r["incremental_wait_s"] for r in engine_records if r.get("ok") and r.get("incremental_wait_s") is not None
-    ]
     scored = [r for r in engine_records if r.get("ok") and "sim" in r]
     term_correct = sum(r["terms"][term]["correct"] for r in scored for term in terms)
     term_total = sum(r["terms"][term]["sent"] for r in scored for term in terms)
@@ -444,8 +356,6 @@ def write_outputs(
             "stop_to_final_p50_s": _percentile(stop_to_final, 50),
             "stop_to_final_p90_s": _percentile(stop_to_final, 90),
             "first_partial_p50_s": _percentile(first_partial, 50),
-            "offline_wait_p50_s": _percentile(offline_wait, 50),
-            "incremental_wait_p50_s": _percentile(incremental_wait, 50),
             "term_correct": term_correct,
             "term_total": term_total,
             "sim_mean": sim_mean,
@@ -473,8 +383,6 @@ def write_outputs(
       if record.get("ok") and "terms" in record for term in terms
       if record["terms"][term]["correct"] < record["terms"][term]["sent"]
   ]
-  if not misses:
-    lines.append("(none)")
   for clip_name, term, score, text in misses:
     lines.append(f"- `{clip_name}` term `{term}` "
                  f"({score['correct']}/{score['sent']}): `{_snippet(text, term)}`")
@@ -484,15 +392,17 @@ def write_outputs(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-  parser.add_argument("--engines", default="local,muse", help=f"comma list from {','.join(ENGINES)}")
-  parser.add_argument("--hotwords", default="", help="comma list of local-engine hotwords")
-  parser.add_argument("--keywords", default="", help="comma list of Muse keywords")
+  known_engines = sorted(_variant_engine_ids())
   parser.add_argument(
-      "--language-bias", default="Mandarin Chinese,English", help="comma list passed as languageBias when non-empty")
+      "--engines", default=",".join(registry.backend_ids()), help=f"comma list from {', '.join(known_engines)}")
+  parser.add_argument("--hotwords", default="", help=f"comma list of local-engine hotwords (engine {HOTWORDS_ENGINE})")
+  parser.add_argument(
+      "--vocabulary", default="", help="comma list passed as the backend vocabulary by the <id>-vocab variants")
+  parser.add_argument(
+      "--languages", default="zh,en", help="comma list of BCP-47 base codes passed to every backend as language hints")
   parser.add_argument("--terms", default="CharlieBot,Charlie Code", help="comma list of proper nouns to score")
   parser.add_argument("--only", default="", help="restrict to paths containing SUBSTR")
   parser.add_argument("--limit", type=int, default=0, help="evaluate at most N recordings")
-  parser.add_argument("--muse-url", default=DEFAULT_MUSE_URL)
   parser.add_argument(
       "--out", default="", help="output directory "
       "(default <charliebot_home>/voice_eval/<UTC timestamp>/)")
@@ -500,19 +410,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
       "--dry-run", action="store_true", help="print recording, ground-truth, and audio-minute counts only")
   args = parser.parse_args(argv)
   engines = [engine.strip() for engine in args.engines.split(",") if engine.strip()]
-  unknown = [engine for engine in engines if engine not in ENGINES]
+  unknown = [engine for engine in engines if engine not in known_engines]
   if unknown:
-    parser.error(f"unknown engines {unknown}; choose from {', '.join(ENGINES)}")
+    parser.error(f"unknown engines {unknown}; choose from {', '.join(known_engines)}")
   if not engines:
     parser.error("--engines is empty")
-  if "local-hotwords" in engines and not args.hotwords:
-    parser.error("engine local-hotwords needs --hotwords")
-  if "muse-keywords" in engines and not args.keywords:
-    parser.error("engine muse-keywords needs --keywords")
+  if HOTWORDS_ENGINE in engines and not args.hotwords:
+    parser.error(f"engine {HOTWORDS_ENGINE} needs --hotwords")
+  if any(engine.endswith(VOCAB_SUFFIX) for engine in engines) and not args.vocabulary:
+    parser.error("a <id>-vocab engine needs --vocabulary")
   args.engines = engines
   args.hotwords_list = [h.strip() for h in args.hotwords.split(",") if h.strip()]
-  args.keywords_list = [k.strip() for k in args.keywords.split(",") if k.strip()]
-  args.language_bias_list = [b.strip() for b in args.language_bias.split(",") if b.strip()]
+  args.vocabulary_list = [v.strip() for v in args.vocabulary.split(",") if v.strip()]
+  args.languages_list = [code.strip() for code in args.languages.split(",") if code.strip()]
   args.terms_list = [t.strip() for t in args.terms.split(",") if t.strip()]
   return args
 
@@ -534,27 +444,24 @@ def main(argv: list[str] | None = None) -> int:
     print(f"audio minutes: {total_minutes:.1f}")
     return 0
 
+  if HOTWORDS_ENGINE in args.engines:
+    # The script's own variant: the local backend built with --hotwords,
+    # registered like any backend so the runner below drives it through the
+    # same registry interface.
+    hotwords = ",".join(args.hotwords_list)
+    registry.register_transcription_backend(
+        HOTWORDS_ENGINE, lambda backend_cfg, **_: LocalTranscriptionBackend(backend_cfg, hotwords=hotwords))
+
   out_dir.mkdir(parents=True, exist_ok=True)
+  backends = {
+      engine: registry.build_transcription_backend(engine.removesuffix(VOCAB_SUFFIX), cfg) for engine in args.engines
+  }
+  _prepare_local_backends(backends, cfg)
+
   records: dict[str, list[dict]] = {}
   for engine in args.engines:
-    if engine in ("local", "local-hotwords"):
-      bundle = build_local_bundle(cfg, ",".join(args.hotwords_list) if engine == "local-hotwords" else "")
-      engine_records = []
-      for index, clip in enumerate(clips, start=1):
-        began = time.monotonic()
-        result = run_local(bundle, clip)
-        engine_records.append({"clip": clip.path.name, "ok": True, "wall_s": time.monotonic() - began, **result})
-        _note(
-            f"[{engine} {index}/{len(clips)}] {clip.path.name}: "
-            f"{result['offline_wait_s']:.2f}s decode over {result['segments']} segment(s)")
-      records[engine] = engine_records
-    else:
-      access_token = str(get_credentials().require("meta", "model_api_key"))
-      engine_records = asyncio.run(
-          run_muse_engine(
-              args.muse_url, access_token, clips, args.keywords_list if engine == "muse-keywords" else [],
-              args.language_bias_list))
-      records[engine] = engine_records
+    vocabulary = args.vocabulary_list if engine.endswith(VOCAB_SUFFIX) else []
+    records[engine] = asyncio.run(run_engine(engine, backends[engine], clips, vocabulary, args.languages_list))
 
   # Attach ground-truth scoring to each successful record.
   for engine in args.engines:

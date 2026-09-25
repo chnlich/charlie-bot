@@ -489,15 +489,15 @@ Known-alive symbols:
   sends through `websocket.send_json(...)`, the resize path calls `attachment.resize(cols, rows)`,
   and the server catchup/replay producers send through `FakeWebSocket.send_json`; every call
   dispatches on the injected double. Vulture flags each method as unused.
-- `accept_waveform`, `flush`, `empty`, `front`, `pop` (`_FakeVad` in
-  `tests/test_transcriber_sampling.py`) — `transcribe_pcm_offline`
+- `accept_waveform`, `flush`, `empty`, `front`, `pop` (`FakeOfflineVad` in
+  `tests/conftest.py`; the offline transcription suites install it) — `transcribe_pcm_offline`
   (src/agents/transcriber.py) drives the installed VAD duck-typed: it feeds
   `accept_waveform` in 128 ms steps, calls `flush()`, then drains the segment queue
-  through `empty()`/`front`/`pop()`. A vulture scan of `tests/test_transcriber_sampling.py`
-  alone flags `accept_waveform`, `flush`, `empty`, and `front` as unused methods/property
-  (60% confidence); any scan that also takes in `tests/test_voice_offline_models.py` — the
-  real-VAD suite, the whole tests/ tree — stays silent because its call sites use the same
-  names.
+  through `empty()`/`front`/`pop()`. A vulture scan of `tests/conftest.py` alone flags
+  `accept_waveform`, `flush`, `flushed`, `empty`, and `front` as unused methods/property
+  (60% confidence); any scan that also takes in the suites that install the double
+  (`tests/test_transcriber_sampling.py`, `tests/test_voice_replay_eval.py`) stays silent
+  because their call sites use the same names.
 - `_proc`, `_ws` (backend and warm-renderer doubles in `tests/test_backend_logging.py`,
   `tests/test_opencode_backend.py`, and the fake `_launch` in `tests/core/test_headless_render.py`)
   — the stderr pump reads `self._proc.stderr` (`src/agents/backends/base.py`), the opencode

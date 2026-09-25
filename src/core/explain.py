@@ -16,7 +16,6 @@ into any context pipeline.
 """
 
 import asyncio
-import json
 import os
 import shutil
 import tempfile
@@ -30,7 +29,7 @@ from src.agents.backends.deferred_build import load_build_backend
 from src.api.message_utils import events_to_messages
 from src.core.config import CharlieBotConfig
 from src.core.deferred import deferred_module_getattr
-from src.core.json_utils import write_json_atomically
+from src.core.json_utils import load_json_dict, write_json_atomically
 from src.core.models import BackendOption, utc_now
 from src.core.sessions import SessionManager
 from src.core.streaming import session_channel, streaming_manager
@@ -99,15 +98,9 @@ def results_path(session_mgr: SessionManager, session_id: str) -> Path:
   return session_mgr.get_chat_events_path(session_id).parent / "explain_results.json"
 
 
-def _load_results(path: Path) -> dict:
-  if not path.exists():
-    return {}
-  return json.loads(path.read_text(encoding="utf-8"))
-
-
 def _write_entry(session_mgr: SessionManager, session_id: str, upto: int, entry: dict) -> None:
   path = results_path(session_mgr, session_id)
-  results = _load_results(path)
+  results = load_json_dict(path)
   results[str(upto)] = entry
   # Readers parse this file from executor threads with no coordination against this
   # write; the swap keeps every read on one complete document (recap's cache rule).
@@ -264,7 +257,7 @@ async def request_explain(
   generation; a stale one is reaped first, which frees the divider for this re-run.
   """
   async with _register_lock:
-    results = await asyncio.to_thread(_load_results, results_path(session_mgr, session_id))
+    results = await asyncio.to_thread(load_json_dict, results_path(session_mgr, session_id))
     entry = results.get(str(upto))
     if entry is not None and entry.get("state") == "pending":
       if not _is_stale(entry):
@@ -283,7 +276,7 @@ async def request_explain(
 
 async def get_explain_entry(session_mgr: SessionManager, session_id: str, upto: int) -> dict | None:
   """The single entry for one divider (answer/error included), reaping a stale pending on the way."""
-  results = await asyncio.to_thread(_load_results, results_path(session_mgr, session_id))
+  results = await asyncio.to_thread(load_json_dict, results_path(session_mgr, session_id))
   entry = results.get(str(upto))
   if entry is None:
     return None
@@ -298,7 +291,7 @@ async def explain_status(session_mgr: SessionManager, session_id: str) -> dict:
   The session page pulls this once per load/switch to render each divider's button
   from persisted truth; a stale pending met here is reaped like any other read.
   """
-  results = await asyncio.to_thread(_load_results, results_path(session_mgr, session_id))
+  results = await asyncio.to_thread(load_json_dict, results_path(session_mgr, session_id))
   summary: dict[str, dict] = {}
   for key, entry in results.items():
     if entry.get("state") == "pending" and _is_stale(entry):

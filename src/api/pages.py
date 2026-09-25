@@ -28,6 +28,7 @@ from src.api.deps import (
     SESSION_NOT_FOUND_DETAIL,
     get_config_on_loop,
     get_session_manager,
+    get_task_manager,
     get_thread_manager,
 )
 from src.api.message_utils import build_session_bootstrap_data
@@ -52,6 +53,7 @@ from src.core.memo import StatSignatureMemo
 from src.core.models import SessionStatus
 from src.core.session_tree_preview import is_preview_mode
 from src.core.sessions import SessionManager
+from src.core.task_sessions import TaskTreeManager
 from src.core.threads import ThreadManager
 from src.core.timeouts import HOME_SERVICE_PROBE_TIMEOUT, SUBPROCESS_GIT_VERSION_TIMEOUT
 
@@ -854,11 +856,18 @@ async def home_page(request: Request, cfg: CharlieBotConfig = Depends(get_config
 async def index(
     request: Request,
     session: str | None = None,
+    thread: str | None = None,
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
 ) -> Response:
-  """Render the full page with only critical active-session data."""
+  """Render the full page with only critical active-session data.
+
+  ``/?session=<id>`` opens a session (a worker node's messages are its Runs'
+  transcript); ``/?session=<parent>&thread=<id>`` opens one legacy worker
+  thread projected into the same main-chat view, read-only.
+  """
   load_errors: list[str] = []
   try:
     sessions = await session_mgr.list_sessions(
@@ -876,15 +885,31 @@ async def index(
   pending_draft: dict | None = None
   event_count = 0
   session_bootstrap: dict | None = None
+  thread_view: dict | None = None
   if session:
     try:
       active_session = await session_mgr.get_session(session)
     except Exception:
       log.exception("get_session_failed", session_id=session)
 
+    if active_session and thread:
+      # The legacy thread view: the page renders the parent session's chrome
+      # (sidebar highlight, task context) over the thread's projected
+      # transcript, read-only, addressed by this URL.
+      thread_meta = await thread_mgr.get_thread(session, thread)
+      if thread_meta is None:
+        load_errors.append(f"Thread {thread} not found in session {session}.")
+      else:
+        thread_view = {
+            "session_id": session,
+            "thread_id": thread,
+            "description": thread_meta.description,
+            "backend": thread_meta.backend or "",
+        }
+        active_session = None  # the header names the thread, not the parent session
     if active_session:
       try:
-        bootstrap = await build_session_bootstrap_data(session, session_mgr)
+        bootstrap = await build_session_bootstrap_data(session, session_mgr, tree=task_mgr)
         active_session = bootstrap.session
         pending_draft = bootstrap.pending_draft
         event_count = bootstrap.total_event_count
@@ -892,6 +917,24 @@ async def index(
           if sidebar_session.id == session:
             sidebar_session.has_unread = False
         session_bootstrap = _bootstrap_payload(bootstrap, cfg)
+        if thread_view is not None:
+          from src.core import worker_transcript
+          entry = await asyncio.to_thread(
+              worker_transcript.load_thread_transcript, cfg,
+              cfg.sessions_dir / session, await thread_mgr.get_thread(session, thread),
+              await thread_mgr.get_events_log_path(session, thread))
+          session_bootstrap = {
+              **session_bootstrap,
+              "session": {**session_bootstrap["session"], "name": thread_view["description"],
+                          "profile": "worker", "backend": thread_view["backend"]},
+              "messages": [m.model_dump(mode="json") if hasattr(m, "model_dump") else m
+                           for m in entry.projection.committed],
+              "pending_draft": entry.projection.pending_draft,
+              "event_count": entry.projection.event_count,
+              "oldest_message_ordinal": 0,
+              "has_more": False,
+              "thread_view": thread_view,
+          }
       except Exception:
         log.exception("load_session_data_failed", session_id=session)
         load_errors.append("Failed to load session data. Check server logs for details.")
@@ -903,7 +946,8 @@ async def index(
   # auto-redirect target.
   sessions = await project_worker_threads(sessions, cfg, thread_mgr)
 
-  active_backend = active_session.backend if active_session else _default_backend_id(cfg)
+  active_backend = ((active_session.run_backend or active_session.backend)
+                    if active_session else _default_backend_id(cfg))
   active_backend_opt = cfg.get_backend_option(active_backend)
   active_backend_label = active_backend_opt.label if active_backend_opt else active_backend
   active_backend_type = active_backend_opt.type if active_backend_opt else ""
@@ -914,6 +958,7 @@ async def index(
       context={
           "initial_sessions": [s.model_dump(mode="json") for s in sessions],
           "active_session": active_session,
+          "thread_view": thread_view,
           "pending_draft": pending_draft,
           "event_count": event_count,
           "session_bootstrap": session_bootstrap,

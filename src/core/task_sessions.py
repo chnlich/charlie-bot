@@ -72,6 +72,7 @@ from src.core.sessions import _TRANSIENT_METADATA_FIELDS, SessionManager
 from src.core.takeoff_gate import is_verify_exempt
 from src.core.task_completion import TaskCompletionManager
 from src.core.tasks import create_logged_task
+from src.core.thinking_state import clear_run_busy, mark_run_busy, note_run_backend
 
 if TYPE_CHECKING:
   from src.core.models import RunRecord
@@ -352,6 +353,11 @@ class TaskTreeManager:
     # (archived segments included), so a rotated acknowledgement never un-dones
     # itself and a repeat finish stays idempotent across rotation.
     self.runs.set_fact_history_loader(self.fact_history)
+    # The run owner's launch/finish paths push a worker Run's busy interval
+    # (the node's thinking_since) and its display backend into thinking_state.
+    # The notification is the tree owner's because only the tree index knows
+    # which nodes are workers.
+    self.runs.set_liveness_notifier(self._note_run_liveness)
     self.dispatch = TaskInputDispatcher(self)
     self.completion = TaskCompletionManager(self)
     # The pending-input blockers of one session ([] when none): the structural
@@ -388,6 +394,11 @@ class TaskTreeManager:
   def sessions(self) -> SessionManager:
     """The conversation/attachment service this tree is wired over."""
     return self._sessions
+
+  @property
+  def cfg(self) -> CharlieBotConfig:
+    """The config this tree was built over (display-label resolution reads it)."""
+    return self._cfg
 
   # ------------------------------------------------------------------
   # Metadata reads/writes (single owner of the v2 fields)
@@ -572,6 +583,28 @@ class TaskTreeManager:
       if len(chain) > _ANCESTOR_HOP_LIMIT:
         raise TaskConflictError([f"ancestor chain of {session_id} exceeds {_ANCESTOR_HOP_LIMIT} hops"])
     return chain
+
+  async def _note_run_liveness(self, session_id: str, run: RunRecord, launched: bool) -> None:
+    """The run owner's liveness notification: a worker node's busy interval.
+
+    A worker node's busy interval (its thinking_since, the header timer) opens
+    at its Run's recorded started_at and closes at that Run's terminal fact
+    (every exit path lands one through record_finish / dispatch.finish_run). A
+    manager node's busy interval stays owned by the master queue, so a
+    manager_turn Run opens nothing here and its finish closes nothing. The
+    node's has_running_tasks and work_state are the task-tree activity
+    derivation's (derive_task_tree_activity), never this notification's.
+    Failures are logged by the run owner's seam and never fail the durable
+    launch or finish that preceded them.
+    """
+    if not launched:
+      clear_run_busy(session_id, run.id)
+      return
+    note_run_backend(session_id, run.backend)
+    index = await self._get_index()
+    meta = index.metas.get(session_id)
+    if meta is not None and meta.profile == "worker":
+      mark_run_busy(session_id, run.id, since=run.started_at)
 
   async def _require_open_ancestry(self, session_id: str) -> list[SessionMetadata]:
     index = await self._get_index()

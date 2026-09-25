@@ -600,6 +600,14 @@ async def _send_session_catchup(
   """Send catchup frames, fast-skipping replay when the client cursor is current."""
   event_index_offset = meta.archive_offset if meta else 0
   total_event_count: int | None
+  if meta is not None and meta.profile == "worker":
+    # A worker node's chat record is its Runs' transcript; the catchup replay
+    # and the first paint read the same projected event list, so the client's
+    # cursor is one space across both.
+    from src.core import worker_transcript
+    entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_manager(), session_id)
+    events = entry.events
+    return await _replay_aggregated_catchup(websocket, events, cursor, session_id), len(events)
   try:
     total_event_count = await asyncio.to_thread(session_mgr.get_chat_event_count_sync, session_id, meta)
   except Exception as e:

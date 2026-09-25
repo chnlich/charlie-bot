@@ -140,7 +140,7 @@ async def test_replay_uses_global_cursor_after_archive_offset() -> None:
 async def test_session_catchup_fast_skips_when_cursor_is_current() -> None:
   ws = FakeWebSocket()
   mgr = _CountOnlySessionManager(count=7)
-  meta = type("Meta", (), {"archive_offset": 5})()
+  meta = type("Meta", (), {"archive_offset": 5, "profile": None})()
 
   sent, total = await _send_session_catchup(ws, mgr, "s", cursor=7, meta=meta)
 

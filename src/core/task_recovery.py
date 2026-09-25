@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING
 from src.core import runs
 from src.core.config import CharlieBotConfig
 from src.core.log_once import LazyStructlogLogger
+from src.core.thinking_state import note_run_backend
 
 if TYPE_CHECKING:
     from src.core.task_execution import TaskExecutionAdapter
@@ -99,6 +100,12 @@ async def _reconcile_node(
         return
     events = tree.runs.load_events_sync(session_id)
     run_records = tree.runs.list_run_records_sync(session_id)
+    # Warm the display-backend map: a fresh boot has seen no Run liveness
+    # notification, and the sidebar row and header badge show this node's
+    # newest Run's backend (the persisted metadata.backend is never rewritten).
+    newest = tree.runs.newest_run_record_sync(session_id)
+    if newest is not None:
+        note_run_backend(session_id, newest.backend)
 
     # --- 0. an interrupted prompt edit lands its missing fact --------------
     # Idempotent: a landed fact appends nothing, so repeated recovery and

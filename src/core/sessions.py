@@ -61,7 +61,7 @@ from src.core.scheduled_sessions import (
 from src.core.session_usage import SessionUsageResolver
 from src.core.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
 from src.core.tasks import create_logged_task
-from src.core.thinking_state import busy_since
+from src.core.thinking_state import busy_since, run_backend
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 
 # Raw event types whose render content is produced by the per-session
@@ -169,6 +169,7 @@ _TRANSIENT_METADATA_FIELDS = {
     "schedule_project",
     "schedule_allow_failure",
     "thinking_since",
+    "run_backend",
     "worker_thread",
 }
 
@@ -190,6 +191,7 @@ def _stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
   through an unstamped API path.
   """
   meta.thinking_since = busy_since(meta.id)
+  meta.run_backend = run_backend(meta.id)
   return meta
 
 

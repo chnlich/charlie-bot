@@ -1240,6 +1240,13 @@ class TaskExecutionAdapter:
         meta = await tree.load_meta(session_id)
         if meta is None:
             raise TaskNotFoundError(f"task {session_id} not found")
+        if is_alive():
+            # A re-attached live Run re-marks the busy interval the restart
+            # dropped: a worker node's thinking_since re-opens at the Run's
+            # recorded started_at (a manager turn's re-attach re-marks through
+            # the master queue's own resume enqueue). A drain (is_alive False)
+            # converges straight to the durable terminal fact and marks nothing.
+            await tree.runs.notify_liveness(session_id, run, launched=True)
         option = self._resolve_run_backend(run)
         if meta.profile == "manager" and run.kind == "manager_turn":
             await self._resume_manager_turn(meta, run, option, is_alive)

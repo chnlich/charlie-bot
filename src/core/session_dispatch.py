@@ -460,6 +460,11 @@ class TaskInputDispatcher:
                 session_id, run_id, outcome,
                 input_event_ids=input_event_ids, exit_code=exit_code,
                 ended_at=ended_at if isinstance(ended_at, datetime) or ended_at is None else None)
+        # The terminal fact is durable: a worker node's busy interval (its
+        # header timer) closes with the Run that opened it. Best-effort: a
+        # notification failure is logged by the run owner's seam and never
+        # fails the finish.
+        await tree.runs.notify_liveness(session_id, run, launched=False)
         # First terminal fact wins: the durable outcome — never the outcome
         # argument a losing concurrent finisher passed — governs every
         # post-finish action. The completion owner owns the follow-up policy

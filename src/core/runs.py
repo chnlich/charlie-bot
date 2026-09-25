@@ -29,7 +29,7 @@ import re
 import signal
 import stat
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -42,12 +42,15 @@ from src.core import event_types as ET
 from src.core.constants import BackendType
 from src.core.control_events import ACTOR_SYSTEM, ControlEventSink, build_control_event, sha256_hex, stable_run_id
 from src.core.json_utils import atomic_write_text
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import RunRecord, ensure_utc, utc_now
 from src.core.ndjson import parse_ndjson_line
 from src.core.run_token import b64url_decode, b64url_encode
 from src.core.session_aliases import SessionAliasStore
 from src.core.sidebar_state import mark_sidebar_dirty
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
+
+log = LazyStructlogLogger()
 
 if TYPE_CHECKING:
   from src.core.config import CharlieBotConfig
@@ -757,10 +760,36 @@ class RunStore:
     # segments included) the terminal/stop/identity reads use, so a rotated
     # acknowledgement or stop request never un-dones itself.
     self._fact_history_loader: Callable[[str], list[dict]] | None = None
+    # Installed by the tree owner: the Run liveness notification (a worker
+    # node's busy interval, the display backend) the launch/finish paths fire
+    # after the durable write. Best-effort by contract: a notification failure
+    # is logged and never fails the durable operation.
+    self._liveness_notifier: Callable[[str, RunRecord, bool], Awaitable[None]] | None = None
 
   def set_fact_history_loader(self, loader: Callable[[str], list[dict]]) -> None:
     """Install the tree owner's full-history reader (archived segments included)."""
     self._fact_history_loader = loader
+
+  def set_liveness_notifier(self, notifier: Callable[[str, RunRecord, bool], Awaitable[None]]) -> None:
+    """Install the tree owner's Run liveness notification (launch/finish)."""
+    self._liveness_notifier = notifier
+
+  async def notify_liveness(self, session_id: str, run: RunRecord, *, launched: bool) -> None:
+    """Fire the installed liveness notification; a failure is logged, never raised.
+
+    The durable fact (process identity or terminal outcome) is already on
+    disk when this runs and the sidebar's activity derivation reads only
+    that fact, so a notification failure costs the worker's header timer
+    this one transition — never the durable launch or finish.
+    """
+    notifier = self._liveness_notifier
+    if notifier is None:
+      return
+    try:
+      await notifier(session_id, run, launched)
+    except Exception:
+      log.error("run_liveness_notify_failed", session_id=session_id,
+                run_id=run.id, launched=launched, exc_info=True)
 
   # -- paths ---------------------------------------------------------------
 
@@ -815,6 +844,11 @@ class RunStore:
         runs.append(run)
     runs.sort(key=_run_sort_key)
     return runs
+
+  def newest_run_record_sync(self, session_id: str) -> RunRecord | None:
+    """The session's newest Run record by the canonical (started_at, id) order."""
+    runs = self.list_run_records_sync(session_id)
+    return runs[-1] if runs else None
 
   def list_runs_page_sync(
       self,
@@ -1024,6 +1058,7 @@ class RunStore:
         # a notification failure is logged, never fails the durable launch, and
         # a repeated callback for the same process changes nothing.
         await self._events.notify_tree_changed(session_id, ET.RUN_LAUNCHED)
+        await self.notify_liveness(session_id, run, launched=True)
       return run
 
   async def record_observation(
@@ -1086,8 +1121,10 @@ class RunStore:
     consumes — intact.
     """
     async with self._lock:
-      return await self.record_finish_locked(
+      run = await self.record_finish_locked(
           session_id, run_id, outcome, input_event_ids=input_event_ids, exit_code=exit_code, ended_at=ended_at)
+    await self.notify_liveness(session_id, run, launched=False)
+    return run
 
   def _finish_payload(self, run: RunRecord, input_event_ids: list[str] | None) -> list[str]:
     """The durable acknowledgement payload of one finish, validated against the record.

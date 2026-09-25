@@ -452,9 +452,7 @@ class TaskCompletionManager:
             assert claims is not None
             if claims.session_id != session_id:
                 raise TaskForbiddenError("an agent may only request closure of its own task")
-            meta = await tree.load_meta(session_id)
-            tree._require_task(meta, session_id)
-            assert meta is not None
+            meta = await tree.load_task_meta(session_id)
             if meta.profile != "manager":
                 raise TaskForbiddenError("own-run closure requests come from manager tasks only")
             run = await tree.runs.get_run(session_id, claims.run_id)
@@ -734,9 +732,7 @@ class TaskCompletionManager:
         from src.core.task_sessions import TaskConflictError, TaskForbiddenError, TaskNotFoundError
 
         tree = self._tree
-        meta = await tree.load_meta(session_id)
-        tree._require_task(meta, session_id)
-        assert meta is not None
+        meta = await tree.load_task_meta(session_id)
         if meta.profile != "worker":
             raise TaskForbiddenError("automatic completion applies to worker tasks")
         facts = tree.facts_of(session_id)
@@ -781,9 +777,7 @@ class TaskCompletionManager:
         from src.core.task_sessions import TaskConflictError
 
         tree = self._tree
-        meta = await tree.load_meta(session_id)
-        tree._require_task(meta, session_id)
-        assert meta is not None
+        meta = await tree.load_task_meta(session_id)
         await self.recheck_close_requests(session_id, run_id)
         facts = tree.facts_of(session_id)
         if facts.run_outcomes.get(run_id) != "success":
@@ -946,9 +940,7 @@ class TaskCompletionManager:
         replay = self._replay_close_request(session_id, request_id)
         if replay is not None:
             return replay[1]
-        pre_meta = await tree.load_meta(session_id)
-        tree._require_task(pre_meta, session_id)
-        assert pre_meta is not None
+        pre_meta = await tree.load_task_meta(session_id)
         child_epoch = await tree.sessions.prime_aggregator(session_id)
         parent_epoch = (await tree.sessions.prime_aggregator(pre_meta.task_parent_id)
                         if pre_meta.task_parent_id else None)

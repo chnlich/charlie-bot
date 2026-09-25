@@ -109,8 +109,7 @@ class TaskInputDispatcher:
         tree = self._tree
         epoch = await tree.sessions.prime_aggregator(session_id)
         async with tree.control_lock:
-            meta = await tree.load_meta(session_id)
-            tree._require_task(meta, session_id)
+            await tree.load_task_meta(session_id)
             events = tree.fact_history(session_id)
             if input_id is not None:
                 existing = next((e for e in events if e.get("id") == input_id), None)
@@ -267,9 +266,7 @@ class TaskInputDispatcher:
         """
 
         tree = self._tree
-        meta = await tree.load_meta(session_id)
-        tree._require_task(meta, session_id)
-        assert meta is not None
+        meta = await tree.load_task_meta(session_id)
         pending = self.pending_inputs(session_id)
         decision: dict = {"session_id": session_id, "pending": len(pending)}
         if tree.task_state(session_id) != "open":
@@ -553,8 +550,7 @@ class TaskInputDispatcher:
         history (the parent is not reopened by them).
         """
         tree = self._tree
-        meta = await tree.load_meta(session_id)
-        tree._require_task(meta, session_id)
+        await tree.load_task_meta(session_id)
         facts = tree.facts_of(session_id)
         delivered: list[dict] = []
         for close in facts.close_events:

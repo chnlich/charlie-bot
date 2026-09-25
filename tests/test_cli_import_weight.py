@@ -206,8 +206,11 @@ def test_artifact_wrap_verb_runs_off_the_config_stack() -> None:
 # parsers build with neither module loaded. The same construction calls
 # `_set_color`, whose function-level `from _colorize import ...` pulls
 # _colorize's dataclasses+inspect chain (~12 ms) into every verb; the piped
-# arm renders the empty theme without it (docs/perf_baseline.md M92/M97/M98/M102).
-_PARSER_BUILD_BANNED = ("shutil", "bz2", "lzma", "_colorize")
+# arm renders the empty theme without it. src.core.run_token — the one module
+# every verb imports through src.cli.common — stays a plain-class module for the
+# same reason: its dataclass decorators pulled inspect (~9-11 ms) into every
+# fresh process (docs/perf_baseline.md M92/M97/M98/M102).
+_PARSER_BUILD_BANNED = ("shutil", "bz2", "lzma", "_colorize", "dataclasses")
 _PARSER_BUILD_MODULES = (
     pytest.param("src.cli.plan", id="plan"),
     pytest.param("src.cli.artifact", id="artifact"),

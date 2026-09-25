@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, field_validator
 from starlette.responses import Response
 
 from src.api.cron import next_run_iso
@@ -665,7 +665,7 @@ async def all_sessions_status(
     busy = thinking_state.busy_since(meta.id)
     entry = derived[meta.id]
     next_trigger_at = entry[sidebar_state.NEXT_TRIGGER_AT]
-    result[meta.id] = {
+    payload = {
         "has_unread": bool(meta.has_unread),
         sidebar_state.HAS_RUNNING_TASKS: entry[sidebar_state.HAS_RUNNING_TASKS],
         "thinking_since": busy.isoformat() if busy else None,
@@ -674,6 +674,11 @@ async def all_sessions_status(
         sidebar_state.NEXT_TRIGGER_AT: next_trigger_at.isoformat() if next_trigger_at else None,
         sidebar_state.HAS_PENDING_PLAN_APPROVAL: entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL],
     }
+    if sidebar_state.WORK_STATE in entry:
+      # A task-tree row carries its fact-derived work verdict. A legacy row's
+      # key set stays byte-identical to today.
+      payload[sidebar_state.WORK_STATE] = entry[sidebar_state.WORK_STATE]
+    result[meta.id] = payload
   # The sidebar's 3 s poll is this host's second-busiest route; the gzip form
   # rides the body-keyed memo (_switch_payload_response).
   return await _switch_payload_response(request, result)
@@ -857,6 +862,14 @@ class SessionDetailResponse(SessionMetadata):
   """GET /api/sessions/{id} response: the session metadata plus the derived task fields."""
   task_state: TaskState = "open"
   work_state: WorkState = "idle"
+
+  @field_validator("work_state", mode="before")
+  @classmethod
+  def _unprobed_verdict_stays_idle(cls, value: object) -> object:
+    """A row whose sidebar state was never probed carries no verdict (the
+    transient field is None); the response's work_state stays the literal
+    'idle' it always was for those rows."""
+    return "idle" if value is None else value
   archived: bool = False
   ancestors: list[AncestorRef] = []
   # The scope/source/current-rule facts the later Task/Context UI reads; body

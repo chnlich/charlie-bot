@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+import time
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
@@ -1337,3 +1338,166 @@ async def test_own_subtree_rule_launch_parity_and_edit_boundary(
     assert "program-wide rule v2" in "\n\n".join(b.text for b in child_preview.blocks)
     # The finished Run's evidence is immutable history.
     assert _snapshot_of(run) == stored
+
+
+# ---------------------------------------------------------------------------
+# Launch failure past admission: a durable failed run, its error evidence, and
+# the parent report a failed process would produce
+# ---------------------------------------------------------------------------
+
+
+def _read_error_event(events_log: Path) -> str:
+    """The run's error-event text from its events log (the leaf view's source)."""
+    if not events_log.is_file():
+        return ""
+    for line in events_log.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        if event.get("type") == ET.ERROR:
+            return str(event.get("message") or event.get("content") or "")
+    return ""
+
+
+def wait_for_terminal_run_sync(tree: TaskTreeManager, session_id: str, run_id: str,
+                                timeout: float = 20.0) -> tuple[RunRecord, str]:
+    """Poll one Run's durable state without touching the launch's event loop.
+
+    The delegate endpoint schedules the Run on the API client's portal loop;
+    awaiting tree APIs from the test's own loop would chain futures across
+    loops, so this poller reads only the sync, on-disk views.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        run = tree.runs.read_run_sync(session_id, run_id)
+        assert run is not None, f"run {run_id} vanished"
+        events = tree.runs.load_events_sync(session_id)
+        outcome = tree.runs.terminal_outcome(events, run_id)
+        if outcome is not None:
+            return run, str(outcome)
+        time.sleep(0.05)
+    pytest.fail(f"run {run_id} never reached a terminal fact within {timeout}s")
+
+
+async def _wait_for_parent_report(tree: TaskTreeManager, parent_id: str, timeout: float = 15.0) -> dict:
+    """Poll the parent's fact history until a delivered child_report lands."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        reports = [e for e in tree.events.load_events(parent_id) if e.get("type") == ET.CHILD_REPORT]
+        if reports:
+            return reports[-1]
+        await asyncio.sleep(0.1)
+    pytest.fail(f"the parent {parent_id} never received a failure report within {timeout}s")
+
+
+@pytest.mark.asyncio
+async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_parent(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The worktree-prep failure case, exactly: a synthetic repo whose local
+    base branch is ahead of its origin makes _prepare_worktree raise after the
+    Run was admitted. That Run lands its durable failed fact, keeps the actual
+    error as readable evidence in its own events log, and the worker's parent
+    receives a failure report naming the error and is woken."""
+    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+    manager = await create_task(tree, parent=None, request_id="root")
+    monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
+    stub_credentials({"charliebot": {"access_key": "op-secret"}})
+
+    def pm_build(option, cfg_, **kwargs):
+        # The parent's report-consuming turn builds through the registry.
+        b = SpawningScriptedBackend([result_event("failure noted")])
+        if kwargs.get("on_spawn") is not None:
+            b.set_on_spawn(kwargs["on_spawn"])
+        return b
+
+    monkeypatch.setattr("src.agents.backends.registry.build_backend", pm_build)
+    install_backends(
+        monkeypatch, [SpawningScriptedBackend([result_event("phrase")])],
+        "src.agents.worker.build_backend")
+    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+
+    repo, _origin = init_repo_with_origin(tmp_path / "prep-fail")
+    # The failure's exact shape: the local base branch diverges from origin.
+    (repo / "local.txt").write_text("local work\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "local-only")
+
+    await tree.dispatch.admit_input(
+        manager.id, event_type=ET.USER, content="Take off and delegate the phrase task.", actor="user")
+    from src.api import internal as internal_api
+    monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
+    # The client context stays open across the waits: the launches are tasks on
+    # the client's portal loop, alive exactly while the block stands.
+    with make_api_client(cfg, session_mgr, tree) as client:
+        resp = client.post("/api/internal/delegate", json={
+            "session_id": manager.id,
+            "description": "## Goal\n\nsay the phrase\n",
+            "task_type": "quick-edit",
+            "keep_worktree": False,
+            "repo_path": str(repo),
+            "base_branch": "main",
+        }, headers=OPERATOR)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        child_id, run_id = body["session_id"], body["run_id"]
+
+        run, outcome = wait_for_terminal_run_sync(tree, child_id, run_id)
+        assert outcome == "failed"
+        assert run.pid is None, "the process never started; the failure is a launch failure"
+        error_text = _read_error_event(tree.runs.run_dir(child_id, run_id) / "events.jsonl")
+        assert "differs from origin/main" in error_text, (
+            f"the run's durable evidence must name the actual error, got: {error_text!r}")
+
+        report = await _wait_for_parent_report(tree, manager.id)
+        assert report.get("outcome") == "failed"
+        assert "differs from origin/main" in str(report.get("summary")), (
+            f"the report summary must name the actual error, got: {report.get('summary')!r}")
+
+        # The delivered report is the parent's new durable input: its next
+        # serialized turn consumes it. All of that runs on the API client's
+        # portal loop, so this wait polls the durable views instead of
+        # awaiting anything the portal owns.
+        deadline = time.monotonic() + 20
+        parent_succeeded = False
+        while time.monotonic() < deadline:
+            pm_events = tree.runs.load_events_sync(manager.id)
+            if any(tree.runs.terminal_outcome(pm_events, r.id) == "success"
+                   for r in tree.runs.list_run_records_sync(manager.id)):
+                parent_succeeded = True
+                break
+            time.sleep(0.1)
+        assert parent_succeeded, "the parent's report turn never ran to success"
+
+
+@pytest.mark.asyncio
+async def test_backend_resolution_failure_lands_the_manager_runs_durable_failure(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A manager turn gets the same guarantee: backend resolution is the first
+    post-admission act, and its failure lands the Run's durable failed fact
+    with the error as evidence — never a queued run stranded without a fact."""
+    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+    manager = await create_task(tree, parent=None, request_id="root")
+    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+    patch_instructions_content(monkeypatch)
+
+    def explode(cfg, backend: str | None, model: str | None):
+        raise ValueError(f"backend {backend!r} is not configured")
+
+    monkeypatch.setattr("src.core.task_execution.resolve_backend_option", explode)
+
+    await tree.dispatch.admit_input(
+        manager.id, event_type=ET.USER, content="Take off. Reply with the phrase.", actor="user")
+    decision = await tree.dispatch.dispatch_pending(manager.id)
+    assert decision["launch"] is True
+    run_id = decision["run_id"]
+
+    run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
+    assert outcome == "failed"
+    assert run.pid is None
+    error_text = _read_error_event(tree.runs.run_dir(manager.id, run_id) / "events.jsonl")
+    assert "is not configured" in error_text, (
+        f"the run's durable evidence must name the actual error, got: {error_text!r}")
+    # The claimed batch stays claimed by the failed round; nothing re-launches
+    # behind the failure and the node is left with the fact, not a queued run.
+    assert tree.dispatch.pending_inputs(manager.id) == []
+    assert [r.id for r in tree.runs.list_run_records_sync(manager.id)] == [run_id]

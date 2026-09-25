@@ -172,11 +172,14 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     return;
   }
 
-  // Sidebar spinner update
+  // Sidebar activity update. The same state mapping the status poll and the
+  // list paint apply: a task-tree row's work_state verdict rides the event
+  // when the broadcaster knows it, and the 3 s poll corrects any drift.
   if (t === 'running_changed') {
     setSessionIndicator(ev.session_id, getSessionIndicatorState({
       thinking_since: ev.thinking_since,
       has_running_tasks: ev.has_running_tasks,
+      work_state: ev.work_state,
     }));
     if ('has_pending_trigger' in ev) {
       setSessionPendingTriggerIndicator(ev.session_id, ev);

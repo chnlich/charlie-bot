@@ -215,10 +215,12 @@ function activeSessionIsLeaf() {
 }
 
 // RunRow.state (fact-derived) folded into the card's status vocabulary, the
-// same way the thread alias folds it server-side (_v2_run_status).
+// same way the thread alias folds it server-side (_v2_run_status). A queued
+// Run reads `queued` — its own truth, never `idle` — and the card's dot color
+// keys off the same vocabulary (STATUS_DOT_COLORS).
 const RUN_CARD_STATUS = {
   success: 'completed', failed: 'failed', interrupted: 'failed', attention: 'failed',
-  stopped: 'cancelled', queued: 'idle', running: 'running',
+  stopped: 'cancelled', queued: 'queued', running: 'running',
 };
 
 function runCardRow(run, description) {
@@ -384,6 +386,8 @@ const finalFetchDone = new Set();
 const STATUS_DOT_COLORS = {
   running: 'bg-blue-500', completed: 'bg-green-500',
   failed: 'bg-red-500', cancelled: 'bg-slate-500', idle: 'bg-slate-500',
+  // A queued run is waiting work, not an idle card: its own amber.
+  queued: 'bg-amber-400',
 };
 
 function updateWorkerStatus(threadId, status) {

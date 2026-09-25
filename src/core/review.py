@@ -308,6 +308,26 @@ def _worker_summary_from_events_log(worker_log: Path) -> str | None:
   return None
 
 
+def _worker_error_from_events_log(worker_log: Path) -> str | None:
+  """The newest non-empty error-event text in a worker's events log, or None.
+
+  A run that failed before its process produced any output (a worktree or
+  backend preparation failure) carries its actual error as the log's error
+  event — the evidence the parent report's summary must name. Same walk and
+  skip contract as :func:`_worker_summary_from_events_log`.
+  """
+  error_types = frozenset({ET.ERROR})
+  for event in iter_ndjson_events_from_end(worker_log, log_event=PARSE_SKIP_LOG_EVENT, log_fields={},
+                                           parse_filter=type_line_filter(error_types)):
+    for key in ("message", "content"):
+      val = event.get(key)
+      if isinstance(val, str):
+        stripped = val.strip()
+        if stripped:
+          return stripped
+  return None
+
+
 async def extract_review_context(
     session_id: str,
     thread_id: str,

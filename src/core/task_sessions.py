@@ -66,7 +66,7 @@ from src.core.models import (
 )
 from src.core.ndjson import append_ndjson
 from src.core.run_token import CallerIdentity
-from src.core.runs import RunStore
+from src.core.runs import RunStore, is_run_alive, stop_requested_in_events
 from src.core.session_aliases import SessionAliasStore
 from src.core.session_dispatch import TaskInputDispatcher
 from src.core.sessions import _TRANSIENT_METADATA_FIELDS, SessionManager
@@ -242,6 +242,92 @@ def _admits_input_type(event: dict) -> bool:
   return True
 
 
+@dataclass(frozen=True)
+class TaskTreeActivity:
+  """One task-tree node's derived activity: the sidebar's truth for the node.
+
+  ``has_running_tasks`` is true exactly while one of the node's Runs is live
+  (recorded pid alive, no terminal fact); ``work_state`` is the node's
+  fact-derived work verdict (idle | running | waiting | attention). Both come
+  from one derivation — :func:`derive_task_tree_activity` — that
+  ``TaskTreeManager.work_state_of`` and the sidebar's task-tree probe share.
+  """
+  has_running_tasks: bool
+  work_state: WorkState
+
+
+def derive_task_tree_activity(
+    runs: list[RunRecord],
+    events: list[dict],
+    host_boot_time: Callable[[], datetime],
+) -> TaskTreeActivity:
+  """The single owner of a task-tree node's activity rules.
+
+  Reads only durable facts (the run records and the session's fact history)
+  plus process liveness for Runs that still lack a terminal fact — /proc is
+  never consulted for a terminal or queued Run, and the host boot time is read
+  lazily, only when some Run needs a liveness judgment. An active run wins,
+  then an unresolved failure, then waiting work; a failed or interrupted run
+  draws attention only while it stands unresolved (a successful run that
+  finished after it, or a successful authorized retry chain, resolves it).
+  """
+  outcomes: dict[str, str] = {}
+  finish_positions: dict[str, int] = {}
+  for absolute, event in enumerate(events):
+    if event.get("type") != ET.RUN_FINISHED:
+      continue
+    run_id = event.get("run_id")
+    if isinstance(run_id, str):
+      outcomes[run_id] = str(event.get("outcome"))
+      finish_positions.setdefault(run_id, absolute)
+  superseded: set[str] = set()
+  for run in runs:
+    if outcomes.get(run.id) != "success":
+      continue
+    target = run.retry_of_run_id
+    while target is not None and target not in superseded:
+      superseded.add(target)
+      target = next((r.retry_of_run_id for r in runs if r.id == target), None)
+  success_positions = [
+      position for run_id, position in finish_positions.items() if outcomes.get(run_id) == "success"]
+  for run in runs:
+    if outcomes.get(run.id) not in ("failed", "interrupted"):
+      continue
+    own = finish_positions.get(run.id)
+    if own is not None and any(position > own for position in success_positions):
+      superseded.add(run.id)
+  verdicts: list[str] = []
+  has_running = False
+  boot: datetime | None = None
+  for run in runs:
+    outcome = outcomes.get(run.id)
+    if outcome is not None:
+      if outcome in ("failed", "interrupted") and run.id not in superseded:
+        verdicts.append("attention")
+      continue
+    if run.pid is None:
+      if stop_requested_in_events(events, run.id):
+        continue  # a stopped queued run is resolved-by-request, not waiting work
+      verdicts.append("waiting")  # queued: retains its inputs for later dispatch
+      continue
+    # Liveness is judged only here, only for a launched Run without a terminal
+    # fact — the sole case where a /proc read can change the verdict.
+    if boot is None:
+      boot = host_boot_time()
+    alive = is_run_alive(run.pid, run.pid_start, run.started_at, boot)
+    if alive:
+      has_running = True
+      verdicts.append("running")
+    else:
+      verdicts.append("attention")  # launched, exit observed by nobody yet
+  work_state: WorkState = "idle"
+  for state in ("running", "attention", "waiting"):
+    if state in verdicts:
+      work_state = state  # type: ignore[assignment]
+      break
+  return TaskTreeActivity(has_running_tasks=has_running, work_state=work_state)
+
+
 class TaskTreeManager:
   """The task-tree record owner wired over one SessionManager."""
 
@@ -273,6 +359,9 @@ class TaskTreeManager:
     # every descendant of an archived ancestor — while its Archived list shows
     # them, with no status write.
     session_mgr.archive_overlay = self.derived_archived_ids
+    # The sidebar's probe derives a task-tree node's activity through this
+    # hook — the tree's own derivation, never a second copy of the rules.
+    session_mgr.task_tree_activity = self.activity_pair_of
     self._index: tuple[_TreeIndex, float] | None = None
     self._index_generation = 0
     self._facts_memo: dict[str, tuple[list[dict], int, _TaskFacts]] = {}
@@ -522,6 +611,7 @@ class TaskTreeManager:
   def work_state_of(self, index: _TreeIndex, session_id: str) -> WorkState:
     """idle | running | waiting | attention, from CURRENT unresolved facts.
 
+    One half of :meth:`activity_of` — the shared derivation's work verdict.
     An active run wins, then an unresolved failure, then waiting work. A
     failed or interrupted run draws attention only while it stands
     unresolved: a successful run that finished after it on the same node (the
@@ -529,46 +619,26 @@ class TaskTreeManager:
     timestamp) or a successful authorized retry (the retry_of_run_id chain)
     resolves the older failure instead of leaving attention forever.
     """
-    facts = self._facts_of(session_id)
+    return self.activity_of(session_id).work_state
+
+  def activity_of(self, session_id: str) -> TaskTreeActivity:
+    """The node's derived sidebar activity: live-Run flag plus work verdict.
+
+    The one derivation the sidebar's task-tree probe reuses, so a sidebar row
+    and the tree projection can never disagree about the same node.
+    """
     runs = self.runs.list_run_records_sync(session_id)
     events = self.runs.load_events_sync(session_id)
-    host_boot = self._host_boot_time()
-    superseded: set[str] = set()
-    for run in runs:
-      if facts.run_outcomes.get(run.id) == "success":
-        target = run.retry_of_run_id
-        while target is not None and target not in superseded:
-          superseded.add(target)
-          target = next((r.retry_of_run_id for r in runs if r.id == target), None)
-    success_positions = [
-        position for run_id, position in facts.run_finish_positions.items()
-        if facts.run_outcomes.get(run_id) == "success"]
-    for run in runs:
-      if facts.run_outcomes.get(run.id) not in ("failed", "interrupted"):
-        continue
-      own = facts.run_finish_positions.get(run.id)
-      if own is not None and any(position > own for position in success_positions):
-        superseded.add(run.id)
-    verdicts: list[str] = []
-    for run in runs:
-      outcome = facts.run_outcomes.get(run.id)
-      if outcome is not None:
-        if outcome in ("failed", "interrupted") and run.id not in superseded:
-          verdicts.append("attention")
-        continue
-      alive = self.runs.run_is_active(run, [], host_boot)
-      if run.pid is None:
-        if self.runs.stop_requested(events, run.id):
-          continue  # a stopped queued run is resolved-by-request, not waiting work
-        verdicts.append("waiting")  # queued: retains its inputs for later dispatch
-      elif alive:
-        verdicts.append("running")
-      else:
-        verdicts.append("attention")  # launched, exit observed by nobody yet
-    for state in ("running", "attention", "waiting"):
-      if state in verdicts:
-        return state  # type: ignore[return-value]
-    return "idle"
+    return derive_task_tree_activity(runs, events, self._host_boot_time)
+
+  def activity_pair_of(self, session_id: str) -> tuple[bool, str]:
+    """``activity_of`` as the plain pair the sidebar snapshot stores.
+
+    The pair form keeps :mod:`src.core.sidebar_state` (which must not import
+    the tree owner) free to hold and compare the value.
+    """
+    activity = self.activity_of(session_id)
+    return (activity.has_running_tasks, activity.work_state)
 
   def _host_boot_time(self) -> datetime:
     from src.core.runs import read_host_boot_time

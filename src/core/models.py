@@ -337,6 +337,10 @@ class SessionMetadata(BaseModel):
   status: SessionStatus = SessionStatus.ACTIVE
   has_unread: bool = False
   has_running_tasks: bool = False
+  # The task-tree derivation's work verdict for a task-tree row (idle |
+  # running | waiting | attention). Transient and response-only — never
+  # persisted (excluded by _TRANSIENT_METADATA_FIELDS); None on a legacy row.
+  work_state: WorkState | None = None
   has_pending_trigger: bool = False
   pending_trigger_count: int = 0
   next_trigger_at: datetime | None = None

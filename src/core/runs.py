@@ -51,6 +51,7 @@ from src.core.control_events import (
 from src.core.json_utils import atomic_write_text
 from src.core.models import RunRecord, ensure_utc, utc_now
 from src.core.ndjson import parse_ndjson_line
+from src.core.sidebar_state import mark_sidebar_dirty
 from src.core.session_aliases import SessionAliasStore
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 
@@ -638,6 +639,23 @@ def run_identity_refusal(run: RunRecord | None, events: list[dict]) -> str | Non
   return None
 
 
+def stop_requested_in_events(
+    events: list[dict], run_id: str, request_id: str | None = None,
+) -> bool:
+  """Whether a durable run_stop_requested fact exists (optionally one request_id's).
+
+  The pure fact scan behind ``RunStore.stop_requested``: the work-state
+  derivation (src.core.task_sessions) reads the same durable events through
+  this function so both owners answer one identical question.
+  """
+  for event in events:
+    if event.get("type") != ET.RUN_STOP_REQUESTED or event.get("run_id") != run_id:
+      continue
+    if request_id is None or event.get("request_id") == request_id:
+      return True
+  return False
+
+
 class RunNotFoundError(LookupError):
   """The requested run record does not exist (API: 404)."""
 
@@ -846,12 +864,7 @@ class RunStore:
 
   def stop_requested(self, events: list[dict], run_id: str, request_id: str | None = None) -> bool:
     """Whether a durable run_stop_requested fact exists (optionally one request_id's)."""
-    for event in events:
-      if event.get("type") != ET.RUN_STOP_REQUESTED or event.get("run_id") != run_id:
-        continue
-      if request_id is None or event.get("request_id") == request_id:
-        return True
-    return False
+    return stop_requested_in_events(events, run_id, request_id)
 
   def run_is_active(self, run: RunRecord, events: list[dict], host_boot_time: datetime) -> bool:
     """Whether *run* holds a verified-live process (queued and dead are both false)."""
@@ -911,6 +924,11 @@ class RunStore:
     path = self.metadata_path(record.session_id, record.id)
     await asyncio.to_thread(atomic_write_text, path, record.model_dump_json(indent=2))
     self._aliases.register_run_thread(record.session_id, record.id)
+    # A registered Run is a new fact transition (queued work exists where none
+    # did): the node's sidebar state must re-probe on the next poll. No path
+    # rides the mark: a run metadata file is not a workers-panel row source,
+    # and the sidebar probe's own signature walk covers the file.
+    mark_sidebar_dirty(record.session_id)
     return record
 
   async def create_retry_run(
@@ -972,7 +990,12 @@ class RunStore:
         run.started_at = utc_now()
       run.pid = pid
       run.pid_start = pid_start
-      await asyncio.to_thread(atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+      await asyncio.to_thread(
+          atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+      # The launch fact flipped the derived state (queued -> running): the next
+      # poll must re-probe (same contract as the terminal fact below). No path
+      # rides the mark: a run metadata file is not a workers-panel row source.
+      mark_sidebar_dirty(session_id)
       if first_launch:
         # The durable identity flipped the node's derived work state (queued ->
         # running): tell connected trees now, or a queued row painted while the
@@ -1146,7 +1169,12 @@ class RunStore:
     run.ended_at = ended_at or utc_now()
     run.exit_code = exit_code
     run.input_event_ids = payload
-    await asyncio.to_thread(atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+    await asyncio.to_thread(
+        atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+    # The terminal fact flipped the derived state (running/waiting/attention ->
+    # idle or the resolved verdict): the next poll must re-probe. No path rides
+    # the mark: a run metadata file is not a workers-panel row source.
+    mark_sidebar_dirty(session_id)
     return run
 
   # -- stop ----------------------------------------------------------------
@@ -1177,6 +1205,9 @@ class RunStore:
             run_id=run_id,
         )
         await self._events.append(session_id, event)
+        # The durable stop request is a fact transition (a queued run leaves the
+        # waiting verdict): the next poll must re-probe.
+        mark_sidebar_dirty(session_id)
 
     # A queued (never-launched) run has no process to signal and no exit to
     # observe; the durable request is the fact, and the dispatch stage honors

@@ -59,7 +59,8 @@ test('runCardRow folds the run state into the card vocabulary', () => {
   assert.equal(fold('interrupted'), 'failed');
   assert.equal(fold('attention'), 'failed');
   assert.equal(fold('stopped'), 'cancelled');
-  assert.equal(fold('queued'), 'idle');
+  // A queued Run reads its own truth, never 'idle'.
+  assert.equal(fold('queued'), 'queued');
   assert.equal(fold('running'), 'running');
   const row = ctx.runCardRow(DELIVERED_RUN, 'Implement the parser');
   assert.equal(row.id, 'run-2');
@@ -72,12 +73,20 @@ test('runCardRow folds the run state into the card vocabulary', () => {
 test('renderLeafView paints the goal and one card per run, with no banner while the task is open', () => {
   const container = fakeContainer();
   const ctx = loadLeaf(new Map([['tab-workers', container]]));
-  ctx.renderLeafView(OPEN_DETAIL, [run(), run({id: 'run-0', state: 'failed', started_at: '2026-09-18T09:00:00Z'})], '', 'leaf-1');
+  ctx.renderLeafView(OPEN_DETAIL, [
+    run(),
+    run({id: 'run-q', state: 'queued', started_at: null}),
+    run({id: 'run-0', state: 'failed', started_at: '2026-09-18T09:00:00Z'}),
+  ], '', 'leaf-1');
   const html = container.innerHTML;
   assert.match(html, /Worker task/);
   assert.match(html, /Implement the parser/);
   assert.match(html, /id="thread-dot-run-1" class="[^"]*bg-blue-500/);
   assert.match(html, /id="thread-dot-run-0" class="[^"]*bg-red-500/);
+  // A queued Run reads its own state and its own color, never 'idle'.
+  assert.match(html, /id="thread-status-run-q"[^>]*>queued &middot;/);
+  assert.match(html, /id="thread-dot-run-q" class="[^"]*bg-amber-400/);
+  assert.doesNotMatch(html, /id="thread-status-run-q"[^>]*>idle/);
   assert.match(html, /toggleThreadDetail\('run-1', 'leaf-1'\)/, 'the card addresses the Run through the thread alias');
   assert.doesNotMatch(html, /Delivered/);
   assert.match(html, /id="leaf-delivery-slot"><\/div>/, 'the banner slot stays empty while open');

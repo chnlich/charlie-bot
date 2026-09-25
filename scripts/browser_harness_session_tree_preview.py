@@ -66,14 +66,16 @@ import subprocess  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
 import traceback  # noqa: E402
-import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 
 from scripts.browser_harness_session_tree import (  # noqa: E402
     CDP,
+    Results,
+    api_request,
     evaluate,
     log,
     pick_free_port,
+    screenshot,
     wait_for,
 )
 
@@ -97,40 +99,6 @@ GUARD_SOURCE = """
       };
     })();
 """
-
-
-class Results:
-    def __init__(self, evidence_dir: Path, commit: str, invocation: list[str]) -> None:
-        self.evidence_dir = evidence_dir
-        self.commit = commit
-        self.invocation = invocation
-        self.scenarios: list[dict] = []
-        self.console_errors: list[str] = []
-
-    def record(self, name: str, ok: bool, detail: str, screenshot: str | None) -> None:
-        self.scenarios.append({"name": name, "ok": ok, "detail": detail, "screenshot": screenshot})
-        log(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}")
-
-    def save(self) -> None:
-        payload = {
-            "tested_commit": self.commit,
-            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "browser": "google-chrome headless (CDP), isolated private profile",
-            "entry_point": "charliebot session-tree preview (fresh process, foreground)",
-            "invocation": self.invocation,
-            "scenarios": self.scenarios,
-            "console_errors": self.console_errors,
-        }
-        out = self.evidence_dir / "session_tree_preview_browser_results.json"
-        out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        log(f"results written to {out}")
-
-
-async def screenshot(cdp: CDP, session_id: str, results: Results, name: str) -> str:
-    res = await cdp.send("Page.captureScreenshot", {"format": "png"}, session_id=session_id)
-    path = results.evidence_dir / f"{name}.png"
-    path.write_bytes(base64.b64decode(res["data"]))
-    return path.name
 
 
 async def click(cdp: CDP, session_id: str, selector: str) -> None:
@@ -353,20 +321,6 @@ def motion_timeline_verdict(samples: list[list[dict]], kind: str,
                   f'{len(generations)} generation(s)')
 
 
-def api_request(base: str, key: str, method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
-    headers = {"Authorization": "Bearer " + key}
-    data = None
-    if body is not None:
-        headers["Content-Type"] = "application/json"
-        data = json.dumps(body).encode()
-    req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            return resp.status, json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read().decode() or "{}")
-
-
 def build_source_home(source: Path, backend_ids: list[str]) -> None:
     """The trial's private configuration source: the selected backend entries of the current profile.
 
@@ -471,7 +425,11 @@ async def run_harness(args: argparse.Namespace) -> None:
         env["CHARLIEBOT_HOME"] = str(source)
         env["PYTHONUNBUFFERED"] = "1"
         server_out = tmp_path / "server-console.log"
-        results = Results(evidence_dir, commit, invocation)
+        results = Results(evidence_dir, commit,
+                          browser="google-chrome headless (CDP), isolated private profile",
+                          entry_point="charliebot session-tree preview (fresh process, foreground)",
+                          invocation=invocation,
+                          results_name="session_tree_preview_browser_results.json")
         log(f"starting preview instance on 127.0.0.1:{port} (home {home})")
         with open(server_out, "w", encoding="utf-8") as server_log_file:
             proc = subprocess.Popen(
@@ -691,7 +649,7 @@ async def drive_browser(debug_port: int, base: str,
     admit_deadline = time.monotonic() + 15
     while time.monotonic() < admit_deadline:
         events_status, page = api_request(base, access_key, "GET",
-                                          f"/api/sessions/{root_id}/events?before=999999&limit=40")
+                                          f"/api/sessions/{root_id}/events?before=999999&limit=40", timeout=20.0)
         admitted = events_status == 200 and any(
             m.get("role") == "user" and first_message in str(m.get("content", ""))
             for m in ((page or {}).get("messages") or []))
@@ -936,7 +894,7 @@ async def drive_browser(debug_port: int, base: str,
     run_wait_deadline = time.monotonic() + 180
     run = None
     while time.monotonic() < run_wait_deadline:
-        status, page = api_request(base, access_key, "GET", f"/api/sessions/{root_id}/runs?limit=5")
+        status, page = api_request(base, access_key, "GET", f"/api/sessions/{root_id}/runs?limit=5", timeout=20.0)
         runs = (page.get("items") or []) if isinstance(page, dict) else (page or [])
         terminal = [r for r in runs if r.get("kind") == "manager_turn" and r.get("state") in
                     ("success", "failed", "stopped", "interrupted")]
@@ -978,14 +936,14 @@ async def drive_browser(debug_port: int, base: str,
             cdp, sid, f"document.getElementById('tab-runs').textContent.includes({json.dumps(run['id'][:8])})",
             timeout=10, label="run row in the runs panel")
         status, ctx = api_request(base, access_key, "GET",
-                                  f"/api/sessions/{root_id}/runs/{run['id']}/context")
+                                  f"/api/sessions/{root_id}/runs/{run['id']}/context", timeout=20.0)
         has_snapshot = status == 200 and bool((ctx or {}).get("snapshot"))
         results.record("s09-run-history-and-context", bool(run_visible and has_snapshot),
                        f"runs-panel={bool(run_visible)} context-snapshot={has_snapshot}",
                        await screenshot(cdp, sid, results, "s09-runs-context"))
         # The stored snapshot is the same assembly the prompt preview showed.
         status, preview = api_request(base, access_key, "GET",
-                                      f"/api/sessions/{root_id}/effective-prompt?kind=manager_turn")
+                                      f"/api/sessions/{root_id}/effective-prompt?kind=manager_turn", timeout=20.0)
         preview_hash = (preview or {}).get("prompt_hash")
         stored_hash = ((ctx or {}).get("snapshot") or {}).get("prompt_hash")
         results.record("s09b-prompt-preview-matches-stored-context",
@@ -1116,7 +1074,7 @@ async def drive_browser(debug_port: int, base: str,
     await wait_for(cdp, sid, f"SESSION_ID === {json.dumps(worker_id)}", timeout=15,
                    label="worker selected for the activity scenario")
     status, _meta = api_request(base, access_key, "PATCH", f"/api/sessions/{worker_id}",
-                                {"automation_paused": False})
+                                {"automation_paused": False}, timeout=20.0)
     resumed = status == 200
     results.record("s14a-worker-resumed", resumed, f"PATCH automation_paused=false -> {status}", None)
 
@@ -1160,7 +1118,7 @@ async def drive_browser(debug_port: int, base: str,
         child_during = await tree_row_activity(cdp, sid, child_id)
         # Pin the exact Run this visible spinner belongs to (never a fake row).
         status, runs_page = api_request(base, access_key, "GET",
-                                        f"/api/sessions/{worker_id}/runs?order=desc&limit=1")
+                                        f"/api/sessions/{worker_id}/runs?order=desc&limit=1", timeout=20.0)
         runs = (runs_page.get("items") or []) if isinstance(runs_page, dict) else []
         if runs and runs[0].get("state") in ("running", "queued"):
             active_run_id = runs[0]["id"]
@@ -1225,7 +1183,7 @@ async def drive_browser(debug_port: int, base: str,
 
     async def active_run_of(session_id: str) -> str | None:
         _status, page = api_request(base, access_key, "GET",
-                                   f"/api/sessions/{session_id}/runs?order=desc&limit=1")
+                                   f"/api/sessions/{session_id}/runs?order=desc&limit=1", timeout=20.0)
         items = (page.get("items") or []) if isinstance(page, dict) else []
         return items[0]["id"] if items and items[0].get("state") in ("running", "queued") else None
 
@@ -1311,7 +1269,7 @@ async def drive_browser(debug_port: int, base: str,
         decision (launch flag + reason) so the scenario evidence shows WHY a
         run did or did not launch instead of leaving a silent idle row."""
         status, body = api_request(base, access_key, "POST", f"/api/chat/{child_id}/message",
-                                   {"content": message})
+                                   {"content": message}, timeout=20.0)
         decision = body if isinstance(body, dict) else {}
         launched = status == 202 and bool(decision.get("launch"))
         reason = str(decision.get("reason") or ("launched " + str(decision.get("run_id", ""))[:8]
@@ -1452,7 +1410,7 @@ async def drive_browser(debug_port: int, base: str,
         else:
             status, cancel = api_request(base, access_key, "POST",
                                          f"/api/sessions/{child_id}/runs/{stop_target}/cancel",
-                                         {"request_id": "trial-stop-" + stop_target[:8]})
+                                         {"request_id": "trial-stop-" + stop_target[:8]}, timeout=20.0)
             stop_stage = "cleared-row observation"
             after = await wait_row_activity(cdp, sid, child_id,
                                             {"spinner": False, "gear": False}, 60,
@@ -1469,7 +1427,7 @@ async def drive_browser(debug_port: int, base: str,
                 label = after.get("label", "")
             root_after = await tree_row_activity_tolerant(cdp, sid, root_id)
             _w_status, w_page = api_request(base, access_key, "GET",
-                                           f"/api/sessions/{worker_id}/runs?order=desc&limit=1")
+                                           f"/api/sessions/{worker_id}/runs?order=desc&limit=1", timeout=20.0)
             w_runs = (w_page.get("items") or []) if isinstance(w_page, dict) else []
             worker_row_after = await tree_row_activity_tolerant(cdp, sid, worker_id)
             results.record("s14e-stop-clears-activity",
@@ -1485,7 +1443,7 @@ async def drive_browser(debug_port: int, base: str,
         # (pid set, no terminal fact) or a refused launch must be visible in
         # the evidence, not guessed at.
         _s, runs_page = api_request(base, access_key, "GET",
-                                    f"/api/sessions/{child_id}/runs?order=desc&limit=5")
+                                    f"/api/sessions/{child_id}/runs?order=desc&limit=5", timeout=20.0)
         runs = (runs_page.get("items") or []) if isinstance(runs_page, dict) else []
         run_summary = "; ".join(f"{r.get('id', '')[:8]}={r.get('state')}/pid={r.get('pid')}"
                                 for r in runs[:5])
@@ -1620,7 +1578,7 @@ async def drive_browser(debug_port: int, base: str,
         deadline = time.monotonic() + bound
         while time.monotonic() < deadline:
             _status, page = api_request(base, access_key, "GET",
-                                       f"/api/sessions/{node_id}/runs?order=desc&limit=1")
+                                       f"/api/sessions/{node_id}/runs?order=desc&limit=1", timeout=20.0)
             runs = (page.get("items") or []) if isinstance(page, dict) else []
             if runs and runs[0].get("state") in ("success", "failed", "stopped", "interrupted"):
                 return runs[0]
@@ -1777,7 +1735,7 @@ async def drive_browser(debug_port: int, base: str,
         model_run = None
         while time.monotonic() < run_deadline:
             status, page = api_request(base, access_key,
-                                       "GET", f"/api/sessions/{model_root_id}/runs?limit=5")
+                                       "GET", f"/api/sessions/{model_root_id}/runs?limit=5", timeout=20.0)
             runs = (page.get("items") or []) if isinstance(page, dict) else (page or [])
             terminal = [r for r in runs if r.get("kind") == "manager_turn" and r.get("state") in
                         ("success", "failed", "stopped", "interrupted")]

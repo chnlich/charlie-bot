@@ -408,7 +408,10 @@ function renderScheduledSessionItem(s, options = {}) {
     ${renderRenameButton(s, activeBtnClass)}
     ${renderArchiveButton(s, activeBtnClass)}
     ${renderCronGearButton(s.scheduled_task, activeBtnClass)}`;
+  // The tree chevron leads the indicator slot, as in renderSessionItem: the
+  // Scheduled tab's cron rows nest their worker leaves behind it.
   const indicators = [
+      options.treeChildCount ? renderTreeChevron(s.id, options.treeChildCount) : '',
       renderSessionIndicators(s),
       renderPendingTriggerIndicator(s),
       renderPendingPlanApprovalIndicator(s),
@@ -442,16 +445,25 @@ function renderGroupedScheduledList(sessions, options = {}) {
     nav.innerHTML = badgeHtml + renderEmptyNote('No scheduled sessions');
     return;
   }
-  const {groups, sortedKeys} = groupSessionsBySortedKeys(sessions, s => s.schedule_project);
+  // The same parent/child tree the All tab builds: a projected worker leaf
+  // nests under the cron session that ran it instead of sitting at group
+  // level, and only the roots group by project.
+  const {roots, childrenOf, parentOf} = buildSessionTree(sessions);
+  lastTreeChildrenOf = childrenOf;
+  lastTreeParentOf = parentOf;
+  revealActiveSessionOnce(parentOf);
+  const {groups, sortedKeys} = groupSessionsBySortedKeys(roots, s => s.schedule_project);
   const collapsedState = loadGroupCollapsedState(CRON_GROUP_COLLAPSED_STORAGE_KEY);
   const limitState = loadGroupLimitState(CRON_GROUP_LIMIT_STORAGE_KEY);
 
   let html = '';
   for (const key of sortedKeys) {
     const label = key || '(No project)';
-    const groupSessions = groups[key];
-    const enabledCount = groupSessions.filter(s => s.schedule_enabled !== false).length;
-    const totalCount = groupSessions.length;
+    const groupRoots = groups[key];
+    // Counts and the preview cap read the roots alone: a leaf belongs to its
+    // cron session's subtree, not to the group's row budget.
+    const enabledCount = groupRoots.filter(s => s.schedule_enabled !== false).length;
+    const totalCount = groupRoots.length;
     const isCollapsed = collapsedState[key] !== false; // collapsed by default
     const isLimitExpanded = limitState[key] === true;
     const chevronClass = isCollapsed ? '' : 'rotate-90';
@@ -467,16 +479,21 @@ function renderGroupedScheduledList(sessions, options = {}) {
         <span class="text-xs text-slate-500 ml-auto">${enabledCount}/${totalCount} enabled</span>
       </div>
       <div class="cron-group-items ${isCollapsed ? 'hidden' : ''}" data-group-items="${safeKey}">
-        ${groupSessions.map((s, index) => renderScheduledSessionItem(
+        ${groupRoots.map((s, index) => renderSessionTree(
           s,
-          groupLimitItemOptions('cron', key, s, index, isLimitExpanded)
+          'scheduled',
+          groupLimitItemOptions('cron', key, s, index, isLimitExpanded),
+          childrenOf,
+          renderScheduledSessionItem
         )).join('')}
-        ${renderGroupLimitToggle('cron', key, groupSessions.length, isLimitExpanded)}
+        ${renderGroupLimitToggle('cron', key, groupRoots.length, isLimitExpanded)}
       </div>
     </div>`;
   }
   nav.innerHTML = badgeHtml + html;
   resyncSessionUnread(sessions);
+  // A collapsed cron row stands in for its hidden leaves' running/unread state.
+  if (typeof Sidebar.refreshTreeIndicators === 'function') Sidebar.refreshTreeIndicators();
   updateRelativeTimes();
   refreshTuiDots();
 }
@@ -738,9 +755,14 @@ function renderWorkerDeliveredIcon() {
 // group-limit class and attributes, so a root hidden by the 5-row preview
 // hides its subtree with it and Show all reveals both; the inner container
 // carries the expand state. Each level indents 22px behind a guide line.
-function renderSessionTree(s, filter, options, childrenOf) {
+// rowRenderer (optional) renders the top row alone; the subtree rows always
+// render through renderSessionItem — the Scheduled tab's cron rows are the
+// one caller whose root row form (renderScheduledSessionItem) differs from
+// its subtree's.
+function renderSessionTree(s, filter, options, childrenOf, rowRenderer) {
+  const renderRow = rowRenderer || ((row, opts) => renderSessionItem(row, filter, opts));
   const children = childrenOf.get(s.id) || [];
-  const row = renderSessionItem(s, filter, {...options, treeChildCount: children.length});
+  const row = renderRow(s, {...options, treeChildCount: children.length});
   if (!children.length) return row;
   const wrapClass = ['tree-subtree', options.extraClass || ''].filter(Boolean).join(' ');
   const wrapAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
@@ -853,7 +875,8 @@ function renderSessionItem(s, filter, options = {}) {
 
 function renderSessionList(sessions, filter, options = {}) {
   searchListPainted = (filter === 'search');
-  // Only the grouped paint nests rows; a flat paint shows each row's own facts.
+  // The grouped paints (All and Scheduled) nest rows and set the tree maps
+  // themselves; a flat paint shows each row's own facts.
   lastTreeChildrenOf = new Map();
   lastTreeParentOf = new Map();
   if (filter === 'scheduled') {

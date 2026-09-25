@@ -2,7 +2,9 @@
 // Sidebar task-tree nesting (groups.js): a child task node renders under its
 // parent row, collapsed by default behind an in-memory expand state; the
 // five-row preview cap counts root rows only; a worker leaf carries the leaf
-// icon and the archive action alone. Harness follows
+// icon and the archive action alone. The Scheduled tab nests the same way:
+// its cron rows group by project at root level with the projected worker
+// leaves collapsed under them. Harness follows
 // test_sidebar_delete_backfill.test.js (session_context_stub +
 // createChatSidebarContext, timers inline).
 // ---------------------------------------------------------------------------
@@ -54,6 +56,23 @@ function projectedLeaf(threadId, sessionId, hour, overrides = {}) {
 
 function legacy(id, hour, overrides = {}) {
   return meta(id, {profile: null, updated_at: at(hour), ...overrides});
+}
+
+// A cron session row: the chat a cron task wakes, carrying the schedule
+// fields the /api/sessions/scheduled payload overlays onto it (project P).
+function cronSession(id, hour, overrides = {}) {
+  return meta(id, {
+    group: null,
+    profile: null,
+    scheduled_task: `task-${id}`,
+    schedule_cron: '0 9 * * *',
+    schedule_timezone: 'America/Los_Angeles',
+    schedule_next_run: '2026-04-03T04:00:00Z',
+    schedule_project: 'P',
+    schedule_enabled: true,
+    updated_at: at(hour),
+    ...overrides,
+  });
 }
 
 // One root with two logical children (one carrying a worker grandchild) and
@@ -347,4 +366,90 @@ test('a legacy session row keeps its actions but shows no Task & context button'
   assert.doesNotMatch(legacyRow, /openTaskContextModal/);
   const managerRow = rowHtml(nav.innerHTML, 'mgr');
   assert.match(managerRow, /openTaskContextModal/);
+});
+
+// ---------------------------------------------------------------------------
+// The Scheduled tab: the same tree the All tab builds, grouped by
+// schedule_project at root level, with the cron row form for roots.
+// ---------------------------------------------------------------------------
+
+test('the scheduled tab nests a cron session\u2019s projected leaves under it, collapsed, with no (No project) group', () => {
+  const {context, nav} = buildContext();
+
+  context.renderSessionList([
+    cronSession('cron1', 10),
+    projectedLeaf('t1', 'cron1', 9),
+    projectedLeaf('t2', 'cron1', 8),
+    projectedLeaf('t3', 'cron1', 7),
+  ], 'scheduled');
+
+  const html = nav.innerHTML;
+  // The three leaves sit inside the root's subtree container, collapsed.
+  const container = html.match(/<div class="tree-children[^"]*"[^>]*data-tree-children="cron1">/);
+  assert.ok(container, 'the cron root row is followed by its children container');
+  assert.match(container[0], / hidden"/);
+  assert.ok(html.indexOf('data-tree-children="cron1"') < html.indexOf('id="session-t1"'));
+  // No leafless bucket: the project-less leaves belong to the cron row now.
+  assert.doesNotMatch(html, /\(No project\)/);
+  // The root row keeps the cron form: schedule line, chevron with the count.
+  assert.match(rowHtml(html, 'cron1'), /0 9 \* \* \*/);
+  assert.match(anchorOpenTag(html, 'cron1') + rowHtml(html, 'cron1'),
+      /data-tree-toggle="cron1"[^>]*aria-expanded="false"/);
+  // A projected leaf stays read-only: no star, rename, archive or gear button,
+  // and its click opens the owning session's worker pane on that thread.
+  for (const t of ['t1', 't2', 't3']) {
+    const row = rowHtml(html, t);
+    assert.doesNotMatch(row, /star-btn|title="Rename"|title="Archive"|title="Edit task config"/);
+    assert.match(anchorOpenTag(html, t), /openWorkerThread\('cron1',/);
+  }
+  // The group header counts the cron root alone, never its leaves.
+  assert.match(html, /1\/1 enabled/);
+  assert.deepEqual(anchorIdsInOrder(html), ['cron1', 't1', 't2', 't3']);
+  // The Scheduled render recorded the tree maps itself.
+  assert.deepEqual([...context.Sidebar.treeChildIds('cron1')], ['t1', 't2', 't3']);
+  assert.equal(context.Sidebar.treeParentId('t1'), 'cron1');
+});
+
+test('the scheduled tab\u2019s preview cap counts roots only and hides a capped root with its subtree', () => {
+  const {context, nav} = buildContext();
+  const rows = [];
+  for (let i = 1; i <= 6; i++) rows.push(cronSession(`cron-${i}`, 20 - i));
+  for (let i = 1; i <= 3; i++) rows.push(projectedLeaf(`t1-${i}`, 'cron-1', i));
+  rows.push(projectedLeaf('t6-1', 'cron-6', 1));
+
+  context.renderSessionList(rows, 'scheduled');
+
+  const html = nav.innerHTML;
+  assert.match(html, />Show all<\/button>/);
+  assert.equal(anchorOpenTag(html, 'cron-5').includes('cron-group-limit-extra'), false);
+  assert.equal(anchorOpenTag(html, 'cron-6').includes('cron-group-limit-extra hidden'), true);
+  // Leaves render inside their root's subtree and never spend the row budget.
+  for (const leaf of ['t1-1', 't1-2', 't1-3', 't6-1']) {
+    assert.equal(anchorOpenTag(html, leaf).includes('cron-group-limit-extra'), false);
+  }
+  // The capped root's subtree hides with it through the wrapper.
+  assert.match(html, /<div class="tree-subtree cron-group-limit-extra hidden[^"]*" data-cron-group-limit-extra="P">/);
+  // The header counts the six roots, not the four leaves.
+  assert.match(html, /6\/6 enabled/);
+});
+
+test('a scheduled paint records the tree maps, refreshes tree indicators, and shares expand state with the All tab', () => {
+  const {context, nav} = buildContext();
+  const rows = [cronSession('cron1', 10), projectedLeaf('t1', 'cron1', 9)];
+  let indicatorRefreshes = 0;
+  context.Sidebar.refreshTreeIndicators = () => { indicatorRefreshes += 1; };
+
+  context.renderSessionList(rows, 'scheduled');
+
+  assert.equal(indicatorRefreshes, 1, 'the collapsed cron row takes its leaves\u2019 stand-in state');
+  assert.equal(context.Sidebar.treeParentId('t1'), 'cron1');
+
+  // Expanding here keeps the subtree open on the next repaint of either tab.
+  context.Sidebar.refreshSessionIndicator = () => {};
+  context.toggleTreeNode('cron1');
+  context.renderSessionList(rows, 'scheduled');
+  assert.doesNotMatch(nav.innerHTML.match(/<div class="tree-children[^"]*"[^>]*data-tree-children="cron1">/)[0], /hidden/);
+
+  context.renderSessionList(rows, 'all');
+  assert.doesNotMatch(nav.innerHTML.match(/<div class="tree-children[^"]*"[^>]*data-tree-children="cron1">/)[0], /hidden/);
 });

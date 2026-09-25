@@ -237,7 +237,7 @@ async def run_engine(
     try:
       text, stop_to_final_s, first_partial_s = await _transcribe_clip(backend, clip, vocabulary, languages)
       record.update(ok=True, text=text, stop_to_final_s=stop_to_final_s, first_partial_s=first_partial_s)
-    except Exception as exc:  # noqa: BLE001 — recorded as the clip's failure, then the run continues
+    except Exception as exc:  # recorded as the clip's failure, then the run continues
       record.update(ok=False, error=f"{type(exc).__name__}: {exc}")
     record["wall_s"] = time.monotonic() - began
     records.append(record)

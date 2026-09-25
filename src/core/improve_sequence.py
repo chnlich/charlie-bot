@@ -316,9 +316,7 @@ async def run_improve_sequence(
         if blocked is not None:
             state.status = 'failed'
             outcome_label = "failed"
-            summary = (
-                f"Improve loop blocked on iteration {blocked[0]}: {blocked[1]}. "
-                "No further iterations were spawned; decide whether to wait, switch backend, or relaunch.")
+            summary = improve_command.blocked_loop_summary(blocked[0], blocked[1])
         elif stopped_by_user:
             state.status = 'stopped'
             outcome_label = "cancelled"

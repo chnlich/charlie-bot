@@ -1444,6 +1444,11 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
         run, outcome = wait_for_terminal_run_sync(tree, child_id, run_id)
         assert outcome == "failed"
         assert run.pid is None, "the process never started; the failure is a launch failure"
+        # The leaf card's Events link reads the record's events_ref: the
+        # launch-failed run's evidence must be reachable the same way a
+        # process run's is.
+        assert run.events_ref is not None and run.events_ref.endswith("events.jsonl"), (
+            f"the run's evidence ref was never set: {run.events_ref!r}")
         error_text = _read_error_event(tree.runs.run_dir(child_id, run_id) / "events.jsonl")
         assert "differs from origin/main" in error_text, (
             f"the run's durable evidence must name the actual error, got: {error_text!r}")

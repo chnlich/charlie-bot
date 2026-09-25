@@ -37,6 +37,14 @@ from src.core.timeouts import SUBPROCESS_GIT_READ_TIMEOUT_ASYNC
 
 log = LazyStructlogLogger()
 
+# Shared contract strings: the v2 controller (improve_sequence) reproduces this
+# module's iteration description, fallback report, and failure payloads verbatim,
+# and tests pin the exact strings on both paths.
+ITERATION_SUMMARIES_HEADING = "Previous iteration summaries:\n"
+RUNNER_FALLBACK_REPORT_MARKER = "<!-- runner fallback: worker wrote no report -->\n"
+WORKTREE_CREATE_ERROR_PREFIX = "Failed to create worktree: "
+LOOP_FAILURE_ERROR_PREFIX = "Improve loop failed: "
+
 # The first matching substring names the blocker, so an entry contained in an
 # earlier one can never be named: keep the shorter form ("out of token" covers
 # "out of tokens").
@@ -597,7 +605,7 @@ async def _run_single_iteration(
   if plan is not None:
     desc_parts.append(f"Plan:\n{plan}")
   if previous_summaries:
-    desc_parts.append("Previous iteration summaries:\n" + "\n\n".join(previous_summaries))
+    desc_parts.append(ITERATION_SUMMARIES_HEADING + "\n\n".join(previous_summaries))
   description = "\n".join(desc_parts)
 
   # Get session metadata
@@ -662,7 +670,7 @@ async def _run_single_iteration(
   if not await asyncio.to_thread(report_path.exists):
     fallback_body = await asyncio.to_thread(_extract_iteration_summary, _newest_first_events(events_path), i, status)
     await asyncio.to_thread(
-        report_path.write_text, "<!-- runner fallback: worker wrote no report -->\n" + fallback_body)
+        report_path.write_text, RUNNER_FALLBACK_REPORT_MARKER + fallback_body)
 
   log.info(
       ET.IMPROVE_ITERATION_COMPLETED,
@@ -867,7 +875,7 @@ async def run_improve_loop(
     await clear_active_loop_lock(session_id, cfg)
     log.error("improve_loop_worktree_failed", session=session_id, error=str(e))
     failure_payload = _build_summary_payload(ET.IMPROVE_FAILED, goal, [])
-    failure_payload['error'] = f"Failed to create worktree: {e}"
+    failure_payload['error'] = WORKTREE_CREATE_ERROR_PREFIX + str(e)
     await session_mgr.deliver_to_successor(session_id, failure_payload)
     await trigger_master(session_id, json.dumps(failure_payload, indent=2), cfg, session_mgr)
     return
@@ -973,7 +981,7 @@ async def run_improve_loop(
       await save_loop_state(session_id, state, cfg)
       failure_payload = _build_summary_payload(ET.IMPROVE_FAILED, goal, previous_summaries)
       failure_payload['failed_iteration'] = failure_iteration
-      failure_payload['error'] = f"Improve loop failed: {exc}"
+      failure_payload['error'] = LOOP_FAILURE_ERROR_PREFIX + str(exc)
       failure_payload['work_branch'] = work_branch
       failure_payload['base_branch'] = base_branch
       instructions = (

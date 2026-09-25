@@ -111,7 +111,7 @@ def _compose_iteration_description(goal: str, plan: str | None, previous_summari
     if plan is not None:
         parts.append(f"Plan:\n{plan}")
     if previous_summaries:
-        parts.append("Previous iteration summaries:\n" + "\n\n".join(previous_summaries))
+        parts.append(improve_command.ITERATION_SUMMARIES_HEADING + "\n\n".join(previous_summaries))
     return "\n".join(parts)
 
 
@@ -242,7 +242,7 @@ async def run_improve_sequence(
             log.error("improve_sequence_worktree_failed", session=session_id, loop_id=loop_id, error=str(e))
             await tree.sessions.deliver_to_successor(
                 session_id, {"type": ET.IMPROVE_FAILED, "goal": goal,
-                             "error": f"Failed to create worktree: {e}"})
+                             "error": improve_command.WORKTREE_CREATE_ERROR_PREFIX + str(e)})
             await _deliver_sequence_report(
                 tree, child_id, session_id, loop_id, "failed",
                 f"Improve loop failed to create its worktree: {e}", [])
@@ -375,7 +375,7 @@ async def run_improve_sequence(
             await tree.sessions.deliver_to_successor(session_id, {
                 "type": ET.IMPROVE_FAILED,
                 "goal": goal,
-                "error": f"Improve loop failed: {exc}",
+                "error": improve_command.LOOP_FAILURE_ERROR_PREFIX + str(exc),
                 "iterations_completed": completed_iterations,
             })
             await _deliver_sequence_report(
@@ -451,7 +451,7 @@ async def _judge_iteration(
             if text:
                 fallback = text
         await asyncio.to_thread(
-            report_path.write_text, "<!-- runner fallback: worker wrote no report -->\n" + fallback)
+            report_path.write_text, improve_command.RUNNER_FALLBACK_REPORT_MARKER + fallback)
         return fallback
     tip_after, commits_added, diffstat = await improve_command._worktree_commit_delta(wt_path, tip_before)
     del diffstat

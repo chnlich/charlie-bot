@@ -9,51 +9,20 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from conftest import stub_speech_bundle
+from conftest import FakeOfflineVad, stub_speech_bundle
 
 from src.agents import transcriber
-
-
-class _FakeSegment:
-
-  def __init__(self, start: int, length: int) -> None:
-    self.start = start
-    self.samples = np.zeros(length, dtype=np.float32)
-
-
-class _FakeVad:
-
-  def __init__(self, segments: list[tuple[int, int]]) -> None:
-    self._segments = [_FakeSegment(start, length) for start, length in segments]
-    self.feed_sizes: list[int] = []
-    self.flushed = False
-
-  def accept_waveform(self, samples: np.ndarray) -> None:
-    self.feed_sizes.append(samples.size)
-
-  def flush(self) -> None:
-    self.flushed = True
-
-  def empty(self) -> bool:
-    return not self._segments
-
-  @property
-  def front(self) -> _FakeSegment:
-    return self._segments[0]
-
-  def pop(self) -> None:
-    self._segments.pop(0)
 
 
 def _install_fakes(
     monkeypatch: pytest.MonkeyPatch,
     segments: list[tuple[int, int]],
     decode_texts: list[str],
-) -> tuple[list[np.ndarray], _FakeVad]:
-  vad = _FakeVad(segments)
+) -> tuple[list[np.ndarray], FakeOfflineVad]:
+  vad = FakeOfflineVad(segments)
   captured: list[np.ndarray] = []
 
-  def fake_open_vad(_config: object, _buffer_seconds: float) -> _FakeVad:
+  def fake_open_vad(_config: object, _buffer_seconds: float) -> FakeOfflineVad:
     return vad
 
   def fake_decode(_bundle: object, samples: np.ndarray) -> str:

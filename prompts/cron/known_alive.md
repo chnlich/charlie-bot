@@ -489,8 +489,8 @@ Known-alive symbols:
   sends through `websocket.send_json(...)`, the resize path calls `attachment.resize(cols, rows)`,
   and the server catchup/replay producers send through `FakeWebSocket.send_json`; every call
   dispatches on the injected double. Vulture flags each method as unused.
-- `accept_waveform`, `flush`, `empty`, `front`, `pop` (`_FakeVad` in
-  `tests/test_transcriber_sampling.py`) — `transcribe_pcm_offline`
+- `accept_waveform`, `flush`, `empty`, `front`, `pop` (`FakeOfflineVad` in
+  `tests/conftest.py`; the offline transcription suites install it) — `transcribe_pcm_offline`
   (src/agents/transcriber.py) drives the installed VAD duck-typed: it feeds
   `accept_waveform` in 128 ms steps, calls `flush()`, then drains the segment queue
   through `empty()`/`front`/`pop()`. A vulture scan of `tests/test_transcriber_sampling.py`

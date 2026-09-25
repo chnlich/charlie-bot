@@ -147,9 +147,14 @@ class TaskInputDispatcher:
         Exactly the valid input boundary (post-creation for fresh tasks;
         post-import plus only the explicitly listed old pending inputs for
         imported ones), minus ids a successful run_finished acknowledged,
-        minus ids currently claimed by registered queued/active Runs. A
-        stopped queued Run claims nothing: it will never launch, so its batch
-        returns to the pending set for the next consumer.
+        minus ids a launched Run holds. A Run that launched (its record has a
+        pid, or the log holds its run_finished fact) keeps its batch claimed
+        permanently — success, failed, interrupted, or stopped: the round ran
+        and its outcome is the handling, so its batch never reappears as
+        pending. A Run that never launched and was stop-requested claims
+        nothing: it will never run, so its batch returns to the pending set
+        for the next consumer. A queued (registered, never launched) Run
+        still claims, as now.
         """
         from src.core.task_sessions import TaskInvalidError
 
@@ -165,10 +170,9 @@ class TaskInputDispatcher:
         confirmed: set[str] = set(facts.confirmed_input_ids)
         claimed: set[str] = set()
         for run in runs:
-            if tree.runs.run_has_terminal_fact(run, events):
-                continue
-            if run.pid is None and tree.runs.stop_requested(events, run.id):
-                continue  # a stopped queued run never launches and never claims
+            launched = run.pid is not None or tree.runs.run_has_terminal_fact(run, events)
+            if not launched and tree.runs.stop_requested(events, run.id):
+                continue  # a never-launched, stop-requested run releases its batch
             claimed.update(run.input_event_ids)
         pending: dict[str, dict] = {}
         for event in facts.input_candidates:
@@ -245,29 +249,6 @@ class TaskInputDispatcher:
     # Launch decision (the executor seam)
     # ------------------------------------------------------------------
 
-    def unresolved_failure_run_ids(self, session_id: str) -> list[str]:
-        """Runs whose failed/interrupted outcome still stands unresolved.
-
-        A successful authorized retry supersedes the failure it retried (the
-        retry_of_run_id chain), the same judgment the work-state projection
-        applies. A standing failure keeps the node at attention: fresh
-        dispatch waits for the explicit retry instead of silently re-running
-        the failed batch's side effects because a new message arrived.
-        """
-        tree = self._tree
-        runs = tree.runs.list_run_records_sync(session_id)
-        outcomes = tree.facts_of(session_id).run_outcomes
-        superseded: set[str] = set()
-        for run in runs:
-            if outcomes.get(run.id) == "success":
-                target = run.retry_of_run_id
-                while target is not None and target not in superseded:
-                    superseded.add(target)
-                    target = next((r.retry_of_run_id for r in runs if r.id == target), None)
-        return [
-            run.id for run in runs
-            if outcomes.get(run.id) in ("failed", "interrupted") and run.id not in superseded]
-
     async def dispatch_pending(self, session_id: str) -> dict:
         """Evaluate the launch decision for one node's pending inputs.
 
@@ -278,8 +259,9 @@ class TaskInputDispatcher:
         explicit retry, or a run a crashed process registered — and is handed
         to the executor to launch rather than deadlocking the node on itself;
         a stop-requested queued run never launches and releases its batch. A
-        standing unresolved failure blocks fresh dispatch until the explicit
-        authorized retry lands. With an executor registered the pending batch
+        past failure never blocks fresh dispatch: a launched round's batch is
+        handled whatever its outcome, and redoing work is the operator's
+        re-send or retry. With an executor registered the pending batch
         is handed over after admission; without one this stage records exactly
         that and acknowledges nothing.
         """
@@ -353,13 +335,6 @@ class TaskInputDispatcher:
         if not pending:
             decision["launch"] = False
             decision["reason"] = "no pending inputs"
-            return decision
-        unresolved = self.unresolved_failure_run_ids(session_id)
-        if unresolved:
-            decision["launch"] = False
-            decision["reason"] = (
-                f"run {unresolved[0]} has an unresolved failure; explicit retry is required "
-                "before new execution")
             return decision
         if self.executor is None:
             decision["launch"] = False

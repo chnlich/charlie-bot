@@ -259,6 +259,36 @@ async def test_reparent_rejects_cycles_and_closed_targets(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_failed_run_attention_clears_when_a_later_run_succeeds(tmp_path: Path) -> None:
+  """The attention marker: a failed run alone draws attention; once a later
+  successful run finished on the same node (the event log's order is the
+  durable one), the node is idle again — no manual retry is required."""
+  _, _session_mgr, mgr = build_env(tmp_path)
+  node = await create_task(mgr, parent=None, request_id="node")
+  await mgr.runs.register_run(RunRecord(id="run-f", session_id=node.id, kind="work"))
+  await mgr.dispatch.finish_run(node.id, "run-f", outcome="failed", exit_code=1)
+  index = await mgr._get_index()
+  assert mgr.work_state_of(index, node.id) == "attention"
+
+  # A later run finishes successfully after the failure in the log order.
+  await mgr.runs.register_run(RunRecord(id="run-ok", session_id=node.id, kind="work"))
+  await mgr.dispatch.finish_run(node.id, "run-ok", outcome="success", exit_code=0)
+  index = await mgr._get_index()
+  assert mgr.work_state_of(index, node.id) == "idle"
+
+  # A failure after that success draws attention again; a success after THAT
+  # failure clears it once more.
+  await mgr.runs.register_run(RunRecord(id="run-f2", session_id=node.id, kind="work"))
+  await mgr.dispatch.finish_run(node.id, "run-f2", outcome="interrupted")
+  index = await mgr._get_index()
+  assert mgr.work_state_of(index, node.id) == "attention"
+  await mgr.runs.register_run(RunRecord(id="run-ok2", session_id=node.id, kind="work"))
+  await mgr.dispatch.finish_run(node.id, "run-ok2", outcome="success", exit_code=0)
+  index = await mgr._get_index()
+  assert mgr.work_state_of(index, node.id) == "idle"
+
+
+@pytest.mark.asyncio
 async def test_tree_pagination_counts_and_attention_ancestor_path(tmp_path: Path) -> None:
   _, _session_mgr, mgr = build_env(tmp_path)
   ids = await build_three_levels(mgr)

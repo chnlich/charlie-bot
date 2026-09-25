@@ -474,6 +474,45 @@ def test_rollback_refuses_after_new_system_write(
   assert "rollback refused" in cli_json(err)["error"]
 
 
+def test_rollback_restores_running_worker_thread_home_exactly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The rehearsal's rollback defect: apply receipts a running-marked worker
+  thread's run record, then the run_finished product's record_finish rewrites
+  that receipted file (it fills the missing ended_at). The plan must already
+  carry the deterministic value the rewrite writes, so apply and rollback
+  agree byte-for-byte and the home restores exactly."""
+  home = fx.build_running_worker_thread_home(tmp_path / "home")
+  point_home(monkeypatch, home)
+  before = _tree_snapshot(home)
+  manifest_path = tmp_path / "m.json"
+  code, manifest, _ = dry_run(monkeypatch, home, manifest_path)
+  assert code == 0 and manifest.unresolved == []
+  worker = next(m for m in manifest.mappings if m.source_kind == "worker_thread")
+  assert worker.detail["old_status"] == "running"
+
+  assert run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))[0] == 0
+  from src.core.sessions import SessionManager
+  from src.core.task_sessions import TaskTreeManager
+  cfg = home_config_of(monkeypatch, home)
+  tree = TaskTreeManager(cfg, SessionManager(cfg))
+  target = worker.target_session_id
+  runs = tree.runs.list_run_records_sync(target)
+  assert len(runs) == 1 and runs[0].kind == "work"
+  events = tree.runs.load_events_sync(target)
+  assert tree.runs.terminal_outcome(events, runs[0].id) == "interrupted"
+  # The deterministic ended_at the plan minted (the thread's own started_at)
+  # is what record_finish wrote — the receipt still matches the file.
+  assert runs[0].ended_at == fx.BASE + timedelta(minutes=5)
+  assert runs[0].started_at == fx.BASE + timedelta(minutes=5)
+
+  code, out, err = run_cli(monkeypatch, home, "--rollback", "--manifest", str(manifest_path))
+  assert code == 0, err
+  result = cli_json(out)
+  assert result["status"] == "rolled_back"
+  assert result["removed"] > 0
+  assert _tree_snapshot(home) == before
+
+
 def test_rollback_requires_applied_manifest(
     full_home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   manifest_path = tmp_path / "m.json"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -15,6 +16,7 @@ from src.api.message_utils import events_to_view
 from src.core import event_types as ET
 from src.core.models import RunRecord, TaskSpec
 from src.core.run_token import CallerIdentity, RunTokenClaims, sign_run_token
+from src.core.runs import read_pid_stat
 from src.core.sessions import SessionManager
 from src.core.task_completion import CompletionEvidence
 from src.core.task_sessions import (
@@ -24,6 +26,36 @@ from src.core.task_sessions import (
 )
 
 OPERATOR = CallerIdentity(kind="operator")
+
+# The Claude CLI's persisted tool-result echo: a user-type event whose content
+# is a list of tool_result blocks (src/cli/claude_sub_bridge.py), the shape
+# production logs carry for every tool call.
+TOOL_RESULT_ECHO = {
+    "type": ET.USER,
+    "message": {
+        "role": "user",
+        "content": [{
+            "type": ET.TOOL_RESULT,
+            "tool_use_id": "toolu_1",
+            "content": "ok",
+        }],
+    },
+    "parent_tool_use_id": None,
+    "session_id": "cc-session-1",
+    "uuid": "0b6c7f1e-0000-4000-8000-000000000001",
+    "tool_use_result": {"stdout": "ok", "stderr": ""},
+}
+
+
+def live_subprocess() -> subprocess.Popen:
+  """An owned, isolated sleeper: the only process identity any test here signals."""
+  return subprocess.Popen(["/bin/sleep", "30"])
+
+
+def identity_of(pid: int) -> tuple[int, str]:
+  pair = read_pid_stat(pid)
+  assert pair is not None
+  return pid, pair[0]
 
 
 def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:
@@ -226,15 +258,21 @@ async def test_later_input_during_execution_keeps_id_and_blocks_close(tmp_path: 
   # all that remains pending.
   assert {str(e["id"]) for e in input_events(tree, node.id)} == {"input-2"}
 
-  # Failure never acknowledges: the failed run's batch returns to pending.
-  failed_run = await tree.runs.register_run(RunRecord(id="run-failed", session_id=node.id))
-  await tree.dispatch.claim_input_batch(node.id, failed_run.id, input_ids=["input-2"])
-  await tree.dispatch.finish_run(node.id, failed_run.id, outcome="failed")
-  assert {str(e["id"]) for e in input_events(tree, node.id)} == {"input-2"}
-
   # An unrelated MASTER_DONE output cannot consume an input.
   await tree.events.append(node.id, {"type": ET.MASTER_DONE, "thinking_seconds": 3})
   assert {str(e["id"]) for e in input_events(tree, node.id)} == {"input-2"}
+
+  # A failed round counts as handled whatever its outcome: its claimed batch
+  # never reappears as pending, and no retry is needed before the next input
+  # dispatches (the launched round's outcome is the handling).
+  failed_run = await tree.runs.register_run(RunRecord(id="run-failed", session_id=node.id))
+  await tree.dispatch.claim_input_batch(node.id, failed_run.id, input_ids=["input-2"])
+  await tree.dispatch.finish_run(node.id, failed_run.id, outcome="failed")
+  assert input_events(tree, node.id) == []
+  await admit(tree, node.id, "next instruction", input_id="input-3")
+  decision = await tree.dispatch.dispatch_pending(node.id)
+  assert decision["launch"] is True
+  assert executor.batches[-1] == (node.id, ["input-3"])
 
 
 @pytest.mark.asyncio
@@ -438,6 +476,129 @@ async def test_stopped_queued_run_is_never_launched_and_releases_its_batch(tmp_p
 
   with pytest.raises(TaskConflictError, match="stop request"):
     await tree.dispatch.claim_input_batch(node.id, "run-queued")
+
+
+# ---------------------------------------------------------------------------
+# Input candidacy and handling: tool echoes, stopped/failed/interrupted rounds
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cli_tool_result_echo_is_not_pending_input_and_never_blocks_close(
+    tmp_path: Path) -> None:
+  """The Claude CLI persists each tool result as a user-type event whose
+  content is a list of tool_result blocks (src/cli/claude_sub_bridge.py).
+  That echo is tool output, not a message: it enters no round's batch, stays
+  out of the pending set after the round that produced it, and never blocks
+  the task from closing (the probe_tool_echo.py scenario)."""
+  _, session_mgr, tree = build_env(tmp_path)
+  node = await create_task(tree, parent=None, request_id="node")
+  await admit(tree, node.id, "please run ls")
+  run = await tree.runs.register_run(
+      RunRecord(id="probe-run", session_id=node.id, kind="manager_turn"))
+  bound = await tree.dispatch.claim_input_batch(node.id, run.id)
+  assert len(bound) == 1
+  await session_mgr.persist_and_broadcast(node.id, dict(TOOL_RESULT_ECHO))
+  await tree.dispatch.finish_run(node.id, run.id, outcome="success")
+  assert tree.dispatch.pending_inputs(node.id) == []
+  assert tree.dispatch.pending_input_blockers(node.id) == []
+  # The echo stays in the history (it is evidence), just never as input.
+  assert any(e.get("tool_use_result") for e in tree.events.load_events(node.id))
+
+
+@pytest.mark.asyncio
+async def test_stopped_round_is_handled_and_next_message_launches_at_once(
+    tmp_path: Path) -> None:
+  """A round stopped mid-run counts as handled: its batch never reappears as
+  pending, and the next message dispatches a new round immediately whose batch
+  holds only the new message (the probe_stop_then_message.py scenario)."""
+  _, _session_mgr, tree = build_env(tmp_path)
+  node = await create_task(tree, parent=None, request_id="node")
+  m1 = await admit(tree, node.id, "long job")
+  run = await tree.runs.register_run(
+      RunRecord(id="run-live", session_id=node.id, kind="manager_turn"))
+  await tree.dispatch.claim_input_batch(node.id, run.id)
+  proc = live_subprocess()
+  try:
+    pid, pid_start = identity_of(proc.pid)
+    await tree.runs.record_launch(node.id, run.id, pid=pid, pid_start=pid_start)
+    stop = await tree.runs.request_stop(node.id, run.id, "stop-1")
+    assert stop.stop_requested is True and stop.outcome == "interrupted"
+  finally:
+    if proc.poll() is None:
+      proc.kill()
+  m2 = await admit(tree, node.id, "new instruction after stop")
+  assert [str(e["id"]) for e in tree.dispatch.pending_inputs(node.id)] == [str(m2["id"])]
+  executor = ScriptedExecutor(tree)
+  tree.dispatch.executor = executor
+  decision = await tree.dispatch.dispatch_pending(node.id)
+  assert decision["launch"] is True
+  assert executor.batches == [(node.id, [str(m2["id"])])]
+  # The stopped round's message is handled: it is never rerun and never
+  # re-acknowledgable, and the new round's batch holds only the new message.
+  with pytest.raises(TaskConflictError, match="not pending"):
+    await tree.completion.acknowledge_inputs(
+        node.id, request_id="ack-1", input_ids=[str(m1["id"])], note="drop", caller=OPERATOR)
+
+
+@pytest.mark.asyncio
+async def test_failed_and_interrupted_rounds_neither_block_nor_rerun(tmp_path: Path) -> None:
+  """A failed round and an interrupted round (recovery marks a dead launched
+  run interrupted) are both handled: neither blocks the next message, and
+  neither batch reappears as pending."""
+  _, _session_mgr, tree = build_env(tmp_path)
+  node = await create_task(tree, parent=None, request_id="node")
+  failed_in = await admit(tree, node.id, "do the thing")
+  failed_run = await tree.runs.register_run(
+      RunRecord(id="run-failed", session_id=node.id, kind="manager_turn"))
+  await tree.dispatch.claim_input_batch(node.id, failed_run.id)
+  await tree.dispatch.finish_run(node.id, failed_run.id, outcome="failed", exit_code=1)
+
+  interrupted_in = await admit(tree, node.id, "then the other thing")
+  interrupted_run = await tree.runs.register_run(
+      RunRecord(id="run-interrupted", session_id=node.id, kind="manager_turn"))
+  await tree.dispatch.claim_input_batch(node.id, interrupted_run.id)
+  proc = live_subprocess()
+  try:
+    pid, pid_start = identity_of(proc.pid)
+    await tree.runs.record_launch(node.id, interrupted_run.id, pid=pid, pid_start=pid_start)
+  finally:
+    if proc.poll() is None:
+      proc.kill()
+  # The dead process's terminal fact lands the way recovery records it.
+  await tree.runs.record_finish(node.id, interrupted_run.id, "interrupted")
+
+  next_in = await admit(tree, node.id, "carry on")
+  assert [str(e["id"]) for e in tree.dispatch.pending_inputs(node.id)] == [str(next_in["id"])]
+  executor = ScriptedExecutor(tree)
+  tree.dispatch.executor = executor
+  decision = await tree.dispatch.dispatch_pending(node.id)
+  assert decision["launch"] is True
+  assert executor.batches == [(node.id, [str(next_in["id"])])]
+  assert {str(failed_in["id"]), str(interrupted_in["id"])}.isdisjoint(
+      {str(e["id"]) for e in tree.dispatch.pending_inputs(node.id)})
+
+
+@pytest.mark.asyncio
+async def test_messages_arriving_during_a_round_form_one_next_round(tmp_path: Path) -> None:
+  """Two inputs admitted while a round runs merge into the single next round's
+  batch when the running round finishes."""
+  _, _session_mgr, tree = build_env(tmp_path)
+  node = await create_task(tree, parent=None, request_id="node")
+  await admit(tree, node.id, "first instruction", input_id="m-1")
+  executor = ScriptedExecutor(tree, finish=False)
+  tree.dispatch.executor = executor
+  await tree.dispatch.dispatch_pending(node.id)
+  run_id = executor.tree.runs.list_run_records_sync(node.id)[0].id
+  await admit(tree, node.id, "second instruction", input_id="m-2")
+  await admit(tree, node.id, "third instruction", input_id="m-3")
+  assert [str(e["id"]) for e in tree.dispatch.pending_inputs(node.id)] == ["m-2", "m-3"]
+
+  executor.finish = True
+  await tree.dispatch.finish_run(node.id, run_id, outcome="success")
+  decision = await tree.dispatch.dispatch_pending(node.id)
+  assert decision["launch"] is True
+  assert executor.batches[-1][1] == ["m-2", "m-3"]
 
 
 @pytest.mark.asyncio

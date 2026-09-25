@@ -39,6 +39,9 @@ _TRANSIENT = {
 }
 
 # Well-known synthetic session ids (UUID-shaped, nothing host-derived).
+S_ECHO = "dad0d000-0000-4000-8000-000000000001"
+S_RUNNING_WORKER = "dad1d111-0000-4000-8000-000000000001"
+T_RUNNING = "eeee2222-0000-4000-8000-000000000001"
 S_ORDINARY = "1a1a1111-0000-4000-8000-000000000001"
 S_PENDING = "2a2a2222-0000-4000-8000-000000000002"
 S_PM = "3a3a3333-0000-4000-8000-000000000003"
@@ -973,3 +976,63 @@ def build_moved_branch_home(home: Path) -> Path:
 def build_pinned_worktree_home(home: Path) -> Path:
   """A moved branch whose run's own worktree still pins the result commit."""
   return _implement_with_branch(home, worktree=True, move_branch=True)
+
+
+def build_tool_echo_home(home: Path) -> Path:
+  """A proven successful round plus the Claude CLI's tool-result echo after it.
+
+  The echo is a user-typed event whose content is a list of tool_result blocks
+  (src/cli/claude_sub_bridge.py's persisted shape) and no MASTER_DONE names it:
+  it is tool output, never an old input, so it must leave the input statistics
+  and the unresolved lists untouched.
+  """
+  builder = FixtureBuilder(home)
+  builder.build()
+  sid = S_ECHO
+  u = ev("user", 0, f"{sid[:8]}-0000-0000-0000-00000000000a",
+         content="Run the checks", source_session_id=sid)
+  md = ev("master_done", 20, f"{sid[:8]}-0000-0000-0000-00000000000b",
+          actor="agent", exit_code=0, input_event_id=u["id"], source_session_id=sid)
+  echo = {
+      "id": f"{sid[:8]}-0000-0000-0000-00000000000c",
+      "type": "user",
+      "timestamp": iso(25),
+      "message": {"role": "user", "content": [
+          {"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"}]},
+      "session_id": "cc-echo-1",
+      "uuid": "0b6c7f1e-0000-4000-8000-000000000002",
+      "tool_use_result": {"stdout": "ok", "stderr": ""},
+  }
+  marker, _done = _round("sid-echo-1", input_event=u, done_offset=20,
+                         done_event_id=md["id"], session_id=sid)
+  builder.session(SessionMetadata(id=sid, name="Echo hub", backend="synth",
+                                  created_at=BASE, updated_at=BASE))
+  builder.chat_log(sid, [u, marker, md, echo])
+  builder.master_turn_dir(sid, iso(10), _turn_raw("sid-echo-1", echo="Run the checks"),
+                          mtime=iso(18))
+  return home
+
+
+def build_running_worker_thread_home(home: Path) -> Path:
+  """A worker thread still marked running with no completion time.
+
+  Quiescence proves its recorded process dead (a pid that owns no process), so
+  the migration imports the thread as an interrupted Run whose run_finished
+  product rewrites the receipted run record (record_finish fills the missing
+  ended_at). The plan must already carry the deterministic value that rewrite
+  writes, or the receipt breaks and rollback refuses — the rehearsal's
+  four-file refusal shape.
+  """
+  builder = FixtureBuilder(home)
+  builder.build()
+  sid = S_RUNNING_WORKER
+  builder.session(SessionMetadata(id=sid, name="Running hub", backend="synth",
+                                  created_at=BASE, updated_at=BASE))
+  builder.thread(sid, ThreadMetadata(
+      id=T_RUNNING, session_id=sid, description="Sweep the queue",
+      status="running", created_at=BASE, started_at=BASE + timedelta(minutes=5),
+      completed_at=None, pid=0, pid_start="0", backend="synth"),
+      events=[ev("assistant", 10, f"{sid[:8]}-0000-0000-0000-00000000000a", actor="agent",
+                 message={"content": [{"type": "text", "text": "working"}]},
+                 source_session_id=sid)])
+  return home

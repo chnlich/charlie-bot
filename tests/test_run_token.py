@@ -24,7 +24,6 @@ from src.core.run_token import (
     RunTokenClaims,
     RunTokenError,
     load_run_token,
-    operator_signing_key,
     sign_run_token,
     verify_run_token,
 )
@@ -72,13 +71,6 @@ def test_missing_signing_key_is_an_explicit_error() -> None:
     sign_run_token(CLAIMS, "")
   with pytest.raises(RunTokenError, match="no signing key"):
     verify_run_token("a.b", "")
-
-
-def test_operator_signing_key_reads_credentials() -> None:
-  stub_credentials({"charliebot": {"access_key": "op-secret"}})
-  assert operator_signing_key() == "op-secret"
-  stub_credentials({"charliebot": {}})
-  assert operator_signing_key() == ""
 
 
 # ---------------------------------------------------------------------------

@@ -24,9 +24,14 @@ from starlette.responses import Response
 
 from src.agents.transcription.registry import build_transcription_backends
 from src.api.code_server import is_code_server_available
-from src.api.deps import SESSION_NOT_FOUND_DETAIL, get_config_on_loop, get_session_manager
+from src.api.deps import (
+  SESSION_NOT_FOUND_DETAIL,
+  get_config_on_loop,
+  get_session_manager,
+  get_thread_manager,
+)
 from src.api.message_utils import build_session_bootstrap_data
-from src.api.sessions import _bootstrap_payload, _default_backend_id
+from src.api.sessions import _bootstrap_payload, _default_backend_id, project_worker_threads
 from src.core.buildinfo import read_repo_head_sha
 from src.core.config import CharlieBotConfig, configured_access_key, get_config
 from src.core.constants import (
@@ -46,6 +51,7 @@ from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus
 from src.core.session_tree_preview import is_preview_mode
 from src.core.sessions import SessionManager
+from src.core.threads import ThreadManager
 from src.core.timeouts import HOME_SERVICE_PROBE_TIMEOUT, SUBPROCESS_GIT_VERSION_TIMEOUT
 
 if TYPE_CHECKING:
@@ -823,6 +829,7 @@ async def index(
     session: str | None = None,
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
 ) -> Response:
   """Render the full page with only critical active-session data."""
   load_errors: list[str] = []
@@ -863,6 +870,11 @@ async def index(
         load_errors.append("Failed to load session data. Check server logs for details.")
   elif session is None and sessions:
     return RedirectResponse(f"/?session={sessions[0].id}")
+
+  # The first-paint sidebar list carries the legacy worker-thread leaves too;
+  # projected after the redirect check so a thread row can never become the
+  # auto-redirect target.
+  sessions = await project_worker_threads(sessions, cfg, thread_mgr)
 
   active_backend = active_session.backend if active_session else _default_backend_id(cfg)
   active_backend_opt = cfg.get_backend_option(active_backend)

@@ -1,10 +1,10 @@
 # Session tree preview
 
 `charliebot session-tree preview --home DIR --port PORT` starts one isolated,
-interactive trial instance of the real application (plan 1 v4: the independent
-instance carries the session-tree trial; real migration waits for an explicit
-request). It is the reviewed way to try the task-tree UI with real execution
-before any production cutover — existing session data is never imported.
+interactive trial instance of the real application. It is the reviewed way to
+try the task-tree UI with real execution before any production deploy —
+existing session data is never imported: legacy sessions are read in place by
+the new code, never converted.
 
 ## Invocation
 
@@ -60,7 +60,7 @@ the whole launch, additions included, as one structured diagnostic.
   nonoverlapping with the production home, the production workspace dirs, and
   the running checkout. A fresh path is seeded with minimal private config and
   its own random access key; an existing validated preview home keeps its
-  config and user-created tasks across restarts. Legacy/migrated state,
+  config and user-created tasks across restarts. Existing legacy state,
   unrelated configurations, overlapping paths, occupied ports, and unprovable
   instance ownership refuse before any write.
 - **Environment selection.** The process switches `CHARLIEBOT_HOME` and clears
@@ -78,8 +78,7 @@ the whole launch, additions included, as one structured diagnostic.
   boundary.
 - **Writer fence.** The preview holds the normal home writer fence
   (`state/home_writer.lock`) for its whole run and releases it on startup or
-  shutdown failure, so a concurrent migration apply or second instance refuses
-  with the holder's identity.
+  shutdown failure, so a second instance refuses with the holder's identity.
 - **Readiness record.** `<home>/state/preview_instance.json` names the serving
   identity (pid, /proc start marker), the URL, the backend, the source branch
   and SHA, and the readiness state. Logs land in `<home>/logs/`.
@@ -90,5 +89,6 @@ the whole launch, additions included, as one structured diagnostic.
   session data is copied from the production home; the trial starts empty.
 - **No production claim.** Starting the preview never stops, restarts, or
   reconfigures the production runtime, its routing, or its shared services.
-- **No migration.** The `session-tree migrate` verbs are separate; a preview
-  home is never a migration source or target.
+- **No rewriting of existing homes.** A preview home is never a source or
+  target that touches the production home's sessions; legacy sessions are read
+  in place by the new code, never converted.

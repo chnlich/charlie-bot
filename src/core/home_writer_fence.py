@@ -20,10 +20,8 @@ port, or a private lock the writers ignore:
 - :func:`probe_writer_fence` answers read-only questions (is a holder alive,
   which one) for dry-run reporting. A probe never signals a process.
 
-Apply additionally scans ``/proc`` for live processes whose environment binds
-them to this home (see :mod:`src.core.session_tree_migration`), which covers
-writers predating this fence. A refused startup or apply exits with the
-holder's details; nothing is ever killed by this module.
+A refused startup or apply exits with the holder's details; nothing is ever
+killed by this module.
 """
 
 from __future__ import annotations

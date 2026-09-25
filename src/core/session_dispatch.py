@@ -352,6 +352,38 @@ class TaskInputDispatcher:
         decision["run_id"] = launched
         return decision
 
+    async def wake_parent(self, parent_id: str) -> None:
+        """The one parent-wake entry after a report delivery.
+
+        A task-tree parent's next serialized turn dispatches from its durable
+        inputs. A legacy parent (profile None) keeps its own execution path:
+        the newest child_report in its fact history rides the legacy master
+        wake (trigger_master) as the turn's input text, rendered the way
+        compose_input_prompt renders a child_report. The child_report event
+        appended by deliver_child_report_locked stays the durable record — a
+        failed wake leaves it in the log, and the next report or user message
+        runs the parent as today.
+        """
+        tree = self._tree
+        meta = await tree.load_meta(parent_id)
+        if meta is None:
+            log.warning("wake_parent_target_missing", parent_id=parent_id)
+            return
+        if meta.profile is not None:
+            await self.dispatch_pending(parent_id)
+            return
+        report = next(
+            (e for e in reversed(tree.fact_history(parent_id))
+             if e.get("type") == ET.CHILD_REPORT), None)
+        if report is None:
+            log.warning("wake_parent_no_report", parent_id=parent_id)
+            return
+        text = (f"[Report from task {report.get('child_session_id')} | "
+                f"outcome {report.get('outcome')}] {str(report.get('summary') or '')}")
+        from src.core.master_trigger import trigger_master
+
+        await trigger_master(parent_id, text, tree._cfg, tree.sessions)
+
     def _tui_manager_refusal(self, meta) -> str | None:
         """Why a headless manager turn must not start on *meta*, or None.
 

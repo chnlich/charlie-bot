@@ -43,6 +43,19 @@ function worker(id, parent, hour, overrides = {}) {
   return meta(id, {profile: 'worker', task_parent_id: parent, updated_at: at(hour), ...overrides});
 }
 
+// A projected legacy worker-thread row: profile worker, parent session, and
+// the worker_thread origin pair (no session exists behind the row id).
+function projectedLeaf(threadId, sessionId, hour, overrides = {}) {
+  return worker(threadId, sessionId, hour, {
+    worker_thread: {session_id: sessionId, thread_id: threadId},
+    ...overrides,
+  });
+}
+
+function legacy(id, hour, overrides = {}) {
+  return meta(id, {profile: null, updated_at: at(hour), ...overrides});
+}
+
 // One root with two logical children (one carrying a worker grandchild) and
 // two worker leaves, listed in an order the renderer must not keep.
 function familyRows() {
@@ -285,4 +298,53 @@ test('an archived worker row shows the delivered check in place of the leaf icon
   assert.doesNotMatch(liveRow, /title="Worker \(delivered\)"/);
   assert.match(doneRow, /title="Worker \(delivered\)"[^>]*>[\s\S]*?M5 13l4 4L19 7/);
   assert.doesNotMatch(doneRow, /title="Worker \(implementation leaf\)"/);
+});
+
+test('the projected worker threads of a legacy session nest under it, collapsed by default', () => {
+  const {context, nav} = buildContext();
+
+  context.renderSessionList([
+    legacy('old1', 10),
+    projectedLeaf('t1', 'old1', 9),
+    projectedLeaf('t2', 'old1', 8),
+  ], 'all');
+
+  const html = nav.innerHTML;
+  const container = html.match(/<div class="tree-children[^"]*"[^>]*data-tree-children="old1">/);
+  assert.ok(container, 'the legacy root row is followed by its children container');
+  assert.match(container[0], / hidden"/);
+  assert.ok(html.indexOf('data-tree-children="old1"') < html.indexOf('id="session-t1"'));
+  assert.match(anchorOpenTag(html, 'old1') + rowHtml(html, 'old1'),
+      /data-tree-toggle="old1"[^>]*aria-expanded="false"/);
+  // The leaves carry the worker glyph and nest in listed order.
+  assert.match(rowHtml(html, 't1'), /title="Worker \(implementation leaf\)"/);
+  assert.match(rowHtml(html, 't2'), /title="Worker \(implementation leaf\)"/);
+  assert.deepEqual(anchorIdsInOrder(html), ['old1', 't1', 't2']);
+});
+
+test('a projected leaf click opens the thread view and never switches sessions', () => {
+  const {context, nav} = buildContext();
+
+  context.renderSessionList([legacy('old1', 10), projectedLeaf('t1', 'old1', 9)], 'all');
+
+  const tag = anchorOpenTag(nav.innerHTML, 't1');
+  assert.match(tag, /openWorkerThread\('old1', 't1'\)/);
+  assert.doesNotMatch(tag, /switchSession\('t1'\)/);
+  // A projected leaf is read-only: no actions, and a double click never renames.
+  const row = rowHtml(nav.innerHTML, 't1');
+  assert.doesNotMatch(row, /title="Archive"|star-btn|title="Rename"|title="Set group"/);
+  assert.doesNotMatch(tag, /ondblclick/);
+});
+
+test('a legacy session row keeps its actions but shows no Task & context button', () => {
+  const {context, nav} = buildContext();
+
+  context.renderSessionList([legacy('old1', 10), manager('mgr', null, 9)], 'all');
+
+  const legacyRow = rowHtml(nav.innerHTML, 'old1');
+  assert.match(legacyRow, /star-btn/);
+  assert.match(legacyRow, /title="New child session"/);
+  assert.doesNotMatch(legacyRow, /openTaskContextModal/);
+  const managerRow = rowHtml(nav.innerHTML, 'mgr');
+  assert.match(managerRow, /openTaskContextModal/);
 });

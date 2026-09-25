@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,6 +30,16 @@ def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:
   cfg = make_home_config(tmp_path)
   session_mgr = SessionManager(cfg)
   return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
+
+
+def write_session_alias(path: Path, *, old_session_ids: dict[str, str],
+                        old_threads: dict[str, dict] | None = None) -> None:
+  """Write one session_aliases.json in the store's own file shape."""
+  path.parent.mkdir(parents=True, exist_ok=True)
+  path.write_text(json.dumps({
+      "old_session_ids": old_session_ids,
+      "old_threads": old_threads or {},
+  }, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
 async def create_task(mgr: TaskTreeManager, *, parent: str | None, profile: str = "manager",
@@ -112,7 +123,7 @@ async def test_flat_paths_survive_reparenting(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_history_copying_never_becomes_a_task_parent(tmp_path: Path) -> None:
-  _, session_mgr, mgr = build_env(tmp_path)
+  cfg, session_mgr, mgr = build_env(tmp_path)
   legacy = await session_mgr.create_session(CreateSessionRequest(name="legacy"), backend=OPUS_BACKEND_ID)
   legacy.parent_session_id = "some-old-session"
   legacy.origin_ref = EventRef(session_id="some-old-session", event_id=None)
@@ -120,39 +131,29 @@ async def test_history_copying_never_becomes_a_task_parent(tmp_path: Path) -> No
 
   index = await mgr._get_index()
   assert legacy.id not in index.children.get(None, [])  # not a task-tree node yet
-  # The first child create adopts the legacy session as a manager node; the
-  # history-copy fields never turn into tree parentage.
+  # A legacy session parents task work in place: the create writes nothing to
+  # it (its metadata.json is byte-identical) and the child hangs under it.
+  meta_path = cfg.sessions_dir / legacy.id / "metadata.json"
+  before = meta_path.read_bytes()
   child = await create_task(mgr, parent=legacy.id, request_id="child-of-legacy")
+  assert meta_path.read_bytes() == before
   fresh = await session_mgr.get_session(legacy.id)
   assert fresh is not None and fresh.task_parent_id is None
-  assert fresh.profile == "manager" and fresh.schema_version == 2
+  assert fresh.profile is None and fresh.schema_version == 1
   assert child.task_parent_id == legacy.id
   index = await mgr._get_index()
-  assert legacy.id in index.children.get(None, [])
+  assert legacy.id not in index.children.get(None, [])
   assert child.id in mgr._children_of(index, legacy.id)
 
 
 @pytest.mark.asyncio
-async def test_adopt_legacy_session_writes_profile_and_schema_version_once(tmp_path: Path) -> None:
-  _, session_mgr, mgr = build_env(tmp_path)
-  legacy = await session_mgr.create_session(CreateSessionRequest(name="legacy"), backend=OPUS_BACKEND_ID)
-  before = legacy.model_dump(exclude={"updated_at"})
-
-  adopted = await mgr.adopt_legacy_session(legacy.id)
-
-  assert adopted.profile == "manager" and adopted.schema_version == 2
-  after = adopted.model_dump(exclude={"updated_at"})
-  assert {k for k in before if before[k] != after[k]} == {"profile", "schema_version"}
-  stored = await session_mgr.get_session(legacy.id)
-  assert stored is not None and stored.profile == "manager" and stored.schema_version == 2
-  # A second call is a read: nothing is rewritten.
-  again = await mgr.adopt_legacy_session(legacy.id)
-  assert again.updated_at == stored.updated_at
-  # A node that already carries a profile keeps it.
-  worker = await create_task(mgr, parent=adopted.id, request_id="w", profile="worker", name="W")
-  assert (await mgr.adopt_legacy_session(worker.id)).profile == "worker"
+async def test_create_under_legacy_parent_rejects_missing_and_worker_parents(tmp_path: Path) -> None:
+  _, _session_mgr, mgr = build_env(tmp_path)
   with pytest.raises(TaskNotFoundError):
-    await mgr.adopt_legacy_session("missing")
+    await create_task(mgr, parent="missing-parent", request_id="x")
+  worker = await create_task(mgr, parent=None, request_id="w", profile="worker", name="W")
+  with pytest.raises(TaskInvalidError, match="not a manager"):
+    await create_task(mgr, parent=worker.id, request_id="under-worker")
 
 
 @pytest.mark.asyncio
@@ -352,9 +353,10 @@ async def test_permanent_delete_blockers(tmp_path: Path) -> None:
   blockers = await mgr.deletion_blockers(ids["worker2"])
   assert any("trigger" in b for b in blockers)
 
-  # A saved alias mapping referencing the session blocks deletion too.
+  # A saved alias mapping referencing the session blocks deletion too. The
+  # file format is the store's contract; the test writes it directly.
   leaf = await create_task(mgr, parent=ids["root"], request_id="leafy", profile="worker", name="Leafy")
-  mgr.aliases.put_old_session("old-leaf", leaf.id)
+  write_session_alias(mgr.aliases.path, old_session_ids={"old-leaf": leaf.id})
   blockers = await mgr.deletion_blockers(leaf.id)
   assert any("alias" in b for b in blockers)
   mgr.aliases.path.unlink()

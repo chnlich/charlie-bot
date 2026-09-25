@@ -722,7 +722,6 @@ class TaskTreeManager:
         # delegation) into an ungated manager create.
         if isinstance(caller, CallerIdentity) and not caller.is_operator:
           parent_meta = await self.load_meta(task_parent_id) if task_parent_id is not None else None
-          parent_meta = parent_meta if parent_meta is not None and parent_meta.profile is not None else None
           assert existing.profile is not None  # a (parent, request_id)-bound id only exists via this create
           await self._authorize_agent_creation(caller, existing.profile, task_parent_id, parent_meta)
         return existing
@@ -731,17 +730,15 @@ class TaskTreeManager:
       if isinstance(caller, CallerIdentity) and not caller.is_operator:
         if task_parent_id is not None:
           parent_meta = await self.load_meta(task_parent_id)
-          parent_meta = parent_meta if parent_meta is not None and parent_meta.profile is not None else None
         await self._authorize_agent_creation(caller, profile, task_parent_id, parent_meta)
       if task_parent_id is not None:
         parent_meta = await self.load_meta(task_parent_id)
-        if parent_meta is not None and parent_meta.profile is None:
-          # A legacy session becomes a manager node the first time it parents
-          # a task (the sidebar's hover "+" lands here).
-          parent_meta = await self._adopt_legacy_session_locked(task_parent_id)
-        self._require_task(parent_meta, task_parent_id)
-        assert parent_meta is not None
-        if parent_meta.profile != "manager":
+        if parent_meta is None:
+          raise TaskNotFoundError(f"task {task_parent_id} not found")
+        # A legacy session (profile None) parents task work in place: it is a
+        # valid parent exactly like a manager and is never rewritten by the
+        # create. Only a worker parent is no parent at all.
+        if parent_meta.profile == "worker":
           raise TaskInvalidError(f"parent task {task_parent_id} is not a manager")
         index = await self._get_index()
         parent_state = self.task_state_of(index, task_parent_id)
@@ -775,28 +772,6 @@ class TaskTreeManager:
     await self.events.notify_tree_changed(task_id, ET.TASK_CREATED)
     return fresh
 
-  async def adopt_legacy_session(self, session_id: str) -> SessionMetadata:
-    """A legacy session (profile None) becomes a manager node the first time it
-    is asked to parent task work: a delegation, an improve loop, or a child
-    create naming it as the parent. Only profile and schema_version change, the
-    two fields Promote writes; its history threads stay on the thread path. A
-    node that already carries a profile is returned unchanged.
-    """
-    async with self.control_lock:
-      return await self._adopt_legacy_session_locked(session_id)
-
-  async def _adopt_legacy_session_locked(self, session_id: str) -> SessionMetadata:
-    meta = await self.load_meta(session_id)
-    if meta is None:
-      raise TaskNotFoundError(f"session {session_id} not found")
-    if meta.profile is not None:
-      return meta
-    meta.profile = "manager"
-    meta.schema_version = 2
-    await self._save_meta(meta)
-    await self.events.notify_tree_changed(session_id, "task_updated")
-    return meta
-
   async def _default_node_name(self, task: TaskSpec | None, profile: str) -> str:
     """A node created without a name takes the goal's first line when there is
     one; otherwise the legacy session counter name ("Session N"), so the
@@ -818,14 +793,16 @@ class TaskTreeManager:
     A logical manager child directly under the caller's own manager task is
     coordination work and needs no user authorization; a worker child is
     implementation delegation and still rides the nearest-real-user-ancestor
-    gate (takeoff_gate). Any other shape — an unrelated root, a foreign
-    parent, a non-manager parent — is outside an agent's scope.
+    gate (takeoff_gate). A legacy session (profile None) counts as the
+    caller's manager task without being rewritten. Any other shape — an
+    unrelated root, a foreign parent, a worker parent — is outside an agent's
+    scope.
     """
     assert isinstance(caller, CallerIdentity)
     claims = caller.claims
     assert claims is not None
     if (task_parent_id != claims.session_id or parent_meta is None or
-            parent_meta.profile != "manager"):
+            parent_meta.profile not in ("manager", None)):
       raise TaskForbiddenError(
           "an agent may only create a task directly under its own open manager task")
     if profile == "worker":
@@ -918,7 +895,10 @@ class TaskTreeManager:
       meta = index.metas.get(sid)
       if meta is None:
         return None, None
-      return meta.task_parent_id, meta.profile
+      # A legacy session parents task work without being rewritten: the gate
+      # treats it as a manager node whose chat log is the authorization
+      # source. It has no close facts, so its state is "open".
+      return meta.task_parent_id, meta.profile if meta.profile is not None else "manager"
 
     def state_of(sid: str) -> str:
       meta = index.metas.get(sid)

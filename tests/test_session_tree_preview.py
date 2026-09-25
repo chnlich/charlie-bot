@@ -183,12 +183,12 @@ def test_classify_home_fresh_existing_and_refusals(tmp_path: Path) -> None:
   with pytest.raises(PreviewRefusedError, match="not a session-tree preview home") as exc:
     classify_home(legacy)
   assert any("legacy v1 session" in detail for detail in exc.value.details)
-  migrated = tmp_path / "migrated"
-  migrated.mkdir()
-  (migrated / "session_tree_migration.json").write_text("{}")
+  aliased = tmp_path / "aliased"
+  aliased.mkdir()
+  (aliased / "session_aliases.json").write_text("{}")
   with pytest.raises(PreviewRefusedError, match="not a session-tree preview home") as exc:
-    classify_home(migrated)
-  assert any("migration products" in detail for detail in exc.value.details)
+    classify_home(aliased)
+  assert any("session_aliases.json exists" in detail for detail in exc.value.details)
   valid = tmp_path / "valid"
   valid.mkdir()
   _write_record(valid)
@@ -1094,13 +1094,13 @@ def test_cli_refuses_legacy_and_migrated_content(tmp_path: Path, source_home: Pa
            ["--home", str(legacy), "--port", str(_free_port()), "--backend", "clc-test"],
            "not a session-tree preview home")
   assert (legacy / "sessions" / "abc" / "metadata.json").is_file()
-  migrated = tmp_path / "migrated"
-  migrated.mkdir()
-  (migrated / "session_tree_migration.json").write_text("{}")
+  aliased = tmp_path / "aliased"
+  aliased.mkdir()
+  (aliased / "session_aliases.json").write_text("{}")
   _refusal(tmp_path, source_home,
-           ["--home", str(migrated), "--port", str(_free_port()), "--backend", "clc-test"],
+           ["--home", str(aliased), "--port", str(_free_port()), "--backend", "clc-test"],
            "not a session-tree preview home")
-  assert (migrated / "session_tree_migration.json").read_text() == "{}"
+  assert (aliased / "session_aliases.json").read_text() == "{}"
 
 
 def test_cli_refuses_when_launcher_missing(tmp_path: Path, source_home: Path) -> None:

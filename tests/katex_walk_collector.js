@@ -110,6 +110,19 @@ try {
   const pageParity = nFree === page.length ? pageRoot.innerHTML === before : pageRoot.innerHTML.includes('katex');
   if (!pageParity) throw new Error('page walk changed a math-free page');
 
+  // Repeat shape: the same page rebuilt into fresh elements — the parse memo
+  // serves the identical pre-walk HTML — so this is the walk cost a session
+  // re-entry pays. A walked-bytes memo serves the first render's output;
+  // byte-identity against the cold walk is the parity contract.
+  const coldWalked = pageRoot.innerHTML;
+  pageRoot.innerHTML =
+    page.map((t) => `<div class="prose-msg" data-raw="${dataRaw(t)}">${w.renderProseMarkdown(t)}</div>`).join('');
+  const t1 = performance.now();
+  pageRoot.querySelectorAll('.prose-msg').forEach(w.renderChatMath);
+  const repeatWall = performance.now() - t1;
+  const repeatParity = pageRoot.innerHTML === coldWalked;
+  if (!repeatParity) throw new Error('repeat render diverged from the cold walk');
+
   // Streamed shape: the largest math-free draft through the checkout's real
   // paint path; the wrapper walks each painted frame (the gate-less arm).
   const text = largestAssistantDraft(mathFree);
@@ -136,6 +149,7 @@ try {
     `${page.length} bodies (${nFree} math-free, ${(pageBytes / 1024).toFixed(1)} KB, corpus sha1 ${digest}) ` +
     `of a ${(fileSize / 1e6).toFixed(1)} MB live chat file, katex ${KATEX_LABEL} walk over jsdom; ` +
     `page re-render wall ${pageWall.toFixed(2)} ms, ${pageWalks} walks, parity ${pageParity}; ` +
+    `repeat re-render wall ${repeatWall.toFixed(2)} ms, parity ${repeatParity}; ` +
     `${(text.length / 1024).toFixed(1)} KB math-free draft (sha1 ${draftDigest}), ${h.stats().frames.length} paints: ` +
     `walk wall ${walkMs.toFixed(2)} ms (${walkCalls} walks)`
   );

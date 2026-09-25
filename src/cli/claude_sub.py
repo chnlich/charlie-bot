@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from src.agents.backends.claude_launch import (
+    DISABLE_CONNECTOR_SETTINGS,
     SKIP_PERMISSIONS_FLAG,
     SKIP_PERMISSIONS_SETTINGS,
     build_claude_argv,
@@ -450,8 +451,11 @@ def _session_settings(args: ClaudeSubArgs) -> str:
       raise ClaudeSubError("claude-sub --settings must contain a JSON object")
     merged.update(value)
   # Inline managed settings must be last so the completion threshold cannot be
-  # overridden by the fast-mode setting passed by ClaudeCodeBackend.
+  # overridden by the fast-mode setting passed by ClaudeCodeBackend, and so the
+  # connector key stays CharlieBot policy: a caller's --settings cannot
+  # re-enable claude.ai connector sync (see DISABLE_CONNECTOR_SETTINGS).
   merged.update(_MANAGED_NOTIFICATION_SETTINGS)
+  merged.update(DISABLE_CONNECTOR_SETTINGS)
   return json.dumps(merged, ensure_ascii=False, separators=(",", ":"))
 
 

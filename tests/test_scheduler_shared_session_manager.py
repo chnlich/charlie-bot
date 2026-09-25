@@ -7,15 +7,13 @@ process-wide instance's cache — keep serving the pre-cron history.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from conftest import (
-    MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET,
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
     SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
@@ -27,12 +25,11 @@ from conftest import (
     _noop,
     build_option_worktree_cfg,
     close_create_logged_task,
-    make_task_spawner,
 )
 
 from src.core import event_types as ET
 from src.core.config import ScheduledTaskConfig
-from src.core.models import CreateSessionRequest, SessionStatus
+from src.core.models import CreateSessionRequest
 from src.core.scheduler import TASK_HANDLERS, Scheduler
 from src.core.sessions import SessionManager
 
@@ -56,7 +53,7 @@ async def test_scheduled_prompt_task_hands_injected_session_manager_to_worker(
       backend=OPUS_BACKEND_ID,
   )
   scheduler = Scheduler(cfg, session_mgr)
-  task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", type="normal", prompt="nightly prompt")
+  task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt")
 
   captured: dict[str, Any] = {}
 
@@ -97,7 +94,7 @@ async def test_scheduled_round_events_reach_shared_read_cache(
   scheduler = Scheduler(cfg, session_mgr)
   monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setitem(TASK_HANDLERS, "probe", AsyncMock(return_value="done"))
-  task_cfg = ScheduledTaskConfig(name="probe", cron="* * * * *", type="normal", handler="probe")
+  task_cfg = ScheduledTaskConfig(name="probe", cron="* * * * *", handler="probe")
 
   await scheduler._execute_task(task_cfg)
 
@@ -108,43 +105,3 @@ async def test_scheduled_round_events_reach_shared_read_cache(
   projection = session_mgr.get_message_projection(meta.id)
   assert projection is not None
   assert len(projection.history) == 1
-
-
-@pytest.mark.asyncio
-async def test_cron_pm_wake_leaves_an_archived_session_archived(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  """The cron wake is a timed wake (pull_back=False): a resolved session that is
-  archived stays archived, with no run and no event."""
-  cfg = build_option_worktree_cfg(tmp_path, OPUS_BACKEND_OPTION)
-  session_mgr = SessionManager(cfg)
-  meta = await session_mgr.create_session(
-      CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
-      backend=OPUS_BACKEND_ID,
-  )
-  await session_mgr.archive_session(meta.id)
-  # get_session returns copies: re-read so the handed-over meta carries ARCHIVED.
-  archived = await session_mgr.get_session(meta.id)
-  assert archived is not None
-  scheduler = Scheduler(cfg, session_mgr)
-  task_cfg = ScheduledTaskConfig(
-      name="nightly", cron="* * * * *", type="pm", project="nightly-group", prompt="nightly prompt")
-
-  spawned: list[asyncio.Task] = []
-
-  # Hand the wake an archived session directly: selection itself only ever
-  # returns active sessions, so this isolates the opted-out wake's behavior.
-  monkeypatch.setattr(scheduler, "_get_or_create_session", AsyncMock(return_value=archived))
-  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, make_task_spawner(spawned))
-
-  with patch(MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET, new=AsyncMock()) as mock_run:
-    await scheduler._execute_pm_task(task_cfg)
-    await asyncio.wait_for(spawned[0], timeout=5)
-
-  mock_run.assert_not_awaited()
-  assert session_mgr.load_chat_events_sync(meta.id) == []
-  fresh = await session_mgr.get_session(meta.id)
-  assert fresh is not None
-  assert fresh.status == SessionStatus.ARCHIVED

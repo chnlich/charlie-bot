@@ -153,7 +153,7 @@ def main() -> None:
   cron = HOME / "config.d" / "cron.d"
   cron.mkdir(parents=True)
   (cron / "hourly.yaml").write_text(
-      "type: normal\ncron: '0 * * * *'\n"
+      "cron: '0 * * * *'\n"
       "timezone: America/Los_Angeles\nprompt: hourly probe\n", encoding="utf-8")
 
   files = [p for p in HOME.rglob("*") if p.is_file()]

@@ -1400,7 +1400,7 @@ SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.core.slack_listener._bot_client"
 # Import-path patch target for the background-task spawner a scheduled task fires through.
 # src/core/scheduler.py binds the name at import scope (`from src.core.tasks import
 # create_logged_task`), so monkeypatch.setattr lands the stand-in on the src.core.scheduler
-# module attribute and _execute_pm_task/_spawn_scheduled_worker read it at call time; the
+# module attribute and _spawn_scheduled_worker reads it at call time; the
 # src.core.slack_listener route above reaches a different namespace.
 SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.scheduler.create_logged_task"
 
@@ -1409,7 +1409,7 @@ SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.scheduler.create_logged_ta
 # `from src.core.master_trigger import trigger_master`, `from src.core.spawner import
 # resolve_requested_subagent_backend_model, spawn_worker`, `from src.core.threads import
 # ThreadManager`), so monkeypatch.setattr lands the stand-in on the src.core.scheduler module
-# attribute and the call-time readers — _reload_config, _execute_pm_task, and
+# attribute and the call-time readers — _reload_config and
 # _spawn_scheduled_worker for the bindings above; _tick and run_task_now for
 # get_scheduled_tasks — read it there; sibling modules binding the same functions keep their
 # own routes.
@@ -1418,14 +1418,13 @@ SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.core.scheduler.get_scheduled_t
 SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = ("src.core.scheduler.resolve_requested_subagent_backend_model")
 SCHEDULER_SPAWN_WORKER_PATCH_TARGET = "src.core.scheduler.spawn_worker"
 SCHEDULER_THREAD_MANAGER_PATCH_TARGET = "src.core.scheduler.ThreadManager"
-SCHEDULER_TRIGGER_MASTER_PATCH_TARGET = "src.core.scheduler.trigger_master"
 
 # Import-path patch target for the master wake a review-chain finalize fires. src/core/review.py
 # binds the name at import scope (`from src.core.master_trigger import trigger_master`), so
 # monkeypatch.setattr lands the stand-in on the src.core.review module attribute and
 # _trigger_master_judged reads it at call time; sibling modules binding the same function
-# (TRIGGER_MASTER_PATCH_TARGET, SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
-# SCHEDULER_TRIGGER_MASTER_PATCH_TARGET above) keep their own routes.
+# (TRIGGER_MASTER_PATCH_TARGET, SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET) keep their own
+# routes.
 REVIEW_TRIGGER_MASTER_PATCH_TARGET = "src.core.review.trigger_master"
 
 # Import-path patch targets for the worker spawn/resume seam a recovery or improve-loop run
@@ -1753,17 +1752,14 @@ class FakeSlackClient:
     return f"name-of-{channel_id}"
 
 
-def make_instruction_cfg(tmp_path: Path, *, manager_contract: str | None) -> SimpleNamespace:
+def make_instruction_cfg(tmp_path: Path) -> SimpleNamespace:
   """Fake instruction inputs for the master-instruction builder: a repo whose prompts/master.md
-  reads "BASE PROMPT", plus prompts/project_manager.md carrying the manager_contract text when
-  given. claude_md_file and memory_dir name paths that do not exist, so the built instructions
-  carry neither host override nor memory block."""
+  reads "BASE PROMPT". claude_md_file and memory_dir name paths that do not exist, so the built
+  instructions carry neither host override nor memory block."""
   home = tmp_path / "home"
   repo = tmp_path / "repo"
   (repo / "prompts").mkdir(parents=True)
   (repo / "prompts" / "master.md").write_text("BASE PROMPT", encoding="utf-8")
-  if manager_contract is not None:
-    (repo / "prompts" / "project_manager.md").write_text(manager_contract, encoding="utf-8")
   return SimpleNamespace(
       charlie_bot_repo=repo,
       claude_md_file=home / "MASTER_AGENT_PROMPT.md",

@@ -348,7 +348,7 @@ def test_module_defers_structlog_until_the_first_log_call(module_name: str, impo
 # merge-pool build, ncu_parsing and trace_merge ride the NCU and Perfetto pages,
 # and wave rides the voice wav write — each lazy at its use site, the croniter
 # seam. The master-turn chain (src.agents.master_cc and its run/queue/relay/
-# state modules plus src.core.project_config) rides its three wake call sites
+# state modules) rides its three wake call sites
 # (the chat send/cancel handlers, the trigger fire), the memory store rides the
 # worker prompt build, and the compaction stack rides the worker's relay
 # decision — each lazy at its call. The slash-command stack
@@ -371,7 +371,6 @@ SERVER_HEAVY_MODULES = (
     "src.agents.master_cc_queue",
     "src.agents.master_cc_relay",
     "src.agents.master_cc_state",
-    "src.core.project_config",
     "src.core.memory",
     "src.core.claude_compaction",
     "src.agents.backends.registry",

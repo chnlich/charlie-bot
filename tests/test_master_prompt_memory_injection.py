@@ -31,14 +31,14 @@ def _make_store(memory_dir: Path) -> None:
 
 
 def _cfg(tmp_path: Path) -> SimpleNamespace:
-  cfg = make_instruction_cfg(tmp_path, manager_contract=None)
+  cfg = make_instruction_cfg(tmp_path)
   _make_store(cfg.memory_dir)
   return cfg
 
 
 def test_resident_body_present_non_resident_index_only(tmp_path: Path) -> None:
   cfg = _cfg(tmp_path)
-  out = master_cc._build_instructions_content(SimpleNamespace(id="session-1", role=None, group=None), cfg, None)
+  out = master_cc._build_instructions_content(SimpleNamespace(id="session-1", group=None), cfg, None)
   assert out is not None
   assert "BASE PROMPT" in out
   # Resident entry: full body injected, heading synthesized from the frontmatter title.
@@ -53,7 +53,7 @@ def test_resident_body_present_non_resident_index_only(tmp_path: Path) -> None:
 
 def test_staging_content_absent(tmp_path: Path) -> None:
   cfg = _cfg(tmp_path)
-  out = master_cc._build_instructions_content(SimpleNamespace(id="session-1", role=None, group=None), cfg, None)
+  out = master_cc._build_instructions_content(SimpleNamespace(id="session-1", group=None), cfg, None)
   assert out is not None
   # Staging candidates are never injected.
   assert "STAGED BODY" not in out
@@ -62,8 +62,8 @@ def test_staging_content_absent(tmp_path: Path) -> None:
 
 def test_missing_memory_dir_still_builds(tmp_path: Path) -> None:
   """A missing memory_dir is the one tolerated degradation: prompt still builds."""
-  cfg = make_instruction_cfg(tmp_path, manager_contract=None)  # memory_dir left unpopulated
-  out = master_cc._build_instructions_content(SimpleNamespace(id="session-1", role=None, group=None), cfg, None)
+  cfg = make_instruction_cfg(tmp_path)  # memory_dir left unpopulated
+  out = master_cc._build_instructions_content(SimpleNamespace(id="session-1", group=None), cfg, None)
   assert out is not None
   assert "BASE PROMPT" in out
   assert "User prefers dark UI." not in out

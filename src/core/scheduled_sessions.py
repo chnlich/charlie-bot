@@ -35,15 +35,14 @@ class ScheduledSessionStore:
       self,
       task_name: str,
       backend: str,
-      role: str | None,
   ) -> SessionMetadata:
     """Create the task's next scheduled-session generation under the canonical name.
 
     Single home of the generation request: the first-creation and rotation paths
-    must produce identically shaped sessions (name, scheduled_task, role).
+    must produce identically shaped sessions (name, scheduled_task).
     """
     return await self._session_manager.create_session(
-        CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name, role=role), backend=backend)
+        CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name), backend=backend)
 
   async def ensure_scheduled_session_backend(
       self,
@@ -51,15 +50,11 @@ class ScheduledSessionStore:
       backend: str,
       session_cache: dict[str, list[SessionMetadata]] | None = None,
       skip_if_busy: bool = False,
-      role: str | None = None,
-      group: str | None = None,
   ) -> SessionMetadata | None:
     """Return the active scheduled session for task_name/backend, rotating history if needed.
 
     Backend changes are generation changes: the old active session is archived and a new
-    scheduled session is created with only scheduler bookkeeping copied over. ``role`` and
-    ``group`` (passed for type: pm tasks) ride along on both creation paths — first
-    creation and generation rotation alike.
+    scheduled session is created with only scheduler bookkeeping copied over.
     """
     active_sessions = await self._active_scheduled_sessions(task_name, session_cache)
     for session in active_sessions:
@@ -68,11 +63,7 @@ class ScheduledSessionStore:
 
     old_session = active_sessions[0] if active_sessions else None
     if old_session is None:
-      meta = await self._create_generation(task_name, backend, role)
-      if group is not None:
-        meta.group = group
-        meta.updated_at = utc_now()
-        await self._session_manager.save_metadata(meta)
+      meta = await self._create_generation(task_name, backend)
       log.info("scheduled_session_created", task=task_name, session=meta.id, backend=backend)
       if session_cache is not None:
         session_cache.setdefault(task_name, []).insert(0, meta)
@@ -94,10 +85,8 @@ class ScheduledSessionStore:
       raise ScheduledSessionBusyError(message)
 
     await self._session_manager.archive_session(old_session.id)
-    meta = await self._create_generation(task_name, backend, role)
+    meta = await self._create_generation(task_name, backend)
     self.migrate_scheduler_bookkeeping(old_session, meta)
-    if group is not None:
-      meta.group = group
     meta.updated_at = utc_now()
     await self._session_manager.save_metadata(meta)
     if session_cache is not None:
@@ -171,17 +160,6 @@ class ScheduledSessionStore:
     Persistence rides :meth:`_write_cron_key`'s contract.
     """
     await asyncio.to_thread(self._write_cron_key, task_name, "backend", backend)
-
-  async def write_scheduled_task_enabled(self, task_name: str, enabled: bool) -> None:
-    """Write only the ``enabled`` key of *task_name*'s cron yaml, preserving every other key.
-
-    The PM lifecycle's self-disable write (dead-group shutdown and the
-    manual-archive stop): the run gate flips while every other field — cron,
-    prompt_file pointer, project, backend — stays on disk untouched. Persistence
-    rides :meth:`_write_cron_key`'s contract, the same as
-    :meth:`write_scheduled_task_backend`.
-    """
-    await asyncio.to_thread(self._write_cron_key, task_name, "enabled", enabled)
 
   @staticmethod
   def _write_cron_key(task_name: str, key: str, value: str | bool) -> None:

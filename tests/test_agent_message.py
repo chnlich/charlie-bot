@@ -233,14 +233,14 @@ def test_cli_session_create_posts_metadata_only_payload(tmp_path: Path) -> None:
   cfg = _mock_cli_config(tmp_path)
   resp = make_json_response({"id": "new-id", "name": "task-a"})
 
-  with patched_cli_post(cfg, ["session", "create", "--name", "task-a", "--backend", "codex-o3", "--role", "project"],
+  with patched_cli_post(cfg, ["session", "create", "--name", "task-a", "--backend", "codex-o3"],
                         return_value=resp) as post_mock:
     session_cli_main()
 
   assert post_mock.call_count == 1
   url = post_mock.call_args[0][0]
   assert url.endswith("/api/sessions/")
-  assert post_mock.call_args[1]["json"] == {"name": "task-a", "backend": "codex-o3", "role": "project"}
+  assert post_mock.call_args[1]["json"] == {"name": "task-a", "backend": "codex-o3"}
 
 
 def test_cli_session_create_group_triggers_second_group_call(tmp_path: Path) -> None:

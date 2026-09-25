@@ -342,10 +342,6 @@ async def smoke(backend_id: str, purge: bool) -> None:
             fail(f"manager snapshot lacks the manager contract blocks: {scope_refs}")
         if any(scope in ("subtree", "node") for scope, _ref in scope_refs):
             fail(f"manager snapshot invented local rules for default-empty scopes: {scope_refs}")
-        if any("project_manager" in ref or "Project Manager" in text
-               for _scope, ref in scope_refs
-               for text in [b["text"] for b in stored["blocks"]]):
-            fail("manager snapshot injected a retired PM body")
         # Preview parity: the preview taken before launch equals the stored
         # snapshot object (same hash, char_count and block sources/text).
         if preview.get("prompt_hash") != stored["prompt_hash"] or \

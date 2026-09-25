@@ -19,12 +19,9 @@ from src.core.config import (
     require_backend_option,
 )
 from src.core.log_once import LazyStructlogLogger
-from src.core.master_trigger import trigger_master
 from src.core.models import (
-    PROJECT_ROLE,
     LastRunStatus,
     SessionMetadata,
-    SessionStatus,
     SpawnRequest,
     TaskType,
     ThreadMetadata,
@@ -97,35 +94,6 @@ def effective_scheduled_task_backend(task_cfg: ScheduledTaskConfig, cfg: Charlie
   if not cfg.backends.options:
     raise ValueError("scheduled task backend resolution requires a configured backends.options entry")
   return cfg.backends.options[0].id
-
-
-def scheduled_task_session_binding(task_cfg: ScheduledTaskConfig,
-                                   cfg: CharlieBotConfig) -> tuple[str, str | None, str | None]:
-  """Return the effective backend plus the role/group a task's dedicated session binds to.
-
-  A type: pm task binds its dedicated session to the task's project —
-  role=project and group=<project value>; every normal task binds neither.
-  """
-  backend = effective_scheduled_task_backend(task_cfg, cfg)
-  role = PROJECT_ROLE if task_cfg.type == 'pm' else None
-  group = task_cfg.project if task_cfg.type == 'pm' else None
-  return backend, role, group
-
-
-def pm_manually_archived(task_cfg: ScheduledTaskConfig, session_cache: dict[str, list[SessionMetadata]]) -> bool:
-  """Whether the task's newest dedicated session is an archived manual stop.
-
-  Reads the tick's scheduled-session cache: the newest generation (by
-  ``created_at``) being ARCHIVED without a ``successor_session_id`` is an
-  operator stop. An elone takeover archives the parent WITH a successor pointer
-  and its active child is the newer generation; backend rotation archives the
-  old generation but births a newer active one — neither reads as a stop.
-  """
-  sessions = session_cache.get(task_cfg.name)
-  if not sessions:
-    return False
-  newest = max(sessions, key=lambda s: s.created_at)
-  return newest.status == SessionStatus.ARCHIVED and newest.successor_session_id is None
 
 
 async def fire_scheduled_worker(
@@ -247,31 +215,12 @@ class Scheduler:
       assert s.scheduled_task is not None
       session_cache.setdefault(s.scheduled_task, []).append(s)
 
-    # A PM whose dedicated session was manually archived without an elone
-    # successor is an intentional stop: flip the task yaml's enabled gate off
-    # so neither the get-or-create below nor the fire loop resurrects a
-    # generation. The in-process task snapshot still reads enabled, so the
-    # stopped names gate both loops for this tick; the next tick reloads the
-    # yaml and skips the task on its own.
-    stopped_pm_tasks: set[str] = set()
     for task_cfg in tasks:
-      if task_cfg.enabled and task_cfg.type == 'pm' and pm_manually_archived(task_cfg, session_cache):
-        try:
-          await session_mgr.write_scheduled_task_enabled(task_cfg.name, enabled=False)
-        except Exception as e:
-          # The stop stands for this tick either way (no generation is
-          # resurrected); a failed yaml write is loud and retried next tick.
-          log.error("pm_manual_archive_disable_failed", task=task_cfg.name, error=str(e))
-        else:
-          log.info("pm_disabled_manual_archive", task=task_cfg.name)
-        stopped_pm_tasks.add(task_cfg.name)
-
-    for task_cfg in tasks:
-      if task_cfg.enabled and task_cfg.name not in stopped_pm_tasks and not task_cfg.session_id:
+      if task_cfg.enabled and not task_cfg.session_id:
         await self._get_or_create_session(task_cfg, cfg, session_mgr, session_cache)
 
     for task_cfg in tasks:
-      if not task_cfg.enabled or task_cfg.name in stopped_pm_tasks:
+      if not task_cfg.enabled:
         continue
       try:
         await self._maybe_run(task_cfg, session_mgr, session_cache, cfg)
@@ -376,7 +325,7 @@ class Scheduler:
       self, task_cfg: ScheduledTaskConfig, record_handle: bool = False,
       firing: str | None = None,
   ) -> dict:
-    """Route to bound, pm, handler, loop, steps, or prompt execution based on task config.
+    """Route to bound, handler, loop, steps, or prompt execution based on task config.
 
     ``record_handle`` gates whether the background round spawned by this fire is
     registered in the overlap-skip registry. The scheduled path records it via
@@ -389,8 +338,6 @@ class Scheduler:
     if task_cfg.session_id:
       return await self._execute_bound_task(
           task_cfg, record_handle=record_handle, firing=firing or datetime.now(UTC).isoformat())
-    if task_cfg.type == 'pm':
-      return await self._execute_pm_task(task_cfg, record_handle=record_handle)
     if task_cfg.handler:
       return await self._execute_handler_task(task_cfg)
     if task_cfg.loop:
@@ -418,11 +365,12 @@ class Scheduler:
     tree = task_manager()
     meta = await check_fireable_binding(task_cfg, tree)
 
-    if task_cfg.type == 'pm':
-      # The durable input IS the admission: the checkpoint advances only once
-      # the firing's product exists durably, so a crash or admission failure
-      # in between leaves the occurrence unconsumed and the replay re-admits
-      # the SAME input (stable firing identity), never a duplicate.
+    if task_cfg.mode == 'master':
+      # mode: master wakes the bound manager node — the durable input IS the
+      # admission: the checkpoint advances only once the firing's product
+      # exists durably, so a crash or admission failure in between leaves the
+      # occurrence unconsumed and the replay re-admits the SAME input (stable
+      # firing identity), never a duplicate.
       await fire_bound_master(task_cfg, meta, tree, firing)
       await self._record_bound_fire(meta, task_cfg, cfg)
       return {"session_id": meta.id, "firing": firing}
@@ -598,70 +546,6 @@ class Scheduler:
     await self._session_mgr.persist_and_broadcast(session.id, event)
     return {'session_id': session.id, 'thread_id': None}
 
-  async def _execute_pm_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
-    """Run one PM fire: project liveness check, then wake the dedicated session's master.
-
-    The liveness check runs before any wake: when the task's project group has
-    sessions and every member session is archived, the project is finished —
-    the task yaml's ``enabled`` gate flips to false, the dedicated session
-    archives, and the master is never woken. A group with no sessions at all is
-    a brand-new project and stays alive.
-
-    The wake message is the task's resolved prompt: a PM task's host cron file
-    carries the path to prompts/project_manager.md under ``prompt_file``, the
-    pointed file owns the body, and the loader reads it on every load; a
-    `Group: <project>` line is appended, and the yaml is the single control
-    point for the wake text. No worker thread and no
-    TASK_DELEGATED event: the fire is a single master turn in the task's
-    dedicated session, delivered through the shared trigger_master primitive
-    (fire-and-forget so the scheduler loop never stalls behind a master turn).
-    """
-    cfg, session_mgr, session = await self._prepare_task_execution(task_cfg)
-    if await self._pm_project_is_dead(task_cfg, session_mgr):
-      await session_mgr.write_scheduled_task_enabled(task_cfg.name, enabled=False)
-      # The SUCCESS save lands before the archive on purpose: save_metadata
-      # persists the whole meta it is handed, so saving the in-hand active copy
-      # after archive_session would flip the status back to active on disk.
-      session.last_run_status = LastRunStatus.SUCCESS
-      session.updated_at = datetime.now(UTC)
-      await session_mgr.save_metadata(session)
-      await session_mgr.archive_session(session.id)
-      log.info(
-          "pm_disabled_dead_group",
-          task=task_cfg.name,
-          project=task_cfg.project,
-          session=session.id,
-      )
-      return {"session_id": session.id, "thread_id": None}
-    wake_prompt = f"{task_cfg.prompt}\n\nGroup: {task_cfg.project}"
-    # pull_back=False: a cron wake is a timed wake and must never unarchive the
-    # session it lands on — the same opt-out the trigger fire passes. Selection
-    # above only hands over active sessions, so this is the declared intent.
-    handle = create_logged_task(
-        trigger_master(session.id, wake_prompt, cfg, session_mgr, pull_back=False),
-        name=f"scheduled_master_{task_cfg.name}",
-    )
-    if record_handle:
-      self._handles[task_cfg.name] = handle
-    session.last_run_status = LastRunStatus.SUCCESS
-    session.updated_at = datetime.now(UTC)
-    await session_mgr.save_metadata(session)
-    log.info("pm_task_fired", task=task_cfg.name, session=session.id)
-    return {"session_id": session.id, "thread_id": None}
-
-  async def _pm_project_is_dead(self, task_cfg: ScheduledTaskConfig, session_mgr: SessionManager) -> bool:
-    """Whether the task's project group has only archived member sessions left.
-
-    Members are the sessions carrying the project group other than this task's
-    own dedicated session (``scheduled_task == task_cfg.name`` — the active
-    generation and any archived predecessor alike).
-    """
-    members = [
-        s for s in await session_mgr.list_sessions()
-        if s.group == task_cfg.project and s.scheduled_task != task_cfg.name
-    ]
-    return bool(members) and all(s.status == SessionStatus.ARCHIVED for s in members)
-
   async def _execute_handler_task(self, task_cfg: ScheduledTaskConfig) -> dict:
     """Run a built-in handler inline; track last_scheduled_run via session."""
     handler = TASK_HANDLERS.get(task_cfg.handler)
@@ -793,14 +677,12 @@ class Scheduler:
     When session_cache is provided, uses it instead of scanning the sessions
     directory. Newly created sessions are added to the cache.
     """
-    effective_backend, role, group = scheduled_task_session_binding(task_cfg, cfg)
+    effective_backend = effective_scheduled_task_backend(task_cfg, cfg)
     return await session_mgr.ensure_scheduled_session_backend(
         task_cfg.name,
         effective_backend,
         session_cache=session_cache,
         skip_if_busy=True,
-        role=role,
-        group=group,
     )
 
   # ---------------------------------------------------------------------------

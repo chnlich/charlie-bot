@@ -301,11 +301,6 @@ class PendingTrigger(BaseModel):
 # Session Models
 # ---------------------------------------------------------------------------
 
-# Role carried by the dedicated session of a type: pm cron task — the
-# Project Manager for the task's ``project`` (group) value.
-PROJECT_ROLE = "project"
-
-
 class MasterRunRecord(BaseModel):
   """Identity of one in-flight master turn, persisted for restart reconciliation.
 
@@ -366,7 +361,6 @@ class SessionMetadata(BaseModel):
   master_run: MasterRunRecord | None = None
   backend: str = ""  # empty default; create_session always provides the real value
   scheduled_task: str | None = None  # task name; None = regular session
-  role: str | None = None  # role ("project" from the scheduler; arbitrary via create API); None = regular session
   last_scheduled_run: str | None = None  # ISO datetime of last scheduler execution
   last_run_status: LastRunStatus | None = None
   last_scheduled_cron: str | None = None  # cron expr at last run; detects changes
@@ -468,7 +462,6 @@ class CreateSessionRequest(BaseModel):
   name: str | None = None
   scheduled_task: str | None = None
   backend: str | None = None
-  role: str | None = None
   session_id: str | None = None
   slack_origin: SlackOrigin | None = None
   # ---- v2 task create: any of these set routes POST /api/sessions/ through the

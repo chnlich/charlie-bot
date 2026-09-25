@@ -27,7 +27,7 @@ async def test_cron_tasks_gzip_ships_precompressed_body(monkeypatch: pytest.Monk
   equal the plain body, the vary header names the negotiator, and the parsed
   payload keeps the task-list shape (prompt excluded, the M46 dump contract)."""
   tasks = [
-      ScheduledTaskConfig(name="nightly", cron="* * * * *", type="normal", prompt="nightly prompt", backend="codex-o3")
+      ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt", backend="codex-o3")
   ]
   monkeypatch.setattr(cron_mod, "get_scheduled_tasks", lambda: tasks)
   monkeypatch.setattr(cron_mod, "get_scheduled_task_errors", list)
@@ -46,7 +46,7 @@ async def test_cron_tasks_gzip_ships_precompressed_body(monkeypatch: pytest.Monk
 async def test_cron_tasks_repeat_serves_cache_without_rerender(monkeypatch: pytest.MonkeyPatch) -> None:
   """A repeat poll of the same generation serves both cached bodies and
   re-renders nothing."""
-  tasks = [ScheduledTaskConfig(name="nightly", cron="* * * * *", type="normal", prompt="p", backend="codex-o3")]
+  tasks = [ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="p", backend="codex-o3")]
   monkeypatch.setattr(cron_mod, "get_scheduled_tasks", lambda: tasks)
   monkeypatch.setattr(cron_mod, "get_scheduled_task_errors", list)
   first = await list_cron_tasks(_page_request("gzip"))
@@ -63,8 +63,8 @@ async def test_cron_tasks_repeat_serves_cache_without_rerender(monkeypatch: pyte
 async def test_cron_tasks_generation_change_rerenders(monkeypatch: pytest.MonkeyPatch) -> None:
   """A config change rebuilds the snapshot's tasks list: the next poll
   re-renders once and its body carries the new task."""
-  current = [ScheduledTaskConfig(name="old", cron="* * * * *", type="normal", prompt="p", backend="codex-o3")]
-  fresh = [ScheduledTaskConfig(name="new", cron="* * * * *", type="normal", prompt="p", backend="codex-o3")]
+  current = [ScheduledTaskConfig(name="old", cron="* * * * *", prompt="p", backend="codex-o3")]
+  fresh = [ScheduledTaskConfig(name="new", cron="* * * * *", prompt="p", backend="codex-o3")]
   monkeypatch.setattr(cron_mod, "get_scheduled_tasks", lambda: current)
   monkeypatch.setattr(cron_mod, "get_scheduled_task_errors", list)
   first = await list_cron_tasks(_page_request("gzip"))

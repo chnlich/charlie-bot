@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from datetime import UTC, datetime, timedelta
@@ -775,6 +776,16 @@ def assert_cli_reject_exit2(
   """Same as assert_cli_reject with the exit code pinned at 2 (CLI usage error, e.g. bad file input)."""
   assert exc_info.value.code == 2
   _assert_stderr_fragments(capsys, *err_fragments)
+
+
+def stub_speech_bundle(engine: str, model_id: str) -> Any:
+  """The inert _SpeechModelBundle the offline voice tests decode on: object() recognizer
+  and VAD parts, so no model loads, and a real decode lock because _decode_samples
+  acquires it around every decoder call."""
+  from src.agents import transcriber
+
+  return transcriber._SpeechModelBundle(
+      recognizer=object(), vad_config=object(), decode_lock=threading.Lock(), engine=engine, model_id=model_id)
 
 
 def voice_models_cached(cfg: CharlieBotConfig) -> bool:

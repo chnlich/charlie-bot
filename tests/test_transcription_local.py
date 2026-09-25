@@ -13,15 +13,11 @@ import threading
 from collections.abc import AsyncIterator
 
 import pytest
+from conftest import stub_speech_bundle
 
 from src.agents import transcriber
 from src.agents.transcription.local import LocalTranscriptionBackend
 from src.core.config import CharlieBotConfig
-
-
-def _stub_bundle() -> transcriber._SpeechModelBundle:
-  return transcriber._SpeechModelBundle(
-      recognizer=object(), vad_config=object(), decode_lock=threading.Lock(), engine="sherpa", model_id="test")
 
 
 async def _collect(backend: LocalTranscriptionBackend, chunks: list[bytes], **kwargs) -> list:
@@ -37,7 +33,7 @@ def test_transcribe_drains_audio_and_decodes_on_the_resident_bundle(monkeypatch:
   """The chunk stream becomes one transcribe_pcm_offline call on get_transcription_bundle's
   bundle — the upload endpoint's exact decode shape; exactly one final comes out."""
   cfg = CharlieBotConfig()
-  bundle = _stub_bundle()
+  bundle = stub_speech_bundle("sherpa", "test")
   acquired: list[CharlieBotConfig] = []
   decoded: list[tuple[object, bytes]] = []
 
@@ -65,7 +61,7 @@ def test_transcribe_drains_audio_and_decodes_on_the_resident_bundle(monkeypatch:
 def test_transcribe_runs_offline_decode_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
   """The decode is a worker-thread call, so a paced caller is never blocked by it."""
   cfg = CharlieBotConfig()
-  monkeypatch.setattr(transcriber, "get_transcription_bundle", lambda _cfg: _stub_bundle())
+  monkeypatch.setattr(transcriber, "get_transcription_bundle", lambda _cfg: stub_speech_bundle("sherpa", "test"))
 
   def fake_offline(_bundle: object, _pcm: bytes) -> str:
     assert threading.current_thread() is not threading.main_thread()
@@ -90,7 +86,7 @@ def test_hotwords_build_a_dedicated_sherpa_bundle_once(monkeypatch: pytest.Monke
 
   def fake_create(received_paths: object, hotwords: str = "") -> object:
     built.append(hotwords)
-    return _stub_bundle()
+    return stub_speech_bundle("sherpa", "test")
 
   def fake_offline(received_bundle: object, _pcm: bytes) -> str:
     decoded.append(received_bundle)

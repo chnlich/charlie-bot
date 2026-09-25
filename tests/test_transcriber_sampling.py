@@ -7,10 +7,9 @@ the feed cadence, window padding, and concatenation rules hold without models.
 
 from __future__ import annotations
 
-import threading
-
 import numpy as np
 import pytest
+from conftest import stub_speech_bundle
 
 from src.agents import transcriber
 
@@ -46,11 +45,6 @@ class _FakeVad:
     self._segments.pop(0)
 
 
-def _stub_bundle() -> transcriber._SpeechModelBundle:
-  return transcriber._SpeechModelBundle(
-      recognizer=object(), vad_config=object(), decode_lock=threading.Lock(), engine="sherpa", model_id="test")
-
-
 def _install_fakes(
     monkeypatch: pytest.MonkeyPatch,
     segments: list[tuple[int, int]],
@@ -76,7 +70,7 @@ def test_offline_feeds_vad_in_128ms_steps_and_flushes(monkeypatch: pytest.Monkey
   seconds = 5
   pcm = np.zeros(seconds * transcriber.SAMPLE_RATE, dtype="<i2").tobytes()
 
-  transcriber.transcribe_pcm_offline(_stub_bundle(), pcm)
+  transcriber.transcribe_pcm_offline(stub_speech_bundle("sherpa", "test"), pcm)
 
   assert vad.flushed
   # 80000 samples = 39 full 128 ms steps plus a 128-sample tail.
@@ -89,7 +83,7 @@ def test_offline_feed_tail_is_the_remainder(monkeypatch: pytest.MonkeyPatch) -> 
   # 2 full 128 ms steps plus a 100 ms remainder.
   pcm = np.zeros(2 * transcriber.OFFLINE_VAD_FEED_SAMPLES + 1600, dtype="<i2").tobytes()
 
-  transcriber.transcribe_pcm_offline(_stub_bundle(), pcm)
+  transcriber.transcribe_pcm_offline(stub_speech_bundle("sherpa", "test"), pcm)
 
   assert vad.feed_sizes == [2048, 2048, 1600]
 
@@ -103,7 +97,7 @@ def test_offline_decodes_padded_windows_without_overlap(monkeypatch: pytest.Monk
       decode_texts=["first", "second"],
   )
 
-  text = transcriber.transcribe_pcm_offline(_stub_bundle(), source.tobytes())
+  text = transcriber.transcribe_pcm_offline(stub_speech_bundle("sherpa", "test"), source.tobytes())
 
   assert text == "first second"
   pause, pad = transcriber.SEGMENT_DECODE_PAUSE_SAMPLES, transcriber.SEGMENT_DECODE_PAD_SAMPLES
@@ -120,7 +114,7 @@ def test_offline_windows_clamp_to_the_recording_bounds(monkeypatch: pytest.Monke
   # The segment sits at the very start and its pad runs past the recording's end.
   captured, _vad = _install_fakes(monkeypatch, [(0, 10_000)], ["only"])
 
-  transcriber.transcribe_pcm_offline(_stub_bundle(), source.tobytes())
+  transcriber.transcribe_pcm_offline(stub_speech_bundle("sherpa", "test"), source.tobytes())
 
   np.testing.assert_array_equal(captured[0], source[0:16_400].astype(np.float32) / 32768.0)
 
@@ -133,13 +127,15 @@ def test_offline_skips_empty_segment_texts(monkeypatch: pytest.MonkeyPatch) -> N
       decode_texts=["", "kept"],
   )
 
-  assert transcriber.transcribe_pcm_offline(_stub_bundle(), source.tobytes()) == "kept"
+  assert transcriber.transcribe_pcm_offline(stub_speech_bundle("sherpa", "test"), source.tobytes()) == "kept"
 
 
 def test_offline_without_speech_decodes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
   captured, vad = _install_fakes(monkeypatch, [], [])
 
-  assert transcriber.transcribe_pcm_offline(_stub_bundle(), np.zeros(16_000, dtype="<i2").tobytes()) == ""
+  assert transcriber.transcribe_pcm_offline(
+      stub_speech_bundle("sherpa", "test"),
+      np.zeros(16_000, dtype="<i2").tobytes()) == ""
 
   assert captured == []
   assert vad.flushed
@@ -149,4 +145,4 @@ def test_offline_odd_pcm_length_raises(monkeypatch: pytest.MonkeyPatch) -> None:
   _install_fakes(monkeypatch, [], [])
 
   with pytest.raises(ValueError, match="byte length must be even"):
-    transcriber.transcribe_pcm_offline(_stub_bundle(), b"\x00\x00\x00")
+    transcriber.transcribe_pcm_offline(stub_speech_bundle("sherpa", "test"), b"\x00\x00\x00")

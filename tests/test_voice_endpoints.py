@@ -7,12 +7,11 @@ without models; the real-model decode is covered by the local_only suites.
 from __future__ import annotations
 
 import io
-import threading
 import wave
 from pathlib import Path
 
 import pytest
-from conftest import make_home_config
+from conftest import make_home_config, stub_speech_bundle
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -46,13 +45,7 @@ def _upload_parts(
 def voice_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, CharlieBotConfig, list[bytes]]:
   """The voice router over a tmp config, with the speech bundle stubbed ready."""
   cfg = make_home_config(tmp_path)
-  bundle = transcriber._SpeechModelBundle(
-      recognizer=object(),
-      vad_config=object(),
-      decode_lock=threading.Lock(),
-      engine="sherpa",
-      model_id="test",
-  )
+  bundle = stub_speech_bundle("sherpa", "test")
   decoded: list[bytes] = []
 
   def fake_decode(_bundle: object, pcm_bytes: bytes) -> str:

@@ -282,6 +282,8 @@ async def test_verify_exemption_on_the_v2_route_and_launch(
     # The verify child is repo-less; the blocked repo delegation created nothing.
     leaves = [m for m in (await tree._get_index()).metas.values()
               if m.task_parent_id == child.id]
+    assert [m.id for m in leaves] == [verify_leaf]
+    assert len(builds) == 1
 
 
 def agent_headers(session_id: str, run_id: str) -> dict[str, str]:
@@ -413,32 +415,38 @@ async def test_replay_relabeled_verify_is_judged_by_the_original_task_type(
     replay cannot borrow the verify exemption for an implement node (the same
     principle the replay judgment applies to the profile)."""
     cfg, session_mgr, tree, root, child = await make_tree(tmp_path, monkeypatch)
-    builds = install_backends(
-        monkeypatch, [SpawningScriptedBackend([result_event("leaf done")])],
-        "src.agents.worker.build_backend")
+    builds = install_backends(monkeypatch, [], "src.agents.worker.build_backend")
     await register_active_run(tree, child.id, "child-run")
     await tree.dispatch.admit_input(
         root.id, event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
 
     from tests.test_task_execution import make_api_client
-    payload = delegate_payload(child.id, repo, task_type="implement")
-    payload["request_id"] = "w1"
     with make_api_client(cfg, session_mgr, tree) as client:
-        first = client.post("/api/internal/delegate", json=payload,
-                            headers=agent_headers(child.id, "child-run"))
-        assert first.status_code == 200, first.text
-        original_id, original_run = first.json()["session_id"], first.json()["run_id"]
+        # The original product: the agent itself creates a worker child as
+        # implementation under the live take-off, through the ordinary create
+        # route, bound to the (parent, request_id) the replay will present.
+        created = client.post("/api/sessions/", json={
+            "request_id": "w1",
+            "task_parent_id": child.id,
+            "profile": "worker",
+            "task": {
+                "goal": "fix the thing",
+                "repo_path": str(repo),
+                "base_branch": "main",
+                "task_type": "implement",
+            },
+        }, headers=agent_headers(child.id, "child-run"))
+        assert created.status_code == 200, created.text
+        original_id = created.json()["id"]
         original = await tree.load_meta(original_id)
         assert original is not None and original.task is not None
         assert original.task.task_type == "implement"
-        # The first run settles before the window closes, so the replay's 403
-        # is the replay judgment, never a launch race.
-        assert await wait_terminal(tree, original_id, original_run, "the implement run") == "success"
 
-        # The window closes: a later real user message without the phrase.
-        await tree.dispatch.admit_input(
-            root.id, event_type=ET.USER, content="hold on, new plan", actor="user")
+    # The window closes: a later real user message without the phrase.
+    await tree.dispatch.admit_input(
+        root.id, event_type=ET.USER, content="hold on, new plan", actor="user")
 
+    with make_api_client(cfg, session_mgr, tree) as client:
         # The replay re-labels the same (parent, request_id) operation as
         # verify (repo-less, so the contract checks pass). The judgment reads
         # the ORIGINAL implement task and refuses.
@@ -449,11 +457,13 @@ async def test_replay_relabeled_verify_is_judged_by_the_original_task_type(
         assert replay.status_code == 403
         assert "no active authorization" in replay.json()["detail"]
 
-        # The original product is untouched: no verify re-label materialized.
-        original = await tree.load_meta(original_id)
-        assert original is not None and original.task is not None
-        assert original.task.task_type == "implement"
-    assert len(builds) == 1
+    # The original product is untouched: no verify re-label materialized and
+    # the blocked replay launched nothing.
+    after = await tree.load_meta(original_id)
+    assert after is not None and after.task is not None
+    assert after.task.task_type == "implement"
+    assert tree.runs.list_run_records_sync(original_id) == []
+    assert builds == []
 
 
 @pytest.mark.asyncio

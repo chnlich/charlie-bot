@@ -382,8 +382,7 @@ def _bootstrap_stub(session: SessionMetadata) -> Callable[..., Awaitable[SimpleN
 
 
 @pytest.mark.asyncio
-async def test_index_embeds_the_voice_backend_menu_data(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_index_embeds_the_voice_backend_menu_data(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """The caret menu's whole world rides the page: ids, labels, partials flags,
   the missing-credential reasons, and the server default. No extra endpoint."""
   cfg = make_home_config(tmp_path)

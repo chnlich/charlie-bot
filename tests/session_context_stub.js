@@ -87,7 +87,10 @@ function baseSessionContext(overrides = {}) {
     shouldAutoScroll: () => true,
     showScrollToBottom: () => {},
     showToast: () => {},
-    loadedThreads: {clear: () => {}},
+    // The thread-detail caches web/static/js/workers.js owns: real Set/Map so
+    // session-view's clear and openWorkerThread's delete both behave as in the browser.
+    loadedThreads: new Set(),
+    loadedEventCounts: new Map(),
     _backlogLoaded: false,
     BACKEND_OPTIONS: overrides.BACKEND_OPTIONS || {},
     BACKEND_TYPES: overrides.BACKEND_TYPES || {},

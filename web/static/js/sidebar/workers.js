@@ -182,6 +182,12 @@ async function openWorkerThread(sessionId, threadId) {
   container.classList.remove('hidden');
   container.innerHTML = '<div class="' + WORKER_CARD_CLASS + '">'
     + workerCardBodyHtml(meta, sessionId) + '</div>';
+  // The fresh card replaces any earlier render of this thread: the loaded
+  // marks a previous expand left on the shared caches must not suppress the
+  // fetch, and the stale event-count cursor would skip the events already on
+  // disk (toggleThreadDetail's own collapse clears both for the same reason).
+  if (typeof loadedThreads !== 'undefined') loadedThreads.delete(threadId);
+  if (typeof loadedEventCounts !== 'undefined') loadedEventCounts.delete(threadId);
   await toggleThreadDetail(threadId, sessionId);
 }
 

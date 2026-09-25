@@ -86,6 +86,36 @@ test('a leaf click on another active session switches to the parent first', asyn
   assert.equal(context.Sidebar.activeSessionIsLeaf(), false);
 });
 
+test('a repeat click clears the stale loaded marks so the fresh card refetches', async () => {
+  const {context, workersPane} = buildContext();
+  const fetches = [];
+  context.fetch = async (url) => {
+    fetches.push(url);
+    if (url === `/api/threads/${PARENT_ID}/threads/${THREAD_ID}`) {
+      return {ok: true, json: async () => ({
+        id: THREAD_ID, description: 'old delegation', status: 'completed',
+        created_at: '2026-04-01T00:00:00Z',
+      })};
+    }
+    return {ok: true, json: async () => ({events: [], total: 0})};
+  };
+  // The real toggleThreadDetail reads these shared caches (web/static/js/
+  // workers.js): the first expand's marks must not suppress the fresh card's
+  // fetch, and the stale count cursor must not skip events already on disk.
+  context.loadedThreads = new Set([THREAD_ID]);
+  context.loadedEventCounts = new Map([[THREAD_ID, 42]]);
+  const detailOrder = [];
+  context.toggleThreadDetail = async (threadId, sessionId) => {
+    detailOrder.push([threadId, context.loadedThreads.has(threadId), context.loadedEventCounts.has(threadId)]);
+  };
+
+  await context.openWorkerThread(PARENT_ID, THREAD_ID);
+
+  assert.deepEqual(detailOrder, [[THREAD_ID, false, false]],
+      'the expand runs with the stale loaded marks already cleared');
+  assert.match(workersPane.innerHTML, new RegExp(`id="thread-detail-${THREAD_ID}`));
+});
+
 test('a failed thread fetch leaves the pane alone', async () => {
   const {context, workersPane} = buildContext();
   context.fetch = async () => ({ok: false, status: 404});

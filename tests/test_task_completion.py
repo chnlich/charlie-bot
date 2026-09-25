@@ -12,7 +12,7 @@ from conftest import build_env, create_task
 
 from src.core import event_types as ET
 from src.core.models import PatchSessionTaskRequest, RunRecord, TaskSpec
-from src.core.run_token import CallerIdentity, RunTokenClaims, sign_run_token
+from src.core.run_token import CallerIdentity, RunTokenClaims
 from src.core.task_completion import CompletionEvidence, LandingEvidence
 from src.core.task_sessions import (
   TaskConflictError,
@@ -282,12 +282,6 @@ async def test_failed_only_universe_still_refuses_completion_on_a_bare_claim(tmp
 # ---------------------------------------------------------------------------
 # Own-manager close: 202 pending_run_finish
 # ---------------------------------------------------------------------------
-
-
-def manager_agent_headers(tree: TaskTreeManager, session_id: str, run_id: str, cfg) -> dict[str, str]:
-  claims = RunTokenClaims(run_id=run_id, session_id=session_id)
-  token = sign_run_token(claims, cfg.run_token_signing_key)
-  return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.mark.asyncio

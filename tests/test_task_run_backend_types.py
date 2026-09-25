@@ -12,7 +12,6 @@ backends (which support raw re-attach) is unchanged and asserted per type.
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 
 import pytest
@@ -50,10 +49,6 @@ def build_env(tmp_path: Path, backend_type: BackendType):
         path=home / "credentials.yaml", sections={"charliebot": {"access_key": "key-type"}}))
     session_mgr = SessionManager(cfg)
     return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
-
-
-def raw_stream_line(event: dict) -> bytes:
-    return (json.dumps(event) + "\n").encode("utf-8")
 
 
 def session_attached_event(native_id: str) -> dict:

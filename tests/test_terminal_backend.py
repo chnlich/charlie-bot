@@ -199,7 +199,7 @@ async def test_ensure_terminal_session_reuses_existing_tmux_session(monkeypatch:
   monkeypatch.delenv(CHARLIEBOT_HOME_ENV, raising=False)
   calls = []
 
-  async def fake_run_tmux(*args: str, capture: bool = False, check: bool = False) -> tuple[int, str]:
+  async def fake_run_tmux(*args: str, capture: bool = False) -> tuple[int, str]:
     calls.append(args)
     return 0, ""
 

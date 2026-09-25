@@ -259,9 +259,10 @@ class TaskTreeManager:
     # stale flag a missed broadcast would have left standing.
     session_mgr.tree_index_invalidator = self.invalidate_tree_index
     # The session lists read stored status; the archive of a task node is a
-    # derived fact (archived_of). The overlay lets the sidebar's active list
-    # drop a delivered worker and its Archived list show it, with no status
-    # write.
+    # derived fact (archived_of, subtree inheritance included). The overlay
+    # lets the sidebar's active list drop a delivered worker — and, with it,
+    # every descendant of an archived ancestor — while its Archived list shows
+    # them, with no status write.
     session_mgr.archive_overlay = self.derived_archived_ids
     self._index: tuple[_TreeIndex, float] | None = None
     self._index_generation = 0
@@ -363,23 +364,32 @@ class TaskTreeManager:
       except ValueError as e:
         raise RuntimeError(f"session metadata unparseable at {path}: {e}") from e
     children: dict[str | None, list[str]] = {}
-    structural: list[str] = []
+    task_nodes: list[tuple[str, SessionMetadata]] = []
     for sid, meta in metas.items():
       if meta.profile is None:
         continue  # legacy v1 session: not a task-tree node
+      task_nodes.append((sid, meta))
       children.setdefault(meta.task_parent_id, []).append(sid)
-      # The revision covers every input of archive membership (the tree page's
-      # row filter), so a facts-driven membership change during pagination is
-      # a visible 409 instead of a silently omitted or repeated row.
+    for kids in children.values():
+      kids.sort(key=lambda sid: (metas[sid].created_at, sid))
+    # The revision covers every input of archive membership (the tree page's
+    # row filter), so a facts-driven membership change during pagination is
+    # a visible 409 instead of a silently omitted or repeated row. Task nodes
+    # record their EFFECTIVE archive value (subtree inheritance through
+    # archived_of), so an ancestor's flip still moves the revision — a legacy
+    # parent's archived status among them, which this loop skips entirely.
+    index = _TreeIndex(metas=metas, children=children, revision="", root_sig=root_sig)
+    memo: dict[str, bool] = {}
+    structural: list[str] = []
+    for sid, meta in task_nodes:
       facts = self._facts_of(sid)
       structural.append(
           f"{sid}|{meta.task_parent_id or ''}|{meta.profile}|{meta.presentation}|{meta.status.value}"
-          f"|{facts.task_state}|{self._archived_facts_based(meta, facts)}")
-    for kids in children.values():
-      kids.sort(key=lambda sid: (metas[sid].created_at, sid))
-    revision_input = "\n".join(sorted(structural))
-    revision = sha256_hex(revision_input)
-    return _TreeIndex(metas=metas, children=children, revision=revision, root_sig=root_sig)
+          f"|{facts.task_state}|{self.archived_of(index, meta, memo)}")
+    # The placeholder revision above is an input only to the shared-memo pass,
+    # which never reads it; the real one lands before the index is published.
+    index.revision = sha256_hex("\n".join(sorted(structural)))
+    return index
 
   def _index_meta(self, index: _TreeIndex, session_id: str) -> SessionMetadata:
     meta = index.metas.get(session_id)
@@ -556,7 +566,10 @@ class TaskTreeManager:
     return read_host_boot_time()
 
   def _archived_facts_based(self, meta: SessionMetadata, facts: _TaskFacts) -> bool:
-    """Archive visibility from a pre-folded fact set (the index build's form)."""
+    """One node's OWN archive value from a pre-folded fact set (no inheritance).
+
+    The subtree-inheritance fold around it lives in archived_of.
+    """
     if meta.presentation == "hidden":
       return True
     if meta.presentation == "shown":
@@ -578,27 +591,71 @@ class TaskTreeManager:
     return (meta.id, str(close.get("id"))) in parent_facts.delivered_reports
 
   async def derived_archived_ids(self) -> set[str]:
-    """Task nodes the facts archive while their stored status stays active.
+    """Task nodes the effective archive hides while their stored status stays active.
 
     The read-time overlay the SessionManager listings apply (plan 2 v3
     Trade-off 1: a worker archives after delivery by derivation, never by a
     status write). Reads the cached index; a node already archived by status
-    needs no overlay and is left out.
+    needs no overlay and is left out. Subtree inheritance rides the same call:
+    one shared memo keeps the pass linear in node count.
     """
     index = await self._get_index()
+    memo: dict[str, bool] = {}
     return {
         session_id for session_id, meta in index.metas.items()
-        if meta.status != SessionStatus.ARCHIVED and self.archived_of(index, meta)
+        if meta.status != SessionStatus.ARCHIVED and self.archived_of(index, meta, memo)
     }
 
-  def archived_of(self, index: _TreeIndex, meta: SessionMetadata) -> bool:
-    """Archive visibility: the explicit preference, or auto after successful receipt.
+  def archived_of(self, index: _TreeIndex, meta: SessionMetadata,
+                  memo: dict[str, bool] | None = None) -> bool:
+    """Archive visibility with subtree inheritance (the effective archive's single owner).
 
+    effective(n) is False when n.presentation == "shown" — an explicit
+    keep-visible also breaks inheritance for n's own subtree; otherwise it is
+    the node's own facts-based value or its parent's inherited one:
     presentation=auto archives a successful task once its parent receipt is on
-    disk (a root immediately on success); shown keeps it visible; hidden is an
-    explicit user collapse. Reopened nodes are open again, so they unarchive.
+    disk (a root immediately on success); hidden is an explicit user collapse;
+    a stored ARCHIVED status stays an archive preference. Every descendant
+    reads its parent's effective value, so archiving an ancestor — a legacy
+    profile=None parent's stored status among them — archives the subtree at
+    read time with no descendant metadata write. Reopened nodes are open
+    again, so they unarchive. A shared *memo* makes a pass over many nodes
+    linear in node count (each chain resolves through already-computed
+    ancestors); a relation cycle surfaces through the hop guard as
+    TaskConflictError, never silently.
     """
-    return self._archived_facts_based(meta, self._facts_of(meta.id))
+    return self._effective_archived(index, meta.id, {} if memo is None else memo)
+
+  def _effective_archived(self, index: _TreeIndex, session_id: str, memo: dict[str, bool]) -> bool:
+    """One node's effective archive value with inheritance, memoized per pass.
+
+    Walks up the task-parent chain to the first memoized node, an explicit
+    shown, or a root, then folds the effective values back down; every node
+    the walk touches lands in the memo, so a whole-listing pass never
+    recomputes one.
+    """
+    chain: list[tuple[str, SessionMetadata]] = []
+    seen: set[str] = set()
+    current = session_id
+    inherited = False
+    while True:
+      known = memo.get(current)
+      if known is not None:
+        inherited = known
+        break
+      if current in seen or len(chain) > _ANCESTOR_HOP_LIMIT:
+        raise TaskConflictError([f"task relation cycle through {current}"])
+      seen.add(current)
+      meta = self._index_meta(index, current)
+      chain.append((current, meta))
+      if meta.presentation == "shown" or meta.task_parent_id is None:
+        inherited = False  # shown breaks inheritance here; a root inherits nothing
+        break
+      current = meta.task_parent_id
+    for sid, node in reversed(chain):
+      inherited = self._archived_facts_based(node, self._facts_of(sid)) or inherited
+      memo[sid] = inherited
+    return memo[session_id]
 
   def session_row(self, index: _TreeIndex, session_id: str) -> SessionRow:
     meta = self._index_meta(index, session_id)
@@ -1218,13 +1275,18 @@ class TaskTreeManager:
     children = self._children_of(index, parent_id or None)
     rows_all = [self.session_row(index, sid) for sid in children]
     if not include_archived:
-      # A hidden/archived row stays navigable as ancestor context when active
-      # work (running/attention) lives below it: dropping it would sever the
-      # path to that descendant in a partial client tree. Its stored
-      # presentation is unchanged — the row still reports archived=true.
+      # A hidden/archived row stays navigable when active work (running/
+      # attention) lives at or below it: dropping it would sever the path to
+      # that work in a partial client tree. The row's OWN work state counts —
+      # under inheritance a running leaf below a retained archived parent is
+      # itself archived, and only its own state keeps it (and with it the
+      # parent's child page) visible. Stored presentation is unchanged — the
+      # row still reports archived=true.
       rows_all = [
           r for r in rows_all
-          if not r.archived or self._has_active_work_descendant(index, r.id)]
+          if not r.archived
+          or r.work_state in ("running", "attention")
+          or self._has_active_work_descendant(index, r.id)]
     rows_all.sort(key=lambda r: (index.metas[r.id].created_at, r.id))
     after = _decode_tree_cursor(cursor) if cursor else None
     if after is not None:

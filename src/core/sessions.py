@@ -1732,9 +1732,18 @@ class SessionManager:
     await streaming_manager.broadcast(SIDEBAR_CHANNEL, {"type": event_type, "session_id": session_id, **fields})
 
   async def archive_session(self, session_id: str) -> SessionMetadata | None:
-    """Mark a session as archived (does not delete files)."""
+    """Mark a session as archived (does not delete files).
+
+    The stored status is a tree-projection input (a legacy archived parent
+    archives its task subtree through the read-time inheritance), so the write
+    drops the rebuildable index through the same hook the unread flip uses:
+    without it, a listing within _TREE_INDEX_TTL_SECONDS would compute the
+    children's inherited state from the parent's pre-archive status.
+    """
     meta = await self._update_field(session_id, "status", SessionStatus.ARCHIVED, "session_archived")
     self._drop_session_runtime_state(session_id)
+    if meta is not None and self.tree_index_invalidator is not None:
+      self.tree_index_invalidator()
     return meta
 
   async def delete_session_permanently(self, session_id: str) -> bool:
@@ -1759,8 +1768,16 @@ class SessionManager:
     return True
 
   async def unarchive_session(self, session_id: str) -> SessionMetadata | None:
-    """Restore an archived session back to active."""
-    return await self._update_field(session_id, "status", SessionStatus.ACTIVE, "session_unarchived")
+    """Restore an archived session back to active.
+
+    The status flip moves the tree projection the same way the archive write
+    does (descendants inherit the ancestor's restored visibility), so the
+    rebuildable index drops through the same hook.
+    """
+    meta = await self._update_field(session_id, "status", SessionStatus.ACTIVE, "session_unarchived")
+    if meta is not None and self.tree_index_invalidator is not None:
+      self.tree_index_invalidator()
+    return meta
 
   async def recycle_scheduled_session(self, session_id: str, cutoff_utc: datetime) -> dict:
     """GC old threads and archive old chat_events for a scheduled session.

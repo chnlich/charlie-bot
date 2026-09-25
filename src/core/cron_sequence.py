@@ -46,6 +46,7 @@ from src.core.config import ScheduledTaskConfig
 from src.core.control_events import stable_run_id
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec
+from src.core.task_chain import chain_step_prompt
 
 if TYPE_CHECKING:
     from src.core.task_execution import LaunchSettlement
@@ -323,9 +324,8 @@ async def run_firing_steps(
     if outcome is None:
       prompt = step.prompt or ""
       if position > 0:
-        previous_name = steps[position - 1].name
         previous = executed[-1][3] if executed else ""
-        prompt = f"{prompt.rstrip()}\n\n## Result of the previous step ({previous_name})\n{previous}"
+        prompt = chain_step_prompt(prompt, steps[position - 1].name, previous)
       observation = await launch_and_settle(tree, leaf_id, run.id, prompt)
       if observation.withheld is not None:
         # No process started and no terminal fact will arrive: the chain
@@ -588,8 +588,7 @@ async def reconcile_bound_firings(
     if pos > 0 and executed_positions:
       previous_pos = executed_positions[-1]
       previous = await run_result_text(tree, leaf_id, by_position[previous_pos].id)
-      prompt = (f"{prompt.rstrip()}\n\n## Result of the previous step "
-                f"({steps[previous_pos].name})\n{previous}")
+      prompt = chain_step_prompt(prompt, steps[previous_pos].name, previous)
     from src.core.tasks import create_logged_task
 
     async def _settle_recovered_launch(run_id: str = run.id, launch_prompt: str = prompt) -> None:
@@ -619,7 +618,7 @@ async def reconcile_bound_firings(
       prompt = steps[last_pos + 1].prompt or ""
       if last_pos + 1 > 0:
         previous = await run_result_text(tree, leaf_id, by_position[last_pos].id)
-        prompt = f"{prompt.rstrip()}\n\n## Result of the previous step ({steps[last_pos].name})\n{previous}"
+        prompt = chain_step_prompt(prompt, steps[last_pos].name, previous)
       # The recovered launch settles in its own task (never inline — a live
       # process's follow must not hold this pass): a withheld launch delivers
       # the same blocked boundary report the fresh controller would.

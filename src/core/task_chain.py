@@ -19,6 +19,16 @@ from src.core.threads import ThreadManager
 log = LazyStructlogLogger()
 
 
+def chain_step_prompt(prompt: str, previous_name: str, previous_result: str) -> str:
+  """One step's prompt with the previous step's result under the legacy heading.
+
+  The heading is worker-facing contract: ``memory_reviewer.md`` in
+  ``prompts/cron/memory_curator/`` tells a step to read its input under it,
+  so the format lives only here.
+  """
+  return f"{prompt.rstrip()}\n\n## Result of the previous step ({previous_name})\n{previous_result}"
+
+
 async def spawn_step(
     session: SessionMetadata,
     task_cfg: ScheduledTaskConfig,
@@ -54,8 +64,8 @@ async def spawn_step(
 
   prompt = step.prompt
   if step_index > 0:
-    previous_name = task_cfg.steps[step_index - 1].name
-    prompt = f"{prompt.rstrip()}\n\n## Result of the previous step ({previous_name})\n{previous_result}"
+    assert previous_result is not None
+    prompt = chain_step_prompt(prompt, task_cfg.steps[step_index - 1].name, previous_result)
 
   handle = await fire_scheduled_worker(
       session,

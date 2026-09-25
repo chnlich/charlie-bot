@@ -371,6 +371,13 @@ function sessionRowActiveClass(isActive) {
   return isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
 }
 
+// A projected legacy worker-thread row's target: the thread's transcript
+// opened in the main chat view, read-only, addressed by the owning session.
+function openThreadView(sessionId, threadId) {
+  window.location.href = '/?session=' + encodeURIComponent(sessionId)
+    + '&thread=' + encodeURIComponent(threadId);
+}
+
 // The one session-row frame shared by renderScheduledSessionItem and
 // renderSessionItem: the anchor open tag, the name span, and the closing tag.
 // A markup change to the row frame lands here, not in one renderer.
@@ -380,10 +387,10 @@ function renderSessionRowShell(s, {filter, activeClass, options, indicators, lin
   const extraClass = options.extraClass ? ' ' + options.extraClass : '';
   const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
   // A projected legacy worker-thread row has no session behind its id: the
-  // click opens the owning session's worker pane on that thread instead of
-  // switching sessions, and a double click never starts a rename.
+  // click opens the thread's transcript in the main chat view (the 4.1 URL)
+  // instead of switching sessions, and a double click never starts a rename.
   const click = s.worker_thread
-    ? `openWorkerThread('${s.worker_thread.session_id}', '${s.worker_thread.thread_id}')`
+    ? `openThreadView('${s.worker_thread.session_id}', '${s.worker_thread.thread_id}')`
     : `switchSession('${s.id}')`;
   const dblclick = s.worker_thread ? '' : ` ondblclick="startRename(event, '${s.id}')"`;
   return `<a href="/?session=${s.id}&filter=${filter}"
@@ -958,6 +965,7 @@ function removeSessionFromRenderedList(sessionId) {
 
 const GLOBALS = {
   renderEmptyNote,
+  openThreadView,
   resetGroupLimitState,
   toggleSessionGroupLimit,
   toggleCronGroupLimit,

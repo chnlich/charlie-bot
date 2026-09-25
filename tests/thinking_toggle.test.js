@@ -2,11 +2,9 @@
 // chat/shared.js single-sources the collapsed "Thinking…" toggle:
 // thinkingButtonHtml owns the flip button, thinkingToggleHtml composes it with
 // the chat-palette hidden div for the chat assistant bubble (chat/rendering.js)
-// and the live streaming draft (usage.js), and workers.js composes the same
-// button with its own palette div for thread events. These tests pin the
-// emitted markup through all three real renderers: the inline onclick swap,
-// the button/hidden-div classes, the escaped thinking text, and each site's id
-// choice.
+// and the live streaming draft (usage.js). These tests pin the emitted markup
+// through both real renderers: the inline onclick swap, the button/hidden-div
+// classes, the escaped thinking text, and each site's id choice.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -76,17 +74,4 @@ test('streaming draft without thinking renders no toggle', () => {
   const ctx = loadContext();
   const html = showStreamingHtml(ctx, { content: 'hi' });
   assert.ok(!html.includes('Thinking…'));
-});
-
-test('workers thread-event thinking renders the shared button with the workers palette', () => {
-  const ctx = loadToggleHarness('workers.js', { fetch: async () => ({ ok: true, json: async () => ({}) }) });
-  const container = new FakeElement('div').appendChild(new FakeElement('div'));
-  ctx._elements.set('thread-events-t1', container);
-  ctx.renderThreadEvents('t1', [{ type: 'thinking', content: 'mull <x>', timestamp: '2026-09-02T10:00:00Z' }]);
-  const html = container.innerHTML;
-  assert.ok(html.includes(ctx.thinkingButtonHtml('think-i', 'text-xs text-slate-600 hover:text-slate-500 italic')), html);
-  assert.ok(
-      html.includes(
-          `<div id="think-i" style="display:none" class="mt-1 text-xs text-slate-600 whitespace-pre-wrap">mull &lt;x&gt;</div>`),
-      html);
 });

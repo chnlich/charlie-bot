@@ -43,6 +43,7 @@ from src.api.responses import (
 )
 from src.api.threads import view_thread_rows
 from src.core import claude_accounts, sidebar_state, task_completion, thinking_state
+from src.core.thinking_state import run_backend
 from src.core.chat_events import chat_events_path
 from src.core.compression import gzip_level1
 from src.core.config import (
@@ -413,6 +414,10 @@ async def list_sessions(
     entry = derived[row.id]
     thinking = thinking_state.busy_since(row.id)
     next_trigger = entry[sidebar_state.NEXT_TRIGGER_AT]
+    # A worker row displays its newest Run's backend (the delegation's target
+    # model), never the inherited creation value; the in-memory read rides the
+    # overlay tuple so a backend change re-renders the memoized body.
+    display_backend = (run_backend(row.id) or row.backend) if row.profile == "worker" else None
     # Both datetimes ride the model's JSON scheme (pydantic-core renders UTC as
     # Z); a hand-rolled isoformat() would emit +00:00 inside an all-Z row.
     rendered.append(
@@ -422,7 +427,7 @@ async def list_sessions(
                 entry[sidebar_state.HAS_RUNNING_TASKS],
                 entry[sidebar_state.HAS_PENDING_TRIGGER], entry[sidebar_state.PENDING_TRIGGER_COUNT],
                 _UTC_DATETIME_JSON.dump_python(next_trigger, mode="json") if next_trigger is not None else None,
-                entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL])))
+                entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL], display_backend)))
   list_rows = tuple(row for row, _s in rendered)
   list_states = tuple(state for _row, state in rendered)
   cached = _sessions_list_whole_body
@@ -435,7 +440,7 @@ async def list_sessions(
     if state:
       (
           dump["thinking_since"], dump["has_running_tasks"], dump["has_pending_trigger"], dump["pending_trigger_count"],
-          dump["next_trigger_at"], dump["has_pending_plan_approval"]) = state
+          dump["next_trigger_at"], dump["has_pending_plan_approval"], dump["backend"]) = state
     payload.append(dump)
   body = fast_json_bytes(payload)
   _sessions_list_whole_body = (list_rows, list_states, body)

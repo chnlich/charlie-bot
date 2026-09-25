@@ -1,19 +1,19 @@
 // ---------------------------------------------------------------------------
 // showMoreToggleHtml (chat/shared.js) single-sources the truncated-text
-// "Show more" toggle for the chat tool-activity renderer (chat/rendering.js)
-// and the worker thread event list (workers.js). These tests pin the emitted
-// markup through both real renderers: span ids, the inline onclick swap, the
-// button classes, and the short/full split at each site's limit.
+// "Show more" toggle for the chat tool-activity renderer (chat/rendering.js).
+// These tests pin the emitted markup through the real renderer: span ids, the
+// inline onclick swap, the button classes, and the short/full split.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { loadToggleHarness } = require('./chat_rendering_context_stub');
 
-const { FakeElement } = require('./fake_dom');
-
 function loadContext() {
-  return loadToggleHarness('workers.js');
+  // usage.js stands in as the extra module: the harness loads the real
+  // renderer, pins Math.random for deterministic toggle ids, and the deleted
+  // workers.js card panel no longer takes part.
+  return loadToggleHarness('usage.js', {restoreBottomPin: () => {}});
 }
 
 function toggleHtml(id, restHtml) {
@@ -48,43 +48,5 @@ test('chat tool-activity within limits renders no toggle', () => {
     content: '',
     tools: [{ name: 'Bash', input: { command: 'ls' }, output: 'ok' }],
   }, 'sess-1');
-  assert.ok(!html.includes('Show more'));
-});
-
-function renderWorkerEvents(ctx, events) {
-  const parent = new FakeElement('div');
-  const container = new FakeElement('div');
-  parent.appendChild(container);
-  ctx._elements.set('thread-events-t-1', container);
-  ctx.renderThreadEvents('t-1', events);
-  return container.innerHTML;
-}
-
-test('worker event list toggles assistant and tool_use overflow; tool_result renders plain', () => {
-  const ctx = loadContext();
-  const html = renderWorkerEvents(ctx, [
-    { type: 'assistant', content: 'a'.repeat(350) },
-    { type: 'tool_use', tool_name: 'Bash', input: { command: 'x'.repeat(90) } },
-    { type: 'tool_result', content: 'y'.repeat(600) },
-  ]);
-  assert.ok(html.includes(
-    '<div class="text-sm text-slate-300">' + 'a'.repeat(300) + toggleHtml('evt-more-i', 'a'.repeat(50)) + '</div>'));
-  assert.ok(html.includes(
-    'flex-1">' + 'x'.repeat(80) + toggleHtml('tu-i', 'x'.repeat(10)) + '</span>'));
-  // The projection trims each tool_result output to the inline-render bound and
-  // marks the row, so the renderer carries no tail span: the note names the raw
-  // events log.
-  assert.ok(html.includes(
-    '<pre class="text-xs text-slate-500 whitespace-pre-wrap break-all">' + 'y'.repeat(600) + '</pre>'));
-  assert.ok(!html.includes('tr-more-'));
-});
-
-test('worker event list within limits renders no toggle', () => {
-  const ctx = loadContext();
-  const html = renderWorkerEvents(ctx, [
-    { type: 'assistant', content: 'short answer' },
-    { type: 'tool_use', tool_name: 'Bash', input: { command: 'ls' } },
-    { type: 'tool_result', content: 'ok' },
-  ]);
   assert.ok(!html.includes('Show more'));
 });

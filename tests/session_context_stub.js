@@ -67,7 +67,6 @@ function baseSessionContext(overrides = {}) {
     showStreaming: () => {},
     updateSidebarHighlight: () => {},
     pollSessionStatus: () => Promise.resolve(false),
-    pollWorkers: () => {},
     autoResize: () => {},
     startThinking: () => {},
     stopThinking: () => {},
@@ -76,7 +75,6 @@ function baseSessionContext(overrides = {}) {
     formatTokens: (n) => `${Math.round(n / 1000)}k`,
     formatUsageCostValue: (cost) => cost == null ? 'N/A' : '$' + cost.toFixed(2),
     escapeHtml: (v) => v,
-    renderWorkersTab: () => {},
     switchTab: () => {},
     marked: {parse: (txt) => txt},
     fixNestedFences: (txt) => txt,
@@ -87,10 +85,6 @@ function baseSessionContext(overrides = {}) {
     shouldAutoScroll: () => true,
     showScrollToBottom: () => {},
     showToast: () => {},
-    // The thread-detail caches web/static/js/workers.js owns: real Set/Map so
-    // session-view's clear and openWorkerThread's delete both behave as in the browser.
-    loadedThreads: new Set(),
-    loadedEventCounts: new Map(),
     _backlogLoaded: false,
     BACKEND_OPTIONS: overrides.BACKEND_OPTIONS || {},
     BACKEND_TYPES: overrides.BACKEND_TYPES || {},

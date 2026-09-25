@@ -347,7 +347,7 @@ test('a projected leaf click opens the thread view and never switches sessions',
   context.renderSessionList([legacy('old1', 10), projectedLeaf('t1', 'old1', 9)], 'all');
 
   const tag = anchorOpenTag(nav.innerHTML, 't1');
-  assert.match(tag, /openWorkerThread\('old1', 't1'\)/);
+  assert.match(tag, /openThreadView\('old1', 't1'\)/);
   assert.doesNotMatch(tag, /switchSession\('t1'\)/);
   // A projected leaf is read-only: no actions, and a double click never renames.
   const row = rowHtml(nav.innerHTML, 't1');
@@ -396,11 +396,11 @@ test('the scheduled tab nests a cron session\u2019s projected leaves under it, c
   assert.match(anchorOpenTag(html, 'cron1') + rowHtml(html, 'cron1'),
       /data-tree-toggle="cron1"[^>]*aria-expanded="false"/);
   // A projected leaf stays read-only: no star, rename, archive or gear button,
-  // and its click opens the owning session's worker pane on that thread.
+  // and its click opens that thread's transcript in the main chat view.
   for (const t of ['t1', 't2', 't3']) {
     const row = rowHtml(html, t);
     assert.doesNotMatch(row, /star-btn|title="Rename"|title="Archive"|title="Edit task config"/);
-    assert.match(anchorOpenTag(html, t), /openWorkerThread\('cron1',/);
+    assert.match(anchorOpenTag(html, t), /openThreadView\('cron1',/);
   }
   // The group header counts the cron root alone, never its leaves.
   assert.match(html, /1\/1 enabled/);

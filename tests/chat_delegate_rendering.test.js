@@ -4,7 +4,6 @@ const test = require('node:test');
 const { escapeHtml } = require('./escape_html_stub');
 const {createEscapingElement} = require('./dom_element_stub');
 const {loadChatRendering} = require('./chat_rendering_context_stub');
-const {loadSidebarWorkersContext} = require('./sidebar_workers_context_stub');
 
 function assertWellFormedMarkup(html, label = 'html') {
   assert.doesNotMatch(html, /<[^>]*</, `${label} contains a nested tag opener`);
@@ -29,16 +28,6 @@ function assertWellFormedMarkup(html, label = 'html') {
   for (const [tagName, count] of counts) {
     assert.equal(count.opening, count.closing, `${label} has unbalanced <${tagName}> tags`);
   }
-}
-
-function loadSidebarWorkers(elements) {
-  return loadSidebarWorkersContext({
-    document: {
-      createElement: (tag) => createEscapingElement(tag),
-      getElementById: (id) => elements.get(id) || null,
-      querySelectorAll: () => [],
-    },
-  });
 }
 
 test('task_delegated renders CLI-style metadata without full task spec', () => {
@@ -96,6 +85,113 @@ test('task_delegated verify metadata renders explicit none for repo and base', (
   assert.match(html, /base[\s\S]*\(none\)/);
 });
 
+test('a new-style delegation links its child session and shows the live state line', () => {
+  const context = loadChatRendering();
+
+  const html = context.renderMessage({
+    role: 'task_delegated',
+    content: 'Task delegated',
+    thread_id: 'run-9',
+    child_session_id: 'child-session-9',
+    backend: 'claude-sonnet-5',
+    delegate_invocation: {
+      task_type: 'implement',
+      repo_path: '/repo',
+      base_branch: 'main',
+      task_spec_file: '/tmp/spec.md',
+      reviewer_context_file: null,
+      keep_worktree: false,
+      backend: 'claude-sonnet-5',
+    },
+  }, 'session-a');
+
+  // The child link rides the status poll's scope; the dead panel pointer is gone.
+  assert.match(html, /href="\/\?session=child-session-9"/);
+  assert.match(html, /data-delegate-session="child-session-9"/);
+  assert.doesNotMatch(html, /Workers panel/);
+});
+
+test('the delegated card live state paints from the status poll', () => {
+  const stateEl = createEscapingElement('span');
+  stateEl.dataset = {delegateSession: 'child-1', delegateBackend: 'Sonnet 5'};
+  const document = {
+    getElementById: () => null,
+    querySelectorAll: (sel) => (sel.includes('child-1') ? [stateEl] : []),
+  };
+  const vm = require('node:vm');
+  const {readStatic} = require('./read_static');
+  const context = {
+    document,
+    console: {error() {}, warn() {}, log() {}},
+    fetch: () => Promise.resolve({ok: true, json: async () => ({}), text: async () => ''}),
+    localStorage: {getItem: () => null, setItem() {}, removeItem() {}},
+    location: {href: '', protocol: 'http:', host: 'localhost:8000', search: ''},
+    history: {pushState() {}},
+    URLSearchParams,
+    SESSION_ID: 'sess-1',
+    BACKEND_OPTIONS: {},
+    BACKEND_TYPES: {},
+    setInterval: () => 0,
+    clearInterval: () => {},
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+  };
+  context.globalThis = context;
+  context.window = {addEventListener() {}};
+  vm.createContext(context);
+  vm.runInContext(readStatic('sidebar/namespace.js'), context, {filename: 'sidebar/namespace.js'});
+  vm.runInContext(readStatic('sidebar/status.js'), context, {filename: 'sidebar/status.js'});
+  context.document = {
+    getElementById: () => null,
+    querySelectorAll: (sel) => (sel.includes('child-1') ? [stateEl] : []),
+  };
+
+  context.Sidebar.paintDelegateCardState('child-1', {has_running_tasks: true});
+  assert.equal(stateEl.textContent, 'running \u00b7 Sonnet 5');
+  context.Sidebar.paintDelegateCardState('child-1', {has_running_tasks: false});
+  assert.equal(stateEl.textContent, 'idle \u00b7 Sonnet 5');
+});
+
+test('run_delivery closes the transcript with the summary and the four evidence links', () => {
+  const context = loadChatRendering();
+
+  const delivered = context.renderMessage({
+    role: 'run_delivery',
+    content: 'shipped the parser',
+    task_state: 'completed',
+    completed: true,
+    result_refs: ['evidence/a.txt'],
+    raw_log_ref: '/h/runs/run-1/raw.log',
+    events_ref: '/h/runs/run-1/events.jsonl',
+    result_ref: '/h/runs/run-1/raw.log',
+    repo_path: '/repo',
+    base_branch: 'main',
+    branch_name: 'task/run-1',
+  }, 'sess-1');
+
+  assert.match(delivered, /Delivered/);
+  assert.match(delivered, /shipped the parser/);
+  assert.match(delivered, /Raw log/);
+  assert.match(delivered, /Events/);
+  assert.match(delivered, /Result/);
+  assert.match(delivered, /Diff/);
+  // The file-server route carries host-absolute refs; the diff page compares
+  // the run's work branch against its base.
+  assert.match(delivered, /href="\/absolute_filepath\/h\/runs\/run-1\/raw\.log"/);
+  assert.match(delivered, /\/diff\?repo=%2Frepo&amp;base=main&amp;head=task%2Frun-1&amp;session=sess-1/);
+  assert.match(delivered, /evidence\/a\.txt/);
+
+  const unresolved = context.renderMessage({
+    role: 'run_delivery',
+    content: '',
+    task_state: 'failed',
+    completed: false,
+    result_refs: [],
+  }, 'sess-1');
+  assert.match(unresolved, /Task failed/);
+  assert.match(unresolved, /text-slate-500">Raw log/);
+});
+
 test('historical task_delegated fallback omits full description', () => {
   const context = loadChatRendering();
   const fullTaskSpec = '## Goal\nOld full task spec should not render.';
@@ -111,8 +207,12 @@ test('historical task_delegated fallback omits full description', () => {
 
   assert.match(html, /old-thread/);
   assert.match(html, /codex-o3 \/ o3/);
-  assert.match(html, /Workers panel/);
+  assert.doesNotMatch(html, /Workers panel/);
   assert.doesNotMatch(html, /Old full task spec/);
+  // The legacy delegation links the thread URL (the 4.1 addressing) and the
+  // live-state span rides the owning session's status poll.
+  assert.match(html, /href="\/\?session=session-a&amp;thread=old-thread"/);
+  assert.match(html, /data-delegate-parent-session="session-a"/);
 });
 
 test('worker_summary renders non-clickable locator without worker result content', () => {
@@ -290,24 +390,4 @@ test('renderMessage returns well-formed markup for every role branch', () => {
   for (const msg of messages) {
     assertWellFormedMarkup(context.renderMessage(msg, 'session-a'), msg.role);
   }
-});
-
-test('workers sidebar escapes full descriptions in initial and live cards', () => {
-  const container = createEscapingElement('div');
-  const elements = new Map([['tab-workers', container]]);
-  const context = loadSidebarWorkers(elements);
-  const description = 'Quote "double" and \'single\' <tag>';
-
-  context.renderWorkersTab([{
-    id: 'thread-a',
-    status: 'running',
-    description,
-    created_at: '2026-07-01T12:00:00Z',
-  }], 'session-a', []);
-
-  assert.match(container.innerHTML, /data-full="Quote &quot;double&quot; and &#39;single&#39; &lt;tag&gt;"/);
-
-  context.Sidebar.addWorkerCard('thread-b', description, '2026-07-01T12:00:00Z', '');
-
-  assert.match(container.children[0].innerHTML, /data-full="Quote &quot;double&quot; and &#39;single&#39; &lt;tag&gt;"/);
 });

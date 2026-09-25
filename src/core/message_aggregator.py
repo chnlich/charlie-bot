@@ -347,6 +347,9 @@ def _task_delegated_msg(ev: dict) -> dict:
       "role": ET.TASK_DELEGATED,
       "content": "Task delegated",
       "thread_id": ev.get("thread_id", ""),
+      # The delegated child's address: the card links to it (the session id for
+      # a v2 delegation; a legacy one links the parent's thread URL instead).
+      "child_session_id": ev.get("child_session_id") or "",
       ET.DELEGATE_INVOCATION: ev.get(ET.DELEGATE_INVOCATION),
       "backend": backend,
       "model": model,

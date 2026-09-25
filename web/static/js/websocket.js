@@ -229,9 +229,9 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
   } else if (t === 'error') {
     hideStreaming();
   } else if (t === 'task_delegated') {
-    refreshSessionStatusNow({refreshWorkers: true});
+    refreshSessionStatusNow();
   } else if (t === 'worker_summary') {
-    refreshSessionStatusNow({refreshWorkers: true});
+    refreshSessionStatusNow();
   } else if (t === 'result') {
     // The usage header is a projection over the full event list, so the forced
     // poll is what updates it — the WebSocket handler must not write the header.

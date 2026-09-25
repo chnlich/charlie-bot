@@ -120,8 +120,6 @@ function resetLazySessionData() {
   stopPageTimer('workers-list');
   workersLoadedForSession = null;
   workersLoadInflightForSession = null;
-  if (typeof stopAllThreadPolls === 'function') stopAllThreadPolls();
-  if (typeof loadedThreads !== 'undefined') loadedThreads.clear();
 }
 
 function disposeActiveTurnEngine() {
@@ -137,6 +135,7 @@ function disposeActiveTurnEngine() {
 // composer state cleared here.
 function teardownActiveSessionView() {
   stopActiveSessionViewPolling();
+  stopTranscriptPolling();
   resetLazySessionData();
   disposeActiveTurnEngine();
   resetVoiceState();
@@ -150,12 +149,152 @@ function scheduleLazySessionDataLoad() {
   lazySessionDataTimer = scheduleIdleTask(() => {
     lazySessionDataTimer = null;
     pollActiveSessionView({force: true});
-    ensureWorkersLoadedForActiveSession();
     // One explain/status GET per session load/switch paints every divider's
     // explain button from persisted truth; turns the engine materializes later
     // read the map at render time, so no per-divider request is ever needed.
     loadExplainStatuses(SESSION_ID);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Worker / thread transcript mode (the live record in the main chat column)
+// ---------------------------------------------------------------------------
+// A task-tree worker node's messages are its Runs' transcript, and a projected
+// legacy thread row's are its thread events; both render through the main chat
+// column and stay live through the transcript poll (the server's memoized
+// projection answers an unchanged read with one stat pass). The poll carries
+// thinking_since (the header timer), the signallable run (the stop control),
+// and the streaming draft, so a worker page needs no other live channel.
+const TRANSCRIPT_POLL_MS = 2000;
+let transcriptMode = null;       // {sessionId, threadId?} while the view shows one
+let transcriptRevision = '';
+let transcriptMessageCount = 0;
+let transcriptInflight = false;
+let transcriptActiveRunId = null;
+
+function setWorkerTranscriptMode(mode) {
+  transcriptMode = mode;         // {sessionId} for a worker node
+  transcriptRevision = '';
+  transcriptMessageCount = 0;
+  transcriptActiveRunId = null;
+  if (mode) startTranscriptPolling();
+}
+
+function setInputAreaVisible(visible) {
+  const area = document.getElementById('input-area');
+  if (area) area.classList.toggle('hidden', !visible);
+}
+
+function startTranscriptPolling() {
+  if (!pageTimerRegistered('transcript-poll')) {
+    startPageTimer('transcript-poll', pollTranscript, TRANSCRIPT_POLL_MS);
+  }
+}
+
+function stopTranscriptPolling() {
+  stopPageTimer('transcript-poll');
+  transcriptMode = null;
+  transcriptRevision = '';
+  transcriptMessageCount = 0;
+  transcriptActiveRunId = null;
+}
+
+function transcriptTarget() {
+  return transcriptMode;
+}
+
+async function pollTranscript(opts) {
+  const target = transcriptTarget();
+  if (!target || transcriptInflight) return;
+  if (target.threadId ? SESSION_ID !== target.session_id : SESSION_ID !== target.sessionId) return;
+  if (!(opts && opts.force) && document.hidden) return;
+  transcriptInflight = true;
+  try {
+    const params = new URLSearchParams({
+      after: String(transcriptMessageCount),
+      revision: transcriptRevision,
+    });
+    if (target.threadId) params.set('thread', target.threadId);
+    const res = await fetch('/api/sessions/' + target.sessionId + '/transcript?' + params.toString());
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    if (target.threadId ? SESSION_ID !== target.session_id : SESSION_ID !== target.sessionId) return;
+    applyTranscriptUpdate(data);
+  } catch (err) {
+    console.error('Transcript poll failed:', err);
+  } finally {
+    transcriptInflight = false;
+  }
+}
+
+function applyTranscriptUpdate(data) {
+  const container = document.getElementById('messages');
+  if (container) {
+    if (data.reset) {
+      // A reset re-renders the whole transcript (the committed prefix is no
+      // longer current — a Run header's state moved, or the delivery close
+      // landed). The full committed history is now on screen, so the chat
+      // tail's scroll-up pagination stands down.
+      renderMessagesIntoContainer(container, data.messages || [], SESSION_ID);
+      sessionHasMore = false;
+      sessionOlderBeforeCursor = Infinity;
+      sessionLoadingMore = false;
+      container.scrollTop = container.scrollHeight;
+    } else if ((data.messages || []).length) {
+      for (const msg of data.messages) appendMessageObject(msg);
+    }
+  }
+  transcriptMessageCount = data.total != null ? data.total
+    : transcriptMessageCount + (data.messages ? data.messages.length : 0);
+  transcriptRevision = data.revision || transcriptRevision;
+  transcriptActiveRunId = data.active_run_id || null;
+  if (data.pending_draft && (data.pending_draft.content || data.pending_draft.thinking)) {
+    showStreaming(data.pending_draft);
+  } else {
+    hideStreaming();
+  }
+  if (typeof data.thinking_since !== 'undefined') {
+    const since = data.thinking_since;
+    if (since && !THINKING_SINCE) {
+      THINKING_SINCE = since;
+      startThinking({keepSendEnabled: true});
+    } else if (!since && THINKING_SINCE) {
+      THINKING_SINCE = null;
+      stopThinking({preserveSessionIndicator: true});
+    } else if (since) {
+      THINKING_SINCE = since;
+    }
+  }
+}
+
+// The stop control on a worker node / thread view stops the active Run through
+// its own cancel route; the chat stop button (cancelMaster) dispatches here.
+async function cancelTranscriptTarget() {
+  const target = transcriptTarget();
+  if (!target) return false;
+  let url;
+  if (target.threadId) {
+    url = '/api/sessions/' + target.sessionId + '/threads/' + target.threadId + '/cancel';
+  } else {
+    if (!transcriptActiveRunId) return true;  // nothing signallable: the state will clear on its own
+    url = '/api/sessions/' + target.sessionId + '/runs/' + transcriptActiveRunId + '/cancel';
+  }
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({request_id: 'ui-stop-' + Date.now()}),
+    });
+    if (res.ok) return true;
+    let detail = '';
+    try { detail = (await res.json()).detail || ''; } catch (_err) { detail = ''; }
+    showToast('Stop failed: ' + (detail || ('HTTP ' + res.status)), true);
+    console.error('Stop run failed:', res.status, detail);
+  } catch (err) {
+    showToast('Stop failed: network error.', true);
+    console.error('Stop run failed:', err);
+  }
+  return true;
 }
 
 function buildEmptySessionBootstrap(session) {
@@ -382,16 +521,6 @@ async function switchSession(sessionId) {
 // A worker leaf's closing line in its own chat projection: the close event
 // projects to the system message "Task <outcome>: <summary>", and the leaf's
 // delivery banner shows that summary.
-function leafClosingSummary(messages) {
-  for (let i = (messages || []).length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (!m || m.role !== 'system' || typeof m.content !== 'string') continue;
-    const match = m.content.match(/^Task \w+:\s*([\s\S]*)$/);
-    if (match) return match[1].trim();
-  }
-  return '';
-}
-
 function renderSessionView(data) {
   const session = data.session;
   const messages = data.messages || [];
@@ -451,12 +580,18 @@ function renderSessionView(data) {
   // Scroll to bottom — the engine already pinned its projection at mount.
   if (!turnEngine) container.scrollTop = container.scrollHeight;
 
-  // A worker leaf shows its Run list in place of the chat (sidebar/workers.js):
-  // name the leaf before the tab switch below swaps the containers, and reset
-  // the container so the load paints fresh instead of the previous leaf.
-  const isLeaf = session.profile === 'worker';
-  setLeafSession(isLeaf ? session.id : null, isLeaf ? leafClosingSummary(messages) : '');
-  if (isLeaf) renderWorkersTabUnknown();
+  // A worker node renders its Run transcript through the main chat column
+  // (this file's transcript poll keeps it live); so does a projected legacy
+  // thread view, read-only. Neither takes a message input.
+  const isWorker = session.profile === 'worker';
+  if (data.thread_view) {
+    setWorkerTranscriptMode(
+        {sessionId: data.thread_view.session_id, threadId: data.thread_view.thread_id});
+    setInputAreaVisible(false);
+  } else {
+    setWorkerTranscriptMode(isWorker ? {sessionId: session.id} : null);
+    setInputAreaVisible(!isWorker);
+  }
 
   // Restore whichever tab was active before the session switch
   const activeBtn = document.querySelector('#btn-terminal.bg-blue-600\\/20, #btn-chat-tex.bg-blue-600\\/20, #btn-chat.bg-blue-600\\/20, #btn-chat-backlog.bg-blue-600\\/20');
@@ -856,7 +991,8 @@ const API = {
   scheduleLazySessionDataLoad,
   switchSession,
   renderSessionView,
-  leafClosingSummary,
+  setWorkerTranscriptMode,
+  setInputAreaVisible,
   initScrollPagination,
   renderUsageFromData,
   createSession,

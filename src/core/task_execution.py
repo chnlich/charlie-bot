@@ -278,9 +278,7 @@ class TaskExecutionAdapter:
         """
         tree = self._tree
         async with tree.control_lock:
-            meta = await tree.load_meta(session_id)
-            tree._require_task(meta, session_id)
-            assert meta is not None
+            meta = await tree.load_task_meta(session_id)
             if tree.task_state(session_id) != "open" or meta.automation_paused:
                 return None
             if launch_run_id is not None:
@@ -453,9 +451,7 @@ class TaskExecutionAdapter:
         """
         tree = self._tree
         async with tree.control_lock:
-            meta = await tree.load_meta(session_id)
-            tree._require_task(meta, session_id)
-            assert meta is not None
+            meta = await tree.load_task_meta(session_id)
             run = await tree.runs.get_run(session_id, run_id)
             if run is None:
                 raise RunNotFoundError(f"run {run_id} not found in task {session_id}")

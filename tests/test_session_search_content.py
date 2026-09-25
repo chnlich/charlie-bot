@@ -13,6 +13,7 @@ from src.api.responses import fast_json_bytes
 from src.core import thinking_state
 from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
+from src.core.threads import ThreadManager
 
 _fresh_search_read_failure_registry = fresh_state_fixture(sessions_mod._SEARCH_READ_FAILURES_SEEN.clear)
 
@@ -302,6 +303,7 @@ async def test_content_search_atomic_rewrite_rescans_the_whole_file(
 async def test_search_route_body_is_byte_identical_to_the_merged_render(tmp_path: Path) -> None:
   cfg = make_home_config(tmp_path)
   mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
   await _session_with_chat_content(mgr, '{"type":"user","content":"irrelevant"}\n', "needle-ascii")
   await _session_with_chat_content(mgr, '{"type":"user","content":"irrelevant"}\n', "针-needle-会话")
 
@@ -319,8 +321,8 @@ async def test_search_route_body_is_byte_identical_to_the_merged_render(tmp_path
     row["next_trigger_at"] = sessions_api._UTC_DATETIME_JSON.dump_python(entry["next_trigger_at"], mode="json")
     payload.append(row)
 
-  first = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr)
-  second = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr)
+  first = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
+  second = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
   assert first.body == fast_json_bytes(payload)
   assert second.body == first.body  # the memo serves the same bytes
 
@@ -329,13 +331,14 @@ async def test_search_route_body_is_byte_identical_to_the_merged_render(tmp_path
 async def test_search_row_memo_follows_the_write_funnel_rename(tmp_path: Path) -> None:
   cfg = make_home_config(tmp_path)
   mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
   session = await _session_with_chat_content(mgr, '{"type":"user","content":"irrelevant"}\n', "needle-v1")
 
-  first = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr)
+  first = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
   assert b"needle-v1" in first.body
 
   await mgr.rename_session(session.id, "needle-v2")  # save_metadata replaces the cached object
-  second = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr)
+  second = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
   assert b"needle-v2" in second.body
   assert b"needle-v1" not in second.body
 
@@ -355,18 +358,19 @@ def test_search_row_memo_respects_its_cap() -> None:
 async def test_search_row_body_memo_re_renders_when_derived_state_moves(tmp_path: Path) -> None:
   cfg = make_home_config(tmp_path)
   mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
   session = await _session_with_chat_content(mgr, '{"type":"user","content":"irrelevant"}\n', "needle-idle")
 
-  idle = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr)
+  idle = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
   assert b'"thinking_since":null' in idle.body
 
   thinking_state.mark_busy(session.id)
-  busy = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr)
+  busy = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
   assert busy.body != idle.body
   assert b'"thinking_since":null' not in busy.body
 
   thinking_state.clear_busy(session.id)
-  cleared = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr)
+  cleared = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
   assert cleared.body == idle.body
 
 
@@ -374,14 +378,15 @@ async def test_search_row_body_memo_re_renders_when_derived_state_moves(tmp_path
 async def test_search_whole_body_cache_rebuilds_when_the_row_set_changes(tmp_path: Path) -> None:
   cfg = make_home_config(tmp_path)
   mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
   await _session_with_chat_content(mgr, '{"type":"user","content":"irrelevant"}\n', "needle-one")
   await _session_with_chat_content(mgr, '{"type":"user","content":"irrelevant"}\n', "needle-two")
 
-  both = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr)
+  both = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
   assert both.body.count(b"needle-") == 2
-  one = await sessions_api.search_sessions(_page_request(), q="needle-one", session_mgr=mgr)
+  one = await sessions_api.search_sessions(_page_request(), q="needle-one", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
   assert one.body.count(b"needle-") == 1
-  again = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr)
+  again = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
   assert again.body == both.body
 
 

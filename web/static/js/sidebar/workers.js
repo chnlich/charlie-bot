@@ -154,6 +154,37 @@ function renderWorkersTabUnknown() {
   container.innerHTML = '<div id="workers-loading-placeholder" class="flex items-center justify-center h-full text-slate-500 text-sm">Loading worker threads...</div>';
 }
 
+// A projected legacy worker-thread leaf has no session behind its row id, so
+// its click never switches sessions: it lands on the owning session (already
+// active, or switched to now), then paints that one thread's card into the
+// workers pane and expands it so its events load. The card is the ordinary
+// Workers-tab card body (workerCardBodyHtml over the thread detail row), so
+// its description modal, cancel button, and event view all work unchanged.
+async function openWorkerThread(sessionId, threadId) {
+  if (!SESSION_ID) { location.href = '/?session=' + sessionId; return; }
+  if (SESSION_ID !== sessionId) await switchSession(sessionId);
+  const container = document.getElementById('tab-workers');
+  if (!container) return;
+  let meta;
+  try {
+    const res = await fetch('/api/threads/' + sessionId + '/threads/' + threadId, {cache: 'no-store'});
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    meta = await res.json();
+  } catch (err) {
+    console.error('openWorkerThread fetch failed:', err);
+    return;
+  }
+  if (SESSION_ID !== sessionId) return;  // a newer switch owns the pane
+  // The owning session is not a leaf, so a tab switch paints the chat column;
+  // swap it for the thread card the way a worker leaf's pane shows.
+  if (typeof switchTab === 'function') switchTab('chat');
+  document.getElementById('tab-chat')?.classList.add('hidden');
+  container.classList.remove('hidden');
+  container.innerHTML = '<div class="' + WORKER_CARD_CLASS + '">'
+    + workerCardBodyHtml(meta, sessionId) + '</div>';
+  await toggleThreadDetail(threadId, sessionId);
+}
+
 // ---------------------------------------------------------------------------
 // Worker leaf view
 // ---------------------------------------------------------------------------
@@ -468,6 +499,7 @@ const API = {
   fetchWorkerDescription,
   renderWorkersTab,
   renderWorkersTabUnknown,
+  openWorkerThread,
   setLeafSession,
   activeSessionIsLeaf,
   runCardRow,

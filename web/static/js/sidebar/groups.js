@@ -380,10 +380,16 @@ function sessionRowActiveClass(isActive) {
 function renderSessionRowShell(s, {filter, activeClass, options, indicators, line, actions}) {
   const extraClass = options.extraClass ? ' ' + options.extraClass : '';
   const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
+  // A projected legacy worker-thread row has no session behind its id: the
+  // click opens the owning session's worker pane on that thread instead of
+  // switching sessions, and a double click never starts a rename.
+  const click = s.worker_thread
+    ? `openWorkerThread('${s.worker_thread.session_id}', '${s.worker_thread.thread_id}')`
+    : `switchSession('${s.id}')`;
+  const dblclick = s.worker_thread ? '' : ` ondblclick="startRename(event, '${s.id}')"`;
   return `<a href="/?session=${s.id}&filter=${filter}"
-     class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}"
-     ondblclick="startRename(event, '${s.id}')"
-     onclick="event.preventDefault(); switchSession('${s.id}')"
+     class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}"${dblclick}
+     onclick="event.preventDefault(); ${click}"
      id="session-${s.id}"${extraAttrs}>
     ${indicators}
     <span class="flex-1 min-w-0">
@@ -954,8 +960,12 @@ function renderSessionItem(s, filter, options = {}) {
             class="opacity-0 group-hover:opacity-100 p-1 hover:text-purple-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Set group">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z"/></svg>
     </button>`;
+  // A projected legacy worker-thread row is read-only: no archive, star,
+  // rename, group, create-child or Task & context action.
   let actions = '';
-  if (isArchivedRow) {
+  if (s.worker_thread) {
+    actions = '';
+  } else if (isArchivedRow) {
     actions = `
       ${renderStarButton(s, activeBtnClass)}
       ${groupBtn}
@@ -974,12 +984,15 @@ function renderSessionItem(s, filter, options = {}) {
   } else if (isWorkerRow) {
     actions = renderArchiveButton(s, activeBtnClass);
   } else {
+    // A legacy session (profile null) has no task-tree context behind the
+    // Task & context dialog (the endpoint answers 400 for it).
+    const taskContextBtn = s.profile === null ? '' : renderTaskContextButton(s, activeBtnClass);
     actions = `
       ${renderStarButton(s, activeBtnClass)}
       ${renderRenameButton(s, activeBtnClass)}
       ${groupBtn}
       ${renderNewChildButton(s, activeBtnClass)}
-      ${renderTaskContextButton(s, activeBtnClass)}
+      ${taskContextBtn}
       ${renderArchiveButton(s, activeBtnClass)}
       ${renderCronGearButton(filter === 'scheduled' ? s.scheduled_task : '', activeBtnClass)}`;
   }

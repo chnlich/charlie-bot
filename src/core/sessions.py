@@ -161,6 +161,7 @@ _TRANSIENT_METADATA_FIELDS = {
     "schedule_project",
     "schedule_allow_failure",
     "thinking_since",
+    "worker_thread",
 }
 
 
@@ -903,6 +904,12 @@ class SessionManager:
     self._create_session_dirs(self._session_dir(meta.id))
 
     await self.save_metadata(meta)
+    # A new session is a tree-projection input (the rebuildable index scans
+    # the sessions root): drop it through the same hook as the unread flip,
+    # so a task operation naming the new session as its parent reads an index
+    # that already holds it.
+    if self.tree_index_invalidator is not None:
+      self.tree_index_invalidator()
     await self._backend_create_hook(meta)
 
     log.info("session_created", session_id=meta.id, name=meta.name)

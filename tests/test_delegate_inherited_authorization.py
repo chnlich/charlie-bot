@@ -301,7 +301,7 @@ async def test_verify_exemption_on_the_v2_route_and_launch(
 async def test_v1_delegate_without_takeoff_stays_blocked(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
     """A legacy session keeps its session-local gate: no take-off, no spawn,
-    and the session is not adopted as a task node."""
+    and the session is not rewritten into a task node."""
     cfg, session_mgr, tree, _root, _child = await make_tree(tmp_path, monkeypatch)
     builds = install_backends(monkeypatch, [], "src.agents.worker.build_backend")
     from src.core.models import CreateSessionRequest
@@ -319,18 +319,58 @@ async def test_v1_delegate_without_takeoff_stays_blocked(
     assert stays_legacy.schema_version == 1
 
 
+@pytest.mark.asyncio
+async def test_legacy_root_authorizes_its_worker_child_from_its_own_takeoff(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    """The gate treats a legacy root as a manager node whose chat log is the
+    authorization source: a worker child created under it launches on the
+    root's real user take-off, and the session itself is never rewritten."""
+    _cfg, session_mgr, tree, _root, _child = await make_tree(tmp_path, monkeypatch)
+    from src.core.models import CreateSessionRequest
+    legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"))
+    await session_mgr.save_chat_event(legacy.id, _legacy_user_takeoff())
+    child = await tree.create_task(
+        request_id="legacy-child", task_parent_id=legacy.id, profile="worker",
+        task=TaskSpec(goal="do the thing", repo_path=str(repo)),
+        name=None, backend=None, caller=OPERATOR)
+    assert legacy.profile is None and legacy.schema_version == 1
+
+    # The start node is the worker's parent — the launch gate's own shape.
+    assert await tree.check_task_authorization(child.task_parent_id) == legacy.id
+
+    # Without any real user instruction on the root the same walk blocks.
+    bare = await session_mgr.create_session(CreateSessionRequest(name="Bare legacy"))
+    bare_child = await tree.create_task(
+        request_id="bare-child", task_parent_id=bare.id, profile="worker",
+        task=TaskSpec(goal="do the other thing", repo_path=str(repo)),
+        name=None, backend=None, caller=OPERATOR)
+    from src.core.takeoff_gate import DelegationBlockedError
+    with pytest.raises(DelegationBlockedError, match="no real user instruction"):
+        await tree.check_task_authorization(bare_child.task_parent_id)
+
+    # A user message without a take-off blocks at the root too.
+    plain = await session_mgr.create_session(CreateSessionRequest(name="Plain legacy"))
+    await session_mgr.save_chat_event(plain.id, _legacy_user_takeoff("Just a question, no go."))
+    plain_child = await tree.create_task(
+        request_id="plain-child", task_parent_id=plain.id, profile="worker",
+        task=TaskSpec(goal="and another", repo_path=str(repo)),
+        name=None, backend=None, caller=OPERATOR)
+    with pytest.raises(DelegationBlockedError, match="no active authorization"):
+        await tree.check_task_authorization(plain_child.task_parent_id)
+
+
 def _legacy_user_takeoff(content: str = "Take off. Ship it.") -> dict:
     return {"id": "user-takeoff", "type": ET.USER, "content": content, "actor": "user",
             "timestamp": datetime.now(UTC).isoformat()}
 
 
 @pytest.mark.asyncio
-async def test_legacy_session_is_adopted_as_manager_on_first_delegation(
+async def test_legacy_session_delegates_in_place(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
     """A legacy session whose own chat carries a take-off delegates through the
-    real route: it becomes a manager node (profile and schema_version change,
-    nothing else), the worker leaf hangs under it with one launched Run, and
-    the reply carries the task-tree shape."""
+    real route without being rewritten: its metadata.json is byte-identical
+    after the create, the worker leaf hangs under it with one launched Run,
+    and the reply carries the task-tree shape."""
     cfg, session_mgr, tree, _root, _child = await make_tree(tmp_path, monkeypatch)
     builds = install_backends(
         monkeypatch, [SpawningScriptedBackend([result_event("leaf done")])],
@@ -338,7 +378,8 @@ async def test_legacy_session_is_adopted_as_manager_on_first_delegation(
     from src.core.models import CreateSessionRequest
     legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"))
     await session_mgr.save_chat_event(legacy.id, _legacy_user_takeoff())
-    before = (await session_mgr.get_session(legacy.id)).model_dump(exclude={"updated_at"})
+    meta_path = cfg.sessions_dir / legacy.id / "metadata.json"
+    before = meta_path.read_bytes()
 
     from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
@@ -350,11 +391,10 @@ async def test_legacy_session_is_adopted_as_manager_on_first_delegation(
         leaf_id, run_id = body["session_id"], body["run_id"]
         assert body["thread_id"] == run_id
 
-        adopted = await session_mgr.get_session(legacy.id)
-        assert adopted is not None
-        after = adopted.model_dump(exclude={"updated_at"})
-        assert after["profile"] == "manager" and after["schema_version"] == 2
-        assert {k for k in before if before[k] != after[k]} == {"profile", "schema_version"}
+        assert meta_path.read_bytes() == before
+        stays_legacy = await session_mgr.get_session(legacy.id)
+        assert stays_legacy is not None
+        assert stays_legacy.profile is None and stays_legacy.schema_version == 1
 
         leaf = await tree.load_meta(leaf_id)
         assert leaf is not None and leaf.profile == "worker" and leaf.task_parent_id == legacy.id
@@ -372,11 +412,11 @@ async def test_legacy_session_is_adopted_as_manager_on_first_delegation(
 
 
 @pytest.mark.asyncio
-async def test_legacy_verify_delegation_adopts_the_session_and_records_the_task_type(
+async def test_legacy_verify_delegation_records_the_task_type_without_adopting(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
     """A read-only verify delegation from a legacy session needs no take-off,
-    adopts the session as a manager node, and records the verify task type on
-    the repo-less leaf."""
+    never rewrites the session, and records the verify task type on the
+    repo-less leaf."""
     cfg, session_mgr, tree, _root, _child = await make_tree(tmp_path, monkeypatch)
     builds = install_backends(
         monkeypatch, [SpawningScriptedBackend([result_event("verdict: yes")])],
@@ -391,8 +431,9 @@ async def test_legacy_verify_delegation_adopts_the_session_and_records_the_task_
             headers=OPERATOR)
         assert verify.status_code == 200, verify.text
         leaf_id, run_id = verify.json()["session_id"], verify.json()["run_id"]
-        adopted = await session_mgr.get_session(legacy.id)
-        assert adopted is not None and adopted.profile == "manager" and adopted.schema_version == 2
+        stays_legacy = await session_mgr.get_session(legacy.id)
+        assert stays_legacy is not None
+        assert stays_legacy.profile is None and stays_legacy.schema_version == 1
         leaf = await tree.load_meta(leaf_id)
         assert leaf is not None and leaf.task is not None
         assert leaf.task.task_type == "verify" and leaf.task.repo_path is None

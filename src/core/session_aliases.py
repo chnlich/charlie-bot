@@ -4,9 +4,8 @@ Old entry points (legacy thread ids, pre-tree session ids) resolve to the
 canonical task and Run through this one file; new runs register their
 compatibility thread alias here at creation, so the legacy thread transport
 resolves to the same Run without a second ThreadMetadata ever being written.
-The migration stage (``session_tree_migration.py``) fills ``old_session_ids``
-and the historical ``old_threads`` rows; the run owner writes only new-run
-rows. Reads merge both sources; writers hold the tree control write lock.
+The run owner writes the new-run rows. Writers hold the tree control write
+lock; the file's shape (``old_session_ids``, ``old_threads``) is unchanged.
 """
 
 import json
@@ -82,12 +81,6 @@ class SessionAliasStore:
     self._put(
         alias_thread_key(owner_session_id, run_id), {"session_id": session_id, "run_id": run_id})
 
-  def put_old_session(self, old_session_id: str, canonical_session_id: str) -> None:
-    """Register one imported old-session mapping (migration-stage entry point)."""
-    sessions = self._read()["old_session_ids"]
-    sessions[old_session_id] = canonical_session_id
-    self._write({"old_session_ids": sessions, "old_threads": self._read()["old_threads"]})
-
   def _put(self, key: str, target: dict) -> None:
     raw = self._read()
     raw["old_threads"][key] = target
@@ -96,34 +89,3 @@ class SessionAliasStore:
   def _write(self, payload: dict) -> None:
     self.path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(self.path, json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-
-  def merge_imported_entries(
-      self,
-      old_sessions: dict[str, str],
-      old_threads: dict[str, dict],
-  ) -> None:
-    """Merge one migration's imported alias rows in a single atomic rewrite.
-
-    The migration-stage bulk path (one write per apply instead of one per row).
-    Existing rows are preserved untouched; an existing row that disagrees with
-    an imported mapping is a corruption, never a silent overwrite, so the
-    conflicting old id/key is raised with both targets named.
-    """
-    raw = self._read()
-    sessions = raw["old_session_ids"]
-    threads = raw["old_threads"]
-    for old, canonical in old_sessions.items():
-      existing = sessions.get(old)
-      if existing is not None and existing != canonical:
-        raise ValueError(
-            f"session alias conflict for old id {old}: existing target {existing}, "
-            f"imported mapping targets {canonical}")
-      sessions[old] = canonical
-    for key, target in old_threads.items():
-      existing = threads.get(key)
-      if existing is not None and existing != target:
-        raise ValueError(
-            f"thread alias conflict for {key}: existing target {existing}, "
-            f"imported mapping targets {target}")
-      threads[key] = target
-    self._write({"old_session_ids": sessions, "old_threads": threads})

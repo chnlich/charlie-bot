@@ -598,20 +598,22 @@ class TaskCompletionManager:
                 str(fresh_meta.task_parent_id), report, epoch=parent_epoch)
         if report_created and fresh_meta.task_parent_id:
             # The delivered report is the parent's new durable input: its next
-            # serialized turn dispatches now (facts-derived, no legacy wake
-            # judgment). The close fact and the report are already durable at
-            # this point, so a failed wake must not fail the close: the
-            # automatic-completion callers would classify the landed boundary
-            # as blocked and deliver a contradictory second report over the
-            # completed close. The wake is separately re-drivable — any later
-            # dispatch or recovery pass launches the parent's queued
-            # reservation with the delivered report — so the failure is
-            # logged loudly and the close result stands.
+            # serialized turn wakes now (dispatcher for a task-tree parent,
+            # the legacy master wake for a legacy parent). The close fact and
+            # the report are already durable at this point, so a failed wake
+            # must not fail the close: the automatic-completion callers would
+            # classify the landed boundary as blocked and deliver a
+            # contradictory second report over the completed close. The wake
+            # is separately re-drivable — any later dispatch or recovery pass
+            # launches the parent's queued reservation with the delivered
+            # report — so the failure is logged loudly and the close result
+            # stands.
             try:
-                await tree.dispatch.dispatch_pending(str(fresh_meta.task_parent_id))
+                await tree.dispatch.wake_parent(str(fresh_meta.task_parent_id))
             except Exception as exc:
-                log.warning("close_parent_dispatch_failed", session_id=session_id,
-                            parent=str(fresh_meta.task_parent_id), error=str(exc))
+                log.warning("close_parent_wake_failed", session_id=session_id,
+                            parent=str(fresh_meta.task_parent_id), report=str(report.get("id")),
+                            error=str(exc))
         return 200, {"session_id": session_id, "closed_event_id": close_event["id"]}
 
     async def _append_closed(
@@ -991,15 +993,16 @@ class TaskCompletionManager:
             await tree.sessions.announce_appended_event(
                 str(meta.task_parent_id), report, epoch=parent_epoch)
         if report_created and meta.task_parent_id:
-            # Same delivered-report dispatch the completed close performs. The
+            # Same delivered-report wake the completed close performs. The
             # cancelled close and its report are already durable here, so a
             # failed wake is logged and the cancellation result stands (the
             # parent's turn is re-drivable; see _close_now).
             try:
-                await tree.dispatch.dispatch_pending(str(meta.task_parent_id))
+                await tree.dispatch.wake_parent(str(meta.task_parent_id))
             except Exception as exc:
-                log.warning("cancel_parent_dispatch_failed", session_id=session_id,
-                            parent=str(meta.task_parent_id), error=str(exc))
+                log.warning("cancel_parent_wake_failed", session_id=session_id,
+                            parent=str(meta.task_parent_id), report=str(report.get("id")),
+                            error=str(exc))
         return {"session_id": session_id, "closed_event_id": close_event["id"]}
 
     async def reopen_task(

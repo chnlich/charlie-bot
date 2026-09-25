@@ -289,10 +289,9 @@ async def delegate_task(
 ) -> dict:
   """Create a worker task under the calling manager and launch its first Run.
 
-  A legacy session (profile None) is adopted as a manager node on its first
-  delegation, after its own session-local gate and backend check have passed,
-  so a blocked or malformed request converts nothing; its history threads
-  stay on the thread path.
+  A legacy session (profile None) delegates in place: its own session-local
+  gate and backend check run first so a blocked or malformed request converts
+  nothing, and the worker child is created under it without rewriting it.
   """
   # Repo/branch contract first, before any session access or backend
   # resolution: the rejection must not depend on the caller's configured
@@ -309,11 +308,9 @@ async def delegate_task(
     if req.base_branch is None:
       raise HTTPException(
           status_code=400, detail=f"{req.task_type.value} delegations require base_branch")
-  target = require_found(await session_mgr.get_session(req.session_id))
+  require_found(await session_mgr.get_session(req.session_id))
   meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(
       req, session_mgr, task_mgr)
-  if target.profile is None:
-    meta = await task_mgr.adopt_legacy_session(req.session_id)
   return await _delegate_task_tree(
       req, meta, cfg, task_mgr, session_mgr, caller, resolved_backend, resolved_model)
 
@@ -329,15 +326,14 @@ async def start_improve_loop(
 
   One worker child task, one iteration Run per round (``sequence_ref``
   kind=improve), and one final sequence result delivered to the manager
-  through the common report owner. A legacy session (profile None) is adopted
-  as a manager node on its first loop, after its own session-local gate and
-  backend check have passed, so a blocked or malformed request converts
-  nothing.
+  through the common report owner. A legacy session (profile None) loops in
+  place: its own session-local gate and backend check run first so a blocked
+  or malformed request converts nothing, and the worker child is created
+  under it without rewriting it.
   """
   target = require_found(await session_mgr.get_session(req.session_id))
   if target.profile is None:
     await _authorize_spawn_request(req, session_mgr, task_mgr)
-    await task_mgr.adopt_legacy_session(req.session_id)
   return await _start_improve_sequence(req, cfg, task_mgr, session_mgr)
 
 

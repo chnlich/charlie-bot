@@ -260,10 +260,10 @@ def _thread_list_item(t: ThreadMetadata) -> dict:
   line and the full-text modal fetches the thread row on click, so neither
   payload ships task-spec-length descriptions (~KB each). A truncated row
   carries ``description_full_len`` so the client knows to fetch. Timestamps
-  ship as epoch milliseconds: the client reads both fields through ``new
-  Date()``, which accepts the integer and the ISO string alike, and the int
-  form halves their wire bytes on a body that scales with the session's thread
-  count.
+  (created/started/completed) ship as epoch milliseconds: the client reads
+  them through ``new Date()``, which accepts the integer and the ISO string
+  alike, and the int form halves their wire bytes on a body that scales with
+  the session's thread count.
   """
   description = t.description or ""
   item = {
@@ -272,6 +272,7 @@ def _thread_list_item(t: ThreadMetadata) -> dict:
       "description": description[:_LIST_DESCRIPTION_CAP],
       "status": t.status.value,
       "created_at": _epoch_ms(t.created_at),
+      "started_at": _epoch_ms(t.started_at) if t.started_at else None,
       "completed_at": _epoch_ms(t.completed_at) if t.completed_at else None,
       "backend": t.backend,
   }

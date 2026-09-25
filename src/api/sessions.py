@@ -85,6 +85,7 @@ from src.core.models import (
   TaskState,
   ThreadMetadata,
   UtcDatetime,
+  WorkerThreadRef,
   WorkState,
 )
 from src.core.plans import PlanRegistryManager
@@ -297,15 +298,91 @@ def _resolve_requested_backend(
   return resolved_fallback
 
 
+# ---------------------------------------------------------------------------
+# Projected legacy worker-thread rows (sidebar list responses)
+# ---------------------------------------------------------------------------
+# A legacy session (profile None) stays a root row of every sidebar list; the
+# worker threads its delegations left under threads/*/metadata.json project as
+# read-only worker-leaf rows under it. The projected rows are response-only
+# SessionMetadata objects — worker_thread marks them and the transient
+# exclusion keeps every metadata write free of it — derived from the memoized
+# full thread-row scan (view_thread_rows: every threads/*/metadata.json, no
+# time window; never init_worker_recovery's 30-day windowed badge scan).
+# Each row memoizes on (parent id, thread id) against the parent row object
+# and the thread row object, both shared cache references whose identity
+# changes exactly when their file changed, so the search route's whole-body
+# memo keeps serving while nothing moved.
+_PROJECTED_ROW_MEMO_LIMIT = 8192
+_projected_row_memo: BoundedMemo[tuple[str, str],
+                                 tuple[SessionMetadata, dict, SessionMetadata]] = BoundedMemo(
+                                     _PROJECTED_ROW_MEMO_LIMIT)
+
+
+def _datetime_from_epoch_ms(ms: int) -> datetime:
+  return datetime.fromtimestamp(ms / 1000, tz=UTC)
+
+
+def _projected_thread_row(parent: SessionMetadata, thread_row: dict) -> SessionMetadata:
+  """One legacy worker thread projected as a sidebar worker-leaf row."""
+  key = (parent.id, str(thread_row["id"]))
+  hit = _projected_row_memo.get(key)
+  if hit is not None and hit[0] is parent and hit[1] is thread_row:
+    return hit[2]
+  projected = SessionMetadata(
+      id=str(thread_row["id"]),
+      name=str(thread_row["description"] or "")[:80],
+      status=parent.status,
+      profile="worker",
+      task_parent_id=parent.id,
+      created_at=_datetime_from_epoch_ms(thread_row["created_at"]),
+      updated_at=_datetime_from_epoch_ms(
+          thread_row["completed_at"] or thread_row["started_at"] or thread_row["created_at"]),
+      has_running_tasks=thread_row["status"] == "running",
+      backend=thread_row["backend"] or parent.backend,
+      worker_thread=WorkerThreadRef(session_id=parent.id, thread_id=str(thread_row["id"])),
+  )
+  _projected_row_memo.store(key, (parent, thread_row, projected))
+  return projected
+
+
+async def project_worker_threads(
+    rows: list[SessionMetadata],
+    cfg: CharlieBotConfig,
+    thread_mgr: ThreadManager,
+) -> list[SessionMetadata]:
+  """Every sidebar list row plus one projected worker leaf per legacy worker thread.
+
+  The parent rows return as given; after each legacy row (profile None) its
+  session's thread rows ride ``view_thread_rows`` — the session view's
+  memoized full scan — and each becomes one leaf row named for the thread
+  description's first 80 characters, with the parent's status and the
+  thread's times. Nothing is written to disk.
+  """
+  out: list[SessionMetadata] = []
+  for row in rows:
+    out.append(row)
+    if row.profile is not None:
+      continue
+    out.extend(
+        _projected_thread_row(row, thread_row)
+        for thread_row in await view_thread_rows(row.id, cfg, thread_mgr))
+  return out
+
+
 @router.get("/", response_model=list[SessionMetadata])
-async def list_sessions(session_mgr: SessionManager = Depends(get_session_manager)) -> list[SessionMetadata]:
-  return await session_mgr.list_sessions(
+async def list_sessions(
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
+) -> list[SessionMetadata]:
+  sessions = await session_mgr.list_sessions(
       status=SessionStatus.ACTIVE,
       scheduled=False,
       include_running_status=True,
       include_pending_trigger_status=True,
       include_pending_plan_approval=True,
   )
+  return await project_worker_threads(sessions, cfg, thread_mgr)
 
 
 @router.post("/", response_model=SessionMetadata)
@@ -375,22 +452,31 @@ async def list_archived_sessions(
     before: str | None = None,
     before_id: str | None = None,
     session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
 ) -> dict:
   """One keyset page of archived sessions, newest first, with group aggregates for the filter strip."""
   try:
-    return await session_mgr.list_archived_page(group=group, limit=limit, before=before, before_id=before_id)
+    page = await session_mgr.list_archived_page(group=group, limit=limit, before=before, before_id=before_id)
   except ValueError as e:
     raise HTTPException(status_code=422, detail=str(e)) from e
+  page["sessions"] = await project_worker_threads(page["sessions"], cfg, thread_mgr)
+  return page
 
 
 @router.get("/starred", response_model=list[SessionMetadata])
-async def list_starred_sessions(session_mgr: SessionManager = Depends(get_session_manager)) -> list[SessionMetadata]:
-  """List starred sessions, newest first."""
-  return await session_mgr.list_sessions(
+async def list_starred_sessions(
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
+) -> list[SessionMetadata]:
+  """List starred sessions, newest first, with their legacy worker-thread leaves."""
+  sessions = await session_mgr.list_sessions(
       starred=True,
       include_running_status=True,
       include_pending_trigger_status=True,
   )
+  return await project_worker_threads(sessions, cfg, thread_mgr)
 
 
 @router.get("/groups")
@@ -417,6 +503,8 @@ async def delete_group(req: DeleteGroupRequest, session_mgr: SessionManager = De
 async def list_scheduled_sessions(
     request: Request,
     session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
 ) -> Response:
   """List sessions with a scheduled task, newest first."""
   sessions = await session_mgr.list_sessions(
@@ -438,6 +526,7 @@ async def list_scheduled_sessions(
       s.schedule_next_run = next_run_iso(task.cron, task.timezone, now_utc)
     else:
       s.schedule_enabled = False
+  sessions = await project_worker_threads(sessions, cfg, thread_mgr)
   # The grouped sidebar render pairs this poll with /api/cron/tasks; the gzip
   # form rides the body-keyed memo (_switch_payload_response). model_dump's
   # mode="json" is the encoder-free render the /tasks route's comment
@@ -794,15 +883,18 @@ async def search_sessions(
     request: Request,
     q: str = '',
     session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
 ) -> list[SessionMetadata] | Response:
   """Full-text search across session names and chat content."""
   global _search_whole_body
   if not q.strip():
-    return await session_mgr.list_sessions(
+    sessions = await session_mgr.list_sessions(
         status=SessionStatus.ACTIVE,
         include_running_status=True,
         include_pending_trigger_status=True,
     )
+    return await project_worker_threads(sessions, cfg, thread_mgr)
   # The capped name-match shape (a short query) is this route's slowest
   # request: the read-only search serves cache references and the response
   # renders through FastJsonResponse with the derived fields overlaid, the
@@ -823,26 +915,38 @@ async def search_sessions(
   # _SEARCH_DERIVED_PREFIXES, and a None datetime field rides its whole prebuilt
   # null piece (both fields are None on the common idle row), so the pydantic
   # dump_python call under it never runs.
-  states = []
+  # A legacy row's projected worker-thread leaves ride directly after it with
+  # their own state tuples: a leaf's only live fact is its thread's running
+  # state (no thinking, no pending trigger), and the leaf memo keeps the row
+  # objects identity-stable so the whole-body memo below still serves.
+  rendered: list[tuple[SessionMetadata, tuple]] = []
   for meta in rows:
     entry = derived[meta.id]
-    states.append(
-        (
-            thinking_state.busy_since(meta.id), entry[sidebar_state.HAS_RUNNING_TASKS],
-            entry[sidebar_state.HAS_PENDING_TRIGGER], entry[sidebar_state.PENDING_TRIGGER_COUNT],
-            entry[sidebar_state.NEXT_TRIGGER_AT]))
+    rendered.append(
+        (meta,
+         (thinking_state.busy_since(meta.id), entry[sidebar_state.HAS_RUNNING_TASKS],
+          entry[sidebar_state.HAS_PENDING_TRIGGER], entry[sidebar_state.PENDING_TRIGGER_COUNT],
+          entry[sidebar_state.NEXT_TRIGGER_AT])))
+    if meta.profile is not None:
+      continue
+    for thread_row in await view_thread_rows(meta.id, cfg, thread_mgr):
+      leaf = _projected_thread_row(meta, thread_row)
+      rendered.append((leaf, (None, leaf.has_running_tasks, False, 0, None)))
+  search_rows = tuple(m for m, _s in rendered)
+  search_states = tuple(s for _m, s in rendered)
   cached = _search_whole_body
-  if (cached is not None and len(cached[0]) == len(rows) and
-      all(c is m for c, m in zip(cached[0], rows, strict=True)) and cached[1] == tuple(states)):
+  if (cached is not None and len(cached[0]) == len(search_rows) and
+      all(c is m for c, m in zip(cached[0], search_rows, strict=True)) and
+      cached[1] == search_states):
     return await gzip_body_response(request, cached[2], {}, _search_gzip_memo)
   parts: list[bytes] = []
-  for meta, state in zip(rows, states, strict=True):
-    thinking_since, has_running, has_pending, pending_count, next_trigger_at = state
+  for meta, (thinking_since, has_running, has_pending, pending_count, next_trigger_at) in \
+          zip(search_rows, search_states, strict=True):
     row_key = (thinking_since, has_running, has_pending, pending_count, next_trigger_at)
     body = _search_row_body(meta, row_key)
     parts.append(body)
   body = b"[" + b",".join(parts) + b"]"
-  _search_whole_body = (tuple(rows), tuple(states), body)
+  _search_whole_body = (search_rows, search_states, body)
   return await gzip_body_response(request, body, {}, _search_gzip_memo)
 
 

@@ -253,11 +253,10 @@ RESULT_TOTAL_COST_USD = "total_cost_usd"
 
 
 # -- Shared event predicates -------------------------------------------------
-# One definition, three consumers: the takeoff authorization gate
-# (src/core/takeoff_gate.py), the task-tree fold's input candidacy
-# (src/core/task_sessions.py), and the migration's old-input classification
-# (src/core/session_tree_migration.py) all judge USER events through this
-# function, so no site can fork the rule.
+# One definition, two consumers: the takeoff authorization gate
+# (src/core/takeoff_gate.py) and the task-tree fold's input candidacy
+# (src/core/task_sessions.py) both judge USER events through this function,
+# so no site can fork the rule.
 
 
 def is_real_user_message(event: dict) -> bool:

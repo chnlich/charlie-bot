@@ -213,7 +213,7 @@ async def test_server_lifespan_acquires_and_releases_fence(lifespan_env) -> None
     assert holder.purpose == "server startup"
     # A concurrent apply (or a second server) refuses while the server runs.
     with pytest.raises(HomeWriterActiveError):
-      acquire_home_writer_fence(home, purpose="session-tree migrate --apply")
+      acquire_home_writer_fence(home, purpose="session-tree preview --add-backend")
   assert probe_writer_fence(home)["exclusive_holder_alive"] is False
 
 
@@ -222,13 +222,13 @@ async def test_server_startup_refuses_while_apply_holds_fence(lifespan_env) -> N
   from fastapi import FastAPI
   server_module = lifespan_env
   home = server_module.get_config().charliebot_home
-  apply_fence = acquire_home_writer_fence(home, purpose="session-tree migrate --apply")
+  apply_fence = acquire_home_writer_fence(home, purpose="session-tree preview --add-backend")
   try:
     with pytest.raises(HomeWriterActiveError) as excinfo:
       async with server_module.lifespan(FastAPI()):
         pass
     assert excinfo.value.holder is not None
-    assert "apply" in excinfo.value.holder.purpose
+    assert "add-backend" in excinfo.value.holder.purpose
   finally:
     apply_fence.release()
   # After the apply releases, startup works.

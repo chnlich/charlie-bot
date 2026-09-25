@@ -1485,9 +1485,10 @@ class TaskExecutionAdapter:
             result_refs=[f"run:{run.id}"],
             recipient=meta.task_parent_id,
         )
-        # The delivered failure report is the parent's new durable input:
-        # dispatch its next serialized turn (deduped replays included).
-        await self._tree.dispatch.dispatch_pending(meta.task_parent_id)
+        # The delivered failure report is the parent's new durable input: wake
+        # its next serialized turn (dispatcher for a task-tree parent, the
+        # legacy master wake for a legacy parent; deduped replays included).
+        await self._tree.dispatch.wake_parent(meta.task_parent_id)
 
 
     async def _worker_failure_summary(self, session_id: str, run: RunRecord) -> str:

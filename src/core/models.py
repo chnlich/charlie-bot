@@ -330,6 +330,12 @@ class SlackOrigin(BaseModel):
   thread_ts: str
 
 
+class WorkerThreadRef(BaseModel):
+  """The origin of one projected legacy worker-thread row (sidebar list only)."""
+  session_id: str
+  thread_id: str
+
+
 class SessionMetadata(BaseModel):
   id: str = Field(default_factory=lambda: str(uuid.uuid4()))
   name: str
@@ -344,6 +350,10 @@ class SessionMetadata(BaseModel):
   # Transient runtime fact derived from src.core.thinking_state at read time;
   # never persisted (excluded by _TRANSIENT_METADATA_FIELDS).
   thinking_since: UtcDatetime | None = None
+  # Marks a projected legacy worker-thread row (a sidebar list response row
+  # built from one threads/<id>/metadata.json of a legacy session). Response
+  # only: never persisted (excluded by _TRANSIENT_METADATA_FIELDS).
+  worker_thread: WorkerThreadRef | None = None
   created_at: UtcDatetime = Field(default_factory=utc_now)
   updated_at: UtcDatetime = Field(default_factory=utc_now)
   cc_session_id: str | None = None

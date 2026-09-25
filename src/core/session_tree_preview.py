@@ -1,10 +1,9 @@
 """The session-tree preview entry point: one isolated trial instance of the real app.
 
 ``charliebot session-tree preview --home DIR --port PORT`` prepares, validates and
-runs a foreground CharlieBot instance for the user's session-tree UI trial (plan 1
-v4: the independent instance carries the trial; real migration waits for an
-explicit request). This module owns the whole lifecycle; the CLI verb is a thin
-dispatcher onto :func:`run_preview_command`.
+runs a foreground CharlieBot instance for the user's session-tree UI trial. This
+module owns the whole lifecycle; the CLI verb is a thin dispatcher onto
+:func:`run_preview_command`.
 
 Contract:
 
@@ -27,7 +26,7 @@ Contract:
   with the production home, the production workspace dirs, and the running
   checkout. A fresh path is seeded with minimal private instance config and its
   own random access key; an existing validated preview home keeps its config and
-  user-created tasks across restarts. Existing legacy/migrated state, unrelated
+  user-created tasks across restarts. Existing legacy state, unrelated
   configurations, occupied ports, and unprovable instance ownership refuse before
   any write. Logs and generated files stay inside the preview home.
 - **Environment selection.** ``CHARLIEBOT_HOME`` is switched and inherited
@@ -267,12 +266,8 @@ def _legacy_home_evidence(home: Path) -> list[str]:
     evidence.append("config.d/ exists (scheduled task configuration)")
   if (home / "triggers").is_dir():
     evidence.append("triggers/ exists")
-  if (home / "session_tree_migration.json").is_file():
-    evidence.append("session_tree_migration.json exists (migration products)")
   if (home / "session_aliases.json").is_file():
-    evidence.append("session_aliases.json exists (migration products)")
-  if (home / "state" / "session_tree_migration").is_dir():
-    evidence.append("state/session_tree_migration/ exists (migration products)")
+    evidence.append("session_aliases.json exists")
   legacy_sessions = 0
   sessions_dir = home / "sessions"
   if sessions_dir.is_dir():

@@ -11,6 +11,7 @@ route keeps serving v1 sessions unchanged.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -254,7 +255,11 @@ async def test_trigger_resolves_established_alias_to_the_same_task(
       request_id="pm", task_parent_id=None, profile="manager",
       task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
   old_id = "11111111-2222-3333-4444-555555555555"
-  tree.aliases.put_old_session(old_id, manager.id)
+  tree.aliases.path.parent.mkdir(parents=True, exist_ok=True)
+  tree.aliases.path.write_text(json.dumps({
+      "old_session_ids": {old_id: manager.id},
+      "old_threads": {},
+  }, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
   builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("awake")])],
                             "src.agents.backends.registry.build_backend")

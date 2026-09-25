@@ -72,6 +72,7 @@ _NODE_TESTS = [
     "sidebar_rename_prefill.test.js",
     "sidebar_session_model.test.js",
     "sidebar_tree_nesting.test.js",
+    "sidebar_worker_thread_leaf.test.js",
     "sidebar_usage_poll.test.js",
     "stream_incremental_parse.test.js",
     "stream_tail_skip.test.js",

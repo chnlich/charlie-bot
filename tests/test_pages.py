@@ -15,6 +15,7 @@ from src.api import pages
 from src.core import token_tally
 from src.core.config import CharlieBotConfig
 from src.core.models import SessionMetadata, SessionStatus
+from src.core.threads import ThreadManager
 from src.core.token_tally import AccountRow, ModelRow, TokenTally
 
 
@@ -427,6 +428,7 @@ async def test_index_embeds_initial_sessions_for_client_sidebar_render(
       session=session.id,
       session_mgr=PendingTriggerSessionManager(session),
       cfg=cfg,
+      thread_mgr=ThreadManager(cfg),
   )
 
   body = response.body.decode("utf-8")

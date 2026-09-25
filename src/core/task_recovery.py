@@ -42,8 +42,6 @@ if TYPE_CHECKING:
 
 log = LazyStructlogLogger()
 
-_FORKILL = "follow-up"
-
 
 async def reconcile_task_tree(
     cfg: CharlieBotConfig,

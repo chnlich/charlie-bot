@@ -57,8 +57,7 @@ OPERATOR_KEY = "source-operator-key-0000"
 PROVIDER_KEY = "provider-key-1111"
 
 
-def write_source_home(home: Path, *, backend: dict | None = None, port: int = 18498,
-                      with_binary: bool = True) -> dict:
+def write_source_home(home: Path, *, backend: dict | None = None, port: int = 18498) -> dict:
   """One synthetic source (production-like) profile: minimal config + operator key."""
   home.mkdir(parents=True, exist_ok=True)
   if backend is None:

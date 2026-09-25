@@ -527,14 +527,6 @@ async def step_advanced(tree: TaskTreeManager, leaf_id: str, run_id: str) -> boo
   return run.exit_code == 0
 
 
-async def wait_for_terminal(tree: TaskTreeManager, leaf_id: str, run_id: str) -> str:
-  while True:
-    outcome = await terminal_outcome(tree, leaf_id, run_id)
-    if outcome is not None:
-      return outcome
-    await asyncio.sleep(0.2)
-
-
 # ---------------------------------------------------------------------------
 # Recovery: re-drive a firing's boundary from durable facts (idempotent)
 # ---------------------------------------------------------------------------

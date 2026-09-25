@@ -19,7 +19,6 @@ import hashlib
 import uuid
 from typing import TYPE_CHECKING
 
-from src.core import event_types as ET
 from src.core.log_once import LazyStructlogLogger
 
 log = LazyStructlogLogger()
@@ -146,24 +145,3 @@ class ControlEventSink:
   def load_events(self, session_id: str) -> list[dict]:
     """The session's parsed chat events (the durable fact stream control events ride)."""
     return self._session_mgr.load_chat_events_sync(session_id)
-
-  async def append_task_created(
-      self,
-      session_id: str,
-      *,
-      actor: str,
-      task_parent_id: str | None,
-      task_spec_hash: str | None,
-      request_id: str,
-  ) -> dict:
-    """Append the creation fact and return it (its id becomes created_by_event.event_id)."""
-    event = build_control_event(
-        ET.TASK_CREATED,
-        actor=actor,
-        source_session_id=session_id,
-        request_id=request_id,
-        task_parent_id=task_parent_id,
-        task_spec_hash=task_spec_hash,
-    )
-    await self.append(session_id, event)
-    return event

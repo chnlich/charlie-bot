@@ -49,7 +49,6 @@ from src.core.config import CharlieBotConfig
 from src.core.control_events import stable_run_id
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec
-from src.core.tasks import create_logged_task
 
 if TYPE_CHECKING:
     from src.core.task_sessions import TaskTreeManager
@@ -587,8 +586,3 @@ async def reconcile_interrupted_sequences(
                         "if you want it to continue."),
                 })
     return repaired
-
-
-def spawn_sequence_controller(coro, *, name: str) -> object:
-    """Fire-and-forget the sequence controller task (the API handler's tail)."""
-    return create_logged_task(coro, name=name)

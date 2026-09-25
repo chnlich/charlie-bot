@@ -110,7 +110,7 @@ class MuseTranscriptionBackend(TranscriptionBackend):
           # The server's close (clean or not) ends the event stream; the main
           # loop turns an abnormal one into an error unless a final arrived.
           events.put_nowait(exc)
-        except Exception as exc:  # noqa: BLE001 — re-raised by the main loop, never swallowed
+        except Exception as exc:  # re-raised by the main loop, never swallowed
           events.put_nowait(exc)
         events.put_nowait(None)
 

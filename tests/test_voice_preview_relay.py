@@ -137,7 +137,10 @@ def _relay_env(
   monkeypatch.setattr(registry, "_FACTORIES", dict(registry._FACTORIES))
   cfg = CharlieBotConfig(
       backends={"options": []},
-      voice={"vocabulary": ["CharlieBot"], "languages": ["zh", "en"]},
+      voice={
+          "vocabulary": ["CharlieBot"],
+          "languages": ["zh", "en"]
+      },
   )
   backend = backend_cls(cfg)
   monkeypatch.setattr(voice, "get_config", lambda: cfg)
@@ -151,7 +154,10 @@ def _relay_env(
 async def test_relay_forwards_partials_and_final_and_feeds_the_registry_backend(
     monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, backend, socket = _relay_env(
-      monkeypatch, incoming=[_connect_message(), _frame(b"\x01\x02"), _frame(b"\x03\x04"), _end_message()])
+      monkeypatch, incoming=[_connect_message(),
+                             _frame(b"\x01\x02"),
+                             _frame(b"\x03\x04"),
+                             _end_message()])
 
   await voice.voice_preview_relay(socket, "session-a", "fake")
 
@@ -160,33 +166,45 @@ async def test_relay_forwards_partials_and_final_and_feeds_the_registry_backend(
   assert backend.vocabulary == cfg.voice.vocabulary
   assert backend.languages == cfg.voice.languages
   assert socket.sent == [
-      {"type": "partial", "text": "partial 1"},
-      {"type": "partial", "text": "partial 2"},
-      {"type": "final", "text": "fake final"},
+      {
+          "type": "partial",
+          "text": "partial 1"
+      },
+      {
+          "type": "partial",
+          "text": "partial 2"
+      },
+      {
+          "type": "final",
+          "text": "fake final"
+      },
   ]
   assert socket.accepted and socket.close_code == 1000
   assert backend.iterator_closed  # a normal end closes the backend iterator too
 
 
 @pytest.mark.asyncio
-async def test_relay_refuses_an_unknown_id_with_one_error_and_a_close(
-    monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_relay_refuses_an_unknown_id_with_one_error_and_a_close(monkeypatch: pytest.MonkeyPatch) -> None:
   _, backend, socket = _relay_env(monkeypatch, incoming=[_connect_message()])
 
   await voice.voice_preview_relay(socket, "session-a", "nosuch")
 
   assert socket.sent == [
-      {"type": "error", "message": "unknown transcription backend 'nosuch'; known: local, gemini, muse, fake"}]
+      {
+          "type": "error",
+          "message": "unknown transcription backend 'nosuch'; known: local, gemini, muse, fake"
+      }
+  ]
   assert socket.close_code == 1000
   assert backend.audio_chunks == []  # no backend was ever driven
 
 
 @pytest.mark.asyncio
-async def test_relay_refuses_an_unavailable_backend_naming_the_key(
-    monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_relay_refuses_an_unavailable_backend_naming_the_key(monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, backend, socket = _relay_env(monkeypatch, incoming=[_connect_message()])
 
   class _LockedBackend(_RelayFakeBackend):
+
     def unavailable_reason(self) -> str | None:
       return "needs fake.credential_key"
 
@@ -199,8 +217,7 @@ async def test_relay_refuses_an_unavailable_backend_naming_the_key(
 
 
 @pytest.mark.asyncio
-async def test_relay_refuses_a_backend_without_live_partials(
-    monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_relay_refuses_a_backend_without_live_partials(monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, backend, socket = _relay_env(monkeypatch, incoming=[_connect_message()])
   backend.live_partials = False
 
@@ -216,8 +233,10 @@ async def test_relay_queue_overflow_ends_the_preview_with_an_error_and_keeps_dra
     monkeypatch: pytest.MonkeyPatch) -> None:
   oversized = b"\x00\x00" * 500_000  # one frame past the 30 s budget (960 000 bytes)
   _, backend, socket = _relay_env(
-      monkeypatch,
-      incoming=[_connect_message(), _frame(oversized), _frame(b"\x09\x09"), _frame(b"\x0a\x0a")])
+      monkeypatch, incoming=[_connect_message(),
+                             _frame(oversized),
+                             _frame(b"\x09\x09"),
+                             _frame(b"\x0a\x0a")])
 
   await voice.voice_preview_relay(socket, "session-a", "fake")
 
@@ -229,11 +248,14 @@ async def test_relay_queue_overflow_ends_the_preview_with_an_error_and_keeps_dra
 
 
 @pytest.mark.asyncio
-async def test_a_protocol_violation_ends_the_preview_with_an_error(
-    monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_protocol_violation_ends_the_preview_with_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, _backend, socket = _relay_env(
       monkeypatch,
-      incoming=[_connect_message(), _frame(b"\x01\x02"), {"type": "websocket.receive", "text": "not json"}])
+      incoming=[_connect_message(),
+                _frame(b"\x01\x02"), {
+                    "type": "websocket.receive",
+                    "text": "not json"
+                }])
 
   await voice.voice_preview_relay(socket, "session-a", "fake")
 
@@ -243,8 +265,7 @@ async def test_a_protocol_violation_ends_the_preview_with_an_error(
 
 
 @pytest.mark.asyncio
-async def test_a_backend_rejection_becomes_one_error_and_the_failure_log_line(
-    monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_backend_rejection_becomes_one_error_and_the_failure_log_line(monkeypatch: pytest.MonkeyPatch) -> None:
   recorder = _LogRecorder()
   monkeypatch.setattr(voice, "log", recorder)
   _cfg, backend, socket = _relay_env(
@@ -268,12 +289,17 @@ async def test_a_backend_rejection_becomes_one_error_and_the_failure_log_line(
 
 
 @pytest.mark.asyncio
-async def test_a_browser_disconnect_closes_the_backend_iterator(
-    monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_browser_disconnect_closes_the_backend_iterator(monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, backend, socket = _relay_env(
       monkeypatch,
-      incoming=[_connect_message(), _frame(b"\x01\x02"), _frame(b"\x03\x04"),
-                {"type": "websocket.disconnect", "code": 1000}],
+      incoming=[
+          _connect_message(),
+          _frame(b"\x01\x02"),
+          _frame(b"\x03\x04"), {
+              "type": "websocket.disconnect",
+              "code": 1000
+          }
+      ],
   )
 
   await voice.voice_preview_relay(socket, "session-a", "fake")
@@ -296,8 +322,7 @@ def test_unauthenticated_preview_connections_are_rejected_like_the_session_socke
   stub_credentials({"charliebot": {"access_key": "secret-key"}})
   client = TestClient(server.app)
 
-  with pytest.raises(WebSocketDisconnect) as exc_info, client.websocket_connect(
-      "/ws/voice/session-a?backend=local"):
+  with pytest.raises(WebSocketDisconnect) as exc_info, client.websocket_connect("/ws/voice/session-a?backend=local"):
     pass  # pragma: no cover - the handshake never completes
 
   assert exc_info.value.code == 4401

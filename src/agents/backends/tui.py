@@ -49,8 +49,7 @@ if TYPE_CHECKING:
 # Connector sync rides the same settings object: TUI sessions run under the
 # shared real ~/.claude where the announce-once dedup cache persists, and
 # disabling connectors removes even that one replay (DISABLE_CONNECTOR_SETTINGS).
-_CLAUDE_TUI_SETTINGS = json.dumps(
-    {**SKIP_PERMISSIONS_SETTINGS, **DISABLE_CONNECTOR_SETTINGS}, separators=(",", ":"))
+_CLAUDE_TUI_SETTINGS = json.dumps({**SKIP_PERMISSIONS_SETTINGS, **DISABLE_CONNECTOR_SETTINGS}, separators=(",", ":"))
 _BUSY_THRESHOLD_SECONDS = 3.0
 
 # Transcript paths are stable per session id (claude treats a session's jsonl

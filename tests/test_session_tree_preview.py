@@ -579,6 +579,7 @@ def test_seed_existing_home_refuses_an_already_present_addition_untouched(tmp_pa
 
 def test_existing_multi_entry_home_restarts_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(preview_module, "check_ui_assets", lambda: None)
+  monkeypatch.setattr(preview_module, "check_launcher", lambda: None)
   home = _existing_preview_home(tmp_path)
   data = yaml.safe_load((home / "config.yaml").read_text())
   data["backends"]["options"] = [
@@ -999,19 +1000,39 @@ def test_preview_mode_flag() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _cli_env(source: Path, *, strip_launcher: bool = False) -> dict:
+def _fake_launcher_dir(tmp_path: Path) -> Path:
+  """A PATH entry whose charlie-code shim passes check_launcher's --help/--session-dir probe.
+
+  check_launcher runs before the fence refusal a CLI test wants to reach; the shim stands in
+  for the host launcher CI runners lack.
+  """
+  bin_dir = tmp_path / "fake-launcher-bin"
+  bin_dir.mkdir()
+  shim = bin_dir / "charlie-code"
+  shim.write_text('#!/bin/sh\nif [ "$1" = "--help" ]; then echo "--session-dir DIR"; fi\nexit 0\n',
+                  encoding="utf-8")
+  shim.chmod(0o755)
+  return bin_dir
+
+
+def _cli_env(source: Path, *, strip_launcher: bool = False,
+             launcher_dir: Path | None = None) -> dict:
   env = dict(os.environ.items())
   env["CHARLIEBOT_HOME"] = str(source)
   env["PYTHONUNBUFFERED"] = "1"
   if strip_launcher:
     env["PATH"] = "/usr/bin:/bin"
+  if launcher_dir is not None:
+    env["PATH"] = f"{launcher_dir}:{env['PATH']}"
   return env
 
 
-def _run_cli(args: list[str], source: Path, *, strip_launcher: bool = False) -> subprocess.CompletedProcess:
+def _run_cli(args: list[str], source: Path, *, strip_launcher: bool = False,
+             launcher_dir: Path | None = None) -> subprocess.CompletedProcess:
   return subprocess.run(
       [sys.executable, "-m", "src.cli.main", "session-tree", "preview", *args],
-      cwd=str(REPO_ROOT), env=_cli_env(source, strip_launcher=strip_launcher),
+      cwd=str(REPO_ROOT),
+      env=_cli_env(source, strip_launcher=strip_launcher, launcher_dir=launcher_dir),
       capture_output=True, text=True, timeout=120)
 
 
@@ -1193,7 +1214,7 @@ def test_cli_addition_to_a_live_holder_refuses_structured_and_untouched(
   fence = acquire_home_writer_fence(home, purpose="running preview instance")
   try:
     proc = _run_cli(["--home", str(home), "--port", str(_free_port()),
-                     "--add-backend", "clc-add"], other)
+                     "--add-backend", "clc-add"], other, launcher_dir=_fake_launcher_dir(tmp_path))
     assert proc.returncode == 1, proc.stdout + proc.stderr
     diagnostic = json.loads(proc.stderr.strip())
     assert "refused for home" in diagnostic["error"]

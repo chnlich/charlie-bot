@@ -50,6 +50,7 @@ from src.core.control_events import (
   sha256_hex,
   stable_task_id,
 )
+from src.core.event_types import is_real_user_message
 from src.core.json_utils import atomic_write_text
 from src.core.models import (
   AncestorRef,
@@ -118,6 +119,9 @@ class _TaskFacts:
   """
   task_state: str = "open"
   run_outcomes: dict[str, str] = field(default_factory=dict)
+  # Each run's first run_finished fact's absolute log position (the durable
+  # order; RunRecord carries no creation timestamp).
+  run_finish_positions: dict[str, int] = field(default_factory=dict)
   # Input ids a successful run_finished acknowledged.
   confirmed_input_ids: set[str] = field(default_factory=set)
   # Input events inside the valid boundary (pre confirmation/claim filtering).
@@ -174,7 +178,7 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
       # candidacy narrows to that declared set, never the whole history.
       facts.input_candidates = [
           e for e in facts.events_by_id.values()
-          if e.get("type") in _INPUT_EVENT_TYPES and e.get("id") in facts.imported_pending_ids]
+          if _admits_input_type(e) and e.get("id") in facts.imported_pending_ids]
     elif etype == ET.TASK_CLOSED:
       facts.task_state = str(event.get("outcome") or "completed")
       facts.close_events.append(event)
@@ -187,6 +191,8 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
       run_id = event.get("run_id")
       if isinstance(run_id, str):
         facts.run_outcomes[run_id] = str(event.get("outcome"))
+        if run_id not in facts.run_finish_positions:
+          facts.run_finish_positions[run_id] = absolute
         if event.get("outcome") == "success":
           ids = event.get("input_event_ids")
           if isinstance(ids, list):
@@ -200,7 +206,7 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
       child_event_id = event.get("child_event_id")
       if isinstance(child_session_id, str) and isinstance(child_event_id, str):
         facts.delivered_reports.add((child_session_id, child_event_id))
-    if etype in _INPUT_EVENT_TYPES and (
+    if _admits_input_type(event) and (
         facts.boundary_index is None or absolute > facts.boundary_index
         or (event_id is not None and event_id in facts.imported_pending_ids)):
       facts.input_candidates.append(event)
@@ -209,6 +215,22 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
 
 _INPUT_EVENT_TYPES = frozenset({
     ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT})
+
+
+def _admits_input_type(event: dict) -> bool:
+  """The fold's input-type admission.
+
+  Agent messages, scheduled triggers, and child reports are input by type; a
+  USER event is input only when it is a real user message — the Claude CLI
+  persists each tool result as a user-type event with list content, and that
+  echo is tool output no round can ever confirm, not a message.
+  """
+  etype = event.get("type")
+  if etype not in _INPUT_EVENT_TYPES:
+    return False
+  if etype == ET.USER:
+    return is_real_user_message(event)
+  return True
 
 
 class TaskTreeManager:
@@ -474,7 +496,9 @@ class TaskTreeManager:
 
     An active run wins, then an unresolved failure, then waiting work. A
     failed or interrupted run draws attention only while it stands
-    unresolved: a successful authorized retry (the retry_of_run_id chain)
+    unresolved: a successful run that finished after it on the same node (the
+    event log's order is the durable one — records carry no creation
+    timestamp) or a successful authorized retry (the retry_of_run_id chain)
     resolves the older failure instead of leaving attention forever.
     """
     facts = self._facts_of(session_id)
@@ -488,6 +512,15 @@ class TaskTreeManager:
         while target is not None and target not in superseded:
           superseded.add(target)
           target = next((r.retry_of_run_id for r in runs if r.id == target), None)
+    success_positions = [
+        position for run_id, position in facts.run_finish_positions.items()
+        if facts.run_outcomes.get(run_id) == "success"]
+    for run in runs:
+      if facts.run_outcomes.get(run.id) not in ("failed", "interrupted"):
+        continue
+      own = facts.run_finish_positions.get(run.id)
+      if own is not None and any(position > own for position in success_positions):
+        superseded.add(run.id)
     verdicts: list[str] = []
     for run in runs:
       outcome = facts.run_outcomes.get(run.id)
@@ -950,6 +983,14 @@ class TaskTreeManager:
       original = await self.runs.get_run(session_id, original_run_id)
       if original is None:
         raise TaskNotFoundError(f"run {original_run_id} not found in session {session_id}")
+      retry_fields: dict = {}
+      if original.kind == "manager_turn":
+        # A manager-round retry reruns that round's own batch: the retry Run
+        # binds the original's input_event_ids, so the launch path skips the
+        # pending claim (the original batch counts as handled) and the finish
+        # payload is exactly that batch. Worker retries stay claimless — they
+        # consume whatever is pending when they launch.
+        retry_fields["input_event_ids"] = list(original.input_event_ids)
       run = await self.runs.create_retry_run_locked(
           session_id,
           request_id,
@@ -966,6 +1007,7 @@ class TaskTreeManager:
           # A review retry stays chained to the same work Run (the work/spec/
           # review pin must survive the retry).
           review_of_run_id=original.review_of_run_id,
+          **retry_fields,
       )
     return {"session_id": session_id, "run_id": run.id}
 

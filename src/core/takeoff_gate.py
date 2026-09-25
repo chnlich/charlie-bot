@@ -20,7 +20,7 @@ rides.
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
-from src.core import event_types as ET
+from src.core.event_types import is_real_user_message
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo
 from src.core.sessions import SessionManager
@@ -43,13 +43,6 @@ _gate_answers_memo: BoundedMemo[str, tuple[list[dict], int, bool, datetime | Non
 
 class DelegationBlockedError(Exception):
   """Raised when the takeoff gate rejects a delegation attempt."""
-
-
-def _is_real_user_message(event: dict) -> bool:
-  """Real user message = ET.USER with string content (excludes trigger events and nested tool_result blocks)."""
-  if event.get("type") != ET.USER:
-    return False
-  return isinstance(event.get("content"), str)
 
 
 def _normalize_takeoff_content(content: str) -> str:
@@ -107,7 +100,7 @@ def _backward_user_answers(
   latest_pre_takeoff_at: datetime | None = None
   seen_latest_user = False
   for event in reversed(events):
-    if not _is_real_user_message(event):
+    if not is_real_user_message(event):
       continue
     normalized = _normalize_takeoff_content(event.get("content"))
     if not seen_latest_user:

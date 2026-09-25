@@ -605,50 +605,63 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
 
 
 @pytest.mark.asyncio
-async def test_stopped_queued_retry_never_launches_and_fresh_retry_launches(
+async def test_manager_retry_reruns_its_own_batch_and_stopped_retry_never_launches(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
     manager = await create_task(tree, parent=None, request_id="root")
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
     patch_instructions_content(monkeypatch)
 
-    # A failed run leaves its batch pending; dispatch must not auto-retry it.
+    # A manager round claims its batch and fails. The failed round counts as
+    # handled whatever its outcome: its batch never reappears as pending, and
+    # a new message dispatches a new round at once — no explicit retry gate.
+    first_in = await tree.dispatch.admit_input(
+        manager.id, event_type=ET.USER, content="Take off. First.", actor="user")
     await tree.runs.register_run(
         RunRecord(id="run-failed", session_id=manager.id, kind="manager_turn",
                   backend="fake", model="fake-model"))
     await tree.dispatch.claim_input_batch(manager.id, "run-failed")
     await tree.dispatch.finish_run(manager.id, "run-failed", outcome="failed", exit_code=1)
+    assert tree.dispatch.pending_inputs(manager.id) == []
     admitted = await tree.dispatch.admit_input(
         manager.id, event_type=ET.USER, content="Take off. Next.", actor="user")
-    decision = await tree.dispatch.dispatch_pending(manager.id)
-    assert decision["launch"] is False
-    assert "unresolved failure" in decision["reason"]
-
-    # The explicit retry creates a queued run; a stop request on it keeps it
-    # from ever launching.
-    retry = await tree.create_retry(manager.id, "retry-1", "run-failed")
-    assert retry["run_id"], retry
-    await tree.runs.request_stop(manager.id, retry["run_id"], "stop-1")
-    decision = await tree.dispatch.dispatch_pending(manager.id)
-    assert decision["launch"] is False
-
-    # A fresh queued retry (no stop request) actually launches and claims the
-    # pending batch — the serialized turn that consumes it.
-    retry2 = await tree.create_retry(manager.id, "retry-2", "run-failed")
-    backend = SpawningScriptedBackend([result_event("retried")])
+    backend = SpawningScriptedBackend([result_event("next round")])
     install_backends(monkeypatch, [backend], "src.agents.backends.registry.build_backend")
     decision = await tree.dispatch.dispatch_pending(manager.id)
-    assert decision["launch"] is True and decision["run_id"] == retry2["run_id"]
-    run, _outcome = await wait_for_terminal_run(tree, manager.id, retry2["run_id"])
-    assert run.input_event_ids == [str(admitted["id"])]
-    # The successful retry supersedes the failure; later input dispatches.
-    await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER, content="Take off. Later.", actor="user")
-    backend2 = SpawningScriptedBackend([result_event("later")])
+    assert decision["launch"] is True
+    next_run, _outcome = await wait_for_terminal_run(tree, manager.id, decision["run_id"])
+    assert next_run.input_event_ids == [str(admitted["id"])]
+
+    # The explicit retry of the failed manager round reruns that round's OWN
+    # batch: the retry Run binds the original's input_event_ids, so it
+    # launches with nothing pending and finishes with exactly that payload.
+    retry = await tree.create_retry(manager.id, "retry-1", "run-failed")
+    retry_run = await tree.runs.get_run(manager.id, retry["run_id"])
+    assert retry_run is not None and retry_run.input_event_ids == [str(first_in["id"])]
+    backend2 = SpawningScriptedBackend([result_event("retried")])
     install_backends(monkeypatch, [backend2], "src.agents.backends.registry.build_backend")
     decision = await tree.dispatch.dispatch_pending(manager.id)
-    assert decision["launch"] is True
-    await wait_for_terminal_run(tree, manager.id, decision["run_id"])
+    assert decision["launch"] is True and decision["run_id"] == retry["run_id"]
+    retried, _retried_outcome = await wait_for_terminal_run(tree, manager.id, retry["run_id"])
+    assert retried.input_event_ids == [str(first_in["id"])]
+    finished = [e for e in tree.events.load_events(manager.id)
+                if e["type"] == ET.RUN_FINISHED and e.get("run_id") == retry["run_id"]]
+    assert finished and finished[0]["input_event_ids"] == [str(first_in["id"])]
+
+    # A stop request on a queued retry keeps THAT retry from ever launching;
+    # the pending message still dispatches as a fresh round of its own.
+    third_in = await tree.dispatch.admit_input(
+        manager.id, event_type=ET.USER, content="Take off. Again.", actor="user")
+    retry2 = await tree.create_retry(manager.id, "retry-2", "run-failed")
+    await tree.runs.request_stop(manager.id, retry2["run_id"], "stop-1")
+    decision = await tree.dispatch.dispatch_pending(manager.id)
+    assert decision["launch"] is True and decision["run_id"] != retry2["run_id"]
+    fresh_run, _fresh_outcome = await wait_for_terminal_run(tree, manager.id, decision["run_id"])
+    assert fresh_run.input_event_ids == [str(third_in["id"])]
+    stopped_run = await tree.runs.get_run(manager.id, retry2["run_id"])
+    assert stopped_run is not None and stopped_run.pid is None
+    assert tree.runs.terminal_outcome(
+        tree.runs.load_events_sync(manager.id), retry2["run_id"]) is None
     assert tree.dispatch.pending_inputs(manager.id) == []
 
 

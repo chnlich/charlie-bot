@@ -22,6 +22,7 @@ from src.api.chat import cancel_master_agent
 from src.core import config as core_config
 from src.core import event_types as ET
 from src.core import models
+from src.core.models import RunRecord
 
 
 class _StderrOnlyBackend(AgentBackend):
@@ -96,7 +97,7 @@ async def _run_cc_with_stderr_backend(
 @pytest.mark.asyncio
 async def test_cancel_master_agent_success() -> None:
   session_mgr = AsyncMock()
-  meta = object()
+  meta = models.SessionMetadata(id="session-ok", name="Legacy")
 
   with patch(CHAT_CANCEL_MASTER_PATCH_TARGET, new=AsyncMock(return_value=True)) as mock_cancel:
     result = await cancel_master_agent("session-ok", meta=meta, session_mgr=session_mgr)
@@ -109,7 +110,7 @@ async def test_cancel_master_agent_success() -> None:
 @pytest.mark.asyncio
 async def test_cancel_master_agent_no_active_master_broadcasts_error() -> None:
   session_mgr = AsyncMock()
-  meta = object()
+  meta = models.SessionMetadata(id="session-missing", name="Legacy")
 
   with (
       patch(CHAT_CANCEL_MASTER_PATCH_TARGET, new=AsyncMock(return_value=False)) as mock_cancel,
@@ -127,6 +128,124 @@ async def test_cancel_master_agent_no_active_master_broadcasts_error() -> None:
           "content": "No active master agent to cancel.",
       },
   )
+
+
+# ---------------------------------------------------------------------------
+# Task-tree nodes: the stop button rides the run store's request_stop
+# ---------------------------------------------------------------------------
+
+
+async def _task_node(tmp_path: Path, profile: str = "manager"):
+  from conftest import make_home_config
+
+  from src.api.deps import set_task_manager
+  from src.core.run_token import CallerIdentity
+  from src.core.sessions import SessionManager
+  from src.core.task_sessions import TaskTreeManager
+
+  cfg = make_home_config(tmp_path)
+  session_mgr = SessionManager(cfg)
+  tree = TaskTreeManager(cfg, session_mgr)
+  node = await tree.create_task(
+      request_id="node", task_parent_id=None, profile=profile, task=None,
+      name="Node", backend=None, caller=CallerIdentity(kind="operator"))
+  set_task_manager(tree)
+  return cfg, session_mgr, tree, node
+
+
+@pytest.mark.asyncio
+async def test_chat_cancel_on_task_node_stops_the_launched_run(tmp_path: Path) -> None:
+  from src.api.deps import set_task_manager
+
+  _cfg, session_mgr, tree, node = await _task_node(tmp_path)
+  run = await tree.runs.register_run(
+      RunRecord(id="run-live", session_id=node.id, kind="manager_turn"))
+  # A launched run whose process is already gone: request_stop converges it to
+  # the interrupted terminal fact the way a live process's exit would.
+  await tree.runs.record_launch(node.id, run.id, pid=2**23, pid_start="1")
+
+  meta = await session_mgr.get_session(node.id)
+  assert meta is not None and meta.profile == "manager"
+  result = await cancel_master_agent(node.id, meta=meta, session_mgr=session_mgr)
+
+  assert result == {"ok": True}
+  events = tree.events.load_events(node.id)
+  stops = [e for e in events if e["type"] == ET.RUN_STOP_REQUESTED]
+  assert stops and stops[0]["run_id"] == "run-live"
+  assert stops[0]["request_id"] == "chat-cancel:run-live"
+  finished = [e for e in events if e["type"] == ET.RUN_FINISHED and e.get("run_id") == "run-live"]
+  assert finished and finished[0]["outcome"] == "interrupted"
+  set_task_manager(None)
+
+
+@pytest.mark.asyncio
+async def test_chat_cancel_identity_conflict_maps_to_409(tmp_path: Path) -> None:
+  """A pid reuse (the recorded identity no longer matches /proc) surfaces as
+  the v2 run-cancel route's 409 shape, never as a silent miss."""
+  import subprocess
+
+  from src.api.deps import set_task_manager
+  from src.core.runs import read_pid_stat
+
+  _cfg, session_mgr, tree, node = await _task_node(tmp_path)
+  run = await tree.runs.register_run(
+      RunRecord(id="run-reused", session_id=node.id, kind="manager_turn"))
+  live = subprocess.Popen(["/bin/sleep", "30"])
+  try:
+    pair = read_pid_stat(live.pid)
+    assert pair is not None
+    # A recorded pid_start that /proc no longer reports: pid reuse evidence.
+    await tree.runs.record_launch(node.id, run.id, pid=live.pid, pid_start="not-this-boot")
+    meta = await session_mgr.get_session(node.id)
+    with pytest.raises(HTTPException) as exc_info:
+      await cancel_master_agent(node.id, meta=meta, session_mgr=session_mgr)
+    assert exc_info.value.status_code == 409
+  finally:
+    if live.poll() is None:
+      live.kill()
+  # The durable stop request survives (the requesting phase landed first).
+  events = tree.events.load_events(node.id)
+  assert [e for e in events if e["type"] == ET.RUN_STOP_REQUESTED]
+  set_task_manager(None)
+
+
+@pytest.mark.asyncio
+async def test_chat_cancel_on_task_node_without_a_launched_run_is_404(tmp_path: Path) -> None:
+  from src.api.deps import set_task_manager
+
+  _cfg, session_mgr, tree, node = await _task_node(tmp_path)
+  # A queued (never launched) run is not running anything; the button stops nothing.
+  await tree.runs.register_run(RunRecord(id="run-queued", session_id=node.id, kind="manager_turn"))
+
+  meta = await session_mgr.get_session(node.id)
+  with pytest.raises(HTTPException) as exc_info:
+    await cancel_master_agent(node.id, meta=meta, session_mgr=session_mgr)
+
+  assert exc_info.value.status_code == 404
+  assert exc_info.value.detail == "No active master agent"
+  events = session_mgr.load_chat_events_sync(node.id)
+  assert any(e.get("type") == ET.ASSISTANT_ERROR for e in events)
+  assert [e for e in tree.events.load_events(node.id) if e["type"] == ET.RUN_STOP_REQUESTED] == []
+  set_task_manager(None)
+
+
+@pytest.mark.asyncio
+async def test_chat_cancel_on_legacy_session_reaches_cancel_master(tmp_path: Path) -> None:
+  from conftest import make_home_config
+
+  from src.core.sessions import SessionManager
+
+  cfg = make_home_config(tmp_path)
+  session_mgr = SessionManager(cfg)
+  legacy = await session_mgr.create_session(models.CreateSessionRequest(name="Legacy"))
+  meta = await session_mgr.get_session(legacy.id)
+  assert meta is not None and meta.profile is None
+
+  with patch(CHAT_CANCEL_MASTER_PATCH_TARGET, new=AsyncMock(return_value=True)) as mock_cancel:
+    result = await cancel_master_agent(legacy.id, meta=meta, session_mgr=session_mgr)
+
+  assert result == {"ok": True}
+  mock_cancel.assert_awaited_once_with(legacy.id, meta=meta, session_mgr=session_mgr)
 
 
 @pytest.mark.asyncio

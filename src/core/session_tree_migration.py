@@ -130,6 +130,7 @@ from src.core.control_events import (
     stable_run_id,
     stable_task_id,
 )
+from src.core.event_types import is_real_user_message
 from src.core.home_writer_fence import (
     FenceHolder,
     FencePathRefusalError,
@@ -472,6 +473,12 @@ def _archive_files(session_dir: Path) -> list[Path]:
   return sorted(archives.glob("chat_events.*.jsonl"))
 
 
+def _string_content(event: dict) -> str | None:
+  """The event's content when it is a string, else None."""
+  value = event.get("content")
+  return value if isinstance(value, str) else None
+
+
 def _raw_line_output_signal(event: dict) -> bool:
   """Whether one raw stream line evidences model or tool output.
 
@@ -499,7 +506,8 @@ def _raw_line_output_signal(event: dict) -> bool:
   if kind in (ET.TOOL_USE, ET.TOOL_RESULT):
     return True
   if kind == ET.THINKING:
-    return bool(isinstance(event.get("content"), str) and event["content"].strip())
+    content = _string_content(event)
+    return bool(content and content.strip())
   if kind == ET.USER:
     # The claude-family raw stream echoes tool results under type "user";
     # a tool result implies tool activity happened.
@@ -1268,10 +1276,11 @@ def _classify_inputs(info: SessionInfo, events: list[dict], meta: SessionMetadat
     provably successful final result. Binding to one raw Run additionally
     needs the round's retained identity; unbound-but-proven stays visible.
   - failed attempts: failed/zero-output named rounds, preserved as failed
-    executions bound to their exact logs. Their inputs re-enter the v2
-    pending set only while the standing failed Run blocks auto-dispatch
-    (the v2 fold's own failed-turn policy); a failed attempt without its
-    execution log is unresolved, because re-admitting it there would
+    executions bound to their exact logs. Their inputs stay imported history:
+    the failed Run's terminal fact keeps its batch handled (a launched round
+    counts as handled whatever its outcome), so nothing re-enters the v2
+    pending set and nothing blocks the next message; a failed attempt without
+    its execution log is unresolved, because re-admitting it there would
     auto-execute on ambiguous evidence.
   - pending: only inputs the old system's replay rule proves unhandled —
     no MASTER_DONE of any round after them. Scheduled wakes are proven
@@ -1459,9 +1468,10 @@ def _classify_inputs(info: SessionInfo, events: list[dict], meta: SessionMetadat
         disposition.round_failed_logs.add(log.dir_name)
     # Handling proof needs the launch identity: the wake text is the round's
     # own launch prompt, echoed into the bound round's raw log.
+    wake_text = _string_content(input_event)
     echo = (log is not None and log.raw_path is not None
-            and isinstance(input_event.get("content"), str) and input_event["content"]
-            and input_event["content"].encode("utf-8") in log.raw_path.read_bytes())
+            and wake_text
+            and wake_text.encode("utf-8") in log.raw_path.read_bytes())
     if outcome == "success" and echo:
       correlation = bound_or_unbound(log, input_id)
       disposition.confirmed.append((input_id, correlation))
@@ -1478,6 +1488,11 @@ def _classify_inputs(info: SessionInfo, events: list[dict], meta: SessionMetadat
   for index, event in enumerate(events):
     event_type = event.get("type")
     input_id = event.get("id")
+    if event_type == ET.USER and not is_real_user_message(event):
+      # A CLI tool-result echo (user-typed event, list content) is not an old
+      # input: it stays history and leaves the statistics and the unresolved
+      # lists, exactly as the v2 fold's own candidacy rule judges it.
+      continue
     if event_type in _NAMED_INPUT_TYPES:
       if not isinstance(input_id, str) or not input_id:
         disposition.uncertain.append(UnresolvedEntry(
@@ -2501,12 +2516,23 @@ def _run_from_thread(
 ) -> RunProduct:
   meta = thread.meta
   run_id = _run_id_for(target_id, request_id)
+  outcome = _thread_outcome(meta)
+  ended_at = meta.completed_at
+  if outcome is not None and ended_at is None:
+    # A thread still marked running (quiescence proved its process dead)
+    # imports as an interrupted Run. The run_finished product's record_finish
+    # rewrites the receipted run record with ``ended_at or utc_now()``; the
+    # plan must already carry the deterministic value that rewrite will write
+    # — the source thread's own timestamps — or the rewrite would break the
+    # apply receipt and rollback would refuse. Dry-run and apply derive the
+    # same value, so the rewrite is byte-identical.
+    ended_at = meta.started_at or meta.created_at
   record = RunRecord(
       id=run_id,
       session_id=target_id,
       kind=kind,  # type: ignore[arg-type]
       started_at=meta.started_at,
-      ended_at=meta.completed_at,
+      ended_at=ended_at,
       exit_code=meta.exit_code,
       backend=meta.backend or None,
       model=meta.model or None,
@@ -2522,8 +2548,8 @@ def _run_from_thread(
       events_ref=str(thread.events_path) if thread.events_path.is_file() else None,
       result_ref=str(thread.events_path) if thread.events_path.is_file() else None,
   )
-  return RunProduct(record=record, outcome=_thread_outcome(meta),
-                    ended_at=meta.completed_at, exit_code=meta.exit_code,
+  return RunProduct(record=record, outcome=outcome,
+                    ended_at=ended_at, exit_code=meta.exit_code,
                     evidence_thread=thread)
 
 

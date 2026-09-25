@@ -25,7 +25,7 @@ from conftest import reset_config_caches
 from src.core import event_types as ET
 from src.core import session_tree_migration as migration
 from src.core.json_utils import atomic_write_text
-from src.core.models import SessionMetadata, SessionStatus
+from src.core.models import RunRecord, SessionMetadata, SessionStatus
 from src.core.runs import RAW_LOG_NAME
 from src.core.session_aliases import SessionAliasStore
 from src.core.sessions import SessionManager
@@ -187,6 +187,95 @@ def test_dry_run_via_cli_prints_reviewable_manifest(
   assert payload["status"] == "dry_run"
   assert payload["unresolved_count"] == 0
   assert (tmp_path / "m.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Old-input candidacy: tool echoes, imported failed rounds
+# ---------------------------------------------------------------------------
+
+
+def test_tool_result_echo_is_not_an_old_input(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The Claude CLI's tool-result echo (a user-typed event with list content)
+  is not an old input: it leaves the input statistics and the unresolved
+  lists, imports as plain history, and never blocks the migrated node."""
+  home = fx.build_tool_echo_home(tmp_path / "home")
+  point_home(monkeypatch, home)
+  manifest_path = tmp_path / "m.json"
+  code, manifest, _summary = dry_run(monkeypatch, home, manifest_path)
+  assert code == 0
+  sid = fx.S_ECHO
+  echo_id = f"{sid[:8]}-0000-0000-0000-00000000000c"
+  mapping = next(m for m in manifest.mappings if m.source_kind == "ordinary"
+                 and m.source_id == sid)
+  disposition = mapping.detail["input_disposition"]
+  assert disposition["confirmed_bound"] == 1  # the handled round
+  assert disposition["pending"] == 0 and disposition["uncertain"] == 0
+  assert manifest.unresolved == []
+  assert all(u.source_id != f"{sid}:{echo_id}" for u in manifest.import_report)
+
+  assert run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))[0] == 0
+  tree = tree_of(home)
+  assert tree.dispatch.pending_inputs(sid) == []
+  boundary = [e for e in tree.fact_history(sid) if e.get("type") == ET.TASK_IMPORTED]
+  assert boundary and boundary[0]["pending_inputs"] == []
+  # The echo is still in the node's history as evidence, just never as input.
+  assert any(e.get("id") == echo_id for e in tree.fact_history(sid))
+  # A post-import message dispatches a fresh round with no echo attached.
+  launched: list[list[str]] = []
+
+  async def executor(session_id: str, pending: list[dict],
+                     launch_run_id: str | None = None) -> str:
+    run = await tree.runs.register_run(
+        RunRecord(id=f"consumer-{len(launched) + 1}", session_id=session_id))
+    await tree.dispatch.claim_input_batch(session_id, run.id)
+    launched.append([str(e["id"]) for e in pending])
+    return run.id
+
+  tree.dispatch.executor = executor
+  admitted = asyncio.run(tree.dispatch.admit_input(
+      sid, event_type=ET.USER, content="carry on", actor="user"))
+  decision = asyncio.run(tree.dispatch.dispatch_pending(sid))
+  assert decision["launch"] is True
+  assert launched == [[str(admitted["id"])]]
+
+
+def test_imported_failed_round_neither_blocks_nor_reruns(tmp_path: Path,
+                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+  """An imported node with a failed manager_turn run dispatches a new message
+  at once: the failed round's batch stays handled (never re-queued) and no
+  explicit retry is required before fresh execution."""
+  home = fx.build_failed_rounds_home(tmp_path / "home")
+  point_home(monkeypatch, home)
+  manifest_path = tmp_path / "m.json"
+  code, manifest, _summary = dry_run(monkeypatch, home, manifest_path)
+  assert code == 0 and manifest.unresolved == []
+  assert run_cli(monkeypatch, home, "--apply", "--manifest", str(manifest_path))[0] == 0
+  sid = fx.S_FAILED_ROUNDS
+  tree = tree_of(home)
+  failed = [r for r in tree.runs.list_run_records_sync(sid)
+            if tree.runs.terminal_outcome(tree.runs.load_events_sync(sid), r.id) == "failed"]
+  assert failed, "the migration imports the failed rounds as failed manager_turn runs"
+  failed_inputs = {i for r in failed for i in r.input_event_ids}
+  assert failed_inputs  # the failed rounds keep the exact inputs they attempted
+
+  launched: list[list[str]] = []
+
+  async def executor(session_id: str, pending: list[dict],
+                     launch_run_id: str | None = None) -> str:
+    run = await tree.runs.register_run(
+        RunRecord(id=f"consumer-{len(launched) + 1}", session_id=session_id))
+    await tree.dispatch.claim_input_batch(session_id, run.id)
+    launched.append([str(e["id"]) for e in pending])
+    return run.id
+
+  tree.dispatch.executor = executor
+  admitted = asyncio.run(tree.dispatch.admit_input(
+      sid, event_type=ET.USER, content="carry on", actor="user"))
+  decision = asyncio.run(tree.dispatch.dispatch_pending(sid))
+  assert decision["launch"] is True
+  assert launched == [[str(admitted["id"])]]
+  pending_ids = {str(e["id"]) for e in tree.dispatch.pending_inputs(sid)}
+  assert failed_inputs.isdisjoint(pending_ids)
 
 
 # ---------------------------------------------------------------------------

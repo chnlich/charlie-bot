@@ -568,7 +568,7 @@ def test_takeoff_gate_memo_cold_walk_claims_only_the_walked_span(monkeypatch: py
   from src.core import takeoff_gate
 
   mgr = FakeSessionManager([user_event("please proceed") for _ in range(50)])
-  real = takeoff_gate._is_real_user_message
+  real = takeoff_gate.is_real_user_message
   seen = {"n": 0}
 
   def spy(event: dict[str, Any]) -> bool:
@@ -578,11 +578,11 @@ def test_takeoff_gate_memo_cold_walk_claims_only_the_walked_span(monkeypatch: py
       mgr.events.append(user_event("take off"))
     return result
 
-  monkeypatch.setattr(takeoff_gate, "_is_real_user_message", spy)
+  monkeypatch.setattr(takeoff_gate, "is_real_user_message", spy)
   with pytest.raises(DelegationBlockedError):
     check_takeoff_gate("session-id", mgr)
   assert seen["n"] >= 10
-  monkeypatch.setattr(takeoff_gate, "_is_real_user_message", real)
+  monkeypatch.setattr(takeoff_gate, "is_real_user_message", real)
   check_takeoff_gate("session-id", mgr)
 
 

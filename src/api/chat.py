@@ -30,11 +30,12 @@ from src.core.log_once import LazyStructlogLogger
 from src.core.message_aggregator import extract_text_from_message
 from src.core.message_events import serialize_uploaded_files
 from src.core.models import (
-    SendMessageRequest,
-    SessionMetadata,
-    SessionStatus,
+  SendMessageRequest,
+  SessionMetadata,
+  SessionStatus,
 )
 from src.core.run_token import CallerIdentity
+from src.core.runs import RunIdentityConflictError
 from src.core.session_dispatch import agent_provenance, input_event_type_for_caller
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
@@ -208,13 +209,53 @@ async def send_message(
   return JSONResponse(status_code=202, content={"status": "accepted"})
 
 
+async def _cancel_task_node_runs(session_id: str) -> int:
+  """Stop every launched, non-terminal Run of one task-tree node.
+
+  Each stop rides the run store's own entry point: the durable request lands
+  first, then the identity-checked signal and exit observation, so a run
+  re-attached after a server restart stops the same way. The request id is
+  derived from the run id, so a repeated press is the same idempotent request.
+  Returns how many stops were requested.
+  """
+  task_mgr = await get_task_manager()
+  events = task_mgr.runs.load_events_sync(session_id)
+  requested = 0
+  for run in task_mgr.runs.list_run_records_sync(session_id):
+    if run.pid is None or task_mgr.runs.run_has_terminal_fact(run, events):
+      continue  # queued runs launch nothing; finished runs keep their outcome
+    result = await task_mgr.runs.request_stop(session_id, run.id, f"chat-cancel:{run.id}")
+    if result.stop_requested:
+      requested += 1
+  return requested
+
+
 @router.post("/{session_id}/cancel")
 async def cancel_master_agent(
     session_id: str,
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
 ) -> dict:
-  """Send SIGTERM to the running master CC agent for this session."""
+  """Stop the session's current execution.
+
+  A task-tree node (the metadata carries a profile) stops its launched Runs
+  through the run store; a legacy session keeps the master-cancel path. With
+  nothing running, both keep today's error broadcast and 404.
+  """
+  if meta.profile is not None:
+    try:
+      requested = await _cancel_task_node_runs(session_id)
+    except RunIdentityConflictError as e:
+      from src.api.sessions import _task_http_error
+      raise _task_http_error(e) from e
+    if not requested:
+      await session_mgr.persist_and_broadcast(
+          session_id, {
+              "type": ET.ASSISTANT_ERROR,
+              "content": "No active master agent to cancel.",
+          })
+      raise HTTPException(status_code=404, detail="No active master agent")
+    return {"ok": True}
   found = await _load_cancel_master(globals())(session_id, meta=meta, session_mgr=session_mgr)
   if not found:
     await session_mgr.persist_and_broadcast(

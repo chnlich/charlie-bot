@@ -250,3 +250,24 @@ USAGE_CACHE_CREATION_INPUT_TOKENS = "cache_creation_input_tokens"
 # persisted wire value the cost fold re-reads (src/core/session_usage.py);
 # the resolver's usage dict reuses the name for the panel.
 RESULT_TOTAL_COST_USD = "total_cost_usd"
+
+
+# -- Shared event predicates -------------------------------------------------
+# One definition, three consumers: the takeoff authorization gate
+# (src/core/takeoff_gate.py), the task-tree fold's input candidacy
+# (src/core/task_sessions.py), and the migration's old-input classification
+# (src/core/session_tree_migration.py) all judge USER events through this
+# function, so no site can fork the rule.
+
+
+def is_real_user_message(event: dict) -> bool:
+  """Real user message = ET.USER with string content.
+
+  Excludes trigger events (a different type) and the Claude CLI's tool-result
+  echoes: the CLI persists each tool result as a ``user``-type event whose
+  content is a list of tool_result blocks (src/cli/claude_sub_bridge.py), and
+  that echo is tool output, never a message someone sent.
+  """
+  if event.get("type") != USER:
+    return False
+  return isinstance(event.get("content"), str)

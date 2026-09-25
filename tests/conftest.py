@@ -3391,17 +3391,3 @@ def spy_on_load_json_meta(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
 
   monkeypatch.setattr(worker_recovery_module, "load_json_meta", spy)
   return read_paths
-
-
-@pytest.fixture
-def full_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-  """The fully synthetic eleven-category migration home, with CHARLIEBOT_HOME pointed at it.
-
-  Built by tests/session_tree_fixtures.py: nothing host-derived, one throwaway
-  git repo inside the home. Shared by the session-tree migration test files.
-  """
-  import session_tree_fixtures as fx
-  home = fx.build_full_home(tmp_path / "home")
-  monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(home))
-  reset_config_caches()
-  return home

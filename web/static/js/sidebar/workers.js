@@ -441,21 +441,6 @@ function addWorkerCard(threadId, description, createdAt, backend, descriptionFul
 // Trigger card functions
 // ---------------------------------------------------------------------------
 
-function addTriggerCard(triggerId, message, fireAt, createdAt, status) {
-  const container = document.getElementById('tab-workers');
-  if (!container) return;
-  document.getElementById('no-workers-placeholder')?.remove();
-  if (document.getElementById('trigger-dot-' + triggerId)) return;
-
-  const chrome = triggerStatusChrome(status);
-
-  const card = document.createElement('div');
-  card.className = triggerCardClass(chrome.border);
-  card.id = 'trigger-card-' + triggerId;
-  card.innerHTML = triggerCardBodyHtml(triggerId, status, message, fireAt, SESSION_ID);
-  container.appendChild(card);
-}
-
 function updateTriggerStatus(triggerId, status) {
   const icon = document.getElementById('trigger-dot-' + triggerId);
   const text = document.getElementById('trigger-status-' + triggerId);

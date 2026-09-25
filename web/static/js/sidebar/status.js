@@ -233,10 +233,6 @@ const GEAR_CENTER_PATH =
 const SPINNER_TITLE = 'Task is running';
 const GEAR_TITLE = 'Delegated work running in subtasks';
 
-function spinnerSvgContent() {
-  return SPINNER_SVG_INNER;
-}
-
 function gearSvgContent() {
   return (Sidebar.GEAR_SVG_PATH || '') + GEAR_CENTER_PATH;
 }

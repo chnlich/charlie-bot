@@ -1165,6 +1165,7 @@ class SessionManager:
       scheduled: bool | None = None,
       include_running_status: bool = False,
       include_pending_trigger_status: bool = False,
+      include_pending_plan_approval: bool = False,
   ) -> tuple[list[SessionMetadata], dict[str, dict]]:
     """List sessions newest-first without copying: ``(rows, derived)`` for
     consumers that only read.
@@ -1185,6 +1186,7 @@ class SessionManager:
         rows,
         include_running_status=include_running_status,
         include_pending_trigger_status=include_pending_trigger_status,
+        include_pending_plan_approval=include_pending_plan_approval,
     )
     return rows, derived
 

@@ -88,7 +88,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Coming back from a hidden tab: one immediate snapshot of everything the
   // paused timers would have refreshed, before their cadences restart.
   onPageResume(() => {
-    refreshSessionStatusNow({refreshWorkers: true});
+    refreshSessionStatusNow();
     fetchTuiStatus();
     pollActiveSessionView();
     updateThinkingTime();

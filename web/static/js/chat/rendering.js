@@ -508,6 +508,26 @@ function renderMessagesToDetachedContainer(messages, sessionId) {
   return tempDiv;
 }
 
+// The delivery banner's evidence links. A host-absolute ref rides the
+// file-server route; the diff page compares the run's work branch against its
+// base branch.
+function evidenceHref(ref) {
+  return typeof ref === 'string' && ref.startsWith('/') ? '/absolute_filepath' + ref : null;
+}
+
+function deliveryDiffHref(msg, sessionId) {
+  if (!msg || !msg.repo_path || !msg.base_branch || !msg.branch_name) return null;
+  return '/diff?repo=' + encodeURIComponent(msg.repo_path)
+    + '&base=' + encodeURIComponent(msg.base_branch)
+    + '&head=' + encodeURIComponent(msg.branch_name)
+    + '&session=' + encodeURIComponent(sessionId || '');
+}
+
+function evidenceLinkHtml(label, href) {
+  if (!href) return '<span class="text-slate-500">' + label + '</span>';
+  return '<a class="text-blue-400 hover:underline" href="' + escapeHtmlAttr(href) + '" target="_blank" rel="noopener">' + label + '</a>';
+}
+
 function displayMetadataValue(value, emptyText) {
   if (value === null || value === undefined || value === '') return emptyText;
   return String(value);
@@ -526,8 +546,56 @@ function delegateBackendModel(invocation, msg) {
   return model ? backend + ' / ' + model : backend;
 }
 
-function renderDelegateMetadata(msg) {
+// Where the delegated child lives: new-style delegations name the child
+// session; legacy ones left only a thread under the parent session, addressed
+// by the projected thread URL.
+function delegateChildHref(msg, sessionId) {
+  if (msg.child_session_id) return '/?session=' + encodeURIComponent(msg.child_session_id);
+  if (msg.thread_id && sessionId) {
+    return '/?session=' + encodeURIComponent(sessionId) + '&thread=' + encodeURIComponent(msg.thread_id);
+  }
+  return null;
+}
+
+function delegateChildLinkHtml(msg, sessionId) {
+  const href = delegateChildHref(msg, sessionId);
+  if (!href) return '';
+  const label = msg.child_session_id || ('thread ' + msg.thread_id);
+  return '<a class="text-blue-400 hover:underline break-all" href="' + escapeHtmlAttr(href) + '">'
+    + escapeHtml(label) + '</a>';
+}
+
+// The display label for a backend id (the config-authored text, family prefix
+// stripped the way the sidebar rows show it).
+function delegateBackendLabelText(backendId) {
+  const options = typeof BACKEND_OPTIONS === 'undefined' ? null : BACKEND_OPTIONS;
+  const full = (backendId && options && options[backendId]) ? options[backendId] : (backendId || '');
+  const sep = full.indexOf(' · ');
+  return sep === -1 ? full : full.slice(sep + 3);
+}
+
+// The live line the 3 s status poll paints into the card. A new-style card
+// reads the child session's own status; a legacy delegation has no session id
+// for the poll to resolve, so its line follows the owning session's status —
+// the same coarseness the projected sidebar row carries.
+function delegateLiveStateHtml(msg, sessionId) {
+  const child = msg.child_session_id || '';
+  const tracked = child || sessionId || '';
+  if (!tracked) return '';
+  const attr = child ? 'data-delegate-session' : 'data-delegate-parent-session';
+  const backend = delegateBackendLabelText(
+      msg.backend || (msg.delegate_invocation && msg.delegate_invocation.backend) || '');
+  return '<span class="delegate-live-state" ' + attr + '="' + escapeHtmlAttr(tracked) + '"'
+    + ' data-delegate-backend="' + escapeHtmlAttr(backend) + '"></span>';
+}
+
+function renderDelegateMetadata(msg, sessionId) {
   var invocation = msg.delegate_invocation;
+  // The rendered session owns the message: its id addresses a legacy child's
+  // thread URL and anchors the live-state line's poll scope.
+  sessionId = sessionId || (typeof SESSION_ID !== 'undefined' ? SESSION_ID : '');
+  var liveState = delegateLiveStateHtml(msg, sessionId);
+  var childLink = delegateChildLinkHtml(msg, sessionId);
   var rows = [];
   if (invocation) {
     var taskType = displayMetadataValue(invocation.task_type || msg.task_type, '(unknown)');
@@ -542,7 +610,6 @@ function renderDelegateMetadata(msg) {
       ['reviewer context file', displayMetadataValue(invocation.reviewer_context_file, '(none)')],
       ['backend/model', delegateBackendModel(invocation, msg)],
       ['keep worktree', invocation.keep_worktree ? 'true' : 'false'],
-      ['full details', 'Workers panel'],
     ];
   } else {
     rows = [
@@ -550,11 +617,16 @@ function renderDelegateMetadata(msg) {
     ];
     var backendModel = delegateBackendModel(null, msg);
     if (backendModel !== '(none)') rows.push(['backend/model', backendModel]);
-    rows.push(['full details', 'Workers panel']);
   }
-  return '<div class="font-mono text-xs leading-5 bg-slate-950/35 border border-amber-700/20 rounded-lg px-3 py-2 space-y-1">'
-    + rows.map(row => renderMetadataRow(row[0], row[1])).join('')
-    + '</div>';
+  var html = '<div class="font-mono text-xs leading-5 bg-slate-950/35 border border-amber-700/20 rounded-lg px-3 py-2 space-y-1">'
+    + rows.map(row => renderMetadataRow(row[0], row[1])).join('');
+  if (liveState || childLink) {
+    html += '<div class="grid grid-cols-[9rem_minmax(0,1fr)] gap-3"><span class="text-slate-500 not-italic font-sans">state</span>'
+      + '<span class="min-w-0 break-words font-sans not-italic">' + liveState
+      + (liveState && childLink ? ' &middot; ' : '')
+      + childLink + '</span></div>';
+  }
+  return html + '</div>';
 }
 
 // Every rendered message wrapper carries messageIdentityAttrs: the turn fold,
@@ -606,7 +678,33 @@ function renderMessage(msg, sessionId) {
       + "<div class=\"flex items-center gap-2 text-amber-400 text-xs font-semibold mb-2\">"
       + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 5l7 7-7 7M5 5l7 7-7 7\"/></svg>"
       + "Delegated</div>"
-      + renderDelegateMetadata(msg) + timeDiv() + "</div></div>";
+      + renderDelegateMetadata(msg, sessionId) + timeDiv() + "</div></div>";
+  }
+  if (msg.role === "run_delivery") {
+    // The worker transcript's close: the delivery summary and the four
+    // evidence links the old leaf banner showed (sidebar/workers.js is gone).
+    var delivered = msg.completed;
+    var palette = delivered ? 'border-green-500/50 bg-green-500/10' : 'border-slate-600 bg-slate-800';
+    var labelClass = delivered ? 'text-green-300' : 'text-slate-400';
+    var stateLabel = delivered ? 'Delivered' : 'Task ' + (msg.task_state || 'closed');
+    var links = [
+      evidenceLinkHtml('Raw log', evidenceHref(msg.raw_log_ref)),
+      evidenceLinkHtml('Events', evidenceHref(msg.events_ref)),
+      evidenceLinkHtml('Result', evidenceHref(msg.result_ref)),
+      evidenceLinkHtml('Diff', deliveryDiffHref(msg, sessionId)),
+    ];
+    var refsHtml = '';
+    var refs = Array.isArray(msg.result_refs) ? msg.result_refs : [];
+    if (refs.length) {
+      refsHtml = '<div class="mt-1 pt-1 border-t border-slate-700/50 text-xs text-slate-400/70 space-y-0.5">'
+        + refs.map(function(ref) { return '<div class="break-all">' + escapeHtml(String(ref)) + '</div>'; }).join('')
+        + '</div>';
+    }
+    return openMessageWrapper("flex justify-start", msg) + '<div class="max-w-[90%] overflow-hidden rounded-xl border ' + palette + ' px-4 py-3 space-y-1 text-sm">'
+      + '<p class="text-xs font-semibold uppercase tracking-wider ' + labelClass + '">' + escapeHtml(stateLabel) + '</p>'
+      + (msg.content ? '<p class="text-slate-200 whitespace-pre-wrap">' + escapeHtml(String(msg.content)) + '</p>' : '')
+      + '<p class="text-xs flex flex-wrap gap-3">' + links.join('') + '</p>'
+      + refsHtml + timeDiv() + '</div></div>';
   }
   if (msg.role === "child_report") {
     var reportOutcome = String(msg.outcome || "completed");

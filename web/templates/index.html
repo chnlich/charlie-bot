@@ -27,8 +27,13 @@
     window.pdfjsLib = pdfjsLib;
   </script>
   <script>
-    let SESSION_ID = {{ (active_session.id|tojson) if active_session else 'null' }};
-    let DRAFT_KEY = SESSION_ID ? 'charliebot-draft-' + SESSION_ID : null;
+    // A legacy worker thread projected into the main chat view
+    // (/?session=<parent>&thread=<id>): the page is addressed by the parent
+    // session (sidebar highlight, status poll) and renders the thread's
+    // transcript read-only; no thread ever owns SESSION_ID.
+    const THREAD_VIEW = {{ thread_view|tojson }};
+    let SESSION_ID = {{ (active_session.id|tojson) if active_session else (thread_view.session_id|tojson if thread_view else 'null') }};
+    let DRAFT_KEY = (SESSION_ID && !THREAD_VIEW) ? 'charliebot-draft-' + SESSION_ID : null;
     let THINKING_SINCE = {{ (active_session.thinking_since.isoformat()|tojson) if active_session and active_session.thinking_since else 'null' }};
     let eventCursor = {{ event_count }};
     const SESSION_BOOTSTRAP = {{ session_bootstrap|tojson }};
@@ -262,13 +267,13 @@
         <div id="thinking" class="hidden px-4 py-2 flex items-center gap-2 text-sm text-slate-400">
           <span class="w-2 h-2 rounded-full bg-blue-400 animate-pulse-dot"></span>
           Thinking... <span id="thinking-time">0s</span>
-          <button onclick="cancelMaster()" class="ml-1 p-1 rounded-md hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors" title="Stop agent">
+          <button onclick="cancelMaster()" class="ml-1 p-1 rounded-md hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors" title="Stop agent or run">
             <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
           </button>
         </div>
 
-        <!-- Input -->
-        <div class="border-t border-slate-700 p-4">
+        <!-- Input (a worker node and a thread view take no messages) -->
+        <div id="input-area" class="border-t border-slate-700 p-4 {% if (active_session and active_session.profile == 'worker') or thread_view %}hidden{% endif %}">
           <!-- Uploaded file chips -->
           <div id="file-chips" class="hidden flex flex-wrap gap-1 mb-2"></div>
           <div id="context-chip" class="hidden flex flex-wrap gap-1 mb-2"></div>
@@ -315,12 +320,6 @@
         </div>
       </div>
 
-      <!-- ===== WORKER LEAF VIEW ===== -->
-      <!-- A worker leaf's Run list stands in for the chat here; renderLeafView
-           (sidebar/workers.js) owns this container's contents. -->
-      <div id="tab-workers" class="flex-1 overflow-y-auto p-4 space-y-3 hidden">
-        <div id="no-workers-placeholder" class="flex items-center justify-center h-full text-slate-500 text-sm">No runs yet</div>
-      </div>
 
       <div id="latex-resize-handle" class="resize-handle" style="display:none"></div>
 
@@ -518,13 +517,11 @@
   <script src="/static/js/usage.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/namespace.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/status.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/sidebar/workers.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/filters.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/groups.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/archived.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/session-view.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/modals.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/workers.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/voice-input.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/latex-panel.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/backlog-panel.js?v={{ static_asset_version|urlencode }}"></script>
@@ -592,7 +589,7 @@
   <div id="text-modal-overlay" class="diff-modal-overlay" style="display:none" onclick="closeTextModal()">
     <div class="diff-modal" style="max-width:700px" onclick="event.stopPropagation()">
       <div class="diff-modal-header">
-        <span id="text-modal-title" class="text-sm font-semibold text-slate-200">Worker Description</span>
+        <span id="text-modal-title" class="text-sm font-semibold text-slate-200">Rendered Markdown</span>
         {{ close_button('closeTextModal()', 'Close', close_btn_class) }}
       </div>
       <div class="diff-modal-body p-4">

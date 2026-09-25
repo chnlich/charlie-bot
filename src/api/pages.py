@@ -894,7 +894,7 @@ async def index(
 
     if active_session and thread:
       # The legacy thread view: the page renders the parent session's chrome
-      # (sidebar highlight, task context) over the thread's projected
+      # (sidebar highlight, status poll) over the thread's projected
       # transcript, read-only, addressed by this URL.
       thread_meta = await thread_mgr.get_thread(session, thread)
       if thread_meta is None:
@@ -906,7 +906,6 @@ async def index(
             "description": thread_meta.description,
             "backend": thread_meta.backend or "",
         }
-        active_session = None  # the header names the thread, not the parent session
     if active_session:
       try:
         bootstrap = await build_session_bootstrap_data(session, session_mgr, tree=task_mgr)
@@ -918,6 +917,8 @@ async def index(
             sidebar_session.has_unread = False
         session_bootstrap = _bootstrap_payload(bootstrap, cfg)
         if thread_view is not None:
+          # The header names the thread, not the parent session; the parent
+          # session metadata only addresses the view.
           from src.core import worker_transcript
           entry = await asyncio.to_thread(
               worker_transcript.load_thread_transcript, cfg,
@@ -935,6 +936,7 @@ async def index(
               "has_more": False,
               "thread_view": thread_view,
           }
+          active_session = None
       except Exception:
         log.exception("load_session_data_failed", session_id=session)
         load_errors.append("Failed to load session data. Check server logs for details.")
@@ -946,8 +948,11 @@ async def index(
   # auto-redirect target.
   sessions = await project_worker_threads(sessions, cfg, thread_mgr)
 
-  active_backend = ((active_session.run_backend or active_session.backend)
-                    if active_session else _default_backend_id(cfg))
+  if thread_view is not None:
+    active_backend = thread_view.get("backend") or _default_backend_id(cfg)
+  else:
+    active_backend = ((active_session.run_backend or active_session.backend)
+                      if active_session else _default_backend_id(cfg))
   active_backend_opt = cfg.get_backend_option(active_backend)
   active_backend_label = active_backend_opt.label if active_backend_opt else active_backend
   active_backend_type = active_backend_opt.type if active_backend_opt else ""

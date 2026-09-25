@@ -908,6 +908,13 @@ function renderChatMath(el, sourceText) {
   }
 }
 
+// The rendered-markdown modal this file opens; the overlay's backdrop and
+// close button call it (the old worker-description reader was the other user).
+function closeTextModal() {
+  const overlay = document.getElementById('text-modal-overlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
 function renderMarkdown(btn) {
   // Try to get full content from raw text stored before marked.parse()
   const proseMsgEl = btn.closest('[data-raw]');

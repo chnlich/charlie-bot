@@ -104,6 +104,8 @@ def run_backend(session_id: str) -> str | None:
 
 
 def reset_run_state_for_tests() -> None:
-  """Clear the worker Run busy map and the display-backend map (tests only)."""
+  """Every in-memory running-state fact gone (tests only): a restart's empty
+  registries — worker Run busy intervals, busy intervals, display backends."""
+  _busy_since.clear()
   _run_busy.clear()
   _run_backends.clear()

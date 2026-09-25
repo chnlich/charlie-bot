@@ -4,7 +4,6 @@ const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
 const { loadSidebarStatusContext } = require('./sidebar_status_context_stub');
-const { loadSidebarWorkersContext } = require('./sidebar_workers_context_stub');
 
 // ---------------------------------------------------------------------------
 // A DOM node that counts every write to `class`/`title`, mirroring the real
@@ -189,30 +188,4 @@ test('refreshTuiDots writes class and title when the dot status actually changed
   assert.equal(dot.classList.contains('running'), true);
   assert.equal(dot.classList.contains('busy'), true);
   assert.equal(dot.title, 'Claude busy');
-});
-
-// ---------------------------------------------------------------------------
-// sidebar/workers.js: updateTriggerStatus
-// ---------------------------------------------------------------------------
-function loadWorkersContext(elements) {
-  return loadSidebarWorkersContext({
-    document: {
-      getElementById: (id) => elements.get(id) || null,
-    },
-  });
-}
-
-test('updateTriggerStatus writes nothing to icon.className when the status is unchanged', () => {
-  const icon = makeCountingElement(['w-4', 'h-4', 'flex-shrink-0', 'text-amber-400'], '');
-  const context = loadWorkersContext(new Map([['trigger-dot-t1', icon]]));
-  context.Sidebar.updateTriggerStatus('t1', 'pending');
-  assert.equal(icon.counts.classWrites, 0);
-});
-
-test('updateTriggerStatus writes icon.className exactly once when the status actually changed', () => {
-  const icon = makeCountingElement(['w-4', 'h-4', 'flex-shrink-0', 'text-slate-500'], '');
-  const context = loadWorkersContext(new Map([['trigger-dot-t1', icon]]));
-  context.Sidebar.updateTriggerStatus('t1', 'pending');
-  assert.equal(icon.counts.classWrites, 1);
-  assert.equal(icon.classList.contains('text-amber-400'), true);
 });

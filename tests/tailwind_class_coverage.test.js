@@ -53,22 +53,6 @@ function loadChatContext(elements) {
   return context;
 }
 
-function loadWorkersContext(elements) {
-  const context = {
-    document: makeDocument(elements),
-    console: { error: () => {} },
-    fetch: () => Promise.resolve({ ok: true }),
-    SESSION_ID: 'sess-1',
-    BACKEND_OPTIONS: { 'claude-sonnet-5': 'Sonnet 5', 'codex-o3': 'Codex o3' },
-  };
-  vm.createContext(context);
-  vm.runInContext(readStatic('chat/namespace.js'), context, { filename: 'chat/namespace.js' });
-  vm.runInContext(readStatic('chat/shared.js'), context, { filename: 'chat/shared.js' });
-  vm.runInContext(readStatic('sidebar/namespace.js'), context, { filename: 'sidebar/namespace.js' });
-  vm.runInContext(readStatic('sidebar/workers.js'), context, { filename: 'sidebar/workers.js' });
-  return context;
-}
-
 function loadBacklogContext(elements, fetchImpl) {
   const context = {
     document: makeDocument(elements),
@@ -209,18 +193,6 @@ const CHAT_MESSAGES = [
   { role: 'separator', id: 'sep1', thinking_seconds: 12, event_index: 3 },
 ];
 
-const WORKER_THREADS = [
-  { id: 'th-1', description: 'Implement the tailwind build', status: 'running', created_at: '2026-07-30T12:00:00Z', backend: 'claude-sonnet-5' },
-  { id: 'th-2', description: 'Fix flaky test', status: 'completed', created_at: '2026-07-30T11:00:00Z', completed_at: '2026-07-30T11:05:00Z', backend: 'codex-o3' },
-  { id: 'th-3', description: 'Investigate scroll jank', status: 'failed', created_at: '2026-07-30T10:00:00Z', completed_at: '2026-07-30T10:05:00Z' },
-];
-
-const WORKER_TRIGGERS = [
-  { id: 'tr-1', message: 'remind me later', status: 'pending', fire_at: '2026-08-01T20:00:00Z', created_at: '2026-07-30T12:00:00Z' },
-  { id: 'tr-2', message: 'already fired', status: 'fired', fire_at: '2026-07-30T09:00:00Z', created_at: '2026-07-30T08:00:00Z' },
-  { id: 'tr-3', message: 'cancelled one', status: 'cancelled', fire_at: '2026-07-30T09:00:00Z', created_at: '2026-07-30T08:00:00Z' },
-];
-
 const BACKLOG_ITEMS = [
   { id: 1, title: 'Pending idea', description: 'desc', priority: 'high', category: 'feature', status: 'pending', created: '2026-07-30T00:00:00Z', _source: 'alpha-lab-core' },
   { id: 2, title: 'Needs revision', description: 'desc', priority: 'medium', category: 'infra', status: 'revision_requested', revision_feedback: 'please clarify', created: '2026-07-29T00:00:00Z', _source: 'alpha-lab-core' },
@@ -244,11 +216,29 @@ test('tailwind utility classes used by rendered messages/cards are all present i
   const chatCtx = loadChatContext(new Map());
   for (const msg of CHAT_MESSAGES) snippets.push(chatCtx.renderMessage(msg, 'sess-1'));
 
-  // 2. Workers tab: thread + trigger cards.
-  const workersContainer = new FakeElement('DIV');
-  const workersCtx = loadWorkersContext(new Map([['tab-workers', workersContainer]]));
-  workersCtx.renderWorkersTab(WORKER_THREADS, 'sess-1', WORKER_TRIGGERS);
-  snippets.push(workersContainer.innerHTML);
+  // 2. The worker transcript's own chrome: the delegated card's live-state
+  // row + child link (new-style and legacy shapes) and the delivery banner in
+  // both palettes.
+  for (const delegated of [
+    { role: 'task_delegated', id: 'del-1', timestamp: '2026-07-30T12:00:00Z', content: 'Task delegated',
+      thread_id: 'run-1', child_session_id: 'child-1', backend: 'claude-sonnet-5', model: 'sonnet',
+      delegate_invocation: { task_type: 'implement', repo_path: '/repo', base_branch: 'main',
+        task_spec_file: '/tmp/spec.md', reviewer_context_file: null, keep_worktree: false, backend: 'claude-sonnet-5' } },
+    { role: 'task_delegated', id: 'del-2', timestamp: '2026-07-30T12:00:01Z', content: 'Task delegated',
+      thread_id: 'legacy-thread', backend: 'codex-o3' },
+  ]) {
+    snippets.push(chatCtx.renderMessage(delegated, 'sess-1'));
+  }
+  for (const delivery of [
+    { role: 'run_delivery', id: 'rd-1', timestamp: '2026-07-30T12:05:00Z', content: 'shipped the parser',
+      task_state: 'completed', completed: true, result_refs: ['evidence/a.txt'],
+      raw_log_ref: '/h/runs/run-1/raw.log', events_ref: '/h/runs/run-1/events.jsonl',
+      result_ref: '/h/runs/run-1/raw.log', repo_path: '/repo', base_branch: 'main', branch_name: 'task/run-1' },
+    { role: 'run_delivery', id: 'rd-2', timestamp: '2026-07-30T12:05:01Z', content: '',
+      task_state: 'failed', completed: false, result_refs: [] },
+  ]) {
+    snippets.push(chatCtx.renderMessage(delivery, 'sess-1'));
+  }
 
   // 3. Backlog cards, across every status branch.
   const backlogList = new FakeElement('DIV');

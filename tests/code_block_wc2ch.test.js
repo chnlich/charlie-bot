@@ -276,23 +276,6 @@ test('tool output pre and raw backend block wrap through rendering.js', () => {
   assert.match(rawHtml, /literal text/);
 });
 
-test('worker dashboard tool_result pre wraps; the attach-command block does not', () => {
-  const context = loadChatSurfaceContext();
-  vm.runInContext(readStatic('workers.js'), context, { filename: 'workers.js' });
-  context.renderThreadEvents('t1', [
-    { type: 'tool_result', tool_name: 'Bash', content: '\u4e2d\u6587 \u2500\u2502 rail', timestamp: 't' },
-  ]);
-  const events = context._elements.get('thread-events-t1').innerHTML;
-  assert.match(events, /<span class="wc2ch">\u4e2d<\/span>/);
-  assert.equal((events.match(/<span class="wc2ch">/g) || []).length, 2);
-  assert.equal(textContent(/<pre[^>]*>([\s\S]*?)<\/pre>/.exec(events)[1]), '\u4e2d\u6587 \u2500\u2502 rail');
-
-  context.renderAttachCommand('t1', { attach_command: 'tmux attach -t \u4e2d' });
-  const attach = context._elements.get('thread-attach-t1').innerHTML;
-  assert.match(attach, /terminal/);
-  assert.doesNotMatch(attach, /wc2ch/); // attach block: Latin command line, untouched
-});
-
 // --- the embedded diagram fixture ---
 
 // The MoEMLP data-flow box diagram whose right edge drifts when a wide char

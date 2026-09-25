@@ -58,6 +58,14 @@ function sidebarSessionIds() {
     seen.add(SESSION_ID);
     ids.push(SESSION_ID);
   }
+  // Delegated cards in the open chat read their child's live state from this
+  // poll; a child whose sidebar row is filtered out still rides the request.
+  document.querySelectorAll('.delegate-live-state[data-delegate-session]').forEach(el => {
+    const sid = el.dataset.delegateSession;
+    if (!sid || seen.has(sid)) return;
+    seen.add(sid);
+    ids.push(sid);
+  });
   document.querySelectorAll('a[id^="session-"]').forEach(el => {
     const sid = el.id.slice('session-'.length);
     if (!sid || seen.has(sid)) return;
@@ -512,10 +520,23 @@ function applySessionStatus(sid, status, requestSeq) {
   globalThis.setSessionIndicator(sid, getSessionIndicatorState(status));
   globalThis.setSessionPendingTriggerIndicator(sid, status);
   globalThis.setSessionPendingPlanApprovalIndicator(sid, status);
+  paintDelegateCardState(sid, status);
+}
+
+// The Delegated cards' live line: "running · <model>" while the delegation
+// works, "idle · <model>" once it settles. A card tracks either its child
+// session (new-style) or the owning session (legacy), keyed by data attribute.
+function paintDelegateCardState(sid, status) {
+  document.querySelectorAll(
+      '.delegate-live-state[data-delegate-session="' + sid + '"],'
+      + '.delegate-live-state[data-delegate-parent-session="' + sid + '"]').forEach(el => {
+    const backend = el.dataset.delegateBackend || '';
+    const running = !!(status && status.has_running_tasks);
+    el.textContent = (running ? 'running' : 'idle') + (backend ? ' · ' + backend : '');
+  });
 }
 
 function refreshSessionStatusNow(opts) {
-  if (opts && opts.refreshWorkers) pollWorkers();
   if (!statusPollInflight) return globalThis.pollSessionStatus();
 
   statusPollQueued = true;
@@ -594,6 +615,11 @@ function updateThinkingTime() {
 }
 
 async function cancelMaster() {
+  // A worker node's or legacy thread view's stop button signals the active
+  // Run through its own cancel route (session-view.js), not the chat cancel.
+  if (typeof transcriptTarget === 'function' && transcriptTarget()) {
+    return cancelTranscriptTarget();
+  }
   try {
     const res = await fetch(`/api/chat/${SESSION_ID}/cancel`, { method: 'POST' });
     if (res.ok) return;
@@ -646,6 +672,7 @@ const API = {
   markSessionRead,
   setSessionPendingTriggerIndicator,
   setSessionPendingPlanApprovalIndicator,
+  paintDelegateCardState,
   stopActiveSessionViewPolling,
   ensureActiveSessionViewPolling,
   pollActiveSessionView,

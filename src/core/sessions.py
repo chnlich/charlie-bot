@@ -662,9 +662,7 @@ def _reference_scan(arr: np.ndarray) -> tuple[np.ndarray, bool]:
   return nls, ascii_ok
 
 
-def _fast_reference_frames(
-    data: bytes | mmap.mmap, take: int, nls: np.ndarray
-) -> tuple[int, int, int, bool] | None:
+def _fast_reference_frames(data: bytes | mmap.mmap, take: int, nls: np.ndarray) -> tuple[int, int, int, bool] | None:
   """Vectorized frame check for the first ``take`` raw lines of ``data``.
 
   ``nls`` is the corpus's 0x0A positions from the caller's one sweep

@@ -878,15 +878,15 @@ async def index(
           "event_count": event_count,
           "session_bootstrap": session_bootstrap,
           "backend_options": cfg.backends.options,
-          "voice_backends": [
-              {
-                  "id": backend.id,
-                  "label": backend.label,
-                  "live_partials": backend.live_partials,
-                  "unavailable_reason": backend.unavailable_reason(),
-              }
-              for backend in build_transcription_backends(cfg)
-          ],
+          "voice_backends":
+              [
+                  {
+                      "id": backend.id,
+                      "label": backend.label,
+                      "live_partials": backend.live_partials,
+                      "unavailable_reason": backend.unavailable_reason(),
+                  } for backend in build_transcription_backends(cfg)
+              ],
           "voice_default_backend": cfg.voice.default_backend,
           "active_backend": active_backend,
           "active_backend_label": active_backend_label,

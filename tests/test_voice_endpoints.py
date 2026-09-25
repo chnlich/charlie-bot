@@ -212,6 +212,7 @@ def test_full_upload_accepts_exactly_five_minutes(voice_env: tuple[TestClient, C
   voice_dir = cfg.sessions_dir / "session-a" / "voice"
   assert len(list(voice_dir.glob("*.wav"))) == 1
 
+
 # --- The transcript path: the preview relay's final rides the upload ---------
 
 
@@ -221,7 +222,10 @@ def test_upload_with_transcript_persists_both_files_and_skips_the_decode(
 
   response = client.post(
       "/api/voice/session-a",
-      **_upload_parts(48_000, {"transcript": "\u4f60\u597d\u4e16\u754c", "backend": "gemini"}),
+      **_upload_parts(48_000, {
+          "transcript": "\u4f60\u597d\u4e16\u754c",
+          "backend": "gemini"
+      }),
   )
 
   # The transcript is written verbatim and returned unchanged: the input box
@@ -247,7 +251,10 @@ def test_upload_with_transcript_needs_no_speech_model_readiness(
 
   monkeypatch.setattr(transcriber, "get_ready_model_paths", not_ready)
   response = client.post(
-      "/api/voice/session-a", **_upload_parts(48_000, {"transcript": "relay words", "backend": "muse"}))
+      "/api/voice/session-a", **_upload_parts(48_000, {
+          "transcript": "relay words",
+          "backend": "muse"
+      }))
 
   assert response.status_code == 200
   assert response.json() == {"text": "relay words"}
@@ -260,6 +267,7 @@ def _record_voice_log(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict]]
   events: list[tuple[str, dict]] = []
 
   class _Recorder:
+
     def info(self, event: str, **fields: object) -> None:
       events.append((event, fields))
 
@@ -274,7 +282,10 @@ def test_upload_transcript_logs_backend_and_selected_backend_from_the_form(
   client, _cfg, _decoded = voice_env
   events = _record_voice_log(monkeypatch)
   response = client.post(
-      "/api/voice/session-a", **_upload_parts(48_000, {"transcript": "relay words", "backend": "gemini"}))
+      "/api/voice/session-a", **_upload_parts(48_000, {
+          "transcript": "relay words",
+          "backend": "gemini"
+      }))
 
   assert response.status_code == 200
   assert events[0][0] == "voice_transcribed"

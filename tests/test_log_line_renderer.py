@@ -191,12 +191,11 @@ def test_color_decision_mirrors_the_default_chain(
 # ---------------------------------------------------------------------------
 
 
-def _composed_line(method: object, path: object, status: object, duration_ms: object, client: object,
-                   error: str | None = None) -> str:
+def _composed_line(
+    method: object, path: object, status: object, duration_ms: object, client: object, error: str | None = None) -> str:
   sink = io.StringIO()
   with contextlib.redirect_stdout(sink):
-    log_http_request_line(method=method, path=path, status=status, duration_ms=duration_ms,
-                          client=client, error=error)
+    log_http_request_line(method=method, path=path, status=status, duration_ms=duration_ms, client=client, error=error)
   return sink.getvalue()
 
 
@@ -211,9 +210,8 @@ def _composed_line(method: object, path: object, status: object, duration_ms: ob
         ("GET", "/api/x", 204, 3.5, "t", "e=mc^2"),
     ],
     ids=["401", "200", "error", "spaces", "quotes-unicode", "status-none", "float-duration"])
-def test_composed_access_line_matches_the_lean_renderer(method: object, path: object, status: object,
-                                                        duration_ms: object, client: object,
-                                                        error: str | None) -> None:
+def test_composed_access_line_matches_the_lean_renderer(
+    method: object, path: object, status: object, duration_ms: object, client: object, error: str | None) -> None:
   line = _composed_line(method, path, status, duration_ms, client, error)
   assert line.endswith("\n")
   timestamp = line[:19]
@@ -237,6 +235,7 @@ def test_composed_access_line_writes_once() -> None:
   writes: list[str] = []
 
   class _Recorder:
+
     def write(self, s: str) -> int:
       writes.append(s)
       return len(s)
@@ -251,6 +250,7 @@ def test_composed_access_line_writes_once() -> None:
 # ---------------------------------------------------------------------------
 # The per-minute stamp prefix memo
 # ---------------------------------------------------------------------------
+
 
 def _stamp_struct(year: int, month: int, day: int, hour: int, minute: int, second: int) -> time.struct_time:
   return time.struct_time((year, month, day, hour, minute, second, 0, 1, -1))
@@ -269,8 +269,7 @@ def test_stamp_prefix_reused_within_a_minute(_stamp_memo_isolated: None, monkeyp
   assert _local_timestamp() == "2026-09-24 15:01:59"
 
 
-def test_stamp_prefix_rebuilt_on_minute_rollover(_stamp_memo_isolated: None,
-                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stamp_prefix_rebuilt_on_minute_rollover(_stamp_memo_isolated: None, monkeypatch: pytest.MonkeyPatch) -> None:
   current = _stamp_struct(2026, 9, 24, 15, 1, 59)
   monkeypatch.setattr(log_once.time, "localtime", lambda: current)
   assert _local_timestamp() == "2026-09-24 15:01:59"
@@ -278,8 +277,8 @@ def test_stamp_prefix_rebuilt_on_minute_rollover(_stamp_memo_isolated: None,
   assert _local_timestamp() == "2026-09-24 15:02:00"
 
 
-def test_stamp_survives_a_stale_minute_after_rollover(_stamp_memo_isolated: None,
-                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stamp_survives_a_stale_minute_after_rollover(
+    _stamp_memo_isolated: None, monkeypatch: pytest.MonkeyPatch) -> None:
   """A reader whose minute lost the memo race still renders its own minute."""
   current = _stamp_struct(2026, 9, 24, 15, 1, 7)
   monkeypatch.setattr(log_once.time, "localtime", lambda: current)

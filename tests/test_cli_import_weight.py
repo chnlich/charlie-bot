@@ -47,11 +47,13 @@ PLAN_HEAVY_MODULES = (
     "src.core.plan_diff",
 )
 
-# The memory chain's ban set is the base CLI set: the verbs read no config file
-# (the store root derives from the env-resolved home (src.core.home), which no
-# config key can move) and src.core.memory's log proxy defers structlog to first
-# use, so every chain the base set bans stays out of `import src.cli.memory` too.
-MEMORY_HEAVY_MODULES = HEAVY_MODULES
+# The memory chain bans the base CLI set plus asyncio: the verbs read no config
+# file (the store root derives from the env-resolved home (src.core.home), which
+# no config key can move) and src.core.memory's log proxy defers structlog to
+# first use, so every chain the base set bans stays out of `import src.cli.memory`
+# too; the run-token resolution is the chain's only asyncio consumer and imports
+# it at that call site.
+MEMORY_HEAVY_MODULES = (*HEAVY_MODULES, "asyncio")
 
 
 def _run_probe(code: str) -> subprocess.CompletedProcess[str]:

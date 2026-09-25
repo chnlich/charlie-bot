@@ -125,6 +125,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M114 backend-launch spawn loop stall, big-heap shape | M114 collector below | seconds of event-loop stall per backend spawn through the checkout's spawn seam, both production shapes (the fork's page-table copy scales with the forking process's resident set — the collector inflates a 3.5 GB heap to the server's standing RSS class first; raw-log shape preexec-free, piped shape through the pdeathsig spawn seam's clone(CLONE_VM|CLONE_VFORK) path) | raw-log shape loop-lag median < 0.020 s (the M75 loop-lag line); piped shape < 0.020 s (re-tightened from < 0.150 s: the child-side-prctl follow-up landed — the vfork seam's clone(CLONE_VM|CLONE_VFORK) spawn skips the page-table copy the preexec fork pays, the after reading sits at the 5 ms ticker floor like the raw-log line; a regression to the thread-fork's ~110 ms shape trips it 20×) | — (introduced with its first history row) |
 | M115 cold config+credentials resolution, fresh process | M115 collector below | seconds per fresh-process shared import + `get_config()` + `get_credentials()` wall (the shape a server start, a config-cache-miss verb, and every config/credentials change round pay; a cache-hit CLI verb reads only the credentials half) | median < 0.25 s | 0.148-0.155 s (branch arm, 2026-09-24 landing; main arm read 0.155-0.167 s the same round) |
 | M116 ndjson whole-file parse, worst live chat file by event count | M116 collector below | seconds per `parse_ndjson_file` over the live chat file carrying the most events (the per-line plumbing's own corpus: the by-bytes worst file the M78 collector reads carries its wall in orjson's huge-line work, where a per-line cut is invisible — 507 lines across 1051 MB vs every regular session's thousands of small lines) | median < max(0.010 s, events × 0.0000060 s) (2.1x over the post-fix 2.7-2.9 µs/event measured per line, the same headroom convention the M72 walk line set — the line watches for a per-line cost class returning, not for the fix's own 8 % band) | — (introduced with its first history row) |
+| M117 sessions-list projected-leaf build, warm repeat | M117 collector below | seconds per served `GET /api/sessions/` drive, raw-ASGI with the production gzip middleware over the live corpus (read-only), one cold pass then nine timed drives; the parse-memo read witness (thread `metadata.json` file reads across the timed window — a read on a warm drive is the walk path's cross-session memo eviction returning) | warm median < 0.008 s; warm timed-window metadata reads = 0 | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -8109,10 +8110,108 @@ print(f"{best_n} events / {path.stat().st_size / 1e6:.1f} MB worst live chat fil
       f"whole-file parse median {times[5] * 1000:.1f} ms, max {times[-1] * 1000:.1f} ms over 12")
 EOF
 ```
+M117 — sessions-list projected-leaf build, warm repeat. The sidebar list fetch
+(`GET /api/sessions/`, the page-load list whose legacy rows each project one
+worker-leaf row per worker thread) walks every legacy session through
+``view_thread_rows`` per fetch; the collector drives the endpoint raw-ASGI with
+the production gzip middleware over the live corpus (read-only), one cold pass
+as at first paint after a server start, then nine timed drives, with a parsed
+digest so live churn cannot masquerade as a payload change, and counts the
+thread ``metadata.json`` file reads across the timed window — a read on a warm
+drive is the walk path's cross-session memo eviction returning (the 2026-09-25
+landing's defect):
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'PYEOF'
+import asyncio, builtins, gzip, hashlib, json, os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from fastapi import FastAPI
+from server import _CharlieBotGZipMiddleware
+from src.api.deps import (get_session_manager, get_thread_manager, get_trigger_manager,
+                          get_config_on_loop)
+from src.api.sessions import router as sessions_router
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+from src.core.threads import ThreadManager
+from src.core.triggers import TriggerManager
+from src.api import deps as deps_api
+
+cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
+mgr = SessionManager(cfg)
+tm = ThreadManager(cfg)
+trig = TriggerManager(cfg, mgr)
+deps_api._trigger_manager = None
+app = FastAPI()
+app.include_router(sessions_router, prefix="/api/sessions")
+app.dependency_overrides[get_session_manager] = lambda: mgr
+app.dependency_overrides[get_thread_manager] = lambda: tm
+app.dependency_overrides[get_trigger_manager] = lambda: trig
+app.dependency_overrides[get_config_on_loop] = lambda: cfg
+app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
+
+def scope():
+    return {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1", "method": "GET", "scheme": "http",
+            "path": "/api/sessions/", "raw_path": b"/api/sessions/",
+            "query_string": b"", "root_path": "",
+            "headers": [(b"host", b"test"), (b"accept-encoding", b"gzip")],
+            "client": ("t", 1), "server": ("t", 80)}
+
+async def drive():
+    body = b""
+    out = {"status": 0}
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+    async def send(msg):
+        nonlocal body
+        if msg["type"] == "http.response.start":
+            out["status"] = msg["status"]
+        elif msg["type"] == "http.response.body":
+            body += msg.get("body", b"")
+    t0 = time.perf_counter()
+    await app(scope(), receive, send)
+    return time.perf_counter() - t0, body, out["status"]
+
+def digest(decoded):
+    return hashlib.sha256(json.dumps(json.loads(decoded), sort_keys=True).encode()).hexdigest()[:12]
+
+async def main():
+    dt, body, status = await drive()
+    assert status == 200, status
+    rows = json.loads(gzip.decompress(body))
+    leaves = sum(1 for r in rows if r.get("profile") == "worker")
+    times, digests = [], set()
+    opens = {"n": 0}
+    real_open = builtins.open
+    def counting(file, *a, **k):
+        if str(file).endswith("/metadata.json"):
+            opens["n"] += 1
+        return real_open(file, *a, **k)
+    builtins.open = counting
+    try:
+        for _ in range(9):
+            dt, body, status = await drive()
+            decoded = gzip.decompress(body)
+            times.append(dt)
+            digests.add(digest(decoded))
+    finally:
+        builtins.open = real_open
+    times.sort()
+    assert len(digests) == 1, f"repeat bodies differ: {digests}"
+    print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {len(rows)} rows ({leaves} leaves); "
+          f"list served median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms over 9, "
+          f"wire {len(body)} B, decoded {len(decoded)} B, digest {digests.pop()}, "
+          f"metadata.json reads over the 9 timed drives: {opens['n']}")
+
+asyncio.run(main())
+PYEOF
+```
 
 ## Sampling history
 
 | Date | PR | Before → after | Note |
+| 2026-09-25 | this PR | M117 sessions-list projected-leaf build, introduced with this PR: warm `GET /api/sessions/` served median 15.39/14.50/16.03 → 2.58/2.56/2.61 ms (−83 % to −84 %), maxima 20.98-26.27 → 2.98-3.03 ms, over three interleaved rounds of the collector — main checkout before vs branch worktree after back-to-back, 116 rows (82 projected worker leaves), wire 15658 B and parsed digest 423bd293cc85 identical across every arm, thread `metadata.json` reads across the nine timed drives 738 → 0 (82 per drive — every file of every walked session, every drive), load 1.17-1.20 one-minute; component attribution: the sidebar list's projected worker leaves walk every legacy session (34 here) through `view_thread_rows`, whose parse memo's end-of-walk `drop_where(key not in walked)` evicted every OTHER session's cached parses — one singleton ThreadManager serves every session's walk, so the 34 walks per fetch mutually wiped each other and every drive re-read and re-validated all 82 metadata files (738 opens over 9 drives) — and the view-rows memo's 8-entry cap evicted 26 of the 34 sessions' rows per fetch, so their gate proofs had nothing to serve and the walks ran every drive; the drop now scopes to the walked session's own threads directory (a deleted thread still drops at its own session's next walk; another session's entries survive) and the cap holds the active legacy set (128); no-regression witnesses interleaved ×3: M63 `/view` handler 0.46-0.55 → 0.48-0.52 ms (band, body sha256 26af253957c3 identical across arms), M36 list poll full 0.56-0.58 → 0.56-0.61 ms and conditional 0.51-0.56 → 0.53-0.57 ms (204, 0 B, digest afdaf4098821 identical across arms); suite green, ruff clean, yapf clean on the diff's own hunks (the file's import-block drift is pre-existing on main), 2 new tests, both red on the pre-fix tree (the scoped-drop open count and the projection's walk-free repeat fetches) | the projected-leaf list projection (landed 2026-09-25 00:38) turned the parse memo's whole-memo drop and the 8-entry view-rows cap from single-consumer quirks into a per-fetch full re-read of every walked session's thread metadata: the memo exists so the 3 s poll never re-reads (its own comment prices the re-validate at ~176 µs/thread), and the live log's page-load `/api/sessions/` readings ran 71-121 ms against a 15 ms warm floor |
 | 2026-09-24 | this PR | M92/M97/M98/M102 CLI verb walls, argparse's `_colorize` import priced out of the piped arm: M92 `schedule-trigger --help` 46.9/46.7/46.7/48.0/53.9 → 34.1/34.0/34.5/33.4/38.0 ms (−26 % to −30 %), M97 `plan list` 74.4/69.5/69.2/71.2/68.0 → 62.4/59.6/54.2/54.3/54.4 ms (−14 % to −24 %), M98 `memory query` 51.5/51.6/54.0/54.9/55.6 → 48.8/47.5/50.2/50.1/55.6 ms (−5 % to −9 %, one tie), M102 `artifact wrap` 54.1/56.4/54.2/56.4/51.2 → 41.2/39.8/42.5/40.0/36.2 ms (−22 % to −29 %) over five interleaved rounds of the verbatim collectors — main checkout before vs branch worktree after back-to-back, ABBA arm order inside each round, 7-run medians per arm per round; component attribution (importtime, one verb process): `_colorize` 11.7 ms cumulative — its own 4.0 ms plus the dataclasses→inspect chain 7.4 ms it drags — reached through `HelpFormatter._set_color`'s function-level import at the parser's first formatter construction; the M98 residual is `src/core/memory.py`'s own module-scope `dataclass` use (7.5 ms), a real import the memory entry model needs; byte-identity checked across nine env shapes (plain pipe, FORCE_COLOR, NO_COLOR, PYTHON_COLORS=0/1, TERM=dumb, and combinations) × six commands plus a real-TTY `script` round (both arms ride the stock colorized path there) — every digest pair equal; no-regression witnesses interleaved: M99 `import server` 544.6-548.8 → 541.9-548.5 ms (band), M115 fresh config+credentials 146.2-159.2 → 146.1-148.4 ms (band), M108 claude-sub launch floor 76.9-77.6 → 76.1-77.6 ms (band — manual argv, no parser); 6077-passed suite plus 9 skipped with the 21 vfork/antigravity failures pre-existing on branch worktrees in this venv (the compiled _vfkspawn stub is CI-only — the M116 row's documented set); ruff and yapf clean, 2 new tests (the piped-render ban and the stock-theme byte parity) plus the `_colorize` ban riding the parser-build set | argparse's first formatter construction calls `_set_color`, whose function-level `from _colorize import ...` prices every fresh-process verb even when it never renders help; the shared CliHelpFormatter now reproduces the two arms itself — the colorized arm delegates to the stock method (real import, real decision), the piped arm installs the empty theme without importing (the stock no-color theme is every style field set to "", so any attribute read renders empty in both), and the colorization decision mirrors `_colorize.can_colorize` on POSIX with the colorized arm re-deciding through the stock path, so a mirror drift costs only cosmetic color, never bytes |
 | 2026-09-24 | this PR | M116 whole-file parse, introduced with this PR: worst live chat file (20534 events / 22.4 MB) parse median 61.08/60.99/61.02/61.60/60.72/62.12/63.12 → 57.32/57.79/58.67/57.13/56.14/57.45/57.01 ms over seven interleaved rounds of the verbatim collector — main checkout before vs branch worktree after, ABBA arm order inside each round so the host's second-position bias cancels where it lands, every paired round faster (−2.35 to −6.11 ms, −3.7 % to −9.7 %, median −4.5 ms / −7.3 %), 12-call medians per arm per round, the parsed events' identity digest b0492b35024f identical in every arm that checked it (17 of the 28 runs); component attribution (in-process, one 20534-event corpus): the middle generator layer ~5.5 ms — iter_ndjson_events's wrapper exists for the early-stop readers, and a read-everything consumer pays one generator resume per line for nothing — and the per-line parse call chain (kwargs plus the str-first isinstance pair on an all-memoryview stream) ~6.6 ms; no-regression re-measures on the branch: M78's own corpora chat 3281.4/3350.2 → 3228.2/3251.2 ms and worker log 38.9/39.3 → 37.1/39.1 ms over two ABBA rounds (the 507-line / 232-line shapes carry their wall in orjson's work, the per-line cut invisible, as the M116 definition states); 6095-passed suite plus 9 skipped with the one load-sensitive fork-parks failure the 2026-09-24 M115 row documents (11/11 passed alone on both checkouts); ruff and yapf clean | the whole-file parse read every line through two generator frames and constructed a fresh `memoryview(mm)` wrapper per line before slicing it — the wrapper's laziness serves only the early-stop readers (tail, range, the M13 window), which keep it; the read-everything consumer now walks the mapping's lines directly with the skip contract still single-homed in `parse_ndjson_line`, and `_iter_mmap_lines` slices one hoisted mapping view — the pattern `iter_ndjson_events_containing` already rode |
 | 2026-09-24 | this PR | M17 fork, the collector repaired and the reference stream's two whole-corpus sweeps fused into one pass. The standing sweep read fork median 6.2596 s, max 10.4999 s against the < 2 s range while the code sat at its post-#1696 level; the ramp tracks the five accumulated corpus-sized children's pending writeback, not the fork: children kept, the five timed forks of the 1051.3 MB / 507-event heaviest corpus read 0.584/1.150/6.178/8.186/8.901 s (a rerun read 0.4955/1.5882/6.4706/10.1147/8.3288 s) and five plain 1 GB writes into one directory ride the same ramp 0.303/0.302/0.320/0.404/2.766 s, while children freed at each wall the same forks read 0.680/0.637/0.524/0.553/0.538 s; the repaired collector frees each child as its wall is taken. Repaired-collector A/B, main checkout before vs branch worktree after back-to-back, three interleaved rounds: fork median 0.5501/0.5123/0.4875 → 0.4937/0.4835/0.4759 s, every paired round faster (−2.4 % to −10 %), maxima 0.5033-0.6494 → 0.5051-0.5256 s; component attribution: the reference stream's ASCII sweep plus newline scan, two whole-corpus DRAM passes, fuse into one chunked sweep — standalone scan median 173.8/182.3/174.7 → 135.4/154.3/133.3 ms over three interleaved rounds of five reps (−15 % to −24 %), newline positions (507) and ASCII verdict identical across arms; a copy_file_range window write measured and rejected — 0.68 → 0.38 s on a sync-drained backlog but +40-70 ms in the fork's own dirty-backlog conditions (three counterbalanced rounds of the phase-attributed collector); parent_reference.jsonl sha256 digest b157b7effbdf58b2 identical across every arm and round; load 7.6-14.9 one-minute across the readings | the five timed forks each leave a corpus-sized parent_reference.jsonl whose pending writeback throttles the next fork's reference write into the kernel's dirty-page path, so the standing collector read host IO state and every round since the corpus crossed a gigabyte would have flagged M17; the free-children shape restores the metric's intent (the fork's own wall) and the fused sweep takes the scan from two passes to one |

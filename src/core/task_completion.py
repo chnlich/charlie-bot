@@ -104,6 +104,38 @@ class TaskCompletionManager:
     # Blockers
     # ------------------------------------------------------------------
 
+    def _execution_blockers(
+        self,
+        session_id: str,
+        *,
+        label: str,
+        exclude_run_ids: set[str] | None = None,
+    ) -> list[str]:
+        """The Run blockers plus open-descendant blockers of one task, from current
+        facts (lock held by caller). ``label`` names the caller in the
+        caller-held-index error; ``exclude_run_ids`` carves out the Run whose
+        own closure request is being re-evaluated.
+        """
+        tree = self._tree
+        cached = tree._index
+        if cached is None:
+            raise RuntimeError(f"{label} blockers require the caller-held tree index")
+        index = cached[0]
+        tree._index_meta(index, session_id)  # 404 on an unknown task before any blocker text
+        blockers: list[str] = []
+        events = tree.runs.load_events_sync(session_id)
+        for run in tree.runs.list_run_records_sync(session_id):
+            if exclude_run_ids and run.id in exclude_run_ids:
+                continue
+            blocker = tree.runs.run_blocker(run, events, tree._host_boot_time())
+            if blocker is not None:
+                blockers.append(blocker)
+        blockers.extend(
+            f"has open descendant task {descendant}"
+            for descendant in tree._descendants(index, session_id)
+            if tree.task_state_of(index, descendant) == "open")
+        return blockers
+
     def completion_blockers(
         self,
         session_id: str,
@@ -119,32 +151,15 @@ class TaskCompletionManager:
         ``exclude_input_ids`` carves out exactly that Run's already-claimed
         batch — never later inputs or other Runs' claims.
         """
-
-        tree = self._tree
-        cached = tree._index
-        if cached is None:
-            raise RuntimeError("completion blockers require the caller-held tree index")
-        index = cached[0]
-        tree._index_meta(index, session_id)  # 404 on an unknown task before any blocker text
-        blockers: list[str] = []
+        blockers = self._execution_blockers(
+            session_id, label="completion", exclude_run_ids=exclude_run_ids)
         pending = [
-            e for e in tree.dispatch.pending_inputs(session_id)
+            e for e in self._tree.dispatch.pending_inputs(session_id)
             if str(e.get("id")) not in (exclude_input_ids or set())]
         if pending:
             ids = ", ".join(str(e.get("id")) for e in pending[:8])
             more = "" if len(pending) <= 8 else f" (+{len(pending) - 8} more)"
-            blockers.append(f"has unprocessed input: {ids}{more}")
-        events = tree.runs.load_events_sync(session_id)
-        for run in tree.runs.list_run_records_sync(session_id):
-            if exclude_run_ids and run.id in exclude_run_ids:
-                continue
-            blocker = tree.runs.run_blocker(run, events, tree._host_boot_time())
-            if blocker is not None:
-                blockers.append(blocker)
-        blockers.extend(
-            f"has open descendant task {descendant}"
-            for descendant in tree._descendants(index, session_id)
-            if tree.task_state_of(index, descendant) == "open")
+            blockers.insert(0, f"has unprocessed input: {ids}{more}")
         return blockers
 
     def cancellation_blockers(self, session_id: str) -> list[str]:
@@ -156,23 +171,7 @@ class TaskCompletionManager:
         cancelled node — refusing cancel over it would trap every task whose
         input nothing consumed yet.
         """
-        tree = self._tree
-        cached = tree._index
-        if cached is None:
-            raise RuntimeError("cancellation blockers require the caller-held tree index")
-        index = cached[0]
-        tree._index_meta(index, session_id)  # 404 on an unknown task before any blocker text
-        blockers: list[str] = []
-        events = tree.runs.load_events_sync(session_id)
-        for run in tree.runs.list_run_records_sync(session_id):
-            blocker = tree.runs.run_blocker(run, events, tree._host_boot_time())
-            if blocker is not None:
-                blockers.append(blocker)
-        blockers.extend(
-            f"has open descendant task {descendant}"
-            for descendant in tree._descendants(index, session_id)
-            if tree.task_state_of(index, descendant) == "open")
-        return blockers
+        return self._execution_blockers(session_id, label="cancellation")
 
     # ------------------------------------------------------------------
     # Evidence

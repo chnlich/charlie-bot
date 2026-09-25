@@ -1601,6 +1601,8 @@ from pathlib import Path
 sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
 from src.core.config import CharlieBotConfig
 from src.core.sessions import SessionManager
+from src.core.triggers import TriggerManager
+
 # Worst trigger corpus: the session whose triggers directory carries the most files.
 root = Path.home() / ".charliebot" / "sessions"
 best, best_n = None, -1
@@ -1705,7 +1707,7 @@ M18 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, gzip, hashlib, json, os, shutil, sys, tempfile, time
+import asyncio, hashlib, json, os, shutil, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from src.core.config import CharlieBotConfig
@@ -3163,7 +3165,7 @@ branch checkout (`CHECKOUT` at the worktree root), the same shape as the M18 pro
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, gzip, hashlib, json, os, shutil, sys, tempfile, time
+import asyncio, hashlib, json, os, shutil, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from src.core.config import CharlieBotConfig
@@ -8240,7 +8242,6 @@ from src.api.deps import get_session_manager
 from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
 from src.core.sessions import SessionManager
-from src.core.triggers import TriggerManager
 
 # Sidebar corpus snapshot (the M71 corpus): every session's metadata.json, the
 # active sessions' live chat files, and every session's triggers/. Live home
@@ -8300,8 +8301,7 @@ try:
 
     async def main():
         _, _, cold = await drive()  # cold pass, as at the first sidebar render after a server start; not timed
-        if cold["status"] != 200:
-            raise SystemExit(f"M119 FAILED, cold status {cold['status']}")
+        if cold["status"] != 200: raise SystemExit(f"M119 FAILED, cold status {cold['status']}")
         times, wire_body, out = [], None, None
         for _ in range(9):
             dt, wire_body, out = await drive()

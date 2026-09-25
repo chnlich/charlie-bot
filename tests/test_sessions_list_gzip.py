@@ -1,6 +1,5 @@
 """The sidebar's root session list (GET /api/sessions/): the parsed body equals
-the response-model render, an unchanged corpus re-renders nothing, and the gzip
-form rides the body-keyed memo."""
+the response-model render, an unchanged corpus re-renders nothing."""
 
 from __future__ import annotations
 
@@ -22,14 +21,12 @@ from fastapi.encoders import jsonable_encoder
 
 from src.api.sessions import _sessions_list_gzip_memo, list_sessions, project_worker_threads
 from src.core.models import SessionStatus
-from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 
-# Process-wide memo: cleared around every test so counts cannot leak.
 _fresh_list_memo = fresh_state_fixture(_sessions_list_gzip_memo.clear)
 
 
-async def _call(cfg, mgr: SessionManager, thread_mgr: ThreadManager, accept_encoding: str = ""):
+async def _call(cfg, mgr, thread_mgr, accept_encoding: str = ""):
   return await list_sessions(
       _page_request(accept_encoding), session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
 
@@ -96,18 +93,30 @@ async def test_list_rerenders_when_a_meta_reloads(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_overlay_carries_the_live_thinking_stamp(tmp_path: Path) -> None:
-  """The overlay renders thinking_since from thinking_state — the field the
-  copy path stamped onto its copies."""
+async def test_list_overlay_matches_the_copy_path_render(tmp_path: Path) -> None:
+  """The overlay renders thinking_since in the UtcDatetime scheme (the copy
+  path's stamp) and next_trigger_at in the plain-datetime scheme — both byte-
+  equal to the copy path's render with the fields set."""
+  from datetime import UTC, datetime, timedelta
+
   from src.core import thinking_state
+  from src.core.models import PendingTrigger
+  from src.core.triggers import TriggerManager
 
   cfg, mgr, session = await make_home_session(tmp_path, name="t")
   thread_mgr = ThreadManager(cfg)
-  body = json.loads((await _call(cfg, mgr, thread_mgr)).body)
-  assert body[0]["thinking_since"] is None
+  trigger_mgr = TriggerManager(cfg, mgr)
+  await trigger_mgr._save_trigger(PendingTrigger(
+      session_id=session.id, fire_at=datetime.now(UTC) + timedelta(hours=1), message="wake"))
   thinking_state.mark_busy(session.id)
-  body = json.loads((await _call(cfg, mgr, thread_mgr)).body)
-  assert body[0]["thinking_since"] == thinking_state.busy_since(session.id).isoformat()
+  plain = await _call(cfg, mgr, thread_mgr)
+  body = json.loads(plain.body)
+  sessions = await mgr.list_sessions(
+      status=SessionStatus.ACTIVE, scheduled=False, include_running_status=True,
+      include_pending_trigger_status=True, include_pending_plan_approval=True)
+  rows = await project_worker_threads(sessions, cfg, thread_mgr)
+  assert body == jsonable_encoder(rows)
+  assert body[0]["thinking_since"] == thinking_state.busy_since(session.id).isoformat().replace("+00:00", "Z")
   thinking_state.clear_busy(session.id)
   body = json.loads((await _call(cfg, mgr, thread_mgr)).body)
   assert body[0]["thinking_since"] is None

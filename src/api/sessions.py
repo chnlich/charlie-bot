@@ -418,12 +418,14 @@ async def list_sessions(
     entry = derived[row.id]
     thinking = thinking_state.busy_since(row.id)
     next_trigger = entry[sidebar_state.NEXT_TRIGGER_AT]
+    # Both datetimes ride the model's JSON scheme (pydantic-core renders UTC as
+    # Z); a hand-rolled isoformat() would emit +00:00 inside an all-Z row.
     rendered.append((row, (
-        thinking.isoformat() if thinking else None,
+        _UTC_DATETIME_JSON.dump_python(thinking, mode="json") if thinking is not None else None,
         entry[sidebar_state.HAS_RUNNING_TASKS],
         entry[sidebar_state.HAS_PENDING_TRIGGER],
         entry[sidebar_state.PENDING_TRIGGER_COUNT],
-        next_trigger.isoformat() if next_trigger else None,
+        _UTC_DATETIME_JSON.dump_python(next_trigger, mode="json") if next_trigger is not None else None,
         entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL])))
   list_rows = tuple(row for row, _s in rendered)
   list_states = tuple(state for _row, state in rendered)
@@ -1078,18 +1080,15 @@ async def _switch_payload_response(request: Request, payload: dict | list) -> Re
   return await gzip_body_response(request, fast_json_bytes(payload), {}, _switch_gzip_memo)
 
 
-# The sidebar's root list (GET /api/sessions/) also rebuilds its payload per
-# request — the projected rows are fresh model copies, so unlike the search
-# route there is no row identity to key a whole-body memo on — and the rendered
-# body bytes are their own invalidation ground, the _switch_gzip_memo
-# mechanism. The limit covers one steady-state body per open tab.
+# The sidebar's root list renders pre-dumped rows and ships the gzip form from
+# a body-keyed memo; the limit covers one steady-state body per open tab.
 _SESSIONS_LIST_GZIP_MEMO_LIMIT = 4
 _sessions_list_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SESSIONS_LIST_GZIP_MEMO_LIMIT)
 
 
 # One steady-state whole-body slot beside the gzip memo: the search route's
 # _search_whole_body mechanism. The slot is only ever replaced whole.
-_sessions_list_whole_body: tuple[list[SessionMetadata], tuple, bytes] | None = None
+_sessions_list_whole_body: tuple[tuple[SessionMetadata, ...], tuple, bytes] | None = None
 
 
 @router.get('/{session_id}/view')

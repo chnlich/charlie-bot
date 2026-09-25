@@ -830,11 +830,6 @@ async def test_implement_delivery_requires_review_and_real_landing(
     assert tree.task_state(manager.id) == "open"
 
 
-def _consumers():
-    from src.agents import master_cc_state
-    return master_cc_state._session_consumers.values()
-
-
 def _task_spec(tree: TaskTreeManager, spec: dict):
     from src.core.models import TaskSpec, TaskType
     return TaskSpec(

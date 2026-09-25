@@ -538,6 +538,16 @@ async def run_harness(args: argparse.Namespace) -> None:
             worker_b, run_b = await delegate(
                 base, access_key, manager_b,
                 "## Goal\n\nSay the phrase\n", bad_repo, "quick-edit", "sidebar-status-worker-b")
+            # The parent is paused the moment the delegation returns: the
+            # child's launch (and its failure) proceeds untouched, the failure
+            # report still lands durably in the parent's chat, and the woken
+            # consumer turn is withheld — so the collapsed parent stands in for
+            # its subtree with the alert instead of running its own follow-up
+            # turns on top of the failure.
+            status, _ = request(base, access_key, "PATCH", f"/api/sessions/{manager_b}",
+                                {"automation_paused": True})
+            if status != 200:
+                fail(f"pause of manager B failed: {status}")
             run_row, outcome = await wait_run_terminal(base, access_key, worker_b, run_b, "failing work run")
             record("launch-failure run reached failed", outcome == "failed", f"outcome={outcome}")
             record("the failed run never started a process", run_row.get("pid") is None,

@@ -11,12 +11,11 @@ outcomes, and the ancestor activity count the collapsed-row cue reads.
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from conftest import identity_of, make_home_config
+from conftest import identity_of, live_subprocess, make_home_config
 
 from src.core import event_types as ET
 from src.core.models import RunRecord
@@ -60,10 +59,6 @@ class NotificationSpy:
 
   def install(self) -> None:
     self._tree.events.notify_tree_changed = self._spy  # type: ignore[method-assign]
-
-
-def live_subprocess() -> subprocess.Popen:
-  return subprocess.Popen(["/bin/sleep", "30"])
 
 
 @pytest.mark.asyncio

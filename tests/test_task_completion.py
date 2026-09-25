@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from conftest import build_env
+from conftest import build_env, create_task
 
 from src.core import event_types as ET
 from src.core.models import PatchSessionTaskRequest, RunRecord, TaskSpec
@@ -31,13 +31,6 @@ def live_identity() -> tuple[int, str, datetime]:
   pair = read_pid_stat(proc.pid)
   assert pair is not None
   return proc.pid, pair[0], datetime.now(UTC)
-
-
-async def create_task(tree: TaskTreeManager, *, parent: str | None, request_id: str,
-                      profile: str = "manager", task: TaskSpec | None = None, name: str | None = None):
-  return await tree.create_task(
-      request_id=request_id, task_parent_id=parent, profile=profile, task=task,
-      name=name, backend=None, caller=OPERATOR)
 
 
 async def finish_worker_run(tree: TaskTreeManager, session_id: str, run_id: str) -> None:

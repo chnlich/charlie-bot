@@ -4,17 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import os
-import subprocess
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import build_env, identity_of, stub_credentials
+from conftest import build_env, create_task, identity_of, live_subprocess, stub_credentials
 
 from src.api.message_utils import events_to_view
 from src.core import event_types as ET
-from src.core.models import RunRecord, TaskSpec
+from src.core.models import RunRecord
 from src.core.run_token import CallerIdentity, RunTokenClaims, sign_run_token
 from src.core.sessions import SessionManager
 from src.core.task_completion import CompletionEvidence
@@ -44,19 +43,6 @@ TOOL_RESULT_ECHO = {
     "uuid": "0b6c7f1e-0000-4000-8000-000000000001",
     "tool_use_result": {"stdout": "ok", "stderr": ""},
 }
-
-
-def live_subprocess() -> subprocess.Popen:
-  """An owned, isolated sleeper: the only process identity any test here signals."""
-  return subprocess.Popen(["/bin/sleep", "30"])
-
-
-async def create_task(tree: TaskTreeManager, *, parent: str | None, request_id: str,
-                      profile: str = "manager", task: TaskSpec | None = None,
-                      name: str | None = None):
-  return await tree.create_task(
-      request_id=request_id, task_parent_id=parent, profile=profile, task=task,
-      name=name, backend=None, caller=OPERATOR)
 
 
 async def admit(tree: TaskTreeManager, session_id: str, content: str, *, event_type: str = ET.USER,

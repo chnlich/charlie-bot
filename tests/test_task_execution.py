@@ -18,7 +18,9 @@ from pathlib import Path
 import pytest
 from conftest import (
     backend_option,
+    create_task,
     patch_instructions_content,
+    stub_credentials,
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -149,19 +151,6 @@ def make_api_client(cfg, session_mgr, task_mgr) -> TestClient:
     app.dependency_overrides[get_task_manager] = lambda: task_mgr
     app.dependency_overrides[get_run_store] = lambda: task_mgr.runs
     return TestClient(app)
-
-
-def stub_credentials(monkeypatch: pytest.MonkeyPatch, sections: dict) -> None:
-    import src.core.config as core_config
-    core_config._credentials_cache.seed(core_config.Credentials(
-        path=Path("credentials.yaml"), sections=sections))
-
-
-async def create_task(tree: TaskTreeManager, *, parent: str | None, request_id: str,
-                      profile: str = "manager", task=None, name: str | None = None):
-    return await tree.create_task(
-        request_id=request_id, task_parent_id=parent, profile=profile, task=task,
-        name=name, backend=None, caller="operator")
 
 
 async def wait_for_terminal_run(tree: TaskTreeManager, session_id: str, run_id: str,
@@ -445,7 +434,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
     manager = await create_task(tree, parent=None, request_id="root")
     monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-    stub_credentials(monkeypatch, {"charliebot": {"access_key": "op-secret"}})
+    stub_credentials({"charliebot": {"access_key": "op-secret"}})
     pm_builds = []
 
     def pm_build(option, cfg_, **kwargs):
@@ -716,7 +705,7 @@ async def test_implement_delivery_requires_review_and_real_landing(
 
     monkeypatch.setattr("src.agents.backends.registry.build_backend", pm_build)
     patch_instructions_content(monkeypatch)
-    stub_credentials(monkeypatch, {"charliebot": {"access_key": "op-secret"}})
+    stub_credentials({"charliebot": {"access_key": "op-secret"}})
     # The work-run launch re-judges the nearest-user authorization gate; the
     # manager carries the real user takeoff message the delegation rode in on.
     await tree.dispatch.admit_input(

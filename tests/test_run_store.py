@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from conftest import build_env as build_task_tree_env
-from conftest import identity_of
+from conftest import identity_of, live_subprocess
 
 from src.core import event_types as ET
 from src.core.models import RunRecord
@@ -33,11 +33,6 @@ async def make_task(store_run_env: tuple, request_id: str) -> str:
       request_id=request_id, task_parent_id=None, profile="worker", task=None, name=None,
       backend=None, caller="operator")
   return task.id
-
-
-def live_subprocess() -> subprocess.Popen:
-  """An owned, isolated sleeper: the only process identity any test here signals."""
-  return subprocess.Popen(["/bin/sleep", "30"])
 
 
 async def register_live_run(store: RunStore, session_id: str, proc: subprocess.Popen) -> RunRecord:

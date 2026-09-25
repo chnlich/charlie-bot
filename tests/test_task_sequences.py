@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import patch_instructions_content
+from conftest import patch_instructions_content, stub_credentials
 
 from src.core import event_types as ET
 from src.core.improve_command import load_loop_state
@@ -29,7 +29,6 @@ from tests.test_task_execution import (
     install_backends,
     make_api_client,
     result_event,
-    stub_credentials,
 )
 
 
@@ -45,7 +44,7 @@ async def _start_loop(cfg, session_mgr, tree, manager, monkeypatch, payload_over
                       wait_effect=None):
     """POST the improve loop against the v2 manager and wait for the controller's child."""
     patch_instructions_content(monkeypatch)
-    stub_credentials(monkeypatch, {"charliebot": {"access_key": "op-secret"}})
+    stub_credentials({"charliebot": {"access_key": "op-secret"}})
     monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
     payload = {
@@ -193,7 +192,7 @@ async def test_live_goal_change_affects_next_iteration(
     queue = [first, second]
     monkeypatch.setattr("src.agents.worker.build_backend", lambda *a, **k: queue.pop(0))
     patch_instructions_content(monkeypatch)
-    stub_credentials(monkeypatch, {"charliebot": {"access_key": "op-secret"}})
+    stub_credentials({"charliebot": {"access_key": "op-secret"}})
     monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
 
@@ -258,7 +257,7 @@ async def test_user_stop_prevents_further_iterations_and_reports_cancelled(
     monkeypatch.setattr(
         "src.agents.worker.build_backend", lambda *a, **k: _StopAfterFirst([result_event("one")]))
     patch_instructions_content(monkeypatch)
-    stub_credentials(monkeypatch, {"charliebot": {"access_key": "op-secret"}})
+    stub_credentials({"charliebot": {"access_key": "op-secret"}})
     monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
 
@@ -321,7 +320,7 @@ async def test_quota_blocked_iteration_fails_loop_without_further_iterations(
         "src.agents.worker.build_backend",
         lambda *a, **k: SpawningScriptedBackend([quota_event, result_event("ignored")], exit_code=1))
     patch_instructions_content(monkeypatch)
-    stub_credentials(monkeypatch, {"charliebot": {"access_key": "op-secret"}})
+    stub_credentials({"charliebot": {"access_key": "op-secret"}})
     monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
 
@@ -388,7 +387,7 @@ async def test_restart_marks_interrupted_controller_without_resuming(
 
     monkeypatch.setattr("src.agents.worker.build_backend", _hang_build)
     patch_instructions_content(monkeypatch)
-    stub_credentials(monkeypatch, {"charliebot": {"access_key": "op-secret"}})
+    stub_credentials({"charliebot": {"access_key": "op-secret"}})
     monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
 
@@ -494,7 +493,7 @@ async def test_invalid_backend_fails_admission_without_leaking_the_lock(
         request_id="root", task_parent_id=None, profile="manager",
         task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
     patch_instructions_content(monkeypatch)
-    stub_credentials(monkeypatch, {"charliebot": {"access_key": "op-secret"}})
+    stub_credentials({"charliebot": {"access_key": "op-secret"}})
     monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
     await tree.dispatch.admit_input(
         manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
@@ -548,7 +547,7 @@ async def test_improve_without_authorization_is_forbidden_not_a_server_error(
     manager = await tree.create_task(
         request_id="root", task_parent_id=None, profile="manager",
         task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
-    stub_credentials(monkeypatch, {"charliebot": {"access_key": "op-secret"}})
+    stub_credentials({"charliebot": {"access_key": "op-secret"}})
     monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
     payload = {
         "session_id": manager.id,

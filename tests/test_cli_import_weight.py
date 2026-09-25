@@ -201,8 +201,11 @@ def test_artifact_wrap_verb_runs_off_the_config_stack() -> None:
 # backends (bz2, lzma) with it — ~2.4 ms of every fresh-process verb's wall.
 # The shared CliHelpFormatter (src/cli/help_formatter.py) passes the width
 # itself under shutil.get_terminal_size's documented precedence, so the verb
-# parsers build with neither module loaded.
-_PARSER_BUILD_BANNED = ("shutil", "bz2", "lzma")
+# parsers build with neither module loaded. The same construction calls
+# `_set_color`, whose function-level `from _colorize import ...` pulls
+# _colorize's dataclasses+inspect chain (~12 ms) into every verb; the piped
+# arm renders the empty theme without it (docs/perf_baseline.md M92/M97/M98/M102).
+_PARSER_BUILD_BANNED = ("shutil", "bz2", "lzma", "_colorize")
 _PARSER_BUILD_MODULES = (
     pytest.param("src.cli.plan", id="plan"),
     pytest.param("src.cli.artifact", id="artifact"),
@@ -245,6 +248,36 @@ def test_cli_help_formatter_width_matches_shutil_precedence() -> None:
   # 80-column fallback, so the stock formatter renders the same width.
   assert readings["0"] == readings["-5"] == readings["abc"] == readings["unset"] == 78, readings
   assert readings["explicit"] == 50, "an explicit width must pass through"
+
+
+def test_piped_help_render_never_loads_colorize() -> None:
+  # The rendered help resolves the theme through _set_color: piped stdout must
+  # render the empty theme without importing _colorize, and a forced-color
+  # stdout must still ride the stock decision (the import comes back there).
+  probe = (
+      "import json, sys\n"
+      "from src.cli.schedule_trigger import _build_parser\n"
+      "print(_build_parser().format_help())\n"
+      "print(json.dumps('_colorize' in sys.modules))\n")
+  result = _run_probe(probe)
+  assert result.stdout.count("\n") >= 2, result.stdout
+  assert json.loads(result.stdout.rsplit("\n", 2)[-2]) is False
+  forced = "import os\nos.environ['FORCE_COLOR'] = '1'\n" + probe
+  assert json.loads(_run_probe(forced).stdout.rsplit("\n", 2)[-2]) is True
+
+
+def test_no_color_render_matches_the_stock_theme() -> None:
+  # The empty-theme arm replaces _colorize's no-color theme, whose every style
+  # field is the empty string: the rendered help must be byte-identical to the
+  # stock formatter's own piped rendering at the same width.
+  probe = (
+      "import argparse, json, os\n"
+      "os.environ['COLUMNS'] = '80'\n"
+      "import src.cli.schedule_trigger as st\n"
+      "ours = st._build_parser().format_help()\n"
+      "st.CliHelpFormatter = argparse.HelpFormatter\n"
+      "print(json.dumps(ours == st._build_parser().format_help()))\n")
+  assert json.loads(_run_probe(probe).stdout) is True
 
 
 def test_memory_chain_imports_without_the_heavy_chains() -> None:

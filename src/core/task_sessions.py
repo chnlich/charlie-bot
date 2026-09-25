@@ -292,6 +292,15 @@ class TaskTreeManager:
       raise TaskInvalidError(f"session {session_id} is not a task-tree node (no profile)")
     return meta
 
+  async def load_task_meta(self, session_id: str) -> SessionMetadata:
+    """The session's metadata, required to be a task-tree node.
+
+    Raises TaskNotFoundError for an absent session and TaskInvalidError for a
+    session with no profile; callers rely on the returned metadata passing
+    that validation.
+    """
+    return self._require_task(await self.load_meta(session_id), session_id)
+
   async def _save_meta(self, meta: SessionMetadata) -> None:
     meta.updated_at = utc_now()
     await self._sessions.save_metadata(meta)
@@ -627,9 +636,7 @@ class TaskTreeManager:
     reaches this write, so the usable old anchor survives it.
     """
     async with self.control_lock:
-      meta = await self.load_meta(session_id)
-      self._require_task(meta, session_id)
-      assert meta is not None
+      meta = await self.load_task_meta(session_id)
       meta.native_prompt_hash = prompt_hash
       meta.native_backend = backend
       meta.native_model = model
@@ -666,9 +673,7 @@ class TaskTreeManager:
 
   async def session_detail(self, session_id: str) -> dict:
     """The session detail projection: existing metadata plus the derived task fields."""
-    meta = await self.load_meta(session_id)
-    self._require_task(meta, session_id)
-    assert meta is not None
+    await self.load_task_meta(session_id)
     index = await self._get_index()
     # Re-read through the index so the detail and the tree agree on one projection.
     indexed = index.metas.get(session_id)
@@ -933,9 +938,7 @@ class TaskTreeManager:
     if last_scheduled_run is None and cron is None and last_run_status is None:
       raise TaskInvalidError("record_scheduled_fire requires at least one scheduling field")
     async with self.control_lock:
-      meta = await self.load_meta(session_id)
-      self._require_task(meta, session_id)
-      assert meta is not None
+      meta = await self.load_task_meta(session_id)
       if last_scheduled_run is not None:
         meta.last_scheduled_run = last_scheduled_run
       if cron is not None:
@@ -955,8 +958,7 @@ class TaskTreeManager:
     """
     async with self.control_lock:
       await self._get_index()
-      meta = await self.load_meta(session_id)
-      self._require_task(meta, session_id)
+      meta = await self.load_task_meta(session_id)
       state = self.task_state_of(self._index[0], session_id)
       if state != "open":
         raise TaskConflictError([f"task {session_id} is {state}; only open tasks accept retries"])
@@ -1001,9 +1003,7 @@ class TaskTreeManager:
       raise TaskForbiddenError("task metadata mutations require operator credentials")
     async with self.control_lock:
       await self._get_index()
-      meta = await self.load_meta(session_id)
-      self._require_task(meta, session_id)
-      assert meta is not None
+      meta = await self.load_task_meta(session_id)
       fs = req.model_fields_set
       structural = bool(fs & {"task", "profile", "task_parent_id"})
       blockers = self._structural_blockers(session_id) if structural else []
@@ -1046,9 +1046,7 @@ class TaskTreeManager:
       raise TaskInvalidError(f"presentation must be auto, shown, or hidden (got {presentation!r})")
     async with self.control_lock:
       await self._get_index()
-      meta = await self.load_meta(session_id)
-      self._require_task(meta, session_id)
-      assert meta is not None
+      meta = await self.load_task_meta(session_id)
       if meta.presentation != presentation:
         meta.presentation = presentation  # type: ignore[assignment]
         await self._save_meta(meta)

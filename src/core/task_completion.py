@@ -303,7 +303,6 @@ class TaskCompletionManager:
         branch this task's runs were based on. Unknown shapes pass through as
         opaque evidence pointers.
         """
-        from src.core.task_sessions import TaskConflictError  # noqa: F401  (reexported shape)
 
         blockers: list[str] = []
         if ref.startswith(RUN_REF_PREFIX):
@@ -377,7 +376,6 @@ class TaskCompletionManager:
         """
         blockers: list[str] = []
         from src.core.git import git_verify_commit_landed
-        from src.core.task_sessions import TaskConflictError  # noqa: F401  (parity with the shape layer)
 
         claims = self._landing_claims(meta, evidence)
         if not claims:

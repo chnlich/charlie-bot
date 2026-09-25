@@ -250,6 +250,7 @@ _NATIVE_RESUME_SESSION_BACKEND_TYPES = {
 # The pre-flight anchor-missing alarm fires only for these.
 _RESUME_CAPABLE_BACKEND_TYPES = _CLAUDE_RESUME_FLAG_BACKEND_TYPES | _NATIVE_RESUME_SESSION_BACKEND_TYPES
 
+
 class _Instructions(str):
   """Instructions string carrying the build's non-fatal read failure, when one occurred.
 
@@ -596,8 +597,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       prompt_overlay = None
     # Any other string is the overlay filename (sans ".md"); pass it through.
 
-    instructions_content = await asyncio.to_thread(
-        _build_instructions_content, session_meta, cfg, prompt_overlay)
+    instructions_content = await asyncio.to_thread(_build_instructions_content, session_meta, cfg, prompt_overlay)
     overlay_error = getattr(instructions_content, "overlay_error", None)
     if overlay_error is not None:
       log.warning(
@@ -648,8 +648,8 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   # id, when the session already has an anchor on disk or a completed round, is
   # about to start a zero-context conversation. Fail loudly unless the caller
   # declared a fresh start (the scheduled-session weekly-recycle path).
-  if (option.type in _RESUME_CAPABLE_BACKEND_TYPES and not resume_id
-      and not item.expect_fresh_session and not fresh_native):
+  if (option.type in _RESUME_CAPABLE_BACKEND_TYPES and not resume_id and not item.expect_fresh_session and
+      not fresh_native):
     anchor_on_disk = session_meta.cc_session_id
     if anchor_on_disk or await item.callbacks.has_completed_round(session_meta.id):
       reason = ET.RESUME_REASON_TRANSCRIPT_MISSING if anchor_on_disk else ET.RESUME_REASON_ANCHOR_MISSING
@@ -723,9 +723,8 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   # _spawn_and_stream).
   started_at = datetime.now(UTC)
   log_dir = (
-      Path(item.task_run.transport_dir)
-      if item.task_run is not None
-      else runs.master_run_log_dir(cfg.sessions_dir / session_meta.id, started_at))
+      Path(item.task_run.transport_dir) if item.task_run is not None else runs.master_run_log_dir(
+          cfg.sessions_dir / session_meta.id, started_at))
   raw_log = str(log_dir / runs.RAW_LOG_NAME)
 
   # The invocation's own translated error-event messages, in stream order — the
@@ -771,9 +770,8 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       # A v2 task-tree turn keeps every relay process inside its Run's own
       # transport dir; the v1 turn gets the per-round master_run dir.
       log_dir = (
-          Path(item.task_run.transport_dir)
-          if item.task_run is not None
-          else runs.master_run_log_dir(cfg.sessions_dir / session_meta.id, started_at))
+          Path(item.task_run.transport_dir) if item.task_run is not None else runs.master_run_log_dir(
+              cfg.sessions_dir / session_meta.id, started_at))
       raw_log = str(log_dir / runs.RAW_LOG_NAME)
     backend = build_backend(
         option,

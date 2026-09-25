@@ -65,7 +65,8 @@ class SessionAliasStore:
 
   def old_ids_for(self, canonical_session_id: str) -> list[str]:
     """Every imported old id that resolves to *canonical_session_id*."""
-    return sorted(old for old, canonical in self._read()["old_session_ids"].items() if canonical == canonical_session_id)
+    return sorted(
+        old for old, canonical in self._read()["old_session_ids"].items() if canonical == canonical_session_id)
 
   def register_run_thread(self, session_id: str, run_id: str) -> None:
     """Register the new-run compatibility thread alias (idempotent, atomic rewrite)."""
@@ -78,8 +79,7 @@ class SessionAliasStore:
     address, the child task is where the Run lives. Recording the owner as the
     target session would resolve to a run that does not exist there.
     """
-    self._put(
-        alias_thread_key(owner_session_id, run_id), {"session_id": session_id, "run_id": run_id})
+    self._put(alias_thread_key(owner_session_id, run_id), {"session_id": session_id, "run_id": run_id})
 
   def _put(self, key: str, target: dict) -> None:
     raw = self._read()

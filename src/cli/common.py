@@ -605,8 +605,7 @@ def _request_with_contract(
         resp = _request_post(
             url, json=payload, params=params, headers=internal_api_auth_headers(), timeout=HTTP_INTERNAL_API_TIMEOUT)
       elif method == "PATCH":
-        resp = _request_patch(
-            url, json=payload, headers=internal_api_auth_headers(), timeout=HTTP_INTERNAL_API_TIMEOUT)
+        resp = _request_patch(url, json=payload, headers=internal_api_auth_headers(), timeout=HTTP_INTERNAL_API_TIMEOUT)
       elif method == "GET":
         resp = _request_get(url, params=params, headers=internal_api_auth_headers(), timeout=HTTP_INTERNAL_API_TIMEOUT)
       else:
@@ -696,7 +695,10 @@ def derive_delegate_request_id(session_id: str, task_type: str, description: str
 
 
 def find_local_task_child(
-    session_id: str, description: str, task_type: str, request_id: str | None = None,
+    session_id: str,
+    description: str,
+    task_type: str,
+    request_id: str | None = None,
 ) -> dict | None:
   """The v2 task-tree child THIS delegation's request identity binds to.
 
@@ -722,12 +724,8 @@ def find_local_task_child(
     meta = SessionMetadata.model_validate_json(meta_path.read_text(encoding="utf-8"))
   except (OSError, ValueError):
     return None
-  if (meta.id != child_id
-      or meta.task_parent_id != session_id
-      or meta.profile != "worker"
-      or meta.task is None
-      or meta.task.goal != description
-      or (meta.task.task_type.value if meta.task.task_type else None) != task_type):
+  if (meta.id != child_id or meta.task_parent_id != session_id or meta.profile != "worker" or meta.task is None or
+      meta.task.goal != description or (meta.task.task_type.value if meta.task.task_type else None) != task_type):
     return None
   # The authoritative Run is this delegation's own work Run: the same stable
   # (child, "<request id>:work") binding the server launched — not "whatever

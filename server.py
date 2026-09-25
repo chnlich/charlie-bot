@@ -356,8 +356,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   try:
     writer_fence = acquire_home_writer_fence(cfg.charliebot_home, purpose="server startup")
   except HomeWriterActiveError as e:
-    log.error("server_startup_refused_home_writer_fence", home=str(cfg.charliebot_home),
-              error=str(e))
+    log.error("server_startup_refused_home_writer_fence", home=str(cfg.charliebot_home), error=str(e))
     raise
   # Every exit path of a still-live process releases the exclusion: a startup
   # failure after acquisition, and any exception during shutdown, must not

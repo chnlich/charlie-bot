@@ -59,8 +59,7 @@ def task_manager() -> TaskTreeManager:
   if _task_manager is None:
     _task_manager = TaskTreeManager(get_config(), session_manager())
     from src.core.task_execution import TaskExecutionAdapter
-    _task_manager.dispatch.executor = TaskExecutionAdapter(
-        get_config(), session_manager(), _task_manager)
+    _task_manager.dispatch.executor = TaskExecutionAdapter(get_config(), session_manager(), _task_manager)
   return _task_manager
 
 

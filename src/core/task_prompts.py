@@ -558,12 +558,10 @@ def review_task_context(
   The same pieces build_review_prompt composes for v1 — one maintained source
   (src/core/review.py), two callers.
   """
-  from src.core.review import review_numbered_steps
+  from src.core.review import review_git_venue, review_log_pointer, review_numbered_steps
   return (
       f"## Context\n"
       f"{context_section}\n\n"
-      f"If the summary above is insufficient or you are unsure about intent, "
-      f"read the full logs: Session: `{chat_log_path}`, Worker: `{worker_log_path}`\n\n"
-      f"The work is on branch `{branch_name}` in worktree `{wt_path}`. "
-      f"All git operations below run from the worktree.\n\n"
+      f"{review_log_pointer(chat_log_path, worker_log_path)}\n\n"
+      f"{review_git_venue(branch_name, wt_path)}\n\n"
       f"{review_numbered_steps(branch_name, wt_path, base_branch)}")

@@ -1071,14 +1071,8 @@ class TaskExecutionAdapter:
         user_request, worker_summary = await review.extract_review_context(
             session_id, work_run.id, self._cfg.sessions_dir,
             worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / "events.jsonl")
-        context_lines: list[str] = []
-        if user_request:
-            context_lines.append(f"**User request:** {user_request}")
-        if worker_summary:
-            context_lines.append(f"**Worker summary:** {worker_summary}")
-        if not context_lines:
-            context_lines.append("*(Log extraction unavailable — review based on delegator hint and diff only.)*")
-        context_lines.append(f"**Delegator hint:** (work run {work_run.id})")
+        context_lines = review.review_context_lines(user_request, worker_summary,
+                                                    f"(work run {work_run.id})")
         return task_prompts.review_task_context(
             branch_name=work_run.branch_name,
             wt_path=work_run.worktree_path,

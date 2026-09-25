@@ -100,6 +100,10 @@ _REVIEW_CHECKLIST_INTRO = (
     "state-machine tasks, verify the implementation against `## Required Behavior`; do not rely only "
     "on tests.")
 
+# The checklist heading and intro ride both prompt shapes (the v1 review prompt
+# and the v2 managed instruction block); one spelling of that contract here.
+_REVIEW_CHECKLIST_BLOCK = f"## Review Checklist\n{_REVIEW_CHECKLIST_INTRO}\n\n"
+
 # The checklist's stable judgment rules (the volatile cd/fetch/diff/push steps
 # stay in build_review_prompt, which formats them with the run's actual paths).
 _REVIEW_SCOPE_CHECK = (
@@ -134,7 +138,7 @@ def review_rules_text() -> str:
   """
   return (
       f"{_REVIEW_ROLE_TEXT}\n\n"
-      f"## Review Checklist\n{_REVIEW_CHECKLIST_INTRO}\n\n"
+      f"{_REVIEW_CHECKLIST_BLOCK}"
       f"{_REVIEW_STABLE_RULES}")
 
 
@@ -157,16 +161,7 @@ def build_review_prompt(
   coding_principles = load_worker_prompt_sections(cfg)["coding_principles"]
 
   context_hint = context or '(none provided)'
-  context_lines: list[str] = []
-  if user_request or worker_summary:
-    if user_request:
-      context_lines.append(f"**User request:** {user_request}")
-    if worker_summary:
-      context_lines.append(f"**Worker summary:** {worker_summary}")
-  else:
-    context_lines.append("*(Log extraction unavailable — review based on delegator hint and diff only.)*")
-  context_lines.append(f"**Delegator hint:** {context_hint}")
-  context_section = "\n".join(context_lines)
+  context_section = "\n".join(review_context_lines(user_request, worker_summary, context_hint))
   session_dir = sessions_dir / session_id
   chat_log_path = chat_events_path(session_dir)
   # A v2 review pass reads the work Run's own events log; the legacy default
@@ -205,6 +200,39 @@ def review_numbered_steps(branch_name: str, wt_path: str, base_branch: str) -> s
   ])
 
 
+def review_context_lines(
+    user_request: str | None,
+    worker_summary: str | None,
+    delegator_hint: str,
+) -> list[str]:
+  """The review prompt's context lines: the extracted evidence, or the fallback, plus the hint.
+
+  The unavailable line appears only when neither the request nor the summary
+  was extracted, so the reviewer always knows why the context is thin.
+  """
+  lines: list[str] = []
+  if user_request:
+    lines.append(f"**User request:** {user_request}")
+  if worker_summary:
+    lines.append(f"**Worker summary:** {worker_summary}")
+  if not lines:
+    lines.append("*(Log extraction unavailable — review based on delegator hint and diff only.)*")
+  lines.append(f"**Delegator hint:** {delegator_hint}")
+  return lines
+
+
+def review_log_pointer(chat_log_path: Path, worker_log_path: Path) -> str:
+  """The context footer that sends the reviewer to the run's full logs."""
+  return (f"If the summary above is insufficient or you are unsure about intent, "
+          f"read the full logs: Session: `{chat_log_path}`, Worker: `{worker_log_path}`")
+
+
+def review_git_venue(branch_name: str, wt_path: str) -> str:
+  """The sentence pinning the numbered git steps to this run's worktree."""
+  return (f"The work is on branch `{branch_name}` in worktree `{wt_path}`. "
+          f"All git operations below run from the worktree.")
+
+
 def _compose_review_prompt(
     *,
     context_section: str,
@@ -221,13 +249,10 @@ def _compose_review_prompt(
       f"{_REVIEW_ROLE_TEXT}\n\n"
       f"## Context\n"
       f"{context_section}\n\n"
-      f"If the summary above is insufficient or you are unsure about intent, "
-      f"read the full logs: Session: `{chat_log_path}`, Worker: `{resolved_worker_log}`\n\n"
+      f"{review_log_pointer(chat_log_path, resolved_worker_log)}\n\n"
       f"{coding_principles}\n"
-      f"## Review Checklist\n"
-      f"{_REVIEW_CHECKLIST_INTRO}\n\n"
-      f"The work is on branch `{branch_name}` in worktree `{wt_path}`. "
-      f"All git operations below run from the worktree.\n\n"
+      f"{_REVIEW_CHECKLIST_BLOCK}"
+      f"{review_git_venue(branch_name, wt_path)}\n\n"
       f"{numbered_steps}")
 
 

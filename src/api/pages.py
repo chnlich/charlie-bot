@@ -25,10 +25,10 @@ from starlette.responses import Response
 from src.agents.transcription.registry import build_transcription_backends
 from src.api.code_server import is_code_server_available
 from src.api.deps import (
-  SESSION_NOT_FOUND_DETAIL,
-  get_config_on_loop,
-  get_session_manager,
-  get_thread_manager,
+    SESSION_NOT_FOUND_DETAIL,
+    get_config_on_loop,
+    get_session_manager,
+    get_thread_manager,
 )
 from src.api.message_utils import build_session_bootstrap_data
 from src.api.sessions import _bootstrap_payload, _default_backend_id, project_worker_threads

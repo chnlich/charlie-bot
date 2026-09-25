@@ -51,8 +51,8 @@ class HomeWriterActiveError(RuntimeError):
     self.home = home
     detail = (
         f"home writer fence held by pid {holder.pid} (started {holder.started_at}, "
-        f"purpose {holder.purpose!r}, argv: {holder.argv})" if holder else
-        "home writer fence is held (holder identity unreadable)")
+        f"purpose {holder.purpose!r}, argv: {holder.argv})"
+        if holder else "home writer fence is held (holder identity unreadable)")
     super().__init__(f"{purpose} refused for home {home}: {detail}")
 
 
@@ -221,14 +221,17 @@ def read_fence_holder(home: Path) -> FenceHolder | None:
 
 def _holder_json(holder: FenceHolder) -> str:
   import json
-  return json.dumps({
-      "pid": holder.pid,
-      "pid_start": holder.pid_start,
-      "started_at": holder.started_at,
-      "purpose": holder.purpose,
-      "argv": holder.argv,
-      "home": holder.home,
-  }, indent=2, sort_keys=True)
+  return json.dumps(
+      {
+          "pid": holder.pid,
+          "pid_start": holder.pid_start,
+          "started_at": holder.started_at,
+          "purpose": holder.purpose,
+          "argv": holder.argv,
+          "home": holder.home,
+      },
+      indent=2,
+      sort_keys=True)
 
 
 def probe_writer_fence(home: Path) -> dict:

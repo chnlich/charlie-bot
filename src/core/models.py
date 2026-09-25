@@ -103,7 +103,6 @@ class LastRunStatus(StrEnum):
   SKIPPED = "skipped"
 
 
-
 # ---------------------------------------------------------------------------
 # Task-tree record types (schema_version=2)
 # ---------------------------------------------------------------------------
@@ -300,6 +299,7 @@ class PendingTrigger(BaseModel):
 # ---------------------------------------------------------------------------
 # Session Models
 # ---------------------------------------------------------------------------
+
 
 class MasterRunRecord(BaseModel):
   """Identity of one in-flight master turn, persisted for restart reconciliation.
@@ -604,7 +604,6 @@ class RunCancelResponse(BaseModel):
   run_id: str
   stop_requested: bool
   outcome: RunOutcomeValue | None = None
-
 
 
 class ForkSessionRequest(BaseModel):

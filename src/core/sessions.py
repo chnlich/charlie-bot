@@ -2447,8 +2447,8 @@ class SessionManager:
       meta.round_ratings = migrated
     return changed
 
-  async def _with_derived_archive(
-      self, metas: list[SessionMetadata], status: SessionStatus | None) -> list[SessionMetadata]:
+  async def _with_derived_archive(self, metas: list[SessionMetadata],
+                                  status: SessionStatus | None) -> list[SessionMetadata]:
     """Apply the task tree's fact-derived archive to one stored-status listing.
 
     The listing memo keys stored status; the derived set moves with facts, so
@@ -2471,8 +2471,9 @@ class SessionManager:
     if status == SessionStatus.ARCHIVED:
       active = await self._load_session_metas(SessionStatus.ACTIVE)
       return metas + [as_archived(meta) for meta in active if meta.id in derived]
-    return [as_archived(meta) if meta.id in derived and meta.status != SessionStatus.ARCHIVED else meta
-            for meta in metas]
+    return [
+        as_archived(meta) if meta.id in derived and meta.status != SessionStatus.ARCHIVED else meta for meta in metas
+    ]
 
   async def _load_session_metas(self, status: SessionStatus | None = None) -> list[SessionMetadata]:
     """Load session metadata, batching disk reads and parses for cache misses.

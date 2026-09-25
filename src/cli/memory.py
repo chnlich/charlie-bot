@@ -150,19 +150,18 @@ def _resolve_run_scoped_audience(cfg: CharlieBotConfig, token: str) -> str:
     sys.exit(1)
   # A read-only local resolution through the same owners the server uses (the
   # one shared active-Run predicate), no server process needed.
-  store = RunStore(cfg, asyncio.Lock(), ControlEventSink(SessionManager(cfg)),
-                   SessionAliasStore(cfg.sessions_dir))
+  store = RunStore(cfg, asyncio.Lock(), ControlEventSink(SessionManager(cfg)), SessionAliasStore(cfg.sessions_dir))
   run = store.read_run_sync(claims.session_id, claims.run_id)
   refusal = run_identity_refusal(run, store.load_events_sync(claims.session_id))
   if refusal is not None:
     print(f"error: {refusal}", file=sys.stderr)
     sys.exit(1)
-  meta = TaskTreeManager._read_metadata_file(
-      cfg.sessions_dir / claims.session_id / "metadata.json")
+  meta = TaskTreeManager._read_metadata_file(cfg.sessions_dir / claims.session_id / "metadata.json")
   if meta is None or meta.profile is None:
     print(
         f"error: run token references session {claims.session_id}, which is not a "
-        "task-tree node in this instance", file=sys.stderr)
+        "task-tree node in this instance",
+        file=sys.stderr)
     sys.exit(1)
   return "master" if meta.profile == "manager" else "worker"
 

@@ -409,8 +409,9 @@ def blocked_loop_summary(iteration: int, reason: str) -> str:
   payload and the v2 sequence's failed summary -- so the instruction to the
   reader cannot fork between them.
   """
-  return (f"Improve loop blocked on iteration {iteration}: {reason}. "
-          "No further iterations were spawned; decide whether to wait, switch backend, or relaunch.")
+  return (
+      f"Improve loop blocked on iteration {iteration}: {reason}. "
+      "No further iterations were spawned; decide whether to wait, switch backend, or relaunch.")
 
 
 async def reserve_loop_state(

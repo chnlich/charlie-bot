@@ -80,8 +80,7 @@ def stable_child_report_id(child_session_id: str, source_event_id: str, recipien
   The recipient is part of the identity: task_closed.report_to fixes delivery
   ownership at close time, so retries, recovery, and reparenting can never
   retarget or duplicate a historical report."""
-  return str(uuid.uuid5(
-      TASK_ID_NAMESPACE, f"child-report:{child_session_id}:{source_event_id}:{recipient_session_id}"))
+  return str(uuid.uuid5(TASK_ID_NAMESPACE, f"child-report:{child_session_id}:{source_event_id}:{recipient_session_id}"))
 
 
 def sha256_hex(text: str) -> str:
@@ -139,8 +138,7 @@ class ControlEventSink:
     try:
       await self._session_mgr.broadcast_task_tree_changed(session_id, event_type)
     except Exception:
-      log.exception("task_tree_changed_broadcast_failed", session_id=session_id,
-                    event_type=event_type)
+      log.exception("task_tree_changed_broadcast_failed", session_id=session_id, event_type=event_type)
 
   def load_events(self, session_id: str) -> list[dict]:
     """The session's parsed chat events (the durable fact stream control events ride)."""

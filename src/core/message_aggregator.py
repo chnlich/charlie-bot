@@ -283,24 +283,24 @@ def _scheduled_run_skipped_msg(ev: dict) -> dict:
 
 
 def _child_report_msg(ev: dict) -> dict:
-    """One child task's result report: summary, evidence refs, and its node link."""
-    outcome = ev.get("outcome", "")
-    return {
-        "role": ET.CHILD_REPORT,
-        "content": ev.get("summary", ""),
-        "child_session_id": ev.get("child_session_id", ""),
-        "outcome": outcome,
-        "result_refs": ev.get("result_refs") or [],
-    }
+  """One child task's result report: summary, evidence refs, and its node link."""
+  outcome = ev.get("outcome", "")
+  return {
+      "role": ET.CHILD_REPORT,
+      "content": ev.get("summary", ""),
+      "child_session_id": ev.get("child_session_id", ""),
+      "outcome": outcome,
+      "result_refs": ev.get("result_refs") or [],
+  }
 
 
 def _task_closed_msg(ev: dict) -> dict:
-    outcome = ev.get("outcome", "completed")
-    summary = ev.get("summary") or ""
-    return {
-        "role": "system",
-        "content": f"Task {outcome}: {summary}".rstrip(),
-    }
+  outcome = ev.get("outcome", "completed")
+  summary = ev.get("summary") or ""
+  return {
+      "role": "system",
+      "content": f"Task {outcome}: {summary}".rstrip(),
+  }
 
 
 def _task_delegated_msg(ev: dict) -> dict:
@@ -413,11 +413,12 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
         },
     ET.TASK_INPUT_ACKNOWLEDGED:
         lambda ev: {
-            "role": "system",
-            "content": (
-                f"Task input(s) acknowledged as handled: {', '.join(ev.get('input_ids') or [])}"
-                + (f" — {ev['note']}" if ev.get("note") else "")
-            ).rstrip(),
+            "role":
+                "system",
+            "content":
+                (
+                    f"Task input(s) acknowledged as handled: {', '.join(ev.get('input_ids') or [])}" +
+                    (f" — {ev['note']}" if ev.get("note") else "")).rstrip(),
         },
 }
 

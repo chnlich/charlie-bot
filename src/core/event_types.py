@@ -251,7 +251,6 @@ USAGE_CACHE_CREATION_INPUT_TOKENS = "cache_creation_input_tokens"
 # the resolver's usage dict reuses the name for the panel.
 RESULT_TOTAL_COST_USD = "total_cost_usd"
 
-
 # -- Shared event predicates -------------------------------------------------
 # One definition, two consumers: the takeoff authorization gate
 # (src/core/takeoff_gate.py) and the task-tree fold's input candidacy

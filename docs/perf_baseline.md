@@ -126,6 +126,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M115 cold config+credentials resolution, fresh process | M115 collector below | seconds per fresh-process shared import + `get_config()` + `get_credentials()` wall (the shape a server start, a config-cache-miss verb, and every config/credentials change round pay; a cache-hit CLI verb reads only the credentials half) | median < 0.25 s | 0.148-0.155 s (branch arm, 2026-09-24 landing; main arm read 0.155-0.167 s the same round) |
 | M116 ndjson whole-file parse, worst live chat file by event count | M116 collector below | seconds per `parse_ndjson_file` over the live chat file carrying the most events (the per-line plumbing's own corpus: the by-bytes worst file the M78 collector reads carries its wall in orjson's huge-line work, where a per-line cut is invisible — 507 lines across 1051 MB vs every regular session's thousands of small lines) | median < max(0.010 s, events × 0.0000060 s) (2.1x over the post-fix 2.7-2.9 µs/event measured per line, the same headroom convention the M72 walk line set — the line watches for a per-line cost class returning, not for the fix's own 8 % band) | — (introduced with its first history row) |
 | M118 raw-log tail-follow grown-line round cost | M118 collector below | seconds of drain wall + worst event-loop tick gap while a backend appends to one never-closing raw-log line (the runaway-write window — the on-disk worst raw log's 2.1 GB single line is the observed instance; the writer paces slower than the drain's poll interval, so each round sees one append) | wall median < 4.0 s (the collector's own 2.0 s write pacing plus the after band's ~0.9 s drain-and-exit work; the pre-fix copy-per-round shape reads 6.2-7.8 s and trips); max tick gap median < 0.15 s (the after band's 79-90 ms is the harness's own 128 MB page-cache write; the pre-fix ~1.0 s per-round copy+rescan trips) | — (introduced with its first history row) |
+| M119 sidebar root session-list serve | M119 collector below | seconds per request, worst projected-list corpus (the sidebar "All" pill fetch, `GET /api/sessions/`: every active session plus one projected worker-leaf row per legacy thread, the M71 snapshot corpus); the served shape is the identity-keyed whole-body memo (the search route's `_search_whole_body` mechanism) over the pre-dumped render (the M34 events-fetch repair's shape) with the body-keyed gzip memo — a regression to the response_model jsonable_encoder pass over every row, to a per-request re-render of an unchanged corpus, or to the middleware's whole-body deflate trips (the cron-collision bias the M56 history documents applies) | median < max(0.002 s, rows × 0.0000080 s) (the after band reads 4.8-5.8 µs/row over the projection walk plus the memo-serve render; the line sits ~1.4-1.7x over it, the same headroom convention the M72 walk line set) | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -1600,8 +1601,6 @@ from pathlib import Path
 sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
 from src.core.config import CharlieBotConfig
 from src.core.sessions import SessionManager
-from src.core.triggers import TriggerManager
-
 # Worst trigger corpus: the session whose triggers directory carries the most files.
 root = Path.home() / ".charliebot" / "sessions"
 best, best_n = None, -1
@@ -1706,7 +1705,7 @@ M18 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, hashlib, json, os, shutil, sys, tempfile, time
+import asyncio, gzip, hashlib, json, os, shutil, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from src.core.config import CharlieBotConfig
@@ -3164,7 +3163,7 @@ branch checkout (`CHECKOUT` at the worktree root), the same shape as the M18 pro
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, hashlib, json, os, shutil, sys, tempfile, time
+import asyncio, gzip, hashlib, json, os, shutil, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from src.core.config import CharlieBotConfig
@@ -8211,9 +8210,122 @@ shutil.rmtree(work, ignore_errors=True)
 EOF
 ```
 
+M119 — sidebar root session-list serve, steady state. The sidebar's "All" pill
+fetch (`GET /api/sessions/`) serves every active session plus one projected
+worker-leaf row per legacy thread — the projected shape the capped search
+serves, at the whole-corpus scale, and the shape every sidebar re-entry
+re-reads. The served path keys the whole body on the row identities plus
+overlay states (the search route's `_search_whole_body` mechanism), renders
+the rows once into pre-dumped bytes — the M34 events-fetch repair's shape,
+priced on the response_model jsonable_encoder pass the mapped return ran over
+every row — and ships the gzip form from a body-keyed memo, so a repeat of an
+unchanged body re-runs zero dumps and zero deflate (the _switch_gzip_memo
+mechanism). The cost is per-click latency invisible to the standing probes
+(M56 reads the status poll, M8 the absent-needle search), so the collector
+snapshots the M71 corpus (the manager's reads; the projection's thread reads
+resolve through the process config) and drives the route raw-ASGI behind the
+production gzip middleware — the browser's fetch always sends Accept-Encoding:
+gzip, so the body's deflate is part of the served shape — one cold pass, then
+nine timed requests, with a parsed-body digest so a corpus difference between
+arms cannot masquerade as a payload difference:
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, gzip, hashlib, json, os, shutil, sys, tempfile, time
+sys.path.insert(0, os.environ["CHECKOUT"])
+from pathlib import Path
+from fastapi import FastAPI
+from server import _CharlieBotGZipMiddleware
+import src.api.deps as deps
+from src.api.deps import get_session_manager
+from src.api.sessions import router as sessions_router
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+from src.core.triggers import TriggerManager
+
+# Sidebar corpus snapshot (the M71 corpus): every session's metadata.json, the
+# active sessions' live chat files, and every session's triggers/. Live home
+# read once for the copy, never written; removed on every exit path
+root = Path.home() / ".charliebot" / "sessions"
+home = Path(tempfile.mkdtemp(prefix="m119-list-home-", dir="/tmp"))
+try:
+    for d in root.iterdir():
+        meta_p = d / "metadata.json"
+        if not meta_p.is_file():
+            continue
+        try:
+            raw = json.loads(meta_p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        dst = home / "sessions" / d.name
+        dst.mkdir(parents=True)
+        shutil.copy2(meta_p, dst / "metadata.json")
+        if raw.get("status") == "active" and (d / "data" / "chat_events.jsonl").is_file():
+            (dst / "data").mkdir()
+            shutil.copy2(d / "data" / "chat_events.jsonl", dst / "data" / "chat_events.jsonl")
+        if (d / "triggers").is_dir():
+            shutil.copytree(d / "triggers", dst / "triggers")
+
+    cfg = CharlieBotConfig(charliebot_home=home)
+    mgr = SessionManager(cfg)
+    app = FastAPI()
+    app.include_router(sessions_router, prefix="/api/sessions")
+    app.dependency_overrides[get_session_manager] = lambda: mgr
+    app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
+
+    def scope():
+        return {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+                "http_version": "1.1", "method": "GET", "scheme": "http",
+                "path": "/api/sessions/", "raw_path": b"/api/sessions/", "query_string": b"", "root_path": "",
+                "headers": [(b"host", b"test"), (b"accept-encoding", b"gzip")],
+                "client": ("test", 123), "server": ("test", 80)}
+
+    async def drive():
+        body = b""
+        out = {"status": 0, "enc": b""}
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(msg):
+            nonlocal body
+            if msg["type"] == "http.response.start":
+                out["status"] = msg["status"]
+                out["enc"] = dict(msg.get("headers", [])).get(b"content-encoding", b"")
+            elif msg["type"] == "http.response.body":
+                body += msg.get("body", b"")
+
+        t0 = time.perf_counter()
+        await app(scope(), receive, send)
+        return time.perf_counter() - t0, body, out
+
+    async def main():
+        _, _, cold = await drive()  # cold pass, as at the first sidebar render after a server start; not timed
+        if cold["status"] != 200:
+            raise SystemExit(f"M119 FAILED, cold status {cold['status']}")
+        times, wire_body, out = [], None, None
+        for _ in range(9):
+            dt, wire_body, out = await drive()
+            times.append(dt)
+        if out["status"] != 200:
+            raise SystemExit(f"M119 FAILED, status {out['status']}")
+        times.sort()
+        wire, enc = len(wire_body), out["enc"]
+        decoded = gzip.decompress(wire_body) if enc == b"gzip" else wire_body
+        digest = hashlib.sha256(json.dumps(json.loads(decoded), sort_keys=True).encode()).hexdigest()[:12]
+        print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {len(json.loads(decoded))} rows, "
+              f"decoded {len(decoded)} B, wire {wire} B, enc {enc.decode() or 'identity'}, digest {digest}; "
+              f"list serve median {times[4] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms over 9")
+
+    asyncio.run(main())
+finally:
+    shutil.rmtree(home)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
+| 2026-09-25 | this PR | M119 list serve, introduced with this PR: median 2.90/2.85/2.72 → 0.71/0.74/0.61 ms (−73 % to −78 %), maxima 3.20-4.38 → 0.96-1.02 ms, every paired round faster over three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back at load 1.5-4.1 one-minute, 128 projected rows (52 active sessions, 35 legacy parents carrying the leaf fan-out), decoded 248203-248392 B, wire 42347-42461 B, digest stable within every arm; the parsed body stays pinned equal to the response-model render of the stamped-copy path (the test_list_ships_precompressed_body parity witness, jsonable_encoder equality) and the whole-body memo serves an unchanged corpus with zero re-renders (test_list_repeat_serves_whole_body_without_rerender) | the route returned the projected list through response_model — the jsonable_encoder pass over every row plus the stdlib render measured ~1.8-2.2 ms of the ~2.9 ms wall, and the per-request model copies broke every downstream identity memo, so the leaf rows rebuilt and no whole-body memo could serve; the route now reads the shared cached refs through list_sessions_readonly (plan-approval key added), overlays the six derived fields at render, and keys the whole body on the row identities plus overlay states — a repeat of an unchanged corpus runs zero dumps, and the gzip form rides the body-keyed memo beside the search route's |
 | 2026-09-25 | this PR | M98 memory query wall median 0.089/0.087/0.088 → 0.057/0.056/0.057 s, −35 % to −36 %, maxima 0.093/0.089/0.092 → 0.068/0.058/0.059 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, live store read-only, load 1.50-2.74 one-minute; component attribution, cProfile of a fresh `memory query --index` process on the before arm: src.cli.memory module exec 60 ms of the 71 ms wall, `asyncio/__init__` 42 ms cumulative inside it, the query work itself ~1 ms); no-regression witnesses: the run-token resolution suite (tests/test_memory_run_query.py + tests/test_memory_store.py, 70 passed), the import-weight contract now banning asyncio from the memory chain (20 passed), the three verbs exercised — query against the live store read-only, add and lint against a scratch CHARLIEBOT_HOME — and the 6511-passed suite (17 skipped) | the module-level `import asyncio` served only `_resolve_run_scoped_audience`'s `asyncio.Lock()` — the run-token path's one consumer — while query/add/lint, the verbs the cron instructions and master turns issue on demand, paid its ~40 ms (asyncio plus the concurrent.futures and logging chain it drags) on every invocation; the import moves beside the run-token path's other deferred imports (the file's get_config deferral shape), putting the read wall at the 09-24 verb-wall band the M92 collector prices (0.033-0.047 s floor plus the memory chain's own ~20 ms), and the healthy range keeps its 0.30 s line |
 | 2026-09-25 | this PR | M44 served /scheduled median 1.72/1.66/1.65 → 1.00/0.98/1.01 ms over three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back at load 1.43-1.72 one-minute, 54 scheduled rows, wire 5842 B, decoded 76290 B, digest 0c4db57e2401 identical across all six arms, every paired round faster (−0.63 to −0.72 ms, −37 % to −41 %), maxima 1.89-2.79 → 1.30-1.93 ms; no-regression witnesses interleaved ×3, every body digest identical: M63 /view handler 0.52-0.53 → 0.48-0.60 ms (max 3.90 → 1.43-1.94 ms, body 126327 B), M36 full poll 0.55-0.59 → 0.57-0.68 ms (digest afdaf4098821), M71 capped search 2.54-2.64 → 2.48-2.55 ms (digest df1a38cbf819); 6502-passed suite | the poll rebuilt every payload row per request although the projection's row memos pin each leaf object across requests: the parents arrived as per-request model_copy rows, so the projection memo's parent identity check missed every request and the fan-out rebuilt all 43 leaves plus their dumps, and the view-rows sweep walked 510 µs on the calling poll (90 % of the fan-out's wall over 600 gated calls). The route now lists shared cache references (list_sessions_readonly, the derived state riding alongside instead of stamped onto copies) and overlays derived, thinking, and schedule fields onto the dumped dicts — the same keys in the model's field order, byte-identical render — so the leaf payloads serve from the pinned objects; the countdown's insurance sweep runs detached single-flight (the sidebar sweep's semantics, its fresh proof landing for the following polls), off the collector's 10-call window: the quoted cut is the readonly+memo rework alone, the sweep's −0.6 ms amortized share lands on the live continuous polls |
 | 2026-09-25 | this PR | M118 grown-line round cost, introduced with this PR: 8 × 128 MB appends to one never-closing raw-log line (1 GB tail) read drain wall 6.16/6.15/7.83 → 2.93/2.94/2.93 s (−52 % to −62 %) and max loop tick gap 987/1017/995 → 79/90/80 ms (−91 % to −92 %) over three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back (load 1.4-2.4 one-minute, a sibling cron sweeping throughout); the M84 standing collector rode along as the no-regression witness: tail-follow replay median 5924.9 ms (main) vs 5999.9 ms (branch), stdout-stream 6609.1 vs 6599.2 ms, parity divergences 0 both arms (the single-round replay's giant-line parse is untouched); 14 stream-parse and silence-recheck tests passed, full suite in the landing run | the drain copied the whole unclosed tail into `carry` and re-scanned it from the line's first byte on every poll round, so a runaway write's per-round cost grew with the tail while the writer appended — the on-disk 2.1 GB single-line raw log documents the shape; writers only append, so the region a previous round's find proved newline-free stays newline-free and the scan resumes at the round watermark, and the torn-tail warning's bytes read once at follow end instead of riding every round |

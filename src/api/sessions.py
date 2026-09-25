@@ -387,20 +387,63 @@ async def project_worker_threads(
   return out
 
 
-@router.get("/", response_model=list[SessionMetadata])
+@router.get("/")
 async def list_sessions(
+    request: Request,
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
-) -> list[SessionMetadata]:
-  sessions = await session_mgr.list_sessions(
+) -> Response:
+  """List active sessions newest first, each legacy row followed by its worker-leaf rows."""
+  global _sessions_list_whole_body
+  rows, derived = await session_mgr.list_sessions_readonly(
       status=SessionStatus.ACTIVE,
       scheduled=False,
       include_running_status=True,
       include_pending_trigger_status=True,
       include_pending_plan_approval=True,
   )
-  return await project_worker_threads(sessions, cfg, thread_mgr)
+  projected = await project_worker_threads(rows, cfg, thread_mgr)
+  # The readonly rows and the memoized leaves are identity-stable across
+  # requests, so the rendered body keys on the row identities plus the overlay
+  # states: a repeat of an unchanged corpus re-runs zero dumps (the search
+  # route's whole-body memo mechanism) and a reloaded meta or moved overlay
+  # state re-renders. A worker_thread row's fields are construction-fixed, so
+  # only the parent rows carry overlay state.
+  rendered: list[tuple[SessionMetadata, tuple]] = []
+  for row in projected:
+    if row.worker_thread is not None:
+      rendered.append((row, ()))
+      continue
+    entry = derived[row.id]
+    thinking = thinking_state.busy_since(row.id)
+    next_trigger = entry[sidebar_state.NEXT_TRIGGER_AT]
+    rendered.append((row, (
+        thinking.isoformat() if thinking else None,
+        entry[sidebar_state.HAS_RUNNING_TASKS],
+        entry[sidebar_state.HAS_PENDING_TRIGGER],
+        entry[sidebar_state.PENDING_TRIGGER_COUNT],
+        next_trigger.isoformat() if next_trigger else None,
+        entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL])))
+  list_rows = tuple(row for row, _s in rendered)
+  list_states = tuple(state for _row, state in rendered)
+  cached = _sessions_list_whole_body
+  if (cached is not None and len(cached[0]) == len(list_rows) and
+      all(c is r for c, r in zip(cached[0], list_rows, strict=True)) and
+      cached[1] == list_states):
+    return await gzip_body_response(request, cached[2], {}, _sessions_list_gzip_memo)
+  payload = []
+  for row, state in zip(list_rows, list_states, strict=True):
+    dump = row.model_dump(mode="json")
+    if state:
+      (dump["thinking_since"], dump["has_running_tasks"], dump["has_pending_trigger"],
+       dump["pending_trigger_count"], dump["next_trigger_at"], dump["has_pending_plan_approval"]) = state
+    payload.append(dump)
+  body = fast_json_bytes(payload)
+  _sessions_list_whole_body = (list_rows, list_states, body)
+  # The Response return skips response_model's jsonable_encoder pass over every
+  # projected row; the body-keyed memo serves the middleware's deflate.
+  return await gzip_body_response(request, body, {}, _sessions_list_gzip_memo)
 
 
 @router.post("/", response_model=SessionMetadata)
@@ -1033,6 +1076,20 @@ _switch_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SWITCH_GZIP_MEMO_LIM
 async def _switch_payload_response(request: Request, payload: dict | list) -> Response:
   """Render a request-path payload once and serve its gzip form from the body-keyed memo."""
   return await gzip_body_response(request, fast_json_bytes(payload), {}, _switch_gzip_memo)
+
+
+# The sidebar's root list (GET /api/sessions/) also rebuilds its payload per
+# request — the projected rows are fresh model copies, so unlike the search
+# route there is no row identity to key a whole-body memo on — and the rendered
+# body bytes are their own invalidation ground, the _switch_gzip_memo
+# mechanism. The limit covers one steady-state body per open tab.
+_SESSIONS_LIST_GZIP_MEMO_LIMIT = 4
+_sessions_list_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SESSIONS_LIST_GZIP_MEMO_LIMIT)
+
+
+# One steady-state whole-body slot beside the gzip memo: the search route's
+# _search_whole_body mechanism. The slot is only ever replaced whole.
+_sessions_list_whole_body: tuple[list[SessionMetadata], tuple, bytes] | None = None
 
 
 @router.get('/{session_id}/view')

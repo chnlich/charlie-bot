@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_ID, make_home_config
+from conftest import OPUS_BACKEND_ID, build_env
 
 from src.core.control_events import sha256_hex
 from src.core.memory import (
@@ -26,7 +26,6 @@ from src.core.memory import (
 )
 from src.core.models import PatchSessionTaskRequest, TaskSpec
 from src.core.run_token import CallerIdentity
-from src.core.sessions import SessionManager
 from src.core.task_prompts import (
     PromptSnapshot,
     TaskPromptError,
@@ -39,12 +38,6 @@ from src.core.task_sessions import TaskTreeManager
 pytestmark = pytest.mark.asyncio
 
 OPERATOR = CallerIdentity(kind="operator")
-
-
-def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:
-  cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
-  return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
 
 
 async def create_task(mgr: TaskTreeManager, *, parent: str | None, profile: str = "manager",

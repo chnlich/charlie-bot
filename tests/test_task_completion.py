@@ -8,12 +8,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from conftest import make_home_config
+from conftest import build_env
 
 from src.core import event_types as ET
 from src.core.models import PatchSessionTaskRequest, RunRecord, TaskSpec
 from src.core.run_token import CallerIdentity, RunTokenClaims, sign_run_token
-from src.core.sessions import SessionManager
 from src.core.task_completion import CompletionEvidence, LandingEvidence
 from src.core.task_sessions import (
   TaskConflictError,
@@ -32,12 +31,6 @@ def live_identity() -> tuple[int, str, datetime]:
   pair = read_pid_stat(proc.pid)
   assert pair is not None
   return proc.pid, pair[0], datetime.now(UTC)
-
-
-def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:
-  cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
-  return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
 
 
 async def create_task(tree: TaskTreeManager, *, parent: str | None, request_id: str,

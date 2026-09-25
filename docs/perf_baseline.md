@@ -158,7 +158,7 @@ tracked or untracked, which `switch` would otherwise carry silently — exits be
 and a diverged checkout fails the `--ff-only` merge. The restore runs only on a clean tree, where
 it cannot discard a sibling's work; the branch keeps its commits.
 
-Each collector's scratch copy under /tmp is removed by the block that finishes with it, on every exit path: the hourly cadence turns a skipped removal into one leaked copy per round, tmpfiles reaps /tmp only past 30 days, and the leak compounds on the root fs that holds every collector's corpus.
+The whole-corpus scratch copies (the M35/M55/M70/M71 pair consumers and the M66/M84 builders) are removed by the block that finishes with them, on every exit path: the hourly cadence turns a skipped removal into one leaked copy per round, tmpfiles reaps /tmp only past 30 days, and the leak compounds on the root fs that holds every collector's corpus.
 
 M1 — host load and serve CPU. The grep covers both process shapes the serving path runs: the
 server's own launcher chain (`scripts/start-server.sh` → `uv run python3 server.py` wrapper →
@@ -4636,9 +4636,9 @@ if best is None:
     raise SystemExit(0)
 print(f"worst build corpus: {best}, {best_n / 1e6:.1f} MB")
 
+work = Path(tempfile.mkdtemp(prefix="m66-merge-"))
+out = work / "merged.json.gz"
 try:
-    work = Path(tempfile.mkdtemp(prefix="m66-merge-"))
-    out = work / "merged.json.gz"
     merge_traces([best], out, slim=False)  # cold pass, as at the first view of a corpus; not timed
     times = []
     for _ in range(3):

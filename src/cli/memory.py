@@ -130,14 +130,14 @@ def _resolve_run_scoped_audience(cfg: CharlieBotConfig, token: str) -> str:
   A wrong-instance token names a session this home's sessions directory has
   never heard of, which is the same visible unknown-run refusal.
   """
-  from src.core.config import get_credentials
+  from src.core.config import configured_access_key
   from src.core.control_events import ControlEventSink
   from src.core.run_token import RunTokenError, verify_run_token
   from src.core.runs import RunStore, run_identity_refusal
   from src.core.session_aliases import SessionAliasStore
   from src.core.sessions import SessionManager
   from src.core.task_sessions import TaskTreeManager
-  key = str(get_credentials().get("charliebot", "access_key") or "")
+  key = configured_access_key()
   if not key:
     print("error: run token presented but no signing key is configured", file=sys.stderr)
     sys.exit(1)

@@ -49,7 +49,7 @@ from src.agents.worker import QuotaExhaustedError, Worker
 from src.core import claude_relay, git, review, runs, task_prompts
 from src.core import event_types as ET
 from src.core.chat_events import chat_events_path
-from src.core.config import CharlieBotConfig, get_credentials
+from src.core.config import CharlieBotConfig, configured_access_key
 from src.core.constants import SESSION_ID_ENV_VAR, BackendType
 from src.core.control_events import sha256_hex, stable_run_id
 from src.core.log_once import LazyStructlogLogger
@@ -592,7 +592,7 @@ class TaskExecutionAdapter:
         selected home so the child CLI resolves this instance's config,
         credentials and server address.
         """
-        key = str(get_credentials().get("charliebot", "access_key") or "")
+        key = configured_access_key()
         if not key:
             raise RuntimeError(
                 "run-token signing requires credentials.yaml charliebot.access_key; "
@@ -1665,7 +1665,7 @@ async def prepare_tui_task_launch(
             atomic_write_text, snapshot_path,
             json.dumps(snapshot.to_json_dict(), indent=2, ensure_ascii=False))
         await tree.runs.record_observation(session_id, run_id, prompt_snapshot_ref=str(snapshot_path))
-        key = str(get_credentials().get("charliebot", "access_key") or "")
+        key = configured_access_key()
         if not key:
             raise RuntimeError(
                 "run-token signing requires credentials.yaml charliebot.access_key; "

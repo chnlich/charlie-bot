@@ -255,9 +255,8 @@ def test_upload_with_transcript_needs_no_speech_model_readiness(
   assert [p.read_text(encoding="utf-8") for p in voice_dir.glob("*.txt")] == ["relay words"]
 
 
-def test_upload_transcript_log_line_carries_the_backend(
-    voice_env: tuple[TestClient, CharlieBotConfig, list[bytes]], monkeypatch: pytest.MonkeyPatch) -> None:
-  client, _cfg, _decoded = voice_env
+def _record_voice_log(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict]]:
+  """Capture the voice endpoints' log lines as (event, fields) pairs."""
   events: list[tuple[str, dict]] = []
 
   class _Recorder:
@@ -265,28 +264,50 @@ def test_upload_transcript_log_line_carries_the_backend(
       events.append((event, fields))
 
   monkeypatch.setattr(voice, "log", _Recorder())
+  return events
+
+
+def test_upload_transcript_logs_backend_and_selected_backend_from_the_form(
+    voice_env: tuple[TestClient, CharlieBotConfig, list[bytes]], monkeypatch: pytest.MonkeyPatch) -> None:
+  # The relay produced this text, so the form's backend is both the producer the
+  # log names and the selection it echoes.
+  client, _cfg, _decoded = voice_env
+  events = _record_voice_log(monkeypatch)
   response = client.post(
       "/api/voice/session-a", **_upload_parts(48_000, {"transcript": "relay words", "backend": "gemini"}))
 
   assert response.status_code == 200
   assert events[0][0] == "voice_transcribed"
   assert events[0][1]["backend"] == "gemini"
+  assert events[0][1]["selected_backend"] == "gemini"
 
 
-def test_upload_without_transcript_logs_no_backend(
+def test_upload_local_decode_logs_local_backend_with_the_selected_backend(
     voice_env: tuple[TestClient, CharlieBotConfig, list[bytes]], monkeypatch: pytest.MonkeyPatch) -> None:
+  # The browser selected gemini but no transcript rode the form, so the server
+  # decoded: the producer is the local backend while the selection stays recorded.
   client, _cfg, _decoded = voice_env
-  events: list[tuple[str, dict]] = []
+  events = _record_voice_log(monkeypatch)
+  response = client.post("/api/voice/session-a", **_upload_parts(48_000, {"backend": "gemini"}))
 
-  class _Recorder:
-    def info(self, event: str, **fields: object) -> None:
-      events.append((event, fields))
+  assert response.status_code == 200
+  assert events[0][0] == "voice_transcribed"
+  assert events[0][1]["backend"] == "local"
+  assert events[0][1]["selected_backend"] == "gemini"
 
-  monkeypatch.setattr(voice, "log", _Recorder())
+
+def test_upload_local_decode_without_a_selection_logs_local_backend_and_none(
+    voice_env: tuple[TestClient, CharlieBotConfig, list[bytes]], monkeypatch: pytest.MonkeyPatch) -> None:
+  # No transcript and no backend on the form: the server decoded and the browser
+  # named no backend, so the selection field is None.
+  client, _cfg, _decoded = voice_env
+  events = _record_voice_log(monkeypatch)
   response = client.post("/api/voice/session-a", **_upload_parts(48_000))
 
   assert response.status_code == 200
-  assert events[0][1]["backend"] is None  # today's decode path names no backend
+  assert events[0][0] == "voice_transcribed"
+  assert events[0][1]["backend"] == "local"
+  assert events[0][1]["selected_backend"] is None
 
 
 def test_upload_with_transcript_rejects_a_bad_wav_before_persisting(

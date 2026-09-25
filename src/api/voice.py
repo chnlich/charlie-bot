@@ -72,19 +72,32 @@ async def upload_voice_recording(
   body ever enforced), ``transcript`` is optional — its presence means the
   preview relay already transcribed this recording, so the .txt is written
   verbatim, the decode is skipped, and no speech-model readiness is needed — and
-  ``backend`` names the transcription backend for the voice_transcribed log line.
+  ``backend`` names the backend the browser selected. The voice_transcribed log
+  line records ``backend``, the producer of the persisted text — the form's
+  ``backend`` when the transcript rides along, the local backend's id when the
+  server decoded it — and ``selected_backend``, the form's ``backend`` exactly
+  as sent, None when absent.
   """
   try:
     pcm_bytes = _wav_body_to_pcm(await audio.read(), _full_max_samples())
     if transcript is None:
+      # The server decoded this recording, so the local backend produced the
+      # persisted text; its id comes from the class, not a fresh literal. Lazy
+      # import: the module sits on `import server`'s ban list (SERVER_HEAVY_MODULES
+      # in tests/test_cli_import_weight.py).
+      from src.agents.transcription.local import LocalTranscriptionBackend
+
       # The bundle comes first so models-not-ready (503) persists nothing — the client
       # keeps its buffer and retries, and no orphan wav piles up per retry.
       bundle = await _speech_bundle()
       audio_path = await asyncio.to_thread(_persist_voice_audio, get_config(), session_id, pcm_bytes)
       text = await _transcribe_with_bundle(session_id, bundle, pcm_bytes)
+      produced_by = LocalTranscriptionBackend.id
     else:
       audio_path = await asyncio.to_thread(_persist_voice_audio, get_config(), session_id, pcm_bytes)
       text = transcript
+      # The relay already produced this text under the backend the browser selected.
+      produced_by = backend
   except _VoiceRequestError as exc:
     # A decode failure (500) leaves the wav on disk: persist-before-decode means the
     # recording survives every later failure.
@@ -97,7 +110,8 @@ async def upload_voice_recording(
       audio_bytes_size=len(pcm_bytes),
       transcription_length=len(text),
       transcription_preview=text[:80],
-      backend=backend,
+      backend=produced_by,
+      selected_backend=backend,
   )
   return FastJsonResponse({"text": text})
 

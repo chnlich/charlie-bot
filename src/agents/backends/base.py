@@ -451,7 +451,7 @@ async def tail_follow_events(
       # log's writers only ever append (a rotated log moves to an inode the
       # open fd never sees); a writer that truncated the mapped file would
       # SIGBUS the drain, the contract parse_ndjson_file's mapping states.
-      carry = b""
+      tail_start = start_offset
       read_to = start_offset
       while True:
         size = os.fstat(f.fileno()).st_size
@@ -466,7 +466,12 @@ async def tail_follow_events(
             view = memoryview(mm)
             pos = offset
             while True:
-              nl = mm.find(b"\n", pos)
+              # Writers only append, so the region a previous round's find
+              # proved newline-free ([pos, read_to)) stays newline-free; the
+              # scan resumes at read_to and an unclosed line's grown body is
+              # never rescanned — a runaway write's per-round cost stays
+              # linear in the appended bytes, not in the whole tail.
+              nl = mm.find(b"\n", max(pos, read_to))
               if nl < 0:
                 break
               # The line rides a zero-copy view: orjson parses straight from
@@ -526,7 +531,7 @@ async def tail_follow_events(
                     last_growth = time.monotonic()
               if cursor_writer is not None:
                 cursor_writer.write(offset)
-            carry = bytes(view[pos:])
+            tail_start = pos
             read_to = len(mm)
           finally:
             del view
@@ -547,10 +552,15 @@ async def tail_follow_events(
           await on_silence()
         await asyncio.sleep(poll_interval)
 
-      if carry.strip():
-        # Dropping it makes a restart replay the run's tail as at most a
-        # duplicate — never a loss.
-        log.warning("raw_trailing_torn_line_dropped", bytes=len(carry))
+      if tail_start < read_to:
+        # The trailing partial's bytes, read once at follow end from the still
+        # -open fd — a per-round copy would re-materialize the whole tail on
+        # every poll. Dropping it makes a restart replay the run's tail as at
+        # most a duplicate — never a loss.
+        f.seek(tail_start)
+        carry = f.read(read_to - tail_start)
+        if carry.strip():
+          log.warning("raw_trailing_torn_line_dropped", bytes=len(carry))
 
   finally:
     if cursor_writer is not None:

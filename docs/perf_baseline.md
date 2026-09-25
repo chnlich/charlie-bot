@@ -125,6 +125,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M114 backend-launch spawn loop stall, big-heap shape | M114 collector below | seconds of event-loop stall per backend spawn through the checkout's spawn seam, both production shapes (the fork's page-table copy scales with the forking process's resident set — the collector inflates a 3.5 GB heap to the server's standing RSS class first; raw-log shape preexec-free, piped shape through the pdeathsig spawn seam's clone(CLONE_VM|CLONE_VFORK) path) | raw-log shape loop-lag median < 0.020 s (the M75 loop-lag line); piped shape < 0.020 s (re-tightened from < 0.150 s: the child-side-prctl follow-up landed — the vfork seam's clone(CLONE_VM|CLONE_VFORK) spawn skips the page-table copy the preexec fork pays, the after reading sits at the 5 ms ticker floor like the raw-log line; a regression to the thread-fork's ~110 ms shape trips it 20×) | — (introduced with its first history row) |
 | M115 cold config+credentials resolution, fresh process | M115 collector below | seconds per fresh-process shared import + `get_config()` + `get_credentials()` wall (the shape a server start, a config-cache-miss verb, and every config/credentials change round pay; a cache-hit CLI verb reads only the credentials half) | median < 0.25 s | 0.148-0.155 s (branch arm, 2026-09-24 landing; main arm read 0.155-0.167 s the same round) |
 | M116 ndjson whole-file parse, worst live chat file by event count | M116 collector below | seconds per `parse_ndjson_file` over the live chat file carrying the most events (the per-line plumbing's own corpus: the by-bytes worst file the M78 collector reads carries its wall in orjson's huge-line work, where a per-line cut is invisible — 507 lines across 1051 MB vs every regular session's thousands of small lines) | median < max(0.010 s, events × 0.0000060 s) (2.1x over the post-fix 2.7-2.9 µs/event measured per line, the same headroom convention the M72 walk line set — the line watches for a per-line cost class returning, not for the fix's own 8 % band) | — (introduced with its first history row) |
+| M118 raw-log tail-follow grown-line round cost | M118 collector below | seconds of drain wall + worst event-loop tick gap while a backend appends to one never-closing raw-log line (the runaway-write window — the on-disk worst raw log's 2.1 GB single line is the observed instance; the writer paces slower than the drain's poll interval, so each round sees one append) | wall median < 4.0 s (the collector's own 2.0 s write pacing plus the after band's ~0.9 s drain-and-exit work; the pre-fix copy-per-round shape reads 6.2-7.8 s and trips); max tick gap median < 0.15 s (the after band's 79-90 ms is the harness's own 128 MB page-cache write; the pre-fix ~1.0 s per-round copy+rescan trips) | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -8114,9 +8115,86 @@ print(f"{best_n} events / {path.stat().st_size / 1e6:.1f} MB worst live chat fil
 EOF
 ```
 
+M118 — raw-log tail-follow grown-line round cost. The runaway-write shape: a backend appends
+to one line that never closes, so every poll round the drain re-examines the whole unclosed
+tail. The writer paces slower than the drain's poll interval (one append per round), the ticker
+reads the event loop's worst gap the same way M14/M114 do, and the tail read stays bounded by
+the window's scratch file (live home never touched):
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, shutil, sys, tempfile, threading, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.agents.backends.base import tail_follow_events
+
+CHUNK = 128 * 1024 * 1024
+ROUNDS = 8
+
+work = Path(tempfile.mkdtemp(prefix="m118-tail-", dir="/tmp"))
+raw = work / "agent.raw.ndjson"
+raw.write_bytes(b'{"type": "context", "blob": "')
+writer_done = threading.Event()
+stop = threading.Event()
+chunk = b"x" * CHUNK  # built once: a per-round build would ride the writer's alloc, not the drain's cost
+
+def writer():
+    with raw.open("ab") as f:
+        for _ in range(ROUNDS):
+            if stop.is_set():
+                return
+            f.write(chunk)
+            time.sleep(0.25)
+    writer_done.set()
+
+async def main():
+    lag = []
+    done = threading.Event()
+    last = time.perf_counter()
+
+    def ticker():
+        nonlocal last
+        while not done.is_set():
+            time.sleep(0.005)
+            now = time.perf_counter()
+            lag.append(now - last)
+            last = now
+
+    wt = threading.Thread(target=writer, daemon=True)
+    tt = threading.Thread(target=ticker, daemon=True)
+    count = 0
+
+    def translate(event):
+        nonlocal count
+        count += 1
+        return [event]
+
+    t0 = time.perf_counter()
+    tt.start()
+    wt.start()
+    async for _ in tail_follow_events(
+        raw, translate=translate, is_alive=lambda: not writer_done.is_set(),
+        post_result_timeout=60.0,
+    ):
+        pass
+    wall = time.perf_counter() - t0
+    done.set()
+    tt.join()
+    wt.join()
+    lag.sort()
+    print(f"{ROUNDS} x {CHUNK // (1 << 20)} MB appends to one unclosed line "
+          f"({ROUNDS * CHUNK / 1e6:.0f} MB tail): drain wall {wall:.2f} s, "
+          f"max loop tick gap {lag[-1] * 1000:.0f} ms, events {count}")
+
+asyncio.run(main())
+shutil.rmtree(work, ignore_errors=True)
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
+| 2026-09-25 | this PR | M118 grown-line round cost, introduced with this PR: 8 × 128 MB appends to one never-closing raw-log line (1 GB tail) read drain wall 6.16/6.15/7.83 → 2.93/2.94/2.93 s (−52 % to −62 %) and max loop tick gap 987/1017/995 → 79/90/80 ms (−91 % to −92 %) over three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back (load 1.4-2.4 one-minute, a sibling cron sweeping throughout); the M84 standing collector rode along as the no-regression witness: tail-follow replay median 5924.9 ms (main) vs 5999.9 ms (branch), stdout-stream 6609.1 vs 6599.2 ms, parity divergences 0 both arms (the single-round replay's giant-line parse is untouched); 14 stream-parse and silence-recheck tests passed, full suite in the landing run | the drain copied the whole unclosed tail into `carry` and re-scanned it from the line's first byte on every poll round, so a runaway write's per-round cost grew with the tail while the writer appended — the on-disk 2.1 GB single-line raw log documents the shape; writers only append, so the region a previous round's find proved newline-free stays newline-free and the scan resumes at the round watermark, and the torn-tail warning's bytes read once at follow end instead of riding every round |
 | 2026-09-25 | this PR | M81 repeat re-render, introduced with this PR: the same page rebuilt into fresh elements — the session re-entry shape — reads repeat median 16.35/16.71/14.10/16.16/16.90 → 3.09/3.26/4.21/2.75/5.46 ms over five interleaved rounds of the verbatim collector (main checkout before vs branch worktree after back-to-back, load 0.43-0.99 one-minute), −68 % to −83 %, every paired round faster, repeat parity (byte-identity against the cold walk) true every round; the standing cold reading moves 25.88-29.23 → 27.83-31.33 ms (the duplicated gated body's walked-bytes swap replaces its warm re-walk plus the pair store's reads — both arms far inside the 60 ms line, and the walked count the gate watches reads 2 both arms; the cold pass's walk count reads 4 → 2 as the duplicate serves the swap); streamed math-free draft arm unchanged 0 walks / 0.00 ms inside its < 0.010 s line; no-regression witnesses interleaved ×2: M33 replay wall median 0.037-0.038 s both arms, parity true every arm; M54 paint-work median 0.086-0.098 → 0.089-0.094 s, parity true; M60 repeat-page 0.01 ms both arms, parity true; M106 switch repaint 0.40-0.42 → 0.39-0.41 ms, parity true; 43-passed node suites including the new 9-case walked-bytes memo suite registered in _NODE_TESTS, 6473-passed Python suite with the 20 vfork/antigravity failures pre-existing in this venv (CI-only), ruff and yapf clean | every session re-entry, page-depth change, and recap rebuild re-ran the KaTeX walk over every unchanged delimiter-bearing body — the parse memo made the marked parse free on re-entry but never the walk, and the 2026-09-16 row had priced the two direct alternatives against the standing contracts (the walked HTML's jsdom innerHTML re-parse costs 23.2-23.8 ms per body — no cheaper than the walk — and baking katex into the parse memo blind breaks M60's settled-bytes-equal-direct-parse parity) and stopped; the walk's output is a pure function of the body's pre-walk HTML, so renderChatMath now keeps the (pre, walked) pair per body source keyed on the same string the parse memo keys on (data-raw decodes back to it) and the walk upgrades the parse entry to the walked bytes — the next render is born walked and skips even the swap, the element-bytes identity check keeps foreign markup out of the parse entry, the flush settle swaps the plain block in both halves so the pair stays settled, and the streamed paint stays off the cache (its HTML grows every delta — the eviction shape); M60's collector never walks, so its parity contract is untouched — re-read parity true both arms |
 | 2026-09-24 | this PR | M92/M97/M98/M102 CLI verb walls, argparse's `_colorize` import priced out of the piped arm: M92 `schedule-trigger --help` 46.9/46.7/46.7/48.0/53.9 → 34.1/34.0/34.5/33.4/38.0 ms (−26 % to −30 %), M97 `plan list` 74.4/69.5/69.2/71.2/68.0 → 62.4/59.6/54.2/54.3/54.4 ms (−14 % to −24 %), M98 `memory query` 51.5/51.6/54.0/54.9/55.6 → 48.8/47.5/50.2/50.1/55.6 ms (−5 % to −9 %, one tie), M102 `artifact wrap` 54.1/56.4/54.2/56.4/51.2 → 41.2/39.8/42.5/40.0/36.2 ms (−22 % to −29 %) over five interleaved rounds of the verbatim collectors — main checkout before vs branch worktree after back-to-back, ABBA arm order inside each round, 7-run medians per arm per round; component attribution (importtime, one verb process): `_colorize` 11.7 ms cumulative — its own 4.0 ms plus the dataclasses→inspect chain 7.4 ms it drags — reached through `HelpFormatter._set_color`'s function-level import at the parser's first formatter construction; the M98 residual is `src/core/memory.py`'s own module-scope `dataclass` use (7.5 ms), a real import the memory entry model needs; byte-identity checked across nine env shapes (plain pipe, FORCE_COLOR, NO_COLOR, PYTHON_COLORS=0/1, TERM=dumb, and combinations) × six commands plus a real-TTY `script` round (both arms ride the stock colorized path there) — every digest pair equal; no-regression witnesses interleaved: M99 `import server` 544.6-548.8 → 541.9-548.5 ms (band), M115 fresh config+credentials 146.2-159.2 → 146.1-148.4 ms (band), M108 claude-sub launch floor 76.9-77.6 → 76.1-77.6 ms (band — manual argv, no parser); 6077-passed suite plus 9 skipped with the 21 vfork/antigravity failures pre-existing on branch worktrees in this venv (the compiled _vfkspawn stub is CI-only — the M116 row's documented set); ruff and yapf clean, 2 new tests (the piped-render ban and the stock-theme byte parity) plus the `_colorize` ban riding the parser-build set | argparse's first formatter construction calls `_set_color`, whose function-level `from _colorize import ...` prices every fresh-process verb even when it never renders help; the shared CliHelpFormatter now reproduces the two arms itself — the colorized arm delegates to the stock method (real import, real decision), the piped arm installs the empty theme without importing (the stock no-color theme is every style field set to "", so any attribute read renders empty in both), and the colorization decision mirrors `_colorize.can_colorize` on POSIX with the colorized arm re-deciding through the stock path, so a mirror drift costs only cosmetic color, never bytes |
 | 2026-09-24 | this PR | M116 whole-file parse, introduced with this PR: worst live chat file (20534 events / 22.4 MB) parse median 61.08/60.99/61.02/61.60/60.72/62.12/63.12 → 57.32/57.79/58.67/57.13/56.14/57.45/57.01 ms over seven interleaved rounds of the verbatim collector — main checkout before vs branch worktree after, ABBA arm order inside each round so the host's second-position bias cancels where it lands, every paired round faster (−2.35 to −6.11 ms, −3.7 % to −9.7 %, median −4.5 ms / −7.3 %), 12-call medians per arm per round, the parsed events' identity digest b0492b35024f identical in every arm that checked it (17 of the 28 runs); component attribution (in-process, one 20534-event corpus): the middle generator layer ~5.5 ms — iter_ndjson_events's wrapper exists for the early-stop readers, and a read-everything consumer pays one generator resume per line for nothing — and the per-line parse call chain (kwargs plus the str-first isinstance pair on an all-memoryview stream) ~6.6 ms; no-regression re-measures on the branch: M78's own corpora chat 3281.4/3350.2 → 3228.2/3251.2 ms and worker log 38.9/39.3 → 37.1/39.1 ms over two ABBA rounds (the 507-line / 232-line shapes carry their wall in orjson's work, the per-line cut invisible, as the M116 definition states); 6095-passed suite plus 9 skipped with the one load-sensitive fork-parks failure the 2026-09-24 M115 row documents (11/11 passed alone on both checkouts); ruff and yapf clean | the whole-file parse read every line through two generator frames and constructed a fresh `memoryview(mm)` wrapper per line before slicing it — the wrapper's laziness serves only the early-stop readers (tail, range, the M13 window), which keep it; the read-everything consumer now walks the mapping's lines directly with the skip contract still single-homed in `parse_ndjson_line`, and `_iter_mmap_lines` slices one hoisted mapping view — the pattern `iter_ndjson_events_containing` already rode |

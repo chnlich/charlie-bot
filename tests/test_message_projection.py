@@ -114,48 +114,66 @@ FIXTURE_EVENTS: list[tuple[str, list[dict]]] = [
 ]
 
 
-def _real_session_events() -> list[tuple[str, list[dict]]]:
-  """Load events from real sessions under ~/.charliebot/sessions if present."""
+def _real_session_event_paths() -> list[tuple[str, Path]]:
+  """Chat event logs of the real sessions under ~/.charliebot/sessions, if present.
+
+  Only the paths are gathered at import; each case parses its own session, so the
+  whole home (gigabytes on a long-lived host) never sits resident in the test
+  process, where it would price every later fork in the run.
+  """
   sessions_dir = Path.home() / ".charliebot" / "sessions"
   if not sessions_dir.exists():
     return []
-  result: list[tuple[str, list[dict]]] = []
+  result: list[tuple[str, Path]] = []
   for session_dir in sorted(sessions_dir.iterdir()):
     if not session_dir.is_dir():
       continue
     events_path = session_dir / "data" / "chat_events.jsonl"
-    if not events_path.exists():
-      continue
-    events: list[dict] = []
-    try:
-      for raw_line in events_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if line:
-          events.append(json.loads(line))
-    except (OSError, json.JSONDecodeError):
-      continue
-    if events:
-      result.append((session_dir.name, events))
+    if events_path.exists():
+      result.append((session_dir.name, events_path))
   return result
 
 
-# Loaded once so every real-session parametrization shares a single read.
-_REAL_SESSION_EVENTS = _real_session_events()
+def _load_real_session_events(events_path: Path) -> list[dict]:
+  """Parse one real session's chat events; an unreadable or empty log skips the case."""
+  events: list[dict] = []
+  try:
+    for raw_line in events_path.read_text(encoding="utf-8").splitlines():
+      line = raw_line.strip()
+      if line:
+        events.append(json.loads(line))
+  except (OSError, json.JSONDecodeError) as exc:
+    pytest.skip(f"unreadable chat_events.jsonl: {exc}")
+  if not events:
+    pytest.skip("empty chat_events.jsonl")
+  return events
+
+
+_REAL_SESSION_EVENT_PATHS = _real_session_event_paths()
 
 # ---------------------------------------------------------------------------
 # 1. Definitional equivalence
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("name", "events"), [*FIXTURE_EVENTS, *_REAL_SESSION_EVENTS])
-def test_projection_history_equals_events_to_messages(name: str, events: list[dict]) -> None:
-  """projection.history must equal events_to_messages(all_events) by definition —
-  on the fixture events and on every real session under ~/.charliebot/sessions."""
+def _assert_history_equals_events_to_messages(name: str, events: list[dict]) -> None:
   projection = MessageProjection(events)
   reference = events_to_messages(events)
   proj_identities = [_identity_tuple(m) for m in projection.history]
   ref_identities = [_identity_tuple(m) for m in reference]
   assert proj_identities == ref_identities, f"mismatch in '{name}'"
+
+
+@pytest.mark.parametrize(("name", "events"), FIXTURE_EVENTS)
+def test_projection_history_equals_events_to_messages(name: str, events: list[dict]) -> None:
+  """projection.history must equal events_to_messages(all_events) by definition."""
+  _assert_history_equals_events_to_messages(name, events)
+
+
+@pytest.mark.parametrize(("name", "events_path"), _REAL_SESSION_EVENT_PATHS)
+def test_projection_history_equals_events_to_messages_real_sessions(name: str, events_path: Path) -> None:
+  """The same definitional equivalence on every real session under ~/.charliebot/sessions."""
+  _assert_history_equals_events_to_messages(name, _load_real_session_events(events_path))
 
 
 def test_projection_reorder_fixture_reorders_queued_user() -> None:
@@ -277,10 +295,11 @@ def test_lossless_walk_on_reorder_session() -> None:
   assert len(collected) == len(full_ids)
 
 
-@pytest.mark.parametrize(("name", "events"), _REAL_SESSION_EVENTS)
-def test_turn_aligned_backwards_walk_real_sessions(name: str, events: list[dict]) -> None:
+@pytest.mark.parametrize(("name", "events_path"), _REAL_SESSION_EVENT_PATHS)
+def test_turn_aligned_backwards_walk_real_sessions(name: str, events_path: Path) -> None:
   """Every page of a full backwards walk starts at a turn start and the pages
   tile the whole history — on every real session under ~/.charliebot/sessions."""
+  events = _load_real_session_events(events_path)
   _assert_turn_aligned_walk(MessageProjection(events), limit=40, label=f"real session '{name}'")
 
 

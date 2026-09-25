@@ -390,9 +390,22 @@ async def seed_scenario(home: Path) -> dict:
 
 
 class Results:
-    def __init__(self, evidence_dir: Path, commit: str) -> None:
+    """The browser evidence file: per-scenario rows, console errors, and the run's provenance.
+
+    ``record`` accumulates the scenario rows in call order; ``save`` writes the
+    run's one JSON evidence file. ``entry_point`` and ``invocation`` are
+    optional provenance keys: a harness whose results file name already says
+    what ran omits both.
+    """
+
+    def __init__(self, evidence_dir: Path, commit: str, *, browser: str, results_name: str,
+                 entry_point: str | None = None, invocation: list[str] | None = None) -> None:
         self.evidence_dir = evidence_dir
         self.commit = commit
+        self.browser = browser
+        self.results_name = results_name
+        self.entry_point = entry_point
+        self.invocation = invocation
         self.scenarios: list[dict] = []
         self.console_errors: list[str] = []
 
@@ -400,44 +413,44 @@ class Results:
         self.scenarios.append({"name": name, "ok": ok, "detail": detail, "screenshot": screenshot})
         log(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}")
 
-
-
     def save(self) -> None:
-        payload = {
+        payload: dict = {
             "tested_commit": self.commit,
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "browser": "google-chrome headless (CDP)",
-            "scenarios": self.scenarios,
-            "console_errors": self.console_errors,
+            "browser": self.browser,
         }
-        out = self.evidence_dir / "session_tree_browser_results.json"
+        if self.entry_point is not None:
+            payload["entry_point"] = self.entry_point
+        if self.invocation is not None:
+            payload["invocation"] = self.invocation
+        payload["scenarios"] = self.scenarios
+        payload["console_errors"] = self.console_errors
+        out = self.evidence_dir / self.results_name
         out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         log(f"results written to {out}")
 
 
-def api_request(base: str, access_key: str, method: str, path: str,
-                body: dict | None = None, token: str | None = None) -> tuple[int, dict]:
+def api_request(base: str, key: str, method: str, path: str, body: dict | None = None,
+                *, timeout: float, token: str | None = None) -> tuple[int, dict]:
     """One real HTTP API call from a SEPARATE authenticated client.
 
     This is the cross-client creator of the creation-visibility scenarios: the
     operator access key (or a scoped agent run token) rides the Authorization
-    header; the browser under observation never performs the call.
+    header; the browser under observation never performs the call. ``timeout``
+    bounds one call. A 2xx body must be JSON; an error response's empty body
+    parses as {}.
     """
-    headers = {"Authorization": "Bearer " + (token or access_key)}
+    headers = {"Authorization": "Bearer " + (token or key)}
     data = None
     if body is not None:
         headers["Content-Type"] = "application/json"
         data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
-
-    def call() -> tuple[int, dict]:
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                return resp.status, json.loads(resp.read().decode())
-        except urllib.error.HTTPError as e:
-            return e.code, json.loads(e.read().decode() or "{}")
-
-    return call()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read().decode() or "{}")
 
 
 async def evaluate(cdp: CDP, session_id: str, expression: str) -> object:
@@ -567,7 +580,9 @@ async def run_harness(args: argparse.Namespace) -> None:
     evidence_dir.mkdir(parents=True, exist_ok=True)
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT,
                             capture_output=True, text=True, check=True).stdout.strip()
-    results = Results(evidence_dir, commit)
+    results = Results(evidence_dir, commit,
+                      browser="google-chrome headless (CDP)",
+                      results_name="session_tree_browser_results.json")
 
     with tempfile.TemporaryDirectory(prefix="charliebot-browser-harness-") as tmp:
         tmp_path = Path(tmp)
@@ -1221,7 +1236,8 @@ async def run_harness(args: argparse.Namespace) -> None:
                 status, meta = await asyncio.to_thread(
                     api_request, base, access_key, "POST", "/api/sessions/",
                     {"request_id": "harness-x-root-1", "profile": "manager", "name": "Remote root",
-                     "task": {"goal": "created outside the browser", "acceptance": [], "context_refs": []}})
+                     "task": {"goal": "created outside the browser", "acceptance": [], "context_refs": []}},
+                    timeout=15.0)
                 assert_true(status == 200, f"the separate client's create succeeded ({status}: {meta})")
                 created["root"] = meta["id"]
                 await wait_for(cdp, session_id, """
@@ -1256,7 +1272,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                     api_request, base, access_key, "POST", "/api/sessions/",
                     {"request_id": "harness-x-mid-1", "task_parent_id": ids["feature"],
                      "profile": "manager", "name": "Remote mid",
-                     "task": {"goal": "mid manager", "acceptance": [], "context_refs": []}})
+                     "task": {"goal": "mid manager", "acceptance": [], "context_refs": []}}, timeout=15.0)
                 assert_true(status == 200, f"nested manager create succeeded ({status})")
                 created["mid"] = mid["id"]
                 await wait_for(cdp, session_id, """
@@ -1270,7 +1286,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                     api_request, base, access_key, "POST", "/api/sessions/",
                     {"request_id": "harness-x-leaf-1", "task_parent_id": mid["id"],
                      "profile": "worker", "name": "Remote leaf",
-                     "task": {"goal": "idle leaf worker", "acceptance": [], "context_refs": []}})
+                     "task": {"goal": "idle leaf worker", "acceptance": [], "context_refs": []}}, timeout=15.0)
                 assert_true(status == 200, f"deep leaf create succeeded ({status})")
                 created["leaf"] = leaf["id"]
                 await wait_for(cdp, session_id, """
@@ -1309,7 +1325,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                     {"request_id": "harness-agent-w1", "task_parent_id": ids["root"],
                      "profile": "worker", "name": "Agent worker",
                      "task": {"goal": "created by a scoped agent", "acceptance": [], "context_refs": []}},
-                    token=agent_token)
+                    token=agent_token, timeout=15.0)
                 assert_true(status == 200, f"agent-scoped create succeeded ({status}: {worker})")
                 await wait_for(cdp, session_id, """
                     [...document.querySelectorAll('#session-list .tree-row .session-name')]
@@ -1342,7 +1358,8 @@ async def run_harness(args: argparse.Namespace) -> None:
                 status, replay = await asyncio.to_thread(
                     api_request, base, access_key, "POST", "/api/sessions/",
                     {"request_id": "harness-x-root-1", "profile": "manager", "name": "Remote root",
-                     "task": {"goal": "created outside the browser", "acceptance": [], "context_refs": []}})
+                     "task": {"goal": "created outside the browser", "acceptance": [], "context_refs": []}},
+                    timeout=15.0)
                 assert_true(status == 200 and replay["id"] == created["root"],
                             f"the replay returned the original product ({status})")
                 await asyncio.sleep(0.6)
@@ -1360,7 +1377,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                     api_request, base, access_key, "POST", "/api/sessions/",
                     {"request_id": "harness-refused-1", "task_parent_id": created["leaf"],
                      "profile": "worker", "name": "Should not exist",
-                     "task": {"goal": "refused", "acceptance": [], "context_refs": []}})
+                     "task": {"goal": "refused", "acceptance": [], "context_refs": []}}, timeout=15.0)
                 assert_true(status == 400, f"the worker-parent create was refused ({status})")
                 await asyncio.sleep(0.6)
                 rows_after = await evaluate(cdp, session_id,
@@ -1441,7 +1458,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 # panel while the dialog is open: selection and draft must hold.
                 status, _renamed = await asyncio.to_thread(
                     api_request, base, access_key, "PATCH", f"/api/sessions/{ids['evidence']}",
-                    {"name": "Evidence manager renamed"})
+                    {"name": "Evidence manager renamed"}, timeout=15.0)
                 assert_true(status == 200, f"the out-of-band rename succeeded ({status})")
                 await asyncio.sleep(1.0)
                 await wait_for(cdp, session_id,
@@ -1487,7 +1504,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                             and body["result_refs"] == ["evidence/run-e0119.log"],
                             "the draft summary and refs rode the claim")
                 status, detail = await asyncio.to_thread(
-                    api_request, base, access_key, "GET", f"/api/sessions/{ids['evidence']}")
+                    api_request, base, access_key, "GET", f"/api/sessions/{ids['evidence']}", timeout=15.0)
                 assert_true(status == 200 and detail["task_state"] == "completed",
                             f"the server closed the task ({status}, {detail.get('task_state')})")
                 shot2 = await screenshot(cdp, session_id, results, "s16b_completion_submitted")
@@ -1572,7 +1589,8 @@ async def run_harness(args: argparse.Namespace) -> None:
                 status, _r = await asyncio.to_thread(
                     api_request, base, access_key, "POST", "/api/sessions/",
                     {"request_id": "harness-move-page-root", "profile": "manager",
-                     "name": "Remote late root", "task": {"goal": "created mid-pagination", "acceptance": [], "context_refs": []}})
+                     "name": "Remote late root", "task": {"goal": "created mid-pagination", "acceptance": [], "context_refs": []}},
+                    timeout=15.0)
                 assert_true(status == 200, f"the mid-pagination create succeeded ({status})")
                 await evaluate(cdp, session_id, """
                     (() => { [...document.querySelectorAll('#task-move-list button')]
@@ -1608,7 +1626,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 await wait_for(cdp, session_id, "!document.getElementById('task-move-modal')",
                                timeout=10, label="s17 move submitted")
                 status, detail = await asyncio.to_thread(
-                    api_request, base, access_key, "GET", f"/api/sessions/{ids['bulk1']}")
+                    api_request, base, access_key, "GET", f"/api/sessions/{ids['bulk1']}", timeout=15.0)
                 assert_true(status == 200 and detail["task_parent_id"] == ids["late_mid"],
                             f"the moved task's real parent is the chosen manager ({detail.get('task_parent_id')})")
                 muts = [m for m in cdp.mutations_since(mark) if m["method"] == "PATCH"]
@@ -1631,7 +1649,8 @@ async def run_harness(args: argparse.Namespace) -> None:
                 status, victim = await asyncio.to_thread(
                     api_request, base, access_key, "POST", "/api/sessions/",
                     {"request_id": "harness-refusal-victim", "profile": "manager",
-                     "name": "Refusal victim", "task": {"goal": "closed right after being chosen", "acceptance": [], "context_refs": []}})
+                     "name": "Refusal victim", "task": {"goal": "closed right after being chosen", "acceptance": [], "context_refs": []}},
+                    timeout=15.0)
                 assert_true(status == 200, f"the refusal victim was created ({status})")
                 await evaluate(cdp, session_id, """
                     (() => { [...document.querySelectorAll('#task-move-list button')]
@@ -1651,7 +1670,8 @@ async def run_harness(args: argparse.Namespace) -> None:
                     "document.getElementById('task-move-chosen').textContent.includes('Refusal victim')")
                 status, _c = await asyncio.to_thread(
                     api_request, base, access_key, "POST", f"/api/sessions/{victim['id']}/cancel",
-                    {"request_id": "harness-close-victim", "reason": "closed out-of-band for the refusal case"})
+                    {"request_id": "harness-close-victim", "reason": "closed out-of-band for the refusal case"},
+                    timeout=15.0)
                 assert_true(status == 200, f"the out-of-band close succeeded ({status})")
                 await evaluate(cdp, session_id, "document.getElementById('task-move-confirm').click()")
                 await wait_for(cdp, session_id,
@@ -1686,7 +1706,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 await wait_for(cdp, session_id, "!document.getElementById('task-move-modal')",
                                timeout=10, label="s17 explicit root move submitted")
                 status, detail = await asyncio.to_thread(
-                    api_request, base, access_key, "GET", f"/api/sessions/{ids['bulk2']}")
+                    api_request, base, access_key, "GET", f"/api/sessions/{ids['bulk2']}", timeout=15.0)
                 assert_true(status == 200 and detail["task_parent_id"] is None,
                             f"the explicit root choice submitted a null parent ({detail.get('task_parent_id')})")
                 muts = [m for m in cdp.mutations_since(mark) if m["method"] == "PATCH"]
@@ -1718,7 +1738,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 await wait_for(cdp, session_id, "!document.getElementById('task-move-modal')",
                                timeout=10, label="s17 search-chosen move submitted")
                 status, detail = await asyncio.to_thread(
-                    api_request, base, access_key, "GET", f"/api/sessions/{ids['bulk3']}")
+                    api_request, base, access_key, "GET", f"/api/sessions/{ids['bulk3']}", timeout=15.0)
                 assert_true(status == 200 and detail["task_parent_id"] == ids["late_mid"],
                             f"the search-chosen move submitted its real id ({detail.get('task_parent_id')})")
                 results.record("move chooser across pages, depths and search", ok=True,
@@ -1752,7 +1772,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                     api_request, base, access_key, "POST", "/api/sessions/",
                     {"request_id": "harness-wide-new-child", "task_parent_id": ids["wide"],
                      "profile": "worker", "name": "Wide child new",
-                     "task": {"goal": "created mid-pagination", "acceptance": [], "context_refs": []}})
+                     "task": {"goal": "created mid-pagination", "acceptance": [], "context_refs": []}}, timeout=15.0)
                 assert_true(status == 200, f"the mid-pagination child create succeeded ({status})")
                 await evaluate(cdp, session_id, """
                     (() => { [...document.querySelectorAll('#tab-runs button')]

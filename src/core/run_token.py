@@ -39,7 +39,7 @@ class RunTokenClaims:
   M92/M97/M102 verb walls) for machinery no consumer calls.
   """
 
-  __slots__ = ("session_id", "run_id", "agent")
+  __slots__ = ("agent", "run_id", "session_id")
 
   def __init__(self, session_id: str, run_id: str, agent: str) -> None:
     self.session_id = session_id
@@ -58,9 +58,9 @@ class RunTokenClaims:
 class CallerIdentity:
   """The verified caller of a structural request: operator, or an agent bound to one Run."""
 
-  __slots__ = ("kind", "claims")
+  __slots__ = ("claims", "kind")
 
-  def __init__(self, kind: Literal["operator", "agent"], claims: "RunTokenClaims | None" = None) -> None:
+  def __init__(self, kind: Literal["operator", "agent"], claims: RunTokenClaims | None = None) -> None:
     self.kind = kind
     # Present only for kind == "agent".
     self.claims = claims

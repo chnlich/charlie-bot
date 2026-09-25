@@ -12,12 +12,11 @@ reading one task never touches another.
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from conftest import make_home_config
+from conftest import live_subprocess, make_home_config
 
 from src.core import event_types as ET
 from src.core.models import RunRecord
@@ -41,10 +40,6 @@ async def env(tmp_path: Path):
   worker_b = await tree.create_task(
       request_id="wb", task_parent_id=root.id, profile="worker", task=None, name="Worker B", backend=None, caller=OP)
   return tree, session_mgr, root.id, worker_a.id, worker_b.id
-
-
-def live_subprocess() -> subprocess.Popen:
-  return subprocess.Popen(["/bin/sleep", "30"])
 
 
 def row_of(page: dict, session_id: str) -> dict:

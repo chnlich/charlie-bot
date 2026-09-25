@@ -180,6 +180,7 @@ async def test_sessions_list_endpoint_serves_projected_leaves(tmp_path: Path) ->
   assert parent["profile"] is None
   assert "worker_thread" not in parent or parent["worker_thread"] is None
 
+
 @pytest.mark.asyncio
 async def test_projection_fanout_repeat_serves_the_same_rows(tmp_path: Path) -> None:
   """A fan-out wider than one single-session consumer serves the same row

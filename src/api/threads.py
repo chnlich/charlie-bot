@@ -592,7 +592,11 @@ async def _list_response(request: Request, body: bytes, etag_value: str, etag: s
 # so repeat views serve rows with zero stats; a writer mark or the sweep walk
 # rebuilds from the walked pairs, the row memo serving the unmoved files'
 # rows.
-_VIEW_ROWS_MEMO_LIMIT = 8
+# The session view's consumer set is one user's recent sessions; the sidebar
+# list's projected worker leaves add every legacy session of the active list
+# (dozens here) to the same memo per fetch, so the cap must hold that set or
+# every fetch re-walks the sessions the LRU evicted.
+_VIEW_ROWS_MEMO_LIMIT = 128
 _VIEW_ROWS_SWEEP_EVERY = 10
 _view_rows_memo: BoundedMemo[str, list[dict]] = BoundedMemo(_VIEW_ROWS_MEMO_LIMIT)
 _view_rows_gate = RevisionSweepGate(_VIEW_ROWS_SWEEP_EVERY)
@@ -617,11 +621,12 @@ async def view_thread_rows(
     return hit
   session_dir = cfg.sessions_dir / session_id
 
-  def walk_and_parse() -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]], list[ThreadMetadata | None]]:
+  def walk_and_parse(
+  ) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]], list[ThreadMetadata | None]]:
+    threads_dir = str(session_dir / THREADS_DIR_NAME)
     thread_pairs, _triggers, run_pairs = _row_source_stats(
-        str(session_dir / THREADS_DIR_NAME), str(session_dir / "triggers"),
-        str(session_dir / "data" / "runs"))
-    return thread_pairs, run_pairs, thread_mgr.list_threads_from_stats(thread_pairs)
+        threads_dir, str(session_dir / "triggers"), str(session_dir / "data" / "runs"))
+    return thread_pairs, run_pairs, thread_mgr.list_threads_from_stats(thread_pairs, threads_dir)
 
   thread_pairs, run_pairs, metas = await asyncio.to_thread(walk_and_parse)
   rows = [row for row, _fragment in _thread_list_items(session_id, thread_pairs, metas)]
@@ -671,9 +676,9 @@ async def list_threads(
       # an unmarked row-source write heals inside the same ~30 s window.
       _sig_gate.mark_proven(session_id, rev, reset_sweep=False)
       return await _list_response(request, body, etag_value, etag)
+    threads_dir = str(session_dir / THREADS_DIR_NAME)
     thread_pairs, trigger_pairs, run_pairs = await asyncio.to_thread(
-        _row_source_stats, str(session_dir / THREADS_DIR_NAME), str(session_dir / "triggers"),
-        str(session_dir / "data" / "runs"))
+        _row_source_stats, threads_dir, str(session_dir / "triggers"), str(session_dir / "data" / "runs"))
     sig = _signature_from_stats(thread_pairs, trigger_pairs, run_pairs)
     if hit is not None and hit[0] == sig:
       _sig_gate.mark_proven(session_id, rev)
@@ -686,7 +691,7 @@ async def list_threads(
   # the memo's proof and the rows behind the body describe one instant. The
   # gate-hit path always serves above, so a rebuild implies the walk ran.
   assert thread_pairs is not None
-  metas = await asyncio.to_thread(thread_mgr.list_threads_from_stats, thread_pairs)
+  metas = await asyncio.to_thread(thread_mgr.list_threads_from_stats, thread_pairs, threads_dir)
   thread_items = _thread_list_items(session_id, thread_pairs, metas)
   thread_items.extend(await _v2_run_list_items(session_id, run_pairs))
 

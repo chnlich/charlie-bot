@@ -80,11 +80,13 @@ class ThreadManager:
     # file on each 3 s workers-panel poll costs ~176 us per thread; the
     # stat-before-read contract keeps a rewrite from serving old data (a
     # rewrite always moves (mtime_ns, size)). Each walk drops the entries for
-    # files it did not see, so a deleted thread never lingers, and concurrent
-    # executor walks serialize on the memo's lock. Callers only read the
-    # returned metas: the update path (update_status) re-reads through the
-    # uncached get_thread, so no in-place mutation of a memoized instance
-    # exists to leak.
+    # its own session's files it did not see (the walk's drop_scope), so a
+    # deleted thread never lingers while another session's walk leaves this
+    # session's entries alone — one singleton manager serves every session's
+    # walk. Concurrent executor walks serialize on the memo's lock. Callers
+    # only read the returned metas: the update path (update_status) re-reads
+    # through the uncached get_thread, so no in-place mutation of a memoized
+    # instance exists to leak.
     self._list_memo: StatSignatureMemo[str, ThreadMetadata] = StatSignatureMemo(_THREAD_LIST_MEMO_LIMIT)
 
   async def create_thread(
@@ -131,13 +133,14 @@ class ThreadManager:
       # workers-panel poll scale linearly with thread count.
       if not threads_dir.is_dir():
         return []
-      return self._metas_from_stats(iter_thread_meta_stats(threads_dir))
+      return self._metas_from_stats(iter_thread_meta_stats(threads_dir), str(threads_dir))
 
     threads = [t for t in await asyncio.to_thread(load_all) if t is not None]
     threads.sort(key=lambda t: t.created_at, reverse=True)
     return threads
 
-  def list_threads_from_stats(self, pairs: Iterator[tuple[str, os.stat_result]]) -> list[ThreadMetadata | None]:
+  def list_threads_from_stats(self, pairs: Iterator[tuple[str, os.stat_result]],
+                              drop_scope: str) -> list[ThreadMetadata | None]:
     """Parse-merge the pre-walked ``(metadata.json path, stat)`` pairs of one session.
 
     *pairs* must be a fresh walk of exactly the files the caller's freshness
@@ -148,11 +151,16 @@ class ThreadManager:
     no-thread-row verdict the walk's stat failure gives), so callers pairing
     metas back with pairs stay aligned. The parse memo is ``list_threads``'s:
     a hit costs no read, a miss reads the file, and files absent from *pairs*
-    drop out of the memo.
+    drop out of the memo. *drop_scope* is the threads directory *pairs* was
+    walked from, spelled the way ``iter_thread_meta_stats`` spells its keys —
+    the drop reaches only entries under it, so one session's walk never
+    evicts another session's cached parses (the manager is one singleton
+    shared by every session's walk).
     """
-    return self._metas_from_stats(pairs)
+    return self._metas_from_stats(pairs, drop_scope)
 
-  def _metas_from_stats(self, pairs: Iterator[tuple[str, os.stat_result]]) -> list[ThreadMetadata | None]:
+  def _metas_from_stats(self, pairs: Iterator[tuple[str, os.stat_result]],
+                        drop_scope: str) -> list[ThreadMetadata | None]:
     walked: set[str] = set()
     metas: list[ThreadMetadata | None] = []
     for meta_path, st in pairs:
@@ -173,7 +181,8 @@ class ThreadManager:
       else:
         self._list_memo.record(meta_path, st, meta)
       metas.append(meta)
-    self._list_memo.drop_where(lambda key: key not in walked)
+    prefix = drop_scope + "/"
+    self._list_memo.drop_where(lambda key: key.startswith(prefix) and key not in walked)
     return metas
 
   async def update_status(

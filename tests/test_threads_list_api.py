@@ -2,7 +2,9 @@
 (src/api/threads.py list_threads, src/api/sessions.py get_session_view)."""
 
 import asyncio
+import builtins
 import json
+import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -206,6 +208,108 @@ def test_rows_skip_the_walk_until_a_mark_or_the_sweep(
     assert walks["n"] == 3
 
 
+def _count_metadata_opens() -> tuple[dict[str, int], object]:
+  """Count ``open()`` calls that name a thread metadata.json, the parse memo's
+  read path; the caller restores the builtins open around the walked region."""
+  opens = {"n": 0}
+  real_open = open
+
+  def counting(file, *args, **kwargs):
+    if str(file).endswith("/metadata.json"):
+      opens["n"] += 1
+    return real_open(file, *args, **kwargs)
+
+  return opens, counting
+
+
+def test_parse_memo_serves_across_sessions_scoped_drops(
+    tmp_path: Path,
+    _fresh_list_state: None,
+) -> None:
+  """One session's walk drops only its own vanished files: the shared parse
+  memo still serves every other session's parses on their next walk.
+
+  The drop predicate keyed the whole memo before the projection consumer
+  arrived, so each walk evicted every other session's cached parses and the
+  next walk of any session re-read and re-validated all its files.
+  """
+  cfg_a, _session_a, threads_a = _seeded_thread_dir(tmp_path / "a", "memo-a", "a one", "a two")
+  cfg_b, _session_b, threads_b = _seeded_thread_dir(tmp_path / "b", "memo-b", "b one")
+  mgr_a = ThreadManager(cfg_a)
+  mgr_b = ThreadManager(cfg_b)
+  pairs_a = list(core_threads.iter_thread_meta_stats(str(threads_a)))
+  pairs_b = list(core_threads.iter_thread_meta_stats(str(threads_b)))
+
+  opens, counting = _count_metadata_opens()
+  real_open = builtins.open
+  try:
+    builtins.open = counting  # type: ignore[assignment]
+    mgr_a.list_threads_from_stats(iter(pairs_a), str(threads_a))
+    assert opens["n"] == 2
+    mgr_b.list_threads_from_stats(iter(pairs_b), str(threads_b))
+    assert opens["n"] == 3
+    # A repeat walk of the first session after the second session's walk: the
+    # scoped drop left its entries resident, so the walk opens no file.
+    mgr_a.list_threads_from_stats(iter(pairs_a), str(threads_a))
+    assert opens["n"] == 3
+  finally:
+    builtins.open = real_open  # type: ignore[assignment]
+
+  # The scoped drop still evicts this session's own vanished file: removing a
+  # thread and re-walking drops its row while the other session's stays.
+  victim_dir = next(
+      Path(pair[0]).parent for pair in pairs_a if json.loads(Path(pair[0]).read_text())["description"] == "a two")
+  shutil.rmtree(victim_dir)
+  fresh_pairs = list(core_threads.iter_thread_meta_stats(str(threads_a)))
+  metas = [m for m in mgr_a.list_threads_from_stats(iter(fresh_pairs), str(threads_a)) if m is not None]
+  assert {m.description for m in metas} == {"a one"}
+  metas_b = [m for m in mgr_b.list_threads_from_stats(iter(pairs_b), str(threads_b)) if m is not None]
+  assert {m.description for m in metas_b} == {"b one"}
+
+
+def test_list_projection_walks_stop_once_the_view_memo_holds_the_set(
+    tmp_path: Path,
+    _fresh_list_state: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """The sidebar list's projected worker leaves keep every legacy session's
+  rows in the view-rows memo: after the first fetch walks the set, the next
+  nine fetches walk nothing (the gate's sweep lands on the tenth poll)."""
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
+  sessions = SessionManager(cfg)
+
+  async def seed() -> None:
+    threads = ThreadManager(cfg)
+    for i in range(12):
+      session = await sessions.create_session(CreateSessionRequest(name=f"projection-{i}"))
+      await threads.create_thread(session, f"thread {i}")
+
+  asyncio.run(seed())
+
+  app = FastAPI()
+  app.include_router(sessions_router, prefix="/api/sessions")
+  app.dependency_overrides[get_session_manager] = lambda: sessions
+  app.dependency_overrides[get_thread_manager] = lambda: ThreadManager(cfg)
+  app.dependency_overrides[get_trigger_manager] = lambda: TriggerManager(cfg, sessions)
+  apply_config_overrides(app, cfg)
+  client = TestClient(app)
+
+  walks = _count_walks(monkeypatch)
+  first = client.get("/api/sessions/")
+  assert first.status_code == 200
+  leaves = [row for row in first.json() if row.get("profile") == "worker"]
+  assert len(leaves) == 12
+  cold_walks = walks["n"]
+  assert cold_walks >= 12  # one source walk per legacy session, cold
+
+  for _ in range(9):
+    assert client.get("/api/sessions/").status_code == 200
+  assert walks["n"] == cold_walks  # served from the view-rows memo; nothing re-walked
+
+  client.get("/api/sessions/")
+  assert walks["n"] > cold_walks  # every session's tenth poll sweeps once
+
+
 def test_session_view_rows_match_the_list_rows_order(tmp_path: Path) -> None:
   """The view's rows are the list's thread rows: same fields, newest-first."""
   client, session_id, _ = _seeded_client(tmp_path)
@@ -322,7 +426,7 @@ def test_list_body_sorts_thread_and_trigger_rows_by_one_epoch_ms_key(tmp_path: P
   cfg, session_id, threads_dir = _seeded_thread_dir(tmp_path, "mixed-sort", "the thread row")
   mgr = ThreadManager(cfg)
   pairs = list(core_threads.iter_thread_meta_stats(str(threads_dir)))
-  metas = mgr.list_threads_from_stats(iter(pairs))
+  metas = mgr.list_threads_from_stats(iter(pairs), str(threads_dir))
   thread_item, thread_fragment = threads_api._thread_list_items(session_id, pairs, metas)[0]
   trigger = PendingTrigger(
       session_id=session_id,
@@ -422,11 +526,11 @@ def test_rebuild_tolerates_file_vanished_between_walk_and_read(tmp_path: Path) -
   # the rebuild's parse-merge read it.
   stale = [*pairs, (str(threads_dir / "vanished" / "metadata.json"), pairs[0][1])]
 
-  metas = mgr.list_threads_from_stats(stale)
+  metas = mgr.list_threads_from_stats(stale, str(threads_dir))
   assert metas[1] is None
   items = threads_api._thread_list_items(session_id, stale, metas)
   assert len(items) == 1
-  assert {t.id for t in mgr._metas_from_stats(iter(pairs))} == {t.id for t in metas[:1]}
+  assert {t.id for t in mgr._metas_from_stats(iter(pairs), str(threads_dir))} == {t.id for t in metas[:1]}
 
 
 def test_list_threads_from_stats_matches_list_threads(tmp_path: Path) -> None:
@@ -436,7 +540,7 @@ def test_list_threads_from_stats_matches_list_threads(tmp_path: Path) -> None:
   scanned = asyncio.run(mgr.list_threads(session_id))
 
   pairs = list(core_threads.iter_thread_meta_stats(str(threads_dir)))
-  from_stats = mgr.list_threads_from_stats(pairs)
+  from_stats = mgr.list_threads_from_stats(pairs, str(threads_dir))
 
   assert {t.id for t in from_stats} == {t.id for t in scanned}
   assert {t.description for t in from_stats} == {"one", "two"}

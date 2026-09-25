@@ -16,7 +16,7 @@ from types import ModuleType
 
 import numpy as np
 import pytest
-from conftest import stub_speech_bundle
+from conftest import sine_wav_frames, stub_speech_bundle, write_wav_file
 
 from src.agents import transcriber
 
@@ -130,21 +130,6 @@ def test_offline_windows_report_segment_and_window_bounds(monkeypatch: pytest.Mo
 script = _load_script()
 
 
-def _sine_samples(seconds: float) -> np.ndarray:
-  positions = np.arange(int(script.SAMPLE_RATE * seconds), dtype=np.float64)
-  return (np.sin(2 * np.pi * 440.0 * positions / script.SAMPLE_RATE) * 10_000).astype("<i2")
-
-
-def _write_wav(path: Path, samples: np.ndarray, rate: int = script.SAMPLE_RATE) -> None:
-  import wave
-  path.parent.mkdir(parents=True, exist_ok=True)
-  with wave.open(str(path), "wb") as wav:
-    wav.setnchannels(1)
-    wav.setsampwidth(2)
-    wav.setframerate(rate)
-    wav.writeframes(samples.astype("<i2").tobytes())
-
-
 def _write_events(session_dir: Path, events: list[dict]) -> None:
   import json
   events_path = session_dir / "data" / "chat_events.jsonl"
@@ -190,8 +175,9 @@ def test_load_clips_accepts_only_16k_mono_pcm16(tmp_path: Path) -> None:
   from src.core.config import CharlieBotConfig
   cfg = CharlieBotConfig(charliebot_home=tmp_path)
   voice = cfg.sessions_dir / "sess" / "voice"
-  _write_wav(voice / "2026-01-01T000000.000Z_deadbeef.wav", _sine_samples(0.1))
-  _write_wav(voice / "2026-01-01T000100.000Z_deadbeef.wav", _sine_samples(0.1), rate=8_000)
+  write_wav_file(
+      voice / "2026-01-01T000000.000Z_deadbeef.wav", sine_wav_frames(0.1, script.SAMPLE_RATE), script.SAMPLE_RATE)
+  write_wav_file(voice / "2026-01-01T000100.000Z_deadbeef.wav", sine_wav_frames(0.1, script.SAMPLE_RATE), 8_000)
   (voice / "notes.txt").write_text("not audio", encoding="utf-8")
 
   clips = script.load_clips(cfg)

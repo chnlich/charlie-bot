@@ -388,7 +388,17 @@ def _signature_from_stats(
 # fragments (the M72 files-listing row-memo shape) because a changed poll would
 # otherwise re-dump every unmoved row — 0.60 ms of stdlib dumps per rebuild on
 # the 339-row worst corpus against 0.01 ms of join.
-_THREAD_ROW_MEMO_LIMIT = 8
+# Both per-session row memos share one cap because they share one key space and
+# one working set: the projected-leaf fan-out (project_worker_threads) walks one
+# row proof per legacy row of every sidebar list response and every search hit,
+# so one request can touch more distinct sessions than any single-session
+# consumer ever did. The cap must hold that working set — a smaller one evicts a
+# session between two requests of the same fan-out, every request re-walks and
+# re-parses its thread files, and the rebuilt row dicts fail the identity checks
+# the projected-row memo (src/api/sessions.py) and the search route's whole-body
+# memo stand on, so no repeat ever serves its cache.
+_PROJECTION_SESSION_MEMO_LIMIT = 1024
+_THREAD_ROW_MEMO_LIMIT = _PROJECTION_SESSION_MEMO_LIMIT
 _thread_row_memo: BoundedMemo[str, dict[str, tuple[int, int, dict, bytes]]] = BoundedMemo(_THREAD_ROW_MEMO_LIMIT)
 
 # The one home of the list body's JSON options. The encoder's per-element text
@@ -592,7 +602,7 @@ async def _list_response(request: Request, body: bytes, etag_value: str, etag: s
 # so repeat views serve rows with zero stats; a writer mark or the sweep walk
 # rebuilds from the walked pairs, the row memo serving the unmoved files'
 # rows.
-_VIEW_ROWS_MEMO_LIMIT = 8
+_VIEW_ROWS_MEMO_LIMIT = _PROJECTION_SESSION_MEMO_LIMIT
 _VIEW_ROWS_SWEEP_EVERY = 10
 _view_rows_memo: BoundedMemo[str, list[dict]] = BoundedMemo(_VIEW_ROWS_MEMO_LIMIT)
 _view_rows_gate = RevisionSweepGate(_VIEW_ROWS_SWEEP_EVERY)

@@ -316,6 +316,24 @@ _PROJECTED_ROW_MEMO_LIMIT = 8192
 _projected_row_memo: BoundedMemo[tuple[str, str],
                                  tuple[SessionMetadata, dict, SessionMetadata]] = BoundedMemo(
                                      _PROJECTED_ROW_MEMO_LIMIT)
+_projected_row_dumps: BoundedMemo[int, tuple[SessionMetadata, dict]] = BoundedMemo(
+    _PROJECTED_ROW_MEMO_LIMIT)
+
+
+def _projected_row_payload(row: SessionMetadata) -> dict:
+  """One projected leaf row's rendered payload, memoized on the row object.
+
+  The projection pins each leaf row's object to its (parent, thread) identity
+  and never mutates it afterward, so the payload is a pure function of the
+  object; the identity check prices out a freed row's reused id (the search
+  route's row-body memo stands on the same check).
+  """
+  hit = _projected_row_dumps.get(id(row))
+  if hit is not None and hit[0] is row:
+    return hit[1]
+  payload = row.model_dump(mode="json")
+  _projected_row_dumps.store(id(row), (row, payload))
+  return payload
 
 
 def _datetime_from_epoch_ms(ms: int) -> datetime:
@@ -507,7 +525,7 @@ async def list_scheduled_sessions(
     thread_mgr: ThreadManager = Depends(get_thread_manager),
 ) -> Response:
   """List sessions with a scheduled task, newest first."""
-  sessions = await session_mgr.list_sessions(
+  sessions, derived = await session_mgr.list_sessions_readonly(
       status=SessionStatus.ACTIVE,
       scheduled=True,
       include_running_status=True,
@@ -515,23 +533,39 @@ async def list_scheduled_sessions(
   )
   task_map = {t.name: t for t in get_scheduled_tasks()}
   now_utc = datetime.now(UTC)
-  for s in sessions:
-    task = task_map.get(s.scheduled_task)
-    if task:
-      s.schedule_cron = task.cron
-      s.schedule_enabled = task.enabled
-      s.schedule_timezone = task.timezone
-      s.schedule_project = task.project
-      s.schedule_allow_failure = task.allow_failure
-      s.schedule_next_run = next_run_iso(task.cron, task.timezone, now_utc)
-    else:
-      s.schedule_enabled = False
   sessions = await project_worker_threads(sessions, cfg, thread_mgr)
   # The grouped sidebar render pairs this poll with /api/cron/tasks; the gzip
   # form rides the body-keyed memo (_switch_payload_response). model_dump's
   # mode="json" is the encoder-free render the /tasks route's comment
   # documents; orjson raises loudly on the models themselves.
-  return await _switch_payload_response(request, [s.model_dump(mode="json") for s in sessions])
+  # A leaf row's payload rides its pinned object's memo. A parent row renders
+  # per poll from its shared reference — the route must not mutate it, so the
+  # fields the copy path wrote onto the row (derived state, thinking_since,
+  # the six schedule fields) overlay the dump's own keys in the model's field
+  # order, and the served dicts match the copied-row render byte for byte.
+  payload: list[dict] = []
+  for s in sessions:
+    if s.worker_thread is not None:
+      payload.append(_projected_row_payload(s))
+      continue
+    d = s.model_dump(mode="json")
+    for key, value in (derived.get(s.id) or {}).items():
+      d[key] = (_UTC_DATETIME_JSON.dump_python(value, mode="json")
+                if key == sidebar_state.NEXT_TRIGGER_AT and value is not None else value)
+    busy = thinking_state.busy_since(s.id)
+    d["thinking_since"] = (_UTC_DATETIME_JSON.dump_python(busy, mode="json")
+                           if busy is not None else None)
+    task = task_map.get(s.scheduled_task)
+    d.update({
+        "schedule_cron": task.cron,
+        "schedule_enabled": task.enabled,
+        "schedule_timezone": task.timezone,
+        "schedule_project": task.project,
+        "schedule_allow_failure": task.allow_failure,
+        "schedule_next_run": next_run_iso(task.cron, task.timezone, now_utc),
+    } if task else {"schedule_enabled": False})
+    payload.append(d)
+  return await _switch_payload_response(request, payload)
 
 
 def _parse_session_ids(ids: str) -> list[str]:

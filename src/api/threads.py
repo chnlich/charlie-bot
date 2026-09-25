@@ -606,26 +606,14 @@ _VIEW_ROWS_MEMO_LIMIT = _PROJECTION_SESSION_MEMO_LIMIT
 _VIEW_ROWS_SWEEP_EVERY = 10
 _view_rows_memo: BoundedMemo[str, list[dict]] = BoundedMemo(_VIEW_ROWS_MEMO_LIMIT)
 _view_rows_gate = RevisionSweepGate(_VIEW_ROWS_SWEEP_EVERY)
+# One in-flight detached sweep per session: the countdown's insurance walk off
+# the calling poll's wall (the sidebar sweep's single-flight shape).
+_view_rows_sweeps: dict[str, asyncio.Task] = {}
 
 
-async def view_thread_rows(
-    session_id: str,
-    cfg: CharlieBotConfig,
-    thread_mgr: ThreadManager,
-) -> list[dict]:
-  """Thread rows for the session view payload, proven current like the list body.
-
-  Serves the stored rows while the session's write revision stands (bounded by
-  the same sweep window as the list poll); a mark or the sweep walks the
-  row-source directories once and rebuilds through the shared row memo. Rows
-  are shared read-only with the workers-panel list's row memo and sorted
-  newest-first, the list_threads order.
-  """
-  hit = _view_rows_memo.get(session_id)
-  rev = session_revision(session_id)
-  if hit is not None and _view_rows_gate.serve_hit(session_id, rev):
-    return hit
-  session_dir = cfg.sessions_dir / session_id
+async def _rebuild_view_rows(session_id: str, session_dir: Path, thread_mgr: ThreadManager,
+                             revision: int) -> list[dict]:
+  """One full row-source walk, stored as the session's row proof at *revision*."""
 
   def walk_and_parse() -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]], list[ThreadMetadata | None]]:
     thread_pairs, _triggers, run_pairs = _row_source_stats(
@@ -638,8 +626,54 @@ async def view_thread_rows(
   rows.extend(row for row, _fragment in await _v2_run_list_items(session_id, run_pairs))
   rows.sort(key=lambda row: row["created_at"], reverse=True)
   _view_rows_memo.store(session_id, rows)
-  _view_rows_gate.mark_proven(session_id, rev)
+  _view_rows_gate.mark_proven(session_id, revision)
   return rows
+
+
+async def _detached_view_rows_sweep(session_id: str, cfg: CharlieBotConfig, thread_mgr: ThreadManager,
+                                  revision: int) -> None:
+  """The countdown's insurance walk off the calling poll's wall.
+
+  A failure is logged and retried by the next sweep-due poll; the served rows
+  stay the revision-gated stored proof until a walk lands. A mark landing
+  mid-walk leaves the proof at the older revision, so the next poll rebuilds
+  synchronously and the write is never served stale.
+  """
+  try:
+    await _rebuild_view_rows(session_id, cfg.sessions_dir / session_id, thread_mgr, revision)
+  except Exception:
+    log.error("view_rows_sweep_failed", session=session_id, exc_info=True)
+
+
+async def view_thread_rows(
+    session_id: str,
+    cfg: CharlieBotConfig,
+    thread_mgr: ThreadManager,
+) -> list[dict]:
+  """Thread rows for the session view payload, proven current like the list body.
+
+  Serves the stored rows while the session's write revision stands; a mark
+  rebuilds synchronously, and the countdown's insurance sweep runs detached
+  (its fresh proof landing for the polls that follow). Rows are shared
+  read-only with the workers-panel list's row memo and sorted newest-first,
+  the list_threads order.
+  """
+  hit = _view_rows_memo.get(session_id)
+  rev = session_revision(session_id)
+  if hit is not None and _view_rows_gate.serve_hit(session_id, rev):
+    return hit
+  if hit is not None and _view_rows_gate.sweep_due(session_id, rev):
+    # The stored rows stand at the live revision, so the countdown's walk is
+    # insurance against an unmarked write, not an answer to a seen one: it
+    # runs detached (single-flight) and its proof lands for the polls that
+    # follow, the semantics the sidebar sweep's poll answers under. A mark's
+    # revision bump fails sweep_due, keeping a seen write's rebuild synchronous.
+    task = _view_rows_sweeps.get(session_id)
+    if task is None or task.done():
+      task = asyncio.create_task(_detached_view_rows_sweep(session_id, cfg, thread_mgr, rev))
+      _view_rows_sweeps[session_id] = task
+    return hit
+  return await _rebuild_view_rows(session_id, cfg.sessions_dir / session_id, thread_mgr, rev)
 
 
 @router.get("/{session_id}/list")

@@ -179,3 +179,32 @@ async def test_sessions_list_endpoint_serves_projected_leaves(tmp_path: Path) ->
   parent = body[0]
   assert parent["profile"] is None
   assert "worker_thread" not in parent or parent["worker_thread"] is None
+
+@pytest.mark.asyncio
+async def test_projection_fanout_repeat_serves_the_same_rows(tmp_path: Path) -> None:
+  """A fan-out wider than one single-session consumer serves the same row
+  objects on the next projection.
+
+  The sidebar list and the search route project every legacy row of one
+  response, so the per-session row memos behind view_thread_rows hold dozens of
+  sessions at once; a cap below that working set evicts between two requests,
+  the re-walk rebuilds the row dicts, and the identity checks the projected-row
+  memo and the search route's whole-body memo stand on fail on every request.
+  """
+  cfg, session_mgr, thread_mgr, _legacy = await build_env(tmp_path)
+  parents = []
+  for i in range(12):
+    parent = await session_mgr.create_session(
+        CreateSessionRequest(name=f"Legacy {i}"), backend=OPUS_BACKEND_ID)
+    thread = await thread_mgr.create_thread(parent, f"Worker {i}")
+    await write_thread_meta(
+        thread_mgr, thread, status=ThreadStatus.COMPLETED, started_at=thread.created_at,
+        completed_at=thread.created_at)
+    parents.append(parent)
+
+  first = await project_worker_threads(parents, cfg, thread_mgr)
+  second = await project_worker_threads(parents, cfg, thread_mgr)
+
+  assert [r.id for r in first] == [r.id for r in second]
+  assert all(a is b for a, b in zip(first, second, strict=True)), \
+      "a repeat projection rebuilt row objects; the consumers' identity-keyed memos cannot serve"

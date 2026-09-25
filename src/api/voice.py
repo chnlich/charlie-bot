@@ -175,7 +175,7 @@ class _PreviewSocketLost(Exception):  # noqa: N818  a lost socket is a state, no
   """The preview socket died mid-relay; no further frame can go out."""
 
 
-class _PreviewProtocolError(Exception):  # noqa: N818  names the protocol breach, not a fault
+class _PreviewProtocolError(Exception):
   """The browser sent a frame the preview protocol does not define."""
 
 

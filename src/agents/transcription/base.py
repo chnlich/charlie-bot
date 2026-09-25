@@ -13,6 +13,13 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import ClassVar, Literal
 
+# The capture worklet's chunk (web/static/js/voice-input.js VOICE_CHUNK_SAMPLES):
+# 2048 samples = 128 ms of PCM16. The voice relay forwards the browser's frames
+# unsplit, so this is the chunk size a live backend's audio iterator carries in
+# production; the replay script paces at it and the backend tests build their
+# fake audio at it.
+VOICE_CHUNK_SAMPLES = 2048
+
 
 @dataclass(frozen=True)
 class TranscriptEvent:

@@ -6,8 +6,9 @@ latency and proper-noun accuracy against the message the user actually sent.
 Engine names are the registry ids plus variants: ``local-hotwords`` (the local
 backend built with --hotwords) and ``<id>-vocab`` for any backend (the same
 backend called with --vocabulary). Backends with live_partials=False receive
-the whole clip at once; the others receive 2048-sample chunks on a real-time
-schedule, so every stop-to-final number measures from the recording's end.
+the whole clip at once; the others receive the capture worklet's chunk cadence
+(VOICE_CHUNK_SAMPLES) on a real-time schedule, so every stop-to-final number
+measures from the recording's end.
 
 Run as ``uv run python scripts/voice_replay_eval.py`` from the repository root.
 ``--dry-run`` prints recording, ground-truth, and audio-minute counts only.
@@ -40,14 +41,11 @@ if str(_REPO_ROOT) not in sys.path:
 
 from src.agents import transcriber  # noqa: E402
 from src.agents.transcription import registry  # noqa: E402
-from src.agents.transcription.base import TranscriptionBackend  # noqa: E402
+from src.agents.transcription.base import VOICE_CHUNK_SAMPLES, TranscriptionBackend  # noqa: E402
 from src.agents.transcription.local import LocalTranscriptionBackend  # noqa: E402
 from src.core.config import CharlieBotConfig, load_config  # noqa: E402
 
 SAMPLE_RATE = transcriber.SAMPLE_RATE
-# Live backends (live_partials=True) receive 2048-sample chunks — 128 ms of
-# PCM16, the browser worklet's cadence — paced against a real-time schedule.
-FRAME_SAMPLES = 2048
 # A voice recording pairs with the first voice-flagged user message sent within
 # this window after the recording timestamp.
 GROUND_TRUTH_WINDOW_S = 900
@@ -198,7 +196,7 @@ async def _transcribe_clip(backend: TranscriptionBackend, clip: Clip, vocabulary
     yield pcm
 
   async def paced_chunks() -> AsyncIterator[bytes]:
-    frame_bytes = FRAME_SAMPLES * 2
+    frame_bytes = VOICE_CHUNK_SAMPLES * 2
     started = time.monotonic()
     for offset in range(0, len(pcm), frame_bytes):
       target = started + (offset // 2) / SAMPLE_RATE

@@ -157,6 +157,7 @@ _ANCHOR_FIELDS = ("cc_session_id", "claude_account")
 
 _TRANSIENT_METADATA_FIELDS = {
     "has_running_tasks",
+    "work_state",
     "has_pending_trigger",
     "pending_trigger_count",
     "next_trigger_at",
@@ -201,22 +202,32 @@ def _sidebar_entry(
     trigger_count: int,
     next_trigger_at: datetime | None,
     plan_approval: bool,
+    task_activity: tuple[bool, str] | None = None,
 ) -> dict:
   """Build one session's derived sidebar entry: the include-gated key set.
 
   Both build sites in :meth:`SessionManager.resolve_sidebar_state` — the
   archived shortcut and the probed path — must carry the same keys, so the
   set lives here. ``has_pending_trigger`` derives from the count.
+
+  *task_activity* is the task-tree derivation's ``(has_running_tasks,
+  work_state)`` pair for a task-tree node: it owns the row's
+  ``has_running_tasks`` outright (the legacy threads/busy derivation never
+  applies to a task-tree node) and adds the ``work_state`` key. None keeps a
+  legacy row byte-identical to today.
   """
   entry: dict = {}
   if include_running_status:
-    entry[sidebar_state.HAS_RUNNING_TASKS] = running
+    entry[sidebar_state.HAS_RUNNING_TASKS] = (
+        bool(task_activity[0]) if task_activity is not None else running)
   if include_pending_trigger_status:
     entry[sidebar_state.HAS_PENDING_TRIGGER] = trigger_count > 0
     entry[sidebar_state.PENDING_TRIGGER_COUNT] = trigger_count
     entry[sidebar_state.NEXT_TRIGGER_AT] = next_trigger_at
   if include_pending_plan_approval:
     entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL] = plan_approval
+  if task_activity is not None:
+    entry[sidebar_state.WORK_STATE] = task_activity[1]
   return entry
 
 
@@ -237,6 +248,8 @@ def _apply_sidebar_state(
     entry = derived[meta.id]
     if include_running_status:
       meta.has_running_tasks = entry[sidebar_state.HAS_RUNNING_TASKS]
+      if sidebar_state.WORK_STATE in entry:
+        meta.work_state = entry[sidebar_state.WORK_STATE]  # type: ignore[assignment]
     if include_pending_trigger_status:
       meta.has_pending_trigger = entry[sidebar_state.HAS_PENDING_TRIGGER]
       meta.pending_trigger_count = entry[sidebar_state.PENDING_TRIGGER_COUNT]
@@ -529,11 +542,65 @@ class _WalkedProbeInputs(NamedTuple):
   trigger_dir_sig: tuple[int, int] | None
 
 
+class SidebarProbeSpec(NamedTuple):
+  """One session's probe inputs: the legacy probe paths plus the task-tree shape.
+
+  ``session_dir``/``is_task_node`` extend the walk with the files the task-tree
+  activity derivation reads (a node's metadata, its fact history, its Run
+  records); ``recheck_liveness`` marks a node whose stored verdict is
+  ``running`` — the self-heal sweep must re-judge its recorded process
+  identity even when no covered file moved, because a process death writes
+  nothing. A caller may still hand a plain 4-tuple (the legacy shape); the
+  defaults keep it a legacy session.
+  """
+  session_id: str
+  threads_dir: Path
+  triggers_dir: Path
+  plans_path: Path
+  session_dir: Path | None = None
+  is_task_node: bool = False
+  recheck_liveness: bool = False
+
+
+def _stat_signature(path_str: str) -> tuple[int, int] | None:
+  """(mtime_ns, size) of one file, or None when it does not exist."""
+  try:
+    st = os.stat(path_str)
+  except OSError:
+    return None
+  return (st.st_mtime_ns, st.st_size)
+
+
+def _task_tree_probe_signature(session_dir_str: str) -> tuple:
+  """Stat-only identity of every file the task-tree activity derivation reads.
+
+  The derivation reads the node's fact history (metadata.json's archive offset,
+  the live chat_events.jsonl, the archived segments under data/archives) and
+  every Run record under data/runs. An unchanged signature proves the
+  derivation's inputs unchanged, so a fresh-signature poll never hides a
+  changed state — and never pays the derivation's reads either.
+  """
+  metadata_sig = _stat_signature(session_dir_str + "/metadata.json")
+  events_sig = _stat_signature(session_dir_str + "/data/chat_events.jsonl")
+  archives_sig = _stat_signature(session_dir_str + "/data/archives")
+  runs_sig: list[tuple[str, int, int]] = []
+  runs_dir_str = session_dir_str + "/data/runs"
+  try:
+    run_names = sorted(os.listdir(runs_dir_str))
+  except OSError:
+    run_names = []
+  for name in run_names:
+    run_meta = _stat_signature(runs_dir_str + "/" + name + "/metadata.json")
+    if run_meta is not None:
+      runs_sig.append((name, run_meta[0], run_meta[1]))
+  return (metadata_sig, events_sig, archives_sig, tuple(runs_sig))
+
+
 def probe_sidebar_state_sync(
-    specs: list[tuple[str, Path, Path, Path]],
+    specs: list[SidebarProbeSpec],
     walked: dict[str, _WalkedProbeInputs] | None = None,
 ) -> dict[str, dict]:
-  """Probe every ``(session_id, threads_dir, triggers_dir, plans_path)`` spec serially.
+  """Probe every spec serially.
 
   The deep-probe core of a sidebar re-probe: all three probe groups per
   session, one session at a time, so probing N sessions costs one thread-pool
@@ -546,7 +613,11 @@ def probe_sidebar_state_sync(
   re-taking the same scandir+stat phase.
   """
   results: dict[str, dict] = {}
-  for session_id, threads_dir, triggers_dir, plans_path in specs:
+  for spec in specs:
+    if not isinstance(spec, SidebarProbeSpec):
+      spec = SidebarProbeSpec(*spec)
+    session_id, threads_dir, triggers_dir, plans_path = (
+        spec.session_id, spec.threads_dir, spec.triggers_dir, spec.plans_path)
     inputs = walked.get(session_id) if walked is not None else None
     running = has_running_tasks_sync(threads_dir, walked=inputs.thread_metas if inputs else None)
     pending_count, next_trigger_at = pending_trigger_state_sync(
@@ -563,7 +634,13 @@ def probe_sidebar_state_sync(
   return results
 
 
-def _sidebar_probe_walk(threads_dir: Path, triggers_dir: Path, plans_path: Path) -> tuple[tuple, _WalkedProbeInputs]:
+def _sidebar_probe_walk(
+    threads_dir: Path,
+    triggers_dir: Path,
+    plans_path: Path,
+    session_dir: Path | None = None,
+    is_task_node: bool = False,
+) -> tuple[tuple, _WalkedProbeInputs]:
   """Stat-only identity of every byte the sidebar probe reads, plus the walk's stat pairs.
 
   A deep probe's result can change only three ways, and the signature pins all
@@ -609,7 +686,14 @@ def _sidebar_probe_walk(threads_dir: Path, triggers_dir: Path, plans_path: Path)
   except OSError:
     plans_sig = None
   rollover = min(rollovers) if rollovers else float("inf")
-  signature = (tuple(sorted(thread_sig)), tuple(sorted(trigger_sig)), plans_sig, rollover)
+  # A task-tree node's derivation reads its fact history and Run records; the
+  # signature covers those files too, so an unchanged signature can never hide
+  # a changed state (and a fresh-signature poll skips their reads).
+  task_sig: tuple = ()
+  if is_task_node and session_dir is not None:
+    task_sig = _task_tree_probe_signature(os.fspath(session_dir))
+  signature = (
+      tuple(sorted(thread_sig)), tuple(sorted(trigger_sig)), plans_sig, rollover, task_sig)
   return signature, _WalkedProbeInputs(thread_pairs, trigger_pairs, trigger_dir_sig)
 
 
@@ -628,29 +712,46 @@ def _store_probe_results(probed: dict[str, dict], probe_sigs: dict[str, tuple]) 
 
 
 def selective_probe_sidebar_state(
-    specs: list[tuple[str, Path, Path, Path]],
+    specs: list[SidebarProbeSpec],
     *,
     deep: bool,
+    task_probe: Callable[[str], tuple[bool, str]] | None = None,
 ) -> tuple[dict[str, dict], dict[str, tuple]]:
   """Deep-probe exactly the specs whose probe inputs changed since the last probe.
 
   Composes one signature stat pass with :func:`probe_sidebar_state_sync`-shaped
   probing of the changed specs so one thread-pool task covers selection and
   execution. ``deep=True`` probes every spec regardless of signatures (the
-  ``/status?force=1`` escape hatch). Returns ``(entries, signatures)``; the
-  caller stores both in :mod:`src.core.sidebar_state` on the event loop.
+  ``/status?force=1`` escape hatch). A spec whose ``recheck_liveness`` stands is
+  probed whatever its signature says: its stored verdict holds a live Run, and
+  a process death changes no file the signature covers. ``task_probe`` derives
+  a task-tree node's activity through the task-tree owner's own derivation —
+  it runs only for specs actually selected for probing, so a clean node pays
+  neither it nor its /proc reads. Returns ``(entries, signatures)``; the caller
+  stores both in :mod:`src.core.sidebar_state` on the event loop.
   """
   sigs: dict[str, tuple] = {}
   walked_inputs: dict[str, _WalkedProbeInputs] = {}
-  to_probe: list[tuple[str, Path, Path, Path]] = []
+  to_probe: list[SidebarProbeSpec] = []
   now_ts = time.time()
-  for session_id, threads_dir, triggers_dir, plans_path in specs:
-    sig, inputs = _sidebar_probe_walk(threads_dir, triggers_dir, plans_path)
-    sigs[session_id] = sig
-    walked_inputs[session_id] = inputs
-    if deep or not _sidebar_signature_fresh(session_id, sig, now_ts):
-      to_probe.append((session_id, threads_dir, triggers_dir, plans_path))
-  return probe_sidebar_state_sync(to_probe, walked_inputs), sigs
+  for spec in specs:
+    if not isinstance(spec, SidebarProbeSpec):
+      spec = SidebarProbeSpec(*spec)
+    sig, inputs = _sidebar_probe_walk(
+        spec.threads_dir, spec.triggers_dir, spec.plans_path,
+        spec.session_dir, spec.is_task_node)
+    sigs[spec.session_id] = sig
+    walked_inputs[spec.session_id] = inputs
+    if deep or spec.recheck_liveness or not _sidebar_signature_fresh(spec.session_id, sig, now_ts):
+      to_probe.append(spec)
+  entries = probe_sidebar_state_sync(to_probe, walked_inputs)
+  if task_probe is not None:
+    for spec in to_probe:
+      if not spec.is_task_node:
+        continue
+      has_running, work_state = task_probe(spec.session_id)
+      entries[spec.session_id][sidebar_state.TASK_TREE_ACTIVITY] = (has_running, work_state)
+  return entries, sigs
 
 
 _REFERENCE_LINE_WS = b" \t\r\n\x0b\x0c"
@@ -863,6 +964,13 @@ class SessionManager:
     # registers this read-time overlay at wiring time: the ids it returns list
     # as archived. None before that wiring exists (stored status only).
     self.archive_overlay: Callable[[], Awaitable[set[str]]] | None = None
+    # The task-tree owner registers its activity derivation here at wiring
+    # time (TaskTreeManager.__init__): session id -> (has_running_tasks,
+    # work_state), the same derivation the tree projection answers with. The
+    # sidebar probe calls it for a task-tree node's deep probe, so a sidebar
+    # row's state is the tree's own verdict, never a second copy of the rules.
+    # None only before that wiring exists (no tree consumer in this process).
+    self.task_tree_activity: Callable[[str], tuple[bool, str]] | None = None
     # Listing-preamble memo: ((mtime_ns, size) of the sessions root, its subdirectory names).
     # The root's own mtime moves exactly when a session entry is created or removed (metadata
     # writes land one level below), so an unchanged signature proves the name set current.
@@ -2712,11 +2820,20 @@ class SessionManager:
     """
     return await asyncio.to_thread(has_running_tasks_sync, self._threads_dir(session_id))
 
-  def _probe_spec(self, session_id: str) -> tuple[str, Path, Path, Path]:
-    """The probe-input tuple :func:`selective_probe_sidebar_state` consumes."""
-    return (
-        session_id, self._threads_dir(session_id), self._session_dir(session_id) / "triggers",
-        self._session_dir(session_id) / "plans.json")
+  def _probe_spec(self, meta: SessionMetadata, *, recheck_liveness: bool = False) -> SidebarProbeSpec:
+    """The probe-input spec :func:`selective_probe_sidebar_state` consumes.
+
+    ``recheck_liveness`` marks a task-tree node whose stored verdict is
+    ``running``: the self-heal sweep must re-judge its recorded process
+    identity even when no covered file moved, because a process death writes
+    nothing. The poll path leaves it False — a clean node's poll pays no
+    /proc read.
+    """
+    is_task_node = meta.profile is not None
+    return SidebarProbeSpec(
+        meta.id, self._threads_dir(meta.id), self._session_dir(meta.id) / "triggers",
+        self._session_dir(meta.id) / "plans.json", self._session_dir(meta.id),
+        is_task_node, recheck_liveness)
 
   async def _enrich_and_sort(
       self,
@@ -2800,6 +2917,7 @@ class SessionManager:
       # every-10th window. force=1 keeps its synchronous full probe.
       self._schedule_sidebar_sweep(active_sessions)
       force_full = False
+    metas_by_id = {meta.id: meta for meta in active_sessions}
     if force_full:
       probe_ids = [meta.id for meta in active_sessions]
     else:
@@ -2814,12 +2932,16 @@ class SessionManager:
     sidebar_state.discard_dirty(probe_ids)
 
     if probe_ids:
-      specs = [self._probe_spec(session_id) for session_id in probe_ids]
+      specs = [self._probe_spec(metas_by_id[session_id]) for session_id in probe_ids]
       try:
         # Explicit force keeps its teeth as the escape hatch: it deep-probes
         # every selected session. Narrowed sweeps (the every-10th self-heal)
-        # deep-probe only sessions whose probe-input signature moved.
-        probed, probe_sigs = await asyncio.to_thread(selective_probe_sidebar_state, specs, deep=force)
+        # deep-probe only sessions whose probe-input signature moved. The
+        # task-tree owner's derivation rides as task_probe: only a selected
+        # task node pays it, and the verdict it answers with is the tree's own.
+        probed, probe_sigs = await asyncio.to_thread(
+            selective_probe_sidebar_state, specs, deep=force,
+            task_probe=self.task_tree_activity)
       except BaseException:
         # A failed probe must not lose the dirty state it was serving.
         for session_id in probe_ids:
@@ -2837,6 +2959,7 @@ class SessionManager:
           trigger_count=probed[sidebar_state.PENDING_TRIGGER_COUNT],
           next_trigger_at=probed[sidebar_state.NEXT_TRIGGER_AT],
           plan_approval=bool(probed[sidebar_state.HAS_PENDING_PLAN_APPROVAL]),
+          task_activity=probed.get(sidebar_state.TASK_TREE_ACTIVITY),
       )
     return derived
 
@@ -2852,18 +2975,25 @@ class SessionManager:
     global _sidebar_sweep_task
     if _sidebar_sweep_task is not None and not _sidebar_sweep_task.done():
       return
-    specs_template = [self._probe_spec(meta.id) for meta in sessions]
+
+    def _spec(meta: SessionMetadata) -> SidebarProbeSpec:
+      # A task-tree node whose stored verdict is running holds a launched Run
+      # without a terminal fact: its liveness must be re-judged here even when
+      # no covered file moved, because a process death writes nothing.
+      activity = sidebar_state.snapshot_task_activity(meta.id)
+      return self._probe_spec(
+          meta, recheck_liveness=activity is not None and activity[1] == "running")
+
+    specs_template = [_spec(meta) for meta in sessions]
 
     async def _run() -> None:
-      specs = [
-          (session_id, threads_dir, triggers_dir, plans_path)
-          for (session_id, threads_dir, triggers_dir, plans_path) in specs_template
-          if not sidebar_state.is_dirty(session_id)
-      ]
+      specs = [spec for spec in specs_template if not sidebar_state.is_dirty(spec.session_id)]
       if not specs:
         return
       try:
-        probed, probe_sigs = await asyncio.to_thread(selective_probe_sidebar_state, specs, deep=False)
+        probed, probe_sigs = await asyncio.to_thread(
+            selective_probe_sidebar_state, specs, deep=False,
+            task_probe=self.task_tree_activity)
       except asyncio.CancelledError:
         # Loop-teardown cancellation is not a sweep failure: the caller that
         # would consume the results is gone and the probe thread's outcome is
@@ -2875,8 +3005,8 @@ class SessionManager:
         # A failed sweep must not lose the state it was serving: re-mark every
         # selected session so the next poll re-probes it.
         log.exception("sidebar_self_heal_sweep_failed")
-        for session_id, _threads_dir, _triggers_dir, _plans_path in specs:
-          sidebar_state.mark_sidebar_dirty(session_id)
+        for spec in specs:
+          sidebar_state.mark_sidebar_dirty(spec.session_id)
         return
       _store_probe_results(probed, probe_sigs)
 

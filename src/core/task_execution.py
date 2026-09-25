@@ -58,6 +58,7 @@ from src.core.models import (
     RunRecord,
     SessionMetadata,
     TaskType,
+    utc_now,
 )
 from src.core.run_token import RUN_TOKEN_ENV, RunTokenClaims, sign_run_token
 from src.core.runs import RunNotFoundError, scan_result_exit
@@ -483,26 +484,95 @@ class TaskExecutionAdapter:
                     log.info("run_launch_authorization_withheld",
                              session_id=session_id, run_id=run_id, reason=str(e))
                     return f"withheld: {e}"
-        option = self._resolve_run_backend(run)
+        # Backend resolution is the first post-admission act: an exception here
+        # is a launch failure on an ADMITTED run and lands the run's durable
+        # failure (terminal fact, error evidence, after-run) before it
+        # propagates to the logging task owner.
+        try:
+            option = self._resolve_run_backend(run)
+        except Exception as exc:
+            await self._land_launch_failure(meta, run, exc)
+            raise
         # The one assembly owner builds this launch's managed instructions and
         # their durable snapshot BEFORE any backend is invoked. A preparation
         # failure (missing/corrupt rule, malformed memory, unsettled sources)
         # is a definitely-unlaunched withheld verdict: the queued Run and its
-        # unconsumed inputs stay exactly as they were.
+        # unconsumed inputs stay exactly as they were (the launch settles
+        # failed-to-start; no terminal fact — pinned by
+        # test_snapshot_publish_failure_is_a_definitely_unlaunched_preparation_failure).
         try:
             snapshot = await self._prepare_launch_snapshot(meta, run, option)
         except TaskPromptError as e:
             log.error("task_prompt_preparation_failed", session_id=session_id, run_id=run_id,
                       kind=run.kind, error=str(e))
             return f"withheld: prompt preparation failed: {e}"
-        if meta.profile == "manager" and run.kind == "manager_turn":
-            await self._execute_manager_turn(meta, run, option, snapshot)
-        elif meta.profile == "worker" and run.kind in ("work", "review", "iteration", "scheduled_step"):
-            await self._execute_worker_run(meta, run, option, snapshot, launch_prompt=launch_prompt)
-        else:
-            raise TaskInvalidError(
-                f"run {run_id} (profile={meta.profile}, kind={run.kind}) has no executable adapter")
+        # Adapter entry to process start: context build, worktree preparation
+        # and spawn all happen inside. An exception there is a launch failure
+        # on an admitted run — the same durable-failure handler as backend
+        # resolution.
+        try:
+            if meta.profile == "manager" and run.kind == "manager_turn":
+                await self._execute_manager_turn(meta, run, option, snapshot)
+            elif meta.profile == "worker" and run.kind in ("work", "review", "iteration", "scheduled_step"):
+                await self._execute_worker_run(meta, run, option, snapshot, launch_prompt=launch_prompt)
+            else:
+                raise TaskInvalidError(
+                    f"run {run_id} (profile={meta.profile}, kind={run.kind}) has no executable adapter")
+        except Exception as exc:
+            await self._land_launch_failure(meta, run, exc)
+            raise
         return LAUNCH_STARTED
+
+    async def _land_launch_failure(self, meta: SessionMetadata, run: RunRecord, exc: Exception) -> None:
+        """Land one post-admission launch exception as the Run's durable failure.
+
+        The admitted run's evidence trail: the error text rides the run's
+        events log (where the leaf card's event view and the failure-summary
+        reader already look), the terminal ``run_finished`` fact carries
+        outcome ``failed``, and the failed run then walks the same after-run
+        path a failed process takes — the worker's failure report to its
+        parent (task-tree or legacy) and the node's pending-input dispatch.
+        Withheld and refused launch verdicts never reach this handler: they
+        keep their no-terminal-fact semantics. The exception itself still
+        propagates to the launch task's logging owner with its traceback.
+        """
+        session_id, run_id = meta.id, run.id
+        log.error("task_run_launch_failed", session_id=session_id, run_id=run_id,
+                  kind=run.kind, error=str(exc), exc_info=True)
+        try:
+            error_text = f"{type(exc).__name__}: {exc}"[:2000]
+            await self._record_launch_error_event(session_id, run_id, error_text)
+            await self._tree.dispatch.finish_run(session_id, run_id, outcome="failed", exit_code=-1)
+            fresh = await self._tree.runs.get_run(session_id, run_id)
+            if fresh is not None:
+                run = fresh
+            if meta.profile == "worker":
+                await self._after_worker_run(meta, run, "failed")
+            else:
+                await self._tree.dispatch.dispatch_pending(session_id)
+        except Exception as land_exc:
+            # A failed landing must never mask the launch failure that caused
+            # it: both stay in the log, and the original still propagates.
+            log.error("task_run_launch_failure_landing_failed",
+                      session_id=session_id, run_id=run_id,
+                      error=str(land_exc), exc_info=True)
+
+    async def _record_launch_error_event(self, session_id: str, run_id: str, error_text: str) -> None:
+        """Write the launch error into the run's events log as durable evidence.
+
+        The events log is where the leaf card's event view already reads and
+        where ``_worker_failure_summary`` looks for the run's closing words, so
+        the error is reachable without any new evidence channel.
+        """
+        from src.core.ndjson import append_ndjson
+
+        events_log = self._tree.runs.run_dir(session_id, run_id) / "events.jsonl"
+        await append_ndjson(events_log, {
+            "type": ET.ERROR,
+            "message": error_text,
+            "content": error_text,
+            "timestamp": utc_now().isoformat(),
+        })
 
     @staticmethod
     def _verify_exempt(meta: SessionMetadata) -> bool:
@@ -1483,12 +1553,20 @@ class TaskExecutionAdapter:
 
 
     async def _worker_failure_summary(self, session_id: str, run: RunRecord) -> str:
-        """The failed run's own closing words (or the bare outcome) for the parent report."""
+        """The failed run's own closing words (or its error, or the bare outcome).
+
+        The summary must name the actual error when the run produced no report:
+        a run that died before its process started carries its error as the
+        events log's error event, and that text is the report's evidence.
+        """
         events_log = self._tree.runs.run_dir(session_id, run.id) / "events.jsonl"
         if events_log.is_file():
             text = await asyncio.to_thread(review._worker_summary_from_events_log, events_log)
             if text:
                 return text
+            error_text = await asyncio.to_thread(review._worker_error_from_events_log, events_log)
+            if error_text:
+                return error_text
         return f"run {run.id} failed without a reportable output"
 
 

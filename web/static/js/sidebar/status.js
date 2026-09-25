@@ -23,6 +23,17 @@ const renderedSessionStatuses = {};
 // Rows painted with profile=worker: a leaf runs its own work, so its running
 // state paints as the spinner rather than the delegated-work gear.
 const renderedWorkerRows = new Set();
+// Rows painted as task-tree nodes (profile not null, not a projected legacy
+// worker-thread leaf): their own running state is a live Run of their own and
+// paints as the spinner too — the gear is exclusively a collapsed row's
+// stand-in for a running descendant.
+const renderedTaskTreeRows = new Set();
+
+// A projected legacy worker-thread leaf (profile 'worker' plus worker_thread)
+// is a legacy row: it keeps the legacy derivation and the legacy mapping.
+function isTaskTreeRow(session) {
+  return !!session && session.profile != null && !session.worker_thread;
+}
 
 function recordRenderedSessionStatus(session) {
   renderedSessionStatuses[session.id] = (session && session.status) || 'active';
@@ -30,10 +41,14 @@ function recordRenderedSessionStatus(session) {
   ownIndicatorState[session.id] = getSessionIndicatorState(session);
   if (session && session.profile === 'worker') renderedWorkerRows.add(session.id);
   else renderedWorkerRows.delete(session.id);
+  if (isTaskTreeRow(session)) renderedTaskTreeRows.add(session.id);
+  else renderedTaskTreeRows.delete(session.id);
 }
 
 function displayIndicatorState(sid, state) {
-  return state === 'worker_only' && renderedWorkerRows.has(sid) ? 'thinking' : state;
+  if (state === 'worker_only'
+      && (renderedWorkerRows.has(sid) || renderedTaskTreeRows.has(sid))) return 'thinking';
+  return state;
 }
 
 function sidebarSessionIds() {
@@ -181,6 +196,11 @@ function updateSidebarSessionName(sessionId, name) {
 function getSessionIndicatorState(status) {
   if (status.thinking_since) return 'thinking';
   if (status.has_running_tasks) return 'worker_only';
+  // A task-tree row's fact-derived work verdict (idle | running | waiting |
+  // attention) when its sidebar state carries one. has_running_tasks already
+  // covered 'running'; the remaining verdicts map onto their own icons.
+  if (status.work_state === 'attention') return 'attention';
+  if (status.work_state === 'waiting') return 'waiting';
   return 'idle';
 }
 
@@ -232,6 +252,17 @@ const GEAR_CENTER_PATH =
   '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>';
 const SPINNER_TITLE = 'Task is running';
 const GEAR_TITLE = 'Delegated work running in subtasks';
+// The attention alert and the waiting clock complete the visual language:
+// one activity icon per row, chosen by the priority table in
+// paintSessionIndicator (own state first, then a collapsed row's stand-in).
+const ALERT_TITLE = 'Task needs attention';
+const CLOCK_TITLE = 'Task waiting to run';
+const ALERT_SVG_PATH =
+  '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" '
+  + 'd="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>';
+const CLOCK_SVG_PATH =
+  '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" '
+  + 'd="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>';
 
 function gearSvgContent() {
   return (Sidebar.GEAR_SVG_PATH || '') + GEAR_CENTER_PATH;
@@ -247,9 +278,11 @@ const UNREAD_TITLE = 'Unread reply';
 // setSessionIndicator toggles each element by id, so the three id prefixes are pinned.
 function renderSessionIndicators(session) {
   const ownState = getSessionIndicatorState(session);
-  const indicatorState = session.profile === 'worker' && ownState === 'worker_only' ? 'thinking' : ownState;
+  const indicatorState = displayIndicatorState(session.id, ownState);
   return `<svg id="spinner-${session.id}" title="${escapeHtmlAttr(SPINNER_TITLE)}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24">${SPINNER_SVG_INNER}</svg>
     <svg id="worker-indicator-${session.id}" title="${escapeHtmlAttr(GEAR_TITLE)}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">${gearSvgContent()}</svg>
+    <svg id="alert-indicator-${session.id}" title="${escapeHtmlAttr(ALERT_TITLE)}" class="w-3.5 h-3.5 text-red-500 flex-shrink-0 ${indicatorState === 'attention' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">${ALERT_SVG_PATH}</svg>
+    <svg id="waiting-indicator-${session.id}" title="${escapeHtmlAttr(CLOCK_TITLE)}" class="w-3.5 h-3.5 text-slate-500 flex-shrink-0 ${indicatorState === 'waiting' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">${CLOCK_SVG_PATH}</svg>
     <span id="unread-${session.id}" data-has-unread="${session.has_unread ? 1 : 0}" title="${escapeHtmlAttr(UNREAD_TITLE)}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${session.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>`;
 }
 
@@ -292,12 +325,16 @@ function updateSidebarHighlight(newSessionId) {
 }
 
 // Indicator priority over the nested sidebar. A row's own activity comes
-// first (its thinking spinner, then its delegated-work gear); a collapsed
-// parent then stands in for its subtree: a running descendant shows the gear,
-// an unread descendant shows the dot. An expanded parent shows its own facts
-// only, since the descendants show theirs. The facts are the latest applied
-// state per row (list paint, status poll, running_changed broadcast) and the
-// shared unread map; the tree shape comes from the last grouped paint.
+// first, in this order: own thinking or running -> the yellow spinner; own
+// attention -> the red alert; own waiting (queued, not launched) -> the muted
+// clock. A collapsed parent whose own state is idle then stands in for its
+// subtree in the same order: a running descendant shows the gear, an
+// attention descendant the alert, a waiting descendant the clock. An expanded
+// parent shows its own facts only, since the descendants show theirs. The
+// unread dot shows only when no activity icon does. The facts are the latest
+// applied state per row (list paint, status poll, task_tree_changed /
+// running_changed broadcasts) and the shared unread map; the tree shape comes
+// from the last grouped paint.
 const ownIndicatorState = {};
 
 function treeChildIdsOf(sid) {
@@ -309,6 +346,11 @@ function treeStandsInForSubtree(sid) {
   return !(Sidebar.isTreeNodeExpanded && Sidebar.isTreeNodeExpanded(sid));
 }
 
+function subtreeHasState(sid, state) {
+  return treeChildIdsOf(sid).some(
+      child => (ownIndicatorState[child] || 'idle') === state || subtreeHasState(child, state));
+}
+
 function subtreeHasActivity(sid) {
   return treeChildIdsOf(sid).some(child => (ownIndicatorState[child] || 'idle') !== 'idle' || subtreeHasActivity(child));
 }
@@ -317,11 +359,21 @@ function subtreeHasUnread(sid) {
   return treeChildIdsOf(sid).some(child => !!sessionUnread[child] || subtreeHasUnread(child));
 }
 
+// The collapsed stand-in verdict, in the same priority order as the row's own
+// state: a running descendant (the gear), then attention (the alert), then
+// waiting (the clock).
+function subtreeStandInState(sid) {
+  if (!treeStandsInForSubtree(sid)) return 'idle';
+  if (subtreeHasState(sid, 'worker_only')) return 'worker_only';
+  if (subtreeHasState(sid, 'attention')) return 'attention';
+  if (subtreeHasState(sid, 'waiting')) return 'waiting';
+  return 'idle';
+}
+
 function effectiveIndicatorState(sid) {
   const own = ownIndicatorState[sid] || 'idle';
   if (own !== 'idle') return own;
-  if (treeStandsInForSubtree(sid) && subtreeHasActivity(sid)) return 'worker_only';
-  return 'idle';
+  return subtreeStandInState(sid);
 }
 
 function effectiveUnread(sid) {
@@ -330,12 +382,21 @@ function effectiveUnread(sid) {
 }
 
 function paintSessionIndicator(sid) {
-  const state = displayIndicatorState(sid, effectiveIndicatorState(sid));
+  // The display mapping (a row's own running Run reads as the spinner) applies
+  // only to the row's own state; a collapsed stand-in keeps its own icon
+  // vocabulary — the gear for a running descendant, the alert, the clock.
+  const own = ownIndicatorState[sid] || 'idle';
+  const state = own !== 'idle' ? displayIndicatorState(sid, own) : subtreeStandInState(sid);
   const spinner = document.getElementById('spinner-' + sid);
   const worker = document.getElementById('worker-indicator-' + sid);
+  const alert = document.getElementById('alert-indicator-' + sid);
+  const clock = document.getElementById('waiting-indicator-' + sid);
   const dot = document.getElementById('unread-' + sid);
   if (spinner) spinner.classList.toggle('hidden', state !== 'thinking');
   if (worker) worker.classList.toggle('hidden', state !== 'worker_only');
+  if (alert) alert.classList.toggle('hidden', state !== 'attention');
+  if (clock) clock.classList.toggle('hidden', state !== 'waiting');
+  // The unread dot is an idle-state cue: any activity icon hides it.
   if (dot) dot.classList.toggle('hidden', state !== 'idle' || !effectiveUnread(sid));
 }
 

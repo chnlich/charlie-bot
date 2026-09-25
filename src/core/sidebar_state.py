@@ -28,6 +28,14 @@ NEXT_TRIGGER_AT = "next_trigger_at"
 HAS_PENDING_PLAN_APPROVAL = "has_pending_plan_approval"
 HAS_RUNNING_TASKS = "has_running_tasks"
 HAS_PENDING_TRIGGER = "has_pending_trigger"
+# A task-tree node's derived activity, carried by the probed snapshot and the
+# derived entry alike (the sidebar's task-tree rows read it; legacy rows never
+# carry the key). The value is the shared derivation's pair: (has_running_tasks,
+# work_state) — see TaskTreeActivity in src.core.task_sessions.
+TASK_TREE_ACTIVITY = "task_tree_activity"
+# The derived entry's work_state key for task-tree rows (the status payload and
+# the list rows carry the verdict; legacy rows keep today's key set).
+WORK_STATE = "work_state"
 
 # Every Nth populate_sidebar_state call re-probes all active sessions: the
 # bounded self-heal window for a state-transition write path that forgets to
@@ -200,6 +208,21 @@ def required_snapshot_entry(session_id: str) -> dict:
 def store_snapshot_entry(session_id: str, entry: dict) -> None:
   """Refresh the snapshot entry for *session_id* with fresh probe results."""
   _snapshot[session_id] = entry
+
+
+def snapshot_task_activity(session_id: str) -> tuple[bool, str] | None:
+  """The stored task-tree activity for *session_id*, or None for a legacy row.
+
+  ``(has_running_tasks, work_state)`` — the pair the deep probe derived. A
+  node whose stored verdict is ``running`` holds a launched Run without a
+  terminal fact, so its liveness must be re-checked on the self-heal sweep
+  even when no file the probe signature covers has moved (a process death
+  writes nothing).
+  """
+  entry = _snapshot.get(session_id)
+  if entry is None:
+    return None
+  return entry.get(TASK_TREE_ACTIVITY)
 
 
 def probe_signature(session_id: str) -> tuple | None:

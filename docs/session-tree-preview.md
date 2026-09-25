@@ -92,3 +92,31 @@ the whole launch, additions included, as one structured diagnostic.
 - **No rewriting of existing homes.** A preview home is never a source or
   target that touches the production home's sessions; legacy sessions are read
   in place by the new code, never converted.
+
+## Automated trials over a preview
+
+Two repo-owned harnesses drive a preview instance end to end; both are
+executable verification recipes, never mocks:
+
+- `scripts/live_preview_task_tree.py` — the live execution trial: a root
+  manager's real takeoff turn, a repo-less quick-edit worker, a synthetic-repo
+  implement worker with its auto-spawned review, and the workspace boundary.
+- `scripts/live_preview_sidebar_status.py` — the sidebar-status trial: real
+  Chrome over CDP against the same kind of fresh preview home, asserting the
+  sidebar's live work states through `/api/sessions/status`, the DOM icons and
+  screenshots — a ~60 s worker Run (spinner on the row, gear on the collapsed
+  parent, expanded parent showing only its own state, icons clearing after
+  finish), a launch failure before process start (red alert on the row and the
+  collapsed parent, the parent's failure report naming the error, the leaf
+  card reading `failed` and a held-back retry reading `queued`), a queued Run
+  held by a paused node (the clock), and goal-derived row names.
+
+Both share the preview's isolation guarantees: the trial home is a fresh
+temporary directory, the port a free one (the production port 18498 is
+refused explicitly), the harness env is scrubbed of production identity
+variables, the production service is never started, stopped, restarted or
+contacted, the production homes (`~/.charliebot`,
+`~/.charliebot-session-task-tree`) are never written, and an independent
+sentinel home plus a host native-store snapshot prove nothing outside the
+trial changed. Evidence (screenshots, assertion JSON, the tested commit) goes
+to `--evidence-dir`, never into git.

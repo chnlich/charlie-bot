@@ -209,3 +209,22 @@ async def test_projection_fanout_repeat_serves_the_same_rows(tmp_path: Path) -> 
   assert [r.id for r in first] == [r.id for r in second]
   assert all(a is b for a, b in zip(first, second, strict=True)), \
       "a repeat projection rebuilt row objects; the consumers' identity-keyed memos cannot serve"
+
+
+@pytest.mark.asyncio
+async def test_projected_row_payload_rides_the_row_object(tmp_path: Path) -> None:
+  """The leaf payload renders once per pinned row object and is served from the
+  memo after; a rebuilt row object renders its own payload."""
+  import src.api.sessions as api_sessions
+
+  cfg, _session_mgr, thread_mgr, legacy = await build_env(tmp_path)
+  thread = await thread_mgr.create_thread(legacy, "Fix the login flow")
+  await write_thread_meta(thread_mgr, thread, status=ThreadStatus.COMPLETED,
+                          started_at=datetime.now(UTC), completed_at=datetime.now(UTC))
+
+  rows = await project_worker_threads([legacy], cfg, thread_mgr)
+  payload = api_sessions._projected_row_payload(rows[1])
+  assert payload == rows[1].model_dump(mode="json")
+  assert api_sessions._projected_row_payload(rows[1]) is payload  # memo hit
+  rows = await project_worker_threads([legacy], cfg, thread_mgr)  # same pinned object
+  assert api_sessions._projected_row_payload(rows[1]) is payload

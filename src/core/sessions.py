@@ -1158,6 +1158,36 @@ class SessionManager:
         include_pending_plan_approval=include_pending_plan_approval,
     )
 
+  async def list_sessions_readonly(
+      self,
+      status: SessionStatus | None = None,
+      starred: bool | None = None,
+      scheduled: bool | None = None,
+      include_running_status: bool = False,
+      include_pending_trigger_status: bool = False,
+  ) -> tuple[list[SessionMetadata], dict[str, dict]]:
+    """List sessions newest-first without copying: ``(rows, derived)`` for
+    consumers that only read.
+
+    Rows are the shared cached metadata references — the caller must not mutate
+    them (an unfiltered listing's derived-archive rows are copies). ``derived``
+    maps each row's id to the sidebar-state fields the copy path
+    (:meth:`list_sessions`) stamps onto its copies; ``thinking_since`` is not
+    among them (the caller reads :func:`busy_since` itself).
+    """
+    metas = await self._with_derived_archive(await self._load_session_metas(status), status)
+    rows = [
+        meta for meta in metas if (starred is None or meta.starred == starred) and
+        (scheduled is None or bool(meta.scheduled_task) == scheduled)
+    ]
+    rows.sort(key=lambda meta: meta.updated_at, reverse=True)
+    derived = await self.resolve_sidebar_state(
+        rows,
+        include_running_status=include_running_status,
+        include_pending_trigger_status=include_pending_trigger_status,
+    )
+    return rows, derived
+
   async def list_group_names(self) -> list[str]:
     """Return sorted distinct group names across all sessions.
 

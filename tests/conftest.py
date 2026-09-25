@@ -73,6 +73,7 @@ from src.core.home import CREDENTIALS_FILE  # noqa: E402
 from src.core.plans import PlanRegistryManager  # noqa: E402
 from src.core.scheduler import Scheduler  # noqa: E402
 from src.core.sessions import SessionManager  # noqa: E402
+from src.core.run_token import CallerIdentity  # noqa: E402
 from src.core.task_sessions import TaskTreeManager  # noqa: E402
 from src.core import spawner  # noqa: E402
 from src.core import spawner_finalize  # noqa: E402
@@ -947,6 +948,35 @@ def identity_of(pid: int) -> tuple[int, str]:
   pair = runs.read_pid_stat(pid)
   assert pair is not None
   return pid, pair[0]
+
+
+OPERATOR = CallerIdentity(kind="operator")
+
+
+async def create_task(tree: TaskTreeManager, *, parent: str | None, request_id: str,
+                      profile: str = "manager", task: models.TaskSpec | None = None,
+                      name: str | None = None):
+  """One operator-created task node; the default shape task-tree tests build their trees with."""
+  return await tree.create_task(
+      request_id=request_id, task_parent_id=parent, profile=profile, task=task,
+      name=name, backend=None, caller=OPERATOR)
+
+
+def live_subprocess() -> subprocess.Popen:
+  """An owned, isolated sleeper: the only process identity any test here signals."""
+  return subprocess.Popen(["/bin/sleep", "30"])
+
+
+def delegate_payload(session_id: str, repo: Path, *, task_type: str = "quick-edit") -> dict:
+  """The /api/internal/delegate request body one test delegation sends."""
+  return {
+      "session_id": session_id,
+      "description": "## Goal\n\nfix the thing\n",
+      "task_type": task_type,
+      "keep_worktree": False,
+      "repo_path": None if task_type == "verify" else str(repo),
+      "base_branch": None if task_type == "verify" else "main",
+  }
 
 
 def build_master_cc_cfg(tmp_path: Path) -> CharlieBotConfig:

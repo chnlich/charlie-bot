@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from conftest import delegate_payload, stub_credentials
 
 from src.core import event_types as ET
 from src.core.models import RunRecord, TaskSpec
@@ -29,7 +30,6 @@ from tests.test_task_execution import (
     init_repo_with_origin,
     install_backends,
     result_event,
-    stub_credentials,
 )
 
 
@@ -39,7 +39,7 @@ async def make_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
     from conftest import patch_instructions_content
     patch_instructions_content(monkeypatch)
-    stub_credentials(monkeypatch, {"charliebot": {"access_key": "op-secret"}})
+    stub_credentials({"charliebot": {"access_key": "op-secret"}})
     monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
     # The spawn-style routes resolve backends through the config owner directly.
@@ -52,17 +52,6 @@ async def make_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         request_id="child", task_parent_id=root.id, profile="manager",
         task=TaskSpec(goal="feature"), name="Feature", backend=None, caller="operator")
     return cfg, session_mgr, tree, root, child
-
-
-def delegate_payload(session_id: str, repo: Path, *, task_type: str = "quick-edit") -> dict:
-    return {
-        "session_id": session_id,
-        "description": "## Goal\n\nfix the thing\n",
-        "task_type": task_type,
-        "keep_worktree": False,
-        "repo_path": None if task_type == "verify" else str(repo),
-        "base_branch": None if task_type == "verify" else "main",
-    }
 
 
 @pytest.fixture()

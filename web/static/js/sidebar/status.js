@@ -425,7 +425,6 @@ async function pollActiveSessionView(opts) {
     THINKING_SINCE = data.session.thinking_since || null;
     setActiveBackendId(data.active_backend);
     setSwitchableBackends(data.switchable_backends);
-    setBackendSwitchRotates(data.backend_switch_rotates);
     updateActiveBackendBadges();
     globalThis.renderUsageFromData(data.usage);
 

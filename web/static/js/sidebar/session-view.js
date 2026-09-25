@@ -32,30 +32,11 @@ function setSwitchableBackends(backendIds) {
   switchableBackends = Array.isArray(backendIds) ? backendIds : [];
 }
 
-// True when this session is a cron-dedicated PM session whose backend switch
-// writes through to the task yaml and rotates to a fresh session.
-let backendSwitchRotates = false;
-
-function setBackendSwitchRotates(value) {
-  backendSwitchRotates = !!value;
-}
-
-// POST to switch this session's backend, then sync the header. On a rotating
-// (write-through) switch the current session is archived and the scheduled task
-// continues in a fresh session, so confirm first and navigate to the new
-// session on success. On failure the server's `detail` is surfaced and the
-// control reverts to the active value.
+// POST to switch this session's backend, then sync the header. On failure the
+// server's `detail` is surfaced and the control reverts to the active value.
 async function switchBackend(backendId) {
   if (!SESSION_ID || !backendId) return;
   const previousBadge = document.getElementById('backend-badge');
-  if (backendSwitchRotates) {
-    const confirmed = confirm(
-      'Switching the model archives this session and continues the scheduled task in a fresh session with the new model. Continue?');
-    if (!confirmed) {
-      rollbackBackendSelect(previousBadge);
-      return;
-    }
-  }
   try {
     const res = await fetch('/api/sessions/' + SESSION_ID + '/backend', {
       method: 'POST',
@@ -64,15 +45,8 @@ async function switchBackend(backendId) {
     });
     if (res.ok) {
       const data = await res.json();
-      if (data.id && data.id !== SESSION_ID) {
-        setActiveBackendId(data.backend);
-        await switchSession(data.id);
-        updateSidebarHighlight(data.id);
-        switchSidebarFilter(currentFilter);
-      } else {
-        setActiveBackendId(data.backend);
-        updateActiveBackendBadges();
-      }
+      setActiveBackendId(data.backend);
+      updateActiveBackendBadges();
     } else {
       let detail = '';
       try {
@@ -423,7 +397,6 @@ function renderSessionView(data) {
   const messages = data.messages || [];
   setActiveBackendId(data.active_backend);
   setSwitchableBackends(data.switchable_backends);
-  setBackendSwitchRotates(data.backend_switch_rotates);
   setActiveRoundRatings(session.round_ratings || {});
   const backendType = data.active_backend_type || (BACKEND_TYPES ? BACKEND_TYPES[data.active_backend] : '') || '';
   if (globalThis.TuiSession) {
@@ -879,7 +852,6 @@ const API = {
   getActiveBackendId,
   setActiveBackendId,
   setSwitchableBackends,
-  setBackendSwitchRotates,
   updateActiveBackendBadges,
   scheduleLazySessionDataLoad,
   switchSession,

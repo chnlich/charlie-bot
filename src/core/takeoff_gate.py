@@ -138,8 +138,7 @@ def _settled_user_answers(
         seen_any_user = True
       if suffix_pre_takeoff_at is not None:
         pre_takeoff_at = suffix_pre_takeoff_at
-      _gate_answers_memo.store(
-          session_id, (events, covered + len(suffix), has_takeoff, pre_takeoff_at, seen_any_user))
+      _gate_answers_memo.store(session_id, (events, covered + len(suffix), has_takeoff, pre_takeoff_at, seen_any_user))
     return has_takeoff, pre_takeoff_at, seen_any_user
   count = len(events)
   span = events[:count]  # the walked span is the claimed span: an append landing mid-walk is not claimed unseen
@@ -208,8 +207,7 @@ def check_takeoff_gate_for_task(
     task_parent_id, profile = task_meta_of(current)
     is_start = current == start_session_id
     if is_start and profile != "manager":
-      raise DelegationBlockedError(
-          f"task {current} is not a manager; agent calls run only under a manager task")
+      raise DelegationBlockedError(f"task {current} is not a manager; agent calls run only under a manager task")
     if task_state_of(current) != "open":
       raise DelegationBlockedError(
           f"{'ancestor task' if not is_start else 'task'} {current} is "
@@ -221,8 +219,7 @@ def check_takeoff_gate_for_task(
       # The nearest node with a real user instruction: apply the existing gate
       # here and never borrow past it (a local instruction blocks higher ones).
       pre_takeoff_active = (
-          pre_takeoff_at is not None and
-          pre_takeoff_at <= effective_now < pre_takeoff_at + _PRE_TAKEOFF_WINDOW)
+          pre_takeoff_at is not None and pre_takeoff_at <= effective_now < pre_takeoff_at + _PRE_TAKEOFF_WINDOW)
       if has_takeoff or pre_takeoff_active:
         return current
       raise DelegationBlockedError(

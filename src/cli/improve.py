@@ -21,13 +21,13 @@ import argparse
 import json
 
 from src.cli.common import (
-  add_session_arg,
-  find_local_task_child,
-  find_local_thread,
-  post_internal_api,
-  read_required_text_file,
-  resolve_session_id,
-  validate_repo_path,
+    add_session_arg,
+    find_local_task_child,
+    find_local_thread,
+    post_internal_api,
+    read_required_text_file,
+    resolve_session_id,
+    validate_repo_path,
 )
 from src.cli.help_formatter import CliRawDescriptionHelpFormatter
 from src.core.config import get_config
@@ -150,8 +150,7 @@ def main() -> None:
       meta = None
     if meta is not None and meta.profile is not None:
       child = find_local_task_child(
-          session_id, description=goal, task_type=None,
-          request_id=improve_child_request_id(loop_id))
+          session_id, description=goal, task_type=None, request_id=improve_child_request_id(loop_id))
       if child is None:
         return None
       response["child_session_id"] = child["session_id"]

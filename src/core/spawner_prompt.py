@@ -100,15 +100,11 @@ def load_worker_prompt_sections(cfg: CharlieBotConfig) -> dict[str, str]:
       cfg.charlie_bot_repo / "prompts" / "task_base.md", (), extraction="task-base-prompt")
   duplicate = sorted(set(base_sections) & set(worker_sections))
   if duplicate:
-    raise ValueError(
-        "prompts/task_base.md and prompts/worker.md both define section(s): "
-        + ", ".join(duplicate))
+    raise ValueError("prompts/task_base.md and prompts/worker.md both define section(s): " + ", ".join(duplicate))
   merged = {**base_sections, **worker_sections}
   missing = [sid for sid in _REQUIRED_WORKER_PROMPT_SECTIONS if sid not in merged]
   if missing:
-    raise ValueError(
-        "the worker prompt sections are missing required section(s): "
-        + ", ".join(missing))
+    raise ValueError("the worker prompt sections are missing required section(s): " + ", ".join(missing))
   return merged
 
 
@@ -169,8 +165,7 @@ def _build_worker_prompt(
 
   task_section = sections["task"].replace("{{description}}", description)
 
-  worktree_section = (
-      f"{workflow_body}\n\n{sections['task_spec_source_files']}\n{task_section}")
+  worktree_section = (f"{workflow_body}\n\n{sections['task_spec_source_files']}\n{task_section}")
 
   iteration_reports_section = ""
   if loop_dir and iteration_number is not None:

@@ -21,14 +21,14 @@ from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.models import (
-  LocalPid,
-  PendingTrigger,
-  RemotePid,
-  SessionStatus,
-  SlurmJob,
-  TriggerStatus,
-  WatchKind,
-  WatchTarget,
+    LocalPid,
+    PendingTrigger,
+    RemotePid,
+    SessionStatus,
+    SlurmJob,
+    TriggerStatus,
+    WatchKind,
+    WatchTarget,
 )
 from src.core.sessions import SessionManager
 from src.core.sidebar_state import mark_sidebar_dirty
@@ -875,8 +875,7 @@ class TriggerManager:
       log.exception("trigger_alias_resolution_failed", session=session_id)
       return None
 
-  async def _fire_task_tree(self, trigger: PendingTrigger, trigger_message: str,
-                            session_id: str | None = None) -> bool:
+  async def _fire_task_tree(self, trigger: PendingTrigger, trigger_message: str, session_id: str | None = None) -> bool:
     """The v2 delivery: durable scheduled input to the stable node + dispatch.
 
     Returns False when the target is not a task-tree node (the legacy route
@@ -906,8 +905,7 @@ class TriggerManager:
       )
       await task_mgr.dispatch.dispatch_pending(session_id)
     except (TaskNotFoundError, TaskForbiddenError, TaskInvalidError) as e:
-      log.error("trigger_task_tree_delivery_failed", trigger_id=trigger.id,
-                session=session_id, error=str(e))
+      log.error("trigger_task_tree_delivery_failed", trigger_id=trigger.id, session=session_id, error=str(e))
       raise
     log.info("trigger_delivered_to_task_tree", trigger_id=trigger.id, session=session_id)
     return True

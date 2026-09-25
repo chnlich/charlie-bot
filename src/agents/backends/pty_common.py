@@ -135,8 +135,7 @@ async def tmux_pane_pid(session_id: str) -> int | None:
   and the caller-identity checks verify — the same Run/pid owners as a
   headless launch.
   """
-  rc, out = await _run_tmux("list-panes", "-t", tmux_session_name(session_id),
-                            "-F", "#{pane_pid}", capture=True)
+  rc, out = await _run_tmux("list-panes", "-t", tmux_session_name(session_id), "-F", "#{pane_pid}", capture=True)
   if rc != 0 or not out.strip():
     return None
   try:

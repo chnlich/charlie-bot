@@ -552,20 +552,24 @@ def _selection_from_parts(
   index_entries.sort(key=entry_order_key)
   segments: list[tuple[str, str, tuple[MemoryEntrySource, ...]]] = []
   if full_body_entries:
-    segments.append((
-        "full",
-        "\n\n".join(full_text(e) for e in full_body_entries),
-        tuple(MemoryEntrySource(source_ref=f"memory:{e.id}", delivery="full", text=full_text(e))
-              for e in full_body_entries),
-    ))
+    segments.append(
+        (
+            "full",
+            "\n\n".join(full_text(e) for e in full_body_entries),
+            tuple(
+                MemoryEntrySource(source_ref=f"memory:{e.id}", delivery="full", text=full_text(e))
+                for e in full_body_entries),
+        ))
   if index_entries:
-    segments.append((
-        "index",
-        _index_lines(index_entries),
-        tuple(MemoryEntrySource(source_ref=f"memory:{e.id}", delivery="index",
-                                text=f"{e.topic}/{e.slug} · {e.title}")
-              for e in index_entries),
-    ))
+    segments.append(
+        (
+            "index",
+            _index_lines(index_entries),
+            tuple(
+                MemoryEntrySource(
+                    source_ref=f"memory:{e.id}", delivery="index", text=f"{e.topic}/{e.slug} · {e.title}")
+                for e in index_entries),
+        ))
   if usage_line is not None:
     # The worker usage line rides the index segment (it is query guidance); a
     # selection with no index entries gets a usage-only segment so the joined
@@ -635,8 +639,9 @@ def select_worker_memory(memory_dir: Path, repo_basename: str) -> MemorySelectio
       full_body_entries.append(e)
     else:
       index_entries.append(e)
-  return _selection_from_parts(
-      "worker", repo_basename, full_body_entries, index_entries, usage_line=WORKER_USAGE_LINE)
+  return _selection_from_parts("worker", repo_basename, full_body_entries, index_entries, usage_line=WORKER_USAGE_LINE)
+
+
 def entry_order_key(entry: Entry) -> tuple[str | None, str]:
   """The store's canonical entry order: ``(topic, slug)``.
 

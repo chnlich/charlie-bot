@@ -10,16 +10,16 @@ from fastapi.responses import JSONResponse
 
 from src.agents.backends.base import make_master_done_event, make_text_event
 from src.api.deps import (
-  get_config_on_loop,
-  get_session_manager,
-  get_task_manager,
-  require_caller,
-  require_found,
-  require_session,
+    get_config_on_loop,
+    get_session_manager,
+    get_task_manager,
+    require_caller,
+    require_found,
+    require_session,
 )
 from src.api.message_utils import (
-  build_agent_input_content,
-  build_user_event,
+    build_agent_input_content,
+    build_user_event,
 )
 from src.core import event_types as ET
 from src.core.autonamer import is_default_session_name, maybe_auto_name
@@ -30,9 +30,9 @@ from src.core.log_once import LazyStructlogLogger
 from src.core.message_aggregator import extract_text_from_message
 from src.core.message_events import serialize_uploaded_files
 from src.core.models import (
-  SendMessageRequest,
-  SessionMetadata,
-  SessionStatus,
+    SendMessageRequest,
+    SessionMetadata,
+    SessionStatus,
 )
 from src.core.run_token import CallerIdentity
 from src.core.runs import RunIdentityConflictError
@@ -129,12 +129,16 @@ async def send_message(
       raise HTTPException(status_code=403, detail=str(e)) from e
     except TaskInvalidError as e:
       raise HTTPException(status_code=400, detail=str(e)) from e
-    return JSONResponse(status_code=202, content={
-        "status": "accepted",
-        "input_event_id": str(admitted.get("id")),
-        "launch": bool(decision.get("launch")),
-        **({"reason": decision["reason"]} if decision.get("reason") else {}),
-    })
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": "accepted",
+            "input_event_id": str(admitted.get("id")),
+            "launch": bool(decision.get("launch")),
+            **({
+                "reason": decision["reason"]
+            } if decision.get("reason") else {}),
+        })
 
   # The only content path that does not go through trigger_master: unarchive an
   # archived target here, before dispatching, so the slash-command branch and

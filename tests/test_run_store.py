@@ -9,23 +9,21 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import make_home_config
+from conftest import build_env as build_task_tree_env
+from conftest import identity_of
 
 from src.core import event_types as ET
 from src.core.models import RunRecord
 from src.core.runs import (
   RunIdentityConflictError,
   RunStore,
-  read_pid_stat,
 )
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 
 
 def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager, RunStore]:
-  cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
-  mgr = TaskTreeManager(cfg, session_mgr)
+  cfg, session_mgr, mgr = build_task_tree_env(tmp_path)
   return cfg, session_mgr, mgr, mgr.runs
 
 
@@ -40,12 +38,6 @@ async def make_task(store_run_env: tuple, request_id: str) -> str:
 def live_subprocess() -> subprocess.Popen:
   """An owned, isolated sleeper: the only process identity any test here signals."""
   return subprocess.Popen(["/bin/sleep", "30"])
-
-
-def identity_of(pid: int) -> tuple[int, str]:
-  pair = read_pid_stat(pid)
-  assert pair is not None
-  return pid, pair[0]
 
 
 async def register_live_run(store: RunStore, session_id: str, proc: subprocess.Popen) -> RunRecord:

@@ -10,13 +10,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import make_home_config, stub_credentials
+from conftest import build_env, identity_of, stub_credentials
 
 from src.api.message_utils import events_to_view
 from src.core import event_types as ET
 from src.core.models import RunRecord, TaskSpec
 from src.core.run_token import CallerIdentity, RunTokenClaims, sign_run_token
-from src.core.runs import read_pid_stat
 from src.core.sessions import SessionManager
 from src.core.task_completion import CompletionEvidence
 from src.core.task_sessions import (
@@ -50,18 +49,6 @@ TOOL_RESULT_ECHO = {
 def live_subprocess() -> subprocess.Popen:
   """An owned, isolated sleeper: the only process identity any test here signals."""
   return subprocess.Popen(["/bin/sleep", "30"])
-
-
-def identity_of(pid: int) -> tuple[int, str]:
-  pair = read_pid_stat(pid)
-  assert pair is not None
-  return pid, pair[0]
-
-
-def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:
-  cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
-  return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
 
 
 async def create_task(tree: TaskTreeManager, *, parent: str | None, request_id: str,

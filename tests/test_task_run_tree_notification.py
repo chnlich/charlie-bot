@@ -16,12 +16,12 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from conftest import make_home_config
+from conftest import identity_of, make_home_config
 
 from src.core import event_types as ET
 from src.core.models import RunRecord
 from src.core.run_token import CallerIdentity
-from src.core.runs import RunIdentityConflictError, read_pid_stat
+from src.core.runs import RunIdentityConflictError
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 
@@ -64,12 +64,6 @@ class NotificationSpy:
 
 def live_subprocess() -> subprocess.Popen:
   return subprocess.Popen(["/bin/sleep", "30"])
-
-
-def identity_of(pid: int) -> tuple[int, str]:
-  pair = read_pid_stat(pid)
-  assert pair is not None
-  return pid, pair[0]
 
 
 @pytest.mark.asyncio

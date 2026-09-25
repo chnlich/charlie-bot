@@ -22,7 +22,6 @@ import hashlib
 import hmac
 import json
 import os
-from dataclasses import dataclass
 from typing import Literal
 
 RUN_TOKEN_ENV = "CHARLIEBOT_RUN_TOKEN"
@@ -32,20 +31,47 @@ class RunTokenError(Exception):
   """Any run-token verification failure (bad shape, bad signature, bad payload)."""
 
 
-@dataclass(frozen=True)
 class RunTokenClaims:
-  """The identity one run token binds: session, run, and the agent's name."""
-  session_id: str
-  run_id: str
-  agent: str
+  """The identity one run token binds: session, run, and the agent's name.
+
+  A plain class, not a dataclass: the CLI verbs resolve the run token in fresh
+  processes, and the ``dataclasses`` import pulls ``inspect`` (~9-11 ms of the
+  M92/M97/M102 verb walls) for machinery no consumer calls.
+  """
+
+  __slots__ = ("session_id", "run_id", "agent")
+
+  def __init__(self, session_id: str, run_id: str, agent: str) -> None:
+    self.session_id = session_id
+    self.run_id = run_id
+    self.agent = agent
+
+  def __eq__(self, other: object) -> bool:
+    if not isinstance(other, RunTokenClaims):
+      return NotImplemented
+    return (self.session_id, self.run_id, self.agent) == (other.session_id, other.run_id, other.agent)
+
+  def __hash__(self) -> int:
+    return hash((self.session_id, self.run_id, self.agent))
 
 
-@dataclass(frozen=True)
 class CallerIdentity:
   """The verified caller of a structural request: operator, or an agent bound to one Run."""
-  kind: Literal["operator", "agent"]
-  # Present only for kind == "agent".
-  claims: RunTokenClaims | None = None
+
+  __slots__ = ("kind", "claims")
+
+  def __init__(self, kind: Literal["operator", "agent"], claims: "RunTokenClaims | None" = None) -> None:
+    self.kind = kind
+    # Present only for kind == "agent".
+    self.claims = claims
+
+  def __eq__(self, other: object) -> bool:
+    if not isinstance(other, CallerIdentity):
+      return NotImplemented
+    return self.kind == other.kind and self.claims == other.claims
+
+  def __hash__(self) -> int:
+    return hash((self.kind, self.claims))
 
   @property
   def is_operator(self) -> bool:

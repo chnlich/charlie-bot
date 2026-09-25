@@ -17,7 +17,6 @@ fails visibly instead of falling back to operator behavior.
 """
 
 import argparse
-import asyncio
 import re
 import sys
 from datetime import UTC, datetime
@@ -130,6 +129,9 @@ def _resolve_run_scoped_audience(cfg: CharlieBotConfig, token: str) -> str:
   A wrong-instance token names a session this home's sessions directory has
   never heard of, which is the same visible unknown-run refusal.
   """
+  # Deferred off the module wall (M98): this resolution is the only asyncio consumer.
+  import asyncio
+
   from src.core.config import configured_access_key
   from src.core.control_events import ControlEventSink
   from src.core.run_token import RunTokenError, verify_run_token

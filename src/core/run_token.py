@@ -28,17 +28,6 @@ from typing import Literal
 RUN_TOKEN_ENV = "CHARLIEBOT_RUN_TOKEN"
 
 
-def _credentials() -> dict:
-  # lazy: src.core.config stays off the CLI import floor (docs/perf_baseline.md M92)
-  from src.core.config import get_credentials
-  return get_credentials()
-
-
-def operator_signing_key() -> str:
-  """The configured operator access key — the only run-token signing key."""
-  return str(_credentials().get("charliebot", "access_key") or "")
-
-
 class RunTokenError(Exception):
   """Any run-token verification failure (bad shape, bad signature, bad payload)."""
 

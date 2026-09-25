@@ -103,6 +103,49 @@ function countRows(html) {
   return (html.match(/<a\b[^>]*id="session-/g) || []).length;
 }
 
+const at = (hour) => `2026-04-02T${String(hour).padStart(2, '0')}:00:00Z`;
+
+function legacyRow(id, hour, overrides = {}) {
+  return makeSession(id, {profile: null, updated_at: at(hour), ...overrides});
+}
+
+// A task-node child carries the manager profile (session-view.js create-task
+// payload) and its parent's id in task_parent_id.
+function taskNode(id, parent, hour, overrides = {}) {
+  return makeSession(id, {profile: 'manager', task_parent_id: parent, updated_at: at(hour), ...overrides});
+}
+
+// A projected legacy worker-thread leaf (_projected_thread_row in
+// src/api/sessions.py): profile worker, task_parent_id = parent id, and the
+// worker_thread origin pair — no session exists behind the row id.
+function workerLeaf(id, parent, hour, overrides = {}) {
+  return makeSession(id, {
+    profile: 'worker',
+    task_parent_id: parent,
+    updated_at: at(hour),
+    worker_thread: {session_id: parent, thread_id: id},
+    ...overrides,
+  });
+}
+
+function anchorIdsInOrder(html) {
+  return [...html.matchAll(/<a\b[^>]*id="session-([^"]+)"/g)].map((m) => m[1]);
+}
+
+// A legacy parent P with two projected worker-thread leaves, a task-node
+// child C carrying its own child G, plus an unrelated root R — every subtree
+// shape the inline delete must take with the clicked row.
+function taskFamilyRows() {
+  return [
+    legacyRow('p1', 10),
+    workerLeaf('leaf1', 'p1', 9),
+    workerLeaf('leaf2', 'p1', 8),
+    taskNode('c1', 'p1', 7),
+    taskNode('g1', 'c1', 6),
+    makeSession('r1', {updated_at: at(5)}),
+  ];
+}
+
 test('the delete repaint dispatcher is Sidebar-reachable only, never a bare onclick global', () => {
   const {context} = buildContext();
   assert.equal(context.removeSessionFromRenderedList, undefined);
@@ -306,4 +349,79 @@ test('deleting the last remaining session renders the empty view', async () => {
   assert.match(nav.innerHTML, /No sessions yet/);
   assert.deepEqual(noActiveViews, [true]);
   assert.deepEqual(switches, []);
+});
+
+test('archiving a legacy parent takes its worker leaves and task descendants with it', async () => {
+  const {context, nav, fetchCalls} = buildContext();
+  await paintGrouped(context, taskFamilyRows());
+
+  // Pre-state: P nests C (with G) and both leaves; R stands alone.
+  assert.deepEqual(anchorIdsInOrder(nav.innerHTML), ['p1', 'c1', 'g1', 'leaf1', 'leaf2', 'r1']);
+
+  const baseline = fetchCalls.length;
+  await context.archiveSession('p1');
+  await settle();
+
+  // The whole subtree left the repaint: none of P, the leaves, C or G is
+  // promoted to a top-level row; R stays.
+  assert.deepEqual(anchorIdsInOrder(nav.innerHTML), ['r1']);
+  assert.equal(countRows(nav.innerHTML), 1);
+  assert.ok(nav.innerHTML.includes('Session r1'), nav.innerHTML);
+  // No-refetch contract: the whole delete flow issued exactly the DELETE call.
+  assert.deepEqual(fetchCalls.slice(baseline), ['/api/sessions/p1']);
+});
+
+test('archiving a task-node child removes only that child\'s subtree', async () => {
+  const {context, nav} = buildContext();
+  await paintGrouped(context, taskFamilyRows());
+
+  await context.archiveSession('c1');
+  await settle();
+
+  // C and G are gone; P keeps its leaves nested under it, R untouched.
+  assert.deepEqual(anchorIdsInOrder(nav.innerHTML), ['p1', 'leaf1', 'leaf2', 'r1']);
+  const subtreeAt = nav.innerHTML.indexOf('data-tree-children="p1"');
+  assert.notEqual(subtreeAt, -1, nav.innerHTML);
+  assert.ok(subtreeAt < nav.innerHTML.indexOf('id="session-leaf1"'), nav.innerHTML);
+});
+
+test('archiving the viewed legacy parent switches to a row outside its subtree', async () => {
+  const {context, nav, switches} = buildContext({sessionId: 'p1'});
+  await paintGrouped(context, taskFamilyRows());
+  // The switch pick reads the DOM after the repaint, so the row stubs must
+  // derive from the painted rows at call time (the harness default is the
+  // static list passed at build).
+  context.document.querySelectorAll = (selector) => (
+    selector === 'a[id^="session-"]' ? rowStubs(anchorIdsInOrder(nav.innerHTML)) : []);
+
+  await context.archiveSession('p1');
+  await settle();
+
+  // The first remaining rendered row is R — never one of P's children,
+  // which a node-only repaint would have promoted ahead of it.
+  assert.deepEqual(anchorIdsInOrder(nav.innerHTML), ['r1']);
+  assert.deepEqual(switches, ['r1']);
+});
+
+test('archiving a scheduled legacy parent takes its projected leaf with it', async () => {
+  const parent = makeCronSession('cp1', {profile: null, updated_at: at(10)});
+  const leaf = makeSession('cleaf', {
+    profile: 'worker',
+    task_parent_id: 'cp1',
+    updated_at: at(9),
+    worker_thread: {session_id: 'cp1', thread_id: 'ct1'},
+    schedule_project: 'CronProj',
+  });
+  const {context, nav, fetchCalls} = buildContext();
+  await paintScheduled(context, [parent, leaf, makeCronSession('cr1', {updated_at: at(8)})]);
+
+  // The scheduled list paints flat, leaf included.
+  assert.deepEqual(anchorIdsInOrder(nav.innerHTML), ['cp1', 'cleaf', 'cr1']);
+
+  const baseline = fetchCalls.length;
+  await context.archiveSession('cp1');
+  await settle();
+
+  assert.deepEqual(anchorIdsInOrder(nav.innerHTML), ['cr1']);
+  assert.deepEqual(fetchCalls.slice(baseline), ['/api/sessions/cp1']);
 });

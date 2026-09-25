@@ -886,24 +886,47 @@ function renderSessionList(sessions, filter, options = {}) {
   refreshTuiDots();
 }
 
-// Inline-delete repaint for the grouped views: filter the removed session out
-// of the last-rendered list (the args each grouped renderer stored at paint
-// time) and repaint in place, so the preview window backfills and counts and
-// toggles resync — with no refetch. The archived tab owns its own paginated
-// list and the search overlay is keyed by the marker above, so both keep the
-// caller's node-only row removal (false).
+// The rows an inline delete takes with it: the session plus every row whose
+// task_parent_id chain within this list reaches it — projected worker-thread
+// leaves (task_parent_id = parent id) and task-node descendants at any depth.
+// Dropping only the clicked row would let buildSessionTree promote those
+// children to top-level roots until the next list fetch, so the repaint walks
+// buildSessionTree's own parent relation rather than a second definition. A
+// relation cycle in client data ends the walk (the visited set).
+function subtreeIdsToRemove(sessions, sessionId) {
+  const {childrenOf} = buildSessionTree(sessions);
+  const doomed = new Set([sessionId]);
+  const pending = [sessionId];
+  while (pending.length) {
+    for (const child of childrenOf.get(pending.pop()) || []) {
+      if (doomed.has(child.id)) continue;
+      doomed.add(child.id);
+      pending.push(child.id);
+    }
+  }
+  return doomed;
+}
+
+// Inline-delete repaint for the grouped views: filter the removed session's
+// whole subtree out of the last-rendered list (the args each grouped renderer
+// stored at paint time) and repaint in place, so the preview window backfills
+// and counts and toggles resync — with no refetch. The archived tab owns its
+// own paginated list and the search overlay is keyed by the marker above, so
+// both keep the caller's node-only row removal (false).
 function removeSessionFromRenderedList(sessionId) {
   if (currentFilter === 'archived' || searchListPainted) return false;
   if (currentFilter === 'scheduled') {
     if (!lastScheduledRenderArgs) return false;
+    const doomed = subtreeIdsToRemove(lastScheduledRenderArgs.sessions, sessionId);
     renderGroupedScheduledList(
-        lastScheduledRenderArgs.sessions.filter(s => s.id !== sessionId),
+        lastScheduledRenderArgs.sessions.filter(s => !doomed.has(s.id)),
         {brokenTasks: lastScheduledRenderArgs.brokenTasks});
     return true;
   }
   if (!lastGroupedRenderArgs) return false;
+  const doomed = subtreeIdsToRemove(lastGroupedRenderArgs.sessions, sessionId);
   renderGroupedSessionList(
-      lastGroupedRenderArgs.sessions.filter(s => s.id !== sessionId),
+      lastGroupedRenderArgs.sessions.filter(s => !doomed.has(s.id)),
       lastGroupedRenderArgs.filter);
   return true;
 }

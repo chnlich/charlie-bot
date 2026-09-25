@@ -18,7 +18,7 @@ import pytest
 from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
 
-from src.agents.transcription.base import TranscriptEvent, TranscriptionRejected
+from src.agents.transcription.base import VOICE_CHUNK_SAMPLES, TranscriptEvent, TranscriptionRejected
 from src.agents.transcription.gemini import GeminiTranscriptionBackend
 from src.core.config import CharlieBotConfig
 from src.core.credentials import Credentials
@@ -71,7 +71,7 @@ async def test_setup_frame_turn_delimiting_and_final(gemini_credentials) -> None
             }}))
         await socket.close()
 
-  chunks = [b"\x00\x01" * 2048, b"\x02\x03" * 2048]
+  chunks = [b"\x00\x01" * VOICE_CHUNK_SAMPLES, b"\x02\x03" * VOICE_CHUNK_SAMPLES]
   async with _serve(handler) as server:
     port = server.sockets[0].getsockname()[1]
     events = await _collect(_backend(port), chunks, vocabulary=["CharlieBot"], languages=["zh", "en"])
@@ -127,7 +127,7 @@ async def test_interim_spaces_survive_next_to_latin_text(gemini_credentials) -> 
 
   async with _serve(handler) as server:
     port = server.sockets[0].getsockname()[1]
-    events = await _collect(_backend(port), [b"\x00\x00" * 2048], vocabulary=[], languages=[])
+    events = await _collect(_backend(port), [b"\x00\x00" * VOICE_CHUNK_SAMPLES], vocabulary=[], languages=[])
 
   assert [(event.kind, event.text) for event in events] == [
       ("partial", "hello 你好 world"),
@@ -158,7 +158,7 @@ async def test_final_ends_the_stream_even_when_the_server_keeps_talking(gemini_c
 
   async with _serve(handler) as server:
     port = server.sockets[0].getsockname()[1]
-    events = await _collect(_backend(port), [b"\x00\x00" * 2048], vocabulary=[], languages=[])
+    events = await _collect(_backend(port), [b"\x00\x00" * VOICE_CHUNK_SAMPLES], vocabulary=[], languages=[])
 
   assert [(event.kind, event.text) for event in events] == [("final", "done")]
 
@@ -175,7 +175,7 @@ async def test_non_setup_complete_reply_rejects(gemini_credentials) -> None:
   async with _serve(handler) as server:
     port = server.sockets[0].getsockname()[1]
     with pytest.raises(TranscriptionRejected, match="setupComplete"):
-      await _collect(_backend(port), [b"\x00\x00" * 2048], vocabulary=[], languages=[])
+      await _collect(_backend(port), [b"\x00\x00" * VOICE_CHUNK_SAMPLES], vocabulary=[], languages=[])
 
 
 @pytest.mark.asyncio
@@ -191,7 +191,7 @@ async def test_failing_feed_ends_the_session_instead_of_hanging(gemini_credentia
           pass
 
   async def broken_feed() -> AsyncIterator[bytes]:
-    yield b"\x00\x00" * 2048
+    yield b"\x00\x00" * VOICE_CHUNK_SAMPLES
     raise RuntimeError("feed exploded")
 
   async with _serve(handler) as server:
@@ -215,4 +215,7 @@ async def test_mid_stream_close_raises(gemini_credentials) -> None:
   async with _serve(handler) as server:
     port = server.sockets[0].getsockname()[1]
     with pytest.raises(ConnectionClosed):
-      await _collect(_backend(port), [b"\x00\x00" * 2048, b"\x00\x00" * 2048], vocabulary=[], languages=[])
+      await _collect(
+          _backend(port), [b"\x00\x00" * VOICE_CHUNK_SAMPLES, b"\x00\x00" * VOICE_CHUNK_SAMPLES],
+          vocabulary=[],
+          languages=[])

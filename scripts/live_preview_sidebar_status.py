@@ -192,13 +192,23 @@ async def wait_status(base: str, key: str, ids: list[str], session_id: str, pred
     fail(f"status of {session_id} never satisfied {label}; last={json.dumps(last, default=str)}")
 
 
+def request_text(base: str, key: str, path: str) -> tuple[int, str]:
+    """GET one raw-text endpoint (NDJSON): the shared request() parses JSON only."""
+    req = urllib.request.Request(base + path, headers={"Authorization": "Bearer " + key})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        return e.code, ""
+
+
 async def wait_parent_report(base: str, key: str, manager_id: str, child_id: str,
                              timeout: float = 60.0) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        status, body = request(base, key, "GET", f"/api/sessions/{manager_id}/events.jsonl")
+        status, body = request_text(base, key, f"/api/sessions/{manager_id}/events.jsonl")
         if status == 200:
-            for line in body.decode("utf-8", errors="replace").splitlines():
+            for line in body.splitlines():
                 if not line.strip():
                     continue
                 event = json.loads(line)
@@ -216,13 +226,46 @@ async def icon_hidden(cdp: CDP, page_id: str, sid: str, kind: str) -> bool:
     return bool(value)
 
 
-async def assert_icons(cdp: CDP, page_id: str, sid: str, visible: str,
-                       hidden: list[str], label: str) -> None:
-    for kind in hidden:
-        if not await icon_hidden(cdp, page_id, sid, kind):
-            fail(f"{label}: #{kind}-{sid} should be hidden")
-    if not await icon_hidden(cdp, page_id, sid, visible):
-        fail(f"{label}: #{visible}-{sid} should be visible")
+async def assert_icons(cdp: CDP, page_id: str, sid: str, visible: str | None,
+                       hidden: list[str], label: str, timeout: float = 30.0) -> None:
+    """Wait until one row's icon table reads exactly *visible* (+ nothing else).
+
+    The row's paint trails the API verdict by at most one status poll, so the
+    assertion waits for the flip instead of sampling it; a timeout fails with
+    the row's own words as evidence.
+    """
+    deadline = time.monotonic() + timeout
+    last = ""
+    while time.monotonic() < deadline:
+        kinds = ("spinner", "worker-indicator", "alert-indicator", "waiting-indicator", "unread")
+        states = {kind: await icon_hidden(cdp, page_id, sid, kind) for kind in kinds}
+        ok = all(states[kind] for kind in hidden)
+        if ok and visible is not None:
+            ok = not states[visible]
+        if ok:
+            return
+        last = json.dumps(states)
+        await asyncio.sleep(0.5)
+    fail(f"{label}: icons never reached the expected state ({last})\n{await icon_dump(cdp, page_id, sid)}")
+
+
+async def icon_dump(cdp: CDP, page_id: str, sid: str) -> str:
+    """The row's own words at icon-assertion time: the evidence a failure needs."""
+    try:
+        return str(await evaluate(cdp, page_id, f"""
+            JSON.stringify({{
+              row: !!document.getElementById('session-{sid}'),
+              rowHidden: document.getElementById('session-{sid}')?.closest('[data-tree-children]')?.classList.contains('hidden'),
+              spinner: document.getElementById('spinner-{sid}')?.classList.contains('hidden'),
+              gear: document.getElementById('worker-indicator-{sid}')?.classList.contains('hidden'),
+              alert: document.getElementById('alert-indicator-{sid}')?.classList.contains('hidden'),
+              clock: document.getElementById('waiting-indicator-{sid}')?.classList.contains('hidden'),
+              ownState: (window.Sidebar && Sidebar.sessionUnread) ? 'ns' : 'ns',
+              errs: (window.__errs || []).slice(0, 3),
+            }})
+        """))
+    except Exception as exc:
+        return f"<dump failed: {exc!r}>"
 
 
 async def run_harness(args: argparse.Namespace) -> None:
@@ -295,21 +338,21 @@ async def run_harness(args: argparse.Namespace) -> None:
         try:
             record_path = home / "state" / "preview_instance.json"
             deadline = time.monotonic() + 120
-            record = {}
+            preview_record = {}
             while time.monotonic() < deadline:
                 if record_path.is_file():
-                    record = json.loads(record_path.read_text())
-                    if record.get("ready"):
+                    preview_record = json.loads(record_path.read_text())
+                    if preview_record.get("ready"):
                         break
                 if proc.poll() is not None:
                     fail(f"preview process exited early: {server_console.read_text()[-1500:]}")
                 await asyncio.sleep(0.2)
-            if not record.get("ready"):
+            if not preview_record.get("ready"):
                 fail("preview instance never became ready")
-            base = record["url"]
+            base = preview_record["url"]
             if f"127.0.0.1:{PRODUCTION_PORT}" in base:
                 fail("the preview URL names the production port")
-            log(f"preview ready: {base} (sha {record['source_sha'][:12]})")
+            log(f"preview ready: {base} (sha {preview_record['source_sha'][:12]})")
             access_key = (home / "credentials.yaml").read_text().split("access_key: ")[1].split("\n")[0]
 
             # ---- real Chrome over CDP -----------------------------------
@@ -328,18 +371,21 @@ async def run_harness(args: argparse.Namespace) -> None:
                 fail("chrome devtools endpoint did not come up")
             ws = await websockets.connect(ws_url, max_size=50 * 1024 * 1024)
             cdp = CDP(ws)
-            await cdp.send("Target.createTarget", {"url": "about:blank"})
-            target_id = None
-            for t in (await cdp.send("Target.getTargets", {})).get("targetInfos", []):
-                if t["type"] == "page":
-                    target_id = t["targetId"]
-            if target_id is None:
-                fail("no page target in chrome")
-            await cdp.send("Target.attachToTarget", {"targetId": target_id, "flatten": True})
-            page_id = target_id
+            await asyncio.sleep(0.3)
+            target = await cdp.send("Target.createTarget", {"url": "about:blank"})
+            attached = await cdp.send("Target.attachToTarget",
+                                      {"targetId": target["targetId"], "flatten": True})
+            page_id = attached["sessionId"]
+            await cdp.send("Page.enable", session_id=page_id)
+            await cdp.send("Runtime.enable", session_id=page_id)
+            await cdp.send("Network.enable", session_id=page_id)
             await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": f"""
                 (function () {{
                   try {{ localStorage.setItem('charliebot_access_key', '{access_key}'); }} catch (e) {{}}
+                  window.__errs = [];
+                  window.addEventListener('error', (e) => window.__errs.push(String(e.message).slice(0, 160)));
+                  window.addEventListener('unhandledrejection',
+                      (e) => window.__errs.push('rej: ' + String(e.reason).slice(0, 160)));
                 }})();
             """}, session_id=page_id)
             await cdp.send("Network.setCookie", {
@@ -350,25 +396,30 @@ async def run_harness(args: argparse.Namespace) -> None:
                 "width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False,
             }, session_id=page_id)
             await cdp.send("Page.enable", {}, session_id=page_id)
-            await cdp.send("Page.navigate", {"url": base + "/"}, session_id=page_id)
-            deadline = time.monotonic() + 30
-            while time.monotonic() < deadline:
-                rows = await evaluate(cdp, page_id,
-                                      "document.querySelectorAll('#session-list a[id^=session-]').length")
-                if rows:
-                    break
-                await asyncio.sleep(0.5)
-            log("browser attached; sidebar rendered")
-
-            results: dict = {"tested_commit": commit, "invocation": invocation,
-                             "preview_record": record, "backend": args.backend}
-
             # ---- scenario A: a real ~60 s worker Run shows as running -----
             log("scenario A: the running state (spinner on the worker, gear on the collapsed parent)")
             slow_repo = build_slow_repo(home)
             manager_a = await create_manager(
                 base, access_key, "Slow trial program",
                 "## Goal\n\nSleep then report the marker\n", "sidebar-status-root-a")
+
+            # The page is opened on the manager's URL: with a session id the
+            # app connects its websocket, and the tree re-fetches on the
+            # delegation broadcasts the rest of the trial rides.
+            await cdp.send("Page.navigate", {"url": f"{base}/?session={manager_a}"},
+                           session_id=page_id)
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if await evaluate(cdp, page_id, f"!!document.getElementById('session-{manager_a}')"):
+                    break
+                if time.monotonic() > deadline - 0.1:
+                    fail("sidebar never rendered the trial manager's row")
+                await asyncio.sleep(0.5)
+            log("browser attached; the manager's row is rendered")
+
+            results: dict = {"tested_commit": commit, "invocation": invocation,
+                             "preview_record": preview_record, "backend": args.backend}
+
             takeoff_run_a = await takeoff(base, access_key, manager_a, "sidebar-status-takeoff-a")
             worker_a, run_a = await delegate(
                 base, access_key, manager_a,
@@ -382,20 +433,37 @@ async def run_harness(args: argparse.Namespace) -> None:
             record("worker name is the goal's first content line", status == 200 and name is not None
                    and name.startswith("Run `bash slow_report.sh`")
                    and "## Goal" not in name, f"name={name!r}")
+            # Wait for the rows to render (the tree re-fetches on the
+            # delegation broadcast), for the names, and for the Run to be live.
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:
+                rows = await evaluate(cdp, page_id, """
+                    [...document.querySelectorAll('#session-list a[id^=session-]')]
+                        .map(el => el.id)
+                """)
+                if rows and f"session-{manager_a}" in rows and f"session-{worker_a}" in rows:
+                    break
+                await asyncio.sleep(1.0)
+            else:
+                fail(f"sidebar never rendered the trial rows: {rows}")
             row_names = await evaluate(cdp, page_id, """
                 [...document.querySelectorAll('#session-list .session-name')].map(el => el.textContent)
             """)
-            record("no row is named '## Goal'",
-                   all("## Goal" not in (n or "") for n in (row_names or [])),
+            record("rows carry goal-derived names, never '## Goal'",
+                   any("Slow trial program" in (n or "") for n in (row_names or []))
+                   and any("Run `bash slow_report.sh`" in (n or "") for n in (row_names or []))
+                   and all("## Goal" not in (n or "") for n in (row_names or [])),
                    f"rows={row_names}")
 
-            # Wait for the Run to be live (launched identity), then the states.
-            async def running_payload(st: dict) -> bool:
+            def running_payload(st: dict) -> bool:
                 return bool(st) and st.get("has_running_tasks") is True and st.get("work_state") == "running"
 
             ids_a = [manager_a, worker_a]
+            # The real backend's launch prep (context build, worktree) takes
+            # on the order of a minute; the queued phase before it is the
+            # waiting verdict, and the launch flips the row to running.
             payload = await wait_status(base, access_key, ids_a, worker_a, running_payload,
-                                        "worker running", timeout=90)
+                                        "worker running", timeout=300)
             record("status: worker has_running_tasks + work_state=running while live",
                    payload.get("has_running_tasks") is True and payload.get("work_state") == "running",
                    json.dumps(payload, default=str))
@@ -407,13 +475,6 @@ async def run_harness(args: argparse.Namespace) -> None:
                    parent_payload.get("has_running_tasks") is False
                    and parent_payload.get("work_state") == "idle",
                    json.dumps(parent_payload, default=str))
-            deadline = time.monotonic() + 30
-            while time.monotonic() < deadline:
-                worker_ok = (await icon_hidden(cdp, page_id, worker_a, "spinner") is False)
-                gear_ok = (await icon_hidden(cdp, page_id, manager_a, "worker-indicator") is False)
-                if worker_ok and gear_ok:
-                    break
-                await asyncio.sleep(0.5)
             await assert_icons(cdp, page_id, worker_a, "spinner",
                                ["worker-indicator", "alert-indicator", "waiting-indicator"],
                                "running worker row")
@@ -427,7 +488,6 @@ async def run_harness(args: argparse.Namespace) -> None:
 
             # Expanded manager shows only its own (idle) state.
             await evaluate(cdp, page_id, f"Sidebar.expandTreeNode('{manager_a}')")
-            await asyncio.sleep(1.0)
             await assert_icons(cdp, page_id, manager_a, "unread",
                                ["spinner", "worker-indicator", "alert-indicator", "waiting-indicator"],
                                "expanded manager row (own idle state only)")
@@ -440,7 +500,6 @@ async def run_harness(args: argparse.Namespace) -> None:
             await evaluate(
                 cdp, page_id,
                 f"if (Sidebar.isTreeNodeExpanded('{manager_a}')) toggleTreeNode('{manager_a}')")
-            await asyncio.sleep(0.5)
 
             run_row, outcome = await wait_run_terminal(base, access_key, worker_a, run_a, "slow work run")
             record("slow run reached terminal success", outcome == "success", f"outcome={outcome}")
@@ -455,14 +514,17 @@ async def run_harness(args: argparse.Namespace) -> None:
                 "worker cleared", timeout=60)
             record("status after finish: worker's activity cleared",
                    payload.get("has_running_tasks") is False, json.dumps(payload, default=str))
-            deadline = time.monotonic() + 30
-            gear_cleared = False
-            while time.monotonic() < deadline:
-                if await icon_hidden(cdp, page_id, manager_a, "worker-indicator"):
-                    gear_cleared = True
-                    break
-                await asyncio.sleep(0.5)
-            record("DOM after finish: collapsed manager's gear cleared", gear_cleared, manager_a)
+            # The parent's report-consuming turn is its own thinking state,
+            # which outranks every stand-in; the collapsed row's cleared icons
+            # are only assertable once that turn has settled.
+            await wait_status(
+                base, access_key, ids_a, manager_a,
+                lambda st: bool(st) and st.get("work_state") == "idle" and not st.get("thinking_since"),
+                "manager A idle after consuming the report", timeout=180)
+            await assert_icons(cdp, page_id, manager_a, None,
+                               ["spinner", "worker-indicator", "alert-indicator", "waiting-indicator"],
+                               "collapsed manager row after finish (no activity icon)")
+            record("DOM after finish: collapsed manager's gear cleared", True, manager_a)
             shot = await screenshot(cdp, page_id, shots, "after_finish")
             results["after_finish_screenshot"] = shot
 
@@ -501,12 +563,18 @@ async def run_harness(args: argparse.Namespace) -> None:
                 "worker attention", timeout=60)
             record("status: worker work_state=attention after the launch failure",
                    payload.get("work_state") == "attention", json.dumps(payload, default=str))
-            deadline = time.monotonic() + 30
-            while time.monotonic() < deadline:
-                if (await icon_hidden(cdp, page_id, worker_b, "alert-indicator") is False
-                        and await icon_hidden(cdp, page_id, manager_b, "alert-indicator") is False):
-                    break
-                await asyncio.sleep(0.5)
+            report = await wait_parent_report(base, access_key, manager_b, worker_b)
+            record("the parent received a failure report naming the error",
+                   report.get("outcome") == "failed"
+                   and "differs from origin/main" in str(report.get("summary", "")),
+                   f"summary={str(report.get('summary'))[:160]!r}")
+            # The collapsed parent's alert stand-in is its idle-state paint; the
+            # report-consuming turn's own spinner outranks it, so the icon
+            # assertion waits for the parent to settle first.
+            await wait_status(
+                base, access_key, ids_b, manager_b,
+                lambda st: bool(st) and st.get("work_state") == "idle" and not st.get("thinking_since"),
+                "manager B idle after consuming the failure report", timeout=180)
             await assert_icons(cdp, page_id, worker_b, "alert-indicator",
                                ["spinner", "worker-indicator", "waiting-indicator"],
                                "attention worker row")
@@ -516,12 +584,6 @@ async def run_harness(args: argparse.Namespace) -> None:
             shot = await screenshot(cdp, page_id, shots, "attention_state")
             results["attention_screenshot"] = shot
             record("DOM: worker row and collapsed parent show the red alert", True, worker_b)
-
-            report = await wait_parent_report(base, access_key, manager_b, worker_b)
-            record("the parent received a failure report naming the error",
-                   report.get("outcome") == "failed"
-                   and "differs from origin/main" in str(report.get("summary", "")),
-                   f"summary={str(report.get('summary'))[:160]!r}")
 
             # The leaf card: the failed run reads failed (and a queued retry
             # reads queued in its own color while the alert keeps priority).
@@ -540,6 +602,22 @@ async def run_harness(args: argparse.Namespace) -> None:
                 await asyncio.sleep(0.5)
             record("leaf card reads failed for the launch-failure run",
                    bool(failed_card) and "failed" in str(failed_card), f"card={failed_card!r}")
+            # The failure's error text is reachable from the leaf view: the
+            # card's expandable events panel carries the run's own events log.
+            await evaluate(cdp, page_id,
+                           f"toggleThreadDetail('{run_b}', '{worker_b}')")
+            deadline = time.monotonic() + 30
+            panel_text = ""
+            while time.monotonic() < deadline:
+                panel_text = str(await evaluate(cdp, page_id, f"""
+                    (document.getElementById('thread-events-{run_b}') || {{}}).textContent || ''
+                """))
+                if "differs from origin/main" in panel_text:
+                    break
+                await asyncio.sleep(0.5)
+            record("the leaf card's events panel names the actual error",
+                   "differs from origin/main" in panel_text,
+                   f"panel={panel_text[:160]!r}")
             shot = await screenshot(cdp, page_id, shots, "leaf_failed")
             results["leaf_failed_screenshot"] = shot
 
@@ -598,25 +676,25 @@ async def run_harness(args: argparse.Namespace) -> None:
                 "manager waiting", timeout=60)
             record("status: queued Run held by the pause reads work_state=waiting",
                    payload.get("work_state") == "waiting", json.dumps(payload, default=str))
-            deadline = time.monotonic() + 30
-            clock_visible = False
-            while time.monotonic() < deadline:
-                if await icon_hidden(cdp, page_id, manager_a, "waiting-indicator") is False:
-                    clock_visible = True
-                    break
-                await asyncio.sleep(0.5)
             await assert_icons(cdp, page_id, manager_a, "waiting-indicator",
                                ["spinner", "worker-indicator", "alert-indicator"],
                                "waiting manager row")
-            record("DOM: the paused node's queued Run shows the clock", clock_visible, manager_a)
+            record("DOM: the paused node's queued Run shows the clock", True, manager_a)
             shot = await screenshot(cdp, page_id, shots, "waiting_state")
             results["waiting_screenshot"] = shot
 
             # ---- isolation postflight ------------------------------------
+            # The host store also carries the harness's own session logs (this
+            # trial may run inside a CharlieBot session), so the check is the
+            # trial's own ids: none of the preview's native session ids may
+            # appear anywhere in the host's native session store.
             native_after = snapshot_native_storage()
-            leaked = sorted(set(native_after) - set(native_before))
-            record("the host's production native session store received nothing",
-                   not leaked, f"leaked={leaked[:3]}")
+            preview_native = sorted({p.name for p in (home / "clc-sessions").rglob("*")
+                                    if p.is_dir()}) if (home / "clc-sessions").is_dir() else []
+            leaked_ids = [nid for nid in preview_native
+                          if any(nid in path for path in native_after)]
+            record("the trial's native session ids never reached the host's store",
+                   not leaked_ids, f"preview_native_ids={preview_native[:3]} leaked={leaked_ids[:3]}")
             independent_after = {
                 str(p.relative_to(independent)): p.read_bytes()
                 for p in sorted(independent.rglob("*")) if p.is_file()

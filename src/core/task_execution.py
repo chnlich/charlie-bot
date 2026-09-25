@@ -573,6 +573,10 @@ class TaskExecutionAdapter:
             "content": error_text,
             "timestamp": utc_now().isoformat(),
         })
+        # The leaf card's Events link reads the record's events_ref: the
+        # launch-failed run's evidence is reachable exactly the way a process
+        # run's is (record_observation writes only the provided fields).
+        await self._tree.runs.record_observation(session_id, run_id, events_ref=str(events_log))
 
     @staticmethod
     def _verify_exempt(meta: SessionMetadata) -> bool:

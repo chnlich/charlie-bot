@@ -22,29 +22,16 @@ import hashlib
 import hmac
 import json
 import os
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
 RUN_TOKEN_ENV = "CHARLIEBOT_RUN_TOKEN"
 
-# Credentials lookup: kept as an injectable seam so tests can stub credentials
-# without the env-file round-trip. Live callers resolve through
-# src.core.config.get_credentials (lazy import — the CLI import floor rule).
-_credentials_getter: Callable[[], dict] | None = None
-
 
 def _credentials() -> dict:
-  if _credentials_getter is not None:
-    return _credentials_getter()
+  # lazy: src.core.config stays off the CLI import floor (docs/perf_baseline.md M92)
   from src.core.config import get_credentials
   return get_credentials()
-
-
-def set_credentials_getter(getter: Callable[[], dict] | None) -> None:
-  """Swap the credentials source (tests); None restores the live reader."""
-  global _credentials_getter
-  _credentials_getter = getter
 
 
 def operator_signing_key() -> str:

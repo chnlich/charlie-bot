@@ -76,7 +76,6 @@ SCOPE_MEMORY = "memory"
 SCOPE_SUBTREE = "subtree"
 SCOPE_NODE = "node"
 DELIVERY_FULL = "full"
-DELIVERY_INDEX = "index"
 
 # Run kinds whose managed instructions are the manager contract (no worker
 # workflow, no PM body, no project/PM rules — those retired with the v1 role).

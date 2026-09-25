@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-import threading
 from pathlib import Path
 from types import ModuleType
 
 import numpy as np
 import pytest
+from conftest import stub_speech_bundle
 
 from src.agents import transcriber
 
@@ -63,11 +63,6 @@ class _FakeVad:
     self._segments.pop(0)
 
 
-def _stub_bundle() -> transcriber._SpeechModelBundle:
-  return transcriber._SpeechModelBundle(
-      recognizer=object(), vad_config=object(), decode_lock=threading.Lock(), engine="sherpa", model_id="test")
-
-
 def _install_fakes(
     monkeypatch: pytest.MonkeyPatch,
     segments: list[tuple[int, int]],
@@ -96,7 +91,7 @@ def test_offline_windows_parity_with_transcribe_pcm_offline(monkeypatch: pytest.
   decode_texts = ["first", "second"]
   captured, _texts = _install_fakes(monkeypatch, segments, decode_texts)
 
-  production_text = transcriber.transcribe_pcm_offline(_stub_bundle(), source.tobytes())
+  production_text = transcriber.transcribe_pcm_offline(stub_speech_bundle("sherpa", "test"), source.tobytes())
   assert production_text == "first second"
   production_windows = [c.copy() for c in captured]
 
@@ -107,7 +102,8 @@ def test_offline_windows_parity_with_transcribe_pcm_offline(monkeypatch: pytest.
   windows = transcriber.offline_decode_windows(vad, source)
   replay_text = transcriber._join_segments(
       *(
-          transcriber._decode_samples(_stub_bundle(), source[left:right].astype(np.float32) / 32768.0)
+          transcriber._decode_samples(
+              stub_speech_bundle("sherpa", "test"), source[left:right].astype(np.float32) / 32768.0)
           for _start, _end, left, right in windows))
   assert replay_text == production_text
   # Both passes decoded byte-identical spans, in order.

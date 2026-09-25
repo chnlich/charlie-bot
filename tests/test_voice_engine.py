@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from conftest import fresh_state_fixture
+from conftest import fresh_state_fixture, stub_speech_bundle
 from structlog.testing import capture_logs
 
 from src.agents import transcriber
@@ -22,15 +22,10 @@ from src.core.config import CharlieBotConfig
 reset_bundle_cache = fresh_state_fixture(transcriber.reset_bundle_cache_for_tests)
 
 
-def _stub_bundle(engine: str, model_id: str) -> transcriber._SpeechModelBundle:
-  return transcriber._SpeechModelBundle(
-      recognizer=object(), vad_config=object(), decode_lock=threading.Lock(), engine=engine, model_id=model_id)
-
-
 def test_default_engine_builds_sherpa_bundle(monkeypatch: pytest.MonkeyPatch) -> None:
   """voice.engine unset: the sherpa factory builds the bundle and the GPU one is never touched."""
   cfg = CharlieBotConfig()
-  sherpa = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
+  sherpa = stub_speech_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
   calls: list[str] = []
 
   def fail_gpu(*_args: object) -> None:
@@ -49,7 +44,7 @@ def test_default_engine_builds_sherpa_bundle(monkeypatch: pytest.MonkeyPatch) ->
 def test_qwen3_hf_engine_builds_gpu_bundle(monkeypatch: pytest.MonkeyPatch) -> None:
   """voice.engine=qwen3_hf: the GPU factory builds the bundle carrying the config's model id."""
   cfg = CharlieBotConfig(voice={"engine": "qwen3_hf", "model_id": "Qwen/Qwen3-ASR-0.6B-hf"})
-  gpu = _stub_bundle("qwen3_hf", cfg.voice.model_id)
+  gpu = stub_speech_bundle("qwen3_hf", cfg.voice.model_id)
   received: list[tuple] = []
 
   def fake_gpu(received_cfg: CharlieBotConfig, paths: transcriber.VoiceModelPaths) -> transcriber._SpeechModelBundle:
@@ -71,7 +66,7 @@ def test_qwen3_hf_engine_builds_gpu_bundle(monkeypatch: pytest.MonkeyPatch) -> N
 def test_gpu_engine_failure_falls_back_to_sherpa_with_warning(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """A GPU init error warns and decodes on the CPU engine instead of failing the session."""
   cfg = CharlieBotConfig(voice={"engine": "qwen3_hf"}, charliebot_home=tmp_path)
-  sherpa = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
+  sherpa = stub_speech_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
   ensured: list[CharlieBotConfig] = []
 
   def fail_gpu(*_args: object) -> None:
@@ -100,7 +95,7 @@ def test_gpu_engine_failure_falls_back_to_sherpa_with_warning(monkeypatch: pytes
 def test_gpu_fallback_result_is_cached_under_the_requested_engine(monkeypatch: pytest.MonkeyPatch) -> None:
   """After a fallback build, later sessions reuse it without retrying the GPU engine."""
   cfg = CharlieBotConfig(voice={"engine": "qwen3_hf"})
-  sherpa = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
+  sherpa = stub_speech_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
   gpu_calls: list[int] = []
   sherpa_calls: list[int] = []
 
@@ -122,8 +117,8 @@ def test_gpu_fallback_result_is_cached_under_the_requested_engine(monkeypatch: p
 
 def test_bundle_cache_rebuilds_when_engine_changes(monkeypatch: pytest.MonkeyPatch) -> None:
   """A cached sherpa bundle does not answer for a qwen3_hf config; the factories re-run."""
-  sherpa = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
-  gpu = _stub_bundle("qwen3_hf", "Qwen/Qwen3-ASR-1.7B-hf")
+  sherpa = stub_speech_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
+  gpu = stub_speech_bundle("qwen3_hf", "Qwen/Qwen3-ASR-1.7B-hf")
   monkeypatch.setattr(transcriber, "create_sherpa_bundle", lambda paths: sherpa)
   monkeypatch.setattr(transcriber, "create_qwen3_hf_bundle", lambda cfg, paths: gpu)
 
@@ -143,7 +138,7 @@ def test_bundle_cache_rebuilds_when_engine_changes(monkeypatch: pytest.MonkeyPat
 def test_concurrent_first_access_builds_exactly_once(monkeypatch: pytest.MonkeyPatch) -> None:
   """Two first accesses racing a slow build: the build runs once and both getters share its bundle."""
   cfg = CharlieBotConfig()
-  sherpa = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
+  sherpa = stub_speech_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
   builds: list[str] = []
   inside_build = threading.Event()
 
@@ -181,8 +176,8 @@ def test_concurrent_first_access_builds_exactly_once(monkeypatch: pytest.MonkeyP
 def test_build_lock_recheck_honors_a_cache_published_before_acquisition(monkeypatch: pytest.MonkeyPatch) -> None:
   """A bundle published between the outer miss and the build-lock acquisition wins: no second build."""
   cfg = CharlieBotConfig()
-  winner = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
-  loser = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
+  winner = stub_speech_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
+  loser = stub_speech_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
   builds: list[str] = []
   real_lock = transcriber._bundle_build_lock
 
@@ -215,7 +210,7 @@ def test_build_lock_recheck_honors_a_cache_published_before_acquisition(monkeypa
 def test_prepopulated_cache_yields_zero_builds(monkeypatch: pytest.MonkeyPatch) -> None:
   """A cache already holding the engine's bundle answers without running any factory."""
   cfg = CharlieBotConfig()
-  cached = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
+  cached = stub_speech_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
   with transcriber._state_lock:
     transcriber._bundle = cached
     transcriber._bundle_engine = cfg.voice.engine
@@ -228,7 +223,7 @@ def test_prepopulated_cache_yields_zero_builds(monkeypatch: pytest.MonkeyPatch) 
 
 def test_warm_up_bundle_decodes_exactly_one_deterministic_sine(monkeypatch: pytest.MonkeyPatch) -> None:
   """The warm decode is one _decode_samples call over a deterministic 0.5 s sine; the text is dropped."""
-  bundle = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
+  bundle = stub_speech_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
   calls: list[np.ndarray] = []
 
   def fake_decode(received_bundle: transcriber._SpeechModelBundle, samples: np.ndarray) -> str:

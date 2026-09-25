@@ -202,7 +202,7 @@ def test_artifact_wrap_verb_runs_off_the_config_stack() -> None:
 # The shared CliHelpFormatter (src/cli/help_formatter.py) passes the width
 # itself under shutil.get_terminal_size's documented precedence, so the verb
 # parsers build with neither module loaded. The same construction calls
-# `_set_color`, whose module-level `from _colorize import ...` pulls
+# `_set_color`, whose function-level `from _colorize import ...` pulls
 # _colorize's dataclasses+inspect chain (~12 ms) into every verb; the piped
 # arm renders the empty theme without it (docs/perf_baseline.md M92/M97/M98/M102).
 _PARSER_BUILD_BANNED = ("shutil", "bz2", "lzma", "_colorize")

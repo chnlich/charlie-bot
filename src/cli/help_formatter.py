@@ -11,7 +11,7 @@ neither shutil nor its archive backends.
 
 The subclass also keeps ``_colorize`` (stdlib, ~12 ms with its dataclasses +
 inspect chain) out of the piped verb: argparse's first formatter construction
-calls ``_set_color``, whose module-level ``from _colorize import ...`` prices
+calls ``_set_color``, whose function-level ``from _colorize import ...`` prices
 every ``charliebot`` invocation. The override reproduces the two arms exactly:
 the colorized arm delegates to the stock method (the real import, the real
 decision), and the no-color arm installs the empty theme without importing —
@@ -77,7 +77,7 @@ class _NoColorTheme:
     return ""
 
 
-def _identity(value):
+def _identity(value: object) -> object:
   return value
 
 

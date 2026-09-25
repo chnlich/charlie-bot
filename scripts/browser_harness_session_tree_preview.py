@@ -76,6 +76,7 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     pick_free_port,
     wait_for,
 )
+from src.core.process import terminate_and_wait  # noqa: E402
 
 # Evidence defaults to a host temp directory so the public repo carries no
 # host path; pass --evidence-dir to keep evidence with its owning session.
@@ -509,22 +510,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                 results.record("harness-error", ok=False, detail=f"{type(exc).__name__}: {exc}", screenshot=None)
                 raise
             finally:
-                chrome_proc.terminate()
-                try:
-                    chrome_proc.wait(timeout=15)
-                except subprocess.TimeoutExpired:
-                    chrome_proc.kill()
-                    chrome_proc.wait(timeout=10)
+                terminate_and_wait(chrome_proc, term_timeout_s=15, kill_timeout_s=10)
         finally:
             from src.core.home_writer_fence import probe_writer_fence
 
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=60)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=30)
+            terminate_and_wait(proc, term_timeout_s=60, kill_timeout_s=30)
             holder = probe_writer_fence(home)
             results.record("server-fence-released-on-stop", holder["exclusive_holder_alive"] is False,
                            f"writer fence holder alive: {holder['exclusive_holder_alive']}", None)

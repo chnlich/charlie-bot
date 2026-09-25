@@ -3,6 +3,7 @@
 import asyncio
 import os
 import signal
+import subprocess
 import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
@@ -70,6 +71,21 @@ async def wait_or_kill_group(
     raise
   finally:
     await cancel_and_wait(stderr_task)
+
+
+def terminate_and_wait(proc: subprocess.Popen, term_timeout_s: float, kill_timeout_s: float) -> None:
+  """SIGTERM *proc*, wait; on timeout SIGKILL and reap.
+
+  A caller relies on the return for the reap: a following temp-directory removal
+  or port rebinding must never race the dead child. SIGKILL reaps in
+  milliseconds; *kill_timeout_s* only fences an uninterruptible (D-state) child.
+  """
+  proc.terminate()
+  try:
+    proc.wait(timeout=term_timeout_s)
+  except subprocess.TimeoutExpired:
+    proc.kill()
+    proc.wait(timeout=kill_timeout_s)
 
 
 # ---------------------------------------------------------------------------

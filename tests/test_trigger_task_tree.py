@@ -18,12 +18,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-  BROADCAST_PATCH_TARGET,
-  BUILD_BACKEND_PATCH_TARGET,
-  TRIGGER_MASTER_PATCH_TARGET,
-  TRIGGERS_GET_CONFIG_PATCH_TARGET,
-  make_home_config,
-  patch_instructions_content,
+    BROADCAST_PATCH_TARGET,
+    BUILD_BACKEND_PATCH_TARGET,
+    TRIGGER_MASTER_PATCH_TARGET,
+    TRIGGERS_GET_CONFIG_PATCH_TARGET,
+    make_home_config,
+    patch_instructions_content,
 )
 
 from src.core import event_types as ET
@@ -32,10 +32,10 @@ from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 from src.core.triggers import TriggerManager
 from tests.test_task_execution import (
-  SpawningScriptedBackend,
-  _adapter_with_silent_broadcast,
-  install_backends,
-  result_event,
+    SpawningScriptedBackend,
+    _adapter_with_silent_broadcast,
+    install_backends,
+    result_event,
 )
 
 
@@ -49,8 +49,10 @@ def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
       charliebot_home=home,
       backends={"options": [backend_option(id="fake", label="Fake", type="codex", model="fake-model")]},
       paths={"worktree_dir": str(home / "worktrees")})
-  core_config._credentials_cache.seed(core_config.Credentials(
-      path=home / "credentials.yaml", sections={"charliebot": {"access_key": "trigger-key"}}))
+  core_config._credentials_cache.seed(
+      core_config.Credentials(path=home / "credentials.yaml", sections={"charliebot": {
+          "access_key": "trigger-key"
+      }}))
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
@@ -69,17 +71,21 @@ def _trigger(session_id: str, trigger_id: str = "trigger-v2-1") -> PendingTrigge
 
 @pytest.mark.asyncio
 async def test_trigger_admits_one_durable_input_to_task_tree_node(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
   from src.api import deps
   monkeypatch.setattr(deps, "_task_manager", tree)
   monkeypatch.setattr(deps, "_session_manager", session_mgr)
-  builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("awake")])],
-                            BUILD_BACKEND_PATCH_TARGET)
+  builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("awake")])], BUILD_BACKEND_PATCH_TARGET)
   patch_instructions_content(monkeypatch)
   manager = await tree.create_task(
-      request_id="pm", task_parent_id=None, profile="manager",
-      task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
+      request_id="pm",
+      task_parent_id=None,
+      profile="manager",
+      task=TaskSpec(goal="pm"),
+      name="PM",
+      backend=None,
+      caller="operator")
   trigger_mgr = TriggerManager(cfg, session_mgr)
   trigger = _trigger(manager.id)
   await trigger_mgr._save_trigger(trigger)
@@ -110,7 +116,7 @@ async def test_trigger_admits_one_durable_input_to_task_tree_node(
 
 @pytest.mark.asyncio
 async def test_trigger_refire_after_crash_does_not_duplicate_input(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Crash after the durable admission but before FIRED: the recovered trigger
   re-fires into the SAME input and stamps FIRED once."""
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
@@ -118,8 +124,13 @@ async def test_trigger_refire_after_crash_does_not_duplicate_input(
   monkeypatch.setattr(deps, "_task_manager", tree)
   monkeypatch.setattr(deps, "_session_manager", session_mgr)
   manager = await tree.create_task(
-      request_id="pm", task_parent_id=None, profile="manager",
-      task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
+      request_id="pm",
+      task_parent_id=None,
+      profile="manager",
+      task=TaskSpec(goal="pm"),
+      name="PM",
+      backend=None,
+      caller="operator")
   trigger = _trigger(manager.id)
   trigger_mgr = TriggerManager(cfg, session_mgr)
   await trigger_mgr._save_trigger(trigger)
@@ -136,8 +147,7 @@ async def test_trigger_refire_after_crash_does_not_duplicate_input(
   assert fresh is not None and fresh.status == TriggerStatus.PENDING
 
   # Recovery re-fires it: the same input id dedups and FIRED lands.
-  builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("awake")])],
-                            BUILD_BACKEND_PATCH_TARGET)
+  builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("awake")])], BUILD_BACKEND_PATCH_TARGET)
   patch_instructions_content(monkeypatch)
   with (
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
@@ -158,7 +168,7 @@ async def test_trigger_refire_after_crash_does_not_duplicate_input(
 
 @pytest.mark.asyncio
 async def test_trigger_on_closed_node_keeps_history_without_reopening(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
   from src.api import deps
   monkeypatch.setattr(deps, "_task_manager", tree)
@@ -166,8 +176,13 @@ async def test_trigger_on_closed_node_keeps_history_without_reopening(
   from src.core.run_token import CallerIdentity
   from src.core.task_completion import CompletionEvidence
   manager = await tree.create_task(
-      request_id="pm", task_parent_id=None, profile="manager",
-      task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
+      request_id="pm",
+      task_parent_id=None,
+      profile="manager",
+      task=TaskSpec(goal="pm"),
+      name="PM",
+      backend=None,
+      caller="operator")
   close_run = "run-close-" + manager.id[:8]
   from src.core.control_events import stable_run_id
   close_run = stable_run_id(manager.id, "close:evidence")
@@ -176,12 +191,13 @@ async def test_trigger_on_closed_node_keeps_history_without_reopening(
   await tree.runs.record_launch(manager.id, close_run, pid=424001, pid_start="ps-1")
   await tree.dispatch.finish_run(manager.id, close_run, outcome="success")
   await tree.completion.complete_task(
-      manager.id, request_id="close-1", caller=CallerIdentity(kind="operator"),
+      manager.id,
+      request_id="close-1",
+      caller=CallerIdentity(kind="operator"),
       evidence=CompletionEvidence(summary="done", run_ids=[close_run], result_refs=[f"run:{close_run}"]))
   assert tree.task_state(manager.id) == "completed"
 
-  builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])],
-                            BUILD_BACKEND_PATCH_TARGET)
+  builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])], BUILD_BACKEND_PATCH_TARGET)
   trigger_mgr = TriggerManager(cfg, session_mgr)
   trigger = _trigger(manager.id)
   await trigger_mgr._save_trigger(trigger)
@@ -205,7 +221,7 @@ async def test_trigger_on_closed_node_keeps_history_without_reopening(
 
 @pytest.mark.asyncio
 async def test_trigger_on_paused_node_retains_input_for_later_dispatch(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
   from src.api import deps
   monkeypatch.setattr(deps, "_task_manager", tree)
@@ -213,14 +229,17 @@ async def test_trigger_on_paused_node_retains_input_for_later_dispatch(
   from src.core.models import PatchSessionTaskRequest
   from src.core.run_token import CallerIdentity
   manager = await tree.create_task(
-      request_id="pm", task_parent_id=None, profile="manager",
-      task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
+      request_id="pm",
+      task_parent_id=None,
+      profile="manager",
+      task=TaskSpec(goal="pm"),
+      name="PM",
+      backend=None,
+      caller="operator")
   await tree.patch_task(
-      manager.id, PatchSessionTaskRequest(automation_paused=True),
-      caller=CallerIdentity(kind="operator"))
+      manager.id, PatchSessionTaskRequest(automation_paused=True), caller=CallerIdentity(kind="operator"))
 
-  builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])],
-                            BUILD_BACKEND_PATCH_TARGET)
+  builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])], BUILD_BACKEND_PATCH_TARGET)
   trigger_mgr = TriggerManager(cfg, session_mgr)
   trigger = _trigger(manager.id)
   await trigger_mgr._save_trigger(trigger)
@@ -239,31 +258,39 @@ async def test_trigger_on_paused_node_retains_input_for_later_dispatch(
   assert fresh is not None and fresh.status == TriggerStatus.FIRED
   # Resuming dispatches the retained input through the same dispatcher.
   await tree.patch_task(
-      manager.id, PatchSessionTaskRequest(automation_paused=False),
-      caller=CallerIdentity(kind="operator"))
+      manager.id, PatchSessionTaskRequest(automation_paused=False), caller=CallerIdentity(kind="operator"))
   decision = await tree.dispatch.dispatch_pending(manager.id)
   assert decision["launch"] is True
 
 
 @pytest.mark.asyncio
 async def test_trigger_resolves_established_alias_to_the_same_task(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
   from src.api import deps
   monkeypatch.setattr(deps, "_task_manager", tree)
   monkeypatch.setattr(deps, "_session_manager", session_mgr)
   manager = await tree.create_task(
-      request_id="pm", task_parent_id=None, profile="manager",
-      task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
+      request_id="pm",
+      task_parent_id=None,
+      profile="manager",
+      task=TaskSpec(goal="pm"),
+      name="PM",
+      backend=None,
+      caller="operator")
   old_id = "11111111-2222-3333-4444-555555555555"
   tree.aliases.path.parent.mkdir(parents=True, exist_ok=True)
-  tree.aliases.path.write_text(json.dumps({
-      "old_session_ids": {old_id: manager.id},
-      "old_threads": {},
-  }, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+  tree.aliases.path.write_text(
+      json.dumps(
+          {
+              "old_session_ids": {
+                  old_id: manager.id
+              },
+              "old_threads": {},
+          }, ensure_ascii=False, indent=2, sort_keys=True),
+      encoding="utf-8")
 
-  builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("awake")])],
-                            BUILD_BACKEND_PATCH_TARGET)
+  builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("awake")])], BUILD_BACKEND_PATCH_TARGET)
   trigger_mgr = TriggerManager(cfg, session_mgr)
   trigger = _trigger(old_id, trigger_id="trigger-alias-1")
   await trigger_mgr._save_trigger(trigger)
@@ -285,7 +312,7 @@ async def test_trigger_resolves_established_alias_to_the_same_task(
 
 @pytest.mark.asyncio
 async def test_trigger_to_legacy_session_keeps_the_legacy_route(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A v1 session keeps the existing append+wake behavior unchanged."""
   cfg = make_home_config(tmp_path)
   session_mgr = SessionManager(cfg)

@@ -697,8 +697,8 @@ async def test_stale_index_build_never_installs_over_newer_writes(tmp_path: Path
   tree._index = None  # TTL-expired state: the next query must build
   real_build = tree._build_index_sync
 
-  def racing_build() -> object:
-    index = real_build()
+  def racing_build(cached_metas: dict) -> object:
+    index = real_build(cached_metas)
     # A structural write lands while this build is in flight.
     tree._invalidate_index()
     return index

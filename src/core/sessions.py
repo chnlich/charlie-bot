@@ -2595,6 +2595,24 @@ class SessionManager:
     self._listings_revision += 1
     return None
 
+  def fresh_cached_metas(self) -> dict[str, SessionMetadata]:
+    """The authoritative cached metadata entries, keyed by session id.
+
+    One :meth:`_fresh_cached_meta` check per entry — the shared check
+    ``get_session`` and ``_load_session_metas`` route through — so a caller
+    that snapshots this map reads exactly the metadata every other reader
+    serves: archived entries regardless of age, active entries while their
+    stat signature proves the parsed bytes stand. Entries past revalidation
+    re-time or evict here, the same side effects a per-id check has; ids with
+    no authoritative entry are absent and the caller reads their files.
+    """
+    resolved: dict[str, SessionMetadata] = {}
+    for session_id in list(self._metadata_cache):
+      meta = self._fresh_cached_meta(session_id)
+      if meta is not None:
+        resolved[session_id] = meta
+    return resolved
+
   @staticmethod
   def _parse_optional_utc(raw: Any, log_event: str, **log_ctx: Any) -> datetime | None:
     """Parse a stored timestamp tolerantly: absent or unparseable becomes None.

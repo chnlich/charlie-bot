@@ -304,7 +304,11 @@ def _task_closed_msg(ev: dict) -> dict:
 
 
 def _run_header_msg(ev: dict) -> dict:
-  """One worker-transcript Run header: kind, backend label and state."""
+  """One worker-transcript Run header: kind, backend label and state.
+
+  A system line of its own kind: the chat paints the Run's state dot from
+  ``state`` and shows a failed Run's ``error`` beneath the line.
+  """
   parts = [f"Run {ev.get('kind') or 'run'}"]
   backend = ev.get("backend_label") or ev.get("backend") or ""
   if backend:
@@ -314,7 +318,11 @@ def _run_header_msg(ev: dict) -> dict:
     parts.append(state)
   return {
       "role": "system",
+      "kind": ET.RUN_HEADER,
       "content": " · ".join(parts),
+      "run_id": ev.get("run_id") or "",
+      "state": state,
+      "error": ev.get("error") or "",
   }
 
 

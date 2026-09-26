@@ -260,6 +260,10 @@ async def test_worker_transcript_headers_delivery_and_pagination(
   assert delivery["events_ref"] == "/h/runs/run-1/events.jsonl"
   assert delivery["result_ref"] == "/h/runs/run-1/raw.log"
   assert delivery["branch_name"] == "task/run-1" and delivery["repo_path"] == "/repo"
+  # The header lines carry the Run's own state for the chat's state dot.
+  assert header1["kind"] == ET.RUN_HEADER and header1["run_id"] == "run-1"
+  assert header1["state"] == "success" and header1["error"] == ""
+  assert header2["run_id"] == "run-2" and header2["state"] == "queued"
   # The signallable run is the queued review Run.
   assert entry.active_run_id == "run-2"
 
@@ -272,6 +276,32 @@ async def test_worker_transcript_headers_delivery_and_pagination(
   older, next_before, more = entry.projection.slice_before(oldest, 10)
   assert [m["role"] for m in older] == roles[:4]
   assert more is False and next_before == 0
+
+
+@pytest.mark.asyncio
+async def test_failed_run_header_reads_failed_with_its_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A Run that failed before its process started (its events log holds only
+  the launch error) heads its segment as failed with the error text in full;
+  the error event itself still renders in the segment."""
+  from src.core import worker_transcript
+
+  _cfg, _session_mgr, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
+  error_text = "RuntimeError: worktree preparation failed: task/x differs from origin/main"
+  await tree.runs.register_run(RunRecord(
+      id="run-f", session_id=worker.id, kind="work",
+      backend="fake", model="fake-model", started_at=datetime.now(UTC)))
+  _write_run_events(tree, worker.id, "run-f", [
+      {"type": ET.ERROR, "message": error_text, "content": error_text,
+       "timestamp": datetime.now(UTC).isoformat()},
+  ])
+  await tree.dispatch.finish_run(worker.id, "run-f", outcome="failed", exit_code=-1)
+
+  entry = worker_transcript.load_worker_transcript(tree, worker.id)
+  header, error_line = entry.projection.committed[:2]
+  assert header["state"] == "failed" and header["content"].endswith("failed")
+  assert header["error"] == error_text
+  assert error_line["role"] == "system" and error_text in error_line["content"]
 
 
 @pytest.mark.asyncio

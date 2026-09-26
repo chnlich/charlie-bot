@@ -150,6 +150,35 @@ test('the delegated card live state paints from the status poll', () => {
   assert.equal(stateEl.textContent, 'running \u00b7 Sonnet 5');
   context.Sidebar.paintDelegateCardState('child-1', {has_running_tasks: false});
   assert.equal(stateEl.textContent, 'idle \u00b7 Sonnet 5');
+  // A settled task-tree child reads its work verdict, never a bare 'idle'.
+  context.Sidebar.paintDelegateCardState('child-1', {has_running_tasks: false, work_state: 'attention'});
+  assert.equal(stateEl.textContent, 'failed \u00b7 Sonnet 5');
+  context.Sidebar.paintDelegateCardState('child-1', {has_running_tasks: false, work_state: 'waiting'});
+  assert.equal(stateEl.textContent, 'queued \u00b7 Sonnet 5');
+});
+
+test('a Run header reads its own state: queued in amber, failed in red with its error', () => {
+  const context = loadChatRendering();
+  const header = (state, extra) => context.renderMessage({
+    role: 'system', kind: 'run_header', run_id: 'run-' + state,
+    content: 'Run work \u00b7 Sonnet 5 \u00b7 ' + state, state, error: '', ...extra,
+  }, 'sess-1');
+
+  const queued = header('queued');
+  assertWellFormedMarkup(queued, 'queued header');
+  assert.match(queued, /id="run-header-run-queued" data-run-state="queued"/);
+  assert.match(queued, /id="run-dot-run-queued" class="[^"]*bg-amber-400/);
+  assert.match(queued, /Run work \u00b7 Sonnet 5 \u00b7 queued/);
+  assert.doesNotMatch(queued, /run-error-/);
+
+  const failed = header('failed', {error: 'RuntimeError: worktree <prep> failed'});
+  assertWellFormedMarkup(failed, 'failed header');
+  assert.match(failed, /id="run-dot-run-failed" class="[^"]*bg-red-500/);
+  assert.match(failed, /id="run-error-run-failed"[^>]*>RuntimeError: worktree &lt;prep&gt; failed</);
+
+  assert.match(header('running'), /id="run-dot-run-running" class="[^"]*bg-blue-500/);
+  assert.match(header('success'), /id="run-dot-run-success" class="[^"]*bg-green-500/);
+  assert.match(header('stopped'), /id="run-dot-run-stopped" class="[^"]*bg-slate-500/);
 });
 
 test('run_delivery closes the transcript with the summary and the four evidence links', () => {

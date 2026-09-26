@@ -14,8 +14,9 @@ and screenshots it asserts the sidebar's live work states:
    base branch ahead of its origin makes worktree preparation raise) reaches
    ``failed`` with the error as durable evidence; its row and its collapsed
    parent show the red alert, the parent receives a failure report naming the
-   error, and the leaf card reads ``failed`` (a queued retry on the same node
-   then reads ``queued`` in its own color while the alert keeps priority).
+   error, and the worker's transcript heads the Run ``failed`` with the error
+   beneath it (a queued retry on the same node then heads its segment
+   ``queued`` in its own color while the alert keeps priority).
 3. waiting: a queued Run held back by a paused node shows the muted clock.
 4. names: the rows carry goal-derived names, never "## Goal".
 
@@ -601,44 +602,38 @@ async def run_harness(args: argparse.Namespace) -> None:
             results["attention_screenshot"] = shot
             record("DOM: worker row and collapsed parent show the red alert", ok=True, detail=worker_b)
 
-            # The leaf card: the failed run reads failed (and a queued retry
-            # reads queued in its own color while the alert keeps priority).
+            # The worker's transcript: the failed Run's header reads failed (and
+            # a queued retry's header reads queued in its own color while the
+            # alert keeps priority).
             await evaluate(cdp, page_id, f"switchSession('{worker_b}')")
             deadline = time.monotonic() + 30
-            failed_card = None
+            failed_header = None
             while time.monotonic() < deadline:
-                failed_card = await evaluate(cdp, page_id, f"""
+                failed_header = await evaluate(cdp, page_id, f"""
                     (() => {{
-                      const el = document.getElementById('thread-status-{run_b}');
-                      return el ? el.textContent : null;
+                      const el = document.getElementById('run-header-{run_b}');
+                      return el ? (el.dataset.runState + '|' + el.textContent) : null;
                     }})()
                 """)
-                if failed_card and "failed" in str(failed_card):
+                if failed_header and str(failed_header).startswith("failed|"):
                     break
                 await asyncio.sleep(0.5)
-            record("leaf card reads failed for the launch-failure run",
-                   bool(failed_card) and "failed" in str(failed_card), f"card={failed_card!r}")
-            # The failure's error text is reachable from the leaf view: the
-            # card's expandable events panel carries the run's own events log.
-            await evaluate(cdp, page_id,
-                           f"toggleThreadDetail('{run_b}', '{worker_b}')")
-            deadline = time.monotonic() + 30
-            panel_text = ""
-            while time.monotonic() < deadline:
-                panel_text = str(await evaluate(cdp, page_id, f"""
-                    (document.getElementById('thread-events-{run_b}') || {{}}).textContent || ''
-                """))
-                if "differs from origin/main" in panel_text:
-                    break
-                await asyncio.sleep(0.5)
-            record("the leaf card's events panel names the actual error",
-                   "differs from origin/main" in panel_text,
-                   f"panel={panel_text[:160]!r}")
-            shot = await screenshot(cdp, page_id, shots, "leaf_failed")
-            results["leaf_failed_screenshot"] = shot
+            record("the transcript's Run header reads failed for the launch-failure run",
+                   bool(failed_header) and str(failed_header).startswith("failed|"),
+                   f"header={failed_header!r}")
+            # The failure's error text is reachable from the worker view: the
+            # failed Run's header shows its own events log's error in full.
+            error_text = str(await evaluate(cdp, page_id, f"""
+                (document.getElementById('run-error-{run_b}') || {{}}).textContent || ''
+            """))
+            record("the failed Run's header names the actual error",
+                   "differs from origin/main" in error_text,
+                   f"error={error_text[:160]!r}")
+            shot = await screenshot(cdp, page_id, shots, "worker_run_failed")
+            results["worker_run_failed_screenshot"] = shot
 
             # Pause the worker, then retry: the queued retry is held back and
-            # the leaf card shows it as queued; the row keeps the alert
+            # its transcript header reads queued; the row keeps the alert
             # (attention outranks waiting on one row).
             status, _ = request(base, access_key, "PATCH", f"/api/sessions/{worker_b}",
                                 {"automation_paused": True})
@@ -650,26 +645,26 @@ async def run_harness(args: argparse.Namespace) -> None:
                 fail(f"retry failed: {status} {retry_body}")
             retry_id = retry_body.get("run_id") or retry_body.get("id")
             deadline = time.monotonic() + 30
-            queued_card = None
+            queued_header = None
             while time.monotonic() < deadline:
-                queued_card = await evaluate(cdp, page_id, f"""
+                queued_header = await evaluate(cdp, page_id, f"""
                     (() => {{
-                      const el = document.getElementById('thread-status-{retry_id}');
-                      const dot = document.getElementById('thread-dot-{retry_id}');
-                      return el ? (el.textContent + '|' + (dot ? dot.className : '')) : null;
+                      const el = document.getElementById('run-header-{retry_id}');
+                      const dot = document.getElementById('run-dot-{retry_id}');
+                      return el ? (el.dataset.runState + '|' + (dot ? dot.className : '')) : null;
                     }})()
                 """)
-                if queued_card and "queued" in str(queued_card):
+                if queued_header and str(queued_header).startswith("queued|"):
                     break
                 await asyncio.sleep(0.5)
-            record("leaf card reads queued for the held-back retry (own color)",
-                   bool(queued_card) and "queued" in str(queued_card)
-                   and "bg-amber-400" in str(queued_card), f"card={queued_card!r}")
+            record("the transcript's Run header reads queued for the held-back retry (own color)",
+                   bool(queued_header) and str(queued_header).startswith("queued|")
+                   and "bg-amber-400" in str(queued_header), f"header={queued_header!r}")
             await assert_icons(cdp, page_id, worker_b, "alert-indicator",
                                ["spinner", "worker-indicator", "waiting-indicator"],
                                "attention outranks waiting on the paused worker row")
-            shot = await screenshot(cdp, page_id, shots, "leaf_queued")
-            results["leaf_queued_screenshot"] = shot
+            shot = await screenshot(cdp, page_id, shots, "worker_run_queued")
+            results["worker_run_queued_screenshot"] = shot
 
             # ---- scenario C: the waiting state (queued, not launched) -----
             log("scenario C: the waiting state (a queued Run held back by a paused node)")

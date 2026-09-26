@@ -88,9 +88,10 @@ _TREE_INDEX_TTL_SECONDS = 2.0
 # never spin on a corrupted relation.
 _ANCESTOR_HOP_LIMIT = 1000
 
-# The create route's v2 pre-checks (src/api/sessions.py) reproduce these two
-# refusals verbatim as their client-visible details; the wording lives beside
-# the raises that own the contracts.
+# The create route (src/api/sessions.py) reproduces these two refusals
+# verbatim as its client-visible details — the first in the v2 pre-check, the
+# second in the legacy-shape guard; the wording lives beside the raises that
+# own the contracts.
 TASK_CREATE_REQUEST_ID_REQUIRED = "request_id is required for task creation"
 AGENT_CREATE_SCOPE_REFUSAL = "an agent may only create a task directly under its own open manager task"
 

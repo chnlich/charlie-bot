@@ -366,37 +366,38 @@ class TaskInputDispatcher:
         decision["run_id"] = launched
         return decision
 
-    async def wake_parent(self, parent_id: str) -> asyncio.Task | None:
+    async def wake_parent(
+        self, parent_id: str, *, report: dict, caller_session_id: str | None = None
+    ) -> asyncio.Task | None:
         """The one parent-wake entry after a report delivery.
 
-        A task-tree parent's next serialized turn dispatches from its durable
-        inputs. A legacy parent (profile None) keeps its own execution path:
-        the newest child_report in its fact history rides the legacy master
-        wake (trigger_master) as the turn's input text, rendered by
-        child_report_text as compose_input_prompt renders it. The child_report event
-        appended by deliver_child_report_locked stays the durable record — a
-        failed wake leaves it in the log, and the next report or user message
-        runs the parent as today.
+        A legacy parent whose own turn closed the task (caller_session_id equal
+        to the parent id) skips the wake: the parent's own turn already holds
+        the outcome in its HTTP response. The report argument is the
+        child_report the caller just delivered — the legacy wake renders it
+        through child_report_text as compose_input_prompt renders it, and the
+        event appended by deliver_child_report_locked stays the durable record;
+        a task-tree parent's next serialized turn dispatches from its durable
+        inputs and never consults the caller.
 
         The legacy wake is a whole master turn (minutes on a slow backend), so
         it is scheduled, never awaited: the startup reconcile pass that replays
         a lost report must not hold the server's doors shut for the turn, and a
-        close request must not wait on it. Returns that scheduled task.
+        close request must not wait on it. Returns that scheduled task, or None
+        when the wake was skipped or the parent is missing.
         """
         tree = self._tree
         meta = await tree.load_meta(parent_id)
         if meta is None:
             log.warning("wake_parent_target_missing", parent_id=parent_id)
-            return
+            return None
         if meta.profile is not None:
             await self.dispatch_pending(parent_id)
-            return
-        report = next(
-            (e for e in reversed(tree.fact_history(parent_id))
-             if e.get("type") == ET.CHILD_REPORT), None)
-        if report is None:
-            log.warning("wake_parent_no_report", parent_id=parent_id)
-            return
+            return None
+        if caller_session_id == parent_id:
+            log.info("legacy_parent_wake_skipped", parent=parent_id,
+                     report=report.get("id"), caller=caller_session_id)
+            return None
         text = child_report_text(report)
         from src.core.master_trigger import trigger_master
         from src.core.tasks import create_logged_task

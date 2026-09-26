@@ -475,9 +475,12 @@ class TaskCompletionManager:
         replay = self._replay_close_request(session_id, request_id)
         if replay is not None:
             return replay
+        # A non-CallerIdentity caller (the legacy string convenience) carries no
+        # session header; None never skips the wake.
+        caller_session_id = caller.session_id if isinstance(caller, CallerIdentity) else None
         return await self._close_now(
             session_id, request_id=request_id, evidence=evidence, actor=ACTOR_USER,
-            caller_session_id=caller.session_id)
+            caller_session_id=caller_session_id)
 
     def _replay_close_request(self, session_id: str, request_id: str) -> tuple[int, dict] | None:
         """The original outcome of an already-recorded operation id, if one exists.

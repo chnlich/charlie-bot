@@ -65,13 +65,15 @@ def _build_parser() -> argparse.ArgumentParser:
   create.add_argument("--group", default=None, help="Group name to assign after creation (optional)")
   # ---- v2 task create ----
   create.add_argument("--parent", default=None, help="Parent task id (optional; v2 task create)")
+  create.add_argument("--profile", default=None, choices=["manager", "worker"], help="Task profile (v2 task create)")
   create.add_argument(
-      "--profile", default=None, choices=["manager", "worker"], help="Task profile (v2 task create)")
+      "--task-file",
+      default=None,
+      help="Path to the task object JSON (v2 task create; corresponds to the "
+      "create request's 'task' field)")
   create.add_argument(
-      "--task-file", default=None, help="Path to the task object JSON (v2 task create; corresponds to the "
-                                        "create request's 'task' field)")
-  create.add_argument(
-      "--request-id", default=None,
+      "--request-id",
+      default=None,
       help="Request id binding the stable node id (v2 task create; defaults to a fresh UUID)")
 
   tree = sub.add_parser("tree", help="Page the task tree")
@@ -90,45 +92,46 @@ def _build_parser() -> argparse.ArgumentParser:
   retry.add_argument("session_id", help="Task id")
   retry.add_argument("--run", required=True, help="The run id being retried")
   retry.add_argument(
-      "--request-id", default=None,
+      "--request-id",
+      default=None,
       help="Request id binding the retry run (defaults to a fresh UUID; replays return the same run)")
 
   complete = sub.add_parser("complete", help="Complete (close) one task")
   complete.add_argument("session_id", help="Task id")
   complete.add_argument(
-      "--result-file", required=True,
+      "--result-file",
+      required=True,
       help="Path to the complete request's JSON body (summary, result_refs, run_ids; request_id "
-           "optional and defaults to a fresh UUID)")
-  complete.add_argument(
-      "--request-id", default=None, help="Request id binding the close (defaults to a fresh UUID)")
+      "optional and defaults to a fresh UUID)")
+  complete.add_argument("--request-id", default=None, help="Request id binding the close (defaults to a fresh UUID)")
 
   ack = sub.add_parser(
-      "acknowledge", help="Acknowledge exact task inputs the operator handled out-of-band "
-                          "(the terminal-driven node's resolution step)")
+      "acknowledge",
+      help="Acknowledge exact task inputs the operator handled out-of-band "
+      "(the terminal-driven node's resolution step)")
   ack.add_argument("session_id", help="Task id")
   ack.add_argument(
-      "--input-ids", required=True,
+      "--input-ids",
+      required=True,
       help="Comma-separated input event ids being resolved (each must currently be pending)")
   ack.add_argument("--note", default="", help="Optional note recorded with the acknowledgement")
   ack.add_argument(
-      "--request-id", default=None,
+      "--request-id",
+      default=None,
       help="Request id binding the acknowledgement (defaults to a fresh UUID; replays return "
-           "the original acknowledgement)")
+      "the original acknowledgement)")
 
   cancel = sub.add_parser("cancel", help="Explicitly cancel one open task")
   cancel.add_argument("session_id", help="Task id")
   cancel.add_argument("--reason", required=True, help="Cancellation reason")
-  cancel.add_argument(
-      "--request-id", default=None, help="Request id binding the cancel (defaults to a fresh UUID)")
+  cancel.add_argument("--request-id", default=None, help="Request id binding the cancel (defaults to a fresh UUID)")
 
   reopen = sub.add_parser("reopen", help="Reopen one closed task")
   reopen.add_argument("session_id", help="Task id")
   reopen.add_argument("--reason", required=True, help="Reopen reason")
+  reopen.add_argument("--request-id", default=None, help="Request id binding the reopen (defaults to a fresh UUID)")
   reopen.add_argument(
-      "--request-id", default=None, help="Request id binding the reopen (defaults to a fresh UUID)")
-  reopen.add_argument(
-      "--closed-event", default=None,
-      help="The task_closed event id to reopen (default: the latest close fact)")
+      "--closed-event", default=None, help="The task_closed event id to reopen (default: the latest close fact)")
 
   send = sub.add_parser(
       "send", help="Relay a message to another session as an agent_message", formatter_class=CliHelpFormatter)
@@ -197,8 +200,7 @@ def _cmd_acknowledge(args: argparse.Namespace) -> None:
       "input_ids": input_ids,
       "note": args.note,
   }
-  print(json.dumps(
-      post_internal_api(f"/api/sessions/{args.session_id}/task-inputs/acknowledge", body), indent=2))
+  print(json.dumps(post_internal_api(f"/api/sessions/{args.session_id}/task-inputs/acknowledge", body), indent=2))
 
 
 def _cmd_cancel(args: argparse.Namespace) -> None:

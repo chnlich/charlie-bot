@@ -669,8 +669,7 @@ async def _run_single_iteration(
   # blocked path above delivers its own extracted copy to the successor.
   if not await asyncio.to_thread(report_path.exists):
     fallback_body = await asyncio.to_thread(_extract_iteration_summary, _newest_first_events(events_path), i, status)
-    await asyncio.to_thread(
-        report_path.write_text, RUNNER_FALLBACK_REPORT_MARKER + fallback_body)
+    await asyncio.to_thread(report_path.write_text, RUNNER_FALLBACK_REPORT_MARKER + fallback_body)
 
   log.info(
       ET.IMPROVE_ITERATION_COMPLETED,

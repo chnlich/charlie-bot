@@ -171,23 +171,15 @@ async def test_live_goal_change_affects_next_iteration(
     manager = await tree.create_task(
         request_id="root", task_parent_id=None, profile="manager",
         task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
-    class _EditBetween(SpawningScriptedBackend):
-        async def run(self, prompt, cwd, env, uploaded_files=None):
-            self.prompt = prompt
-            self.env = dict(env)
-            self._pid += 1
-            if self._on_spawn is not None:
-                await self._on_spawn(self._pid)
-            for event in self._events:
-                if self.terminated:
-                    return
-                yield event
-            # After the first build's scripted stream, edit the live goal so the
-            # second iteration must see it.
-            goal_path = cfg.sessions_dir / manager.id / "loops" / "1" / "goal.md"
-            goal_path.write_text("## Goal\n\nnow improve the OTHER thing\n")
 
-    first = _EditBetween([result_event("one")])
+    async def edit_goal_after_first_stream() -> None:
+        # After the first build's scripted stream, edit the live goal so the
+        # second iteration must see it.
+        goal_path = cfg.sessions_dir / manager.id / "loops" / "1" / "goal.md"
+        goal_path.write_text("## Goal\n\nnow improve the OTHER thing\n")
+
+    first = SpawningScriptedBackend(
+        [result_event("one")], post_events=edit_goal_after_first_stream)
     second = SpawningScriptedBackend([result_event("two")])
     queue = [first, second]
     monkeypatch.setattr("src.agents.worker.build_backend", lambda *a, **k: queue.pop(0))
@@ -239,23 +231,15 @@ async def test_user_stop_prevents_further_iterations_and_reports_cancelled(
         request_id="root", task_parent_id=None, profile="manager",
         task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
 
-    class _StopAfterFirst(SpawningScriptedBackend):
-        async def run(self, prompt, cwd, env, uploaded_files=None):
-            self.prompt = prompt
-            self.env = dict(env)
-            self._pid += 1
-            if self._on_spawn is not None:
-                await self._on_spawn(self._pid)
-            for event in self._events:
-                if self.terminated:
-                    return
-                yield event
-            # The user's stop lands after this iteration's work: the controller
-            # must honor it before spawning any further iteration.
-            await stop_improve_loop(manager.id, cfg)
+    async def stop_loop_after_first_stream() -> None:
+        # The user's stop lands after this iteration's work: the controller
+        # must honor it before spawning any further iteration.
+        await stop_improve_loop(manager.id, cfg)
 
     monkeypatch.setattr(
-        "src.agents.worker.build_backend", lambda *a, **k: _StopAfterFirst([result_event("one")]))
+        "src.agents.worker.build_backend",
+        lambda *a, **k: SpawningScriptedBackend(
+            [result_event("one")], post_events=stop_loop_after_first_stream))
     patch_instructions_content(monkeypatch)
     stub_credentials({"charliebot": {"access_key": "op-secret"}})
     monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))

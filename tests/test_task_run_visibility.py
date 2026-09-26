@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from conftest import assistant_text_event as _assistant_event
 from conftest import patch_instructions_content, stub_credentials
 
 from src.core import event_types as ET
@@ -209,20 +210,6 @@ def _write_run_events(tree: TaskTreeManager, session_id: str, run_id: str, event
       f.write(json.dumps(event) + "\n")
 
 
-def _assistant_event(content: str, timestamp: str) -> dict:
-  """One backend assistant event in the CC block shape the aggregator reads."""
-  return {
-      "type": ET.ASSISTANT,
-      "message": {
-          "content": [{
-              "type": "text",
-              "text": content
-          }]
-      },
-      "timestamp": timestamp,
-  }
-
-
 async def _worker_with_two_runs(tree: TaskTreeManager, worker_id: str):
   """One delivered work Run and one queued review Run, in Run order."""
   t1 = datetime.now(UTC) - timedelta(minutes=5)
@@ -250,7 +237,7 @@ async def _worker_with_two_runs(tree: TaskTreeManager, worker_id: str):
               "content": "fix the parser",
               "timestamp": t1.isoformat()
           },
-          _assistant_event("done", t1_done.isoformat()),
+          {**_assistant_event("done"), "timestamp": t1_done.isoformat()},
           {
               "type": ET.MASTER_DONE,
               "timestamp": t1_done.isoformat()
@@ -264,7 +251,7 @@ async def _worker_with_two_runs(tree: TaskTreeManager, worker_id: str):
   await tree.runs.register_run(
       RunRecord(id="run-2", session_id=worker_id, kind="review", backend="fake", model="fake-model", started_at=t2))
   _write_run_events(tree, worker_id, "run-2", [
-      _assistant_event("reviewing", t2.isoformat()),
+      {**_assistant_event("reviewing"), "timestamp": t2.isoformat()},
   ])
 
   close_event = build_control_event(

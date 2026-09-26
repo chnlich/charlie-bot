@@ -24,7 +24,7 @@ from structlog.testing import capture_logs
 
 from src.agents import master_cc_run, master_cc_state
 from src.api import ext_usage as ext_usage_mod
-from src.api.sessions import _active_backend_payload, _backend_domain
+from src.api.sessions import _active_backend_payload
 from src.core import claude_accounts, storage_cool, token_tally
 from src.core import config as core_config
 from src.core import event_types as ET
@@ -608,12 +608,15 @@ def test_resolve_resume_id_pool_miss_returns_none_and_keeps_account(tmp_path: Pa
 def test_pooled_entries_share_one_switch_domain(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
 
-  assert _backend_domain(cfg.get_backend_option(POOLED_FABLE_ID), cfg) == claude_accounts.POOL_DOMAIN
-  assert _backend_domain(cfg.get_backend_option("claude-sonnet-5"), cfg) == claude_accounts.POOL_DOMAIN
-  assert _backend_domain(cfg.get_backend_option("codex-o3"), cfg) is None
+  assert claude_accounts.continuation_domain(
+      cfg.get_backend_option(POOLED_FABLE_ID), cfg) == claude_accounts.POOL_DOMAIN
+  assert claude_accounts.continuation_domain(
+      cfg.get_backend_option("claude-sonnet-5"), cfg) == claude_accounts.POOL_DOMAIN
+  # A non-Claude backend's continuation domain is its own id.
+  assert claude_accounts.continuation_domain(cfg.get_backend_option("codex-o3"), cfg) == "codex-o3"
 
   pooled = _active_backend_payload(SessionMetadata(id="a", name="t", backend=POOLED_FABLE_ID), cfg)
-  assert pooled["switchable_backends"] == ["claude-fable-5", "claude-sonnet-5"]
+  assert pooled["switchable_backends"] == ["claude-fable-5", "claude-sonnet-5", "codex-o3"]
 
 
 # ---------------------------------------------------------------------------

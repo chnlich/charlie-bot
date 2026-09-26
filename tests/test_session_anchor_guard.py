@@ -21,6 +21,7 @@ from structlog.testing import capture_logs
 from src.core.master_trigger import trigger_master
 from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
+from src.core.task_sessions import TaskTreeManager
 
 
 def _corrections(logs: list[dict]) -> list[dict]:
@@ -51,6 +52,29 @@ async def test_whole_object_save_with_a_stale_label_is_corrected_back_to_disk(tm
   assert len(corrections) == 1
   assert corrections[0]["field"] == "claude_account"
   assert corrections[0]["on_disk"] == "pool-b" and corrections[0]["attempted"] == "pool-a"
+
+
+@pytest.mark.asyncio
+async def test_stale_writer_after_a_native_backend_funnel_persist_keeps_the_funnel_value(tmp_path: Path) -> None:
+  """The stale-writer race on the third anchor: the round-end funnel persists
+  the producing backend beside the id, then a stale whole-object writer lands
+  (re-attributing the id to another backend) — the disk keeps the funnel's
+  value and the correction is logged."""
+  mgr = SessionManager(build_sessions_cfg(tmp_path))
+  session = await mgr.create_session(CreateSessionRequest(name="race-native"))
+  await mgr.persist_cc_session_id(session.id, "cc-1", native_backend="opus")
+
+  stale = await mgr.get_session(session.id)
+  stale.native_backend = "codex-o3"  # the enqueue-time value the caller still holds
+  with capture_logs() as logs:
+    await mgr.save_metadata(stale)
+
+  disk = await mgr.read_metadata_fresh(session.id)
+  assert disk.cc_session_id == "cc-1"
+  assert disk.native_backend == "opus", "the stale whole-object write may not re-attribute the id"
+  corrections = _corrections(logs)
+  assert [c["field"] for c in corrections] == ["native_backend"]
+  assert corrections[0]["on_disk"] == "opus" and corrections[0]["attempted"] == "codex-o3"
 
 
 @pytest.mark.asyncio
@@ -92,10 +116,34 @@ async def test_authorized_channels_still_change_the_anchors(tmp_path: Path) -> N
   disk = await mgr.read_metadata_fresh(session.id)
   assert disk.claude_account == "pool-c" and disk.cc_session_id == "cc-2"
 
+  # The switch endpoint's backfill funnel records the producing backend.
+  read_back = await mgr.persist_native_backend(session.id, "codex-o3")
+  assert read_back == "codex-o3"
+  disk = await mgr.read_metadata_fresh(session.id)
+  assert disk.native_backend == "codex-o3"
+
+  # The v2 launch's spawn-time channel writes the provenance triple in one
+  # authorized save (driven here through the real TaskTreeManager channel).
+  cfg = build_sessions_cfg(tmp_path)
+  tree = TaskTreeManager(cfg, mgr)
+  await tree.record_native_anchor(
+      session.id, prompt_hash="hash-3", backend="opus", model="opus-model", reset_anchor=False)
+  disk = await mgr.read_metadata_fresh(session.id)
+  assert disk.native_prompt_hash == "hash-3"
+  assert disk.native_backend == "opus" and disk.native_model == "opus-model"
+
+  # A whole-object save after the funnels cannot roll either anchor back.
+  stale = await mgr.get_session(session.id)
+  stale.native_backend = "claude-opus-5"
+  await mgr.save_metadata(stale)
+  disk = await mgr.read_metadata_fresh(session.id)
+  assert disk.native_backend == "opus"
+
   await mgr.clear_cc_session_anchor(session.id)
   disk = await mgr.read_metadata_fresh(session.id)
   assert disk.cc_session_id is None and disk.cc_session_started_at is None
   assert disk.claude_account == "pool-c", "the clear channel clears the resume anchor, not the label"
+  assert disk.native_backend == "opus", "the clear channel clears the resume anchor, not the provenance"
 
   # A whole-object save after the clear cannot resurrect the cleared anchor.
   stale = await mgr.get_session(session.id)

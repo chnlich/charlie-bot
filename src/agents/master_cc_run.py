@@ -34,6 +34,7 @@ from src.core.models import (
     backend_type_allows_missing_model,
 )
 from src.core.process import kill_group_escalating
+from src.core.sessions import HISTORY_LOCATION_NOTE
 from src.core.streaming import handle_compaction_events
 
 log = LazyStructlogLogger()
@@ -338,6 +339,37 @@ def _build_prompt(user_content: str, is_voice: bool) -> str:
   return user_content
 
 
+async def _v1_reset_reason(
+    item: master_cc_state._WorkItem,
+    option: BackendOption,
+    *,
+    fresh_by_switch: bool,
+    dropped_reason: str | None,
+) -> str | None:
+  """The v1 start note's reset reason, or None when this turn carries no note.
+
+  A v1 turn notes its context reset only when the session has a completed round
+  of its own (``has_completed_round`` scopes to the session's own log segment,
+  so a fresh clone child gets no note) and the caller did not declare the turn
+  fresh (the weekly recycle). The reason names either the cross-family
+  continuation rule — the session switched backends, and the new family starts
+  its own conversation — or the dropped-resume path (transcript or anchor
+  missing). v2 turns carry their note from the launch seam (task_execution)
+  instead, so this helper fires for ``task_run is None`` items only.
+  """
+  if item.task_run is not None or item.expect_fresh_session:
+    return None
+  if not fresh_by_switch and dropped_reason is None:
+    return None
+  if not await item.callbacks.has_completed_round(item.session_meta.id):
+    return None
+  if fresh_by_switch:
+    return (
+        f"this session switched from backend {item.session_meta.native_backend} to {option.id}, "
+        "which starts its own conversation")
+  return "the previous conversation could not be resumed"
+
+
 def _cc_transcript_exists(config_dir: Path, cc_session_id: str) -> bool:
   """True when *config_dir* holds a resumable transcript for *cc_session_id*."""
   return bool(claude_accounts.transcript_matches(config_dir, cc_session_id))
@@ -633,7 +665,19 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     # thinking state) must carry the cleared anchor, not the stale one the
     # item was enqueued with; the durable clearing itself happens at spawn.
     session_meta.cc_session_id = None
-  resume_id = None if fresh_native else _resolve_resume_id(option, session_meta, cfg=cfg)
+  # v1 continuation rule: a held native id belongs to the backend recorded in
+  # native_backend, and a backend outside its continuation domain starts its
+  # own conversation. The turn withholds the resume id (no --resume flag, no
+  # native resume id) and skips the resume pre-flight, but leaves the id on
+  # disk: the consumer persists only a truthy new id, so a round that lands one
+  # replaces the old id and native_backend together and a round that lands none
+  # leaves both for the next turn to judge again. A pre-rule session (empty
+  # native_backend) resumes as before.
+  switch_from_backend = session_meta.native_backend
+  fresh_by_switch = (
+      item.task_run is None and not fresh_native and bool(session_meta.cc_session_id) and bool(switch_from_backend) and
+      not claude_accounts.same_continuation_domain(switch_from_backend, option.id, cfg))
+  resume_id = None if (fresh_native or fresh_by_switch) else _resolve_resume_id(option, session_meta, cfg=cfg)
   if pooled:
     # The pool picks the login for this turn, moves the transcript to it when the
     # account changes, and compacts a large Fable context when the cache is cold.
@@ -647,12 +691,15 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   # Pre-flight: a resume-capable backend about to run with no resolved resume
   # id, when the session already has an anchor on disk or a completed round, is
   # about to start a zero-context conversation. Fail loudly unless the caller
-  # declared a fresh start (the scheduled-session weekly-recycle path).
+  # declared a fresh start (the scheduled-session weekly-recycle path) or the
+  # continuation rule already declared this turn fresh (a cross-domain switch).
+  dropped_reason: str | None = None
   if (option.type in _RESUME_CAPABLE_BACKEND_TYPES and not resume_id and not item.expect_fresh_session and
-      not fresh_native):
+      not fresh_native and not fresh_by_switch):
     anchor_on_disk = session_meta.cc_session_id
     if anchor_on_disk or await item.callbacks.has_completed_round(session_meta.id):
       reason = ET.RESUME_REASON_TRANSCRIPT_MISSING if anchor_on_disk else ET.RESUME_REASON_ANCHOR_MISSING
+      dropped_reason = reason
       log.error(
           "master_cc_resume_anchor_missing",
           session=session_meta.id,
@@ -686,6 +733,11 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     env.pop(CLAUDE_CONFIG_DIR_ENV_VAR, None)
 
   prompt = _build_prompt(item.user_content, item.is_voice)
+  reset_reason = await _v1_reset_reason(item, option, fresh_by_switch=fresh_by_switch, dropped_reason=dropped_reason)
+  if reset_reason is not None:
+    # Only the prompt the backend receives carries the note; the persisted user
+    # event was written before the run and stays unchanged.
+    prompt = f"[Context reset: {reset_reason}. {HISTORY_LOCATION_NOTE}]\n\n{prompt}"
 
   log.info(
       "master_cc_starting",
@@ -698,7 +750,15 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       account=account.label if account is not None else None,
   )
 
-  cc_session_id: str | None = session_meta.cc_session_id
+  # The round's own conversation state. A fresh turn (v2's cleared snapshot, or
+  # a v1 cross-family switch) starts a new conversation, so its state starts
+  # empty: a new id from the backend is adoptable, and a round that lands none
+  # returns None, so the consumer's persist leaves the disk's old id and
+  # producer untouched for the next turn to judge again. The metadata snapshot
+  # itself stays intact for the v1 switch (only v2's spawn clears it): the
+  # dequeue refresh corrects a set snapshot from disk, and a None snapshot is
+  # never resurrected.
+  cc_session_id: str | None = None if (fresh_native or fresh_by_switch) else session_meta.cc_session_id
   exit_code = 1
   error_msg: str | None = None
   # Set inside _on_spawn the moment the master_run record hits disk; the cancel
@@ -906,6 +966,9 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   finally:
     master_cc_state._active_procs.pop(session_meta.id, None)
     finish_extras = tracker.build_finish_extras()
+    # The backend id this round actually ran on, for the consumer's round-end
+    # anchor persist (the option resolved above, never the request's hint).
+    finish_extras["native_backend"] = option.id
     if relays:
       finish_extras["account_relays"] = relays
 

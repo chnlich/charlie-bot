@@ -152,10 +152,11 @@ _SUCCESSOR_CHAIN_HOP_LIMIT = 100
 # full span (measured 23 ms worst hold per pass).
 _AGGREGATOR_INIT_SLICE_EVENTS = 256
 
-# The resume anchors: the two metadata fields that name where the conversation
-# lives (the cc-id and the pool login holding its transcript). They change only
-# through their authorized channels (see save_metadata's guard).
-_ANCHOR_FIELDS = ("cc_session_id", "claude_account")
+# The resume anchors: the metadata fields that name where the conversation
+# lives and who produced it (the cc-id, the pool login holding its transcript,
+# and the backend the id came from). They change only through their authorized
+# channels (see save_metadata's guard).
+_ANCHOR_FIELDS = ("cc_session_id", "claude_account", "native_backend")
 
 _TRANSIENT_METADATA_FIELDS = {
     "has_running_tasks",
@@ -2047,25 +2048,73 @@ class SessionManager:
         await self.save_metadata(fresh, lock_held=True, anchor_write=True)
       return await self._get_session_bypassing_cache(session_id)
 
-  async def persist_cc_session_id(self, session_id: str, cc_session_id: str) -> str | None:
+  async def persist_cc_session_id(
+      self, session_id: str, cc_session_id: str, *, native_backend: str | None = None) -> str | None:
     """Persist a cc_session_id without clobbering unrelated metadata fields.
 
     Only ``cc_session_id`` changes (and ``cc_session_started_at`` when the
-    on-disk id actually changes); the save runs on every call, id changed or
-    not — the consumer owns the resume anchor and hands it every round (the
-    persist-with-readback step in ``master_cc_queue``). Never falls back to a
-    whole-object save — that clobbers concurrent single-field writes like
-    ``has_unread``.
+    on-disk id actually changes), plus ``native_backend`` when the caller hands
+    the producing backend id — the consumer's round-end write, so the
+    continuation rule knows which backend the id belongs to; ``None`` (the
+    default) leaves that field untouched, keeping the two-argument callers
+    working. The save runs on every call, id changed or not — the consumer owns
+    the resume anchor and hands it every round (the persist-with-readback step
+    in ``master_cc_queue``). Never falls back to a whole-object save — that
+    clobbers concurrent single-field writes like ``has_unread``.
     """
 
     def set_anchor(meta: SessionMetadata) -> bool:
       if meta.cc_session_id != cc_session_id:
         meta.cc_session_id = cc_session_id
         meta.cc_session_started_at = utc_now()
+      if native_backend is not None:
+        meta.native_backend = native_backend
       return True
 
     saved = await self._persist_anchor_fresh(session_id, set_anchor)
     return saved.cc_session_id if saved is not None else None
+
+  async def persist_native_backend(self, session_id: str, native_backend: str) -> str | None:
+    """Record the backend that produced the session's held native conversation.
+
+    The switch endpoint's pre-rule backfill: a session from before the
+    native_backend rule holds a ``cc_session_id`` with an empty
+    ``native_backend``, and switching records the effective current backend as
+    its producer through this authorized anchor channel *before* the backend
+    field changes, so the next turn's continuation rule judges the held id
+    against the backend that actually produced it. Only ``native_backend``
+    changes, so concurrent single-field writes survive; an unchanged value
+    writes nothing.
+    """
+
+    def set_backend(meta: SessionMetadata) -> bool:
+      if meta.native_backend == native_backend:
+        return False
+      meta.native_backend = native_backend
+      return True
+
+    saved = await self._persist_anchor_fresh(session_id, set_backend)
+    return saved.native_backend if saved is not None else None
+
+  async def persist_native_anchor_provenance(
+      self, session_id: str, *, prompt_hash: str, native_backend: str, model: str | None) -> None:
+    """Write the native-context anchor's provenance through an authorized anchor write.
+
+    The v2 launch's spawn-time channel (``TaskTreeManager.record_native_anchor``):
+    a fresh read under the per-session lock sets the instruction hash and the
+    backend/model identity the current conversation continues under in one
+    authorized save, so a concurrent stale whole-object save cannot roll the
+    identity back to a previous conversation's provenance. The clear of a
+    deliberately voided anchor stays on ``clear_cc_session_anchor``.
+    """
+
+    def set_provenance(meta: SessionMetadata) -> bool:
+      meta.native_prompt_hash = prompt_hash
+      meta.native_backend = native_backend
+      meta.native_model = model
+      return True
+
+    await self._persist_anchor_fresh(session_id, set_provenance)
 
   async def persist_claude_account(self, session_id: str, claude_account: str) -> str | None:
     """Persist the pool account holding the session's transcript; returns the label on disk.
@@ -3089,8 +3138,9 @@ class SessionManager:
   async def _reconcile_anchor_fields(self, meta: SessionMetadata) -> None:
     """Correct *meta*'s anchor fields back to the on-disk values before a whole-object save.
 
-    The guard behind the authorized-channel model: the two resume anchors change
+    The guard behind the authorized-channel model: the resume anchors change
     only through their channels (``persist_cc_session_id``, ``persist_claude_account``,
+    ``persist_native_backend``, ``persist_native_anchor_provenance``,
     ``clear_cc_session_anchor``), so a whole-object save built from a stale cached
     meta must not roll them back. Reads metadata.json fresh (a cached view is the
     very staleness this guard exists for) and mutates *meta* in place; a
@@ -3141,6 +3191,7 @@ class SessionManager:
       caller's own critical section. Lock-free callers get the acquisition here.
     * ``anchor_write`` — this save is an authorized anchor channel
       (``persist_cc_session_id``, ``persist_claude_account``,
+      ``persist_native_backend``, ``persist_native_anchor_provenance``,
       ``clear_cc_session_anchor``) and legitimately changes an anchor field; the
       reconciliation is skipped, because its whole purpose would revert the
       intended write. Every other caller is reconciled: a stale anchor is

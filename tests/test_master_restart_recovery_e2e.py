@@ -75,7 +75,7 @@ from src.core.models import (
     SessionMetadata,
 )
 from src.core.process import kill_process_group
-from src.core.sessions import SessionManager
+from src.core.sessions import HISTORY_LOCATION_NOTE, SessionManager
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 
 FAKE_SHIM = r"""#!/bin/sh
@@ -750,12 +750,17 @@ async def test_queued_message_answered_after_restart(tmp_path: Path, monkeypatch
 
   await _recover(monkeypatch, home, shim, state)
 
-  # A: re-attached, prompt unmarked. B: one new spawn, marked, only after A.
+  # A: re-attached, prompt unmarked. B: one new spawn, only after A. The
+  # replayed prompt opens with the context-reset note (A's round completed
+  # without landing a resume id, so the anchor-missing drop fired) and then
+  # carries the replay marker + the original content.
   assert "message A" in _shim_prompt(state, 1)
   assert not _shim_prompt(state, 1).startswith(master_cc_queue._REPLAY_MARKER)
   assert (state / "inv-2.argv").exists(), "queued message B was never replayed"
   replayed_prompt = _shim_prompt(state, 2)
-  assert replayed_prompt.startswith(master_cc_queue._REPLAY_MARKER)
+  assert replayed_prompt.startswith(
+      f"[Context reset: the previous conversation could not be resumed. {HISTORY_LOCATION_NOTE}]\n\n"
+      f"{master_cc_queue._REPLAY_MARKER}")
   assert "message B" in replayed_prompt
 
   events = read_chat_events(home, session_id)

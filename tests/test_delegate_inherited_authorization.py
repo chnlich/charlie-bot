@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import WORKER_BUILD_BACKEND_PATCH_TARGET, delegate_payload, stub_credentials
+from conftest import WORKER_BUILD_BACKEND_PATCH_TARGET, agent_headers, delegate_payload, stub_credentials
 
 from src.core import event_types as ET
 from src.core.models import RunRecord, TaskSpec
@@ -284,17 +284,6 @@ async def test_verify_exemption_on_the_v2_route_and_launch(
               if m.task_parent_id == child.id]
     assert [m.id for m in leaves] == [verify_leaf]
     assert len(builds) == 1
-
-
-def agent_headers(session_id: str, run_id: str) -> dict[str, str]:
-    """The run-token credential of one node's own active Run: the credential
-    the delegating CLI really carries (never the operator access key the
-    operator-header tests use, and the only credential that exercises the
-    agent-creation check on the task tree)."""
-    token = sign_run_token(
-        RunTokenClaims(session_id=session_id, run_id=run_id, agent="manager-agent"),
-        "op-secret")
-    return {"Authorization": f"Bearer {token}"}
 
 
 async def register_active_run(tree, session_id: str, run_id: str, kind: str = "manager_turn") -> None:

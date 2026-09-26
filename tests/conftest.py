@@ -73,7 +73,7 @@ from src.core.home import CREDENTIALS_FILE  # noqa: E402
 from src.core.plans import PlanRegistryManager  # noqa: E402
 from src.core.scheduler import Scheduler  # noqa: E402
 from src.core.sessions import SessionManager  # noqa: E402
-from src.core.run_token import CallerIdentity  # noqa: E402
+from src.core.run_token import CallerIdentity, RunTokenClaims, sign_run_token  # noqa: E402
 from src.core.task_sessions import TaskTreeManager  # noqa: E402
 from src.core import spawner  # noqa: E402
 from src.core import spawner_finalize  # noqa: E402
@@ -2128,6 +2128,18 @@ def stub_credentials(sections: dict[str, dict[str, str | int]]) -> None:
   Credentials, stamped with the current credentials.yaml fingerprint, so the answer comes from
   memory and no file is read."""
   core_config._credentials_cache.seed(core_config.Credentials(path=Path("credentials.yaml"), sections=sections))
+
+
+def agent_headers(session_id: str, run_id: str) -> dict[str, str]:
+  """The run-token credential of one node's own active Run (agent="manager-agent").
+
+  The signing key must equal the access key planted via stub_credentials, or the API
+  rejects the token as a bad credential. This is the credential the delegating CLI
+  really carries — never the operator access key the operator-header tests use — and
+  the only credential that exercises the agent-creation check on the task tree.
+  """
+  token = sign_run_token(RunTokenClaims(session_id=session_id, run_id=run_id, agent="manager-agent"), "op-secret")
+  return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture(autouse=True)

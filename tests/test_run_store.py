@@ -13,11 +13,11 @@ from conftest import build_env as build_task_tree_env
 from conftest import identity_of, live_subprocess
 
 from src.core import event_types as ET
+from src.core import runs
 from src.core.models import RunRecord
 from src.core.runs import (
     RunIdentityConflictError,
     RunStore,
-    read_host_boot_time,
 )
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
@@ -69,7 +69,8 @@ async def test_register_is_idempotent_and_registers_alias(tmp_path: Path) -> Non
 
   # A queued run is distinguishable from a live process and keeps its inputs for dispatch.
   assert store.run_blocker(
-      run, store.load_events_sync(session_id), read_host_boot_time()) == f"run {run.id} is queued (pending dispatch)"
+      run, store.load_events_sync(session_id),
+      runs.read_host_boot_time()) == f"run {run.id} is queued (pending dispatch)"
 
 
 @pytest.mark.asyncio

@@ -72,6 +72,7 @@ from src.core.session_dispatch import TaskInputDispatcher
 from src.core.sessions import _TRANSIENT_METADATA_FIELDS, SessionManager
 from src.core.takeoff_gate import is_verify_exempt
 from src.core.task_completion import TaskCompletionManager
+from src.core.tasks import create_logged_task
 
 if TYPE_CHECKING:
   from src.core.models import RunRecord
@@ -374,6 +375,8 @@ class TaskTreeManager:
     session_mgr.task_tree_activity = self.activity_pair_of
     self._index: tuple[_TreeIndex, float] | None = None
     self._index_generation = 0
+    self._index_build_task: asyncio.Task[_TreeIndex] | None = None
+    self._index_build_generation = -1
     self._facts_memo: dict[str, tuple[list[dict], int, _TaskFacts]] = {}
     self._prompt_bodies_dir = cfg.charliebot_home / PROMPT_BODIES_DIR_NAME
 
@@ -424,11 +427,28 @@ class TaskTreeManager:
     if not force and self._index is not None and now - self._index[1] < _TREE_INDEX_TTL_SECONDS:
       return self._index[0]
     generation = self._index_generation
+    task = self._index_build_task
+    if task is not None and self._index_build_generation == generation:
+      # Every reader invalidated by the same write shares one build: a burst of
+      # concurrent readers each paying its own full build multiplies the one
+      # rebuild's wall across every request the write touches.
+      return await task
     # The metadata snapshot resolves on the loop through the shared per-entry
     # check (_fresh_cached_meta), so the thread build reads a file only for a
     # session no authoritative entry covers (cold cache, out-of-band create).
     cached_metas = self._sessions.fresh_cached_metas()
-    index = await asyncio.to_thread(self._build_index_sync, cached_metas)
+    task = create_logged_task(
+        asyncio.to_thread(self._build_index_sync, cached_metas), name="task-tree-index-build")
+    self._index_build_task = task
+    self._index_build_generation = generation
+    try:
+      index = await task
+    finally:
+      # The task removes itself from the marker on completion, success or
+      # failure, so a later read retries fresh instead of inheriting a stale
+      # failure; a newer build owning the marker must not be clobbered.
+      if self._index_build_task is task:
+        self._index_build_task = None
     if self._index_generation == generation:
       self._index = (index, now)
     # A structural write landing mid-build bumped the generation: the build's

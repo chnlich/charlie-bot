@@ -670,6 +670,15 @@ class RunNotFoundError(LookupError):
   """The requested run record does not exist (API: 404)."""
 
 
+# The task-tree execution and completion paths raise this sentence inside
+# their own miss types, and the run-status route (src/api/sessions.py)
+# restates it verbatim as the client-visible 404 detail; one home keeps the
+# layers from drifting apart on the wording.
+def run_not_found_in_task_text(run_id: str, session_id: str) -> str:
+  """The task-tree run-miss sentence (API: 404 detail)."""
+  return f"run {run_id} not found in task {session_id}"
+
+
 class RunIdentityConflictError(Exception):
   """The recorded (pid, pid_start) pair no longer names one process instance (API: 409).
 

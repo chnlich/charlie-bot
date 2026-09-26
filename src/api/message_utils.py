@@ -174,8 +174,7 @@ async def _worker_messages_page(
   from src.core import worker_transcript
   entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, tree, session_id)
   messages, oldest_ordinal, has_more = entry.projection.tail(message_limit)
-  return (messages, entry.projection.pending_draft, entry.projection.event_count,
-          oldest_ordinal, has_more)
+  return (messages, entry.projection.pending_draft, entry.projection.event_count, oldest_ordinal, has_more)
 
 
 async def _worker_usage(tree: TaskTreeManager, session_id: str) -> dict | None:

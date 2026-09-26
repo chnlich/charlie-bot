@@ -152,9 +152,9 @@ def _delivery_event(task_state: str, facts_events: list[dict], runs: list[RunRec
 def _revision(signature: tuple, states: dict[str, str], task_state: str) -> str:
   """The client-facing revision: moves exactly when a re-render (reset) is due."""
   payload = json.dumps(
-      [[*item] if isinstance(item, tuple) else item for item in signature]
-      + [sorted(states.items()), task_state],
-      sort_keys=True, default=str)
+      [[*item] if isinstance(item, tuple) else item for item in signature] + [sorted(states.items()), task_state],
+      sort_keys=True,
+      default=str)
   return hashlib.sha256(payload.encode()).hexdigest()[:24]
 
 
@@ -191,8 +191,7 @@ def worker_signature_sync(tree, session_id: str) -> tuple:
     for entry in sorted(root.iterdir(), key=lambda e: e.name):
       if not entry.is_dir():
         continue
-      parts.append((entry.name, _file_signature(entry / "metadata.json"),
-                    _file_signature(entry / "events.jsonl")))
+      parts.append((entry.name, _file_signature(entry / "metadata.json"), _file_signature(entry / "events.jsonl")))
   parts.append(("chat", _file_signature(tree.sessions.get_chat_events_path(session_id))))
   return tuple(parts)
 
@@ -213,15 +212,14 @@ def build_worker_transcript_sync(tree, session_id: str) -> TranscriptEntry:
   for run in runs:
     state = states.get(run.id, "queued")
     run_events = _read_events(tree.runs.run_dir(session_id, run.id) / "events.jsonl")
-    transcript.append(_run_header_event(
-        run, state, _backend_label(tree.cfg, run.backend), _header_error(state, run_events)))
+    transcript.append(
+        _run_header_event(run, state, _backend_label(tree.cfg, run.backend), _header_error(state, run_events)))
     transcript.extend(run_events)
   task_state = tree.task_state(session_id)
   delivery = _delivery_event(task_state, facts_events, runs)
   if delivery is not None:
     transcript.append(delivery)
-  active_run_id = next(
-      (run.id for run in reversed(runs) if states.get(run.id) in _SIGNALLABLE_STATES), None)
+  active_run_id = next((run.id for run in reversed(runs) if states.get(run.id) in _SIGNALLABLE_STATES), None)
   signature = worker_signature_sync(tree, session_id)
   return TranscriptEntry(
       revision=_revision(signature, states, task_state),
@@ -267,8 +265,7 @@ def _thread_dir(session_dir: Path, thread_id: str) -> Path:
 def thread_signature_sync(session_dir: Path, thread_id: str) -> tuple:
   """Stat-only identity of one legacy thread's metadata and events files."""
   thread_dir = _thread_dir(session_dir, thread_id)
-  return (_file_signature(thread_dir / "metadata.json"),
-          _file_signature(thread_dir / "data" / "events.jsonl"))
+  return (_file_signature(thread_dir / "metadata.json"), _file_signature(thread_dir / "data" / "events.jsonl"))
 
 
 def _thread_state(meta: ThreadMetadata) -> str:
@@ -276,29 +273,35 @@ def _thread_state(meta: ThreadMetadata) -> str:
   if meta.status != "running":
     return str(meta.status)
   from src.core.runs import is_run_alive, read_host_boot_time
-  alive = (meta.pid is not None and meta.pid_start is not None and meta.started_at is not None
-           and is_run_alive(meta.pid, meta.pid_start, meta.started_at, read_host_boot_time()))
+  alive = (
+      meta.pid is not None and meta.pid_start is not None and meta.started_at is not None and
+      is_run_alive(meta.pid, meta.pid_start, meta.started_at, read_host_boot_time()))
   return "running" if alive else "attention"
 
 
 def build_thread_transcript_sync(
-    meta: ThreadMetadata, events_path: Path, session_dir: Path, label: str,
+    meta: ThreadMetadata,
+    events_path: Path,
+    session_dir: Path,
+    label: str,
 ) -> TranscriptEntry:
   """Build one legacy thread's transcript: one header line, then its events."""
   state = _thread_state(meta)
   started = meta.started_at.isoformat() if meta.started_at is not None else None
   thread_events = _read_events(events_path)
-  transcript: list[dict] = [{
-      "type": ET.RUN_HEADER,
-      "run_id": meta.id,
-      "kind": "thread",
-      "backend": meta.backend or "",
-      "backend_label": label,
-      "state": state,
-      "error": _header_error(state, thread_events),
-      "started_at": started,
-      "timestamp": started or utc_now().isoformat(),
-  }]
+  transcript: list[dict] = [
+      {
+          "type": ET.RUN_HEADER,
+          "run_id": meta.id,
+          "kind": "thread",
+          "backend": meta.backend or "",
+          "backend_label": label,
+          "state": state,
+          "error": _header_error(state, thread_events),
+          "started_at": started,
+          "timestamp": started or utc_now().isoformat(),
+      }
+  ]
   transcript.extend(thread_events)
   signature = thread_signature_sync(session_dir, meta.id)
   return TranscriptEntry(
@@ -311,7 +314,10 @@ def build_thread_transcript_sync(
 
 
 def load_thread_transcript(
-    cfg, session_dir: Path, meta: ThreadMetadata, events_path: Path,
+    cfg,
+    session_dir: Path,
+    meta: ThreadMetadata,
+    events_path: Path,
 ) -> TranscriptEntry:
   """The memoized legacy-thread transcript, addressed by (parent session, thread).
 

@@ -922,15 +922,18 @@ async def index(
           # session metadata only addresses the view.
           from src.core import worker_transcript
           entry = await asyncio.to_thread(
-              worker_transcript.load_thread_transcript, cfg,
-              cfg.sessions_dir / session, await thread_mgr.get_thread(session, thread),
-              await thread_mgr.get_events_log_path(session, thread))
+              worker_transcript.load_thread_transcript, cfg, cfg.sessions_dir / session, await
+              thread_mgr.get_thread(session, thread), await thread_mgr.get_events_log_path(session, thread))
           session_bootstrap = {
               **session_bootstrap,
-              "session": {**session_bootstrap["session"], "name": thread_view["description"],
-                          "profile": "worker", "backend": thread_view["backend"]},
-              "messages": [m.model_dump(mode="json") if hasattr(m, "model_dump") else m
-                           for m in entry.projection.committed],
+              "session":
+                  {
+                      **session_bootstrap["session"], "name": thread_view["description"],
+                      "profile": "worker",
+                      "backend": thread_view["backend"]
+                  },
+              "messages":
+                  [m.model_dump(mode="json") if hasattr(m, "model_dump") else m for m in entry.projection.committed],
               "pending_draft": entry.projection.pending_draft,
               "event_count": entry.projection.event_count,
               "oldest_message_ordinal": 0,
@@ -952,8 +955,8 @@ async def index(
   if thread_view is not None:
     active_backend = thread_view.get("backend") or _default_backend_id(cfg)
   else:
-    active_backend = ((active_session.run_backend or active_session.backend)
-                      if active_session else _default_backend_id(cfg))
+    active_backend = (
+        (active_session.run_backend or active_session.backend) if active_session else _default_backend_id(cfg))
   active_backend_opt = cfg.get_backend_option(active_backend)
   active_backend_label = active_backend_opt.label if active_backend_opt else active_backend
   active_backend_type = active_backend_opt.type if active_backend_opt else ""

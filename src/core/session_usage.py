@@ -345,7 +345,7 @@ def _resolve_reading_tier(facts: _UsageFacts) -> dict:
 
 
 def resolve_events_usage(events: list[dict]) -> dict | None:
-    """One-shot tier resolution over an already-loaded event list (no memo).
+  """One-shot tier resolution over an already-loaded event list (no memo).
 
     The worker transcript's usage path (src/core/worker_transcript.py): the
     same tier selection as :meth:`SessionUsageResolver.resolve_session_usage`
@@ -353,18 +353,18 @@ def resolve_events_usage(events: list[dict]) -> dict | None:
     the transcript projection memo already holds the events list, and the
     3 s header poll folds a few hundred events in well under a millisecond.
     """
-    fold = _UsageFold()
-    fold.feed(events)
-    facts = fold.facts()
-    if facts.reading_kind == _READING_CLAUDE:
-        return _resolve_claude_tier(facts)
-    if facts.reading_kind == _READING_SNAPSHOT:
-        return _resolve_snapshot_tier(facts)
-    if facts.reading_kind == _READING_RESOLVED:
-        return _resolve_reading_tier(facts)
-    if not events:
-        return None
-    return _resolve_no_source_tier(facts)
+  fold = _UsageFold()
+  fold.feed(events)
+  facts = fold.facts()
+  if facts.reading_kind == _READING_CLAUDE:
+    return _resolve_claude_tier(facts)
+  if facts.reading_kind == _READING_SNAPSHOT:
+    return _resolve_snapshot_tier(facts)
+  if facts.reading_kind == _READING_RESOLVED:
+    return _resolve_reading_tier(facts)
+  if not events:
+    return None
+  return _resolve_no_source_tier(facts)
 
 
 def _resolve_no_source_tier(facts: _UsageFacts) -> dict:

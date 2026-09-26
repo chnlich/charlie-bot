@@ -426,8 +426,16 @@ async def seed_scenario(home: Path) -> dict:
         from src.core.control_events import build_control_event
         from src.core.runs import read_pid_stat
 
+        # The live worker's own delegating manager: an otherwise idle parent,
+        # so its collapsed row's stand-in shows the gear. (The root itself
+        # carries the agent-auth Run, whose unobserved identity is its own
+        # attention verdict — and a row's own state outranks any stand-in.)
+        live_parent = await tree.create_task(
+            request_id="seed-live-parent", task_parent_id=root.id, profile="manager",
+            task=TaskSpec(goal="delegate the live worker"), name="Live rollout",
+            backend=None, caller=OP)
         live = await tree.create_task(
-            request_id="seed-live", task_parent_id=root.id, profile="worker",
+            request_id="seed-live", task_parent_id=live_parent.id, profile="worker",
             task=TaskSpec(goal="watch this worker run live"), name="Live worker",
             backend=None, caller=OP)
         live_run_dir = tree.runs.run_dir(live.id, "run-live")
@@ -488,8 +496,8 @@ async def seed_scenario(home: Path) -> dict:
 
         # The parent's Delegated card: a new-style delegation whose event
         # carries the child session id.
-        await tree.events.append(root.id, build_control_event(
-            ET.TASK_DELEGATED, actor="agent", source_session_id=root.id,
+        await tree.events.append(live_parent.id, build_control_event(
+            ET.TASK_DELEGATED, actor="agent", source_session_id=live_parent.id,
             request_id="seed-delegate-live",
             thread_id="run-live", child_session_id=live.id,
             description="watch this worker run live",
@@ -537,7 +545,7 @@ async def seed_scenario(home: Path) -> dict:
                 "late_root": late_root.id, "late_mid": late_mid.id, "wide": wide.id,
                 "ops_root": ops_root.id, "ops_mid": ops_mid.id, "failing": failing.id,
                 "evidence": evidence.id, "bind_a": bind_a.id, "bind_b": bind_b.id,
-                "live": live.id, "legacy": legacy.id, "legacy_thread": legacy_thread_id,
+                "live": live.id, "live_parent": live_parent.id, "legacy": legacy.id, "legacy_thread": legacy_thread_id,
                 "live_run": "run-live",
                 "_live_handles": {"process": live_proc, "stop": live_stop,
                                   "counter": live_counter, "tree": tree,
@@ -719,6 +727,27 @@ async def expand_to(cdp: CDP, session_id: str, node_ids: list[str]) -> None:
                        "\"[data-tree-children='" + node_id + "']\");"
                        " return el && !el.classList.contains('hidden'); })()",
                        timeout=8, label=f"children container for {node_id}")
+
+
+async def reveal_row(cdp: CDP, session_id: str, node_id: str) -> None:
+    """Bring one (possibly nested) row on screen for the screenshot evidence.
+
+    A nested row sits inside its root's subtree wrapper, which the group's
+    5-row preview hides with the root when the root falls past the limit (only
+    the active row itself is exempt): Show all that group, then scroll the row
+    into view. Expansion is the caller's (expand_to)."""
+    await evaluate(cdp, session_id, f"""
+        (() => {{
+          const row = document.getElementById('session-{node_id}');
+          let el = row;
+          // The "(No group)" group's key is the empty string: test presence.
+          while (el && !(el.dataset && 'sessionGroupLimitExtra' in el.dataset)) el = el.parentElement;
+          if (el && el.classList.contains('hidden')) toggleSessionGroupLimit(el.dataset.sessionGroupLimitExtra);
+          row.scrollIntoView({{block: 'center'}});
+        }})()
+    """)
+    await wait_for(cdp, session_id, f"document.getElementById('session-{node_id}').offsetParent !== null",
+                   timeout=8, label=f"row on screen for {node_id}")
 
 
 DIAGNOSTIC_SNAPSHOT = """
@@ -1147,15 +1176,20 @@ async def run_harness(args: argparse.Namespace) -> None:
                 # Delegated card live line + link — all following the status
                 # poll. The expanded parent shows only its own state (its
                 # descendants show theirs); collapsed, it stands in with the gear.
-                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
+                live_parent = ids["live_parent"]
+                parent_icons = f"""
+                    ['spinner', 'worker-indicator', 'alert-indicator', 'waiting-indicator']
+                      .filter(k => !document.getElementById(k + '-{live_parent}').classList.contains('hidden'))
+                """
+                await cdp.send("Page.navigate", {"url": f"{base}/?session={live_parent}"}, session_id=session_id)
                 await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
-                await expand_to(cdp, session_id, [ids["root"]])
+                await expand_to(cdp, session_id, [ids["root"], live_parent])
+                await reveal_row(cdp, session_id, live)
                 await wait_for(cdp, session_id,
                                f"document.getElementById('spinner-{live}') && !document.getElementById('spinner-{live}').classList.contains('hidden')",
                                timeout=12, label="worker row spinner while its Run is live")
-                parent_gear_expanded = await evaluate(cdp, session_id,
-                    f"!document.getElementById('worker-indicator-{ids['root']}').classList.contains('hidden')")
-                assert_true(not parent_gear_expanded, "the expanded parent shows only its own (idle) state")
+                shown_expanded = await evaluate(cdp, session_id, parent_icons)
+                assert_true(shown_expanded == [], f"the expanded parent shows only its own (idle) state ({shown_expanded})")
                 await wait_for(cdp, session_id, """
                     (() => {
                       const el = document.querySelector('.delegate-live-state[data-delegate-session]');
@@ -1174,12 +1208,12 @@ async def run_harness(args: argparse.Namespace) -> None:
                 assert_true(card_link == f"/?session={live}", f"the Delegated card links its child ({card_link})")
                 shot = await screenshot(cdp, session_id, results, "s21a_parent_running")
                 await evaluate(cdp, session_id,
-                               f"if (Sidebar.isTreeNodeExpanded('{ids['root']}')) toggleTreeNode('{ids['root']}')")
-                await wait_for(cdp, session_id,
-                               f"document.getElementById('worker-indicator-{ids['root']}') && !document.getElementById('worker-indicator-{ids['root']}').classList.contains('hidden')",
+                               f"if (Sidebar.isTreeNodeExpanded('{live_parent}')) toggleTreeNode('{live_parent}')")
+                await reveal_row(cdp, session_id, live_parent)
+                await wait_for(cdp, session_id, f"JSON.stringify({parent_icons}) === '[\"worker-indicator\"]'",
                                timeout=12, label="the collapsed parent's gear stands in for the running worker")
                 shot_collapsed = await screenshot(cdp, session_id, results, "s21a_parent_collapsed_gear")
-                await expand_to(cdp, session_id, [ids["root"]])
+                await expand_to(cdp, session_id, [live_parent])
                 results.record("(a) parent sees the running worker (spinner, collapsed gear, live Delegated card)", ok=True,
                                detail="worker spinner visible with the parent expanded; the collapsed parent shows the gear "
                                       f"({shot_collapsed}); card shows 'running · Scripted Live Runner' and links the child",
@@ -1272,18 +1306,23 @@ async def run_harness(args: argparse.Namespace) -> None:
                         && ['Raw log', 'Events', 'Result', 'Diff'].every(l => text.includes(l));
                     })()
                 """, timeout=12, label="the delivery close with the four evidence links")
-                # Both cues checked where they would show: the worker row's
-                # spinner with its parent expanded, the parent's gear with it
-                # collapsed (the only state in which the stand-in paints).
-                await expand_to(cdp, session_id, [ids["root"]])
-                spinner_hidden = await evaluate(cdp, session_id,
-                    f"document.getElementById('spinner-{live}').classList.contains('hidden')")
+                # Both cues checked where they would show: the worker row's own
+                # spinner (the delivered worker may already have left the list —
+                # a successful delivery auto-archives it), and the parent's gear
+                # with the parent collapsed (the only state the stand-in paints).
+                spinner_hidden = await evaluate(cdp, session_id, f"""
+                    (() => {{
+                      const el = document.getElementById('spinner-{live}');
+                      return !el || el.classList.contains('hidden');
+                    }})()
+                """)
                 await evaluate(cdp, session_id,
-                               f"if (Sidebar.isTreeNodeExpanded('{ids['root']}')) toggleTreeNode('{ids['root']}')")
-                gear_hidden = await evaluate(cdp, session_id,
-                    f"document.getElementById('worker-indicator-{ids['root']}').classList.contains('hidden')")
-                assert_true(spinner_hidden and gear_hidden, "the running-state cues clear once the Run finished")
+                               f"if (Sidebar.isTreeNodeExpanded('{live_parent}')) toggleTreeNode('{live_parent}')")
                 await expand_to(cdp, session_id, [ids["root"]])
+                await reveal_row(cdp, session_id, live_parent)
+                parent_shown = await evaluate(cdp, session_id, parent_icons)
+                assert_true(spinner_hidden and parent_shown == [],
+                            f"the running-state cues clear once the Run finished (parent icons {parent_shown})")
                 shot = await screenshot(cdp, session_id, results, "s21c_worker_delivered")
                 results.record("(b) finished: cues clear, delivery summary and four links shown", ok=True,
                                detail="banner with summary + Raw log/Events/Result/Diff; gear and spinner cleared without a reload", screenshot=shot)

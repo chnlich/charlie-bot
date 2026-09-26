@@ -419,7 +419,11 @@ class TaskTreeManager:
     if not force and self._index is not None and now - self._index[1] < _TREE_INDEX_TTL_SECONDS:
       return self._index[0]
     generation = self._index_generation
-    index = await asyncio.to_thread(self._build_index_sync)
+    # The metadata snapshot resolves on the loop through the shared per-entry
+    # check (_fresh_cached_meta), so the thread build reads a file only for a
+    # session no authoritative entry covers (cold cache, out-of-band create).
+    cached_metas = self._sessions.fresh_cached_metas()
+    index = await asyncio.to_thread(self._build_index_sync, cached_metas)
     if self._index_generation == generation:
       self._index = (index, now)
     # A structural write landing mid-build bumped the generation: the build's
@@ -441,7 +445,7 @@ class TaskTreeManager:
     must drop the projection cache here or tree_page serves a stale name."""
     self._invalidate_index()
 
-  def _build_index_sync(self) -> _TreeIndex:
+  def _build_index_sync(self, cached_metas: dict[str, SessionMetadata]) -> _TreeIndex:
     sessions_dir = self._cfg.sessions_dir
     root_sig = (0, 0)
     try:
@@ -457,6 +461,13 @@ class TaskTreeManager:
     for name in entries:
       if name.startswith(".task-") and name.endswith(".tmp"):
         continue  # an unpublished create's staging directory is never a node
+      meta = cached_metas.get(name)
+      if meta is not None:
+        metas[name] = meta
+        continue
+      # No authoritative entry covers this name (cold cache, out-of-band
+      # create): the strict read is the tree's own contract — an unparseable
+      # file fails the build loud, where the listings readers drop and log.
       path = sessions_dir / name / "metadata.json"
       try:
         raw = path.read_text(encoding="utf-8")

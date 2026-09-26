@@ -103,13 +103,26 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   cfg = CharlieBotConfig(
       charliebot_home=home,
       paths={"worktree_dir": str(home / "worktrees")},
-      backends={"options": [
-          {"id": "fake", "label": "Fake", "type": "codex", "model": "fake-model"},
-          {"id": "claude-tui", "label": "Claude TUI", "type": "tui-cli"},
-      ]})
+      backends={
+          "options":
+              [
+                  {
+                      "id": "fake",
+                      "label": "Fake",
+                      "type": "codex",
+                      "model": "fake-model"
+                  },
+                  {
+                      "id": "claude-tui",
+                      "label": "Claude TUI",
+                      "type": "tui-cli"
+                  },
+              ]
+      })
   core_config._credentials_cache.seed(
-      core_config.Credentials(path=home / "credentials.yaml",
-                              sections={"charliebot": {"access_key": "tui-op-key"}}))
+      core_config.Credentials(path=home / "credentials.yaml", sections={"charliebot": {
+          "access_key": "tui-op-key"
+      }}))
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
@@ -124,17 +137,22 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
   pane_proc = subprocess.Popen(["/bin/sleep", "300"])
 
-  async def fake_start_tmux_session(session_name: str, working_dir: str, env_args: list[str],
-                                    command_args: list[str], window_name: str | None = None) -> None:
+  async def fake_start_tmux_session(
+      session_name: str,
+      working_dir: str,
+      env_args: list[str],
+      command_args: list[str],
+      window_name: str | None = None) -> None:
     # The lowest scripted seam: the real ensure_tmux_session builds the argv and
     # env pairs above this, so the test observes actual delivery, not call
     # counts on ensure_tmux_session.
-    start_calls.append({
-        "session_name": session_name,
-        "working_dir": working_dir,
-        "env_args": list(env_args),
-        "command_args": list(command_args),
-    })
+    start_calls.append(
+        {
+            "session_name": session_name,
+            "working_dir": working_dir,
+            "env_args": list(env_args),
+            "command_args": list(command_args),
+        })
     Path(working_dir).mkdir(parents=True, exist_ok=True)
     tmux_live.add(session_name.removeprefix("charliebot-"))
     ensured.append((session_name.removeprefix("charliebot-"), Path(working_dir)))
@@ -158,13 +176,12 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   from src.agents.backends import pty_common
   monkeypatch.setattr(pty_common, "tmux_pane_pid", fake_tmux_pane_pid)
 
-
-
   import server as server_module
   from server import session_websocket, streaming_manager
 
   async def fake_ws_auth(websocket) -> bool:
     return True
+
   monkeypatch.setattr(server_module, "_check_ws_auth", fake_ws_auth)
   monkeypatch.setattr(server_module, "session_manager", lambda: session_mgr)
   monkeypatch.setattr(server_module, "task_manager", lambda: tree)
@@ -184,27 +201,29 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def _create_tui_task(client: TestClient) -> dict:
-  resp = client.post("/api/sessions/", json={
-      "request_id": "create-tui-task",
-      "name": "TUI Feature",
-      "profile": "manager",
-      "backend": "claude-tui",
-      "task": {"goal": "Ship the terminal-driven feature"},
-  })
+  resp = client.post(
+      "/api/sessions/",
+      json={
+          "request_id": "create-tui-task",
+          "name": "TUI Feature",
+          "profile": "manager",
+          "backend": "claude-tui",
+          "task": {
+              "goal": "Ship the terminal-driven feature"
+          },
+      })
   assert resp.status_code == 200, resp.text
   return resp.json()
 
 
 def _send_input(client: TestClient, session_id: str, content: str, request_id: str) -> dict:
-  resp = client.post(f"/api/chat/{session_id}/message",
-                     json={"content": content, "request_id": request_id})
+  resp = client.post(f"/api/chat/{session_id}/message", json={"content": content, "request_id": request_id})
   assert resp.status_code == 202, resp.text
   return resp.json()
 
 
 @pytest.mark.asyncio
-async def test_public_tui_task_full_route_under_scripted_terminal(
-        tui_env, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_public_tui_task_full_route_under_scripted_terminal(tui_env, monkeypatch: pytest.MonkeyPatch) -> None:
   """Create → attach (stable task identity) → status → stop, then the durable
   input, the operator acknowledgement, and the completion through the ordinary
   guards. A second synthetic instance stays untouched throughout."""
@@ -217,13 +236,22 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
   from src.core.task_sessions import TaskTreeManager
   other_cfg = CharlieBotConfig(
       charliebot_home=other_home,
-      backends={"options": [
-          {"id": "fake", "label": "Fake", "type": "codex", "model": "fake-model"}]})
+      backends={"options": [{
+          "id": "fake",
+          "label": "Fake",
+          "type": "codex",
+          "model": "fake-model"
+      }]})
   other_mgr = SessionManager(other_cfg)
   other_tree = TaskTreeManager(other_cfg, other_mgr)
   other_task = await other_tree.create_task(
-      request_id="other", task_parent_id=None, profile="manager",
-      task=TaskSpec(goal="decoy"), name="Decoy", backend=None, caller="operator")
+      request_id="other",
+      task_parent_id=None,
+      profile="manager",
+      task=TaskSpec(goal="decoy"),
+      name="Decoy",
+      backend=None,
+      caller="operator")
   other_events_before = len(other_tree.events.load_events(other_task.id))
 
   task = _create_tui_task(client)
@@ -318,9 +346,7 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
   joined = "\n\n".join(b["text"] for b in stored["blocks"])
   assert claude_md == joined  # the launched bytes are the saved bytes
   assert stored["char_count"] == len(joined)
-  assert any(
-      any(s["source_ref"] == "prompts/task_manager.md" for s in b["sources"])
-      for b in stored["blocks"])
+  assert any(any(s["source_ref"] == "prompts/task_manager.md" for s in b["sources"]) for b in stored["blocks"])
   run_after_attach = await tree.runs.get_run(session_id, runs_first.id)
   assert run_after_attach is not None
   assert run_after_attach.pid == pane_proc.pid
@@ -350,7 +376,8 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
   from src.core.run_token import CallerIdentity
   snapshot_before = Path(runs_first.prompt_snapshot_ref).read_bytes()
   patched = await tree.patch_task(
-      session_id, PatchSessionTaskRequest(node_prompt="Live edit while attached"),
+      session_id,
+      PatchSessionTaskRequest(node_prompt="Live edit while attached"),
       caller=CallerIdentity(kind="operator"))
   assert patched.node_prompt_ref is not None
   assert Path(runs_first.prompt_snapshot_ref).read_bytes() == snapshot_before
@@ -388,8 +415,7 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
   relaunch_call = start_calls[1]
   relaunch_env = dict(kv.split("=", 1) for kv in relaunch_call["env_args"] if kv != "-e")
   relaunch_argv = relaunch_call["command_args"]
-  tui_runs_now = [r for r in tree.runs.list_run_records_sync(session_id)
-                  if r.kind == "manager_turn"]
+  tui_runs_now = [r for r in tree.runs.list_run_records_sync(session_id) if r.kind == "manager_turn"]
   assert len(tui_runs_now) == 2
   second_run_id = next(r.id for r in tui_runs_now if r.id != runs_first.id)
   run2 = await tree.runs.get_run(session_id, second_run_id)
@@ -411,8 +437,9 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
   assert stop2.status_code == 200, stop2.text
   assert killed == [session_id, session_id]
   events_now = tree.events.load_events(session_id)
-  assert any(e.get("type") == ET.RUN_FINISHED and e.get("run_id") == run2.id
-             and e.get("outcome") == "interrupted" for e in events_now)
+  assert any(
+      e.get("type") == ET.RUN_FINISHED and e.get("run_id") == run2.id and e.get("outcome") == "interrupted"
+      for e in events_now)
   # Both terminal Runs are terminal facts; the task remains open.
   assert tree.task_state(session_id) == "open"
 
@@ -422,8 +449,13 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
 
   # A run-token agent cannot confirm on behalf of the operator.
   agents_task = await tree.create_task(
-      request_id="agent-leaf", task_parent_id=session_id, profile="worker",
-      task=TaskSpec(goal="leaf"), name="AL", backend=None, caller="operator")
+      request_id="agent-leaf",
+      task_parent_id=session_id,
+      profile="worker",
+      task=TaskSpec(goal="leaf"),
+      name="AL",
+      backend=None,
+      caller="operator")
   from src.core.models import RunRecord
   await tree.runs.register_run(RunRecord(id="agent-run", session_id=agents_task.id, kind="work"))
 
@@ -432,29 +464,39 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
   pair = read_pid_stat(proc.pid)
   await tree.runs.record_launch(agents_task.id, "agent-run", pid=proc.pid, pid_start=pair[0])
   agent_token = sign_run_token(
-      RunTokenClaims(session_id=agents_task.id, run_id="agent-run", agent="worker"),
-      "tui-op-key")
+      RunTokenClaims(session_id=agents_task.id, run_id="agent-run", agent="worker"), "tui-op-key")
   try:
     ack_forbidden = client.post(
         f"/api/sessions/{session_id}/task-inputs/acknowledge",
-        json={"request_id": "agent-ack", "input_ids": [input_event_id], "note": "agent says so"},
+        json={
+            "request_id": "agent-ack",
+            "input_ids": [input_event_id],
+            "note": "agent says so"
+        },
         headers={"Authorization": f"Bearer {agent_token}"})
     assert ack_forbidden.status_code == 403
     assert "operator credentials" in ack_forbidden.json()["detail"]
 
     # Completion with an unresolved input is still blocked by the ordinary guard.
-    blocked_complete = client.post(f"/api/sessions/{session_id}/complete", json={
-        "request_id": "complete-1",
-        "summary": "delivered through the terminal",
-        "result_refs": ["terminal:transcript"],
-    })
+    blocked_complete = client.post(
+        f"/api/sessions/{session_id}/complete",
+        json={
+            "request_id": "complete-1",
+            "summary": "delivered through the terminal",
+            "result_refs": ["terminal:transcript"],
+        })
     assert blocked_complete.status_code == 409
     blockers = blocked_complete.json()["detail"]["blockers"]
     assert any("unprocessed input" in b and second_id in b for b in blockers), blockers
 
     # The operator resolves exactly the first input; the later one stays pending.
-    ack = client.post(f"/api/sessions/{session_id}/task-inputs/acknowledge", json={
-        "request_id": "ack-1", "input_ids": [input_event_id], "note": "handled in the terminal"})
+    ack = client.post(
+        f"/api/sessions/{session_id}/task-inputs/acknowledge",
+        json={
+            "request_id": "ack-1",
+            "input_ids": [input_event_id],
+            "note": "handled in the terminal"
+        })
     assert ack.status_code == 200, ack.text
     ack_body = ack.json()
     assert ack_body["input_ids"] == [input_event_id]
@@ -462,86 +504,109 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
     assert ack_body["acknowledged_event_id"]
 
     # Replay: the same request id returns the original acknowledgement.
-    replay = client.post(f"/api/sessions/{session_id}/task-inputs/acknowledge", json={
-        "request_id": "ack-1", "input_ids": [input_event_id], "note": "handled in the terminal"})
+    replay = client.post(
+        f"/api/sessions/{session_id}/task-inputs/acknowledge",
+        json={
+            "request_id": "ack-1",
+            "input_ids": [input_event_id],
+            "note": "handled in the terminal"
+        })
     assert replay.status_code == 200
     assert replay.json() == ack_body
     # Re-acking an acknowledged id is an idempotent no-op (no second fact).
-    noop = client.post(f"/api/sessions/{session_id}/task-inputs/acknowledge", json={
-        "request_id": "ack-2", "input_ids": [input_event_id]})
+    noop = client.post(
+        f"/api/sessions/{session_id}/task-inputs/acknowledge",
+        json={
+            "request_id": "ack-2",
+            "input_ids": [input_event_id]
+        })
     assert noop.status_code == 200
     assert noop.json()["input_ids"] == []
     assert noop.json()["already_acknowledged"] == [input_event_id]
 
     # The later input still blocks; acknowledging it resolves the last one.
-    still = client.post(f"/api/sessions/{session_id}/complete", json={
-        "request_id": "complete-2",
-        "summary": "delivered through the terminal",
-        "result_refs": ["terminal:transcript"],
-    })
+    still = client.post(
+        f"/api/sessions/{session_id}/complete",
+        json={
+            "request_id": "complete-2",
+            "summary": "delivered through the terminal",
+            "result_refs": ["terminal:transcript"],
+        })
     assert still.status_code == 409
-    assert any("unprocessed input" in b and second_id in b
-               for b in still.json()["detail"]["blockers"]), still.json()["detail"]
-    ack2 = client.post(f"/api/sessions/{session_id}/task-inputs/acknowledge", json={
-        "request_id": "ack-3", "input_ids": [second_id]})
+    assert any(
+        "unprocessed input" in b and second_id in b for b in still.json()["detail"]["blockers"]), still.json()["detail"]
+    ack2 = client.post(
+        f"/api/sessions/{session_id}/task-inputs/acknowledge", json={
+            "request_id": "ack-3",
+            "input_ids": [second_id]
+        })
     assert ack2.status_code == 200
 
     # Unknown ids refuse; they never silently become acknowledgements.
-    unknown = client.post(f"/api/sessions/{session_id}/task-inputs/acknowledge", json={
-        "request_id": "ack-4", "input_ids": ["00000000-0000-0000-0000-00000000dead"]})
+    unknown = client.post(
+        f"/api/sessions/{session_id}/task-inputs/acknowledge",
+        json={
+            "request_id": "ack-4",
+            "input_ids": ["00000000-0000-0000-0000-00000000dead"]
+        })
     assert unknown.status_code == 409
 
     # The agent child's active Run and open state keep their normal blockers
     # too; the operator stops that run and cancels the child explicitly before
     # completing.
-    run_cancel = client.post(f"/api/sessions/{agents_task.id}/runs/agent-run/cancel", json={
-        "request_id": "cancel-agent-run"})
+    run_cancel = client.post(
+        f"/api/sessions/{agents_task.id}/runs/agent-run/cancel", json={"request_id": "cancel-agent-run"})
     assert run_cancel.status_code == 200, run_cancel.text
     deadline = asyncio.get_event_loop().time() + 10
     while asyncio.get_event_loop().time() < deadline:
-        if tree.runs.terminal_outcome(
-                tree.runs.load_events_sync(agents_task.id), "agent-run") is not None:
-            break
-        await asyncio.sleep(0.05)
+      if tree.runs.terminal_outcome(tree.runs.load_events_sync(agents_task.id), "agent-run") is not None:
+        break
+      await asyncio.sleep(0.05)
     else:
-        pytest.fail("the agent run never reached its terminal fact after cancellation")
-    cancelled = client.post(f"/api/sessions/{agents_task.id}/cancel", json={
-        "request_id": "cancel-agent-leaf", "reason": "not needed"})
+      pytest.fail("the agent run never reached its terminal fact after cancellation")
+    cancelled = client.post(
+        f"/api/sessions/{agents_task.id}/cancel", json={
+            "request_id": "cancel-agent-leaf",
+            "reason": "not needed"
+        })
     assert cancelled.status_code == 200, cancelled.text
     deadline = asyncio.get_event_loop().time() + 10
     while asyncio.get_event_loop().time() < deadline:
-        if tree.task_state(agents_task.id) != "open":
-            break
-        await asyncio.sleep(0.05)
+      if tree.task_state(agents_task.id) != "open":
+        break
+      await asyncio.sleep(0.05)
     else:
-        pytest.fail("the agent child never settled after cancellation")
+      pytest.fail("the agent child never settled after cancellation")
 
     # The cancelled child's report landed on this node as a durable input (the
     # ordinary delivery chain). The operator resolved it in the terminal too.
     remaining = tree.dispatch.pending_inputs(session_id)
-    ack_remaining = client.post(f"/api/sessions/{session_id}/task-inputs/acknowledge", json={
-        "request_id": "ack-5",
-        "input_ids": [str(e.get("id")) for e in remaining],
-    })
+    ack_remaining = client.post(
+        f"/api/sessions/{session_id}/task-inputs/acknowledge",
+        json={
+            "request_id": "ack-5",
+            "input_ids": [str(e.get("id")) for e in remaining],
+        })
     assert ack_remaining.status_code == 200, ack_remaining.text
     assert tree.dispatch.pending_inputs(session_id) == []
 
     # The explicit operator completion now passes the ordinary guards: the
     # terminal's Runs are terminal facts (the stop landed interrupted), so
     # nothing is active and the operator's own attributed evidence carries it.
-    done = client.post(f"/api/sessions/{session_id}/complete", json={
-        "request_id": "complete-3",
-        "summary": "feature delivered via the terminal session",
-        "result_refs": ["terminal:transcript"],
-    })
+    done = client.post(
+        f"/api/sessions/{session_id}/complete",
+        json={
+            "request_id": "complete-3",
+            "summary": "feature delivered via the terminal session",
+            "result_refs": ["terminal:transcript"],
+        })
     assert done.status_code == 200, done.text
     assert tree.task_state(session_id) == "completed"
     closed = [e for e in tree.events.load_events(session_id) if e.get("type") == ET.TASK_CLOSED]
     assert len(closed) == 1
     assert closed[0]["outcome"] == "completed"
     assert closed[0]["actor"] == "user"
-    acks = [e for e in tree.events.load_events(session_id)
-            if e.get("type") == ET.TASK_INPUT_ACKNOWLEDGED]
+    acks = [e for e in tree.events.load_events(session_id) if e.get("type") == ET.TASK_INPUT_ACKNOWLEDGED]
     acked_ids = sorted(i for e in acks for i in e["input_ids"])
     assert acked_ids == sorted([input_event_id, second_id] + [str(e.get("id")) for e in remaining])
     assert all(e["actor"] == "user" for e in acks)
@@ -559,8 +624,7 @@ async def test_public_tui_task_full_route_under_scripted_terminal(
 
 
 @pytest.mark.asyncio
-async def test_acknowledged_input_unblocks_a_structural_operation(
-        tui_env) -> None:
+async def test_acknowledged_input_unblocks_a_structural_operation(tui_env) -> None:
   """The acknowledgement is durable task state: the folded pending set loses
   the acknowledged ids, so the same guard set the tree UI reads reports the
   node unblocked without any second model."""
@@ -578,11 +642,14 @@ async def test_acknowledged_input_unblocks_a_structural_operation(
   from src.core.run_token import CallerIdentity
   with pytest.raises(Exception) as exc:
     await tree.patch_task(
-        session_id, PatchSessionTaskRequest(task_parent_id=None),
-        caller=CallerIdentity(kind="operator"))
+        session_id, PatchSessionTaskRequest(task_parent_id=None), caller=CallerIdentity(kind="operator"))
   assert "unprocessed input" in str(exc.value)
-  ack = client.post(f"/api/sessions/{session_id}/task-inputs/acknowledge", json={
-      "request_id": "ack-1", "input_ids": [input_event_id]})
+  ack = client.post(
+      f"/api/sessions/{session_id}/task-inputs/acknowledge",
+      json={
+          "request_id": "ack-1",
+          "input_ids": [input_event_id]
+      })
   assert ack.status_code == 200
   await tree._get_index()
   assert tree.completion.completion_blockers(session_id) == []
@@ -592,8 +659,7 @@ async def test_acknowledged_input_unblocks_a_structural_operation(
 
 
 @pytest.mark.asyncio
-async def test_tui_attach_prepare_failure_lands_a_terminal_fact_and_retries_cleanly(
-        tui_env) -> None:
+async def test_tui_attach_prepare_failure_lands_a_terminal_fact_and_retries_cleanly(tui_env) -> None:
   """A launch-preparation failure (a rule body that vanished) surfaces on the
   attach, the registered Run records a definite failed terminal fact — never
   a permanently queued ghost — the in-flight marker is released, and the next
@@ -604,8 +670,7 @@ async def test_tui_attach_prepare_failure_lands_a_terminal_fact_and_retries_clea
   from src.core.models import PatchSessionTaskRequest
   from src.core.run_token import CallerIdentity
   patched = await tree.patch_task(
-      session_id, PatchSessionTaskRequest(node_prompt="terminal rule"),
-      caller=CallerIdentity(kind="operator"))
+      session_id, PatchSessionTaskRequest(node_prompt="terminal rule"), caller=CallerIdentity(kind="operator"))
   body = cfg.charliebot_home / "prompt_bodies" / f"{patched.node_prompt_ref}.md"
   body.unlink()  # the rule vanished before the launch
 
@@ -641,12 +706,10 @@ async def test_tui_attach_prepare_failure_lands_a_terminal_fact_and_retries_clea
   assert len(start_calls) == 1
   runs2 = [r for r in tree.runs.list_run_records_sync(session_id) if r.kind == "manager_turn"]
   assert len(runs2) == 2
-  live_run = await tree.runs.get_run(
-      session_id, next(r.id for r in runs2 if r.id != runs1[0].id))
+  live_run = await tree.runs.get_run(session_id, next(r.id for r in runs2 if r.id != runs1[0].id))
   assert live_run is not None and live_run.pid == pane_proc.pid
   assert Path(live_run.prompt_snapshot_ref).is_file()
   stop = client.post(f"/api/sessions/{session_id}/tui/stop")
   assert stop.status_code == 200, stop.text
-  assert tree.runs.terminal_outcome(
-      tree.runs.load_events_sync(session_id), live_run.id) == "interrupted"
+  assert tree.runs.terminal_outcome(tree.runs.load_events_sync(session_id), live_run.id) == "interrupted"
   pane_proc.terminate()

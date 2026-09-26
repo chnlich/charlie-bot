@@ -110,6 +110,7 @@ from src.core.task_sessions import (
   TaskInvalidError,
   TaskNotFoundError,
   TaskTreeManager,
+  not_task_node_detail,
 )
 from src.core.threads import ThreadManager
 
@@ -1829,7 +1830,7 @@ async def _require_task_meta(task_mgr: TaskTreeManager, session_id: str) -> Sess
     raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
   if meta.profile is None:
     raise HTTPException(
-        status_code=400, detail=f"session {session_id} is not a task-tree node (no profile)")
+        status_code=400, detail=not_task_node_detail(session_id))
   return meta
 
 

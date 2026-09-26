@@ -121,6 +121,15 @@ def closed_ancestors_blocker(closed_ids: list[str]) -> str:
   return f"closed ancestor task(s): {', '.join(closed_ids)}"
 
 
+def not_task_node_detail(session_id: str) -> str:
+  """The 400 detail sentence for a session that carries no task-tree profile.
+
+  Named and used by the context-read route's ``_require_task_meta`` so the
+  route's 400 detail and the domain error's message stay one sentence.
+  """
+  return f"session {session_id} is not a task-tree node (no profile)"
+
+
 @dataclass
 class _TaskFacts:
   """The derived facts one session's full event history folds to.
@@ -393,7 +402,7 @@ class TaskTreeManager:
     if meta is None:
       raise TaskNotFoundError(f"task {session_id} not found")
     if meta.profile is None:
-      raise TaskInvalidError(f"session {session_id} is not a task-tree node (no profile)")
+      raise TaskInvalidError(not_task_node_detail(session_id))
     return meta
 
   async def load_task_meta(self, session_id: str) -> SessionMetadata:
@@ -825,7 +834,7 @@ class TaskTreeManager:
     # Re-read through the index so the detail and the tree agree on one projection.
     indexed = index.metas.get(session_id)
     if indexed is None:
-      raise TaskInvalidError(f"session {session_id} is not a task-tree node (no profile)")
+      raise TaskInvalidError(not_task_node_detail(session_id))
     ancestors = self._ancestors(index, session_id)
     payload = indexed.model_dump(mode="json")
     payload.update({

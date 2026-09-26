@@ -43,26 +43,26 @@ import orjson
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.control_events import (
-  ACTOR_AGENT,
-  ACTOR_SYSTEM,
-  ACTOR_USER,
-  ControlEventSink,
-  build_control_event,
-  sha256_hex,
-  stable_task_id,
+    ACTOR_AGENT,
+    ACTOR_SYSTEM,
+    ACTOR_USER,
+    ControlEventSink,
+    build_control_event,
+    sha256_hex,
+    stable_task_id,
 )
 from src.core.event_types import is_real_user_message
 from src.core.json_utils import atomic_write_text
 from src.core.models import (
-  AncestorRef,
-  EventRef,
-  PatchSessionTaskRequest,
-  SessionMetadata,
-  SessionRow,
-  SessionStatus,
-  TaskSpec,
-  WorkState,
-  utc_now,
+    AncestorRef,
+    EventRef,
+    PatchSessionTaskRequest,
+    SessionMetadata,
+    SessionRow,
+    SessionStatus,
+    TaskSpec,
+    WorkState,
+    utc_now,
 )
 from src.core.ndjson import append_ndjson
 from src.core.run_token import CallerIdentity
@@ -191,8 +191,7 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
       for entry in event.get("pending_inputs") or []:
         input_id = entry.get("input_id") if isinstance(entry, dict) else None
         if not isinstance(input_id, str) or not input_id:
-          raise ValueError(
-              f"task_imported event {event_id!r} lists a pending input without a stable input_id")
+          raise ValueError(f"task_imported event {event_id!r} lists a pending input without a stable input_id")
         listed.append(input_id)
       facts.boundary_index = absolute
       facts.imported_pending_ids = frozenset(listed)
@@ -200,8 +199,8 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
       # the old pending inputs the boundary explicitly lists — pre-boundary
       # candidacy narrows to that declared set, never the whole history.
       facts.input_candidates = [
-          e for e in facts.events_by_id.values()
-          if _admits_input_type(e) and e.get("id") in facts.imported_pending_ids]
+          e for e in facts.events_by_id.values() if _admits_input_type(e) and e.get("id") in facts.imported_pending_ids
+      ]
     elif etype == ET.TASK_CLOSED:
       facts.task_state = str(event.get("outcome") or "completed")
       facts.close_events.append(event)
@@ -229,15 +228,13 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
       child_event_id = event.get("child_event_id")
       if isinstance(child_session_id, str) and isinstance(child_event_id, str):
         facts.delivered_reports.add((child_session_id, child_event_id))
-    if _admits_input_type(event) and (
-        facts.boundary_index is None or absolute > facts.boundary_index
-        or (event_id is not None and event_id in facts.imported_pending_ids)):
+    if _admits_input_type(event) and (facts.boundary_index is None or absolute > facts.boundary_index or
+                                      (event_id is not None and event_id in facts.imported_pending_ids)):
       facts.input_candidates.append(event)
   return facts
 
 
-_INPUT_EVENT_TYPES = frozenset({
-    ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT})
+_INPUT_EVENT_TYPES = frozenset({ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT})
 
 
 def _admits_input_type(event: dict) -> bool:
@@ -302,8 +299,7 @@ def derive_task_tree_activity(
     while target is not None and target not in superseded:
       superseded.add(target)
       target = next((r.retry_of_run_id for r in runs if r.id == target), None)
-  success_positions = [
-      position for run_id, position in finish_positions.items() if outcomes.get(run_id) == "success"]
+  success_positions = [position for run_id, position in finish_positions.items() if outcomes.get(run_id) == "success"]
   for run in runs:
     if outcomes.get(run.id) not in ("failed", "interrupted"):
       continue
@@ -705,8 +701,7 @@ class TaskTreeManager:
         if meta.status != SessionStatus.ARCHIVED and self.archived_of(index, meta, memo)
     }
 
-  def archived_of(self, index: _TreeIndex, meta: SessionMetadata,
-                  memo: dict[str, bool] | None = None) -> bool:
+  def archived_of(self, index: _TreeIndex, meta: SessionMetadata, memo: dict[str, bool] | None = None) -> bool:
     """Archive visibility with subtree inheritance (the effective archive's single owner).
 
     effective(n) is False when n.presentation == "shown" — an explicit
@@ -780,7 +775,12 @@ class TaskTreeManager:
     )
 
   async def record_native_anchor(
-      self, session_id: str, *, prompt_hash: str, backend: str, model: str | None,
+      self,
+      session_id: str,
+      *,
+      prompt_hash: str,
+      backend: str,
+      model: str | None,
       reset_anchor: bool,
   ) -> None:
     """Persist the native-context anchor provenance under the control lock.
@@ -837,13 +837,14 @@ class TaskTreeManager:
       raise TaskInvalidError(not_task_node_detail(session_id))
     ancestors = self._ancestors(index, session_id)
     payload = indexed.model_dump(mode="json")
-    payload.update({
-        "task_state": self.task_state_of(index, session_id),
-        "work_state": self.work_state_of(index, session_id),
-        "archived": self.archived_of(index, indexed),
-        "ancestors": [AncestorRef(id=a.id, name=a.name).model_dump() for a in ancestors],
-        "prompt_rules": self.prompt_rule_summaries(indexed, index),
-    })
+    payload.update(
+        {
+            "task_state": self.task_state_of(index, session_id),
+            "work_state": self.work_state_of(index, session_id),
+            "archived": self.archived_of(index, indexed),
+            "ancestors": [AncestorRef(id=a.id, name=a.name).model_dump() for a in ancestors],
+            "prompt_rules": self.prompt_rule_summaries(indexed, index),
+        })
     return payload
 
   # ------------------------------------------------------------------
@@ -886,8 +887,7 @@ class TaskTreeManager:
         if isinstance(caller, CallerIdentity) and not caller.is_operator:
           parent_meta = await self.load_meta(task_parent_id) if task_parent_id is not None else None
           assert existing.profile is not None  # a (parent, request_id)-bound id only exists via this create
-          await self._authorize_agent_creation(
-              caller, existing.profile, existing.task, task_parent_id, parent_meta)
+          await self._authorize_agent_creation(caller, existing.profile, existing.task, task_parent_id, parent_meta)
         return existing
       parent_meta: SessionMetadata | None = None
       # Caller scope first: an agent's 403 must not depend on the target's shape.
@@ -970,8 +970,7 @@ class TaskTreeManager:
     assert isinstance(caller, CallerIdentity)
     claims = caller.claims
     assert claims is not None
-    if (task_parent_id != claims.session_id or parent_meta is None or
-            parent_meta.profile not in ("manager", None)):
+    if (task_parent_id != claims.session_id or parent_meta is None or parent_meta.profile not in ("manager", None)):
       raise TaskForbiddenError(AGENT_CREATE_SCOPE_REFUSAL)
     if profile == "worker" and not is_verify_exempt(task):
       # Implementation authorization stays with the caller's own manager task:
@@ -980,8 +979,7 @@ class TaskTreeManager:
       # judgment the route and the launch apply.
       await self.check_task_authorization(claims.session_id)
 
-  async def _require_open_ancestry_from_index(
-      self, index: _TreeIndex, session_id: str) -> list[SessionMetadata]:
+  async def _require_open_ancestry_from_index(self, index: _TreeIndex, session_id: str) -> list[SessionMetadata]:
     """Every ancestor of *session_id* must be an open task (API: 409 otherwise)."""
     chain = self._ancestors(index, session_id)
     closed = [a.id for a in chain if self._facts_of(a.id).task_state != "open"]
@@ -1175,8 +1173,8 @@ class TaskTreeManager:
       fs = req.model_fields_set
       structural = bool(fs & {"task", "profile", "task_parent_id"})
       blockers = self._structural_blockers(session_id) if structural else []
-      if ("profile" in fs and req.profile is not None and req.profile != meta.profile
-          and req.profile == "worker" and self._children_count(session_id) > 0):
+      if ("profile" in fs and req.profile is not None and req.profile != meta.profile and req.profile == "worker" and
+          self._children_count(session_id) > 0):
         blockers.append("demotion to worker requires a task with no child tasks")
       if "task_parent_id" in fs and req.task_parent_id != meta.task_parent_id:
         blockers.extend(await self._reparent_blockers(session_id, req.task_parent_id))
@@ -1200,7 +1198,8 @@ class TaskTreeManager:
           await self._apply_prompt_change(session_id, meta, scope, getattr(req, field))
       meta.schema_version = 2
       await self._save_meta(meta)
-      await self.events.notify_tree_changed(session_id, ET.PROMPT_CHANGED if fs & {"subtree_prompt", "node_prompt"} else "task_updated")
+      await self.events.notify_tree_changed(
+          session_id, ET.PROMPT_CHANGED if fs & {"subtree_prompt", "node_prompt"} else "task_updated")
       return meta
 
   async def set_presentation(self, session_id: str, presentation: str) -> SessionMetadata:
@@ -1257,8 +1256,7 @@ class TaskTreeManager:
       if session_id == new_parent_id or session_id in chain_ids:
         blockers.append(f"reparent target {new_parent_id} is inside {session_id}'s own subtree")
       else:
-        closed = [a.id for a in self._ancestors(index, new_parent_id)
-                  if self._facts_of(a.id).task_state != "open"]
+        closed = [a.id for a in self._ancestors(index, new_parent_id) if self._facts_of(a.id).task_state != "open"]
         if closed:
           blockers.append(closed_ancestors_blocker(closed))
     # The moving subtree itself must be idle: every node in it, self included.
@@ -1305,22 +1303,22 @@ class TaskTreeManager:
     ``previous_ref`` taken from the last fact so the chain stays truthful.
     """
     events = self.events.load_events(session_id)
-    last = next(
-        (e for e in reversed(events)
-         if e.get("type") == ET.PROMPT_CHANGED and e.get("scope") == scope), None)
+    last = next((e for e in reversed(events) if e.get("type") == ET.PROMPT_CHANGED and e.get("scope") == scope), None)
     current: str | None = getattr(meta, f"{scope}_prompt_ref")
     if last is not None and last.get("new_ref") == current:
       return
     if last is None and current is None:
       return  # no rule was ever set on this scope: nothing to land
-    await self.events.append(session_id, build_control_event(
-        ET.PROMPT_CHANGED,
-        actor=ACTOR_USER,
-        source_session_id=session_id,
-        scope=scope,
-        previous_ref=last.get("new_ref") if last is not None else None,
-        new_ref=current,
-    ))
+    await self.events.append(
+        session_id,
+        build_control_event(
+            ET.PROMPT_CHANGED,
+            actor=ACTOR_USER,
+            source_session_id=session_id,
+            scope=scope,
+            previous_ref=last.get("new_ref") if last is not None else None,
+            new_ref=current,
+        ))
 
   def _store_prompt_body(self, body: str) -> str:
     """Write the rule body once under its SHA-256 fingerprint; returns the fingerprint ref."""
@@ -1341,9 +1339,7 @@ class TaskTreeManager:
 
   def _has_active_work_descendant(self, index: _TreeIndex, session_id: str) -> bool:
     """True when any descendant's current work is running or needs attention."""
-    return any(
-        self.work_state_of(index, d) in ("running", "attention")
-        for d in self._descendants(index, session_id))
+    return any(self.work_state_of(index, d) in ("running", "attention") for d in self._descendants(index, session_id))
 
   async def tree_search(self, *, query: str, limit: int = 20) -> dict:
     """Task-tree search: matching rows with each one's complete ancestor path.
@@ -1395,9 +1391,9 @@ class TaskTreeManager:
       # row still reports archived=true.
       rows_all = [
           r for r in rows_all
-          if not r.archived
-          or r.work_state in ("running", "attention")
-          or self._has_active_work_descendant(index, r.id)]
+          if not r.archived or r.work_state in ("running",
+                                                "attention") or self._has_active_work_descendant(index, r.id)
+      ]
     rows_all.sort(key=lambda r: (index.metas[r.id].created_at, r.id))
     after = _decode_tree_cursor(cursor) if cursor else None
     if after is not None:
@@ -1440,8 +1436,7 @@ class TaskTreeManager:
     if triggers_dir.is_dir() and any(triggers_dir.glob("*.json")):
       blockers.append("has saved trigger reference(s)")
     blockers.extend(
-        f"referenced by session alias for old id {old_id}"
-        for old_id in self.aliases.old_ids_for(session_id))
+        f"referenced by session alias for old id {old_id}" for old_id in self.aliases.old_ids_for(session_id))
     return blockers
 
   def _deletion_blockers_locked(self, index: _TreeIndex, session_id: str) -> list[str]:
@@ -1454,8 +1449,7 @@ class TaskTreeManager:
     """
     blockers = self._legacy_deletion_blockers(index, session_id)
     facts = self._facts_of(session_id)
-    substance = [
-        e for e in facts.events_by_id.values() if e.get("type") != ET.TASK_CREATED]
+    substance = [e for e in facts.events_by_id.values() if e.get("type") != ET.TASK_CREATED]
     if substance:
       kinds = sorted({str(e.get("type")) for e in substance})
       blockers.append(f"has preserved conversation/evidence: {', '.join(kinds)}")

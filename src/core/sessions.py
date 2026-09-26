@@ -218,8 +218,7 @@ def _sidebar_entry(
   """
   entry: dict = {}
   if include_running_status:
-    entry[sidebar_state.HAS_RUNNING_TASKS] = (
-        bool(task_activity[0]) if task_activity is not None else running)
+    entry[sidebar_state.HAS_RUNNING_TASKS] = (bool(task_activity[0]) if task_activity is not None else running)
   if include_pending_trigger_status:
     entry[sidebar_state.HAS_PENDING_TRIGGER] = trigger_count > 0
     entry[sidebar_state.PENDING_TRIGGER_COUNT] = trigger_count
@@ -692,8 +691,7 @@ def _sidebar_probe_walk(
   task_sig: tuple = ()
   if is_task_node and session_dir is not None:
     task_sig = _task_tree_probe_signature(os.fspath(session_dir))
-  signature = (
-      tuple(sorted(thread_sig)), tuple(sorted(trigger_sig)), plans_sig, rollover, task_sig)
+  signature = (tuple(sorted(thread_sig)), tuple(sorted(trigger_sig)), plans_sig, rollover, task_sig)
   return signature, _WalkedProbeInputs(thread_pairs, trigger_pairs, trigger_dir_sig)
 
 
@@ -738,8 +736,7 @@ def selective_probe_sidebar_state(
     if not isinstance(spec, SidebarProbeSpec):
       spec = SidebarProbeSpec(*spec)
     sig, inputs = _sidebar_probe_walk(
-        spec.threads_dir, spec.triggers_dir, spec.plans_path,
-        spec.session_dir, spec.is_task_node)
+        spec.threads_dir, spec.triggers_dir, spec.plans_path, spec.session_dir, spec.is_task_node)
     sigs[spec.session_id] = sig
     walked_inputs[spec.session_id] = inputs
     if deep or spec.recheck_liveness or not _sidebar_signature_fresh(spec.session_id, sig, now_ts):
@@ -2849,9 +2846,9 @@ class SessionManager:
     """
     is_task_node = meta.profile is not None
     return SidebarProbeSpec(
-        meta.id, self._threads_dir(meta.id), self._session_dir(meta.id) / "triggers",
-        self._session_dir(meta.id) / "plans.json", self._session_dir(meta.id),
-        is_task_node, recheck_liveness)
+        meta.id, self._threads_dir(meta.id),
+        self._session_dir(meta.id) / "triggers",
+        self._session_dir(meta.id) / "plans.json", self._session_dir(meta.id), is_task_node, recheck_liveness)
 
   async def _enrich_and_sort(
       self,
@@ -2958,8 +2955,7 @@ class SessionManager:
         # task-tree owner's derivation rides as task_probe: only a selected
         # task node pays it, and the verdict it answers with is the tree's own.
         probed, probe_sigs = await asyncio.to_thread(
-            selective_probe_sidebar_state, specs, deep=force,
-            task_probe=self.task_tree_activity)
+            selective_probe_sidebar_state, specs, deep=force, task_probe=self.task_tree_activity)
       except BaseException:
         # A failed probe must not lose the dirty state it was serving.
         for session_id in probe_ids:
@@ -2999,8 +2995,7 @@ class SessionManager:
       # without a terminal fact: its liveness must be re-judged here even when
       # no covered file moved, because a process death writes nothing.
       activity = sidebar_state.snapshot_task_activity(meta.id)
-      return self._probe_spec(
-          meta, recheck_liveness=activity is not None and activity[1] == "running")
+      return self._probe_spec(meta, recheck_liveness=activity is not None and activity[1] == "running")
 
     specs_template = [_spec(meta) for meta in sessions]
 
@@ -3010,8 +3005,7 @@ class SessionManager:
         return
       try:
         probed, probe_sigs = await asyncio.to_thread(
-            selective_probe_sidebar_state, specs, deep=False,
-            task_probe=self.task_tree_activity)
+            selective_probe_sidebar_state, specs, deep=False, task_probe=self.task_tree_activity)
       except asyncio.CancelledError:
         # Loop-teardown cancellation is not a sweep failure: the caller that
         # would consume the results is gone and the probe thread's outcome is

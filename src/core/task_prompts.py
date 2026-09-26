@@ -133,25 +133,33 @@ class PromptSnapshot:
   @property
   def prompt_hash(self) -> str:
     payload = json.dumps(
-        {"blocks": [
-            {"sources": [vars(s) for s in b.sources], "body_ref": b.body_ref,
-             "delivery": b.delivery, "text": b.text}
-            for b in self.blocks]},
-        sort_keys=True, ensure_ascii=False)
+        {
+            "blocks":
+                [
+                    {
+                        "sources": [vars(s) for s in b.sources],
+                        "body_ref": b.body_ref,
+                        "delivery": b.delivery,
+                        "text": b.text
+                    } for b in self.blocks
+                ]
+        },
+        sort_keys=True,
+        ensure_ascii=False)
     return sha256_hex(payload)
 
   def to_json_dict(self) -> dict:
     """The persisted/wire form: blocks, prompt_hash, char_count — the plan 4.1 object."""
     return {
-        "blocks": [
-            {
-                "sources": [vars(s) for s in b.sources],
-                "body_ref": b.body_ref,
-                "delivery": b.delivery,
-                "text": b.text,
-            }
-            for b in self.blocks
-        ],
+        "blocks":
+            [
+                {
+                    "sources": [vars(s) for s in b.sources],
+                    "body_ref": b.body_ref,
+                    "delivery": b.delivery,
+                    "text": b.text,
+                } for b in self.blocks
+            ],
         "prompt_hash": self.prompt_hash,
         "char_count": self.char_count,
     }
@@ -166,8 +174,7 @@ class PromptSnapshot:
               body_ref=b["body_ref"],
               delivery=b["delivery"],
               text=b["text"],
-          )
-          for b in data["blocks"])
+          ) for b in data["blocks"])
     except (KeyError, TypeError, ValueError) as e:
       raise TaskPromptError(f"malformed stored prompt snapshot: {e}") from e
     snapshot = cls(blocks=blocks)
@@ -247,11 +254,12 @@ def _memory_rule_segments(selection: MemorySelection) -> list[RuleSegment]:
   """The memory selection's segments as ordered rule segments (scope=memory)."""
   segments: list[RuleSegment] = []
   for delivery, text, sources in selection.segments:
-    segments.append(RuleSegment(
-        text=text,
-        sources=tuple(PromptSource(scope=SCOPE_MEMORY, source_ref=s.source_ref) for s in sources),
-        delivery=delivery,
-    ))
+    segments.append(
+        RuleSegment(
+            text=text,
+            sources=tuple(PromptSource(scope=SCOPE_MEMORY, source_ref=s.source_ref) for s in sources),
+            delivery=delivery,
+        ))
   return segments
 
 
@@ -266,8 +274,7 @@ def read_local_rule_body(prompt_bodies_dir: Path, ref: str, *, owner: str, scope
   body = _read_source_file(path, what=f"{scope} rule of task {owner}")
   actual = sha256_hex(body)
   if actual != ref:
-    raise TaskPromptError(
-        f"{scope} rule of task {owner} is corrupt: prompt_bodies/{ref}.md hashes to {actual}")
+    raise TaskPromptError(f"{scope} rule of task {owner} is corrupt: prompt_bodies/{ref}.md hashes to {actual}")
   return body
 
 
@@ -295,9 +302,8 @@ def _manager_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata) -> list
   return segments
 
 
-def _worker_kind_rule_segments(
-    cfg: CharlieBotConfig, meta: SessionMetadata, kind: str, task_type: TaskType
-) -> list[RuleSegment]:
+def _worker_kind_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata, kind: str,
+                               task_type: TaskType) -> list[RuleSegment]:
   """Worker-kind rules: role, the task-type workflow contract, and the source-files rule.
 
   The workflow's volatile bindings (branch/worktree/repo, the intro line) are
@@ -309,9 +315,9 @@ def _worker_kind_rule_segments(
 
   if kind == "review":
     from src.core.review import review_rules_text
-    segments.append(RuleSegment(
-        text=review_rules_text(),
-        sources=(PromptSource(SCOPE_BASE, "src/core/review.py:review_rules_text"),)))
+    segments.append(
+        RuleSegment(
+            text=review_rules_text(), sources=(PromptSource(SCOPE_BASE, "src/core/review.py:review_rules_text"),)))
   elif task_type == TaskType.VERIFY:
     from src.core.spawner_prompt import _substitute_tokens, verify_contract_tokens
     contract = _sections_text(cfg, "verify.md", ("preamble", "scope"))
@@ -325,21 +331,21 @@ def _worker_kind_rule_segments(
     from src.core.spawner_prompt import WORKFLOW_PROMPT_SECTION
     workflow = _sections_text(cfg, "worker.md", WORKFLOW_PROMPT_SECTION[task_type][1:])
     source_files = _sections_text(cfg, "worker.md", ("task_spec_source_files",))
-    segments.append(RuleSegment(
-        text="\n".join((worker, workflow, source_files)),
-        sources=(PromptSource(SCOPE_BASE, "prompts/worker.md"),)))
+    segments.append(
+        RuleSegment(
+            text="\n".join((worker, workflow, source_files)), sources=(PromptSource(SCOPE_BASE, "prompts/worker.md"),)))
   return segments
 
 
 def _overlay_rule_segments(
-    cfg: CharlieBotConfig, overlay: str | None,
+    cfg: CharlieBotConfig,
+    overlay: str | None,
 ) -> tuple[list[RuleSegment], OSError | None]:
   segments, overlay_error = _overlay_segment(cfg, overlay)
   if segments is None:
     return [], overlay_error
-  return ([RuleSegment(
-      text=segments,
-      sources=(PromptSource(SCOPE_BASE, f"prompts/model_overlays/{overlay}.md"),))], None)
+  return (
+      [RuleSegment(text=segments, sources=(PromptSource(SCOPE_BASE, f"prompts/model_overlays/{overlay}.md"),))], None)
 
 
 def _local_rule_segments(
@@ -360,13 +366,15 @@ def _local_rule_segments(
   for owner, ref in chain:
     if ref is None:
       continue
-    segments.append(RuleSegment(
-        text=read_local_rule_body(prompt_bodies_dir, ref, owner=owner, scope="subtree"),
-        sources=(PromptSource(SCOPE_SUBTREE, f"prompt_bodies/{ref}.md", source_session_id=owner),)))
+    segments.append(
+        RuleSegment(
+            text=read_local_rule_body(prompt_bodies_dir, ref, owner=owner, scope="subtree"),
+            sources=(PromptSource(SCOPE_SUBTREE, f"prompt_bodies/{ref}.md", source_session_id=owner),)))
   if node_ref is not None:
-    segments.append(RuleSegment(
-        text=read_local_rule_body(prompt_bodies_dir, node_ref, owner=node_id, scope="node"),
-        sources=(PromptSource(SCOPE_NODE, f"prompt_bodies/{node_ref}.md", source_session_id=node_id),)))
+    segments.append(
+        RuleSegment(
+            text=read_local_rule_body(prompt_bodies_dir, node_ref, owner=node_id, scope="node"),
+            sources=(PromptSource(SCOPE_NODE, f"prompt_bodies/{node_ref}.md", source_session_id=node_id),)))
   return segments
 
 
@@ -393,8 +401,7 @@ def assemble_snapshot(segments: list[RuleSegment]) -> PromptSnapshot:
         if source not in merged:
           merged.append(source)
       replacement = PromptBlock(
-          sources=tuple(merged), body_ref=existing.body_ref,
-          delivery=existing.delivery, text=existing.text)
+          sources=tuple(merged), body_ref=existing.body_ref, delivery=existing.delivery, text=existing.text)
       blocks[blocks.index(existing)] = replacement
       by_text[segment.text] = replacement
       continue
@@ -421,8 +428,7 @@ def memory_selection_for(meta: SessionMetadata, kind: str, cfg: CharlieBotConfig
   if kind in MANAGER_KINDS:
     return select_master_memory(cfg.memory_dir)
   # A repo-less worker matches no repo topic: worker index only, never a guessed project.
-  repo_basename = Path(meta.task.repo_path).name if (
-      meta.task is not None and meta.task.repo_path) else ""
+  repo_basename = Path(meta.task.repo_path).name if (meta.task is not None and meta.task.repo_path) else ""
   return select_worker_memory(cfg.memory_dir, repo_basename)
 
 
@@ -484,8 +490,8 @@ def preview_snapshot(
 
 def render_session_info(cfg: CharlieBotConfig, session_name: str) -> str:
   from src.core.spawner_prompt import load_marker_sections
-  sections = load_marker_sections(cfg.charlie_bot_repo / "prompts" / "worker.md", ("session_info",),
-                                  extraction="worker-prompt")
+  sections = load_marker_sections(
+      cfg.charlie_bot_repo / "prompts" / "worker.md", ("session_info",), extraction="worker-prompt")
   return sections["session_info"].replace("{{session_name}}", session_name)
 
 
@@ -503,35 +509,35 @@ def render_worktree_bindings(
   from src.core.spawner_prompt import WORKFLOW_PROMPT_SECTION, _substitute_tokens, load_marker_sections
   # Element 0 of the section map's single home is the bindings section.
   section = WORKFLOW_PROMPT_SECTION[task_type][0]
-  sections = load_marker_sections(cfg.charlie_bot_repo / "prompts" / "worker.md", (section,),
-                                  extraction="worker-prompt")
-  return _substitute_tokens(sections[section], {
-      "{{intro_line}}": intro_line,
-      "{{branch_name}}": branch_name,
-      "{{base_branch_origin}}": base_branch_origin,
-      "{{wt_path}}": wt_path,
-      "{{repo_path}}": repo_path,
-  })
+  sections = load_marker_sections(
+      cfg.charlie_bot_repo / "prompts" / "worker.md", (section,), extraction="worker-prompt")
+  return _substitute_tokens(
+      sections[section], {
+          "{{intro_line}}": intro_line,
+          "{{branch_name}}": branch_name,
+          "{{base_branch_origin}}": base_branch_origin,
+          "{{wt_path}}": wt_path,
+          "{{repo_path}}": repo_path,
+      })
 
 
 def render_task_body(cfg: CharlieBotConfig, description: str) -> str:
   from src.core.spawner_prompt import _substitute_tokens, load_marker_sections
-  sections = load_marker_sections(cfg.charlie_bot_repo / "prompts" / "worker.md", ("task",),
-                                  extraction="worker-prompt")
+  sections = load_marker_sections(cfg.charlie_bot_repo / "prompts" / "worker.md", ("task",), extraction="worker-prompt")
   return _substitute_tokens(sections["task"], {"{{description}}": description})
 
 
 def render_iteration_reports(cfg: CharlieBotConfig, *, loop_dir: str, iteration_number: int) -> str:
   from src.core.spawner_prompt import _substitute_tokens, iteration_report_tokens, load_marker_sections
-  sections = load_marker_sections(cfg.charlie_bot_repo / "prompts" / "worker.md", ("iteration_reports",),
-                                  extraction="worker-prompt")
+  sections = load_marker_sections(
+      cfg.charlie_bot_repo / "prompts" / "worker.md", ("iteration_reports",), extraction="worker-prompt")
   return _substitute_tokens(sections["iteration_reports"], iteration_report_tokens(loop_dir, iteration_number))
 
 
 def render_worktree_persistence(cfg: CharlieBotConfig) -> str:
   from src.core.spawner_prompt import load_marker_sections
-  sections = load_marker_sections(cfg.charlie_bot_repo / "prompts" / "worker.md", ("worktree_persistence",),
-                                  extraction="worker-prompt")
+  sections = load_marker_sections(
+      cfg.charlie_bot_repo / "prompts" / "worker.md", ("worktree_persistence",), extraction="worker-prompt")
   return sections["worktree_persistence"]
 
 

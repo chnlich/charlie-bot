@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 
 log = LazyStructlogLogger()
 
-# Resume domain shared by every pooled cc-claude entry (src/api/sessions.py):
+# Resume domain shared by every pooled cc-claude entry (continuation_domain below):
 # Fable, Opus and Sonnet switch in place inside the pool without touching accounts.
 POOL_DOMAIN = "pool"
 

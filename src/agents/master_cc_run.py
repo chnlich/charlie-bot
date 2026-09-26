@@ -686,8 +686,12 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     if account is None:
       log.error("master_cc_account_unavailable", session=session_meta.id, error=place_error)
       return await _refuse_turn(item, place_error)
-    # A moved transcript is re-resolved under the chosen account.
-    resume_id = _resolve_resume_id(option, session_meta, cfg=cfg)
+    # A moved transcript is re-resolved under the chosen account. A fresh turn
+    # (v2's fresh_native, or the v1 rule's cross-family switch) placed with no
+    # resume id, so no transcript moved and the withheld id stays withheld —
+    # re-resolving would hand the old id to a backend outside its domain.
+    if not (fresh_native or fresh_by_switch):
+      resume_id = _resolve_resume_id(option, session_meta, cfg=cfg)
   # Pre-flight: a resume-capable backend about to run with no resolved resume
   # id, when the session already has an anchor on disk or a completed round, is
   # about to start a zero-context conversation. Fail loudly unless the caller

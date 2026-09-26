@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from conftest import (
     ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
+    AUTONAMER_BUILD_BACKEND_PATCH_TARGET,
     BASE_SPAWN_SUBPROCESS_PATCH_TARGET,
     CODEX_RESOLVE_BINARY_PATCH_TARGET,
     OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
@@ -30,7 +31,6 @@ from src.core.autonamer import (
 from src.core.config import CharlieBotConfig
 from src.core.models import SessionMetadata
 
-_BUILD_BACKEND_PATCH_TARGET = "src.core.autonamer.build_backend"
 _STREAMING_BROADCAST_PATCH_TARGET = "src.core.autonamer.streaming_manager.broadcast"
 _LOG_PATCH_TARGET = "src.core.autonamer.log"
 
@@ -76,7 +76,7 @@ async def _run_auto_name(
   broadcast = AsyncMock()
   log_mock = MagicMock()
   with (
-      patch(_BUILD_BACKEND_PATCH_TARGET, build),
+      patch(AUTONAMER_BUILD_BACKEND_PATCH_TARGET, build),
       patch(_STREAMING_BROADCAST_PATCH_TARGET, new=broadcast),
       patch(_LOG_PATCH_TARGET, new=log_mock),
   ):
@@ -156,7 +156,7 @@ async def test_maybe_auto_name_passes_existing_groups_to_backend() -> None:
   one_shot = AsyncMock(return_value='{"name":"Test Name","group":"work"}')
 
   with (
-      patch(_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)),
+      patch(AUTONAMER_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)),
       patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
     await maybe_auto_name(
@@ -186,7 +186,7 @@ async def test_maybe_auto_name_does_not_overwrite_existing_manual_group() -> Non
   one_shot = AsyncMock(return_value='{"name":"Test Name","group":"Work"}')
 
   with (
-      patch(_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)),
+      patch(AUTONAMER_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)),
       patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock_broadcast,
   ):
     await maybe_auto_name(
@@ -502,7 +502,7 @@ async def test_maybe_auto_name_skips_loudly_when_no_preference_resolves() -> Non
   session_mgr = AsyncMock()
 
   with (
-      patch(_BUILD_BACKEND_PATCH_TARGET) as mock_build,
+      patch(AUTONAMER_BUILD_BACKEND_PATCH_TARGET) as mock_build,
       patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock_broadcast,
       patch(_LOG_PATCH_TARGET, new=MagicMock()) as mock_log,
   ):

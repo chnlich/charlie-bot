@@ -15,7 +15,13 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from conftest import BUILD_BACKEND_PATCH_TARGET, backend_option
+from conftest import (
+    BUILD_BACKEND_PATCH_TARGET,
+    TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET,
+    TUI_KILL_TMUX_SESSION_PATCH_TARGET,
+    TUI_TMUX_SESSION_EXISTS_PATCH_TARGET,
+    backend_option,
+)
 
 from src.core import event_types as ET
 from src.core.backend_models import BackendType
@@ -296,9 +302,9 @@ async def test_tui_task_node_terminal_endpoints_and_explicit_completion(
     async def fake_kill_tmux_session(session_id: str) -> None:
         killed.append(session_id)
 
-    monkeypatch.setattr("src.agents.backends.tui.tmux_session_exists", fake_tmux_session_exists)
-    monkeypatch.setattr("src.agents.backends.tui._claude_jsonl_busy", fake_claude_jsonl_busy)
-    monkeypatch.setattr("src.agents.backends.tui.kill_tmux_session", fake_kill_tmux_session)
+    monkeypatch.setattr(TUI_TMUX_SESSION_EXISTS_PATCH_TARGET, fake_tmux_session_exists)
+    monkeypatch.setattr(TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET, fake_claude_jsonl_busy)
+    monkeypatch.setattr(TUI_KILL_TMUX_SESSION_PATCH_TARGET, fake_kill_tmux_session)
     with make_api_client(cfg, session_mgr, tree) as client:
         status = client.get(
             f"/api/sessions/tui/status?ids={root.id}", headers=OPERATOR)

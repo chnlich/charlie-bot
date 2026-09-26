@@ -33,7 +33,7 @@ if TYPE_CHECKING:
   from src.core.config import CharlieBotConfig
   from src.core.credentials import Credentials
 
-from src.core.constants import SESSION_ID_ENV_VAR
+from src.core.constants import CALLER_SESSION_HEADER, SESSION_ID_ENV_VAR
 from src.core.home import charliebot_home_dir
 from src.core.run_token import load_run_token
 from src.core.timeouts import (
@@ -421,15 +421,32 @@ def internal_api_auth_headers() -> dict[str, str]:
   Without a run token the operator access key is used as before — it lives in
   credentials.yaml under ``charliebot.access_key``; with neither, no header is
   sent (the middleware is a no-op for an empty key).
+
+  When ``CHARLIEBOT_SESSION_ID`` is non-empty the returned dict also carries
+  ``X-CharlieBot-Caller-Session`` with that value, which the server records on
+  operator caller identities only (an agent's session comes from its verified
+  token, never the header).
   """
   run_token = load_run_token()
   if run_token:
-    return {"Authorization": f"Bearer {run_token}"}
+    return _with_caller_session({"Authorization": f"Bearer {run_token}"})
   from src.core.credentials import configured_access_key
   access_key = configured_access_key()
   if access_key:
-    return {"Authorization": f"Bearer {access_key}"}
+    return _with_caller_session({"Authorization": f"Bearer {access_key}"})
   return {}
+
+
+def _with_caller_session(headers: dict[str, str]) -> dict[str, str]:
+  """Add CALLER_SESSION_HEADER to *headers* when SESSION_ID_ENV_VAR is non-empty.
+
+  The value comes from the environment variable only: it names the process the
+  server started, while the cwd only names a directory.
+  """
+  session_id = os.environ.get(SESSION_ID_ENV_VAR)
+  if session_id:
+    headers[CALLER_SESSION_HEADER] = session_id
+  return headers
 
 
 def exit_usage_error(message: str) -> None:

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import backend_option
+from conftest import SCHEDULER_GET_CONFIG_PATCH_TARGET, backend_option
 
 from src.cli import storage as storage_cli
 from src.core import scheduler as scheduler_module
@@ -1145,7 +1145,7 @@ def test_cool_storage_scheduler_handler_runs_the_real_sweep(
   transport = thread_data_dir(cfg, SID_COLD) / "stdout.log"
   transport.write_bytes(b"transport")
   # The handler resolves the config on the loop before the executor dispatch.
-  monkeypatch.setattr(scheduler_module, "get_config", lambda: cfg)
+  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
 
   summary = asyncio.run(scheduler_module._cool_storage_handler())
 

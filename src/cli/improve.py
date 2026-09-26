@@ -32,6 +32,7 @@ from src.cli.common import (
 from src.cli.help_formatter import CliRawDescriptionHelpFormatter
 from src.core.config import get_config
 from src.core.improve_sequence import improve_child_request_id
+from src.core.threads import METADATA_NAME
 
 
 def _read_goal_file(goal_file: str) -> str:
@@ -145,7 +146,7 @@ def main() -> None:
     # presence (and only the matching parent's) proves the v2 admission.
     try:
       meta = SessionMetadata.model_validate_json(
-          (cfg.sessions_dir / session_id / "metadata.json").read_text(encoding="utf-8"))
+          (cfg.sessions_dir / session_id / METADATA_NAME).read_text(encoding="utf-8"))
     except (OSError, ValueError):
       meta = None
     if meta is not None and meta.profile is not None:

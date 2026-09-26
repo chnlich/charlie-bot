@@ -57,6 +57,8 @@ from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events
 from src.core.process import kill_process_group
 from src.core.run_token import CallerIdentity
 from src.core.runs import (
+    RUN_EVENTS_NAME,
+    RUN_METADATA_NAME,
     RunIdentityConflictError,
     RunNotFoundError,
     stop_requested_in_events,
@@ -344,7 +346,7 @@ def _row_source_stats(
       for entry in os.scandir(runs_dir):
         if not entry.is_dir():
           continue
-        meta_path = os.path.join(entry.path, "metadata.json")
+        meta_path = os.path.join(entry.path, RUN_METADATA_NAME)
         try:
           run_pairs.append((meta_path, os.stat(meta_path)))
         except OSError:
@@ -977,7 +979,7 @@ async def get_thread_events(
   if v2_run is not None:
     # The worker Run's own events log: the same projection the v2 route
     # serves, reached through the registered alias.
-    events_path = task_manager().runs.run_dir(v2_run[0], v2_run[1]) / "events.jsonl"
+    events_path = task_manager().runs.run_dir(v2_run[0], v2_run[1]) / RUN_EVENTS_NAME
   else:
     events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
   # The unchanged-log poll is one stat + a lookup; only a miss pays the

@@ -73,6 +73,7 @@ from src.core.takeoff_gate import is_verify_exempt
 from src.core.task_completion import TaskCompletionManager
 from src.core.tasks import create_logged_task
 from src.core.thinking_state import clear_run_busy, mark_run_busy, note_run_backend
+from src.core.threads import METADATA_NAME
 
 if TYPE_CHECKING:
   from src.core.models import RunRecord
@@ -507,7 +508,7 @@ class TaskTreeManager:
       # No authoritative entry covers this name (cold cache, out-of-band
       # create): the strict read is the tree's own contract — an unparseable
       # file fails the build loud, where the listings readers drop and log.
-      path = sessions_dir / name / "metadata.json"
+      path = sessions_dir / name / METADATA_NAME
       try:
         raw = path.read_text(encoding="utf-8")
       except OSError:
@@ -1086,13 +1087,13 @@ class TaskTreeManager:
       await append_ndjson(temp_dir / "data" / "chat_events.jsonl", created_event)
       meta.created_by_event = EventRef(session_id=task_id, event_id=str(created_event["id"]))
       await asyncio.to_thread(
-          atomic_write_text, temp_dir / "metadata.json",
+          atomic_write_text, temp_dir / METADATA_NAME,
           meta.model_dump_json(indent=2, exclude=_TRANSIENT_METADATA_FIELDS))
       try:
         os.replace(temp_dir, final_dir)
       except OSError:
         # Lost a create race for the same stable id: the original product exists.
-        existing = self._read_metadata_file(final_dir / "metadata.json")
+        existing = self._read_metadata_file(final_dir / METADATA_NAME)
         if existing is None:
           raise
         return existing

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -23,6 +24,7 @@ from conftest import (
     drain_session_consumer,
     fresh_master_state,
     make_failed_round,
+    make_one_shot_backend,
     make_sound_round,
     make_work_item,
     manager_backed_callbacks,
@@ -1081,3 +1083,145 @@ async def test_consumer_keeps_the_durable_anchor_when_a_turn_returns_no_session_
   cold_meta = await cold_reader.get_session(session.id)
   assert cold_meta is not None
   assert cold_meta.cc_session_id == "kept-anchor"
+
+
+# ---------------------------------------------------------------------------
+# after_round: the consumer-owned post-round naming hook
+# ---------------------------------------------------------------------------
+
+
+async def _await_after_round_tasks(session_id: str) -> None:
+  """Await the fire-and-forget after_round tasks the consumer created for
+  *session_id*: the hook runs concurrently, so a deterministic assert drains
+  the named tasks once the consumer has exited."""
+
+  async def release() -> None:
+    for task in list(asyncio.all_tasks()):
+      if task.get_name() == f"after-round-{session_id}":
+        await asyncio.wait_for(task, timeout=5)
+
+  await asyncio.wait_for(release(), timeout=5)
+
+
+def _order_stamped_callbacks(order: list[str]) -> SessionCallbacks:
+  """Callbacks whose MASTER_DONE persist and after_round both stamp *order*.
+
+  The stamps make the firing order observable: the hook must land strictly
+  after the round's MASTER_DONE event was persisted, never before.
+  """
+
+  async def persist(sid: str, event: dict) -> None:
+    if event.get("type") == ET.MASTER_DONE:
+      order.append("master_done")
+
+  after_round = AsyncMock(side_effect=lambda sid: order.append("after_round"))
+  return replace(mock_session_callbacks(), persist_and_broadcast=persist, after_round=after_round)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["plain", "auto_trigger", "task_run"])
+async def test_consumer_awaits_after_round_once_after_master_done(kind: str) -> None:
+  """Every round origin reaches the naming hook: exactly one await carrying the
+  session id, strictly after the round's MASTER_DONE event was persisted."""
+  session_id = f"test-after-round-{kind}"
+  order: list[str] = []
+  callbacks = _order_stamped_callbacks(order)
+
+  item = make_work_item(MagicMock(), _make_meta(session_id), None, callbacks=callbacks)
+  if kind == "auto_trigger":
+    item.auto_trigger = True
+  elif kind == "task_run":
+    item.task_run = master_cc_state.TaskRunBinding(
+        session_id=session_id, run_id="run-1", transport_dir=str(Path("/tmp") / "transport"))
+    item.on_task_finish = AsyncMock()
+
+  await run_session_consumer(session_id, [item], make_sound_round("cc-1"))
+  await _await_after_round_tasks(session_id)
+
+  assert item.future.done() and item.future.result() == "cc-1"
+  assert callbacks.after_round.await_count == 1
+  assert callbacks.after_round.await_args.args == (session_id,)
+  assert order == ["master_done", "after_round"]
+
+
+@pytest.mark.asyncio
+async def test_after_round_await_does_not_block_next_queued_round() -> None:
+  """Fire-and-forget: an after_round parked on a never-set event must not hold
+  the consumer — the next queued item's round still resolves its future."""
+  session_id = "test-after-round-nonblocking"
+  parked = asyncio.Event()
+
+  async def parked_after_round(sid: str) -> None:
+    await parked.wait()
+
+  blocked_item = make_work_item(
+      MagicMock(), _make_meta(session_id), None,
+      callbacks=replace(mock_session_callbacks(), after_round=parked_after_round))
+  free_item = make_work_item(MagicMock(), _make_meta(session_id), None)
+
+  await run_session_consumer(session_id, [blocked_item, free_item], make_sound_round("cc-x"))
+
+  assert blocked_item.future.done() and blocked_item.future.result() == "cc-x"
+  assert free_item.future.done() and free_item.future.result() == "cc-x"
+
+  # Release the parked hook so no pending task survives the test's event loop.
+  parked.set()
+  await _await_after_round_tasks(session_id)
+
+
+@pytest.mark.asyncio
+async def test_after_round_none_round_completes_normally() -> None:
+  """after_round=None stays a legal bundle: the hook is skipped, the round
+  still completes and resolves its caller's future."""
+  session_id = "test-after-round-none"
+  callbacks = replace(mock_session_callbacks(), after_round=None)
+  item = make_work_item(MagicMock(), _make_meta(session_id), None, callbacks=callbacks)
+
+  await run_session_consumer(session_id, [item], make_sound_round("cc-none"))
+
+  assert item.future.done() and item.future.result() == "cc-none"
+  assert item.callbacks.persist_master_run.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_consumer_fires_session_naming_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The real wiring names the session: a default-named session's round through
+  the real consumer fires SessionManager.name_after_round in the background,
+  and the light one-shot's answer lands as the session name and group."""
+  cfg = build_master_cc_cfg(tmp_path)
+  cfg.backends.preference = ["fake"]  # iter_light_backends must resolve the one-shot
+  session_mgr = SessionManager(cfg)
+  session = await session_mgr.create_session(CreateSessionRequest(name="Session 5"))
+
+  async def fake_run_cc(item: master_cc._WorkItem) -> tuple[str | None, int, str | None, dict]:
+    await item.callbacks.persist_and_broadcast(item.session_meta.id, make_text_event("Alpha Beta answers."))
+    return ("cc-named", 0, None, {})
+
+  one_shot = AsyncMock(return_value='{"name": "Alpha Beta", "group": "G"}')
+  naming_backend = make_one_shot_backend(one_shot)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: naming_backend)
+  # The autonamer caches its build_backend binding on first use (module
+  # __getattr__), so the registry target alone misses once another test has
+  # bound it; patch the module attribute too and the stand-in applies
+  # regardless of suite order.
+  monkeypatch.setattr("src.core.autonamer.build_backend", lambda *a, **k: naming_backend)
+  monkeypatch.setattr(master_cc_run, "_run_cc", fake_run_cc)
+  monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
+  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
+
+  async with fresh_master_state(session.id):
+    await master_cc.run_message(cfg, session, "hi", session_mgr.callbacks(), skip_user_event=True)
+    await drain_session_consumer(session.id, timeout=5)
+
+    # Naming runs in the background after MASTER_DONE; poll briefly for it.
+    meta = None
+    for _ in range(100):
+      meta = await session_mgr.get_session(session.id)
+      if meta is not None and meta.name == "5: Alpha Beta" and meta.group == "G":
+        break
+      await asyncio.sleep(0.05)
+
+  assert meta is not None
+  assert meta.name == "5: Alpha Beta"
+  assert meta.group == "G"
+  one_shot.assert_awaited_once()

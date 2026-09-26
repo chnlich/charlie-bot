@@ -21,7 +21,6 @@ from src.api.message_utils import (
     build_user_event,
 )
 from src.core import event_types as ET
-from src.core.autonamer import is_default_session_name, name_after_round
 from src.core.config import CharlieBotConfig
 from src.core.constants import BackendType
 from src.core.deferred import deferred_import_loader, deferred_module_getattr
@@ -281,7 +280,7 @@ async def run_and_finalize(
     uploaded_files: list[dict] | None = None,
     is_voice: bool = False,
 ) -> None:
-  """Run master CC, persist cc_session_id, and auto-name the session."""
+  """Run master CC; the consumer owns cc_session_id persistence and naming."""
   log.info("run_and_finalize_start", session=meta.id, backend=meta.backend)
   backend_id = meta.backend
   backend_option = cfg.get_backend_option(backend_id)
@@ -301,11 +300,7 @@ async def run_and_finalize(
         is_voice=is_voice,
     )
     # cc_session_id persistence is owned by the consumer in run_message; nothing
-    # downstream here reads meta.cc_session_id (auto-naming uses name and id).
-
-    # Auto-name session after first turn if still using default name
-    if is_default_session_name(meta.name):
-      create_logged_task(name_after_round(cfg, meta.id, session_mgr))
+    # downstream here reads meta.cc_session_id.
   except Exception as e:
     log.exception("master_cc_run_failed", session=meta.id)
     # run_message() should handle and emit failures, but keep this as a

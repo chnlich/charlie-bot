@@ -2237,6 +2237,12 @@ class SessionManager:
     aggregator.emit_stream_deltas = True
     return aggregator
 
+  async def name_after_round(self, session_id: str) -> None:
+    """Run post-round session naming for *session_id* through the autonamer."""
+    # Imported here: autonamer imports SessionManager at module level.
+    from src.core.autonamer import name_after_round
+    await name_after_round(self._cfg, session_id, self)
+
   def callbacks(self) -> SessionCallbacks:
     """Return a bundle of session-related callbacks for run_message()."""
     return SessionCallbacks(
@@ -2248,6 +2254,7 @@ class SessionManager:
         persist_master_run=self.persist_master_run,
         persist_claude_account=self.persist_claude_account,
         claude_context_state=self.claude_context_state,
+        after_round=self.name_after_round,
     )
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:

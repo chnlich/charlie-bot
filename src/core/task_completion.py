@@ -47,6 +47,10 @@ from src.core.control_events import (
 )
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionMetadata
+from src.core.session_dispatch import (
+    inputs_not_pending_conflict,
+    unprocessed_input_blocker,
+)
 
 if TYPE_CHECKING:
     from src.core.task_sessions import TaskTreeManager
@@ -157,9 +161,7 @@ class TaskCompletionManager:
             e for e in self._tree.dispatch.pending_inputs(session_id)
             if str(e.get("id")) not in (exclude_input_ids or set())]
         if pending:
-            ids = ", ".join(str(e.get("id")) for e in pending[:8])
-            more = "" if len(pending) <= 8 else f" (+{len(pending) - 8} more)"
-            blockers.insert(0, f"has unprocessed input: {ids}{more}")
+            blockers.insert(0, unprocessed_input_blocker(pending))
         return blockers
 
     def cancellation_blockers(self, session_id: str) -> list[str]:
@@ -853,7 +855,7 @@ class TaskCompletionManager:
             unknown = [i for i in input_ids if i not in pending and i not in acknowledged]
             if unknown:
                 raise TaskConflictError(
-                    [f"input(s) not pending for {session_id}: {', '.join(unknown)}"])
+                    [inputs_not_pending_conflict(session_id, unknown)])
             acked_now = [i for i in input_ids if i in pending]
             if not acked_now:
                 # Every named id was already acknowledged: the replay of that

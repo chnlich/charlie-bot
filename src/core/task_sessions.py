@@ -74,7 +74,7 @@ from src.core.takeoff_gate import is_verify_exempt
 from src.core.task_completion import TaskCompletionManager
 
 if TYPE_CHECKING:
-  pass
+  from src.core.models import RunRecord
 
 PROMPT_BODIES_DIR_NAME = "prompt_bodies"
 

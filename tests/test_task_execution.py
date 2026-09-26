@@ -144,6 +144,24 @@ def install_backends(monkeypatch: pytest.MonkeyPatch, backends: list, target: st
     return builds
 
 
+def make_pm_build(text: str, pm_builds: list | None = None):
+    """The parent-manager turn's build function for BUILD_BACKEND_PATCH_TARGET:
+    one scripted double per registry build, wired for on_spawn the way
+    install_backends wires worker builds. ``pm_builds`` collects the built
+    doubles for tests that assert the parent turn actually built one."""
+
+    def pm_build(option, cfg_, **kwargs):
+        b = SpawningScriptedBackend([result_event(text)])
+        on_spawn = kwargs.get("on_spawn")
+        if on_spawn is not None:
+            b.set_on_spawn(on_spawn)
+        if pm_builds is not None:
+            pm_builds.append(b)
+        return b
+
+    return pm_build
+
+
 def make_api_client(cfg, session_mgr, task_mgr) -> TestClient:
     from src.api import internal as internal_api
     from src.api import sessions as sessions_api
@@ -445,17 +463,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
     monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
     stub_credentials({"charliebot": {"access_key": "op-secret"}})
     pm_builds = []
-
-    def pm_build(option, cfg_, **kwargs):
-        # Parent manager turns (the delivered child reports' serialized
-        # consumer) build through the registry on demand.
-        b = SpawningScriptedBackend([result_event("manager turn")])
-        if kwargs.get("on_spawn") is not None:
-            b.set_on_spawn(kwargs["on_spawn"])
-        pm_builds.append(b)
-        return b
-
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, pm_build)
+    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
     backend = SpawningScriptedBackend([result_event("phrase")])
     builds = install_backends(
         monkeypatch,
@@ -704,15 +712,7 @@ async def test_implement_delivery_requires_review_and_real_landing(
                                task=_task_spec(tree, task_spec))
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
     pm_builds = []
-
-    def pm_build(option, cfg_, **kwargs):
-        b = SpawningScriptedBackend([result_event("manager turn")])
-        if kwargs.get("on_spawn") is not None:
-            b.set_on_spawn(kwargs["on_spawn"])
-        pm_builds.append(b)
-        return b
-
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, pm_build)
+    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
     patch_instructions_content(monkeypatch)
     stub_credentials({"charliebot": {"access_key": "op-secret"}})
     # The work-run launch re-judges the nearest-user authorization gate; the
@@ -1421,14 +1421,7 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
     monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
     stub_credentials({"charliebot": {"access_key": "op-secret"}})
 
-    def pm_build(option, cfg_, **kwargs):
-        # The parent's report-consuming turn builds through the registry.
-        b = SpawningScriptedBackend([result_event("failure noted")])
-        if kwargs.get("on_spawn") is not None:
-            b.set_on_spawn(kwargs["on_spawn"])
-        return b
-
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, pm_build)
+    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("failure noted"))
     install_backends(
         monkeypatch, [SpawningScriptedBackend([result_event("phrase")])],
         WORKER_BUILD_BACKEND_PATCH_TARGET)

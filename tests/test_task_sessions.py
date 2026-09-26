@@ -164,6 +164,32 @@ async def test_unnamed_create_without_a_goal_takes_the_session_counter_name(tmp_
   assert named.name == "Given"
 
 
+@pytest.mark.asyncio
+async def test_unnamed_create_names_from_goal_skipping_markdown_headings(tmp_path: Path) -> None:
+  _, _session_mgr, mgr = build_env(tmp_path)
+
+  goal_heading = await create_task(mgr, parent=None, request_id="h1",
+                                   profile="worker",
+                                   task=TaskSpec(goal="## Goal\nPerform a delta verification of the plan"))
+  assert goal_heading.name == "Perform a delta verification of the plan"
+
+  only_heading = await create_task(mgr, parent=None, request_id="h2",
+                                   profile="worker",
+                                   task=TaskSpec(goal="## Only heading"))
+  assert only_heading.name == "Only heading"
+
+  empty_headings = await create_task(mgr, parent=None, request_id="h3",
+                                     profile="worker",
+                                     task=TaskSpec(goal="##\n\n##"))
+  assert empty_headings.name == "New worker task"
+
+  long_line = "x" * 100
+  truncated = await create_task(mgr, parent=None, request_id="h4",
+                                profile="worker",
+                                task=TaskSpec(goal=f"## Goal\n{long_line}"))
+  assert truncated.name == "x" * 80
+
+
 # ---------------------------------------------------------------------------
 # Stable create / retry
 # ---------------------------------------------------------------------------

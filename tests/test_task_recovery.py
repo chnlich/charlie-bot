@@ -285,6 +285,107 @@ async def test_terminal_append_crash_replays_review_and_close_once(
 
 
 @pytest.mark.asyncio
+async def test_recovery_never_rereviews_a_successfully_reviewed_work_run(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A work run whose review already succeeded never gets another review:
+    restart recovery any number of times registers none (the chain ends at
+    the first successful review), while the review's own follow-up replay
+    (landing recheck) stays idempotent."""
+    from src.core.models import PatchSessionTaskRequest
+    from src.core.run_token import CallerIdentity
+    from src.core.task_recovery import reconcile_task_tree
+    from tests.test_task_execution import init_repo_with_origin
+    cfg, session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+    repo, _origin = init_repo_with_origin(tmp_path / "repo")
+    await tree.patch_task(
+        worker.id,
+        PatchSessionTaskRequest(
+            task=TaskSpec(goal="do the work", repo_path=str(repo), task_type=TaskType.IMPLEMENT)),
+        caller=CallerIdentity(kind="operator"))
+    install_backends(
+        monkeypatch, [SpawningScriptedBackend([result_event("review ok")])],
+        WORKER_BUILD_BACKEND_PATCH_TARGET)
+    patch_instructions_content(monkeypatch)
+    run_id = "run-reviewed"
+    await tree.runs.register_run(
+        RunRecord(id=run_id, session_id=worker.id, kind="work",
+                  backend="fake", model="fake-model",
+                  repo_path=str(repo), base_branch="main",
+                  branch_name="task/work", worktree_path=str(repo)))
+    await tree.dispatch.finish_run(worker.id, run_id, outcome="success", exit_code=0)
+    # The review ran to its own successful terminal fact (the state every
+    # server restart used to re-enter with a fresh reviewer backend).
+    review_id = "review-done"
+    await tree.runs.register_run(
+        RunRecord(id=review_id, session_id=worker.id, kind="review",
+                  review_of_run_id=run_id, backend="fake", model="fake-model"))
+    await tree.dispatch.finish_run(worker.id, review_id, outcome="success", exit_code=0)
+
+    for _round in range(2):
+        await reconcile_task_tree(cfg, tree, session_mgr)
+        reviews = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
+        assert len(reviews) == 1, f"recovery registered a new review: {[r.id for r in reviews]}"
+        assert reviews[0].id == review_id
+
+
+@pytest.mark.asyncio
+async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed review is a used attempt: recovery registers the next review
+    on the next preference backend (the existing policy, unchanged)."""
+    from src.core.models import PatchSessionTaskRequest
+    from src.core.run_token import CallerIdentity
+    from src.core.task_recovery import reconcile_task_tree
+    from tests.test_task_execution import init_repo_with_origin
+    from conftest import backend_option
+    cfg, session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+    # Two reviewer entries beyond the worker's own backend: a failed first
+    # attempt must move to the second one.
+    cfg.backends.options.extend([
+        backend_option(id="fake2", label="Fake2", type="cc-claude", model="fake2-model"),
+        backend_option(id="fake3", label="Fake3", type="cc-claude", model="fake3-model"),
+    ])
+    cfg.backends.preference = ["fake2", "fake3"]
+    repo, _origin = init_repo_with_origin(tmp_path / "repo")
+    await tree.patch_task(
+        worker.id,
+        PatchSessionTaskRequest(
+            task=TaskSpec(goal="do the work", repo_path=str(repo), task_type=TaskType.IMPLEMENT)),
+        caller=CallerIdentity(kind="operator"))
+    install_backends(
+        monkeypatch, [SpawningScriptedBackend([result_event("review ok")])],
+        WORKER_BUILD_BACKEND_PATCH_TARGET)
+    patch_instructions_content(monkeypatch)
+    run_id = "run-work"
+    await tree.runs.register_run(
+        RunRecord(id=run_id, session_id=worker.id, kind="work",
+                  backend="fake", model="fake-model",
+                  repo_path=str(repo), base_branch="main",
+                  branch_name="task/work", worktree_path=str(repo)))
+    await tree.dispatch.finish_run(worker.id, run_id, outcome="success", exit_code=0)
+    # The first review attempt ran on the first preference backend and failed.
+    failed_review = "review-failed"
+    await tree.runs.register_run(
+        RunRecord(id=failed_review, session_id=worker.id, kind="review",
+                  review_of_run_id=run_id, backend="fake2", model="fake2-model"))
+    await tree.dispatch.finish_run(worker.id, failed_review, outcome="failed", exit_code=1)
+
+    await reconcile_task_tree(cfg, tree, session_mgr)
+    reviews = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
+    assert len(reviews) == 2, f"expected the retried review, got {[r.id for r in reviews]}"
+    retried = next(r for r in reviews if r.id != failed_review)
+    # The stable retry identity binds to the work run and its attempt number.
+    from src.core.control_events import stable_run_id
+    assert retried.id == stable_run_id(worker.id, f"review:{run_id}:2")
+    assert retried.backend == "fake3", f"expected the next preference backend, got {retried.backend}"
+    _run, outcome = await wait_for_terminal_run(tree, worker.id, retried.id)
+    assert outcome == "success"
+    # The retried review consumed the one scripted backend; nothing else launches.
+    await reconcile_task_tree(cfg, tree, session_mgr)
+    assert len([r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]) == 2
+
+
+@pytest.mark.asyncio
 async def test_terminal_append_crash_replays_parent_failure_report_once(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A failed work run whose parent report never landed: recovery delivers it

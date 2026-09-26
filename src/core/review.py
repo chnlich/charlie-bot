@@ -177,12 +177,19 @@ def build_review_prompt(
 
 
 def review_numbered_steps(branch_name: str, wt_path: str, base_branch: str) -> str:
-  """The review prompt's git steps with this run's actual branch/worktree/base."""
+  """The review prompt's git steps with this run's actual branch/worktree/base.
+
+  The steps name the published branch (review_published_branch) and its
+  origin ref (review_landing_target), so a base recorded as ``origin/<b>``
+  renders the same steps as ``<b>``.
+  """
+  published = review_published_branch(base_branch)
+  landing = review_landing_target(base_branch)
   return "\n".join(
       [
           f"1. `cd {wt_path}`",
-          f"2. Fetch the latest base branch: `git fetch origin {base_branch}`",
-          f"3. Review the changes: `git diff origin/{base_branch}...{branch_name}`",
+          f"2. Fetch the latest base branch: `git fetch origin {published}`",
+          f"3. Review the changes: `git diff {landing}...{branch_name}`",
           "4. Verify the changes address the user's actual intent (from context research above).",
           f"5. {_REVIEW_SCOPE_CHECK}",
           f"6. {_REVIEW_DIVERGENT_CHECK}",
@@ -190,12 +197,21 @@ def review_numbered_steps(branch_name: str, wt_path: str, base_branch: str) -> s
           f"8. {_REVIEW_STYLE_CHECK}",
           "9. If you find issues, fix them and commit with descriptive messages.",
           "10. Stash untracked/modified files: `git stash --include-untracked`",
-          f"11. Fetch the latest base branch: `git fetch origin {base_branch}`",
-          f"12. Rebase onto the remote base: `git rebase origin/{base_branch}`",
-          f"13. Push to remote base branch from the worktree: `git push origin HEAD:{base_branch}`",
-          "14. Verify: `git log --oneline -1 HEAD` and `git log --oneline -1 origin/{base_branch}` "
-          "must show the same commit.".replace("{base_branch}", base_branch),
+          f"11. Fetch the latest base branch: `git fetch origin {published}`",
+          f"12. Rebase onto the remote base: `git rebase {landing}`",
+          f"13. Push to remote base branch from the worktree: `git push origin HEAD:{published}`",
+          (
+              f"14. Verify: `git log --oneline -1 HEAD` and `git log --oneline -1 {landing}` "
+              "must show the same commit."),
       ])
+
+
+def review_published_branch(base_branch: str) -> str:
+  """The branch name on origin that a Run's recorded base names.
+
+  A base recorded as ``origin/<b>`` names that same published branch ``<b>``.
+  """
+  return base_branch.removeprefix('origin/')
 
 
 def review_landing_target(base_branch: str) -> str:
@@ -203,10 +219,9 @@ def review_landing_target(base_branch: str) -> str:
 
   The push publishes the base on origin, so the target is its ``origin/`` ref,
   which git_verify_commit_landed fetches before judging; a local branch of the
-  same name may lag it. A base recorded as ``origin/<b>`` names that same
-  published branch.
+  same name may lag it.
   """
-  return f"origin/{base_branch.removeprefix('origin/')}"
+  return f"origin/{review_published_branch(base_branch)}"
 
 
 def review_context_lines(

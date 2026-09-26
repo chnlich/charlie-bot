@@ -65,6 +65,25 @@ def test_asset_token_tracks_the_served_tree(tmp_path: Path) -> None:
     second = pages._asset_tree_digest()
     assert second != first  # a tree edit moves the token on the next render
   pages._ASSET_DIGEST_STATE.update(sig=(), digests={}, digest="")
+  pages._DIR_LISTINGS.clear()
+
+
+def test_asset_token_tracks_a_new_file_in_a_memoized_directory(tmp_path: Path) -> None:
+  static = tmp_path / "web" / "static"
+  static.mkdir(parents=True)
+  (static / "a.js").write_text("one", encoding="utf-8")
+  with pytest.MonkeyPatch.context() as mp:
+    mp.setattr(pages, "REPO_ROOT", tmp_path)
+    pages._ASSET_DIGEST_STATE.update(sig=(), digests={}, digest="")
+    pages._DIR_LISTINGS.clear()
+    first = pages._asset_tree_digest()
+    # The first walk memoized the directory record; the new file moves the
+    # directory stat, so the next walk re-scandirs and sees it.
+    (static / "b.js").write_text("two", encoding="utf-8")
+    second = pages._asset_tree_digest()
+    assert second != first
+  pages._ASSET_DIGEST_STATE.update(sig=(), digests={}, digest="")
+  pages._DIR_LISTINGS.clear()
 
 
 def test_asset_token_composes_git_version_and_digest() -> None:

@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -27,10 +27,27 @@ def _cfg(tmp_path: Path, **floors: int) -> CharlieBotConfig:
       charliebot_home=tmp_path / "home", accounts={"claude_compaction": ClaudeCompactionConfig(**floors)})
 
 
-def _write_transcript(config_dir: Path, cc_session_id: str, boundaries: int = 0) -> Path:
+def _usage(*, inp: int, out: int, cache_read: int = 0, cache_creation: int = 0) -> dict:
+  """One model's entry in a ``modelUsage`` dict, with the transcript's camelCase counters."""
+  return {
+      "inputTokens": inp,
+      "outputTokens": out,
+      "cacheReadInputTokens": cache_read,
+      "cacheCreationInputTokens": cache_creation,
+  }
+
+
+def _cost_state_row(model_usage: dict) -> dict:
+  """A ``cost-state`` row in the wire shape Claude Code writes: session totals per model."""
+  return {"type": "cost-state", "sessionId": "s1", "totalCostUSD": 37.42, "modelUsage": model_usage}
+
+
+def _write_transcript(
+    config_dir: Path, cc_session_id: str, boundaries: int = 0, cost_states: Sequence[dict] = ()) -> Path:
   transcript = config_dir / "projects" / SLUG / f"{cc_session_id}.jsonl"
   transcript.parent.mkdir(parents=True, exist_ok=True)
   rows = ['{"type":"user","message":{"role":"user","content":"hi"}}']
+  rows += [json.dumps(_cost_state_row(usage)) for usage in cost_states]
   rows += [
       json.dumps(
           {
@@ -125,6 +142,31 @@ def test_count_compact_boundaries_reads_on_disk_rows(tmp_path: Path) -> None:
   assert claude_compaction._newest_boundary_compact_metadata(transcript) == {"trigger": "manual", "pre_tokens": 150001}
 
 
+def test_newest_cost_state_model_usage_reads_the_newest_row(tmp_path: Path) -> None:
+  transcript = _write_transcript(
+      tmp_path / "login",
+      "uuid-2",
+      cost_states=[
+          {
+              FABLE: _usage(inp=1, out=2)
+          },
+          {
+              FABLE: _usage(inp=3, out=4),
+              SONNET: _usage(inp=5, out=6)
+          },
+      ])
+
+  assert claude_compaction._newest_cost_state_model_usage(transcript) == {
+      FABLE: _usage(inp=3, out=4),
+      SONNET: _usage(inp=5, out=6)
+  }
+
+
+def test_newest_cost_state_model_usage_is_empty_without_a_cost_state_row(tmp_path: Path) -> None:
+  transcript = _write_transcript(tmp_path / "login", "uuid-2")
+  assert claude_compaction._newest_cost_state_model_usage(transcript) == {}
+
+
 def test_newest_boundary_payload_converts_keys_by_rule_and_carries_both_counts(tmp_path: Path) -> None:
   transcript = tmp_path / "login" / "projects" / SLUG / "uuid-2b.jsonl"
   transcript.parent.mkdir(parents=True, exist_ok=True)
@@ -194,14 +236,15 @@ class _FakeProc:
     return self.returncode
 
 
-def _result_json(models: list[str], *, is_error: bool = False) -> bytes:
+def _result_json(models: list[str], *, is_error: bool = False, model_usage: dict | None = None) -> bytes:
+  """The run's result JSON; ``model_usage`` replaces the default ``inputTokens: 1`` per named model."""
   return json.dumps(
       {
           "type": "result",
           "subtype": "success",
           "is_error": is_error,
           "result": "",
-          "modelUsage": {
+          "modelUsage": model_usage if model_usage is not None else {
               name: {
                   "inputTokens": 1
               } for name in models
@@ -236,9 +279,10 @@ async def _run(
     proc: _FakeProc,
     *,
     pre_tokens: int | None = 120_000,
-    timeout: float = 5.0) -> tuple[bool, list[dict], dict[str, Any]]:
+    timeout: float = 5.0,
+    cost_states: Sequence[dict] = ()) -> tuple[bool, list[dict], dict[str, Any]]:
   login = tmp_path / "login"
-  _write_transcript(login, "uuid-3")
+  _write_transcript(login, "uuid-3", cost_states=cost_states)
   captured = _install_fake_exec(monkeypatch, proc)
   events: list[dict] = []
 
@@ -364,6 +408,130 @@ async def test_failed_runs_emit_context_compact_failed_and_return_false(
   assert events[0]["type"] == ET.CONTEXT_COMPACT_FAILED
   assert events[0]["model"] == SONNET
   assert fragment in events[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_restored_fable_totals_do_not_fail_a_sonnet_only_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A /compact on a Fable session resumes the session's totals: the result's
+  modelUsage repeats Fable's earlier usage unchanged and the run still succeeds
+  when only Sonnet's counters grew over the newest cost-state row."""
+  baseline = {
+      FABLE: _usage(inp=2326, out=209_495, cache_read=15_334_182, cache_creation=1_116_711),
+      SONNET: _usage(inp=257_373, out=21_397, cache_creation=12_196),
+  }
+  transcript = tmp_path / "login" / "projects" / SLUG / "uuid-3.jsonl"
+  proc = _FakeProc(
+      returncode=0,
+      stdout=_result_json(
+          [FABLE, SONNET],
+          model_usage={
+              FABLE: baseline[FABLE],
+              SONNET: _usage(inp=257_373 + 6_656, out=21_397 + 1_702, cache_creation=12_196),
+          }),
+      on_communicate=lambda: _append_boundary(transcript))
+
+  ok, events, _captured = await _run(tmp_path, monkeypatch, proc, cost_states=[baseline])
+
+  assert ok is True
+  assert events == [
+      {
+          "type": ET.CONTEXT_COMPACTED,
+          "trigger": "manual",
+          ET.COMPACT_METADATA: {
+              "trigger": "manual",
+              "pre_tokens": 120_000,
+              "post_tokens": 9111,
+          },
+          "model": SONNET,
+      }
+  ]
+
+
+@pytest.mark.asyncio
+async def test_fable_growth_fails_and_names_fable_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Fable counters that grew over the baseline mean Fable served the run; the
+  failure names only the models that grew, not the restored session totals."""
+  baseline = {
+      FABLE: _usage(inp=2326, out=209_495, cache_read=15_334_182, cache_creation=1_116_711),
+      SONNET: _usage(inp=257_373, out=21_397, cache_creation=12_196),
+  }
+  transcript = tmp_path / "login" / "projects" / SLUG / "uuid-3.jsonl"
+  proc = _FakeProc(
+      returncode=0,
+      stdout=_result_json(
+          [FABLE, SONNET],
+          model_usage={
+              FABLE: _usage(inp=2326 + 12_000, out=209_495, cache_read=15_334_182, cache_creation=1_116_711),
+              SONNET: baseline[SONNET],
+          }),
+      on_communicate=lambda: _append_boundary(transcript))
+
+  ok, events, _captured = await _run(tmp_path, monkeypatch, proc, cost_states=[baseline])
+
+  assert ok is False
+  assert len(events) == 1
+  assert events[0]["type"] == ET.CONTEXT_COMPACT_FAILED
+  assert events[0]["model"] == SONNET
+  assert "served by" in events[0]["error"]
+  assert FABLE in events[0]["error"]
+  assert SONNET not in events[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_newest_cost_state_row_is_the_baseline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The result matching the newest row's Fable totals succeeds even though
+  those totals exceed the older row's — the judge reads the newest cost-state
+  row, not the older one."""
+  newest_fable = _usage(inp=2326, out=209_495, cache_read=15_334_182, cache_creation=1_116_711)
+  cost_states = [
+      {
+          FABLE: _usage(inp=1_826, out=180_000, cache_read=14_000_000, cache_creation=1_000_000),
+          SONNET: _usage(inp=200_000, out=20_000, cache_creation=10_000),
+      },
+      {
+          FABLE: newest_fable,
+          SONNET: _usage(inp=257_373, out=21_397, cache_creation=12_196),
+      },
+  ]
+  transcript = tmp_path / "login" / "projects" / SLUG / "uuid-3.jsonl"
+  proc = _FakeProc(
+      returncode=0,
+      stdout=_result_json(
+          [FABLE, SONNET],
+          model_usage={
+              FABLE: newest_fable,
+              SONNET: _usage(inp=257_373 + 6_656, out=21_397, cache_creation=12_196),
+          }),
+      on_communicate=lambda: _append_boundary(transcript))
+
+  ok, events, _captured = await _run(tmp_path, monkeypatch, proc, cost_states=cost_states)
+
+  assert ok is True
+  assert len(events) == 1
+  assert events[0]["type"] == ET.CONTEXT_COMPACTED and events[0]["model"] == SONNET
+
+
+@pytest.mark.asyncio
+async def test_result_matching_the_baseline_names_no_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """No counter grew over the baseline: modelUsage carries the session's totals
+  but the run's own usage is empty, so the run fails with the ``no model`` error."""
+  baseline = {
+      FABLE: _usage(inp=2326, out=209_495, cache_read=15_334_182, cache_creation=1_116_711),
+      SONNET: _usage(inp=257_373, out=21_397, cache_creation=12_196),
+  }
+  transcript = tmp_path / "login" / "projects" / SLUG / "uuid-3.jsonl"
+  proc = _FakeProc(
+      returncode=0,
+      stdout=_result_json([FABLE, SONNET], model_usage=baseline),
+      on_communicate=lambda: _append_boundary(transcript))
+
+  ok, events, _captured = await _run(tmp_path, monkeypatch, proc, cost_states=[baseline])
+
+  assert ok is False
+  assert len(events) == 1
+  assert events[0]["type"] == ET.CONTEXT_COMPACT_FAILED
+  assert "no model" in events[0]["error"]
 
 
 @pytest.mark.asyncio

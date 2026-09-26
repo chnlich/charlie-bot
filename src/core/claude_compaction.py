@@ -14,11 +14,18 @@ where the cache is still warm.
 
 The module runs ``claude -p --resume <uuid> --model claude-sonnet-5`` with
 ``/compact`` on stdin inside the account's login directory and judges success
-from two facts: the transcript gained a ``compact_boundary`` row and the run's
-``modelUsage`` names Sonnet alone. Success and failure surface through the same
+from two facts: the transcript gained a ``compact_boundary`` row, and the
+models that took part in the run — those whose token counters grew over the
+transcript's newest ``cost-state`` row — are Sonnet alone. Growth over that row
+is the fact that counts, not presence in ``modelUsage``: ``--resume`` restores
+the session's per-model totals from the transcript's ``cost-state`` rows, so
+the run's ``modelUsage`` always repeats the session's earlier turns' usage next
+to the run's own. Success and failure surface through the same
 ``context_compacted`` / ``context_compact_failed`` chat events the Claude Code
-auto compaction path emits, with ``model`` naming the compacting model. A failed
-run leaves the transcript as it was and the caller continues without compaction.
+auto compaction path emits, with ``model`` naming the compacting model. A
+failed run leaves the caller continuing without compaction; one rejected after
+its boundary row landed (the model check) leaves the compacted transcript in
+place.
 """
 
 from __future__ import annotations
@@ -77,6 +84,10 @@ COMPACT_PROMPT = "/compact\n"
 # constant so the byte needle stays in sync with the persisted wire value.
 _BOUNDARY_MARKER = f'"{ET.COMPACT_BOUNDARY}"'
 
+# The JSON-quoted type the raw cost-state lines carry; the transcript writes it
+# with no shared constant, so the literal is the needle.
+_COST_STATE_MARKER = '"cost-state"'
+
 # ---------------------------------------------------------------------------
 # Trigger decisions (pure)
 # ---------------------------------------------------------------------------
@@ -133,6 +144,24 @@ def _boundary_rows(transcript: Path) -> list[dict]:
 def count_compact_boundaries(transcript: Path) -> int:
   """Number of ``compact_boundary`` rows in an on-disk transcript."""
   return len(_boundary_rows(transcript))
+
+
+def _newest_cost_state_model_usage(transcript: Path) -> dict:
+  """The newest ``cost-state`` row's ``modelUsage``, the session's running
+  per-model totals; {} when the transcript carries no such row."""
+  newest: dict = {}
+  with transcript.open(encoding="utf-8", errors="replace") as handle:
+    for line in handle:
+      if _COST_STATE_MARKER not in line:
+        continue
+      try:
+        row = json.loads(line)
+      except ValueError:
+        continue
+      if isinstance(row, dict) and row.get("type") == "cost-state":
+        usage = row.get("modelUsage")
+        newest = usage if isinstance(usage, dict) else {}
+  return newest
 
 
 # A camelCase/lowercase-or-digit boundary, i.e. every place a snake_case name
@@ -199,14 +228,31 @@ def compaction_env(config_dir: str | Path) -> dict[str, str]:
   return env
 
 
-def _judge(returncode: int, stdout: bytes, before: int, after: int) -> CompactionOutcome:
+# The token counters a run's modelUsage carries; growth in any one past the
+# baseline says the model served this run.
+_USAGE_COUNTERS = ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens")
+
+
+def _models_that_grew(result: dict, baseline: dict) -> tuple[str, ...]:
+  """The models whose token counters grew over the baseline's restored totals;
+  the run's ``modelUsage`` covers the whole session, so presence alone names
+  the earlier turns' models too."""
+  grew = []
+  for name, counters in (result.get("modelUsage") or {}).items():
+    restored = baseline.get(name) or {}
+    if any(counters.get(counter, 0) > restored.get(counter, 0) for counter in _USAGE_COUNTERS):
+      grew.append(str(name))
+  return tuple(grew)
+
+
+def _judge(returncode: int, stdout: bytes, baseline: dict, before: int, after: int) -> CompactionOutcome:
   try:
     result = json.loads(stdout.decode("utf-8", errors="replace") or "null")
   except ValueError:
     result = None
   if not isinstance(result, dict):
     return CompactionOutcome(ok=False, error=f"exit {returncode}, no JSON result on stdout")
-  models = tuple(str(name) for name in (result.get("modelUsage") or {}))
+  models = _models_that_grew(result, baseline)
   if returncode != 0 or result.get("is_error"):
     detail = str(result.get("result") or "").strip()[:200]
     return CompactionOutcome(ok=False, error=f"exit {returncode}: {detail or 'run reported an error'}", models=models)
@@ -233,8 +279,9 @@ async def compact_with_sonnet(
   Emits one ``context_compacted`` (``model`` = Sonnet; ``compact_metadata`` is
   the new boundary row's payload, with the caller's pre-compaction reading
   winning for ``pre_tokens``) or one ``context_compact_failed`` (``error``
-  names the cause). Never raises for a failed run: the caller proceeds on the
-  untouched transcript.
+  names the cause). Never raises for a failed run; a run rejected after its
+  boundary row landed (the model check) leaves the compacted transcript in
+  place.
 
   *cgroup_session_id* is the owning CharlieBot session, so the compaction
   process lands in that session's memory-cap cgroup; None (no session home)
@@ -244,6 +291,9 @@ async def compact_with_sonnet(
   if transcript is None:
     return await _fail(persist_and_broadcast, log_context, f"no transcript for {cc_session_id} under {config_dir}")
   before = count_compact_boundaries(transcript)
+  # The run's modelUsage covers the whole session (--resume restores the newest
+  # cost-state row), so the judge compares against these pre-run totals.
+  baseline = _newest_cost_state_model_usage(transcript)
   cmd = compaction_command(cc_session_id)
   log.info("claude_compaction_starting", cc_session_id=cc_session_id, pre_tokens=pre_tokens, **log_context)
   cfg = get_config()
@@ -273,7 +323,7 @@ async def compact_with_sonnet(
     await proc.wait()
     return await _fail(persist_and_broadcast, log_context, f"timed out after {int(timeout)} s")
   after = count_compact_boundaries(transcript)
-  outcome = _judge(proc.returncode or 0, stdout, before, after)
+  outcome = _judge(proc.returncode or 0, stdout, baseline, before, after)
   if not outcome.ok:
     stderr_tail = stderr.decode("utf-8", errors="replace").strip()[-300:]
     log.warning(

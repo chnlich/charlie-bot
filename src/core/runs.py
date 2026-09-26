@@ -41,18 +41,12 @@ import orjson
 
 from src.core import event_types as ET
 from src.core.constants import BackendType
-from src.core.control_events import (
-    ACTOR_SYSTEM,
-    ControlEventSink,
-    build_control_event,
-    sha256_hex,
-    stable_run_id,
-)
+from src.core.control_events import ACTOR_SYSTEM, ControlEventSink, build_control_event, sha256_hex, stable_run_id
 from src.core.json_utils import atomic_write_text
 from src.core.models import RunRecord, ensure_utc, utc_now
 from src.core.ndjson import parse_ndjson_line
-from src.core.sidebar_state import mark_sidebar_dirty
 from src.core.session_aliases import SessionAliasStore
+from src.core.sidebar_state import mark_sidebar_dirty
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 
 if TYPE_CHECKING:

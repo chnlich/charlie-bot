@@ -788,7 +788,17 @@ async def test_implement_delivery_requires_review_and_real_landing(
     # requested target, so the task stays open with a blocked report and the
     # worktree preserved.
     assert tree.task_state(worker.id) == "open"
-    reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
+    # The blocked report rides the delivery chain's own awaits (the landing
+    # check shells out to git), so it can land after the review's terminal
+    # fact is readable; wait for it the way the waits above wait for the
+    # worktree and the terminal fact.
+    reports: list[dict] = []
+    deadline = asyncio.get_event_loop().time() + 10
+    while asyncio.get_event_loop().time() < deadline:
+        reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
+        if reports and reports[-1]["outcome"] == "blocked":
+            break
+        await asyncio.sleep(0.05)
     assert reports and reports[-1]["outcome"] == "blocked"
     assert Path(work_run.worktree_path).exists()
 

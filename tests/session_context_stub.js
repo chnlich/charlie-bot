@@ -71,6 +71,11 @@ function baseSessionContext(overrides = {}) {
     startThinking: () => {},
     stopThinking: () => {},
     relativeTime: (txt) => txt,
+    // utils.js's trigger clock form; harnesses needing the real one load utils.js
+    // (pending_triggers_tray.test.js does) and its top-level functions overwrite these.
+    clockTimeHM: () => 'HH:mm',
+    dateClockMDHM: () => 'MM/DD HH:mm',
+    relativeFireIn: () => '(in 0m)',
     updateRelativeTimes: () => {},
     formatTokens: (n) => `${Math.round(n / 1000)}k`,
     formatUsageCostValue: (cost) => cost == null ? 'N/A' : '$' + cost.toFixed(2),

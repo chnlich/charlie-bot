@@ -275,6 +275,10 @@
           </button>
         </div>
 
+        <!-- Pending delayed triggers tray (the tray module owns rendering;
+             hidden at zero pending and in a legacy thread view) -->
+        <div id="pending-triggers-tray" class="hidden px-4 pt-3"></div>
+
         <!-- Input (a worker node and a thread view take no messages) -->
         <div id="input-area" class="border-t border-slate-700 p-4 {% if (active_session and active_session.profile == 'worker') or thread_view %}hidden{% endif %}">
           <!-- Uploaded file chips -->
@@ -511,6 +515,7 @@
   <script src="/static/js/chat/rendering.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat/turn-engine.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat/input.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/chat/triggers-tray.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/terminal_b64.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/terminal_clipboard.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/terminal_mount.js?v={{ static_asset_version|urlencode }}"></script>

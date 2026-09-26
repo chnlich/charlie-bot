@@ -78,9 +78,9 @@ _SLURM_TERMINAL_STATES = frozenset(
         "SPECIAL_EXIT",
     })
 
-# LRU cap on list_triggers memos, in sessions: the workers-panel poll exercises at most a
-# handful of sessions at a time, and a fired-then-pruned session must not pin its files' parsed
-# records for the process lifetime.
+# LRU cap on list_triggers memos, in sessions: the pending-triggers tray endpoint exercises at
+# most a handful of sessions at a time, and a fired-then-pruned session must not pin its files'
+# parsed records for the process lifetime.
 _TRIGGER_LIST_MEMO_SESSION_LIMIT = 32
 
 # How often a waiting trigger's watchdog re-checks the dormancy predicate: an archive must
@@ -555,9 +555,9 @@ class TriggerManager:
   async def list_triggers(self, session_id: str) -> list[PendingTrigger]:
     """Read all triggers for a session from disk, memoized per file.
 
-    Steady state (the workers-panel threads/list poll, the session view render) pays one
-    directory stat per call: every trigger-file write goes through
-    ``write_model_json_atomically``, whose rename into the triggers directory moves the
+    Steady state (the pending-triggers tray endpoint, GET
+    /api/sessions/{id}/pending-triggers) pays one directory stat per call: every
+    trigger-file write goes through ``write_model_json_atomically``, whose rename into the triggers directory moves the
     directory's own mtime_ns whether it creates, replaces, or removes an entry, so an
     unchanged (mtime_ns, size) of the directory proves the stored sorted list current and
     serves it without the per-file stat walk or its executor round-trip. Within one proved

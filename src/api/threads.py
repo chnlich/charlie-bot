@@ -24,7 +24,6 @@ from src.api.deps import (
     get_run_store,
     get_task_manager,
     get_thread_manager,
-    get_trigger_manager,
     require_caller,
     task_manager,
 )
@@ -46,7 +45,6 @@ from src.core.message_aggregator import (
 )
 from src.core.models import (
     CcClaudeBackend,
-    PendingTrigger,
     RunRecord,
     ThreadMetadata,
     ThreadStatus,
@@ -66,7 +64,6 @@ from src.core.runs import (
 )
 from src.core.sidebar_state import RevisionSweepGate, session_revision, take_marked_paths
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME, ThreadManager, iter_thread_meta_stats
-from src.core.triggers import TriggerManager, iter_trigger_file_stats
 
 log = LazyStructlogLogger()
 
@@ -274,9 +271,9 @@ def _thread_list_item(t: ThreadMetadata) -> dict:
 
 # Whole-body memo for the 3 s workers-panel list poll: body bytes per session
 # keyed on the union file signature. Every row field derives from thread
-# metadata.json and trigger *.json files, and every writer rewrites those
-# files atomically (a rename always moves mtime_ns), so an unchanged signature
-# proves the built body is still current. Single slot per session with an LRU
+# metadata.json files, and every writer rewrites them atomically (a rename
+# always moves mtime_ns), so an unchanged signature proves the built body is
+# still current. Single slot per session with an LRU
 # cap: one slot holds the worst body (its bytes scale with the session's
 # thread count), and deeper caps buy nothing because a session's poll reuses
 # its one slot.
@@ -309,8 +306,8 @@ _DETAIL_GZIP_MEMO_LIMIT = 8
 _detail_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_DETAIL_GZIP_MEMO_LIMIT)
 
 # Polls between signature walks, per session. Every writer of a row-source
-# file (thread metadata via _save_metadata, triggers via _save_trigger) marks
-# through mark_sidebar_dirty, so an unchanged session_revision proves the
+# file (thread metadata via _save_metadata) marks through mark_sidebar_dirty,
+# so an unchanged session_revision proves the
 # stored signature still describes the files and the memo serves without the
 # per-file stat walk. The sweep walk every Nth poll bounds a mark its writer
 # path forgot to the same ~30 s window the sidebar's populate sweep accepts.
@@ -320,26 +317,25 @@ _sig_gate = RevisionSweepGate(_LIST_PROOF_SWEEP_EVERY)
 
 def _row_source_stats(
     threads_dir: str,
-    triggers_dir: str,
     runs_dir: str | None = None,
-) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]]]:
+) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]]]:
   """One scandir+stat walk of the row-source directories, split by directory.
 
   The list body's freshness signature and its thread rows read the same files,
   so a rebuild walks once and feeds both; two walks would stat every
   metadata.json twice per rebuild. A directory that cannot be scanned
   contributes an empty half, the same "no rows" verdict the signature's
-  OSError swallow gives it. The third source is the task tree's Run metadata
+  OSError swallow gives it. The second source is the task tree's Run metadata
   files: the v2 compatibility rows ride the same proof, so a Run's metadata
   write (atomic rename, mtime moves) refreshes its row inside the same sweep
-  window the unmarked thread write heals in.
+  window the unmarked thread write heals in. Trigger records are not row
+  sources — the workers-panel list is gone and the pending-triggers tray reads
+  them through its own endpoint (src/api/sessions.py get_pending_triggers) —
+  so a trigger write neither joins the signature nor rebuilds this body.
   """
   thread_pairs: list[tuple[str, os.stat_result]] = []
   with contextlib.suppress(OSError):
     thread_pairs.extend(iter_thread_meta_stats(threads_dir))
-  trigger_pairs: list[tuple[str, os.stat_result]] = []
-  with contextlib.suppress(OSError):
-    trigger_pairs.extend(iter_trigger_file_stats(triggers_dir))
   run_pairs: list[tuple[str, os.stat_result]] = []
   if runs_dir:
     try:
@@ -353,17 +349,15 @@ def _row_source_stats(
           continue
     except OSError:
       pass
-  return thread_pairs, trigger_pairs, run_pairs
+  return thread_pairs, run_pairs
 
 
 def _signature_from_stats(
     thread_pairs: list[tuple[str, os.stat_result]],
-    trigger_pairs: list[tuple[str, os.stat_result]],
     run_pairs: list[tuple[str, os.stat_result]] = (),
 ) -> tuple[tuple[str, int, int], ...]:
   """(path, mtime_ns, size) of every row-source file, in the memo's sorted-key order."""
   sig = [(path, st.st_mtime_ns, st.st_size) for path, st in thread_pairs]
-  sig.extend((path, st.st_mtime_ns, st.st_size) for path, st in trigger_pairs)
   sig.extend((path, st.st_mtime_ns, st.st_size) for path, st in run_pairs)
   sig.sort()
   return tuple(sig)
@@ -482,28 +476,8 @@ def _thread_list_items(
   return items
 
 
-def _trigger_list_item(tr: PendingTrigger) -> dict:
-  """One trigger row of the workers-panel list payload.
-
-  Timestamps ride the same epoch-ms wire form as the thread rows: ``_list_body``
-  sorts both row kinds by ``created_at``, so the mixed sort stays homogeneous.
-  The client's first paint reads the raw JSON value through ``new Date()``,
-  which accepts the integer; its poll-update path re-reads ``fire_at`` from the
-  ``data-fire-at`` attribute as a string, where only the numeric form coerces —
-  the card's formatter handles that coercion (``formatTriggerTimeLabel``).
-  """
-  return {
-      "type": "trigger",
-      "id": tr.id,
-      "message": tr.message,
-      "status": tr.status.value,
-      "fire_at": _epoch_ms(tr.fire_at),
-      "created_at": _epoch_ms(tr.created_at),
-  }
-
-
-def _list_body(rows: list[tuple[dict, bytes]], triggers: list[PendingTrigger]) -> bytes:
-  """The list body from (row, fragment) pairs plus trigger rows: the combined sort, then the fragment join.
+def _list_body(rows: list[tuple[dict, bytes]]) -> bytes:
+  """The list body from (row, fragment) pairs: the created_at sort, then the fragment join.
 
   The body is the fragments joined inside array brackets, not a whole-array
   dumps — a changed poll would otherwise re-encode every unmoved row (the
@@ -511,9 +485,6 @@ def _list_body(rows: list[tuple[dict, bytes]], triggers: list[PendingTrigger]) -
   pinned by test_list_body_splice_matches_whole_dump).
   """
   combined = list(rows)
-  for tr in triggers:
-    item = _trigger_list_item(tr)
-    combined.append((item, _row_fragment(item)))
   combined.sort(key=lambda pair: pair[0]["created_at"], reverse=True)
   return b"[" + b",".join(fragment for _item, fragment in combined) + b"]"
 
@@ -523,7 +494,6 @@ async def _marked_rebuild(
     session_dir: Path,
     hit: tuple[tuple[tuple[str, int, int], ...], bytes, str],
     marked: list[str],
-    trigger_mgr: TriggerManager,
 ) -> tuple[tuple[tuple[str, int, int], ...], bytes, str] | None:
   """Prove the stored list body against exactly the marked row-source files.
 
@@ -574,8 +544,7 @@ async def _marked_rebuild(
     # Every marked file already stands in the proof (a repeat mark): the
     # stored body is current, serve it instead of rebuilding the same bytes.
     return hit
-  triggers = await trigger_mgr.list_triggers(session_id)
-  body = _list_body([(entry[2], entry[3]) for entry in refreshed.values()], triggers)
+  body = _list_body([(entry[2], entry[3]) for entry in refreshed.values()])
   etag_value = '"' + hashlib.sha1(body).hexdigest() + '"'
   return sig, body, etag_value
 
@@ -609,8 +578,7 @@ async def _rebuild_view_rows(session_id: str, session_dir: Path, thread_mgr: Thr
 
   def walk_and_parse(
   ) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]], list[ThreadMetadata | None]]:
-    thread_pairs, _triggers, run_pairs = _row_source_stats(
-        str(session_dir / THREADS_DIR_NAME), str(session_dir / "triggers"), str(session_dir / "data" / "runs"))
+    thread_pairs, run_pairs = _row_source_stats(str(session_dir / THREADS_DIR_NAME), str(session_dir / "data" / "runs"))
     return thread_pairs, run_pairs, thread_mgr.list_threads_from_stats(thread_pairs)
 
   thread_pairs, run_pairs, metas = await asyncio.to_thread(walk_and_parse)
@@ -674,10 +642,9 @@ async def list_threads(
     session_id: str,
     etag: str | None = Query(default=None),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
-    trigger_mgr: TriggerManager = Depends(get_trigger_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> Response:
-  """Return mixed list of thread and trigger summaries, sorted by created_at descending.
+  """Return the session's worker-thread summaries, sorted by created_at descending.
 
   The body carries a strong ETag (sha1 of the body bytes). A poll repeating the
   ETag it rendered via ``?etag=`` is answered 204 with no body. The conditional
@@ -698,7 +665,7 @@ async def list_threads(
   else:
     marked_body = None
     if hit is not None and marked and _sig_gate.marked_since_proof(session_id, rev):
-      marked_body = await _marked_rebuild(session_id, session_dir, hit, marked, trigger_mgr)
+      marked_body = await _marked_rebuild(session_id, session_dir, hit, marked)
     if marked_body is not None:
       sig, body, etag_value = marked_body
       _list_body_memo.store(session_id, (sig, body, etag_value))
@@ -707,10 +674,9 @@ async def list_threads(
       # an unmarked row-source write heals inside the same ~30 s window.
       _sig_gate.mark_proven(session_id, rev, reset_sweep=False)
       return await _list_response(request, body, etag_value, etag)
-    thread_pairs, trigger_pairs, run_pairs = await asyncio.to_thread(
-        _row_source_stats, str(session_dir / THREADS_DIR_NAME), str(session_dir / "triggers"),
-        str(session_dir / "data" / "runs"))
-    sig = _signature_from_stats(thread_pairs, trigger_pairs, run_pairs)
+    thread_pairs, run_pairs = await asyncio.to_thread(
+        _row_source_stats, str(session_dir / THREADS_DIR_NAME), str(session_dir / "data" / "runs"))
+    sig = _signature_from_stats(thread_pairs, run_pairs)
     if hit is not None and hit[0] == sig:
       _sig_gate.mark_proven(session_id, rev)
     else:
@@ -726,9 +692,8 @@ async def list_threads(
   thread_items = _thread_list_items(session_id, thread_pairs, metas)
   thread_items.extend(await _v2_run_list_items(session_id, run_pairs))
 
-  triggers = await trigger_mgr.list_triggers(session_id)
   # The marked rebuild's body rides this same _list_body build.
-  body = _list_body(thread_items, triggers)
+  body = _list_body(thread_items)
   etag_value = '"' + hashlib.sha1(body).hexdigest() + '"'
   _list_body_memo.store(session_id, (sig, body, etag_value))
   _sig_gate.mark_proven(session_id, rev)

@@ -3,7 +3,7 @@
 
 import asyncio
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -31,7 +31,7 @@ from src.api.threads import router as threads_router
 from src.core import sidebar_state
 from src.core import threads as core_threads
 from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest, PendingTrigger, ThreadStatus
+from src.core.models import CreateSessionRequest, ThreadStatus
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
@@ -149,9 +149,9 @@ def _count_walks(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
   walks = {"n": 0}
   real = threads_api._row_source_stats
 
-  def counting(threads_dir: str, triggers_dir: str, runs_dir: str | None = None):
+  def counting(threads_dir: str, runs_dir: str | None = None):
     walks["n"] += 1
-    return real(threads_dir, triggers_dir, runs_dir)
+    return real(threads_dir, runs_dir)
 
   monkeypatch.setattr(threads_api, "_row_source_stats", counting)
   return walks
@@ -195,7 +195,7 @@ def test_session_view_rows_match_the_list_rows_order(tmp_path: Path) -> None:
   """The view's rows are the list's thread rows: same fields, newest-first."""
   client, session_id, _ = _seeded_client(tmp_path)
 
-  list_rows = [row for row in client.get(f"/api/threads/{session_id}/list").json() if row["type"] == "thread"]
+  list_rows = client.get(f"/api/threads/{session_id}/list").json()
   view_rows = client.get(f"/api/sessions/{session_id}/view").json()["threads"]
 
   assert view_rows == list_rows
@@ -302,28 +302,18 @@ def test_list_rows_ship_epoch_ms_timestamps(tmp_path: Path) -> None:
   assert rows[long_thread_id]["completed_at"] is None
 
 
-def test_list_body_sorts_thread_and_trigger_rows_by_one_epoch_ms_key(tmp_path: Path) -> None:
-  """The mixed body sort compares int against int: both row kinds convert their timestamps."""
-  cfg, session_id, threads_dir = _seeded_thread_dir(tmp_path, "mixed-sort", "the thread row")
+def test_list_body_sorts_rows_newest_first_by_one_epoch_ms_key(tmp_path: Path) -> None:
+  """The body sort compares one int key, newest first, across the thread rows."""
+  cfg, session_id, threads_dir = _seeded_thread_dir(tmp_path, "row-sort", "one", "two")
   mgr = ThreadManager(cfg)
   pairs = list(core_threads.iter_thread_meta_stats(str(threads_dir)))
   metas = mgr.list_threads_from_stats(iter(pairs))
-  thread_item, thread_fragment = threads_api._thread_list_items(session_id, pairs, metas)[0]
-  trigger = PendingTrigger(
-      session_id=session_id,
-      fire_at=datetime.now(UTC) + timedelta(hours=1),
-      message="the trigger row",
-      watch_targets=[],
-  )
 
-  body = json.loads(threads_api._list_body([(thread_item, thread_fragment)], [trigger]))
+  body = json.loads(threads_api._list_body(threads_api._thread_list_items(session_id, pairs, metas)))
 
   stamps = [row["created_at"] for row in body]
   assert stamps == sorted(stamps, reverse=True)
   assert all(isinstance(stamp, int) for stamp in stamps)
-  trigger_row = next(row for row in body if row["type"] == "trigger")
-  assert isinstance(trigger_row["fire_at"], int)
-  assert trigger_row["fire_at"] == int(trigger.fire_at.timestamp() * 1000)
 
 
 def test_list_body_splice_matches_whole_dump() -> None:
@@ -354,12 +344,13 @@ def test_list_body_splice_matches_whole_dump() -> None:
           "description_full_len": 42
       },
       {
-          "type": "trigger",
+          "type": "thread",
           "id": "tr1",
-          "message": "multi\nline\ttab",
+          "description": "multi\nline\ttab",
           "status": "pending",
-          "fire_at": 1702,
-          "created_at": 1702
+          "created_at": 1702,
+          "completed_at": 1703,
+          "backend": "cc-claude"
       },
       {
           "type": "thread",
@@ -389,10 +380,8 @@ def test_list_body_splice_matches_whole_dump() -> None:
       },
   ]
   pairs = [(row, threads_api._row_fragment(row)) for row in rows]
-  trigger = PendingTrigger(
-      session_id="s", fire_at=datetime.now(UTC) + timedelta(hours=1), message="the trigger row", watch_targets=[])
-  spliced = threads_api._list_body(pairs, [trigger])
-  dicts = [pair[0] for pair in pairs] + [threads_api._trigger_list_item(trigger)]
+  spliced = threads_api._list_body(pairs)
+  dicts = [pair[0] for pair in pairs]
   dicts.sort(key=lambda row: row["created_at"], reverse=True)
   whole = json.dumps(dicts, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
   assert spliced == whole

@@ -593,6 +593,11 @@ function renderSessionView(data) {
     setInputAreaVisible(!isWorker);
   }
 
+  // The pending-triggers tray opens for this session (a worker session's
+  // hidden input area does not hide it; a legacy thread projection shows
+  // none). The tray owns its endpoint fetch; the status poll drives refetches.
+  globalThis.renderPendingTriggersTray(session.id, !!data.thread_view);
+
   // Restore whichever tab was active before the session switch
   const activeBtn = document.querySelector('#btn-terminal.bg-blue-600\\/20, #btn-chat-tex.bg-blue-600\\/20, #btn-chat.bg-blue-600\\/20, #btn-chat-backlog.bg-blue-600\\/20');
   const activeTab = activeBtn ? activeBtn.id.replace('btn-', '') : 'chat';
@@ -979,6 +984,7 @@ function renderNoActiveSessionView() {
   pendingUserMsg = false;
 
   SESSION_ID = null;
+  globalThis.renderPendingTriggersTray(null, false);
   if (typeof planPanel !== 'undefined') planPanel.onActiveSessionChanged();
   DRAFT_KEY = null;
   THINKING_SINCE = null;

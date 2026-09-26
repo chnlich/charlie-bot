@@ -764,6 +764,50 @@ def find_local_task_child(
   }
 
 
+def find_local_task_close(task_id: str, request_id: str) -> dict | None:
+  """The close fact THIS cancel/complete request's own identity binds to.
+
+  The sent-but-lost readback for ``session cancel`` / ``session complete``
+  binds to the operation's request identity, never to a scan: this request's
+  closed fact is the event whose id derives from (task id, request id) via
+  ``stable_close_event_id``, and its run-token deferral is the
+  ``task_close_requested`` fact carrying the same request id -- no other
+  request's close fact can ever answer this call. A missing file or an
+  unreadable line proves nothing (the caller reports outcome unknown), never
+  a borrowed answer. The closed fact outranks the deferral: once this
+  request's closure is on disk the task is no longer pending a run finish.
+  """
+  from src.core.chat_events import chat_events_path
+  from src.core.config import get_config
+  from src.core.control_events import stable_close_event_id
+
+  events_path = chat_events_path(get_config().sessions_dir / task_id)
+  if not events_path.is_file():
+    return None
+  try:
+    lines = events_path.read_text(encoding="utf-8").splitlines()
+  except OSError:
+    return None
+  closed_id = stable_close_event_id(task_id, request_id)
+  deferred: dict | None = None
+  for line in lines:
+    try:
+      event = json.loads(line)
+    except ValueError:
+      return None
+    if not isinstance(event, dict):
+      return None
+    if event.get("type") == "task_closed" and event.get("id") == closed_id:
+      return {
+          "session_id": task_id,
+          "task_state": "cancelled" if event.get("outcome") == "cancelled" else "completed",
+          "closed_event_id": closed_id,
+      }
+    if event.get("type") == "task_close_requested" and event.get("request_id") == request_id:
+      deferred = {"session_id": task_id, "request_id": request_id, "status": "pending_run_finish"}
+  return deferred
+
+
 def find_local_thread(
     session_id: str,
     *,

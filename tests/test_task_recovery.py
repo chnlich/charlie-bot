@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import BUILD_BACKEND_PATCH_TARGET, patch_instructions_content
+from conftest import BUILD_BACKEND_PATCH_TARGET, WORKER_BUILD_BACKEND_PATCH_TARGET, patch_instructions_content
 
 from src.core import event_types as ET
 from src.core.models import RunRecord, TaskSpec, TaskType
@@ -57,7 +57,7 @@ def install_resume_ready_backends(monkeypatch: pytest.MonkeyPatch, backends: lis
         builds.append({"option": option, "backend": backend})
         return backend
 
-    monkeypatch.setattr("src.agents.worker.build_backend", fake_build)
+    monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, fake_build)
     return builds
 
 
@@ -224,7 +224,7 @@ async def test_stop_request_wins_over_launch_and_recovery(
     from src.core.task_recovery import reconcile_task_tree
     cfg, session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
     builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])],
-                              "src.agents.worker.build_backend")
+                              WORKER_BUILD_BACKEND_PATCH_TARGET)
     patch_instructions_content(monkeypatch)
     run_id = "run-stopped"
     await tree.runs.register_run(
@@ -262,7 +262,7 @@ async def test_terminal_append_crash_replays_review_and_close_once(
             task=TaskSpec(goal="do the work", repo_path=str(repo), task_type=TaskType.IMPLEMENT)),
         caller=CallerIdentity(kind="operator"))
     backend = SpawningScriptedBackend([result_event("work done")])
-    install_backends(monkeypatch, [backend], "src.agents.worker.build_backend")
+    install_backends(monkeypatch, [backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
     patch_instructions_content(monkeypatch)
     run_id = "run-work"
     await tree.runs.register_run(

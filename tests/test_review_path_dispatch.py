@@ -12,7 +12,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from conftest import BUILD_BACKEND_PATCH_TARGET, patch_instructions_content
+from conftest import BUILD_BACKEND_PATCH_TARGET, WORKER_BUILD_BACKEND_PATCH_TARGET, patch_instructions_content
 
 from src.core import event_types as ET
 from src.core import git
@@ -68,7 +68,7 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
         SpawningScriptedBackend([result_event("tweak done")]),
         # The tweak's own delivery chain spawns its review of the tweak run.
         SpawningScriptedBackend([result_event("tweak review approved")]),
-    ], "src.agents.worker.build_backend")
+    ], WORKER_BUILD_BACKEND_PATCH_TARGET)
     await tree.dispatch.admit_input(
         child.id, event_type=ET.USER, content="Start the work.", actor="user")
     d1 = await tree.dispatch.dispatch_pending(child.id)

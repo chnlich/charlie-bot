@@ -58,6 +58,18 @@ INPUT_EVENT_TYPES: frozenset[str] = frozenset(
 ROUTE_INPUT_TYPES: frozenset[str] = frozenset({ET.USER, ET.AGENT_MESSAGE})
 
 
+def unprocessed_input_blocker(pending: list[dict]) -> str:
+    """The blocker sentence for a pending-input list: first 8 ids, then (+N more)."""
+    ids = ", ".join(str(e.get("id")) for e in pending[:8])
+    more = "" if len(pending) <= 8 else f" (+{len(pending) - 8} more)"
+    return f"has unprocessed input: {ids}{more}"
+
+
+def inputs_not_pending_conflict(session_id: str, unknown: list[str]) -> str:
+    """The 409 conflict sentence for ack/claim ids outside the pending set."""
+    return f"input(s) not pending for {session_id}: {', '.join(unknown)}"
+
+
 class TaskInputDispatcher:
     """The input/report owner wired over one TaskTreeManager."""
 
@@ -186,9 +198,7 @@ class TaskInputDispatcher:
         pending = self.pending_inputs(session_id)
         if not pending:
             return []
-        ids = ", ".join(str(e.get("id")) for e in pending[:8])
-        more = "" if len(pending) <= 8 else f" (+{len(pending) - 8} more)"
-        return [f"has unprocessed input: {ids}{more}"]
+        return [unprocessed_input_blocker(pending)]
 
     # ------------------------------------------------------------------
     # Claims
@@ -234,7 +244,7 @@ class TaskInputDispatcher:
             unknown = [i for i in input_ids if i not in pending_ids]
             if unknown:
                 raise TaskConflictError(
-                    [f"input(s) not pending for {session_id}: {', '.join(unknown)}"])
+                    [inputs_not_pending_conflict(session_id, unknown)])
             batch = list(input_ids)
         run.input_event_ids = [*run.input_event_ids, *batch]
         await asyncio.to_thread(
@@ -437,7 +447,7 @@ class TaskInputDispatcher:
                 foreign = [i for i in input_event_ids if i not in pending_ids]
                 if foreign:
                     raise TaskConflictError(
-                        [f"input(s) not pending for {session_id}: {', '.join(foreign)}"])
+                        [inputs_not_pending_conflict(session_id, foreign)])
         async with tree.control_lock:
             run = await tree.runs.record_finish_locked(
                 session_id, run_id, outcome,

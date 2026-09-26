@@ -111,7 +111,7 @@ def main() -> None:
       failures.append(f"{label}: fewer than 3 rows keep a >= {int(100 * scale)}px visible name")
     if not wrapped:
       failures.append(f"{label}: no row shows its badge band on a second line")
-    # Export 3x zoomed crops of the first bands for human review.
+    # Export 2x zoomed crops of the first bands for human review.
     crop_h = int(46 * scale)
     crop = img.crop((0, int(110 * scale), sb_x1, min(img.height, int(110 * scale) + crop_h * 10)))
     crop = crop.resize((crop.width * 2, crop.height * 2), Image.LANCZOS)

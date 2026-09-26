@@ -432,7 +432,12 @@ class TaskTreeManager:
       # Every reader invalidated by the same write shares one build: a burst of
       # concurrent readers each paying its own full build multiplies the one
       # rebuild's wall across every request the write touches.
-      return await task
+      if task.get_loop() is asyncio.get_running_loop():
+        return await task
+      # The marker can hold a build still pending on a loop that has closed
+      # (TestClient's portal loop, in the mixed-loop tests); awaiting a
+      # foreign-loop task raises, so this reader rebuilds on its own loop.
+      self._index_build_task = None
     # The metadata snapshot resolves on the loop through the shared per-entry
     # check (_fresh_cached_meta), so the thread build reads a file only for a
     # session no authoritative entry covers (cold cache, out-of-band create).

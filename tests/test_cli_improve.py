@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import (
+    CONFIG_GET_CONFIG_PATCH_TARGET,
     assert_cli_reject,
     make_json_response,
     make_sessions_dir_config,
@@ -17,7 +18,6 @@ from src.cli.improve import main
 from src.core.models import ImproveRequest
 
 _INTERNAL_GET_CONFIG_PATCH_TARGET = "src.api.internal.get_config"
-_IMPROVE_GET_CONFIG_PATCH_TARGET = "src.core.config.get_config"
 _INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET = "src.api.internal.check_takeoff_gate"
 _INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = ("src.api.internal.resolve_requested_subagent_backend_model")
 _INTERNAL_RESERVE_LOOP_STATE_PATCH_TARGET = "src.api.internal.reserve_loop_state"
@@ -91,7 +91,7 @@ def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
   with patched_cli_post(cfg, _improve_argv("s1", str(tmp_path), goal_file),
                         side_effect=_SentButLostError("conn error")), \
-       patch(_IMPROVE_GET_CONFIG_PATCH_TARGET, return_value=cfg):
+       patch(CONFIG_GET_CONFIG_PATCH_TARGET, return_value=cfg):
     with pytest.raises(SystemExit) as exc_info:
       main()
     assert exc_info.value.code == 1

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import SCHEDULER_GET_CONFIG_PATCH_TARGET, backend_option
+from conftest import CONFIG_GET_CONFIG_PATCH_TARGET, SCHEDULER_GET_CONFIG_PATCH_TARGET, backend_option
 
 from src.cli import storage as storage_cli
 from src.core import scheduler as scheduler_module
@@ -1086,7 +1086,7 @@ def test_cli_storage_cool_prints_table_and_exits_zero(
   cfg = cool_env
   write_session_meta(cfg, SID_COLD, cold_meta())
   (thread_data_dir(cfg, SID_COLD) / "stdout.log").write_bytes(b"transport")
-  monkeypatch.setattr("src.core.config.get_config", lambda: cfg)
+  monkeypatch.setattr(CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setattr(sys, "argv", ["charliebot storage", "cool", "--dry-run"])
 
   storage_cli.main()
@@ -1112,7 +1112,7 @@ def test_cli_storage_cool_vacuum_and_force_flags_wire_through(
     return storage_cool.SweepResult(categories=(), freelist_bytes=3 * 1024**2)
 
   monkeypatch.setattr(storage_cool, "run_cool_sweep", pretend_sweep)
-  monkeypatch.setattr("src.core.config.get_config", lambda: cool_env)
+  monkeypatch.setattr(CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cool_env)
   monkeypatch.setattr(
       sys, "argv", ["charliebot storage", "cool", "--dry-run", "--vacuum", "--force", "--min-idle-days", "30"])
 
@@ -1127,7 +1127,7 @@ def test_cli_storage_cool_vacuum_and_force_flags_wire_through(
 
 def test_cli_storage_cool_unknown_session_exits_nonzero(
     cool_env: CharlieBotConfig, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  monkeypatch.setattr("src.core.config.get_config", lambda: cool_env)
+  monkeypatch.setattr(CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cool_env)
   monkeypatch.setattr(sys, "argv", ["charliebot storage", "cool", "--session", SID_COLD])
 
   with pytest.raises(SystemExit) as exc_info:

@@ -13,6 +13,7 @@ Depends forms.
 from fastapi import Depends, HTTPException, Request
 
 from src.core.config import CharlieBotConfig, configured_access_key, get_config
+from src.core.constants import CALLER_SESSION_HEADER
 from src.core.models import SessionMetadata
 from src.core.plans import PlanRegistryManager
 from src.core.run_token import (
@@ -179,13 +180,17 @@ async def require_caller(
   identity pinned — src.core.runs.run_identity_refusal), and it never falls
   back to the cookie or the access key. Run-token use with a missing signing
   key is an explicit 401.
+
+  The ``X-CharlieBot-Caller-Session`` header is recorded only on operator
+  identities — an operator claiming a session can at most lose its own wake —
+  while an agent's session always comes from its verified token.
   """
   bearer = bearer_from_authorization(request.headers.get("authorization"))
   if not bearer:
-    return CallerIdentity(kind="operator")
+    return CallerIdentity(kind="operator", session_id=request.headers.get(CALLER_SESSION_HEADER) or None)
   key = configured_access_key()
   if key and bearer == key:
-    return CallerIdentity(kind="operator")
+    return CallerIdentity(kind="operator", session_id=request.headers.get(CALLER_SESSION_HEADER) or None)
   # Anything else is run-token use: fail closed, never fall back.
   if not key:
     raise HTTPException(

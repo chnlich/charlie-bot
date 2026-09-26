@@ -22,8 +22,8 @@ from src.core.plan_diff import (
 
 
 def _parse(html: str) -> _Element:
-  parser = _parse_dom(html)
-  return next((node for node in _descendants(parser) if node.tag == "body"), parser)
+  root = _parse_dom(html)
+  return next((node for node in _descendants(root) if node.tag == "body"), root)
 
 
 def _text(node: _Element) -> str:

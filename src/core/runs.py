@@ -788,8 +788,7 @@ class RunStore:
     try:
       await notifier(session_id, run, launched)
     except Exception:
-      log.error("run_liveness_notify_failed", session_id=session_id,
-                run_id=run.id, launched=launched, exc_info=True)
+      log.error("run_liveness_notify_failed", session_id=session_id, run_id=run.id, launched=launched, exc_info=True)
 
   # -- paths ---------------------------------------------------------------
 

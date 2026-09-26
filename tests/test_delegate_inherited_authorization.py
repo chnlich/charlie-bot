@@ -17,7 +17,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import WORKER_BUILD_BACKEND_PATCH_TARGET, agent_headers, delegate_payload, stub_credentials
+from conftest import (
+    WORKER_BUILD_BACKEND_PATCH_TARGET,
+    agent_headers,
+    delegate_payload,
+    make_api_client,
+    stub_credentials,
+)
 
 from src.core import event_types as ET
 from src.core.models import RunRecord, TaskSpec
@@ -73,7 +79,6 @@ async def test_authorized_ancestor_delegates_without_a_local_takeoff(
     await tree.dispatch.admit_input(
         root.id, event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
 
-    from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
         payload = delegate_payload(child.id, repo)
         first = client.post("/api/internal/delegate", json=payload, headers=OPERATOR)
@@ -125,7 +130,6 @@ async def test_shadowing_local_instruction_blocks_inherited_delegation(
     await tree.dispatch.admit_input(
         child.id, event_type=ET.USER, content="please look into this", actor="user")
 
-    from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
         resp = client.post(
             "/api/internal/delegate", json=delegate_payload(child.id, repo), headers=OPERATOR)
@@ -151,7 +155,6 @@ async def test_expired_pre_takeoff_on_the_ancestor_blocks(
     await tree.dispatch.admit_input(
         root.id, event_type=ET.USER, content="carry on with the plan", actor="user")
 
-    from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
         resp = client.post(
             "/api/internal/delegate", json=delegate_payload(child.id, repo), headers=OPERATOR)
@@ -179,7 +182,6 @@ async def test_agent_cron_and_report_takeoff_strings_never_authorize(
         child_session_id=root.id, child_event_id="00000000-0000-0000-0000-000000000000",
         outcome="completed", summary="take off"))
 
-    from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
         resp = client.post(
             "/api/internal/delegate", json=delegate_payload(child.id, repo), headers=OPERATOR)
@@ -201,7 +203,6 @@ async def test_worker_caller_cannot_delegate(
     await tree.dispatch.admit_input(
         root.id, event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
 
-    from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
         resp = client.post(
             "/api/internal/delegate", json=delegate_payload(worker.id, repo), headers=OPERATOR)
@@ -230,7 +231,6 @@ async def test_foreign_run_token_cannot_delegate(
     proc = subprocess.Popen(["/bin/sleep", "30"])
     pair = read_pid_stat(proc.pid)
     await tree.runs.record_launch(agents_child.id, "agent-run", pid=proc.pid, pid_start=pair[0])
-    from tests.test_task_execution import make_api_client
     token = sign_run_token(
         RunTokenClaims(session_id=agents_child.id, run_id="agent-run", agent="worker"),
         "op-secret")
@@ -255,7 +255,6 @@ async def test_verify_exemption_on_the_v2_route_and_launch(
         monkeypatch, [SpawningScriptedBackend([result_event("verdict: no")])],
         WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-    from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
         verify = client.post(
             "/api/internal/delegate", json=delegate_payload(child.id, repo, task_type="verify"),
@@ -318,7 +317,6 @@ async def test_agent_run_token_delegates_verify_without_a_takeoff(
         WORKER_BUILD_BACKEND_PATCH_TARGET)
     await register_active_run(tree, child.id, "child-run")
 
-    from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
         verify = client.post(
             "/api/internal/delegate", json=delegate_payload(child.id, repo, task_type="verify"),
@@ -349,7 +347,6 @@ async def test_agent_run_token_implement_stays_blocked_without_a_takeoff(
     await tree.dispatch.admit_input(
         root.id, event_type=ET.USER, content="please look into this", actor="user")
 
-    from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
         resp = client.post(
             "/api/internal/delegate", json=delegate_payload(child.id, repo),
@@ -375,7 +372,6 @@ async def test_legacy_session_run_token_delegates_verify_without_a_takeoff(
     legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"))
     await register_active_run(tree, legacy.id, "legacy-run", kind="work")
 
-    from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
         verify = client.post(
             "/api/internal/delegate", json=delegate_payload(legacy.id, repo, task_type="verify"),
@@ -409,7 +405,6 @@ async def test_replay_relabeled_verify_is_judged_by_the_original_task_type(
     await tree.dispatch.admit_input(
         root.id, event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
 
-    from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
         # The original product: the agent itself creates a worker child as
         # implementation under the live take-off, through the ordinary create
@@ -465,7 +460,6 @@ async def test_v1_delegate_without_takeoff_stays_blocked(
     from src.core.models import CreateSessionRequest
     legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"))
 
-    from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
         resp = client.post(
             "/api/internal/delegate", json=delegate_payload(legacy.id, repo), headers=OPERATOR)
@@ -539,7 +533,6 @@ async def test_legacy_session_delegates_in_place(
     meta_path = cfg.sessions_dir / legacy.id / "metadata.json"
     before = meta_path.read_bytes()
 
-    from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
         first = client.post(
             "/api/internal/delegate", json=delegate_payload(legacy.id, repo), headers=OPERATOR)
@@ -582,7 +575,6 @@ async def test_legacy_verify_delegation_records_the_task_type_without_adopting(
     from src.core.models import CreateSessionRequest
     legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"))
 
-    from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
         verify = client.post(
             "/api/internal/delegate", json=delegate_payload(legacy.id, repo, task_type="verify"),

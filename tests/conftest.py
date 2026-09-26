@@ -1072,6 +1072,27 @@ def make_cron_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> Test
   return make_router_client(cfg, session_mgr, cron_router, "/api/cron")
 
 
+def make_api_client(cfg: CharlieBotConfig, session_mgr: SessionManager, task_mgr: TaskTreeManager) -> TestClient:
+  """TestClient over the task-tree API surface: the sessions, threads, and internal routers
+  mounted at their production prefixes, with task_mgr bound as the task manager and its
+  run store backing the run routes."""
+  from src.api import internal as internal_api
+  from src.api import sessions as sessions_api
+  from src.api import threads as threads_api
+  from src.api.deps import get_config, get_config_on_loop, get_run_store, get_session_manager, get_task_manager
+
+  app = FastAPI()
+  app.include_router(sessions_api.router, prefix="/api/sessions")
+  app.include_router(threads_api.router, prefix="/api/threads")
+  app.include_router(internal_api.router, prefix="/api/internal")
+  app.dependency_overrides[get_config] = lambda: cfg
+  app.dependency_overrides[get_config_on_loop] = lambda: cfg
+  app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[get_task_manager] = lambda: task_mgr
+  app.dependency_overrides[get_run_store] = lambda: task_mgr.runs
+  return TestClient(app)
+
+
 def make_http_scope(url: str, *, headers: list[tuple[bytes, bytes]]) -> dict[str, Any]:
   """HTTP ASGI scope for the tests that drive an app directly, no server boot.
 

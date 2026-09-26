@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 from conftest import assistant_text_event as _assistant_event
-from conftest import patch_instructions_content, stub_credentials
+from conftest import make_api_client, patch_instructions_content, stub_credentials
 
 from src.core import event_types as ET
 from src.core import thinking_state
@@ -30,7 +30,6 @@ from src.core.task_sessions import TaskTreeManager
 from tests.test_task_execution import (
     _adapter_with_silent_broadcast,
     build_env,
-    make_api_client,
     wait_for_terminal_run,
 )
 

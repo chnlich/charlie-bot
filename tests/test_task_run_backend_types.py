@@ -21,6 +21,7 @@ from conftest import (
     TUI_KILL_TMUX_SESSION_PATCH_TARGET,
     TUI_TMUX_SESSION_EXISTS_PATCH_TARGET,
     backend_option,
+    make_api_client,
 )
 
 from src.core import event_types as ET
@@ -289,7 +290,6 @@ async def test_tui_task_node_terminal_endpoints_and_explicit_completion(
 
     # The existing tui status/stop endpoints recognize the v2 node by its task
     # identity (the tmux probes are patched to their double responses).
-    from tests.test_task_execution import make_api_client
 
     async def fake_tmux_session_exists(session_id: str) -> bool:
         return session_id == root.id

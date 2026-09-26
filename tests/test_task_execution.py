@@ -22,11 +22,10 @@ from conftest import (
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     backend_option,
     create_task,
+    make_api_client,
     patch_instructions_content,
     stub_credentials,
 )
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 from src.core import event_types as ET
 from src.core.models import BackendOption, PatchSessionTaskRequest, RunRecord, TaskSpec
@@ -160,24 +159,6 @@ def make_pm_build(text: str, pm_builds: list | None = None):
         return b
 
     return pm_build
-
-
-def make_api_client(cfg, session_mgr, task_mgr) -> TestClient:
-    from src.api import internal as internal_api
-    from src.api import sessions as sessions_api
-    from src.api import threads as threads_api
-    from src.api.deps import get_config, get_config_on_loop, get_run_store, get_session_manager, get_task_manager
-
-    app = FastAPI()
-    app.include_router(sessions_api.router, prefix="/api/sessions")
-    app.include_router(threads_api.router, prefix="/api/threads")
-    app.include_router(internal_api.router, prefix="/api/internal")
-    app.dependency_overrides[get_config] = lambda: cfg
-    app.dependency_overrides[get_config_on_loop] = lambda: cfg
-    app.dependency_overrides[get_session_manager] = lambda: session_mgr
-    app.dependency_overrides[get_task_manager] = lambda: task_mgr
-    app.dependency_overrides[get_run_store] = lambda: task_mgr.runs
-    return TestClient(app)
 
 
 async def wait_for_terminal_run(tree: TaskTreeManager, session_id: str, run_id: str,

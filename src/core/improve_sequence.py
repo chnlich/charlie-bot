@@ -164,13 +164,6 @@ async def register_iteration_run(
     return fresh
 
 
-async def terminal_outcome(tree: TaskTreeManager, child_id: str, run_id: str) -> str | None:
-    run = await tree.runs.get_run(child_id, run_id)
-    if run is None:
-        return None
-    return tree.runs.terminal_outcome(tree.runs.load_events_sync(child_id), run_id)
-
-
 async def _iteration_blocker(
     tree: TaskTreeManager, child_id: str, run_id: str, iteration: int, outcome: str,
 ) -> tuple[str | None, str]:
@@ -264,7 +257,7 @@ async def run_improve_sequence(
                 resolved_backend=resolved_backend, resolved_model=resolved_model,
                 repo_path=str(resolved_repo), base_branch=base_branch,
                 work_branch=work_branch, worktree_path=str(wt_path))
-            outcome = await terminal_outcome(tree, child_id, run.id)
+            outcome = await tree.runs.terminal_outcome_of(child_id, run.id)
             if outcome is None:
                 # This controller's work: launch the iteration with its
                 # composed description and await the launch/wait settlement.

@@ -13,7 +13,7 @@ import asyncio
 import json
 import subprocess
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
 import pytest
@@ -64,16 +64,20 @@ def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch | None = None):
 
 class SpawningScriptedBackend:
     """Backend double that fires the on_spawn callback, records its launch env,
-    and yields a scripted event list ending in a result event."""
+    and yields a scripted event list ending in a result event. A *post_events*
+    hook is awaited after that stream, before run() returns: it is how a test
+    acts on the world between one build's events and the next build's prompt."""
 
     def __init__(self, events: list[dict], exit_code: int = 0, stderr_text: str = "",
                  pre_run: Callable[[], None] | None = None,
-                 gate: Callable[[], object] | None = None) -> None:
+                 gate: Callable[[], object] | None = None,
+                 post_events: Callable[[], Awaitable[None]] | None = None) -> None:
         self._events = events
         self.exit_code = exit_code
         self.stderr_text = stderr_text
         self._pre_run = pre_run
         self.gate = gate
+        self.post_events = post_events
         self.pid_start = "1-424000"
         self.terminated = False
         self.hang_diagnostics = None
@@ -109,6 +113,8 @@ class SpawningScriptedBackend:
             if self.terminated:
                 return
             yield event
+        if self.post_events is not None:
+            await self.post_events()
 
 
 def result_event(text: str = "done") -> dict:

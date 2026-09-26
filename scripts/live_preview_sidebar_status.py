@@ -50,6 +50,7 @@ import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 
 from scripts.browser_harness_session_tree import CDP, evaluate, pick_free_port  # noqa: E402
+from scripts.browser_harness_session_tree_preview import build_source_home  # noqa: E402
 from scripts.live_preview_task_tree import (  # noqa: E402
     DEFAULT_BACKEND,
     build_synthetic_repo,
@@ -59,7 +60,6 @@ from scripts.live_preview_task_tree import (  # noqa: E402
     snapshot_native_storage,
     wait_run_terminal,
 )
-from scripts.browser_harness_session_tree_preview import build_source_home  # noqa: E402
 
 PRODUCTION_PORT = 18498
 PRODUCTION_HOMES = (
@@ -290,14 +290,13 @@ async def run_harness(args: argparse.Namespace) -> None:
     # by construction — the trial gets a fresh temp home and a free port.
     if args.port is not None and args.port == PRODUCTION_PORT:
         fail("the requested port is the production port 18498")
-    native_before = snapshot_native_storage()
     for home in PRODUCTION_HOMES:
         if home.exists():
-            record("production home untouched (exists read-only, never written)", True, str(home))
-
-    import websockets
+            record("production home untouched (exists read-only, never written)", ok=True, detail=str(home))
 
     import atexit
+
+    import websockets
 
     tmp_path = Path(tempfile.mkdtemp(prefix="charliebot-sidebar-status-"))
     if args.keep:
@@ -495,8 +494,8 @@ async def run_harness(args: argparse.Namespace) -> None:
                                "collapsed manager row")
             shot = await screenshot(cdp, page_id, shots, "running_state")
             results["running_screenshot"] = shot
-            record("DOM: worker row spinner, collapsed manager gear", True,
-                   f"{worker_a}/spinner + {manager_a}/gear")
+            record("DOM: worker row spinner, collapsed manager gear", ok=True,
+                   detail=f"{worker_a}/spinner + {manager_a}/gear")
 
             # Expanded manager shows only its own (idle) state.
             await evaluate(cdp, page_id, f"Sidebar.expandTreeNode('{manager_a}')")
@@ -508,7 +507,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                                "running worker row (expanded parent)")
             shot = await screenshot(cdp, page_id, shots, "running_expanded")
             results["running_expanded_screenshot"] = shot
-            record("DOM: expanded manager shows only its own state", True, manager_a)
+            record("DOM: expanded manager shows only its own state", ok=True, detail=manager_a)
             await evaluate(
                 cdp, page_id,
                 f"if (Sidebar.isTreeNodeExpanded('{manager_a}')) toggleTreeNode('{manager_a}')")
@@ -536,7 +535,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             await assert_icons(cdp, page_id, manager_a, None,
                                ["spinner", "worker-indicator", "alert-indicator", "waiting-indicator"],
                                "collapsed manager row after finish (no activity icon)")
-            record("DOM after finish: collapsed manager's gear cleared", True, manager_a)
+            record("DOM after finish: collapsed manager's gear cleared", ok=True, detail=manager_a)
             shot = await screenshot(cdp, page_id, shots, "after_finish")
             results["after_finish_screenshot"] = shot
 
@@ -612,7 +611,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                                "collapsed manager row (attention stand-in)")
             shot = await screenshot(cdp, page_id, shots, "attention_state")
             results["attention_screenshot"] = shot
-            record("DOM: worker row and collapsed parent show the red alert", True, worker_b)
+            record("DOM: worker row and collapsed parent show the red alert", ok=True, detail=worker_b)
 
             # The leaf card: the failed run reads failed (and a queued retry
             # reads queued in its own color while the alert keeps priority).
@@ -708,7 +707,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             await assert_icons(cdp, page_id, manager_a, "waiting-indicator",
                                ["spinner", "worker-indicator", "alert-indicator"],
                                "waiting manager row")
-            record("DOM: the paused node's queued Run shows the clock", True, manager_a)
+            record("DOM: the paused node's queued Run shows the clock", ok=True, detail=manager_a)
             shot = await screenshot(cdp, page_id, shots, "waiting_state")
             results["waiting_screenshot"] = shot
 

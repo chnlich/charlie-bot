@@ -40,6 +40,12 @@ def unknown_backend_pin_refusal(backend_id: str, fallback_id: str) -> str:
           f"refusing to substitute '{fallback_id}'")
 
 
+# The run-context preview route (src/api/sessions.py) reproduces this refusal
+# verbatim as its 400 detail: the preview must refuse exactly where a launch
+# would.
+EMPTY_BACKENDS_OPTIONS_REFUSAL = "session backend resolution requires a configured backends.options entry"
+
+
 def _resolve_session_default_backend_model(
     cfg: CharlieBotConfig,
     session_meta: SessionMetadata,
@@ -54,7 +60,7 @@ def _resolve_session_default_backend_model(
   option = cfg.get_backend_option(session_meta.backend) if session_meta.backend else None
   if option is None:
     if not cfg.backends.options:
-      raise ValueError("session backend resolution requires a configured backends.options entry")
+      raise ValueError(EMPTY_BACKENDS_OPTIONS_REFUSAL)
     if session_meta.backend:
       log.error(
           "session_backend_unresolved",

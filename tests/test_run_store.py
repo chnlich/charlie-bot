@@ -17,6 +17,7 @@ from src.core.models import RunRecord
 from src.core.runs import (
     RunIdentityConflictError,
     RunStore,
+    read_host_boot_time,
 )
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
@@ -67,7 +68,8 @@ async def test_register_is_idempotent_and_registers_alias(tmp_path: Path) -> Non
   assert not (session_mgr._cfg.sessions_dir / session_id / "threads" / "r1").exists()
 
   # A queued run is distinguishable from a live process and keeps its inputs for dispatch.
-  assert store.run_is_queued(run, store.load_events_sync(session_id))
+  assert store.run_blocker(
+      run, store.load_events_sync(session_id), read_host_boot_time()) == f"run {run.id} is queued (pending dispatch)"
 
 
 @pytest.mark.asyncio

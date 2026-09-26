@@ -911,10 +911,6 @@ class RunStore:
   def run_has_terminal_fact(self, run: RunRecord, events: list[dict]) -> bool:
     return self.terminal_outcome(events, run.id) is not None
 
-  def run_is_queued(self, run: RunRecord, events: list[dict]) -> bool:
-    """Registered but never launched: retains its inputs for later dispatch."""
-    return run.pid is None and not self.run_has_terminal_fact(run, events)
-
   def run_blocker(self, run: RunRecord, events: list[dict], host_boot_time: datetime) -> str | None:
     """The structural-mutation blocker one run poses, or None.
 

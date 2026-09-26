@@ -1927,6 +1927,21 @@ async def _require_task_meta(task_mgr: TaskTreeManager, session_id: str) -> Sess
   return meta
 
 
+def _legacy_prompt_payload(path: Path) -> dict:
+  """The legacy_prompt payload for one recorded raw launch-text file: ref, content hash, note."""
+  return {
+      "ref":
+          str(path),
+      "sha256":
+          sha256_hex(path.read_text(encoding="utf-8")),
+      "note":
+          (
+              "raw launch text recorded before the context stage: the managed "
+              "instructions are visible but per-source provenance was not "
+              "recorded, so this is limited evidence, not a full snapshot"),
+  }
+
+
 @router.get("/{session_id}/runs/{run_id}/context")
 async def get_run_context(
     session_id: str,
@@ -1971,31 +1986,11 @@ async def get_run_context(
       # recorded. Never recomposed into snapshot-shaped provenance.
       if not ref_path.is_file():
         raise HTTPException(status_code=500, detail=f"recorded raw launch text missing at {run.prompt_snapshot_ref}")
-      legacy_prompt = {
-          "ref":
-              str(ref_path),
-          "sha256":
-              sha256_hex(ref_path.read_text(encoding="utf-8")),
-          "note":
-              (
-                  "raw launch text recorded before the context stage: the managed "
-                  "instructions are visible but per-source provenance was not "
-                  "recorded, so this is limited evidence, not a full snapshot"),
-      }
+      legacy_prompt = _legacy_prompt_payload(ref_path)
   else:
     legacy_path = task_mgr.runs.run_dir(session_id, run_id) / LAUNCH_TEXT_FILENAME
     if legacy_path.is_file():
-      legacy_prompt = {
-          "ref":
-              str(legacy_path),
-          "sha256":
-              sha256_hex(legacy_path.read_text(encoding="utf-8")),
-          "note":
-              (
-                  "raw launch text recorded before the context stage: the managed "
-                  "instructions are visible but per-source provenance was not "
-                  "recorded, so this is limited evidence, not a full snapshot"),
-      }
+      legacy_prompt = _legacy_prompt_payload(legacy_path)
   return {
       "session_id": session_id,
       "run_id": run_id,

@@ -9,14 +9,20 @@ lock; the file's shape (``old_session_ids``, ``old_threads``) is unchanged.
 """
 
 import json
+import os
 from pathlib import Path
 
 from src.core.json_utils import atomic_write_text, load_json_meta
 from src.core.log_once import LazyStructlogLogger
+from src.core.memo import StatSignatureMemo
 
 log = LazyStructlogLogger()
 
 ALIASES_FILE_NAME = "session_aliases.json"
+
+# The store reads one file, so the memo holds one entry; the key only labels it.
+_ALIAS_MEMO_LIMIT = 1
+_ALIAS_MEMO_KEY = "session_aliases"
 
 
 def alias_thread_key(owner_session_id: str, thread_id: str) -> str:
@@ -25,22 +31,40 @@ def alias_thread_key(owner_session_id: str, thread_id: str) -> str:
 
 
 class SessionAliasStore:
-  """Read/resolve/register access to the sessions-root alias file."""
+  """Read/resolve/register access to the sessions-root alias file.
+
+  Reads ride a stat-signature memo: a resolve between writes re-parses
+  nothing, and a write's atomic replace moves the signature so the next read
+  re-parses. Served values are shared and read-only; the only mutating
+  caller (:meth:`_put`) writes from its own copy.
+  """
 
   def __init__(self, sessions_dir: Path) -> None:
     self.path = sessions_dir / ALIASES_FILE_NAME
+    self._memo: StatSignatureMemo[str, dict] = StatSignatureMemo(_ALIAS_MEMO_LIMIT)
 
   def _read(self) -> dict:
-    empty = {"old_session_ids": {}, "old_threads": {}}
+    try:
+      st = os.stat(self.path)
+    except OSError:
+      self._memo.drop(_ALIAS_MEMO_KEY)
+      return {"old_session_ids": {}, "old_threads": {}}
+    cached = self._memo.fresh(_ALIAS_MEMO_KEY, st)
+    if cached is not None:
+      return cached
     raw = load_json_meta(self.path, "session_aliases_unreadable")
     if raw is None:
-      return empty
+      # Missing (unlinked between the stat and the read) or malformed: the
+      # per-call empty answer the resolvers have always seen, never memoized.
+      return {"old_session_ids": {}, "old_threads": {}}
     old_session_ids = raw.get("old_session_ids")
     old_threads = raw.get("old_threads")
-    return {
+    value = {
         "old_session_ids": old_session_ids if isinstance(old_session_ids, dict) else {},
         "old_threads": old_threads if isinstance(old_threads, dict) else {},
     }
+    self._memo.record(_ALIAS_MEMO_KEY, st, value)
+    return value
 
   def resolve_session(self, old_session_id: str) -> str | None:
     """The canonical session id an imported old id maps to, or None."""
@@ -83,8 +107,14 @@ class SessionAliasStore:
 
   def _put(self, key: str, target: dict) -> None:
     raw = self._read()
-    raw["old_threads"][key] = target
-    self._write(raw)
+    # The read's value is the memo's shared entry: the new row lands in a copy,
+    # never in the object concurrent resolvers are reading.
+    payload = {
+        "old_session_ids": dict(raw["old_session_ids"]),
+        "old_threads": dict(raw["old_threads"]),
+    }
+    payload["old_threads"][key] = target
+    self._write(payload)
 
   def _write(self, payload: dict) -> None:
     self.path.parent.mkdir(parents=True, exist_ok=True)

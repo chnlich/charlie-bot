@@ -242,7 +242,7 @@ class ServerConfig(BaseModel):
   # kernel kills only the cgroup's largest process. 0 disables cgroup control
   # entirely. session_swap_max_mb bounds swap use separately (0 = no swap).
   session_memory_max_mb: int = 12288
-  session_swap_max_mb: int = 2048
+  session_swap_max_mb: int = 0
 
 
 class PathsConfig(BaseModel):

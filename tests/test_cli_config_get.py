@@ -37,7 +37,7 @@ def test_server_section_prints_exact_json(
       "port": 18498,
       "subprocess_buffer_limit_mb": 1024,
       "session_memory_max_mb": 12288,
-      "session_swap_max_mb": 2048,
+      "session_swap_max_mb": 0,
   }
   assert err == ""
 

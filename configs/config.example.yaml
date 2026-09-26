@@ -24,7 +24,7 @@ server:
   # to this hard limit; 0 disables cgroup control entirely. session_swap_max_mb
   # bounds swap use separately (0 = no swap).
   session_memory_max_mb: 12288
-  session_swap_max_mb: 2048
+  session_swap_max_mb: 0
 
 # Paths: repos to scan and where worker worktrees live.
 paths:

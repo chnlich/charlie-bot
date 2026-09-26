@@ -445,7 +445,7 @@ async def list_sessions(
       if work_state is not None:
         # A task-tree row carries its fact-derived work verdict — the same
         # derivation the /status payload serves — so the first paint shows the
-        # running/attention/waiting icons without a poll. A legacy row's key
+        # running/waiting icons without a poll. A legacy row's key
         # set stays byte-identical (the dump already carries the field's null).
         dump[sidebar_state.WORK_STATE] = work_state
     payload.append(dump)

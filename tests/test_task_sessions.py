@@ -310,41 +310,37 @@ async def test_reparent_rejects_cycles_and_closed_targets(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_failed_run_attention_clears_when_a_later_run_succeeds(tmp_path: Path) -> None:
-  """The attention marker: a failed run alone draws attention; once a later
-  successful run finished on the same node (the event log's order is the
-  durable one), the node is idle again — no manual retry is required."""
+async def test_failed_or_interrupted_run_derives_idle(tmp_path: Path) -> None:
+  """A Run with a terminal fact of any outcome contributes nothing to the
+  work verdict: a failed or interrupted Run leaves the node idle (managers
+  resolve subagent failures by re-delegating; the sidebar never flags them)."""
   _, _session_mgr, mgr = build_env(tmp_path)
   node = await create_task(mgr, parent=None, request_id="node")
   await mgr.runs.register_run(RunRecord(id="run-f", session_id=node.id, kind="work"))
   await mgr.dispatch.finish_run(node.id, "run-f", outcome="failed", exit_code=1)
   index = await mgr._get_index()
-  assert mgr.work_state_of(index, node.id) == "attention"
+  assert mgr.work_state_of(index, node.id) == "idle"
 
-  # A later run finishes successfully after the failure in the log order.
+  await mgr.runs.register_run(RunRecord(id="run-i", session_id=node.id, kind="work"))
+  await mgr.dispatch.finish_run(node.id, "run-i", outcome="interrupted")
+  index = await mgr._get_index()
+  assert mgr.work_state_of(index, node.id) == "idle"
+
+  # A later successful run reads idle too: the verdict never depends on
+  # what came before.
   await mgr.runs.register_run(RunRecord(id="run-ok", session_id=node.id, kind="work"))
   await mgr.dispatch.finish_run(node.id, "run-ok", outcome="success", exit_code=0)
   index = await mgr._get_index()
   assert mgr.work_state_of(index, node.id) == "idle"
 
-  # A failure after that success draws attention again; a success after THAT
-  # failure clears it once more.
-  await mgr.runs.register_run(RunRecord(id="run-f2", session_id=node.id, kind="work"))
-  await mgr.dispatch.finish_run(node.id, "run-f2", outcome="interrupted")
-  index = await mgr._get_index()
-  assert mgr.work_state_of(index, node.id) == "attention"
-  await mgr.runs.register_run(RunRecord(id="run-ok2", session_id=node.id, kind="work"))
-  await mgr.dispatch.finish_run(node.id, "run-ok2", outcome="success", exit_code=0)
-  index = await mgr._get_index()
-  assert mgr.work_state_of(index, node.id) == "idle"
-
 
 @pytest.mark.asyncio
-async def test_tree_pagination_counts_and_attention_ancestor_path(tmp_path: Path) -> None:
+async def test_tree_pagination_counts_and_ancestor_path(tmp_path: Path) -> None:
   _, _session_mgr, mgr = build_env(tmp_path)
   ids = await build_three_levels(mgr)
 
-  # One attention descendant: a launched run nobody observed exiting.
+  # A launched run nobody observed exiting (a stale identity) contributes
+  # nothing: no running count, no work verdict.
   run = await mgr.runs.register_run(
       RunRecord(id="run-attn", session_id=ids["worker1"], pid=os.getpid(), pid_start="1", started_at=datetime.now(UTC)))
   assert run.id == "run-attn"
@@ -354,13 +350,13 @@ async def test_tree_pagination_counts_and_attention_ancestor_path(tmp_path: Path
   assert root_row["task_state"] == "open"
   assert root_row["child_count"] == 1
   assert root_row["open_descendant_count"] == 4  # mid, low, worker1, worker2
-  assert root_row["attention_descendant_count"] == 1
+  assert root_row["running_descendant_count"] == 0
 
   detail = await mgr.session_detail(ids["worker1"])
   assert [(a["id"], a["name"]) for a in detail["ancestors"]] == [
       (ids["low"], "Low"), (ids["mid"], "Mid"), (ids["root"], "Root")
   ]
-  assert detail["work_state"] == "attention"
+  assert detail["work_state"] == "idle"
   assert detail["task_state"] == "open"
 
   # Stale pagination: the revision moves when the tree changes, and the old cursor 409s.

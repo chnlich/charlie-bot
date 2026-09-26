@@ -1226,8 +1226,8 @@ class RunStore:
     run.exit_code = exit_code
     run.input_event_ids = payload
     await asyncio.to_thread(atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
-    # The terminal fact flipped the derived state (running/waiting/attention ->
-    # idle or the resolved verdict): the next poll must re-probe. No path rides
+    # The terminal fact flipped the derived state (running/waiting -> idle):
+    # the next poll must re-probe. No path rides
     # the mark: a run metadata file is not a workers-panel row source.
     mark_sidebar_dirty(session_id)
     return run

@@ -268,7 +268,7 @@ class TaskInputDispatcher:
     async def dispatch_pending(self, session_id: str) -> dict:
         """Evaluate the launch decision for one node's pending inputs.
 
-        Closed nodes keep late input as history and attention-to-view; paused
+        Closed nodes keep late input as history; paused
         nodes keep it durable without starting work. An active consumer owns
         the node: later arrivals wait for the next serialized run. A queued
         (registered, never launched) run is a pending execution request — an

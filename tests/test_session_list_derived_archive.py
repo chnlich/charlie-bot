@@ -8,7 +8,6 @@ listings, and the list route, see the derived state.
 
 from __future__ import annotations
 
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -201,12 +200,12 @@ async def test_a_legacy_archived_parent_archives_its_task_children_immediately(t
 
 
 @pytest.mark.asyncio
-async def test_tree_page_keeps_an_archived_node_whose_own_work_is_live(tmp_path: Path) -> None:
+async def test_tree_page_keeps_an_archived_node_only_for_running_work(tmp_path: Path) -> None:
   _cfg, _session_mgr, tree = build_env(tmp_path)
   running_root = await create(tree, parent=None, request_id="running-root")
   running_leaf = await create(tree, parent=running_root.id, request_id="running-leaf", profile="worker")
-  attention_root = await create(tree, parent=None, request_id="attention-root")
-  attention_leaf = await create(tree, parent=attention_root.id, request_id="attention-leaf", profile="worker")
+  failed_root = await create(tree, parent=None, request_id="failed-root")
+  failed_leaf = await create(tree, parent=failed_root.id, request_id="failed-leaf", profile="worker")
 
   proc = live_subprocess()
   try:
@@ -219,35 +218,31 @@ async def test_tree_page_keeps_an_archived_node_whose_own_work_is_live(tmp_path:
             pid=pid,
             pid_start=pid_start,
             started_at=datetime.now(UTC)))
-    await tree.runs.register_run(
-        RunRecord(
-            id="run-attn",
-            session_id=attention_leaf.id,
-            kind="work",
-            pid=os.getpid(),
-            pid_start="1",
-            started_at=datetime.now(UTC)))
+    await tree.runs.register_run(RunRecord(id="run-failed", session_id=failed_leaf.id, kind="work"))
+    await tree.dispatch.finish_run(failed_leaf.id, "run-failed", outcome="failed")
     await tree.set_presentation(running_root.id, "hidden")
-    await tree.set_presentation(attention_root.id, "hidden")
+    await tree.set_presentation(failed_root.id, "hidden")
 
     page = await tree.tree_page(parent_id=None, include_archived=False, limit=100, cursor=None)
     rows = {r["id"]: r for r in page["items"]}
-    # Both hidden roots stay navigable: active work (running/attention) lives
-    # below each, and the row still reports archived=true.
-    assert set(rows) == {running_root.id, attention_root.id}
+    # Only the running root stays navigable: its live descendant work needs the
+    # path, and the row still reports archived=true. The failed root's leaf
+    # holds no running work, so its own hidden presentation wins again and the
+    # row leaves the default page.
+    assert set(rows) == {running_root.id}
     assert rows[running_root.id]["archived"] is True
-    assert rows[attention_root.id]["archived"] is True
-    # Each archived leaf is kept on its own level by its own work state.
+    # The archived leaf is kept on its own level by its own running work.
     running_page = await tree.tree_page(parent_id=running_root.id, include_archived=False, limit=100, cursor=None)
     running_rows = {r["id"]: r for r in running_page["items"]}
     assert set(running_rows) == {running_leaf.id}
     assert running_rows[running_leaf.id]["archived"] is True
     assert running_rows[running_leaf.id]["work_state"] == "running"
-    attention_page = await tree.tree_page(parent_id=attention_root.id, include_archived=False, limit=100, cursor=None)
-    attention_rows = {r["id"]: r for r in attention_page["items"]}
-    assert set(attention_rows) == {attention_leaf.id}
-    assert attention_rows[attention_leaf.id]["archived"] is True
-    assert attention_rows[attention_leaf.id]["work_state"] == "attention"
+    # A failed leaf is excluded from its level too: a terminal Run is not work.
+    failed_page = await tree.tree_page(parent_id=failed_root.id, include_archived=False, limit=100, cursor=None)
+    assert failed_page["items"] == []
+    # The archived view still preserves both subtrees in place.
+    archived_page = await tree.tree_page(parent_id=None, include_archived=True, limit=100, cursor=None)
+    assert {r["id"] for r in archived_page["items"]} == {running_root.id, failed_root.id}
   finally:
     if proc.poll() is None:
       proc.kill()

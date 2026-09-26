@@ -356,9 +356,9 @@ async def seed_scenario(home: Path) -> dict:
                 task=TaskSpec(goal=f"wide child {i:03d}"), name=f"Wide child {i:03d}",
                 backend=None, caller=OP)
 
-        # A three-level ops tree whose leaf has a FAILED run: the root and the
-        # nested manager rows carry attention + subtree counts — the rows the
-        # readability scenario measures.
+        # A three-level ops tree whose leaf has a FAILED run: the terminal Run
+        # paints no sidebar activity, so the rows the readability scenario
+        # measures carry their names and subtree counts alone.
         ops_root = await tree.create_task(
             request_id="seed-ops-root", task_parent_id=None, profile="manager",
             task=TaskSpec(goal="ops root"), name="Ops root", backend=None, caller=OP)
@@ -411,9 +411,9 @@ async def seed_scenario(home: Path) -> dict:
         from src.core.runs import read_pid_stat
 
         # The live worker's own delegating manager: an otherwise idle parent,
-        # so its collapsed row's stand-in shows the gear. (The root itself
-        # carries the agent-auth Run, whose unobserved identity is its own
-        # attention verdict — and a row's own state outranks any stand-in.)
+        # so its collapsed row's stand-in shows the gear. (The root's own
+        # agent-auth Run has no terminal fact and a stale identity, so its own
+        # row paints nothing and the stand-in is what shows.)
         live_parent = await tree.create_task(
             request_id="seed-live-parent", task_parent_id=root.id, profile="manager",
             task=TaskSpec(goal="delegate the live worker"), name="Live rollout",
@@ -1162,7 +1162,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 # descendants show theirs); collapsed, it stands in with the gear.
                 live_parent = ids["live_parent"]
                 parent_icons = f"""
-                    ['spinner', 'worker-indicator', 'alert-indicator', 'waiting-indicator']
+                    ['spinner', 'worker-indicator', 'waiting-indicator']
                       .filter(k => !document.getElementById(k + '-{live_parent}').classList.contains('hidden'))
                 """
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={live_parent}"}, session_id=session_id)

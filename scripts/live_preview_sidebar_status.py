@@ -11,16 +11,8 @@ screenshots it asserts the sidebar's live work states:
    sleeps, then reports) shows the spinner on its row and the amber gear on its
    collapsed parent; the expanded parent shows only its own state; after the
    Run ends the activity icons clear.
-2. attention: a worker whose launch fails before its process starts (a local
-   base branch ahead of its origin makes worktree preparation raise) reaches
-   ``failed`` with the error as durable evidence; its row and its collapsed
-   parent show the red alert, the parent receives a failure report naming the
-   error, and the worker's transcript heads the Run ``failed`` with the error
-   beneath it and the Run's own ``ended_at`` as its time (a queued retry on
-   the same node then heads its segment ``queued`` in its own color and with
-   no time at all, while the alert keeps priority).
-3. waiting: a queued Run held back by a paused node shows the muted clock.
-4. names and first paint: the rows carry goal-derived names, never "## Goal";
+2. waiting: a queued Run held back by a paused node shows the muted clock.
+3. names and first paint: the rows carry goal-derived names, never "## Goal";
    no worker-facing title starts with a raw Markdown heading; and the list
    response already carries each task-tree row's ``work_state``, so the icons
    paint on first render without a poll.
@@ -52,9 +44,6 @@ import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
-import urllib.error  # noqa: E402
-import urllib.request  # noqa: E402
-from datetime import datetime  # noqa: E402
 
 from scripts.browser_harness_session_tree import (  # noqa: E402
     CDP,
@@ -110,15 +99,6 @@ def git(repo: Path, *args: str) -> str:
     return proc.stdout.strip()
 
 
-def same_instant(a: str, b: str) -> bool:
-    """Two ISO timestamps name the same instant: the runs API renders UTC as Z,
-    the transcript carries the +00:00 form."""
-    try:
-        return datetime.fromisoformat(a) == datetime.fromisoformat(b)
-    except ValueError:
-        return False
-
-
 def build_slow_repo(home: Path) -> Path:
     """The ~60 s script-run repo: the worker runs slow_report.sh and reports it."""
     repo = home / "workspaces" / "slow-repo"
@@ -131,25 +111,6 @@ def build_slow_repo(home: Path) -> Path:
         encoding="utf-8")
     git(repo, "add", ".")
     git(repo, "commit", "-q", "-m", "add slow_report.sh")
-    return repo
-
-
-def build_failing_repo(home: Path) -> Path:
-    """The launch-failure repo: local main is ahead of origin/main, so
-    worktree preparation raises BaseBranchResolutionError before any process."""
-    repo = home / "workspaces" / "diverged-repo"
-    origin = home / "workspaces" / "diverged-origin.git"
-    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
-    subprocess.run(["git", "clone", "-q", str(origin), str(repo)], check=True)
-    git(repo, "config", "user.email", "preview@example.com")
-    git(repo, "config", "user.name", "preview")
-    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
-    git(repo, "add", ".")
-    git(repo, "commit", "-q", "-m", "seed")
-    git(repo, "push", "-q", "origin", "main")
-    (repo / "local.txt").write_text("local work\n", encoding="utf-8")
-    git(repo, "add", ".")
-    git(repo, "commit", "-q", "-m", "local-only")
     return repo
 
 
@@ -220,33 +181,6 @@ async def wait_status(base: str, key: str, ids: list[str], session_id: str, pred
     fail(f"status of {session_id} never satisfied {label}; last={json.dumps(last, default=str)}")
 
 
-def request_text(base: str, key: str, path: str) -> tuple[int, str]:
-    """GET one raw-text endpoint (NDJSON): the shared request() parses JSON only."""
-    req = urllib.request.Request(base + path, headers={"Authorization": "Bearer " + key})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return resp.status, resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as e:
-        return e.code, ""
-
-
-async def wait_parent_report(base: str, key: str, manager_id: str, child_id: str,
-                             timeout: float = 60.0) -> dict:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        status, body = request_text(base, key, f"/api/sessions/{manager_id}/events.jsonl")
-        if status == 200:
-            for line in body.splitlines():
-                if not line.strip():
-                    continue
-                event = json.loads(line)
-                if (event.get("type") == "child_report"
-                        and event.get("child_session_id") == child_id):
-                    return event
-        await asyncio.sleep(1.0)
-    fail(f"parent {manager_id} never received a report for {child_id}")
-
-
 async def icon_hidden(cdp: CDP, page_id: str, sid: str, kind: str) -> bool:
     """Whether one indicator element carries the hidden class (row may be collapsed)."""
     value = await evaluate(cdp, page_id,
@@ -265,7 +199,7 @@ async def assert_icons(cdp: CDP, page_id: str, sid: str, visible: str | None,
     deadline = time.monotonic() + timeout
     last = ""
     while time.monotonic() < deadline:
-        kinds = ("spinner", "worker-indicator", "alert-indicator", "waiting-indicator", "unread")
+        kinds = ("spinner", "worker-indicator", "waiting-indicator", "unread")
         states = {kind: await icon_hidden(cdp, page_id, sid, kind) for kind in kinds}
         ok = all(states[kind] for kind in hidden)
         if ok and visible is not None:
@@ -303,7 +237,6 @@ async def icon_dump(cdp: CDP, page_id: str, sid: str) -> str:
               rowHidden: document.getElementById('session-{sid}')?.closest('[data-tree-children]')?.classList.contains('hidden'),
               spinner: document.getElementById('spinner-{sid}')?.classList.contains('hidden'),
               gear: document.getElementById('worker-indicator-{sid}')?.classList.contains('hidden'),
-              alert: document.getElementById('alert-indicator-{sid}')?.classList.contains('hidden'),
               clock: document.getElementById('waiting-indicator-{sid}')?.classList.contains('hidden'),
               ownState: (window.Sidebar && Sidebar.sessionUnread) ? 'ns' : 'ns',
               errs: (window.__errs || []).slice(0, 3),
@@ -408,7 +341,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             # ---- scenario A: a real ~60 s worker Run shows as running -----
             log("scenario A: the running state (spinner on the worker, gear on the collapsed parent)")
             slow_repo = build_slow_repo(home)
-            # The trial manager must stay open and listed through scenario C
+            # The trial manager must stay open and listed through scenario B
             # (the waiting clock rides its paused, retried takeoff run). A
             # manager is instructed to request completion once its own
             # conditions hold, and a root task archives itself on that success
@@ -526,10 +459,10 @@ async def run_harness(args: argparse.Namespace) -> None:
                    and parent_payload.get("work_state") == "idle",
                    json.dumps(parent_payload, default=str))
             await assert_icons(cdp, page_id, worker_a, "spinner",
-                               ["worker-indicator", "alert-indicator", "waiting-indicator"],
+                               ["worker-indicator", "waiting-indicator"],
                                "running worker row")
             await assert_icons(cdp, page_id, manager_a, "worker-indicator",
-                               ["spinner", "alert-indicator", "waiting-indicator"],
+                               ["spinner", "waiting-indicator"],
                                "collapsed manager row")
             shot = await screenshot(cdp, page_id, shots, "running_state")
             results["running_screenshot"] = shot
@@ -539,10 +472,10 @@ async def run_harness(args: argparse.Namespace) -> None:
             # Expanded manager shows only its own (idle) state.
             await evaluate(cdp, page_id, f"Sidebar.expandTreeNode('{manager_a}')")
             await assert_icons(cdp, page_id, manager_a, "unread",
-                               ["spinner", "worker-indicator", "alert-indicator", "waiting-indicator"],
+                               ["spinner", "worker-indicator", "waiting-indicator"],
                                "expanded manager row (own idle state only)")
             await assert_icons(cdp, page_id, worker_a, "spinner",
-                               ["worker-indicator", "alert-indicator", "waiting-indicator"],
+                               ["worker-indicator", "waiting-indicator"],
                                "running worker row (expanded parent)")
             shot = await screenshot(cdp, page_id, shots, "running_expanded")
             results["running_expanded_screenshot"] = shot
@@ -560,7 +493,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             payload = await wait_status(
                 base, access_key, ids_a, worker_a,
                 lambda st: bool(st) and st.get("has_running_tasks") is False
-                and st.get("work_state") in (None, "idle", "attention"),
+                and st.get("work_state") in (None, "idle"),
                 "worker cleared", timeout=60)
             record("status after finish: worker's activity cleared",
                    payload.get("has_running_tasks") is False, json.dumps(payload, default=str))
@@ -572,195 +505,14 @@ async def run_harness(args: argparse.Namespace) -> None:
                 lambda st: bool(st) and st.get("work_state") == "idle" and not st.get("thinking_since"),
                 "manager A idle after consuming the report", timeout=180)
             await assert_icons(cdp, page_id, manager_a, None,
-                               ["spinner", "worker-indicator", "alert-indicator", "waiting-indicator"],
+                               ["spinner", "worker-indicator", "waiting-indicator"],
                                "collapsed manager row after finish (no activity icon)")
             record("DOM after finish: collapsed manager's gear cleared", ok=True, detail=manager_a)
             shot = await screenshot(cdp, page_id, shots, "after_finish")
             results["after_finish_screenshot"] = shot
 
-            # ---- scenario B: a launch failure shows as attention ----------
-            log("scenario B: the attention state (launch failure before process start)")
-            bad_repo = build_failing_repo(home)
-            manager_b = await create_manager(
-                base, access_key, "Failing-delegate program",
-                "## Goal\n\nDelegate into the diverged repo\n", "sidebar-status-root-b")
-            await takeoff(base, access_key, manager_b, "sidebar-status-takeoff-b")
-            # The parent is paused before it delegates. A woken parent reacts
-            # to the failure report as a manager should: it repairs the
-            # delegation (a corrected sibling on origin/main), and that
-            # sibling's own report wakes a further turn, so its spinner (and
-            # the sibling's gear) legitimately outrank the collapsed alert for
-            # minutes. A pause sent after the delegation returns races the
-            # child, whose worktree preparation fails within milliseconds. The
-            # pause gates only the parent's own turns: the child still launches
-            # and fails, and the failure report still lands durably in the
-            # parent's chat.
-            status, _ = request(base, access_key, "PATCH", f"/api/sessions/{manager_b}",
-                                {"automation_paused": True})
-            if status != 200:
-                fail(f"pause of manager B failed: {status}")
-            worker_b, run_b = await delegate(
-                base, access_key, manager_b,
-                "## Goal\n\nSay the phrase\n", bad_repo, "quick-edit", "sidebar-status-worker-b")
-            run_row, outcome = await wait_run_terminal(base, access_key, worker_b, run_b, "failing work run")
-            record("launch-failure run reached failed", outcome == "failed", f"outcome={outcome}")
-            record("the failed run never started a process", run_row.get("pid") is None,
-                   f"pid={run_row.get('pid')!r}")
-            error_text = ""
-            status, runs_page = request(base, access_key, "GET",
-                                        f"/api/sessions/{worker_b}/runs?order=desc&limit=10")
-            for row in runs_page.get("items", []):
-                if row.get("id") == run_b:
-                    events_ref = row.get("events_ref") or ""
-                    if events_ref and Path(events_ref).is_file():
-                        for line in Path(events_ref).read_text(errors="replace").splitlines():
-                            event = json.loads(line)
-                            if event.get("type") == "error":
-                                error_text = str(event.get("message") or event.get("content") or "")
-            record("the failed run's durable evidence names the actual error",
-                   "differs from origin/main" in error_text, f"error={error_text[:160]!r}")
-
-            ids_b = [manager_b, worker_b]
-            payload = await wait_status(
-                base, access_key, ids_b, worker_b,
-                lambda st: bool(st) and st.get("work_state") == "attention",
-                "worker attention", timeout=60)
-            record("status: worker work_state=attention after the launch failure",
-                   payload.get("work_state") == "attention", json.dumps(payload, default=str))
-            report = await wait_parent_report(base, access_key, manager_b, worker_b)
-            record("the parent received a failure report naming the error",
-                   report.get("outcome") == "failed"
-                   and "differs from origin/main" in str(report.get("summary", "")),
-                   f"summary={str(report.get('summary'))[:160]!r}")
-            # The collapsed parent's alert stand-in is its idle-state paint: the
-            # paused parent holds the report without a turn, so its own state
-            # stays idle and the stand-in is what its row shows.
-            payload = await wait_status(
-                base, access_key, ids_b, manager_b,
-                lambda st: bool(st) and st.get("work_state") == "idle" and not st.get("thinking_since"),
-                "paused manager B idle with the failure report held", timeout=60)
-            record("status: the paused parent holds the report without a turn",
-                   payload.get("work_state") == "idle" and not payload.get("thinking_since"),
-                   json.dumps(payload, default=str))
-            await assert_icons(cdp, page_id, worker_b, "alert-indicator",
-                               ["spinner", "worker-indicator", "waiting-indicator"],
-                               "attention worker row")
-            await assert_icons(cdp, page_id, manager_b, "alert-indicator",
-                               ["spinner", "worker-indicator", "waiting-indicator"],
-                               "collapsed manager row (attention stand-in)")
-            shot = await screenshot(cdp, page_id, shots, "attention_state")
-            results["attention_screenshot"] = shot
-            record("DOM: worker row and collapsed parent show the red alert", ok=True, detail=worker_b)
-
-            # The worker's transcript: the failed Run's header reads failed (and
-            # a queued retry's header reads queued in its own color while the
-            # alert keeps priority).
-            await evaluate(cdp, page_id, f"switchSession('{worker_b}')")
-            deadline = time.monotonic() + 30
-            failed_header = None
-            while time.monotonic() < deadline:
-                failed_header = await evaluate(cdp, page_id, f"""
-                    (() => {{
-                      const el = document.getElementById('run-header-{run_b}');
-                      return el ? (el.dataset.runState + '|' + el.textContent) : null;
-                    }})()
-                """)
-                if failed_header and str(failed_header).startswith("failed|"):
-                    break
-                await asyncio.sleep(0.5)
-            record("the transcript's Run header reads failed for the launch-failure run",
-                   bool(failed_header) and str(failed_header).startswith("failed|"),
-                   f"header={failed_header!r}")
-            # The failure's error text is reachable from the worker view: the
-            # failed Run's header shows its own events log's error in full.
-            error_text = str(await evaluate(cdp, page_id, f"""
-                (document.getElementById('run-error-{run_b}') || {{}}).textContent || ''
-            """))
-            record("the failed Run's header names the actual error",
-                   "differs from origin/main" in error_text,
-                   f"error={error_text[:160]!r}")
-
-            # The header's time is the Run's own ended_at (it never started),
-            # never the page-load time: the wrapper's data-message-ts carries
-            # the raw value the bubble title formats.
-            header_ts = str(await evaluate(cdp, page_id, f"""
-                (() => {{
-                  const el = document.getElementById('run-header-{run_b}');
-                  const wrap = el ? el.closest('[data-message-id]') : null;
-                  return el ? ((wrap && wrap.dataset.messageTs) || '') : null;
-                }})()
-            """))
-            ended_at = str(run_row.get("ended_at") or "")
-            record("the failed-before-start Run header carries its ended_at",
-                   bool(header_ts) and bool(ended_at) and same_instant(header_ts, ended_at),
-                   f"header_ts={header_ts!r} ended_at={ended_at!r}")
-            has_title = await evaluate(cdp, page_id, f"""
-                (() => {{
-                  const el = document.getElementById('run-header-{run_b}');
-                  return el ? (el.title || '').length > 0 : null;
-                }})()
-            """)
-            record("the failed-before-start Run header shows a bubble time (not the page load)",
-                   has_title is True, f"has_title={has_title!r}")
-            shot = await screenshot(cdp, page_id, shots, "worker_run_failed")
-            results["worker_run_failed_screenshot"] = shot
-
-            # Pause the worker, then retry: the queued retry is held back and
-            # its transcript header reads queued; the row keeps the alert
-            # (attention outranks waiting on one row).
-            status, _ = request(base, access_key, "PATCH", f"/api/sessions/{worker_b}",
-                                {"automation_paused": True})
-            if status != 200:
-                fail(f"pause failed: {status}")
-            status, retry_body = request(base, access_key, "POST", f"/api/sessions/{worker_b}/retry",
-                                         {"request_id": "sidebar-status-retry", "run_id": run_b})
-            if status != 200:
-                fail(f"retry failed: {status} {retry_body}")
-            retry_id = retry_body.get("run_id") or retry_body.get("id")
-            deadline = time.monotonic() + 30
-            queued_header = None
-            while time.monotonic() < deadline:
-                queued_header = await evaluate(cdp, page_id, f"""
-                    (() => {{
-                      const el = document.getElementById('run-header-{retry_id}');
-                      const dot = document.getElementById('run-dot-{retry_id}');
-                      return el ? (el.dataset.runState + '|' + (dot ? dot.className : '')) : null;
-                    }})()
-                """)
-                if queued_header and str(queued_header).startswith("queued|"):
-                    break
-                await asyncio.sleep(0.5)
-            record("the transcript's Run header reads queued for the held-back retry (own color)",
-                   bool(queued_header) and str(queued_header).startswith("queued|")
-                   and "bg-amber-400" in str(queued_header), f"header={queued_header!r}")
-            queued_ts = str(await evaluate(cdp, page_id, f"""
-                (() => {{
-                  const el = document.getElementById('run-header-{retry_id}');
-                  const wrap = el ? el.closest('[data-message-id]') : null;
-                  return el ? ((wrap && wrap.dataset.messageTs) || '') : null;
-                }})()
-            """))
-            queued_title = await evaluate(cdp, page_id, f"""
-                (() => {{
-                  const el = document.getElementById('run-header-{retry_id}');
-                  return el ? (el.title || '').length > 0 : null;
-                }})()
-            """)
-            record("a queued Run's header carries no time (no page-load stand-in)",
-                   queued_ts == "" and queued_title is False,
-                   f"ts={queued_ts!r} has_title={queued_title!r}")
-            titles_b = await worker_facing_titles(cdp, page_id)
-            record("no worker-facing title starts with '## ' (worker transcript view)",
-                   bool(titles_b) and all(not (t or "").startswith("## ") for t in titles_b),
-                   f"titles={titles_b}")
-            await assert_icons(cdp, page_id, worker_b, "alert-indicator",
-                               ["spinner", "worker-indicator", "waiting-indicator"],
-                               "attention outranks waiting on the paused worker row")
-            shot = await screenshot(cdp, page_id, shots, "worker_run_queued")
-            results["worker_run_queued_screenshot"] = shot
-
-            # ---- scenario C: the waiting state (queued, not launched) -----
-            log("scenario C: the waiting state (a queued Run held back by a paused node)")
+            # ---- scenario B: the waiting state (queued, not launched) -----
+            log("scenario B: the waiting state (a queued Run held back by a paused node)")
             payload = await wait_status(
                 base, access_key, ids_a, manager_a,
                 lambda st: bool(st) and st.get("work_state") == "idle" and not st.get("thinking_since"),
@@ -781,7 +533,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             record("status: queued Run held by the pause reads work_state=waiting",
                    payload.get("work_state") == "waiting", json.dumps(payload, default=str))
             await assert_icons(cdp, page_id, manager_a, "waiting-indicator",
-                               ["spinner", "worker-indicator", "alert-indicator"],
+                               ["spinner", "worker-indicator"],
                                "waiting manager row")
             record("DOM: the paused node's queued Run shows the clock", ok=True, detail=manager_a)
             shot = await screenshot(cdp, page_id, shots, "waiting_state")
@@ -799,7 +551,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             # 09-25), so that shape produced false "leaked" verdicts.
             native_after = snapshot_native_storage()
             trial_native_ids: set[str] = set()
-            for sid in {manager_a, worker_a, manager_b, worker_b}:
+            for sid in {manager_a, worker_a}:
                 status, page = request(base, access_key, "GET", f"/api/sessions/{sid}/runs?limit=100")
                 if status != 200:
                     fail(f"runs fetch of {sid} failed: {status}")

@@ -126,7 +126,7 @@ RunKind = Literal["manager_turn", "work", "review", "iteration", "scheduled_step
 TaskState = Literal["open", "completed", "cancelled"]
 
 # Derived per-node work state, rebuilt from run and input facts.
-WorkState = Literal["idle", "running", "waiting", "attention"]
+WorkState = Literal["idle", "running", "waiting"]
 
 # Outcome carried by a run_finished fact.
 RunOutcomeValue = Literal["success", "failed", "interrupted"]
@@ -338,7 +338,7 @@ class SessionMetadata(BaseModel):
   has_unread: bool = False
   has_running_tasks: bool = False
   # The task-tree derivation's work verdict for a task-tree row (idle |
-  # running | waiting | attention). Transient and response-only — never
+  # running | waiting). Transient and response-only — never
   # persisted (excluded by _TRANSIENT_METADATA_FIELDS); None on a legacy row.
   work_state: WorkState | None = None
   has_pending_trigger: bool = False
@@ -523,7 +523,6 @@ class SessionRow(BaseModel):
   archived: bool
   child_count: int
   open_descendant_count: int
-  attention_descendant_count: int
   # Descendants whose work_state is currently running — the collapsed-row
   # delegated-work cue (a manager with only active descendants must not hide
   # ongoing work). Derived in the same projection pass as the other counts.

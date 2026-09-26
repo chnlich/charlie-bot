@@ -232,8 +232,9 @@ class TaskCompletionManager:
         elif not evidence.run_ids and any(
                 outcome == "failed" for outcome in outcomes.values()):
             # A failed-only subtree still refuses to be called completed on a
-            # bare claim: the failure stays attention — cancel the failed work,
-            # or retry it to success and cite that Run. Only a delivery
+            # bare claim: the failed Run is not completion evidence — cancel
+            # the failed work, or retry it to success and cite that Run. Only
+            # a delivery
             # universe with neither a successful nor a failed Run (the
             # terminal-driven node's explicit operator completion;
             # cancelled-only or interrupted-only child work) closes on the

@@ -633,29 +633,36 @@ async def test_tree_page_keeps_archived_ancestor_of_running_descendant(task_env)
       request_id="leaf", task_parent_id=root.id, profile="worker", task=None, name="Leaf",
       backend=None, caller="operator")
   await task_mgr.patch_task(root.id, PatchSessionTaskRequest(presentation="hidden"), caller=OP)
-  import os as _os
-  await task_mgr.runs.register_run(
-      RunRecord(id="run-live", session_id=leaf.id, pid=_os.getpid(), pid_start="1"))
-  with make_client(cfg, session_mgr, task_mgr) as client:
-    page = client.get("/api/sessions/tree", params={"include_archived": "false"}).json()
-    rows = {r["id"]: r for r in page["items"]}
-    # The hidden ancestor remains navigable as ancestor context, still archived.
-    assert rows[root.id]["archived"] is True
-    under = client.get("/api/sessions/tree", params={"parent_id": root.id}).json()
-    assert {r["id"] for r in under["items"]} == {leaf.id}
-    # With the descendant's run finished (terminal, no attention), the
-    # presentation preference wins again and the ancestor drops from its level.
-    # A successful delivered worker autoarchives (server facts): the leaf
-    # leaves the default projection, and with no active work below it the
-    # hidden ancestor's own presentation wins again — the root level empties.
-    await task_mgr.dispatch.finish_run(leaf.id, "run-live", outcome="success")
-    page2 = client.get("/api/sessions/tree", params={"include_archived": "false"}).json()
-    assert page2["items"] == []
-    under2 = client.get("/api/sessions/tree", params={"parent_id": root.id}).json()
-    assert under2["items"] == []
-    # The archived view still preserves the ancestry in place.
-    archived_page = client.get("/api/sessions/tree", params={"include_archived": "true"}).json()
-    assert {r["id"] for r in archived_page["items"]} == {root.id}
+  proc = subprocess.Popen(["/bin/sleep", "30"])
+  try:
+    from src.core.runs import read_pid_stat
+    pair = read_pid_stat(proc.pid)
+    assert pair is not None
+    await task_mgr.runs.register_run(
+        RunRecord(id="run-live", session_id=leaf.id, pid=proc.pid, pid_start=pair[0], started_at=datetime.now(UTC)))
+    with make_client(cfg, session_mgr, task_mgr) as client:
+      page = client.get("/api/sessions/tree", params={"include_archived": "false"}).json()
+      rows = {r["id"]: r for r in page["items"]}
+      # The hidden ancestor remains navigable as ancestor context, still archived.
+      assert rows[root.id]["archived"] is True
+      under = client.get("/api/sessions/tree", params={"parent_id": root.id}).json()
+      assert {r["id"] for r in under["items"]} == {leaf.id}
+      # With the descendant's run finished (terminal — no activity), the
+      # presentation preference wins again and the ancestor drops from its level.
+      # A successful delivered worker autoarchives (server facts): the leaf
+      # leaves the default projection, and with no active work below it the
+      # hidden ancestor's own presentation wins again — the root level empties.
+      await task_mgr.dispatch.finish_run(leaf.id, "run-live", outcome="success")
+      page2 = client.get("/api/sessions/tree", params={"include_archived": "false"}).json()
+      assert page2["items"] == []
+      under2 = client.get("/api/sessions/tree", params={"parent_id": root.id}).json()
+      assert under2["items"] == []
+      # The archived view still preserves the ancestry in place.
+      archived_page = client.get("/api/sessions/tree", params={"include_archived": "true"}).json()
+      assert {r["id"] for r in archived_page["items"]} == {root.id}
+  finally:
+    if proc.poll() is None:
+      proc.kill()
 
 
 @pytest.mark.asyncio

@@ -332,7 +332,8 @@ async def test_bound_steps_failure_stops_chain_and_reports_failed(
   # The chain stopped at the failed step: no later step run exists.
   records = tree.runs.list_run_records_sync(leaf_id)
   assert [r.sequence_ref.position for r in records] == [0]
-  # The failed step's report names the stop and the leaf stays open (attention).
+  # The failed step's report names the stop and the leaf stays open (a failed
+  # Run is not a terminal task state and paints no sidebar activity).
   assert "stopped at step 'selector'" in str(reports[0].get("summary"))
   assert tree.task_state(leaf_id) != "completed"
 

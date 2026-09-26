@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from src.agents.backends import pty_common
 from src.cli import claude_sub, claude_sub_hook
 from src.cli.claude_sub_bridge import (
     HOOK_EVENTS,
@@ -737,7 +738,7 @@ async def test_respawn_passes_one_prompt_directly_and_does_not_use_a_shell(
 
   assert len(calls) == 1
   command = calls[0]
-  assert command[0:4] == ("respawn-pane", "-k", "-t", claude_sub.tmux_session_name(SESSION_ID))
+  assert command[0:4] == ("respawn-pane", "-k", "-t", pty_common.tmux_session_name(SESSION_ID))
   assert "sh" not in command
   assert command[-2:] == ("--", "-leading prompt")
   assert command.count("-leading prompt") == 1
@@ -790,7 +791,7 @@ async def test_old_style_live_pane_is_migration_blocked_without_killing_it(
     )
 
   monkeypatch.setattr(claude_sub, "_read_marker", lambda session_id: None)
-  monkeypatch.setattr(claude_sub, "tmux_session_exists", fake_exists)
+  monkeypatch.setattr(pty_common, "tmux_session_exists", fake_exists)
   monkeypatch.setattr(claude_sub, "_pane_info", fake_pane)
   monkeypatch.setattr(claude_sub, "_write_marker", lambda session_id, state: marker_states.append(state))
 
@@ -819,7 +820,7 @@ async def test_migration_resumes_same_session_after_old_tui_exits_and_session_cl
       "_read_marker",
       lambda session_id: claude_sub.SessionMarkerState.MIGRATION_BLOCKED,
   )
-  monkeypatch.setattr(claude_sub, "tmux_session_exists", fake_exists)
+  monkeypatch.setattr(pty_common, "tmux_session_exists", fake_exists)
   monkeypatch.setattr(claude_sub, "_create_tmux_host", fake_create)
   monkeypatch.setattr(claude_sub, "_write_marker", lambda session_id, state: marker_states.append(state))
 
@@ -846,7 +847,7 @@ async def test_started_marker_without_session_refuses_to_resume(
       "_read_marker",
       lambda session_id: claude_sub.SessionMarkerState.STARTED_BY_NEW_ADAPTER,
   )
-  monkeypatch.setattr(claude_sub, "tmux_session_exists", fake_exists)
+  monkeypatch.setattr(pty_common, "tmux_session_exists", fake_exists)
 
   with pytest.raises(claude_sub.ClaudeSubError, match="refusing to resume"):
     await claude_sub._prepare_tmux_session(SESSION_ID, tmp_path, requested_resume=True)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import json
 import os
@@ -15,7 +14,9 @@ from src.core.log_once import LazyStructlogLogger
 
 # future-annotations keep the hint unevaluated; the pydantic import rides the one
 # call that needs it, so the claude-sub launch chain (M108) imports this module
-# without the model stack.
+# without the model stack. asyncio does the same: its interpreter+concurrent-
+# futures cost is the launch chain's single largest import slice, and this
+# module's one async writer is the only reader.
 if TYPE_CHECKING:
   from pydantic import BaseModel
 
@@ -123,5 +124,7 @@ async def write_model_json_atomically(path: Path, model: BaseModel) -> None:
   async atomic swap: a plain truncate-write lets them observe a half-written
   file.
   """
+  import asyncio
+
   path.parent.mkdir(parents=True, exist_ok=True)
   await asyncio.to_thread(atomic_write_text, path, model.model_dump_json(indent=2))

@@ -7,16 +7,22 @@ validates the protocol and produces the existing CharlieBot event shapes.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import uuid
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.core import event_types as ET
+
+# asyncio rides the methods that use it, not this import block: the bridge is
+# src.cli.claude_sub's module-level import, and the M108 launch floor
+# (docs/perf_baseline.md) is the wall from process start to the argv parse the
+# bridge never reaches. The TYPE_CHECKING import covers the lazy method hints.
+if TYPE_CHECKING:
+  import asyncio
 
 
 class PromptDelivery(IntEnum):
@@ -472,6 +478,8 @@ class HookBridge:
   """Authenticated local Unix-socket server for one interactive Claude process."""
 
   def __init__(self, socket_path: Path, token: str, state: HookTurnState) -> None:
+    import asyncio
+
     self.socket_path = socket_path
     self.token = token
     self.state = state
@@ -481,11 +489,15 @@ class HookBridge:
     self._client_tasks: set[asyncio.Task[None]] = set()
 
   async def start(self) -> None:
+    import asyncio
+
     if self.socket_path.exists():
       raise HookBridgeError(f"hook bridge socket already exists: {self.socket_path}")
     self._server = await asyncio.start_unix_server(self._serve_client, path=str(self.socket_path))
 
   async def stop(self) -> None:
+    import asyncio
+
     if self._server is not None:
       self._server.close()
       await self._server.wait_closed()
@@ -507,6 +519,8 @@ class HookBridge:
       self.state.failure = error
 
   async def _serve_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    import asyncio
+
     task = asyncio.current_task()
     assert task is not None
     self._client_tasks.add(task)

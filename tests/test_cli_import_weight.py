@@ -459,9 +459,15 @@ def test_autonamer_and_recap_defer_the_registry_until_first_use() -> None:
 # scope builds the account models the launch never reads. The launch argv/env
 # assembly single-homes in src.agents.backends.claude_launch (stdlib-only), so
 # the backend ABC — and the runs/process/pty stacks only its run path reads —
-# stay out of the import too.
+# stay out of the import too. asyncio and the pty/tui helper stack ride their
+# call sites the same way: asyncio's interpreter+concurrent.futures chain is the
+# launch floor's largest import slice, and json_utils (the chain's shared write
+# helper) defers it to its one async writer for the same reason.
 CLAUDE_SUB_HEAVY_MODULES = (
     "fastapi",
+    "asyncio",
+    "src.agents.backends.pty_common",
+    "src.agents.backends.tui",
     "src.core.config",
     "yaml",
     "src.core.credentials",

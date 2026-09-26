@@ -205,7 +205,10 @@ class CodexBackend(AgentBackend):
 
   # Codex items that translate one started/completed pair onto one fixed tool event:
   # item type -> (tool name, payload field carrying the input, whether the completed
-  # output is str()-wrapped before it becomes the tool_result content).
+  # output is str()-wrapped before it becomes the tool_result content). The completed
+  # output is read as aggregated_output first — codex-cli 0.157.0 emits a command's
+  # output under that key for command_execution — and falls back to output (the
+  # field older schemas emitted) only when aggregated_output is absent or None.
   _TOOL_ITEM_SPECS: ClassVar[dict[str, tuple[str, str, bool]]] = {
       "command_execution": ("Bash", "command", False),
       "web_search": ("WebSearch", "query", True),
@@ -280,7 +283,9 @@ class CodexBackend(AgentBackend):
     if ev.get("type") == "item.started":
       return [make_tool_use_event(tool, {payload_field: item.get(payload_field, "")})]
     if ev.get("type") == "item.completed":
-      output = item.get("output", "")
+      output = item.get("aggregated_output")
+      if output is None:
+        output = item.get("output", "")
       return [make_tool_result_event(tool, str(output) if stringify_output else output)]
     return []
 

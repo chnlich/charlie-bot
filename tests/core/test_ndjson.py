@@ -742,3 +742,14 @@ def test_append_ndjson_fdatasyncs_once_after_the_writes(tmp_path: Path, monkeypa
   # One fdatasync, on the fd that received the writes, after every write.
   fd = ops[0][1]
   assert ops == [("write", fd), ("fdatasync", fd)]
+
+
+def test_append_ndjson_writes_non_ascii_verbatim(tmp_path: Path) -> None:
+  target = tmp_path / "events.jsonl"
+  asyncio.run(append_ndjson(target, {"text": "指针"}))
+
+  raw = target.read_bytes()
+  # The line is grep-able as written: raw UTF-8 bytes on disk, no \uXXXX escape.
+  assert "指针".encode() in raw
+  assert b"\\u6307" not in raw
+  assert parse_ndjson_file(target) == [{"text": "指针"}]

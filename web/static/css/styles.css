@@ -508,3 +508,7 @@ body { overscroll-behavior: none; }
 .voice-meta { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; }
 .voice-timer { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.75rem; color: #94a3b8; }
 .voice-hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Pending triggers tray (chat column, chat/triggers-tray.js): dashed amber
+   border and the --watch spellings' mono face, per the reviewed mockup. */
+.tray-border { border: 1px dashed rgba(245, 158, 11, .55); }
+.tray-mono { font-family: 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }

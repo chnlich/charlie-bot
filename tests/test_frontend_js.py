@@ -56,6 +56,7 @@ _NODE_TESTS = [
     "ext_usage_render.test.mjs",
     "marked_hl_cache.test.js",
     "page_timers_visibility.test.js",
+    "pending_triggers_tray.test.js",
     "panel_resize.test.js",
     "plan_cards.test.js",
     "plan_panel.test.js",

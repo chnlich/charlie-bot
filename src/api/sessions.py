@@ -21,10 +21,10 @@ from src.api.deps import (
     get_session_manager,
     get_task_manager,
     get_thread_manager,
+    get_trigger_manager,
     require_caller,
     require_found,
     require_session,
-    trigger_manager,
 )
 from src.api.message_utils import (
     SessionBootstrapData,
@@ -86,6 +86,7 @@ from src.core.models import (
     SwitchBackendRequest,
     TaskState,
     ThreadMetadata,
+    TriggerStatus,
     UtcDatetime,
     WorkerThreadRef,
     WorkState,
@@ -117,6 +118,7 @@ from src.core.task_sessions import (
 )
 from src.core.thinking_state import run_backend
 from src.core.threads import ThreadManager
+from src.core.triggers import TriggerManager
 
 log = LazyStructlogLogger()
 router = APIRouter()
@@ -1162,18 +1164,15 @@ async def get_session_view(
   # row memo): a repeat view of a session no write landed in pays zero stats.
   thread_rows = await view_thread_rows(session_id, cfg, thread_mgr)
   view = await build_session_view_data(session_id, session_mgr, thread_rows, tree=task_mgr)
-  trigger_mgr = trigger_manager()
-  triggers = await trigger_mgr.list_triggers(session_id)
-  # The workers tab paints one CSS-truncated description line per card and its
-  # full-text modal fetches the thread row on click (the workers-panel list's
-  # truncation contract), so the view ships the same prefixed rows — the
+  # The chat column's thread rows carry one CSS-truncated description line per
+  # row and its full text rides the thread-detail endpoint (the workers-panel
+  # list's truncation contract), so the view ships the same prefixed rows — the
   # worst session's whole-row dumps measured 2.6 MB of body per session open.
   payload = {
       "session": meta.model_dump(mode="json"),
       "messages": view.messages,
       "pending_draft": view.pending_draft,
       "threads": view.threads,
-      "triggers": [tr.model_dump(mode="json") for tr in triggers],
       "event_count": view.total_event_count,
       "oldest_message_ordinal": view.oldest_message_ordinal,
       "usage": view.usage,
@@ -1186,6 +1185,28 @@ async def get_session_view(
   payload.update(_active_backend_payload(meta, cfg))
   # The switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
   return await _switch_payload_response(request, payload)
+
+
+@router.get('/{session_id}/pending-triggers')
+async def get_pending_triggers(
+    session_id: str,
+    _meta: SessionMetadata = Depends(require_session),
+    trigger_mgr: TriggerManager = Depends(get_trigger_manager),
+) -> list[dict]:
+  """Return the session's pending delayed triggers, fire_at ascending.
+
+  The chat column's pending-triggers tray is the one consumer: each element is
+  the trigger record's JSON form (PendingTrigger dumped with mode="json"), so
+  the tray renders the watch targets and fire_at the record carries. Fired and
+  cancelled records stay out — the transcript shows fired triggers, and the
+  cancel endpoint (src/api/internal.py) owns removal.
+  """
+  triggers = await trigger_mgr.list_triggers(session_id)
+  pending = sorted(
+      (tr for tr in triggers if tr.status is TriggerStatus.PENDING),
+      key=lambda tr: tr.fire_at,
+  )
+  return [tr.model_dump(mode="json") for tr in pending]
 
 
 @router.get('/{session_id}/bootstrap')

@@ -181,9 +181,6 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
       has_running_tasks: ev.has_running_tasks,
       work_state: ev.work_state,
     }));
-    if ('has_pending_trigger' in ev) {
-      setSessionPendingTriggerIndicator(ev.session_id, ev);
-    }
     if (ev.session_id === SESSION_ID) {
       if (ev.thinking_since) {
         startThinking({keepSendEnabled: true});

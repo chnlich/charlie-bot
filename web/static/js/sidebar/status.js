@@ -289,16 +289,25 @@ function renderSessionIndicators(session) {
     <span id="unread-${session.id}" data-has-unread="${session.has_unread ? 1 : 0}" title="${escapeHtmlAttr(UNREAD_TITLE)}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${session.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>`;
 }
 
-function pendingTriggerTitle(count) {
+// The pending-trigger bell's body: the chat column's tray
+// (chat/triggers-tray.js) renders the same glyph, so the two surfaces of one
+// fact read as one signal. Wired sidebarOnly for the tray's bellSvg().
+const PENDING_TRIGGER_BELL_SVG_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0a3 3 0 01-6 0"/>';
+
+function pendingTriggerTitle(count, nextTriggerAt) {
   const normalized = Number(count) || 0;
-  if (normalized === 1) return '1 pending delayed trigger';
-  if (normalized > 1) return `${normalized} pending delayed triggers`;
-  return 'Pending delayed trigger';
+  let title;
+  if (normalized === 1) title = '1 pending delayed trigger';
+  else if (normalized > 1) title = `${normalized} pending delayed triggers`;
+  else title = 'Pending delayed trigger';
+  if (nextTriggerAt) title += ' · next ' + clockTimeHM(new Date(nextTriggerAt));
+  return title;
 }
 
 function renderPendingTriggerIndicator(session) {
   const count = Number(session.pending_trigger_count) || 0;
-  return `<svg id="pending-trigger-${session.id}" data-count="${count}" data-next-trigger-at="${escapeHtmlAttr(session.next_trigger_at || '')}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 ${session.has_pending_trigger ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="${escapeHtmlAttr(pendingTriggerTitle(count))}"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0a3 3 0 01-6 0"/></svg>`;
+  const click = `event.preventDefault(); event.stopPropagation(); expandPendingTriggersTray('${session.id}')`;
+  return `<svg id="pending-trigger-${session.id}" data-count="${count}" data-next-trigger-at="${escapeHtmlAttr(session.next_trigger_at || '')}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 cursor-pointer ${session.has_pending_trigger ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="${escapeHtmlAttr(pendingTriggerTitle(count, session.next_trigger_at))}" onclick="${click}">${PENDING_TRIGGER_BELL_SVG_PATH}</svg>`;
 }
 
 function renderPendingPlanApprovalIndicator(session) {
@@ -443,7 +452,7 @@ function setSessionPendingTriggerIndicator(sid, status) {
   icon.classList.toggle('hidden', !hasPending);
   icon.dataset.count = String(count);
   icon.dataset.nextTriggerAt = (status && status.next_trigger_at) || '';
-  icon.title = pendingTriggerTitle(count);
+  icon.title = pendingTriggerTitle(count, status && status.next_trigger_at);
 }
 
 function setSessionPendingPlanApprovalIndicator(sid, status) {
@@ -513,6 +522,7 @@ function applySessionStatus(sid, status, requestSeq) {
   if (unreadReplyIsCurrent(sid, requestSeq)) recordUnreadFact(sid, status.has_unread);
   globalThis.setSessionIndicator(sid, getSessionIndicatorState(status));
   globalThis.setSessionPendingTriggerIndicator(sid, status);
+  globalThis.setSessionPendingTriggerTrayStatus(sid, status);
   globalThis.setSessionPendingPlanApprovalIndicator(sid, status);
   paintDelegateCardState(sid, status);
 }
@@ -687,6 +697,7 @@ Sidebar.wire(API, {
   tuiSidebarSessionIds,
   sidebarSessionIds,
   updateSpinner,
+  PENDING_TRIGGER_BELL_SVG_PATH,
 });
 
 })();

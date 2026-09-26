@@ -5,10 +5,19 @@ from __future__ import annotations
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
-from conftest import OPUS_BACKEND_ID, stub_credentials
+from conftest import (
+    MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET,
+    OPUS_BACKEND_ID,
+    agent_headers as run_token_headers,
+    assert_wake_unused,
+    legacy_parent_with_open_task,
+    stub_credentials,
+    wait_for_wake,
+)
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -16,6 +25,7 @@ from src.api import sessions as sessions_api
 from src.api import threads as threads_api
 from src.api.deps import get_config, get_config_on_loop, get_run_store, get_session_manager, get_task_manager
 from src.core import event_types as ET
+from src.core.constants import CALLER_SESSION_HEADER
 from src.core.models import PatchSessionTaskRequest, RunRecord
 from src.core.run_token import CallerIdentity, RunTokenClaims, sign_run_token
 from src.core.sessions import SessionManager
@@ -692,3 +702,130 @@ async def test_pending_task_inputs_endpoint_lists_source_and_text(task_env) -> N
     bad = client.post(f"/api/sessions/{root.id}/task-inputs/acknowledge", json={
         "request_id": "ack-2", "input_ids": ["not-an-input"]})
     assert bad.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Caller-session rule through the HTTP API: the operator header picks whose
+# own turn closed the child, the run token ignores it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cancel_with_the_parent_session_header_skips_the_legacy_wake(
+    task_env, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The delegating CLI rides X-CharlieBot-Caller-Session when the server
+  started it for one session (src/cli/common.py). When that session is the
+  legacy parent itself, its own turn already holds the close outcome in the
+  HTTP response: the close facts and the delivered report land, but no echo
+  wake of the parent is scheduled."""
+  cfg, session_mgr, task_mgr = task_env
+  legacy, child = await legacy_parent_with_open_task(session_mgr, task_mgr, request_id="child")
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  trigger = AsyncMock()
+  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
+
+  with make_client(cfg, session_mgr, task_mgr) as client:
+    resp = client.post(
+        f"/api/sessions/{child.id}/cancel",
+        json={"request_id": "cancel-1", "reason": "no longer needed"},
+        headers={"Authorization": "Bearer op-secret", CALLER_SESSION_HEADER: legacy.id})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["task_state"] == "cancelled"
+    await assert_wake_unused(trigger)
+
+  reports = [e for e in task_mgr.events.load_events(legacy.id)
+             if e["type"] == ET.CHILD_REPORT and e["child_session_id"] == child.id]
+  assert len(reports) == 1 and reports[0]["outcome"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_cancel_without_the_header_wakes_the_legacy_parent_once(
+    task_env, monkeypatch: pytest.MonkeyPatch) -> None:
+  """No X-CharlieBot-Caller-Session, no session identity: the caller is the
+  operator's own manually started process, so the close wakes the parent with
+  the report it just delivered."""
+  cfg, session_mgr, task_mgr = task_env
+  legacy, child = await legacy_parent_with_open_task(session_mgr, task_mgr, request_id="child")
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  trigger = AsyncMock()
+  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
+
+  with make_client(cfg, session_mgr, task_mgr) as client:
+    resp = client.post(
+        f"/api/sessions/{child.id}/cancel",
+        json={"request_id": "cancel-1", "reason": "no longer needed"},
+        headers={"Authorization": "Bearer op-secret"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["task_state"] == "cancelled"
+    await wait_for_wake(trigger)
+  args = trigger.await_args.args
+  assert args[0] == legacy.id
+  assert args[1] == f"[Report from task {child.id} | outcome cancelled] no longer needed"
+
+
+@pytest.mark.asyncio
+async def test_cancel_with_a_foreign_session_header_still_wakes_the_parent(
+    task_env, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A header naming some other session is not the parent: the wake fires as if
+  no header had been sent. A false claim can at most lose the claimant's own
+  wake — it must never silence another session's."""
+  cfg, session_mgr, task_mgr = task_env
+  legacy, child = await legacy_parent_with_open_task(session_mgr, task_mgr, request_id="child")
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  trigger = AsyncMock()
+  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
+
+  with make_client(cfg, session_mgr, task_mgr) as client:
+    resp = client.post(
+        f"/api/sessions/{child.id}/cancel",
+        json={"request_id": "cancel-1", "reason": "no longer needed"},
+        headers={"Authorization": "Bearer op-secret", CALLER_SESSION_HEADER: "session-down-the-hall"})
+    assert resp.status_code == 200, resp.text
+    await wait_for_wake(trigger)
+  args = trigger.await_args.args
+  assert args[0] == legacy.id
+  assert args[1] == f"[Report from task {child.id} | outcome cancelled] no longer needed"
+
+
+@pytest.mark.asyncio
+async def test_complete_with_a_run_token_saves_the_close_under_the_runs_own_identity(
+    task_env) -> None:
+  """A run token's identity is its verified claims: X-CharlieBot-Caller-Session
+  is ignored on an agent call. The manager's own-run close request answers 202
+  pending_run_finish — an operator identity carrying the parent's id in the
+  header would instead be refused by the active Run — and the durable record
+  names the token's own run, not the header's session."""
+  cfg, session_mgr, task_mgr = task_env
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  root = await task_mgr.create_task(
+      request_id="root", task_parent_id=None, profile="manager", task=None, name="Root",
+      backend=None, caller="operator")
+  manager = await task_mgr.create_task(
+      request_id="mgr", task_parent_id=root.id, profile="manager", task=None, name="Feature",
+      backend=None, caller="operator")
+  proc = subprocess.Popen(["/bin/sleep", "30"])
+  try:
+    from src.core.runs import read_pid_stat
+    pair = read_pid_stat(proc.pid)
+    assert pair is not None
+    # The manager's own live coordination Run backs the token — the fixture of
+    # test_task_manager_authorization's own-run completion test.
+    await task_mgr.runs.register_run(
+        RunRecord(id="run-mgr", session_id=manager.id, kind="manager_turn",
+                  pid=proc.pid, pid_start=pair[0], started_at=datetime.now(UTC)))
+    with make_client(cfg, session_mgr, task_mgr) as client:
+      pending = client.post(
+          f"/api/sessions/{manager.id}/complete",
+          json={"request_id": "close-1", "summary": "coordination complete",
+                "result_refs": ["report:feature"], "run_ids": ["run-mgr"]},
+          headers={**run_token_headers(manager.id, "run-mgr"), CALLER_SESSION_HEADER: root.id})
+      assert pending.status_code == 202, pending.text
+      assert pending.json() == {
+          "session_id": manager.id, "request_id": "close-1", "status": "pending_run_finish"}
+  finally:
+    if proc.poll() is None:
+      proc.kill()
+  saved = [e for e in task_mgr.events.load_events(manager.id) if e["type"] == ET.TASK_CLOSE_REQUESTED]
+  assert len(saved) == 1
+  assert saved[0]["owner_run_id"] == "run-mgr"
+  assert saved[0]["source_session_id"] == manager.id

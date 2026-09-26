@@ -49,19 +49,23 @@ def __getattr__(name: str) -> Any:
   return deferred_module_getattr(name, __name__, globals(), "build_backend", load_build_backend)
 
 
-# Matches true defaults ("Session 7") and legacy empty placeholders ("7: ").
-# Does NOT match already-renamed titles like "7: My Topic".
-_DEFAULT_NAME_RE = re.compile(r"^(Session \d+|\d+: )$")
-_SESSION_NUMBER_RE = re.compile(r"^Session (\d+)$")
+# Matches true defaults ("Session 7"), legacy empty placeholders ("7: "), and
+# clone/elone children of a never-named session — clone and elone prepend C / E
+# to the parent name (src/core/sessions.py _spawn_with_reference), so "CSession
+# 746" or "ECSession 3" is still a default. Does NOT match already-renamed
+# titles like "7: My Topic".
+_DEFAULT_NAME_RE = re.compile(r"^[CE]*(Session \d+|\d+: )$")
+_SESSION_NUMBER_RE = re.compile(r"^([CE]*)Session (\d+)$")
 _MARKDOWN_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?\s*```$", re.DOTALL)
 
 
 def _prefix_session_number_if_default(session_name: str, name: str) -> str:
-  """If session_name matches the default 'Session N' pattern, prepend 'N: ' to name.
-  Otherwise return name unchanged. Used by both autonaming strategies so the
-  generated title carries the original session number for easier reference."""
+  """If session_name matches the default 'Session N' pattern (optionally carrying
+  clone/elone C/E prefixes), return f"{prefix}{N}: {name}". Otherwise return name
+  unchanged. Used by both autonaming strategies so the generated title carries the
+  original session number for easier reference."""
   m = _SESSION_NUMBER_RE.match(session_name)
-  return f"{m.group(1)}: {name}" if m else name
+  return f"{m.group(1)}{m.group(2)}: {name}" if m else name
 
 
 def is_default_session_name(name: str) -> bool:

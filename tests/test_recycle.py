@@ -762,7 +762,9 @@ async def test_bootstrap_payload_trims_tool_previews_over_cap(tmp_path: Path) ->
       _tool_result_event("tool-result-1", big_output, _payload_ts(1)),
       _tool_use_event("tool-1", "Bash", {"command": big_command}, _payload_ts(2)),
       _tool_result_event("tool-result-2", "ok", _payload_ts(3)),
-      {**_assistant_event("done", event_id="assistant-3"), "timestamp": _payload_ts(4)},
+      {
+          **_assistant_event("done", event_id="assistant-3"), "timestamp": _payload_ts(4)
+      },
       {
           "type": ET.MASTER_DONE,
           "thinking_seconds": 1,
@@ -792,7 +794,9 @@ async def test_bootstrap_payload_leaves_small_tools_untouched(tmp_path: Path) ->
   events = [
       _tool_use_event("tool-0", "Read", {"file_path": "a.txt"}, _payload_ts(0)),
       _tool_result_event("tool-result-1", "x" * 499, _payload_ts(1)),
-      {**_assistant_event("done", event_id="assistant-2"), "timestamp": _payload_ts(2)},
+      {
+          **_assistant_event("done", event_id="assistant-2"), "timestamp": _payload_ts(2)
+      },
       {
           "type": ET.MASTER_DONE,
           "thinking_seconds": 1,

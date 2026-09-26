@@ -4,6 +4,7 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import get_args
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -75,6 +76,7 @@ from src.core.models import (
     ReopenTaskRequest,
     RetryRunRequest,
     RunCancelResponse,
+    RunKind,
     RunPage,
     RunRow,
     SessionMetadata,
@@ -122,6 +124,9 @@ router = APIRouter()
 # model's own JSON scheme: a hand-rolled isoformat() emits +00:00 where the
 # model's UtcDatetime fields emit Z.
 _UTC_DATETIME_JSON = TypeAdapter(UtcDatetime | None)
+
+# Read from the Literal so the preview's 400 cannot drift from the type home.
+_RUN_KINDS = frozenset(get_args(RunKind))
 
 
 def _default_backend_id(cfg: CharlieBotConfig) -> str:
@@ -1882,7 +1887,7 @@ async def get_effective_prompt(
   meta = await _require_task_meta(task_mgr, session_id)
   default_kind = "manager_turn" if meta.profile == "manager" else "work"
   resolved_kind = kind or default_kind
-  if resolved_kind not in ("manager_turn", "work", "review", "iteration", "scheduled_step"):
+  if resolved_kind not in _RUN_KINDS:
     raise HTTPException(status_code=400, detail=f"unknown run kind: {kind!r}")
   # The preview must resolve the backend exactly as a launch would
   # (_resolve_session_default_backend_model): a task without its own backend

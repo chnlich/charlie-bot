@@ -33,8 +33,10 @@ async def test_search_gzip_ships_precompressed_body(tmp_path: Path) -> None:
   parsed payload keeps the row shape."""
   cfg, mgr, _session = await make_home_session(tmp_path, name="needle")
   thread_mgr = ThreadManager(cfg)
-  plain = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
-  gz = await sessions_api.search_sessions(_page_request("gzip"), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
+  plain = await sessions_api.search_sessions(
+      _page_request(), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
+  gz = await sessions_api.search_sessions(
+      _page_request("gzip"), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
 
   assert_gzip_served(gz)
   assert gzip.decompress(gz.body) == plain.body
@@ -47,10 +49,12 @@ async def test_search_gzip_repeat_serves_memo_without_recompress(tmp_path: Path)
   re-compresses nothing."""
   cfg, mgr, _session = await make_home_session(tmp_path, name="needle")
   thread_mgr = ThreadManager(cfg)
-  first = await sessions_api.search_sessions(_page_request("gzip"), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
+  first = await sessions_api.search_sessions(
+      _page_request("gzip"), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
 
   with patch(RESPONSES_GZIP_LEVEL1_PATCH_TARGET, gzip_explode_compress("repeat search re-ran the deflate")):
-    second = await sessions_api.search_sessions(_page_request("gzip"), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
+    second = await sessions_api.search_sessions(
+        _page_request("gzip"), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
   assert second.body == first.body
 
 
@@ -60,7 +64,8 @@ async def test_search_plain_request_stays_uncompressed(tmp_path: Path) -> None:
   Content-Encoding header, and the search gzip memo gains no entry."""
   cfg, mgr, _session = await make_home_session(tmp_path, name="needle")
   thread_mgr = ThreadManager(cfg)
-  plain = await sessions_api.search_sessions(_page_request(), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
+  plain = await sessions_api.search_sessions(
+      _page_request(), q="needle", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
 
   assert "content-encoding" not in plain.headers
   assert len(sessions_api._search_gzip_memo) == 0

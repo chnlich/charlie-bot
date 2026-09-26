@@ -25,11 +25,11 @@ from src.core import storage_cool
 from src.core.config import CharlieBotConfig
 from src.core.runs import RAW_LOG_NAME, STDERR_LOG_NAME
 from src.core.storage_cool import (
-  claude_project_dir_name,
-  codex_rollout_session_id,
-  format_sweep_table,
-  is_cold_session,
-  run_cool_sweep,
+    claude_project_dir_name,
+    codex_rollout_session_id,
+    format_sweep_table,
+    is_cold_session,
+    run_cool_sweep,
 )
 
 NOW = datetime(2026, 9, 4, 12, 0, 0, tzinfo=UTC)
@@ -1183,18 +1183,27 @@ def test_migrated_run_referenced_transport_survives_the_sweep(cool_env: CharlieB
   age_file(referenced_raw, timedelta(days=30))
   runs_dir = cfg.sessions_dir / SID_COLD / "data" / "runs" / "run-migrated"
   runs_dir.mkdir(parents=True)
-  (runs_dir / "metadata.json").write_text(json.dumps({
-      "id": "run-migrated", "session_id": SID_COLD, "kind": "work",
-      "raw_log_ref": str(referenced_raw),
-      "events_ref": str(cfg.sessions_dir / SID_COLD / "threads" / TID / "data" / "events.jsonl"),
-  }), encoding="utf-8")
+  (runs_dir / "metadata.json").write_text(
+      json.dumps(
+          {
+              "id": "run-migrated",
+              "session_id": SID_COLD,
+              "kind": "work",
+              "raw_log_ref": str(referenced_raw),
+              "events_ref": str(cfg.sessions_dir / SID_COLD / "threads" / TID / "data" / "events.jsonl"),
+          }),
+      encoding="utf-8")
   # The migrated manager-turn run references the historical master_runs log.
   turn_runs_dir = cfg.sessions_dir / SID_COLD / "data" / "runs" / "run-migrated-turn"
   turn_runs_dir.mkdir(parents=True)
-  (turn_runs_dir / "metadata.json").write_text(json.dumps({
-      "id": "run-migrated-turn", "session_id": SID_COLD, "kind": "manager_turn",
-      "raw_log_ref": str(raw),
-  }), encoding="utf-8")
+  (turn_runs_dir / "metadata.json").write_text(
+      json.dumps({
+          "id": "run-migrated-turn",
+          "session_id": SID_COLD,
+          "kind": "manager_turn",
+          "raw_log_ref": str(raw),
+      }),
+      encoding="utf-8")
 
   result = run_cool_sweep(cfg=cfg, now=NOW)
 
@@ -1212,7 +1221,9 @@ def test_run_reference_to_outside_path_is_ignored_not_created(cool_env: CharlieB
   transport.write_bytes(b"x")
   age_file(transport, timedelta(days=30))
   run_meta = {
-      "id": "run-outside", "session_id": SID_COLD, "kind": "work",
+      "id": "run-outside",
+      "session_id": SID_COLD,
+      "kind": "work",
       "raw_log_ref": "/nonexistent/outside/agent.raw.ndjson",
   }
   runs_dir = cfg.sessions_dir / SID_COLD / "data" / "runs" / "run-outside"

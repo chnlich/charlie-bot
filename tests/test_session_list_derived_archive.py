@@ -30,8 +30,13 @@ OPERATOR = CallerIdentity(kind="operator")
 
 async def create(tree: TaskTreeManager, *, parent: str | None, request_id: str, profile: str = "manager"):
   return await tree.create_task(
-      request_id=request_id, task_parent_id=parent, profile=profile, task=None,
-      name=None, backend=None, caller=OPERATOR)
+      request_id=request_id,
+      task_parent_id=parent,
+      profile=profile,
+      task=None,
+      name=None,
+      backend=None,
+      caller=OPERATOR)
 
 
 async def deliver(tree: TaskTreeManager, worker_id: str, run_id: str) -> None:
@@ -80,8 +85,12 @@ async def test_failed_worker_stays_in_the_active_list(tmp_path: Path) -> None:
   await tree.runs.register_run(RunRecord(id="run-f", session_id=worker.id, kind="work"))
   await tree.dispatch.finish_run(worker.id, "run-f", outcome="failed")
   await tree.dispatch.deliver_child_report(
-      worker.id, source_event={"id": "runf-finish"}, outcome="failed",
-      summary="run failed", result_refs=[], recipient=root.id)
+      worker.id,
+      source_event={"id": "runf-finish"},
+      outcome="failed",
+      summary="run failed",
+      result_refs=[],
+      recipient=root.id)
 
   assert await active_ids(session_mgr) == {root.id, worker.id}
   assert await archived_by_id(session_mgr) == {}
@@ -202,12 +211,22 @@ async def test_tree_page_keeps_an_archived_node_whose_own_work_is_live(tmp_path:
   proc = live_subprocess()
   try:
     pid, pid_start = identity_of(proc.pid)
-    await tree.runs.register_run(RunRecord(
-        id="run-live", session_id=running_leaf.id, kind="work",
-        pid=pid, pid_start=pid_start, started_at=datetime.now(UTC)))
-    await tree.runs.register_run(RunRecord(
-        id="run-attn", session_id=attention_leaf.id, kind="work",
-        pid=os.getpid(), pid_start="1", started_at=datetime.now(UTC)))
+    await tree.runs.register_run(
+        RunRecord(
+            id="run-live",
+            session_id=running_leaf.id,
+            kind="work",
+            pid=pid,
+            pid_start=pid_start,
+            started_at=datetime.now(UTC)))
+    await tree.runs.register_run(
+        RunRecord(
+            id="run-attn",
+            session_id=attention_leaf.id,
+            kind="work",
+            pid=os.getpid(),
+            pid_start="1",
+            started_at=datetime.now(UTC)))
     await tree.set_presentation(running_root.id, "hidden")
     await tree.set_presentation(attention_root.id, "hidden")
 
@@ -219,14 +238,12 @@ async def test_tree_page_keeps_an_archived_node_whose_own_work_is_live(tmp_path:
     assert rows[running_root.id]["archived"] is True
     assert rows[attention_root.id]["archived"] is True
     # Each archived leaf is kept on its own level by its own work state.
-    running_page = await tree.tree_page(
-        parent_id=running_root.id, include_archived=False, limit=100, cursor=None)
+    running_page = await tree.tree_page(parent_id=running_root.id, include_archived=False, limit=100, cursor=None)
     running_rows = {r["id"]: r for r in running_page["items"]}
     assert set(running_rows) == {running_leaf.id}
     assert running_rows[running_leaf.id]["archived"] is True
     assert running_rows[running_leaf.id]["work_state"] == "running"
-    attention_page = await tree.tree_page(
-        parent_id=attention_root.id, include_archived=False, limit=100, cursor=None)
+    attention_page = await tree.tree_page(parent_id=attention_root.id, include_archived=False, limit=100, cursor=None)
     attention_rows = {r["id"]: r for r in attention_page["items"]}
     assert set(attention_rows) == {attention_leaf.id}
     assert attention_rows[attention_leaf.id]["archived"] is True

@@ -33,16 +33,20 @@ def prompt_facts(tree: TaskTreeManager, session_id: str) -> list[dict]:
 async def _leaf(tmp_path: Path):
   cfg, tree = build_env(tmp_path)
   meta = await tree.create_task(
-      request_id="leaf", task_parent_id=None, profile="worker",
-      task=TaskSpec(goal="g"), name="L", backend=None, caller=OPERATOR)
+      request_id="leaf",
+      task_parent_id=None,
+      profile="worker",
+      task=TaskSpec(goal="g"),
+      name="L",
+      backend=None,
+      caller=OPERATOR)
   return cfg, tree, meta.id
 
 
 async def test_successful_patch_is_durable_across_both_scopes(tmp_path: Path) -> None:
   _cfg, tree, sid = await _leaf(tmp_path)
   meta = await tree.patch_task(
-      sid, PatchSessionTaskRequest(subtree_prompt="subtree rule", node_prompt="node rule"),
-      caller=OPERATOR)
+      sid, PatchSessionTaskRequest(subtree_prompt="subtree rule", node_prompt="node rule"), caller=OPERATOR)
   assert meta.subtree_prompt_ref and meta.node_prompt_ref
   facts = prompt_facts(tree, sid)
   assert [(f["scope"], f["previous_ref"], f["new_ref"]) for f in facts] == [
@@ -56,7 +60,7 @@ async def test_successful_patch_is_durable_across_both_scopes(tmp_path: Path) ->
 
 
 async def test_crash_after_metadata_save_before_fact_retry_lands_exactly_one_fact(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, tree, sid = await _leaf(tmp_path)
   # Direction 1: the fact append fails after the metadata swap — the PATCH must
   # not report success, and the retry lands the one missing fact.
@@ -85,7 +89,7 @@ async def test_crash_after_metadata_save_before_fact_retry_lands_exactly_one_fac
 
 
 async def test_crash_after_body_before_metadata_retry_does_not_lose_the_edit(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, tree, sid = await _leaf(tmp_path)
   # Direction 2: the metadata save fails after the body is stored — the PATCH
   # fails visibly; the retry re-stores the same immutable body and completes.
@@ -100,25 +104,22 @@ async def test_crash_after_body_before_metadata_retry_does_not_lose_the_edit(
 
   monkeypatch.setattr(tree, "_save_meta", failing_save)
   with pytest.raises(OSError):
-    await tree.patch_task(sid, PatchSessionTaskRequest(subtree_prompt="the subtree rule"),
-                          caller=OPERATOR)
+    await tree.patch_task(sid, PatchSessionTaskRequest(subtree_prompt="the subtree rule"), caller=OPERATOR)
   assert await tree.load_meta(sid) is not None
   meta = await tree.load_meta(sid)
   assert meta.subtree_prompt_ref is None  # the swap never landed
   # Retry: the same body content-addresses to the same ref; one edit, one fact.
   monkeypatch.setattr(tree, "_save_meta", real_save)
-  meta = await tree.patch_task(sid, PatchSessionTaskRequest(subtree_prompt="the subtree rule"),
-                               caller=OPERATOR)
+  meta = await tree.patch_task(sid, PatchSessionTaskRequest(subtree_prompt="the subtree rule"), caller=OPERATOR)
   facts = prompt_facts(tree, sid)
-  assert [(f["scope"], f["previous_ref"], f["new_ref"]) for f in facts] == [
-      ("subtree", None, meta.subtree_prompt_ref)]
+  assert [(f["scope"], f["previous_ref"], f["new_ref"]) for f in facts] == [("subtree", None, meta.subtree_prompt_ref)]
   # The immutable body store holds exactly one copy.
   bodies = list((cfg.charliebot_home / "prompt_bodies").glob("*.md"))
   assert len(bodies) == 1
 
 
 async def test_two_scope_patch_crash_between_scopes_repairs_cleanly(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, tree, sid = await _leaf(tmp_path)
   real_save = tree._save_meta
   calls = {"n": 0}
@@ -134,19 +135,18 @@ async def test_two_scope_patch_crash_between_scopes_repairs_cleanly(
   monkeypatch.setattr(tree, "_save_meta", failing_save)
   with pytest.raises(OSError):
     await tree.patch_task(
-        sid, PatchSessionTaskRequest(subtree_prompt="subtree rule", node_prompt="node rule"),
-        caller=OPERATOR)
+        sid, PatchSessionTaskRequest(subtree_prompt="subtree rule", node_prompt="node rule"), caller=OPERATOR)
   monkeypatch.setattr(tree, "_save_meta", real_save)
   meta = await tree.patch_task(
-      sid, PatchSessionTaskRequest(subtree_prompt="subtree rule", node_prompt="node rule"),
-      caller=OPERATOR)
+      sid, PatchSessionTaskRequest(subtree_prompt="subtree rule", node_prompt="node rule"), caller=OPERATOR)
   facts = prompt_facts(tree, sid)
   assert [(f["scope"], f["new_ref"]) for f in facts] == [
-      ("subtree", meta.subtree_prompt_ref), ("node", meta.node_prompt_ref)]
+      ("subtree", meta.subtree_prompt_ref), ("node", meta.node_prompt_ref)
+  ]
 
 
 async def test_recovery_sweep_is_idempotent_and_does_not_duplicate(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, tree, sid = await _leaf(tmp_path)
   # Simulate the crash window: metadata swapped, fact append failed.
   real_ensure = tree._ensure_prompt_changed_fact
@@ -171,7 +171,7 @@ async def test_recovery_sweep_is_idempotent_and_does_not_duplicate(
 
 
 async def test_later_edit_after_interrupted_edit_keeps_a_truthful_chain(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, tree, sid = await _leaf(tmp_path)
   real_ensure = tree._ensure_prompt_changed_fact
 
@@ -203,23 +203,18 @@ async def test_concurrent_task_mutation_is_not_overwritten(tmp_path: Path) -> No
   before the final save loses neither on retry."""
   _cfg, tree, sid = await _leaf(tmp_path)
   meta = await tree.patch_task(
-      sid,
-      PatchSessionTaskRequest(name="renamed", subtree_prompt="rule", node_prompt="node rule"),
-      caller=OPERATOR)
+      sid, PatchSessionTaskRequest(name="renamed", subtree_prompt="rule", node_prompt="node rule"), caller=OPERATOR)
   assert meta.name == "renamed"
   assert meta.subtree_prompt_ref and meta.node_prompt_ref
   # Retry with identical values: idempotent, no duplicate facts.
   facts_before = prompt_facts(tree, sid)
   meta = await tree.patch_task(
-      sid,
-      PatchSessionTaskRequest(name="renamed", subtree_prompt="rule", node_prompt="node rule"),
-      caller=OPERATOR)
+      sid, PatchSessionTaskRequest(name="renamed", subtree_prompt="rule", node_prompt="node rule"), caller=OPERATOR)
   assert prompt_facts(tree, sid) == facts_before
   assert meta.name == "renamed"
 
 
-async def test_next_launch_semantics_when_a_rule_is_edited_during_an_active_run(
-        tmp_path: Path) -> None:
+async def test_next_launch_semantics_when_a_rule_is_edited_during_an_active_run(tmp_path: Path) -> None:
   """An edit during an active Run changes nothing for that Run; the next launch
   sees the new ref (the chain recheck picks it up at its own launch time)."""
   _cfg, tree, sid = await _leaf(tmp_path)

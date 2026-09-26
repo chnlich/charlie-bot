@@ -112,8 +112,7 @@ async def test_terminal_states_never_infer_unread(env) -> None:
   await tree.dispatch.finish_run(worker_a_id, run_ok.id, outcome="success", exit_code=0)
   index = await tree._get_index()
   row = tree.session_row(index, worker_a_id)
-  assert row.work_state == "idle" and row.has_unread is False, (
-      "success alone is not an unread reply")
+  assert row.work_state == "idle" and row.has_unread is False, ("success alone is not an unread reply")
 
   # A failed run draws attention, not an unread dot.
   run_failed = await tree.runs.register_run(RunRecord(id="run-f", session_id=worker_a_id, kind="work"))
@@ -163,8 +162,7 @@ async def test_mark_read_leaves_other_sessions_unread(env, monkeypatch: pytest.M
   await session_mgr.mark_read(worker_a_id)
   page = await tree.tree_page(parent_id=root_id, include_archived=False, limit=10, cursor=None)
   assert row_of(page, worker_a_id)["has_unread"] is False
-  assert row_of(page, worker_b_id)["has_unread"] is True, (
-      "reading one task never marks another one read")
+  assert row_of(page, worker_b_id)["has_unread"] is True, ("reading one task never marks another one read")
 
   # The flip rides the sidebar unread channel only, with the flip's own value:
   # a read/unread change never triggers a tree refresh, and no tree

@@ -525,7 +525,11 @@ def _write_hook_plugin(root: Path, bridge: HookBridge) -> Path:
   hooks: dict[str, list[dict[str, Any]]] = {}
   for event_name in HOOK_EVENTS:
     gate = event_name in {"UserPromptSubmit", "PreToolUse", "PermissionRequest"}
+    # -S skips site for the helper process: the helper is machine-invoked once per
+    # hook event and imports nothing from site-packages, while site's editable
+    # finder drags pathlib/glob/re into every event's import floor.
     hook_args = [
+        "-S",
         str(helper),
         "--socket",
         str(bridge.socket_path),

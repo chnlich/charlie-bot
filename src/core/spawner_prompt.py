@@ -126,6 +126,32 @@ def _require_tokens_resolved(assembled: str, *, prompt: str) -> None:
     raise ValueError(prompt + " prompt assembly left an unresolved {{token}} in the output")
 
 
+def verify_contract_tokens(cfg: CharlieBotConfig) -> dict[str, str]:
+  """verify.md's token map: the expected result trailer and the canonical plan template's path.
+
+  One home for both render paths (the v1 spawn assembly and the v2 verify rules segment):
+  a token verify.md gains gets its value here once.
+  """
+  from src.core.verify_trailer import VERIFY_RESULT_TRAILER_EXPECTED
+  return {
+      "{{result_trailer_expected}}": VERIFY_RESULT_TRAILER_EXPECTED,
+      "{{canonical_template_path}}": str((cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()),
+  }
+
+
+def iteration_report_tokens(loop_dir: str, iteration_number: int) -> dict[str, str]:
+  """The iteration_reports section's token map: loop dir plus the plain and zero-padded number.
+
+  One home for both render paths (the v1 worker assembly and the v2 render_iteration_reports),
+  so the padding contract is one definition.
+  """
+  return {
+      "{{loop_dir}}": loop_dir,
+      "{{iteration_number_padded}}": f"{iteration_number:04d}",
+      "{{iteration_number}}": str(iteration_number),
+  }
+
+
 def _build_worker_prompt(
     description: str,
     repo_path: Path,
@@ -172,11 +198,7 @@ def _build_worker_prompt(
   iteration_reports_section = ""
   if loop_dir and iteration_number is not None:
     iteration_body = _substitute_tokens(
-        sections["iteration_reports"], {
-            "{{loop_dir}}": loop_dir,
-            "{{iteration_number_padded}}": f"{iteration_number:04d}",
-            "{{iteration_number}}": str(iteration_number),
-        })
+        sections["iteration_reports"], iteration_report_tokens(loop_dir, iteration_number))
     iteration_reports_section = f"\n\n{iteration_body}"
 
   memory_section = ""

@@ -20,6 +20,8 @@ from conftest import (
 
 from src.core import event_types as ET
 from src.core.autonamer import (
+    _prefix_session_number_if_default,
+    is_default_session_name,
     iter_light_backends,
     maybe_auto_name,
     maybe_auto_name_from_claude_ai_title,
@@ -104,6 +106,40 @@ def _fallback_chain_cfg() -> CharlieBotConfig:
 
 
 # ---------------------------------------------------------------------------
+# Default-name classification and session-number prefixing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        pytest.param("Session 3", True, id="plain-default"),
+        pytest.param("CSession 746", True, id="clone-of-default"),
+        pytest.param("ECSession 3", True, id="elone-of-clone"),
+        pytest.param("C7: ", True, id="legacy-empty-placeholder-with-prefix"),
+        pytest.param("C737: BlueBerry Stage 3", False, id="renamed-title-with-prefix"),
+        pytest.param("Clone Session 3", False, id="renamed-title-looks-like-default"),
+        pytest.param("12: Named", False, id="legacy-placeholder-renamed"),
+    ],
+)
+def test_is_default_session_name(name: str, expected: bool) -> None:
+  assert is_default_session_name(name) is expected
+
+
+@pytest.mark.parametrize(
+    ("session_name", "name", "expected"),
+    [
+        pytest.param("Session 5", "T", "5: T", id="plain-default"),
+        pytest.param("CSession 746", "T", "C746: T", id="clone-of-default"),
+        pytest.param("ECSession 3", "T", "EC3: T", id="elone-of-clone"),
+        pytest.param("C737: X", "T", "T", id="renamed-title-unchanged"),
+    ],
+)
+def test_prefix_session_number_if_default(session_name: str, name: str, expected: str) -> None:
+  assert _prefix_session_number_if_default(session_name, name) == expected
+
+
+# ---------------------------------------------------------------------------
 # maybe_auto_name — light-backend one-shot path
 # ---------------------------------------------------------------------------
 
@@ -183,6 +219,24 @@ async def test_maybe_auto_name_preserves_default_session_number() -> None:
 
   rig.one_shot.assert_awaited_once()
   rig.session_mgr.rename_session.assert_awaited_once_with("session-prefix", "42: Refactor Config Loader")
+
+
+@pytest.mark.asyncio
+async def test_maybe_auto_name_preserves_clone_prefix_and_session_number() -> None:
+  rig = await _run_auto_name(
+      build_light_cc_cfg(),
+      "session-clone",
+      "CSession 746",
+      "light-cc",
+      "Refactor the config loader",
+      "I updated the loader to use the shared config parser.",
+      [],
+      one_shot=AsyncMock(return_value='{"name":"Title"}'),
+      get_session_reply=SessionMetadata(id="session-clone", name="CSession 746"),
+  )
+
+  rig.one_shot.assert_awaited_once()
+  rig.session_mgr.rename_session.assert_awaited_once_with("session-clone", "C746: Title")
 
 
 @pytest.mark.asyncio

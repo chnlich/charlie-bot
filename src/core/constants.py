@@ -21,6 +21,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # (src.cli.common.resolve_session_id). One spelling everywhere.
 SESSION_ID_ENV_VAR = "CHARLIEBOT_SESSION_ID"
 
+# Request-header wire name of the calling session on internal-API calls: the
+# CLI sends it from SESSION_ID_ENV_VAR and require_caller records it on
+# operator caller identities (an agent's session is token-verified, never the
+# header). One spelling everywhere, shared by the CLI and the API.
+CALLER_SESSION_HEADER = "X-CharlieBot-Caller-Session"
+
 # Upper bound on trigger --message length. The message is a short label naming
 # which watch fired (runbook steps and readback commands live in session
 # artifacts), so the CLI argparse precheck and --help text share this constant.

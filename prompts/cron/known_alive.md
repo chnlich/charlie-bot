@@ -421,7 +421,8 @@ Known-alive symbols:
   `MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET` spelling `src.core.master_trigger.run_message`
   (`tests/test_session_anchor_guard.py` and `tests/test_spawner_trigger_master_resume_recovery.py`,
   constant defined in `tests/conftest.py`), `src.core.autonamer.build_backend`
-  (`tests/test_autonamer.py`), and `src.core.recap.build_backend` (`tests/test_recap.py`).
+  (`AUTONAMER_BUILD_BACKEND_PATCH_TARGET`, constant defined in `tests/conftest.py`), and
+  `src.core.recap.build_backend` (`tests/test_recap.py`).
   Vulture flags each hook as an unused function at 60% confidence.
 - `_fresh_detail_memo` (`tests/test_thread_detail_gzip.py`) — a `fresh_state_fixture(...)` assignment
   clearing the thread-detail gzip memo (`src.api.threads._detail_gzip_memo`) around every test

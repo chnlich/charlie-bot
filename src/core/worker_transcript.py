@@ -248,11 +248,6 @@ def load_worker_transcript(tree, session_id: str) -> TranscriptEntry:
   return entry
 
 
-def drop_worker_transcript(session_id: str) -> None:
-  """Forget a node's memoized transcript (its node is gone or archived)."""
-  _worker_memo.drop(session_id)
-
-
 # ---------------------------------------------------------------------------
 # Legacy worker thread: threads/<thread_id>/data/events.jsonl
 # ---------------------------------------------------------------------------

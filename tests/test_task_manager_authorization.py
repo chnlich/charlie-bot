@@ -20,7 +20,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import BUILD_BACKEND_PATCH_TARGET, delegate_payload, patch_instructions_content, stub_credentials
+from conftest import (
+    BUILD_BACKEND_PATCH_TARGET,
+    WORKER_BUILD_BACKEND_PATCH_TARGET,
+    delegate_payload,
+    patch_instructions_content,
+    stub_credentials,
+)
 
 from src.core import event_types as ET
 from src.core.control_events import build_control_event
@@ -348,7 +354,7 @@ async def test_implementation_blocked_until_real_user_authorizes_then_delegates_
   cfg, session_mgr, tree, ids = await three_manager_tree(tmp_path, monkeypatch)
   grand_id, grand_run = ids["grandchild"], "grandchild-run"
   builds = install_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("leaf done")])], "src.agents.worker.build_backend")
+      monkeypatch, [SpawningScriptedBackend([result_event("leaf done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   with make_api_client(cfg, session_mgr, tree) as client:
     blocked = client.post(
@@ -417,7 +423,7 @@ async def test_expired_and_shadowing_authorization_still_block_delegation_at_dep
   """Expired pre-takeoff windows and a shadowing local instruction keep current
   semantics at manager depth: the nearest real user instruction decides."""
   cfg, session_mgr, tree, ids = await three_manager_tree(tmp_path, monkeypatch)
-  install_backends(monkeypatch, [], "src.agents.worker.build_backend")
+  install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   grand_id, grand_run = ids["grandchild"], "grandchild-run"
   child_id = ids["child"]
 
@@ -455,7 +461,7 @@ async def test_queued_retry_launch_recheck_and_verify_exemption_remain_effective
   grand_id, grand_run = ids["grandchild"], "grandchild-run"
   await tree.dispatch.admit_input(ids["root"], event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
   builds = install_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("verdict: no")])], "src.agents.worker.build_backend")
+      monkeypatch, [SpawningScriptedBackend([result_event("verdict: no")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   with make_api_client(cfg, session_mgr, tree) as client:
     ok = client.post(

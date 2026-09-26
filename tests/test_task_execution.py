@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
+    WORKER_BUILD_BACKEND_PATCH_TARGET,
     backend_option,
     create_task,
     patch_instructions_content,
@@ -460,7 +461,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
         monkeypatch,
         [backend, SpawningScriptedBackend([result_event("phrase")]),
          SpawningScriptedBackend([result_event("phrase")])],
-        "src.agents.worker.build_backend")
+        WORKER_BUILD_BACKEND_PATCH_TARGET)
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
     repo, _origin = init_repo_with_origin(tmp_path / "delegate-work")
 
@@ -746,7 +747,7 @@ async def test_implement_delivery_requires_review_and_real_landing(
     review_retry_backend = SpawningScriptedBackend([result_event("review ok again")], pre_run=reviewer_push)
     install_backends(
         monkeypatch, [work_backend, review_backend, review_retry_backend],
-        "src.agents.worker.build_backend")
+        WORKER_BUILD_BACKEND_PATCH_TARGET)
 
     record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake",
                        model="fake-model", repo_path=str(repo), base_branch="origin/main")
@@ -1019,7 +1020,7 @@ async def test_worker_run_kinds_deliver_snapshot_bytes_and_task_context(
         scripted.append(b)
         return b
 
-    monkeypatch.setattr("src.agents.worker.build_backend", build)
+    monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, build)
 
     # The delegation gate needs a real user authorization along the ancestor chain.
     await tree.dispatch.admit_input(
@@ -1430,7 +1431,7 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
     monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, pm_build)
     install_backends(
         monkeypatch, [SpawningScriptedBackend([result_event("phrase")])],
-        "src.agents.worker.build_backend")
+        WORKER_BUILD_BACKEND_PATCH_TARGET)
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
 
     repo, _origin = init_repo_with_origin(tmp_path / "prep-fail")

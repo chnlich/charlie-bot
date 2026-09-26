@@ -21,6 +21,7 @@ from conftest import (
     CODEX_BACKEND_OPTION,
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
+    WORKER_BUILD_BACKEND_PATCH_TARGET,
     patch_instructions_content,
 )
 
@@ -212,7 +213,7 @@ async def test_bound_steps_one_leaf_ordered_runs_one_report(
   builds = install_backends(monkeypatch, [
       SpawningScriptedBackend([result_event("selector says pick three")]),
       SpawningScriptedBackend([result_event("reviewer wrote the report")]),
-  ], "src.agents.worker.build_backend")
+  ], WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The sequence boundary's report-consuming turn rides the manager dispatch
   # path (registry builder): script it so no external process starts here.
   _script_manager_turn(monkeypatch, ["report noted"])
@@ -292,7 +293,7 @@ async def test_bound_steps_failure_stops_chain_and_reports_failed(
   manager = await make_manager(tree)
   install_backends(monkeypatch, [
       SpawningScriptedBackend([result_event("broke")], exit_code=1),
-  ], "src.agents.worker.build_backend")
+  ], WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _bound_task(
       "chained", manager.id,
       steps=[
@@ -344,7 +345,7 @@ async def test_bound_prompt_task_one_leaf_per_firing_and_distinct_firings(
   install_backends(monkeypatch, [
       SpawningScriptedBackend([result_event("round one")]),
       SpawningScriptedBackend([result_event("round two")]),
-  ], "src.agents.worker.build_backend")
+  ], WORKER_BUILD_BACKEND_PATCH_TARGET)
   # Each firing's report-consuming turn rides the manager dispatch path:
   # script both so no external process starts here.
   _script_manager_turn(monkeypatch, ["noted round one", "noted round two"])
@@ -539,7 +540,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   # from this test, and no background launch outlives it.
   install_backends(monkeypatch, [
       SpawningScriptedBackend([result_event("reviewer wrote the report")]),
-  ], "src.agents.worker.build_backend")
+  ], WORKER_BUILD_BACKEND_PATCH_TARGET)
   _script_manager_turn(monkeypatch, ["report noted"])
   task_cfg = _bound_task(
       "chained", manager.id,
@@ -662,7 +663,7 @@ async def test_withheld_step_launch_settles_the_chain_without_hanging(
   scheduler's overlap handle ends with the controller instead of hanging."""
   _cfg, _session_mgr, tree = bound_env
   manager = await make_manager(tree)
-  builds = install_backends(monkeypatch, [], "src.agents.worker.build_backend")
+  builds = install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _bound_task(
       "withheld-steps", manager.id,
       steps=[StepConfig(name="first", prompt="Do the first thing."),
@@ -703,7 +704,7 @@ async def test_withheld_step_launch_settles_the_chain_without_hanging(
       caller=CallerIdentity(kind="operator"))
   builds2 = install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("first done")])],
-      "src.agents.worker.build_backend")
+      WORKER_BUILD_BACKEND_PATCH_TARGET)
   await asyncio.wait_for(cron_sequence.reconcile_bound_firings(
       task_cfg, meta, tree, FIRING, leaf.id), 20)
   deadline = asyncio.get_event_loop().time() + 15
@@ -725,7 +726,7 @@ async def test_withheld_single_round_settles_and_releases_the_overlap_handle(
   reason rides the stable blocked report."""
   cfg, session_mgr, tree = bound_env
   manager = await make_manager(tree)
-  builds = install_backends(monkeypatch, [], "src.agents.worker.build_backend")
+  builds = install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _bound_task("withheld-round", manager.id, prompt="Do the round.")
   from src.core import cron_sequence
   meta = await tree.load_meta(manager.id)
@@ -793,7 +794,7 @@ async def test_steps_admission_failure_does_not_consume_the_occurrence(
         bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_mgr, tree = bound_env
   manager = await make_manager(tree)
-  install_backends(monkeypatch, [], "src.agents.worker.build_backend")
+  install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _bound_task(
       "flaky-steps", manager.id,
       steps=[StepConfig(name="only", prompt="Do it.")])
@@ -849,7 +850,7 @@ async def test_two_bound_jobs_and_manual_firings_stay_distinct(
       monkeypatch,
       [SpawningScriptedBackend([result_event("job-a done")]),
        SpawningScriptedBackend([result_event("job-b done")])],
-      "src.agents.worker.build_backend")
+      WORKER_BUILD_BACKEND_PATCH_TARGET)
   job_a = _bound_task("job-a", manager.id, prompt="Run A.")
   job_b = _bound_task("job-b", manager.id, prompt="Run B.")
   scheduler = Scheduler(cfg, session_mgr)
@@ -892,7 +893,7 @@ async def _successful_two_step_leaf(bound_env, monkeypatch: pytest.MonkeyPatch):
       monkeypatch,
       [SpawningScriptedBackend([result_event("step zero done")]),
        SpawningScriptedBackend([result_event("step one done")])],
-      "src.agents.worker.build_backend")
+      WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The boundary close dispatches the parent's report-consuming turn through
   # the registry builder: script it so no external process starts here.
   _script_manager_turn(monkeypatch, ["report noted"])
@@ -950,7 +951,7 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
   # normal completion owner closes and delivers the completed report.
   builds = install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("answered")])],
-      "src.agents.worker.build_backend")
+      WORKER_BUILD_BACKEND_PATCH_TARGET)
   decision = await tree.dispatch.dispatch_pending(leaf.id)
   assert decision["launch"] is True
   deadline = asyncio.get_event_loop().time() + 15
@@ -1064,7 +1065,7 @@ async def test_noop_loop_consumes_the_occurrence_and_advances_the_checkpoint(
   last_run_status bookkeeping as before."""
   cfg, session_mgr, tree = bound_env
   manager = await make_manager(tree)
-  install_backends(monkeypatch, [], "src.agents.worker.build_backend")
+  install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _bound_task(
       "noop-loop", manager.id, repo=str(cfg.charliebot_home),
       loop={"backlog": "backlog.yaml", "role": "tester", "scope_files": ["x"],

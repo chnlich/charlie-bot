@@ -32,7 +32,7 @@ function buildHarness(overrides = {}) {
     elements.set('new-session-backend',
       createElement({tagName: 'SELECT', id: 'new-session-backend', value: overrides.backendSelectValue}));
   }
-  const h = {posts: [], renders: [], expanded: [], consoleErrors: [], pushes: []};
+  const h = {posts: [], renders: [], expanded: [], groupExpands: [], consoleErrors: [], pushes: []};
   const {context} = baseSessionContext({elements});
   context.SESSION_ID = overrides.sessionId !== undefined ? overrides.sessionId : 'session-a';
   context.DRAFT_KEY = context.SESSION_ID ? 'charliebot-draft-' + context.SESSION_ID : null;
@@ -62,6 +62,7 @@ function buildHarness(overrides = {}) {
   }
   context.renderSessionView = (data) => h.renders.push(data);
   context.Sidebar.expandTreeNode = (id) => h.expanded.push(id);
+  context.Sidebar.expandSessionGroup = (key) => h.groupExpands.push(key);
   h.context = context;
   return h;
 }
@@ -102,6 +103,23 @@ test('the hover "+" posts the same body under its parent and opens the parent ro
   assert.equal('backend' in body, false, 'no dropdown, no backend override');
   assert.deepEqual(h.expanded, ['parent-1']);
   assert.equal(h.context.SESSION_ID, 'task-new-1');
+});
+
+test('the group header "+" posts the root body with the group and opens the group', async () => {
+  const h = buildHarness({backendSelectValue: 'codex-o3'});
+
+  h.context.createSessionInGroup('alpha');
+  await settle();
+
+  assert.equal(h.posts.length, 1);
+  assert.deepEqual(h.posts[0].body, {
+    request_id: 'req-1', task_parent_id: null, profile: 'manager', task: {goal: ''},
+    backend: 'codex-o3', group: 'alpha',
+  });
+  assert.deepEqual(h.groupExpands, ['alpha'], 'the target group is expanded before the list repaints');
+  assert.deepEqual(h.expanded, [], 'a root has no parent to open');
+  assert.equal(h.context.SESSION_ID, 'task-new-1', 'the new node is the active session');
+  assert.deepEqual(h.consoleErrors, []);
 });
 
 test('from the welcome screen a create lands through a full page load', async () => {

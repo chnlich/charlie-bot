@@ -562,6 +562,11 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
 
     const groupActions = key ? `
       <button data-group-name="${safeKey}"
+              onclick="event.stopPropagation(); createSessionInGroup(this.dataset.groupName)"
+              class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-green-400 transition-opacity" title="New session in group">
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${PLUS_SVG_PATH}</svg>
+      </button>
+      <button data-group-name="${safeKey}"
               onclick="event.stopPropagation(); renameGroup(this.dataset.groupName)"
               class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-blue-400 transition-opacity" title="Rename group">
         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${PENCIL_SVG_PATH}</svg>
@@ -617,6 +622,14 @@ function toggleSessionGroup(key) {
     const chevron = group.querySelector('.session-group-chevron');
     if (chevron) chevron.classList.toggle('rotate-90');
   }
+}
+
+// A group-header create (session-view.js) marks its target expanded before the
+// create's repaint, so the new row lands visible inside the group it names.
+function expandSessionGroup(key) {
+  const collapsedState = loadGroupCollapsedState(SESSION_GROUP_COLLAPSED_STORAGE_KEY);
+  collapsedState[key] = false;
+  localStorage.setItem(SESSION_GROUP_COLLAPSED_STORAGE_KEY, JSON.stringify(collapsedState));
 }
 
 async function renameGroup(oldName) {
@@ -1004,6 +1017,7 @@ const SIDEBAR_ONLY = {
   renderSessionTree,
   isTreeNodeExpanded,
   expandTreeNode,
+  expandSessionGroup,
   treeChildIds,
   treeParentId,
   setSessionGroup,

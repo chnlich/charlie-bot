@@ -179,6 +179,48 @@ async def test_explicit_backend_create_records_the_choice_and_replays_keep_it(tm
 
 
 @pytest.mark.asyncio
+async def test_group_create_records_the_group_and_replays_keep_it(task_env) -> None:
+  """The group header's one-click create: the create POST carries the target group,
+  the node records it verbatim and a fresh read still shows it, a replayed request
+  returns the original product even when the retried body names another group (no
+  silent re-group), a group-less create stays ungrouped, and the operator-only
+  legacy create shape records the group the same way."""
+  cfg, session_mgr, task_mgr = task_env
+  with make_client(cfg, session_mgr, task_mgr) as client:
+    body = {
+        "request_id": "group-create",
+        "task_parent_id": None,
+        "profile": "manager",
+        "task": {"goal": "", "acceptance": [], "context_refs": []},
+        "group": "alpha",
+    }
+    created = client.post("/api/sessions/", json=body)
+    assert created.status_code == 200
+    assert created.json()["group"] == "alpha", "the target group lands on the node"
+
+    fresh = client.get(f"/api/sessions/{created.json()['id']}")
+    assert fresh.status_code == 200
+    assert fresh.json()["group"] == "alpha", "a fresh read of the session shows the same group"
+
+    replay = client.post("/api/sessions/", json={**body, "group": "beta"})
+    assert replay.status_code == 200
+    assert replay.json()["id"] == created.json()["id"]
+    assert replay.json()["group"] == "alpha", \
+        "the replayed action returns its original product; the group never silently switches"
+
+    ungrouped = client.post("/api/sessions/", json={
+        "request_id": "no-group-create", "task_parent_id": None,
+        "profile": "manager", "task": {"goal": "", "acceptance": [], "context_refs": []},
+    })
+    assert ungrouped.status_code == 200
+    assert ungrouped.json()["group"] is None, "a create without a group stays ungrouped"
+
+    legacy = client.post("/api/sessions/", json={"name": "Legacy create", "group": "legacy-g"})
+    assert legacy.status_code == 200
+    assert legacy.json()["group"] == "legacy-g", "the operator-only legacy create records the group too"
+
+
+@pytest.mark.asyncio
 async def test_stale_tree_pagination_returns_409(task_env) -> None:
   cfg, session_mgr, task_mgr = task_env
   await seed_tree(task_mgr)

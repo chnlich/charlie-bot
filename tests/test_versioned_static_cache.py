@@ -66,7 +66,6 @@ def test_asset_token_tracks_the_served_tree(tmp_path: Path) -> None:
     assert second != first  # a tree edit moves the token on the next render
   pages._ASSET_DIGEST_STATE.update(sig=(), digests={}, digest="")
   pages._DIR_LISTINGS.clear()
-  pages._DIR_LISTINGS.clear()
 
 
 def test_asset_token_tracks_a_new_file_in_a_memoized_directory(tmp_path: Path) -> None:

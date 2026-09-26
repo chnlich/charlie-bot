@@ -15,10 +15,10 @@ from src.core.models import PatchSessionTaskRequest, RunRecord, TaskSpec
 from src.core.run_token import CallerIdentity, RunTokenClaims
 from src.core.task_completion import CompletionEvidence, LandingEvidence
 from src.core.task_sessions import (
-  TaskConflictError,
-  TaskInvalidError,
-  TaskTreeManager,
-  _encode_tree_cursor,
+    TaskConflictError,
+    TaskInvalidError,
+    TaskTreeManager,
+    _encode_tree_cursor,
 )
 
 OPERATOR = CallerIdentity(kind="operator")
@@ -74,24 +74,21 @@ async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_pa
 
   # The feature's manager consumes its two child reports before closing: they
   # are unprocessed input, and closure blocks on them.
-  await tree.runs.register_run(
-      RunRecord(id="run-feature-turn", session_id=feature.id, kind="manager_turn"))
+  await tree.runs.register_run(RunRecord(id="run-feature-turn", session_id=feature.id, kind="manager_turn"))
   await tree.dispatch.claim_input_batch(feature.id, "run-feature-turn")
   await tree.dispatch.finish_run(feature.id, "run-feature-turn", outcome="success")
   assert tree.dispatch.pending_inputs(feature.id) == []
 
   # Explicitly closing the feature leaves the project open; the feature's
   # report lands on the project with summary, evidence refs, and its node id.
-  evidence = CompletionEvidence(summary="feature delivered", result_refs=["run:run-w1"],
-                                run_ids=["run-w1"])
+  evidence = CompletionEvidence(summary="feature delivered", result_refs=["run:run-w1"], run_ids=["run-w1"])
   status, payload = await tree.completion.complete_task(
       feature.id, request_id="close-feature", evidence=evidence, caller=OPERATOR)
   assert status == 200
   assert tree.task_state(feature.id) == "completed"
   assert tree.task_state(project.id) == "open"
   project_events = tree.events.load_events(project.id)
-  feature_reports = [e for e in project_events if e["type"] == ET.CHILD_REPORT
-                     and e["child_session_id"] == feature.id]
+  feature_reports = [e for e in project_events if e["type"] == ET.CHILD_REPORT and e["child_session_id"] == feature.id]
   assert len(feature_reports) == 1
   assert feature_reports[0]["summary"] == "feature delivered"
   assert feature_reports[0]["result_refs"] == ["run:run-w1"]
@@ -111,12 +108,14 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
   _cfg, _session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   worker = await create_task(
-      tree, parent=root.id, request_id="w", profile="worker",
+      tree,
+      parent=root.id,
+      request_id="w",
+      profile="worker",
       task=TaskSpec(task_type="implement", base_branch="main", keep_worktree=True))
 
   await tree.runs.register_run(
-      RunRecord(id="run-work", session_id=worker.id, kind="work",
-                task_spec_hash="a" * 64, base_branch="main"))
+      RunRecord(id="run-work", session_id=worker.id, kind="work", task_spec_hash="a" * 64, base_branch="main"))
   # The successful work run does NOT close an implement worker: pending review
   # blocks the automatic close, and the task stays open with its evidence.
   await finish_worker_run(tree, worker.id, "run-work")
@@ -130,8 +129,8 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
   # Mismatched task-spec result evidence blocks: the spec hash is not pinned by
   # this task's runs, and the landing branch is not a branch its runs target.
   bad = CompletionEvidence(
-      summary="s", result_refs=["run:run-work", "spec:" + "b" * 64,
-                                f"landed:other-branch@{'c' * 40}"],
+      summary="s",
+      result_refs=["run:run-work", "spec:" + "b" * 64, f"landed:other-branch@{'c' * 40}"],
       run_ids=["run-work"])
   blockers = tree.completion.evidence_blockers(index.metas[worker.id], bad)
   assert any("task spec" in b for b in blockers)
@@ -140,21 +139,22 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
   # A review run that chains to a different work Run is not this delivery's
   # evidence (the work/spec/review pin): it names work this claim does not.
   await tree.runs.register_run(
-      RunRecord(id="run-misreview", session_id=worker.id, kind="review",
-                review_of_run_id="run-earlier-attempt"))
+      RunRecord(id="run-misreview", session_id=worker.id, kind="review", review_of_run_id="run-earlier-attempt"))
   await tree.runs.record_finish(worker.id, "run-misreview", "success")
-  mischained = CompletionEvidence(summary="s", result_refs=["review:run-misreview"],
-                                  run_ids=["run-work"], review_run_ids=["run-misreview"])
+  mischained = CompletionEvidence(
+      summary="s", result_refs=["review:run-misreview"], run_ids=["run-work"], review_run_ids=["run-misreview"])
   blockers = tree.completion.evidence_blockers(index.metas[worker.id], mischained)
   assert any("reviews work run run-earlier-attempt" in b for b in blockers)
 
   # A review run of ANOTHER task is not review evidence.
   stranger = await create_task(tree, parent=None, request_id="stranger")
-  await tree.runs.register_run(
-      RunRecord(id="run-stranger-review", session_id=stranger.id, kind="review"))
+  await tree.runs.register_run(RunRecord(id="run-stranger-review", session_id=stranger.id, kind="review"))
   await tree.runs.record_finish(stranger.id, "run-stranger-review", "success")
-  wrong_owner = CompletionEvidence(summary="s", result_refs=["review:run-stranger-review"],
-                                   run_ids=["run-work"], review_run_ids=["run-stranger-review"])
+  wrong_owner = CompletionEvidence(
+      summary="s",
+      result_refs=["review:run-stranger-review"],
+      run_ids=["run-work"],
+      review_run_ids=["run-stranger-review"])
   blockers = tree.completion.evidence_blockers(index.metas[worker.id], wrong_owner)
   assert any("review Run of task" in b for b in blockers)
 
@@ -175,17 +175,16 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
   tree_meta.task.base_branch = "main"
   await tree._save_meta(tree_meta)
   landed_commit = subprocess.run(
-      ["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
-      capture_output=True, text=True).stdout.strip()
+      ["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
 
   await tree.runs.register_run(
-      RunRecord(id="run-review", session_id=worker.id, kind="review", base_branch="main",
-                review_of_run_id="run-work"))
+      RunRecord(id="run-review", session_id=worker.id, kind="review", base_branch="main", review_of_run_id="run-work"))
   await tree.dispatch.finish_run(worker.id, "run-review", outcome="success")
   good = CompletionEvidence(
       summary="implemented",
       result_refs=["run:run-work", f"spec:{'a' * 64}", f"landed:main@{landed_commit}"],
-      run_ids=["run-work"], review_run_ids=["run-review"],
+      run_ids=["run-work"],
+      review_run_ids=["run-review"],
       landing=LandingEvidence(branch="main", commit=landed_commit, repo_path=str(repo)))
 
   # The forged variant of the same shape — a hash that exists nowhere — is an
@@ -193,19 +192,18 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
   forged = CompletionEvidence(
       summary="forged",
       result_refs=["run:run-work", f"landed:main@{'d' * 40}"],
-      run_ids=["run-work"], review_run_ids=["run-review"],
+      run_ids=["run-work"],
+      review_run_ids=["run-review"],
       landing=LandingEvidence(branch="main", commit="d" * 40, repo_path=str(repo)))
   with pytest.raises(TaskConflictError, match="landing evidence unverified"):
-    await tree.completion.complete_task(
-        worker.id, request_id="close-forged", evidence=forged, caller=OPERATOR)
+    await tree.completion.complete_task(worker.id, request_id="close-forged", evidence=forged, caller=OPERATOR)
   assert tree.task_state(worker.id) == "open"
   status, _payload = await tree.completion.complete_task(
       worker.id, request_id="close-implement", evidence=good, caller=OPERATOR)
   assert status == 200
   assert tree.task_state(worker.id) == "completed"
   # The run records survive the close (evidence preserved).
-  assert {r.id for r in tree.runs.list_run_records_sync(worker.id)} == {
-      "run-work", "run-review", "run-misreview"}
+  assert {r.id for r in tree.runs.list_run_records_sync(worker.id)} == {"run-work", "run-review", "run-misreview"}
 
 
 @pytest.mark.asyncio
@@ -221,16 +219,19 @@ async def test_failed_child_reports_remain_visible(tmp_path: Path) -> None:
   index = await tree._get_index()
   assert tree.work_state_of(index, child.id) == "attention"
   await tree.dispatch.deliver_child_report(
-      child.id, source_event={"id": "runf-finish"}, outcome="failed",
-      summary="run failed", result_refs=[], recipient=root.id)
+      child.id,
+      source_event={"id": "runf-finish"},
+      outcome="failed",
+      summary="run failed",
+      result_refs=[],
+      recipient=root.id)
   index = await tree._get_index()
   assert tree.archived_of(index, index.metas[child.id]) is False  # failed stays visible
   root_events = tree.events.load_events(root.id)
   failed_reports = [e for e in root_events if e["type"] == ET.CHILD_REPORT and e["outcome"] == "failed"]
   assert len(failed_reports) == 1
   # A successful authorized retry resolves the superseded attention.
-  await tree.runs.register_run(
-      RunRecord(id="run-r", session_id=child.id, kind="work", retry_of_run_id="run-f"))
+  await tree.runs.register_run(RunRecord(id="run-r", session_id=child.id, kind="work", retry_of_run_id="run-f"))
   await finish_worker_run(tree, child.id, "run-r")
   index = await tree._get_index()
   assert tree.work_state_of(index, child.id) == "idle"
@@ -252,13 +253,11 @@ async def test_failed_only_universe_still_refuses_completion_on_a_bare_claim(tmp
   await tree.runs.register_run(RunRecord(id="run-c", session_id=cancelled_child.id, kind="work"))
   await tree.dispatch.finish_run(cancelled_child.id, "run-c", outcome="cancelled")
   index = await tree._get_index()
-  claim = CompletionEvidence(
-      summary="gave up and delivered it manually", result_refs=["terminal:transcript"])
+  claim = CompletionEvidence(summary="gave up and delivered it manually", result_refs=["terminal:transcript"])
 
   # Failed (here beside cancelled) Runs in the universe: a bare claim refuses.
   blockers = tree.completion.evidence_blockers(index.metas[root.id], claim)
-  assert any("run_ids" in b and "failed Runs are not completion evidence" in b
-             for b in blockers), blockers
+  assert any("run_ids" in b and "failed Runs are not completion evidence" in b for b in blockers), blockers
 
   # A universe with neither a failed nor a successful Run to cite closes on
   # the operator's own attributed evidence.
@@ -291,13 +290,15 @@ async def test_own_manager_close_returns_202_and_rechecks_after_run_finish(tmp_p
   manager = await create_task(tree, parent=root.id, request_id="mgr")
   pid, pid_start, started_at = live_identity()
   await tree.runs.register_run(
-      RunRecord(id="run-mgr", session_id=manager.id, kind="manager_turn",
-                pid=pid, pid_start=pid_start, started_at=started_at))
+      RunRecord(
+          id="run-mgr", session_id=manager.id, kind="manager_turn", pid=pid, pid_start=pid_start,
+          started_at=started_at))
   agent = CallerIdentity(
       kind="run", claims=RunTokenClaims(run_id="run-mgr", session_id=manager.id, agent="manager-agent"))
 
   status, payload = await tree.completion.complete_task(
-      manager.id, request_id="close-own-1",
+      manager.id,
+      request_id="close-own-1",
       evidence=CompletionEvidence(summary="wrap up", result_refs=[], run_ids=[]),
       caller=agent)
   assert status == 202 and payload["status"] == "pending_run_finish"
@@ -307,15 +308,13 @@ async def test_own_manager_close_returns_202_and_rechecks_after_run_finish(tmp_p
   assert tree.task_state(manager.id) == "open"
 
   # A later input during execution keeps the close open after the Run succeeds.
-  await tree.dispatch.admit_input(
-      manager.id, event_type=ET.USER, content="one more thing", actor="user")
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="one more thing", actor="user")
   await tree.runs.register_run(RunRecord(id="run-other", session_id=manager.id, kind="work"))
   await tree.dispatch.finish_run(manager.id, "run-other", outcome="success")
   assert tree.task_state(manager.id) == "open"  # the owner run has not finished
   blockers = await tree.completion.recheck_close_requests(manager.id, "run-other")
   assert blockers == []  # not the owner run: nothing to re-evaluate
-  await tree.dispatch.admit_input(
-      manager.id, event_type=ET.SCHEDULED_TRIGGER, content="cron", actor="system")
+  await tree.dispatch.admit_input(manager.id, event_type=ET.SCHEDULED_TRIGGER, content="cron", actor="system")
 
   # The owner Run finishes successfully: the close re-evaluates, the later
   # inputs and the other open run keep the task open with visible blockers.
@@ -327,16 +326,15 @@ async def test_own_manager_close_returns_202_and_rechecks_after_run_finish(tmp_p
   assert not any("queued" in b or "active" in b for b in remaining)
 
   # Conditions clear: a consumer takes the later inputs, then the close lands.
-  await tree.runs.register_run(
-      RunRecord(id="run-consume", session_id=manager.id, kind="manager_turn"))
+  await tree.runs.register_run(RunRecord(id="run-consume", session_id=manager.id, kind="manager_turn"))
   await tree.dispatch.claim_input_batch(manager.id, "run-consume")
   await tree.dispatch.finish_run(manager.id, "run-consume", outcome="success")
   assert tree.dispatch.pending_inputs(manager.id) == []
   # Repeated crash recovery does not double-close once conditions clear.
   status_now, _payload_now = await tree.completion.complete_task(
-      manager.id, request_id="close-own-2",
-      evidence=CompletionEvidence(summary="wrap", result_refs=["run:run-consume"],
-                                  run_ids=["run-consume"]),
+      manager.id,
+      request_id="close-own-2",
+      evidence=CompletionEvidence(summary="wrap", result_refs=["run:run-consume"], run_ids=["run-consume"]),
       caller=OPERATOR)
   assert status_now == 200
   # The original request replays once: one close, one request event.
@@ -350,18 +348,18 @@ async def test_own_run_close_scope_attacks_fail(tmp_path: Path) -> None:
   root = await create_task(tree, parent=None, request_id="root")
   manager = await create_task(tree, parent=root.id, request_id="mgr")
   worker = await create_task(tree, parent=root.id, request_id="worker", profile="worker")
-  await tree.runs.register_run(
-      RunRecord(id="run-mgr", session_id=manager.id, kind="manager_turn", pid=os.getpid()))
-  await tree.runs.register_run(
-      RunRecord(id="run-worker", session_id=worker.id, kind="work", pid=os.getpid()))
+  await tree.runs.register_run(RunRecord(id="run-mgr", session_id=manager.id, kind="manager_turn", pid=os.getpid()))
+  await tree.runs.register_run(RunRecord(id="run-worker", session_id=worker.id, kind="work", pid=os.getpid()))
 
   # An agent bound to a WORKER run cannot request own-manager closure.
   worker_agent = CallerIdentity(
       kind="run", claims=RunTokenClaims(run_id="run-worker", session_id=worker.id, agent="worker-agent"))
   with pytest.raises(Exception) as e_info:
     await tree.completion.complete_task(
-        manager.id, request_id="spoof-1",
-        evidence=CompletionEvidence(summary="s", result_refs=[], run_ids=[]), caller=worker_agent)
+        manager.id,
+        request_id="spoof-1",
+        evidence=CompletionEvidence(summary="s", result_refs=[], run_ids=[]),
+        caller=worker_agent)
   assert "403" in str(e_info.type.__name__) or "Forbidden" in str(e_info.value) or True
 
   # An agent bound to another session's run cannot close this task at all.
@@ -369,8 +367,10 @@ async def test_own_run_close_scope_attacks_fail(tmp_path: Path) -> None:
       kind="run", claims=RunTokenClaims(run_id="run-worker", session_id=worker.id, agent="worker-agent"))
   with pytest.raises(Exception):
     await tree.completion.complete_task(
-        manager.id, request_id="spoof-2",
-        evidence=CompletionEvidence(summary="s", result_refs=[], run_ids=[]), caller=foreign_agent)
+        manager.id,
+        request_id="spoof-2",
+        evidence=CompletionEvidence(summary="s", result_refs=[], run_ids=[]),
+        caller=foreign_agent)
 
   # A stale caller (run already finished) cannot request closure.
   await tree.dispatch.finish_run(manager.id, "run-mgr", outcome="failed")
@@ -378,8 +378,10 @@ async def test_own_run_close_scope_attacks_fail(tmp_path: Path) -> None:
       kind="run", claims=RunTokenClaims(run_id="run-mgr", session_id=manager.id, agent="manager-agent"))
   with pytest.raises(TaskConflictError, match="not active"):
     await tree.completion.complete_task(
-        manager.id, request_id="spoof-3",
-        evidence=CompletionEvidence(summary="s", result_refs=[], run_ids=[]), caller=own_agent)
+        manager.id,
+        request_id="spoof-3",
+        evidence=CompletionEvidence(summary="s", result_refs=[], run_ids=[]),
+        caller=own_agent)
   events = tree.events.load_events(manager.id)
   assert not [e for e in events if e["type"] == ET.TASK_CLOSE_REQUESTED]
 
@@ -397,23 +399,19 @@ async def test_cancel_refuses_active_runs_and_open_children(tmp_path: Path) -> N
 
   # An open child refuses the cancel.
   with pytest.raises(TaskConflictError, match="open descendant"):
-    await tree.completion.cancel_task(
-        root.id, request_id="cancel-1", reason="not yet", caller=OPERATOR)
+    await tree.completion.cancel_task(root.id, request_id="cancel-1", reason="not yet", caller=OPERATOR)
 
   # An active run refuses the cancel.
   pid, pid_start, started_at = live_identity()
   await tree.runs.register_run(
-      RunRecord(id="run-active", session_id=child.id, kind="work",
-                pid=pid, pid_start=pid_start, started_at=started_at))
+      RunRecord(id="run-active", session_id=child.id, kind="work", pid=pid, pid_start=pid_start, started_at=started_at))
   with pytest.raises(TaskConflictError):
-    await tree.completion.cancel_task(
-        child.id, request_id="cancel-2", reason="still running", caller=OPERATOR)
+    await tree.completion.cancel_task(child.id, request_id="cancel-2", reason="still running", caller=OPERATOR)
 
   # The child's run resolves without success (failed evidence keeps the task
   # open); an eligible cancel preserves history and stays visible.
   await tree.dispatch.finish_run(child.id, "run-active", outcome="failed")
-  await tree.completion.cancel_task(
-      child.id, request_id="cancel-3", reason="no longer needed", caller=OPERATOR)
+  await tree.completion.cancel_task(child.id, request_id="cancel-3", reason="no longer needed", caller=OPERATOR)
   events = tree.events.load_events(child.id)
   close = [e for e in events if e["type"] == ET.TASK_CLOSED]
   assert len(close) == 1 and close[0]["outcome"] == "cancelled"
@@ -426,10 +424,10 @@ async def test_cancel_refuses_active_runs_and_open_children(tmp_path: Path) -> N
   assert [e for e in root_events if e["type"] == ET.CHILD_REPORT and e["outcome"] == "cancelled"]
 
   # Agents cannot cancel.
-  agent = CallerIdentity(kind="run", claims=RunTokenClaims(run_id="run-active", session_id=child.id, agent="worker-agent"))
+  agent = CallerIdentity(
+      kind="run", claims=RunTokenClaims(run_id="run-active", session_id=child.id, agent="worker-agent"))
   with pytest.raises(Exception):
-    await tree.completion.cancel_task(
-        root.id, request_id="cancel-4", reason="x", caller=agent)
+    await tree.completion.cancel_task(root.id, request_id="cancel-4", reason="x", caller=agent)
 
 
 @pytest.mark.asyncio
@@ -443,29 +441,26 @@ async def test_reopen_contract(tmp_path: Path) -> None:
   # closure blocks on unprocessed input, and a child report is input.
   await tree.runs.register_run(RunRecord(id="run-w", session_id=worker.id, kind="work"))
   await finish_worker_run(tree, worker.id, "run-w")
-  await tree.runs.register_run(
-      RunRecord(id="run-feature-turn", session_id=feature.id, kind="manager_turn"))
+  await tree.runs.register_run(RunRecord(id="run-feature-turn", session_id=feature.id, kind="manager_turn"))
   await tree.dispatch.claim_input_batch(feature.id, "run-feature-turn")
   await tree.dispatch.finish_run(feature.id, "run-feature-turn", outcome="success")
   await tree.completion.complete_task(
-      feature.id, request_id="close-feature",
-      evidence=CompletionEvidence(summary="s", result_refs=["run:run-w"],
-                                  run_ids=["run-feature-turn"]),
+      feature.id,
+      request_id="close-feature",
+      evidence=CompletionEvidence(summary="s", result_refs=["run:run-w"], run_ids=["run-feature-turn"]),
       caller=OPERATOR)
-  await tree.runs.register_run(
-      RunRecord(id="run-project-turn", session_id=project.id, kind="manager_turn"))
+  await tree.runs.register_run(RunRecord(id="run-project-turn", session_id=project.id, kind="manager_turn"))
   await tree.dispatch.claim_input_batch(project.id, "run-project-turn")
   await tree.dispatch.finish_run(project.id, "run-project-turn", outcome="success")
   await tree.completion.complete_task(
-      project.id, request_id="close-project",
-      evidence=CompletionEvidence(summary="s", result_refs=["run:run-feature-turn"],
-                                  run_ids=["run-project-turn"]),
+      project.id,
+      request_id="close-project",
+      evidence=CompletionEvidence(summary="s", result_refs=["run:run-feature-turn"], run_ids=["run-project-turn"]),
       caller=OPERATOR)
 
   # Reopen under a closed ancestor fails, listing the closed ancestors.
   with pytest.raises(TaskConflictError, match="closed ancestor"):
-    await tree.completion.reopen_task(
-        worker.id, request_id="reopen-w", reason="rework", caller=OPERATOR)
+    await tree.completion.reopen_task(worker.id, request_id="reopen-w", reason="rework", caller=OPERATOR)
   # Reopening the project works, and pause plus gate rules are preserved.
   await tree.patch_task(project.id, PatchSessionTaskRequest(automation_paused=True), caller=OPERATOR)
   reopen_result = await tree.completion.reopen_task(
@@ -474,8 +469,7 @@ async def test_reopen_contract(tmp_path: Path) -> None:
   meta = await tree.load_meta(project.id)
   assert meta is not None and meta.automation_paused is True  # reopen never touches pause
   # The still-closed feature now reopens (its ancestor is open).
-  await tree.completion.reopen_task(
-      feature.id, request_id="reopen-feature", reason="rework", caller=OPERATOR)
+  await tree.completion.reopen_task(feature.id, request_id="reopen-feature", reason="rework", caller=OPERATOR)
   assert tree.task_state(feature.id) == "open"
   # Earlier already-handled history stays handled: the worker's acknowledged
   # input is not pending again, and the worker stays closed.
@@ -493,24 +487,25 @@ async def test_reopen_contract(tmp_path: Path) -> None:
   # The reopened feature must close again first: the project cannot close over
   # an open descendant.
   await tree.completion.complete_task(
-      feature.id, request_id="close-feature-2",
-      evidence=CompletionEvidence(summary="s2", result_refs=["run:run-w"],
-                                  run_ids=["run-feature-turn"]),
+      feature.id,
+      request_id="close-feature-2",
+      evidence=CompletionEvidence(summary="s2", result_refs=["run:run-w"], run_ids=["run-feature-turn"]),
       caller=OPERATOR)
   # The second close delivers a second report to the project (a new close
   # event derives a new report id); the project consumes it before closing.
-  await tree.runs.register_run(
-      RunRecord(id="run-project-turn-2", session_id=project.id, kind="manager_turn"))
+  await tree.runs.register_run(RunRecord(id="run-project-turn-2", session_id=project.id, kind="manager_turn"))
   await tree.dispatch.claim_input_batch(project.id, "run-project-turn-2")
   await tree.dispatch.finish_run(project.id, "run-project-turn-2", outcome="success")
   await tree.completion.complete_task(
-      project.id, request_id="close-project-2",
-      evidence=CompletionEvidence(summary="s2", result_refs=["run:run-feature-turn"],
-                                  run_ids=["run-project-turn-2"]),
+      project.id,
+      request_id="close-project-2",
+      evidence=CompletionEvidence(summary="s2", result_refs=["run:run-feature-turn"], run_ids=["run-project-turn-2"]),
       caller=OPERATOR)
   replay = await tree.completion.complete_task(
-      project.id, request_id="close-project",
-      evidence=CompletionEvidence(summary="s", result_refs=[], run_ids=[]), caller=OPERATOR)
+      project.id,
+      request_id="close-project",
+      evidence=CompletionEvidence(summary="s", result_refs=[], run_ids=[]),
+      caller=OPERATOR)
   assert replay[1]["closed_event_id"]
   closes = [e for e in tree.events.load_events(project.id) if e["type"] == ET.TASK_CLOSED]
   assert len(closes) == 2
@@ -518,8 +513,7 @@ async def test_reopen_contract(tmp_path: Path) -> None:
   # Reopen references the relevant closed event: a foreign event id is invalid.
   with pytest.raises(TaskInvalidError, match="not a close fact"):
     await tree.completion.reopen_task(
-        feature.id, request_id="reopen-bad-ref", reason="x", caller=OPERATOR,
-        closed_event_id="not-a-close-event")
+        feature.id, request_id="reopen-bad-ref", reason="x", caller=OPERATOR, closed_event_id="not-a-close-event")
 
 
 # ---------------------------------------------------------------------------
@@ -535,8 +529,7 @@ async def test_hidden_ancestor_keeps_descendant_path_navigable(tmp_path: Path) -
   leaf = await create_task(tree, parent=mid.id, request_id="leaf", profile="worker")
 
   await tree.patch_task(root.id, PatchSessionTaskRequest(presentation="hidden"), caller=OPERATOR)
-  await tree.runs.register_run(
-      RunRecord(id="run-leaf", session_id=leaf.id, kind="work", pid=os.getpid()))
+  await tree.runs.register_run(RunRecord(id="run-leaf", session_id=leaf.id, kind="work", pid=os.getpid()))
   index = await tree._get_index()
   page = await tree.tree_page(parent_id=None, include_archived=False, limit=100, cursor=None)
   # The hidden ancestor stays navigable as ancestor context while active work
@@ -618,16 +611,15 @@ async def test_cancel_with_unprocessed_input_keeps_it_as_preserved_history(tmp_p
   preserved as pending history on the cancelled node."""
   _cfg, _session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
-  await tree.dispatch.admit_input(
-      root.id, event_type=ET.USER, content="later input", actor="user", input_id="late-1")
+  await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="later input", actor="user", input_id="late-1")
 
   with pytest.raises(TaskConflictError, match="unprocessed input"):
     await tree.completion.complete_task(
-        root.id, request_id="close-1",
+        root.id,
+        request_id="close-1",
         evidence=CompletionEvidence(summary="s", result_refs=["x"], run_ids=["r"]),
         caller=OPERATOR)
-  await tree.completion.cancel_task(
-      root.id, request_id="cancel-1", reason="abandoned", caller=OPERATOR)
+  await tree.completion.cancel_task(root.id, request_id="cancel-1", reason="abandoned", caller=OPERATOR)
   assert tree.task_state(root.id) == "cancelled"
   assert [str(e.get("id")) for e in tree.dispatch.pending_inputs(root.id)] == ["late-1"]
   events = tree.events.load_events(root.id)
@@ -647,11 +639,13 @@ async def test_reopen_announces_after_the_durable_append(tmp_path: Path) -> None
   await tree.runs.register_run(RunRecord(id="run-r", session_id=root.id, kind="work"))
   await tree.dispatch.finish_run(root.id, "run-r", outcome="success")
   await tree.completion.complete_task(
-      root.id, request_id="close-1",
+      root.id,
+      request_id="close-1",
       evidence=CompletionEvidence(summary="done", result_refs=["run:run-r"], run_ids=["run-r"]),
       caller=OPERATOR)
 
   class _StreamingManager:
+
     def __init__(self) -> None:
       self.sent: list[tuple[str, dict]] = []
 
@@ -662,16 +656,14 @@ async def test_reopen_announces_after_the_durable_append(tmp_path: Path) -> None
   original = sessions_module.streaming_manager
   sessions_module.streaming_manager = fake  # type: ignore[assignment]
   try:
-    await tree.completion.reopen_task(
-        root.id, request_id="reopen-1", reason="rework", caller=OPERATOR)
+    await tree.completion.reopen_task(root.id, request_id="reopen-1", reason="rework", caller=OPERATOR)
     deltas = [p["message"] for _channel, p in fake.sent if p.get("type") == "message"]
     reopened = [m.get("content") for m in deltas if m.get("role") == "system" and "reopened" in str(m.get("content"))]
     assert reopened == ["Task reopened: rework"]
     assert tree.task_state(root.id) == "open"
     # A replayed request id appends and announces nothing new.
     sent_before = list(fake.sent)
-    again = await tree.completion.reopen_task(
-        root.id, request_id="reopen-1", reason="rework", caller=OPERATOR)
+    again = await tree.completion.reopen_task(root.id, request_id="reopen-1", reason="rework", caller=OPERATOR)
     assert fake.sent == sent_before
     assert again["reopened_event_id"]
   finally:

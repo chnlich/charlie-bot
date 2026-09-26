@@ -768,8 +768,8 @@ class RunStore:
   def _require_run(self, session_id: str, run_id: str) -> RunRecord:
     """The run's record, or RunNotFoundError when no run metadata exists.
 
-    A plain read: no lock is taken here, so callers under the control lock
-    and the outside-lock finish and recovery paths share one read-or-raise.
+    A plain read: no lock is taken here, so the under-lock write paths and
+    the outside-lock recovery path share one read-or-raise.
     """
     run = self.read_run_sync(session_id, run_id)
     if run is None:

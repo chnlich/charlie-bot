@@ -416,9 +416,11 @@ function renderScheduledSessionItem(s, options = {}) {
     ${renderArchiveButton(s, activeBtnClass)}
     ${renderCronGearButton(s.scheduled_task, activeBtnClass)}`;
   // The tree chevron leads the indicator slot, as in renderSessionItem: the
-  // Scheduled tab's cron rows nest their worker leaves behind it.
+  // Scheduled tab's cron roots nest their worker leaves behind it, and a
+  // childless root draws the same chevron so a level's markers line up in
+  // one column.
   const indicators = [
-      options.treeChildCount ? renderTreeChevron(s.id, options.treeChildCount) : '',
+      'treeChildCount' in options ? renderTreeChevron(s.id, options.treeChildCount) : '',
       renderSessionIndicators(s),
       renderPendingTriggerIndicator(s),
       renderPendingPlanApprovalIndicator(s),
@@ -746,16 +748,18 @@ function renderTreeChevron(sessionId, childCount) {
          fill="none" stroke="currentColor" viewBox="0 0 24 24">${CHEVRON_SVG_PATH}</svg>`;
 }
 
+// The worker glyph leads its row — the chevron's slot at the chevron's
+// size, in every paint tree or flat — and a worker row never draws a chevron.
 function renderWorkerLeafIcon() {
-  return `<svg class="w-3.5 h-3.5 text-slate-500 flex-shrink-0" title="Worker (implementation leaf)" fill="none" stroke="currentColor" viewBox="0 0 24 24">${LEAF_SVG_PATH}</svg>`;
+  return `<svg class="w-3 h-3 text-slate-500 flex-shrink-0" title="Worker (implementation leaf)" fill="none" stroke="currentColor" viewBox="0 0 24 24">${LEAF_SVG_PATH}</svg>`;
 }
 
-// An archived worker delivered its work: the row shows a check in the leaf
-// icon's place.
+// An archived worker delivered its work: the row leads with a check instead
+// of the leaf glyph.
 const CHECK_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>`;
 
 function renderWorkerDeliveredIcon() {
-  return `<svg class="w-3.5 h-3.5 text-green-500 flex-shrink-0" title="Worker (delivered)" fill="none" stroke="currentColor" viewBox="0 0 24 24">${CHECK_SVG_PATH}</svg>`;
+  return `<svg class="w-3 h-3 text-green-500 flex-shrink-0" title="Worker (delivered)" fill="none" stroke="currentColor" viewBox="0 0 24 24">${CHECK_SVG_PATH}</svg>`;
 }
 
 // One row followed by its subtree. The outer wrapper carries the row's
@@ -766,6 +770,9 @@ function renderWorkerDeliveredIcon() {
 // render through renderSessionItem — the Scheduled tab's cron rows are the
 // one caller whose root row form (renderScheduledSessionItem) differs from
 // its subtree's.
+// Every row rendered here receives treeChildCount (0 for a leaf); its
+// presence is the one marker that tells a row renderer a tree row from a
+// flat one — the flat paints (search results, the Archived tab) pass none.
 function renderSessionTree(s, filter, options, childrenOf, rowRenderer) {
   const renderRow = rowRenderer || ((row, opts) => renderSessionItem(row, filter, opts));
   const children = childrenOf.get(s.id) || [];
@@ -867,12 +874,17 @@ function renderSessionItem(s, filter, options = {}) {
       s.scheduled_task ? renderScheduledBadge(s) : '',
       renderTuiStatusDot(s),
   ].join('\n    ');
-  // The tree chevron leads the indicator slot and the worker glyph closes it,
-  // so a tree row keeps the one row shell every other row kind uses.
+  // Every tree row leads with one 12px marker so a level's markers line up
+  // in one column: a logical row draws the chevron even with no children
+  // (same markup and toggle behavior, with nothing to reveal below it), and
+  // a worker row draws the worker glyph instead — never a chevron. A flat
+  // row (search results, the Archived tab) draws neither. The indicators
+  // follow the lead marker.
   const lead = [
-      options.treeChildCount ? renderTreeChevron(s.id, options.treeChildCount) : '',
+      isWorker
+          ? (isArchivedRow ? renderWorkerDeliveredIcon() : renderWorkerLeafIcon())
+          : ('treeChildCount' in options ? renderTreeChevron(s.id, options.treeChildCount) : ''),
       indicators,
-      isWorker ? (isArchivedRow ? renderWorkerDeliveredIcon() : renderWorkerLeafIcon()) : '',
   ].join('\n    ');
   const line = filter === 'scheduled' && s.schedule_cron
       ? renderSessionScheduleLine(s)

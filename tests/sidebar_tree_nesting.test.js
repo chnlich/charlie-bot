@@ -139,7 +139,67 @@ test('a row whose parent is absent from the list renders as a root', () => {
 
   assert.deepEqual(anchorIdsInOrder(nav.innerHTML), ['orphan', 'legacy']);
   assert.doesNotMatch(nav.innerHTML, /data-tree-children/);
-  assert.doesNotMatch(nav.innerHTML, /data-tree-toggle/);
+  // The childless logical root leads with a chevron like any tree row; the
+  // worker root leads with the worker glyph and never a chevron.
+  assert.match(rowHtml(nav.innerHTML, 'legacy'), /data-tree-toggle="legacy"/);
+  assert.doesNotMatch(rowHtml(nav.innerHTML, 'orphan'), /data-tree-toggle/);
+});
+
+test('a childless logical tree row leads with a chevron and no children container', () => {
+  const {context, nav} = buildContext();
+
+  context.renderSessionList([meta('legacy')], 'all');
+
+  const row = rowHtml(nav.innerHTML, 'legacy');
+  assert.match(anchorOpenTag(nav.innerHTML, 'legacy') + row, /data-tree-toggle="legacy"[^>]*aria-expanded="false"/);
+  assert.match(row, /title="0 child tasks"/);
+  assert.doesNotMatch(nav.innerHTML, /data-tree-children/);
+});
+
+test('toggleTreeNode turns a childless row\u2019s chevron and records it, with nothing to reveal', () => {
+  const {context, nav} = buildContext();
+  const chevron = createElement({className: 'tree-chevron'});
+  let refreshes = 0;
+  context.document.querySelectorAll = (selector) => {
+    if (selector === '[data-tree-toggle="legacy"]') return [chevron];
+    return [];
+  };
+  context.Sidebar.refreshSessionIndicator = () => { refreshes += 1; };
+
+  context.renderSessionList([meta('legacy')], 'all');
+  context.toggleTreeNode('legacy');
+
+  assert.equal(context.Sidebar.isTreeNodeExpanded('legacy'), true);
+  assert.equal(chevron.classList.contains('rotate-90'), true);
+  assert.equal(chevron['aria-expanded'], 'true');
+  assert.equal(refreshes, 1);
+
+  // A repaint keeps the chevron turned and still renders no children container.
+  context.renderSessionList([meta('legacy')], 'all');
+  assert.match(rowHtml(nav.innerHTML, 'legacy'), /rotate-90"[^>]*data-tree-toggle="legacy"[^>]*aria-expanded="true"/);
+  assert.doesNotMatch(nav.innerHTML, /data-tree-children/);
+});
+
+test('a worker tree row leads with the worker glyph instead of a chevron', () => {
+  const {context, nav} = buildContext();
+
+  context.renderSessionList([manager('r1', null, 10), worker('w-new', 'r1', 11)], 'all');
+
+  const leaf = rowHtml(nav.innerHTML, 'w-new');
+  const glyphAt = leaf.indexOf('title="Worker (implementation leaf)"');
+  const nameAt = leaf.indexOf('class="truncate block session-name"');
+  assert.ok(glyphAt !== -1 && nameAt !== -1 && glyphAt < nameAt, 'the worker glyph precedes the name');
+  assert.match(leaf, /class="w-3 h-3 [^"]*" title="Worker \(implementation leaf\)"/);
+  assert.doesNotMatch(leaf, /data-tree-toggle/);
+});
+
+test('a starred paint renders the childless chevron like the All paint', () => {
+  const {context, nav} = buildContext();
+
+  context.renderSessionList([meta('legacy', {starred: true})], 'starred');
+
+  assert.match(rowHtml(nav.innerHTML, 'legacy'), /data-tree-toggle="legacy"[^>]*aria-expanded="false"/);
+  assert.doesNotMatch(nav.innerHTML, /data-tree-children/);
 });
 
 test('the five-row preview counts root rows only and hides a capped root with its subtree', () => {

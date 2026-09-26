@@ -230,20 +230,9 @@ async def _delegate_task_tree(
         # from the delegating session resolve to the same Run (whose owner is
         # the child task).
         task_mgr.aliases.register_owner_thread_alias(req.session_id, child.id, run_id)
-  except DelegationBlockedError as e:
-    # The central ancestor gate's refusal (worker caller, closed ancestor,
-    # shadowing local instruction, expired window) is an authorization
-    # rejection, never a server error.
-    raise HTTPException(status_code=403, detail=str(e)) from e
-  except TaskNotFoundError as e:
-    raise HTTPException(status_code=404, detail=str(e)) from e
-  except TaskForbiddenError as e:
-    raise HTTPException(status_code=403, detail=str(e)) from e
-  except TaskConflictError as e:
-    blockers = list(getattr(e, "blockers", None) or [])
-    raise HTTPException(status_code=409, detail={"message": str(e), "blockers": blockers}) from e
-  except TaskInvalidError as e:
-    raise HTTPException(status_code=400, detail=str(e)) from e
+  except (DelegationBlockedError, TaskNotFoundError, TaskForbiddenError, TaskConflictError, TaskInvalidError) as e:
+    from src.api.sessions import _task_http_error
+    raise _task_http_error(e) from e
 
   # The same adapter the creating tree owns launches the run — never a
   # differently-configured singleton.
@@ -342,12 +331,6 @@ async def _start_improve_sequence(
   stable ids, and the controller task owns the iterations from there.
   """
   from src.core.improve_sequence import create_improve_child, run_improve_sequence
-  from src.core.task_sessions import (
-      TaskConflictError,
-      TaskForbiddenError,
-      TaskInvalidError,
-      TaskNotFoundError,
-  )
 
   try:
     await task_mgr.check_task_authorization(req.session_id)
@@ -389,16 +372,8 @@ async def _start_improve_sequence(
     # ever spawned for it, and its active lock would block every later improve
     # request until the next restart's dirty-pid reconciliation.
     await _fail_reserved_loop(req.session_id, state, cfg)
-    if isinstance(e, TaskNotFoundError):
-      raise HTTPException(status_code=404, detail=str(e)) from e
-    if isinstance(e, TaskForbiddenError):
-      raise HTTPException(status_code=403, detail=str(e)) from e
-    if isinstance(e, TaskConflictError):
-      blockers = list(getattr(e, "blockers", None) or [])
-      raise HTTPException(status_code=409, detail={"message": str(e), "blockers": blockers}) from e
-    if isinstance(e, TaskInvalidError):
-      raise HTTPException(status_code=400, detail=str(e)) from e
-    raise
+    from src.api.sessions import _task_http_error
+    raise _task_http_error(e) from e
 
   create_logged_task(
       run_improve_sequence(
@@ -547,15 +522,9 @@ async def session_message(
           from_session_name=caller.name,
       )
       await task_mgr.dispatch.dispatch_pending(req.target_session_id)
-    except TaskNotFoundError as e:
-      raise HTTPException(status_code=404, detail=str(e)) from e
-    except TaskForbiddenError as e:
-      raise HTTPException(status_code=403, detail=str(e)) from e
-    except TaskConflictError as e:
-      blockers = list(getattr(e, "blockers", None) or [])
-      raise HTTPException(status_code=409, detail={"message": str(e), "blockers": blockers}) from e
-    except TaskInvalidError as e:
-      raise HTTPException(status_code=400, detail=str(e)) from e
+    except (TaskNotFoundError, TaskForbiddenError, TaskConflictError, TaskInvalidError) as e:
+      from src.api.sessions import _task_http_error
+      raise _task_http_error(e) from e
     log.info(
         "session_message_dispatched",
         session=req.session_id,

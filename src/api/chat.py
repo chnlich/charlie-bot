@@ -1,6 +1,5 @@
 """Chat API routes — triggers master CC process, returns 202 Accepted."""
 
-import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -22,12 +21,11 @@ from src.api.message_utils import (
     build_user_event,
 )
 from src.core import event_types as ET
-from src.core.autonamer import is_default_session_name, maybe_auto_name
+from src.core.autonamer import is_default_session_name, name_after_round
 from src.core.config import CharlieBotConfig
 from src.core.constants import BackendType
 from src.core.deferred import deferred_import_loader, deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
-from src.core.message_aggregator import extract_text_from_message
 from src.core.message_events import serialize_uploaded_files
 from src.core.models import (
     SendMessageRequest,
@@ -307,7 +305,7 @@ async def run_and_finalize(
 
     # Auto-name session after first turn if still using default name
     if is_default_session_name(meta.name):
-      create_logged_task(_auto_name(cfg, meta, display_content or content, session_mgr))
+      create_logged_task(name_after_round(cfg, meta.id, session_mgr))
   except Exception as e:
     log.exception("master_cc_run_failed", session=meta.id)
     # run_message() should handle and emit failures, but keep this as a
@@ -341,25 +339,3 @@ def launch_prompt_dispatch(
           skip_user_event=True,
           display_content=display_content,
           uploaded_files=uploaded_files))
-
-
-async def _auto_name(
-    cfg: CharlieBotConfig,
-    session_meta: SessionMetadata,
-    user_message: str,
-    session_mgr: SessionManager,
-) -> None:
-  """Extract assistant response from saved events and auto-name/group the session."""
-  events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_meta.id)
-  assistant_text = ""
-  for ev in events:
-    if ev.get("type") == ET.ASSISTANT:
-      assistant_text += extract_text_from_message(ev.get("message"))
-
-  if not assistant_text:
-    return
-
-  # Collect existing group names so the LLM can reuse them
-  existing_groups = await session_mgr.list_group_names()
-
-  await maybe_auto_name(cfg, session_meta, user_message, assistant_text, session_mgr, existing_groups)

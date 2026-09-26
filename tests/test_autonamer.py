@@ -18,10 +18,12 @@ from conftest import (
     make_one_shot_backend,
 )
 
+from src.core import event_types as ET
 from src.core.autonamer import (
     iter_light_backends,
     maybe_auto_name,
     maybe_auto_name_from_claude_ai_title,
+    name_after_round,
 )
 from src.core.config import CharlieBotConfig
 from src.core.models import SessionMetadata
@@ -740,3 +742,84 @@ async def test_opencode_one_shot_text_returns_empty_when_no_text_part(monkeypatc
       monkeypatch, [_OPENCODE_STEP_START, _OPENCODE_STEP_FINISH], pid=7776, prompt="hi", system_prompt="sys")
 
   assert result == ""
+
+
+# --- name_after_round: chat-log-driven entry called from src/api/chat.py ---
+
+_MAYBE_AUTO_NAME_PATCH_TARGET = "src.core.autonamer.maybe_auto_name"
+
+
+class _NameAfterRoundSessionMgr:
+  """Fake session manager exposing only what name_after_round touches."""
+
+  def __init__(self, meta: SessionMetadata, events: list[dict], groups: list[str]) -> None:
+    self.get_session = AsyncMock(return_value=meta)
+    self.load_chat_events_sync = MagicMock(return_value=events)
+    self.list_group_names = AsyncMock(return_value=groups)
+
+
+def _user_event(content: str) -> dict:
+  return {"type": ET.USER, "content": content}
+
+
+def _assistant_event(text: str) -> dict:
+  return {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": text}]}}
+
+
+@pytest.mark.asyncio
+async def test_name_after_round_reads_first_user_and_all_assistant_events() -> None:
+  """Prompt text is the FIRST user event; response text concatenates every assistant event."""
+  meta = SessionMetadata(id="s-round-1", name="Session 7", backend="cc-claude")
+  events = [
+      _user_event("first"),
+      _assistant_event("reply one"),
+      _user_event("second"),
+      _assistant_event("reply two"),
+  ]
+  session_mgr = _NameAfterRoundSessionMgr(meta, events, groups=["Alpha"])
+  cfg = build_light_cc_cfg()
+  maybe = AsyncMock()
+  with patch(_MAYBE_AUTO_NAME_PATCH_TARGET, new=maybe):
+    await name_after_round(cfg, "s-round-1", session_mgr)
+
+  maybe.assert_awaited_once_with(cfg, meta, "first", "reply onereply two", session_mgr, ["Alpha"])
+
+
+@pytest.mark.asyncio
+async def test_name_after_round_skips_when_no_assistant_event() -> None:
+  """No assistant text means nothing to name from; no model call and no group listing."""
+  meta = SessionMetadata(id="s-round-2", name="Session 3", backend="cc-claude")
+  session_mgr = _NameAfterRoundSessionMgr(meta, [_user_event("hi")], groups=[])
+  maybe = AsyncMock()
+  with patch(_MAYBE_AUTO_NAME_PATCH_TARGET, new=maybe):
+    await name_after_round(build_light_cc_cfg(), "s-round-2", session_mgr)
+
+  maybe.assert_not_awaited()
+  session_mgr.list_group_names.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_name_after_round_skips_non_default_name_without_reading_events() -> None:
+  """A user-set name short-circuits before the chat log is even loaded."""
+  meta = SessionMetadata(id="s-round-3", name="12: Named", backend="cc-claude")
+  session_mgr = _NameAfterRoundSessionMgr(meta, [], groups=[])
+  maybe = AsyncMock()
+  with patch(_MAYBE_AUTO_NAME_PATCH_TARGET, new=maybe):
+    await name_after_round(build_light_cc_cfg(), "s-round-3", session_mgr)
+
+  maybe.assert_not_awaited()
+  session_mgr.load_chat_events_sync.assert_not_called()
+  session_mgr.list_group_names.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_name_after_round_uses_empty_user_message_when_no_user_event() -> None:
+  """A log with no string-content user event still names, prompting with an empty user message."""
+  meta = SessionMetadata(id="s-round-4", name="Session 9", backend="cc-claude")
+  session_mgr = _NameAfterRoundSessionMgr(meta, [_assistant_event("reply only")], groups=[])
+  cfg = build_light_cc_cfg()
+  maybe = AsyncMock()
+  with patch(_MAYBE_AUTO_NAME_PATCH_TARGET, new=maybe):
+    await name_after_round(cfg, "s-round-4", session_mgr)
+
+  maybe.assert_awaited_once_with(cfg, meta, "", "reply only", session_mgr, [])

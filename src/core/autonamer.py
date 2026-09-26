@@ -3,7 +3,8 @@
 Two strategies, picked by who triggers them:
 
 1. Light-backend one-shot (SDK sessions: cc-claude / codex / opencode / etc.)
-   - Entry: maybe_auto_name(...) — called from src/api/chat.py after a master_done event.
+   - Entry: name_after_round(...) — called from src/api/chat.py after a master round;
+     it assembles the prompt from the chat log and delegates to maybe_auto_name(...).
    - Reads CharlieBot's chat_events.jsonl (user message + assistant_text).
    - Picks resolved light backends from backends.preference in order
      (iter_light_backends) and asks them, via one_shot_text, for {name, group}.
@@ -22,6 +23,7 @@ Both strategies share _apply_name_to_session(), which guards against overwriting
 a name the user has already set (matched via is_default_session_name).
 """
 
+import asyncio
 import json
 import re
 from collections.abc import Iterator
@@ -33,6 +35,7 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, default_claude_dir
 from src.core.deferred import deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
+from src.core.message_aggregator import extract_text_from_message
 from src.core.models import BackendOption, SessionMetadata
 from src.core.sessions import SessionManager
 from src.core.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
@@ -192,6 +195,34 @@ async def _apply_name_to_session(
   if current_meta and not current_meta.group:
     await session_mgr.set_group(session_meta.id, group)
     log.info("session_auto_grouped", session_id=session_meta.id, group=group)
+
+
+async def name_after_round(cfg: CharlieBotConfig, session_id: str, session_mgr: SessionManager) -> None:
+  """Name a session from its saved chat log after a master round finishes.
+
+  The manager prompt is composed from typed input events, so naming reads the
+  chat log's first user event for the prompt and every assistant event's text
+  for the response, then delegates to maybe_auto_name().
+  """
+  meta = await session_mgr.get_session(session_id)
+  if meta is None or not is_default_session_name(meta.name):
+    return
+
+  events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
+  user_message = ""
+  for ev in events:
+    if ev.get("type") == ET.USER and isinstance(ev.get("content"), str):
+      user_message = ev["content"]
+      break
+  assistant_text = ""
+  for ev in events:
+    if ev.get("type") == ET.ASSISTANT:
+      assistant_text += extract_text_from_message(ev.get("message"))
+  if not assistant_text:
+    return
+
+  existing_groups = await session_mgr.list_group_names()
+  await maybe_auto_name(cfg, meta, user_message, assistant_text, session_mgr, existing_groups)
 
 
 async def maybe_auto_name(

@@ -441,12 +441,14 @@ class TaskTreeManager:
         asyncio.to_thread(self._build_index_sync, cached_metas), name="task-tree-index-build")
     self._index_build_task = task
     self._index_build_generation = generation
-    index = await task
-    # Only the last joiner observing its own task still installed clears it; a
-    # joiner that resumes after a newer build replaced it must not clobber that
-    # build's in-flight marker (the token-usage route's single-flight rule).
-    if self._index_build_task is task:
-      self._index_build_task = None
+    try:
+      index = await task
+    finally:
+      # The task removes itself from the marker on completion, success or
+      # failure, so a later read retries fresh instead of inheriting a stale
+      # failure; a newer build owning the marker must not be clobbered.
+      if self._index_build_task is task:
+        self._index_build_task = None
     if self._index_generation == generation:
       self._index = (index, now)
     # A structural write landing mid-build bumped the generation: the build's

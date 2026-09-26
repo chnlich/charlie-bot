@@ -55,6 +55,29 @@ async def test_concurrent_invalidated_readers_share_one_build(tree, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_failed_build_releases_the_marker_and_the_next_read_rebuilds(tree, monkeypatch):
+    """One transient build failure must not poison later reads with its exception."""
+    builds = await _count_builds(tree, monkeypatch)
+    await tree._get_index()
+    orig = tree._build_index_sync
+    state = {"fail": True}
+
+    def flaky(cached_metas):
+        if state["fail"]:
+            state["fail"] = False
+            raise RuntimeError("transient build failure")
+        return orig(cached_metas)
+
+    monkeypatch.setattr(tree, "_build_index_sync", flaky)
+    tree._invalidate_index()
+    with pytest.raises(RuntimeError):
+        await tree._get_index()
+    assert tree._index_build_task is None  # the failed build released the marker
+    assert (await tree._get_index()).revision  # the next read rebuilt fresh
+    assert builds["n"] == 2  # warm-up + the retry; the failed attempt raised before the counter
+
+
+@pytest.mark.asyncio
 async def test_write_mid_build_never_installs_over_newer_generation(tree, monkeypatch):
     """A structural write landing inside a running build refuses that build's install."""
     builds = await _count_builds(tree, monkeypatch)

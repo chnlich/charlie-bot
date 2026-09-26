@@ -92,6 +92,24 @@ test('the unread dot of a collapsed parent stands in for an unread descendant, a
   assert.deepEqual(shown('p'), {spinner: false, gear: false, dot: false, alert: false, clock: false});
 });
 
+test('a thinking descendant lights the collapsed parent’s gear', () => {
+  const {context, shown} = buildContext(['p', 'w']);
+  context.renderSessionList([row('p', null), row('w', 'p', {profile: 'worker'})], 'all');
+  assert.deepEqual(shown('p'), {spinner: false, gear: false, dot: false, alert: false, clock: false});
+
+  // A worker's live Run carries its header timer: its own row reads thinking.
+  context.setSessionIndicator('w', 'thinking');
+  assert.deepEqual(shown('p'), {spinner: false, gear: true, dot: false, alert: false, clock: false});
+
+  context.Sidebar.expandTreeNode('p');
+  assert.deepEqual(shown('p'), {spinner: false, gear: false, dot: false, alert: false, clock: false},
+      'expanded, the parent shows only its own state');
+  context.setSessionIndicator('w', 'idle');
+  context.Sidebar.toggleTreeNode('p');
+  assert.deepEqual(shown('p'), {spinner: false, gear: false, dot: false, alert: false, clock: false},
+      'the gear clears when the Run ends');
+});
+
 test('a row’s own thinking spinner outranks its subtree', () => {
   const {context, shown} = buildContext(['p', 'c']);
   context.renderSessionList([row('p', null), row('c', 'p', {has_running_tasks: true})], 'all');

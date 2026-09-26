@@ -369,10 +369,12 @@ function subtreeHasUnread(sid) {
 
 // The collapsed stand-in verdict, in the same priority order as the row's own
 // state: a running descendant (the gear), then attention (the alert), then
-// waiting (the clock).
+// waiting (the clock). A running descendant is one whose own state is
+// worker_only or thinking — a manager's turn, or a worker's live Run, whose
+// header timer (thinking_since) paints its own row's spinner.
 function subtreeStandInState(sid) {
   if (!treeStandsInForSubtree(sid)) return 'idle';
-  if (subtreeHasState(sid, 'worker_only')) return 'worker_only';
+  if (subtreeHasState(sid, 'worker_only') || subtreeHasState(sid, 'thinking')) return 'worker_only';
   if (subtreeHasState(sid, 'attention')) return 'attention';
   if (subtreeHasState(sid, 'waiting')) return 'waiting';
   return 'idle';

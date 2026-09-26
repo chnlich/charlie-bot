@@ -59,7 +59,12 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     open_cdp_page,
     pick_free_port,
 )
-from scripts.browser_harness_session_tree_preview import build_source_home  # noqa: E402
+from scripts.browser_harness_session_tree_preview import (  # noqa: E402
+    build_source_home,
+    preview_instance_env,
+    preview_invocation,
+    wait_preview_ready,
+)
 from scripts.live_preview_task_tree import (  # noqa: E402
     DEFAULT_BACKEND,
     build_synthetic_repo,
@@ -328,11 +333,8 @@ async def run_harness(args: argparse.Namespace) -> None:
     port = args.port or pick_free_port()
     if port == PRODUCTION_PORT:
         fail("the picked free port collided with the production port; refusing")
-    invocation = [sys.executable, "-m", "src.cli.main", "session-tree", "preview",
-                  "--home", str(home), "--port", str(port), "--backend", args.backend]
-    env = dict(os.environ)
-    env["CHARLIEBOT_HOME"] = str(source)
-    env["PYTHONUNBUFFERED"] = "1"
+    invocation = preview_invocation(home, port, args.backend, [])
+    env = preview_instance_env(source)
     server_console = tmp_path / "server-console.log"
     log(f"starting preview instance on 127.0.0.1:{port} (home {home})")
     with open(server_console, "w", encoding="utf-8") as server_log_file:
@@ -341,19 +343,7 @@ async def run_harness(args: argparse.Namespace) -> None:
         debug_port = pick_free_port()
         chrome_proc = None
         try:
-            record_path = home / "state" / "preview_instance.json"
-            deadline = time.monotonic() + 120
-            preview_record = {}
-            while time.monotonic() < deadline:
-                if record_path.is_file():
-                    preview_record = json.loads(record_path.read_text())
-                    if preview_record.get("ready"):
-                        break
-                if proc.poll() is not None:
-                    fail(f"preview process exited early: {server_console.read_text()[-1500:]}")
-                await asyncio.sleep(0.2)
-            if not preview_record.get("ready"):
-                fail("preview instance never became ready")
+            preview_record = await wait_preview_ready(proc, home, server_console, fail, 120.0)
             base = preview_record["url"]
             if f"127.0.0.1:{PRODUCTION_PORT}" in base:
                 fail("the preview URL names the production port")

@@ -1323,34 +1323,35 @@ async def get_session_transcript(
     if thread_meta is None:
       raise HTTPException(status_code=404, detail=f"thread {thread} not found in session {session_id}")
     entry = await asyncio.to_thread(
-        worker_transcript.load_thread_transcript, cfg,
-        cfg.sessions_dir / session_id, thread_meta,
-        await thread_mgr.get_events_log_path(session_id, thread))
+        worker_transcript.load_thread_transcript, cfg, cfg.sessions_dir / session_id, thread_meta, await
+        thread_mgr.get_events_log_path(session_id, thread))
     reset = _transcript_reset(entry.revision, revision)
     running_since = worker_transcript.thread_thinking_since(thread_meta)
-    return FastJsonResponse({
-        "messages": entry.projection.committed if reset else entry.projection.committed[after:],
-        "total": len(entry.projection.committed),
-        "pending_draft": entry.projection.pending_draft,
-        "revision": entry.revision,
-        "reset": reset,
-        "active_run_id": entry.active_run_id,
-        "thinking_since": running_since.isoformat() if running_since else None,
-    })
+    return FastJsonResponse(
+        {
+            "messages": entry.projection.committed if reset else entry.projection.committed[after:],
+            "total": len(entry.projection.committed),
+            "pending_draft": entry.projection.pending_draft,
+            "revision": entry.revision,
+            "reset": reset,
+            "active_run_id": entry.active_run_id,
+            "thinking_since": running_since.isoformat() if running_since else None,
+        })
   if meta.profile != "worker":
     raise HTTPException(status_code=400, detail=f"session {session_id} has no worker transcript")
   entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_mgr, session_id)
   reset = _transcript_reset(entry.revision, revision)
   busy = thinking_state.busy_since(session_id)
-  return FastJsonResponse({
-      "messages": entry.projection.committed if reset else entry.projection.committed[after:],
-      "total": len(entry.projection.committed),
-      "pending_draft": entry.projection.pending_draft,
-      "revision": entry.revision,
-      "reset": reset,
-      "active_run_id": entry.active_run_id,
-      "thinking_since": busy.isoformat() if busy else None,
-  })
+  return FastJsonResponse(
+      {
+          "messages": entry.projection.committed if reset else entry.projection.committed[after:],
+          "total": len(entry.projection.committed),
+          "pending_draft": entry.projection.pending_draft,
+          "revision": entry.revision,
+          "reset": reset,
+          "active_run_id": entry.active_run_id,
+          "thinking_since": busy.isoformat() if busy else None,
+      })
 
 
 def _transcript_reset(latest_revision: str, client_revision: str) -> bool:

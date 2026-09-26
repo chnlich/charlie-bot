@@ -1484,6 +1484,11 @@ BUILD_BACKEND_PATCH_TARGET = "src.agents.backends.registry.build_backend"
 # so the worker path's stand-in binds here — an existing binding is returned untouched,
 # exactly the semantics the master-cc registry route relies on.
 WORKER_BUILD_BACKEND_PATCH_TARGET = "src.agents.worker.build_backend"
+# The autonamer defers through the same lazy loader and resolves the registry
+# function at first build; a patch applied after that first build (any earlier
+# test in the suite) must bind the autonamer's cached module attribute for the
+# stand-in to apply regardless of suite order.
+AUTONAMER_BUILD_BACKEND_PATCH_TARGET = "src.core.autonamer.build_backend"
 
 # Import-path patch target for the worker's default-backend fallback. src/agents/worker.py
 # binds the class at import scope (`from src.agents.backends.claude_code import

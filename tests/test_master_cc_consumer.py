@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import (
+    AUTONAMER_BUILD_BACKEND_PATCH_TARGET,
     BROADCAST_PATCH_TARGET,
     BUILD_BACKEND_PATCH_TARGET,
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
@@ -1202,11 +1203,10 @@ async def test_consumer_fires_session_naming_end_to_end(tmp_path: Path, monkeypa
   one_shot = AsyncMock(return_value='{"name": "Alpha Beta", "group": "G"}')
   naming_backend = make_one_shot_backend(one_shot)
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: naming_backend)
-  # The autonamer caches its build_backend binding on first use (module
-  # __getattr__), so the registry target alone misses once another test has
-  # bound it; patch the module attribute too and the stand-in applies
-  # regardless of suite order.
-  monkeypatch.setattr("src.core.autonamer.build_backend", lambda *a, **k: naming_backend)
+  # The autonamer caches its build_backend binding on first use, so the
+  # registry target alone misses once another test has bound it; the module
+  # attribute makes the stand-in apply regardless of suite order.
+  monkeypatch.setattr(AUTONAMER_BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: naming_backend)
   monkeypatch.setattr(master_cc_run, "_run_cc", fake_run_cc)
   monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())

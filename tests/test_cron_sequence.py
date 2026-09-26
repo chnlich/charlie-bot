@@ -2,9 +2,9 @@
 
 Exercises the actual scheduler entry points (_maybe_run / run_task_now) against
 a synthetic instance with deterministic scripted backend processes: bound
-pm and normal types, steps sharing one leaf, per-step backends, stop
+master and worker modes, steps sharing one leaf, per-step backends, stop
 semantics, config API round-trip, closed/paused nodes, new-vs-replayed
-firings, no role/group manager creation, and run-token spoof attempts.
+firings, and run-token spoof attempts.
 """
 
 from __future__ import annotations
@@ -71,10 +71,10 @@ def bound_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   return cfg, session_mgr, tree
 
 
-async def make_manager(tree: TaskTreeManager, name: str = "PM"):
+async def make_manager(tree: TaskTreeManager, name: str = "Manager"):
   return await tree.create_task(
-      request_id=f"pm-{name}", task_parent_id=None, profile="manager",
-      task=TaskSpec(goal="pm"), name=name, backend=None, caller="operator")
+      request_id=f"manager-{name}", task_parent_id=None, profile="manager",
+      task=TaskSpec(goal="standup"), name=name, backend=None, caller="operator")
 
 
 def _bound_task(name: str, session_id: str, **overrides) -> ScheduledTaskConfig:
@@ -115,7 +115,7 @@ async def _drain_manager_turns(tree: TaskTreeManager, manager_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# pm type: the typed scheduled input lands on the bound manager
+# mode: master: the typed scheduled input lands on the bound manager
 # ---------------------------------------------------------------------------
 
 
@@ -128,7 +128,7 @@ async def test_bound_master_admits_one_typed_input_and_dispatches(
                             "src.agents.backends.registry.build_backend")
   from conftest import patch_instructions_content
   patch_instructions_content(monkeypatch)
-  task_cfg = _bound_task("wake-pm", manager.id, mode="master", prompt="Standup time.")
+  task_cfg = _bound_task("wake-manager", manager.id, mode="master", prompt="Standup time.")
   scheduler = Scheduler(cfg, session_mgr)
 
   result = await scheduler._execute_task(task_cfg, record_handle=True, firing="2026-01-01T03:00:00+00:00")
@@ -146,7 +146,7 @@ async def test_bound_master_admits_one_typed_input_and_dispatches(
   events = tree.events.load_events(manager.id)
   triggers = [e for e in events if e.get("type") == ET.SCHEDULED_TRIGGER]
   assert len(triggers) == 1
-  assert triggers[0].get("id") == "cron:wake-pm:2026-01-01T03:00:00+00:00"
+  assert triggers[0].get("id") == "cron:wake-manager:2026-01-01T03:00:00+00:00"
   assert "Standup time." in str(triggers[0].get("content"))
   # No legacy Group line rides a bound fire (no role/group discovery here).
   assert "Group:" not in str(triggers[0].get("content"))
@@ -177,7 +177,7 @@ async def test_bound_master_worker_spoof_cannot_forged_scheduled_input(
   import src.core.config as core_config
   from src.core.run_token import RunTokenClaims, sign_run_token
   key = str(core_config.get_credentials().get("charliebot", "access_key") or "")
-  claims = RunTokenClaims(session_id=manager.id, run_id=run_id, agent="PM")
+  claims = RunTokenClaims(session_id=manager.id, run_id=run_id, agent="Manager")
   token = sign_run_token(claims, key)
   request = type("R", (), {"headers": {"authorization": f"Bearer {token}"}})()
   from src.api.deps import require_caller
@@ -199,7 +199,7 @@ async def test_bound_master_worker_spoof_cannot_forged_scheduled_input(
 
 
 # ---------------------------------------------------------------------------
-# Normal types: one leaf per firing, steps share it, one boundary report
+# Worker mode: one leaf per firing, steps share it, one boundary report
 # ---------------------------------------------------------------------------
 
 
@@ -403,7 +403,7 @@ async def test_legacy_session_binding_refuses_the_v2_path(
   await make_manager(tree)
   from src.core.models import CreateSessionRequest
   legacy = await session_mgr.create_session(
-      CreateSessionRequest(name="Old PM"), backend=OPUS_BACKEND_ID)
+      CreateSessionRequest(name="Legacy session"), backend=OPUS_BACKEND_ID)
   task_cfg = _bound_task("legacy-bound", legacy.id, prompt="wake")
   scheduler = Scheduler(cfg, session_mgr)
   with pytest.raises(ScheduledBindingError, match="not a task-tree node"):
@@ -429,7 +429,7 @@ async def test_closed_bound_node_generates_no_new_execution(
       evidence=CompletionEvidence(
           summary="done", run_ids=[close_run],
           result_refs=[f"run:{close_run}"]))
-  task_cfg = _bound_task("wake-pm", manager.id, prompt="Standup.")
+  task_cfg = _bound_task("wake-manager", manager.id, prompt="Standup.")
   scheduler = Scheduler(cfg, session_mgr)
   with pytest.raises(ScheduledBindingError, match="no new cron execution"):
     await scheduler._execute_task(task_cfg, record_handle=True, firing="2026-01-01T03:00:00+00:00")
@@ -450,7 +450,7 @@ async def test_paused_bound_node_generates_no_new_execution(
   await tree.patch_task(
       manager.id, PatchSessionTaskRequest(automation_paused=True),
       caller=CallerIdentity(kind="operator"))
-  task_cfg = _bound_task("wake-pm", manager.id, prompt="Standup.")
+  task_cfg = _bound_task("wake-manager", manager.id, prompt="Standup.")
   scheduler = Scheduler(cfg, session_mgr)
   with pytest.raises(ScheduledBindingError, match="paused"):
     await scheduler._execute_task(task_cfg, record_handle=True, firing="2026-01-01T03:00:00+00:00")
@@ -484,12 +484,12 @@ async def test_config_loader_and_api_round_trip_binding(tmp_path: Path, monkeypa
   from src.core.config import _load_cron_file
   cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
   manager = await tree.create_task(
-      request_id="pm", task_parent_id=None, profile="manager",
-      task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
+      request_id="manager", task_parent_id=None, profile="manager",
+      task=TaskSpec(goal="standup"), name="Manager", backend=None, caller="operator")
   cron_dir = cfg.charliebot_home / "config.d" / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
   wake_md = cron_dir / "wake.md"
-  wake_md.write_text("wake the pm\n", encoding="utf-8")
+  wake_md.write_text("wake the manager\n", encoding="utf-8")
   (cron_dir / "bound.yaml").write_text(yaml.safe_dump({
       "cron": "0 3 * * *",
       "prompt_file": str(wake_md),
@@ -498,7 +498,7 @@ async def test_config_loader_and_api_round_trip_binding(tmp_path: Path, monkeypa
   }), encoding="utf-8")
   task, _mtimes = _load_cron_file(cron_dir / "bound.yaml", cfg.charlie_bot_repo, "bound")
   assert task.session_id == str(manager.id)
-  assert task.prompt == "wake the pm\n"
+  assert task.prompt == "wake the manager\n"
 
   # The API update round-trips the binding (set, overwrite, clear).
   raw = task.model_dump()
@@ -926,7 +926,7 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
   # The blocker: an unclaimed pending input on the leaf.
   await tree.dispatch.admit_input(
       leaf.id, event_type=ET.AGENT_MESSAGE, content="one more thing", actor="agent",
-      from_session=manager.id, from_session_name="PM")
+      from_session=manager.id, from_session_name="Manager")
 
   from src.core import cron_sequence
   await cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id)

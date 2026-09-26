@@ -88,6 +88,13 @@ _TREE_INDEX_TTL_SECONDS = 2.0
 # never spin on a corrupted relation.
 _ANCESTOR_HOP_LIMIT = 1000
 
+# The create route (src/api/sessions.py) reproduces these two refusals
+# verbatim as its client-visible details — the first in the v2 pre-check, the
+# second in the legacy-shape guard; the wording lives beside the raises that
+# own the contracts.
+TASK_CREATE_REQUEST_ID_REQUIRED = "request_id is required for task creation"
+AGENT_CREATE_SCOPE_REFUSAL = "an agent may only create a task directly under its own open manager task"
+
 
 class TaskInvalidError(ValueError):
   """Empty target or illegal relation (API: 400)."""
@@ -771,7 +778,7 @@ class TaskTreeManager:
     crash leaves either no node or a complete one.
     """
     if not request_id:
-      raise TaskInvalidError("request_id is required for task creation")
+      raise TaskInvalidError(TASK_CREATE_REQUEST_ID_REQUIRED)
     if profile not in ("manager", "worker"):
       raise TaskInvalidError("profile must be 'manager' or 'worker'")
     task_id = stable_task_id(task_parent_id, request_id)
@@ -875,8 +882,7 @@ class TaskTreeManager:
     assert claims is not None
     if (task_parent_id != claims.session_id or parent_meta is None or
             parent_meta.profile not in ("manager", None)):
-      raise TaskForbiddenError(
-          "an agent may only create a task directly under its own open manager task")
+      raise TaskForbiddenError(AGENT_CREATE_SCOPE_REFUSAL)
     if profile == "worker" and not is_verify_exempt(task):
       # Implementation authorization stays with the caller's own manager task:
       # the nearest-real-user-ancestor gate (takeoff_gate) decides. The

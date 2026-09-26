@@ -3,6 +3,8 @@ import io
 import json
 import os
 import stat
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,7 @@ from src.cli.claude_sub_bridge import (
     PromptDelivery,
 )
 from src.core import event_types as ET
+from src.core.timeouts import CLAUDE_SUB_HOOK_SOCKET_TIMEOUT
 
 SESSION_ID = "session-id"
 WORKING_DIRECTORY = "/tmp/claude-sub-test"
@@ -378,6 +381,7 @@ async def test_hook_bridge_accepts_fake_hook_source_and_emits_events(tmp_path: P
         bridge.token,
         gate=False,
         payload=_payload("SessionStart", source="startup"),
+        socket_timeout=CLAUDE_SUB_HOOK_SOCKET_TIMEOUT,
     )
     assert session_start == {"ok": True}
     assert (await bridge.events.get())["subtype"] == "init"
@@ -388,6 +392,7 @@ async def test_hook_bridge_accepts_fake_hook_source_and_emits_events(tmp_path: P
         bridge.token,
         gate=True,
         payload=_payload("UserPromptSubmit", prompt=PROMPT, turn_id="turn-1"),
+        socket_timeout=CLAUDE_SUB_HOOK_SOCKET_TIMEOUT,
     )
     assert user_submit == {"ok": True}
     message = await asyncio.to_thread(
@@ -403,6 +408,7 @@ async def test_hook_bridge_accepts_fake_hook_source_and_emits_events(tmp_path: P
             final=True,
             delta="hello",
         ),
+        socket_timeout=CLAUDE_SUB_HOOK_SOCKET_TIMEOUT,
     )
     assert message == {"ok": True}
     assert (await bridge.events.get())["message_id"] == "message-1"
@@ -667,6 +673,44 @@ def test_hook_plugin_registers_every_required_event_without_user_settings(tmp_pa
         "PreToolUse",
         "PermissionRequest",
     })
+    # -S is the site skip the helper's import floor is priced against: the helper
+    # imports nothing from site-packages, and site's editable finder would drag
+    # pathlib/glob/re into every hook event.
+    assert command["args"][0] == "-S"
+
+
+def test_hook_helper_runs_siteless_and_reports_transport_failure(tmp_path: Path) -> None:
+  helper = Path(claude_sub.__file__).with_name("claude_sub_hook.py").resolve()
+  absent_socket = tmp_path / "absent.sock"
+  proc = subprocess.run(
+      [sys.executable, "-S",
+       str(helper), "--socket",
+       str(absent_socket), "--token", "t", "--gate"],
+      input=b"{}",
+      capture_output=True,
+      timeout=30,
+  )
+  # The gate fail path returns 2 and leaves the parent process group alone.
+  assert proc.returncode == 2
+  assert b"transport failure" in proc.stderr
+
+
+def test_hook_helper_non_object_payload_terminates_its_own_process_group(tmp_path: Path) -> None:
+  helper = Path(claude_sub.__file__).with_name("claude_sub_hook.py").resolve()
+  absent_socket = tmp_path / "absent.sock"
+  # The session wrap keeps the helper's terminate-parent-group signal inside the
+  # probe: sh is the helper's parent and the session's only other member.
+  proc = subprocess.run(
+      ["sh", "-c", f'"{sys.executable}" -S "{helper}" --socket "{absent_socket}" --token t --gate'],
+      input=b"[1]",
+      capture_output=True,
+      timeout=30,
+      start_new_session=True,
+  )
+  assert b"hook JSON must be an object" in proc.stderr
+  # sh is the helper's parent and the session's only other member, so its SIGTERM
+  # death is the terminate-parent-group observation.
+  assert proc.returncode == -15
 
 
 @pytest.mark.asyncio

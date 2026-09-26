@@ -399,9 +399,21 @@ async def run_harness(args: argparse.Namespace) -> None:
             # ---- scenario A: a real ~60 s worker Run shows as running -----
             log("scenario A: the running state (spinner on the worker, gear on the collapsed parent)")
             slow_repo = build_slow_repo(home)
+            # The trial manager must stay open and listed through scenario C
+            # (the waiting clock rides its paused, retried takeoff run). A
+            # manager is instructed to request completion once its own
+            # conditions hold, and a root task archives itself on that success
+            # — so a completable one-line goal ("Sleep then report the
+            # marker") lets the report-consuming turn legitimately close the
+            # task and drop the row mid-trial. The goal therefore declares the
+            # standing condition that keeps its completion conditions from
+            # holding during the trial.
             manager_a = await create_manager(
                 base, access_key, "Slow trial program",
-                "## Goal\n\nSleep then report the marker\n", "sidebar-status-root-a")
+                "## Goal\n\nSleep then report the marker\n\nThis trial task stays open after "
+                "the marker is reported: its completion conditions never hold during the "
+                "trial, so never request its completion or closure.\n",
+                "sidebar-status-root-a")
 
             # The page is opened on the manager's URL: with a session id the
             # app connects its websocket, and the tree re-fetches on the

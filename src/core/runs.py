@@ -633,6 +633,20 @@ def run_identity_refusal(run: RunRecord | None, events: list[dict]) -> str | Non
   return None
 
 
+def terminal_outcome_in_events(events: list[dict], run_id: str) -> str | None:
+  """The last recorded run_finished outcome of one Run (None while none).
+
+  The pure fact scan behind ``RunStore.terminal_outcome``: the API's legacy
+  status fold (src.api.threads) reads the same durable events through this
+  function so both owners answer one identical question.
+  """
+  outcome: str | None = None
+  for event in events:
+    if event.get("type") == ET.RUN_FINISHED and event.get("run_id") == run_id:
+      outcome = event.get("outcome")
+  return outcome
+
+
 def stop_requested_in_events(
     events: list[dict], run_id: str, request_id: str | None = None,
 ) -> bool:
@@ -853,11 +867,7 @@ class RunStore:
 
   def terminal_outcome(self, events: list[dict], run_id: str) -> str | None:
     """The run's recorded run_finished outcome, or None while it has none."""
-    outcome: str | None = None
-    for event in events:
-      if event.get("type") == ET.RUN_FINISHED and event.get("run_id") == run_id:
-        outcome = event.get("outcome")
-    return outcome
+    return terminal_outcome_in_events(events, run_id)
 
   def _fact_input_payload(self, events: list[dict], run_id: str) -> list[str]:
     """The input ids the run's recorded run_finished fact carries ([] without one)."""

@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import OPUS_BACKEND_ID, make_home_config
+from conftest import MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, OPUS_BACKEND_ID, make_home_config
 
 from src.core import event_types as ET
 from src.core.models import CreateSessionRequest
@@ -59,7 +59,7 @@ async def test_legacy_parent_wakes_through_trigger_master_once(tmp_path: Path, m
   await tree.events.append(
       legacy.id, child_report(child_id, outcome="completed", summary="the work landed", event_id="report-1"))
   trigger = AsyncMock()
-  monkeypatch.setattr("src.core.master_trigger.trigger_master", trigger)
+  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
 
   await await_wake(await tree.dispatch.wake_parent(legacy.id))
 
@@ -87,7 +87,7 @@ async def test_legacy_parent_wake_does_not_hold_the_caller_for_the_turn(
     turn_started.set()
     await turn_may_finish.wait()
 
-  monkeypatch.setattr("src.core.master_trigger.trigger_master", slow_turn)
+  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, slow_turn)
 
   task = await asyncio.wait_for(tree.dispatch.wake_parent(legacy.id), timeout=1.0)
 
@@ -106,7 +106,7 @@ async def test_legacy_parent_wake_uses_the_newest_report(tmp_path: Path, monkeyp
   await tree.events.append(
       legacy.id, child_report("child-b", outcome="completed", summary="newer attempt", event_id="report-new"))
   trigger = AsyncMock()
-  monkeypatch.setattr("src.core.master_trigger.trigger_master", trigger)
+  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
 
   await await_wake(await tree.dispatch.wake_parent(legacy.id))
 
@@ -119,7 +119,7 @@ async def test_legacy_parent_without_a_report_never_wakes(tmp_path: Path, monkey
   _cfg, session_mgr, tree = await build_env(tmp_path)
   legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
   trigger = AsyncMock()
-  monkeypatch.setattr("src.core.master_trigger.trigger_master", trigger)
+  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
 
   await tree.dispatch.wake_parent(legacy.id)
 
@@ -141,7 +141,7 @@ async def test_node_parent_dispatches_its_pending_inputs(tmp_path: Path, monkeyp
   dispatch = AsyncMock(return_value={"session_id": node.id, "pending": 0, "launch": False})
   monkeypatch.setattr(tree.dispatch, "dispatch_pending", dispatch)
   trigger = AsyncMock()
-  monkeypatch.setattr("src.core.master_trigger.trigger_master", trigger)
+  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
 
   await tree.dispatch.wake_parent(node.id)
 
@@ -188,7 +188,7 @@ async def test_missing_parent_logs_and_returns(tmp_path: Path, monkeypatch: pyte
   dispatch = AsyncMock()
   monkeypatch.setattr(tree.dispatch, "dispatch_pending", dispatch)
   trigger = AsyncMock()
-  monkeypatch.setattr("src.core.master_trigger.trigger_master", trigger)
+  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
 
   await tree.dispatch.wake_parent("no-such-parent")
 

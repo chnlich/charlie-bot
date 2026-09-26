@@ -322,7 +322,9 @@ class Scheduler:
     return cfg, session_mgr, session
 
   async def _execute_task(
-      self, task_cfg: ScheduledTaskConfig, record_handle: bool = False,
+      self,
+      task_cfg: ScheduledTaskConfig,
+      record_handle: bool = False,
       firing: str | None = None,
   ) -> dict:
     """Route to bound, handler, loop, steps, or prompt execution based on task config.
@@ -351,14 +353,18 @@ class Scheduler:
   # ---------------------------------------------------------------------------
 
   async def _execute_bound_task(
-      self, task_cfg: ScheduledTaskConfig, *, record_handle: bool, firing: str,
+      self,
+      task_cfg: ScheduledTaskConfig,
+      *,
+      record_handle: bool,
+      firing: str,
   ) -> dict:
     """Fire one bound task against its stable node (src.core.cron_sequence owns the shapes)."""
     from src.api.deps import task_manager
     from src.core.cron_sequence import (
-      check_fireable_binding,
-      fire_bound_master,
-      run_firing_steps,
+        check_fireable_binding,
+        fire_bound_master,
+        run_firing_steps,
     )
 
     cfg = self._reload_config()
@@ -388,19 +394,17 @@ class Scheduler:
     backend, model = self._resolve_bound_backend_model(task_cfg, tree)
 
     if task_cfg.steps:
-      leaf = await self._bound_leaf(task_cfg, meta, tree, firing,
-                                    goal=f"{task_cfg.name} steps", backend=backend, model=model)
+      leaf = await self._bound_leaf(
+          task_cfg, meta, tree, firing, goal=f"{task_cfg.name} steps", backend=backend, model=model)
       from src.core.cron_sequence import register_leaf_run
       # The firing's first durable product is the leaf's first step Run: the
       # checkpoint advances only after it exists, so a replayed occurrence
       # re-admits the same leaf/Run (stable firing identity).
       await register_leaf_run(
-          tree, leaf.id, task_cfg, firing, kind="scheduled_step", position=0,
-          backend=backend, model=model)
+          tree, leaf.id, task_cfg, firing, kind="scheduled_step", position=0, backend=backend, model=model)
       await self._record_bound_fire(meta, task_cfg, cfg)
       handle = create_logged_task(
-          run_firing_steps(task_cfg, meta, tree, firing, leaf.id),
-          name=f"bound_steps_{task_cfg.name}_{firing}")
+          run_firing_steps(task_cfg, meta, tree, firing, leaf.id), name=f"bound_steps_{task_cfg.name}_{firing}")
       if record_handle:
         self._handles[task_cfg.name] = handle
       return {"session_id": meta.id, "leaf_session_id": leaf.id, "firing": firing}
@@ -412,20 +416,27 @@ class Scheduler:
       # advances, or the same occurrence would refire every tick).
       await self._record_bound_fire(meta, task_cfg, cfg)
       return {"session_id": meta.id, "firing": firing, "skipped": action}
-    leaf = await self._bound_leaf(
-        task_cfg, meta, tree, firing, goal=prompt, backend=backend, model=model)
+    leaf = await self._bound_leaf(task_cfg, meta, tree, firing, goal=prompt, backend=backend, model=model)
     from src.core.cron_sequence import register_leaf_run
-    await register_leaf_run(
-        tree, leaf.id, task_cfg, firing, kind="work", position=None,
-        backend=backend, model=model)
+    await register_leaf_run(tree, leaf.id, task_cfg, firing, kind="work", position=None, backend=backend, model=model)
     await self._record_bound_fire(meta, task_cfg, cfg)
     handle = await self._launch_bound_round(
-        task_cfg, meta, tree, firing, leaf.id, backend=backend, model=model,
-        event_description=event_description, record_handle=record_handle)
+        task_cfg,
+        meta,
+        tree,
+        firing,
+        leaf.id,
+        backend=backend,
+        model=model,
+        event_description=event_description,
+        record_handle=record_handle)
     return {"session_id": meta.id, "leaf_session_id": leaf.id, "firing": firing}
 
   async def _record_bound_fire(
-      self, meta: SessionMetadata, task_cfg: ScheduledTaskConfig, cfg: CharlieBotConfig,
+      self,
+      meta: SessionMetadata,
+      task_cfg: ScheduledTaskConfig,
+      cfg: CharlieBotConfig,
   ) -> None:
     """The scheduler's per-fire bookkeeping on the bound node (same fields as legacy).
 
@@ -437,17 +448,21 @@ class Scheduler:
     tz = ZoneInfo(task_cfg.timezone)
     now = datetime.now(tz)
     from src.api.deps import task_manager
-    await task_manager().record_scheduled_fire(
-        meta.id, last_scheduled_run=now.isoformat(), cron=task_cfg.cron)
+    await task_manager().record_scheduled_fire(meta.id, last_scheduled_run=now.isoformat(), cron=task_cfg.cron)
 
   def _resolve_bound_backend_model(
-      self, task_cfg: ScheduledTaskConfig, tree,
+      self,
+      task_cfg: ScheduledTaskConfig,
+      tree,
   ) -> tuple[str, str | None]:
     from src.core.cron_sequence import resolved_backend_model
     return resolved_backend_model(task_cfg, tree, task_cfg.backend)
 
   async def _resolve_bound_prompt(
-      self, task_cfg: ScheduledTaskConfig, meta: SessionMetadata, cfg: CharlieBotConfig,
+      self,
+      task_cfg: ScheduledTaskConfig,
+      meta: SessionMetadata,
+      cfg: CharlieBotConfig,
   ) -> tuple[str | None, str, str | None]:
     """The fire's prompt: the loop action's decision, or the task prompt verbatim.
 
@@ -462,24 +477,38 @@ class Scheduler:
       action_type, prompt = await determine_action(repo_path / task_cfg.loop.backlog, task_cfg.loop, repo_path)
       if action_type in ('noop', 'stale_reset'):
         from src.api.deps import task_manager
-        await task_manager().record_scheduled_fire(
-            meta.id, last_run_status=LastRunStatus.SUCCESS)
+        await task_manager().record_scheduled_fire(meta.id, last_run_status=LastRunStatus.SUCCESS)
         log.info("bound_loop_task_noop", task=task_cfg.name, action=action_type, session=meta.id)
         return None, "", action_type
       return prompt, f"[{action_type}] {prompt[:200]}", action_type
     return task_cfg.prompt or "", "scheduled_task_fired", None
 
   async def _bound_leaf(
-      self, task_cfg: ScheduledTaskConfig, meta: SessionMetadata, tree,
-      firing: str, *, goal: str, backend: str, model: str | None,
+      self,
+      task_cfg: ScheduledTaskConfig,
+      meta: SessionMetadata,
+      tree,
+      firing: str,
+      *,
+      goal: str,
+      backend: str,
+      model: str | None,
   ):
     from src.core.cron_sequence import ensure_firing_leaf
     return await ensure_firing_leaf(task_cfg, meta, tree, firing, goal, backend, model)
 
   async def _launch_bound_round(
-      self, task_cfg: ScheduledTaskConfig, meta: SessionMetadata, tree,
-      firing: str, leaf_id: str, *, backend: str, model: str | None,
-      event_description: str, record_handle: bool,
+      self,
+      task_cfg: ScheduledTaskConfig,
+      meta: SessionMetadata,
+      tree,
+      firing: str,
+      leaf_id: str,
+      *,
+      backend: str,
+      model: str | None,
+      event_description: str,
+      record_handle: bool,
   ) -> asyncio.Task:
     """One firing's work round: launch (scheduler-owned) and settle for the
     overlap registry. The ordinary work-Run delivery chain owns the success
@@ -487,15 +516,14 @@ class Scheduler:
     this round with the actual reason through the same report owner, and the
     queued Run stays as the retained pending request."""
     from src.core.cron_sequence import (
-      deliver_boundary_report,
-      launch_and_settle,
-      register_leaf_run,
+        deliver_boundary_report,
+        launch_and_settle,
+        register_leaf_run,
     )
 
     async def _round() -> None:
       run = await register_leaf_run(
-          tree, leaf_id, task_cfg, firing, kind="work", position=None,
-          backend=backend, model=model)
+          tree, leaf_id, task_cfg, firing, kind="work", position=None, backend=backend, model=model)
       observation = await launch_and_settle(tree, leaf_id, run.id, prompt=None)
       if observation.withheld is not None:
         # No process started and no terminal fact will arrive: release the
@@ -505,8 +533,7 @@ class Scheduler:
             f"Scheduled task '{task_cfg.name}' fired but its round's launch was withheld and no "
             f"process started ({observation.withheld}). The run stays queued on the firing's "
             "leaf as the retained pending request; no side effects ran.")
-        await deliver_boundary_report(
-            tree, leaf_id, meta.id, task_cfg, firing, "blocked", summary)
+        await deliver_boundary_report(tree, leaf_id, meta.id, task_cfg, firing, "blocked", summary)
 
     handle = create_logged_task(_round(), name=f"bound_worker_{task_cfg.name}_{firing}")
     if record_handle:
@@ -515,7 +542,10 @@ class Scheduler:
     return handle
 
   async def _execute_handler_on_bound(
-      self, task_cfg: ScheduledTaskConfig, meta: SessionMetadata, tree,
+      self,
+      task_cfg: ScheduledTaskConfig,
+      meta: SessionMetadata,
+      tree,
   ) -> dict:
     """The built-in handler modes on a bound node: inline execution, bound bookkeeping."""
     handler = TASK_HANDLERS.get(task_cfg.handler)

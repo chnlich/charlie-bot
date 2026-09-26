@@ -48,8 +48,8 @@ from src.core.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec
 from src.core.task_chain import chain_step_prompt
 
 if TYPE_CHECKING:
-    from src.core.task_execution import LaunchSettlement
-    from src.core.task_sessions import TaskTreeManager
+  from src.core.task_execution import LaunchSettlement
+  from src.core.task_sessions import TaskTreeManager
 
 log = LazyStructlogLogger()
 
@@ -195,8 +195,7 @@ async def fire_bound_master(
       input_id=input_id,
   )
   await tree.dispatch.dispatch_pending(meta.id)
-  log.info("bound_master_fired", task=task_cfg.name, session=meta.id, firing=firing,
-           input_id=str(admitted.get("id")))
+  log.info("bound_master_fired", task=task_cfg.name, session=meta.id, firing=firing, input_id=str(admitted.get("id")))
   return {"session_id": meta.id, "firing": firing, "input_event_id": str(admitted.get("id"))}
 
 
@@ -272,8 +271,9 @@ async def register_leaf_run(
       backend=backend,
       model=model,
       repo_path=task_cfg.repo,
-      sequence_ref=(SequenceRef(kind="cron_steps", owner_ref=firing_ref(task_cfg, firing), position=position)
-                    if position is not None else None),
+      sequence_ref=(
+          SequenceRef(kind="cron_steps", owner_ref=firing_ref(task_cfg, firing), position=position)
+          if position is not None else None),
   )
   async with tree.control_lock:
     await tree.runs.register_run_locked(record, task_spec_text=None)
@@ -317,8 +317,7 @@ async def run_firing_steps(
   for position, step in enumerate(steps):
     backend, model = resolved_backend_model(task_cfg, tree, step.backend or task_cfg.backend)
     run = await register_leaf_run(
-        tree, leaf_id, task_cfg, firing, kind="scheduled_step", position=position,
-        backend=backend, model=model)
+        tree, leaf_id, task_cfg, firing, kind="scheduled_step", position=position, backend=backend, model=model)
     outcome = await terminal_outcome(tree, leaf_id, run.id)
     if outcome is None:
       prompt = step.prompt or ""
@@ -333,8 +332,7 @@ async def run_firing_steps(
         # delivered through the report owner, and the scheduler's overlap
         # handle ends with this controller.
         await deliver_withheld_boundary(
-            tree, leaf_id, meta.id, task_cfg, firing, position, step.name,
-            observation.withheld, executed)
+            tree, leaf_id, meta.id, task_cfg, firing, position, step.name, observation.withheld, executed)
         return
       outcome = observation.outcome
       assert outcome is not None
@@ -413,8 +411,7 @@ async def deliver_withheld_boundary(
       f"Scheduled task '{task_cfg.name}' stopped before step '{step_name}': its launch was "
       f"withheld and no process started ({reason}). The step run stays queued on the firing's "
       "leaf as the retained pending request; no side effects ran.\n\n" + "\n\n".join(blocks))
-  await deliver_boundary_report(
-      tree, leaf_id, recipient, task_cfg, firing, "blocked", summary)
+  await deliver_boundary_report(tree, leaf_id, recipient, task_cfg, firing, "blocked", summary)
 
 
 async def redrive_firing(leaf_id: str, tree: TaskTreeManager, cfg) -> None:
@@ -427,8 +424,8 @@ async def redrive_firing(leaf_id: str, tree: TaskTreeManager, cfg) -> None:
   dependent on the next tick or restart.
   """
   records = tree.runs.list_run_records_sync(leaf_id)
-  seq = next((r.sequence_ref for r in records
-              if r.sequence_ref is not None and r.sequence_ref.kind == "cron_steps"), None)
+  seq = next(
+      (r.sequence_ref for r in records if r.sequence_ref is not None and r.sequence_ref.kind == "cron_steps"), None)
   if seq is None:
     return
   parsed = firing_ref_prefix(seq.owner_ref)
@@ -461,7 +458,9 @@ def effective_backend(task_cfg: ScheduledTaskConfig, tree: TaskTreeManager) -> s
 
 
 def resolved_backend_model(
-    task_cfg: ScheduledTaskConfig, tree: TaskTreeManager, backend_id: str | None,
+    task_cfg: ScheduledTaskConfig,
+    tree: TaskTreeManager,
+    backend_id: str | None,
 ) -> tuple[str, str | None]:
   """(backend, model) for one fire's run: the step's or task's backend, resolved
   strictly to its configured default model (the same resolution the legacy
@@ -490,7 +489,10 @@ def launch(tree: TaskTreeManager, leaf_id: str, run_id: str, prompt: str | None)
 
 
 async def launch_and_settle(
-    tree: TaskTreeManager, leaf_id: str, run_id: str, prompt: str | None,
+    tree: TaskTreeManager,
+    leaf_id: str,
+    run_id: str,
+    prompt: str | None,
 ) -> LaunchSettlement:
   """The scheduler-owned launch followed to its settlement (the shared
   launch/wait observation): a durable terminal outcome, or an explicit
@@ -555,8 +557,7 @@ async def reconcile_bound_firings(
   for run in records:
     if run.sequence_ref is not None and run.sequence_ref.kind == "cron_steps":
       by_position[run.sequence_ref.position] = run
-  executed_positions = sorted(
-      pos for pos, run in by_position.items() if tree.runs.run_has_terminal_fact(run, events))
+  executed_positions = sorted(pos for pos, run in by_position.items() if tree.runs.run_has_terminal_fact(run, events))
   # A registered-but-unlaunched frontier step is the admitted product its
   # controller never got to launch (withheld precondition, or a crash before
   # the launch): the replay launches that SAME step Run — the retained pending
@@ -571,16 +572,16 @@ async def reconcile_bound_firings(
       return  # a live recovered process; its own finish chain re-drives
     backend, model = resolved_backend_model(task_cfg, tree, steps[pos].backend or task_cfg.backend)
     run = await register_leaf_run(
-        tree, leaf_id, task_cfg, firing, kind="scheduled_step", position=pos,
-        backend=backend, model=model)
+        tree, leaf_id, task_cfg, firing, kind="scheduled_step", position=pos, backend=backend, model=model)
     prompt = steps[pos].prompt or ""
     executed: list[tuple[int, str, str, str]] = []
     for previous_pos in executed_positions:
       if previous_pos >= pos:
         break
-      executed.append((
-          previous_pos, by_position[previous_pos].id, steps[previous_pos].name,
-          await run_result_text(tree, leaf_id, by_position[previous_pos].id)))
+      executed.append(
+          (
+              previous_pos, by_position[previous_pos].id, steps[previous_pos].name, await
+              run_result_text(tree, leaf_id, by_position[previous_pos].id)))
     if pos > 0 and executed_positions:
       previous_pos = executed_positions[-1]
       previous = await run_result_text(tree, leaf_id, by_position[previous_pos].id)
@@ -591,25 +592,21 @@ async def reconcile_bound_firings(
       observation = await launch_and_settle(tree, leaf_id, run_id, launch_prompt)
       if observation.withheld is not None:
         await deliver_withheld_boundary(
-            tree, leaf_id, meta.id, task_cfg, firing, pos, steps[pos].name,
-            observation.withheld, executed)
+            tree, leaf_id, meta.id, task_cfg, firing, pos, steps[pos].name, observation.withheld, executed)
 
-    create_logged_task(
-        _settle_recovered_launch(), name=f"cron-recovered-step-{run.id[:8]}")
+    create_logged_task(_settle_recovered_launch(), name=f"cron-recovered-step-{run.id[:8]}")
     return
   if not executed_positions:
     return
   last_pos = executed_positions[-1]
   last_outcome = tree.runs.terminal_outcome(events, by_position[last_pos].id)
-  if (last_pos < len(steps) - 1 and last_outcome == "success"
-      and await step_advanced(tree, leaf_id, by_position[last_pos].id)):
+  if (last_pos < len(steps) - 1 and last_outcome == "success" and
+      await step_advanced(tree, leaf_id, by_position[last_pos].id)):
     # The chain is mid-flight: launch the next position through the same
     # controller semantics (idempotent by stable run id).
-    backend, model = resolved_backend_model(
-        task_cfg, tree, steps[last_pos + 1].backend or task_cfg.backend)
+    backend, model = resolved_backend_model(task_cfg, tree, steps[last_pos + 1].backend or task_cfg.backend)
     next_run = await register_leaf_run(
-        tree, leaf_id, task_cfg, firing, kind="scheduled_step", position=last_pos + 1,
-        backend=backend, model=model)
+        tree, leaf_id, task_cfg, firing, kind="scheduled_step", position=last_pos + 1, backend=backend, model=model)
     if await terminal_outcome(tree, leaf_id, next_run.id) is None and next_run.pid is None:
       prompt = steps[last_pos + 1].prompt or ""
       if last_pos + 1 > 0:
@@ -624,13 +621,12 @@ async def reconcile_bound_firings(
         observation = await launch_and_settle(tree, leaf_id, run_id, launch_prompt)
         if observation.withheld is not None:
           await deliver_withheld_boundary(
-              tree, leaf_id, meta.id, task_cfg, firing, last_pos + 1,
-              steps[last_pos + 1].name, observation.withheld, executed)
+              tree, leaf_id, meta.id, task_cfg, firing, last_pos + 1, steps[last_pos + 1].name, observation.withheld,
+              executed)
         # A settled step Run's own finish chain re-drives the frontier from
         # here; nothing further is owed inline.
 
-      create_logged_task(
-          _settle_recovered_launch(), name=f"cron-recovered-step-{next_run.id[:8]}")
+      create_logged_task(_settle_recovered_launch(), name=f"cron-recovered-step-{next_run.id[:8]}")
     return
   # The chain reached its boundary: re-deliver the ONE report (dedup by id).
   if last_outcome == "success" and last_pos == len(steps) - 1:
@@ -679,10 +675,8 @@ async def run_firing_steps_boundary_report(
     log.warning("cron_sequence_close_blocked", task=task_cfg.name, leaf=leaf_id, error=str(e))
     blocked_summary = (
         f"Scheduled task '{task_cfg.name}' completed all {len(chain)} step(s) but the leaf's "
-        f"automatic close is blocked ({e}); the task stays open with its evidence.\n\n"
-        + "\n\n".join(blocks))
-    await deliver_boundary_report(
-        tree, leaf_id, meta.id, task_cfg, firing, "blocked", blocked_summary)
+        f"automatic close is blocked ({e}); the task stays open with its evidence.\n\n" + "\n\n".join(blocks))
+    await deliver_boundary_report(tree, leaf_id, meta.id, task_cfg, firing, "blocked", blocked_summary)
 
   try:
     await tree.completion.evaluate_automatic_completion(

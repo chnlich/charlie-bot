@@ -472,6 +472,24 @@ class TaskInputDispatcher:
     # Parent reports
     # ------------------------------------------------------------------
 
+    def report_source_event(self, child_session_id: str, child_kind: str) -> dict:
+        """The child's latest durable run fact: the source event one report rides on.
+
+        The report id derives from the source event's id, so repeated
+        finalization and recovery passes must pick the same fact: the latest
+        ``run_finished`` over the full fact history, or the child's creation
+        fact when no run finished. A child with no durable fact at all fails
+        loudly here — a report without a source event has no stable id to
+        dedup on.
+        """
+        events = self._tree.fact_history(child_session_id)
+        source = next((e for e in reversed(events)
+                       if e.get("type") in (ET.RUN_FINISHED, ET.TASK_CREATED)), None)
+        if source is None:
+            raise RuntimeError(
+                f"{child_kind} {child_session_id} has no durable fact to source its report from")
+        return source
+
     async def deliver_child_report(
         self,
         child_session_id: str,

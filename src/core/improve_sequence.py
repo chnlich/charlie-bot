@@ -496,22 +496,15 @@ async def _deliver_sequence_report(
 ) -> None:
     """The ONE final sequence result, delivered through the common report owner.
 
-    The source event is the child's latest durable run fact (its creation fact
-    when the loop ended before any iteration), so the stable report id dedups
-    repeated finalization and recovery passes. The child itself stays open:
-    its evidence (the iteration Runs and loop reports) remains, and the parent
-    — or the operator — closes it through the common closure guards.
+    The child itself stays open: its evidence (the iteration Runs and loop
+    reports) remains, and the parent — or the operator — closes it through the
+    common closure guards.
     """
     meta = await tree.load_meta(child_id)
     if meta is None or not meta.task_parent_id:
         log.warning("improve_sequence_report_no_parent", session=session_id, child=child_id)
         return
-    events = tree.fact_history(child_id)
-    source = next(
-        (e for e in reversed(events)
-         if e.get("type") in (ET.RUN_FINISHED, ET.TASK_CREATED)), None)
-    if source is None:
-        raise RuntimeError(f"improve child {child_id} has no durable fact to source its report from")
+    source = tree.dispatch.report_source_event(child_id, "improve child")
     detail = ("\n\nIteration summaries:\n" + "\n\n".join(previous_summaries)) if previous_summaries else ""
     await tree.dispatch.deliver_child_report(
         child_id,

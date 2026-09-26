@@ -29,6 +29,7 @@ Guarantees the delivery stage pins down:
 import asyncio
 import base64
 import os
+import re
 import shutil
 import time
 from collections.abc import Callable
@@ -1448,11 +1449,21 @@ def uuid4_hex() -> str:
   return uuid4().hex
 
 
+# A Markdown ATX heading: up to three leading spaces, then 1-6 '#' closed by
+# whitespace or end of line (so "####### tag" is content, not a heading).
+_MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}(\s|$)")
+
+
 def default_task_name(task: TaskSpec | None, profile: str) -> str:
-  """A readable fallback name: the goal's first line, else the profile."""
+  """The goal's first content line, skipping Markdown headings because delegation goals open with a "## Goal" heading; else "New <profile> task"."""
   if task is not None and task.goal.strip():
-    first_line = task.goal.strip().splitlines()[0]
-    return first_line[:80]
+    nonempty = [line for line in task.goal.splitlines() if line.strip()]
+    content = [line for line in nonempty if not _MD_HEADING_RE.match(line)]
+    if content:
+      return content[0].strip()[:80]
+    heading_text = nonempty[0].lstrip().lstrip("#").strip()
+    if heading_text:
+      return heading_text[:80]
   return f"New {profile} task"
 
 

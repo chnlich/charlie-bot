@@ -85,9 +85,7 @@ class CDP:
         self._pending: dict[int, asyncio.Future] = {}
         self._events: list[dict] = []
         self.console_errors: list[str] = []
-        self.tree_fetch_counts: list[str] = []
         self.list_fetch_counts: list[str] = []
-        self.runs_fetch_counts: list[str] = []
         self.mutations: list[dict] = []
         self._reader = asyncio.create_task(self._read_loop())
 
@@ -116,12 +114,8 @@ class CDP:
                     if method == "Network.requestWillBeSent":
                         request = msg["params"]["request"]
                         url = request["url"]
-                        if "/api/sessions/tree" in url:
-                            self.tree_fetch_counts.append(url)
                         if request.get("method") == "GET" and url.endswith("/api/sessions/"):
                             self.list_fetch_counts.append(url)
-                        if "/runs?" in url:
-                            self.runs_fetch_counts.append(url)
                         if request.get("method") in ("POST", "PATCH") and "/api/sessions" in url:
                             # Every outgoing mutation with its exact target URL
                             # and body — the ground truth for "which task did
@@ -145,19 +139,9 @@ class CDP:
         await self._ws.send(json.dumps(payload))
         return await asyncio.wait_for(fut, timeout=30)
 
-    def drain_tree_fetches(self) -> list[str]:
-        seen = self.tree_fetch_counts
-        self.tree_fetch_counts = []
-        return seen
-
     def drain_list_fetches(self) -> list[str]:
         seen = self.list_fetch_counts
         self.list_fetch_counts = []
-        return seen
-
-    def drain_runs_fetches(self) -> list[str]:
-        seen = self.runs_fetch_counts
-        self.runs_fetch_counts = []
         return seen
 
     def mutations_since(self, mark: int) -> list[dict]:

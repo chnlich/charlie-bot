@@ -164,8 +164,7 @@ async def test_root_child_grandchild_organize_and_turn_without_takeoff(
   turn on the scripted backend. Three depths, zero authorization prompts."""
   cfg, session_mgr, tree, root = await manager_tree(tmp_path, monkeypatch)
   builds = install_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("grandchild turn")])],
-      BUILD_BACKEND_PATCH_TARGET)
+      monkeypatch, [SpawningScriptedBackend([result_event("grandchild turn")])], BUILD_BACKEND_PATCH_TARGET)
   await tree.runs.register_run(RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
   await tree.runs.record_launch(root.id, "root-run", pid=424242, pid_start="ps-root")
 
@@ -634,8 +633,7 @@ async def test_closed_parent_refuses_agent_creation(tmp_path: Path, monkeypatch:
   cfg, session_mgr, tree, root = await manager_tree(tmp_path, monkeypatch)
   # The close's report wakes the root: its manager turn runs to completion on
   # the scripted backend before any later call touches the tree.
-  install_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("root turn")])], BUILD_BACKEND_PATCH_TARGET)
+  install_backends(monkeypatch, [SpawningScriptedBackend([result_event("root turn")])], BUILD_BACKEND_PATCH_TARGET)
   child = await tree.create_task(
       request_id="child",
       task_parent_id=root.id,

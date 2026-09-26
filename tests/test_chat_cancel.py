@@ -147,8 +147,13 @@ async def _task_node(tmp_path: Path, profile: str = "manager"):
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
   node = await tree.create_task(
-      request_id="node", task_parent_id=None, profile=profile, task=None,
-      name="Node", backend=None, caller=CallerIdentity(kind="operator"))
+      request_id="node",
+      task_parent_id=None,
+      profile=profile,
+      task=None,
+      name="Node",
+      backend=None,
+      caller=CallerIdentity(kind="operator"))
   set_task_manager(tree)
   return cfg, session_mgr, tree, node
 
@@ -158,8 +163,7 @@ async def test_chat_cancel_on_task_node_stops_the_launched_run(tmp_path: Path) -
   from src.api.deps import set_task_manager
 
   _cfg, session_mgr, tree, node = await _task_node(tmp_path)
-  run = await tree.runs.register_run(
-      RunRecord(id="run-live", session_id=node.id, kind="manager_turn"))
+  run = await tree.runs.register_run(RunRecord(id="run-live", session_id=node.id, kind="manager_turn"))
   # A launched run whose process is already gone: request_stop converges it to
   # the interrupted terminal fact the way a live process's exit would.
   await tree.runs.record_launch(node.id, run.id, pid=2**23, pid_start="1")
@@ -188,8 +192,7 @@ async def test_chat_cancel_identity_conflict_maps_to_409(tmp_path: Path) -> None
   from src.core.runs import read_pid_stat
 
   _cfg, session_mgr, tree, node = await _task_node(tmp_path)
-  run = await tree.runs.register_run(
-      RunRecord(id="run-reused", session_id=node.id, kind="manager_turn"))
+  run = await tree.runs.register_run(RunRecord(id="run-reused", session_id=node.id, kind="manager_turn"))
   live = subprocess.Popen(["/bin/sleep", "30"])
   try:
     pair = read_pid_stat(live.pid)

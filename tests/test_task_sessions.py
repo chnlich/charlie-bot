@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_ID, build_env, make_home_config
+from conftest import OPUS_BACKEND_ID, build_env, create_task, make_home_config
 
 from src.core import event_types as ET
 from src.core.control_events import sha256_hex, stable_task_id
@@ -39,27 +39,6 @@ def write_session_alias(
           indent=2,
           sort_keys=True),
       encoding="utf-8")
-
-
-async def create_task(
-    mgr: TaskTreeManager,
-    *,
-    parent: str | None,
-    profile: str = "manager",
-    request_id: str,
-    name: str | None = None,
-    task: TaskSpec | None = None,
-    **kwargs: object):
-  return await mgr.create_task(
-      request_id=request_id,
-      task_parent_id=parent,
-      profile=profile,
-      task=task,
-      name=name,
-      backend=None,
-      caller=OPERATOR,
-      **kwargs,
-  )
 
 
 async def build_three_levels(mgr: TaskTreeManager) -> dict[str, str]:

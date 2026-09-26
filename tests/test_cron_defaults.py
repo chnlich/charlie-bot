@@ -112,11 +112,7 @@ def test_existing_entry_untouched(temp_home: Path) -> None:
   cfg = get_config()
   defaults = load_yaml(cfg.charlie_bot_repo / "configs" / "cron.default.yaml", default={}).get("scheduled_tasks", [])
   for entry in defaults:
-    _write_task_text(
-        temp_home, entry["name"], _dump({
-            "cron": "5 5 * * *",
-            "prompt_file": "prompts/whatever.md"
-        }))
+    _write_task_text(temp_home, entry["name"], _dump({"cron": "5 5 * * *", "prompt_file": "prompts/whatever.md"}))
   cron_dir = _cron_d_dir(temp_home)
   before = {p.name: p.read_bytes() for p in sorted(cron_dir.glob("*.yaml"))}
 
@@ -177,9 +173,7 @@ def test_loader_loads_prompt_file_pointer(temp_home: Path) -> None:
             "cron": "* * * * *",
             "prompt": "body v1"
         }, id="inline-prompt"),
-        pytest.param({
-            "cron": "* * * * *"
-        }, id="no-prompt-source"),
+        pytest.param({"cron": "* * * * *"}, id="no-prompt-source"),
     ],
 )
 def test_loader_rejects_task_without_prompt_file(temp_home: Path, task_yaml: dict) -> None:
@@ -292,13 +286,7 @@ def test_seed_dry_run_fails_loud_on_legacy_cron(temp_home: Path) -> None:
 
 def test_timezone_local_resolves(temp_home: Path) -> None:
   prompt_path = _write_healthy(temp_home, "t", "* * * * *", "p")
-  _write_task_text(
-      temp_home, "t",
-      _dump({
-          "cron": "* * * * *",
-          "timezone": "local",
-          "prompt_file": str(prompt_path)
-      }))
+  _write_task_text(temp_home, "t", _dump({"cron": "* * * * *", "timezone": "local", "prompt_file": str(prompt_path)}))
   tasks = get_scheduled_tasks()
   assert tasks[0].timezone != "local"
   ZoneInfo(tasks[0].timezone)
@@ -307,8 +295,7 @@ def test_timezone_local_resolves(temp_home: Path) -> None:
 def test_explicit_timezone_untouched(temp_home: Path) -> None:
   prompt_path = _write_healthy(temp_home, "t", "* * * * *", "p")
   _write_task_text(
-      temp_home, "t",
-      _dump({
+      temp_home, "t", _dump({
           "cron": "* * * * *",
           "timezone": "America/New_York",
           "prompt_file": str(prompt_path)
@@ -354,12 +341,7 @@ def _inject_name_key(h: Path) -> Path:
 
 
 def _inject_unknown_key(h: Path) -> Path:
-  return _write_task_text(
-      h, "broken-4", _dump({
-          "cron": "0 0 * * *",
-          "prompt_file": "p.md",
-          "promt_file": "typo.md"
-      }))
+  return _write_task_text(h, "broken-4", _dump({"cron": "0 0 * * *", "prompt_file": "p.md", "promt_file": "typo.md"}))
 
 
 def _inject_missing_source(h: Path) -> Path:
@@ -451,8 +433,7 @@ def test_hot_reload_edit_existing_file(temp_home: Path) -> None:
   assert get_scheduled_tasks()[0].cron == "0 0 * * *"
 
   _write_task_text(
-      temp_home, "task-a",
-      _dump({
+      temp_home, "task-a", _dump({
           "cron": "0 9 * * *",
           "prompt_file": str(temp_home / "repo" / "task-a.md")
       }))
@@ -536,12 +517,7 @@ def test_broken_prompt_file_missing_path(temp_home: Path) -> None:
 
 def _post_nightly(client: TestClient, prompt_path: Path, cron: str = "0 2 * * *") -> httpx.Response:
   """POST the canonical ``nightly`` pointer task; only *cron* varies across callers."""
-  return client.post(
-      "/api/cron/tasks", json={
-          "name": "nightly",
-          "cron": cron,
-          "prompt_file": str(prompt_path)
-      })
+  return client.post("/api/cron/tasks", json={"name": "nightly", "cron": cron, "prompt_file": str(prompt_path)})
 
 
 @pytest.mark.parametrize(
@@ -578,8 +554,7 @@ def test_list_tasks_omits_resolved_prompt(temp_home: Path) -> None:
   step_pf = repo / "step-one.md"
   step_pf.write_text("resolved step body", encoding="utf-8")
   _write_task_text(
-      temp_home, "task-chain",
-      _dump({
+      temp_home, "task-chain", _dump({
           "cron": "0 3 * * *",
           "steps": [{
               "name": "one",
@@ -747,12 +722,7 @@ def test_api_rejects_path_traversal_name(temp_home: Path, bad: str) -> None:
   with make_cron_client(cfg, SessionManager(cfg)) as client:
     r_put = client.put(f"/api/cron/tasks/{bad}", json={"cron": "0 1 * * *"})
     r_del = client.delete(f"/api/cron/tasks/{bad}")
-    r_post = client.post(
-        "/api/cron/tasks", json={
-            "name": bad,
-            "cron": "0 1 * * *",
-            "prompt_file": "p.md"
-        })
+    r_post = client.post("/api/cron/tasks", json={"name": bad, "cron": "0 1 * * *", "prompt_file": "p.md"})
   # Every malicious name must be rejected before reaching the filesystem. A
   # single-segment bad name (e.g. ``a..``, ``.lead``) hits the handler's regex
   # check (400); path-shaped names (``..``, ``a/b``, ``/abs``) are blocked even
@@ -774,5 +744,4 @@ def test_scheduled_task_config_has_no_base_branch_field() -> None:
   ``extra='forbid'`` keeps a stray ``base_branch:`` key an error, not a silent drop."""
   assert "base_branch" not in ScheduledTaskConfig.model_fields
   with pytest.raises(ValidationError, match="base_branch"):
-    ScheduledTaskConfig(
-        name="t", cron="0 0 * * *", prompt="p", base_branch="main")  # type: ignore[call-arg]
+    ScheduledTaskConfig(name="t", cron="0 0 * * *", prompt="p", base_branch="main")  # type: ignore[call-arg]

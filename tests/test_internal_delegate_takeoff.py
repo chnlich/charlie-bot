@@ -33,8 +33,7 @@ def _stub_task_manager():
   """A task-tree manager over the test's session manager (v1 sessions never
   reach its authorization path; the signature keeps one owner for both)."""
   from src.core.task_sessions import TaskTreeManager
-  return TaskTreeManager(CharlieBotConfig(charliebot_home=Path("/tmp/delegate-takeoff-stub")),
-                         _LastSessionManager())
+  return TaskTreeManager(CharlieBotConfig(charliebot_home=Path("/tmp/delegate-takeoff-stub")), _LastSessionManager())
 
 
 class _LastSessionManager:
@@ -644,7 +643,8 @@ async def test_all_nonverify_delegate_types_can_reuse_ordinary_takeoff(
   cfg = _patch_resolve_rig(monkeypatch)
 
   for _ in range(3):
-    _meta, resolved_cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(req, session_mgr, _stub_task_manager())
+    _meta, resolved_cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(
+        req, session_mgr, _stub_task_manager())
     assert resolved_cfg is cfg
     assert (resolved_backend, resolved_model) == ("codex-o3", "o3")
 
@@ -659,7 +659,8 @@ async def test_improve_uses_the_same_pre_takeoff_gate(monkeypatch: pytest.Monkey
           user_event("continue with the approved work"),
       ])
   cfg = _patch_resolve_rig(monkeypatch)
-  _meta, resolved_cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(req, session_mgr, _stub_task_manager())
+  _meta, resolved_cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(
+      req, session_mgr, _stub_task_manager())
 
   assert resolved_cfg is cfg
   assert (resolved_backend, resolved_model) == ("codex-o3", "o3")
@@ -735,7 +736,8 @@ async def _authorize_verify(
   req = _build_request(task_type=TaskType.VERIFY, repo_path=None, base_branch=None, backend=backend)
   monkeypatch.setattr(internal, "get_config", lambda: _build_verify_cfg(preference))
   session_mgr = BackendFakeSessionManager(session_backend)
-  _meta, _cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(req, session_mgr, _stub_task_manager())
+  _meta, _cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(
+      req, session_mgr, _stub_task_manager())
   return resolved_backend, resolved_model
 
 

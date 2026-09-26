@@ -714,7 +714,7 @@ the fixed write path cannot produce; the count is the metric.
 
 ```bash
 /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, sys, tempfile, threading
+import asyncio, shutil, sys, tempfile, threading
 from pathlib import Path
 sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
 from src.core.config import CharlieBotConfig
@@ -724,8 +724,9 @@ from src.core.threads import ThreadManager
 
 WRITES = 3000
 
+work = Path(tempfile.mkdtemp(prefix="m10-torn-read-"))
+
 async def main():
-    work = Path(tempfile.mkdtemp(prefix="m10-torn-read-"))
     # A session's default backend resolves from backends.options (empty by
     # default since the sectioned config), so the scratch config carries one.
     cfg = CharlieBotConfig(charliebot_home=work / "home",
@@ -763,7 +764,10 @@ async def main():
         t.join()
     print(f"{WRITES} save_metadata calls, {reads} concurrent reads; torn reads observed: {torn}")
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+finally:
+    shutil.rmtree(work)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
 EOF
 ```
 
@@ -858,7 +862,7 @@ state: the scratch CHARLIEBOT_HOME is a tempfile):
 
 ```bash
 /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, subprocess, sys, tempfile, time
+import asyncio, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
 from src.core.config import CharlieBotConfig
@@ -867,7 +871,8 @@ from src.api.git import diff_files
 REPO = Path("/home/chaoli/workspace/charlie-bot")
 BASE = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"],
                       cwd=REPO, capture_output=True, text=True, check=True).stdout.splitlines()[0]
-cfg = CharlieBotConfig(charliebot_home=Path(tempfile.mkdtemp(prefix="m14-home-")),
+work = Path(tempfile.mkdtemp(prefix="m14-home-"))
+cfg = CharlieBotConfig(charliebot_home=work,
                        paths={"workspace_dirs": ["/home/chaoli/workspace"]})
 
 async def run_once():
@@ -898,7 +903,10 @@ async def main():
     worst.sort()
     print(f"{total} files in root..HEAD diff; loop-lag median {worst[2]:.4f} s, max {worst[-1]:.4f} s")
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+finally:
+    shutil.rmtree(work)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
 EOF
 ```
 
@@ -2873,7 +2881,7 @@ same shape as the M18 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, os, subprocess, sys, tempfile, time
+import asyncio, os, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from src.core.config import CharlieBotConfig
@@ -2882,7 +2890,8 @@ from src.api.git import diff_files
 REPO = Path("/home/chaoli/workspace/charlie-bot")
 BASE = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"],
                       cwd=REPO, capture_output=True, text=True, check=True).stdout.splitlines()[0]
-cfg = CharlieBotConfig(charliebot_home=Path(tempfile.mkdtemp(prefix="m41-home-")),
+work = Path(tempfile.mkdtemp(prefix="m41-home-"))
+cfg = CharlieBotConfig(charliebot_home=work,
                        paths={"workspace_dirs": ["/home/chaoli/workspace"]})
 
 async def main():
@@ -2898,7 +2907,10 @@ async def main():
     print(f"{result['total_files']} files in root..HEAD diff; first view {cold:.4f} s; "
           f"repeat-view median {times[3]:.4f} s, max {times[-1]:.4f} s")
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+finally:
+    shutil.rmtree(work)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
 EOF
 ```
 
@@ -2976,7 +2988,7 @@ at the worktree root), the same shape as the M18 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, os, subprocess, sys, tempfile, time
+import asyncio, os, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from src.core.config import CharlieBotConfig
@@ -2985,7 +2997,8 @@ from src.api.git import diff_files, diff_file
 REPO = Path("/home/chaoli/workspace/charlie-bot")
 BASE = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"],
                       cwd=REPO, capture_output=True, text=True, check=True).stdout.splitlines()[0]
-cfg = CharlieBotConfig(charliebot_home=Path(tempfile.mkdtemp(prefix="m43-home-")),
+work = Path(tempfile.mkdtemp(prefix="m43-home-"))
+cfg = CharlieBotConfig(charliebot_home=work,
                        paths={"workspace_dirs": ["/home/chaoli/workspace"]})
 
 async def main():
@@ -3009,7 +3022,10 @@ async def main():
           f"size_bytes {first['size_bytes']}; first view {cold:.4f} s; "
           f"repeat-view median {times[3]:.4f} s, max {times[-1]:.4f} s")
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+finally:
+    shutil.rmtree(work)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
 EOF
 ```
 
@@ -5821,7 +5837,7 @@ M41 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, hashlib, os, subprocess, sys, tempfile, time
+import asyncio, hashlib, os, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from src.core.config import CharlieBotConfig
@@ -5830,7 +5846,8 @@ from src.api.git import list_branches, _refs_signature
 REPO = Path("/home/chaoli/workspace/charlie-bot")
 REFS = subprocess.run(["git", "for-each-ref"], cwd=REPO, capture_output=True, text=True,
                       check=True).stdout.count("\n")
-cfg = CharlieBotConfig(charliebot_home=Path(tempfile.mkdtemp(prefix="m79-home-")),
+work = Path(tempfile.mkdtemp(prefix="m79-home-"))
+cfg = CharlieBotConfig(charliebot_home=work,
                        paths={"workspace_dirs": ["/home/chaoli/workspace"]})
 
 async def main():
@@ -5856,7 +5873,10 @@ async def main():
           f"max {times[-1]:.4f} s over 7; list digest {digest} ({len(first)} names); "
           f"signature walk median {sig_walks[2]*1000:.1f} ms")
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+finally:
+    shutil.rmtree(work)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
 EOF
 ```
 
@@ -5957,12 +5977,13 @@ M76 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, os, sys, tempfile, time
+import asyncio, os, shutil, sys, tempfile, time
 sys.path.insert(0, os.environ["CHECKOUT"])
 from src.agents import worker as worker_mod
 
 # Scratch worker log under /tmp; the live home is never touched.
-path = os.path.join(tempfile.mkdtemp(prefix="m82-append-"), "events.jsonl")
+work = tempfile.mkdtemp(prefix="m82-append-")
+path = os.path.join(work, "events.jsonl")
 probe = {"type": "assistant", "message": {"content": "m82 probe " + "y" * 200}}
 
 append = worker_mod._append_event_line
@@ -5988,7 +6009,10 @@ async def main():
           f"median {times[24] * 1e6:.0f} us, max {times[-1] * 1e6:.0f} us over 50")
 
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+finally:
+    shutil.rmtree(work)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
 EOF
 ```
 
@@ -6480,7 +6504,7 @@ at the worktree root), the same shape as the M66 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import os, subprocess, sys, tempfile, time
+import os, shutil, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 import orjson
@@ -6522,15 +6546,17 @@ print(f"worst direct-pass corpus: {best}, {best_n / 1e6:.1f} MB")
 work = Path(tempfile.mkdtemp(prefix="m88-direct-pass-", dir="/tmp"))
 out = work / "direct.json.gz"
 
-_build_direct_pass_gzip(best, out)  # cold pass, as at the first view of a corpus; not timed
-times = []
-for _ in range(3):
-    t0 = time.perf_counter()
-    _build_direct_pass_gzip(best, out)
-    times.append(time.perf_counter() - t0)
-times.sort()
-print(f"direct-pass build median {times[1]:.2f} s, max {times[-1]:.2f} s over 3; artifact {out.stat().st_size / 1e6:.1f} MB.gz")
-subprocess.run(["rm", "-rf", str(work)], check=True)
+try:
+    _build_direct_pass_gzip(best, out)  # cold pass, as at the first view of a corpus; not timed
+    times = []
+    for _ in range(3):
+        t0 = time.perf_counter()
+        _build_direct_pass_gzip(best, out)
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    print(f"direct-pass build median {times[1]:.2f} s, max {times[-1]:.2f} s over 3; artifact {out.stat().st_size / 1e6:.1f} MB.gz")
+finally:
+    shutil.rmtree(work)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
 EOF
 ```
 
@@ -6549,7 +6575,7 @@ Evidence points the same collector at the before and after checkouts (``CHECKOUT
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, os, sys, tempfile, time
+import asyncio, os, shutil, sys, tempfile, time
 sys.path.insert(0, os.environ["CHECKOUT"])
 from src.agents.backends.base import AgentBackend
 
@@ -6570,8 +6596,9 @@ class _StubBackend:
         self._proc = type("P", (), {"stderr": _StubStream()})()
         self._stderr_tail = bytearray()
 
+work = tempfile.mkdtemp(prefix="m89-stderr-tee-")
+
 async def main():
-    work = tempfile.mkdtemp(prefix="m89-stderr-tee-")
     stub = _StubBackend()
     await AgentBackend._stream_stderr(stub, os.path.join(work, "stderr-warm.log"))  # warm, as a run's first stderr bytes; not timed
     times = []
@@ -6586,7 +6613,10 @@ async def main():
           f"{CHUNKS} chunks in {times[2] * 1000:.2f} ms median; per-chunk "
           f"{per_chunk * 1e6:.1f} us, max {times[-1] / CHUNKS * 1e6:.1f} us over 5 pump rounds")
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+finally:
+    shutil.rmtree(work)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
 EOF
 ```
 
@@ -6604,7 +6634,7 @@ timing a removed shape. Evidence points the same collector at the before and aft
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, os, sys, tempfile, time
+import asyncio, os, shutil, sys, tempfile, time
 sys.path.insert(0, os.environ["CHECKOUT"])
 import src.agents.backends.base as base_mod
 from src.agents.backends.opencode import OpenCodeBackend
@@ -6612,7 +6642,8 @@ from src.agents.backends.opencode import OpenCodeBackend
 CHUNKS = 400
 chunk = b"x" * 8192
 line = b"2026-09-11T04:00:00.000Z  INFO serve listening on 127.0.0.1:4099\n"
-path = os.path.join(tempfile.mkdtemp(prefix="m90-stdout-pump-"), "stdout.log")
+work = tempfile.mkdtemp(prefix="m90-stdout-pump-")
+path = os.path.join(work, "stdout.log")
 
 class _StubStream:
     def __init__(self):
@@ -6659,7 +6690,10 @@ async def main():
     print(f"line median {times[24] * 1e6:.0f} us, max {times[-1] * 1e6:.0f} us over 50")
     os.close(fd)
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+finally:
+    shutil.rmtree(work)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
 EOF
 ```
 
@@ -7174,10 +7208,12 @@ async def main():
         f"{worker_times[-1] * 1e6:.1f} us over 50; broadcast frames per signal {len(broadcasts)}; "
         f"worker-log lines {worker_lines}; cold read+transform wall {read_wall * 1000:.2f} ms, "
         f"raw rows {raw_rows} of {len(rows)} rows")
-  shutil.rmtree(home)
 
 
-asyncio.run(main())
+try:
+  asyncio.run(main())
+finally:
+  shutil.rmtree(home)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
 EOF
 ```
 
@@ -7478,7 +7514,7 @@ shape as the M35 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, os, sys, tempfile, time
+import asyncio, os, shutil, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 
@@ -7486,82 +7522,85 @@ sys.path.insert(0, os.environ["CHECKOUT"])
 # uncredentialed request reads 401 before the file route; the scratch home pins
 # the empty key so the drive carries the credentialed view's served shape.
 home = tempfile.mkdtemp(prefix="m105-transport-home-", dir="/tmp")
-Path(home, "credentials.yaml").write_text("charliebot:\n  access_key: ''\n", encoding="utf-8")
-os.environ["CHARLIEBOT_HOME"] = home
-import server  # the real app stack: the transport-gzip middleware over the file server
+try:
+    Path(home, "credentials.yaml").write_text("charliebot:\n  access_key: ''\n", encoding="utf-8")
+    os.environ["CHARLIEBOT_HOME"] = home
+    import server  # the real app stack: the transport-gzip middleware over the file server
 
-# Worst served corpora per family: the largest .png and .pptx under the live
-# sessions tree's artifact dirs, plus the largest artifact page (the
-# keep-compressing witness). Read-only; the URL shape is the canonical
-# /absolute_filepath mount.
-root = Path.home() / ".charliebot" / "sessions"
-best = {}
-for p in root.glob("*/artifacts/*"):
-    if not p.is_file():
-        continue
-    suffix = p.suffix.lower()
-    n = p.stat().st_size
-    if suffix in (".png", ".pptx", ".html") and n > best.get(suffix, (0,))[0]:
-        best[suffix] = (n, p)
-for p in root.glob("*/artifacts/*/*"):
-    if not p.is_file():
-        continue
-    suffix = p.suffix.lower()
-    n = p.stat().st_size
-    if suffix in (".png", ".pptx") and n > best.get(suffix, (0,))[0]:
-        best[suffix] = (n, p)
-
-def scope(url):
-    return {
-        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
-        "http_version": "1.1", "method": "GET", "scheme": "http",
-        "path": url, "raw_path": url.encode(), "query_string": b"", "root_path": "",
-        "headers": [(b"host", b"test"), (b"accept-encoding", b"gzip")],
-        "client": ("test", 123), "server": ("test", 80),
-    }
-
-async def drive(url):
-    body = b""
-    out = {"status": 0, "encoding": b""}
-
-    async def receive():
-        return {"type": "http.request", "body": b"", "more_body": False}
-
-    async def send(msg):
-        nonlocal body
-        if msg["type"] == "http.response.start":
-            out["status"] = msg["status"]
-            out["encoding"] = dict(msg.get("headers", [])).get(b"content-encoding", b"")
-        elif msg["type"] == "http.response.body":
-            body += msg.get("body", b"")
-
-    t0 = time.perf_counter()
-    await server.app(scope(url), receive, send)
-    return time.perf_counter() - t0, body, out
-
-async def main():
-    for suffix in (".png", ".pptx", ".html"):
-        entry = best.get(suffix)
-        if entry is None:
-            print(f"{suffix}: no corpus under the sessions tree; unmeasured")
+    # Worst served corpora per family: the largest .png and .pptx under the live
+    # sessions tree's artifact dirs, plus the largest artifact page (the
+    # keep-compressing witness). Read-only; the URL shape is the canonical
+    # /absolute_filepath mount.
+    root = Path.home() / ".charliebot" / "sessions"
+    best = {}
+    for p in root.glob("*/artifacts/*"):
+        if not p.is_file():
             continue
-        n, p = entry
-        url = f"/absolute_filepath{p}"
-        _, _, cold_out = await drive(url)  # cold pass; not timed
-        assert cold_out["status"] == 200, (url, cold_out["status"])
-        times, wire, enc = [], 0, b""
-        for _ in range(5):
-            dt, body, out = await drive(url)
-            assert out["status"] == 200, (url, out["status"])
-            times.append(dt)
-            wire = len(body)
-            enc = out["encoding"]
-        times.sort()
-        transport = "identity" if not enc else f"gzip ({wire} B wire)"
-        print(f"{suffix} {n} B raw: serve median {times[2] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms, "
-              f"wire {wire} B, transport {transport}")
+        suffix = p.suffix.lower()
+        n = p.stat().st_size
+        if suffix in (".png", ".pptx", ".html") and n > best.get(suffix, (0,))[0]:
+            best[suffix] = (n, p)
+    for p in root.glob("*/artifacts/*/*"):
+        if not p.is_file():
+            continue
+        suffix = p.suffix.lower()
+        n = p.stat().st_size
+        if suffix in (".png", ".pptx") and n > best.get(suffix, (0,))[0]:
+            best[suffix] = (n, p)
 
-asyncio.run(main())
+    def scope(url):
+        return {
+            "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1", "method": "GET", "scheme": "http",
+            "path": url, "raw_path": url.encode(), "query_string": b"", "root_path": "",
+            "headers": [(b"host", b"test"), (b"accept-encoding", b"gzip")],
+            "client": ("test", 123), "server": ("test", 80),
+        }
+
+    async def drive(url):
+        body = b""
+        out = {"status": 0, "encoding": b""}
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(msg):
+            nonlocal body
+            if msg["type"] == "http.response.start":
+                out["status"] = msg["status"]
+                out["encoding"] = dict(msg.get("headers", [])).get(b"content-encoding", b"")
+            elif msg["type"] == "http.response.body":
+                body += msg.get("body", b"")
+
+        t0 = time.perf_counter()
+        await server.app(scope(url), receive, send)
+        return time.perf_counter() - t0, body, out
+
+    async def main():
+        for suffix in (".png", ".pptx", ".html"):
+            entry = best.get(suffix)
+            if entry is None:
+                print(f"{suffix}: no corpus under the sessions tree; unmeasured")
+                continue
+            n, p = entry
+            url = f"/absolute_filepath{p}"
+            _, _, cold_out = await drive(url)  # cold pass; not timed
+            assert cold_out["status"] == 200, (url, cold_out["status"])
+            times, wire, enc = [], 0, b""
+            for _ in range(5):
+                dt, body, out = await drive(url)
+                assert out["status"] == 200, (url, out["status"])
+                times.append(dt)
+                wire = len(body)
+                enc = out["encoding"]
+            times.sort()
+            transport = "identity" if not enc else f"gzip ({wire} B wire)"
+            print(f"{suffix} {n} B raw: serve median {times[2] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms, "
+                  f"wire {wire} B, transport {transport}")
+
+    asyncio.run(main())
+finally:
+    shutil.rmtree(home)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
 EOF
 ```
 
@@ -8327,6 +8366,7 @@ EOF
 ## Sampling history
 
 | Date | PR | Before → after | Note |
+| 2026-09-26 | this PR | Collector scratch leak, second slice fixed in this PR: the eleven blocks whose scratch outlived the round now remove it on every exit path — measured before the fix over the day's hourly rounds (home timestamps 10:43-17:50, one home per family per round; the 12:xx gap is a round whose sweep died early): m89-stderr-tee and m90-stdout-pump leave one 19.2 MB home each per round (400 × 8 KB chunks × 6 pump rounds; 14 live homes, 269 MB of the 272 MB the leaking families held at measurement, root fs 86 %), m10/m14/m41/m43/m79/m82/m105 one ≤40 KB home each per round, m100's and m88's removals rode the happy path only (an in-main rmtree and a `rm -rf` a failed build skips — no live homes observed, the leak needs a failed round); after the fix the eleven blocks re-run verbatim with zero scratch left and readings at their sweep values (m10 torn reads 0 over 41523 concurrent reads, m14 loop-lag 5.2 ms, m41 repeat 1.1 ms, m43 repeat 2.3 ms, m79 repeat 1.0 ms, m82 append 3 µs, m88 build 2.35 s, m89 per-chunk 14.2 µs, m90 line 64 µs, m100 read wall 0.12 ms, m105 html 0.56 ms), and an injected mid-body `raise SystemExit` still removes the home (before/after live-dir counts equal); still open, two classes for a later round: the six module-body collectors (m15, m16, m48, m50, m53, m102) leak one ≤40 KB home per round (~0.22 MB/round combined), and the removal rides the happy path only in 25 more blocks (M6-append, M17, M20, M20-cold, M23, M26, M30, M34, M45, M51, M52, M63, M65, M68, M73, M75, M76, M80, M86, M91, M101, M103, M104, M107, M118) — no live homes from that class, a home leaks only when the round fails mid-block | the removal rides each block's exit path (try/finally around the run — the 2026-09-25 slice's pattern) so a failed round cannot skip it; m89/m90 are the mass, 38.4 MB/round of the families' 38.6 MB/round; the diff budget bounds this slice to the every-round leakers plus the two happy-path removals the review flagged |
 | 2026-09-25 | this PR | M92/M97/M102 CLI verb walls, the run-token chain's dataclasses import priced out: M92 schedule-trigger --help 0.049/0.051/0.052 → 0.041/0.042/0.043 s (−16 % to −18 %), M97 plan list 0.072/0.077/0.074 → 0.063/0.066/0.059 s (−13 % to −20 %), M102 artifact wrap --genre plan 0.054/0.053/0.058 → 0.043/0.042/0.044 s (−20 % to −24 %), maxima down in step (0.053-0.055 → 0.045-0.049, 0.080-0.087 → 0.060-0.077, 0.061-0.067 → 0.045-0.050 s), every paired round faster over three interleaved rounds of the verbatim collectors — main checkout before vs branch worktree after back-to-back at load 1.7-3.9 one-minute; M98 memory query unchanged within noise (0.056/0.064/0.054 → 0.056/0.060/0.054 s — src.core.memory keeps its own dataclasses import, so the run-token share the fix removes sits under that wall's spread); component attribution, -X importtime on schedule-trigger --help: src.core.run_token cumulative 12.4 ms → 3.3 ms with the dataclasses→inspect chain (inspect 7.2 ms plus annotationlib/ast/dis/tokenize) gone from the plan/artifact/schedule-trigger import chains; no-regression witnesses: tests/test_run_token.py + tests/test_cli_import_weight.py (34 passed; the parser-build pin now bans dataclasses beside shutil/_colorize), the 6555-passed suite (17 skipped) | the two frozen dataclasses in src.core.run_token rode src.cli.common's module-level ``from src.core.run_token import load_run_token`` into every fresh CLI process — every master turn and worker session runs several ``charliebot`` invocations, each paying the dataclasses→inspect chain for machinery no consumer calls; the plain ``__slots__`` classes mirror the credentials.py precedent (which names the same cost for its own module), keep the value semantics the round-trip test pins (eq + hash), and tests/test_cli_import_weight.py's parser-build ban now holds the chain dataclasses-free |
 | 2026-09-25 | this PR | M119 list serve, introduced with this PR: median 2.90/2.85/2.72 → 0.71/0.74/0.61 ms (−73 % to −78 %), maxima 3.20-4.38 → 0.96-1.02 ms, every paired round faster over three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back at load 1.5-4.1 one-minute, 128 projected rows (52 active sessions, 35 legacy parents carrying the leaf fan-out), decoded 248203-248392 B, wire 42347-42461 B, digest stable within every arm; the parsed body stays pinned equal to the response-model render of the stamped-copy path (the test_list_ships_precompressed_body parity witness, jsonable_encoder equality) and the whole-body memo serves an unchanged corpus with zero re-renders (test_list_repeat_serves_whole_body_without_rerender) | the route returned the projected list through response_model — the jsonable_encoder pass over every row plus the stdlib render measured ~1.8-2.2 ms of the ~2.9 ms wall, and the per-request model copies broke every downstream identity memo, so the leaf rows rebuilt and no whole-body memo could serve; the route now reads the shared cached refs through list_sessions_readonly (plan-approval key added), overlays the six derived fields at render, and keys the whole body on the row identities plus overlay states — a repeat of an unchanged corpus runs zero dumps, and the gzip form rides the body-keyed memo beside the search route's |
 | 2026-09-25 | this PR | M98 memory query wall median 0.089/0.087/0.088 → 0.057/0.056/0.057 s, −35 % to −36 %, maxima 0.093/0.089/0.092 → 0.068/0.058/0.059 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, live store read-only, load 1.50-2.74 one-minute; component attribution, cProfile of a fresh `memory query --index` process on the before arm: src.cli.memory module exec 60 ms of the 71 ms wall, `asyncio/__init__` 42 ms cumulative inside it, the query work itself ~1 ms); no-regression witnesses: the run-token resolution suite (tests/test_memory_run_query.py + tests/test_memory_store.py, 70 passed), the import-weight contract now banning asyncio from the memory chain (20 passed), the three verbs exercised — query against the live store read-only, add and lint against a scratch CHARLIEBOT_HOME — and the 6511-passed suite (17 skipped) | the module-level `import asyncio` served only `_resolve_run_scoped_audience`'s `asyncio.Lock()` — the run-token path's one consumer — while query/add/lint, the verbs the cron instructions and master turns issue on demand, paid its ~40 ms (asyncio plus the concurrent.futures and logging chain it drags) on every invocation; the import moves beside the run-token path's other deferred imports (the file's get_config deferral shape), putting the read wall at the 09-24 verb-wall band the M92 collector prices (0.033-0.047 s floor plus the memory chain's own ~20 ms), and the healthy range keeps its 0.30 s line |

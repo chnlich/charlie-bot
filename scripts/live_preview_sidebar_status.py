@@ -75,7 +75,6 @@ PRODUCTION_HOMES = (
     Path.home() / ".charliebot",
     Path.home() / ".charliebot-session-task-tree",
 )
-RUN_TIMEOUT_SECONDS = 420.0
 SLOW_RUN_SECONDS = 65
 WORKER_PHRASE = "SLOW-RUN-MARKER-Q7X2"
 

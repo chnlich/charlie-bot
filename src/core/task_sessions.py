@@ -116,6 +116,11 @@ class TaskConflictError(Exception):
     super().__init__("; ".join(blockers))
 
 
+def closed_ancestors_blocker(closed_ids: list[str]) -> str:
+  """The 409 blocker sentence naming a node's closed ancestor tasks."""
+  return f"closed ancestor task(s): {', '.join(closed_ids)}"
+
+
 @dataclass
 class _TaskFacts:
   """The derived facts one session's full event history folds to.
@@ -530,13 +535,8 @@ class TaskTreeManager:
     return chain
 
   async def _require_open_ancestry(self, session_id: str) -> list[SessionMetadata]:
-    """Every ancestor of *session_id* must be an open task (API: 409 otherwise)."""
     index = await self._get_index()
-    chain = self._ancestors(index, session_id)
-    closed = [a.id for a in chain if self._facts_of(a.id).task_state != "open"]
-    if closed:
-      raise TaskConflictError([f"closed ancestor task(s): {', '.join(closed)}"])
-    return chain
+    return await self._require_open_ancestry_from_index(index, session_id)
 
   # ------------------------------------------------------------------
   # Derived facts (rebuilt from durable facts, suffix-memoized)
@@ -960,11 +960,14 @@ class TaskTreeManager:
       # judgment the route and the launch apply.
       await self.check_task_authorization(claims.session_id)
 
-  async def _require_open_ancestry_from_index(self, index: _TreeIndex, session_id: str) -> None:
+  async def _require_open_ancestry_from_index(
+      self, index: _TreeIndex, session_id: str) -> list[SessionMetadata]:
+    """Every ancestor of *session_id* must be an open task (API: 409 otherwise)."""
     chain = self._ancestors(index, session_id)
     closed = [a.id for a in chain if self._facts_of(a.id).task_state != "open"]
     if closed:
-      raise TaskConflictError([f"closed ancestor task(s): {', '.join(closed)}"])
+      raise TaskConflictError([closed_ancestors_blocker(closed)])
+    return chain
 
   async def _publish_new_task(
       self,
@@ -1237,7 +1240,7 @@ class TaskTreeManager:
         closed = [a.id for a in self._ancestors(index, new_parent_id)
                   if self._facts_of(a.id).task_state != "open"]
         if closed:
-          blockers.append(f"closed ancestor task(s): {', '.join(closed)}")
+          blockers.append(closed_ancestors_blocker(closed))
     # The moving subtree itself must be idle: every node in it, self included.
     subtree = [session_id, *self._descendants(index, session_id)]
     for sid in subtree:

@@ -27,7 +27,6 @@ Guarantees the delivery stage pins down:
 """
 
 import asyncio
-import base64
 import os
 import re
 import shutil
@@ -65,7 +64,7 @@ from src.core.models import (
     utc_now,
 )
 from src.core.ndjson import append_ndjson
-from src.core.run_token import CallerIdentity
+from src.core.run_token import CallerIdentity, b64url_decode, b64url_encode
 from src.core.runs import RunStore, is_run_alive, stop_requested_in_events
 from src.core.session_aliases import SessionAliasStore
 from src.core.session_dispatch import TaskInputDispatcher
@@ -1591,13 +1590,13 @@ def jsonable_row(row: SessionRow) -> dict:
 def _encode_tree_cursor(revision: str, key: tuple[datetime, str]) -> str:
   """Revision-bound keyset cursor: base64url JSON of (revision, created_at, id)."""
   payload = {"r": revision, "a": key[0].isoformat(), "i": key[1]}
-  return base64.urlsafe_b64encode(orjson.dumps(payload)).rstrip(b"=").decode("ascii")
+  return b64url_encode(orjson.dumps(payload))
 
 
 def _decode_tree_cursor(cursor: str) -> tuple[str, tuple[datetime, str]]:
   """Decode one tree cursor; a malformed value fails loud (API: 400)."""
   try:
-    payload = orjson.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+    payload = orjson.loads(b64url_decode(cursor))
     key = (ensure_utc(datetime.fromisoformat(payload["a"])), payload["i"])
     return payload["r"], key
   except (ValueError, KeyError, TypeError) as e:

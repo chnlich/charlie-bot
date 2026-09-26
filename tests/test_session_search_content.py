@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
-from conftest import _page_request, fresh_state_fixture, make_home_config
+from conftest import _page_request, fresh_state_fixture, make_home_config, make_home_session
+from fastapi.encoders import jsonable_encoder
 
 import src.api.sessions as sessions_api
 import src.core.sessions as sessions_mod
 from src.api.responses import fast_json_bytes
 from src.core import thinking_state
-from src.core.models import CreateSessionRequest, SessionMetadata
+from src.core.models import CreateSessionRequest, SessionMetadata, SessionStatus
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 
@@ -400,3 +403,86 @@ def test_search_row_body_memo_respects_its_cap() -> None:
   # The evicted oldest entry is gone; a recent one survives with its pinned object.
   assert sessions_api._search_row_bodies.get(id(metas[599]))[0] is metas[599]
   sessions_api._search_row_bodies.clear()
+
+
+@pytest.mark.asyncio
+async def test_whitespace_search_serves_the_list_rows_through_the_search_memo(tmp_path: Path) -> None:
+  """A whitespace query serves the active list through the whole-body memo.
+
+  The body equals the copy-path render of the same rows (the response_model
+  serve this branch replaced), and a repeat of an unchanged corpus re-renders
+  nothing.
+  """
+  cfg, mgr, _session = await make_home_session(tmp_path, name="t")
+  thread_mgr = ThreadManager(cfg)
+  first = await sessions_api.search_sessions(_page_request(), q=" ", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
+  sessions = await mgr.list_sessions(
+      status=SessionStatus.ACTIVE, include_running_status=True, include_pending_trigger_status=True)
+  rows = await sessions_api.project_worker_threads(sessions, cfg, thread_mgr)
+  assert json.loads(first.body) == jsonable_encoder(rows)
+  with patch.object(sessions_api, "fast_json_bytes",
+                    side_effect=AssertionError("repeat whitespace search re-rendered the body")):
+    second = await sessions_api.search_sessions(_page_request(), q=" ", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
+  assert second.body == first.body
+
+
+@pytest.mark.asyncio
+async def test_whitespace_search_overlays_match_the_copy_path_render(tmp_path: Path) -> None:
+  """The whitespace serve overlays the five derived fields with the copy
+  path's values: a busy session and a pending trigger render exactly what the
+  stamped copies carry."""
+  from datetime import UTC, datetime, timedelta
+
+  from src.core.models import PendingTrigger
+  from src.core.triggers import TriggerManager
+
+  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  thread_mgr = ThreadManager(cfg)
+  trigger_mgr = TriggerManager(cfg, mgr)
+  await trigger_mgr._save_trigger(
+      PendingTrigger(session_id=session.id, fire_at=datetime.now(UTC) + timedelta(hours=1), message="wake"))
+  thinking_state.mark_busy(session.id)
+  body = json.loads(
+      (await sessions_api.search_sessions(_page_request(), q=" ", session_mgr=mgr, cfg=cfg,
+                                          thread_mgr=thread_mgr)).body)
+  sessions = await mgr.list_sessions(
+      status=SessionStatus.ACTIVE, include_running_status=True, include_pending_trigger_status=True)
+  rows = await sessions_api.project_worker_threads(sessions, cfg, thread_mgr)
+  assert body == jsonable_encoder(rows)
+
+
+@pytest.mark.asyncio
+async def test_content_search_hit_memo_skips_rescans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A content hit's proof serves its substring queries without a re-read.
+
+  Same-inode growth appends past the scanned prefix and keeps the proof; a
+  shrink or an inode swap re-scans.
+  """
+  cfg = make_home_config(tmp_path)
+  mgr = SessionManager(cfg)
+  session = await _session_with_chat_content(mgr, '{"type":"user","content":"the Purple Fox jumped"}\n', "hit-file")
+  count = _counting_scan(monkeypatch)
+
+  [found] = await mgr.search_sessions("purple fox")
+  assert found.id == session.id
+  assert count() == 1
+  # The stored needle's substrings serve from the hit root; a superstring is
+  # not covered and re-scans.
+  [found] = await mgr.search_sessions("purple")
+  assert found.id == session.id
+  assert count() == 1
+  [found] = await mgr.search_sessions("purple fox jumped")
+  assert found.id == session.id
+  assert count() == 2
+
+  # Same-inode growth appends past the scanned prefix: the hit proof holds.
+  with mgr.get_chat_events_path(session.id).open("a", encoding="utf-8") as stream:
+    stream.write('{"type":"user","content":"more"}\n')
+  [found] = await mgr.search_sessions("purple")
+  assert found.id == session.id
+  assert count() == 2
+
+  # A rewrite that drops the needle re-scans and reads the miss.
+  mgr.get_chat_events_path(session.id).write_text('{"type":"user","content":"nothing relevant"}\n', encoding="utf-8")
+  assert await mgr.search_sessions("purple") == []
+  assert count() == 3

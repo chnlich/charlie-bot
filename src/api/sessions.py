@@ -959,14 +959,17 @@ async def search_sessions(
     thread_mgr: ThreadManager = Depends(get_thread_manager),
 ) -> list[SessionMetadata] | Response:
   """Full-text search across session names and chat content."""
-  global _search_whole_body
   if not q.strip():
-    sessions = await session_mgr.list_sessions(
+    # A whitespace query never reaches the capped scan: the route serves the
+    # active list from the shared cached references and rides the same
+    # whole-body-memo render — the copy path's per-row model_copy plus the
+    # response-model walk measured multi-ms on the projected fan-out.
+    rows, derived = await session_mgr.list_sessions_readonly(
         status=SessionStatus.ACTIVE,
         include_running_status=True,
         include_pending_trigger_status=True,
     )
-    return await project_worker_threads(sessions, cfg, thread_mgr)
+    return await _serve_search_rows(request, rows, derived, cfg, thread_mgr)
   # The capped name-match shape (a short query) is this route's slowest
   # request: the read-only search serves cache references and the response
   # renders through FastJsonResponse with the derived fields overlaid, the
@@ -977,6 +980,24 @@ async def search_sessions(
       include_running_status=True,
       include_pending_trigger_status=True,
   )
+  return await _serve_search_rows(request, rows, derived, cfg, thread_mgr)
+
+
+async def _serve_search_rows(
+    request: Request,
+    rows: list[SessionMetadata],
+    derived: dict[str, dict],
+    cfg: CharlieBotConfig,
+    thread_mgr: ThreadManager,
+) -> Response:
+  """Render the search route's rows through the whole-body memo and serve.
+
+  Both query shapes feed it — the capped name-match search and the
+  whitespace query's active list — with rows as the shared cached
+  references and ``derived`` mapping each row's id to the sidebar-state
+  fields the response overlays.
+  """
+  global _search_whole_body
   # Each row's bytes splice the memoized static segments with the five derived
   # values, rendered only when the row's state first produces a body (the whole
   # body serves the steady-state repeat, a churn round re-renders the moved

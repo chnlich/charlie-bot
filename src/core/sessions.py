@@ -127,6 +127,13 @@ _SEARCH_MISS_MEMO_LIMIT = 256
 # for the evicted family only, the same cost the one-slot form paid for every
 # non-dominant family.
 _SEARCH_MISS_ROOTS_PER_FILE = 8
+# The hit side's bounds mirror the absence side's: one proven-present root per
+# query family per file, the file map LRU-bounded. A stored needle's hit
+# answers its substrings without a read (the miss side answers superstrings),
+# because the hit's bytes sit in the prefix the scan read and same-inode
+# growth only appends past it.
+_SEARCH_HIT_MEMO_LIMIT = 256
+_SEARCH_HIT_ROOTS_PER_FILE = 8
 # str.lower() and substring search hold the GIL for the whole input, so the
 # sidebar content search reads chat files in windows of this many characters:
 # each lower()/scan call's GIL hold stays bounded instead of scaling with the
@@ -449,6 +456,25 @@ def _absence_rescan_start(
   if best_size < 0:
     return 0
   return max(0, best_size - (4 * len(query_lower) + 8))
+
+
+def _hit_root_covers(
+    roots: tuple[tuple[str, tuple[int, int, int]], ...],
+    sig: tuple[int, int, int],
+    query_lower: str,
+) -> bool:
+  """True when a stored hit root answers the query without a file read.
+
+  A stored needle's hit covers the needle's substrings: the hit's bytes sit in
+  the prefix the scan read, and same-inode growth only appends past it, so the
+  hit persists while the inode holds and the file has not shrunk below the
+  scanned size — the same signature convention the absence roots'
+  append-window re-proof runs on. A shrink or an inode swap re-scans.
+  """
+  for needle, root_sig in roots:
+    if query_lower in needle and root_sig[2] == sig[2] and sig[1] >= root_sig[1]:
+      return True
+  return False
 
 
 def _scan_content_for_hit(path: Path, session_id: str, query_lower: str, start: int) -> bool | None:
@@ -882,6 +908,8 @@ class SessionManager:
     self._projection_cache: BoundedMemo[str, MessageProjection] = BoundedMemo(_PROJECTION_LRU_LIMIT)
     self._search_miss_memo: BoundedMemo[str, BoundedMemo[str, tuple[int, int,
                                                                     int]]] = BoundedMemo(_SEARCH_MISS_MEMO_LIMIT)
+    self._search_hit_memo: BoundedMemo[str, BoundedMemo[str, tuple[int, int,
+                                                                   int]]] = BoundedMemo(_SEARCH_HIT_MEMO_LIMIT)
 
   # ---------------------------------------------------------------------------
   # Session CRUD
@@ -1314,6 +1342,7 @@ class SessionManager:
     # pool churn (the default executor's ~cpu+4 workers are shared with every
     # poll read, append, and probe, so each acquisition queues). Only reads
     # that must move corpus bytes go to the pool.
+    proven_hits: list[SessionMetadata] = []
     read_jobs: list[tuple[SessionMetadata, Path, tuple[int, int, int], int]] = []
     for meta, path in content_candidates:
       key = str(path)
@@ -1325,6 +1354,10 @@ class SessionManager:
         _log_search_read_failed_once(meta.id, e)
         continue
       sig = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+      hit_roots = self._search_hit_memo.peek(key)
+      if hit_roots is not None and _hit_root_covers(tuple(hit_roots.items()), sig, query_lower):
+        proven_hits.append(meta)  # the stored hit answers without a read
+        continue
       start = _absence_rescan_start(memo_roots, sig, query_lower)
       if start is not None:
         read_jobs.append((meta, path, sig, start))
@@ -1336,13 +1369,15 @@ class SessionManager:
       if verdict is None:
         return None  # errored scan proves no absence, so nothing is memoized
       if verdict:
+        self._memoize_search_hit(str(path), sig, query_lower)
         return meta
       self._memoize_search_miss(str(path), sig, query_lower)
       return None
 
-    content_hits = await asyncio.gather(
+    scanned_hits = await asyncio.gather(
         *(_check_content(meta, path, sig, start) for meta, path, sig, start in read_jobs))
-    rows = matches[:_SEARCH_RESULT_LIMIT] + [meta for meta in content_hits if meta is not None]
+    content_hits = proven_hits + [meta for meta in scanned_hits if meta is not None]
+    rows = matches[:_SEARCH_RESULT_LIMIT] + content_hits
     rows.sort(key=lambda meta: meta.updated_at, reverse=True)
     rows = rows[:_SEARCH_RESULT_LIMIT]
     derived = await self.resolve_sidebar_state(
@@ -1367,6 +1402,20 @@ class SessionManager:
       roots = BoundedMemo(_SEARCH_MISS_ROOTS_PER_FILE)
     roots.store(needle, sig)
     self._search_miss_memo.store(memo_key, roots)
+
+  def _memoize_search_hit(self, memo_key: str, sig: tuple[int, int, int], needle: str) -> None:
+    """Record a clean-scan hit as one more proven-present root for the file.
+
+    The root covers the needle's substrings while the inode holds and the file
+    has not shrunk below the scanned size; the per-file root LRU
+    (``_SEARCH_HIT_ROOTS_PER_FILE``) and the file LRU (``_SEARCH_HIT_MEMO_LIMIT``)
+    bound both maps, the same shape the absence side's bounds set.
+    """
+    roots = self._search_hit_memo.get(memo_key)
+    if roots is None:
+      roots = BoundedMemo(_SEARCH_HIT_ROOTS_PER_FILE)
+    roots.store(needle, sig)
+    self._search_hit_memo.store(memo_key, roots)
 
   async def fork_session(
       self,

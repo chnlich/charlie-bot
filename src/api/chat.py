@@ -122,6 +122,14 @@ async def send_message(
           from_session_name=from_session_name,
       )
       decision = await task_mgr.dispatch.dispatch_pending(session_id)
+      if event_type == ET.USER and task_mgr.dispatch.executor is not None:
+        # A real user message can open the takeoff window its node's subtree
+        # was waiting on: queued Runs the authorization gate held back re-enter
+        # through the normal launch path (execute_run's prechecks re-judge
+        # everything, so paused, closed, stopped and out-of-scope Runs stay
+        # untouched).
+        await task_mgr.dispatch.executor.redrive_authorized_runs(  # type: ignore[attr-defined]
+            session_id, str(admitted.get("id")))
     except (TaskForbiddenError, TaskInvalidError) as e:
       from src.api.sessions import _task_http_error
       raise _task_http_error(e) from e

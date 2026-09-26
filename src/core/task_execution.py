@@ -648,6 +648,66 @@ class TaskExecutionAdapter:
             return LaunchSettlement(withheld=verdict)
         return LaunchSettlement(outcome=await self._await_terminal(session_id, run_id))
 
+    async def redrive_authorized_runs(self, session_id: str, message_id: str) -> list[str]:
+        """Re-drive the queued Runs an authorization gate was holding back.
+
+        A real user message admitted to *session_id* (its durable event id is
+        *message_id*) can open the nearest-real-user-ancestor takeoff window
+        for this node's subtree. Every queued work/review Run under an open,
+        unpaused node whose authorization is decided exactly here re-enters
+        through :meth:`launch` — the same ``execute_run`` prechecks every
+        fresh launch passes — so the Run launches when its authorization
+        arrives instead of waiting for an unrelated later dispatch. A deeper
+        node holding its own real user messages keeps its own gate (its Runs
+        stay queued); closed and paused nodes, and Runs with a terminal fact,
+        a live process or a durable stop request, are never touched. Returns
+        the re-dispatched Run ids.
+        """
+        tree = self._tree
+        meta = await tree.load_task_meta(session_id)
+        if meta.profile != "manager":
+            # The gate always starts at a manager: a message on a worker node
+            # opens no window for any Run.
+            return []
+        index = await tree._get_index()
+        redriven: list[str] = []
+        for node_id in tree._descendants(index, session_id):
+            node_meta = index.metas.get(node_id)
+            if node_meta is None:
+                continue
+            if tree.task_state_of(index, node_id) != "open" or node_meta.automation_paused:
+                continue
+            node_runs = tree.runs.list_run_records_sync(node_id)
+            if not node_runs:
+                continue
+            events = tree.runs.load_events_sync(node_id)
+            candidates = [
+                r for r in node_runs
+                if r.kind in ("work", "review") and r.pid is None
+                and not tree.runs.run_has_terminal_fact(r, events)
+                and not tree.runs.stop_requested(events, r.id)]
+            if not candidates:
+                continue
+            parent_id = node_meta.task_parent_id
+            if not parent_id:
+                continue
+            try:
+                # The gate judged exactly where a fresh launch of this node's
+                # Runs judges it: the nearest real-user ancestor of the node.
+                # It authorizes only when THIS node's new message carries the
+                # window (a deeper real-user node returns itself instead).
+                authorized = await tree.check_task_authorization(parent_id)
+            except DelegationBlockedError:
+                continue
+            if authorized != session_id:
+                continue
+            for run in candidates:
+                log.info("run_launch_authorized_redrive", session_id=node_id, run_id=run.id,
+                         authorized_by=session_id, message_id=message_id)
+                self.launch(node_id, run.id)
+                redriven.append(run.id)
+        return redriven
+
     def _resolve_run_backend(self, run: RunRecord) -> BackendOption:
         """The Run's explicitly recorded backend/model, resolved strictly."""
         if not run.backend:
@@ -1439,11 +1499,17 @@ class TaskExecutionAdapter:
     async def _maybe_spawn_review(self, session_id: str, work_run: RunRecord) -> str | None:
         """Spawn the work Run's review on the same task, repo, branch and worktree.
 
-        Idempotent by provenance: an existing non-terminal review of this work
-        Run means one is already queued or running (recovery and repeated
-        finalize never spawn a second). A failed reviewer retries down the
-        existing preference policy with distinct Run records; exhausted
-        retries keep the worktree and report blocked.
+        The one owner of "does this work Run still need a review": finalize,
+        the recovery replay and the failed-review retry all enter here, so the
+        chain ends at the first successful review everywhere. An existing
+        successful review ends the chain — its id returns and no further
+        review Run is ever registered for this work Run, on any number of
+        restarts (a review that succeeded without proving its landing follows
+        the landing and blocked-report path; it is never re-reviewed). An
+        existing non-terminal review means one is already queued or running
+        (recovery and repeated finalize never spawn a second). A failed
+        reviewer retries down the existing preference policy with distinct Run
+        records; exhausted retries keep the worktree and report blocked.
         """
         tree = self._tree
         async with tree.control_lock:
@@ -1459,6 +1525,12 @@ class TaskExecutionAdapter:
             existing = [
                 r for r in tree.runs.list_run_records_sync(session_id)
                 if r.kind == "review" and r.review_of_run_id == work_run.id]
+            # The chain ends at the first successful review: its terminal fact
+            # is the settled verdict, never a used attempt that would select
+            # the next reviewer backend.
+            for existing_review in existing:
+                if tree.runs.terminal_outcome(events, existing_review.id) == "success":
+                    return existing_review.id
             if any(not tree.runs.run_has_terminal_fact(r, events) for r in existing):
                 return existing[0].id
             attempts = len(existing)

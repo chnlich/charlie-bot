@@ -98,6 +98,45 @@ async def test_three_manager_depths_share_one_profile_and_workers_are_leaves(tmp
 
 
 @pytest.mark.asyncio
+async def test_tree_index_serves_the_shared_authoritative_metadata(tmp_path: Path) -> None:
+  """The index build consults the shared metadata snapshot (the per-entry check
+  every reader routes through) and re-reads a file only when no authoritative
+  entry covers the name — an out-of-band edit past the entry's TTL is seen."""
+  cfg, session_mgr, mgr = build_env(tmp_path)
+  root = await create_task(mgr, parent=None, request_id="root", name="Root")
+  assert await session_mgr.get_session(root.id) is not None  # the shared entry exists
+  index = await mgr._get_index()
+  # The build serves the shared object itself, the same read-only contract
+  # get_sessions_readonly documents for its warm entries.
+  assert index.metas[root.id] is session_mgr._metadata_cache[root.id][0]
+
+  # An out-of-band edit moves metadata.json without the write funnel; past the
+  # entry's TTL the shared check evicts, and the next build re-reads the file.
+  meta_path = cfg.sessions_dir / root.id / "metadata.json"
+  raw = json.loads(meta_path.read_text())
+  raw["name"] = "Renamed out of band"
+  meta_path.write_text(json.dumps(raw))
+  meta, cached_at, sig = session_mgr._metadata_cache[root.id]
+  session_mgr._metadata_cache[root.id] = (meta, cached_at - 100.0, sig)
+  mgr._index = None
+  page = await mgr.tree_page(parent_id=None, include_archived=True, limit=100, cursor=None)
+  assert [row["name"] for row in page["items"]] == ["Renamed out of band"]
+
+
+@pytest.mark.asyncio
+async def test_tree_index_fails_loud_on_an_unparseable_metadata_file(tmp_path: Path) -> None:
+  """A name no authoritative entry covers reads strict: an unparseable file
+  fails the build loud, the tree's own contract vs the listings' drop-and-log."""
+  cfg, _session_mgr, mgr = build_env(tmp_path)
+  await create_task(mgr, parent=None, request_id="root", name="Root")
+  orphan = cfg.sessions_dir / "orphan-node"
+  orphan.mkdir()
+  (orphan / "metadata.json").write_text("{not json")
+  with pytest.raises(RuntimeError, match="unparseable"):
+    await mgr._get_index(force=True)
+
+
+@pytest.mark.asyncio
 async def test_flat_paths_survive_reparenting(tmp_path: Path) -> None:
   cfg, session_mgr, mgr = build_env(tmp_path)
   ids = await build_three_levels(mgr)

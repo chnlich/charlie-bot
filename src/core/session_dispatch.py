@@ -359,7 +359,7 @@ class TaskInputDispatcher:
         decision["run_id"] = launched
         return decision
 
-    async def wake_parent(self, parent_id: str) -> None:
+    async def wake_parent(self, parent_id: str) -> asyncio.Task | None:
         """The one parent-wake entry after a report delivery.
 
         A task-tree parent's next serialized turn dispatches from its durable
@@ -370,6 +370,11 @@ class TaskInputDispatcher:
         appended by deliver_child_report_locked stays the durable record — a
         failed wake leaves it in the log, and the next report or user message
         runs the parent as today.
+
+        The legacy wake is a whole master turn (minutes on a slow backend), so
+        it is scheduled, never awaited: the startup reconcile pass that replays
+        a lost report must not hold the server's doors shut for the turn, and a
+        close request must not wait on it. Returns that scheduled task.
         """
         tree = self._tree
         meta = await tree.load_meta(parent_id)
@@ -388,8 +393,10 @@ class TaskInputDispatcher:
         text = (f"[Report from task {report.get('child_session_id')} | "
                 f"outcome {report.get('outcome')}] {str(report.get('summary') or '')}")
         from src.core.master_trigger import trigger_master
+        from src.core.tasks import create_logged_task
 
-        await trigger_master(parent_id, text, tree._cfg, tree.sessions)
+        return create_logged_task(trigger_master(parent_id, text, tree._cfg, tree.sessions),
+                                  name=f"legacy-parent-wake-{parent_id[:8]}")
 
     def _tui_manager_refusal(self, meta) -> str | None:
         """Why a headless manager turn must not start on *meta*, or None.

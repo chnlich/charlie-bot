@@ -291,9 +291,8 @@ Known-alive symbols:
   stdlib-dispatch entry.
 - `handle_starttag`, `handle_startendtag`, `handle_endtag`, `handle_data`, `handle_entityref`,
   `handle_charref` (`_Parser` — all six — and `handle_starttag`/`handle_startendtag`/
-  `handle_endtag` on `_BoundaryParser`, both in `src/core/plan_diff.py`;
-  `handle_starttag`/`handle_startendtag`/`handle_endtag`/`handle_data` also on `_DomParser` in
-  `tests/test_plan_diff.py`) — template-method overrides of stdlib `html.parser.HTMLParser`,
+  `handle_endtag` on `_BoundaryParser`, both in `src/core/plan_diff.py`) — template-method
+  overrides of stdlib `html.parser.HTMLParser`,
   same class as the `_TreeBuilder` entry above; `feed()` drives the base scanner, which
   invokes these under their contract-fixed names while each parser builds its DOM. The
   `_TreeBuilder` entry covers only artifact_check's class; each name matches only the parser
@@ -301,7 +300,7 @@ Known-alive symbols:
   shared base of both plan_diff parsers, pins `convert_charrefs=False` because its offset
   math must address raw source spans, so `_Parser`'s `handle_entityref`/`handle_charref` —
   the only overrides of that pair — fire there; parsers without the pair either pin
-  `convert_charrefs=True` (`_TreeBuilder`, `_DomParser`), under which the stdlib folds
+  `convert_charrefs=True` (`_TreeBuilder`), under which the stdlib folds
   references into `handle_data`, or inherit the stdlib no-op defaults (`_BoundaryParser`).
 - `isolation_level` (`src/core/storage_cool.py`) — attribute write on a stdlib
   `sqlite3.Connection`; the sqlite3 C module reads it back when executing statements

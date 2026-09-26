@@ -1,87 +1,41 @@
 import random
 import re
-from collections.abc import Iterator
-from dataclasses import dataclass, field
 from html import unescape
-from html.parser import HTMLParser
 
 import pytest
 from conftest import ROOT
 
 from src.core import plan_diff
+from src.core.artifact_check import _descendants, _Element, _parse_dom
 from src.core.plan_diff import (
-    _document_root,
-    _first_class_descendant,
-    _first_descendant,
-    _offset_after_insertions,
-    _parse_anchors,
-    annotate,
-    diff_text,
+  _BLOCK_TAGS,
+  _IGNORED_TAGS,
+  VOID_TAGS,
+  _document_root,
+  _first_class_descendant,
+  _first_descendant,
+  _offset_after_insertions,
+  _parse_anchors,
+  annotate,
+  diff_text,
 )
-
-_BLOCK_TAGS = {
-    "address", "article", "aside", "blockquote", "body", "caption", "dd", "details", "dialog", "div", "dl", "dt",
-    "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr",
-    "li", "main", "nav", "ol", "p", "pre", "section", "summary", "table", "tbody", "td", "tfoot", "th", "thead", "tr",
-    "ul"
-}
-_IGNORED_TAGS = {"head", "style", "script", "template", "noscript", "title"}
-_VOID_TAGS = {
-    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"
-}
-
-
-@dataclass
-class _Element:
-  tag: str
-  attrs: dict[str, str | None]
-  parent: _Element | None
-  children: list[_Element | str] = field(default_factory=list)
-
-  def text(self) -> str:
-    if self.tag in _IGNORED_TAGS:
-      return ""
-    return "".join(child if isinstance(child, str) else child.text() for child in self.children)
-
-
-class _DomParser(HTMLParser):
-
-  def __init__(self) -> None:
-    super().__init__(convert_charrefs=True)
-    self.root = _Element("#root", {}, None)
-    self.stack = [self.root]
-
-  def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-    node = _Element(tag, dict(attrs), self.stack[-1])
-    self.stack[-1].children.append(node)
-    if tag not in _VOID_TAGS:
-      self.stack.append(node)
-
-  def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-    self.stack[-1].children.append(_Element(tag, dict(attrs), self.stack[-1]))
-
-  def handle_endtag(self, tag: str) -> None:
-    for index in range(len(self.stack) - 1, 0, -1):
-      if self.stack[index].tag == tag:
-        del self.stack[index:]
-        return
-
-  def handle_data(self, data: str) -> None:
-    self.stack[-1].children.append(data)
 
 
 def _parse(html: str) -> _Element:
-  parser = _DomParser()
-  parser.feed(html)
-  parser.close()
-  return next((node for node in _descendants(parser.root) if node.tag == "body"), parser.root)
+  root = _parse_dom(html)
+  return next((node for node in _descendants(root) if node.tag == "body"), root)
 
 
-def _descendants(node: _Element) -> Iterator[_Element]:
-  for child in node.children:
-    if isinstance(child, _Element):
-      yield child
-      yield from _descendants(child)
+def _text(node: _Element) -> str:
+  """The node's text with the ignored-tag subtrees (head, style, script, ...) dropped.
+
+  The plan-differ invariants compare annotated pages against their sources;
+  the pages the differ injects carry a CBD <style> whose CSS text must not
+  count as document text, so the walk skips every _IGNORED_TAGS subtree.
+  """
+  if node.tag in _IGNORED_TAGS:
+    return ""
+  return "".join(child if isinstance(child, str) else _text(child) for child in node.children)
 
 
 def _direct_text(node: _Element) -> str:
@@ -93,7 +47,7 @@ def _commentable(node: _Element) -> bool:
     return False
   if re.search(r"\S", _direct_text(node)):
     return True
-  return node.tag in {"pre", "td", "th"} and bool(node.text().strip())
+  return node.tag in {"pre", "td", "th"} and bool(_text(node).strip())
 
 
 def _commentable_blocks(html: str) -> list[_Element]:
@@ -101,11 +55,11 @@ def _commentable_blocks(html: str) -> list[_Element]:
 
 
 def _quote(node: _Element) -> str:
-  return re.sub(r"\s+", " ", node.text()).strip()[:400]
+  return re.sub(r"\s+", " ", _text(node)).strip()[:400]
 
 
 def _document_text(html: str) -> str:
-  return _parse(html).text()
+  return _text(_parse(html))
 
 
 def _marks(html: str) -> list[tuple[str, re.Match[str]]]:
@@ -226,7 +180,7 @@ def test_deleted_rows_and_list_items_stay_in_their_containers() -> None:
   dom = _parse(annotated)
   ghosts = [node for node in _descendants(dom) if node.attrs.get("class") == "cbd-del"]
   assert [(node.tag, node.parent.tag if node.parent else None) for node in ghosts] == [("li", "ul"), ("tr", "tbody")]
-  assert all(node.text() == "" for node in ghosts)
+  assert all(_text(node) == "" for node in ghosts)
   assert 'colspan="1"' in annotated
 
 
@@ -596,7 +550,7 @@ def _fuzz_document(rng: random.Random) -> str:
     else:
       tag = rng.choice(_FUZZ_TAGS)
       pieces.append(f"<{tag}{_fuzz_attrs(rng)}>")
-      if tag not in _VOID_TAGS:
+      if tag not in VOID_TAGS:
         stack.append(tag)
   pieces.extend(f"</{tag}>" for tag in reversed(stack) if rng.random() < 0.7)
   return "".join(pieces)

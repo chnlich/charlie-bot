@@ -21,7 +21,6 @@ from src.core.models import (
 )
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
-from src.core.verify_trailer import VERIFY_RESULT_TRAILER_EXPECTED
 
 log = LazyStructlogLogger()
 
@@ -167,10 +166,8 @@ async def _create_repoless_process(
         spawner_prompt._REQUIRED_VERIFY_PROMPT_SECTIONS,
         extraction="verify-prompt")
     contract = spawner_prompt._substitute_tokens(
-        "\n".join(sections[section_id].strip("\n") for section_id in spawner_prompt._REQUIRED_VERIFY_PROMPT_SECTIONS), {
-            "{{result_trailer_expected}}": VERIFY_RESULT_TRAILER_EXPECTED,
-            "{{canonical_template_path}}": str((cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()),
-        })
+        "\n".join(sections[section_id].strip("\n") for section_id in spawner_prompt._REQUIRED_VERIFY_PROMPT_SECTIONS),
+        spawner_prompt.verify_contract_tokens(cfg))
     spawner_prompt._require_tokens_resolved(contract, prompt="verify")
     worker_prompt = f"{contract}\n\n{description}"
   elif request.task_type in spawner_prompt.WORKFLOW_PROMPT_SECTION:

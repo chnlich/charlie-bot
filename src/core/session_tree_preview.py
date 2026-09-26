@@ -76,12 +76,12 @@ import yaml
 
 from src.core.buildinfo import init_build_info
 from src.core.config import (
-  CHARLIEBOT_HOME_ENV,
-  CharlieBotConfig,
-  charliebot_home_dir,
-  get_config,
-  load_config,
-  load_credentials,
+    CHARLIEBOT_HOME_ENV,
+    CharlieBotConfig,
+    charliebot_home_dir,
+    get_config,
+    load_config,
+    load_credentials,
 )
 from src.core.constants import REPO_ROOT, BackendType
 from src.core.home_writer_fence import HomeWriterFence, acquire_home_writer_fence
@@ -122,11 +122,12 @@ _INHERITED_IDENTITY_ENV_VARS = (
 # the request boundary refuses them, so a clicked legacy route cannot act on
 # global state from a trial instance.
 _PREVIEW_REFUSED_MUTATION_PREFIXES = ("/api/cron",)
-_PREVIEW_REFUSED_MUTATION_PATHS = frozenset({
-    "/api/internal/schedule-trigger",  # delayed/external trigger creation
-    "/api/internal/slack/reply",  # external messaging
-    "/api/internal/slack/ack",
-})
+_PREVIEW_REFUSED_MUTATION_PATHS = frozenset(
+    {
+        "/api/internal/schedule-trigger",  # delayed/external trigger creation
+        "/api/internal/slack/reply",  # external messaging
+        "/api/internal/slack/ack",
+    })
 _REFUSED_MUTATION_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _REFUSED_WEBSOCKET_PATHS = frozenset({"/ws/terminal"})
 _WS_REFUSED_CLOSE_CODE = 4403
@@ -235,8 +236,7 @@ def check_launcher() -> None:
   """The charlie-code launcher must exist and support its session-directory override."""
   binary = shutil_which("charlie-code")
   if binary is None:
-    raise PreviewRefusedError(
-        "the charlie-code launcher is not installed; the preview cannot run its selected backend")
+    raise PreviewRefusedError("the charlie-code launcher is not installed; the preview cannot run its selected backend")
   if not _launcher_supports_session_dir(binary):
     raise PreviewRefusedError(
         "the installed charlie-code does not support --session-dir; native session isolation "
@@ -245,10 +245,12 @@ def check_launcher() -> None:
 
 def check_ui_assets() -> None:
   """The shipped UI must be present in the running tree before the instance starts."""
-  missing = [str(p.relative_to(REPO_ROOT)) for p in (
-      REPO_ROOT / "web" / "templates" / "index.html",
-      REPO_ROOT / "web" / "static" / "css" / "tailwind.css",
-  ) if not p.is_file()]
+  missing = [
+      str(p.relative_to(REPO_ROOT)) for p in (
+          REPO_ROOT / "web" / "templates" / "index.html",
+          REPO_ROOT / "web" / "static" / "css" / "tailwind.css",
+      ) if not p.is_file()
+  ]
   if missing:
     raise PreviewRefusedError("the running checkout is missing the shipped UI assets: " + ", ".join(missing))
 
@@ -322,7 +324,8 @@ def classify_home(home: Path) -> bool:
       details = evidence or ["the directory is not empty and carries no session-tree preview record"]
       raise PreviewRefusedError(
           f"--home {home} exists and is not a session-tree preview home "
-          "(no valid preview_instance.json record); refusing to touch it", details=details)
+          "(no valid preview_instance.json record); refusing to touch it",
+          details=details)
     return False
   return True
 
@@ -347,7 +350,9 @@ def read_source_backend(backend_id: str) -> tuple[dict, tuple[str, str] | None]:
 
 
 def read_source_backend_additions(
-    add_ids: list[str] | None, *, exclude_ids: set[str],
+    add_ids: list[str] | None,
+    *,
+    exclude_ids: set[str],
 ) -> list[tuple[dict, tuple[str, str] | None]]:
   """Read and validate the explicitly requested additional backend entries, in request order.
 
@@ -363,8 +368,7 @@ def read_source_backend_additions(
     if backend_id in seen:
       raise PreviewRefusedError(f"--add-backend {backend_id!r} is requested more than once")
     if backend_id in exclude_ids:
-      raise PreviewRefusedError(
-          f"--add-backend {backend_id!r} is already part of this trial's backend selection")
+      raise PreviewRefusedError(f"--add-backend {backend_id!r} is already part of this trial's backend selection")
     resolved.append(_read_source_backend_option(backend_id))
     seen.add(backend_id)
   return resolved
@@ -430,8 +434,7 @@ def _read_source_identity() -> tuple[str, str]:
   """The running checkout's branch and full HEAD SHA (the printed provenance)."""
 
   def git(*args: str) -> str:
-    proc = subprocess.run(
-        ["git", *args], cwd=str(REPO_ROOT), capture_output=True, text=True, check=True, timeout=30)
+    proc = subprocess.run(["git", *args], cwd=str(REPO_ROOT), capture_output=True, text=True, check=True, timeout=30)
     return proc.stdout.strip()
 
   try:
@@ -446,8 +449,8 @@ def _new_access_key() -> str:
   return "preview-key-" + secrets.token_hex(16)
 
 
-def prepare_preview(home_raw: str, port: int, backend_id: str | None,
-                    add_backend_ids: list[str] | None = None) -> PreviewSetup:
+def prepare_preview(
+    home_raw: str, port: int, backend_id: str | None, add_backend_ids: list[str] | None = None) -> PreviewSetup:
   """Validate every launch precondition and resolve the instance's identity; no writes.
 
   The environment still selects the source profile here: the backend entries and
@@ -465,12 +468,12 @@ def prepare_preview(home_raw: str, port: int, backend_id: str | None,
     raise PreviewRefusedError(f"preview preparation could not read the source profile: {e}") from e
 
 
-def _prepare_preview(home_raw: str, port: int, backend_id: str | None,
-                     add_backend_ids: list[str] | None) -> PreviewSetup:
+def _prepare_preview(
+    home_raw: str, port: int, backend_id: str | None, add_backend_ids: list[str] | None) -> PreviewSetup:
   home = resolve_preview_home(home_raw)
   source_cfg = load_config()
-  check_home_location(home, source_home=charliebot_home_dir(),
-                      source_workspace_dirs=list(source_cfg.paths.workspace_dirs))
+  check_home_location(
+      home, source_home=charliebot_home_dir(), source_workspace_dirs=list(source_cfg.paths.workspace_dirs))
   check_port(port, source_server_port=source_cfg.server.port)
   fresh = classify_home(home)
   if fresh:
@@ -562,8 +565,7 @@ def validate_existing_config(home: Path) -> dict:
   creds = load_yaml(home / "credentials.yaml", default={})
   for entry in options:
     referenced = entry.get("credential")
-    if referenced and (
-        not isinstance(creds, dict) or not (creds.get(str(referenced)) or {}).get("api_key")):
+    if referenced and (not isinstance(creds, dict) or not (creds.get(str(referenced)) or {}).get("api_key")):
       raise PreviewRefusedError(
           f"the preview home's credentials.yaml has no {referenced}.api_key for the configured "
           "backend; the provider credential is required to run the trial")
@@ -611,15 +613,20 @@ def _preview_config_data(setup: PreviewSetup) -> dict:
   after it as explicit choices only.
   """
   return {
-      "server": {"host": "127.0.0.1", "port": setup.port},
-      "paths": {
-          "workspace_dirs": [str(setup.home / PREVIEW_WORKSPACES_DIRNAME)],
-          "worktree_dir": str(setup.home / PREVIEW_WORKTREES_DIRNAME),
+      "server": {
+          "host": "127.0.0.1",
+          "port": setup.port
       },
-      "backends": {
-          "options": [setup.backend_entry, *[entry for entry, _ in setup.backend_additions]],
-          "preference": [setup.backend_id],
-      },
+      "paths":
+          {
+              "workspace_dirs": [str(setup.home / PREVIEW_WORKSPACES_DIRNAME)],
+              "worktree_dir": str(setup.home / PREVIEW_WORKTREES_DIRNAME),
+          },
+      "backends":
+          {
+              "options": [setup.backend_entry, *[entry for entry, _ in setup.backend_additions]],
+              "preference": [setup.backend_id],
+          },
   }
 
 
@@ -701,11 +708,10 @@ def _extend_existing_home_catalog(setup: PreviewSetup) -> None:
     added_sections.append(section)
   if added_sections:
     atomic_write_text(
-        credentials_path,
-        yaml.safe_dump(creds, allow_unicode=True, default_flow_style=False),
-        private=True)
+        credentials_path, yaml.safe_dump(creds, allow_unicode=True, default_flow_style=False), private=True)
   log.info(
-      "preview_catalog_extended", home=str(setup.home),
+      "preview_catalog_extended",
+      home=str(setup.home),
       added=[entry["id"] for entry, _ in setup.backend_additions],
       credential_sections_added=sorted(added_sections))
 
@@ -723,8 +729,7 @@ def seed_or_validate_preview_home(setup: PreviewSetup) -> None:
     setup.home.mkdir(parents=True, exist_ok=True)
     save_yaml(setup.home / "config.yaml", _preview_config_data(setup))
     atomic_write_text(setup.home / "credentials.yaml", _credentials_text(setup), private=True)
-    for dirname in (PREVIEW_NATIVE_DIRNAME, PREVIEW_WORKSPACES_DIRNAME, PREVIEW_WORKTREES_DIRNAME,
-                    PREVIEW_LOG_DIRNAME):
+    for dirname in (PREVIEW_NATIVE_DIRNAME, PREVIEW_WORKSPACES_DIRNAME, PREVIEW_WORKTREES_DIRNAME, PREVIEW_LOG_DIRNAME):
       (setup.home / dirname).mkdir(parents=True, exist_ok=True)
     log.info("preview_home_seeded", home=str(setup.home), backend=setup.backend_id)
   else:
@@ -739,8 +744,7 @@ def seed_or_validate_preview_home(setup: PreviewSetup) -> None:
       _extend_existing_home_catalog(setup)
     # A restart never rekeys the instance: the stored key stays authoritative.
     setup.access_key = _existing_access_key(setup.home)
-    for dirname in (PREVIEW_NATIVE_DIRNAME, PREVIEW_WORKSPACES_DIRNAME, PREVIEW_WORKTREES_DIRNAME,
-                    PREVIEW_LOG_DIRNAME):
+    for dirname in (PREVIEW_NATIVE_DIRNAME, PREVIEW_WORKSPACES_DIRNAME, PREVIEW_WORKTREES_DIRNAME, PREVIEW_LOG_DIRNAME):
       (setup.home / dirname).mkdir(parents=True, exist_ok=True)
     log.info("preview_home_reused", home=str(setup.home))
   write_instance_record(setup, ready=False)
@@ -758,8 +762,7 @@ def activate_preview_environment(setup: PreviewSetup) -> None:
     os.environ.pop(var, None)
   resolved = charliebot_home_dir()
   if resolved != setup.home:
-    raise PreviewRefusedError(
-        f"the selected home resolved to {resolved}, not the requested {setup.home}")
+    raise PreviewRefusedError(f"the selected home resolved to {resolved}, not the requested {setup.home}")
   cfg = load_config()
   if cfg.charliebot_home != setup.home:
     raise PreviewRefusedError(
@@ -771,8 +774,10 @@ def assert_no_bound_singletons() -> None:
   """Fail fast if an application singleton was constructed before the environment switch."""
   from src.api import deps
 
-  bound = [name for name in ("_session_manager", "_thread_manager", "_trigger_manager", "_task_manager")
-           if getattr(deps, name, None) is not None]
+  bound = [
+      name for name in ("_session_manager", "_thread_manager", "_trigger_manager", "_task_manager")
+      if getattr(deps, name, None) is not None
+  ]
   if bound:
     raise PreviewRefusedError(
         "application singletons bound before the preview environment switched: " + ", ".join(bound))
@@ -874,14 +879,15 @@ class PreviewUnavailableGate:
       return
     log.info("preview_gate_refused", path=path, method=method)
     body = json.dumps({"detail": reason}).encode("utf-8")
-    await send({
-        "type": "http.response.start",
-        "status": 403,
-        "headers": [
-            (b"content-type", b"application/json"),
-            (b"content-length", str(len(body)).encode("latin-1")),
-        ],
-    })
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 403,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("latin-1")),
+            ],
+        })
     await send({"type": "http.response.body", "body": body})
 
 
@@ -905,8 +911,7 @@ def make_preview_lifespan(setup: PreviewSetup) -> Callable[[Any], AsyncIterator[
   async def lifespan(app: Any) -> AsyncIterator[None]:
     cfg = get_config()
     if cfg.charliebot_home != setup.home:
-      raise PreviewRefusedError(
-          f"the preview lifespan bound {cfg.charliebot_home}, not the prepared home {setup.home}")
+      raise PreviewRefusedError(f"the preview lifespan bound {cfg.charliebot_home}, not the prepared home {setup.home}")
     boot_time = utc_now()
     try:
       init_build_info()
@@ -940,8 +945,7 @@ def make_preview_lifespan(setup: PreviewSetup) -> Callable[[Any], AsyncIterator[
       await streaming_manager.close_all()
       pages.shutdown_merge_executor()
       write_instance_record(setup, ready=False, stopped=True)
-      log.info("preview_shutdown", home=str(setup.home), uptime_s=round(
-          (utc_now() - boot_time).total_seconds(), 1))
+      log.info("preview_shutdown", home=str(setup.home), uptime_s=round((utc_now() - boot_time).total_seconds(), 1))
 
   return lifespan
 
@@ -1000,8 +1004,8 @@ def install_log_capture(log_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run_preview_command(home_raw: str, port: int, backend_id: str | None,
-                        add_backend_ids: list[str] | None = None) -> None:
+def run_preview_command(
+    home_raw: str, port: int, backend_id: str | None, add_backend_ids: list[str] | None = None) -> None:
   """Prepare, validate and run one foreground preview instance; returns after clean shutdown.
 
   Every refusal exits through :class:`PreviewRefusedError` before any write; the

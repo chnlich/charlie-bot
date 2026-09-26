@@ -84,8 +84,11 @@ async def wait_or_kill_group(
 # flag and the preexec hook on every session spawn path.
 # ---------------------------------------------------------------------------
 
-# The user-delegated cgroup v2 subtree the session cgroups live under.
-CGROUP_V2_APP_SLICE = "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice"
+# The user-delegated cgroup v2 subtree the session cgroups live under. systemd
+# names each user's delegated subtree by uid (user-<uid>.slice/user@<uid>.service),
+# so the path is built from this process's uid at import — a host whose user is
+# not uid 1000 gets its own slice, not a hardcoded one.
+CGROUP_V2_APP_SLICE = (f"/sys/fs/cgroup/user.slice/user-{os.getuid()}.slice/user@{os.getuid()}.service/app.slice")
 # Directory-name prefix; the suffix is the session id's first 8 chars, so a
 # human can match cgroup directories against the session list.
 SESSION_CGROUP_PREFIX = "charliebot-sess-"

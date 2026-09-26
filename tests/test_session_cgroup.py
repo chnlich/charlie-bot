@@ -1,5 +1,6 @@
 """Session memory-cap cgroup helpers: config schema, naming, degradation, attribution."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,7 @@ SESSION_ID = "abcd1234-ef56-7890-abcd-ef1234567890"
 def test_server_config_session_memory_defaults() -> None:
   cfg = ServerConfig()
   assert cfg.session_memory_max_mb == 12288
-  assert cfg.session_swap_max_mb == 2048
+  assert cfg.session_swap_max_mb == 0
 
 
 def test_server_config_zero_disables_cgroup() -> None:
@@ -66,6 +67,15 @@ def test_session_cgroup_name_keeps_short_ids_whole() -> None:
 
 def test_session_cgroup_path_sits_under_app_slice() -> None:
   assert session_cgroup_path(SESSION_ID).parent == Path(cgroup_process.CGROUP_V2_APP_SLICE)
+
+
+def test_app_slice_constant_is_built_from_this_process_uid() -> None:
+  # systemd names each user's delegated subtree by uid, so the constant must
+  # carry the running process's uid, not a hardcoded one.
+  uid = os.getuid()
+  assert f"user-{uid}.slice" in cgroup_process.CGROUP_V2_APP_SLICE
+  assert f"user@{uid}.service" in cgroup_process.CGROUP_V2_APP_SLICE
+  assert cgroup_process.CGROUP_V2_APP_SLICE.endswith("/app.slice")
 
 
 # ---------------------------------------------------------------------------

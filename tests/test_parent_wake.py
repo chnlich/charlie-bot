@@ -9,6 +9,7 @@ durable record either way.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -20,6 +21,12 @@ from src.core import event_types as ET
 from src.core.models import CreateSessionRequest
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
+
+
+async def await_wake(task: asyncio.Task | None) -> None:
+  """The legacy wake is scheduled, not awaited inline; the test waits it out."""
+  assert task is not None
+  await task
 
 
 async def build_env(tmp_path: Path):
@@ -54,7 +61,7 @@ async def test_legacy_parent_wakes_through_trigger_master_once(tmp_path: Path, m
   trigger = AsyncMock()
   monkeypatch.setattr("src.core.master_trigger.trigger_master", trigger)
 
-  await tree.dispatch.wake_parent(legacy.id)
+  await await_wake(await tree.dispatch.wake_parent(legacy.id))
 
   assert trigger.await_count == 1
   args = trigger.await_args.args
@@ -62,6 +69,32 @@ async def test_legacy_parent_wakes_through_trigger_master_once(tmp_path: Path, m
   assert args[1] == f"[Report from task {child_id} | outcome completed] the work landed"
   assert args[2] is cfg
   assert args[3] is session_mgr
+
+
+@pytest.mark.asyncio
+async def test_legacy_parent_wake_does_not_hold_the_caller_for_the_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The startup reconcile pass replays lost reports through this wake; awaiting
+  the master turn inline held the server's doors shut for the whole turn."""
+  _cfg, session_mgr, tree = await build_env(tmp_path)
+  legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
+  await tree.events.append(
+      legacy.id, child_report("child-task-1", outcome="completed", summary="done", event_id="report-1"))
+  turn_started = asyncio.Event()
+  turn_may_finish = asyncio.Event()
+
+  async def slow_turn(*_args: object, **_kwargs: object) -> None:
+    turn_started.set()
+    await turn_may_finish.wait()
+
+  monkeypatch.setattr("src.core.master_trigger.trigger_master", slow_turn)
+
+  task = await asyncio.wait_for(tree.dispatch.wake_parent(legacy.id), timeout=1.0)
+
+  assert task is not None and not task.done()
+  await asyncio.wait_for(turn_started.wait(), timeout=1.0)
+  turn_may_finish.set()
+  await task
 
 
 @pytest.mark.asyncio
@@ -75,7 +108,7 @@ async def test_legacy_parent_wake_uses_the_newest_report(tmp_path: Path, monkeyp
   trigger = AsyncMock()
   monkeypatch.setattr("src.core.master_trigger.trigger_master", trigger)
 
-  await tree.dispatch.wake_parent(legacy.id)
+  await await_wake(await tree.dispatch.wake_parent(legacy.id))
 
   assert trigger.await_count == 1
   assert trigger.await_args.args[1] == "[Report from task child-b | outcome completed] newer attempt"

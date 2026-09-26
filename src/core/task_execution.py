@@ -1544,7 +1544,7 @@ class TaskExecutionAdapter:
             return
         if summary is None:
             summary = await self._worker_failure_summary(session_id, run)
-        await self._tree.dispatch.deliver_child_report(
+        report = await self._tree.dispatch.deliver_child_report(
             session_id,
             source_event=source,
             outcome=outcome,
@@ -1552,10 +1552,12 @@ class TaskExecutionAdapter:
             result_refs=[f"run:{run.id}"],
             recipient=meta.task_parent_id,
         )
+        if report is None:
+            return
         # The delivered failure report is the parent's new durable input: wake
         # its next serialized turn (dispatcher for a task-tree parent, the
         # legacy master wake for a legacy parent; deduped replays included).
-        await self._tree.dispatch.wake_parent(meta.task_parent_id)
+        await self._tree.dispatch.wake_parent(meta.task_parent_id, report=report)
 
 
     async def _worker_failure_summary(self, session_id: str, run: RunRecord) -> str:

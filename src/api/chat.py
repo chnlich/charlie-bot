@@ -122,10 +122,9 @@ async def send_message(
           from_session_name=from_session_name,
       )
       decision = await task_mgr.dispatch.dispatch_pending(session_id)
-    except TaskForbiddenError as e:
-      raise HTTPException(status_code=403, detail=str(e)) from e
-    except TaskInvalidError as e:
-      raise HTTPException(status_code=400, detail=str(e)) from e
+    except (TaskForbiddenError, TaskInvalidError) as e:
+      from src.api.sessions import _task_http_error
+      raise _task_http_error(e) from e
     return JSONResponse(
         status_code=202,
         content={

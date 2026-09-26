@@ -14,8 +14,7 @@ from src.api.deps import (
     get_trigger_manager,
     require_found,
 )
-from src.api.deps import (
-    require_caller as require_caller_dep,)
+from src.api.deps import require_caller as require_caller_dep
 from src.api.message_utils import build_agent_message_event
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config

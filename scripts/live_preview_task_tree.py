@@ -167,7 +167,9 @@ async def run_harness(args: argparse.Namespace) -> None:
     else:
         atexit.register(lambda: _shutil.rmtree(tmp_path, ignore_errors=True))
     source = tmp_path / "source-home"
-    build_source_home(source, args.backend)
+    # build_source_home takes the selected backend ids as a list (the shared
+    # harness helper's contract); a bare string would iterate per character.
+    build_source_home(source, [args.backend])
     for var in ("CHARLIEBOT_SESSION_ID", "CHARLIEBOT_RUN_TOKEN",
                 "CHARLIE_CODE_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"):
         os.environ.pop(var, None)

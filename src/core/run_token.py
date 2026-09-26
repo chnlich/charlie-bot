@@ -15,6 +15,10 @@ Hard rules this module makes enforceable:
   silent pass.
 - The operator access key keeps working exactly as before for operator
   callers (browser and operator CLI).
+
+``b64url_encode``/``b64url_decode`` are the single home of the unpadded-base64url
+wire codec; the page cursors in ``src/core/runs.py`` and ``src/core/task_sessions.py``
+share it.
 """
 
 import base64
@@ -84,11 +88,13 @@ class CallerIdentity:
     return self.claims.session_id
 
 
-def _b64url_encode(raw: bytes) -> str:
+def b64url_encode(raw: bytes) -> str:
+  """Single home of the unpadded-base64url wire form: this module's token and the page cursors ride it."""
   return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
 
-def _b64url_decode(text: str) -> bytes:
+def b64url_decode(text: str) -> bytes:
+  """The decode side: re-pads the unpadded form to the length base64 requires."""
   padding = "=" * (-len(text) % 4)
   return base64.urlsafe_b64decode(text + padding)
 
@@ -102,9 +108,9 @@ def sign_run_token(claims: RunTokenClaims, signing_key: str) -> str:
       "run_id": claims.run_id,
       "agent": claims.agent,
   }
-  payload_b64 = _b64url_encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+  payload_b64 = b64url_encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
   signature = hmac.new(signing_key.encode("utf-8"), payload_b64.encode("ascii"), hashlib.sha256).digest()
-  return f"{payload_b64}.{_b64url_encode(signature)}"
+  return f"{payload_b64}.{b64url_encode(signature)}"
 
 
 def verify_run_token(token: str, signing_key: str) -> RunTokenClaims:
@@ -117,13 +123,13 @@ def verify_run_token(token: str, signing_key: str) -> RunTokenClaims:
     raise RunTokenError("malformed run token") from e
   expected = hmac.new(signing_key.encode("utf-8"), payload_b64.encode("ascii"), hashlib.sha256).digest()
   try:
-    presented = _b64url_decode(signature_b64)
+    presented = b64url_decode(signature_b64)
   except (ValueError, TypeError) as e:
     raise RunTokenError("malformed run token signature") from e
   if not hmac.compare_digest(presented, expected):
     raise RunTokenError("run token signature mismatch")
   try:
-    payload = json.loads(_b64url_decode(payload_b64))
+    payload = json.loads(b64url_decode(payload_b64))
   except (ValueError, TypeError) as e:
     raise RunTokenError("malformed run token payload") from e
   if not isinstance(payload, dict):

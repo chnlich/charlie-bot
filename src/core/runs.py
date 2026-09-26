@@ -24,7 +24,6 @@ This module owns the pure/queryable parts of that contract:
 from __future__ import annotations
 
 import asyncio
-import base64
 import os
 import re
 import signal
@@ -45,6 +44,7 @@ from src.core.control_events import ACTOR_SYSTEM, ControlEventSink, build_contro
 from src.core.json_utils import atomic_write_text
 from src.core.models import RunRecord, ensure_utc, utc_now
 from src.core.ndjson import parse_ndjson_line
+from src.core.run_token import b64url_decode, b64url_encode
 from src.core.session_aliases import SessionAliasStore
 from src.core.sidebar_state import mark_sidebar_dirty
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
@@ -725,14 +725,14 @@ def _encode_run_cursor(key: tuple[datetime, str], descending: bool = False) -> s
   payload: dict = {"s": key[0].isoformat(), "i": key[1]}
   if descending:
     payload["d"] = True
-  return base64.urlsafe_b64encode(orjson.dumps(payload)).rstrip(b"=").decode("ascii")
+  return b64url_encode(orjson.dumps(payload))
 
 
 def _decode_run_cursor(cursor: str) -> tuple[tuple[datetime, str], bool]:
   """Decode one run-page cursor into its boundary and page order, failing loud
   on a malformed value."""
   try:
-    payload = orjson.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+    payload = orjson.loads(b64url_decode(cursor))
     started = datetime.fromisoformat(payload["s"]) if payload["s"] else datetime.min.replace(tzinfo=UTC)
     return (ensure_utc(started), payload["i"]), bool(payload.get("d", False))
   except (ValueError, KeyError, TypeError) as e:

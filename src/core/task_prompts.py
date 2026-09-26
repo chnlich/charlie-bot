@@ -313,14 +313,9 @@ def _worker_kind_rule_segments(
         text=review_rules_text(),
         sources=(PromptSource(SCOPE_BASE, "src/core/review.py:review_rules_text"),)))
   elif task_type == TaskType.VERIFY:
-    from src.core.verify_trailer import VERIFY_RESULT_TRAILER_EXPECTED
+    from src.core.spawner_prompt import _substitute_tokens, verify_contract_tokens
     contract = _sections_text(cfg, "verify.md", ("preamble", "scope"))
-    from src.core.spawner_prompt import _substitute_tokens
-    contract = _substitute_tokens(contract, {
-        "{{result_trailer_expected}}": VERIFY_RESULT_TRAILER_EXPECTED,
-        "{{canonical_template_path}}": str(
-            (cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()),
-    })
+    contract = _substitute_tokens(contract, verify_contract_tokens(cfg))
     segments.append(RuleSegment(text=contract, sources=(PromptSource(SCOPE_BASE, "prompts/verify.md"),)))
   else:
     worker = _sections_text(cfg, "worker.md", ("role",))
@@ -527,14 +522,10 @@ def render_task_body(cfg: CharlieBotConfig, description: str) -> str:
 
 
 def render_iteration_reports(cfg: CharlieBotConfig, *, loop_dir: str, iteration_number: int) -> str:
-  from src.core.spawner_prompt import _substitute_tokens, load_marker_sections
+  from src.core.spawner_prompt import _substitute_tokens, iteration_report_tokens, load_marker_sections
   sections = load_marker_sections(cfg.charlie_bot_repo / "prompts" / "worker.md", ("iteration_reports",),
                                   extraction="worker-prompt")
-  return _substitute_tokens(sections["iteration_reports"], {
-      "{{loop_dir}}": loop_dir,
-      "{{iteration_number_padded}}": f"{iteration_number:04d}",
-      "{{iteration_number}}": str(iteration_number),
-  })
+  return _substitute_tokens(sections["iteration_reports"], iteration_report_tokens(loop_dir, iteration_number))
 
 
 def render_worktree_persistence(cfg: CharlieBotConfig) -> str:

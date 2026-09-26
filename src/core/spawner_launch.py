@@ -173,7 +173,7 @@ async def _create_repoless_process(
         })
     spawner_prompt._require_tokens_resolved(contract, prompt="verify")
     worker_prompt = f"{contract}\n\n{description}"
-  elif request.task_type in spawner_prompt._WORKFLOW_PROMPT_SECTION:
+  elif request.task_type in spawner_prompt.WORKFLOW_PROMPT_SECTION:
     worker_prompt = request.prompt_override or description
   else:
     raise ValueError(f"unsupported task_type: {request.task_type!r}")

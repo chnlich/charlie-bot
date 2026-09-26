@@ -76,19 +76,24 @@ async def test_register_is_idempotent_and_registers_alias(tmp_path: Path) -> Non
 @pytest.mark.asyncio
 async def test_retry_binding_is_stable_across_requests_and_reload(tmp_path: Path) -> None:
   env = build_env(tmp_path)
-  cfg, session_mgr, _mgr, store = env
+  cfg, session_mgr, mgr, store = env
   session_id = await make_task(env, "t1")
   original = await store.register_run(RunRecord(id="r-orig", session_id=session_id, kind="work", backend="opus"))
 
-  first = await store.create_retry_run(
-      session_id, "retry-req", "r-orig", task_spec_text='{"goal":"x"}', backend=original.backend)
-  second = await store.create_retry_run(
-      session_id, "retry-req", "r-orig", task_spec_text='{"goal":"x"}', backend=original.backend)
+  # The locked variant is the production entry (the retry route holds the tree
+  # owner's control lock); the test holds that same lock to meet its contract.
+  async with mgr.control_lock:
+    first = await store.create_retry_run_locked(
+        session_id, "retry-req", "r-orig", task_spec_text='{"goal":"x"}', backend=original.backend)
+    second = await store.create_retry_run_locked(
+        session_id, "retry-req", "r-orig", task_spec_text='{"goal":"x"}', backend=original.backend)
   assert first.id == second.id and first.retry_of_run_id == "r-orig"
 
-  fresh_store = TaskTreeManager(cfg, session_mgr).runs
-  replay = await fresh_store.create_retry_run(
-      session_id, "retry-req", "r-orig", task_spec_text='{"goal":"x"}', backend=original.backend)
+  fresh_mgr = TaskTreeManager(cfg, session_mgr)
+  fresh_store = fresh_mgr.runs
+  async with fresh_mgr.control_lock:
+    replay = await fresh_store.create_retry_run_locked(
+        session_id, "retry-req", "r-orig", task_spec_text='{"goal":"x"}', backend=original.backend)
   assert replay.id == first.id
 
   # The pinned spec body and its hash survive on the record.

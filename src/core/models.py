@@ -816,6 +816,8 @@ class SessionCallbacks:
   # (context_tokens, last_request_at) for the account pool's cold-cache rule;
   # None when the caller wired no pool (tests).
   claude_context_state: Callable[[str, SessionMetadata], Awaitable[tuple[int | None, datetime | None]]] | None = None
+  # Runs after each finished round (e.g. session naming); optional so test-built bundles stay valid.
+  after_round: Callable[[str], Awaitable[None]] | None = None
 
 
 # ---------------------------------------------------------------------------

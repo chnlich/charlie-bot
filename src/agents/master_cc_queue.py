@@ -21,6 +21,7 @@ from src.core.models import (
 )
 from src.core.process import kill_group_escalating
 from src.core.streaming import SIDEBAR_CHANNEL, streaming_manager
+from src.core.tasks import create_logged_task
 from src.core.thinking_state import busy_since, clear_busy, mark_busy
 
 if TYPE_CHECKING:
@@ -286,6 +287,11 @@ async def _session_consumer(session_id: str) -> None:
         # Resolve the caller's future
         if not item.future.done():
           item.future.set_result(cc_session_id)
+
+        # Every round origin (chat, task, auto-trigger) ends on this MASTER_DONE path.
+        # Fire-and-forget: the consumer serializes rounds; awaiting it would delay the next round.
+        if item.callbacks.after_round is not None:
+          create_logged_task(item.callbacks.after_round(session_id), name=f"after-round-{session_id}")
 
         # Post-MASTER_DONE copy retirement: with the round's account label
         # funnel-persisted above, the pool's redundant copies of this transcript

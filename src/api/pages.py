@@ -48,6 +48,7 @@ from src.core.constants import (
 )
 from src.core.gc_control import gc_off
 from src.core.log_once import LazyStructlogLogger
+from src.core.memo import StatSignatureMemo
 from src.core.models import SessionStatus
 from src.core.session_tree_preview import is_preview_mode
 from src.core.sessions import SessionManager
@@ -194,6 +195,17 @@ _ASSET_DIGEST_STATE: dict[str, tuple | dict[str, bytes] | str] = {
     "digest": "",
 }
 
+# Per-directory record of the digest walk, keyed on the directory's own
+# (mtime_ns, size): dir path -> (subdirectory names, file names). The
+# per-render freshness contract stays with the per-file stat every walk takes
+# — a content edit moves the file's own signature, not its directory's — so
+# only the directory record (entry create, delete, rename, all of which move
+# the directory stat) rides the memo; a moved directory re-scandirs on the
+# next walk. Served listings are shared across renders, the no-defensive-copy
+# idiom of the sibling memos.
+_DIR_LISTING_MEMO_LIMIT = 64
+_DIR_LISTINGS: StatSignatureMemo[str, tuple[list[str], list[str]]] = StatSignatureMemo(_DIR_LISTING_MEMO_LIMIT)
+
 
 def _asset_tree_digest() -> str:
   """Content digest over the served static tree, refreshed per call.
@@ -201,26 +213,41 @@ def _asset_tree_digest() -> str:
   The ?v= token names the bytes the URL serves, and a working-tree edit can
   land between restarts, so the digest walks the tree (one stat pass over the
   static files) and re-hashes only files whose (mtime_ns, size) signature
-  moved; an unchanged walk serves the memoized digest. The walk scans with
-  os.scandir so each entry answers is_file from the directory record and
-  stats once, the M44/M72 conversion of the pathlib double-stat pattern.
+  moved; an unchanged walk serves the memoized digest. The per-directory
+  entry record rides ``_DIR_LISTINGS``, so a steady render stats each file
+  and each directory once and re-scandirs only a directory whose own stat
+  moved.
   """
   static_root = REPO_ROOT / "web" / "static"
   if not static_root.is_dir():
     return ""
   pairs: list[tuple[str, int, int]] = []
 
-  def walk(dir_path: Path, prefix: str) -> None:
-    with os.scandir(dir_path) as entries:
-      for entry in entries:
-        rel = f"{prefix}{entry.name}"
-        if entry.is_dir():
-          walk(Path(entry.path), f"{rel}/")
-        elif entry.is_file():
-          st = entry.stat()
-          pairs.append((rel, st.st_mtime_ns, st.st_size))
+  # String paths only: the per-file stat rides 48 os.stat(str) calls per
+  # render, and a Path division per entry would price the walk past the
+  # shape it replaces.
+  def walk(dir_path: str, prefix: str) -> None:
+    dir_st = os.stat(dir_path)
+    cached = _DIR_LISTINGS.fresh(dir_path, dir_st)
+    if cached is None:
+      subdirs: list[str] = []
+      files: list[str] = []
+      with os.scandir(dir_path) as entries:
+        for entry in entries:
+          if entry.is_dir():
+            subdirs.append(entry.name)
+          elif entry.is_file():
+            files.append(entry.name)
+      cached = (subdirs, files)
+      _DIR_LISTINGS.record(dir_path, dir_st, cached)
+    subdirs, files = cached
+    for name in subdirs:
+      walk(os.path.join(dir_path, name), f"{prefix}{name}/")
+    for name in files:
+      st = os.stat(os.path.join(dir_path, name))
+      pairs.append((f"{prefix}{name}", st.st_mtime_ns, st.st_size))
 
-  walk(static_root, "")
+  walk(str(static_root), "")
   pairs.sort()
   sig = tuple(pairs)
   if _ASSET_DIGEST_STATE["sig"] == sig:

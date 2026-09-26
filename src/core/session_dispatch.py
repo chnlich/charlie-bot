@@ -459,7 +459,7 @@ class TaskInputDispatcher:
         # (close-request rechecks, automatic worker completion); a blocked
         # automatic close keeps its blockers visible and the adapters
         # re-evaluate.
-        durable = tree.runs.terminal_outcome(tree.runs.load_events_sync(session_id), run_id)
+        durable = await tree.runs.terminal_outcome_of(session_id, run_id)
         if durable == "success":
             try:
                 await tree.completion.after_run_finished(session_id, run_id)

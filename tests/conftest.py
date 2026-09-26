@@ -2150,6 +2150,41 @@ def agent_headers(session_id: str, run_id: str) -> dict[str, str]:
   return {"Authorization": f"Bearer {token}"}
 
 
+async def legacy_parent_with_open_task(
+    session_mgr: SessionManager, tree: TaskTreeManager, *, request_id: str):
+  """A legacy (profile None) parent session with one open child task under it.
+
+  The shape the caller-session rule governs: a legacy parent's own turn drives
+  the child's close through the HTTP API, and the close's delivered report must
+  (or must not) wake that parent through the legacy master wake.
+  """
+  legacy = await session_mgr.create_session(models.CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
+  child = await create_task(tree, parent=legacy.id, request_id=request_id)
+  return legacy, child
+
+
+async def wait_for_wake(trigger: AsyncMock, *, count: int = 1, timeout: float = 5.0) -> None:
+  """Wait until the scheduled legacy wake has run *count* times on the API loop.
+
+  The wake is scheduled fire-and-forget (create_logged_task) and the HTTP
+  TestClient drives the app on its own portal loop, so the test polls the
+  stand-in's await count instead of awaiting the wake task: a task of another
+  loop cannot be awaited from the test.
+  """
+  deadline = time.monotonic() + timeout
+  while trigger.await_count < count and time.monotonic() < deadline:
+    await asyncio.sleep(0.01)
+  assert trigger.await_count == count, trigger.await_args
+
+
+async def assert_wake_unused(trigger: AsyncMock, *, quiet_seconds: float = 0.5) -> None:
+  """Give a wrongly scheduled wake the API loop's time, then require silence."""
+  deadline = time.monotonic() + quiet_seconds
+  while time.monotonic() < deadline:
+    assert trigger.await_count == 0, trigger.await_args
+    await asyncio.sleep(0.05)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
   """Every test runs under its own empty profile home, so a code path that calls the real

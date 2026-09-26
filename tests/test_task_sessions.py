@@ -16,28 +16,40 @@ from src.core.models import CreateSessionRequest, EventRef, PatchSessionTaskRequ
 from src.core.run_token import CallerIdentity
 from src.core.runs import read_pid_stat
 from src.core.task_sessions import (
-  TaskConflictError,
-  TaskInvalidError,
-  TaskNotFoundError,
-  TaskTreeManager,
+    TaskConflictError,
+    TaskInvalidError,
+    TaskNotFoundError,
+    TaskTreeManager,
 )
 
 OPERATOR = CallerIdentity(kind="operator")
 
 
-def write_session_alias(path: Path, *, old_session_ids: dict[str, str],
-                        old_threads: dict[str, dict] | None = None) -> None:
+def write_session_alias(
+    path: Path, *, old_session_ids: dict[str, str], old_threads: dict[str, dict] | None = None) -> None:
   """Write one session_aliases.json in the store's own file shape."""
   path.parent.mkdir(parents=True, exist_ok=True)
-  path.write_text(json.dumps({
-      "old_session_ids": old_session_ids,
-      "old_threads": old_threads or {},
-  }, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+  path.write_text(
+      json.dumps(
+          {
+              "old_session_ids": old_session_ids,
+              "old_threads": old_threads or {},
+          },
+          ensure_ascii=False,
+          indent=2,
+          sort_keys=True),
+      encoding="utf-8")
 
 
-async def create_task(mgr: TaskTreeManager, *, parent: str | None, profile: str = "manager",
-                      request_id: str, name: str | None = None,
-                      task: TaskSpec | None = None, **kwargs: object):
+async def create_task(
+    mgr: TaskTreeManager,
+    *,
+    parent: str | None,
+    profile: str = "manager",
+    request_id: str,
+    name: str | None = None,
+    task: TaskSpec | None = None,
+    **kwargs: object):
   return await mgr.create_task(
       request_id=request_id,
       task_parent_id=parent,
@@ -62,18 +74,19 @@ async def build_three_levels(mgr: TaskTreeManager) -> dict[str, str]:
 
 async def close_task(mgr: TaskTreeManager, session_id: str, outcome: str = "completed") -> None:
   """Append one task_closed fact through the control-event sink (the durable way a task ends)."""
-  await mgr.events.append(session_id, {
-      "id": f"close-{session_id}",
-      "type": ET.TASK_CLOSED,
-      "timestamp": datetime.now(UTC).isoformat(),
-      "actor": "user",
-      "source_session_id": session_id,
-      "outcome": outcome,
-      "summary": "s",
-      "result_refs": [],
-      "run_ids": [],
-      "report_to": None,
-  })
+  await mgr.events.append(
+      session_id, {
+          "id": f"close-{session_id}",
+          "type": ET.TASK_CLOSED,
+          "timestamp": datetime.now(UTC).isoformat(),
+          "actor": "user",
+          "source_session_id": session_id,
+          "outcome": outcome,
+          "summary": "s",
+          "result_refs": [],
+          "run_ids": [],
+          "report_to": None,
+      })
   mgr._index = None
 
 
@@ -193,8 +206,8 @@ async def test_unnamed_create_without_a_goal_takes_the_session_counter_name(tmp_
   _, _session_mgr, mgr = build_env(tmp_path)
   first = await create_task(mgr, parent=None, request_id="r1", task=TaskSpec(goal=""))
   second = await create_task(mgr, parent=None, request_id="r2", task=None)
-  with_goal = await create_task(mgr, parent=first.id, request_id="w", profile="worker",
-                                task=TaskSpec(goal="Fix the login\nsecond line"))
+  with_goal = await create_task(
+      mgr, parent=first.id, request_id="w", profile="worker", task=TaskSpec(goal="Fix the login\nsecond line"))
   named = await create_task(mgr, parent=None, request_id="r3", name="Given", task=None)
 
   assert first.name.startswith("Session ") and second.name.startswith("Session ")
@@ -207,25 +220,25 @@ async def test_unnamed_create_without_a_goal_takes_the_session_counter_name(tmp_
 async def test_unnamed_create_names_from_goal_skipping_markdown_headings(tmp_path: Path) -> None:
   _, _session_mgr, mgr = build_env(tmp_path)
 
-  goal_heading = await create_task(mgr, parent=None, request_id="h1",
-                                   profile="worker",
-                                   task=TaskSpec(goal="## Goal\nPerform a delta verification of the plan"))
+  goal_heading = await create_task(
+      mgr,
+      parent=None,
+      request_id="h1",
+      profile="worker",
+      task=TaskSpec(goal="## Goal\nPerform a delta verification of the plan"))
   assert goal_heading.name == "Perform a delta verification of the plan"
 
-  only_heading = await create_task(mgr, parent=None, request_id="h2",
-                                   profile="worker",
-                                   task=TaskSpec(goal="## Only heading"))
+  only_heading = await create_task(
+      mgr, parent=None, request_id="h2", profile="worker", task=TaskSpec(goal="## Only heading"))
   assert only_heading.name == "Only heading"
 
-  empty_headings = await create_task(mgr, parent=None, request_id="h3",
-                                     profile="worker",
-                                     task=TaskSpec(goal="##\n\n##"))
+  empty_headings = await create_task(
+      mgr, parent=None, request_id="h3", profile="worker", task=TaskSpec(goal="##\n\n##"))
   assert empty_headings.name == "New worker task"
 
   long_line = "x" * 100
-  truncated = await create_task(mgr, parent=None, request_id="h4",
-                                profile="worker",
-                                task=TaskSpec(goal=f"## Goal\n{long_line}"))
+  truncated = await create_task(
+      mgr, parent=None, request_id="h4", profile="worker", task=TaskSpec(goal=f"## Goal\n{long_line}"))
   assert truncated.name == "x" * 80
 
 
@@ -354,8 +367,7 @@ async def test_tree_pagination_counts_and_attention_ancestor_path(tmp_path: Path
 
   # One attention descendant: a launched run nobody observed exiting.
   run = await mgr.runs.register_run(
-      RunRecord(id="run-attn", session_id=ids["worker1"], pid=os.getpid(), pid_start="1",
-                started_at=datetime.now(UTC)))
+      RunRecord(id="run-attn", session_id=ids["worker1"], pid=os.getpid(), pid_start="1", started_at=datetime.now(UTC)))
   assert run.id == "run-attn"
 
   page = await mgr.tree_page(parent_id=None, include_archived=False, limit=100, cursor=None)
@@ -367,7 +379,8 @@ async def test_tree_pagination_counts_and_attention_ancestor_path(tmp_path: Path
 
   detail = await mgr.session_detail(ids["worker1"])
   assert [(a["id"], a["name"]) for a in detail["ancestors"]] == [
-      (ids["low"], "Low"), (ids["mid"], "Mid"), (ids["root"], "Root")]
+      (ids["low"], "Low"), (ids["mid"], "Mid"), (ids["root"], "Root")
+  ]
   assert detail["work_state"] == "attention"
   assert detail["task_state"] == "open"
 
@@ -434,22 +447,19 @@ async def test_running_and_pending_runs_block_structural_edits(tmp_path: Path) -
   # Queued (registered, never launched): a pending execution request.
   await mgr.runs.register_run(RunRecord(id="run-queued", session_id=ids["worker1"]))
   with pytest.raises(TaskConflictError, match="queued"):
-    await mgr.patch_task(
-        ids["worker1"], PatchSessionTaskRequest(task=TaskSpec(goal="edited")), caller=OPERATOR)
+    await mgr.patch_task(ids["worker1"], PatchSessionTaskRequest(task=TaskSpec(goal="edited")), caller=OPERATOR)
 
   # Live process: an active run.
   pid_start, _ = read_pid_stat(os.getpid())
   await mgr.runs.register_run(
-      RunRecord(id="run-live", session_id=ids["worker2"], pid=os.getpid(), pid_start=pid_start,
-                started_at=datetime.now(UTC)))
+      RunRecord(
+          id="run-live", session_id=ids["worker2"], pid=os.getpid(), pid_start=pid_start, started_at=datetime.now(UTC)))
   with pytest.raises(TaskConflictError, match="active"):
-    await mgr.patch_task(
-        ids["worker2"], PatchSessionTaskRequest(task=TaskSpec(goal="edited")), caller=OPERATOR)
+    await mgr.patch_task(ids["worker2"], PatchSessionTaskRequest(task=TaskSpec(goal="edited")), caller=OPERATOR)
 
   # Terminal runs block nothing.
   await mgr.runs.record_finish(ids["worker1"], "run-queued", "failed")
-  await mgr.patch_task(
-      ids["worker1"], PatchSessionTaskRequest(task=TaskSpec(goal="edited")), caller=OPERATOR)
+  await mgr.patch_task(ids["worker1"], PatchSessionTaskRequest(task=TaskSpec(goal="edited")), caller=OPERATOR)
   meta = await session_mgr.get_session(ids["worker1"])
   assert meta is not None and meta.task is not None and meta.task.goal == "edited"
 
@@ -481,11 +491,9 @@ async def test_pending_input_seam_blocks_structural_edits(tmp_path: Path) -> Non
   ids = await build_three_levels(mgr)
   mgr.pending_input_blockers = lambda session_id: [f"input pending in {session_id}"]
   with pytest.raises(TaskConflictError, match="input pending"):
-    await mgr.patch_task(
-        ids["worker1"], PatchSessionTaskRequest(task=TaskSpec(goal="edited")), caller=OPERATOR)
+    await mgr.patch_task(ids["worker1"], PatchSessionTaskRequest(task=TaskSpec(goal="edited")), caller=OPERATOR)
   mgr.pending_input_blockers = None
-  await mgr.patch_task(
-      ids["worker1"], PatchSessionTaskRequest(task=TaskSpec(goal="edited")), caller=OPERATOR)
+  await mgr.patch_task(ids["worker1"], PatchSessionTaskRequest(task=TaskSpec(goal="edited")), caller=OPERATOR)
 
 
 # ---------------------------------------------------------------------------

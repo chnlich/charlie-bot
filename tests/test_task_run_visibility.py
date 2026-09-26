@@ -240,7 +240,7 @@ async def test_worker_transcript_headers_delivery_and_pagination(
   slice_before page the same cursor space the /events route serves."""
   from src.core import worker_transcript
 
-  cfg, session_mgr, tree, root, worker = await manager_with_worker(tmp_path, monkeypatch)
+  _cfg, _session_mgr, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
   await _worker_with_two_runs(tree, worker.id)
 
   entry = worker_transcript.load_worker_transcript(tree, worker.id)

@@ -206,10 +206,17 @@ def build_worker_transcript_sync(tree, session_id: str) -> TranscriptEntry:
 
 
 def load_worker_transcript(tree, session_id: str) -> TranscriptEntry:
-  """The memoized worker transcript; a moved signature or state rebuilds."""
+  """The memoized worker transcript; a moved signature or state rebuilds.
+
+  The revision folds the CURRENT task state, not the cached one — a task
+  close changes only that input, and a memo check over the cached value would
+  never observe it (the delivered close would wait for an unrelated run-file
+  move to surface). The facts fold is memoized, so the read is in-memory.
+  """
   signature = worker_signature_sync(tree, session_id)
+  task_state = tree.task_state(session_id)
   cached = _worker_memo.get(session_id)
-  if cached is not None and cached.revision == _revision(signature, cached.states, cached.task_state):
+  if cached is not None and cached.revision == _revision(signature, cached.states, task_state):
     return cached
   entry = build_worker_transcript_sync(tree, session_id)
   _worker_memo.store(session_id, entry)

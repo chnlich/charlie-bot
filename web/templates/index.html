@@ -34,7 +34,11 @@
     const THREAD_VIEW = {{ thread_view|tojson }};
     let SESSION_ID = {{ (active_session.id|tojson) if active_session else (thread_view.session_id|tojson if thread_view else 'null') }};
     let DRAFT_KEY = (SESSION_ID && !THREAD_VIEW) ? 'charliebot-draft-' + SESSION_ID : null;
+    {% if thread_view %}
+    let THINKING_SINCE = {{ (thread_thinking.isoformat()|tojson) if thread_thinking else 'null' }};
+    {% else %}
     let THINKING_SINCE = {{ (active_session.thinking_since.isoformat()|tojson) if active_session and active_session.thinking_since else 'null' }};
+    {% endif %}
     let eventCursor = {{ event_count }};
     const SESSION_BOOTSTRAP = {{ session_bootstrap|tojson }};
     const INITIAL_SESSIONS = {{ initial_sessions|tojson }};
@@ -165,7 +169,7 @@
 
     <!-- ==================== MAIN AREA ==================== -->
     <main class="flex-1 flex flex-col min-w-0">
-      {% if active_session %}
+      {% if active_session or thread_view %}
 
       <!-- Tab bar -->
       <header class="flex items-center border-b border-slate-700 bg-slate-800/50 px-4">
@@ -173,10 +177,9 @@
           <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
         </button>
         <div class="flex-1 min-w-0 py-3">
-          <h2 class="text-sm font-semibold truncate cursor-pointer hover:text-blue-300 transition-colors"
-              onclick="startRename(event, SESSION_ID)"
-              title="Click to rename"
-              id="header-session-name">{{ active_session.name }}</h2>
+          <h2 class="text-sm font-semibold truncate{% if not thread_view %} cursor-pointer hover:text-blue-300 transition-colors{% endif %}"
+              {% if not thread_view %}onclick="startRename(event, SESSION_ID)" title="Click to rename"{% endif %}
+              id="header-session-name">{% if thread_view %}{{ thread_view.description }}{% else %}{{ active_session.name }}{% endif %}</h2>
         </div>
         <!-- Backend badge -->
         <span id="backend-badge" class="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300 border border-slate-600 whitespace-nowrap" title="Session backend">{{ active_backend_label or active_backend }}</span>
@@ -210,7 +213,7 @@
                 onclick="compactContext()"
                 class="ml-2 text-xs px-2 py-1 rounded border border-slate-600 text-slate-300 hover:bg-slate-700 transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
                 {% if active_backend_type != 'cc-claude' %}disabled{% endif %}>Compact</button>
-        <a href="/sessions/{{ active_session.id }}/events"
+        <a href="/sessions/{{ (thread_view.session_id if thread_view else active_session.id) }}/events"
            class="text-slate-500 hover:text-slate-300 transition-colors ml-2 mr-2" title="View JSONL events">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"

@@ -43,7 +43,6 @@ from src.api.responses import (
 )
 from src.api.threads import view_thread_rows
 from src.core import claude_accounts, sidebar_state, task_completion, thinking_state
-from src.core.thinking_state import run_backend
 from src.core.chat_events import chat_events_path
 from src.core.compression import gzip_level1
 from src.core.config import (
@@ -113,6 +112,7 @@ from src.core.task_sessions import (
     TaskTreeManager,
     not_task_node_detail,
 )
+from src.core.thinking_state import run_backend
 from src.core.threads import ThreadManager
 
 log = LazyStructlogLogger()
@@ -415,9 +415,10 @@ async def list_sessions(
     thinking = thinking_state.busy_since(row.id)
     next_trigger = entry[sidebar_state.NEXT_TRIGGER_AT]
     # A worker row displays its newest Run's backend (the delegation's target
-    # model), never the inherited creation value; the in-memory read rides the
-    # overlay tuple so a backend change re-renders the memoized body.
-    display_backend = (run_backend(row.id) or row.backend) if row.profile == "worker" else None
+    # model), never the inherited creation value; every other row keeps its
+    # own persisted backend. The in-memory read rides the overlay tuple so a
+    # backend change re-renders the memoized body.
+    display_backend = (run_backend(row.id) or row.backend) if row.profile == "worker" else row.backend
     # Both datetimes ride the model's JSON scheme (pydantic-core renders UTC as
     # Z); a hand-rolled isoformat() would emit +00:00 inside an all-Z row.
     rendered.append(

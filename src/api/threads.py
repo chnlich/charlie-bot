@@ -1031,13 +1031,8 @@ async def cancel_thread(
     alias = task_mgr.aliases.resolve_thread(session_id, thread_id)
     if alias is not None:
       target_session, target_run = alias["session_id"], alias["run_id"]
-      if not caller.is_operator:
-        # The v2 cancel route's own-run scope applies on the alias path too:
-        # a run token never authorizes stopping another session's Run.
-        claims = caller.claims
-        assert claims is not None
-        if claims.session_id != target_session or claims.run_id != target_run:
-          raise HTTPException(status_code=403, detail="an agent may only stop its own bound run")
+      from src.api.sessions import _require_own_run_scope
+      _require_own_run_scope(caller, target_session, target_run)
       try:
         result = await run_store.request_stop(target_session, target_run, f"thread-cancel:{thread_id}")
       except (RunNotFoundError, RunIdentityConflictError) as e:

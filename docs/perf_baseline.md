@@ -129,7 +129,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M119 sidebar root session-list serve | M119 collector below | seconds per request, worst projected-list corpus (the sidebar "All" pill fetch, `GET /api/sessions/`: every active session plus one projected worker-leaf row per legacy thread, the M71 snapshot corpus); the served shape is the identity-keyed whole-body memo (the search route's `_search_whole_body` mechanism) over the pre-dumped render (the M34 events-fetch repair's shape) with the body-keyed gzip memo — a regression to the response_model jsonable_encoder pass over every row, to a per-request re-render of an unchanged corpus, or to the middleware's whole-body deflate trips (the cron-collision bias the M56 history documents applies) | median < max(0.002 s, rows × 0.0000080 s) (the after band reads 4.8-5.8 µs/row over the projection walk plus the memo-serve render; the line sits ~1.4-1.7x over it, the same headroom convention the M72 walk line set) | — (introduced with its first history row) |
 | M120 task-tree page serve, invalidated index | M120 collector below | seconds per `GET /api/sessions/tree` roots page over the live-corpus scratch copy with the tree index dropped before each timed call (any metadata write between clicks does that — the production shape the server log's per-request durations show), warm shared metadata cache, warm events caches | median < max(0.010 s, metas × 0.0000060 s) (the after band reads 2.4 µs/meta over the scandir, the shared-snapshot consult, and the facts revision; the pre-fix whole-file re-read+re-parse shape reads 41 µs/meta and trips 7x) | — (introduced with its first history row) |
 | M121 task-tree index rebuild burst, invalidated | M121 collector below | seconds per 6-reader concurrent `_get_index` burst after one invalidation, warm shared metadata cache (the delegation-burst shape: one structural write invalidates, and the sidebar poll, the tree page, and the delegate's own read all arrive together — scratch home, live home read-only); the solo invalidated rebuild rides as the sub-reading (the build's own cost must not move — the parity witness), and the builds-per-burst count is the mechanism witness | burst median < max(0.010 s, solo median × 2) (the burst sits at one build's cost; the pre-fix one-build-per-reader shape reads 10.7x the solo wall at 6 readers and 64x at 12 — the amplification is the thread-pool queue plus the shared-cache lock pileup, the shape the 2026-09-25 17:10 delegation burst logged at 766-1339 ms per request); solo median < max(0.010 s, metas × 0.0000100 s) | — (introduced with its first history row) |
-
+| M122 backend stream event discovery delay | M122 collector below | seconds from one complete NDJSON line's append to the follow loop yielding its translated event, over a live-followed scratch raw log (the per-event freshness of every streamed cc-family turn — assistant message, tool call, and result each wait one poll wake; the pipe-shaped funnels — opencode, codex stdout — have no such wait); the idle-round CPU cost rides the same reading as the trade witness | median < 0.015 s, max < 0.030 s (the after band reads 8.2-10.2 ms median, 11.2-19.3 ms max — interval/2 and interval plus parse; the pre-fix 0.15 s poll reads 73.6-78.6 ms median and trips 5x) | — (introduced with its first history row) |
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
 machine capacity, API median in the low tens of milliseconds, zero hung sessions). The serve CPU
@@ -8509,6 +8509,107 @@ finally:
 EOF
 ```
 
+M122 — backend stream event discovery delay. The raw-log tail-follow loop is the single
+read loop for every cc-family backend stream (the master's charlie-code turns, every
+worker turn, the re-attach path), and its poll interval is the discovery delay it adds
+to every event the CLI writes — assistant message, tool call, result alike. The
+collector mounts the loop over a scratch raw log, appends 24 paced lines, and times
+append-to-yield per line; the idle-round CPU cost rides the same reading (the trade
+side of the interval: one fstat per idle wake). Evidence while the live server runs
+older code points the same collector at the branch checkout (`CHECKOUT` at the worktree
+root), the same shape as the M62 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'PYEOF'
+import asyncio, os, sys, time
+from pathlib import Path
+
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.agents.backends.base import tail_follow_events, _TAIL_POLL_INTERVAL
+
+SCRATCH = Path("/tmp/lp_m122/probe.jsonl")
+IDLE = Path("/tmp/lp_m122/idle.jsonl")
+LINES = 24
+PACE = 0.25
+IDLE_WINDOW = 2.0
+
+def write_line(seq: int) -> None:
+    line = f'{{"seq": {seq}, "type": "assistant", "n": {seq}}}\n'.encode()
+    with SCRATCH.open("ab") as f:
+        f.write(line)
+        os.fsync(f.fileno())
+
+async def discovery_round() -> list[float]:
+    SCRATCH.write_bytes(b"")
+    appended: list[float] = []
+    latencies: list[float] = []
+    alive = {"v": True}
+
+    async def consume():
+        async for ev in tail_follow_events(
+            SCRATCH,
+            translate=lambda e: [e],
+            is_alive=lambda: alive["v"],
+            start_offset=0,
+            post_result_timeout=1.0,
+        ):
+            latencies.append(time.perf_counter() - appended[ev["seq"]])
+
+    async def produce():
+        for seq in range(LINES):
+            await asyncio.sleep(PACE)
+            write_line(seq)
+            appended.append(time.perf_counter())
+
+    task = asyncio.create_task(consume())
+    await produce()
+    await asyncio.sleep(0.5)  # one drain window past the last append
+    alive["v"] = False
+    await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+    if len(latencies) != LINES:
+        raise AssertionError(f"discovery rounds: {len(latencies)} of {LINES} lines yielded")
+    return latencies
+
+async def idle_cpu() -> float:
+    IDLE.write_bytes(b"")
+    alive = {"v": True}
+    async def idle_follow():
+        async for _ in tail_follow_events(
+            IDLE,
+            translate=lambda e: [e],
+            is_alive=lambda: alive["v"],
+            start_offset=0,
+            post_result_timeout=1.0,
+        ):
+            pass
+    task = asyncio.create_task(idle_follow())
+    await asyncio.sleep(0.2)  # let the mount settle before the window opens
+    cpu0 = time.process_time()
+    await asyncio.sleep(IDLE_WINDOW)
+    cpu = time.process_time() - cpu0
+    alive["v"] = False
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+    except asyncio.TimeoutError:
+        task.cancel()
+        raise AssertionError("idle follow did not stop on producer death")
+    return cpu
+
+async def main():
+    await discovery_round()  # warm pass, not timed
+    lat = await discovery_round()
+    lat.sort()
+    cpu = await idle_cpu()
+    wakes = IDLE_WINDOW / _TAIL_POLL_INTERVAL
+    print(f"checkout {Path(os.environ['CHECKOUT']).name}: poll interval {_TAIL_POLL_INTERVAL:.2f} s; "
+          f"discovery median {lat[len(lat)//2]*1e3:.1f} ms, max {lat[-1]*1e3:.1f} ms over {LINES}; "
+          f"idle follow CPU {cpu*1e3:.1f} ms over {IDLE_WINDOW:.0f} s "
+          f"({cpu/IDLE_WINDOW*100:.2f}% of one core at {wakes/IDLE_WINDOW:.0f} wakes/s)")
+
+asyncio.run(main())
+PYEOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -8862,3 +8963,4 @@ the round's verbatim collector tripped its 0.003 s line through a collector bug 
 | 2026-09-26 | this PR | M59 thread-detail poll, verbatim collector: full row 0.81/0.84/0.83 → 0.53/0.51/0.50 ms (−35 % to −40 %), maxima 1.14/0.98/1.01 → 0.72/0.60/0.72 ms; attach mode 0.75/0.74/0.73 → 0.41/0.39/0.40 ms (−45 % to −47 %), maxima 0.83/0.77/0.74 → 0.47/0.43/0.42 ms, every paired round faster over three interleaved rounds — main checkout before vs branch worktree after back-to-back at load 1.34-1.47 one-minute, decoded 50206 B wire 22820 B and digest 7184f3458354 identical across all six arms | the 5 s workers-panel detail poll re-read and stdlib-json-parsed the 42 KB sessions/session_aliases.json (205 rows) on every request: `_resolve_v2_run`'s alias probe measured 0.279 ms of the route's 0.78-0.85 ms — the store's `_read` had no memo, and `resolve_thread`'s two lookups (`old_threads` direct, then the canonical-owner retry) parsed the file twice per call; the read now rides the file's stat signature (the `_detail_meta_memo` mechanism), the served value is shared read-only, and `_put` writes a copy so a registration never mutates the entry concurrent resolvers hold |
 | 2026-09-26 | this PR | M120 tree-page serve, introduced with this PR: roots page over the invalidated index 58.19/59.32/58.57 → 3.34/3.39/3.47 ms median (−94 %), maxima 60.87-73.14 → 4.03-4.21 ms, every paired round faster over three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, arm order alternating per round, 1404 metadata files plus 71 task-node event corpora in one shared scratch home, live home read-only; page body sha1 23a8c43f258e and tree revision 64c8bda9aab9 identical across arms | the index build re-read and re-parsed every session's metadata.json per rebuild (1404 opens plus pydantic parses, ~41 µs/meta, 58 ms against today's corpus) although the SessionManager already holds every entry behind the shared per-entry stat-signature check — the production log's per-request durations showed it (GET /api/sessions/tree 75-129 ms per request, median 92 ms, under a 2 s index TTL that any metadata write invalidates); the build now snapshots the authoritative entries on the loop (fresh_cached_metas, one _fresh_cached_meta check per entry) and reads a file only where no entry covers the name (cold cache, out-of-band create), keeping the tree's strict unparseable-file contract; the tree index joins get_session and _load_session_metas on the same freshness check instead of carrying its own whole-corpus re-read; 6635-passed suite plus 2 new tests (the shared authoritative entry served zero-copy with the out-of-band past-TTL edit re-read, and the uncached unparseable file failing the build loud) |
 | 2026-09-26 | this PR | M121 task-tree index rebuild burst, introduced with this PR: 6-reader burst 27.32 ms → 2.12/2.12 ms median (−92%), max 34.95 → 2.35-2.53 ms, builds per burst 6 → 1, solo invalidated rebuild 2.37 → 2.06-2.09 ms (band parity), revision digest 64c8bda9aab9 identical across arms, interleaved back-to-back verbatim-collector rounds — main checkout before vs branch worktree after, plus the 12-reader probe 166.3-168.2 → 2.2-2.5 ms (−99%) | every reader of one invalidation ran its own full `_build_index_sync`: a delegation's create invalidates the index and the sidebar poll, the tree page, and the delegate's own read each paid the build again — the 2026-09-25 17:10 burst logged POST /api/internal/delegate at 766-1156 ms and GET /api/sessions/ at 765-1339 ms while three builds raced (the live corpus's solo build measures 78-375 ms, so the contended shape, not the 2 ms scratch band, is what production pays); the build now single-flights on the in-flight task keyed to its generation (the token-usage route's rule), the existing generation guard still refusing a mid-build write's stale install; 70-passed task-tree suites plus 2 new tests (one build per burst, mid-build write never installs) |
+| 2026-09-26 | this PR | M122 stream event discovery delay, introduced with this PR: append-to-yield median 73.6/77.6/74.6 → 8.2/8.2/10.2 ms (−89% to −90%), maxima 142.0-147.0 → 11.2-19.3 ms, every paired round faster over three interleaved rounds of the new collector — main checkout before vs branch worktree after back-to-back, arm order alternating, at load 0.6-1.2 one-minute; parity witnesses on the same loop: M84 2.1 GB backlog replay tail-follow median 5980.4 → 5922.0 ms and stdout-stream 6591.6 → 6515.6 ms (band parity — the backlog drain is one parse round, the poll never enters it), M118 grown-line drain wall 2.93 → 2.93 s, max tick gap 74 → 89 ms inside the 0.15 s line; the trade: idle follow CPU 1.7-1.9 → 8.8-10.0 ms per 2 s (0.08-0.09% → 0.44-0.50% of one core per followed stream at 7 → 50 wakes/s) | the tail-follow loop's `_TAIL_POLL_INTERVAL` sat at 0.15 s from the coarse-message era (its comment cited a ~54 s median inter-event gap), and that interval is the discovery delay it adds to every event the CLI writes — every assistant message, tool call, and result on the cc-family streams (the master's own charlie-code turns, every worker turn, the re-attach path) waits one poll wake before the server sees it; a turn with k model round-trips pays up to 150 ms per event, and each completion handoff (worker → reviewer, RESULT → finalize) pays it once; the poll now wakes at 0.02 s — one frame's scale — with the idle round still one fstat; 11-passed backend-stream suite plus 1 new test (the default interval is the discovery bound the M122 line prices) |

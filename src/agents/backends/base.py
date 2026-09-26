@@ -99,9 +99,12 @@ async def _tee_stream(
     await _write_chunk(fd, bytes(buffer))
 
 
-# Poll cadence of the tail-follow read loop. Event volume is low (median
-# inter-event gap ~54 s measured), so a fixed poll beats an inotify dependency.
-_TAIL_POLL_INTERVAL = 0.15
+# Poll cadence of the tail-follow read loop. A fixed poll beats an inotify
+# dependency, and the interval is the discovery delay it adds to every event
+# the CLI writes; 20 ms holds that at one frame's scale while the idle round
+# stays one fstat per wake (measured 0.09% of one core per followed stream at
+# 13 wakes/s, 0.3% at 50 — the M122 collector).
+_TAIL_POLL_INTERVAL = 0.02
 
 
 async def _capture_proc_diagnostics(pid: int) -> dict:

@@ -20,7 +20,7 @@ import pytest
 from conftest import _async_wait_for, cancel_and_drain
 from test_opencode_backend import _build_backend, _FakeSseResponse
 
-from src.agents.backends.base import iter_ndjson_events, tail_follow_events
+from src.agents.backends.base import _TAIL_POLL_INTERVAL, iter_ndjson_events, tail_follow_events
 
 _LINES = [
     b'{"type": "assistant", "seq": 1}\n',
@@ -231,3 +231,10 @@ async def test_opencode_sse_events_rejects_nan_boundary(monkeypatch: pytest.Monk
   with pytest.raises(ValueError):
     async for _ in backend._iter_sse_events(response):
       pass
+
+
+def test_tail_follow_default_poll_interval_is_the_discovery_bound() -> None:
+  """The default poll interval is the discovery delay the follow loop adds to
+  every event the CLI writes; the M122 healthy line (discovery median
+  < 0.010 s) is priced against 0.02 s."""
+  assert _TAIL_POLL_INTERVAL <= 0.02

@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-
 from conftest import build_env
+
 from src.core.run_token import CallerIdentity
 
 OP = CallerIdentity(kind="operator")
@@ -22,7 +22,7 @@ OP = CallerIdentity(kind="operator")
 
 @pytest_asyncio.fixture
 async def tree(tmp_path: Path):
-    cfg, session_mgr, tree = build_env(tmp_path)
+    _cfg, _session_mgr, tree = build_env(tmp_path)
     await tree.create_task(
         request_id="root", task_parent_id=None, profile="manager", task=None, name="Root",
         backend=None, caller=OP)

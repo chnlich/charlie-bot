@@ -53,7 +53,6 @@ from src.core.control_events import (
 )
 from src.core.event_types import is_real_user_message
 from src.core.json_utils import atomic_write_text
-from src.core.tasks import create_logged_task
 from src.core.models import (
     AncestorRef,
     EventRef,
@@ -73,6 +72,7 @@ from src.core.session_dispatch import TaskInputDispatcher
 from src.core.sessions import _TRANSIENT_METADATA_FIELDS, SessionManager
 from src.core.takeoff_gate import is_verify_exempt
 from src.core.task_completion import TaskCompletionManager
+from src.core.tasks import create_logged_task
 
 if TYPE_CHECKING:
   from src.core.models import RunRecord

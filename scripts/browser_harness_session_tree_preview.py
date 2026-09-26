@@ -72,8 +72,11 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     CDP,
     Results,
     api_request,
+    connect_cdp,
     evaluate,
+    launch_chrome,
     log,
+    open_cdp_page,
     pick_free_port,
     screenshot,
     wait_for,
@@ -446,16 +449,14 @@ async def run_harness(args: argparse.Namespace) -> None:
             profile = tmp_path / "chrome-profile"
             profile.mkdir()
             debug_port = pick_free_port()
-            chrome_proc = subprocess.Popen(
-                [chrome, "--headless=new", "--remote-debugging-port=" + str(debug_port),
-                 f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
-                 "--disable-background-networking", "--window-size=1440,900",
-                 "--remote-allow-origins=*",
-                 "--disable-background-timer-throttling",
-                 "--disable-backgrounding-occluded-windows",
-                 "--disable-renderer-backgrounding",
-                 "about:blank"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            chrome_proc = launch_chrome(chrome, profile, debug_port, [
+                "--no-first-run", "--no-default-browser-check",
+                "--disable-background-networking", "--window-size=1440,900",
+                "--remote-allow-origins=*",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
+            ])
             try:
                 await drive_browser(debug_port=debug_port, base=base,
                                     access_key=access_key, results=results, args=args, home=home)
@@ -496,9 +497,6 @@ async def run_harness(args: argparse.Namespace) -> None:
 async def drive_browser(debug_port: int, base: str,
                         access_key: str, results: Results, args: argparse.Namespace,
                         home: Path) -> None:
-    import websockets
-
-
     deadline = time.monotonic() + 20
     ws_url = None
     while time.monotonic() < deadline and ws_url is None:
@@ -509,16 +507,8 @@ async def drive_browser(debug_port: int, base: str,
             await asyncio.sleep(0.2)
     if ws_url is None:
         raise SystemExit("chrome devtools endpoint did not come up")
-    ws = await websockets.connect(ws_url, max_size=50 * 1024 * 1024)
-    cdp = CDP(ws)
-    await asyncio.sleep(0.3)
-
-    target = await cdp.send("Target.createTarget", {"url": "about:blank"})
-    attached = await cdp.send("Target.attachToTarget", {"targetId": target["targetId"], "flatten": True})
-    sid = attached["sessionId"]
-    await cdp.send("Page.enable", session_id=sid)
-    await cdp.send("Runtime.enable", session_id=sid)
-    await cdp.send("Network.enable", session_id=sid)
+    cdp = await connect_cdp(ws_url)
+    sid, _target_id = await open_cdp_page(cdp, ("Page", "Runtime", "Network"))
     await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": GUARD_SOURCE}, session_id=sid)
 
     # --- S1: first login over the real auth overlay, then the empty state ---

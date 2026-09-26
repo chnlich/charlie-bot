@@ -49,7 +49,14 @@ from src.core.constants import MIN_IDLE_DAYS
 from src.core.json_utils import load_json_meta
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus, parse_utc_datetime
-from src.core.runs import CURSOR_NAME, DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RAW_LOG_NAME, STDERR_LOG_NAME
+from src.core.runs import (
+    CURSOR_NAME,
+    DATA_DIR_NAME,
+    MASTER_RUNS_DIR_NAME,
+    RAW_LOG_NAME,
+    RUN_METADATA_NAME,
+    STDERR_LOG_NAME,
+)
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 from src.core.timeouts import SQLITE_LOCK_WAIT_MS, SQLITE_LOCK_WAIT_SECONDS
 from src.core.token_tally import DEFAULT_OPENCODE_DB
@@ -319,7 +326,7 @@ def _run_referenced_transport(session_dir: Path) -> set[Path]:
   for run_dir in _sorted_scan(runs_dir, runs_dir.iterdir()) or []:
     if not run_dir.is_dir() or run_dir.is_symlink():
       continue
-    meta = load_json_meta(run_dir / "metadata.json", "storage_cool_run_meta_read_failed")
+    meta = load_json_meta(run_dir / RUN_METADATA_NAME, "storage_cool_run_meta_read_failed")
     if not isinstance(meta, dict):
       continue
     for key in ("raw_log_ref", "events_ref", "result_ref"):

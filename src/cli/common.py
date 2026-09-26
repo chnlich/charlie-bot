@@ -714,10 +714,12 @@ def find_local_task_child(
   from src.core.config import get_config
   from src.core.control_events import stable_task_id
   from src.core.models import SessionMetadata
+  from src.core.runs import RUN_METADATA_NAME
+  from src.core.threads import METADATA_NAME
 
   resolved_request_id = request_id or derive_delegate_request_id(session_id, task_type, description)
   child_id = stable_task_id(session_id, resolved_request_id)
-  meta_path = get_config().sessions_dir / child_id / "metadata.json"
+  meta_path = get_config().sessions_dir / child_id / METADATA_NAME
   if not meta_path.is_file():
     return None
   try:
@@ -733,7 +735,7 @@ def find_local_task_child(
   # operation).
   from src.core.control_events import stable_run_id
   run_id = stable_run_id(child_id, f"{resolved_request_id}:work")
-  if not (get_config().sessions_dir / child_id / "data" / "runs" / run_id / "metadata.json").is_file():
+  if not (get_config().sessions_dir / child_id / "data" / "runs" / run_id / RUN_METADATA_NAME).is_file():
     # Registered but not yet on disk, or the child predates the work Run:
     # the child's existence is still the proof of admission.
     run_id = None

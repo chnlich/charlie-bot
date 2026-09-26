@@ -49,6 +49,7 @@ from src.core.config import CharlieBotConfig
 from src.core.control_events import stable_run_id
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec
+from src.core.runs import RUN_EVENTS_NAME
 
 if TYPE_CHECKING:
     from src.core.task_sessions import TaskTreeManager
@@ -172,7 +173,7 @@ async def _iteration_blocker(
     Reuses the legacy mechanical judgments over the Run's translated events —
     the same quota-shaped-event definition, no new matcher.
     """
-    events_path = tree.runs.run_dir(child_id, run_id) / "events.jsonl"
+    events_path = tree.runs.run_dir(child_id, run_id) / RUN_EVENTS_NAME
     if not events_path.is_file():
         return None, f"Iteration {iteration} {outcome} (no events log)."
     blocker_reason, summary = await asyncio.to_thread(
@@ -435,7 +436,7 @@ async def _judge_iteration(
     if not await asyncio.to_thread(report_path.exists):
         # The worker wrote no report: fall back to its own closing words, as
         # the legacy controller did, and leave the same marked fallback file.
-        events_path = tree.runs.run_dir(child_id, run_id) / "events.jsonl"
+        events_path = tree.runs.run_dir(child_id, run_id) / RUN_EVENTS_NAME
         fallback = f"Iteration {iteration} finished without a report file."
         if events_path.is_file():
             text = await asyncio.to_thread(

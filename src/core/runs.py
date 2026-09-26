@@ -606,6 +606,10 @@ def resolve_run(
 
 RUNS_DIR_NAME = "runs"
 RUN_METADATA_NAME = "metadata.json"
+# The run's transport event log: the executing adapter appends it and the
+# transcript and history readers reopen it by name, so both sides share this
+# one spelling.
+RUN_EVENTS_NAME = "events.jsonl"
 RUN_TASK_SPEC_NAME = "task_spec.md"
 
 # Bounded wait after SIGTERM for the actual exit the interrupted fact requires.

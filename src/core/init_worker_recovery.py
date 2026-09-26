@@ -206,7 +206,7 @@ def _session_is_task_tree(session_dir: Path) -> bool:
   legacy scan then behaves exactly as before.
   """
   from src.core.json_utils import load_json_meta
-  raw = load_json_meta(session_dir / "metadata.json", "thread_scan_meta_unreadable")
+  raw = load_json_meta(session_dir / METADATA_NAME, "thread_scan_meta_unreadable")
   return raw is not None and bool(raw.get("profile"))
 
 

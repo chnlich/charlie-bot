@@ -36,6 +36,7 @@ from src.core import runs
 from src.core.config import CharlieBotConfig
 from src.core.log_once import LazyStructlogLogger
 from src.core.thinking_state import note_run_backend
+from src.core.threads import METADATA_NAME
 
 if TYPE_CHECKING:
     from src.core.task_execution import TaskExecutionAdapter
@@ -65,7 +66,7 @@ async def reconcile_task_tree(
     for session_dir in sorted(cfg.sessions_dir.iterdir()):
         if not session_dir.is_dir():
             continue
-        meta_path = session_dir / "metadata.json"
+        meta_path = session_dir / METADATA_NAME
         if not meta_path.is_file():
             continue
         try:

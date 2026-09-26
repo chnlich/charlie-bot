@@ -7,7 +7,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from starlette.requests import Request
 from conftest import (
     _ok_asgi_downstream,
     asgi_downstream_called,
@@ -15,6 +14,7 @@ from conftest import (
     run_through_asgi_middleware,
     stub_credentials,
 )
+from starlette.requests import Request
 
 from src.api.auth import AuthMiddleware
 from src.api.deps import require_caller
@@ -121,6 +121,8 @@ async def test_operator_bearer_and_cookie_rules_are_unchanged() -> None:
 def test_cli_run_token_priority(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv(RUN_TOKEN_ENV, "run-token-xyz")
+  # Hermetic against the session the spawner writes into every agent's env.
+  monkeypatch.delenv(SESSION_ID_ENV_VAR, raising=False)
   assert internal_api_auth_headers() == {"Authorization": "Bearer run-token-xyz"}
   # The CLI session verbs ride the same header function: no operator fallback.
   from conftest import make_json_response
@@ -135,6 +137,8 @@ def test_cli_run_token_priority(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 def test_cli_without_run_token_uses_the_operator_key(monkeypatch: pytest.MonkeyPatch) -> None:
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.delenv(RUN_TOKEN_ENV, raising=False)
+  # Hermetic against the session the spawner writes into every agent's env.
+  monkeypatch.delenv(SESSION_ID_ENV_VAR, raising=False)
   assert internal_api_auth_headers() == {"Authorization": "Bearer op-secret"}
   monkeypatch.setenv(RUN_TOKEN_ENV, "")
   assert internal_api_auth_headers() == {"Authorization": "Bearer op-secret"}
@@ -195,20 +199,24 @@ async def test_require_caller_carries_the_session_on_the_caller_identity() -> No
 
   # Operator bearer + header: the header value becomes the identity's session.
   caller = await require_caller(
-      Request(_scope(headers={"Authorization": "Bearer op-secret", CALLER_SESSION_HEADER: "sess-1"})),
+      Request(_scope(headers={
+          "Authorization": "Bearer op-secret",
+          CALLER_SESSION_HEADER: "sess-1"
+      })),
       run_store=run_store)
   assert caller.is_operator and caller.session_id == "sess-1"
 
   # A valid run token ignores the header: the session is the token's, never the header's.
   caller = await require_caller(
-      Request(_scope(headers={"Authorization": f"Bearer {token}", CALLER_SESSION_HEADER: "spoofed"})),
+      Request(_scope(headers={
+          "Authorization": f"Bearer {token}",
+          CALLER_SESSION_HEADER: "spoofed"
+      })),
       run_store=run_store)
   assert not caller.is_operator and caller.session_id == "s-1"
 
   # No header: the operator identity's session is None.
-  caller = await require_caller(
-      Request(_scope(headers={"Authorization": "Bearer op-secret"})),
-      run_store=run_store)
+  caller = await require_caller(Request(_scope(headers={"Authorization": "Bearer op-secret"})), run_store=run_store)
   assert caller.is_operator and caller.session_id is None
 
 

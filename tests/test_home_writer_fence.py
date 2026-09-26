@@ -32,10 +32,17 @@ def _write_holder_identity(home: Path, pid: int, pid_start: str | None) -> None:
 
   from src.core.json_utils import atomic_write_text
   (home / "state").mkdir(parents=True, exist_ok=True)
-  atomic_write_text(fence_identity_path(home), json.dumps({
-      "pid": pid, "pid_start": pid_start, "started_at": "2026-01-01T00:00:00+00:00",
-      "purpose": "test", "argv": "pytest", "home": str(home),
-  }))
+  atomic_write_text(
+      fence_identity_path(home),
+      json.dumps(
+          {
+              "pid": pid,
+              "pid_start": pid_start,
+              "started_at": "2026-01-01T00:00:00+00:00",
+              "purpose": "test",
+              "argv": "pytest",
+              "home": str(home),
+          }))
 
 
 def test_acquire_excludes_and_reports_holder(tmp_path: Path) -> None:
@@ -96,10 +103,8 @@ def test_external_process_holding_fence_is_visible(tmp_path: Path) -> None:
       f"sys.path.insert(0, {str(Path(__file__).parent.parent)!r})\n"
       "from src.core.home_writer_fence import acquire_home_writer_fence\n"
       f"fence = acquire_home_writer_fence({str(home)!r}, purpose='external')\n"
-      "time.sleep(60)\n"
-  )
-  proc = subprocess.Popen([sys.executable, "-c", holder_code],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+      "time.sleep(60)\n")
+  proc = subprocess.Popen([sys.executable, "-c", holder_code], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
   try:
     # Wait until the child provably holds the exclusion (real mechanism, not a
     # caller-supplied boolean), bounded so a broken child fails the test fast.
@@ -140,12 +145,15 @@ class _AsyncStub:
     self._return_value = return_value
 
   def __call__(self, *args, **kwargs):
+
     async def _noop(*a, **k):
       return self._return_value
+
     return _noop()
 
 
 class _StubScheduler:
+
   def __init__(self, *a, **k):
     pass
 
@@ -157,6 +165,7 @@ class _StubScheduler:
 
 
 class _StubTriggerManager:
+
   def __init__(self, *a, **k):
     pass
 
@@ -182,8 +191,7 @@ def lifespan_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   reset_config_caches()
 
   monkeypatch.setattr(server_module, "get_config", lambda: cfg)
-  monkeypatch.setattr(server_module, "reconcile_master_identity",
-                      _AsyncStub(return_value=None))
+  monkeypatch.setattr(server_module, "reconcile_master_identity", _AsyncStub(return_value=None))
   monkeypatch.setattr(server_module, "_run_crash_recovery", _AsyncStub())
   monkeypatch.setattr(server_module, "_provision_speech_models", lambda cfg: None)
   monkeypatch.setattr(server_module, "log_session_cgroup_startup", lambda *a, **k: None)
@@ -280,9 +288,14 @@ def test_release_does_not_erase_a_successor_identity(tmp_path: Path) -> None:
   fence = acquire_home_writer_fence(home, purpose="first")
   lock_path = fence_lock_path(home)
   identity_path = fence_identity_path(home)
-  successor = {"pid": 999999, "pid_start": "424242",
-               "started_at": "2026-01-01T00:00:00+00:00", "purpose": "second",
-               "argv": "successor", "home": str(home)}
+  successor = {
+      "pid": 999999,
+      "pid_start": "424242",
+      "started_at": "2026-01-01T00:00:00+00:00",
+      "purpose": "second",
+      "argv": "successor",
+      "home": str(home)
+  }
   real_flock = fcntl.flock
 
   def flock_with_successor(fd, cmd):
@@ -344,8 +357,7 @@ def test_fence_refuses_symlinked_paths(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_server_lifespan_releases_fence_on_startup_failure(
-    lifespan_env, monkeypatch) -> None:
+async def test_server_lifespan_releases_fence_on_startup_failure(lifespan_env, monkeypatch) -> None:
   """A startup exception after acquisition releases the exclusion in the
   still-live process."""
   from fastapi import FastAPI
@@ -367,8 +379,7 @@ async def test_server_lifespan_releases_fence_on_startup_failure(
 
 
 @pytest.mark.asyncio
-async def test_server_lifespan_releases_fence_on_shutdown_failure(
-    lifespan_env, monkeypatch) -> None:
+async def test_server_lifespan_releases_fence_on_shutdown_failure(lifespan_env, monkeypatch) -> None:
   """A shutdown exception releases the exclusion; the fence never outlives the
   server's ability to hold it cleanly."""
   from fastapi import FastAPI
@@ -376,6 +387,7 @@ async def test_server_lifespan_releases_fence_on_shutdown_failure(
   home = server_module.get_config().charliebot_home
 
   class _FailingScheduler(_StubScheduler):
+
     async def stop(self):
       raise RuntimeError("shutdown failed")
 

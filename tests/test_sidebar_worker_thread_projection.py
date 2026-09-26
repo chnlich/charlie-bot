@@ -33,9 +33,14 @@ async def build_env(tmp_path: Path):
   return cfg, session_mgr, thread_mgr, legacy
 
 
-async def write_thread_meta(thread_mgr: ThreadManager, thread, *, status: ThreadStatus,
-                            started_at: datetime | None, completed_at: datetime | None,
-                            backend: str | None = None) -> None:
+async def write_thread_meta(
+    thread_mgr: ThreadManager,
+    thread,
+    *,
+    status: ThreadStatus,
+    started_at: datetime | None,
+    completed_at: datetime | None,
+    backend: str | None = None) -> None:
   """Rewrite one thread's metadata.json with the wanted shape (the writers' file)."""
   thread.status = status
   thread.started_at = started_at
@@ -51,8 +56,12 @@ async def test_projected_row_fields(tmp_path: Path) -> None:
   created = datetime.now(UTC) - timedelta(days=40)
   thread = await thread_mgr.create_thread(legacy, "Fix the login flow and document it")
   await write_thread_meta(
-      thread_mgr, thread, status=ThreadStatus.COMPLETED, started_at=created + timedelta(minutes=1),
-      completed_at=created + timedelta(minutes=9), backend=None)
+      thread_mgr,
+      thread,
+      status=ThreadStatus.COMPLETED,
+      started_at=created + timedelta(minutes=1),
+      completed_at=created + timedelta(minutes=9),
+      backend=None)
 
   rows = await project_worker_threads([legacy], cfg, thread_mgr)
 
@@ -77,8 +86,12 @@ async def test_projected_row_running_thread_and_name_prefix(tmp_path: Path) -> N
   cfg, _session_mgr, thread_mgr, legacy = await build_env(tmp_path)
   thread = await thread_mgr.create_thread(legacy, "x" * 120)
   await write_thread_meta(
-      thread_mgr, thread, status=ThreadStatus.RUNNING, started_at=thread.created_at,
-      completed_at=None, backend="codex-main")
+      thread_mgr,
+      thread,
+      status=ThreadStatus.RUNNING,
+      started_at=thread.created_at,
+      completed_at=None,
+      backend="codex-main")
 
   rows = await project_worker_threads([legacy], cfg, thread_mgr)
 
@@ -99,8 +112,7 @@ async def test_projection_scans_every_thread_no_time_window(tmp_path: Path) -> N
   recent = await thread_mgr.create_thread(legacy, "recent delegation")
   for thread in (old, recent):
     await write_thread_meta(
-        thread_mgr, thread, status=ThreadStatus.FAILED, started_at=thread.created_at,
-        completed_at=thread.created_at)
+        thread_mgr, thread, status=ThreadStatus.FAILED, started_at=thread.created_at, completed_at=thread.created_at)
   # Push the "ancient" thread's created_at behind the 30-day badge window.
   ancient = datetime.now(UTC) - timedelta(days=45)
   old.created_at = ancient
@@ -158,8 +170,7 @@ async def test_sessions_list_endpoint_serves_projected_leaves(tmp_path: Path) ->
   cfg, session_mgr, thread_mgr, legacy = await build_env(tmp_path)
   thread = await thread_mgr.create_thread(legacy, "endpoint delegation")
   await write_thread_meta(
-      thread_mgr, thread, status=ThreadStatus.RUNNING, started_at=thread.created_at,
-      completed_at=None)
+      thread_mgr, thread, status=ThreadStatus.RUNNING, started_at=thread.created_at, completed_at=None)
 
   app = FastAPI()
   app.include_router(sessions_api.router, prefix="/api/sessions")
@@ -195,12 +206,10 @@ async def test_projection_fanout_repeat_serves_the_same_rows(tmp_path: Path) -> 
   cfg, session_mgr, thread_mgr, _legacy = await build_env(tmp_path)
   parents = []
   for i in range(12):
-    parent = await session_mgr.create_session(
-        CreateSessionRequest(name=f"Legacy {i}"), backend=OPUS_BACKEND_ID)
+    parent = await session_mgr.create_session(CreateSessionRequest(name=f"Legacy {i}"), backend=OPUS_BACKEND_ID)
     thread = await thread_mgr.create_thread(parent, f"Worker {i}")
     await write_thread_meta(
-        thread_mgr, thread, status=ThreadStatus.COMPLETED, started_at=thread.created_at,
-        completed_at=thread.created_at)
+        thread_mgr, thread, status=ThreadStatus.COMPLETED, started_at=thread.created_at, completed_at=thread.created_at)
     parents.append(parent)
 
   first = await project_worker_threads(parents, cfg, thread_mgr)
@@ -219,8 +228,8 @@ async def test_projected_row_payload_rides_the_row_object(tmp_path: Path) -> Non
 
   cfg, _session_mgr, thread_mgr, legacy = await build_env(tmp_path)
   thread = await thread_mgr.create_thread(legacy, "Fix the login flow")
-  await write_thread_meta(thread_mgr, thread, status=ThreadStatus.COMPLETED,
-                          started_at=datetime.now(UTC), completed_at=datetime.now(UTC))
+  await write_thread_meta(
+      thread_mgr, thread, status=ThreadStatus.COMPLETED, started_at=datetime.now(UTC), completed_at=datetime.now(UTC))
 
   rows = await project_worker_threads([legacy], cfg, thread_mgr)
   payload = api_sessions._projected_row_payload(rows[1])

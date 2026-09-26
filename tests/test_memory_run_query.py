@@ -42,15 +42,22 @@ async def _launched_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *,
   # pin CHARLIEBOT_HOME to this config's home so the seeded store and every reader
   # (CLI verbs, run-token audience resolution) see one home.
   monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(cfg.charliebot_home))
-  core_config._credentials_cache.seed(core_config.Credentials(
-      path=cfg.charliebot_home / "credentials.yaml",
-      sections={"charliebot": {"access_key": "query-op-key"}}))
+  core_config._credentials_cache.seed(
+      core_config.Credentials(
+          path=cfg.charliebot_home / "credentials.yaml", sections={"charliebot": {
+              "access_key": "query-op-key"
+          }}))
   _write_store(cfg)
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
   meta = await tree.create_task(
-      request_id="r", task_parent_id=None, profile=profile,
-      task=TaskSpec(goal="g"), name="N", backend=None, caller=CallerIdentity(kind="operator"))
+      request_id="r",
+      task_parent_id=None,
+      profile=profile,
+      task=TaskSpec(goal="g"),
+      name="N",
+      backend=None,
+      caller=CallerIdentity(kind="operator"))
   run_id = "query-run"
   await tree.runs.register_run(RunRecord(id=run_id, session_id=meta.id, kind="work"))
   proc = subprocess.Popen(["/bin/sleep", "60"])
@@ -58,8 +65,7 @@ async def _launched_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *,
   pair = read_pid_stat(proc.pid)
   assert pair is not None
   await tree.runs.record_launch(meta.id, run_id, pid=proc.pid, pid_start=pair[0])
-  token = sign_run_token(
-      RunTokenClaims(session_id=meta.id, run_id=run_id, agent="worker"), "query-op-key")
+  token = sign_run_token(RunTokenClaims(session_id=meta.id, run_id=run_id, agent="worker"), "query-op-key")
   return cfg, tree, meta.id, run_id, token, proc
 
 
@@ -94,8 +100,7 @@ async def test_active_run_token_fixes_the_audience(tmp_path: Path, monkeypatch: 
     assert code == 0, err
     assert "master body" not in out
     # A contradictory --audience cannot broaden it.
-    out, err, code = _run_cli(
-        monkeypatch, cfg, ["query", "--topic", "beta", "--audience", "master"], token)
+    out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "beta", "--audience", "master"], token)
     assert code == 1
     assert "contradicts" in err
   finally:
@@ -129,13 +134,11 @@ async def test_ended_run_token_refuses(tmp_path: Path, monkeypatch: pytest.Monke
     proc.terminate()
 
 
-async def test_invalid_and_not_launched_tokens_refuse(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_invalid_and_not_launched_tokens_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, tree, session_id, run_id, _token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
   try:
     # A token signed with a different key fails verification.
-    foreign = sign_run_token(
-        RunTokenClaims(session_id=session_id, run_id=run_id, agent="worker"), "other-key")
+    foreign = sign_run_token(RunTokenClaims(session_id=session_id, run_id=run_id, agent="worker"), "other-key")
     _out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "beta"], foreign)
     assert code == 1
     assert "invalid run token" in err
@@ -155,9 +158,7 @@ async def test_wrong_instance_token_refuses(tmp_path: Path, monkeypatch: pytest.
   try:
     # A token for a session this instance never heard of.
     stranger = sign_run_token(
-        RunTokenClaims(session_id="00000000-0000-0000-0000-00000000beef",
-                       run_id="r", agent="worker"),
-        "query-op-key")
+        RunTokenClaims(session_id="00000000-0000-0000-0000-00000000beef", run_id="r", agent="worker"), "query-op-key")
     _out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "beta"], stranger)
     assert code == 1
     assert "active run" in err
@@ -168,13 +169,11 @@ async def test_wrong_instance_token_refuses(tmp_path: Path, monkeypatch: pytest.
 async def test_no_token_keeps_operator_semantics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, _tree, _session_id, _run_id, _token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
   try:
-    out, err, code = _run_cli(
-        monkeypatch, cfg, ["query", "--topic", "alpha", "--audience", "master"], None)
+    out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "alpha", "--audience", "master"], None)
     assert code == 0, err
     assert "master body" in out
     assert "worker body" not in out
-    out, err, code = _run_cli(
-        monkeypatch, cfg, ["query", "--topic", "alpha", "--audience", "master", "--index"], None)
+    out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "alpha", "--audience", "master", "--index"], None)
     assert code == 0, err
     assert "alpha/m1" in out
   finally:

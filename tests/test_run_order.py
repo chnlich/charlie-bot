@@ -40,17 +40,15 @@ async def store_env(tmp_path: Path):
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
   task = await tree.create_task(
-      request_id="t", task_parent_id=None, profile="worker", task=None, name="T",
-      backend=None, caller=OP)
+      request_id="t", task_parent_id=None, profile="worker", task=None, name="T", backend=None, caller=OP)
   return tree, task.id
 
 
 async def seed_runs(tree: TaskTreeManager, session_id: str, launched: int, queued: int = 2) -> None:
   """``launched`` started runs in chronological order plus ``queued`` reservations."""
   for i in range(launched):
-    await tree.runs.register_run(RunRecord(
-        id=f"run-{i:04d}", session_id=session_id, kind="work",
-        started_at=BASE + timedelta(minutes=i)))
+    await tree.runs.register_run(
+        RunRecord(id=f"run-{i:04d}", session_id=session_id, kind="work", started_at=BASE + timedelta(minutes=i)))
   for q in range(queued):
     await tree.runs.register_run(RunRecord(id=f"queued-{q}", session_id=session_id, kind="work"))
 
@@ -65,8 +63,9 @@ async def test_one_row_descending_page_is_the_latest_started_run(store_env) -> N
   tree, session_id = store_env
   await seed_runs(tree, session_id, launched=150)
   page = tree.runs.list_runs_page_sync(session_id, limit=1, cursor=None, descending=True)
-  assert [r.id for r in page.items] == ["run-0149"], (
-    "the newest-first page opens with the most recently started run, never an older page's tail")
+  assert [r.id for r in page.items
+         ] == ["run-0149"
+              ], ("the newest-first page opens with the most recently started run, never an older page's tail")
   # A queued reservation never replaces a real launch.
   assert page.items[0].started_at is not None
 
@@ -78,7 +77,7 @@ async def test_queued_only_session_reports_no_launch(store_env) -> None:
   page = tree.runs.list_runs_page_sync(session_id, limit=1, cursor=None, descending=True)
   assert len(page.items) == 1
   assert page.items[0].started_at is None, (
-    "a queued-only session's newest-first row is a reservation, truthfully never a launch")
+      "a queued-only session's newest-first row is a reservation, truthfully never a launch")
 
 
 @pytest.mark.asyncio
@@ -87,8 +86,7 @@ async def test_adding_a_launch_moves_the_latest(store_env) -> None:
   await seed_runs(tree, session_id, launched=0, queued=1)
   before = tree.runs.list_runs_page_sync(session_id, limit=1, cursor=None, descending=True)
   assert before.items[0].started_at is None
-  await tree.runs.register_run(RunRecord(
-      id="run-first", session_id=session_id, started_at=BASE + timedelta(hours=1)))
+  await tree.runs.register_run(RunRecord(id="run-first", session_id=session_id, started_at=BASE + timedelta(hours=1)))
   after = tree.runs.list_runs_page_sync(session_id, limit=1, cursor=None, descending=True)
   assert [r.id for r in after.items] == ["run-first"]
 
@@ -102,7 +100,7 @@ async def test_equal_started_at_ties_use_the_canonical_id_order(store_env) -> No
   await tree.runs.register_run(RunRecord(id="run-c", session_id=session_id, started_at=same))
   page = tree.runs.list_runs_page_sync(session_id, limit=1, cursor=None, descending=True)
   assert page.items[0].id == "run-c", (
-    "equal started_at ties resolve by the canonical (started_at, id) order's last element")
+      "equal started_at ties resolve by the canonical (started_at, id) order's last element")
   whole = tree.runs.list_runs_page_sync(session_id, limit=10, cursor=None, descending=True)
   assert [r.id for r in whole.items] == ["run-c", "run-b", "run-a"]
 
@@ -128,8 +126,8 @@ async def test_descending_pagination_walks_the_complete_order_without_loss(store
       break
     cursor = page.next_cursor
   assert len(asc_ids) == 60 and len(set(asc_ids)) == 60, "ascending pagination still covers every run once"
-  assert desc_ids == list(reversed(asc_ids)), (
-    "descending is exactly the canonical order read backwards: no missing or duplicated rows")
+  assert desc_ids == list(
+      reversed(asc_ids)), ("descending is exactly the canonical order read backwards: no missing or duplicated rows")
 
 
 @pytest.mark.asyncio
@@ -194,8 +192,8 @@ async def test_runs_api_default_ascending_is_unchanged(api_env) -> None:
   resp = client.get(f"/api/sessions/{session_id}/runs", params={"limit": 10})
   assert resp.status_code == 200
   body = resp.json()
-  assert [r["id"] for r in body["items"]][:4] == ["queued-0", "queued-1", "queued-2", "run-0000"], (
-    "the default stays chronological with queued reservations first")
+  assert [r["id"] for r in body["items"]][:4] == ["queued-0", "queued-1", "queued-2", "run-0000"
+                                                 ], ("the default stays chronological with queued reservations first")
   seen: list[str] = [r["id"] for r in body["items"]]
   cursor = body["next_cursor"]
   while cursor:
@@ -214,7 +212,10 @@ async def test_runs_api_order_validation(api_env) -> None:
   assert "unknown runs order" in bad.json()["detail"]
   asc = client.get(f"/api/sessions/{session_id}/runs", params={"limit": 2}).json()
   mixed = client.get(
-      f"/api/sessions/{session_id}/runs",
-      params={"limit": 2, "order": "desc", "cursor": asc["next_cursor"]})
+      f"/api/sessions/{session_id}/runs", params={
+          "limit": 2,
+          "order": "desc",
+          "cursor": asc["next_cursor"]
+      })
   assert mixed.status_code == 400, "an ascending cursor replayed under desc is an explicit 400"
   assert "ascending" in mixed.json()["detail"]

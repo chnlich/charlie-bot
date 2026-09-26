@@ -237,7 +237,9 @@ async def _worker_with_two_runs(tree: TaskTreeManager, worker_id: str):
               "content": "fix the parser",
               "timestamp": t1.isoformat()
           },
-          {**_assistant_event("done"), "timestamp": t1_done.isoformat()},
+          {
+              **_assistant_event("done"), "timestamp": t1_done.isoformat()
+          },
           {
               "type": ET.MASTER_DONE,
               "timestamp": t1_done.isoformat()
@@ -251,7 +253,9 @@ async def _worker_with_two_runs(tree: TaskTreeManager, worker_id: str):
   await tree.runs.register_run(
       RunRecord(id="run-2", session_id=worker_id, kind="review", backend="fake", model="fake-model", started_at=t2))
   _write_run_events(tree, worker_id, "run-2", [
-      {**_assistant_event("reviewing"), "timestamp": t2.isoformat()},
+      {
+          **_assistant_event("reviewing"), "timestamp": t2.isoformat()
+      },
   ])
 
   close_event = build_control_event(

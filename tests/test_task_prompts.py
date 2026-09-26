@@ -40,12 +40,24 @@ pytestmark = pytest.mark.asyncio
 OPERATOR = CallerIdentity(kind="operator")
 
 
-async def create_task(mgr: TaskTreeManager, *, parent: str | None, profile: str = "manager",
-                      request_id: str, name: str | None = None,
-                      task: TaskSpec | None = None, **kwargs: object):
+async def create_task(
+    mgr: TaskTreeManager,
+    *,
+    parent: str | None,
+    profile: str = "manager",
+    request_id: str,
+    name: str | None = None,
+    task: TaskSpec | None = None,
+    **kwargs: object):
   return await mgr.create_task(
-      request_id=request_id, task_parent_id=parent, profile=profile, task=task,
-      name=name, backend=OPUS_BACKEND_ID, caller=OPERATOR, **kwargs)
+      request_id=request_id,
+      task_parent_id=parent,
+      profile=profile,
+      task=task,
+      name=name,
+      backend=OPUS_BACKEND_ID,
+      caller=OPERATOR,
+      **kwargs)
 
 
 async def build_three_levels(mgr: TaskTreeManager) -> dict[str, str]:
@@ -53,18 +65,19 @@ async def build_three_levels(mgr: TaskTreeManager) -> dict[str, str]:
   mid = await create_task(mgr, parent=root.id, request_id="mid", name="Mid")
   low = await create_task(mgr, parent=mid.id, request_id="low", name="Low")
   worker1 = await create_task(
-      mgr, parent=low.id, request_id="w1", profile="worker", name="W1",
+      mgr,
+      parent=low.id,
+      request_id="w1",
+      profile="worker",
+      name="W1",
       task=TaskSpec(goal="worker goal", repo_path="/tmp/repo-w"))
   worker2 = await create_task(
-      mgr, parent=low.id, request_id="w2", profile="worker", name="W2",
-      task=TaskSpec(goal="sibling goal"))
-  return {"root": root.id, "mid": mid.id, "low": low.id,
-          "worker1": worker1.id, "worker2": worker2.id}
+      mgr, parent=low.id, request_id="w2", profile="worker", name="W2", task=TaskSpec(goal="sibling goal"))
+  return {"root": root.id, "mid": mid.id, "low": low.id, "worker1": worker1.id, "worker2": worker2.id}
 
 
 def sources_of(snapshot: PromptSnapshot) -> list[tuple[str, str, str | None]]:
-  return [(s.scope, s.source_ref, s.source_session_id)
-          for b in snapshot.blocks for s in b.sources]
+  return [(s.scope, s.source_ref, s.source_session_id) for b in snapshot.blocks for s in b.sources]
 
 
 def segment_texts(snapshot: PromptSnapshot) -> list[str]:
@@ -73,9 +86,7 @@ def segment_texts(snapshot: PromptSnapshot) -> list[str]:
 
 async def patched_refs(mgr: TaskTreeManager, session_id: str, subtree: str | None, node: str | None):
   meta = await mgr.patch_task(
-      session_id,
-      PatchSessionTaskRequest(subtree_prompt=subtree, node_prompt=node),
-      caller=OPERATOR)
+      session_id, PatchSessionTaskRequest(subtree_prompt=subtree, node_prompt=node), caller=OPERATOR)
   return meta
 
 
@@ -94,13 +105,9 @@ async def test_manager_template_identical_at_every_depth_and_no_pm_load(tmp_path
     snapshots[label] = snapshot
   for label, snapshot in snapshots.items():
     # The one manager contract from the shared template, at every depth.
-    assert any(
-        any(s.source_ref == "prompts/task_manager.md" for s in b.sources)
-        for b in snapshot.blocks), label
+    assert any(any(s.source_ref == "prompts/task_manager.md" for s in b.sources) for b in snapshot.blocks), label
     # The common rules come from their single maintained home.
-    assert any(
-        any(s.source_ref == "prompts/task_base.md" for s in b.sources)
-        for b in snapshot.blocks), label
+    assert any(any(s.source_ref == "prompts/task_base.md" for s in b.sources) for b in snapshot.blocks), label
   # Identical managed rules ⇒ identical template selection bytes at every depth.
   for label in ("mid", "low"):
     assert snapshots[label].blocks == snapshots["root"].blocks
@@ -140,7 +147,11 @@ async def test_verify_task_gets_the_verify_contract(tmp_path: Path) -> None:
   cfg, _sm, mgr = build_env(tmp_path)
   ids = await build_three_levels(mgr)
   task = await create_task(
-      mgr, parent=ids["low"], profile="worker", request_id="verify-leaf", name="V",
+      mgr,
+      parent=ids["low"],
+      profile="worker",
+      request_id="verify-leaf",
+      name="V",
       task=TaskSpec(goal="verify goal", task_type="verify"))
   meta = await mgr.load_meta(task.id)
   snapshot, _err = preview_snapshot(cfg, meta, "work", chain=(), node_ref=None, overlay=None)
@@ -166,8 +177,7 @@ async def test_three_levels_with_both_scopes_prove_inheritance_and_ordering(tmp_
     index = await mgr._get_index()
     from src.core.task_execution import capture_prompt_chain
     chain, node_ref = capture_prompt_chain(mgr, index, meta)
-    snapshot, _err = preview_snapshot(
-        cfg, meta, kind, chain=chain, node_ref=node_ref, overlay=None)
+    snapshot, _err = preview_snapshot(cfg, meta, kind, chain=chain, node_ref=node_ref, overlay=None)
     return snapshot
 
   # The worker sees exactly root+mid subtree rules then its own node rule.
@@ -175,8 +185,7 @@ async def test_three_levels_with_both_scopes_prove_inheritance_and_ordering(tmp_
   scopes = [(s[0], s[2]) for s in sources_of(worker_snapshot) if s[0] in ("subtree", "node")]
   assert scopes == [("subtree", ids["root"]), ("subtree", ids["mid"])]
   texts = segment_texts(worker_snapshot)
-  subtree_texts = [b.text for b in worker_snapshot.blocks
-                   if any(s.scope == "subtree" for s in b.sources)]
+  subtree_texts = [b.text for b in worker_snapshot.blocks if any(s.scope == "subtree" for s in b.sources)]
   assert subtree_texts == ["root subtree rule", "mid subtree rule"]
 
   # An ancestor node rule never enters a descendant's instructions.
@@ -190,10 +199,8 @@ async def test_three_levels_with_both_scopes_prove_inheritance_and_ordering(tmp_
   # is this node and its descendants), and its own node rule — not low's.
   mid_snapshot = await snapshot_for("mid")
   mid_scopes = [(s[0], s[2]) for s in sources_of(mid_snapshot) if s[0] in ("subtree", "node")]
-  assert mid_scopes == [
-      ("subtree", ids["root"]), ("subtree", ids["mid"]), ("node", ids["mid"])]
-  mid_subtree_texts = [b.text for b in mid_snapshot.blocks
-                       if any(s.scope == "subtree" for s in b.sources)]
+  assert mid_scopes == [("subtree", ids["root"]), ("subtree", ids["mid"]), ("node", ids["mid"])]
+  mid_subtree_texts = [b.text for b in mid_snapshot.blocks if any(s.scope == "subtree" for s in b.sources)]
   assert mid_subtree_texts == ["root subtree rule", "mid subtree rule"]
 
 
@@ -224,13 +231,11 @@ async def test_exact_body_dedup_merges_every_source_at_first_position(tmp_path: 
   meta = await mgr.load_meta(ids["low"])
   index = await mgr._get_index()
   chain, node_ref = capture_prompt_chain(mgr, index, meta)
-  variant_snapshot, _err = preview_snapshot(
-      cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+  variant_snapshot, _err = preview_snapshot(cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
   assert len([b for b in variant_snapshot.blocks if b.text.startswith(same_rule)]) == 2
 
 
-async def test_task_goal_and_context_refs_are_not_copied_into_persistent_rules(
-        tmp_path: Path) -> None:
+async def test_task_goal_and_context_refs_are_not_copied_into_persistent_rules(tmp_path: Path) -> None:
   cfg, _sm, mgr = build_env(tmp_path)
   ids = await build_three_levels(mgr)
   meta = await mgr.load_meta(ids["worker1"])
@@ -242,8 +247,7 @@ async def test_task_goal_and_context_refs_are_not_copied_into_persistent_rules(
   _snapshot, _err = preview_snapshot(
       cfg, meta, "manager_turn", chain=((ids["root"], None),), node_ref=None, overlay=None)
   # Nothing about the goal is manufactured into any node rule.
-  patched = await mgr.patch_task(
-      ids["worker1"], PatchSessionTaskRequest(name="renamed only"), caller=OPERATOR)
+  patched = await mgr.patch_task(ids["worker1"], PatchSessionTaskRequest(name="renamed only"), caller=OPERATOR)
   assert patched.node_prompt_ref is None and patched.subtree_prompt_ref is None
   assert goal_text == "worker goal"
 
@@ -269,42 +273,34 @@ def write_memory_fixture(cfg, entries: list[tuple[str, str, str, str, str]], top
     ("entries", "topics", "audience", "repo", "expect_full", "expect_index"),
     [
         # master-only, non-resident topic: the master indexes it.
-        ([("alpha", "a1", "master", "Master Only", "m-body")], "alpha\n",
-         "master", "nomatch", False, True),
+        ([("alpha", "a1", "master", "Master Only", "m-body")], "alpha\n", "master", "nomatch", False, True),
         # master-only entry, worker audience: not worker-visible at all — the
         # worker's repo-topic full bodies are gated by the audience too.
-        ([("alpha", "a1", "master", "Master Only", "m-body")], "alpha\n",
-         "worker", "alpha", False, False),
+        ([("alpha", "a1", "master", "Master Only", "m-body")], "alpha\n", "worker", "alpha", False, False),
         # worker-only repo topic: full for the matching repo.
-        ([("proj", "p1", "worker", "Proj Entry", "w-body")], "proj\n",
-         "worker", "proj", True, False),
+        ([("proj", "p1", "worker", "Proj Entry", "w-body")], "proj\n", "worker", "proj", True, False),
         # ...and index-only for a non-matching repo.
-        ([("proj", "p1", "worker", "Proj Entry", "w-body")], "proj\n",
-         "worker", "other", False, True),
+        ([("proj", "p1", "worker", "Proj Entry", "w-body")], "proj\n", "worker", "other", False, True),
         # both audiences on a resident topic: the master gets the full body.
-        ([("beta", "b1", "master, worker", "Both", "b-body")], "beta resident\n",
-         "master", "nomatch", True, False),
+        ([("beta", "b1", "master, worker", "Both", "b-body")], "beta resident\n", "master", "nomatch", True, False),
     ])
 async def test_memory_selection_provenance_matches_legacy_strings(
-        tmp_path: Path, entries, topics, audience, repo, expect_full, expect_index) -> None:
+    tmp_path: Path, entries, topics, audience, repo, expect_full, expect_index) -> None:
   cfg, _sm, mgr = build_env(tmp_path)
   write_memory_fixture(cfg, entries, topics)
   staged_dir = cfg.memory_dir / "staging"
   staged_dir.mkdir(parents=True, exist_ok=True)
   (staged_dir / "candidate.md").write_text(
       "---\nscope: user\ntopic: staged\ntitle: Candidate\n---\nstaged body\n", encoding="utf-8")
-  selection = (select_master_memory(cfg.memory_dir) if audience == "master"
-               else select_worker_memory(cfg.memory_dir, repo))
-  legacy = (assemble_master(cfg.memory_dir) if audience == "master"
-            else assemble_worker(cfg.memory_dir, repo))
+  selection = (
+      select_master_memory(cfg.memory_dir) if audience == "master" else select_worker_memory(cfg.memory_dir, repo))
+  legacy = (assemble_master(cfg.memory_dir) if audience == "master" else assemble_worker(cfg.memory_dir, repo))
   assert selection is not None
   assert selection.text == legacy  # the legacy string derives from the same selection
   # Entry-bearing segments (the worker usage line rides an index segment with
   # no sources of its own).
-  full_with_entries = any(
-      d == "full" and sources for d, _t, sources in selection.segments)
-  index_with_entries = any(
-      d == "index" and sources for d, _t, sources in selection.segments)
+  full_with_entries = any(d == "full" and sources for d, _t, sources in selection.segments)
+  index_with_entries = any(d == "index" and sources for d, _t, sources in selection.segments)
   assert full_with_entries == expect_full
   assert index_with_entries == expect_index
   for _d, _text, sources in selection.segments:
@@ -312,10 +308,13 @@ async def test_memory_selection_provenance_matches_legacy_strings(
       assert source.source_ref.startswith("memory:")
   # The assembly injects the same filtered bytes exactly once.
   meta = await mgr.create_task(
-      request_id="m", task_parent_id=None,
+      request_id="m",
+      task_parent_id=None,
       profile="manager" if audience == "master" else "worker",
       task=TaskSpec(goal="g", repo_path=f"/tmp/{repo}" if repo != "nomatch" else None),
-      name="M", backend=OPUS_BACKEND_ID, caller=OPERATOR)
+      name="M",
+      backend=OPUS_BACKEND_ID,
+      caller=OPERATOR)
   fresh = await mgr.load_meta(meta.id)
   assert fresh is not None
   kind = "manager_turn" if audience == "master" else "work"
@@ -352,15 +351,14 @@ async def test_repo_less_worker_gets_worker_index_only(tmp_path: Path) -> None:
   write_memory_fixture(
       cfg, [("proj", "p1", "worker", "Proj", "w-body"), ("shared", "s1", "worker", "Shared", "x-body")],
       "proj\nshared\n")
-  task = await create_task(mgr, parent=None, profile="worker", request_id="w", name="W",
-                           task=TaskSpec(goal="g"))
+  task = await create_task(mgr, parent=None, profile="worker", request_id="w", name="W", task=TaskSpec(goal="g"))
   meta = await mgr.load_meta(task.id)
   segments, _err = build_segments(cfg, meta, "work", overlay=None, chain=(), node_ref=None)
   memory_segments = [s for s in segments if s.sources and s.sources[0].scope == "memory"]
   joined = "\n\n".join(s.text for s in memory_segments)
-  assert "shared/s1" in joined          # index line for the non-repo topic
-  assert "proj/p1" in joined            # repo-matching topic also indexes (repo-less)
-  assert "w-body" not in joined         # no guessed project: no full bodies
+  assert "shared/s1" in joined  # index line for the non-repo topic
+  assert "proj/p1" in joined  # repo-matching topic also indexes (repo-less)
+  assert "w-body" not in joined  # no guessed project: no full bodies
 
 
 # ---------------------------------------------------------------------------
@@ -378,8 +376,7 @@ async def test_snapshot_hash_and_char_count_semantics(tmp_path: Path) -> None:
     index = await mgr._get_index()
     from src.core.task_execution import capture_prompt_chain
     chain, node_ref = capture_prompt_chain(mgr, index, meta)
-    snapshot, _err = preview_snapshot(
-        cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+    snapshot, _err = preview_snapshot(cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
     return snapshot
 
   base_snapshot = await assembled()
@@ -403,8 +400,7 @@ async def test_snapshot_hash_and_char_count_semantics(tmp_path: Path) -> None:
   original = manager_md.read_text(encoding="utf-8")
   try:
     manager_md.write_text(
-        original.replace("You are the manager of one task node.",
-                         "You are the manager of one task node (edited)."),
+        original.replace("You are the manager of one task node.", "You are the manager of one task node (edited)."),
         encoding="utf-8")
     assert (await assembled()).prompt_hash not in (base_snapshot.prompt_hash,)
   finally:
@@ -418,10 +414,11 @@ async def test_snapshot_hash_and_char_count_semantics(tmp_path: Path) -> None:
 
 async def test_snapshot_round_trip_and_tamper_detection(tmp_path: Path) -> None:
   from src.core.task_prompts import PromptSource, RuleSegment
-  snapshot = assemble_snapshot([
-      RuleSegment(text="rule one", sources=(PromptSource("base", "prompts/task_base.md"),)),
-      RuleSegment(text="rule two", sources=(PromptSource("node", "prompt_bodies/x.md", "sid"),)),
-  ])
+  snapshot = assemble_snapshot(
+      [
+          RuleSegment(text="rule one", sources=(PromptSource("base", "prompts/task_base.md"),)),
+          RuleSegment(text="rule two", sources=(PromptSource("node", "prompt_bodies/x.md", "sid"),)),
+      ])
   data = snapshot.to_json_dict()
   assert set(data) == {"blocks", "prompt_hash", "char_count"}
   restored = PromptSnapshot.from_json_dict(json.loads(json.dumps(data)))
@@ -479,8 +476,7 @@ async def test_own_subtree_rule_applies_to_self(tmp_path: Path) -> None:
     index = await mgr._get_index()
     from src.core.task_execution import capture_prompt_chain
     chain, node_ref = capture_prompt_chain(mgr, index, meta)
-    snapshot, _err = preview_snapshot(
-        cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+    snapshot, _err = preview_snapshot(cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
     return snapshot
 
   mid_snapshot = await snapshot_for("mid")
@@ -495,8 +491,7 @@ async def test_own_subtree_rule_applies_to_self(tmp_path: Path) -> None:
   index = await mgr._get_index()
   from src.core.task_execution import capture_prompt_chain
   chain, node_ref = capture_prompt_chain(mgr, index, worker_meta)
-  worker_snapshot, _err = preview_snapshot(
-      cfg, worker_meta, "work", chain=chain, node_ref=node_ref, overlay=None)
+  worker_snapshot, _err = preview_snapshot(cfg, worker_meta, "work", chain=chain, node_ref=node_ref, overlay=None)
   worker_scopes = [(s[0], s[2]) for s in sources_of(worker_snapshot) if s[0] in ("subtree", "node")]
   assert worker_scopes == [("subtree", ids["mid"])]
 
@@ -512,12 +507,10 @@ async def test_root_own_subtree_rule_applies_with_no_ancestors(tmp_path: Path) -
   from src.core.task_execution import capture_prompt_chain
   chain, node_ref = capture_prompt_chain(mgr, index, meta)
   assert chain == ((ids["root"], meta.subtree_prompt_ref),) and node_ref is None
-  snapshot, _err = preview_snapshot(
-      cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+  snapshot, _err = preview_snapshot(cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
   scopes = [(s[0], s[2]) for s in sources_of(snapshot) if s[0] in ("subtree", "node")]
   assert scopes == [("subtree", ids["root"])]
-  assert [b.text for b in snapshot.blocks if any(s.scope == "subtree" for s in b.sources)] == [
-      "root program rule"]
+  assert [b.text for b in snapshot.blocks if any(s.scope == "subtree" for s in b.sources)] == ["root program rule"]
 
 
 async def test_middle_manager_with_both_scopes_orders_subtree_then_node(tmp_path: Path) -> None:
@@ -531,19 +524,16 @@ async def test_middle_manager_with_both_scopes_orders_subtree_then_node(tmp_path
   index = await mgr._get_index()
   from src.core.task_execution import capture_prompt_chain
   chain, node_ref = capture_prompt_chain(mgr, index, meta)
-  snapshot, _err = preview_snapshot(
-      cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+  snapshot, _err = preview_snapshot(cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
   scopes = [(s[0], s[2]) for s in sources_of(snapshot) if s[0] in ("subtree", "node")]
-  assert scopes == [
-      ("subtree", ids["root"]), ("subtree", ids["mid"]), ("node", ids["mid"])]
+  assert scopes == [("subtree", ids["root"]), ("subtree", ids["mid"]), ("node", ids["mid"])]
   subtree_texts = [b.text for b in snapshot.blocks if any(s.scope == "subtree" for s in b.sources)]
   assert subtree_texts == ["root shared rule", "mid shared rule"]
 
   # A worker two levels below sees both subtree rules and never the mid node rule.
   worker_meta = await mgr.load_meta(ids["worker1"])
   chain, node_ref = capture_prompt_chain(mgr, index, worker_meta)
-  worker_snapshot, _err = preview_snapshot(
-      cfg, worker_meta, "work", chain=chain, node_ref=node_ref, overlay=None)
+  worker_snapshot, _err = preview_snapshot(cfg, worker_meta, "work", chain=chain, node_ref=node_ref, overlay=None)
   worker_scopes = [(s[0], s[2]) for s in sources_of(worker_snapshot) if s[0] in ("subtree", "node")]
   assert worker_scopes == [("subtree", ids["root"]), ("subtree", ids["mid"])]
   assert "mid local rule" not in worker_snapshot.instructions_text
@@ -565,8 +555,7 @@ async def test_worker_own_subtree_rule_applies_to_itself(tmp_path: Path) -> None
   # Siblings stay isolated: worker2's context never sees worker1's rule.
   sibling_meta = await mgr.load_meta(ids["worker2"])
   chain, node_ref = capture_prompt_chain(mgr, index, sibling_meta)
-  sibling_snapshot, _err = preview_snapshot(
-      cfg, sibling_meta, "work", chain=chain, node_ref=node_ref, overlay=None)
+  sibling_snapshot, _err = preview_snapshot(cfg, sibling_meta, "work", chain=chain, node_ref=node_ref, overlay=None)
   assert "worker shared rule" not in sibling_snapshot.instructions_text
 
 
@@ -584,8 +573,7 @@ async def test_equal_body_dedup_merges_own_subtree_with_ancestors(tmp_path: Path
   index = await mgr._get_index()
   from src.core.task_execution import capture_prompt_chain
   chain, node_ref = capture_prompt_chain(mgr, index, meta)
-  snapshot, _err = preview_snapshot(
-      cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+  snapshot, _err = preview_snapshot(cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
   matching = [b for b in snapshot.blocks if b.text == same_rule]
   assert len(matching) == 1
   assert [s.source_session_id for s in matching[0].sources] == [ids["root"], ids["mid"], ids["low"]]

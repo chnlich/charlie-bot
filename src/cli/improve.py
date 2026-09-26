@@ -30,8 +30,6 @@ from src.cli.common import (
     validate_repo_path,
 )
 from src.cli.help_formatter import CliRawDescriptionHelpFormatter
-from src.core.config import get_config
-from src.core.improve_sequence import improve_child_request_id
 
 
 def _read_goal_file(goal_file: str) -> str:
@@ -115,7 +113,13 @@ def main() -> None:
     # child for a v2 manager, or an iteration-1 thread for v1) proves the
     # launch landed. Returns the endpoint's response shape so steering output
     # stays identical.
+    # The improve-sequence and config stacks ride the one readback that needs
+    # them: a deferral here keeps --help and parser errors off their import
+    # chains (the src.cli.config deferral shape).
+    from src.core.config import get_config
+    from src.core.improve_sequence import improve_child_request_id
     from src.core.models import SessionMetadata
+
     cfg = get_config()
     loops_dir = cfg.sessions_dir / session_id / "loops"
     if not loops_dir.is_dir():

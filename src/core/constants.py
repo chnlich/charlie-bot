@@ -26,6 +26,10 @@ SESSION_ID_ENV_VAR = "CHARLIEBOT_SESSION_ID"
 # artifacts), so the CLI argparse precheck and --help text share this constant.
 MAX_TRIGGER_MESSAGE_CHARS = 200
 
+# Cold-session idle threshold (days): the storage sweep's default judgment and
+# the CLI parser's --min-idle-days default and --help text share one number.
+MIN_IDLE_DAYS = 14
+
 # Plan-registry verb vocabularies: the CLI's argparse choices (src.cli.plan) and the
 # registry verbs' validation (src.core.plans) share one tuple per vocabulary, so the
 # plan chain imports no pydantic to parse args. The request models' Literal types

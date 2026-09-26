@@ -19,14 +19,15 @@ from conftest import CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, _wait_for
 from src.cli.remote_launch import main
 from src.core.timeouts import SSH_CONNECT_TIMEOUT
 
-# Import-path patch targets for the remote_launch seams. src/cli/remote_launch.py binds
-# get_config at import scope (`from src.core.config import get_config`) and reaches
-# subprocess.run through its module-scope `import subprocess`, so patch() lands each
-# stand-in on the src.cli.remote_launch module attribute and main() reads them at call
-# time; the src.cli.common helpers bind the sessions root in their own namespace
+# Import-path patch targets for the remote_launch seams. src/cli/remote_launch.py defers
+# get_config into main() (`from src.core.config import get_config` at call scope), so that
+# stand-in lands on the src.core.config module attribute and the deferred import reads it
+# at call time; subprocess.run is reached through main's module-scope `import subprocess`,
+# so its stand-in lands on the src.cli.remote_launch module attribute. The
+# src.cli.common helpers bind the sessions root in their own namespace
 # (CLI_COMMON_SESSIONS_DIR_PATCH_TARGET), and a drifted string copy of either route would
 # patch a name nothing reads.
-_GET_CONFIG_PATCH_TARGET = "src.cli.remote_launch.get_config"
+_GET_CONFIG_PATCH_TARGET = "src.core.config.get_config"
 _SUBPROCESS_RUN_PATCH_TARGET = "src.cli.remote_launch.subprocess.run"
 
 

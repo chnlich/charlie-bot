@@ -486,3 +486,28 @@ def test_claude_sub_chain_imports_without_the_web_framework_and_config_stack() -
       "hints ride TYPE_CHECKING and the relay imports WebSocketDisconnect "
       "inside the function, and get_config loads on the cgroup spawn path that "
       "reads it")
+
+
+# The five sibling verbs' dispatch floors (docs/perf_baseline.md M125): each
+# defers its core-module import into the one command that needs it, so --help
+# and parser errors stay off the config model stack and the publish, storage,
+# trash, and improve-sequence chains behind it (the src.cli.config deferral
+# shape, the M92 protocol's deferred-module band).
+SIBLING_VERB_HEAVY_MODULES = ("src.core.config", "src.core.models", "pydantic", "fastapi")
+_SIBLING_VERBS = (
+    pytest.param("src.cli.improve", id="improve"),
+    pytest.param("src.cli.publish", id="publish"),
+    pytest.param("src.cli.storage", id="storage"),
+    pytest.param("src.cli.gc_trash", id="gc-trash"),
+    pytest.param("src.cli.remote_launch", id="remote-launch"),
+)
+
+
+@pytest.mark.parametrize("module_name", _SIBLING_VERBS)
+def test_sibling_verb_imports_without_the_deferred_core_stacks(module_name: str) -> None:
+  loaded = _modules_loaded_after_import(f"import {module_name}", SIBLING_VERB_HEAVY_MODULES)
+  assert loaded == [], (
+      f"{module_name} pulled a deferred core stack into its dispatch process: "
+      f"{loaded}; the M125 dispatch floor (docs/perf_baseline.md) depends on these "
+      "staying out — each verb imports its core module inside the one command "
+      "that needs it")

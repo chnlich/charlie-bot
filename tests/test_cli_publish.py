@@ -10,10 +10,11 @@ from conftest import PUBLISH_BASE_URL, build_publish_cfg, write_artifact
 from src.cli.publish import main
 from src.core.config import CharlieBotConfig
 
-# Import-path patch target for the publish command's config read. src/cli/publish.py binds the
-# name with `from src.core.config import get_config`, so mock setattrs the stand-in on the
-# src.cli.publish module attribute and main's preflight reads it at call time.
-CLI_PUBLISH_GET_CONFIG_PATCH_TARGET = "src.cli.publish.get_config"
+# Import-path patch target for the publish command's config read. src/cli/publish.py defers
+# the import into main() (`from src.core.config import get_config` at call scope), so mock
+# setattrs the stand-in on the src.core.config module attribute and the deferred import
+# reads it at call time.
+CLI_PUBLISH_GET_CONFIG_PATCH_TARGET = "src.core.config.get_config"
 
 
 def test_publish_prints_the_url_on_stdout_and_exits_zero(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -15,8 +15,8 @@ from conftest import identity_of, live_subprocess
 from src.core import event_types as ET
 from src.core.models import RunRecord
 from src.core.runs import (
-  RunIdentityConflictError,
-  RunStore,
+    RunIdentityConflictError,
+    RunStore,
 )
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
@@ -30,16 +30,20 @@ def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager, 
 async def make_task(store_run_env: tuple, request_id: str) -> str:
   _, _, mgr, _ = store_run_env
   task = await mgr.create_task(
-      request_id=request_id, task_parent_id=None, profile="worker", task=None, name=None,
-      backend=None, caller="operator")
+      request_id=request_id,
+      task_parent_id=None,
+      profile="worker",
+      task=None,
+      name=None,
+      backend=None,
+      caller="operator")
   return task.id
 
 
 async def register_live_run(store: RunStore, session_id: str, proc: subprocess.Popen) -> RunRecord:
   pid, pid_start = identity_of(proc.pid)
   return await store.register_run(
-      RunRecord(id="run-live", session_id=session_id, pid=pid, pid_start=pid_start,
-                started_at=datetime.now(UTC)))
+      RunRecord(id="run-live", session_id=session_id, pid=pid, pid_start=pid_start, started_at=datetime.now(UTC)))
 
 
 # ---------------------------------------------------------------------------
@@ -71,8 +75,7 @@ async def test_retry_binding_is_stable_across_requests_and_reload(tmp_path: Path
   env = build_env(tmp_path)
   cfg, session_mgr, _mgr, store = env
   session_id = await make_task(env, "t1")
-  original = await store.register_run(
-      RunRecord(id="r-orig", session_id=session_id, kind="work", backend="opus"))
+  original = await store.register_run(RunRecord(id="r-orig", session_id=session_id, kind="work", backend="opus"))
 
   first = await store.create_retry_run(
       session_id, "retry-req", "r-orig", task_spec_text='{"goal":"x"}', backend=original.backend)
@@ -103,8 +106,7 @@ async def test_run_pagination_is_a_keyset_over_started_order(tmp_path: Path) -> 
   session_id = await make_task(env, "t1")
   base = datetime(2026, 1, 1, tzinfo=UTC)
   for i, started in enumerate([base, base + timedelta(minutes=1), None]):
-    await store.register_run(
-        RunRecord(id=f"r{i}", session_id=session_id, started_at=started))
+    await store.register_run(RunRecord(id=f"r{i}", session_id=session_id, started_at=started))
 
   page1 = store.list_runs_page_sync(session_id, limit=2, cursor=None)
   assert [r.id for r in page1.items] == ["r2", "r0"]  # queued (never launched) first
@@ -127,9 +129,13 @@ async def test_record_finish_is_the_one_terminal_writer(tmp_path: Path) -> None:
   await store.register_run(RunRecord(id="r1", session_id=session_id))
   # An unclaimed run's finisher names real input events of this session only:
   # the acknowledgement payload is identity-bound, never arbitrary strings.
-  await store._events.append(session_id, {
-      "id": "e1", "type": ET.USER, "timestamp": datetime.now(UTC).isoformat(),
-      "content": "real input event"})
+  await store._events.append(
+      session_id, {
+          "id": "e1",
+          "type": ET.USER,
+          "timestamp": datetime.now(UTC).isoformat(),
+          "content": "real input event"
+      })
   await store.record_finish(session_id, "r1", "success", input_event_ids=["e1"], exit_code=0)
   events = store.load_events_sync(session_id)
   finished = [e for e in events if e["type"] == ET.RUN_FINISHED]
@@ -213,11 +219,14 @@ async def test_stop_request_can_return_null_outcome_and_recovery_closes_it(
   # A process that ignores SIGTERM: the request stays durable, outcome stays null.
   ready = tmp_path / "sigterm_ready"
   proc = subprocess.Popen(
-      ["python3", "-c",
-       ("import signal, time, sys; "
-        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-        f"open({str(ready)!r}, 'w').close(); "
-        "time.sleep(30)")])
+      [
+          "python3", "-c",
+          (
+              "import signal, time, sys; "
+              "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+              f"open({str(ready)!r}, 'w').close(); "
+              "time.sleep(30)")
+      ])
   deadline = time.monotonic() + 10
   while not ready.exists():
     assert time.monotonic() < deadline, "helper process never armed its SIGTERM handler"
@@ -254,8 +263,7 @@ async def test_identity_mismatch_returns_conflict_and_keeps_evidence(
   session_id = await make_task(env, "t1")
   # A live pid with a forged pid_start (pid reuse cannot fake field 22).
   await store.register_run(
-      RunRecord(id="run-forged", session_id=session_id, pid=os.getpid(), pid_start="1",
-                started_at=datetime.now(UTC)))
+      RunRecord(id="run-forged", session_id=session_id, pid=os.getpid(), pid_start="1", started_at=datetime.now(UTC)))
   with pytest.raises(RunIdentityConflictError, match="identity mismatch"):
     await store.request_stop(session_id, "run-forged", "stop-1")
 
@@ -274,8 +282,7 @@ async def test_exit_before_stop_observes_interrupted(tmp_path: Path) -> None:
   pid, pid_start = identity_of(proc.pid)
   proc.wait(timeout=10)
   await store.register_run(
-      RunRecord(id="run-exited", session_id=session_id, pid=pid, pid_start=pid_start,
-                started_at=datetime.now(UTC)))
+      RunRecord(id="run-exited", session_id=session_id, pid=pid, pid_start=pid_start, started_at=datetime.now(UTC)))
   result = await store.request_stop(session_id, "run-exited", "stop-1")
   assert result.outcome == "interrupted"
 

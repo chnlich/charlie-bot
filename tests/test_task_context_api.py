@@ -32,6 +32,7 @@ OPERATOR = CallerIdentity(kind="operator")
 
 
 class _TaskEnv:
+
   def __init__(self, tmp_path: Path) -> None:
     self.cfg = make_home_config(tmp_path)
     self.session_mgr = SessionManager(self.cfg)
@@ -53,15 +54,16 @@ async def env(tmp_path: Path):
 
 async def _tree(env: _TaskEnv) -> dict[str, str]:
   root = await env.tree.create_task(
-      request_id="root", task_parent_id=None, profile="manager", task=None, name="Root",
-      backend=None, caller=OPERATOR)
+      request_id="root", task_parent_id=None, profile="manager", task=None, name="Root", backend=None, caller=OPERATOR)
   worker = await env.tree.create_task(
-      request_id="w", task_parent_id=root.id, profile="worker",
-      task=TaskSpec(goal="worker goal", repo_path="/tmp/repo"), name="W", backend=None,
+      request_id="w",
+      task_parent_id=root.id,
+      profile="worker",
+      task=TaskSpec(goal="worker goal", repo_path="/tmp/repo"),
+      name="W",
+      backend=None,
       caller=OPERATOR)
-  await env.tree.patch_task(
-      root.id, PatchSessionTaskRequest(subtree_prompt="the root subtree rule"),
-      caller=OPERATOR)
+  await env.tree.patch_task(root.id, PatchSessionTaskRequest(subtree_prompt="the root subtree rule"), caller=OPERATOR)
   return {"root": root.id, "worker": worker.id}
 
 
@@ -81,8 +83,7 @@ async def test_effective_prompt_defaults_and_kinds(env: _TaskEnv) -> None:
   assert "prompts/task_manager.md" in refs
   worker_preview = env.client.get(f"/api/sessions/{ids['worker']}/effective-prompt")
   assert worker_preview.status_code == 200
-  worker_refs = [s["source_ref"] for b in worker_preview.json()["blocks"]
-                 for s in b["sources"]]
+  worker_refs = [s["source_ref"] for b in worker_preview.json()["blocks"] for s in b["sources"]]
   assert any(r.startswith("prompt_bodies/") for r in worker_refs)
   assert worker_preview.json()["kind"] == "work"
   assert "prompts/worker.md" in worker_refs
@@ -91,13 +92,11 @@ async def test_effective_prompt_defaults_and_kinds(env: _TaskEnv) -> None:
 
 async def test_effective_prompt_kind_selection_and_errors(env: _TaskEnv) -> None:
   ids = await _tree(env)
-  review = env.client.get(
-      f"/api/sessions/{ids['worker']}/effective-prompt", params={"kind": "review"})
+  review = env.client.get(f"/api/sessions/{ids['worker']}/effective-prompt", params={"kind": "review"})
   assert review.status_code == 200
   refs = [s["source_ref"] for b in review.json()["blocks"] for s in b["sources"]]
   assert any(r.startswith("src/core/review.py") for r in refs)
-  bad = env.client.get(
-      f"/api/sessions/{ids['worker']}/effective-prompt", params={"kind": "nonsense"})
+  bad = env.client.get(f"/api/sessions/{ids['worker']}/effective-prompt", params={"kind": "nonsense"})
   assert bad.status_code == 400
   missing = env.client.get("/api/sessions/00000000-0000-0000-0000-00000000dead/effective-prompt")
   assert missing.status_code == 404
@@ -107,8 +106,7 @@ async def test_run_context_returns_the_stored_snapshot(env: _TaskEnv) -> None:
   ids = await _tree(env)
   run_id = "ctx-run"
   await env.tree.runs.register_run(
-      RunRecord(id=run_id, session_id=ids["worker"], kind="work"),
-      task_spec_text="pinned spec")
+      RunRecord(id=run_id, session_id=ids["worker"], kind="work"), task_spec_text="pinned spec")
   # The launch seam commits the snapshot; simulate the commit the adapter does.
   from src.core.task_execution import capture_prompt_chain
   from src.core.task_prompts import preview_snapshot
@@ -116,12 +114,10 @@ async def test_run_context_returns_the_stored_snapshot(env: _TaskEnv) -> None:
   assert meta is not None
   index = await env.tree._get_index()
   chain, node_ref = capture_prompt_chain(env.tree, index, meta)
-  snapshot, _err = preview_snapshot(
-      env.cfg, meta, "work", chain=chain, node_ref=node_ref, overlay=None)
+  snapshot, _err = preview_snapshot(env.cfg, meta, "work", chain=chain, node_ref=node_ref, overlay=None)
   path = env.tree.runs.run_dir(ids["worker"], run_id) / "prompt_snapshot.json"
   path.parent.mkdir(parents=True, exist_ok=True)
-  path.write_text(json.dumps(snapshot.to_json_dict(), indent=2, ensure_ascii=False),
-                  encoding="utf-8")
+  path.write_text(json.dumps(snapshot.to_json_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
   await env.tree.runs.record_observation(ids["worker"], run_id, prompt_snapshot_ref=str(path))
   run = await env.tree.runs.get_run(ids["worker"], run_id)
   assert run is not None and run.task_spec_ref is not None
@@ -153,8 +149,7 @@ async def test_run_context_labels_legacy_raw_prompt_as_limited(env: _TaskEnv) ->
   body = resp.json()
   assert body["snapshot"] is None
   assert body["legacy_prompt"] is not None
-  assert body["legacy_prompt"]["sha256"] == sha256_hex(
-      legacy.read_text(encoding="utf-8"))
+  assert body["legacy_prompt"]["sha256"] == sha256_hex(legacy.read_text(encoding="utf-8"))
   assert "limited" in body["legacy_prompt"]["note"]
   assert "provenance was not recorded" in body["legacy_prompt"]["note"]
 
@@ -212,8 +207,7 @@ async def test_raw_prompt_ref_is_limited_evidence_not_a_500(env: _TaskEnv) -> No
   raw = env.tree.runs.run_dir(ids["root"], run_id) / "launch_prompt.md"
   raw.parent.mkdir(parents=True, exist_ok=True)
   raw.write_text("## raw managed + task text\n", encoding="utf-8")
-  await env.tree.runs.record_observation(
-      ids["root"], run_id, prompt_snapshot_ref=str(raw))
+  await env.tree.runs.record_observation(ids["root"], run_id, prompt_snapshot_ref=str(raw))
   resp = env.client.get(f"/api/sessions/{ids['root']}/runs/{run_id}/context")
   assert resp.status_code == 200, resp.text
   body = resp.json()
@@ -232,15 +226,12 @@ async def test_missing_new_snapshot_is_an_error_not_legacy_fallback(env: _TaskEn
   ids = await _tree(env)
   run_id = "vanished-snapshot"
   await env.tree.runs.register_run(
-      RunRecord(id=run_id, session_id=ids["worker"], kind="work"),
-      task_spec_text="pinned spec")
+      RunRecord(id=run_id, session_id=ids["worker"], kind="work"), task_spec_text="pinned spec")
   snapshot_path = env.tree.runs.run_dir(ids["worker"], run_id) / "prompt_snapshot.json"
   snapshot_path.parent.mkdir(parents=True, exist_ok=True)
   snapshot_path.write_text("{}", encoding="utf-8")
-  (snapshot_path.parent / "launch_prompt.md").write_text(
-      "task/input text", encoding="utf-8")
-  await env.tree.runs.record_observation(
-      ids["worker"], run_id, prompt_snapshot_ref=str(snapshot_path))
+  (snapshot_path.parent / "launch_prompt.md").write_text("task/input text", encoding="utf-8")
+  await env.tree.runs.record_observation(ids["worker"], run_id, prompt_snapshot_ref=str(snapshot_path))
   snapshot_path.unlink()
 
   resp = env.client.get(f"/api/sessions/{ids['worker']}/runs/{run_id}/context")
@@ -252,13 +243,11 @@ async def test_missing_new_snapshot_is_an_error_not_legacy_fallback(env: _TaskEn
 async def test_corrupt_new_snapshot_is_an_error(env: _TaskEnv) -> None:
   ids = await _tree(env)
   run_id = "corrupt-snapshot"
-  await env.tree.runs.register_run(
-      RunRecord(id=run_id, session_id=ids["worker"], kind="work"))
+  await env.tree.runs.register_run(RunRecord(id=run_id, session_id=ids["worker"], kind="work"))
   snapshot_path = env.tree.runs.run_dir(ids["worker"], run_id) / "prompt_snapshot.json"
   snapshot_path.parent.mkdir(parents=True, exist_ok=True)
   snapshot_path.write_text("not json at all", encoding="utf-8")
-  await env.tree.runs.record_observation(
-      ids["worker"], run_id, prompt_snapshot_ref=str(snapshot_path))
+  await env.tree.runs.record_observation(ids["worker"], run_id, prompt_snapshot_ref=str(snapshot_path))
   resp = env.client.get(f"/api/sessions/{ids['worker']}/runs/{run_id}/context")
   assert resp.status_code == 500
   assert "unreadable" in resp.json()["detail"]
@@ -269,8 +258,7 @@ async def test_missing_recorded_raw_ref_is_an_error(env: _TaskEnv) -> None:
   run_id = "vanished-raw"
   await env.tree.runs.register_run(RunRecord(id=run_id, session_id=ids["root"], kind="manager_turn"))
   raw = env.tree.runs.run_dir(ids["root"], run_id) / "launch_prompt.md"
-  await env.tree.runs.record_observation(
-      ids["root"], run_id, prompt_snapshot_ref=str(raw))
+  await env.tree.runs.record_observation(ids["root"], run_id, prompt_snapshot_ref=str(raw))
   resp = env.client.get(f"/api/sessions/{ids['root']}/runs/{run_id}/context")
   assert resp.status_code == 500
   assert "raw launch text missing" in resp.json()["detail"]

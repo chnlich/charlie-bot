@@ -6,57 +6,55 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import (
-  bad_request,
-  get_config_on_loop,
-  get_plan_manager,
-  get_session_manager,
-  get_task_manager,
-  get_trigger_manager,
-  require_found,
+    bad_request,
+    get_config_on_loop,
+    get_plan_manager,
+    get_session_manager,
+    get_task_manager,
+    get_trigger_manager,
+    require_found,
 )
-from src.api.deps import (
-  require_caller as require_caller_dep,
-)
+from src.api.deps import require_caller as require_caller_dep
 from src.api.message_utils import build_agent_message_event
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config
 from src.core.improve_command import (
-  ImproveLoopAlreadyRunningError,
-  ImproveState,
-  loop_goal_path,
-  loop_plan_path,
-  reserve_loop_state,
-  save_loop_state,
+    ImproveLoopAlreadyRunningError,
+    ImproveState,
+    loop_goal_path,
+    loop_plan_path,
+    reserve_loop_state,
+    save_loop_state,
 )
 from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
 from src.core.models import (
-  DelegateInvocationMetadata,
-  DelegateRequest,
-  ImproveRequest,
-  PlanAmendRequest,
-  PlanApproveRequest,
-  PlanCloseRequest,
-  PlanPresentRequest,
-  ScheduleTriggerRequest,
-  SessionMessageRequest,
-  SessionMetadata,
-  SlackAckRequest,
-  SlackReplyRequest,
-  TaskType,
-  WatchKind,
+    DelegateInvocationMetadata,
+    DelegateRequest,
+    ImproveRequest,
+    PlanAmendRequest,
+    PlanApproveRequest,
+    PlanCloseRequest,
+    PlanPresentRequest,
+    ScheduleTriggerRequest,
+    SessionMessageRequest,
+    SessionMetadata,
+    SlackAckRequest,
+    SlackReplyRequest,
+    TaskType,
+    WatchKind,
 )
 from src.core.plans import PlanRegistryManager
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
-  SlackReplyError,
-  ack_messages,
-  assert_thread_fresh,
-  post_reply,
+    SlackReplyError,
+    ack_messages,
+    assert_thread_fresh,
+    post_reply,
 )
 from src.core.spawner import (
-  resolve_requested_subagent_backend_model,
-  select_verify_backend,
+    resolve_requested_subagent_backend_model,
+    select_verify_backend,
 )
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate, is_verify_exempt
 from src.core.task_sessions import TaskTreeManager
@@ -149,8 +147,7 @@ def delegate_request_id(req: DelegateRequest) -> str:
   if req.request_id:
     return req.request_id
   from src.core.control_events import sha256_hex
-  return "delegate-" + sha256_hex("\x00".join(
-      [req.session_id, str(req.task_type.value), req.description]))[:24]
+  return "delegate-" + sha256_hex("\x00".join([req.session_id, str(req.task_type.value), req.description]))[:24]
 
 
 async def _delegate_task_tree(
@@ -228,8 +225,7 @@ async def _delegate_task_tree(
           base_branch=req.base_branch,
       )
       async with task_mgr.control_lock:
-        await task_mgr.runs.register_run_locked(
-            record, task_spec_text=canonical_task_spec_text(task_spec))
+        await task_mgr.runs.register_run_locked(record, task_spec_text=canonical_task_spec_text(task_spec))
         # The parent-entry compatibility alias: legacy thread routes addressed
         # from the delegating session resolve to the same Run (whose owner is
         # the child task).
@@ -280,7 +276,6 @@ async def _delegate_task_tree(
   }
 
 
-
 @router.post("/delegate")
 async def delegate_task(
     req: DelegateRequest,
@@ -304,16 +299,12 @@ async def delegate_task(
       raise HTTPException(status_code=400, detail="verify delegations are repo-less; omit base_branch")
   else:
     if req.repo_path is None:
-      raise HTTPException(
-          status_code=400, detail=f"{req.task_type.value} delegations require repo_path")
+      raise HTTPException(status_code=400, detail=f"{req.task_type.value} delegations require repo_path")
     if req.base_branch is None:
-      raise HTTPException(
-          status_code=400, detail=f"{req.task_type.value} delegations require base_branch")
+      raise HTTPException(status_code=400, detail=f"{req.task_type.value} delegations require base_branch")
   require_found(await session_mgr.get_session(req.session_id))
-  meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(
-      req, session_mgr, task_mgr)
-  return await _delegate_task_tree(
-      req, meta, cfg, task_mgr, session_mgr, caller, resolved_backend, resolved_model)
+  meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr, task_mgr)
+  return await _delegate_task_tree(req, meta, cfg, task_mgr, session_mgr, caller, resolved_backend, resolved_model)
 
 
 @router.post("/improve")
@@ -391,8 +382,7 @@ async def _start_improve_sequence(
 
   try:
     child = await create_improve_child(
-        task_mgr, req.session_id, state.loop_id, req.goal,
-        repo_path=req.repo_path, base_branch=req.base_branch)
+        task_mgr, req.session_id, state.loop_id, req.goal, repo_path=req.repo_path, base_branch=req.base_branch)
   except Exception as e:
     # The reservation is this live process's: a rejected child creation must
     # not leave a "running" loop stamped with the live pid — no controller is
@@ -412,12 +402,21 @@ async def _start_improve_sequence(
 
   create_logged_task(
       run_improve_sequence(
-          req.session_id, cfg, task_mgr,
-          loop_id=state.loop_id, iterations=req.iterations, child_id=child.id, goal=req.goal),
+          req.session_id,
+          cfg,
+          task_mgr,
+          loop_id=state.loop_id,
+          iterations=req.iterations,
+          child_id=child.id,
+          goal=req.goal),
       name=f"improve-sequence-{req.session_id[:8]}-{state.loop_id}",
   )
-  log.info("improve_sequence_started", session=req.session_id, loop_id=state.loop_id,
-           child=child.id, iterations=req.iterations)
+  log.info(
+      "improve_sequence_started",
+      session=req.session_id,
+      loop_id=state.loop_id,
+      child=child.id,
+      iterations=req.iterations)
   response = {
       "status": "started",
       "session_id": req.session_id,

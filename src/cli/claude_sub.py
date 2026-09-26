@@ -8,7 +8,6 @@ and never writes terminal input.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
@@ -21,7 +20,7 @@ import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.agents.backends.claude_launch import (
     DISABLE_CONNECTOR_SETTINGS,
@@ -30,13 +29,6 @@ from src.agents.backends.claude_launch import (
     build_claude_argv,
     headless_claude_env,
 )
-from src.agents.backends.pty_common import (
-    _run_tmux,
-    _tmux_client_env,
-    tmux_session_exists,
-    tmux_session_name,
-)
-from src.agents.backends.tui import mark_project_trusted
 from src.cli.claude_sub_bridge import (
     HOOK_EVENTS,
     HookBridge,
@@ -51,6 +43,13 @@ from src.core.timeouts import (
     CLAUDE_SUB_TERMINATE_TIMEOUT,
     CLAUDE_SUB_TURN_TIMEOUT,
 )
+
+# The pty/tui helpers and asyncio ride their call sites, not this import block:
+# the M108 launch floor (docs/perf_baseline.md) is the wall from process start to
+# the argv parse, and the argv-parse probe reaches none of them. Same rule as the
+# src.core.process import inside _terminate_foreground.
+if TYPE_CHECKING:
+  import asyncio
 
 _MIN_CLAUDE_VERSION = (2, 1, 210)
 _TARGET_CLAUDE_VERSION = (2, 1, 211)
@@ -222,6 +221,8 @@ def validate_prompt(prompt: str) -> None:
 
 
 async def _tmux_checked(*args: str, capture: bool = False) -> str:
+  from src.agents.backends.pty_common import _run_tmux
+
   rc, output = await _run_tmux(*args, capture=capture)
   if rc != 0:
     raise ClaudeSubError(f"tmux {' '.join(args)} failed (rc={rc}): {output.strip()}")
@@ -229,6 +230,8 @@ async def _tmux_checked(*args: str, capture: bool = False) -> str:
 
 
 async def _pane_info(session_id: str) -> PaneInfo:
+  from src.agents.backends.pty_common import tmux_session_name
+
   target = tmux_session_name(session_id)
   output = await _tmux_checked(
       "display-message",
@@ -345,6 +348,8 @@ def _prepare_session_config(session_id: str, cwd: Path) -> Path:
   # the trust dialog (which would stall hooks until the submission-confirmation
   # timeout).  Only this session overlay changes; the user's ~/.claude.json stays
   # untouched.
+  from src.agents.backends.tui import mark_project_trusted
+
   trust_changed = mark_project_trusted(global_settings, str(cwd))
   # Claude 2.1.211/2.1.212 reads this notification setting from global state rather
   # than the --settings flag.  Keep the override in this session-only copy so the
@@ -374,6 +379,8 @@ def _prepare_session_config(session_id: str, cwd: Path) -> Path:
 
 
 async def _create_tmux_host(session_id: str, cwd: Path) -> None:
+  from src.agents.backends.pty_common import tmux_session_name
+
   name = tmux_session_name(session_id)
   await _tmux_checked(
       "new-session",
@@ -395,6 +402,8 @@ async def _create_tmux_host(session_id: str, cwd: Path) -> None:
 
 async def _prepare_tmux_session(session_id: str, cwd: Path, requested_resume: bool) -> bool:
   """Validate the marker/pane binding and return whether Claude must be resumed."""
+  from src.agents.backends.pty_common import tmux_session_exists
+
   marker_state = _read_marker(session_id)
   exists = await tmux_session_exists(session_id)
   if not exists:
@@ -460,6 +469,10 @@ def _session_settings(args: ClaudeSubArgs) -> str:
 
 
 async def _run_cli_capture(*args: str) -> tuple[int, str, str]:
+  import asyncio
+
+  from src.agents.backends.pty_common import _tmux_client_env
+
   binary = shutil.which(args[0]) if args else None
   if binary is None:
     raise ClaudeSubError(f"required CLI binary not found: {args[0] if args else '<empty command>'}")
@@ -572,6 +585,8 @@ async def _respawn_claude(
     cwd: Path,
     config_dir: Path | None = None,
 ) -> None:
+  from src.agents.backends.pty_common import tmux_session_name
+
   tmux_args: list[str] = [
       "respawn-pane",
       "-k",
@@ -602,6 +617,8 @@ async def _terminate_foreground(session_id: str) -> None:
   # The terminate path is the launch chain's only src.core.process reader; the
   # import rides this call so the M108 launch floor (docs/perf_baseline.md)
   # builds no ctypes machinery the argv-parse probe never reaches.
+  import asyncio
+
   from src.core.process import kill_process_group
 
   info = await _pane_info(session_id)
@@ -668,6 +685,8 @@ def _unknown_delivery_message(reason: str) -> str:
 
 
 async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
+  import asyncio
+
   validate_prompt(args.prompt)
   session_id = args.resume or args.session_id or str(uuid.uuid4())
   cwd = Path.cwd().resolve()
@@ -761,6 +780,8 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
 
 
 async def _run(args: ClaudeSubArgs) -> None:
+  import asyncio
+
   await _check_cli_capabilities()
   stop_event = asyncio.Event()
   loop = asyncio.get_running_loop()
@@ -773,6 +794,8 @@ def main(argv: list[str] | None = None) -> int:
   try:
     args = parse_argv(sys.argv[1:] if argv is None else argv)
     args = ClaudeSubArgs(**{**args.__dict__, "prompt": sys.stdin.read()})
+    import asyncio
+
     asyncio.run(_run(args))
     return 0
   except Exception as error:

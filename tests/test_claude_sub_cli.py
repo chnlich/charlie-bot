@@ -695,6 +695,24 @@ def test_hook_helper_runs_siteless_and_reports_transport_failure(tmp_path: Path)
   assert b"transport failure" in proc.stderr
 
 
+def test_hook_helper_non_object_payload_terminates_its_own_process_group(tmp_path: Path) -> None:
+  helper = Path(claude_sub.__file__).with_name("claude_sub_hook.py").resolve()
+  absent_socket = tmp_path / "absent.sock"
+  # The session wrap keeps the helper's terminate-parent-group signal inside the
+  # probe: sh is the helper's parent and the session's only other member.
+  proc = subprocess.run(
+      ["sh", "-c", f'"{sys.executable}" -S "{helper}" --socket "{absent_socket}" --token t --gate'],
+      input=b"[1]",
+      capture_output=True,
+      timeout=30,
+      start_new_session=True,
+  )
+  assert b"hook JSON must be an object" in proc.stderr
+  # sh is the helper's parent and the session's only other member, so its SIGTERM
+  # death is the terminate-parent-group observation.
+  assert proc.returncode == -15
+
+
 @pytest.mark.asyncio
 async def test_respawn_passes_one_prompt_directly_and_does_not_use_a_shell(
     monkeypatch: pytest.MonkeyPatch,

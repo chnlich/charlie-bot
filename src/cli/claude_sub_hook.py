@@ -102,9 +102,11 @@ def main(argv: list[str] | None = None) -> int:
   from src.core.timeouts import CLAUDE_SUB_HOOK_SOCKET_TIMEOUT
 
   try:
-    payload: dict[str, object] = json.load(sys.stdin)
+    payload = json.load(sys.stdin)
   except (json.JSONDecodeError, UnicodeDecodeError) as error:
     return _fail(f"malformed hook JSON: {error}", gate=gate, terminate_parent=True)
+  if not isinstance(payload, dict):
+    return _fail("hook JSON must be an object", gate=gate, terminate_parent=True)
   try:
     response = _send_request(socket_path, token, gate, payload, CLAUDE_SUB_HOOK_SOCKET_TIMEOUT)
   except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError) as error:

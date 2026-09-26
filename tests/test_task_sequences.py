@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import patch_instructions_content, stub_credentials
+from conftest import WORKER_BUILD_BACKEND_PATCH_TARGET, patch_instructions_content, stub_credentials
 
 from src.core import event_types as ET
 from src.core.improve_command import load_loop_state
@@ -37,7 +37,7 @@ def _worker_backends(monkeypatch, outcomes: list[str]) -> list:
     return install_backends(
         monkeypatch,
         [SpawningScriptedBackend([result_event(text)]) for text in outcomes],
-        "src.agents.worker.build_backend")
+        WORKER_BUILD_BACKEND_PATCH_TARGET)
 
 
 async def _start_loop(cfg, session_mgr, tree, manager, monkeypatch, payload_overrides=None,
@@ -182,7 +182,7 @@ async def test_live_goal_change_affects_next_iteration(
         [result_event("one")], post_events=edit_goal_after_first_stream)
     second = SpawningScriptedBackend([result_event("two")])
     queue = [first, second]
-    monkeypatch.setattr("src.agents.worker.build_backend", lambda *a, **k: queue.pop(0))
+    monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: queue.pop(0))
     patch_instructions_content(monkeypatch)
     stub_credentials({"charliebot": {"access_key": "op-secret"}})
     monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
@@ -237,7 +237,7 @@ async def test_user_stop_prevents_further_iterations_and_reports_cancelled(
         await stop_improve_loop(manager.id, cfg)
 
     monkeypatch.setattr(
-        "src.agents.worker.build_backend",
+        WORKER_BUILD_BACKEND_PATCH_TARGET,
         lambda *a, **k: SpawningScriptedBackend(
             [result_event("one")], post_events=stop_loop_after_first_stream))
     patch_instructions_content(monkeypatch)
@@ -301,7 +301,7 @@ async def test_quota_blocked_iteration_fails_loop_without_further_iterations(
         "message": "Error: quota exceeded. Your limit will reset at 5pm (Asia/Shanghai)",
     }
     monkeypatch.setattr(
-        "src.agents.worker.build_backend",
+        WORKER_BUILD_BACKEND_PATCH_TARGET,
         lambda *a, **k: SpawningScriptedBackend([quota_event, result_event("ignored")], exit_code=1))
     patch_instructions_content(monkeypatch)
     stub_credentials({"charliebot": {"access_key": "op-secret"}})
@@ -369,7 +369,7 @@ async def test_restart_marks_interrupted_controller_without_resuming(
             backend.set_on_spawn(on_spawn)
         return backend
 
-    monkeypatch.setattr("src.agents.worker.build_backend", _hang_build)
+    monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, _hang_build)
     patch_instructions_content(monkeypatch)
     stub_credentials({"charliebot": {"access_key": "op-secret"}})
     monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
@@ -576,7 +576,7 @@ async def test_withheld_iteration_launch_settles_the_loop_without_hanging(
         task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
     await tree.dispatch.admit_input(
         manager.id, event_type=ET.USER, content="Take off. Improve the thing.", actor="user")
-    install_backends(monkeypatch, [], "src.agents.worker.build_backend")
+    install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
 
     state = await reserve_loop_state(
@@ -637,7 +637,7 @@ async def test_stopped_queued_iteration_never_launches_and_settles(
         task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
     await tree.dispatch.admit_input(
         manager.id, event_type=ET.USER, content="Take off. Improve the thing.", actor="user")
-    install_backends(monkeypatch, [], "src.agents.worker.build_backend")
+    install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
 
     state = await reserve_loop_state(
@@ -680,7 +680,7 @@ async def test_launch_and_settle_follows_a_live_process_without_relaunching(
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
     from src.core.models import RunRecord, TaskSpec
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    builds = install_backends(monkeypatch, [], "src.agents.worker.build_backend")
+    builds = install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
     manager = await tree.create_task(
         request_id="root", task_parent_id=None, profile="manager",
         task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")

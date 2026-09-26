@@ -56,7 +56,12 @@ from src.core.models import (
 from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events
 from src.core.process import kill_process_group
 from src.core.run_token import CallerIdentity
-from src.core.runs import RunIdentityConflictError, RunNotFoundError
+from src.core.runs import (
+    RunIdentityConflictError,
+    RunNotFoundError,
+    stop_requested_in_events,
+    terminal_outcome_in_events,
+)
 from src.core.sidebar_state import RevisionSweepGate, session_revision, take_marked_paths
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME, ThreadManager, iter_thread_meta_stats
 from src.core.triggers import TriggerManager, iter_trigger_file_stats
@@ -189,28 +194,14 @@ def _v2_run_status(run: RunRecord, events: list[dict], host_boot: datetime) -> s
   recovery stage owns the final resolve).
   """
   from src.core.runs import is_run_alive
-  outcome = run_store_outcome(events, run.id)
+  outcome = terminal_outcome_in_events(events, run.id)
   if outcome == "success":
     return "completed"
   if outcome is not None:
     return "failed"
   if run.pid is None:
-    return "cancelled" if run_store_stop_requested(events, run.id) else "idle"
+    return "cancelled" if stop_requested_in_events(events, run.id) else "idle"
   return "running" if is_run_alive(run.pid, run.pid_start, run.started_at, host_boot) else "failed"
-
-
-def run_store_outcome(events: list[dict], run_id: str) -> str | None:
-  """The run_finished outcome of one Run from the fact history (None while none)."""
-  outcome = None
-  for event in events:
-    if event.get("type") == ET.RUN_FINISHED and event.get("run_id") == run_id:
-      outcome = event.get("outcome")
-  return outcome
-
-
-def run_store_stop_requested(events: list[dict], run_id: str) -> bool:
-  """Whether a durable run_stop_requested fact exists for one Run."""
-  return any(event.get("type") == ET.RUN_STOP_REQUESTED and event.get("run_id") == run_id for event in events)
 
 
 def _v2_run_list_item(

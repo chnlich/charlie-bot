@@ -147,11 +147,15 @@ async def test_second_elone_of_ordinary_parent_overwrites_successor_and_leaves_f
 
   assert first_child.id != second_child.id
 
-  # Both children carry the parent reference handoff.
-  first_ref = mgr.parent_reference_path(first_child.id)
-  second_ref = mgr.parent_reference_path(second_child.id)
-  assert first_ref.exists()
-  assert second_ref.exists()
+  # Both children carry the parent prefix in their own log, ahead of the marker.
+  parent_events = mgr.load_chat_events_sync(parent_id)
+  for child in (first_child, second_child):
+    child_events = [
+        json.loads(line) for line in mgr.get_chat_events_path(child.id).read_text(encoding="utf-8").splitlines()
+    ]
+    assert child_events[:-1] == parent_events[:1]
+    assert child_events[-1]["type"] == "clone_start"
+    assert child_events[-1]["parent_session_id"] == parent_id
 
   # The parent is archived with thumbs_down and the pointer names the newest child.
   fresh_parent = await mgr.read_metadata_fresh(parent_id)
@@ -621,7 +625,7 @@ async def test_unarchived_old_generation_does_not_capture_the_next_cron_fire(
 
 
 @pytest.mark.asyncio
-async def test_handoff_reference_holds_exact_parent_prefix_and_parent_pointer(
+async def test_handoff_child_log_holds_exact_parent_prefix_and_parent_pointer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -630,10 +634,12 @@ async def test_handoff_reference_holds_exact_parent_prefix_and_parent_pointer(
 
   child = await mgr.elone_session(parent.id, event_index=1, backend="codex-o3")
 
-  reference_path = mgr.get_chat_events_path(child.id).parent / "parent_reference.jsonl"
-  reference = [json.loads(line) for line in reference_path.read_text(encoding="utf-8").splitlines()]
+  child_events = [
+      json.loads(line) for line in mgr.get_chat_events_path(child.id).read_text(encoding="utf-8").splitlines()
+  ]
   parent_events = mgr.load_chat_events_sync(parent.id)
-  assert reference == parent_events[:2]
+  assert child_events[:-1] == parent_events[:2]
+  assert child_events[-1]["type"] == "clone_start"
   assert child.parent_session_id == parent.id
 
 

@@ -94,6 +94,7 @@ from src.core.runs import RunIdentityConflictError, RunNotFoundError, run_not_fo
 from src.core.sessions import (
     ELONE_BOOTSTRAP_OPENER,
     FORK_BOOTSTRAP_OPENER,
+    HISTORY_LOCATION_NOTE,
     ScheduledSessionBusyError,
     SessionManager,
     SuccessionRefusedError,
@@ -1460,13 +1461,6 @@ async def get_session_explain_status(
   return FastJsonResponse(await explain.explain_status(session_mgr, session_id))
 
 
-def _reference_instructions(reference_path: Path) -> str:
-  return (
-      f"The full prior conversation up to the takeover point is in {reference_path}. "
-      "Entries are chronological, with newest entries at the end. The file may be large, so it does not "
-      "need to be read in full; read what is needed to reconstruct the current state.\n\n")
-
-
 def _start_successor_run(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
@@ -1474,13 +1468,13 @@ def _start_successor_run(
     prompt_head: str,
     directive: str,
 ) -> None:
-  """Start a fork/elone successor's run on a bootstrap prompt built around the parent reference.
+  """Start a fork/elone successor's run on a bootstrap prompt built around the session's own chat log.
 
   *prompt_head* carries the opener plus whatever successor-specific context precedes the
-  reference instructions; *directive* tells the successor what to do with them.
+  history note; *directive* tells the successor what to do with the copied history. The
+  parts join into one single-spaced paragraph — the child's persisted first user message.
   """
-  reference_path = session_mgr.parent_reference_path(meta.id)
-  bootstrap_prompt = f"{prompt_head}{_reference_instructions(reference_path)}{directive}"
+  bootstrap_prompt = f"{prompt_head}{HISTORY_LOCATION_NOTE} {directive}"
   # Call-time import is the test-patching contract: tests patch src.api.chat.run_and_finalize
   # on the module attribute, and this import is what routes the call to the patched binding.
   from src.api.chat import run_and_finalize
@@ -1517,9 +1511,8 @@ async def fork_session(
       cfg,
       session_mgr,
       meta,
-      prompt_head=f"{FORK_BOOTSTRAP_OPENER}\n\n",
-      directive=
-      "Get oriented from that reference, summarize where things stand, and wait for the user's next instruction.")
+      prompt_head=f"{FORK_BOOTSTRAP_OPENER} ",
+      directive="Get oriented from that log, summarize where things stand, and wait for the user's next instruction.")
 
   return meta
 
@@ -1551,7 +1544,7 @@ async def elone_session(
       meta,
       prompt_head=(
           f"{ELONE_BOOTSTRAP_OPENER} "
-          "The dissatisfaction is usually with the most recent exchange before the takeover point.\n\n"),
+          "The dissatisfaction is usually with the most recent exchange before the takeover point. "),
       directive=(
           "Understand what the user wanted and where it went wrong, then give your read and a better approach. "
           "Confirm with the user before acting."))

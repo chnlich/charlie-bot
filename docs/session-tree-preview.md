@@ -103,14 +103,18 @@ executable verification recipes, never mocks:
   implement worker with its auto-spawned review, and the workspace boundary.
 - `scripts/live_preview_sidebar_status.py` — the sidebar-status trial: real
   Chrome over CDP against the same kind of fresh preview home, asserting the
-  sidebar's live work states through `/api/sessions/status`, the DOM icons and
+  sidebar's live work states through `/api/sessions/status` and the
+  `GET /api/sessions/` list the sidebar paints from, the DOM icons and
   screenshots — a ~60 s worker Run (spinner on the row, gear on the collapsed
   parent, expanded parent showing only its own state, icons clearing after
   finish), a launch failure before process start (red alert on the row and the
   collapsed parent, the parent's failure report naming the error, the
   worker transcript's Run header reading `failed` with the error beneath it
-  and a held-back retry's header reading `queued`), a queued Run
-  held by a paused node (the clock), and goal-derived row names.
+  and the Run's own `ended_at` as its time, and a held-back retry's header
+  reading `queued` with no time at all), a queued Run
+  held by a paused node (the clock), goal-derived row names (never a raw
+  Markdown heading in any worker-facing title), and list rows that already
+  carry each task-tree node's `work_state` on first paint.
 
 Both share the preview's isolation guarantees: the trial home is a fresh
 temporary directory, the port a free one (the production port 18498 is

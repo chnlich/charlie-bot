@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from starlette.requests import Request
 from conftest import (
     _ok_asgi_downstream,
     asgi_downstream_called,
@@ -16,8 +17,11 @@ from conftest import (
 )
 
 from src.api.auth import AuthMiddleware
+from src.api.deps import require_caller
 from src.cli.common import internal_api_auth_headers
 from src.cli.session import main as session_cli_main
+from src.core.constants import CALLER_SESSION_HEADER, SESSION_ID_ENV_VAR
+from src.core.models import RunRecord
 from src.core.run_token import (
     RUN_TOKEN_ENV,
     CallerIdentity,
@@ -137,6 +141,75 @@ def test_cli_without_run_token_uses_the_operator_key(monkeypatch: pytest.MonkeyP
   monkeypatch.delenv(RUN_TOKEN_ENV, raising=False)
   stub_credentials({"charliebot": {"access_key": ""}})
   assert internal_api_auth_headers() == {}
+
+
+def test_internal_api_auth_headers_carries_the_session_header(monkeypatch: pytest.MonkeyPatch) -> None:
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  monkeypatch.setenv(RUN_TOKEN_ENV, "run-token-xyz")
+  monkeypatch.setenv(SESSION_ID_ENV_VAR, "sess-1")
+  # Run-token branch: the bearer dict plus the caller-session header.
+  assert internal_api_auth_headers() == {
+      "Authorization": "Bearer run-token-xyz",
+      CALLER_SESSION_HEADER: "sess-1",
+  }
+  # Operator-key branch: the same header rides the access-key bearer.
+  monkeypatch.delenv(RUN_TOKEN_ENV, raising=False)
+  assert internal_api_auth_headers() == {
+      "Authorization": "Bearer op-secret",
+      CALLER_SESSION_HEADER: "sess-1",
+  }
+  # Empty or absent variable: no such header.
+  monkeypatch.setenv(SESSION_ID_ENV_VAR, "")
+  assert internal_api_auth_headers() == {"Authorization": "Bearer op-secret"}
+  monkeypatch.delenv(SESSION_ID_ENV_VAR, raising=False)
+  assert internal_api_auth_headers() == {"Authorization": "Bearer op-secret"}
+
+
+def test_caller_identity_equality_covers_session_id() -> None:
+  assert CallerIdentity(kind="operator") == CallerIdentity(kind="operator")
+  assert CallerIdentity(kind="operator", session_id="a") != CallerIdentity(kind="operator", session_id="b")
+  assert CallerIdentity(kind="operator", session_id="a") != CallerIdentity(kind="operator")
+  assert CallerIdentity(kind="agent", claims=CLAIMS) == CallerIdentity(kind="agent", claims=CLAIMS)
+  # An agent's session always comes from its verified token claims.
+  assert CallerIdentity(kind="agent", claims=CLAIMS).session_id == CLAIMS.session_id
+
+
+class _FakeRunStore:
+  """Just the two RunStore members require_caller reads, answering from one active run."""
+
+  def __init__(self, run: RunRecord) -> None:
+    self._run = run
+
+  async def get_run(self, session_id: str, run_id: str) -> RunRecord | None:
+    return self._run
+
+  def load_events_sync(self, session_id: str) -> list[dict]:
+    return []
+
+
+@pytest.mark.asyncio
+async def test_require_caller_carries_the_session_on_the_caller_identity() -> None:
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  token = sign_run_token(CLAIMS, "op-secret")
+  run_store = _FakeRunStore(RunRecord(id="r-1", session_id="s-1", pid=11, pid_start="22"))
+
+  # Operator bearer + header: the header value becomes the identity's session.
+  caller = await require_caller(
+      Request(_scope(headers={"Authorization": "Bearer op-secret", CALLER_SESSION_HEADER: "sess-1"})),
+      run_store=run_store)
+  assert caller.is_operator and caller.session_id == "sess-1"
+
+  # A valid run token ignores the header: the session is the token's, never the header's.
+  caller = await require_caller(
+      Request(_scope(headers={"Authorization": f"Bearer {token}", CALLER_SESSION_HEADER: "spoofed"})),
+      run_store=run_store)
+  assert not caller.is_operator and caller.session_id == "s-1"
+
+  # No header: the operator identity's session is None.
+  caller = await require_caller(
+      Request(_scope(headers={"Authorization": "Bearer op-secret"})),
+      run_store=run_store)
+  assert caller.is_operator and caller.session_id is None
 
 
 def test_load_run_token_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -18,8 +18,9 @@ from conftest import (
     fake_one_shot_proc,
     make_one_shot_backend,
 )
+from conftest import assistant_text_event as _assistant_event
+from conftest import user_event as _user_event
 
-from src.core import event_types as ET
 from src.core.autonamer import (
     _prefix_session_number_if_default,
     is_default_session_name,
@@ -810,14 +811,6 @@ class _NameAfterRoundSessionMgr:
     self.get_session = AsyncMock(return_value=meta)
     self.load_chat_events_sync = MagicMock(return_value=events)
     self.list_group_names = AsyncMock(return_value=groups)
-
-
-def _user_event(content: str) -> dict:
-  return {"type": ET.USER, "content": content}
-
-
-def _assistant_event(text: str) -> dict:
-  return {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": text}]}}
 
 
 @pytest.mark.asyncio

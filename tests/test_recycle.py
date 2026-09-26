@@ -18,6 +18,7 @@ from conftest import (
 )
 from conftest import append_events as _append_events
 from conftest import archive_cutoff_events as _archive_cutoff_events
+from conftest import assistant_event as _assistant_event
 
 from src.api.message_utils import SessionBootstrapData, build_session_bootstrap_data, build_session_view_data
 from src.api.sessions import _bootstrap_payload, get_session_events_page
@@ -751,22 +752,6 @@ def _tool_result_event(event_id: str, content: str, ts: str | None = None) -> di
   return event
 
 
-def _assistant_event(event_id: str, text: str, ts: str | None = None) -> dict:
-  event: dict[str, Any] = {
-      "type": ET.ASSISTANT,
-      "id": event_id,
-      "message": {
-          "content": [{
-              "type": "text",
-              "text": text
-          }]
-      },
-  }
-  if ts is not None:
-    event["timestamp"] = ts
-  return event
-
-
 @pytest.mark.asyncio
 async def test_bootstrap_payload_trims_tool_previews_over_cap(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
@@ -777,7 +762,7 @@ async def test_bootstrap_payload_trims_tool_previews_over_cap(tmp_path: Path) ->
       _tool_result_event("tool-result-1", big_output, _payload_ts(1)),
       _tool_use_event("tool-1", "Bash", {"command": big_command}, _payload_ts(2)),
       _tool_result_event("tool-result-2", "ok", _payload_ts(3)),
-      _assistant_event("assistant-3", "done", _payload_ts(4)),
+      {**_assistant_event("done", event_id="assistant-3"), "timestamp": _payload_ts(4)},
       {
           "type": ET.MASTER_DONE,
           "thinking_seconds": 1,
@@ -807,7 +792,7 @@ async def test_bootstrap_payload_leaves_small_tools_untouched(tmp_path: Path) ->
   events = [
       _tool_use_event("tool-0", "Read", {"file_path": "a.txt"}, _payload_ts(0)),
       _tool_result_event("tool-result-1", "x" * 499, _payload_ts(1)),
-      _assistant_event("assistant-2", "done", _payload_ts(2)),
+      {**_assistant_event("done", event_id="assistant-2"), "timestamp": _payload_ts(2)},
       {
           "type": ET.MASTER_DONE,
           "thinking_seconds": 1,
@@ -829,7 +814,7 @@ async def test_events_page_returns_raw_next_before_for_aggregated_messages(tmp_p
   events = [
       _tool_use_event("tool-0", "Read", {"file_path": "a.txt"}),
       _tool_result_event("tool-result-1", "ok"),
-      _assistant_event("assistant-2", "done"),
+      _assistant_event("done", event_id="assistant-2"),
   ]
   _append_events(mgr.get_chat_events_path(session.id), events)
 

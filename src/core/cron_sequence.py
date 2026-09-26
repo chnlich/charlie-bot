@@ -45,6 +45,7 @@ from src.core.config import ScheduledTaskConfig
 from src.core.control_events import stable_run_id
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec
+from src.core.runs import RUN_EVENTS_NAME
 from src.core.task_chain import chain_step_prompt
 
 if TYPE_CHECKING:
@@ -284,7 +285,7 @@ async def register_leaf_run(
 
 async def run_result_text(tree: TaskTreeManager, leaf_id: str, run_id: str) -> str:
   """One Run's closing words from its translated events log ('' without any)."""
-  events_path = tree.runs.run_dir(leaf_id, run_id) / "events.jsonl"
+  events_path = tree.runs.run_dir(leaf_id, run_id) / RUN_EVENTS_NAME
   if not events_path.is_file():
     return ""
   return await asyncio.to_thread(review._worker_summary_from_events_log, events_path)

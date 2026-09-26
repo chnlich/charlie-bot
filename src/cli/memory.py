@@ -139,6 +139,7 @@ def _resolve_run_scoped_audience(cfg: CharlieBotConfig, token: str) -> str:
   from src.core.session_aliases import SessionAliasStore
   from src.core.sessions import SessionManager
   from src.core.task_sessions import TaskTreeManager
+  from src.core.threads import METADATA_NAME
   key = configured_access_key()
   if not key:
     print("error: run token presented but no signing key is configured", file=sys.stderr)
@@ -156,7 +157,7 @@ def _resolve_run_scoped_audience(cfg: CharlieBotConfig, token: str) -> str:
   if refusal is not None:
     print(f"error: {refusal}", file=sys.stderr)
     sys.exit(1)
-  meta = TaskTreeManager._read_metadata_file(cfg.sessions_dir / claims.session_id / "metadata.json")
+  meta = TaskTreeManager._read_metadata_file(cfg.sessions_dir / claims.session_id / METADATA_NAME)
   if meta is None or meta.profile is None:
     print(
         f"error: run token references session {claims.session_id}, which is not a "

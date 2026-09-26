@@ -33,6 +33,8 @@ from src.core import event_types as ET
 from src.core.memo import BoundedMemo
 from src.core.message_projection import MessageProjection
 from src.core.models import RunRecord, ThreadMetadata, utc_now
+from src.core.runs import RUN_EVENTS_NAME, RUN_METADATA_NAME
+from src.core.threads import EVENTS_LOG_NAME, METADATA_NAME
 
 # The projection memos: session (or session+thread) -> entry. Bounded like the
 # other read-path memos; one open worker page holds one entry.
@@ -191,7 +193,7 @@ def worker_signature_sync(tree, session_id: str) -> tuple:
     for entry in sorted(root.iterdir(), key=lambda e: e.name):
       if not entry.is_dir():
         continue
-      parts.append((entry.name, _file_signature(entry / "metadata.json"), _file_signature(entry / "events.jsonl")))
+      parts.append((entry.name, _file_signature(entry / RUN_METADATA_NAME), _file_signature(entry / RUN_EVENTS_NAME)))
   parts.append(("chat", _file_signature(tree.sessions.get_chat_events_path(session_id))))
   return tuple(parts)
 
@@ -211,7 +213,7 @@ def build_worker_transcript_sync(tree, session_id: str) -> TranscriptEntry:
   transcript: list[dict] = []
   for run in runs:
     state = states.get(run.id, "queued")
-    run_events = _read_events(tree.runs.run_dir(session_id, run.id) / "events.jsonl")
+    run_events = _read_events(tree.runs.run_dir(session_id, run.id) / RUN_EVENTS_NAME)
     transcript.append(
         _run_header_event(run, state, _backend_label(tree.cfg, run.backend), _header_error(state, run_events)))
     transcript.extend(run_events)
@@ -260,7 +262,7 @@ def _thread_dir(session_dir: Path, thread_id: str) -> Path:
 def thread_signature_sync(session_dir: Path, thread_id: str) -> tuple:
   """Stat-only identity of one legacy thread's metadata and events files."""
   thread_dir = _thread_dir(session_dir, thread_id)
-  return (_file_signature(thread_dir / "metadata.json"), _file_signature(thread_dir / "data" / "events.jsonl"))
+  return (_file_signature(thread_dir / METADATA_NAME), _file_signature(thread_dir / "data" / EVENTS_LOG_NAME))
 
 
 def _thread_state(meta: ThreadMetadata) -> str:

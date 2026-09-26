@@ -61,7 +61,7 @@ from src.core.models import (
     utc_now,
 )
 from src.core.run_token import RUN_TOKEN_ENV, RunTokenClaims, sign_run_token
-from src.core.runs import RunNotFoundError, run_not_found_in_task_text, scan_result_exit
+from src.core.runs import RUN_EVENTS_NAME, RunNotFoundError, run_not_found_in_task_text, scan_result_exit
 from src.core.sessions import SessionManager
 from src.core.spawner_backends import resolve_backend_option
 from src.core.takeoff_gate import DelegationBlockedError, is_verify_exempt
@@ -566,7 +566,7 @@ class TaskExecutionAdapter:
         """
         from src.core.ndjson import append_ndjson
 
-        events_log = self._tree.runs.run_dir(session_id, run_id) / "events.jsonl"
+        events_log = self._tree.runs.run_dir(session_id, run_id) / RUN_EVENTS_NAME
         await append_ndjson(events_log, {
             "type": ET.ERROR,
             "message": error_text,
@@ -838,7 +838,7 @@ class TaskExecutionAdapter:
         """
         session_id, run_id = meta.id, run.id
         run_dir = self._tree.runs.run_dir(session_id, run_id)
-        events_log = run_dir / "events.jsonl"
+        events_log = run_dir / RUN_EVENTS_NAME
 
         task = meta.task
         task_type = task.task_type if task is not None else TaskType.IMPLEMENT
@@ -949,7 +949,7 @@ class TaskExecutionAdapter:
             native_session_id=native_session_id,
             model=option.model,
             raw_log_ref=str(raw_path),
-            events_ref=str(run_dir / "events.jsonl"),
+            events_ref=str(run_dir / RUN_EVENTS_NAME),
             result_ref=str(raw_path),
         )
         await self._tree.dispatch.finish_run(
@@ -974,7 +974,7 @@ class TaskExecutionAdapter:
             _events, result, _code = await asyncio.to_thread(scan_result_exit, raw_path, translate)
             if result is not None and runs.result_success(result):
                 return "success"
-        events_log = run_dir / "events.jsonl"
+        events_log = run_dir / RUN_EVENTS_NAME
         if events_log.is_file():
             _found, success = await asyncio.to_thread(self._events_log_result_success, events_log)
             if success:
@@ -1139,7 +1139,7 @@ class TaskExecutionAdapter:
             "provenance; an unset base is never silently replaced with main")
         user_request, worker_summary = await review.extract_review_context(
             session_id, work_run.id, self._cfg.sessions_dir,
-            worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / "events.jsonl")
+            worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / RUN_EVENTS_NAME)
         context_lines = review.review_context_lines(user_request, worker_summary,
                                                     f"(work run {work_run.id})")
         return task_prompts.review_task_context(
@@ -1148,7 +1148,7 @@ class TaskExecutionAdapter:
             base_branch=work_run.base_branch,
             session_id=session_id,
             chat_log_path=chat_events_path(self._cfg.sessions_dir / session_id),
-            worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / "events.jsonl",
+            worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / RUN_EVENTS_NAME,
             context_section="\n".join(context_lines),
         )
 
@@ -1306,7 +1306,7 @@ class TaskExecutionAdapter:
         """Re-attach a worker Run through Worker.resume's tail-follow."""
         session_id, run_id = meta.id, run.id
         run_dir = self._tree.runs.run_dir(session_id, run_id)
-        events_log = run_dir / "events.jsonl"
+        events_log = run_dir / RUN_EVENTS_NAME
         binding = RunWorkerBinding(
             id=run_id, session_id=session_id, pid=run.pid, pid_start=run.pid_start,
             claude_session_id=run.native_session_id if option.type == BackendType.CC_CLAUDE else None)
@@ -1564,7 +1564,7 @@ class TaskExecutionAdapter:
         a run that died before its process started carries its error as the
         events log's error event, and that text is the report's evidence.
         """
-        events_log = self._tree.runs.run_dir(session_id, run.id) / "events.jsonl"
+        events_log = self._tree.runs.run_dir(session_id, run.id) / RUN_EVENTS_NAME
         if events_log.is_file():
             text = await asyncio.to_thread(review._worker_summary_from_events_log, events_log)
             if text:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -150,6 +151,26 @@ async def test_fork_session_full_copy_streams_parent_raw_lines_into_child_log(tm
 
 
 @pytest.mark.asyncio
+async def test_fork_session_issues_no_fdatasync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The fork wall must not pay a whole-corpus flush: a marker append after the
+  history copy fdatasyncs the entire copied corpus inside the fork, so the child
+  log is born through the history stream's writeback class, and the child's
+  first own append is what makes the born bytes durable through the funnel."""
+  _cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend=OPUS_BACKEND_ID)
+  events = [user_event(f"e{i}") for i in range(8)]
+  _append_events(mgr.get_chat_events_path(parent.id), events)
+
+  calls: list[int] = []
+  real_fdatasync = os.fdatasync
+  monkeypatch.setattr(os, "fdatasync", lambda fd: calls.append(fd) or real_fdatasync(fd))
+
+  child = await mgr.fork_session(parent.id)
+
+  assert calls == []
+  _assert_child_log_is_parent_prefix_plus_marker(mgr, parent.id, child.id, end=8)
+
+
+@pytest.mark.asyncio
 async def test_history_prefix_uses_read_time_archive_split(tmp_path: Path) -> None:
   _cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend=OPUS_BACKEND_ID)
 
@@ -161,9 +182,11 @@ async def test_history_prefix_uses_read_time_archive_split(tmp_path: Path) -> No
   end = mgr.get_chat_event_count_sync(parent.id)
   await mgr.recycle_scheduled_session(parent.id, cutoff)
 
-  prefix_path = tmp_path / "history_prefix.jsonl"
-  mgr._write_history_prefix_sync(prefix_path, parent.id, end)
-  assert prefix_path.read_text(encoding="utf-8") == "".join(json.dumps(event) + "\n" for event in events)
+  history_path = tmp_path / "history.jsonl"
+  marker_line = json.dumps({"type": ET.CLONE_START, "parent_session_id": parent.id}, ensure_ascii=False) + "\n"
+  mgr._write_history_file_sync(history_path, parent.id, end, marker_line)
+  assert history_path.read_text(
+      encoding="utf-8") == ("".join(json.dumps(event) + "\n" for event in events) + marker_line)
 
 
 @pytest.mark.asyncio

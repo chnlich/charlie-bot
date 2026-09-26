@@ -66,7 +66,7 @@ from src.core.session_dispatch import child_report_text
 from src.core.sessions import SessionManager
 from src.core.spawner_backends import resolve_backend_option
 from src.core.takeoff_gate import DelegationBlockedError, is_verify_exempt
-from src.core.task_prompts import PromptSnapshot, TaskPromptError
+from src.core.task_prompts import WORKER_KINDS, PromptSnapshot, TaskPromptError
 from src.core.task_sessions import (
     TaskConflictError,
     TaskInvalidError,
@@ -513,7 +513,7 @@ class TaskExecutionAdapter:
         try:
             if meta.profile == "manager" and run.kind == "manager_turn":
                 await self._execute_manager_turn(meta, run, option, snapshot)
-            elif meta.profile == "worker" and run.kind in ("work", "review", "iteration", "scheduled_step"):
+            elif meta.profile == "worker" and run.kind in WORKER_KINDS:
                 await self._execute_worker_run(meta, run, option, snapshot, launch_prompt=launch_prompt)
             else:
                 raise TaskInvalidError(
@@ -1251,7 +1251,7 @@ class TaskExecutionAdapter:
         if meta.profile == "manager" and run.kind == "manager_turn":
             await self._resume_manager_turn(meta, run, option, is_alive)
             return
-        if meta.profile == "worker" and run.kind in ("work", "review", "iteration", "scheduled_step"):
+        if meta.profile == "worker" and run.kind in WORKER_KINDS:
             await self._resume_worker_run(meta, run, option, is_alive)
             return
         raise TaskInvalidError(f"run {run_id} (kind={run.kind}) has no resume adapter")

@@ -1051,12 +1051,7 @@ class TaskCompletionManager:
             for event in tree.fact_history(session_id):
                 if event.get("type") == ET.TASK_REOPENED and event.get("request_id") == request_id:
                     return {"session_id": session_id, "reopened_event_id": event.get("id")}
-            chain_ids = [a.id for a in tree._ancestors(index, session_id)]
-            closed_ancestors = [
-                a for a in chain_ids if tree.task_state_of(index, a) != "open"]
-            if closed_ancestors:
-                raise TaskConflictError(
-                    [f"closed ancestor task(s): {', '.join(closed_ancestors)}"])
+            await tree._require_open_ancestry_from_index(index, session_id)
             _ = meta
             reopen_event = build_control_event(
                 ET.TASK_REOPENED,

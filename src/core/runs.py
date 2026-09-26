@@ -648,7 +648,9 @@ def terminal_outcome_in_events(events: list[dict], run_id: str) -> str | None:
 
 
 def stop_requested_in_events(
-    events: list[dict], run_id: str, request_id: str | None = None,
+    events: list[dict],
+    run_id: str,
+    request_id: str | None = None,
 ) -> bool:
   """Whether a durable run_stop_requested fact exists (optionally one request_id's).
 
@@ -1003,8 +1005,7 @@ class RunStore:
         run.started_at = utc_now()
       run.pid = pid
       run.pid_start = pid_start
-      await asyncio.to_thread(
-          atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+      await asyncio.to_thread(atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
       # The launch fact flipped the derived state (queued -> running): the next
       # poll must re-probe (same contract as the terminal fact below). No path
       # rides the mark: a run metadata file is not a workers-panel row source.
@@ -1178,8 +1179,7 @@ class RunStore:
     run.ended_at = ended_at or utc_now()
     run.exit_code = exit_code
     run.input_event_ids = payload
-    await asyncio.to_thread(
-        atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+    await asyncio.to_thread(atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
     # The terminal fact flipped the derived state (running/waiting/attention ->
     # idle or the resolved verdict): the next poll must re-probe. No path rides
     # the mark: a run metadata file is not a workers-panel row source.

@@ -13,9 +13,7 @@ from src.api.deps import get_plan_manager, get_session_manager, get_thread_manag
 from src.api.internal import router as internal_router
 from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
-from src.core.models import (
-    SessionMetadata,
-)
+from src.core.models import SessionMetadata
 from src.core.plans import PlanRegistryManager
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
@@ -314,7 +312,6 @@ async def test_plan_updated_broadcast_on_present_and_absent_from_chat_events(tmp
 # ---------------------------------------------------------------------------
 # ThreadMetadata.task_type is set on delegate-created threads
 # ---------------------------------------------------------------------------
-
 
 # ---------------------------------------------------------------------------
 # List endpoint contract (A2) — 404 unknown / 200+errors corrupt; the

@@ -86,8 +86,8 @@ def test_missing_worker_prompt_file_raises_with_path_and_cause(tmp_path: Path) -
         ("worker.md", "<!-- section: role -->", "<!-- section: memory -->", "role"),
         ("task_base.md", "<!-- section: remote_scratch -->", None, "remote_scratch"),
     ])
-def test_missing_required_section_raises(tmp_path: Path, filename: str, drop_start: str,
-                                         drop_end: str | None, section: str) -> None:
+def test_missing_required_section_raises(
+    tmp_path: Path, filename: str, drop_start: str, drop_end: str | None, section: str) -> None:
   source = _real_worker_prompt_text() if filename == "worker.md" else _real_task_base_prompt_text()
   start = source.index(drop_start)
   end = source.index(drop_end) if drop_end is not None else len(source)

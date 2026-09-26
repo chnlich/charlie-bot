@@ -27,8 +27,7 @@ _fresh_list_memo = fresh_state_fixture(_sessions_list_gzip_memo.clear)
 
 
 async def _call(cfg, mgr, thread_mgr, accept_encoding: str = ""):
-  return await list_sessions(
-      _page_request(accept_encoding), session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
+  return await list_sessions(_page_request(accept_encoding), session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
 
 
 @pytest.mark.asyncio
@@ -44,8 +43,11 @@ async def test_list_ships_precompressed_body(tmp_path: Path) -> None:
   assert gzip.decompress(gz.body) == plain.body
   # Parity witness: the parsed body equals the stamped-copy path's render.
   sessions = await mgr.list_sessions(
-      status=SessionStatus.ACTIVE, scheduled=False, include_running_status=True,
-      include_pending_trigger_status=True, include_pending_plan_approval=True)  # the route's own args
+      status=SessionStatus.ACTIVE,
+      scheduled=False,
+      include_running_status=True,
+      include_pending_trigger_status=True,
+      include_pending_plan_approval=True)  # the route's own args
   rows = await project_worker_threads(sessions, cfg, thread_mgr)
   assert json.loads(plain.body) == jsonable_encoder(rows)
   assert json.loads(plain.body)[0]["id"] == session.id
@@ -58,12 +60,9 @@ async def test_list_repeat_serves_memo_without_recompress(tmp_path: Path) -> Non
   cfg, mgr, _session = await make_home_session(tmp_path, name="t")
   thread_mgr = ThreadManager(cfg)
   first = await _call(cfg, mgr, thread_mgr, "gzip")
-  with patch(RESPONSES_GZIP_LEVEL1_PATCH_TARGET,
-             gzip_explode_compress("repeat session list re-ran the deflate")):
+  with patch(RESPONSES_GZIP_LEVEL1_PATCH_TARGET, gzip_explode_compress("repeat session list re-ran the deflate")):
     second = await _call(cfg, mgr, thread_mgr, "gzip")
   assert second.body == first.body
-
-
 
 
 @pytest.mark.asyncio
@@ -106,14 +105,17 @@ async def test_list_overlay_matches_the_copy_path_render(tmp_path: Path) -> None
   cfg, mgr, session = await make_home_session(tmp_path, name="t")
   thread_mgr = ThreadManager(cfg)
   trigger_mgr = TriggerManager(cfg, mgr)
-  await trigger_mgr._save_trigger(PendingTrigger(
-      session_id=session.id, fire_at=datetime.now(UTC) + timedelta(hours=1), message="wake"))
+  await trigger_mgr._save_trigger(
+      PendingTrigger(session_id=session.id, fire_at=datetime.now(UTC) + timedelta(hours=1), message="wake"))
   thinking_state.mark_busy(session.id)
   plain = await _call(cfg, mgr, thread_mgr)
   body = json.loads(plain.body)
   sessions = await mgr.list_sessions(
-      status=SessionStatus.ACTIVE, scheduled=False, include_running_status=True,
-      include_pending_trigger_status=True, include_pending_plan_approval=True)
+      status=SessionStatus.ACTIVE,
+      scheduled=False,
+      include_running_status=True,
+      include_pending_trigger_status=True,
+      include_pending_plan_approval=True)
   rows = await project_worker_threads(sessions, cfg, thread_mgr)
   assert body == jsonable_encoder(rows)
   assert body[0]["thinking_since"] == thinking_state.busy_since(session.id).isoformat().replace("+00:00", "Z")

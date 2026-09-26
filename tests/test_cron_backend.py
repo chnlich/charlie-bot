@@ -131,8 +131,7 @@ async def test_scheduler_uses_task_backend_override_for_scheduled_worker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  task_cfg = ScheduledTaskConfig(
-      name="nightly", cron="* * * * *", prompt="nightly prompt", backend="codex-o3")
+  task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt", backend="codex-o3")
   result, cfg, session_mgr, resolve_backend, spawns = await _spawn_scheduled_worker_rig(
       tmp_path, monkeypatch, task_cfg=task_cfg, resolved=("codex-o3", "o3"))
 

@@ -8,16 +8,16 @@ from conftest import ROOT
 from src.core import plan_diff
 from src.core.artifact_check import _descendants, _Element, _parse_dom
 from src.core.plan_diff import (
-  _BLOCK_TAGS,
-  _IGNORED_TAGS,
-  VOID_TAGS,
-  _document_root,
-  _first_class_descendant,
-  _first_descendant,
-  _offset_after_insertions,
-  _parse_anchors,
-  annotate,
-  diff_text,
+    _BLOCK_TAGS,
+    _IGNORED_TAGS,
+    VOID_TAGS,
+    _document_root,
+    _first_class_descendant,
+    _first_descendant,
+    _offset_after_insertions,
+    _parse_anchors,
+    annotate,
+    diff_text,
 )
 
 

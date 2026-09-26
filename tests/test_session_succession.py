@@ -726,8 +726,7 @@ async def _make_recently_run_cadence_parent(mgr: SessionManager) -> SessionMetad
 
 
 def _cadence_task_cfg() -> ScheduledTaskConfig:
-  return ScheduledTaskConfig(
-      name="nightly", cron=_CADENCE_CRON, prompt="run nightly", backend="codex-o3")
+  return ScheduledTaskConfig(name="nightly", cron=_CADENCE_CRON, prompt="run nightly", backend="codex-o3")
 
 
 @pytest.mark.asyncio

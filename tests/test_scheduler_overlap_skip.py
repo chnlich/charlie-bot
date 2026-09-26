@@ -112,8 +112,7 @@ def install_pending_executor(scheduler: Scheduler, clock: _Clock, pending: _Pend
     pending.started += 1
     await pending.complete.wait()
 
-  async def _execute(
-      task_cfg: ScheduledTaskConfig, record_handle: bool = False, firing: str | None = None) -> dict:
+  async def _execute(task_cfg: ScheduledTaskConfig, record_handle: bool = False, firing: str | None = None) -> dict:
     pending.fires += 1
     handle = asyncio.create_task(_round())
     pending.handle = handle

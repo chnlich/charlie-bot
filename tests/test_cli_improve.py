@@ -169,7 +169,6 @@ async def test_improve_endpoint_returns_404_for_missing_session() -> None:
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = None
 
-
   with pytest.raises(HTTPException) as exc_info:
     await start_improve_loop(req, session_mgr=session_mgr)
   assert exc_info.value.status_code == 404

@@ -953,9 +953,14 @@ def identity_of(pid: int) -> tuple[int, str]:
 OPERATOR = CallerIdentity(kind="operator")
 
 
-async def create_task(tree: TaskTreeManager, *, parent: str | None, request_id: str,
-                      profile: str = "manager", task: models.TaskSpec | None = None,
-                      name: str | None = None):
+async def create_task(
+    tree: TaskTreeManager,
+    *,
+    parent: str | None,
+    request_id: str,
+    profile: str = "manager",
+    task: models.TaskSpec | None = None,
+    name: str | None = None):
   """One operator-created task node; the default shape task-tree tests build their trees with.
 
   The caller is the verified operator CallerIdentity: create_task skips agent
@@ -963,8 +968,13 @@ async def create_task(tree: TaskTreeManager, *, parent: str | None, request_id: 
   (_create_actor_for) — the label the production operator path records too.
   """
   return await tree.create_task(
-      request_id=request_id, task_parent_id=parent, profile=profile, task=task,
-      name=name, backend=None, caller=OPERATOR)
+      request_id=request_id,
+      task_parent_id=parent,
+      profile=profile,
+      task=task,
+      name=name,
+      backend=None,
+      caller=OPERATOR)
 
 
 def live_subprocess() -> subprocess.Popen:

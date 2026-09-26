@@ -45,7 +45,6 @@ def _status(sent: list[dict]) -> int:
 
 CLAIMS = RunTokenClaims(session_id="s-1", run_id="r-1", agent="worker-alpha")
 
-
 # ---------------------------------------------------------------------------
 # Token mechanics
 # ---------------------------------------------------------------------------
@@ -161,8 +160,10 @@ def test_caller_identity_shape() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _gate_env(events_by_session: dict[str, list[dict]], parents: dict[str, str | None],
-              profiles: dict[str, str], states: dict[str, str]):
+def _gate_env(
+    events_by_session: dict[str, list[dict]], parents: dict[str, str | None], profiles: dict[str, str],
+    states: dict[str, str]):
+
   def load_events(session_id: str) -> list[dict]:
     return events_by_session.get(session_id, [])
 
@@ -185,14 +186,19 @@ NOW = datetime.now(UTC)
 def test_task_gate_borrows_from_the_nearest_user_ancestor() -> None:
   # root holds a valid take off; child has nothing; grandchild only agent chatter.
   events = {
-      "root": [_user("plan the thing", NOW - timedelta(hours=1)), _user("take off", NOW - timedelta(minutes=5))],
-      "child": [{"type": "agent_message", "content": "progress", "timestamp": NOW.isoformat()}],
+      "root": [_user("plan the thing", NOW - timedelta(hours=1)),
+               _user("take off", NOW - timedelta(minutes=5))],
+      "child": [{
+          "type": "agent_message",
+          "content": "progress",
+          "timestamp": NOW.isoformat()
+      }],
   }
   parents = {"root": None, "child": "root", "grandchild": "child"}
   profiles = {"root": "manager", "child": "manager", "grandchild": "manager"}
   load_events, meta_of, state_of = _gate_env(events, parents, profiles, {})
-  assert check_takeoff_gate_for_task("grandchild", load_events=load_events, task_meta_of=meta_of,
-                                     task_state_of=state_of) == "root"
+  assert check_takeoff_gate_for_task(
+      "grandchild", load_events=load_events, task_meta_of=meta_of, task_state_of=state_of) == "root"
 
 
 def test_task_gate_local_instruction_blocks_higher_borrow() -> None:
@@ -205,8 +211,7 @@ def test_task_gate_local_instruction_blocks_higher_borrow() -> None:
   profiles = {"root": "manager", "child": "manager", "grandchild": "manager"}
   load_events, meta_of, state_of = _gate_env(events, parents, profiles, {})
   with pytest.raises(DelegationBlockedError, match="task child"):
-    check_takeoff_gate_for_task("grandchild", load_events=load_events, task_meta_of=meta_of,
-                                task_state_of=state_of)
+    check_takeoff_gate_for_task("grandchild", load_events=load_events, task_meta_of=meta_of, task_state_of=state_of)
 
 
 def test_task_gate_requires_open_ancestors_and_manager_caller() -> None:
@@ -224,11 +229,14 @@ def test_task_gate_pre_takeoff_window_matches_the_legacy_12_hours() -> None:
   issued = NOW - timedelta(hours=11)
   events = {"root": [_user("pre take off", issued), _user("normal follow-up", issued + timedelta(minutes=1))]}
   load_events, meta_of, state_of = _gate_env(events, {"root": None}, {"root": "manager"}, {})
-  assert check_takeoff_gate_for_task("root", load_events=load_events, task_meta_of=meta_of,
-                                     task_state_of=state_of, now=NOW) == "root"
+  assert check_takeoff_gate_for_task(
+      "root", load_events=load_events, task_meta_of=meta_of, task_state_of=state_of, now=NOW) == "root"
   with pytest.raises(DelegationBlockedError):
     check_takeoff_gate_for_task(
-        "root", load_events=load_events, task_meta_of=meta_of, task_state_of=state_of,
+        "root",
+        load_events=load_events,
+        task_meta_of=meta_of,
+        task_state_of=state_of,
         now=issued + timedelta(hours=12, seconds=1))
 
 

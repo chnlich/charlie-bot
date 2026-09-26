@@ -1155,7 +1155,9 @@ async def test_after_round_await_does_not_block_next_queued_round() -> None:
     await parked.wait()
 
   blocked_item = make_work_item(
-      MagicMock(), _make_meta(session_id), None,
+      MagicMock(),
+      _make_meta(session_id),
+      None,
       callbacks=replace(mock_session_callbacks(), after_round=parked_after_round))
   free_item = make_work_item(MagicMock(), _make_meta(session_id), None)
 

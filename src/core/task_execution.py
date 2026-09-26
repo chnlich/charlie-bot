@@ -62,6 +62,7 @@ from src.core.models import (
 )
 from src.core.run_token import RUN_TOKEN_ENV, RunTokenClaims, sign_run_token
 from src.core.runs import RUN_EVENTS_NAME, RunNotFoundError, run_not_found_in_task_text, scan_result_exit
+from src.core.session_dispatch import child_report_text
 from src.core.sessions import SessionManager
 from src.core.spawner_backends import resolve_backend_option
 from src.core.takeoff_gate import DelegationBlockedError, is_verify_exempt
@@ -133,8 +134,7 @@ def compose_input_prompt(events: list[dict]) -> tuple[str, list[dict]]:
                 f"[Message from session {event.get('from_session_name') or event.get('from_session') or 'unknown'}] "
                 f"{content}")
         elif event_type == ET.CHILD_REPORT:
-            parts.append(
-                f"[Report from task {event.get('child_session_id')} | outcome {event.get('outcome')}] {content}")
+            parts.append(child_report_text(event))
         elif event_type == ET.SCHEDULED_TRIGGER:
             parts.append(f"[Scheduled trigger] {content}")
         else:

@@ -52,6 +52,13 @@ log = LazyStructlogLogger()
 INPUT_EVENT_TYPES: frozenset[str] = frozenset(
     {ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT})
 
+
+def child_report_text(report: dict) -> str:
+    """A child_report event as the parent's turn input: the typed header, then its summary."""
+    return (f"[Report from task {report.get('child_session_id')} | "
+            f"outcome {report.get('outcome')}] {str(report.get('summary') or '')}")
+
+
 # The admitted input types a message route may produce. A run-token caller on
 # the user-message route is agent input; only verified operator credentials
 # are user input (see input_event_type_for_caller).
@@ -365,8 +372,8 @@ class TaskInputDispatcher:
         A task-tree parent's next serialized turn dispatches from its durable
         inputs. A legacy parent (profile None) keeps its own execution path:
         the newest child_report in its fact history rides the legacy master
-        wake (trigger_master) as the turn's input text, rendered the way
-        compose_input_prompt renders a child_report. The child_report event
+        wake (trigger_master) as the turn's input text, rendered by
+        child_report_text as compose_input_prompt renders it. The child_report event
         appended by deliver_child_report_locked stays the durable record — a
         failed wake leaves it in the log, and the next report or user message
         runs the parent as today.
@@ -390,8 +397,7 @@ class TaskInputDispatcher:
         if report is None:
             log.warning("wake_parent_no_report", parent_id=parent_id)
             return
-        text = (f"[Report from task {report.get('child_session_id')} | "
-                f"outcome {report.get('outcome')}] {str(report.get('summary') or '')}")
+        text = child_report_text(report)
         from src.core.master_trigger import trigger_master
         from src.core.tasks import create_logged_task
 

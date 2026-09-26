@@ -11,11 +11,16 @@ import argparse
 import sys
 
 from src.cli.help_formatter import CliHelpFormatter
-from src.core.config import get_config
-from src.core.storage_cool import MIN_IDLE_DAYS, format_sweep_table, run_cool_sweep
+from src.core.constants import MIN_IDLE_DAYS
 
 
 def _cmd_cool(args: argparse.Namespace) -> None:
+  # The sweep and config stacks ride the one sweep command that needs them: a
+  # deferral here keeps --help and parser errors off their import chains (the
+  # src.cli.config deferral shape).
+  from src.core.config import get_config
+  from src.core.storage_cool import format_sweep_table, run_cool_sweep
+
   try:
     result = run_cool_sweep(
         dry_run=args.dry_run,

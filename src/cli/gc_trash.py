@@ -15,9 +15,7 @@ import shutil
 import sys
 
 from src.cli.help_formatter import CliHelpFormatter
-from src.core.config import get_config
 from src.core.human_size import format_size
-from src.core.worktree_trash import list_trash_entries, trash_dir
 
 
 def main() -> None:
@@ -28,6 +26,11 @@ def main() -> None:
       action="store_true",
       help="Actually hard-delete every entry. Without it, this is a dry-run that deletes nothing.")
   args = parser.parse_args()
+  # The trash-scan and config stacks ride the one purge that needs them: a
+  # deferral here keeps --help and parser errors off their import chains (the
+  # src.cli.config deferral shape).
+  from src.core.config import get_config
+  from src.core.worktree_trash import list_trash_entries, trash_dir
 
   cfg = get_config()
   trash_path = trash_dir(cfg.paths.worktree_dir)

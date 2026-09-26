@@ -24,8 +24,6 @@ import sys
 
 from src.cli.common import add_session_arg, resolve_session_id
 from src.cli.help_formatter import CliHelpFormatter
-from src.core.config import get_config
-from src.core.models import utc_now
 from src.core.ssh import ssh_cmd
 from src.core.timeouts import SSH_LAUNCH_TIMEOUT
 
@@ -76,6 +74,12 @@ def main() -> None:
   parser.add_argument("--cwd", required=True, help="Working directory on the remote host")
   parser.add_argument("--cmd", required=True, help="Command to execute on the remote host")
   args = parser.parse_args()
+  # The model and config stacks ride the one launch that needs them: a
+  # deferral here keeps --help and parser errors off their import chains (the
+  # src.cli.config deferral shape).
+  from src.core.config import get_config
+  from src.core.models import utc_now
+
   session_id = resolve_session_id(args.session)
 
   started_at = utc_now()

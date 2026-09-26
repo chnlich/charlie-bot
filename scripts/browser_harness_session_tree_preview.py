@@ -67,6 +67,7 @@ import tempfile  # noqa: E402
 import time  # noqa: E402
 import traceback  # noqa: E402
 import urllib.request  # noqa: E402
+from collections.abc import Callable  # noqa: E402
 
 from scripts.browser_harness_session_tree import (  # noqa: E402
     CDP,
@@ -382,16 +383,60 @@ def build_source_home(source: Path, backend_ids: list[str]) -> None:
     (source / "credentials.yaml").write_text(creds, encoding="utf-8")
 
 
-def wait_ready(home: Path, timeout: float = 120.0) -> dict:
+def fail(message: str) -> None:
+    raise SystemExit(message)
+
+
+def preview_invocation(home: Path, port: int, backend: str, extra_backends: list[str]) -> list[str]:
+    """The preview instance's argv: the real CLI as its own foreground process.
+
+    Every harness starts ``charliebot session-tree preview`` rather than an
+    in-process server, so the trial rides the fresh-home boot path the operator
+    runs. *backend* is the trial's default; every entry in *extra_backends*
+    arrives as a further ``--add-backend``.
+    """
+    invocation = [sys.executable, "-m", "src.cli.main", "session-tree", "preview",
+                  "--home", str(home), "--port", str(port), "--backend", backend]
+    for extra in extra_backends:
+        invocation += ["--add-backend", extra]
+    return invocation
+
+
+def preview_instance_env(source_home: Path) -> dict[str, str]:
+    """The preview child's env: the trial's source home and an unbuffered console.
+
+    The copy is taken at call time, so callers must scrub production identity
+    variables from ``os.environ`` before calling.
+    """
+    env = dict(os.environ)
+    env["CHARLIEBOT_HOME"] = str(source_home)
+    env["PYTHONUNBUFFERED"] = "1"
+    return env
+
+
+async def wait_preview_ready(proc: subprocess.Popen, home: Path, server_console: Path,
+                             fail: Callable[[str], None], timeout_s: float) -> dict:
+    """Poll the preview instance's ready record; return it once ready.
+
+    The record is ``<home>/state/preview_instance.json`` and ``ready: true``
+    ends the wait. A process that exits before the record lands fails
+    immediately with the console tail — spinning out the deadline would only
+    re-read a file that can no longer appear; deadline expiry fails with the
+    record path, the only observable left. *fail* is the caller's own failure
+    exit, so each harness keeps its message prefix and exit style.
+    """
     record_path = home / "state" / "preview_instance.json"
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + timeout_s
+    record: dict = {}
     while time.monotonic() < deadline:
         if record_path.is_file():
             record = json.loads(record_path.read_text())
             if record.get("ready"):
                 return record
-        time.sleep(0.2)
-    raise SystemExit(f"preview instance at {home} never became ready")
+        if proc.poll() is not None:
+            fail(f"preview process exited early: {server_console.read_text()[-1500:]}")
+        await asyncio.sleep(0.2)
+    fail(f"preview instance never became ready ({record_path})")
 
 
 async def run_harness(args: argparse.Namespace) -> None:
@@ -418,15 +463,8 @@ async def run_harness(args: argparse.Namespace) -> None:
             os.environ.pop(var, None)
         home = tmp_path / "preview-home"
         port = pick_free_port()
-        # The fresh multi-entry setup rides the real CLI flags: --backend names the
-        # trial's default, every further selected entry arrives as --add-backend.
-        invocation = [sys.executable, "-m", "src.cli.main", "session-tree", "preview",
-                      "--home", str(home), "--port", str(port), "--backend", backends[0]]
-        for extra_id in backends[1:]:
-            invocation += ["--add-backend", extra_id]
-        env = dict(os.environ)
-        env["CHARLIEBOT_HOME"] = str(source)
-        env["PYTHONUNBUFFERED"] = "1"
+        invocation = preview_invocation(home, port, backends[0], backends[1:])
+        env = preview_instance_env(source)
         server_out = tmp_path / "server-console.log"
         results = Results(evidence_dir, commit,
                           browser="google-chrome headless (CDP), isolated private profile",
@@ -439,7 +477,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 invocation, cwd=str(REPO_ROOT), env=env,
                 stdout=server_log_file, stderr=subprocess.STDOUT)
         try:
-            record = wait_ready(home)
+            record = await wait_preview_ready(proc, home, server_out, fail, 120.0)
             base = record["url"]
             log(f"preview ready: {base} (branch {record['source_branch']}, sha {record['source_sha'][:12]})")
             import yaml

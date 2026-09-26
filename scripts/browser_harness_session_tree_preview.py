@@ -74,6 +74,7 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     api_request,
     connect_cdp,
     evaluate,
+    launch_chrome,
     log,
     open_cdp_page,
     pick_free_port,
@@ -448,16 +449,14 @@ async def run_harness(args: argparse.Namespace) -> None:
             profile = tmp_path / "chrome-profile"
             profile.mkdir()
             debug_port = pick_free_port()
-            chrome_proc = subprocess.Popen(
-                [chrome, "--headless=new", "--remote-debugging-port=" + str(debug_port),
-                 f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
-                 "--disable-background-networking", "--window-size=1440,900",
-                 "--remote-allow-origins=*",
-                 "--disable-background-timer-throttling",
-                 "--disable-backgrounding-occluded-windows",
-                 "--disable-renderer-backgrounding",
-                 "about:blank"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            chrome_proc = launch_chrome(chrome, profile, debug_port, [
+                "--no-first-run", "--no-default-browser-check",
+                "--disable-background-networking", "--window-size=1440,900",
+                "--remote-allow-origins=*",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
+            ])
             try:
                 await drive_browser(debug_port=debug_port, base=base,
                                     access_key=access_key, results=results, args=args, home=home)

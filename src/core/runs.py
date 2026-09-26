@@ -880,6 +880,18 @@ class RunStore:
     """The run's recorded run_finished outcome, or None while it has none."""
     return terminal_outcome_in_events(events, run_id)
 
+  async def terminal_outcome_of(self, session_id: str, run_id: str) -> str | None:
+    """The run's recorded terminal outcome, read off this store by id.
+
+    None covers both a missing run record and a run with no terminal fact
+    yet; a caller that already holds the events list folds them through
+    :meth:`terminal_outcome` directly.
+    """
+    run = await self.get_run(session_id, run_id)
+    if run is None:
+      return None
+    return self.terminal_outcome(self.load_events_sync(session_id), run_id)
+
   def _fact_input_payload(self, events: list[dict], run_id: str) -> list[str]:
     """The input ids the run's recorded run_finished fact carries ([] without one)."""
     for event in events:

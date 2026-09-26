@@ -318,7 +318,7 @@ async def run_firing_steps(
     backend, model = resolved_backend_model(task_cfg, tree, step.backend or task_cfg.backend)
     run = await register_leaf_run(
         tree, leaf_id, task_cfg, firing, kind="scheduled_step", position=position, backend=backend, model=model)
-    outcome = await terminal_outcome(tree, leaf_id, run.id)
+    outcome = await tree.runs.terminal_outcome_of(leaf_id, run.id)
     if outcome is None:
       prompt = step.prompt or ""
       if position > 0:
@@ -361,7 +361,7 @@ async def run_firing_steps(
   else:
     summary = (
         f"Scheduled task '{task_cfg.name}' stopped at step '{steps[failed_at].name}' "
-        f"(outcome {await terminal_outcome(tree, leaf_id, executed[-1][1])}); no later step ran.")
+        f"(outcome {await tree.runs.terminal_outcome_of(leaf_id, executed[-1][1])}); no later step ran.")
   await deliver_boundary_report(
       tree, leaf_id, meta.id, task_cfg, firing, "failed" if failed_at is not None else "blocked", summary)
 
@@ -502,13 +502,6 @@ async def launch_and_settle(
   return await _adapter_of(tree).launch_and_settle(leaf_id, run_id, prompt=prompt, scheduled=True)
 
 
-async def terminal_outcome(tree: TaskTreeManager, leaf_id: str, run_id: str) -> str | None:
-  run = await tree.runs.get_run(leaf_id, run_id)
-  if run is None:
-    return None
-  return tree.runs.terminal_outcome(tree.runs.load_events_sync(leaf_id), run_id)
-
-
 async def step_advanced(tree: TaskTreeManager, leaf_id: str, run_id: str) -> bool:
   """Whether one step's durable record clears the chain's advance gate.
 
@@ -607,7 +600,7 @@ async def reconcile_bound_firings(
     backend, model = resolved_backend_model(task_cfg, tree, steps[last_pos + 1].backend or task_cfg.backend)
     next_run = await register_leaf_run(
         tree, leaf_id, task_cfg, firing, kind="scheduled_step", position=last_pos + 1, backend=backend, model=model)
-    if await terminal_outcome(tree, leaf_id, next_run.id) is None and next_run.pid is None:
+    if await tree.runs.terminal_outcome_of(leaf_id, next_run.id) is None and next_run.pid is None:
       prompt = steps[last_pos + 1].prompt or ""
       if last_pos + 1 > 0:
         previous = await run_result_text(tree, leaf_id, by_position[last_pos].id)

@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from conftest import build_env, create_task
+from conftest import (
+    MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET,
+    OPUS_BACKEND_ID,
+    build_env,
+    create_task,
+)
 
 from src.core import event_types as ET
-from src.core.models import PatchSessionTaskRequest, RunRecord, TaskSpec
+from src.core.models import CreateSessionRequest, PatchSessionTaskRequest, RunRecord, TaskSpec
 from src.core.run_token import CallerIdentity, RunTokenClaims
 from src.core.task_completion import CompletionEvidence, LandingEvidence
 from src.core.task_sessions import (
@@ -36,6 +42,48 @@ def live_identity() -> tuple[int, str, datetime]:
 async def finish_worker_run(tree: TaskTreeManager, session_id: str, run_id: str) -> None:
   """Land one successful worker work run: the automatic completion path."""
   await tree.dispatch.finish_run(session_id, run_id, outcome="success")
+
+
+async def legacy_parent_and_task(tree: TaskTreeManager, session_mgr, *, request_id: str):
+  """A legacy (profile None) parent session with one fresh child task under it.
+
+  This is the shape the 9/25 echo incident ran on: a master session's own turn
+  closed a delegated task and the scheduled wake replayed its own words.
+  """
+  legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
+  child = await create_task(tree, parent=legacy.id, request_id=request_id)
+  return legacy, child
+
+
+def wake_probe():
+  """A trigger_master stand-in that records (parent_id, text) and signals fired.
+
+  The legacy wake is scheduled fire-and-forget, so the probe signals through an
+  event: awaiting it proves the wake ran; a timed-out wait proves it never did.
+  """
+  calls: list[tuple[str, str]] = []
+  fired = asyncio.Event()
+
+  async def trigger(parent_id: str, text: str, *_rest: object) -> None:
+    calls.append((parent_id, text))
+    fired.set()
+
+  return trigger, calls, fired
+
+
+async def assert_wake_stays_quiet(fired: asyncio.Event) -> None:
+  """Give any wrongly scheduled wake a bounded loop wait, then require silence."""
+  with pytest.raises(asyncio.TimeoutError):
+    await asyncio.wait_for(fired.wait(), timeout=0.5)
+
+
+def persisted_close_and_report(tree: TaskTreeManager, parent_id: str, child_id: str,
+                               outcome: str) -> tuple[list[dict], list[dict]]:
+  child_events = tree.events.load_events(child_id)
+  closes = [e for e in child_events if e["type"] == ET.TASK_CLOSED and e["outcome"] == outcome]
+  parent_events = tree.events.load_events(parent_id)
+  reports = [e for e in parent_events if e["type"] == ET.CHILD_REPORT and e["child_session_id"] == child_id]
+  return closes, reports
 
 
 # ---------------------------------------------------------------------------
@@ -671,3 +719,95 @@ async def test_reopen_announces_after_the_durable_append(tmp_path: Path) -> None
     assert again["reopened_event_id"]
   finally:
     sessions_module.streaming_manager = original  # type: ignore[assignment]
+
+
+# ---------------------------------------------------------------------------
+# Who closed the gate: the parent's own turn skips the wake, others wake it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cancel_by_the_parent_session_skips_the_parent_wake(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The parent's own turn already holds the outcome in its HTTP response; the
+  close facts and the report still land, but no echo turn is scheduled."""
+  _cfg, session_mgr, tree = build_env(tmp_path)
+  legacy, child = await legacy_parent_and_task(tree, session_mgr, request_id="child")
+  trigger, calls, fired = wake_probe()
+  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
+
+  payload = await tree.completion.cancel_task(
+      child.id,
+      request_id="cancel-1",
+      reason="no longer needed",
+      caller=CallerIdentity(kind="operator", session_id=legacy.id))
+  await assert_wake_stays_quiet(fired)
+
+  assert payload["closed_event_id"]
+  closes, reports = persisted_close_and_report(tree, legacy.id, child.id, "cancelled")
+  assert len(closes) == 1 and closes[0]["summary"] == "no longer needed"
+  assert len(reports) == 1 and reports[0]["outcome"] == "cancelled"
+  assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller_session_id", [None, "someone-else"])
+async def test_cancel_by_a_different_session_wakes_the_parent_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caller_session_id: str | None) -> None:
+  """A closer that is not the parent session gets the ordinary legacy wake."""
+  _cfg, session_mgr, tree = build_env(tmp_path)
+  legacy, child = await legacy_parent_and_task(tree, session_mgr, request_id="child")
+  trigger, calls, fired = wake_probe()
+  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
+
+  await tree.completion.cancel_task(
+      child.id,
+      request_id="cancel-1",
+      reason="no longer needed",
+      caller=CallerIdentity(kind="operator", session_id=caller_session_id))
+  await asyncio.wait_for(fired.wait(), timeout=5)
+
+  assert calls == [(legacy.id, f"[Report from task {child.id} | outcome cancelled] no longer needed")]
+
+
+@pytest.mark.asyncio
+async def test_complete_by_the_parent_session_skips_the_parent_wake(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Same skip rule for the operator complete close: durable report, no wake."""
+  _cfg, session_mgr, tree = build_env(tmp_path)
+  legacy, child = await legacy_parent_and_task(tree, session_mgr, request_id="child")
+  trigger, calls, fired = wake_probe()
+  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
+  evidence = CompletionEvidence(summary="delivered", result_refs=["file:out"], run_ids=[])
+
+  status, payload = await tree.completion.complete_task(
+      child.id, request_id="close-1", evidence=evidence, caller=CallerIdentity(kind="operator", session_id=legacy.id))
+  await assert_wake_stays_quiet(fired)
+
+  assert status == 200 and payload["closed_event_id"]
+  assert tree.task_state(child.id) == "completed"
+  closes, reports = persisted_close_and_report(tree, legacy.id, child.id, "completed")
+  assert len(closes) == 1 and closes[0]["summary"] == "delivered"
+  assert len(reports) == 1 and reports[0]["summary"] == "delivered"
+  assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller_session_id", [None, "someone-else"])
+async def test_complete_by_a_different_session_wakes_the_parent_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caller_session_id: str | None) -> None:
+  _cfg, session_mgr, tree = build_env(tmp_path)
+  legacy, child = await legacy_parent_and_task(tree, session_mgr, request_id="child")
+  trigger, calls, fired = wake_probe()
+  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
+  evidence = CompletionEvidence(summary="delivered", result_refs=["file:out"], run_ids=[])
+
+  status, _payload = await tree.completion.complete_task(
+      child.id,
+      request_id="close-1",
+      evidence=evidence,
+      caller=CallerIdentity(kind="operator", session_id=caller_session_id))
+  await asyncio.wait_for(fired.wait(), timeout=5)
+
+  assert status == 200
+  assert calls == [(legacy.id, f"[Report from task {child.id} | outcome completed] delivered")]

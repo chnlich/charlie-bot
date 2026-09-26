@@ -117,12 +117,12 @@ def mocked_callback_fields(**overrides: Any) -> dict[str, Any]:
   """The four SessionCallbacks fields a test bundle mocks identically; overrides replace a default.
 
   ``persist_cc_session_id`` resolves to the id it was handed, the read-back-after-persist shape
-  the consumer relies on.
+  the consumer relies on; the consumer's producing-backend keyword rides through and is ignored.
   """
   fields: dict[str, Any] = {
       "update_thinking_state": AsyncMock(),
       "mark_unread": AsyncMock(),
-      "persist_cc_session_id": AsyncMock(side_effect=lambda sid, ccid: ccid),
+      "persist_cc_session_id": AsyncMock(side_effect=lambda sid, ccid, native_backend=None: ccid),
       "has_completed_round": AsyncMock(return_value=False),
   }
   fields.update(overrides)

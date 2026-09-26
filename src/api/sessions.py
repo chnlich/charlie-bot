@@ -48,7 +48,6 @@ from src.core.chat_events import chat_events_path
 from src.core.compression import gzip_level1
 from src.core.config import (
     CharlieBotConfig,
-    claude_config_dir,
     get_config,
     get_scheduled_tasks,
 )
@@ -61,7 +60,6 @@ from src.core.message_aggregator import tool_preview
 from src.core.models import (
     AcknowledgeTaskInputsRequest,
     AncestorRef,
-    BackendOption,
     CancelRunRequest,
     CancelTaskRequest,
     CompleteTaskRequest,
@@ -144,7 +142,7 @@ def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dic
   return {
       "active_backend": active_backend,
       "active_backend_type": active_backend_opt.type if active_backend_opt else "",
-      "switchable_backends": _switchable_backend_ids(active_backend, cfg),
+      "switchable_backends": _switchable_backend_ids(active_backend, cfg, dedicated=bool(meta.scheduled_task)),
   }
 
 
@@ -188,64 +186,34 @@ def _bootstrap_payload(bootstrap: SessionBootstrapData, cfg: CharlieBotConfig) -
   return payload
 
 
-def _backend_domain(option: BackendOption, cfg: CharlieBotConfig) -> str | None:
-  """The resume domain an option belongs to, or None for non-cc-claude backends.
-
-  cc-claude entries (src/core/claude_accounts.py) share one resume domain —
-  the pool when one is configured, else the default login directory — and the
-  pool moves the transcript with the session, so any model in the domain can
-  resume it. Every other backend family is its own, non-switchable domain.
-  """
-  if option.type != BackendType.CC_CLAUDE:
-    return None
-  if claude_accounts.is_pooled(option, cfg):
-    return claude_accounts.POOL_DOMAIN
-  return str(claude_config_dir())
-
-
-def _same_backend_domain(cur_id: str, tgt_id: str, cfg: CharlieBotConfig) -> bool:
-  """True when cur and tgt are cc-claude options in the same resume domain.
-
-  ``cur`` must already be the effective current backend (the API layer resolves
-  the default). Any non-cc-claude effective option has no switchable domain.
-  """
-  cur = cfg.get_backend_option(cur_id)
-  tgt = cfg.get_backend_option(tgt_id)
-  if cur is None or tgt is None:
-    return False
-  cur_domain = _backend_domain(cur, cfg)
-  tgt_domain = _backend_domain(tgt, cfg)
-  return cur_domain is not None and cur_domain == tgt_domain
-
-
 def _switchable_backend_ids(
     active_backend: str,
     cfg: CharlieBotConfig,
+    *,
+    dedicated: bool,
 ) -> list[str]:
-  """Return backend option ids available for this session.
+  """Return backend option ids available for this session, in config order.
 
-  The list is empty when the effective backend is missing from config or lies
-  outside the cc-claude domain (nothing is switchable from it in place);
-  otherwise it contains the same-domain ids in config order.
+  An ordinary session accepts every configured option: a cross-family target
+  starts its own native conversation and catches up from the session's chat
+  log. A cron-dedicated session keeps the in-domain restriction — the
+  scheduler re-aligns it to its task config on every trigger, so only the ids
+  in its continuation domain (``claude_accounts.continuation_domain``) are
+  offered; a dedicated non-Claude session therefore lists only itself. The
+  list is empty when the effective backend is missing from config.
   """
-  active_domain = _backend_domain_for(active_backend, cfg)
-  if active_domain is None:
+  active_option = cfg.get_backend_option(active_backend)
+  if active_option is None:
     return []
-  return [opt.id for opt in cfg.backends.options if _backend_domain(opt, cfg) == active_domain]
+  if not dedicated:
+    return [opt.id for opt in cfg.backends.options]
+  active_domain = claude_accounts.continuation_domain(active_option, cfg)
+  return [opt.id for opt in cfg.backends.options if claude_accounts.continuation_domain(opt, cfg) == active_domain]
 
 
-def _backend_domain_for(backend_id: str, cfg: CharlieBotConfig) -> str | None:
-  """The cc-claude resume domain for a backend id, or None if not switchable."""
-  opt = cfg.get_backend_option(backend_id)
-  if opt is None:
-    return None
-  return _backend_domain(opt, cfg)
-
-
-# Wire spelling of the 400 an id outside cfg.backends.options earns: both
-# raisers in _resolve_requested_backend format the same sentence, and the
-# switch route's clone/fork wording is a distinct, deliberate spelling this
-# constant does not home.
+# Wire spelling of the 400 an id outside cfg.backends.options earns: all three
+# raisers (_resolve_requested_backend's two and the switch route) format the
+# same sentence.
 _UNKNOWN_BACKEND_DETAIL = "backend '{}' is not a recognized backend id; valid ids: {}"
 
 # Shared Query description: the routes exposing the sidebar's ids parameter must
@@ -1586,44 +1554,60 @@ async def switch_session_backend(
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> SessionMetadata:
-  """Switch a session's backend in place.
+  """Switch a session's backend in place, across model families.
 
   ``meta.backend`` is an effective current backend: the raw field when set,
-  else ``backends.options[0]``. A scheduled session switches in place like any
-  other session: only cc-claude options sharing the session's resume domain —
-  the pool, or the default login directory when the pool is empty — are
-  switchable; a session targeting anything else must fork/clone.
+  else ``backends.options[0]``. Every session accepts any configured backend
+  id: the target backend starts its own native conversation when it cannot
+  continue the held one (``claude_accounts.same_continuation_domain`` judges
+  that at turn start), and catches up from the session's chat log. A
+  cron-dedicated session keeps the in-domain restriction — the scheduler
+  re-aligns it to its task config on every trigger, so its backend is decided
+  by that config, and an out-of-domain target is refused.
+
+  A session from before the native_backend rule (a held id with no recorded
+  producer) is backfilled here, before the backend field changes, so the next
+  turn judges the id against the backend that actually produced it.
   """
   valid_ids = {opt.id for opt in cfg.backends.options}
   if body.backend not in valid_ids:
-    raise HTTPException(
-        status_code=400,
-        detail=(
-            f"backend '{body.backend}' is not a recognized backend id. To switch to a "
-            "backend outside the session's domain, clone/fork the session with the "
-            "target backend instead."),
-    )
+    raise HTTPException(status_code=400, detail=_UNKNOWN_BACKEND_DETAIL.format(body.backend, sorted(valid_ids)))
 
   effective_current = parent.backend or _default_backend_id(cfg)
   if body.backend == effective_current:
     return parent
 
-  if not _same_backend_domain(effective_current, body.backend, cfg):
+  if parent.scheduled_task and not claude_accounts.same_continuation_domain(effective_current, body.backend, cfg):
     raise HTTPException(
         status_code=400,
         detail=(
-            f"backend '{body.backend}' cannot be switched to in place: it does not "
-            "share this session's resume domain (backend types differ or config dirs "
-            "differ). Clone/fork the session with the target backend instead."),
+            f"backend '{body.backend}' cannot be switched to in place: this session is dedicated to "
+            "scheduled task "
+            f"'{parent.scheduled_task}', whose cron config decides its backend and whose scheduler "
+            "re-aligns the session to that config on every trigger. Edit the task's config or "
+            "clone/fork the session with the target backend instead."),
     )
+
+  # The pre-rule backfill: record the effective current backend as the held
+  # id's producer through the authorized anchor channel, before the backend
+  # field changes. Same-domain switches backfill too, so the next same-domain
+  # turn still resumes as today.
+  if parent.cc_session_id and not parent.native_backend:
+    await session_mgr.persist_native_backend(session_id, effective_current)
 
   previous = effective_current
   meta = require_found(await session_mgr.switch_backend(session_id, body.backend))
 
+  # The audit event is the switch history; the durable metadata read here (the
+  # backfill included) is what it records. previous_native_backend is None when
+  # the session holds no native id to attribute.
+  durable = await session_mgr.read_metadata_fresh(session_id)
   audit_event = {
       "type": BACKEND_SWITCHED,
       "from": previous,
       "to": body.backend,
+      "previous_native_backend": durable.native_backend if durable is not None and durable.cc_session_id else None,
+      "previous_native_session_id": durable.cc_session_id if durable is not None else None,
   }
   await session_mgr.persist_and_broadcast(session_id, audit_event)
   return meta

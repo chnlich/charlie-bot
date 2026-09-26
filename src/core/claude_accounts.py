@@ -164,6 +164,45 @@ def account_by_label(cfg: CharlieBotConfig, label: str | None) -> ClaudeAccount 
   return next((account for account in pool(cfg) if account.label == label), None)
 
 
+def continuation_domain(option: BackendOption, cfg: CharlieBotConfig) -> str:
+  """The continuation domain *option* belongs to: the backends that can continue
+  each other's native conversation.
+
+  A cc-claude option's domain is the account pool when one is configured, else
+  the process login directory (``claude_config_dir``) — either way one
+  transcript store every cc-claude entry can re-find a resume id in. Every
+  other backend family is its own domain, named by the option id: the same
+  Codex option on consecutive turns shares a domain with itself (two ``None``
+  domains never compare equal, so copying the pre-pool resume-domain helper
+  as-is would reopen a fresh conversation every turn), and two different
+  options never do. One definition shared by the switch endpoint and the
+  turn-start continuation rule (``src/api/sessions.py``,
+  ``src/agents/master_cc_run.py``).
+  """
+  if option.type == BackendType.CC_CLAUDE:
+    if is_pooled(option, cfg):
+      return POOL_DOMAIN
+    # Lazy: the config model stack stays out of this module's import (the
+    # claude-sub worker binary imports it; see the module docstring).
+    from src.core.config import claude_config_dir
+
+    return str(claude_config_dir())
+  return option.id
+
+
+def same_continuation_domain(current_id: str, target_id: str, cfg: CharlieBotConfig) -> bool:
+  """True when the two configured backend ids share one continuation domain.
+
+  False when either id is not a configured option: an unknown id has no domain
+  to share.
+  """
+  current = cfg.get_backend_option(current_id)
+  target = cfg.get_backend_option(target_id)
+  if current is None or target is None:
+    return False
+  return continuation_domain(current, cfg) == continuation_domain(target, cfg)
+
+
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------

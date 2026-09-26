@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from src.agents import master_cc_run, master_cc_state
 from src.agents.backends.base import make_error_event, make_master_done_event
@@ -95,19 +95,21 @@ async def _enqueue_and_notify(session_id: str, work_item: master_cc_state._WorkI
 
 async def _persist_with_readback(
     callbacks: SessionCallbacks,
-    persist: Callable[[str, str], Awaitable[str | None]],
+    persist: Callable[..., Awaitable[str | None]],
     session_id: str,
     value: str,
     source: str,
     subject: str,
+    **persist_kwargs: Any,
 ) -> None:
   """Persist *value* through *persist* and verify the value read back from disk.
 
-  A mismatch logs and broadcasts an ERROR event tagged *source*, so a save
-  that did not land reaches the operator's chat panel instead of passing
-  silently.
+  *persist_kwargs* rides through to *persist* (the resume anchor's
+  ``native_backend=<producing backend id>``). A mismatch logs and broadcasts an
+  ERROR event tagged *source*, so a save that did not land reaches the
+  operator's chat panel instead of passing silently.
   """
-  read_back = await persist(session_id, value)
+  read_back = await persist(session_id, value, **persist_kwargs)
   if read_back == value:
     return
   log.error(f"{source}_persist_mismatch", session=session_id, written=value, read_back=read_back)
@@ -128,9 +130,9 @@ async def _refresh_anchors_from_disk(
   """Overwrite the dequeued item's anchor snapshot with what disk holds.
 
   The queue item carries the session metadata as it stood at enqueue time; by
-  the time it dequeues, disk is the authority -- the previous round's placement
-  funnel-persisted the account holding the transcript, and a weekly recycle
-  clears the anchor. The read is the bypass-cache fresh read
+  the time it dequeues, disk is the authority -- the previous round's
+  funnel-persisted the account holding the transcript and the backend that
+  produced the id, and a weekly recycle clears the anchor. The read is the bypass-cache fresh read
   (``read_metadata_fresh``: no cache populate, so no second cache). A snapshot
   anchor that is set is refreshed to the disk value, including a disk-cleared
   one; a snapshot anchor that is None is never resurrected from disk -- a
@@ -154,6 +156,8 @@ async def _refresh_anchors_from_disk(
   if fresh is not None:
     if meta.cc_session_id is not None:
       meta.cc_session_id = fresh.cc_session_id
+    if meta.native_backend is not None:
+      meta.native_backend = fresh.native_backend
     if meta.claude_account is not None:
       meta.claude_account = fresh.claude_account
   if last_cc_session_id and not meta.cc_session_id:
@@ -215,9 +219,14 @@ async def _session_consumer(session_id: str) -> None:
         # its conversation was deliberately started fresh.
         if item.task_run is not None and item.task_run.fresh_native_context:
           last_cc_session_id = None
+        # The backend the round actually ran on (the option _run_cc resolved,
+        # carried out in finish_extras), recorded beside the id it produced.
+        ran_backend: str | None = finish_extras.get("native_backend")
         # Update session_meta.cc_session_id for subsequent queued runs.
         if cc_session_id:
           item.session_meta.cc_session_id = cc_session_id
+          if ran_backend:
+            item.session_meta.native_backend = ran_backend
           last_cc_session_id = cc_session_id
           # The consumer is the single owner of persisting the resume anchor:
           # every round, unconditionally, with no comparison against any
@@ -225,7 +234,8 @@ async def _session_consumer(session_id: str) -> None:
           # Only a truthy id persists: a turn that ended without a backend
           # session (a refusal or a spawn/transport failure) must not wipe the
           # durable anchor — a fresh-native clear is the adapter's spawn-time
-          # write, not this path.
+          # write, not this path. The producing backend lands in the same
+          # anchor write, so the continuation rule can judge the id's owner.
           await _persist_with_readback(
               item.callbacks,
               item.callbacks.persist_cc_session_id,
@@ -233,6 +243,7 @@ async def _session_consumer(session_id: str) -> None:
               cc_session_id,
               "resume_anchor",
               "Resume anchor",
+              native_backend=ran_backend,
           )
 
         # The pool account holding the transcript is persisted the same way,

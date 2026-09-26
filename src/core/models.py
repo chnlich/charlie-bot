@@ -416,12 +416,17 @@ class SessionMetadata(BaseModel):
   # prompt_bodies/<sha256>.md in the selected home.
   subtree_prompt_ref: str | None = None
   node_prompt_ref: str | None = None
-  # The native-backend continuation anchor's provenance: the instruction-hash
+  # The native-context continuation anchor's provenance: the instruction-hash
   # and backend identity the current cc_session_id conversation was continued
-  # under. A manager turn resumes the native conversation only when all three
-  # match the launch's own snapshot and backend; any change starts a fresh
-  # native context (earlier history stays on disk, never rewritten).
+  # under. Changes only through authorized anchor writes (see
+  # _ANCHOR_FIELDS in src/core/sessions.py); earlier history stays on disk,
+  # never rewritten.
   native_prompt_hash: str | None = None
+  # The backend that produced the current cc_session_id conversation. Every
+  # round's anchor persist records it beside the id; a v1 turn resumes the id
+  # only when that backend shares the current backend's continuation domain
+  # (src/core/claude_accounts.py), and a v2 manager turn additionally requires
+  # the prompt hash and model to match the launch's own snapshot.
   native_backend: str | None = None
   native_model: str | None = None
 
@@ -813,8 +818,11 @@ class SessionCallbacks:
   persist_and_broadcast: Callable[[str, dict], Awaitable[None]]
   update_thinking_state: Callable[..., Awaitable[None]]
   mark_unread: Callable[[str], Awaitable[None]]
-  # Returns the cc_session_id read back from disk after persisting.
-  persist_cc_session_id: Callable[[str, str], Awaitable[str | None]]
+  # Returns the cc_session_id read back from disk after persisting. The live
+  # implementation also accepts native_backend=<producing backend id> and
+  # records it beside the id in the same anchor write (None leaves the field
+  # untouched).
+  persist_cc_session_id: Callable[..., Awaitable[str | None]]
   has_completed_round: Callable[[str], Awaitable[bool]]
   # Sets (or clears, on None) the session's in-flight master-turn record.
   persist_master_run: Callable[[str, MasterRunRecord | None], Awaitable[None]]

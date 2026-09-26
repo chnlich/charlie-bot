@@ -819,22 +819,26 @@ class TaskTreeManager:
 
     Called from the launch's spawn callback: the anchor is cleared only when
     this launch deliberately starts a fresh native context (a changed
-    instruction hash or backend identity), and the identity fields always name
-    the snapshot this conversation continues under. A failed preparation never
+    instruction hash, backend family, or model), and the identity fields always
+    name the snapshot this conversation continues under. The three fields write
+    through the authorized anchor channel
+    (``SessionManager.persist_native_anchor_provenance``) — every authorized
+    writer of ``native_backend`` is an anchor write, so a concurrent stale
+    whole-object save cannot roll the identity back. A failed preparation never
     reaches this write, so the usable old anchor survives it.
     """
     async with self.control_lock:
-      meta = await self.load_task_meta(session_id)
-      meta.native_prompt_hash = prompt_hash
-      meta.native_backend = backend
-      meta.native_model = model
-      await self._save_meta(meta)
-      if reset_anchor and meta.cc_session_id is not None:
-        # The fresh native context voids the old conversation anchor. The clear
-        # goes through the authorized channel: a whole-object save's anchor
-        # reconciliation would correct it back to the disk value and the reset
-        # would silently do nothing.
-        await self._sessions.clear_cc_session_anchor(session_id)
+      await self._sessions.persist_native_anchor_provenance(
+          session_id, prompt_hash=prompt_hash, native_backend=backend, model=model)
+      self._invalidate_index()  # any metadata write may move the projection inputs
+      if reset_anchor:
+        fresh = await self._sessions.read_metadata_fresh(session_id)
+        if fresh is not None and fresh.cc_session_id is not None:
+          # The fresh native context voids the old conversation anchor. The clear
+          # goes through the authorized channel: a whole-object save's anchor
+          # reconciliation would correct it back to the disk value and the reset
+          # would silently do nothing.
+          await self._sessions.clear_cc_session_anchor(session_id)
 
   def prompt_rule_summaries(self, meta: SessionMetadata, index: _TreeIndex) -> dict:
     """The scope/source/current-rule facts the Task/Context UI reads from the detail.

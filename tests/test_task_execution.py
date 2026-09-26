@@ -31,7 +31,7 @@ from fastapi.testclient import TestClient
 from src.core import event_types as ET
 from src.core.models import BackendOption, PatchSessionTaskRequest, RunRecord, TaskSpec
 from src.core.run_token import CallerIdentity
-from src.core.sessions import SessionManager
+from src.core.sessions import HISTORY_LOCATION_NOTE, SessionManager
 from src.core.task_sessions import TaskTreeManager
 
 OPERATOR = {"Authorization": "Bearer op-secret"}
@@ -1123,10 +1123,13 @@ async def test_manager_native_continuation_gates_on_instruction_hash(
     # The stale anchor was cleared at spawn (the fresh native context's own
     # conversation replaces it); the old transcript's history is untouched.
     assert meta3.cc_session_id is None or meta3.cc_session_id != anchor_id
-    # The reset notice carried the task identity and where earlier history lives.
+    # The reset notice carried the standing reason and where earlier history
+    # lives (HISTORY_LOCATION_NOTE — the note no longer names the session id).
     launch_text = (tree.runs.run_dir(manager.id, run3) / "launch_prompt.md").read_text(encoding="utf-8")
-    assert "Context reset" in launch_text
-    assert manager.id in launch_text
+    assert launch_text.startswith(
+        "[Context reset: this task's managed instructions or sources changed since the "
+        "previous turn, so this turn starts a fresh native conversation. ")
+    assert HISTORY_LOCATION_NOTE in launch_text
     assert "turn three" in launch_text
 
 
@@ -1150,10 +1153,10 @@ async def test_backend_identity_change_starts_a_fresh_native_context(
     # The conversation anchor changes only through its authorized channel.
     await session_mgr.persist_cc_session_id(manager.id, anchor)
     # The anchor's recorded identity no longer matches (a backend switch
-    # happened): the next turn cannot claim continuity over it.
-    meta_raw = await tree.load_meta(manager.id)
-    meta_raw.native_backend = "some-other-backend"
-    await tree._save_meta(meta_raw)
+    # happened): the next turn cannot claim continuity over it. The identity
+    # changes only through its authorized anchor channel — native_backend is an
+    # anchor field now, so a whole-object save would be corrected back to disk.
+    await session_mgr.persist_native_backend(manager.id, "some-other-backend")
     await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="two", actor="user")
     decision = await tree.dispatch.dispatch_pending(manager.id)
     assert decision.get("launch") is True
@@ -1163,6 +1166,14 @@ async def test_backend_identity_change_starts_a_fresh_native_context(
     # anchor cannot serve it.
     assert meta.native_backend == "fake"
     assert meta.cc_session_id is None or meta.cc_session_id != anchor
+    # The reset note names the switch: the recorded producer, the backend that
+    # ran, and where the earlier history lives.
+    launch_text = (tree.runs.run_dir(manager.id, decision["run_id"]) / "launch_prompt.md").read_text(
+        encoding="utf-8")
+    assert launch_text.startswith(
+        "[Context reset: this session switched from backend some-other-backend to fake, "
+        "which starts its own conversation. ")
+    assert HISTORY_LOCATION_NOTE in launch_text
 
 
 @pytest.mark.asyncio

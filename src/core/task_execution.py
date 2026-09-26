@@ -63,7 +63,7 @@ from src.core.models import (
 from src.core.run_token import RUN_TOKEN_ENV, RunTokenClaims, sign_run_token
 from src.core.runs import RUN_EVENTS_NAME, RunNotFoundError, run_not_found_in_task_text, scan_result_exit
 from src.core.session_dispatch import child_report_text
-from src.core.sessions import SessionManager
+from src.core.sessions import HISTORY_LOCATION_NOTE, SessionManager
 from src.core.spawner_backends import resolve_backend_option
 from src.core.takeoff_gate import DelegationBlockedError, is_verify_exempt
 from src.core.task_prompts import WORKER_KINDS, PromptSnapshot, TaskPromptError
@@ -757,13 +757,17 @@ class TaskExecutionAdapter:
         if fresh_native and meta.cc_session_id is not None:
             # A reset, not a first turn: name the task and where the earlier
             # history lives, so the fresh native context can catch up without
-            # the old conversation being copied or destroyed.
+            # the old conversation being copied or destroyed. A backend change
+            # names the switch (the same sentence shape the v1 turn-start rule
+            # uses); every other change keeps the standing reason.
+            if meta.native_backend and meta.native_backend != option.id:
+                reason = (f"this session switched from backend {meta.native_backend} to {option.id}, "
+                          f"which starts its own conversation")
+            else:
+                reason = ("this task's managed instructions or sources changed since the "
+                          "previous turn, so this turn starts a fresh native conversation")
             goal = meta.task.goal if meta.task is not None else meta.name
-            prompt = (
-                f"[Context reset: this task's managed instructions or sources changed since the "
-                f"previous turn, so this turn starts a fresh native conversation. The task is: "
-                f"{goal}. Earlier turns' history remains readable in session {session_id}'s chat "
-                f"log and Run records (GET /api/sessions/{session_id}/runs).]\n\n{content}")
+            prompt = f"[Context reset: {reason}. The task is: {goal}. {HISTORY_LOCATION_NOTE}]\n\n{content}"
 
         async def on_task_spawn(pid: int, pid_start: str | None) -> None:
             if pid_start is None:

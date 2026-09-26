@@ -765,6 +765,17 @@ class RunStore:
   async def get_run(self, session_id: str, run_id: str) -> RunRecord | None:
     return await asyncio.to_thread(self.read_run_sync, session_id, run_id)
 
+  def _require_run(self, session_id: str, run_id: str) -> RunRecord:
+    """The run's record, or RunNotFoundError when no run metadata exists.
+
+    A plain read: no lock is taken here, so callers under the control lock
+    and the outside-lock finish and recovery paths share one read-or-raise.
+    """
+    run = self.read_run_sync(session_id, run_id)
+    if run is None:
+      raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
+    return run
+
   def list_run_records_sync(self, session_id: str) -> list[RunRecord]:
     """Every run record of one session, chronological (queued first)."""
     root = self.runs_root(session_id)
@@ -972,9 +983,7 @@ class RunStore:
     pid_start change is a corrupted callback, not a recovery input.
     """
     async with self._lock:
-      run = self.read_run_sync(session_id, run_id)
-      if run is None:
-        raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
+      run = self._require_run(session_id, run_id)
       if run.pid is not None and run.pid_start is not None and (run.pid != pid or run.pid_start != pid_start):
         raise RunIdentityConflictError(
             f"run {run_id} already records process identity "
@@ -1023,9 +1032,7 @@ class RunStore:
     the sole owner of outcome, ended_at and exit_code.
     """
     async with self._lock:
-      run = self.read_run_sync(session_id, run_id)
-      if run is None:
-        raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
+      run = self._require_run(session_id, run_id)
       for field, value in (
           ("native_session_id", native_session_id),
           ("model", model),
@@ -1136,9 +1143,7 @@ class RunStore:
     """
     events = self.load_events_sync(session_id)
     existing = self.terminal_outcome(events, run_id)
-    run = self.read_run_sync(session_id, run_id)
-    if run is None:
-      raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
+    run = self._require_run(session_id, run_id)
     existing_payload = self._fact_input_payload(events, run_id)
     if existing is not None:
       # Repeat reconciliation: the terminal fact is authoritative; repair the
@@ -1182,9 +1187,7 @@ class RunStore:
     signalling, and the exit wait all run outside the lock.
     """
     async with self._lock:
-      run = self.read_run_sync(session_id, run_id)
-      if run is None:
-        raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
+      run = self._require_run(session_id, run_id)
       events = self.load_events_sync(session_id)
       existing = self.terminal_outcome(events, run_id)
       if existing is not None:
@@ -1212,9 +1215,7 @@ class RunStore:
 
   async def reconcile_stop_request(self, session_id: str, run_id: str) -> RunStopResult:
     """Fresh-reader recovery: finish a durably requested stop from current process facts."""
-    run = self.read_run_sync(session_id, run_id)
-    if run is None:
-      raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
+    run = self._require_run(session_id, run_id)
     events = self.load_events_sync(session_id)
     existing = self.terminal_outcome(events, run_id)
     if existing is not None:

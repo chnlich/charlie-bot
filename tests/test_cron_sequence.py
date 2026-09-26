@@ -199,7 +199,7 @@ async def test_bound_master_worker_spoof_cannot_forged_scheduled_input(
 
 
 # ---------------------------------------------------------------------------
-# Normal types: one leaf per firing, steps share it, one boundary report
+# Worker mode: one leaf per firing, steps share it, one boundary report
 # ---------------------------------------------------------------------------
 
 

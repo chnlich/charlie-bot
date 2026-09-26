@@ -1132,8 +1132,9 @@ class TriggerManager:
     # this method, so the sidebar snapshot is told here. recover_pending's schema
     # migration writes trigger files directly and preserves each trigger's status,
     # so the pending count cannot change there and no dirty mark is owed. The
-    # mark stays path-less: a trigger save is user-action rare, and the full
-    # walk its mark triggers refreshes the trigger rows' signature entries.
+    # mark stays path-less: a trigger save is user-action rare, and the status
+    # re-probe it schedules refreshes the pending-trigger snapshot the sidebar
+    # bell and the pending-triggers tray read.
     mark_sidebar_dirty(trigger.session_id)
 
   async def _load_trigger(self, session_id: str, trigger_id: str) -> PendingTrigger:

@@ -21,6 +21,7 @@ import pytest_asyncio
 from conftest import (
     _page_request,
     fresh_state_fixture,
+    identity_of,
     make_home_session,
 )
 
@@ -28,7 +29,6 @@ from src.api import sessions as sessions_api
 from src.core import sidebar_state
 from src.core.models import RunRecord, TaskSpec
 from src.core.run_token import CallerIdentity
-from conftest import identity_of
 from src.core.sessions import SessionManager
 from src.core.task_sessions import (
     TaskTreeManager,

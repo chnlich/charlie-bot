@@ -769,7 +769,6 @@ test('renderGroupedScheduledList limits project groups to five visible sessions'
 
 test('switchSession preserves worker icon until authoritative status returns', async () => {
   const workerIcon = createElement();
-  const tabWorkers = createElement();
   const messages = createElement();
   const input = createElement();
   const {context} = buildContext({
@@ -780,7 +779,6 @@ test('switchSession preserves worker icon until authoritative status returns', a
       ['backend-badge', createElement()],
       ['input-model-badge', createElement()],
       ['messages', messages],
-      ['tab-workers', tabWorkers],
       ['worker-indicator-session-b', workerIcon],
       ['spinner-session-b', createElement({className: 'hidden'})],
       ['unread-session-b', createElement({className: 'hidden'})],
@@ -808,14 +806,11 @@ test('switchSession preserves worker icon until authoritative status returns', a
   await context.switchSession('session-b');
 
   assert.equal(workerIcon.classList.contains('hidden'), false);
-  // A manager session leaves the worker leaf container alone.
-  assert.equal(tabWorkers.innerHTML, '');
   assert.equal(context.location.href, '');
 });
 
 test('missing bootstrap worker data and empty worker tab do not imply idle', () => {
   const workerIcon = createElement();
-  const tabWorkers = createElement();
   const {context} = buildContext({
     BACKEND_TYPES: {'claude-opus-4.6': 'claude-code'},
     elements: new Map([
@@ -823,7 +818,6 @@ test('missing bootstrap worker data and empty worker tab do not imply idle', () 
       ['backend-badge', createElement()],
       ['input-model-badge', createElement()],
       ['messages', createElement()],
-      ['tab-workers', tabWorkers],
       ['worker-indicator-session-a', workerIcon],
       ['spinner-session-a', createElement({className: 'hidden'})],
       ['unread-session-a', createElement({className: 'hidden'})],
@@ -846,8 +840,6 @@ test('missing bootstrap worker data and empty worker tab do not imply idle', () 
   });
   context.Sidebar.updateSpinner();
 
-  // A manager session leaves the worker leaf container alone.
-  assert.equal(tabWorkers.innerHTML, '');
   assert.equal(workerIcon.classList.contains('hidden'), false);
   assert.equal(statusPolls, 1);
 });

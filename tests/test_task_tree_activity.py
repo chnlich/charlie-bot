@@ -47,17 +47,30 @@ async def tree_env(tmp_path: Path):
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       backends={"options": [{
-          "id": "fake", "label": "Fake", "type": "cc-claude", "model": "fake-model",
+          "id": "fake",
+          "label": "Fake",
+          "type": "cc-claude",
+          "model": "fake-model",
       }]},
       paths={"worktree_dir": str(tmp_path / "home" / "worktrees")})
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
   root = await tree.create_task(
-      request_id="root", task_parent_id=None, profile="manager",
-      task=TaskSpec(goal="## Goal\n\nDrive the trial\n"), name=None, backend=None, caller=OP)
+      request_id="root",
+      task_parent_id=None,
+      profile="manager",
+      task=TaskSpec(goal="## Goal\n\nDrive the trial\n"),
+      name=None,
+      backend=None,
+      caller=OP)
   worker = await tree.create_task(
-      request_id="w1", task_parent_id=root.id, profile="worker",
-      task=TaskSpec(goal="## Goal\n\nDo the leaf work\n"), name=None, backend=None, caller=OP)
+      request_id="w1",
+      task_parent_id=root.id,
+      profile="worker",
+      task=TaskSpec(goal="## Goal\n\nDo the leaf work\n"),
+      name=None,
+      backend=None,
+      caller=OP)
   return tree, session_mgr, root.id, worker.id
 
 
@@ -261,8 +274,13 @@ async def test_legacy_status_payload_keeps_todays_key_set(tmp_path: Path) -> Non
   payload = await _status_json(session_mgr, ids=session.id)
 
   assert set(payload[session.id]) == {
-      "has_unread", "has_running_tasks", "thinking_since", "has_pending_trigger",
-      "pending_trigger_count", "next_trigger_at", "has_pending_plan_approval",
+      "has_unread",
+      "has_running_tasks",
+      "thinking_since",
+      "has_pending_trigger",
+      "pending_trigger_count",
+      "next_trigger_at",
+      "has_pending_plan_approval",
   }
 
 
@@ -274,18 +292,25 @@ async def test_list_rows_carry_work_state_only_for_task_nodes(tmp_path: Path) ->
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       backends={"options": [{
-          "id": "fake", "label": "Fake", "type": "cc-claude", "model": "fake-model",
+          "id": "fake",
+          "label": "Fake",
+          "type": "cc-claude",
+          "model": "fake-model",
       }]})
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
   legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"))
   node = await tree.create_task(
-      request_id="n1", task_parent_id=None, profile="manager",
-      task=TaskSpec(goal="## Goal\n\nNamed node\n"), name=None, backend=None, caller=OP)
+      request_id="n1",
+      task_parent_id=None,
+      profile="manager",
+      task=TaskSpec(goal="## Goal\n\nNamed node\n"),
+      name=None,
+      backend=None,
+      caller=OP)
 
   rows = await session_mgr.list_sessions(
-      status=None, scheduled=False, include_running_status=True,
-      include_pending_trigger_status=False)
+      status=None, scheduled=False, include_running_status=True, include_pending_trigger_status=False)
   by_id = {row.id: row for row in rows}
   assert by_id[node.id].work_state == "idle"
   assert by_id[node.id].has_running_tasks is False

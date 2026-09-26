@@ -1128,8 +1128,9 @@ M18 — hidden-tab periodic poll fetches: the invariant behind page-timers.js
 ("a hidden tab does no periodic work at all"). A poll routined around the
 registry keeps fetching while the tab is hidden (browser throttling slows but
 never stops a raw interval). The collector loads the checkout's real
-page-timers.js, sidebar/namespace.js, sidebar/session-view.js and ext_usage.js
-— the module chain the page loads them in — in a node vm with a stub document,
+page-timers.js, usage.js, sidebar/namespace.js, sidebar/session-view.js and
+ext_usage.js — the module chain the page loads them in — in a node vm with a
+stub document,
 holds the page hidden, starts one worker transcript's poll (`setWorkerTranscriptMode`;
 the worker transcript lives in the main chat column since the worker-card panel's
 removal) plus the ext-usage strip's DOMContentLoaded init, and fires every
@@ -1193,14 +1194,15 @@ const context = {
   console: {error() {}, warn() {}, log() {}},
   fetch: async (url) => {
     fetches += 1;
-    // The transcript poll's applyTranscriptUpdate advances its counters from
-    // this shape; a body with messages would pull the renderer's call graph in.
+    // The transcript poll's applyTranscriptUpdate advances its counters and
+    // revision from this shape; the 'messages' container id resolves null in
+    // the stub document, so no render path is reachable whatever the body.
     return {ok: true, json: async () => ({messages: [], total: 0, revision: '', active_run_id: null})};
   },
   localStorage: {getItem: () => null, setItem() {}, removeItem() {}},
 };
 vm.createContext(context);
-for (const f of ['page-timers.js', 'sidebar/namespace.js', 'sidebar/session-view.js', 'ext_usage.js']) {
+for (const f of ['page-timers.js', 'usage.js', 'sidebar/namespace.js', 'sidebar/session-view.js', 'ext_usage.js']) {
   vm.runInContext(read(f), context, {filename: f});
 }
 

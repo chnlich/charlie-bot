@@ -114,15 +114,15 @@ async def test_terminal_states_never_infer_unread(env) -> None:
   row = tree.session_row(index, worker_a_id)
   assert row.work_state == "idle" and row.has_unread is False, ("success alone is not an unread reply")
 
-  # A failed run draws attention, not an unread dot.
+  # A failed run reads idle, not an unread dot.
   run_failed = await tree.runs.register_run(RunRecord(id="run-f", session_id=worker_a_id, kind="work"))
   await tree.dispatch.finish_run(worker_a_id, run_failed.id, outcome="failed", exit_code=1)
   index = await tree._get_index()
   row = tree.session_row(index, worker_a_id)
-  assert row.work_state == "attention" and row.has_unread is False, (
-      "a failed Run is attention; failure alone is not an unread reply")
+  assert row.work_state == "idle" and row.has_unread is False, (
+      "a failed Run is idle; failure alone is not an unread reply")
 
-  # A stopped run is interrupted attention, still not unread.
+  # A stopped run's terminal fact settles it idle, still not unread.
   run_stopped = await tree.runs.register_run(RunRecord(id="run-s", session_id=worker_a_id, kind="work"))
   proc = live_subprocess()
   try:
@@ -136,8 +136,7 @@ async def test_terminal_states_never_infer_unread(env) -> None:
       proc.kill()
   index = await tree._get_index()
   row = tree.session_row(index, worker_a_id)
-  assert row.work_state == "attention" and row.has_unread is False, (
-      "a cancelled/stopped Run is not automatically unread")
+  assert row.work_state == "idle" and row.has_unread is False, ("a cancelled/stopped Run is not automatically unread")
 
 
 @pytest.mark.asyncio

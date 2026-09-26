@@ -150,11 +150,13 @@ test('the delegated card live state paints from the status poll', () => {
   assert.equal(stateEl.textContent, 'running \u00b7 Sonnet 5');
   context.Sidebar.paintDelegateCardState('child-1', {has_running_tasks: false});
   assert.equal(stateEl.textContent, 'idle \u00b7 Sonnet 5');
-  // A settled task-tree child reads its work verdict, never a bare 'idle'.
-  context.Sidebar.paintDelegateCardState('child-1', {has_running_tasks: false, work_state: 'attention'});
-  assert.equal(stateEl.textContent, 'failed \u00b7 Sonnet 5');
+  // A settled task-tree child reads its work verdict: waiting reads 'queued',
+  // anything else (a failed or finished Run reads idle) reads bare 'idle' —
+  // no 'failed' verdict exists.
   context.Sidebar.paintDelegateCardState('child-1', {has_running_tasks: false, work_state: 'waiting'});
   assert.equal(stateEl.textContent, 'queued \u00b7 Sonnet 5');
+  context.Sidebar.paintDelegateCardState('child-1', {has_running_tasks: false, work_state: 'idle'});
+  assert.equal(stateEl.textContent, 'idle \u00b7 Sonnet 5');
 });
 
 test('a Run header reads its own state: queued in amber, failed in red with its error', () => {

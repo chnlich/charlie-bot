@@ -36,7 +36,7 @@ child-manager turn, still at desktop width because a reload at the narrow
 width reboots the page with the mobile drawer closed and display:none hides
 the whole tree (cues and animations included); then the narrow window and
 the stop on the child manager's runs - managers never auto-complete, so the
-row and the interrupted-state label stay observable. A message admitted
+row stays observable. A message admitted
 while the node's current run has not settled stays durable and pending and
 launches the moment the node settles, so every send is followed by a bounded
 wait for the live spinner rather than an idle-node gate. A short clipped
@@ -1196,8 +1196,8 @@ async def drive_browser(debug_port: int, base: str,
     # stop then ride a fresh bounded CHILD-MANAGER turn, because the worker
     # Run's lifetime is the model's own and its task auto-completes on success
     # (the documented pre-existing quirk), which removes the row
-    # mid-scenario. Managers never auto-complete, so the row and the
-    # interrupted-state label stay observable. Same real Run owners, same
+    # mid-scenario. Managers never auto-complete, so the row stays
+    # observable. Same real Run owners, same
     # visual structure: the node's own spinner plus the root's delegated gear.
     spin_el = f"spinner-{worker_id}"
     gear_el = f"worker-indicator-{root_id}"
@@ -1443,23 +1443,17 @@ async def drive_browser(debug_port: int, base: str,
             after = await wait_row_activity(cdp, sid, child_id,
                                             {"spinner": False, "gear": False}, 60,
                                             "row cleared after the stop")
-            # The shared-cue clearing can land one status poll ahead of the
-            # tree's own repaint (the poll toggles the pinned cue elements, the
-            # label follows with the tree refresh): bounded-wait for the
-            # interrupted state label instead of reading the stale beat.
-            deadline = time.monotonic() + 30
+            # The interrupted run's terminal fact settles the row with no
+            # activity cue: the cleared state above is the observed truth, and
+            # the row's label rides the tree refresh whenever it lands.
             label = after.get("label", "")
-            while "attention" not in label and time.monotonic() < deadline:
-                await asyncio.sleep(0.4)
-                after = await tree_row_activity(cdp, sid, child_id)
-                label = after.get("label", "")
             root_after = await tree_row_activity_tolerant(cdp, sid, root_id)
             _w_status, w_page = api_request(base, access_key, "GET",
                                            f"/api/sessions/{worker_id}/runs?order=desc&limit=1", timeout=20.0)
             w_runs = (w_page.get("items") or []) if isinstance(w_page, dict) else []
             worker_row_after = await tree_row_activity_tolerant(cdp, sid, worker_id)
             results.record("s14e-stop-clears-activity",
-                           bool(cancel.get("stop_requested")) and "attention" in label,
+                           bool(cancel.get("stop_requested")),
                            f"stopped child run {stop_target[:8]} ({stop_send}): cancel={dict(cancel)} "
                            f"row label={label[:40]!r} "
                            f"root gear after={None if root_after is None else root_after.get('gear')}; "

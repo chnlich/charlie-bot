@@ -935,8 +935,8 @@ class TaskExecutionAdapter:
 
         Successful process exit is only one input: the durable outcome requires
         a successful result event in the run's raw transport log — empty
-        output or a missing result keeps the task at attention with the
-        evidence retained. The first terminal fact wins: a stop request that
+        output or a missing result lands the failed outcome with the evidence
+        retained. The first terminal fact wins: a stop request that
         observed the exit first stands, and this finish reconciles against it.
         """
         session_id, run_id = meta.id, run.id

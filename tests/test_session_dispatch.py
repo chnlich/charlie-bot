@@ -416,7 +416,7 @@ async def test_closed_node_keeps_input_and_agent_content_never_mints_authorizati
   index = await tree._get_index()
   assert tree.task_state_of(index, worker.id) == "completed"  # auto-close landed
 
-  # The closed node keeps late input as history and attention-to-view.
+  # The closed node keeps late input as history.
   await admit(tree, worker.id, "late arrival", input_id="late-1")
   decision = await tree.dispatch.dispatch_pending(worker.id)
   assert decision["launch"] is False and "closed" in decision["reason"]

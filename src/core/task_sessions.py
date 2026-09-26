@@ -261,8 +261,8 @@ class TaskTreeActivity:
 
   ``has_running_tasks`` is true exactly while one of the node's Runs is live
   (recorded pid alive, no terminal fact); ``work_state`` is the node's
-  fact-derived work verdict (idle | running | waiting | attention). Both come
-  from one derivation — :func:`derive_task_tree_activity` — that
+  fact-derived work verdict (idle | running | waiting). Both come from one
+  derivation — :func:`derive_task_tree_activity` — that
   ``TaskTreeManager.work_state_of`` and the sidebar's task-tree probe share.
   """
   has_running_tasks: bool
@@ -279,44 +279,24 @@ def derive_task_tree_activity(
   Reads only durable facts (the run records and the session's fact history)
   plus process liveness for Runs that still lack a terminal fact — /proc is
   never consulted for a terminal or queued Run, and the host boot time is read
-  lazily, only when some Run needs a liveness judgment. An active run wins,
-  then an unresolved failure, then waiting work; a failed or interrupted run
-  draws attention only while it stands unresolved (a successful run that
-  finished after it, or a successful authorized retry chain, resolves it).
+  lazily, only when some Run needs a liveness judgment. Running work wins over
+  waiting work; every Run with a terminal fact contributes nothing, and so
+  does a launched Run whose process is dead (its recovery is the
+  completion/cancellation blockers' job, not a sidebar verdict).
   """
   outcomes: dict[str, str] = {}
-  finish_positions: dict[str, int] = {}
-  for absolute, event in enumerate(events):
+  for event in events:
     if event.get("type") != ET.RUN_FINISHED:
       continue
     run_id = event.get("run_id")
     if isinstance(run_id, str):
       outcomes[run_id] = str(event.get("outcome"))
-      finish_positions.setdefault(run_id, absolute)
-  superseded: set[str] = set()
-  for run in runs:
-    if outcomes.get(run.id) != "success":
-      continue
-    target = run.retry_of_run_id
-    while target is not None and target not in superseded:
-      superseded.add(target)
-      target = next((r.retry_of_run_id for r in runs if r.id == target), None)
-  success_positions = [position for run_id, position in finish_positions.items() if outcomes.get(run_id) == "success"]
-  for run in runs:
-    if outcomes.get(run.id) not in ("failed", "interrupted"):
-      continue
-    own = finish_positions.get(run.id)
-    if own is not None and any(position > own for position in success_positions):
-      superseded.add(run.id)
   verdicts: list[str] = []
   has_running = False
   boot: datetime | None = None
   for run in runs:
-    outcome = outcomes.get(run.id)
-    if outcome is not None:
-      if outcome in ("failed", "interrupted") and run.id not in superseded:
-        verdicts.append("attention")
-      continue
+    if outcomes.get(run.id) is not None:
+      continue  # a terminal fact of any outcome is a settled Run, not activity
     if run.pid is None:
       if stop_requested_in_events(events, run.id):
         continue  # a stopped queued run is resolved-by-request, not waiting work
@@ -326,14 +306,14 @@ def derive_task_tree_activity(
     # fact — the sole case where a /proc read can change the verdict.
     if boot is None:
       boot = host_boot_time()
-    alive = is_run_alive(run.pid, run.pid_start, run.started_at, boot)
-    if alive:
+    if is_run_alive(run.pid, run.pid_start, run.started_at, boot):
       has_running = True
       verdicts.append("running")
-    else:
-      verdicts.append("attention")  # launched, exit observed by nobody yet
+    # A launched Run nobody observed exiting paints nothing: subagent failures
+    # are routine and the manager resolves them by re-delegating, so a dead
+    # process is not work the sidebar flags.
   work_state: WorkState = "idle"
-  for state in ("running", "attention", "waiting"):
+  for state in ("running", "waiting"):
     if state in verdicts:
       work_state = state  # type: ignore[assignment]
       break
@@ -682,15 +662,12 @@ class TaskTreeManager:
     return self._facts_of(session_id).task_state
 
   def work_state_of(self, index: _TreeIndex, session_id: str) -> WorkState:
-    """idle | running | waiting | attention, from CURRENT unresolved facts.
+    """idle | running | waiting, from CURRENT unresolved facts.
 
     One half of :meth:`activity_of` — the shared derivation's work verdict.
-    An active run wins, then an unresolved failure, then waiting work. A
-    failed or interrupted run draws attention only while it stands
-    unresolved: a successful run that finished after it on the same node (the
-    event log's order is the durable one — records carry no creation
-    timestamp) or a successful authorized retry (the retry_of_run_id chain)
-    resolves the older failure instead of leaving attention forever.
+    Running work (a live launched Run) wins over waiting work (a queued Run);
+    everything else — a Run with a terminal fact of any outcome, or a launched
+    Run whose process is dead — reads idle.
     """
     return self.activity_of(session_id).work_state
 
@@ -814,7 +791,6 @@ class TaskTreeManager:
     descendants = self._descendants(index, session_id)
     descendant_work = [self.work_state_of(index, d) for d in descendants]
     open_count = sum(1 for d in descendants if self.task_state_of(index, d) == "open")
-    attention_count = sum(1 for state in descendant_work if state == "attention")
     running_count = sum(1 for state in descendant_work if state == "running")
     return SessionRow(
         id=meta.id,
@@ -826,7 +802,6 @@ class TaskTreeManager:
         archived=self.archived_of(index, meta),
         child_count=len(child_ids),
         open_descendant_count=open_count,
-        attention_descendant_count=attention_count,
         running_descendant_count=running_count,
         has_unread=bool(meta.has_unread),
     )
@@ -1398,9 +1373,9 @@ class TaskTreeManager:
   # Tree queries
   # ------------------------------------------------------------------
 
-  def _has_active_work_descendant(self, index: _TreeIndex, session_id: str) -> bool:
-    """True when any descendant's current work is running or needs attention."""
-    return any(self.work_state_of(index, d) in ("running", "attention") for d in self._descendants(index, session_id))
+  def _has_running_work_descendant(self, index: _TreeIndex, session_id: str) -> bool:
+    """True when any descendant's current work is running."""
+    return any(self.work_state_of(index, d) == "running" for d in self._descendants(index, session_id))
 
   async def tree_search(self, *, query: str, limit: int = 20) -> dict:
     """Task-tree search: matching rows with each one's complete ancestor path.
@@ -1443,17 +1418,16 @@ class TaskTreeManager:
     children = self._children_of(index, parent_id or None)
     rows_all = [self.session_row(index, sid) for sid in children]
     if not include_archived:
-      # A hidden/archived row stays navigable when active work (running/
-      # attention) lives at or below it: dropping it would sever the path to
-      # that work in a partial client tree. The row's OWN work state counts —
-      # under inheritance a running leaf below a retained archived parent is
-      # itself archived, and only its own state keeps it (and with it the
-      # parent's child page) visible. Stored presentation is unchanged — the
-      # row still reports archived=true.
+      # A hidden/archived row stays navigable while running work lives at or
+      # below it: dropping it would sever the path to that work in a partial
+      # client tree. The row's OWN work state counts — under inheritance a
+      # running leaf below a retained archived parent is itself archived, and
+      # only its own state keeps it (and with it the parent's child page)
+      # visible. Stored presentation is unchanged — the row still reports
+      # archived=true.
       rows_all = [
           r for r in rows_all
-          if not r.archived or r.work_state in ("running",
-                                                "attention") or self._has_active_work_descendant(index, r.id)
+          if not r.archived or r.work_state == "running" or self._has_running_work_descendant(index, r.id)
       ]
     rows_all.sort(key=lambda r: (index.metas[r.id].created_at, r.id))
     after = _decode_tree_cursor(cursor) if cursor else None

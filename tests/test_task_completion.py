@@ -213,11 +213,12 @@ async def test_failed_child_reports_remain_visible(tmp_path: Path) -> None:
   child = await create_task(tree, parent=root.id, request_id="child", profile="worker")
   await tree.runs.register_run(RunRecord(id="run-f", session_id=child.id, kind="work"))
   await tree.dispatch.finish_run(child.id, "run-f", outcome="failed")
-  # Failed evidence keeps the task open; the failure is attention, and a
-  # failed report reaches the parent without closing anything.
+  # Failed evidence keeps the task open; the failure reads idle (a terminal
+  # Run paints no sidebar activity), and a failed report reaches the parent
+  # without closing anything.
   assert tree.task_state(child.id) == "open"
   index = await tree._get_index()
-  assert tree.work_state_of(index, child.id) == "attention"
+  assert tree.work_state_of(index, child.id) == "idle"
   await tree.dispatch.deliver_child_report(
       child.id,
       source_event={"id": "runf-finish"},
@@ -230,7 +231,7 @@ async def test_failed_child_reports_remain_visible(tmp_path: Path) -> None:
   root_events = tree.events.load_events(root.id)
   failed_reports = [e for e in root_events if e["type"] == ET.CHILD_REPORT and e["outcome"] == "failed"]
   assert len(failed_reports) == 1
-  # A successful authorized retry resolves the superseded attention.
+  # A successful authorized retry closes the child for real.
   await tree.runs.register_run(RunRecord(id="run-r", session_id=child.id, kind="work", retry_of_run_id="run-f"))
   await finish_worker_run(tree, child.id, "run-r")
   index = await tree._get_index()
@@ -529,7 +530,9 @@ async def test_hidden_ancestor_keeps_descendant_path_navigable(tmp_path: Path) -
   leaf = await create_task(tree, parent=mid.id, request_id="leaf", profile="worker")
 
   await tree.patch_task(root.id, PatchSessionTaskRequest(presentation="hidden"), caller=OPERATOR)
-  await tree.runs.register_run(RunRecord(id="run-leaf", session_id=leaf.id, kind="work", pid=os.getpid()))
+  pid, pid_start, started_at = live_identity()
+  await tree.runs.register_run(
+      RunRecord(id="run-leaf", session_id=leaf.id, kind="work", pid=pid, pid_start=pid_start, started_at=started_at))
   index = await tree._get_index()
   page = await tree.tree_page(parent_id=None, include_archived=False, limit=100, cursor=None)
   # The hidden ancestor stays navigable as ancestor context while active work

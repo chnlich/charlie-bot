@@ -29,6 +29,7 @@ from src.api import sessions as sessions_api
 from src.core import sidebar_state
 from src.core.models import RunRecord, TaskSpec
 from src.core.run_token import CallerIdentity
+from src.core.runs import read_host_boot_time
 from src.core.sessions import SessionManager
 from src.core.task_sessions import (
     TaskTreeManager,
@@ -114,7 +115,10 @@ async def test_derivation_reads_live_run_as_running(tree_env) -> None:
 
 
 @pytest.mark.asyncio
-async def test_derivation_reads_dead_launched_run_as_attention(tree_env) -> None:
+async def test_derivation_reads_dead_launched_run_as_idle_but_still_blocked(tree_env) -> None:
+  """A launched Run whose process died without a terminal fact paints nothing
+  (subagent failures are routine), yet stays a structural blocker through
+  RunManager.run_blocker — the derivation and the blockers split the job."""
   tree, _session_mgr, _root_id, worker_id = tree_env
   run = await _register(tree, worker_id, "run-1")
   proc = subprocess.Popen(["/bin/sleep", "60"])
@@ -125,24 +129,24 @@ async def test_derivation_reads_dead_launched_run_as_attention(tree_env) -> None
 
   activity = tree.activity_of(worker_id)
 
-  assert (activity.has_running_tasks, activity.work_state) == (False, "attention")
+  assert (activity.has_running_tasks, activity.work_state) == (False, "idle")
+  stored = tree.runs.read_run_sync(worker_id, run.id)
+  assert stored is not None and stored.pid is not None
+  events = tree.events.load_events(worker_id)
+  assert tree.runs.run_blocker(
+      stored, events, read_host_boot_time()) == (f"run {run.id} has an unresolved process identity (needs recovery)")
 
 
 @pytest.mark.asyncio
 async def test_derivation_reads_terminal_facts_without_liveness(tree_env) -> None:
+  """A Run with a terminal fact of any outcome contributes nothing: a failed
+  Run leaves the node idle, not flagged."""
   tree, _session_mgr, _root_id, worker_id = tree_env
   run = await _register(tree, worker_id, "run-1")
   await tree.runs.record_finish(worker_id, run.id, "failed")
 
   failed = tree.activity_of(worker_id)
-  assert (failed.has_running_tasks, failed.work_state) == (False, "attention")
-
-  # A later successful run resolves the older failure.
-  retry = await _register(tree, worker_id, "run-2")
-  await tree.runs.record_finish(worker_id, retry.id, "success")
-
-  resolved = tree.activity_of(worker_id)
-  assert (resolved.has_running_tasks, resolved.work_state) == (False, "idle")
+  assert (failed.has_running_tasks, failed.work_state) == (False, "idle")
 
 
 @pytest.mark.asyncio
@@ -357,7 +361,8 @@ async def test_list_rows_carry_work_state_for_task_nodes_and_null_for_legacy(tre
 
   await tree.runs.record_finish(worker_id, run.id, "failed")
   rows = {row["id"]: row for row in await _list_json(session_mgr, cfg, ThreadManager(cfg))}
-  assert rows[worker_id]["work_state"] == "attention"
+  # A terminal fact of any outcome settles the Run: the wire reads idle.
+  assert rows[worker_id]["work_state"] == "idle"
 
   # A legacy row's wire body carries the field's null exactly as before: no
   # derived verdict ever lands on it.

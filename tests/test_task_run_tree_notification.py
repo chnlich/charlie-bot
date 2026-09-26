@@ -155,11 +155,11 @@ async def test_terminal_outcomes_notify_and_clear_running_ancestor_counts(env) -
   root_row = tree.session_row(await tree._get_index(), root_id)
   assert root_row.running_descendant_count == 0, ("the collapsed-ancestor cue clears with the terminal fact")
 
-  # A failed run reads as attention, not running.
+  # A failed run reads idle, not running: a terminal Run is not activity.
   run2 = await tree.runs.register_run(RunRecord(id="run-2", session_id=worker_id, kind="work"))
   await tree.dispatch.finish_run(worker_id, run2.id, outcome="failed", exit_code=1)
   failed_row = tree.session_row(await tree._get_index(), worker_id)
-  assert failed_row.work_state == "attention"
+  assert failed_row.work_state == "idle"
   assert tree.session_row(await tree._get_index(), root_id).running_descendant_count == 0
 
 
@@ -179,7 +179,7 @@ async def test_stop_request_and_interrupted_outcome_ride_the_same_seam(env) -> N
     assert (worker_id, ET.RUN_FINISHED) in spy.calls, (
         "the observed exit lands the interrupted terminal fact through the same seam")
     node = tree.session_row(await tree._get_index(), worker_id)
-    assert node.work_state == "attention", ("an interrupted run is attention (unresolved), never a live spinner")
+    assert node.work_state == "idle", ("an interrupted run's terminal fact settles the node, never a live spinner")
   finally:
     if proc.poll() is None:
       proc.kill()

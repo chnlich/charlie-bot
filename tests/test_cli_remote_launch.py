@@ -14,20 +14,16 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from conftest import CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, _wait_for
+from conftest import CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, CONFIG_GET_CONFIG_PATCH_TARGET, _wait_for
 
 from src.cli.remote_launch import main
 from src.core.timeouts import SSH_CONNECT_TIMEOUT
 
-# Import-path patch targets for the remote_launch seams. src/cli/remote_launch.py defers
-# get_config into main() (`from src.core.config import get_config` at call scope), so that
-# stand-in lands on the src.core.config module attribute and the deferred import reads it
-# at call time; subprocess.run is reached through main's module-scope `import subprocess`,
-# so its stand-in lands on the src.cli.remote_launch module attribute. The
-# src.cli.common helpers bind the sessions root in their own namespace
-# (CLI_COMMON_SESSIONS_DIR_PATCH_TARGET), and a drifted string copy of either route would
-# patch a name nothing reads.
-_GET_CONFIG_PATCH_TARGET = "src.core.config.get_config"
+# Import-path patch target for remote_launch's subprocess seam. subprocess.run is reached
+# through main's module-scope `import subprocess`, so its stand-in lands on the
+# src.cli.remote_launch module attribute. The config and sessions-root routes
+# (CONFIG_GET_CONFIG_PATCH_TARGET and CLI_COMMON_SESSIONS_DIR_PATCH_TARGET in conftest)
+# carry their deferred-import mechanism at their definition.
 _SUBPROCESS_RUN_PATCH_TARGET = "src.cli.remote_launch.subprocess.run"
 
 
@@ -60,15 +56,15 @@ def _mock_config(home: Path) -> MagicMock:
 
 @contextlib.contextmanager
 def _patched_launch(cfg: MagicMock, argv_tail: list[str], run_patch: Any = None) -> Iterator[Any]:
-  """Install the patch stack every launch test shares: argv, both get_config bindings, and run_patch.
+  """Install the patch stack every launch test shares: argv, the config read, the sessions root, and run_patch.
 
-  Yields the subprocess.run stand-in when run_patch is given, else None. Why two get_config
-  bindings are patched: see the patch-target comment above.
+  Yields the subprocess.run stand-in when run_patch is given, else None. Why each stand-in
+  lands on its module attribute: the patch-target comments at each target's definition.
   """
   patches = [
       patch("sys.argv", ["remote_launch", *argv_tail]),
       patch(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=cfg.sessions_dir),
-      patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg),
+      patch(CONFIG_GET_CONFIG_PATCH_TARGET, return_value=cfg),
   ]
   if run_patch is not None:
     patches.append(run_patch)

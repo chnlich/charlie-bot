@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from conftest import CONFIG_GET_CONFIG_PATCH_TARGET
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -12,7 +13,7 @@ from src.core.config import BacklogRepoConfig, CharlieBotConfig
 
 
 def _build_client(monkeypatch: pytest.MonkeyPatch, cfg: CharlieBotConfig) -> TestClient:
-  monkeypatch.setattr("src.core.config.get_config", lambda: cfg)
+  monkeypatch.setattr(CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   app = FastAPI()
   app.include_router(backlog_api.router, prefix="/api/backlog")
   return TestClient(app, raise_server_exceptions=False)

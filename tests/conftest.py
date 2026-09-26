@@ -2150,8 +2150,7 @@ def agent_headers(session_id: str, run_id: str) -> dict[str, str]:
   return {"Authorization": f"Bearer {token}"}
 
 
-async def legacy_parent_with_open_task(
-    session_mgr: SessionManager, tree: TaskTreeManager, *, request_id: str):
+async def legacy_parent_with_open_task(session_mgr: SessionManager, tree: TaskTreeManager, *, request_id: str):
   """A legacy (profile None) parent session with one open child task under it.
 
   The shape the caller-session rule governs: a legacy parent's own turn drives

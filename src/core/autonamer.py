@@ -52,7 +52,7 @@ def __getattr__(name: str) -> Any:
 
 # Matches true defaults ("Session 7"), legacy empty placeholders ("7: "), and
 # clone/elone children of a never-named session — clone and elone prepend C / E
-# to the parent name (src/core/sessions.py _spawn_with_reference), so "CSession
+# to the parent name (src/core/sessions.py _spawn_with_history), so "CSession
 # 746" or "ECSession 3" is still a default. Does NOT match already-renamed
 # titles like "7: My Topic".
 _DEFAULT_NAME_RE = re.compile(r"^[CE]*(Session \d+|\d+: )$")

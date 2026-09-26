@@ -19,7 +19,12 @@ from conftest import session_dir_names as _session_dir_names
 
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, SessionMetadata
-from src.core.sessions import SessionManager
+from src.core.sessions import (
+    ELONE_BOOTSTRAP_OPENER,
+    FORK_BOOTSTRAP_OPENER,
+    HISTORY_LOCATION_NOTE,
+    SessionManager,
+)
 
 
 async def _seed_parent(session_mgr: SessionManager, *, backend: str = OPUS_BACKEND_ID) -> str:
@@ -102,18 +107,30 @@ async def test_route_resolves_requested_backend(
   assert response.json()["backend"] == expected_backend
 
 
-# Each route seeds its bootstrap prompt with its own context fragments; both
-# must stay free of the reconstructed-context and recap phrasing.
+# Each route seeds its bootstrap prompt with one single-spaced paragraph: opener,
+# successor-specific context, the shared history-location note, the directive.
+# Both must stay free of the reconstructed-context and recap phrasing, and no
+# reference-file path may appear any more — the history is the child's own chat log.
 _ROUTE_BOOTSTRAP_ROWS = [
-    pytest.param("fork", 0, ("chronological", "newest entries at the end"), id="fork"),
-    pytest.param("elone", 1, ("wasn't satisfied", "Confirm with the user before acting."), id="elone"),
+    pytest.param(
+        "fork",
+        0, f"{FORK_BOOTSTRAP_OPENER} {HISTORY_LOCATION_NOTE} Get oriented from that log, "
+        "summarize where things stand, and wait for the user's next instruction.",
+        id="fork"),
+    pytest.param(
+        "elone",
+        1, f"{ELONE_BOOTSTRAP_OPENER} The dissatisfaction is usually with the most recent exchange "
+        f"before the takeover point. {HISTORY_LOCATION_NOTE} Understand what the user wanted and "
+        "where it went wrong, then give your read and a better approach. "
+        "Confirm with the user before acting.",
+        id="elone"),
 ]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("route", "event_index", "prompt_fragments"), _ROUTE_BOOTSTRAP_ROWS)
-async def test_route_bootstrap_points_at_reference_file(
-    two_backend_env: _RouteEnv, route: str, event_index: int, prompt_fragments: tuple[str, str]) -> None:
+@pytest.mark.parametrize(("route", "event_index", "expected_prompt"), _ROUTE_BOOTSTRAP_ROWS)
+async def test_route_bootstrap_names_the_chat_log(
+    two_backend_env: _RouteEnv, route: str, event_index: int, expected_prompt: str) -> None:
   cfg, session_mgr, calls = two_backend_env
   parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
 
@@ -121,13 +138,13 @@ async def test_route_bootstrap_points_at_reference_file(
     response = client.post(f"/api/sessions/{parent_id}/{route}", json={"event_index": event_index})
 
   assert response.status_code == 200
-  child_id = response.json()["id"]
-  reference_path = session_mgr.get_chat_events_path(child_id).parent / "parent_reference.jsonl"
+  assert response.json()["id"]
   assert len(calls) == 1
   prompt = calls[0]["content"]
-  assert str(reference_path) in prompt
-  for fragment in prompt_fragments:
-    assert fragment in prompt
+  # Exact equality: opener + context + history note + directive, single-spaced —
+  # which also proves no side-file path is pointed at any more.
+  assert prompt == expected_prompt
+  assert HISTORY_LOCATION_NOTE in prompt
   assert "reconstructed recent context" not in prompt
   assert "recap" not in prompt.lower()
 

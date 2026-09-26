@@ -73,11 +73,13 @@ _RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset(
 log = LazyStructlogLogger()
 
 # The fork/elone API routes (src/api/sessions.py) open their auto-injected
-# bootstrap prompts with these lines, and src.core.recap._AUTO_INJECTED_PREFIXES
-# filters such injected messages from recap asks by prefix match; both sides
-# import this one copy so an edit cannot drift the two apart.
+# bootstrap prompts with an opener plus the note, and
+# src.core.recap._AUTO_INJECTED_PREFIXES filters such injected messages from
+# recap asks by opener-prefix match; the v1/v2 context-reset notes reuse the
+# note. Both sides import this one copy so an edit cannot drift them apart.
 FORK_BOOTSTRAP_OPENER = "This session continues a prior conversation."
 ELONE_BOOTSTRAP_OPENER = "You're taking over because the user wasn't satisfied with the previous session."
+HISTORY_LOCATION_NOTE = "Earlier turns' history remains readable in this session's chat log, data/chat_events.jsonl in the working directory."
 
 _METADATA_CACHE_TTL = 30.0  # seconds
 # Sweep bound for the listings memo. In-process writes bump the revision and
@@ -771,9 +773,9 @@ def _reference_scan(arr: np.ndarray) -> tuple[np.ndarray, bool]:
   every byte: it is the proof that skips the utf-8 decode whose
   UnicodeDecodeError an undecodable corpus must raise.
   """
-  # numpy rides the fork's parent-reference stream (the M99 server import floor):
+  # numpy rides the fork's history-copy stream (the M99 server import floor):
   # the module sits on the sessions chain every server start pulls, and the
-  # vectorized scan serves only this reference fast path.
+  # vectorized scan serves only this copy fast path.
   import numpy as np
   parts: list[np.ndarray] = []
   ascii_ok = True
@@ -903,7 +905,7 @@ def _stream_reference_lines(out: BinaryIO, data: bytes | mmap.mmap, take: int) -
 
 
 def _stream_reference_file(out: BinaryIO, source: Path, take: int) -> tuple[int, int]:
-  """Stream one reference source's first ``take`` raw line frames into ``out``.
+  """Stream one parent source's first ``take`` raw line frames into ``out``.
 
   The source rides an mmap: the frame scan and the window write read the
   mapping directly, so the corpus never enters the Python heap as one object —
@@ -1531,8 +1533,8 @@ class SessionManager:
       event_index: int | None = None,
       backend: str | None = None,
   ) -> SessionMetadata:
-    """Create a new session with parent events stored as a reference file."""
-    meta = await self._spawn_with_reference(parent_id, event_index, backend, "C")
+    """Create a new session whose chat log opens with the parent's raw event lines."""
+    meta = await self._spawn_with_history(parent_id, event_index, backend, "C")
     self._log_spawn("session_cloned", meta, parent_id, event_index)
     return meta
 
@@ -1542,7 +1544,8 @@ class SessionManager:
       event_index: int,
       backend: str | None = None,
   ) -> SessionMetadata:
-    """Create an Elon-e session: reference handoff, archive the parent.
+    """Create an Elon-e session: the child's log opens with the parent's raw
+    event lines, the parent is archived.
 
     Runs the succession rejection BEFORE any child session is created, so a
     refused call mutates nothing on disk. The per-parent invariant: each elone
@@ -1565,7 +1568,7 @@ class SessionManager:
     if fresh_parent.scheduled_task is not None:
       meta = await self._elone_scheduled_successor(fresh_parent, event_index, backend)
     else:
-      meta = await self._spawn_with_reference(parent_id, event_index, backend, "E")
+      meta = await self._spawn_with_history(parent_id, event_index, backend, "E")
 
     # Auto-archive the parent, and record the elone successor
     # pointer (re-read under lock so concurrent mutations to the parent aren't
@@ -1608,7 +1611,7 @@ class SessionManager:
       raise ScheduledSessionBusyError(
           f"scheduled task '{parent.scheduled_task}' elone is blocked because session "
           f"'{parent.id}' has running work; retry when it is idle")
-    meta = await self._spawn_with_reference(parent.id, event_index, backend, "E", inherit_scheduling=True)
+    meta = await self._spawn_with_history(parent.id, event_index, backend, "E", inherit_scheduling=True)
     try:
       await self._scheduled_sessions.write_scheduled_task_backend(parent.scheduled_task, meta.backend)
     except Exception:
@@ -1616,7 +1619,7 @@ class SessionManager:
       raise
     return meta
 
-  async def _spawn_with_reference(
+  async def _spawn_with_history(
       self,
       parent_id: str,
       event_index: int | None,
@@ -1624,8 +1627,13 @@ class SessionManager:
       name_prefix: str,
       inherit_scheduling: bool = False,
   ) -> SessionMetadata:
-    """Create a child session whose parent history lives in data/parent_reference.jsonl.
+    """Create a child session whose chat log opens with the parent's raw event lines.
 
+    The child's ``data/chat_events.jsonl`` first holds the parent's raw event
+    lines for ``[0, end)`` (``end`` is ``event_index + 1`` at a cut point, else
+    the parent's event count), then the ``clone_start`` marker; the child
+    appends its own events after it. One history per session, in the file the
+    model reads in place — the same log the parent grepped.
     ``inherit_scheduling`` marks an inheriting scheduler succession: the child
     keeps the parent name verbatim (name_prefix goes unused), takes over
     scheduled_task, and receives the scheduler bookkeeping so the next cron
@@ -1643,9 +1651,6 @@ class SessionManager:
         raise ValueError(f"event_index {event_index} out of range for parent session {parent_id} with {count} events")
       end = event_index + 1
 
-    # A full-corpus reference carries every parent event, so raw lines stream
-    # into it verbatim; the parse-and-reserialize round trip only buys the
-    # truncation a takeover point asks for.
     meta = SessionMetadata(
         name=parent.name if inherit_scheduling else f"{name_prefix}{parent.name}",
         parent_session_id=parent_id,
@@ -1658,17 +1663,8 @@ class SessionManager:
     session_dir = self._session_dir(meta.id)
     self._create_session_dirs(session_dir)
 
-    reference_path = self.parent_reference_path(meta.id)
-    if event_index is None:
-      await asyncio.to_thread(self._write_reference_from_sources_sync, reference_path, parent_id, end)
-    else:
-      events, _ = await asyncio.to_thread(self.load_chat_events_range, parent_id, 0, end)
-      if len(events) != end:
-        raise ValueError(f"loaded {len(events)} parent events for requested range [0, {end})")
-      reference_raw = await asyncio.to_thread(self._serialize_reference_events_sync, events)
-      await asyncio.to_thread(self._write_reference_raw_sync, reference_path, reference_raw)
-
     events_path = self.get_chat_events_path(meta.id)
+    await asyncio.to_thread(self._write_history_prefix_sync, events_path, parent_id, end)
     clone_event = {
         "type": ET.CLONE_START,
         "parent_session_id": parent_id,
@@ -1749,15 +1745,8 @@ class SessionManager:
     child_plans_path.parent.mkdir(parents=True, exist_ok=True)
     write_json_atomically(child_plans_path, data, indent=2)
 
-  @staticmethod
-  def _serialize_reference_events_sync(events: list[dict]) -> str:
-    # Cache-served events carry the in-memory event_index stamp
-    # persist_and_broadcast injects after the disk write; the reference must
-    # match the persisted lines, which predate the stamp.
-    return "".join(json.dumps({k: v for k, v in event.items() if k != "event_index"}) + "\n" for event in events)
-
-  def _write_reference_from_sources_sync(self, path: Path, parent_id: str, end: int) -> None:
-    """Write the parent's raw event lines for a full-corpus reference into ``path``.
+  def _write_history_prefix_sync(self, path: Path, parent_id: str, end: int) -> None:
+    """Write the parent's raw event lines for ``[0, end)`` into ``path``.
 
     Streams the non-blank lines among the first ``archive_take`` raw archive
     lines (``data/archives/`` in the chronological filename glob) followed by
@@ -1768,9 +1757,12 @@ class SessionManager:
     pass landing between the caller's event count and this write moves lines
     from the live file to the archive tail, changing the split but not the
     sequence — and both spend raw lines against the budget and skip blanks.
-    The corrupt-corpus failures the parsed write surfaces through its length
-    check stay loud here without paying the parse
+    The corrupt-corpus failures a parsed write would surface through its
+    length check stay loud here without paying the parse
     (:func:`_stream_reference_lines`), and so does a take that ends short.
+    The clone path points ``path`` at the child's ``data/chat_events.jsonl``:
+    the cut point rides the same raw-line budget as the full corpus, so one
+    copy path serves both.
     """
     archive_take = min(self._chat_events.read_archive_offset_sync(parent_id), end)
     live_take = end - archive_take
@@ -1804,13 +1796,8 @@ class SessionManager:
     atomic_write_stream(path, _write)
 
   @staticmethod
-  def _write_reference_raw_sync(path: Path, raw: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(path, raw)
-
-  @staticmethod
   def _create_session_dirs(session_dir: Path) -> None:
-    # Every session-creation path (create_session, _spawn_with_reference) lays
+    # Every session-creation path (create_session, _spawn_with_history) lays
     # down the identical skeleton; the single helper is what keeps them agreeing.
     for subdir in ("data", THREADS_DIR_NAME):
       (session_dir / subdir).mkdir(parents=True, exist_ok=True)
@@ -1828,10 +1815,6 @@ class SessionManager:
     See ``src/core/chat_events.py`` for the path layout.
     """
     return self._chat_events.get_chat_events_path(session_id)
-
-  def parent_reference_path(self, session_id: str) -> Path:
-    """Return the absolute path to a session's parent_reference.jsonl."""
-    return self._session_dir(session_id) / "data" / "parent_reference.jsonl"
 
   async def rename_session(self, session_id: str, new_name: str) -> SessionMetadata | None:
     """Rename a session and return the updated metadata."""
@@ -2139,13 +2122,20 @@ class SessionManager:
     return context_tokens, await asyncio.to_thread(newest_request)
 
   async def has_completed_round(self, session_id: str) -> bool:
-    """True when the live event stream contains a master_done event.
+    """True when the session's own segment of the log holds a master_done event.
 
-    Reads through the existing ``load_chat_events_sync`` cache; adds no new
-    persistent state.
+    A clone/elone child's log opens with the parent's copied lines, so only a
+    ``master_done`` after the newest ``clone_start`` marker is this session's
+    completed round; a log without a marker counts any ``master_done``, as
+    before. Reads through the existing ``load_chat_events_sync`` cache; adds no
+    new persistent state.
     """
-    events = self.load_chat_events_sync(session_id)
-    return any(ev.get("type") == ET.MASTER_DONE for ev in events)
+    for ev in reversed(self.load_chat_events_sync(session_id)):
+      if ev.get("type") == ET.CLONE_START:
+        return False
+      if ev.get("type") == ET.MASTER_DONE:
+        return True
+    return False
 
   async def _save_field_fresh(self, session_id: str, field: str, value: Any) -> None:
     """Set one metadata field on a fresh disk read, under the per-session lock.

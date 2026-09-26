@@ -1058,17 +1058,17 @@ EOF
 ```
 
 M17 — session fork (clone) latency: the endpoint behind `POST /api/sessions/{id}/fork`,
-`SessionManager.fork_session`, parses the parent's archived and live chat events and
-re-serializes them into the child's `data/parent_reference.jsonl`, appends the clone event,
-and copies plan artifacts file by file, so the wall time scales with the parent's chat-event
-bytes while the `threads/` payload — often the bulk of a session's directory size — is never
-read. A fork writes state, so the live instance cannot be probed read-only; the collector
-resolves the session with the heaviest fork corpus (live chat events plus archives), copies
-only that session into a scratch `CHARLIEBOT_HOME` under /tmp, and times `fork_session` from
-the main checkout, one cold pass then five timed forks, each child removed as soon as its
-wall is taken (a resident child carries a corpus-sized ``parent_reference.jsonl`` whose
-pending writeback throttles the next fork's reference write into the kernel's dirty-page
-path — the reading then tracks host IO state, not the fork). Evidence while the live server runs
+`SessionManager.fork_session`, streams the parent's archived and live raw chat-event lines
+into the child's `data/chat_events.jsonl`, appends the clone event, and copies plan
+artifacts file by file, so the wall time scales with the parent's chat-event bytes while the
+`threads/` payload — often the bulk of a session's directory size — is never read. A fork
+writes state, so the live instance cannot be probed read-only; the collector resolves the
+session with the heaviest fork corpus (live chat events plus archives), copies only that
+session into a scratch `CHARLIEBOT_HOME` under /tmp, and times `fork_session` from the main
+checkout, one cold pass then five timed forks, each child removed as soon as its wall is
+taken (a resident child carries a corpus-sized copied history in its chat log whose pending
+writeback throttles the next fork's copy write into the kernel's dirty-page path — the
+reading then tracks host IO state, not the fork). Evidence while the live server runs
 older code points the same collector at the branch checkout (`sys.path.insert` at the
 worktree root), the same shape as the M15 protocol.
 
@@ -1080,8 +1080,8 @@ sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
 from src.core.config import CharlieBotConfig
 from src.core.sessions import SessionManager
 
-# Heaviest fork corpus: live chat events plus archives, the bytes fork_session parses
-# and re-serializes into the child's parent_reference.jsonl.
+# Heaviest fork corpus: live chat events plus archives, the raw lines fork_session
+# streams into the child's chat_events.jsonl.
 root = Path.home() / ".charliebot" / "sessions"
 best, best_n = None, -1
 for d in root.iterdir():
@@ -1103,9 +1103,9 @@ cfg = CharlieBotConfig(charliebot_home=home)
 sessions = SessionManager(cfg)
 
 async def main():
-    # Each fork leaves a corpus-sized parent_reference.jsonl; the child is freed
-    # as soon as its wall is taken because accumulated gigabytes of dirty page
-    # cache throttle the next fork's reference write (the same ramp five plain
+    # Each fork leaves a corpus-sized copied history in the child's chat log; the
+    # child is freed as soon as its wall is taken because accumulated gigabytes of
+    # dirty page cache throttle the next fork's copy write (the same ramp five plain
     # 1 GB writes into one directory ride) — without the free, the five
     # back-to-back forks of the 1051.3 MB corpus read 6.3-10.1 s where the
     # freed shape reads 0.5-0.7 s on an idle disk.

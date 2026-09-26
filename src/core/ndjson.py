@@ -526,4 +526,6 @@ def _append_ndjson_sync(path: Path, line: str) -> None:
 async def append_ndjson(path: Path, data: dict) -> None:
   """Async-append a single JSON line to an NDJSON file."""
   path.parent.mkdir(parents=True, exist_ok=True)
-  await asyncio.to_thread(_append_ndjson_sync, path, json.dumps(data) + "\n")
+  # ensure_ascii=False keeps non-ASCII text verbatim, so grep/rg can match the
+  # chat log as written; _append_ndjson_sync encodes the line as UTF-8.
+  await asyncio.to_thread(_append_ndjson_sync, path, json.dumps(data, ensure_ascii=False) + "\n")

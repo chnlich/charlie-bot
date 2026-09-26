@@ -295,19 +295,46 @@ def test_translate_todo_list_suppresses_duplicate_snapshots(monkeypatch: pytest.
   assert updated == [assistant_text_event("- [x] Inspect the code\n- [ ] Patch the bug")]
 
 
+# output_fields -> the keys the completed item carries; expected_content is what
+# the tool_result must show. codex-cli 0.157.0 emits a command's output as
+# aggregated_output; older schemas emitted output, and aggregated_output wins
+# when both are present.
 _TOOL_ITEM_ROWS = [
     pytest.param(
         "command_execution",
         "command",
         "cargo test",
+        {"aggregated_output": "3 passed"},
         "3 passed",
         "Bash",
-        id="command_execution_maps_onto_bash",
+        id="command_execution_reads_aggregated_output",
+    ),
+    pytest.param(
+        "command_execution",
+        "command",
+        "cargo test",
+        {"output": "3 passed"},
+        "3 passed",
+        "Bash",
+        id="command_execution_falls_back_to_output_older_schema",
+    ),
+    pytest.param(
+        "command_execution",
+        "command",
+        "cargo test",
+        {
+            "aggregated_output": "3 passed",
+            "output": "stale"
+        },
+        "3 passed",
+        "Bash",
+        id="command_execution_prefers_aggregated_output_over_output",
     ),
     pytest.param(
         "web_search",
         "query",
         "codex exec json flags",
+        {"output": "docs page"},
         "docs page",
         "WebSearch",
         id="web_search_maps_onto_websearch",
@@ -315,19 +342,20 @@ _TOOL_ITEM_ROWS = [
 ]
 
 
-@pytest.mark.parametrize(("item_type", "payload_field", "payload_value", "output", "tool"), _TOOL_ITEM_ROWS)
+@pytest.mark.parametrize(
+    ("item_type", "payload_field", "payload_value", "output_fields", "expected_content", "tool"), _TOOL_ITEM_ROWS)
 def test_translate_tool_item_maps_one_started_completed_pair_onto_one_tool_event(
-    monkeypatch: pytest.MonkeyPatch, item_type: str, payload_field: str, payload_value: str, output: str,
-    tool: str) -> None:
+    monkeypatch: pytest.MonkeyPatch, item_type: str, payload_field: str, payload_value: str,
+    output_fields: dict[str, str], expected_content: str, tool: str) -> None:
   backend = _build_backend(monkeypatch)
-  item = {"id": "item-1", "type": item_type, payload_field: payload_value, "output": output}
+  item = {"id": "item-1", "type": item_type, payload_field: payload_value, **output_fields}
 
   started = backend.translate_event({"type": "item.started", "item": item})
   completed = backend.translate_event({"type": "item.completed", "item": item})
   updated = backend.translate_event({"type": "item.updated", "item": item})
 
   assert started == [{"type": ET.TOOL_USE, "name": tool, "input": {payload_field: payload_value}}]
-  assert completed == [{"type": ET.TOOL_RESULT, "tool_name": tool, "content": output}]
+  assert completed == [{"type": ET.TOOL_RESULT, "tool_name": tool, "content": expected_content}]
   assert not updated
 
 

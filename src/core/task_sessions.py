@@ -917,6 +917,7 @@ class TaskTreeManager:
       task: TaskSpec | None,
       name: str | None,
       backend: str | None,
+      group: str | None = None,
       caller: object,
   ) -> SessionMetadata:
     """Create one task node; a replayed request returns the original product.
@@ -974,6 +975,7 @@ class TaskTreeManager:
           task=task,
           name=name,
           backend=backend,
+          group=group,
           parent_meta=parent_meta,
           actor=_create_actor_for(caller),
       )
@@ -1054,6 +1056,7 @@ class TaskTreeManager:
       task: TaskSpec | None,
       name: str | None,
       backend: str | None,
+      group: str | None,
       parent_meta: SessionMetadata | None,
       actor: str,
   ) -> SessionMetadata:
@@ -1069,6 +1072,7 @@ class TaskTreeManager:
         task=task,
         task_parent_id=task_parent_id,
         backend=backend or (parent_meta.backend if parent_meta else "") or self._cfg.backends.options[0].id,
+        group=group,
     )
     try:
       (temp_dir / "data").mkdir(parents=True)

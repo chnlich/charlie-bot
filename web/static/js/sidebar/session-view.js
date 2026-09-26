@@ -882,13 +882,16 @@ function newTaskRequestId() {
   return 'ui-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
 }
 
-function taskCreateBody(taskParentId, backend) {
+function taskCreateBody(taskParentId, backend, group) {
   return {
     request_id: newTaskRequestId(),
     task_parent_id: taskParentId,
     profile: 'manager',
     task: {goal: ''},
     backend,
+    // JSON.stringify drops an undefined value: a create without a group sends
+    // the exact body it always has.
+    group,
   };
 }
 
@@ -900,17 +903,26 @@ async function createChildSession(parentId) {
   await createTaskNode(parentId);
 }
 
-async function createTaskNode(taskParentId) {
+// One-click create from a named group's header: the new session is born into
+// that group (the server writes group at creation time) and opens like New
+// Session does.
+async function createSessionInGroup(group) {
+  await createTaskNode(null, group);
+}
+
+async function createTaskNode(taskParentId, group) {
   try {
     const backendSel = document.getElementById('new-session-backend');
     const backend = backendSel ? backendSel.value : undefined;
     const res = await fetch('/api/sessions/', {
       method: 'POST',
       headers: JSON_HEADERS,
-      body: JSON.stringify(taskCreateBody(taskParentId, backend)),
+      body: JSON.stringify(taskCreateBody(taskParentId, backend, group)),
     });
     if (!res.ok) throw new Error(`Create session failed: ${res.status}`);
     const data = await res.json();
+    // The new session must be visible when the list repaints: open its group.
+    if (group && typeof Sidebar.expandSessionGroup === 'function') Sidebar.expandSessionGroup(group);
     // The new child must be visible when the list repaints: open its parent.
     if (taskParentId && typeof Sidebar.expandTreeNode === 'function') Sidebar.expandTreeNode(taskParentId);
     if (!SESSION_ID) {
@@ -999,6 +1011,7 @@ const API = {
   renderUsageFromData,
   createSession,
   createChildSession,
+  createSessionInGroup,
   renderNoActiveSessionView,
 };
 Sidebar.wire(API, {

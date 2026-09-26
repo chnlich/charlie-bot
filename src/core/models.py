@@ -477,6 +477,9 @@ class CreateSessionRequest(BaseModel):
   task_parent_id: str | None = None
   profile: TaskProfile | None = None
   task: TaskSpec | None = None
+  # Both create shapes: the sidebar group the new session is born into (the
+  # group-header "+" create). Stored verbatim, same as set_group stores it.
+  group: str | None = None
 
 
 class PatchSessionTaskRequest(BaseModel):

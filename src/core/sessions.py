@@ -1033,6 +1033,7 @@ class SessionManager:
         scheduled_task=req.scheduled_task,
         backend=backend or self._cfg.backends.options[0].id,
         slack_origin=req.slack_origin,
+        group=req.group,
         **overrides)
 
     self._create_session_dirs(self._session_dir(meta.id))

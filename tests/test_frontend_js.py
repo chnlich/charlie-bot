@@ -66,6 +66,7 @@ _NODE_TESTS = [
     "session_view_create_task.test.js",
     "session_view_sentinel.test.js",
     "show_more_toggle.test.js",
+    "sidebar_group_create_button.test.js",
     "sidebar_indicator_priority.test.js",
     "sidebar_mark_read.test.js",
     "sidebar_rename_prefill.test.js",

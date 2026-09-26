@@ -478,6 +478,7 @@ async def create_session(
           task=req.task,
           name=req.name,
           backend=req.backend,
+          group=req.group,
           caller=caller,
       )
     except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError, DelegationBlockedError) as e:

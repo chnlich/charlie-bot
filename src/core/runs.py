@@ -965,20 +965,6 @@ class RunStore:
     mark_sidebar_dirty(record.session_id)
     return record
 
-  async def create_retry_run(
-      self,
-      session_id: str,
-      request_id: str,
-      original_run_id: str,
-      *,
-      task_spec_text: str | None = None,
-      **fields: object,
-  ) -> RunRecord:
-    """Bind (session, request_id) to one retry run; replays return the original product."""
-    async with self._lock:
-      return await self.create_retry_run_locked(
-          session_id, request_id, original_run_id, task_spec_text=task_spec_text, **fields)
-
   async def create_retry_run_locked(
       self,
       session_id: str,
@@ -988,7 +974,10 @@ class RunStore:
       task_spec_text: str | None = None,
       **fields: object,
   ) -> RunRecord:
-    """create_retry_run for a caller already holding the control lock."""
+    """Bind (session, request_id) to one retry run; replays return the original product.
+
+    The caller holds the control lock (the lock is not reentrant).
+    """
     run_id = stable_run_id(session_id, request_id)
     record_kwargs: dict = {"kind": "work", **fields}
     record = RunRecord(

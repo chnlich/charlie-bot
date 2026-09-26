@@ -23,7 +23,7 @@ from conftest import (
 )
 
 from src.core import event_types as ET
-from src.core.models import PatchSessionTaskRequest, RunRecord, TaskSpec
+from src.core.models import PatchSessionTaskRequest, TaskSpec
 from src.core.run_token import CallerIdentity
 from src.core.task_sessions import TaskTreeManager
 from tests.test_task_execution import (
@@ -58,32 +58,41 @@ def make_chat_client(cfg, session_mgr, tree):
 
 
 async def build_manager_with_worker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[object, object, TaskTreeManager, object, object]:
   """One manager (no user authorization yet) and one implement worker under it."""
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   patch_instructions_content(monkeypatch)
   manager = await tree.create_task(
-      request_id="root", task_parent_id=None, profile="manager",
-      task=TaskSpec(goal="pm"), name="PM", backend=None, caller=OPERATOR)
+      request_id="root",
+      task_parent_id=None,
+      profile="manager",
+      task=TaskSpec(goal="pm"),
+      name="PM",
+      backend=None,
+      caller=OPERATOR)
   worker = await tree.create_task(
-      request_id="child", task_parent_id=manager.id, profile="worker",
-      task=TaskSpec(goal="do the work"), name="W", backend=None, caller=OPERATOR)
+      request_id="child",
+      task_parent_id=manager.id,
+      profile="worker",
+      task=TaskSpec(goal="do the work"),
+      name="W",
+      backend=None,
+      caller=OPERATOR)
   # The WORKER path's deferred loader binds src.agents.worker.build_backend on
   # first access from whatever src.agents.backends.registry.build_backend holds
   # at that moment, so the worker target must be patched BEFORE the registry
   # target: a registry stand-in active at the first worker access would be
   # bound as the worker "previous" value and restored permanently at undo.
   install_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("authorized work")])],
-      WORKER_BUILD_BACKEND_PATCH_TARGET)
+      monkeypatch, [SpawningScriptedBackend([result_event("authorized work")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   # Manager turns ride the build-registry path.
   install_backends(
       monkeypatch,
       [SpawningScriptedBackend([result_event("taken off")]),
-       SpawningScriptedBackend([result_event("later")])],
-      BUILD_BACKEND_PATCH_TARGET)
+       SpawningScriptedBackend([result_event("later")])], BUILD_BACKEND_PATCH_TARGET)
   return cfg, session_mgr, tree, manager, worker
 
 
@@ -136,19 +145,16 @@ async def test_take_off_message_launches_the_authorization_withheld_run(
 
 
 @pytest.mark.asyncio
-async def test_message_without_the_token_keeps_the_run_queued(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_message_without_the_token_keeps_the_run_queued(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A real user message that opens no window re-drives nothing: the Run stays
   queued, no process starts, no backend is built."""
   cfg, session_mgr, tree, manager, worker = await build_manager_with_worker(tmp_path, monkeypatch)
   builds = install_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("never used")])],
-      WORKER_BUILD_BACKEND_PATCH_TARGET)
+      monkeypatch, [SpawningScriptedBackend([result_event("never used")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   run_id = await dispatch_withheld_work_run(tree, worker)
 
   with make_chat_client(cfg, session_mgr, tree) as client:
-    sent = client.post(
-        f"/api/sessions/{manager.id}/message", json={"content": "hold on, new plan"})
+    sent = client.post(f"/api/sessions/{manager.id}/message", json={"content": "hold on, new plan"})
     assert sent.status_code == 202, sent.text
 
   await assert_stays_queued(tree, worker.id, run_id)
@@ -156,8 +162,7 @@ async def test_message_without_the_token_keeps_the_run_queued(
 
 
 @pytest.mark.asyncio
-async def test_paused_node_stays_queued_under_a_take_off(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_paused_node_stays_queued_under_a_take_off(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The authorizing message re-drives only open, unpaused nodes: a paused
   node's queued Run stays exactly as it was."""
   cfg, session_mgr, tree, manager, worker = await build_manager_with_worker(tmp_path, monkeypatch)
@@ -179,16 +184,26 @@ async def test_sibling_subtree_under_its_own_user_node_keeps_its_gate(
   cfg, session_mgr, tree, manager, worker = await build_manager_with_worker(tmp_path, monkeypatch)
   # A sub-manager with its own (non-authorizing) real user instruction.
   sub = await tree.create_task(
-      request_id="sub", task_parent_id=manager.id, profile="manager",
-      task=TaskSpec(goal="sub program"), name="Sub", backend=None, caller=OPERATOR)
+      request_id="sub",
+      task_parent_id=manager.id,
+      profile="manager",
+      task=TaskSpec(goal="sub program"),
+      name="Sub",
+      backend=None,
+      caller=OPERATOR)
   await tree.dispatch.admit_input(sub.id, event_type=ET.USER, content="carry on locally", actor="user")
   sub_decision = await tree.dispatch.dispatch_pending(sub.id)
   # The sub's own turn consumes the serialized slot before the withheld work
   # dispatches, so the takeoff request later meets an uncontended tree.
   await wait_for_terminal_run(tree, sub.id, str(sub_decision["run_id"]))
   sub_worker = await tree.create_task(
-      request_id="sub-worker", task_parent_id=sub.id, profile="worker",
-      task=TaskSpec(goal="sub work"), name="SW", backend=None, caller=OPERATOR)
+      request_id="sub-worker",
+      task_parent_id=sub.id,
+      profile="worker",
+      task=TaskSpec(goal="sub work"),
+      name="SW",
+      backend=None,
+      caller=OPERATOR)
   sub_run_id = await dispatch_withheld_work_run(tree, sub_worker)
   root_run_id = await dispatch_withheld_work_run(tree, worker)
 

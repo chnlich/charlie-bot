@@ -61,7 +61,7 @@ from src.core.models import (
     utc_now,
 )
 from src.core.run_token import RUN_TOKEN_ENV, RunTokenClaims, sign_run_token
-from src.core.runs import RunNotFoundError, scan_result_exit
+from src.core.runs import RunNotFoundError, run_not_found_in_task_text, scan_result_exit
 from src.core.sessions import SessionManager
 from src.core.spawner_backends import resolve_backend_option
 from src.core.takeoff_gate import DelegationBlockedError, is_verify_exempt
@@ -285,7 +285,7 @@ class TaskExecutionAdapter:
             if launch_run_id is not None:
                 run = await tree.runs.get_run(session_id, launch_run_id)
                 if run is None:
-                    raise TaskNotFoundError(f"run {launch_run_id} not found in task {session_id}")
+                    raise TaskNotFoundError(run_not_found_in_task_text(launch_run_id, session_id))
                 events = tree.runs.load_events_sync(session_id)
                 if (tree.runs.run_has_terminal_fact(run, events) or run.pid is not None or
                         tree.runs.stop_requested(events, run.id)):
@@ -455,7 +455,7 @@ class TaskExecutionAdapter:
             meta = await tree.load_task_meta(session_id)
             run = await tree.runs.get_run(session_id, run_id)
             if run is None:
-                raise RunNotFoundError(f"run {run_id} not found in task {session_id}")
+                raise RunNotFoundError(run_not_found_in_task_text(run_id, session_id))
             state = tree.task_state(session_id)
             if state != "open" or meta.automation_paused:
                 reason = (f"withheld: task {session_id} is {state}" if state != "open"
@@ -617,7 +617,7 @@ class TaskExecutionAdapter:
         tree = self._tree
         run = await tree.runs.get_run(session_id, run_id)
         if run is None:
-            raise RunNotFoundError(f"run {run_id} not found in task {session_id}")
+            raise RunNotFoundError(run_not_found_in_task_text(run_id, session_id))
         events = tree.runs.load_events_sync(session_id)
         outcome = tree.runs.terminal_outcome(events, run_id)
         if outcome is not None:
@@ -1228,7 +1228,7 @@ class TaskExecutionAdapter:
         tree = self._tree
         run = await tree.runs.get_run(session_id, run_id)
         if run is None:
-            raise RunNotFoundError(f"run {run_id} not found in task {session_id}")
+            raise RunNotFoundError(run_not_found_in_task_text(run_id, session_id))
         if run.pid is None or run.pid_start is None:
             raise TaskInvalidError(
                 f"run {run_id} records no launched process identity; nothing to re-attach")

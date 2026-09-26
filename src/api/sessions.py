@@ -90,7 +90,7 @@ from src.core.models import (
 )
 from src.core.plans import PlanRegistryManager
 from src.core.run_token import CallerIdentity
-from src.core.runs import RunIdentityConflictError, RunNotFoundError
+from src.core.runs import RunIdentityConflictError, RunNotFoundError, run_not_found_in_task_text
 from src.core.sessions import (
     ELONE_BOOTSTRAP_OPENER,
     FORK_BOOTSTRAP_OPENER,
@@ -1851,7 +1851,7 @@ async def get_run_context(
   """
   run = await task_mgr.runs.get_run(session_id, run_id)
   if run is None:
-    raise HTTPException(status_code=404, detail=f"run {run_id} not found in task {session_id}")
+    raise HTTPException(status_code=404, detail=run_not_found_in_task_text(run_id, session_id))
   snapshot_payload: dict | None = None
   legacy_prompt: dict | None = None
   if run.prompt_snapshot_ref:

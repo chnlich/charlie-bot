@@ -48,6 +48,7 @@ from src.core.control_events import (
 )
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionMetadata
+from src.core.runs import run_not_found_in_task_text
 
 if TYPE_CHECKING:
     from src.core.task_sessions import TaskTreeManager
@@ -739,7 +740,7 @@ class TaskCompletionManager:
         run = await tree.runs.get_run(session_id, run_id)
         if run is None:
             from src.core.task_sessions import TaskNotFoundError
-            raise TaskNotFoundError(f"run {run_id} not found in task {session_id}")
+            raise TaskNotFoundError(run_not_found_in_task_text(run_id, session_id))
         if evidence is not None:
             effective_evidence = evidence
         else:

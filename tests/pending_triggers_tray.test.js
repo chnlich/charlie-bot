@@ -107,6 +107,9 @@ test('collapsed tray shows the next trigger line, target, message and +N more', 
   assert.match(html, /pid 12345/);
   assert.match(html, /tests finished: confirm the push landed on origin\/main, then deploy/);
   assert.match(html, /\+2 more/);
+  // Separator dots ride between the time, the target and the message, as in
+  // the mockup's collapsed frames (one even without a watch target).
+  assert.ok(html.includes('<span class="text-slate-600">·</span>'));
   // Collapsed: no cancel button anywhere.
   assert.ok(!html.includes('Cancel'));
 });

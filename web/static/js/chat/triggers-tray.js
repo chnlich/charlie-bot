@@ -129,7 +129,8 @@
       html += '<span class="text-slate-600">·</span>'
         + '<span class="tray-mono text-amber-300 whitespace-nowrap">' + escapeHtml(watchTargetsLabel(targets)) + '</span>';
     }
-    html += '<span class="truncate text-slate-400 flex-1 min-w-0" title="' + escapeHtmlAttr(next.message) + '">'
+    html += '<span class="text-slate-600">·</span>'
+      + '<span class="truncate text-slate-400 flex-1 min-w-0" title="' + escapeHtmlAttr(next.message) + '">'
       + escapeHtml(next.message) + '</span>';
     if (trayTriggers.length > 1) {
       html += '<span class="text-xs text-slate-500 whitespace-nowrap">+' + (trayTriggers.length - 1) + ' more</span>';

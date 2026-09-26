@@ -52,9 +52,12 @@ _USAGE_TAIL_BYTES = 1 << 20
 # concurrent sessions can never cut a fresh plan event out of the scan set.
 _CODEX_USAGE_SCAN_WINDOW_HOURS = 6
 # Cap for the per-account spend memo. The live sweep drops files outside the
-# 7-day window each round, so the resident set is the live rollout count; this
-# bound only stops a pathological dir from growing the memo without bound.
-_SPEND_CACHE_LIMIT = 512
+# 7-day window each round, so the resident set is the window's file count and
+# the cap must stay above it: a working set past the cap re-parses the whole
+# corpus every round, because each miss's re-record evicts the next hit in
+# walk order. This bound only stops a pathological dir from growing the memo
+# without bound.
+_SPEND_CACHE_LIMIT = 8192
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 TOKEN_REFRESH_URL = "https://platform.claude.com/v1/oauth/token"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"

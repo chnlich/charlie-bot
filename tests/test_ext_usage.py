@@ -509,6 +509,44 @@ async def test_codex_provider_spend_reparses_only_changed_files(
   assert reapplied_usage["spend"]["last_7d_usd"] > first_usage["spend"]["last_7d_usd"]
 
 
+@pytest.mark.asyncio
+async def test_codex_provider_spend_stays_memo_served_past_a_500_file_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A 7-day window holding hundreds of files still serves steady rounds from the memo.
+
+  The spend memo's cap must sit above the window's file count: each miss's
+  re-record evicts the next hit in walk order, so a working set past the cap
+  re-parses the whole corpus every round.
+  """
+  provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
+  now, rollout_dir = _seed_rollout_dir(tmp_path)
+  model_line = json.dumps(_build_turn_context_event(model="gpt-5.3-codex"))
+  spend_line = json.dumps(
+      _build_spend_token_count_event(
+          timestamp=now.isoformat(), input_tokens=1000, cached_input_tokens=0, output_tokens=0))
+  names = [f"rollout-{i:04d}.jsonl" for i in range(600)]
+  for name in names:
+    (rollout_dir / name).write_text(model_line + "\n" + spend_line + "\n")
+
+  extracted: list[str] = []
+  real_extract = ext_usage_mod._extract_codex_spend_events
+
+  def _counting_extract(path: Path) -> list[ext_usage_mod._SpendEvent] | None:
+    extracted.append(path.name)
+    return real_extract(path)
+
+  monkeypatch.setattr(ext_usage_mod, "_extract_codex_spend_events", _counting_extract)
+
+  first_usage = await provider.fetch()
+  assert sorted(extracted) == names
+
+  extracted.clear()
+  steady_usage = await provider.fetch()
+  assert extracted == []
+  assert steady_usage is not None
+  assert steady_usage["spend"] == first_usage["spend"]
+
+
 def _seed_rollout_dir(tmp_path: Path) -> tuple[datetime, Path]:
   """Create <tmp>/sessions/YYYY/MM/DD dated today, the subtree the provider reads."""
   now = datetime.now(UTC)

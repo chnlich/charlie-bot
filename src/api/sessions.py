@@ -428,7 +428,7 @@ async def list_sessions(
                 entry[sidebar_state.HAS_RUNNING_TASKS],
                 entry[sidebar_state.HAS_PENDING_TRIGGER], entry[sidebar_state.PENDING_TRIGGER_COUNT],
                 _UTC_DATETIME_JSON.dump_python(next_trigger, mode="json") if next_trigger is not None else None,
-                entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL], display_backend)))
+                entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL], display_backend, entry.get(sidebar_state.WORK_STATE))))
   list_rows = tuple(row for row, _s in rendered)
   list_states = tuple(state for _row, state in rendered)
   cached = _sessions_list_whole_body
@@ -441,7 +441,13 @@ async def list_sessions(
     if state:
       (
           dump["thinking_since"], dump["has_running_tasks"], dump["has_pending_trigger"], dump["pending_trigger_count"],
-          dump["next_trigger_at"], dump["has_pending_plan_approval"], dump["backend"]) = state
+          dump["next_trigger_at"], dump["has_pending_plan_approval"], dump["backend"], work_state) = state
+      if work_state is not None:
+        # A task-tree row carries its fact-derived work verdict — the same
+        # derivation the /status payload serves — so the first paint shows the
+        # running/attention/waiting icons without a poll. A legacy row's key
+        # set stays byte-identical (the dump already carries the field's null).
+        dump[sidebar_state.WORK_STATE] = work_state
     payload.append(dump)
   body = fast_json_bytes(payload)
   _sessions_list_whole_body = (list_rows, list_states, body)
@@ -755,7 +761,7 @@ async def stop_tui(
 
 
 _SEARCH_ROW_FRAGMENT_CAP = 512
-# The five derived keys' wire prefixes, prebuilt once: the splice below joins
+# The derived keys' wire prefixes, prebuilt once: the splice below joins
 # them per row per request, so the prefix render is a dict hit instead of an
 # encode plus two concats per key.
 _SEARCH_DERIVED_PREFIXES: dict[str, bytes] = {
@@ -764,12 +770,13 @@ _SEARCH_DERIVED_PREFIXES: dict[str, bytes] = {
     sidebar_state.HAS_PENDING_TRIGGER: b'"has_pending_trigger":',
     sidebar_state.PENDING_TRIGGER_COUNT: b'"pending_trigger_count":',
     sidebar_state.NEXT_TRIGGER_AT: b'"next_trigger_at":',
+    sidebar_state.WORK_STATE: b'"work_state":',
 }
 _SEARCH_DERIVED_KEYS = frozenset(_SEARCH_DERIVED_PREFIXES)
 # The two datetime fields are None for the common idle session; their whole
 # ``"key":null`` piece is prebuilt so neither the pydantic dump_python call
-# nor the scalar render ever runs for them. The other three fields' types
-# (bool, int) never hold None.
+# nor the scalar render ever runs for them. The other fields' types (bool, int,
+# the work verdict's str-or-None) render through _json_scalar_bytes directly.
 _SEARCH_NULL_PIECES: dict[str, bytes] = {
     key: prefix + b"null"
     for key, prefix in _SEARCH_DERIVED_PREFIXES.items()
@@ -787,7 +794,7 @@ _search_row_fragments: BoundedMemo[int, tuple[SessionMetadata, tuple[bytes | str
 _SEARCH_ROW_BODY_CAP = 512
 _search_row_bodies: BoundedMemo[int, tuple[SessionMetadata, tuple, bytes]] = BoundedMemo(_SEARCH_ROW_BODY_CAP)
 # The whole response body of the last render: (the rows' metadata objects, each
-# row's five derived values, the body). The body is a pure function of the row
+# row's derived values, the body). The body is a pure function of the row
 # sequence and those values, both in the check — so the steady-state repeat
 # request (the debounced search box re-firing the same query) serves the cached
 # bytes after one identity-and-values compare and rebuilds only when a row's
@@ -807,7 +814,7 @@ _search_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SEARCH_GZIP_MEMO_LIM
 def _search_row_static_segments(meta: SessionMetadata) -> tuple[bytes | str, ...]:
   """Return the row's dump segments: static JSON runs and derived key names.
 
-  The route's overlay assigns its five derived fields onto keys the model
+  The route's overlay assigns its derived fields onto keys the model
   already declares, so dict assignment keeps them at their model-definition
   positions; the segments preserve that order — static runs as rendered JSON
   (no braces, rendered by :func:`fast_json_bytes`), each derived key as its
@@ -1019,7 +1026,7 @@ async def _serve_search_rows(
   fields the response overlays.
   """
   global _search_whole_body
-  # Each row's bytes splice the memoized static segments with the five derived
+  # Each row's bytes splice the memoized static segments with the derived
   # values, rendered only when the row's state first produces a body (the whole
   # body serves the steady-state repeat, a churn round re-renders the moved
   # rows). orjson renders a dict context-free, so the spliced body is
@@ -1041,12 +1048,12 @@ async def _serve_search_rows(
             meta, (
                 thinking_state.busy_since(meta.id), entry[sidebar_state.HAS_RUNNING_TASKS],
                 entry[sidebar_state.HAS_PENDING_TRIGGER], entry[sidebar_state.PENDING_TRIGGER_COUNT],
-                entry[sidebar_state.NEXT_TRIGGER_AT])))
+                entry[sidebar_state.NEXT_TRIGGER_AT], entry.get(sidebar_state.WORK_STATE))))
     if meta.profile is not None:
       continue
     for thread_row in await view_thread_rows(meta.id, cfg, thread_mgr):
       leaf = _projected_thread_row(meta, thread_row)
-      rendered.append((leaf, (None, leaf.has_running_tasks, False, 0, None)))
+      rendered.append((leaf, (None, leaf.has_running_tasks, False, 0, None, None)))
   search_rows = tuple(m for m, _s in rendered)
   search_states = tuple(s for _m, s in rendered)
   cached = _search_whole_body
@@ -1054,9 +1061,9 @@ async def _serve_search_rows(
       all(c is m for c, m in zip(cached[0], search_rows, strict=True)) and cached[1] == search_states):
     return await gzip_body_response(request, cached[2], {}, _search_gzip_memo)
   parts: list[bytes] = []
-  for meta, (thinking_since, has_running, has_pending, pending_count, next_trigger_at) in \
+  for meta, (thinking_since, has_running, has_pending, pending_count, next_trigger_at, work_state) in \
           zip(search_rows, search_states, strict=True):
-    row_key = (thinking_since, has_running, has_pending, pending_count, next_trigger_at)
+    row_key = (thinking_since, has_running, has_pending, pending_count, next_trigger_at, work_state)
     body = _search_row_body(meta, row_key)
     parts.append(body)
   body = b"[" + b",".join(parts) + b"]"
@@ -1071,14 +1078,12 @@ def _search_row_body(meta: SessionMetadata, row_key: tuple) -> bytes:
     return cached[2]
   values = {
       "thinking_since": (_UTC_DATETIME_JSON.dump_python(row_key[0], mode="json") if row_key[0] is not None else None),
-      sidebar_state.HAS_RUNNING_TASKS:
-          row_key[1],
-      sidebar_state.HAS_PENDING_TRIGGER:
-          row_key[2],
-      sidebar_state.PENDING_TRIGGER_COUNT:
-          row_key[3],
+      sidebar_state.HAS_RUNNING_TASKS: row_key[1],
+      sidebar_state.HAS_PENDING_TRIGGER: row_key[2],
+      sidebar_state.PENDING_TRIGGER_COUNT: row_key[3],
       sidebar_state.NEXT_TRIGGER_AT:
           (_UTC_DATETIME_JSON.dump_python(row_key[4], mode="json") if row_key[4] is not None else None),
+      sidebar_state.WORK_STATE: row_key[5],
   }
   rendered: list[bytes] = []
   for segment in _search_row_static_segments(meta):

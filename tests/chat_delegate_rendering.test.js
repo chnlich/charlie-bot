@@ -181,6 +181,25 @@ test('a Run header reads its own state: queued in amber, failed in red with its 
   assert.match(header('stopped'), /id="run-dot-run-stopped" class="[^"]*bg-slate-500/);
 });
 
+test('a Run header carries its own time, and a queued header carries none', () => {
+  const context = loadChatRendering();
+  const header = (extra) => context.renderMessage({
+    role: 'system', kind: 'run_header', run_id: 'run-t',
+    content: 'Run work \u00b7 Fake \u00b7 failed', state: 'failed', error: '', ...extra,
+  }, 'sess-1');
+
+  // A real time rides the wrapper's data-message-ts and the bubble title.
+  const started = header({timestamp: '2026-09-26T18:17:00+00:00', id: 'm1'});
+  assert.match(started, /data-message-ts="2026-09-26T18:17:00\+00:00"/);
+  assert.match(started, /title="[^"]*"/);
+
+  // No time (a queued Run, or the server withheld it): no bubble title and no
+  // data-message-ts — never a fabricated page-load time.
+  const timeless = header({id: 'm2'});
+  assert.doesNotMatch(timeless, /title="/);
+  assert.doesNotMatch(timeless, /data-message-ts/);
+});
+
 test('run_delivery closes the transcript with the summary and the four evidence links', () => {
   const context = loadChatRendering();
 

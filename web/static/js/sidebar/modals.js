@@ -388,13 +388,23 @@ const TASK_CONTEXT_NONE = '<span class="text-slate-500">(none)</span>';
 
 let taskContextModalSession = null;
 
-function taskContextField(label, valueHtml) {
-  return `<div><div class="text-xs text-slate-400 mb-1">${label}</div><div class="whitespace-pre-wrap break-words">${valueHtml}</div></div>`;
+function taskContextField(label, valueHtml, {preWrap = true} = {}) {
+  const wrap = preWrap ? 'whitespace-pre-wrap ' : '';
+  return `<div><div class="text-xs text-slate-400 mb-1">${label}</div><div class="${wrap}break-words">${valueHtml}</div></div>`;
 }
 
 function taskContextList(items) {
   if (!Array.isArray(items) || !items.length) return TASK_CONTEXT_NONE;
   return `<ul class="list-disc pl-4 space-y-0.5">${items.map((item) => `<li>${escapeHtml(String(item))}</li>`).join('')}</ul>`;
+}
+
+// A full goal body renders as prose, the chat bubble's pipeline (escape +
+// renderProseMarkdown + data-raw round-trip): delegation goals open with a
+// "## Goal" heading, and a field that shows it raw paints a literal '## '.
+// The renderer escapes raw HTML itself, so the field stays injection-safe.
+function taskContextGoalHtml(goal) {
+  const raw = escapeHtml(goal).replace(/"/g, '&quot;');
+  return `<div class="prose-msg break-words" data-raw="${raw}">${renderProseMarkdown(goal)}</div>`;
 }
 
 // The upper half: the task record's three fields, each with a visible empty state.
@@ -403,7 +413,7 @@ function taskContextTaskHtml(task) {
   const goal = (t.goal || '').trim();
   return `<div class="space-y-3">
     <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Task</div>
-    ${taskContextField('Goal', goal ? escapeHtml(goal) : TASK_CONTEXT_NONE)}
+    ${taskContextField('Goal', goal ? taskContextGoalHtml(goal) : TASK_CONTEXT_NONE, {preWrap: false})}
     ${taskContextField('Acceptance', taskContextList(t.acceptance))}
     ${taskContextField('Context refs', taskContextList(t.context_refs))}
   </div>`;

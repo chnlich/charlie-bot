@@ -318,6 +318,70 @@ async def test_list_rows_carry_work_state_only_for_task_nodes(tmp_path: Path) ->
 
 
 # ---------------------------------------------------------------------------
+# (c2) the list wire: GET /api/sessions/ and the search route carry the same
+# derivation's verdict for task-tree rows, so the first paint shows the icons
+# without waiting for a poll; legacy rows keep their byte-identical key set
+# ---------------------------------------------------------------------------
+
+
+async def _list_json(session_mgr: SessionManager, cfg, thread_mgr) -> list[dict]:
+  body = await sessions_api.list_sessions(_page_request(), session_mgr=session_mgr, cfg=cfg, thread_mgr=thread_mgr)
+  return json.loads(body.body)
+
+
+@pytest.mark.asyncio
+async def test_list_rows_carry_work_state_for_task_nodes_and_null_for_legacy(tree_env, tmp_path: Path) -> None:
+  from src.core.models import CreateSessionRequest
+  from src.core.threads import ThreadManager
+
+  tree, session_mgr, root_id, worker_id = tree_env
+  cfg = tree.cfg
+  run = await _register(tree, worker_id, "run-1")
+  proc = subprocess.Popen(["/bin/sleep", "60"])
+  try:
+    pid, pid_start = identity_of(proc.pid)
+    await tree.runs.record_launch(worker_id, run.id, pid=pid, pid_start=pid_start)
+
+    rows = {row["id"]: row for row in await _list_json(session_mgr, cfg, ThreadManager(cfg))}
+
+    # The running worker and its idle root read the same verdict the status
+    # payload serves — one derivation, two surfaces.
+    assert rows[worker_id]["work_state"] == "running"
+    assert rows[root_id]["work_state"] == "idle"
+    status = await _status_json(session_mgr, ids=f"{worker_id},{root_id}")
+    assert rows[worker_id]["work_state"] == status[worker_id]["work_state"]
+    assert rows[root_id]["work_state"] == status[root_id]["work_state"]
+  finally:
+    if proc.poll() is None:
+      proc.kill()
+
+  await tree.runs.record_finish(worker_id, run.id, "failed")
+  rows = {row["id"]: row for row in await _list_json(session_mgr, cfg, ThreadManager(cfg))}
+  assert rows[worker_id]["work_state"] == "attention"
+
+  # A legacy row's wire body carries the field's null exactly as before: no
+  # derived verdict ever lands on it.
+  legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"))
+  rows = {row["id"]: row for row in await _list_json(session_mgr, cfg, ThreadManager(cfg))}
+  assert rows[legacy.id]["work_state"] is None
+
+
+@pytest.mark.asyncio
+async def test_search_rows_carry_work_state_for_task_nodes(tree_env) -> None:
+  from src.core.threads import ThreadManager
+
+  tree, session_mgr, root_id, worker_id = tree_env
+  cfg = tree.cfg
+  await _register(tree, worker_id, "run-1")  # queued -> waiting
+
+  body = await sessions_api.search_sessions(
+      _page_request(), q=" ", session_mgr=session_mgr, cfg=cfg, thread_mgr=ThreadManager(cfg))
+  rows = {row["id"]: row for row in json.loads(body.body)}
+  assert rows[worker_id]["work_state"] == "waiting"
+  assert rows[root_id]["work_state"] == "idle"
+
+
+# ---------------------------------------------------------------------------
 # (d) names: nodes take goal-derived names (the rule itself is origin/main's,
 # pinned in tests/test_task_sessions.py)
 # ---------------------------------------------------------------------------

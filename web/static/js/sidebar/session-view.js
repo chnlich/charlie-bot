@@ -993,6 +993,8 @@ const API = {
   renderSessionView,
   setWorkerTranscriptMode,
   setInputAreaVisible,
+  transcriptTarget,
+  cancelTranscriptTarget,
   initScrollPagination,
   renderUsageFromData,
   createSession,

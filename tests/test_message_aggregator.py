@@ -142,6 +142,7 @@ def test_task_delegated_message_exposes_metadata_without_full_description_body()
                   "role": "task_delegated",
                   "content": "Task delegated",
                   "thread_id": "thread-id",
+                  "child_session_id": "",
                   "delegate_invocation": invocation,
                   "backend": "codex-o3",
                   "model": "o3",

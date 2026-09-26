@@ -886,6 +886,7 @@ async def index(
   event_count = 0
   session_bootstrap: dict | None = None
   thread_view: dict | None = None
+  thread_thinking = None
   if session:
     try:
       active_session = await session_mgr.get_session(session)
@@ -936,7 +937,7 @@ async def index(
               "has_more": False,
               "thread_view": thread_view,
           }
-          active_session = None
+          thread_thinking = worker_transcript.thread_thinking_since(thread_meta)
       except Exception:
         log.exception("load_session_data_failed", session_id=session)
         load_errors.append("Failed to load session data. Check server logs for details.")
@@ -964,6 +965,7 @@ async def index(
           "initial_sessions": [s.model_dump(mode="json") for s in sessions],
           "active_session": active_session,
           "thread_view": thread_view,
+          "thread_thinking": thread_thinking,
           "pending_draft": pending_draft,
           "event_count": event_count,
           "session_bootstrap": session_bootstrap,

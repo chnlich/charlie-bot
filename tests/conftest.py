@@ -2141,8 +2141,18 @@ def _isolate_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyte
   with it."""
   profile = tmp_path_factory.mktemp("profile")
   monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(profile))
+  # The worker Run busy map is process-memory state keyed by task-node id,
+  # and task-node ids derive deterministically from (parent, request_id) —
+  # two tests that create the "w" worker under a "root" manager address the
+  # same node. Without a per-test reset, one test's launch mark leaks into the
+  # next (a mark_busy setdefault keeps the earlier start; a finish closes only
+  # the interval its own Run opened) and a recovered node can read as still
+  # running.
+  from src.core import thinking_state as _thinking_state
+  _thinking_state.reset_run_state_for_tests()
   reset_config_caches()
   yield
+  _thinking_state.reset_run_state_for_tests()
   reset_config_caches()
 
 

@@ -32,6 +32,14 @@ def _b64(data: bytes) -> str:
   return base64.b64encode(data).decode("ascii")
 
 
+def _kill_tmux_server(tmux: str, socket_name: str) -> subprocess.CompletedProcess:
+  """Kill the test's private tmux server and unlink its socket (tmux 3.4 leaves the file behind)."""
+  result = subprocess.run([tmux, "-L", socket_name, "kill-server"], capture_output=True, text=True, check=False)
+  socket_dir = Path(os.environ.get("TMUX_TMPDIR") or "/tmp") / f"tmux-{os.getuid()}"
+  (socket_dir / socket_name).unlink(missing_ok=True)
+  return result
+
+
 class _ScriptedWebSocket:
 
   def __init__(self, messages: list[dict]) -> None:
@@ -148,13 +156,7 @@ def test_run_tmux_new_session_returns_under_uvloop(
       rc, stderr = await pty_common._run_tmux("kill-session", "-t", session_name)
       assert rc == 0, stderr
     finally:
-      cleanup = subprocess.run(
-          [tmux, "-L", socket_name, "kill-server"],
-          stdout=subprocess.DEVNULL,
-          stderr=subprocess.PIPE,
-          text=True,
-          check=False,
-      )
+      cleanup = _kill_tmux_server(tmux, socket_name)
       assert cleanup.returncode in (0, 1), cleanup.stderr
 
   with asyncio.Runner(loop_factory=uvloop.new_event_loop) as runner:
@@ -374,9 +376,4 @@ def test_pty_client_can_push_clipboard_to_the_browser(monkeypatch: pytest.Monkey
     assert base64.b64encode(b"CLIPBOARD-PROBE") in seen
   finally:
     attachment.close()
-    subprocess.run(
-        [tmux, "-L", socket_name, "kill-server"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
+    _kill_tmux_server(tmux, socket_name)

@@ -18,7 +18,12 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import OPUS_BACKEND_ID, make_home_config
+from conftest import (
+    OPUS_BACKEND_ID,
+    SCHEDULER_GET_CONFIG_PATCH_TARGET,
+    SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET,
+    make_home_config,
+)
 
 from src.core import scheduler as scheduler_module
 from src.core.config import ScheduledTaskConfig
@@ -341,8 +346,8 @@ async def test_manual_run_is_outside_and_leaves_handle_unchanged(
   scheduler._handles["code-health"] = scheduled_handle
 
   monkeypatch.setattr(scheduler, "_execute_task", AsyncMock(return_value={"session_id": "s", "thread_id": "t"}))
-  monkeypatch.setattr(scheduler_module, "get_config", lambda: cfg)
-  monkeypatch.setattr(scheduler_module, "get_scheduled_tasks", lambda: [_task()])
+  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET, lambda: [_task()])
 
   result = await scheduler.run_task_now("code-health")
 

@@ -1406,13 +1406,10 @@ SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.scheduler.create_logged_ta
 
 # Import-path patch targets for the seams a scheduled run fires through. src/core/scheduler.py
 # binds each name at import scope (`from src.core.config import get_config, get_scheduled_tasks`,
-# `from src.core.master_trigger import trigger_master`, `from src.core.spawner import
-# resolve_requested_subagent_backend_model, spawn_worker`, `from src.core.threads import
-# ThreadManager`), so monkeypatch.setattr lands the stand-in on the src.core.scheduler module
-# attribute and the call-time readers — _reload_config and
-# _spawn_scheduled_worker for the bindings above; _tick and run_task_now for
-# get_scheduled_tasks — read it there; sibling modules binding the same functions keep their
-# own routes.
+# `from src.core.spawner import resolve_requested_subagent_backend_model, spawn_worker`, `from
+# src.core.threads import ThreadManager`), so monkeypatch.setattr lands the stand-in on the
+# src.core.scheduler module attribute and the call-time readers resolve it there; sibling
+# modules binding the same functions keep their own routes.
 SCHEDULER_GET_CONFIG_PATCH_TARGET = "src.core.scheduler.get_config"
 SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.core.scheduler.get_scheduled_tasks"
 SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = ("src.core.scheduler.resolve_requested_subagent_backend_model")

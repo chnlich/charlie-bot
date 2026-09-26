@@ -38,8 +38,10 @@ from src.cli import common
 from src.cli import improve as improve_module
 from src.cli import plan as plan_module
 from src.cli import schedule_trigger as schedule_trigger_module
+from src.cli import session as session_module
 from src.cli.plan import _PLAN_REMINDER
 from src.core.config import CharlieBotConfig
+from src.core.control_events import stable_close_event_id, stable_close_request_event_id
 from src.core.models import PendingTrigger, TriggerStatus
 
 
@@ -405,6 +407,97 @@ def test_schedule_trigger_readback_picks_pending_over_fired_historical_leg(
   assert out == {"trigger_id": "trg-new", "fire_at": "2024-02-01T00:00:00Z"}
 
 
+# ---------------------------------------------------------------------------
+# Session close readback -- a lost cancel/complete response reads back this
+# request's own close fact from the task's chat_events.jsonl.
+# ---------------------------------------------------------------------------
+
+
+def test_session_cancel_readback_resolves_to_own_task_closed_fact_on_sent_but_lost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  cfg = _patch_readback_env(monkeypatch, tmp_path)
+
+  session_id = "sess-cancel"
+  request_id = "req-cancel-1"
+  closed_id = stable_close_event_id(session_id, request_id)
+  events_dir = cfg.sessions_dir / session_id / "data"
+  events_dir.mkdir(parents=True)
+  (events_dir / "chat_events.jsonl").write_text(
+      "\n".join([
+          # An earlier request's closure shares the history; only this
+          # call's own stable event id may answer it.
+          json.dumps({
+              "id": stable_close_event_id(session_id, "req-earlier"),
+              "type": "task_closed",
+              "request_id": "req-earlier",
+              "outcome": "cancelled",
+          }),
+          json.dumps({
+              "id": closed_id,
+              "type": "task_closed",
+              "request_id": request_id,
+              "outcome": "cancelled",
+          }),
+      ]) + "\n",
+      encoding="utf-8")
+
+  monkeypatch.setattr(
+      sys, "argv",
+      ["charliebot-session", "cancel", session_id, "--reason", "superseded", "--request-id", request_id])
+
+  session_module.main()
+
+  out = json.loads(capsys.readouterr().out)
+  assert out == {"session_id": session_id, "task_state": "cancelled", "closed_event_id": closed_id}
+
+
+def test_session_complete_readback_resolves_to_pending_run_finish_on_sent_but_lost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  """A run-token deferral (task_close_requested carrying this request_id)
+  answers the 202 shape the server itself would have sent."""
+  cfg = _patch_readback_env(monkeypatch, tmp_path)
+
+  session_id = "sess-complete"
+  request_id = "req-complete-1"
+  events_dir = cfg.sessions_dir / session_id / "data"
+  events_dir.mkdir(parents=True)
+  (events_dir / "chat_events.jsonl").write_text(
+      json.dumps({
+          "id": stable_close_request_event_id(session_id, request_id),
+          "type": "task_close_requested",
+          "request_id": request_id,
+          "owner_run_id": "run-1",
+      }) + "\n",
+      encoding="utf-8")
+
+  result_file = tmp_path / "result.json"
+  result_file.write_text(json.dumps({"summary": "wrapped up"}), encoding="utf-8")
+  monkeypatch.setattr(
+      sys, "argv",
+      ["charliebot-session", "complete", session_id, "--result-file", str(result_file), "--request-id", request_id])
+
+  session_module.main()
+
+  out = json.loads(capsys.readouterr().out)
+  assert out == {"session_id": session_id, "request_id": request_id, "status": "pending_run_finish"}
+
+
+def test_session_cancel_readback_reports_outcome_unknown_when_no_local_fact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  _patch_readback_env(monkeypatch, tmp_path)
+
+  session_id = "sess-cancel-unknown"
+  monkeypatch.setattr(sys, "argv", ["charliebot-session", "cancel", session_id, "--reason", "no local fact"])
+
+  with pytest.raises(SystemExit) as exc_info:
+    session_module.main()
+
+  assert exc_info.value.code == 1
+  error = json.loads(capsys.readouterr().err)
+  assert error["code"] == "outcome_unknown"
+  assert error["effect"] == "unknown"
+
+
 class _QuietHandler(http.server.BaseHTTPRequestHandler):
   """Base for the stub listeners' handlers: silences the per-request stderr log
   line the stdlib writes; the base class dispatches ``log_message`` by name."""
@@ -671,3 +764,42 @@ def test_find_local_thread_verify_and_implement_never_cross_match(
   match = common.find_local_thread(session_id, description="check the plan 2", task_type="implement")
   assert match is not None
   assert match["id"] == "implement-thread"
+
+def test_find_local_task_close_never_matches_another_requests_close_fact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Same event types, different request id: a foreign task_closed fact and a
+  foreign task_close_requested fact are both invisible to this call's readback
+  -- the judgment binds to the passed request_id only."""
+  cfg = _cfg(tmp_path)
+  # find_local_task_close imports get_config lazily at call time, so both
+  # binding sites need the scratch config (same coverage as _patch_readback_env).
+  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+
+  session_id = "sess-close-identity"
+  events_dir = cfg.sessions_dir / session_id / "data"
+  events_dir.mkdir(parents=True)
+  (events_dir / "chat_events.jsonl").write_text(
+      "\n".join([
+          json.dumps({
+              "id": stable_close_event_id(session_id, "req-theirs"),
+              "type": "task_closed",
+              "request_id": "req-theirs",
+              "outcome": "completed",
+          }),
+          json.dumps({
+              "id": stable_close_request_event_id(session_id, "req-theirs"),
+              "type": "task_close_requested",
+              "request_id": "req-theirs",
+          }),
+      ]) + "\n",
+      encoding="utf-8")
+
+  assert common.find_local_task_close(session_id, "req-mine") is None
+  # Positive control: the request the facts belong to still reads its own
+  # closure back, and the closed fact outranks the deferral.
+  assert common.find_local_task_close(session_id, "req-theirs") == {
+      "session_id": session_id,
+      "task_state": "completed",
+      "closed_event_id": stable_close_event_id(session_id, "req-theirs"),
+  }

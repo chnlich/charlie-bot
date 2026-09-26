@@ -15,7 +15,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from conftest import backend_option
+from conftest import BUILD_BACKEND_PATCH_TARGET, backend_option
 
 from src.core import event_types as ET
 from src.core.backend_models import BackendType
@@ -82,7 +82,7 @@ async def test_run_records_stream_identity_and_result_truth(
         result_event("typed output"),
     ])
     install_backends(
-        monkeypatch, [backend], "src.agents.backends.registry.build_backend")
+        monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
     from src.core.task_execution import TaskExecutionAdapter
     tree.dispatch.executor = TaskExecutionAdapter(cfg, session_mgr, tree)
 
@@ -132,7 +132,7 @@ async def test_tui_cli_manager_turn_is_terminal_driven_never_headless(
         request_id="root", task_parent_id=None, profile="manager", task=None,
         name="M", backend=None, caller="operator")
     backend = SpawningScriptedBackend([result_event("unused")])
-    builds = install_backends(monkeypatch, [backend], "src.agents.backends.registry.build_backend")
+    builds = install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
     from src.core.task_execution import TaskExecutionAdapter
     tree.dispatch.executor = TaskExecutionAdapter(cfg, session_mgr, tree)
     _ = builds  # asserted empty below: no backend build (launch) ever happens
@@ -176,7 +176,7 @@ async def test_zero_output_and_error_results_fail_across_types(
     # input stays pending).
     from src.agents.backends import base as backend_base
     empty = SpawningScriptedBackend([backend_base.make_result_event(0, 0)])
-    install_backends(monkeypatch, [empty], "src.agents.backends.registry.build_backend")
+    install_backends(monkeypatch, [empty], BUILD_BACKEND_PATCH_TARGET)
     from src.core.task_execution import TaskExecutionAdapter
     tree.dispatch.executor = TaskExecutionAdapter(cfg, session_mgr, tree)
     await tree.dispatch.admit_input(
@@ -210,7 +210,7 @@ async def test_zero_output_and_error_results_fail_across_types(
             yield  # pragma: no cover
 
     errored = _TransportDeath([])
-    install_backends(monkeypatch, [errored], "src.agents.backends.registry.build_backend")
+    install_backends(monkeypatch, [errored], BUILD_BACKEND_PATCH_TARGET)
     retry = await tree.create_retry(
         root.id, "retry-error", run_id)
     retry_run_id = retry["run_id"]

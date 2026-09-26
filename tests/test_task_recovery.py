@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import patch_instructions_content
+from conftest import BUILD_BACKEND_PATCH_TARGET, patch_instructions_content
 
 from src.core import event_types as ET
 from src.core.models import RunRecord, TaskSpec, TaskType
@@ -85,7 +85,7 @@ async def _takeoff_manager(tmp_path, monkeypatch):
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
     patch_instructions_content(monkeypatch)
     install_backends(monkeypatch, [SpawningScriptedBackend([result_event("taken off")])],
-                     "src.agents.backends.registry.build_backend")
+                     BUILD_BACKEND_PATCH_TARGET)
     manager = await tree.create_task(
         request_id="root", task_parent_id=None, profile="manager",
         task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
@@ -371,7 +371,7 @@ async def test_recovery_scopes_to_this_instance_only(
         task=TaskSpec(goal="other"), name="OTHER", backend=None, caller="operator")
     patch_instructions_content(monkeypatch)
     install_backends(monkeypatch, [SpawningScriptedBackend([result_event("other takes off")])],
-                     "src.agents.backends.registry.build_backend")
+                     BUILD_BACKEND_PATCH_TARGET)
     other_tree.dispatch.executor = _adapter_with_silent_broadcast(other_cfg, other_session_mgr, other_tree, monkeypatch)
     await other_tree.dispatch.admit_input(
         other_manager.id, event_type=ET.USER, content="Take off.", actor="user")

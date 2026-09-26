@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from conftest import (
   BROADCAST_PATCH_TARGET,
+  BUILD_BACKEND_PATCH_TARGET,
   TRIGGER_MASTER_PATCH_TARGET,
   TRIGGERS_GET_CONFIG_PATCH_TARGET,
   make_home_config,
@@ -74,7 +75,7 @@ async def test_trigger_admits_one_durable_input_to_task_tree_node(
   monkeypatch.setattr(deps, "_task_manager", tree)
   monkeypatch.setattr(deps, "_session_manager", session_mgr)
   builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("awake")])],
-                            "src.agents.backends.registry.build_backend")
+                            BUILD_BACKEND_PATCH_TARGET)
   patch_instructions_content(monkeypatch)
   manager = await tree.create_task(
       request_id="pm", task_parent_id=None, profile="manager",
@@ -136,7 +137,7 @@ async def test_trigger_refire_after_crash_does_not_duplicate_input(
 
   # Recovery re-fires it: the same input id dedups and FIRED lands.
   builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("awake")])],
-                            "src.agents.backends.registry.build_backend")
+                            BUILD_BACKEND_PATCH_TARGET)
   patch_instructions_content(monkeypatch)
   with (
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
@@ -180,7 +181,7 @@ async def test_trigger_on_closed_node_keeps_history_without_reopening(
   assert tree.task_state(manager.id) == "completed"
 
   builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])],
-                            "src.agents.backends.registry.build_backend")
+                            BUILD_BACKEND_PATCH_TARGET)
   trigger_mgr = TriggerManager(cfg, session_mgr)
   trigger = _trigger(manager.id)
   await trigger_mgr._save_trigger(trigger)
@@ -219,7 +220,7 @@ async def test_trigger_on_paused_node_retains_input_for_later_dispatch(
       caller=CallerIdentity(kind="operator"))
 
   builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])],
-                            "src.agents.backends.registry.build_backend")
+                            BUILD_BACKEND_PATCH_TARGET)
   trigger_mgr = TriggerManager(cfg, session_mgr)
   trigger = _trigger(manager.id)
   await trigger_mgr._save_trigger(trigger)
@@ -262,7 +263,7 @@ async def test_trigger_resolves_established_alias_to_the_same_task(
   }, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
   builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("awake")])],
-                            "src.agents.backends.registry.build_backend")
+                            BUILD_BACKEND_PATCH_TARGET)
   trigger_mgr = TriggerManager(cfg, session_mgr)
   trigger = _trigger(old_id, trigger_id="trigger-alias-1")
   await trigger_mgr._save_trigger(trigger)

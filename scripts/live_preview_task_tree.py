@@ -530,6 +530,74 @@ async def run_harness(args: argparse.Namespace) -> None:
                 f"none of the trial's native ids appear in the host store, "
                 f"independent instance untouched")
 
+            # -- restart on the same home: the review chain never re-registers --
+            # The implement work Run carries a successful review. Startup
+            # recovery replays the work Run's follow-up on every boot; the one
+            # needs-review owner must end the chain there instead of registering
+            # another review on the next reviewer backend. The preview CLI
+            # supports restarting the same home, so the trial restarts the real
+            # entry point and compares the node's Run list across the restart.
+            impl_node = results["implement_run"]["task"]
+            status, before_page = request(base, access_key, "GET",
+                                          f"/api/sessions/{impl_node}/runs?order=desc&limit=100")
+            if status != 200:
+                fail(f"restart phase: runs list failed: {status} {before_page}")
+            reviews_before = [r for r in before_page.get("items", []) if r.get("kind") == "review"]
+            queued_before = [r for r in reviews_before if r.get("state") == "queued"]
+            if queued_before:
+                fail(f"restart phase: a review is already queued before the restart: "
+                     f"{[r['id'] for r in queued_before]}")
+            log(f"restart phase: {len(reviews_before)} review run(s) on the implement node before "
+                f"the restart: {[(r['id'][:8], r.get('state')) for r in reviews_before]}")
+
+            proc.terminate()
+            try:
+                proc.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=30)
+            stopped_fence = probe_writer_fence(home)
+            if stopped_fence["exclusive_holder_alive"]:
+                fail("the preview writer fence is still held after the restart-phase shutdown")
+            log("preview instance stopped; restarting the same home")
+
+            restart_port = pick_free_port()
+            restart_invocation = preview_invocation(home, restart_port, args.backend, [])
+            results["restart"] = {"invocation": restart_invocation}
+            with open(server_console, "a", encoding="utf-8") as server_log_file:
+                proc = subprocess.Popen(
+                    restart_invocation, cwd=str(REPO_ROOT), env=env,
+                    stdout=server_log_file, stderr=subprocess.STDOUT)
+                restart_record = await wait_preview_ready(proc, home, server_console, fail, 120.0)
+            # wait_preview_ready returns only after the lifespan's recovery pass
+            # (reconcile_task_tree) completed, so the durable Run set is final.
+            base = restart_record["url"]
+            results["restart"]["record"] = restart_record
+            log(f"preview restarted on the same home: {base}")
+
+            status, after_page = request(base, access_key, "GET",
+                                         f"/api/sessions/{impl_node}/runs?order=desc&limit=100")
+            if status != 200:
+                fail(f"restart phase: post-restart runs list failed: {status} {after_page}")
+            reviews_after = [r for r in after_page.get("items", []) if r.get("kind") == "review"]
+            if len(reviews_after) != len(reviews_before):
+                fail(f"restart phase: the review count moved across the restart: "
+                     f"{len(reviews_before)} -> {len(reviews_after)} "
+                     f"({[r['id'] for r in reviews_after]})")
+            if {r["id"] for r in reviews_after} != {r["id"] for r in reviews_before}:
+                fail(f"restart phase: the review run ids changed across the restart: "
+                     f"{[r['id'] for r in reviews_before]} -> {[r['id'] for r in reviews_after]}")
+            queued_after = [r for r in reviews_after if r.get("state") == "queued"]
+            if queued_after:
+                fail(f"restart phase: a queued review exists after the restart: "
+                     f"{[r['id'] for r in queued_after]}")
+            results["restart"]["review_count_before"] = len(reviews_before)
+            results["restart"]["review_ids"] = sorted(r["id"] for r in reviews_before)
+            results["restart"]["review_count_after"] = len(reviews_after)
+            results["restart"]["queued_reviews_after"] = []
+            log(f"restart phase: the implement node's review count stayed {len(reviews_after)} "
+                f"across the restart and no review is queued")
+
             holder = probe_writer_fence(home)
             results["fence_while_serving"] = holder["exclusive_holder_alive"]
 

@@ -3,8 +3,9 @@
 Starts ``charliebot session-tree preview`` — the real entry point on a fresh
 temporary home with the real ``charlie-code-glm53-flash`` backend — and drives
 the real UI in headless Chrome over CDP (the browser harness's client) while
-the task tree runs real work. Through ``/api/sessions/status``, the DOM icons
-and screenshots it asserts the sidebar's live work states:
+the task tree runs real work. Through ``/api/sessions/status`` and the list
+response the sidebar paints from (``GET /api/sessions/``), the DOM icons and
+screenshots it asserts the sidebar's live work states:
 
 1. running: a worker's ~60 s Run (a script-run task in a synthetic repo that
    sleeps, then reports) shows the spinner on its row and the amber gear on its
@@ -15,10 +16,14 @@ and screenshots it asserts the sidebar's live work states:
    ``failed`` with the error as durable evidence; its row and its collapsed
    parent show the red alert, the parent receives a failure report naming the
    error, and the worker's transcript heads the Run ``failed`` with the error
-   beneath it (a queued retry on the same node then heads its segment
-   ``queued`` in its own color while the alert keeps priority).
+   beneath it and the Run's own ``ended_at`` as its time (a queued retry on
+   the same node then heads its segment ``queued`` in its own color and with
+   no time at all, while the alert keeps priority).
 3. waiting: a queued Run held back by a paused node shows the muted clock.
-4. names: the rows carry goal-derived names, never "## Goal".
+4. names and first paint: the rows carry goal-derived names, never "## Goal";
+   no worker-facing title starts with a raw Markdown heading; and the list
+   response already carries each task-tree row's ``work_state``, so the icons
+   paint on first render without a poll.
 
 Isolation: the trial's home is a fresh temp directory and its port a free
 port; the harness's env is scrubbed of production identity variables; the
@@ -49,6 +54,7 @@ import tempfile  # noqa: E402
 import time  # noqa: E402
 import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
+from datetime import datetime  # noqa: E402
 
 from scripts.browser_harness_session_tree import (  # noqa: E402
     CDP,
@@ -102,6 +108,15 @@ async def screenshot(cdp: CDP, session_id: str, shots: Shots, name: str) -> str:
 def git(repo: Path, *args: str) -> str:
     proc = subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
     return proc.stdout.strip()
+
+
+def same_instant(a: str, b: str) -> bool:
+    """Two ISO timestamps name the same instant: the runs API renders UTC as Z,
+    the transcript carries the +00:00 form."""
+    try:
+        return datetime.fromisoformat(a) == datetime.fromisoformat(b)
+    except ValueError:
+        return False
 
 
 def build_slow_repo(home: Path) -> Path:
@@ -260,6 +275,23 @@ async def assert_icons(cdp: CDP, page_id: str, sid: str, visible: str | None,
         last = json.dumps(states)
         await asyncio.sleep(0.5)
     fail(f"{label}: icons never reached the expected state ({last})\n{await icon_dump(cdp, page_id, sid)}")
+
+
+async def worker_facing_titles(cdp: CDP, page_id: str) -> list[str]:
+    """Every worker-facing title the live view paints: sidebar row names, the
+    header session name, the transcript's per-Run header lines, and the
+    Delegated cards' live-state lines. None may carry a raw Markdown heading."""
+    return list(await evaluate(cdp, page_id, """
+        (() => {
+          const texts = [];
+          document.querySelectorAll('.session-name').forEach(el => texts.push(el.textContent || ''));
+          const headerName = document.getElementById('header-session-name');
+          if (headerName) texts.push(headerName.textContent || '');
+          document.querySelectorAll('[id^="run-header-"]').forEach(el => texts.push(el.textContent || ''));
+          document.querySelectorAll('.delegate-live-state').forEach(el => texts.push(el.textContent || ''));
+          return texts;
+        })()
+    """))
 
 
 async def icon_dump(cdp: CDP, page_id: str, sid: str) -> str:
@@ -444,6 +476,35 @@ async def run_harness(args: argparse.Namespace) -> None:
                    and all("## Goal" not in (n or "") for n in (row_names or [])),
                    f"rows={row_names}")
 
+            # First paint carries work state: the list response the sidebar
+            # paints from (GET /api/sessions/) carries the task-tree rows' work
+            # verdicts, the same derivation the /status payload serves, so the
+            # icons need no poll.
+            def _list_rows() -> dict:
+                status, body = request(base, access_key, "GET", "/api/sessions/")
+                if status != 200:
+                    fail(f"list fetch failed: {status}")
+                return {row.get("id"): row for row in body}
+
+            list_rows = _list_rows()
+            trial_ids = [manager_a, worker_a]
+            record("the list response carries work_state for the trial's task-tree rows",
+                   all(list_rows.get(sid, {}).get("work_state") for sid in trial_ids),
+                   json.dumps({sid: list_rows.get(sid, {}).get("work_state") for sid in trial_ids}))
+            status, scoped = request(base, access_key, "GET",
+                                     "/api/sessions/status?ids=" + ",".join(trial_ids))
+            if status != 200:
+                fail(f"status fetch failed: {status}")
+            record("the list rows' work_state matches the status payload's derivation",
+                   all(list_rows[sid].get("work_state") == scoped.get(sid, {}).get("work_state")
+                       for sid in trial_ids),
+                   json.dumps({sid: [list_rows[sid].get("work_state"), scoped.get(sid, {}).get("work_state")]
+                               for sid in trial_ids}))
+            titles_a = await worker_facing_titles(cdp, page_id)
+            record("no worker-facing title starts with '## ' (manager view)",
+                   bool(titles_a) and all(not (t or "").startswith("## ") for t in titles_a),
+                   f"titles={titles_a}")
+
             def running_payload(st: dict) -> bool:
                 return bool(st) and st.get("has_running_tasks") is True and st.get("work_state") == "running"
 
@@ -618,6 +679,29 @@ async def run_harness(args: argparse.Namespace) -> None:
             record("the failed Run's header names the actual error",
                    "differs from origin/main" in error_text,
                    f"error={error_text[:160]!r}")
+
+            # The header's time is the Run's own ended_at (it never started),
+            # never the page-load time: the wrapper's data-message-ts carries
+            # the raw value the bubble title formats.
+            header_ts = str(await evaluate(cdp, page_id, f"""
+                (() => {{
+                  const el = document.getElementById('run-header-{run_b}');
+                  const wrap = el ? el.closest('[data-message-id]') : null;
+                  return el ? ((wrap && wrap.dataset.messageTs) || '') : null;
+                }})()
+            """))
+            ended_at = str(run_row.get("ended_at") or "")
+            record("the failed-before-start Run header carries its ended_at",
+                   bool(header_ts) and bool(ended_at) and same_instant(header_ts, ended_at),
+                   f"header_ts={header_ts!r} ended_at={ended_at!r}")
+            has_title = await evaluate(cdp, page_id, f"""
+                (() => {{
+                  const el = document.getElementById('run-header-{run_b}');
+                  return el ? (el.title || '').length > 0 : null;
+                }})()
+            """)
+            record("the failed-before-start Run header shows a bubble time (not the page load)",
+                   has_title is True, f"has_title={has_title!r}")
             shot = await screenshot(cdp, page_id, shots, "worker_run_failed")
             results["worker_run_failed_screenshot"] = shot
 
@@ -649,6 +733,26 @@ async def run_harness(args: argparse.Namespace) -> None:
             record("the transcript's Run header reads queued for the held-back retry (own color)",
                    bool(queued_header) and str(queued_header).startswith("queued|")
                    and "bg-amber-400" in str(queued_header), f"header={queued_header!r}")
+            queued_ts = str(await evaluate(cdp, page_id, f"""
+                (() => {{
+                  const el = document.getElementById('run-header-{retry_id}');
+                  const wrap = el ? el.closest('[data-message-id]') : null;
+                  return el ? ((wrap && wrap.dataset.messageTs) || '') : null;
+                }})()
+            """))
+            queued_title = await evaluate(cdp, page_id, f"""
+                (() => {{
+                  const el = document.getElementById('run-header-{retry_id}');
+                  return el ? (el.title || '').length > 0 : null;
+                }})()
+            """)
+            record("a queued Run's header carries no time (no page-load stand-in)",
+                   queued_ts == "" and queued_title is False,
+                   f"ts={queued_ts!r} has_title={queued_title!r}")
+            titles_b = await worker_facing_titles(cdp, page_id)
+            record("no worker-facing title starts with '## ' (worker transcript view)",
+                   bool(titles_b) and all(not (t or "").startswith("## ") for t in titles_b),
+                   f"titles={titles_b}")
             await assert_icons(cdp, page_id, worker_b, "alert-indicator",
                                ["spinner", "worker-indicator", "waiting-indicator"],
                                "attention outranks waiting on the paused worker row")
@@ -686,15 +790,33 @@ async def run_harness(args: argparse.Namespace) -> None:
             # ---- isolation postflight ------------------------------------
             # The host store also carries the harness's own session logs (this
             # trial may run inside a CharlieBot session), so the check is the
-            # trial's own ids: none of the preview's native session ids may
-            # appear anywhere in the host's native session store.
+            # trial's own ids — the Run records' native_session_id values, the
+            # way live_preview_task_tree.py collects them — matched as whole
+            # ids (one whole path component each). A directory-name substring
+            # sweep would drag the preview's second-resolution run-timestamp
+            # dirs (20260925T213047Z) into the check, and two production
+            # sessions starting in the same second are common (7 of 470 on
+            # 09-25), so that shape produced false "leaked" verdicts.
             native_after = snapshot_native_storage()
-            preview_native = sorted({p.name for p in (home / "clc-sessions").rglob("*")
-                                    if p.is_dir()}) if (home / "clc-sessions").is_dir() else []
-            leaked_ids = [nid for nid in preview_native
-                          if any(nid in path for path in native_after)]
+            trial_native_ids: set[str] = set()
+            for sid in {manager_a, worker_a, manager_b, worker_b}:
+                status, page = request(base, access_key, "GET", f"/api/sessions/{sid}/runs?limit=100")
+                if status != 200:
+                    fail(f"runs fetch of {sid} failed: {status}")
+                for row in page.get("items", []):
+                    native = row.get("native_session_id")
+                    if native:
+                        trial_native_ids.add(str(native))
+            if not trial_native_ids:
+                fail("no Run record carried a native_session_id; nothing to isolate")
+            host_components = {component
+                               for path in native_after
+                               for component in Path(path).parts}
+            leaked_ids = sorted(nid for nid in trial_native_ids if nid in host_components)
             record("the trial's native session ids never reached the host's store",
-                   not leaked_ids, f"preview_native_ids={preview_native[:3]} leaked={leaked_ids[:3]}")
+                   not leaked_ids,
+                   f"checked={len(trial_native_ids)} {sorted(trial_native_ids)[:3]}... "
+                   f"host_files={len(native_after)} leaked={leaked_ids[:3]}")
             independent_after = {
                 str(p.relative_to(independent)): p.read_bytes()
                 for p in sorted(independent.rglob("*")) if p.is_file()

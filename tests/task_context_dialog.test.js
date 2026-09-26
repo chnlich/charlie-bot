@@ -29,12 +29,23 @@ function buildHarness(routes) {
   const body = createElement({id: 'task-context-modal-body'});
   const elements = new Map([[overlay.id, overlay], [title.id, title], [body.id, body]]);
   const calls = [];
+  const proseCalls = [];
   const context = {
     Sidebar: {},
     globalThis: null,
     document: {getElementById: (id) => elements.get(id) || null},
     console: {error: () => {}},
     escapeHtml: escapeHtmlText,
+    // The chat bubble's prose pipeline, recorded so tests can pin which text
+    // the dialog hands to it. The stub models the one contract the dialog
+    // relies on (the production renderer escapes raw HTML and turns ATX
+    // headings into elements, so a literal '## ' never paints).
+    renderProseMarkdown: (text) => {
+      const raw = String(text);
+      proseCalls.push(raw);
+      return '<md>' + escapeHtmlText(raw).replace(/^(#{1,6}) (.*)$/gm, (_m, hashes, body) =>
+        `<h${hashes.length}>${body}</h${hashes.length}>`) + '</md>';
+    },
     fetch: async (url) => {
       calls.push(url);
       const route = routes[url];
@@ -42,6 +53,7 @@ function buildHarness(routes) {
       return typeof route === 'function' ? route() : route;
     },
   };
+  context.__proseCalls = proseCalls;
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(NAMESPACE_JS, context, {filename: 'namespace.js'});
@@ -85,6 +97,8 @@ test('opening the dialog renders the task record and one row per assembled block
   assert.equal(h.overlay.classList.contains('flex'), true);
   assert.equal(h.title.textContent, 'Task & context · Auth rework');
   const html = h.body.innerHTML;
+  assert.match(html, /<md>Migrate users to the new schema<\/md>/, 'the goal renders through the prose pipeline');
+  assert.doesNotMatch(html, /&lt;md&gt;/);
   assert.match(html, /Migrate users to the new schema/);
   assert.match(html, /<li>Old columns readable for one release<\/li><li>pytest green<\/li>/);
   assert.match(html, /<li>docs\/auth\.md<\/li>/);
@@ -135,6 +149,28 @@ test('a refused preview keeps the task record and names the server detail', asyn
 
   assert.match(h.body.innerHTML, /Migrate users to the new schema/);
   assert.match(h.body.innerHTML, /Next run context unavailable: session backend gone is not configured/);
+});
+
+test('a heading-bearing goal renders as prose, never a literal heading marker', async () => {
+  const h = buildHarness({
+    '/api/sessions/s1': jsonResponse(200, {
+      ...DETAIL,
+      task: {goal: '## Goal\n\nSay the phrase', acceptance: [], context_refs: []},
+    }),
+    '/api/sessions/s1/effective-prompt': jsonResponse(200, PREVIEW),
+  });
+
+  await h.context.openTaskContextModal('s1');
+
+  // The dialog handed the raw goal to the prose renderer, which turns the
+  // ATX heading into an element: no literal '## ' paints anywhere.
+  assert.deepEqual(h.context.__proseCalls, ['## Goal\n\nSay the phrase']);
+  const html = h.body.innerHTML;
+  assert.match(html, /<h2>Goal<\/h2>/);
+  // The painted markup holds no literal heading marker; data-raw (the mdDiv
+  // round-trip attribute, never displayed as text) carries the raw source.
+  const painted = html.replace(/data-raw="[^"]*"/g, 'data-raw=""');
+  assert.doesNotMatch(painted, /## Goal/);
 });
 
 test('a missing session detail is reported in place of the body', async () => {

@@ -400,6 +400,47 @@ async def test_worker_transcript_api_bootstrap_transcript_and_events(
     assert refused.status_code == 400
 
 
+@pytest.mark.asyncio
+async def test_run_header_times_are_the_run_s_own_facts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A started Run's header carries started_at; a Run that never started but
+  carries a terminal fact (a launch failure) carries its ended_at; a queued
+  Run carries no time at all. No header ever carries a projection-build ("page
+  load") time — that fabricated "now" showed a launch-failed Run a bubble time
+  after its own death and once fed a negative duration."""
+  from src.core import worker_transcript
+
+  _cfg, _session_mgr, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
+  started = datetime.now(UTC) - timedelta(minutes=9)
+  await tree.runs.register_run(
+      RunRecord(
+          id="run-started",
+          session_id=worker.id,
+          kind="work",
+          backend="fake",
+          model="fake-model",
+          started_at=started,
+          ended_at=started + timedelta(seconds=30)))
+  await tree.runs.record_launch(worker.id, "run-started", pid=424301, pid_start="1-424301")
+  await tree.runs.record_finish(worker.id, "run-started", "success")
+
+  await tree.runs.register_run(
+      RunRecord(id="run-launch-failed", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+  await tree.runs.record_finish(worker.id, "run-launch-failed", "failed")
+
+  await tree.runs.register_run(
+      RunRecord(id="run-queued", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+
+  entry = worker_transcript.load_worker_transcript(tree, worker.id)
+  headers = {m["run_id"]: m for m in entry.projection.committed if m.get("kind") == ET.RUN_HEADER}
+
+  assert headers["run-started"]["timestamp"] == started.isoformat()
+  # The failed-before-start Run shows its death, not the page-load time.
+  launch_failed_run = await tree.runs.get_run(worker.id, "run-launch-failed")
+  assert launch_failed_run.started_at is None and launch_failed_run.ended_at is not None
+  assert headers["run-launch-failed"]["timestamp"] == launch_failed_run.ended_at.isoformat()
+  assert headers["run-queued"]["timestamp"] is None
+
+
 def test_legacy_thread_transcript_and_running_timer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A legacy worker thread projects through the same shape, addressed by the
   parent session: one header line, its events, and the running timer anchor."""
@@ -442,3 +483,30 @@ def test_legacy_thread_transcript_and_running_timer(tmp_path: Path, monkeypatch:
 
   meta.status = "completed"
   assert worker_transcript.thread_thinking_since(meta) is None
+
+  # The same real-time rule the Run headers follow: a thread that never
+  # started but carries its terminal fact shows completed_at, not a page-load
+  # time; a never-started, never-finished thread shows no time. (Each phase
+  # rides its own thread id: the projection memoizes per (session, thread).)
+  def _thread_case(thread_id: str, status: str, **fields) -> dict:
+    thread_events = thread_events_log_path(session_dir, thread_id)
+    thread_events.parent.mkdir(parents=True, exist_ok=True)
+    thread_events.write_text(
+        json.dumps({
+            "type": ET.USER,
+            "content": "old delegation",
+            "timestamp": started.isoformat()
+        }) + "\n",
+        encoding="utf-8")
+    thread_meta = ThreadMetadata(
+        id=thread_id, session_id="legacy-session", description=thread_id, status=status, **fields)
+    entry = worker_transcript.load_thread_transcript(
+        cfg=cfg, session_dir=session_dir, meta=thread_meta, events_path=thread_events)
+    return entry.projection.committed[0]
+
+  assert _thread_case("thread-queued", "idle")["timestamp"] is None
+  finished = _thread_case("thread-never-started", "completed", completed_at=started + timedelta(seconds=5))
+  assert finished["timestamp"] == (started + timedelta(seconds=5)).isoformat()
+  assert _thread_case(
+      "thread-both", "completed", started_at=started,
+      completed_at=started + timedelta(seconds=5))["timestamp"] == started.isoformat()

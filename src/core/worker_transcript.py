@@ -79,6 +79,21 @@ def _backend_label(cfg, backend: str | None) -> str:
   return option.label if option is not None else backend
 
 
+def _run_header_time(run: RunRecord) -> str | None:
+  """The header's one real time: the Run's own facts, never a clock read.
+
+  A started Run carries its started_at; a Run that never started but carries a
+  terminal fact (a launch failure) carries its ended_at; a queued Run carries
+  no time at all. A page-load or projection-build time here would show a
+  future-lying bubble (and once fed a negative duration).
+  """
+  if run.started_at is not None:
+    return run.started_at.isoformat()
+  if run.ended_at is not None:
+    return run.ended_at.isoformat()
+  return None
+
+
 def _run_header_event(run: RunRecord, state: str, label: str, error: str) -> dict:
   """The one header line that opens *run*'s transcript segment."""
   started = run.started_at.isoformat() if run.started_at is not None else None
@@ -91,7 +106,7 @@ def _run_header_event(run: RunRecord, state: str, label: str, error: str) -> dic
       "state": state,
       "error": error,
       "started_at": started,
-      "timestamp": started or utc_now().isoformat(),
+      "timestamp": _run_header_time(run),
   }
 
 
@@ -285,6 +300,9 @@ def build_thread_transcript_sync(
   """Build one legacy thread's transcript: one header line, then its events."""
   state = _thread_state(meta)
   started = meta.started_at.isoformat() if meta.started_at is not None else None
+  # The same real-time rule the Run headers follow: the start while it ran,
+  # the terminal fact's completed_at when it never started, else no time.
+  completed = meta.completed_at.isoformat() if meta.completed_at is not None else None
   thread_events = _read_events(events_path)
   transcript: list[dict] = [
       {
@@ -296,7 +314,7 @@ def build_thread_transcript_sync(
           "state": state,
           "error": _header_error(state, thread_events),
           "started_at": started,
-          "timestamp": started or utc_now().isoformat(),
+          "timestamp": started or completed,
       }
   ]
   transcript.extend(thread_events)

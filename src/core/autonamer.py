@@ -3,8 +3,9 @@
 Two strategies, picked by who triggers them:
 
 1. Light-backend one-shot (SDK sessions: cc-claude / codex / opencode / etc.)
-   - Entry: name_after_round(...) — called from src/api/chat.py after a master round;
-     it assembles the prompt from the chat log and delegates to maybe_auto_name(...).
+   - Entry: name_after_round(...) — fired by the per-session queue consumer via
+     SessionManager.name_after_round after a master round; it assembles the
+     prompt from the chat log and delegates to maybe_auto_name(...).
    - Reads CharlieBot's chat_events.jsonl (user message + assistant_text).
    - Picks resolved light backends from backends.preference in order
      (iter_light_backends) and asks them, via one_shot_text, for {name, group}.

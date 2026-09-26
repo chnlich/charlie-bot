@@ -437,8 +437,7 @@ class TaskTreeManager:
     # check (_fresh_cached_meta), so the thread build reads a file only for a
     # session no authoritative entry covers (cold cache, out-of-band create).
     cached_metas = self._sessions.fresh_cached_metas()
-    task = create_logged_task(
-        asyncio.to_thread(self._build_index_sync, cached_metas), name="task-tree-index-build")
+    task = create_logged_task(asyncio.to_thread(self._build_index_sync, cached_metas), name="task-tree-index-build")
     self._index_build_task = task
     self._index_build_generation = generation
     try:

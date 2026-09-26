@@ -472,20 +472,29 @@ async def run_harness(args: argparse.Namespace) -> None:
                      f"{status} {delegated3}")
             outside_id = delegated3.get("session_id")
             outside_run = delegated3.get("run_id")
-            # The boundary refusal is a failed-to-start launch: no process, no
-            # worktree, no terminal fact — the queued reservation never turns
-            # into execution and the boundary error lands in the instance log.
+            # The boundary refusal never reaches a process or a worktree: the
+            # launch failure lands the Run's durable failed fact with the
+            # boundary error as its evidence (the deliberate post-admission
+            # launch-failure contract) — the queued reservation never turns
+            # into execution.
             await asyncio.sleep(30)
             status, page = request(base, access_key, "GET",
                                    f"/api/sessions/{outside_id}/runs?order=desc&limit=5")
             outside_row = next((r for r in page.get("items", []) if r.get("id") == outside_run), None)
             if outside_row is None:
                 fail("the outside-repo run vanished")
-            if outside_row.get("state") == "success":
-                fail("a launch with a repo outside the preview workspace succeeded")
-            if outside_row.get("state") in ("failed", "stopped", "interrupted"):
-                fail(f"the outside-repo launch should never have executed; it reached "
-                     f"{outside_row.get('state')}")
+            if outside_row.get("state") != "failed":
+                fail(f"the outside-repo launch should be refused with a durable failed "
+                     f"fact; it shows {outside_row.get('state')}")
+            if outside_row.get("worktree_path"):
+                fail(f"the outside-repo launch created worktree state: "
+                     f"{outside_row.get('worktree_path')}")
+            if outside_row.get("pid") is not None:
+                fail("the outside-repo launch pinned a process identity")
+            events_ref = outside_row.get("events_ref") or ""
+            if not events_ref or not Path(events_ref).is_file() or \
+                    "preview workspace boundary" not in Path(events_ref).read_text(errors="replace"):
+                fail("the refused run's events log never recorded the workspace-boundary error")
             instance_log_text = "\n".join(
                 pth.read_text(encoding="utf-8", errors="replace")
                 for pth in sorted((home / "logs").glob("*.log")))
@@ -496,9 +505,10 @@ async def run_harness(args: argparse.Namespace) -> None:
                 fail(f"the outside-repo launch created worktree state: {worktrees_after}")
             results["workspace_boundary"] = {"task": outside_id, "run": outside_run,
                                              "state": outside_row.get("state"),
+                                             "worktree_created": False,
                                              "refused_at_launch": True}
             log("outside-repo launch refused at the boundary: no process, no worktree, "
-                "refusal recorded in the instance log")
+                "durable failed fact with the boundary error as evidence")
 
             # -- native state isolation ---------------------------------------
             clc_sessions = home / "clc-sessions"

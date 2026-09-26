@@ -300,8 +300,9 @@ class TaskCompletionManager:
         run:<id> must be a Run of THIS task; spec:<hash> must be a pinned task
         spec of one of the claimed runs; review:<id> a successful review Run
         of this task; landed:<branch>@<commit> a landing whose branch is a
-        branch this task's runs were based on. Unknown shapes pass through as
-        opaque evidence pointers.
+        branch this task's runs were based on, or the published origin/ ref
+        a reviewer pushes it to. Unknown shapes pass through as opaque
+        evidence pointers.
         """
 
         blockers: list[str] = []
@@ -330,11 +331,14 @@ class TaskCompletionManager:
             if not branch or not commit:
                 blockers.append(f"result ref {ref} must be landed:<branch>@<commit>")
             else:
+                from src.core.review import review_landing_target
                 base_branches = {
                     runs[r].base_branch for r in runs if r in runs and runs[r].base_branch}
                 if meta.task is not None and meta.task.base_branch:
                     base_branches.add(meta.task.base_branch)
-                if base_branches and branch not in base_branches:
+                # A reviewed Run lands on the branch its reviewer publishes.
+                targets = base_branches | {review_landing_target(b) for b in base_branches}
+                if base_branches and branch not in targets:
                     blockers.append(
                         f"result ref {ref} lands on {branch}; this task's runs target "
                         f"{', '.join(sorted(base_branches))}")

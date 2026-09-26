@@ -198,6 +198,17 @@ def review_numbered_steps(branch_name: str, wt_path: str, base_branch: str) -> s
       ])
 
 
+def review_landing_target(base_branch: str) -> str:
+  """The published branch step 13's push lands on: the reviewed Run's landing target.
+
+  The push publishes the base on origin, so the target is its ``origin/`` ref,
+  which git_verify_commit_landed fetches before judging; a local branch of the
+  same name may lag it. A base recorded as ``origin/<b>`` names that same
+  published branch.
+  """
+  return f"origin/{base_branch.removeprefix('origin/')}"
+
+
 def review_context_lines(
     user_request: str | None,
     worker_summary: str | None,

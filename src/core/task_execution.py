@@ -1403,12 +1403,12 @@ class TaskExecutionAdapter:
             return
         if durable_outcome != "success":
             return
-        landing = await self._landing_for_work(work_run)
+        landing, reason = await self._landing_for_work(work_run)
         if landing is None:
             await self._report_failure_to_parent(
                 session_id, work_run, "blocked",
                 summary=f"work run {work_run.id} passed review but its branch did not land on "
-                        f"{work_run.base_branch or 'the requested base'}")
+                        f"{work_run.base_branch or 'the requested base'}: {reason}")
             return
         branch, commit, repo_path = landing
         refs = [f"{RUN_REF_PREFIX}{work_run.id}"]
@@ -1483,24 +1483,25 @@ class TaskExecutionAdapter:
         self.launch(session_id, run_id)
         return run_id
 
-    async def _landing_for_work(self, work_run: RunRecord) -> tuple[str, str, str] | None:
-        """The (branch, commit, repo) landing evidence of a reviewed work Run, or None.
+    async def _landing_for_work(self, work_run: RunRecord) -> tuple[tuple[str, str, str] | None, str]:
+        """The (branch, commit, repo) landing evidence of a reviewed work Run, or None and why.
 
         The commit is the work branch's tip in its repository; the check
-        requires that commit to exist and be an ancestor of the requested
-        target branch there (an origin/ target is fetched first).
+        requires that commit to exist and be an ancestor of the branch the
+        reviewer's push publishes (review.review_landing_target, fetched
+        first), never the possibly stale local branch of the same name.
         """
         if not (work_run.repo_path and work_run.branch_name and work_run.base_branch):
-            return None
+            return None, f"work run {work_run.id} records no repo, branch and base to verify"
         commit = await git.git_rev_parse(Path(work_run.repo_path), work_run.branch_name)
         if commit is None:
-            return None
+            return None, f"branch {work_run.branch_name} does not resolve in {work_run.repo_path}"
+        target = review.review_landing_target(work_run.base_branch)
         from src.core.git import git_verify_commit_landed
-        landed, _reason = await git_verify_commit_landed(
-            Path(work_run.repo_path), work_run.base_branch, commit)
+        landed, reason = await git_verify_commit_landed(Path(work_run.repo_path), target, commit)
         if not landed:
-            return None
-        return work_run.base_branch, commit, work_run.repo_path
+            return None, reason
+        return (target, commit, work_run.repo_path), ""
 
     async def _cleanup_worktree_if_delivered(self, session_id: str, work_run: RunRecord) -> None:
         """Remove the shared worktree only once the task actually delivered.

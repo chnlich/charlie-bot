@@ -3,7 +3,8 @@
 The reviewer's push step (``git push origin HEAD:<base>``) updates the published
 branch only, so a shared clone's local <base> can lag it. The post-review
 landing judgment reads the fetched origin/<base> tip, and a failed judgment
-carries git's reason into the parent's blocked report.
+carries git's reason into the parent's blocked report. A delivered child_report
+reaches the manager's turn text with its summary after the typed header.
 """
 
 from __future__ import annotations
@@ -144,3 +145,25 @@ async def test_commit_on_neither_base_ref_reports_blocked_with_the_git_reason(
   assert "passed review but its branch did not land on main: " in summary
   assert "ancestry check failed" in summary and "(origin/main)" in summary
   assert tree.task_state(worker_id) == "open"
+
+
+@pytest.mark.asyncio
+async def test_blocked_child_report_reaches_the_manager_turn_with_its_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  child = await create_task(tree, parent=manager.id, request_id="child", profile="worker", task=TaskSpec(goal="work"))
+  builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("noted")])], BUILD_BACKEND_PATCH_TARGET)
+  patch_instructions_content(monkeypatch)
+  summary = "work run run-w passed review but its branch did not land on main: ancestry check failed"
+  await tree.dispatch.deliver_child_report(
+      child.id, source_event={"id": "finish-1"}, outcome="blocked", summary=summary, recipient=manager.id)
+
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  run, _outcome = await wait_for_terminal_run(tree, manager.id, decision["run_id"])
+
+  line = f"[Report from task {child.id} | outcome blocked] {summary}"
+  launch_text = (tree.runs.run_dir(manager.id, run.id) / "launch_prompt.md").read_text(encoding="utf-8")
+  assert line in launch_text
+  assert line in builds[0]["backend"].prompt

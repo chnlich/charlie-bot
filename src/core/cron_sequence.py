@@ -513,7 +513,7 @@ async def step_advanced(tree: TaskTreeManager, leaf_id: str, run_id: str) -> boo
   run = await tree.runs.get_run(leaf_id, run_id)
   if run is None:
     return False
-  if tree.runs.terminal_outcome(tree.runs.load_events_sync(leaf_id), run_id) != "success":
+  if await tree.runs.terminal_outcome_of(leaf_id, run_id) != "success":
     return False
   return run.exit_code == 0
 

@@ -590,9 +590,7 @@ class TaskExecutionAdapter:
         """Await one Run's durable terminal fact; returns its outcome."""
         tree = self._tree
         while True:
-            run = await tree.runs.get_run(session_id, run_id)
-            events = tree.runs.load_events_sync(session_id)
-            outcome = tree.runs.terminal_outcome(events, run_id) if run is not None else None
+            outcome = await tree.runs.terminal_outcome_of(session_id, run_id)
             if outcome is not None:
                 return outcome
             await asyncio.sleep(0.2)
@@ -618,8 +616,7 @@ class TaskExecutionAdapter:
         run = await tree.runs.get_run(session_id, run_id)
         if run is None:
             raise RunNotFoundError(run_not_found_in_task_text(run_id, session_id))
-        events = tree.runs.load_events_sync(session_id)
-        outcome = tree.runs.terminal_outcome(events, run_id)
+        outcome = await tree.runs.terminal_outcome_of(session_id, run_id)
         if outcome is not None:
             return LaunchSettlement(outcome=outcome)
         if run.pid is not None:
@@ -637,8 +634,7 @@ class TaskExecutionAdapter:
         if future is None:
             # The launch settled (and dropped its entry) between the facts
             # read above and now: re-read what actually happened.
-            events = tree.runs.load_events_sync(session_id)
-            outcome = tree.runs.terminal_outcome(events, run_id)
+            outcome = await tree.runs.terminal_outcome_of(session_id, run_id)
             if outcome is not None:
                 return LaunchSettlement(outcome=outcome)
             raise RuntimeError(f"run {run_id} settled without a terminal fact or launch verdict")
@@ -646,8 +642,7 @@ class TaskExecutionAdapter:
         if verdict != LAUNCH_STARTED:
             # First terminal fact wins over a settle race: the run may have
             # finished through another path while this verdict was formed.
-            events = tree.runs.load_events_sync(session_id)
-            outcome = tree.runs.terminal_outcome(events, run_id)
+            outcome = await tree.runs.terminal_outcome_of(session_id, run_id)
             if outcome is not None:
                 return LaunchSettlement(outcome=outcome)
             return LaunchSettlement(withheld=verdict)
@@ -959,8 +954,7 @@ class TaskExecutionAdapter:
         )
         await self._tree.dispatch.finish_run(
             session_id, run_id, outcome=outcome, exit_code=exit_code if not error else -1)
-        durable = self._tree.runs.terminal_outcome(
-            self._tree.runs.load_events_sync(session_id), run_id) or outcome
+        durable = await self._tree.runs.terminal_outcome_of(session_id, run_id) or outcome
         if error:
             log.warning("task_run_error", session_id=session_id, run_id=run_id, error=error[:500])
         return durable

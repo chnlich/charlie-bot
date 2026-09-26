@@ -423,27 +423,28 @@ def test_session_cancel_readback_resolves_to_own_task_closed_fact_on_sent_but_lo
   events_dir = cfg.sessions_dir / session_id / "data"
   events_dir.mkdir(parents=True)
   (events_dir / "chat_events.jsonl").write_text(
-      "\n".join([
-          # An earlier request's closure shares the history; only this
-          # call's own stable event id may answer it.
-          json.dumps({
-              "id": stable_close_event_id(session_id, "req-earlier"),
-              "type": "task_closed",
-              "request_id": "req-earlier",
-              "outcome": "cancelled",
-          }),
-          json.dumps({
-              "id": closed_id,
-              "type": "task_closed",
-              "request_id": request_id,
-              "outcome": "cancelled",
-          }),
-      ]) + "\n",
+      "\n".join(
+          [
+              # An earlier request's closure shares the history; only this
+              # call's own stable event id may answer it.
+              json.dumps(
+                  {
+                      "id": stable_close_event_id(session_id, "req-earlier"),
+                      "type": "task_closed",
+                      "request_id": "req-earlier",
+                      "outcome": "cancelled",
+                  }),
+              json.dumps({
+                  "id": closed_id,
+                  "type": "task_closed",
+                  "request_id": request_id,
+                  "outcome": "cancelled",
+              }),
+          ]) + "\n",
       encoding="utf-8")
 
   monkeypatch.setattr(
-      sys, "argv",
-      ["charliebot-session", "cancel", session_id, "--reason", "superseded", "--request-id", request_id])
+      sys, "argv", ["charliebot-session", "cancel", session_id, "--reason", "superseded", "--request-id", request_id])
 
   session_module.main()
 
@@ -462,19 +463,21 @@ def test_session_complete_readback_resolves_to_pending_run_finish_on_sent_but_lo
   events_dir = cfg.sessions_dir / session_id / "data"
   events_dir.mkdir(parents=True)
   (events_dir / "chat_events.jsonl").write_text(
-      json.dumps({
-          "id": stable_close_request_event_id(session_id, request_id),
-          "type": "task_close_requested",
-          "request_id": request_id,
-          "owner_run_id": "run-1",
-      }) + "\n",
+      json.dumps(
+          {
+              "id": stable_close_request_event_id(session_id, request_id),
+              "type": "task_close_requested",
+              "request_id": request_id,
+              "owner_run_id": "run-1",
+          }) + "\n",
       encoding="utf-8")
 
   result_file = tmp_path / "result.json"
   result_file.write_text(json.dumps({"summary": "wrapped up"}), encoding="utf-8")
   monkeypatch.setattr(
       sys, "argv",
-      ["charliebot-session", "complete", session_id, "--result-file", str(result_file), "--request-id", request_id])
+      ["charliebot-session", "complete", session_id, "--result-file",
+       str(result_file), "--request-id", request_id])
 
   session_module.main()
 
@@ -765,6 +768,7 @@ def test_find_local_thread_verify_and_implement_never_cross_match(
   assert match is not None
   assert match["id"] == "implement-thread"
 
+
 def test_find_local_task_close_never_matches_another_requests_close_fact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Same event types, different request id: a foreign task_closed fact and a
@@ -780,19 +784,22 @@ def test_find_local_task_close_never_matches_another_requests_close_fact(
   events_dir = cfg.sessions_dir / session_id / "data"
   events_dir.mkdir(parents=True)
   (events_dir / "chat_events.jsonl").write_text(
-      "\n".join([
-          json.dumps({
-              "id": stable_close_event_id(session_id, "req-theirs"),
-              "type": "task_closed",
-              "request_id": "req-theirs",
-              "outcome": "completed",
-          }),
-          json.dumps({
-              "id": stable_close_request_event_id(session_id, "req-theirs"),
-              "type": "task_close_requested",
-              "request_id": "req-theirs",
-          }),
-      ]) + "\n",
+      "\n".join(
+          [
+              json.dumps(
+                  {
+                      "id": stable_close_event_id(session_id, "req-theirs"),
+                      "type": "task_closed",
+                      "request_id": "req-theirs",
+                      "outcome": "completed",
+                  }),
+              json.dumps(
+                  {
+                      "id": stable_close_request_event_id(session_id, "req-theirs"),
+                      "type": "task_close_requested",
+                      "request_id": "req-theirs",
+                  }),
+          ]) + "\n",
       encoding="utf-8")
 
   assert common.find_local_task_close(session_id, "req-mine") is None

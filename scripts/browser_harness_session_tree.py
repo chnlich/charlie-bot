@@ -48,6 +48,7 @@ import subprocess  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
 import urllib.request  # noqa: E402
+from collections.abc import Callable  # noqa: E402
 
 # Evidence defaults to a host temp directory so the public repo carries no
 # host path; pass --evidence-dir to keep evidence with its owning session.
@@ -86,6 +87,10 @@ class CDP:
         self.runs_fetch_counts: list[str] = []
         self.mutations: list[dict] = []
         self._reader = asyncio.create_task(self._read_loop())
+
+    async def close(self) -> None:
+        """Close the browser websocket; the reader loop ends with it."""
+        await self._ws.close()
 
     async def _read_loop(self) -> None:
         try:
@@ -385,6 +390,74 @@ async def seed_scenario(home: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Chrome launch and page wire-up (shared by the browser harnesses)
+# ---------------------------------------------------------------------------
+
+
+def launch_chrome(chrome: str, profile: Path, debug_port: int, flags: list[str]) -> subprocess.Popen:
+    """Start headless chrome with a CDP endpoint and a private profile; return the process.
+
+    The caller owns the returned process: terminate and reap it when the run
+    ends. *flags* carries the harness's own switches (window size, throttling
+    bans); the launch sandwich around them - headless mode, the debug port,
+    the profile, the start URL - is the one shared shape.
+    """
+    return subprocess.Popen(
+        [chrome, "--headless=new", f"--remote-debugging-port={debug_port}",
+         f"--user-data-dir={profile}", *flags, "about:blank"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+
+async def devtools_ws_url(chrome_proc: subprocess.Popen, timeout_s: float,
+                          fail: Callable[[str], None]) -> str:
+    """Read chrome's stderr until the DevTools websocket endpoint appears.
+
+    *fail* is the caller's own failure exit, so each harness keeps its
+    message prefix and exit code. The captured stderr tail rides the failure
+    message: a chrome that exits before announcing its endpoint explains
+    itself there.
+    """
+    stderr_lines: list[str] = []
+    ws_url = None
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline and ws_url is None:
+        line = chrome_proc.stderr.readline().decode(errors="replace")
+        if not line:
+            break  # EOF: chrome exited, so no endpoint is coming
+        stderr_lines.append(line)
+        if "DevTools listening on ws://" in line:
+            ws_url = line.strip().split()[-1]
+    if ws_url is None:
+        fail("chrome devtools endpoint did not come up: " + "".join(stderr_lines[-5:]))
+    return ws_url
+
+
+async def connect_cdp(ws_url: str) -> CDP:
+    """Open the browser websocket, wrap it in CDP, and settle before the first send."""
+    import websockets
+
+    ws = await websockets.connect(ws_url, max_size=50 * 1024 * 1024)
+    cdp = CDP(ws)
+    await asyncio.sleep(0.3)
+    return cdp
+
+
+async def open_cdp_page(cdp: CDP, domains: tuple[str, ...]) -> tuple[str, str]:
+    """Create one blank page target, attach flattened, enable *domains*.
+
+    Returns (session_id, target_id): the session id drives the page's CDP
+    calls; the target id is what closes the page again (Target.closeTarget).
+    """
+    target = await cdp.send("Target.createTarget", {"url": "about:blank"})
+    attached = await cdp.send("Target.attachToTarget",
+                              {"targetId": target["targetId"], "flatten": True})
+    session_id = attached["sessionId"]
+    for domain in domains:
+        await cdp.send(f"{domain}.enable", session_id=session_id)
+    return session_id, target["targetId"]
+
+
+# ---------------------------------------------------------------------------
 # Browser scenarios
 # ---------------------------------------------------------------------------
 
@@ -574,7 +647,6 @@ async def run_harness(args: argparse.Namespace) -> None:
     chrome = args.chrome or shutil.which("google-chrome") or shutil.which("google-chrome-stable")
     if not chrome:
         fail("google-chrome is not installed; install it or pass --chrome (no fake output)")
-    import websockets
 
     evidence_dir = Path(args.evidence_dir)
     evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -630,43 +702,20 @@ async def run_harness(args: argparse.Namespace) -> None:
         profile = tmp_path / "chrome-profile"
         profile.mkdir()
         debug_port = pick_free_port()
-        chrome_proc = subprocess.Popen(
-            [chrome, "--headless=new", "--remote-debugging-port=" + str(debug_port),
-             f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
-             "--disable-background-networking", "--window-size=1440,900",
-             "--remote-allow-origins=*",
-             # Keep the page fully active: background throttling would delay
-             # timers/fetches and distort the live-update evidence.
-             "--disable-background-timer-throttling",
-             "--disable-backgrounding-occluded-windows",
-             "--disable-renderer-backgrounding",
-             "about:blank"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        chrome_proc = launch_chrome(chrome, profile, debug_port, [
+            "--no-first-run", "--no-default-browser-check",
+            "--disable-background-networking", "--window-size=1440,900",
+            "--remote-allow-origins=*",
+            # Keep the page fully active: background throttling would delay
+            # timers/fetches and distort the live-update evidence.
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+        ])
         try:
-            stderr_lines = []
-            ws_url = None
-            deadline = time.monotonic() + 20
-            while time.monotonic() < deadline and ws_url is None:
-                line = chrome_proc.stderr.readline().decode(errors="replace")
-                if not line:
-                    await asyncio.sleep(0.05)
-                    continue
-                stderr_lines.append(line)
-                if "DevTools listening on ws://" in line:
-                    ws_url = line.strip().split()[-1]
-            if ws_url is None:
-                fail("chrome devtools endpoint did not come up: " + "".join(stderr_lines[-5:]))
-            ws = await websockets.connect(ws_url, max_size=50 * 1024 * 1024)
-            cdp = CDP(ws)
-            await asyncio.sleep(0.3)
-
-            target = await cdp.send("Target.createTarget", {"url": "about:blank"})
-            attached = await cdp.send("Target.attachToTarget",
-                                      {"targetId": target["targetId"], "flatten": True})
-            session_id = attached["sessionId"]
-            await cdp.send("Page.enable", session_id=session_id)
-            await cdp.send("Runtime.enable", session_id=session_id)
-            await cdp.send("Network.enable", session_id=session_id)
+            ws_url = await devtools_ws_url(chrome_proc, 20, fail)
+            cdp = await connect_cdp(ws_url)
+            session_id, _target_id = await open_cdp_page(cdp, ("Page", "Runtime", "Network"))
             # Isolation guard, injected before any app script: the browser
             # terminal tab attaches to the HOST-GLOBAL tmux session. The
             # harness must never attach to (or create) it — /ws/terminal is
@@ -2011,7 +2060,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                            f"{len(console_errors)} console errors" + (f": {console_errors[:3]}" if console_errors else ""),
                            None)
 
-            await ws.close()
+            await cdp.close()
         finally:
             chrome_proc.terminate()
             try:

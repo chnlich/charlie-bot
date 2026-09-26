@@ -45,6 +45,7 @@ from pathlib import Path
 
 from src.core.codex_usage import default_codex_home
 from src.core.config import CharlieBotConfig, claude_config_dir, default_claude_dir
+from src.core.constants import MIN_IDLE_DAYS
 from src.core.json_utils import load_json_meta
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionStatus, parse_utc_datetime
@@ -56,7 +57,6 @@ from src.core.worktree_trash import TRASH_DIR_NAME
 
 log = LazyStructlogLogger()
 
-MIN_IDLE_DAYS = 14
 # Unreferenced backend records only have to outlive a backend session that is
 # running right now; such a session refreshes its timestamp every few minutes.
 ORPHAN_IDLE_DAYS = 2

@@ -9,8 +9,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from conftest import (
+    RUNS_STOP_EXIT_POLL_SECONDS_PATCH_TARGET,
+    RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET,
+    identity_of,
+    live_subprocess,
+)
 from conftest import build_env as build_task_tree_env
-from conftest import identity_of, live_subprocess
 
 from src.core import event_types as ET
 from src.core import runs
@@ -219,8 +224,8 @@ async def test_naturally_completed_run_retains_outcome_against_a_late_stop(
 @pytest.mark.asyncio
 async def test_stop_request_can_return_null_outcome_and_recovery_closes_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr("src.core.runs.STOP_EXIT_WAIT_SECONDS", 0.2)
-  monkeypatch.setattr("src.core.runs.STOP_EXIT_POLL_SECONDS", 0.02)
+  monkeypatch.setattr(RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET, 0.2)
+  monkeypatch.setattr(RUNS_STOP_EXIT_POLL_SECONDS_PATCH_TARGET, 0.02)
   env = build_env(tmp_path)
   cfg, session_mgr, _mgr, store = env
   session_id = await make_task(env, "t1")
@@ -265,7 +270,7 @@ async def test_stop_request_can_return_null_outcome_and_recovery_closes_it(
 @pytest.mark.asyncio
 async def test_identity_mismatch_returns_conflict_and_keeps_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr("src.core.runs.STOP_EXIT_WAIT_SECONDS", 0.2)
+  monkeypatch.setattr(RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET, 0.2)
   env = build_env(tmp_path)
   _, _, _, store = env
   session_id = await make_task(env, "t1")

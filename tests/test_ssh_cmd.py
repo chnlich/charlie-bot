@@ -5,13 +5,14 @@ import stat
 from pathlib import Path
 
 import pytest
+from conftest import SSH_CONTROL_DIR_PATCH_TARGET
 
 from src.core.ssh import ssh_cmd
 
 
 def test_argv_carries_the_policy_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   control_dir = tmp_path / "controlmasters"
-  monkeypatch.setattr("src.core.ssh._CONTROL_DIR", str(control_dir))
+  monkeypatch.setattr(SSH_CONTROL_DIR_PATCH_TARGET, str(control_dir))
 
   argv = ssh_cmd("host2", "sacct -j 1 -X -n -P")
 
@@ -28,7 +29,7 @@ def test_argv_carries_the_policy_options(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_control_dir_created_owner_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   control_dir = tmp_path / "nested" / "controlmasters"
-  monkeypatch.setattr("src.core.ssh._CONTROL_DIR", str(control_dir))
+  monkeypatch.setattr(SSH_CONTROL_DIR_PATCH_TARGET, str(control_dir))
 
   ssh_cmd("host2", "true")
 

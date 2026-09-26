@@ -1314,6 +1314,13 @@ SESSIONS_SESSION_MANAGER_PATCH_TARGET = "src.core.sessions.SessionManager"
 # their own routes; grep `from src.core.master_trigger import trigger_master` for the full set.
 TRIGGER_MASTER_PATCH_TARGET = "src.core.triggers.trigger_master"
 
+# The defining-module route of the same wake: callers that import trigger_master inside the
+# firing function (src/core/session_dispatch.py's legacy parent wake) read the
+# src.core.master_trigger module attribute at call time, so monkeypatch.setattr lands the
+# stand-in on the defining module itself; the import-time binders above read their own
+# namespaces instead, so this route and theirs do not reach each other's wakes.
+MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET = "src.core.master_trigger.trigger_master"
+
 # Import-path patch target for the wake's inner run. Every wake fires through trigger_master,
 # whose body reads run_message_with_resume_recovery as a module global of its defining module,
 # so mock setattrs the stand-in there and the run is intercepted no matter which outer seam
@@ -1504,6 +1511,13 @@ WORKER_CLAUDE_CODE_BACKEND_PATCH_TARGET = "src.agents.worker.ClaudeCodeBackend"
 # src.core.runs module attribute where that read resolves.
 RUNS_READ_PID_STAT_PATCH_TARGET = "src.core.runs.read_pid_stat"
 
+# Patch targets for request_stop's exit-wait loop. runs.py defines both timings as module
+# globals and the stop path reads them at call time, so monkeypatch.setattr lands the
+# shortened waits on the src.core.runs module attribute; the pair travels together because
+# the loop's deadline and its poll step share one mechanism.
+RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET = "src.core.runs.STOP_EXIT_WAIT_SECONDS"
+RUNS_STOP_EXIT_POLL_SECONDS_PATCH_TARGET = "src.core.runs.STOP_EXIT_POLL_SECONDS"
+
 # The backend-construction seams, stated once for every constant below: each CLI
 # backend binds resolve_binary at import scope (`from src.agents.backends.base import
 # resolve_binary`), so monkeypatch.setattr on a ``*_RESOLVE_BINARY_PATCH_TARGET`` lands
@@ -1546,6 +1560,12 @@ JSON_UTILS_OS_REPLACE_PATCH_TARGET = "src.core.json_utils.os.replace"
 TUI_KILL_TMUX_SESSION_PATCH_TARGET = "src.agents.backends.tui.kill_tmux_session"
 TUI_TMUX_SESSION_EXISTS_PATCH_TARGET = "src.agents.backends.tui.tmux_session_exists"
 TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET = "src.agents.backends.tui._claude_jsonl_busy"
+
+# Patch target for the ssh control-master directory. src/core/ssh.py derives it from the
+# operator's home at import scope and the argv builder reads the module global at call time,
+# so monkeypatch.setattr redirects the dir onto the src.core.ssh module attribute and keeps
+# the suite off the real ~/.ssh/controlmasters.
+SSH_CONTROL_DIR_PATCH_TARGET = "src.core.ssh._CONTROL_DIR"
 
 
 def build_cli_backend(

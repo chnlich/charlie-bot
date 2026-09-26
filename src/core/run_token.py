@@ -64,8 +64,11 @@ class CallerIdentity:
 
   __slots__ = ("claims", "kind", "session_id")
 
-  def __init__(self, kind: Literal["operator", "agent"], claims: RunTokenClaims | None = None,
-               session_id: str | None = None) -> None:
+  def __init__(
+      self,
+      kind: Literal["operator", "agent"],
+      claims: RunTokenClaims | None = None,
+      session_id: str | None = None) -> None:
     self.kind = kind
     # Present only for kind == "agent".
     self.claims = claims
@@ -78,8 +81,7 @@ class CallerIdentity:
   def __eq__(self, other: object) -> bool:
     if not isinstance(other, CallerIdentity):
       return NotImplemented
-    return (self.kind == other.kind and self.claims == other.claims and
-            self.session_id == other.session_id)
+    return (self.kind == other.kind and self.claims == other.claims and self.session_id == other.session_id)
 
   def __hash__(self) -> int:
     return hash((self.kind, self.claims, self.session_id))

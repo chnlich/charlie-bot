@@ -97,3 +97,26 @@ async def test_write_mid_build_never_installs_over_newer_generation(tree, monkey
     fresh = await tree._get_index()
     assert builds["n"] == 3  # the post-write read rebuilt
     assert fresh.revision != index.revision or fresh is not index
+
+
+@pytest.mark.asyncio
+async def test_retained_build_on_a_closed_loop_is_rebuilt_not_awaited(tree, monkeypatch):
+    """The mixed-loop shape (TestClient's portal vs the test's loop) can leave
+    the single-flight marker holding a build still pending on a loop that has
+    closed; the reader rebuilds on its own loop instead of awaiting a
+    foreign-loop task."""
+    builds = await _count_builds(tree, monkeypatch)
+    seed_loop = asyncio.new_event_loop()
+    try:
+        # create_task on a never-running loop parks the task pending; the loop
+        # close discards its first step, so it never completes.
+        parked = seed_loop.create_task(asyncio.sleep(3600), name="task-tree-index-build")
+    finally:
+        seed_loop.close()
+    tree._invalidate_index()
+    tree._index_build_task = parked
+    tree._index_build_generation = tree._index_generation
+    index = await asyncio.wait_for(tree._get_index(), 5.0)
+    assert index.metas
+    assert builds["n"] == 1
+    assert tree._index_build_task is None

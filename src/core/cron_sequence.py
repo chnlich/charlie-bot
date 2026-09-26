@@ -378,10 +378,7 @@ async def deliver_boundary_report(
     summary: str,
 ) -> None:
   """The ONE firing report through the common report owner (stable id dedup)."""
-  events = tree.fact_history(leaf_id)
-  source = next((e for e in reversed(events) if e.get("type") in (ET.RUN_FINISHED, ET.TASK_CREATED)), None)
-  if source is None:
-    raise RuntimeError(f"scheduled firing leaf {leaf_id} has no durable fact to source its report from")
+  source = tree.dispatch.report_source_event(leaf_id, "scheduled firing leaf")
   await tree.dispatch.deliver_child_report(
       leaf_id,
       source_event=source,

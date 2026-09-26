@@ -26,9 +26,7 @@ async def test_cron_tasks_gzip_ships_precompressed_body(monkeypatch: pytest.Monk
   """A gzip-accepting poll serves the cached gzip form: the decompressed bytes
   equal the plain body, the vary header names the negotiator, and the parsed
   payload keeps the task-list shape (prompt excluded, the M46 dump contract)."""
-  tasks = [
-      ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt", backend="codex-o3")
-  ]
+  tasks = [ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt", backend="codex-o3")]
   monkeypatch.setattr(cron_mod, "get_scheduled_tasks", lambda: tasks)
   monkeypatch.setattr(cron_mod, "get_scheduled_task_errors", list)
 

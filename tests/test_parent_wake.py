@@ -45,14 +45,12 @@ def child_report(child_session_id: str, *, outcome: str, summary: str, event_id:
 
 
 @pytest.mark.asyncio
-async def test_legacy_parent_wakes_through_trigger_master_once(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_legacy_parent_wakes_through_trigger_master_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_mgr, tree = await build_env(tmp_path)
   legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
   child_id = "child-task-1"
   await tree.events.append(
-      legacy.id, child_report(child_id, outcome="completed", summary="the work landed",
-                              event_id="report-1"))
+      legacy.id, child_report(child_id, outcome="completed", summary="the work landed", event_id="report-1"))
   trigger = AsyncMock()
   monkeypatch.setattr("src.core.master_trigger.trigger_master", trigger)
 
@@ -67,16 +65,13 @@ async def test_legacy_parent_wakes_through_trigger_master_once(
 
 
 @pytest.mark.asyncio
-async def test_legacy_parent_wake_uses_the_newest_report(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_legacy_parent_wake_uses_the_newest_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, session_mgr, tree = await build_env(tmp_path)
   legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
   await tree.events.append(
-      legacy.id, child_report("child-a", outcome="failed", summary="older attempt",
-                              event_id="report-old"))
+      legacy.id, child_report("child-a", outcome="failed", summary="older attempt", event_id="report-old"))
   await tree.events.append(
-      legacy.id, child_report("child-b", outcome="completed", summary="newer attempt",
-                              event_id="report-new"))
+      legacy.id, child_report("child-b", outcome="completed", summary="newer attempt", event_id="report-new"))
   trigger = AsyncMock()
   monkeypatch.setattr("src.core.master_trigger.trigger_master", trigger)
 
@@ -87,8 +82,7 @@ async def test_legacy_parent_wake_uses_the_newest_report(
 
 
 @pytest.mark.asyncio
-async def test_legacy_parent_without_a_report_never_wakes(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_legacy_parent_without_a_report_never_wakes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, session_mgr, tree = await build_env(tmp_path)
   legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
   trigger = AsyncMock()
@@ -100,13 +94,17 @@ async def test_legacy_parent_without_a_report_never_wakes(
 
 
 @pytest.mark.asyncio
-async def test_node_parent_dispatches_its_pending_inputs(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_node_parent_dispatches_its_pending_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, _session_mgr, tree = await build_env(tmp_path)
   from src.core.models import TaskSpec
   node = await tree.create_task(
-      request_id="root", task_parent_id=None, profile="manager", task=TaskSpec(goal="project"),
-      name="Project", backend=None, caller="operator")
+      request_id="root",
+      task_parent_id=None,
+      profile="manager",
+      task=TaskSpec(goal="project"),
+      name="Project",
+      backend=None,
+      caller="operator")
   dispatch = AsyncMock(return_value={"session_id": node.id, "pending": 0, "launch": False})
   monkeypatch.setattr(tree.dispatch, "dispatch_pending", dispatch)
   trigger = AsyncMock()
@@ -120,8 +118,7 @@ async def test_node_parent_dispatches_its_pending_inputs(
 
 
 @pytest.mark.asyncio
-async def test_legacy_chat_view_renders_the_delivered_report(
-        tmp_path: Path) -> None:
+async def test_legacy_chat_view_renders_the_delivered_report(tmp_path: Path) -> None:
   """The report event is the durable record the legacy chat view renders: a
   legacy session's aggregated messages include the child report's summary,
   outcome, and node link (message_aggregator's child_report handler)."""
@@ -129,19 +126,21 @@ async def test_legacy_chat_view_renders_the_delivered_report(
 
   _cfg, session_mgr, tree = await build_env(tmp_path)
   legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
-  await tree.events.append(legacy.id, {
-      "id": "u1", "type": ET.USER, "content": "what happened?",
-      "timestamp": datetime.now(UTC).isoformat(), "actor": "user",
-      "source_session_id": legacy.id,
-  })
-  report = child_report("child-task-1", outcome="completed", summary="the work landed",
-                        event_id="report-1")
+  await tree.events.append(
+      legacy.id, {
+          "id": "u1",
+          "type": ET.USER,
+          "content": "what happened?",
+          "timestamp": datetime.now(UTC).isoformat(),
+          "actor": "user",
+          "source_session_id": legacy.id,
+      })
+  report = child_report("child-task-1", outcome="completed", summary="the work landed", event_id="report-1")
   await tree.events.append(legacy.id, report)
 
   events = session_mgr.load_chat_events_sync(legacy.id)
   agg = MessageAggregator()
-  messages = [d["message"] for event in events for d in agg.feed(event)
-              if d.get("type") == "message"]
+  messages = [d["message"] for event in events for d in agg.feed(event) if d.get("type") == "message"]
 
   reports = [m for m in messages if m.get("role") == ET.CHILD_REPORT]
   assert len(reports) == 1

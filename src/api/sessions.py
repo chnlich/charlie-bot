@@ -12,18 +12,18 @@ from starlette.responses import Response
 
 from src.api.cron import next_run_iso
 from src.api.deps import (
-  SESSION_NOT_FOUND_DETAIL,
-  bad_request,
-  get_config_on_loop,
-  get_plan_manager,
-  get_run_store,
-  get_session_manager,
-  get_task_manager,
-  get_thread_manager,
-  require_caller,
-  require_found,
-  require_session,
-  trigger_manager,
+    SESSION_NOT_FOUND_DETAIL,
+    bad_request,
+    get_config_on_loop,
+    get_plan_manager,
+    get_run_store,
+    get_session_manager,
+    get_task_manager,
+    get_thread_manager,
+    require_caller,
+    require_found,
+    require_session,
+    trigger_manager,
 )
 from src.api.message_utils import (
     SessionBootstrapData,
@@ -46,10 +46,10 @@ from src.core import claude_accounts, sidebar_state, task_completion, thinking_s
 from src.core.chat_events import chat_events_path
 from src.core.compression import gzip_level1
 from src.core.config import (
-  CharlieBotConfig,
-  claude_config_dir,
-  get_config,
-  get_scheduled_tasks,
+    CharlieBotConfig,
+    claude_config_dir,
+    get_config,
+    get_scheduled_tasks,
 )
 from src.core.constants import BackendType
 from src.core.control_events import sha256_hex
@@ -58,35 +58,35 @@ from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.message_aggregator import tool_preview
 from src.core.models import (
-  AcknowledgeTaskInputsRequest,
-  AncestorRef,
-  BackendOption,
-  CancelRunRequest,
-  CancelTaskRequest,
-  CompleteTaskRequest,
-  CreateSessionRequest,
-  DeleteGroupRequest,
-  EloneSessionRequest,
-  ExplainRequest,
-  ForkSessionRequest,
-  PatchSessionTaskRequest,
-  RateRoundRequest,
-  RenameGroupRequest,
-  ReopenTaskRequest,
-  RetryRunRequest,
-  RunCancelResponse,
-  RunPage,
-  RunRow,
-  SessionMetadata,
-  SessionRow,
-  SessionStatus,
-  SetGroupRequest,
-  SwitchBackendRequest,
-  TaskState,
-  ThreadMetadata,
-  UtcDatetime,
-  WorkerThreadRef,
-  WorkState,
+    AcknowledgeTaskInputsRequest,
+    AncestorRef,
+    BackendOption,
+    CancelRunRequest,
+    CancelTaskRequest,
+    CompleteTaskRequest,
+    CreateSessionRequest,
+    DeleteGroupRequest,
+    EloneSessionRequest,
+    ExplainRequest,
+    ForkSessionRequest,
+    PatchSessionTaskRequest,
+    RateRoundRequest,
+    RenameGroupRequest,
+    ReopenTaskRequest,
+    RetryRunRequest,
+    RunCancelResponse,
+    RunPage,
+    RunRow,
+    SessionMetadata,
+    SessionRow,
+    SessionStatus,
+    SetGroupRequest,
+    SwitchBackendRequest,
+    TaskState,
+    ThreadMetadata,
+    UtcDatetime,
+    WorkerThreadRef,
+    WorkState,
 )
 from src.core.plans import PlanRegistryManager
 from src.core.run_token import CallerIdentity
@@ -103,14 +103,14 @@ from src.core.takeoff_gate import DelegationBlockedError
 from src.core.task_execution import assemble_coherent_snapshot
 from src.core.task_prompts import LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME, PromptSnapshot, TaskPromptError
 from src.core.task_sessions import (
-  AGENT_CREATE_SCOPE_REFUSAL,
-  TASK_CREATE_REQUEST_ID_REQUIRED,
-  TaskConflictError,
-  TaskForbiddenError,
-  TaskInvalidError,
-  TaskNotFoundError,
-  TaskTreeManager,
-  not_task_node_detail,
+    AGENT_CREATE_SCOPE_REFUSAL,
+    TASK_CREATE_REQUEST_ID_REQUIRED,
+    TaskConflictError,
+    TaskForbiddenError,
+    TaskInvalidError,
+    TaskNotFoundError,
+    TaskTreeManager,
+    not_task_node_detail,
 )
 from src.core.threads import ThreadManager
 
@@ -310,11 +310,9 @@ def _resolve_requested_backend(
 # changes exactly when their file changed, so the search route's whole-body
 # memo keeps serving while nothing moved.
 _PROJECTED_ROW_MEMO_LIMIT = 8192
-_projected_row_memo: BoundedMemo[tuple[str, str],
-                                 tuple[SessionMetadata, dict, SessionMetadata]] = BoundedMemo(
-                                     _PROJECTED_ROW_MEMO_LIMIT)
-_projected_row_dumps: BoundedMemo[int, tuple[SessionMetadata, dict]] = BoundedMemo(
-    _PROJECTED_ROW_MEMO_LIMIT)
+_projected_row_memo: BoundedMemo[tuple[str, str], tuple[SessionMetadata, dict,
+                                                        SessionMetadata]] = BoundedMemo(_PROJECTED_ROW_MEMO_LIMIT)
+_projected_row_dumps: BoundedMemo[int, tuple[SessionMetadata, dict]] = BoundedMemo(_PROJECTED_ROW_MEMO_LIMIT)
 
 
 def _projected_row_payload(row: SessionMetadata) -> dict:
@@ -378,9 +376,7 @@ async def project_worker_threads(
     out.append(row)
     if row.profile is not None:
       continue
-    out.extend(
-        _projected_thread_row(row, thread_row)
-        for thread_row in await view_thread_rows(row.id, cfg, thread_mgr))
+    out.extend(_projected_thread_row(row, thread_row) for thread_row in await view_thread_rows(row.id, cfg, thread_mgr))
   return out
 
 
@@ -417,26 +413,27 @@ async def list_sessions(
     next_trigger = entry[sidebar_state.NEXT_TRIGGER_AT]
     # Both datetimes ride the model's JSON scheme (pydantic-core renders UTC as
     # Z); a hand-rolled isoformat() would emit +00:00 inside an all-Z row.
-    rendered.append((row, (
-        _UTC_DATETIME_JSON.dump_python(thinking, mode="json") if thinking is not None else None,
-        entry[sidebar_state.HAS_RUNNING_TASKS],
-        entry[sidebar_state.HAS_PENDING_TRIGGER],
-        entry[sidebar_state.PENDING_TRIGGER_COUNT],
-        _UTC_DATETIME_JSON.dump_python(next_trigger, mode="json") if next_trigger is not None else None,
-        entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL])))
+    rendered.append(
+        (
+            row, (
+                _UTC_DATETIME_JSON.dump_python(thinking, mode="json") if thinking is not None else None,
+                entry[sidebar_state.HAS_RUNNING_TASKS],
+                entry[sidebar_state.HAS_PENDING_TRIGGER], entry[sidebar_state.PENDING_TRIGGER_COUNT],
+                _UTC_DATETIME_JSON.dump_python(next_trigger, mode="json") if next_trigger is not None else None,
+                entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL])))
   list_rows = tuple(row for row, _s in rendered)
   list_states = tuple(state for _row, state in rendered)
   cached = _sessions_list_whole_body
   if (cached is not None and len(cached[0]) == len(list_rows) and
-      all(c is r for c, r in zip(cached[0], list_rows, strict=True)) and
-      cached[1] == list_states):
+      all(c is r for c, r in zip(cached[0], list_rows, strict=True)) and cached[1] == list_states):
     return await gzip_body_response(request, cached[2], {}, _sessions_list_gzip_memo)
   payload = []
   for row, state in zip(list_rows, list_states, strict=True):
     dump = row.model_dump(mode="json")
     if state:
-      (dump["thinking_since"], dump["has_running_tasks"], dump["has_pending_trigger"],
-       dump["pending_trigger_count"], dump["next_trigger_at"], dump["has_pending_plan_approval"]) = state
+      (
+          dump["thinking_since"], dump["has_running_tasks"], dump["has_pending_trigger"], dump["pending_trigger_count"],
+          dump["next_trigger_at"], dump["has_pending_plan_approval"]) = state
     payload.append(dump)
   body = fast_json_bytes(payload)
   _sessions_list_whole_body = (list_rows, list_states, body)
@@ -469,17 +466,14 @@ async def create_session(
           backend=req.backend,
           caller=caller,
       )
-    except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError,
-            DelegationBlockedError) as e:
+    except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError, DelegationBlockedError) as e:
       raise _task_http_error(e) from e
     log.info("task_created", session_id=meta.id, task_parent_id=req.task_parent_id, profile=req.profile)
     return meta
   if not caller.is_operator:
     # Run credentials create only their own child tasks under their own manager
     # node (the v2 path above); the legacy create shape is operator scope.
-    raise HTTPException(
-        status_code=403,
-        detail=AGENT_CREATE_SCOPE_REFUSAL)
+    raise HTTPException(status_code=403, detail=AGENT_CREATE_SCOPE_REFUSAL)
   backend = _resolve_requested_backend(req.backend, cfg, fallback_backend=_default_backend_id(cfg))
   log.info("creating_session", backend=backend, name=req.name)
   return await session_mgr.create_session(req, backend=backend)
@@ -592,20 +586,21 @@ async def list_scheduled_sessions(
       continue
     d = s.model_dump(mode="json")
     for key, value in (derived.get(s.id) or {}).items():
-      d[key] = (_UTC_DATETIME_JSON.dump_python(value, mode="json")
-                if key == sidebar_state.NEXT_TRIGGER_AT and value is not None else value)
+      d[key] = (
+          _UTC_DATETIME_JSON.dump_python(value, mode="json")
+          if key == sidebar_state.NEXT_TRIGGER_AT and value is not None else value)
     busy = thinking_state.busy_since(s.id)
-    d["thinking_since"] = (_UTC_DATETIME_JSON.dump_python(busy, mode="json")
-                           if busy is not None else None)
+    d["thinking_since"] = (_UTC_DATETIME_JSON.dump_python(busy, mode="json") if busy is not None else None)
     task = task_map.get(s.scheduled_task)
-    d.update({
-        "schedule_cron": task.cron,
-        "schedule_enabled": task.enabled,
-        "schedule_timezone": task.timezone,
-        "schedule_project": task.project,
-        "schedule_allow_failure": task.allow_failure,
-        "schedule_next_run": next_run_iso(task.cron, task.timezone, now_utc),
-    } if task else {"schedule_enabled": False})
+    d.update(
+        {
+            "schedule_cron": task.cron,
+            "schedule_enabled": task.enabled,
+            "schedule_timezone": task.timezone,
+            "schedule_project": task.project,
+            "schedule_allow_failure": task.allow_failure,
+            "schedule_next_run": next_run_iso(task.cron, task.timezone, now_utc),
+        } if task else {"schedule_enabled": False})
     payload.append(d)
   return await _switch_payload_response(request, payload)
 
@@ -871,6 +866,7 @@ class SessionDetailResponse(SessionMetadata):
     transient field is None); the response's work_state stays the literal
     'idle' it always was for those rows."""
     return "idle" if value is None else value
+
   archived: bool = False
   ancestors: list[AncestorRef] = []
   # The scope/source/current-rule facts the later Task/Context UI reads; body
@@ -1033,10 +1029,11 @@ async def _serve_search_rows(
   for meta in rows:
     entry = derived[meta.id]
     rendered.append(
-        (meta,
-         (thinking_state.busy_since(meta.id), entry[sidebar_state.HAS_RUNNING_TASKS],
-          entry[sidebar_state.HAS_PENDING_TRIGGER], entry[sidebar_state.PENDING_TRIGGER_COUNT],
-          entry[sidebar_state.NEXT_TRIGGER_AT])))
+        (
+            meta, (
+                thinking_state.busy_since(meta.id), entry[sidebar_state.HAS_RUNNING_TASKS],
+                entry[sidebar_state.HAS_PENDING_TRIGGER], entry[sidebar_state.PENDING_TRIGGER_COUNT],
+                entry[sidebar_state.NEXT_TRIGGER_AT])))
     if meta.profile is not None:
       continue
     for thread_row in await view_thread_rows(meta.id, cfg, thread_mgr):
@@ -1046,8 +1043,7 @@ async def _serve_search_rows(
   search_states = tuple(s for _m, s in rendered)
   cached = _search_whole_body
   if (cached is not None and len(cached[0]) == len(search_rows) and
-      all(c is m for c, m in zip(cached[0], search_rows, strict=True)) and
-      cached[1] == search_states):
+      all(c is m for c, m in zip(cached[0], search_rows, strict=True)) and cached[1] == search_states):
     return await gzip_body_response(request, cached[2], {}, _search_gzip_memo)
   parts: list[bytes] = []
   for meta, (thinking_since, has_running, has_pending, pending_count, next_trigger_at) in \
@@ -1115,7 +1111,6 @@ async def _switch_payload_response(request: Request, payload: dict | list) -> Re
 # a body-keyed memo; the limit covers one steady-state body per open tab.
 _SESSIONS_LIST_GZIP_MEMO_LIMIT = 4
 _sessions_list_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SESSIONS_LIST_GZIP_MEMO_LIMIT)
-
 
 # One steady-state whole-body slot beside the gzip memo: the search route's
 # _search_whole_body mechanism. The slot is only ever replaced whole.
@@ -1763,8 +1758,7 @@ async def list_session_runs(
           **run.model_dump(),
           state=task_mgr.runs.run_display_state(run, events, host_boot),
           stop_requested=task_mgr.runs.stop_requested(events, run.id),
-      )
-      for run in slice_.items
+      ) for run in slice_.items
   ]
   return RunPage(items=rows, next_cursor=slice_.next_cursor)
 
@@ -1801,13 +1795,10 @@ async def get_effective_prompt(
           detail=(f"session backend {meta.backend!r} is not configured; "
                   "update the task backend before previewing"))
     if not cfg.backends.options:
-      raise HTTPException(
-          status_code=400,
-          detail=EMPTY_BACKENDS_OPTIONS_REFUSAL)
+      raise HTTPException(status_code=400, detail=EMPTY_BACKENDS_OPTIONS_REFUSAL)
     option = cfg.backends.options[0]
   try:
-    snapshot, overlay_error, declared = await assemble_coherent_snapshot(
-        cfg, task_mgr, meta, resolved_kind, option)
+    snapshot, overlay_error, declared = await assemble_coherent_snapshot(cfg, task_mgr, meta, resolved_kind, option)
   except TaskPromptError as e:
     raise HTTPException(status_code=500, detail=str(e)) from e
   payload = {
@@ -1829,8 +1820,7 @@ async def _require_task_meta(task_mgr: TaskTreeManager, session_id: str) -> Sess
   if meta is None:
     raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
   if meta.profile is None:
-    raise HTTPException(
-        status_code=400, detail=not_task_node_detail(session_id))
+    raise HTTPException(status_code=400, detail=not_task_node_detail(session_id))
   return meta
 
 
@@ -1862,15 +1852,12 @@ async def get_run_context(
     ref_path = Path(run.prompt_snapshot_ref)
     if ref_path.name == SNAPSHOT_FILENAME:
       if not ref_path.is_file():
-        raise HTTPException(
-            status_code=500,
-            detail=f"stored prompt snapshot missing at {run.prompt_snapshot_ref}")
+        raise HTTPException(status_code=500, detail=f"stored prompt snapshot missing at {run.prompt_snapshot_ref}")
       try:
         stored = json.loads(ref_path.read_text(encoding="utf-8"))
       except (OSError, ValueError) as e:
         raise HTTPException(
-            status_code=500,
-            detail=f"stored prompt snapshot unreadable at {run.prompt_snapshot_ref}: {e}") from e
+            status_code=500, detail=f"stored prompt snapshot unreadable at {run.prompt_snapshot_ref}: {e}") from e
       try:
         snapshot_payload = PromptSnapshot.from_json_dict(stored).to_json_dict()
       except TaskPromptError as e:
@@ -1880,27 +1867,31 @@ async def get_run_context(
       # managed instructions are visible but per-source provenance was never
       # recorded. Never recomposed into snapshot-shaped provenance.
       if not ref_path.is_file():
-        raise HTTPException(
-            status_code=500,
-            detail=f"recorded raw launch text missing at {run.prompt_snapshot_ref}")
+        raise HTTPException(status_code=500, detail=f"recorded raw launch text missing at {run.prompt_snapshot_ref}")
       legacy_prompt = {
-          "ref": str(ref_path),
-          "sha256": sha256_hex(ref_path.read_text(encoding="utf-8")),
-          "note": (
-              "raw launch text recorded before the context stage: the managed "
-              "instructions are visible but per-source provenance was not "
-              "recorded, so this is limited evidence, not a full snapshot"),
+          "ref":
+              str(ref_path),
+          "sha256":
+              sha256_hex(ref_path.read_text(encoding="utf-8")),
+          "note":
+              (
+                  "raw launch text recorded before the context stage: the managed "
+                  "instructions are visible but per-source provenance was not "
+                  "recorded, so this is limited evidence, not a full snapshot"),
       }
   else:
     legacy_path = task_mgr.runs.run_dir(session_id, run_id) / LAUNCH_TEXT_FILENAME
     if legacy_path.is_file():
       legacy_prompt = {
-          "ref": str(legacy_path),
-          "sha256": sha256_hex(legacy_path.read_text(encoding="utf-8")),
-          "note": (
-              "raw launch text recorded before the context stage: the managed "
-              "instructions are visible but per-source provenance was not "
-              "recorded, so this is limited evidence, not a full snapshot"),
+          "ref":
+              str(legacy_path),
+          "sha256":
+              sha256_hex(legacy_path.read_text(encoding="utf-8")),
+          "note":
+              (
+                  "raw launch text recorded before the context stage: the managed "
+                  "instructions are visible but per-source provenance was not "
+                  "recorded, so this is limited evidence, not a full snapshot"),
       }
   return {
       "session_id": session_id,
@@ -1909,9 +1900,10 @@ async def get_run_context(
       "mode": "historical",
       "snapshot": snapshot_payload,
       "legacy_prompt": legacy_prompt,
-      "task_spec": (
-          {"ref": run.task_spec_ref, "sha256": run.task_spec_hash}
-          if run.task_spec_ref else None),
+      "task_spec": ({
+          "ref": run.task_spec_ref,
+          "sha256": run.task_spec_hash
+      } if run.task_spec_ref else None),
       "logs": {
           "raw_log_ref": run.raw_log_ref,
           "events_ref": run.events_ref,
@@ -1962,15 +1954,17 @@ async def list_pending_task_inputs(
     pending = task_mgr.dispatch.pending_inputs(session_id)
   except (TaskInvalidError, TaskNotFoundError) as e:
     raise _task_http_error(e) from e
-  items = [{
-      "id": str(event.get("id")),
-      "type": str(event.get("type")),
-      "timestamp": event.get("timestamp"),
-      "actor": event.get("actor"),
-      "source_session_id": event.get("source_session_id"),
-      "from_session_name": event.get("from_session_name"),
-      "text": str(event.get("content") or event.get("summary") or ""),
-  } for event in pending]
+  items = [
+      {
+          "id": str(event.get("id")),
+          "type": str(event.get("type")),
+          "timestamp": event.get("timestamp"),
+          "actor": event.get("actor"),
+          "source_session_id": event.get("source_session_id"),
+          "from_session_name": event.get("from_session_name"),
+          "text": str(event.get("content") or event.get("summary") or ""),
+      } for event in pending
+  ]
   return {"items": items}
 
 
@@ -1993,8 +1987,7 @@ async def acknowledge_task_inputs(
   """
   try:
     return await task_mgr.completion.acknowledge_inputs(
-        session_id, request_id=req.request_id, input_ids=req.input_ids, note=req.note,
-        caller=caller)
+        session_id, request_id=req.request_id, input_ids=req.input_ids, note=req.note, caller=caller)
   except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
     raise _task_http_error(e) from e
 
@@ -2014,8 +2007,7 @@ async def complete_session_task(
   names one); the close re-evaluates only after that Run succeeds. Duplicate
   request ids replay the original outcome, across later epochs included.
   """
-  evidence = task_completion.CompletionEvidence(
-      summary=req.summary, result_refs=req.result_refs, run_ids=req.run_ids)
+  evidence = task_completion.CompletionEvidence(summary=req.summary, result_refs=req.result_refs, run_ids=req.run_ids)
   try:
     status, payload = await task_mgr.completion.complete_task(
         session_id, request_id=req.request_id, evidence=evidence, caller=caller)
@@ -2048,8 +2040,7 @@ async def cancel_session_task(
   recursively stopped (Run cancel stays the separate operation).
   """
   try:
-    await task_mgr.completion.cancel_task(
-        session_id, request_id=req.request_id, reason=req.reason, caller=caller)
+    await task_mgr.completion.cancel_task(session_id, request_id=req.request_id, reason=req.reason, caller=caller)
   except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
     raise _task_http_error(e) from e
   return SessionDetailResponse.model_validate(await _completed_session_detail(task_mgr, session_id))
@@ -2068,8 +2059,7 @@ async def reopen_session_task(
   automation_paused or authorization."""
   try:
     await task_mgr.completion.reopen_task(
-        session_id, request_id=req.request_id, reason=req.reason, caller=caller,
-        closed_event_id=req.closed_event_id)
+        session_id, request_id=req.request_id, reason=req.reason, caller=caller, closed_event_id=req.closed_event_id)
   except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
     raise _task_http_error(e) from e
   return SessionDetailResponse.model_validate(await _completed_session_detail(task_mgr, session_id))

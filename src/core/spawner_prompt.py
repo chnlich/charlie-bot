@@ -15,14 +15,16 @@ from src.core.models import SessionMetadata, TaskType
 _PROMPT_SECTION_MARKER_PREFIX = "<!-- section: "
 _PROMPT_SECTION_MARKER_SUFFIX = " -->"
 
-# Every workflow body draws from the same token map (intro + branch tokens);
-# a task type absent from the map fails loud below rather than selecting a
-# wrong workflow body. implement and quick_edit compose the template's shared
-# workflow_steps body with their own closing STOP section, so the
-# commit-message rule lives once in prompts/worker.md; script_run's body is
-# one complete section. The id set lives only here:
-# _REQUIRED_WORKER_PROMPT_SECTIONS derives it.
-_WORKFLOW_PROMPT_SECTION = {
+# Single home of the per-task-type worker.md section selection. Element 0 is
+# the bindings section (the v1 assembly renders it with the branch tokens
+# inline; the v2 assembly renders it per-run through render_worktree_bindings
+# and joins elements 1: as the persistent workflow rule). A task type absent
+# from the map fails loud rather than selecting a wrong workflow body.
+# implement and quick_edit compose the template's shared workflow_steps body
+# with their own closing STOP section, so the commit-message rule lives once
+# in prompts/worker.md; script_run's body is one complete section.
+# _REQUIRED_WORKER_PROMPT_SECTIONS derives its id set from this map.
+WORKFLOW_PROMPT_SECTION = {
     TaskType.IMPLEMENT: ("worktree_bindings", "workflow_steps", "workflow_implement"),
     TaskType.QUICK_EDIT: ("worktree_bindings", "workflow_steps", "workflow_quick_edit"),
     TaskType.SCRIPT_RUN: ("workflow_script_run_bindings", "workflow_script_run"),
@@ -36,7 +38,7 @@ _REQUIRED_WORKER_PROMPT_SECTIONS = (
     "role",
     "intro_new",
     "intro_continuation",
-    *dict.fromkeys(sid for ids in _WORKFLOW_PROMPT_SECTION.values() for sid in ids),
+    *dict.fromkeys(sid for ids in WORKFLOW_PROMPT_SECTION.values() for sid in ids),
     "task_spec_source_files",
     "task",
     "iteration_reports",
@@ -154,7 +156,7 @@ def _build_worker_prompt(
       "{{repo_path}}": str(repo_path),
   }
 
-  workflow_section_ids = _WORKFLOW_PROMPT_SECTION.get(task_type)
+  workflow_section_ids = WORKFLOW_PROMPT_SECTION.get(task_type)
   if workflow_section_ids is None:
     raise ValueError(f"unsupported task_type: {task_type!r}")
   workflow_body = _substitute_tokens(

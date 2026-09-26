@@ -324,11 +324,11 @@ def _worker_kind_rule_segments(
     segments.append(RuleSegment(text=contract, sources=(PromptSource(SCOPE_BASE, "prompts/verify.md"),)))
   else:
     worker = _sections_text(cfg, "worker.md", ("role",))
-    if task_type == TaskType.SCRIPT_RUN:
-      workflow = _sections_text(cfg, "worker.md", ("workflow_script_run",))
-    else:
-      ending = "workflow_implement" if task_type == TaskType.IMPLEMENT else "workflow_quick_edit"
-      workflow = _sections_text(cfg, "worker.md", ("workflow_steps", ending))
+    # The section map in src.core.spawner_prompt is the selection's single
+    # home; its element 0 (the bindings section) renders per-run and is never
+    # a persistent rule, so the rule body starts at element 1.
+    from src.core.spawner_prompt import WORKFLOW_PROMPT_SECTION
+    workflow = _sections_text(cfg, "worker.md", WORKFLOW_PROMPT_SECTION[task_type][1:])
     source_files = _sections_text(cfg, "worker.md", ("task_spec_source_files",))
     segments.append(RuleSegment(
         text="\n".join((worker, workflow, source_files)),
@@ -505,8 +505,9 @@ def render_worktree_bindings(
     repo_path: str,
 ) -> str:
   """The workflow's binding header (intro + branch/worktree/repo), actual values."""
-  from src.core.spawner_prompt import _substitute_tokens, load_marker_sections
-  section = "workflow_script_run_bindings" if task_type == TaskType.SCRIPT_RUN else "worktree_bindings"
+  from src.core.spawner_prompt import WORKFLOW_PROMPT_SECTION, _substitute_tokens, load_marker_sections
+  # Element 0 of the section map's single home is the bindings section.
+  section = WORKFLOW_PROMPT_SECTION[task_type][0]
   sections = load_marker_sections(cfg.charlie_bot_repo / "prompts" / "worker.md", (section,),
                                   extraction="worker-prompt")
   return _substitute_tokens(sections[section], {

@@ -16,10 +16,7 @@ import argparse
 import json
 import sys
 
-from pydantic import BaseModel
-
 from src.cli.help_formatter import CliHelpFormatter
-from src.core.config import CharlieBotConfig, get_config
 
 
 def main() -> None:
@@ -37,6 +34,14 @@ def main() -> None:
 
 
 def _cmd_get(key: str) -> None:
+  # The config model stack rides the one command that reads it: a deferral
+  # here keeps --help and parser errors on the verb family's import floor
+  # (the src.cli.memory deferral shape); `get` itself pays the model build
+  # either way.
+  from pydantic import BaseModel
+
+  from src.core.config import CharlieBotConfig, get_config
+
   if key not in CharlieBotConfig.model_fields:
     print(f"error: unknown config key: {key} (not a CharlieBotConfig field)", file=sys.stderr)
     sys.exit(2)

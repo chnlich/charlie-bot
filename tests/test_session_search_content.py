@@ -415,16 +415,14 @@ async def test_whitespace_search_serves_the_list_rows_through_the_search_memo(tm
   """
   cfg, mgr, _session = await make_home_session(tmp_path, name="t")
   thread_mgr = ThreadManager(cfg)
-  first = await sessions_api.search_sessions(
-      _page_request(), q=" ", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
+  first = await sessions_api.search_sessions(_page_request(), q=" ", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
   sessions = await mgr.list_sessions(
       status=SessionStatus.ACTIVE, include_running_status=True, include_pending_trigger_status=True)
   rows = await sessions_api.project_worker_threads(sessions, cfg, thread_mgr)
   assert json.loads(first.body) == jsonable_encoder(rows)
   with patch.object(sessions_api, "fast_json_bytes",
                     side_effect=AssertionError("repeat whitespace search re-rendered the body")):
-    second = await sessions_api.search_sessions(
-        _page_request(), q=" ", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
+    second = await sessions_api.search_sessions(_page_request(), q=" ", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)
   assert second.body == first.body
 
 
@@ -441,15 +439,17 @@ async def test_whitespace_search_overlays_match_the_copy_path_render(tmp_path: P
   cfg, mgr, session = await make_home_session(tmp_path, name="t")
   thread_mgr = ThreadManager(cfg)
   trigger_mgr = TriggerManager(cfg, mgr)
-  await trigger_mgr._save_trigger(PendingTrigger(
-      session_id=session.id, fire_at=datetime.now(UTC) + timedelta(hours=1), message="wake"))
+  await trigger_mgr._save_trigger(
+      PendingTrigger(session_id=session.id, fire_at=datetime.now(UTC) + timedelta(hours=1), message="wake"))
   thinking_state.mark_busy(session.id)
-  body = json.loads((await sessions_api.search_sessions(
-      _page_request(), q=" ", session_mgr=mgr, cfg=cfg, thread_mgr=thread_mgr)).body)
+  body = json.loads(
+      (await sessions_api.search_sessions(_page_request(), q=" ", session_mgr=mgr, cfg=cfg,
+                                          thread_mgr=thread_mgr)).body)
   sessions = await mgr.list_sessions(
       status=SessionStatus.ACTIVE, include_running_status=True, include_pending_trigger_status=True)
   rows = await sessions_api.project_worker_threads(sessions, cfg, thread_mgr)
   assert body == jsonable_encoder(rows)
+
 
 @pytest.mark.asyncio
 async def test_content_search_hit_memo_skips_rescans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -483,7 +483,6 @@ async def test_content_search_hit_memo_skips_rescans(tmp_path: Path, monkeypatch
   assert count() == 2
 
   # A rewrite that drops the needle re-scans and reads the miss.
-  mgr.get_chat_events_path(session.id).write_text(
-      '{"type":"user","content":"nothing relevant"}\n', encoding="utf-8")
+  mgr.get_chat_events_path(session.id).write_text('{"type":"user","content":"nothing relevant"}\n', encoding="utf-8")
   assert await mgr.search_sessions("purple") == []
   assert count() == 3

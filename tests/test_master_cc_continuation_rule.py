@@ -22,6 +22,7 @@ from conftest import (
     make_work_item,
     mock_session_callbacks,
     patch_instructions_content,
+    pool_cfg,
 )
 
 from src.agents import master_cc, master_cc_queue, master_cc_run
@@ -273,6 +274,56 @@ async def test_transcript_missing_with_completed_round_drops_and_notes(
   dropped = [e for e in events if e["type"] == ET.RESUME_CONTEXT_DROPPED]
   assert [d["reason"] for d in dropped] == ["transcript_missing"]
   assert HISTORY_LOCATION_NOTE in DROP_NOTE
+
+
+def _pooled_rule_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """_rule_cfg with a one-account pool declared: every cc-claude option turns
+  pooled, so a cross-family switch into Claude runs the pool placement branch."""
+  return pool_cfg(
+      tmp_path,
+      [
+          backend_option(id="claude-opus-5", label="Opus 5", type="cc-claude", model="claude-opus-5"),
+          backend_option(id="codex-o3", label="Codex", type="codex", model="o3"),
+      ],
+      home=tmp_path / ".charliebot",
+      worktree_dir=tmp_path / "worktrees",
+      labels=("main",),
+  )
+
+
+@pytest.mark.asyncio
+async def test_cross_family_into_pooled_claude_keeps_the_held_id_withheld(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """(e, pooled) A fresh-by-switch turn on a pooled cc-claude option keeps its
+  withheld resume id through the pool placement branch: the post-placement
+  re-resolve must not hand the held id — even one a pool login still finds —
+  to the new family."""
+  cfg = _pooled_rule_cfg(tmp_path)
+  # The held id's transcript still sits in the pool login (left over from
+  # before its producer left the config): reachable bytes must not resurrect
+  # a resume the rule forbids.
+  make_transcript(Path(cfg.accounts.claude[0].config_dir), "c1")
+  session_meta = SessionMetadata(
+      id="session-id", name="S", backend="claude-opus-5", cc_session_id="c1", native_backend="codex-o3")
+  log: list[dict] = []
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, _scripted_build({"claude-opus-5": ["c2"]}, log))
+  patch_instructions_content(monkeypatch)
+
+  item = make_work_item(
+      cfg,
+      session_meta,
+      cfg.get_backend_option("claude-opus-5"),
+      user_content="hello",
+      callbacks=_callbacks(completed_round=True))
+  cc_id, exit_code, error_msg, extras = await master_cc_run._run_cc(item)
+
+  assert exit_code == 0 and error_msg is None
+  assert cc_id == "c2", "the fresh round adopts the id its own backend produced"
+  assert log[0]["resume_session_id"] is None
+  assert log[0]["extra_flags"] == ["--exclude-dynamic-system-prompt-sections"
+                                  ], ("the pool's re-resolve must not re-hand the held id to the new family")
+  assert log[0]["prompt"].startswith("[Context reset: this session switched from backend codex-o3 to claude-opus-5")
+  assert extras["native_backend"] == "claude-opus-5"
 
 
 # ---------------------------------------------------------------------------

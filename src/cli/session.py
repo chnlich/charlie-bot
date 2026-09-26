@@ -45,6 +45,7 @@ import uuid
 from src.cli.common import (
     add_session_arg,
     exit_usage_error,
+    find_local_task_close,
     get_api,
     patch_internal_api,
     post_internal_api,
@@ -187,8 +188,13 @@ def _cmd_complete(args: argparse.Namespace) -> None:
   if not isinstance(body, dict):
     exit_usage_error("--result-file must carry the complete request's JSON object")
   body = dict(body)
-  body["request_id"] = args.request_id or body.get("request_id") or str(uuid.uuid4())
-  print(json.dumps(post_internal_api(f"/api/sessions/{args.session_id}/complete", body), indent=2))
+  request_id = args.request_id or body.get("request_id") or str(uuid.uuid4())
+  body["request_id"] = request_id
+  result = post_internal_api(
+      f"/api/sessions/{args.session_id}/complete",
+      body,
+      readback=lambda: find_local_task_close(args.session_id, request_id))
+  print(json.dumps(result, indent=2))
 
 
 def _cmd_acknowledge(args: argparse.Namespace) -> None:
@@ -204,11 +210,16 @@ def _cmd_acknowledge(args: argparse.Namespace) -> None:
 
 
 def _cmd_cancel(args: argparse.Namespace) -> None:
+  request_id = args.request_id or str(uuid.uuid4())
   payload = {
-      "request_id": args.request_id or str(uuid.uuid4()),
+      "request_id": request_id,
       "reason": args.reason,
   }
-  print(json.dumps(post_internal_api(f"/api/sessions/{args.session_id}/cancel", payload), indent=2))
+  result = post_internal_api(
+      f"/api/sessions/{args.session_id}/cancel",
+      payload,
+      readback=lambda: find_local_task_close(args.session_id, request_id))
+  print(json.dumps(result, indent=2))
 
 
 def _cmd_reopen(args: argparse.Namespace) -> None:

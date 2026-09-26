@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 from conftest import (
+    BUILD_BACKEND_PATCH_TARGET,
     backend_option,
     create_task,
     patch_instructions_content,
@@ -208,7 +209,7 @@ async def test_manager_turn_persists_run_identity_and_acknowledges_batch(
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
     backend = SpawningScriptedBackend([result_event("SMOKE reply")])
     builds = install_backends(
-        monkeypatch, [backend], "src.agents.backends.registry.build_backend")
+        monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
     patch_instructions_content(monkeypatch)
 
     admitted = await tree.dispatch.admit_input(
@@ -304,7 +305,7 @@ async def test_first_message_on_empty_goal_task_dispatches_a_manager_turn(
     assert manager.task is not None and manager.task.goal == ""
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
     backend = SpawningScriptedBackend([result_event("SMOKE reply")])
-    install_backends(monkeypatch, [backend], "src.agents.backends.registry.build_backend")
+    install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
     patch_instructions_content(monkeypatch)
 
     admitted = await tree.dispatch.admit_input(
@@ -332,7 +333,7 @@ async def test_concurrent_dispatch_starts_one_process(
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
     backend = SpawningScriptedBackend([result_event("one")])
     builds = install_backends(
-        monkeypatch, [backend], "src.agents.backends.registry.build_backend")
+        monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
     patch_instructions_content(monkeypatch)
 
     await tree.dispatch.admit_input(
@@ -385,7 +386,7 @@ async def test_input_admitted_during_active_run_dispatches_after_its_finish(
     first = _SpawnFirstBackend([result_event("first")], gate=gate_release.wait)
     second = _SpawnFirstBackend([result_event("second")])
     install_backends(
-        monkeypatch, [first, second], "src.agents.backends.registry.build_backend")
+        monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
     patch_instructions_content(monkeypatch)
 
     await tree.dispatch.admit_input(
@@ -453,7 +454,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
         pm_builds.append(b)
         return b
 
-    monkeypatch.setattr("src.agents.backends.registry.build_backend", pm_build)
+    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, pm_build)
     backend = SpawningScriptedBackend([result_event("phrase")])
     builds = install_backends(
         monkeypatch,
@@ -622,7 +623,7 @@ async def test_manager_retry_reruns_its_own_batch_and_stopped_retry_never_launch
     admitted = await tree.dispatch.admit_input(
         manager.id, event_type=ET.USER, content="Take off. Next.", actor="user")
     backend = SpawningScriptedBackend([result_event("next round")])
-    install_backends(monkeypatch, [backend], "src.agents.backends.registry.build_backend")
+    install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
     decision = await tree.dispatch.dispatch_pending(manager.id)
     assert decision["launch"] is True
     next_run, _outcome = await wait_for_terminal_run(tree, manager.id, decision["run_id"])
@@ -635,7 +636,7 @@ async def test_manager_retry_reruns_its_own_batch_and_stopped_retry_never_launch
     retry_run = await tree.runs.get_run(manager.id, retry["run_id"])
     assert retry_run is not None and retry_run.input_event_ids == [str(first_in["id"])]
     backend2 = SpawningScriptedBackend([result_event("retried")])
-    install_backends(monkeypatch, [backend2], "src.agents.backends.registry.build_backend")
+    install_backends(monkeypatch, [backend2], BUILD_BACKEND_PATCH_TARGET)
     decision = await tree.dispatch.dispatch_pending(manager.id)
     assert decision["launch"] is True and decision["run_id"] == retry["run_id"]
     retried, _retried_outcome = await wait_for_terminal_run(tree, manager.id, retry["run_id"])
@@ -710,7 +711,7 @@ async def test_implement_delivery_requires_review_and_real_landing(
         pm_builds.append(b)
         return b
 
-    monkeypatch.setattr("src.agents.backends.registry.build_backend", pm_build)
+    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, pm_build)
     patch_instructions_content(monkeypatch)
     stub_credentials({"charliebot": {"access_key": "op-secret"}})
     # The work-run launch re-judges the nearest-user authorization gate; the
@@ -942,7 +943,7 @@ def _snapshot_of(run: RunRecord) -> dict:
 def _manager_backend(monkeypatch: pytest.MonkeyPatch, tree, cfg, session_mgr, *, events: list[dict]) -> tuple[list[SpawningScriptedBackend], list[dict]]:
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
     backend = SpawningScriptedBackend(events)
-    builds = install_backends(monkeypatch, [backend], "src.agents.backends.registry.build_backend")
+    builds = install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
     return [backend], builds
 
 
@@ -1074,7 +1075,7 @@ async def test_manager_native_continuation_gates_on_instruction_hash(
     second = SpawningScriptedBackend([result_event("turn two")])
     third = SpawningScriptedBackend([result_event("turn three")])
     install_backends(
-        monkeypatch, [first, second, third], "src.agents.backends.registry.build_backend")
+        monkeypatch, [first, second, third], BUILD_BACKEND_PATCH_TARGET)
 
     # Turn 1: no anchor — a fresh native context, identity recorded at spawn.
     run1 = await _admit_and_dispatch(tree, manager.id, "turn one", "in-1")
@@ -1137,7 +1138,7 @@ async def test_backend_identity_change_starts_a_fresh_native_context(
     first = SpawningScriptedBackend([result_event("one")])
     second = SpawningScriptedBackend([result_event("two")])
     install_backends(
-        monkeypatch, [first, second], "src.agents.backends.registry.build_backend")
+        monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
     run1 = await _admit_and_dispatch(tree, manager.id, "one", "in-1")
     await wait_for_terminal_run(tree, manager.id, run1)
     snapshot1 = _snapshot_of(await tree.runs.get_run(manager.id, run1))
@@ -1426,7 +1427,7 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
             b.set_on_spawn(kwargs["on_spawn"])
         return b
 
-    monkeypatch.setattr("src.agents.backends.registry.build_backend", pm_build)
+    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, pm_build)
     install_backends(
         monkeypatch, [SpawningScriptedBackend([result_event("phrase")])],
         "src.agents.worker.build_backend")

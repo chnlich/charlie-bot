@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 import yaml
 from conftest import (
+    BUILD_BACKEND_PATCH_TARGET,
     CODEX_BACKEND_OPTION,
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
@@ -95,7 +96,7 @@ def _script_manager_turn(monkeypatch: pytest.MonkeyPatch, notes: list[str]) -> N
   install_backends(
       monkeypatch,
       [SpawningScriptedBackend([result_event(note)]) for note in notes],
-      "src.agents.backends.registry.build_backend")
+      BUILD_BACKEND_PATCH_TARGET)
   patch_instructions_content(monkeypatch)
 
 
@@ -125,7 +126,7 @@ async def test_bound_master_admits_one_typed_input_and_dispatches(
   cfg, session_mgr, tree = bound_env
   manager = await make_manager(tree)
   builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("awake")])],
-                            "src.agents.backends.registry.build_backend")
+                            BUILD_BACKEND_PATCH_TARGET)
   from conftest import patch_instructions_content
   patch_instructions_content(monkeypatch)
   task_cfg = _bound_task("wake-manager", manager.id, mode="master", prompt="Standup time.")
@@ -417,7 +418,7 @@ async def test_closed_bound_node_generates_no_new_execution(
   cfg, session_mgr, tree = bound_env
   manager = await make_manager(tree)
   install_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])],
-                   "src.agents.backends.registry.build_backend")
+                   BUILD_BACKEND_PATCH_TARGET)
   from src.core.run_token import CallerIdentity
   from src.core.task_completion import CompletionEvidence
   close_run = stable_run_id(manager.id, "close:evidence")
@@ -444,7 +445,7 @@ async def test_paused_bound_node_generates_no_new_execution(
   cfg, session_mgr, tree = bound_env
   manager = await make_manager(tree)
   builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])],
-                            "src.agents.backends.registry.build_backend")
+                            BUILD_BACKEND_PATCH_TARGET)
   from src.core.models import PatchSessionTaskRequest
   from src.core.run_token import CallerIdentity
   await tree.patch_task(
@@ -758,7 +759,7 @@ async def test_master_admission_failure_does_not_consume_the_occurrence(
   the SAME occurrence re-admits the same input (never a duplicate)."""
   cfg, session_mgr, tree = bound_env
   manager = await make_manager(tree)
-  install_backends(monkeypatch, [], "src.agents.backends.registry.build_backend")
+  install_backends(monkeypatch, [], BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _bound_task("flaky-master", manager.id, mode="master", prompt="Wake.")
   scheduler = Scheduler(cfg, session_mgr)
   from src.core import cron_sequence as cs

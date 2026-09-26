@@ -398,9 +398,6 @@ class SessionMetadata(BaseModel):
   task_parent_id: str | None = None
   profile: TaskProfile | None = None
   task: TaskSpec | None = None
-  # Compatibility label for project/group grouping; effective rules come from
-  # prompt references and task ancestry, not from this value.
-  project_key: str | None = None
   presentation: PresentationMode = "auto"
   # Pausing blocks new automatic execution only; it never terminates a live run.
   automation_paused: bool = False

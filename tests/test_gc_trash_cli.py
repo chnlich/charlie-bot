@@ -24,7 +24,7 @@ def test_gc_trash_dry_run_lists_but_deletes_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _cfg_with_trash(tmp_path)
   trash = Path(cfg.paths.worktree_dir) / ".trash"
-  monkeypatch.setattr(gc_trash, "get_config", lambda: cfg)
+  monkeypatch.setattr("src.core.config.get_config", lambda: cfg)
   monkeypatch.setattr(sys, "argv", ["charliebot gc-trash"])
 
   gc_trash.main()
@@ -42,7 +42,7 @@ def test_gc_trash_yes_hard_deletes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _cfg_with_trash(tmp_path)
   trash = Path(cfg.paths.worktree_dir) / ".trash"
-  monkeypatch.setattr(gc_trash, "get_config", lambda: cfg)
+  monkeypatch.setattr("src.core.config.get_config", lambda: cfg)
   monkeypatch.setattr(sys, "argv", ["charliebot gc-trash", "--yes"])
 
   gc_trash.main()
@@ -58,7 +58,7 @@ def test_gc_trash_yes_hard_deletes(
 def test_gc_trash_empty_reports_and_returns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = build_worktree_cfg(tmp_path)
-  monkeypatch.setattr(gc_trash, "get_config", lambda: cfg)
+  monkeypatch.setattr("src.core.config.get_config", lambda: cfg)
   monkeypatch.setattr(sys, "argv", ["charliebot gc-trash", "--yes"])
 
   gc_trash.main()

@@ -547,19 +547,23 @@ async def run_harness(args: argparse.Namespace) -> None:
                 base, access_key, "Failing-delegate program",
                 "## Goal\n\nDelegate into the diverged repo\n", "sidebar-status-root-b")
             await takeoff(base, access_key, manager_b, "sidebar-status-takeoff-b")
-            worker_b, run_b = await delegate(
-                base, access_key, manager_b,
-                "## Goal\n\nSay the phrase\n", bad_repo, "quick-edit", "sidebar-status-worker-b")
-            # The parent is paused the moment the delegation returns: the
-            # child's launch (and its failure) proceeds untouched, the failure
-            # report still lands durably in the parent's chat, and the woken
-            # consumer turn is withheld — so the collapsed parent stands in for
-            # its subtree with the alert instead of running its own follow-up
-            # turns on top of the failure.
+            # The parent is paused before it delegates. A woken parent reacts
+            # to the failure report as a manager should: it repairs the
+            # delegation (a corrected sibling on origin/main), and that
+            # sibling's own report wakes a further turn, so its spinner (and
+            # the sibling's gear) legitimately outrank the collapsed alert for
+            # minutes. A pause sent after the delegation returns races the
+            # child, whose worktree preparation fails within milliseconds. The
+            # pause gates only the parent's own turns: the child still launches
+            # and fails, and the failure report still lands durably in the
+            # parent's chat.
             status, _ = request(base, access_key, "PATCH", f"/api/sessions/{manager_b}",
                                 {"automation_paused": True})
             if status != 200:
                 fail(f"pause of manager B failed: {status}")
+            worker_b, run_b = await delegate(
+                base, access_key, manager_b,
+                "## Goal\n\nSay the phrase\n", bad_repo, "quick-edit", "sidebar-status-worker-b")
             run_row, outcome = await wait_run_terminal(base, access_key, worker_b, run_b, "failing work run")
             record("launch-failure run reached failed", outcome == "failed", f"outcome={outcome}")
             record("the failed run never started a process", run_row.get("pid") is None,
@@ -590,13 +594,16 @@ async def run_harness(args: argparse.Namespace) -> None:
                    report.get("outcome") == "failed"
                    and "differs from origin/main" in str(report.get("summary", "")),
                    f"summary={str(report.get('summary'))[:160]!r}")
-            # The collapsed parent's alert stand-in is its idle-state paint; the
-            # report-consuming turn's own spinner outranks it, so the icon
-            # assertion waits for the parent to settle first.
-            await wait_status(
+            # The collapsed parent's alert stand-in is its idle-state paint: the
+            # paused parent holds the report without a turn, so its own state
+            # stays idle and the stand-in is what its row shows.
+            payload = await wait_status(
                 base, access_key, ids_b, manager_b,
                 lambda st: bool(st) and st.get("work_state") == "idle" and not st.get("thinking_since"),
-                "manager B idle after consuming the failure report", timeout=180)
+                "paused manager B idle with the failure report held", timeout=60)
+            record("status: the paused parent holds the report without a turn",
+                   payload.get("work_state") == "idle" and not payload.get("thinking_since"),
+                   json.dumps(payload, default=str))
             await assert_icons(cdp, page_id, worker_b, "alert-indicator",
                                ["spinner", "worker-indicator", "waiting-indicator"],
                                "attention worker row")

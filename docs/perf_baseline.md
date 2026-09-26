@@ -1128,13 +1128,16 @@ M18 — hidden-tab periodic poll fetches: the invariant behind page-timers.js
 ("a hidden tab does no periodic work at all"). A poll routined around the
 registry keeps fetching while the tab is hidden (browser throttling slows but
 never stops a raw interval). The collector loads the checkout's real
-page-timers.js, workers.js and ext_usage.js in a node vm with a stub document,
-holds the page hidden, starts one expanded running worker's thread-detail poll
-plus the ext-usage strip's DOMContentLoaded init, and fires every registered
-interval the number of times its cadence fits a simulated 10 minutes. Fetches
-issued after bootstrap settle are the metric; healthy is 0. The closing 10 s
-visible re-check must fetch again (a poll that never resumes is a finding, not
-a pass). Evidence while the live server runs older code points the same
+page-timers.js, usage.js, sidebar/namespace.js, sidebar/session-view.js and
+ext_usage.js — the module chain the page loads them in — in a node vm with a
+stub document,
+holds the page hidden, starts one worker transcript's poll (`setWorkerTranscriptMode`;
+the worker transcript lives in the main chat column since the worker-card panel's
+removal) plus the ext-usage strip's DOMContentLoaded init, and fires every
+registered interval the number of times its cadence fits a simulated 10 minutes.
+Fetches issued after bootstrap settle are the metric; healthy is 0. The closing
+10 s visible re-check must fetch again (a poll that never resumes is a finding,
+not a pass). Evidence while the live server runs older code points the same
 collector at the branch checkout (`CHECKOUT` at the worktree root):
 
 ```bash
@@ -1149,9 +1152,10 @@ const read = (name) => fs.readFileSync(path.join(CHECKOUT, 'web/static/js', name
 
 const listeners = new Map();
 const elements = new Map([
-  ['thread-detail-t1', {classList: {contains: () => false}}],
-  ['thread-dot-t1', {classList: {contains: (c) => c === 'bg-blue-500'}}],
-  ['thread-events-t1', {innerHTML: '', dataset: {}, parentElement: {querySelector: () => null, insertBefore() {}}}],
+  // hideStreaming() resolves both ids unconditionally on every transcript poll
+  // whose response carries no pending draft.
+  ['streaming-msg', {classList: {contains: () => false, add() {}, remove() {}, toggle() {}}}],
+  ['streaming-content', {innerHTML: '', classList: {contains: () => false, add() {}, remove() {}, toggle() {}}}],
 ]);
 const documentStub = {
   hidden: true,
@@ -1175,6 +1179,10 @@ let nextId = 1;
 let fetches = 0;
 const context = {
   document: documentStub,
+  SESSION_ID: 'session-a',
+  URLSearchParams,
+  setTimeout,
+  clearTimeout,
   setInterval(fn, ms) {
     const id = nextId++;
     intervals.set(id, {id, fn, ms});
@@ -1186,14 +1194,17 @@ const context = {
   console: {error() {}, warn() {}, log() {}},
   fetch: async (url) => {
     fetches += 1;
-    return {ok: true, json: async () => []};
+    // The transcript poll's applyTranscriptUpdate advances its counters and
+    // revision from this shape; the 'messages' container id resolves null in
+    // the stub document, so no render path is reachable whatever the body.
+    return {ok: true, json: async () => ({messages: [], total: 0, revision: '', active_run_id: null})};
   },
   localStorage: {getItem: () => null, setItem() {}, removeItem() {}},
 };
 vm.createContext(context);
-vm.runInContext(read('page-timers.js'), context, {filename: 'page-timers.js'});
-vm.runInContext(read('workers.js'), context, {filename: 'workers.js'});
-vm.runInContext(read('ext_usage.js'), context, {filename: 'ext_usage.js'});
+for (const f of ['page-timers.js', 'usage.js', 'sidebar/namespace.js', 'sidebar/session-view.js', 'ext_usage.js']) {
+  vm.runInContext(read(f), context, {filename: f});
+}
 
 async function tickWindow(seconds) {
   for (const entry of Array.from(intervals.values())) {
@@ -1205,7 +1216,7 @@ async function tickWindow(seconds) {
 (async () => {
   documentStub.dispatch('DOMContentLoaded');
   await new Promise((r) => setImmediate(r));
-  context.startThreadPoll('t1', 'session-a');
+  context.setWorkerTranscriptMode({sessionId: 'session-a'});
   await new Promise((r) => setImmediate(r));
   const bootstrapFetches = fetches;
 
@@ -9006,3 +9017,4 @@ the round's verbatim collector tripped its 0.003 s line through a collector bug 
 | 2026-09-26 | this PR | M122 stream event discovery delay, introduced with this PR: append-to-yield median 73.6/77.6/74.6 → 8.2/8.2/10.2 ms (−89% to −90%), maxima 142.0-147.0 → 11.2-19.3 ms, every paired round faster over three interleaved rounds of the new collector — main checkout before vs branch worktree after back-to-back, arm order alternating, at load 0.6-1.2 one-minute; parity witnesses on the same loop: M84 2.1 GB backlog replay tail-follow median 5980.4 → 5922.0 ms and stdout-stream 6591.6 → 6515.6 ms (band parity — the backlog drain is one parse round, the poll never enters it), M118 grown-line drain wall 2.93 → 2.93 s, max tick gap 74 → 89 ms inside the 0.15 s line; the trade: idle follow CPU 1.7-1.9 → 8.8-10.0 ms per 2 s (0.08-0.09% → 0.44-0.50% of one core per followed stream at 7 → 50 wakes/s) | the tail-follow loop's `_TAIL_POLL_INTERVAL` sat at 0.15 s from the coarse-message era (its comment cited a ~54 s median inter-event gap), and that interval is the discovery delay it adds to every event the CLI writes — every assistant message, tool call, and result on the cc-family streams (the master's own charlie-code turns, every worker turn, the re-attach path) waits one poll wake before the server sees it; a turn with k model round-trips pays up to 150 ms per event, and each completion handoff (worker → reviewer, RESULT → finalize) pays it once; the poll now wakes at 0.02 s — one frame's scale — with the idle round still one fstat; 11-passed backend-stream suite plus 1 new test (the default interval is the discovery bound the M122 line prices) |
 | 2026-09-26 | this PR | M123 hook-helper import floor, introduced with this PR: registered hook-command wall median 36.4/34.6/35.8 → 23.5/23.2/23.4 ms (−33% to −36%), maxima 35.2-50.4 → 23.6-24.2 ms, every paired round faster over three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, arm order alternating, at load 1.37-1.83 one-minute; the registered argv is the launch's own (`claude plugin validate --strict` passes on the written plugin), and the strict-parse, fail-closed rc-2, and parent-group-terminate behaviors are pinned by the 37-passed claude-sub suite, one new siteless transport-failure test, and a new -S-head assertion on the registration test | every Claude Code hook event spawns the helper once, and the gate events (UserPromptSubmit per prompt, PreToolUse per tool call, PermissionRequest on demand) block the turn until the bridge answers — so the helper's import floor rode the turn's critical path per event; the registered command now runs `-S` (the helper imports nothing from site-packages, while site's editable finder drags pathlib/glob/re into every event) and the helper drops argparse (a strict three-flag parse of the contract claude_sub itself registers) and the annotations-only typing import, leaving the floor at interpreter base, the json/re chain, and the transport modules |
 | 2026-09-26 | this PR | M103 token-render pages, the digest walk's directory record memoized: GET / median 1130/1115/1103/1134/1118 → 1026/1016/1041/1038/1043 µs (−7.2 %), GET /diff 606/595/593/617/598 → 517/510/532/521/540 µs (−12.9 %), every paired round faster over five interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, arm order alternating, at load 1.66-1.85 one-minute; GET /api/git/repos band parity (336.0 vs 329.8 µs, no template render, the mechanism witness); the digest call itself 231.8 → 175.1 µs (−24.5 %) over three interleaved 2000-sample rounds, the digest string identical across all six arms and the M99 server import floor at parity (0.567 vs 0.550 s); 6643-passed suite plus one new test (a new file in an already-memoized directory moves the token on the next render) | the ?v= token's digest walk re-scandir'd every static directory on every page render (227 µs, ~20 % of the 1.1 ms GET /) although the per-render freshness contract only needs the files' own (mtime_ns, size) stats — a content edit moves the file's signature, not its directory's — so the per-directory entry record rides the StatSignatureMemo the sibling request-path caches use and a steady render stats each file and directory once, re-scandir-ing only a directory whose own stat moved; the artifact-page injection also called the token twice per body — two full walks per memo miss, and an edit landing between the calls could ship two different tokens in one page — now one |
+| 2026-09-26 | this PR | M18 collector repaired: the standing collector's `workers.js` load reads ENOENT since the worker-card panel's removal landed on main (the frontend consolidation deleted the file; this round's sweep reports M18 unmeasured — the one failed collector of 121). The collector retargets the invariant's subject at its new home — the main chat column's transcript poll (`setWorkerTranscriptMode` over `sidebar/session-view.js`, loaded through `sidebar/namespace.js` in the page's script order) — and reads 0 poll fetches per simulated 10 hidden min (1 bootstrap fetch excluded), 5 fetches in the 10 s visible re-check, identical over the branch-worktree and main-checkout arms (the repair touches no page js), at load 0.15-1.93 one-minute; the invariant and the 0-fetches range are unchanged | the poll the collector was following moved with the worker transcript into the main chat column; a collector pinned to a deleted file measures nothing, so the retarget rides the same file the sweep reads its commands from |

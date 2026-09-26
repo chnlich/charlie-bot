@@ -114,10 +114,8 @@ _REVIEW_DIVERGENT_CHECK = (
     "   - Do changed values make sense? Cross-check against existing defaults and conventions.\n"
     "   - Are there edge cases, regressions, or interactions with other code the worker missed?\n"
     "   - Would this change surprise someone reading the code for the first time?")
-_REVIEW_CORRECTNESS_CHECK = (
-    "Check for: correctness, bugs, unintended side effects, missing edge cases.")
-_REVIEW_STYLE_CHECK = (
-    "Style: Google Style, 2-space indent, 120-col (only flag if egregious — YAPF handles most).")
+_REVIEW_CORRECTNESS_CHECK = ("Check for: correctness, bugs, unintended side effects, missing edge cases.")
+_REVIEW_STYLE_CHECK = ("Style: Google Style, 2-space indent, 120-col (only flag if egregious — YAPF handles most).")
 
 _REVIEW_STABLE_RULES = "\n".join(
     f"{label} {body}" for label, body in (
@@ -136,10 +134,9 @@ def review_rules_text() -> str:
   build_review_prompt's numbered sequence — never part of the stable
   instruction hash.
   """
-  return (
-      f"{_REVIEW_ROLE_TEXT}\n\n"
-      f"{_REVIEW_CHECKLIST_BLOCK}"
-      f"{_REVIEW_STABLE_RULES}")
+  return (f"{_REVIEW_ROLE_TEXT}\n\n"
+          f"{_REVIEW_CHECKLIST_BLOCK}"
+          f"{_REVIEW_STABLE_RULES}")
 
 
 def build_review_prompt(
@@ -181,23 +178,24 @@ def build_review_prompt(
 
 def review_numbered_steps(branch_name: str, wt_path: str, base_branch: str) -> str:
   """The review prompt's git steps with this run's actual branch/worktree/base."""
-  return "\n".join([
-      f"1. `cd {wt_path}`",
-      f"2. Fetch the latest base branch: `git fetch origin {base_branch}`",
-      f"3. Review the changes: `git diff origin/{base_branch}...{branch_name}`",
-      "4. Verify the changes address the user's actual intent (from context research above).",
-      f"5. {_REVIEW_SCOPE_CHECK}",
-      f"6. {_REVIEW_DIVERGENT_CHECK}",
-      f"7. {_REVIEW_CORRECTNESS_CHECK}",
-      f"8. {_REVIEW_STYLE_CHECK}",
-      "9. If you find issues, fix them and commit with descriptive messages.",
-      "10. Stash untracked/modified files: `git stash --include-untracked`",
-      f"11. Fetch the latest base branch: `git fetch origin {base_branch}`",
-      f"12. Rebase onto the remote base: `git rebase origin/{base_branch}`",
-      f"13. Push to remote base branch from the worktree: `git push origin HEAD:{base_branch}`",
-      "14. Verify: `git log --oneline -1 HEAD` and `git log --oneline -1 origin/{base_branch}` "
-      "must show the same commit.".replace("{base_branch}", base_branch),
-  ])
+  return "\n".join(
+      [
+          f"1. `cd {wt_path}`",
+          f"2. Fetch the latest base branch: `git fetch origin {base_branch}`",
+          f"3. Review the changes: `git diff origin/{base_branch}...{branch_name}`",
+          "4. Verify the changes address the user's actual intent (from context research above).",
+          f"5. {_REVIEW_SCOPE_CHECK}",
+          f"6. {_REVIEW_DIVERGENT_CHECK}",
+          f"7. {_REVIEW_CORRECTNESS_CHECK}",
+          f"8. {_REVIEW_STYLE_CHECK}",
+          "9. If you find issues, fix them and commit with descriptive messages.",
+          "10. Stash untracked/modified files: `git stash --include-untracked`",
+          f"11. Fetch the latest base branch: `git fetch origin {base_branch}`",
+          f"12. Rebase onto the remote base: `git rebase origin/{base_branch}`",
+          f"13. Push to remote base branch from the worktree: `git push origin HEAD:{base_branch}`",
+          "14. Verify: `git log --oneline -1 HEAD` and `git log --oneline -1 origin/{base_branch}` "
+          "must show the same commit.".replace("{base_branch}", base_branch),
+      ])
 
 
 def review_context_lines(
@@ -223,14 +221,16 @@ def review_context_lines(
 
 def review_log_pointer(chat_log_path: Path, worker_log_path: Path) -> str:
   """The context footer that sends the reviewer to the run's full logs."""
-  return (f"If the summary above is insufficient or you are unsure about intent, "
-          f"read the full logs: Session: `{chat_log_path}`, Worker: `{worker_log_path}`")
+  return (
+      f"If the summary above is insufficient or you are unsure about intent, "
+      f"read the full logs: Session: `{chat_log_path}`, Worker: `{worker_log_path}`")
 
 
 def review_git_venue(branch_name: str, wt_path: str) -> str:
   """The sentence pinning the numbered git steps to this run's worktree."""
-  return (f"The work is on branch `{branch_name}` in worktree `{wt_path}`. "
-          f"All git operations below run from the worktree.")
+  return (
+      f"The work is on branch `{branch_name}` in worktree `{wt_path}`. "
+      f"All git operations below run from the worktree.")
 
 
 def _compose_review_prompt(

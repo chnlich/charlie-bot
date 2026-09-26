@@ -42,11 +42,11 @@ import orjson
 from src.core import event_types as ET
 from src.core.constants import BackendType
 from src.core.control_events import (
-  ACTOR_SYSTEM,
-  ControlEventSink,
-  build_control_event,
-  sha256_hex,
-  stable_run_id,
+    ACTOR_SYSTEM,
+    ControlEventSink,
+    build_control_event,
+    sha256_hex,
+    stable_run_id,
 )
 from src.core.json_utils import atomic_write_text
 from src.core.models import RunRecord, ensure_utc, utc_now
@@ -614,7 +614,6 @@ RUN_TASK_SPEC_NAME = "task_spec.md"
 STOP_EXIT_POLL_SECONDS = 0.05
 STOP_EXIT_WAIT_SECONDS = 10.0
 
-
 # The caller-identity refusal reasons shared by the API dependency and the CLI's
 # run-scoped query resolution — one active-Run predicate, never a second.
 RUN_IDENTITY_UNKNOWN_DETAIL = "run token does not reference an active run"
@@ -622,21 +621,21 @@ RUN_IDENTITY_NOT_LAUNCHED_DETAIL = "run token references a run that has not laun
 
 
 def run_identity_refusal(run: RunRecord | None, events: list[dict]) -> str | None:
-    """Why *run* is not an active, launched Run for caller identity, or None.
+  """Why *run* is not an active, launched Run for caller identity, or None.
 
     The one predicate both identity consumers share: the API caller-identity
     dependency and the CLI's run-scoped query resolution. A run token stands
     only for a registered Run without a terminal fact whose launch identity
     (pid, pid_start) is pinned.
     """
-    if run is None:
-        return RUN_IDENTITY_UNKNOWN_DETAIL
-    for event in events:
-        if event.get("type") == ET.RUN_FINISHED and event.get("run_id") == run.id:
-            return RUN_IDENTITY_UNKNOWN_DETAIL
-    if run.pid is None or run.pid_start is None:
-        return RUN_IDENTITY_NOT_LAUNCHED_DETAIL
-    return None
+  if run is None:
+    return RUN_IDENTITY_UNKNOWN_DETAIL
+  for event in events:
+    if event.get("type") == ET.RUN_FINISHED and event.get("run_id") == run.id:
+      return RUN_IDENTITY_UNKNOWN_DETAIL
+  if run.pid is None or run.pid_start is None:
+    return RUN_IDENTITY_NOT_LAUNCHED_DETAIL
+  return None
 
 
 class RunNotFoundError(LookupError):
@@ -677,7 +676,6 @@ def _run_sort_key(run: RunRecord) -> tuple[datetime, str]:
   return (started, run.id)
 
 
-
 def _encode_run_cursor(key: tuple[datetime, str], descending: bool = False) -> str:
   """Opaque keyset cursor: base64url JSON of the (started_at, id) boundary.
 
@@ -702,6 +700,7 @@ def _decode_run_cursor(cursor: str) -> tuple[tuple[datetime, str], bool]:
     return (ensure_utc(started), payload["i"]), bool(payload.get("d", False))
   except (ValueError, KeyError, TypeError) as e:
     raise ValueError(f"malformed run page cursor: {cursor!r}") from e
+
 
 class RunStore:
   """Owns v2 run records, their aliases, and every terminal fact."""
@@ -770,7 +769,12 @@ class RunStore:
     return runs
 
   def list_runs_page_sync(
-      self, session_id: str, limit: int, cursor: str | None, *, descending: bool = False,
+      self,
+      session_id: str,
+      limit: int,
+      cursor: str | None,
+      *,
+      descending: bool = False,
   ) -> RunPageSlice:
     """One keyset page ordered by the canonical (started_at, id) launch order.
 
@@ -796,8 +800,7 @@ class RunStore:
       else:
         runs = [r for r in runs if _run_sort_key(r) > boundary]
     page = runs[:limit]
-    next_cursor = (
-        _encode_run_cursor(_run_sort_key(page[-1]), descending) if len(runs) > limit and page else None)
+    next_cursor = (_encode_run_cursor(_run_sort_key(page[-1]), descending) if len(runs) > limit and page else None)
     return RunPageSlice(items=page, next_cursor=next_cursor)
 
   # -- facts ---------------------------------------------------------------
@@ -960,8 +963,7 @@ class RunStore:
       run = self.read_run_sync(session_id, run_id)
       if run is None:
         raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
-      if run.pid is not None and run.pid_start is not None and (
-          run.pid != pid or run.pid_start != pid_start):
+      if run.pid is not None and run.pid_start is not None and (run.pid != pid or run.pid_start != pid_start):
         raise RunIdentityConflictError(
             f"run {run_id} already records process identity "
             f"({run.pid}, {run.pid_start!r}); refusing to overwrite with ({pid}, {pid_start!r})")
@@ -970,8 +972,7 @@ class RunStore:
         run.started_at = utc_now()
       run.pid = pid
       run.pid_start = pid_start
-      await asyncio.to_thread(
-          atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+      await asyncio.to_thread(atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
       if first_launch:
         # The durable identity flipped the node's derived work state (queued ->
         # running): tell connected trees now, or a queued row painted while the
@@ -1022,8 +1023,7 @@ class RunStore:
       ):
         if value is not None:
           setattr(run, field, value)
-      await asyncio.to_thread(
-          atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+      await asyncio.to_thread(atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
       return run
 
   # -- terminal facts ------------------------------------------------------
@@ -1046,8 +1046,7 @@ class RunStore:
     """
     async with self._lock:
       return await self.record_finish_locked(
-          session_id, run_id, outcome, input_event_ids=input_event_ids, exit_code=exit_code,
-          ended_at=ended_at)
+          session_id, run_id, outcome, input_event_ids=input_event_ids, exit_code=exit_code, ended_at=ended_at)
 
   def _finish_payload(self, run: RunRecord, input_event_ids: list[str] | None) -> list[str]:
     """The durable acknowledgement payload of one finish, validated against the record.
@@ -1147,8 +1146,7 @@ class RunStore:
     run.ended_at = ended_at or utc_now()
     run.exit_code = exit_code
     run.input_event_ids = payload
-    await asyncio.to_thread(
-        atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+    await asyncio.to_thread(atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
     return run
 
   # -- stop ----------------------------------------------------------------

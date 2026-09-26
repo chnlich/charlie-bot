@@ -26,9 +26,7 @@ import sys
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(
-      prog="charliebot session-tree",
-      description="Session task-tree maintenance commands")
+  parser = argparse.ArgumentParser(prog="charliebot session-tree", description="Session task-tree maintenance commands")
   sub = parser.add_subparsers(dest="session_tree_command", required=True)
 
   preview = sub.add_parser(
@@ -42,21 +40,28 @@ def _build_parser() -> argparse.ArgumentParser:
           "config. Existing legacy state, unrelated configurations, overlapping "
           "paths, occupied ports and unprovable instance ownership refuse "
           "before any write."))
-  preview.add_argument("--home", required=True, metavar="DIR",
-                       help="The preview instance's own CharlieBot home (required)")
-  preview.add_argument("--port", required=True, type=int, metavar="PORT",
-                       help="The preview instance's loopback port (required)")
-  preview.add_argument("--backend", default=None, metavar="ID",
-                       help="Backend id for initial setup (required for a fresh home; "
-                            "on restart it must match the home's configured backend)")
-  preview.add_argument("--add-backend", dest="add_backend", action="append", default=None,
-                       metavar="ID",
-                       help="Additional charlie-code backend id to add to this trial's "
-                            "explicitly selected catalog (repeatable). Fresh homes seed "
-                            "with every requested entry; an existing preview home gains "
-                            "the requested entries after they and their credentials "
-                            "validate, under the home writer fence. A restart without "
-                            "the flag keeps the stored catalog unchanged.")
+  preview.add_argument(
+      "--home", required=True, metavar="DIR", help="The preview instance's own CharlieBot home (required)")
+  preview.add_argument(
+      "--port", required=True, type=int, metavar="PORT", help="The preview instance's loopback port (required)")
+  preview.add_argument(
+      "--backend",
+      default=None,
+      metavar="ID",
+      help="Backend id for initial setup (required for a fresh home; "
+      "on restart it must match the home's configured backend)")
+  preview.add_argument(
+      "--add-backend",
+      dest="add_backend",
+      action="append",
+      default=None,
+      metavar="ID",
+      help="Additional charlie-code backend id to add to this trial's "
+      "explicitly selected catalog (repeatable). Fresh homes seed "
+      "with every requested entry; an existing preview home gains "
+      "the requested entries after they and their credentials "
+      "validate, under the home writer fence. A restart without "
+      "the flag keeps the stored catalog unchanged.")
   return parser
 
 

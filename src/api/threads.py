@@ -15,18 +15,18 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from src.agents.backends.pty_common import (
-  _TMUX_SOCKET,
-  tmux_session_exists,
-  tmux_session_name,
+    _TMUX_SOCKET,
+    tmux_session_exists,
+    tmux_session_name,
 )
 from src.api.deps import (
-  get_config_on_loop,
-  get_run_store,
-  get_task_manager,
-  get_thread_manager,
-  get_trigger_manager,
-  require_caller,
-  task_manager,
+    get_config_on_loop,
+    get_run_store,
+    get_task_manager,
+    get_thread_manager,
+    get_trigger_manager,
+    require_caller,
+    task_manager,
 )
 from src.api.responses import (
     FastJsonResponse,
@@ -210,9 +210,7 @@ def run_store_outcome(events: list[dict], run_id: str) -> str | None:
 
 def run_store_stop_requested(events: list[dict], run_id: str) -> bool:
   """Whether a durable run_stop_requested fact exists for one Run."""
-  return any(
-      event.get("type") == ET.RUN_STOP_REQUESTED and event.get("run_id") == run_id
-      for event in events)
+  return any(event.get("type") == ET.RUN_STOP_REQUESTED and event.get("run_id") == run_id for event in events)
 
 
 def _v2_run_list_item(
@@ -331,8 +329,7 @@ def _row_source_stats(
     threads_dir: str,
     triggers_dir: str,
     runs_dir: str | None = None,
-) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]],
-           list[tuple[str, os.stat_result]]]:
+) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]]]:
   """One scandir+stat walk of the row-source directories, split by directory.
 
   The list body's freshness signature and its thread rows read the same files,
@@ -449,7 +446,9 @@ async def _v2_run_list_items(
       continue
     created_at = run.started_at or datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
     item = _v2_run_list_item(
-        run, events, datetime.now(UTC),
+        run,
+        events,
+        datetime.now(UTC),
         created_at=created_at,
         description=description,
         branch_name=run.branch_name,
@@ -615,10 +614,10 @@ async def _rebuild_view_rows(session_id: str, session_dir: Path, thread_mgr: Thr
                              revision: int) -> list[dict]:
   """One full row-source walk, stored as the session's row proof at *revision*."""
 
-  def walk_and_parse() -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]], list[ThreadMetadata | None]]:
+  def walk_and_parse(
+  ) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]], list[ThreadMetadata | None]]:
     thread_pairs, _triggers, run_pairs = _row_source_stats(
-        str(session_dir / THREADS_DIR_NAME), str(session_dir / "triggers"),
-        str(session_dir / "data" / "runs"))
+        str(session_dir / THREADS_DIR_NAME), str(session_dir / "triggers"), str(session_dir / "data" / "runs"))
     return thread_pairs, run_pairs, thread_mgr.list_threads_from_stats(thread_pairs)
 
   thread_pairs, run_pairs, metas = await asyncio.to_thread(walk_and_parse)
@@ -630,8 +629,8 @@ async def _rebuild_view_rows(session_id: str, session_dir: Path, thread_mgr: Thr
   return rows
 
 
-async def _detached_view_rows_sweep(session_id: str, cfg: CharlieBotConfig, thread_mgr: ThreadManager,
-                                  revision: int) -> None:
+async def _detached_view_rows_sweep(
+    session_id: str, cfg: CharlieBotConfig, thread_mgr: ThreadManager, revision: int) -> None:
   """The countdown's insurance walk off the calling poll's wall.
 
   A failure is logged and retried by the next sweep-due poll; the served rows
@@ -774,7 +773,9 @@ async def get_thread(
     description = (tree_meta.task.goal if tree_meta is not None and tree_meta.task is not None else "") or ""
     events = task_manager().runs.load_events_sync(v2_run[0])
     row = _v2_run_list_item(
-        run, events, datetime.now(UTC),
+        run,
+        events,
+        datetime.now(UTC),
         created_at=run.started_at or datetime.now(UTC),
         description=description,
         branch_name=run.branch_name,

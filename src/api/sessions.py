@@ -2037,6 +2037,21 @@ async def reopen_session_task(
   return SessionDetailResponse.model_validate(await _completed_session_detail(task_mgr, session_id))
 
 
+def _require_own_run_scope(caller: CallerIdentity, session_id: str, run_id: str) -> None:
+  """One cancel path's own-run scope: an operator passes; a run token must name this run.
+
+  Raises 403 otherwise. The thread-cancel alias path (src/api/threads.py) calls
+  this through a function-level import: sessions imports threads at module
+  scope, so the reverse import is deferred to the call site.
+  """
+  if caller.is_operator:
+    return
+  claims = caller.claims
+  assert claims is not None
+  if claims.session_id != session_id or claims.run_id != run_id:
+    raise HTTPException(status_code=403, detail="an agent may only stop its own bound run")
+
+
 @router.post("/{session_id}/runs/{run_id}/cancel", response_model=RunCancelResponse)
 async def cancel_session_run(
     session_id: str,
@@ -2047,11 +2062,7 @@ async def cancel_session_run(
     caller: CallerIdentity = Depends(require_caller),
 ) -> RunCancelResponse:
   """Request one stop: durable fact first, then identity-checked signal and exit observation."""
-  if not caller.is_operator:
-    claims = caller.claims
-    assert claims is not None
-    if claims.session_id != session_id or claims.run_id != run_id:
-      raise HTTPException(status_code=403, detail="an agent may only stop its own bound run")
+  _require_own_run_scope(caller, session_id, run_id)
   try:
     result = await run_store.request_stop(session_id, run_id, req.request_id)
   except (RunNotFoundError, RunIdentityConflictError) as e:

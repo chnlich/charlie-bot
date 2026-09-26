@@ -524,15 +524,20 @@ function applySessionStatus(sid, status, requestSeq) {
 }
 
 // The Delegated cards' live line: "running · <model>" while the delegation
-// works, "idle · <model>" once it settles. A card tracks either its child
-// session (new-style) or the owning session (legacy), keyed by data attribute.
+// works; once it stops running, a task-tree child's work verdict (the same
+// work_state its sidebar row paints from) reads "failed" or "queued", and
+// anything else "idle". A card tracks either its child session (new-style) or
+// the owning session (legacy), keyed by data attribute.
+const DELEGATE_CARD_VERDICTS = {attention: 'failed', waiting: 'queued'};
+
 function paintDelegateCardState(sid, status) {
   document.querySelectorAll(
       '.delegate-live-state[data-delegate-session="' + sid + '"],'
       + '.delegate-live-state[data-delegate-parent-session="' + sid + '"]').forEach(el => {
     const backend = el.dataset.delegateBackend || '';
-    const running = !!(status && status.has_running_tasks);
-    el.textContent = (running ? 'running' : 'idle') + (backend ? ' · ' + backend : '');
+    const verdict = status && status.has_running_tasks
+      ? 'running' : (DELEGATE_CARD_VERDICTS[status && status.work_state] || 'idle');
+    el.textContent = verdict + (backend ? ' · ' + backend : '');
   });
 }
 

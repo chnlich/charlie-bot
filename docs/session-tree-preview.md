@@ -107,8 +107,9 @@ executable verification recipes, never mocks:
   screenshots — a ~60 s worker Run (spinner on the row, gear on the collapsed
   parent, expanded parent showing only its own state, icons clearing after
   finish), a launch failure before process start (red alert on the row and the
-  collapsed parent, the parent's failure report naming the error, the leaf
-  card reading `failed` and a held-back retry reading `queued`), a queued Run
+  collapsed parent, the parent's failure report naming the error, the
+  worker transcript's Run header reading `failed` with the error beneath it
+  and a held-back retry's header reading `queued`), a queued Run
   held by a paused node (the clock), and goal-derived row names.
 
 Both share the preview's isolation guarantees: the trial home is a fresh

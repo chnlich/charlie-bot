@@ -523,6 +523,33 @@ function deliveryDiffHref(msg, sessionId) {
     + '&session=' + encodeURIComponent(sessionId || '');
 }
 
+// A worker transcript's per-Run header (a system line of kind run_header):
+// kind · backend · state, with the state dot in the colors the retired leaf
+// card used — a queued Run amber, a failed one red — and a failed Run's own
+// error text shown in full beneath the line.
+const RUN_HEADER_DOT_COLORS = {
+  running: 'bg-blue-500', success: 'bg-green-500', completed: 'bg-green-500',
+  queued: 'bg-amber-400',
+  failed: 'bg-red-500', interrupted: 'bg-red-500', attention: 'bg-red-500',
+};
+
+function runHeaderHtml(msg) {
+  const runId = escapeHtmlAttr(String(msg.run_id || ''));
+  const state = String(msg.state || '');
+  const dot = RUN_HEADER_DOT_COLORS[state] || 'bg-slate-500';
+  const titleAttr = msg.timestamp ? ' title="' + formatBubbleTime(msg.timestamp) + '"' : '';
+  const error = msg.error
+    ? '<div id="run-error-' + runId + '" class="text-red-400 text-xs whitespace-pre-wrap break-words max-w-[85%]">'
+      + escapeHtml(String(msg.error)) + '</div>'
+    : '';
+  return openMessageWrapper('flex flex-col items-center gap-1', msg)
+    + '<div id="run-header-' + runId + '" data-run-state="' + escapeHtmlAttr(state) + '"'
+    + ' class="flex items-center gap-2 bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden"' + titleAttr + '>'
+    + '<span id="run-dot-' + runId + '" class="w-2 h-2 rounded-full flex-shrink-0 ' + dot + '"></span>'
+    + '<span class="truncate">' + escapeHtml(msg.content) + '</span></div>'
+    + error + '</div>';
+}
+
 function evidenceLinkHtml(label, href) {
   if (!href) return '<span class="text-slate-500">' + label + '</span>';
   return '<a class="text-blue-400 hover:underline" href="' + escapeHtmlAttr(href) + '" target="_blank" rel="noopener">' + label + '</a>';
@@ -667,6 +694,9 @@ function renderMessage(msg, sessionId) {
     }
     return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
       + thinkingHtml + contentHtml + toolsHtml + timeDiv() + "</div></div>";
+  }
+  if (msg.role === "system" && msg.kind === "run_header") {
+    return runHeaderHtml(msg);
   }
   if (msg.role === "system") {
     var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";

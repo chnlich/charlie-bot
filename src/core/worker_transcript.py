@@ -52,6 +52,10 @@ _TRANSCRIPT_SKIP_TYPES = frozenset({ET.SESSION_ATTACHED})
 # reservation whose durable stop request the dispatch stage honors.
 _SIGNALLABLE_STATES = frozenset({"running", "queued"})
 
+# The states the header reads as a failure (the retired leaf card folded all
+# three into ``failed``): the header then carries the Run's own error text.
+_FAILED_STATES = frozenset({"failed", "interrupted", "attention"})
+
 
 @dataclass
 class TranscriptEntry:
@@ -73,7 +77,7 @@ def _backend_label(cfg, backend: str | None) -> str:
   return option.label if option is not None else backend
 
 
-def _run_header_event(run: RunRecord, state: str, label: str) -> dict:
+def _run_header_event(run: RunRecord, state: str, label: str, error: str) -> dict:
   """The one header line that opens *run*'s transcript segment."""
   started = run.started_at.isoformat() if run.started_at is not None else None
   return {
@@ -83,9 +87,30 @@ def _run_header_event(run: RunRecord, state: str, label: str) -> dict:
       "backend": run.backend or "",
       "backend_label": label,
       "state": state,
+      "error": error,
       "started_at": started,
       "timestamp": started or utc_now().isoformat(),
   }
+
+
+def _header_error(state: str, events: list[dict]) -> str:
+  """A failed Run's newest non-empty error-event text, else "".
+
+  The same walk the parent failure report reads
+  (review._worker_error_from_events_log): a Run that died before its process
+  started carries its actual error as its events log's error event, and the
+  header shows it in full where the event's own chat line truncates.
+  """
+  if state not in _FAILED_STATES:
+    return ""
+  for event in reversed(events):
+    if event.get("type") != ET.ERROR:
+      continue
+    for key in ("message", "content"):
+      value = event.get(key)
+      if isinstance(value, str) and value.strip():
+        return value.strip()
+  return ""
 
 
 def _delivery_event(task_state: str, facts_events: list[dict], runs: list[RunRecord]) -> dict | None:
@@ -186,9 +211,11 @@ def build_worker_transcript_sync(tree, session_id: str) -> TranscriptEntry:
   states = {run.id: tree.runs.run_display_state(run, facts_events, host_boot) for run in runs}
   transcript: list[dict] = []
   for run in runs:
+    state = states.get(run.id, "queued")
+    run_events = _read_events(tree.runs.run_dir(session_id, run.id) / "events.jsonl")
     transcript.append(_run_header_event(
-        run, states.get(run.id, "queued"), _backend_label(tree.cfg, run.backend)))
-    transcript.extend(_read_events(tree.runs.run_dir(session_id, run.id) / "events.jsonl"))
+        run, state, _backend_label(tree.cfg, run.backend), _header_error(state, run_events)))
+    transcript.extend(run_events)
   task_state = tree.task_state(session_id)
   delivery = _delivery_event(task_state, facts_events, runs)
   if delivery is not None:
@@ -260,6 +287,7 @@ def build_thread_transcript_sync(
   """Build one legacy thread's transcript: one header line, then its events."""
   state = _thread_state(meta)
   started = meta.started_at.isoformat() if meta.started_at is not None else None
+  thread_events = _read_events(events_path)
   transcript: list[dict] = [{
       "type": ET.RUN_HEADER,
       "run_id": meta.id,
@@ -267,10 +295,11 @@ def build_thread_transcript_sync(
       "backend": meta.backend or "",
       "backend_label": label,
       "state": state,
+      "error": _header_error(state, thread_events),
       "started_at": started,
       "timestamp": started or utc_now().isoformat(),
   }]
-  transcript.extend(_read_events(events_path))
+  transcript.extend(thread_events)
   signature = thread_signature_sync(session_dir, meta.id)
   return TranscriptEntry(
       revision=_revision(signature, {"thread": state}, state),

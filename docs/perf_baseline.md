@@ -128,6 +128,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M118 raw-log tail-follow grown-line round cost | M118 collector below | seconds of drain wall + worst event-loop tick gap while a backend appends to one never-closing raw-log line (the runaway-write window — the on-disk worst raw log's 2.1 GB single line is the observed instance; the writer paces slower than the drain's poll interval, so each round sees one append) | wall median < 4.0 s (the collector's own 2.0 s write pacing plus the after band's ~0.9 s drain-and-exit work; the pre-fix copy-per-round shape reads 6.2-7.8 s and trips); max tick gap median < 0.15 s (the after band's 79-90 ms is the harness's own 128 MB page-cache write; the pre-fix ~1.0 s per-round copy+rescan trips) | — (introduced with its first history row) |
 | M119 sidebar root session-list serve | M119 collector below | seconds per request, worst projected-list corpus (the sidebar "All" pill fetch, `GET /api/sessions/`: every active session plus one projected worker-leaf row per legacy thread, the M71 snapshot corpus); the served shape is the identity-keyed whole-body memo (the search route's `_search_whole_body` mechanism) over the pre-dumped render (the M34 events-fetch repair's shape) with the body-keyed gzip memo — a regression to the response_model jsonable_encoder pass over every row, to a per-request re-render of an unchanged corpus, or to the middleware's whole-body deflate trips (the cron-collision bias the M56 history documents applies) | median < max(0.002 s, rows × 0.0000080 s) (the after band reads 4.8-5.8 µs/row over the projection walk plus the memo-serve render; the line sits ~1.4-1.7x over it, the same headroom convention the M72 walk line set) | — (introduced with its first history row) |
 | M120 task-tree page serve, invalidated index | M120 collector below | seconds per `GET /api/sessions/tree` roots page over the live-corpus scratch copy with the tree index dropped before each timed call (any metadata write between clicks does that — the production shape the server log's per-request durations show), warm shared metadata cache, warm events caches | median < max(0.010 s, metas × 0.0000060 s) (the after band reads 2.4 µs/meta over the scandir, the shared-snapshot consult, and the facts revision; the pre-fix whole-file re-read+re-parse shape reads 41 µs/meta and trips 7x) | — (introduced with its first history row) |
+| M121 task-tree index rebuild burst, invalidated | M121 collector below | seconds per 6-reader concurrent `_get_index` burst after one invalidation, warm shared metadata cache (the delegation-burst shape: one structural write invalidates, and the sidebar poll, the tree page, and the delegate's own read all arrive together — scratch home, live home read-only); the solo invalidated rebuild rides as the sub-reading (the build's own cost must not move — the parity witness), and the builds-per-burst count is the mechanism witness | burst median < max(0.010 s, solo median × 2) (the burst sits at one build's cost; the pre-fix one-build-per-reader shape reads 10.7x the solo wall at 6 readers and 64x at 12 — the amplification is the thread-pool queue plus the shared-cache lock pileup, the shape the 2026-09-25 17:10 delegation burst logged at 766-1339 ms per request); solo median < max(0.010 s, metas × 0.0000100 s) | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -8413,6 +8414,101 @@ finally:
 EOF
 ```
 
+M121 — task-tree index rebuild burst, invalidated. One structural write (a task
+create, a status flip, any `_save_meta`) invalidates the tree index, and the
+readers the write touches — the sidebar poll's task probe, the tree page, the
+delegation's own create — all arrive inside the same burst. The cost is
+per-request latency invisible to the standing HTTP probes (M120 reads the tree
+page alone, serially), so the collector snapshots the M120 corpus (every
+session's metadata.json plus each task node's `data/` — the facts fold's chat
+events and archived chunks; scratch home, live home read once for the copy,
+never written) and drives `_get_index` directly: one cold pass, then per round a
+solo invalidated rebuild and a 6-reader concurrent burst, seven rounds. The
+solo median is the build's own cost (a regression there is a different topic);
+the burst median against it is the single-flight property this metric watches,
+and the builds-per-burst count the collector prints is its mechanism witness:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, json, os, shutil, sys, tempfile, time
+from pathlib import Path
+
+# The M120 corpus shape: every session's metadata.json plus each task node's
+# data/ (the facts fold's chat events and archived chunks). Live home read once
+# for the copy, never written; this block removes the copy on every exit path.
+root = Path.home() / ".charliebot" / "sessions"
+home = Path(tempfile.mkdtemp(prefix="m121-tree-home-", dir="/tmp"))
+dst = home / "sessions"
+dst.mkdir(parents=True)
+n_meta = n_nodes = 0
+for d in root.iterdir():
+    m = d / "metadata.json"
+    if not m.is_file():
+        continue
+    sd = dst / d.name
+    sd.mkdir()
+    shutil.copy2(m, sd / "metadata.json")
+    n_meta += 1
+    try:
+        meta = json.loads(m.read_text())
+    except ValueError:
+        continue
+    if meta.get("profile") is not None and (d / "data").is_dir():
+        shutil.copytree(d / "data", sd / "data",
+                        ignore=shutil.ignore_patterns("master_runs", "traces", "artifacts", "threads", "runs"))
+        n_nodes += 1
+
+CHECKOUT = os.environ["CHECKOUT"]
+sys.path.insert(0, CHECKOUT)
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+from src.core.task_sessions import TaskTreeManager
+
+cfg = CharlieBotConfig(charliebot_home=home)
+session_mgr = SessionManager(cfg)
+tree = TaskTreeManager(cfg, session_mgr)
+
+async def main():
+    names = sorted(p.name for p in dst.iterdir() if p.is_dir())
+    for sid in names:
+        await session_mgr.get_session(sid)
+    await tree._get_index()  # cold pass, as at a process start; not timed
+    orig = tree._build_index_sync
+    builds = {"n": 0}
+
+    def counting(cached_metas):
+        builds["n"] += 1
+        return orig(cached_metas)
+
+    tree._build_index_sync = counting
+    solo, burst = [], []
+    revision = None
+    for _ in range(7):
+        tree._invalidate_index()
+        t0 = time.perf_counter()
+        r = await tree._get_index()
+        solo.append(time.perf_counter() - t0)
+        revision = r.revision
+        tree._invalidate_index()
+        builds["n"] = 0
+        t0 = time.perf_counter()
+        results = await asyncio.gather(*(tree._get_index() for _ in range(6)))
+        burst.append(time.perf_counter() - t0)
+        assert all(x.revision == revision for x in results), "revision moved across the burst"
+    solo.sort()
+    burst.sort()
+    print(f"checkout {Path(CHECKOUT).name}: {n_meta} metadata files, {n_nodes} task nodes; "
+          f"6-reader burst median {burst[3] * 1000:.2f} ms, max {burst[-1] * 1000:.2f} ms over 7 "
+          f"({builds['n']} builds in the last burst); solo invalidated rebuild median "
+          f"{solo[3] * 1000:.2f} ms; revision {revision[:12]}")
+
+try:
+    asyncio.run(main())
+finally:
+    shutil.rmtree(home, ignore_errors=True)  # every exit path removes the scratch copy
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -8765,3 +8861,4 @@ the round's verbatim collector tripped its 0.003 s line through a collector bug 
 | 2026-09-26 | this PR | M9 steady-state spend rescan 0.6835/0.6672/0.6794 → 0.0023/0.0022/0.0024 s over three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back at load 1.20-1.40 one-minute (maxima 0.684-0.696 → 0.0027-0.0030 s, every paired round faster); spend parity witnessed across arms by the sum digest dac0e06518b4 and the per-file extract digest 7bca2f1f30b6 over all 543 in-window files | the 7-day window's file count outgrew the spend memo's 512-entry cap (539 in-window at the 2026-09-26 sweep, 503 written 09-25 alone), and the cap turned the LRU into a rotating eviction wave: each round's first 27 misses re-record and evict the next round's hits in walk order, so every round re-parsed the whole corpus (0.67 s of parse per 60 s poll round, background work invisible to the HTTP probes) — the cap now sits at 8192, above the window's resident set, and the regression test seeds 600 in-window files to pin the steady round memo-served |
 | 2026-09-26 | this PR | M59 thread-detail poll, verbatim collector: full row 0.81/0.84/0.83 → 0.53/0.51/0.50 ms (−35 % to −40 %), maxima 1.14/0.98/1.01 → 0.72/0.60/0.72 ms; attach mode 0.75/0.74/0.73 → 0.41/0.39/0.40 ms (−45 % to −47 %), maxima 0.83/0.77/0.74 → 0.47/0.43/0.42 ms, every paired round faster over three interleaved rounds — main checkout before vs branch worktree after back-to-back at load 1.34-1.47 one-minute, decoded 50206 B wire 22820 B and digest 7184f3458354 identical across all six arms | the 5 s workers-panel detail poll re-read and stdlib-json-parsed the 42 KB sessions/session_aliases.json (205 rows) on every request: `_resolve_v2_run`'s alias probe measured 0.279 ms of the route's 0.78-0.85 ms — the store's `_read` had no memo, and `resolve_thread`'s two lookups (`old_threads` direct, then the canonical-owner retry) parsed the file twice per call; the read now rides the file's stat signature (the `_detail_meta_memo` mechanism), the served value is shared read-only, and `_put` writes a copy so a registration never mutates the entry concurrent resolvers hold |
 | 2026-09-26 | this PR | M120 tree-page serve, introduced with this PR: roots page over the invalidated index 58.19/59.32/58.57 → 3.34/3.39/3.47 ms median (−94 %), maxima 60.87-73.14 → 4.03-4.21 ms, every paired round faster over three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, arm order alternating per round, 1404 metadata files plus 71 task-node event corpora in one shared scratch home, live home read-only; page body sha1 23a8c43f258e and tree revision 64c8bda9aab9 identical across arms | the index build re-read and re-parsed every session's metadata.json per rebuild (1404 opens plus pydantic parses, ~41 µs/meta, 58 ms against today's corpus) although the SessionManager already holds every entry behind the shared per-entry stat-signature check — the production log's per-request durations showed it (GET /api/sessions/tree 75-129 ms per request, median 92 ms, under a 2 s index TTL that any metadata write invalidates); the build now snapshots the authoritative entries on the loop (fresh_cached_metas, one _fresh_cached_meta check per entry) and reads a file only where no entry covers the name (cold cache, out-of-band create), keeping the tree's strict unparseable-file contract; the tree index joins get_session and _load_session_metas on the same freshness check instead of carrying its own whole-corpus re-read; 6635-passed suite plus 2 new tests (the shared authoritative entry served zero-copy with the out-of-band past-TTL edit re-read, and the uncached unparseable file failing the build loud) |
+| 2026-09-26 | this PR | M121 task-tree index rebuild burst, introduced with this PR: 6-reader burst 27.32 ms → 2.12/2.12 ms median (−92%), max 34.95 → 2.35-2.53 ms, builds per burst 6 → 1, solo invalidated rebuild 2.37 → 2.06-2.09 ms (band parity), revision digest 64c8bda9aab9 identical across arms, interleaved back-to-back verbatim-collector rounds — main checkout before vs branch worktree after, plus the 12-reader probe 166.3-168.2 → 2.2-2.5 ms (−99%) | every reader of one invalidation ran its own full `_build_index_sync`: a delegation's create invalidates the index and the sidebar poll, the tree page, and the delegate's own read each paid the build again — the 2026-09-25 17:10 burst logged POST /api/internal/delegate at 766-1156 ms and GET /api/sessions/ at 765-1339 ms while three builds raced (the live corpus's solo build measures 78-375 ms, so the contended shape, not the 2 ms scratch band, is what production pays); the build now single-flights on the in-flight task keyed to its generation (the token-usage route's rule), the existing generation guard still refusing a mid-build write's stale install; 70-passed task-tree suites plus 2 new tests (one build per burst, mid-build write never installs) |

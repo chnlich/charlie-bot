@@ -65,7 +65,13 @@ SCRIPT_REPO = Path(__file__).resolve().parent.parent
 if str(SCRIPT_REPO) not in sys.path:
     sys.path.insert(0, str(SCRIPT_REPO))
 
-from scripts.browser_harness_session_tree import CDP, pick_free_port  # noqa: E402
+from scripts.browser_harness_session_tree import (  # noqa: E402
+    CDP,
+    devtools_ws_url,
+    launch_chrome,
+    open_cdp_page,
+    pick_free_port,
+)
 
 READY_PREFIX = "PARITY SERVE READY "
 WIDTHS = ((1440, 900, False), (390, 844, True))
@@ -317,20 +323,11 @@ async def run_browser(chrome: str, sides: list[Side], parent_of: dict) -> dict:
 
     profile = Path(tempfile.mkdtemp(prefix="ui-parity-chrome-"))
     debug_port = pick_free_port()
-    proc = subprocess.Popen(
-        [chrome, "--headless=new", f"--remote-debugging-port={debug_port}", f"--user-data-dir={profile}",
-         "--no-first-run", "--no-default-browser-check", "--disable-background-networking",
-         "--remote-allow-origins=*", "about:blank"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    proc = launch_chrome(chrome, profile, debug_port,
+                         ["--no-first-run", "--no-default-browser-check",
+                          "--disable-background-networking", "--remote-allow-origins=*"])
     try:
-        ws_url = None
-        deadline = time.monotonic() + 20
-        while ws_url is None and time.monotonic() < deadline:
-            line = proc.stderr.readline()
-            if "DevTools listening on ws://" in line:
-                ws_url = line.strip().split()[-1]
-        if ws_url is None:
-            fail("chrome devtools endpoint did not come up")
+        ws_url = await devtools_ws_url(proc, 20, fail)
         async with websockets.connect(ws_url, max_size=50 * 1024 * 1024) as ws:
             cdp = CDP(ws)
             captures: dict = {}
@@ -339,18 +336,13 @@ async def run_browser(chrome: str, sides: list[Side], parent_of: dict) -> dict:
                     view = f"{width}px/{view_filter}"
                     captures[view] = {}
                     for side in sides:
-                        target = await cdp.send("Target.createTarget", {"url": "about:blank"})
-                        attached = await cdp.send("Target.attachToTarget",
-                                                  {"targetId": target["targetId"], "flatten": True})
-                        session_id = attached["sessionId"]
-                        await cdp.send("Page.enable", session_id=session_id)
-                        await cdp.send("Network.enable", session_id=session_id)
+                        session_id, target_id = await open_cdp_page(cdp, ("Page", "Network"))
                         await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": (
                             f"try {{ localStorage.setItem('charliebot_access_key', "
                             f"{json.dumps(side.access_key)}); }} catch (e) {{}}")}, session_id=session_id)
                         captures[view][side.name] = await capture(
                             cdp, session_id, side, width, height, mobile, view_filter, parent_of)
-                        await cdp.send("Target.closeTarget", {"targetId": target["targetId"]})
+                        await cdp.send("Target.closeTarget", {"targetId": target_id})
             return captures
     finally:
         proc.terminate()

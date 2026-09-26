@@ -49,7 +49,15 @@ import time  # noqa: E402
 import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 
-from scripts.browser_harness_session_tree import CDP, evaluate, pick_free_port  # noqa: E402
+from scripts.browser_harness_session_tree import (  # noqa: E402
+    CDP,
+    connect_cdp,
+    devtools_ws_url,
+    evaluate,
+    launch_chrome,
+    open_cdp_page,
+    pick_free_port,
+)
 from scripts.browser_harness_session_tree_preview import build_source_home  # noqa: E402
 from scripts.live_preview_task_tree import (  # noqa: E402
     DEFAULT_BACKEND,
@@ -296,8 +304,6 @@ async def run_harness(args: argparse.Namespace) -> None:
 
     import atexit
 
-    import websockets
-
     tmp_path = Path(tempfile.mkdtemp(prefix="charliebot-sidebar-status-"))
     if args.keep:
         log(f"kept for inspection: {tmp_path}")
@@ -355,29 +361,11 @@ async def run_harness(args: argparse.Namespace) -> None:
             access_key = (home / "credentials.yaml").read_text().split("access_key: ")[1].split("\n")[0]
 
             # ---- real Chrome over CDP -----------------------------------
-            chrome_proc = subprocess.Popen(
-                [chrome, "--headless=new", "--remote-debugging-port=" + str(debug_port),
-                 "--user-data-dir=" + str(tmp_path / "chrome-profile"),
-                 "--no-first-run", "--no-default-browser-check", "about:blank"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-            ws_url = None
-            deadline = time.monotonic() + 30
-            while time.monotonic() < deadline and ws_url is None:
-                line = chrome_proc.stderr.readline().decode(errors="replace")
-                if "/devtools/browser" in line:
-                    ws_url = line.strip().split()[-1]
-            if ws_url is None:
-                fail("chrome devtools endpoint did not come up")
-            ws = await websockets.connect(ws_url, max_size=50 * 1024 * 1024)
-            cdp = CDP(ws)
-            await asyncio.sleep(0.3)
-            target = await cdp.send("Target.createTarget", {"url": "about:blank"})
-            attached = await cdp.send("Target.attachToTarget",
-                                      {"targetId": target["targetId"], "flatten": True})
-            page_id = attached["sessionId"]
-            await cdp.send("Page.enable", session_id=page_id)
-            await cdp.send("Runtime.enable", session_id=page_id)
-            await cdp.send("Network.enable", session_id=page_id)
+            chrome_proc = launch_chrome(chrome, tmp_path / "chrome-profile", debug_port,
+                                        ["--no-first-run", "--no-default-browser-check"])
+            ws_url = await devtools_ws_url(chrome_proc, 30, fail)
+            cdp = await connect_cdp(ws_url)
+            page_id, _target_id = await open_cdp_page(cdp, ("Page", "Runtime", "Network"))
             await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": f"""
                 (function () {{
                   try {{ localStorage.setItem('charliebot_access_key', '{access_key}'); }} catch (e) {{}}

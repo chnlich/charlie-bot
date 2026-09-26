@@ -146,7 +146,12 @@ def block_sources(snapshot: dict) -> list[tuple[str, str]]:
 async def run_harness(args: argparse.Namespace) -> None:
     import yaml
 
-    from scripts.browser_harness_session_tree_preview import build_source_home
+    from scripts.browser_harness_session_tree_preview import (
+        build_source_home,
+        preview_instance_env,
+        preview_invocation,
+        wait_preview_ready,
+    )
 
     evidence_dir = Path(args.evidence_dir)
     evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -188,11 +193,8 @@ async def run_harness(args: argparse.Namespace) -> None:
 
     home = tmp_path / "preview-home"
     port = pick_free_port()
-    invocation = [sys.executable, "-m", "src.cli.main", "session-tree", "preview",
-                  "--home", str(home), "--port", str(port), "--backend", args.backend]
-    env = dict(os.environ)
-    env["CHARLIEBOT_HOME"] = str(source)
-    env["PYTHONUNBUFFERED"] = "1"
+    invocation = preview_invocation(home, port, args.backend, [])
+    env = preview_instance_env(source)
     server_console = tmp_path / "server-console.log"
     log(f"starting preview instance on 127.0.0.1:{port} (home {home})")
     with open(server_console, "w", encoding="utf-8") as server_log_file:
@@ -200,19 +202,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             invocation, cwd=str(REPO_ROOT), env=env,
             stdout=server_log_file, stderr=subprocess.STDOUT)
         try:
-            record_path = home / "state" / "preview_instance.json"
-            deadline = time.monotonic() + 120
-            record = {}
-            while time.monotonic() < deadline:
-                if record_path.is_file():
-                    record = json.loads(record_path.read_text())
-                    if record.get("ready"):
-                        break
-                if proc.poll() is not None:
-                    fail(f"preview process exited early: {server_console.read_text()[-1500:]}")
-                await asyncio.sleep(0.2)
-            if not record.get("ready"):
-                fail("preview instance never became ready")
+            record = await wait_preview_ready(proc, home, server_console, fail, 120.0)
             base = record["url"]
             log(f"preview ready: {base} (branch {record['source_branch']}, "
                 f"sha {record['source_sha'][:12]})")

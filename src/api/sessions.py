@@ -98,10 +98,13 @@ from src.core.sessions import (
     SessionManager,
     SuccessionRefusedError,
 )
+from src.core.spawner_backends import EMPTY_BACKENDS_OPTIONS_REFUSAL
 from src.core.takeoff_gate import DelegationBlockedError
 from src.core.task_execution import assemble_coherent_snapshot
 from src.core.task_prompts import LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME, PromptSnapshot, TaskPromptError
 from src.core.task_sessions import (
+  AGENT_CREATE_SCOPE_REFUSAL,
+  TASK_CREATE_REQUEST_ID_REQUIRED,
   TaskConflictError,
   TaskForbiddenError,
   TaskInvalidError,
@@ -452,7 +455,7 @@ async def create_session(
   if any(getattr(req, f) is not None for f in ("request_id", "task_parent_id", "profile", "task")):
     # v2 task create: the task-tree owner binds (parent, request_id) to one node.
     if req.request_id is None:
-      raise HTTPException(status_code=400, detail="request_id is required for task creation")
+      raise HTTPException(status_code=400, detail=TASK_CREATE_REQUEST_ID_REQUIRED)
     if req.backend is not None:
       _resolve_requested_backend(req.backend, cfg, fallback_backend=_default_backend_id(cfg))
     try:
@@ -475,7 +478,7 @@ async def create_session(
     # node (the v2 path above); the legacy create shape is operator scope.
     raise HTTPException(
         status_code=403,
-        detail="an agent may only create a task directly under its own open manager task")
+        detail=AGENT_CREATE_SCOPE_REFUSAL)
   backend = _resolve_requested_backend(req.backend, cfg, fallback_backend=_default_backend_id(cfg))
   log.info("creating_session", backend=backend, name=req.name)
   return await session_mgr.create_session(req, backend=backend)
@@ -1765,7 +1768,7 @@ async def get_effective_prompt(
     if not cfg.backends.options:
       raise HTTPException(
           status_code=400,
-          detail="session backend resolution requires a configured backends.options entry")
+          detail=EMPTY_BACKENDS_OPTIONS_REFUSAL)
     option = cfg.backends.options[0]
   try:
     snapshot, overlay_error, declared = await assemble_coherent_snapshot(

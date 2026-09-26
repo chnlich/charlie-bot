@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import WORKER_BUILD_BACKEND_PATCH_TARGET, patch_instructions_content, stub_credentials
+from conftest import WORKER_BUILD_BACKEND_PATCH_TARGET, make_api_client, patch_instructions_content, stub_credentials
 
 from src.core import event_types as ET
 from src.core.improve_command import load_loop_state
@@ -27,7 +27,6 @@ from tests.test_task_execution import (
     build_env,
     init_repo_with_origin,
     install_backends,
-    make_api_client,
     result_event,
 )
 

@@ -25,6 +25,7 @@ from conftest import (
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     agent_headers,
     delegate_payload,
+    make_api_client,
     patch_instructions_content,
     stub_credentials,
 )
@@ -42,7 +43,6 @@ from tests.test_task_execution import (
     build_env,
     init_repo_with_origin,
     install_backends,
-    make_api_client,
     result_event,
     wait_for_terminal_run,
 )

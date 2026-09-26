@@ -70,15 +70,20 @@ async def build_manager_with_worker(
   worker = await tree.create_task(
       request_id="child", task_parent_id=manager.id, profile="worker",
       task=TaskSpec(goal="do the work"), name="W", backend=None, caller=OPERATOR)
-  # Manager turns ride the build-registry path; worker/review runs the worker path.
+  # The WORKER path's deferred loader binds src.agents.worker.build_backend on
+  # first access from whatever src.agents.backends.registry.build_backend holds
+  # at that moment, so the worker target must be patched BEFORE the registry
+  # target: a registry stand-in active at the first worker access would be
+  # bound as the worker "previous" value and restored permanently at undo.
+  install_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("authorized work")])],
+      WORKER_BUILD_BACKEND_PATCH_TARGET)
+  # Manager turns ride the build-registry path.
   install_backends(
       monkeypatch,
       [SpawningScriptedBackend([result_event("taken off")]),
        SpawningScriptedBackend([result_event("later")])],
       BUILD_BACKEND_PATCH_TARGET)
-  install_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("authorized work")])],
-      WORKER_BUILD_BACKEND_PATCH_TARGET)
   return cfg, session_mgr, tree, manager, worker
 
 

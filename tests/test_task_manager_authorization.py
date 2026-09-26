@@ -23,6 +23,7 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
+    agent_headers,
     delegate_payload,
     patch_instructions_content,
     stub_credentials,
@@ -31,7 +32,7 @@ from conftest import (
 from src.core import event_types as ET
 from src.core.control_events import build_control_event
 from src.core.models import RunRecord, TaskSpec
-from src.core.run_token import CallerIdentity, RunTokenClaims, sign_run_token
+from src.core.run_token import CallerIdentity
 from src.core.sessions import SessionManager
 from src.core.task_completion import CompletionEvidence
 from src.core.task_sessions import TaskTreeManager
@@ -48,12 +49,6 @@ from tests.test_task_execution import (
 
 KEY = "op-secret"
 OP_CALLER = CallerIdentity(kind="operator")
-
-
-def agent_headers(session_id: str, run_id: str) -> dict[str, str]:
-  """The run-token credential of one node's own active Run."""
-  token = sign_run_token(RunTokenClaims(session_id=session_id, run_id=run_id, agent="manager-agent"), KEY)
-  return {"Authorization": f"Bearer {token}"}
 
 
 def live_run_identity() -> tuple[int, str]:

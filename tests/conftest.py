@@ -1405,12 +1405,13 @@ SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.core.slack_listener._bot_client"
 SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.scheduler.create_logged_task"
 
 # Import-path patch targets for the seams a scheduled run fires through. src/core/scheduler.py
-# binds each name at import scope (`from src.core.config import get_config`, `from
-# src.core.spawner import resolve_requested_subagent_backend_model, spawn_worker`, `from
+# binds each name at import scope (`from src.core.config import get_config, get_scheduled_tasks`,
+# `from src.core.spawner import resolve_requested_subagent_backend_model, spawn_worker`, `from
 # src.core.threads import ThreadManager`), so monkeypatch.setattr lands the stand-in on the
 # src.core.scheduler module attribute and the call-time readers resolve it there; sibling
 # modules binding the same functions keep their own routes.
 SCHEDULER_GET_CONFIG_PATCH_TARGET = "src.core.scheduler.get_config"
+SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.core.scheduler.get_scheduled_tasks"
 SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = ("src.core.scheduler.resolve_requested_subagent_backend_model")
 SCHEDULER_SPAWN_WORKER_PATCH_TARGET = "src.core.scheduler.spawn_worker"
 SCHEDULER_THREAD_MANAGER_PATCH_TARGET = "src.core.scheduler.ThreadManager"

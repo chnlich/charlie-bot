@@ -1376,6 +1376,14 @@ TRIGGERS_DORMANCY_CHECK_SECONDS_PATCH_TARGET = "src.core.triggers._DORMANCY_CHEC
 # (the sent-but-lost readback, plan diff's version files).
 CLI_COMMON_GET_CONFIG_PATCH_TARGET = "src.cli.common.get_config"
 
+# Import-path patch target for the config read itself. Verbs that defer the import into the
+# call (`from src.core.config import get_config` at call scope) read the src.core.config
+# module attribute at call time, so the stand-in lands there. src.cli.common's forwarder
+# (CLI_COMMON_GET_CONFIG_PATCH_TARGET above) defer-imports the same attribute per call, so a
+# stand-in set here flows through its callers too; the reverse does not hold — a stand-in on
+# common's module global leaves this attribute real for every deferred import.
+CONFIG_GET_CONFIG_PATCH_TARGET = "src.core.config.get_config"
+
 # Import-path patch target for the CLI request path's server base URL. src/cli/common.py
 # resolves it through the fingerprint-keyed port document (_internal_base_url; a hit keeps
 # config's model stack out of the verb process), so mock setattrs the stand-in on the

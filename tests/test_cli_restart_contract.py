@@ -28,6 +28,7 @@ from conftest import (
     CLI_COMMON_GET_CONFIG_PATCH_TARGET,
     CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
     CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
+    CONFIG_GET_CONFIG_PATCH_TARGET,
     ROOT,
     make_json_response,
     write_trigger,
@@ -90,7 +91,7 @@ def _patch_readback_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Char
   """
   cfg = _cfg(tmp_path)
   monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr("src.core.config.get_config", lambda: cfg)
+  monkeypatch.setattr(CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setattr(
       CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
   return cfg

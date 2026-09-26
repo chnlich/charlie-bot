@@ -236,5 +236,5 @@ async def test_opencode_sse_events_rejects_nan_boundary(monkeypatch: pytest.Monk
 def test_tail_follow_default_poll_interval_is_the_discovery_bound() -> None:
   """The default poll interval is the discovery delay the follow loop adds to
   every event the CLI writes; the M122 healthy line (discovery median
-  < 0.010 s) is priced against 0.02 s."""
+  < 0.015 s, max < 0.030 s) is priced against 0.02 s."""
   assert _TAIL_POLL_INTERVAL <= 0.02

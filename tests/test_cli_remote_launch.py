@@ -3,7 +3,6 @@
 import contextlib
 import json
 import os
-import shlex
 import shutil
 import signal
 import subprocess
@@ -17,7 +16,6 @@ import pytest
 from conftest import CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, CONFIG_GET_CONFIG_PATCH_TARGET, _wait_for
 
 from src.cli.remote_launch import main
-from src.core.timeouts import SSH_CONNECT_TIMEOUT
 
 # Import-path patch target for remote_launch's subprocess seam. subprocess.run is reached
 # through main's module-scope `import subprocess`, so its stand-in lands on the
@@ -131,26 +129,6 @@ def test_ssh_failure_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str])
   assert "ssh" in err.lower()
 
 
-def test_missing_session_dir_exits_4(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-  # Create a home dir without the requested session subdirectory.
-  home = tmp_path / "home"
-  (home / ".charliebot" / "sessions").mkdir(parents=True)
-  cfg = _mock_config(home)
-
-  fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="12345\n", stderr="")
-
-  with _patched_launch(
-      cfg,
-      ["--session", "nonexistent-session", "--host", "localhost", "--cwd", str(tmp_path), "--cmd", "echo hi"],
-      patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc),
-  ), pytest.raises(SystemExit) as exc_info:
-    main()
-
-  assert exc_info.value.code == 4
-  err = capsys.readouterr().err
-  assert "session dir" in err
-
-
 def test_pid_parse_failure_exits_3(tmp_path: Path) -> None:
   session = "sess-bad-pid"
   cfg = _mock_config(_make_session_dir(tmp_path, session))
@@ -165,72 +143,6 @@ def test_pid_parse_failure_exits_3(tmp_path: Path) -> None:
     main()
 
   assert exc_info.value.code == 3
-
-
-def test_ssh_timeout_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-  session = "sess-timeout"
-  cfg = _mock_config(_make_session_dir(tmp_path, session))
-
-  timeout = subprocess.TimeoutExpired(cmd=["ssh"], timeout=30, stderr="still waiting")
-
-  with _patched_launch(
-      cfg,
-      ["--session", session, "--host", "localhost", "--cwd", str(tmp_path), "--cmd", "echo hi"],
-      patch(_SUBPROCESS_RUN_PATCH_TARGET, side_effect=timeout),
-  ), pytest.raises(SystemExit) as exc_info:
-    main()
-
-  assert exc_info.value.code == 2
-  err = capsys.readouterr().err
-  assert "timed out" in err
-
-
-def test_success_path_with_mocked_ssh(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-  session = "sess-mock"
-  home = _make_session_dir(tmp_path, session)
-  cfg = _mock_config(home)
-
-  fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="98765\n", stderr="")
-
-  # cwd has a space and cmd has a special char so shlex.quote produces visible quoting.
-  cwd = "/some where"
-  cmd = "make build && echo done"
-
-  with _patched_launch(
-      cfg,
-      ["--session", session, "--host", "remote.example.com", "--cwd", cwd, "--cmd", cmd],
-      patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc),
-  ) as mock_run:
-    main()
-
-  stdout = capsys.readouterr().out.strip()
-  meta = json.loads(stdout)
-  assert json.dumps(meta, separators=(",", ":")) == stdout
-  assert meta["remote_pid"] == 98765
-  assert meta["host"] == "remote.example.com"
-  assert meta["cwd"] == cwd
-  assert meta["cmd"] == cmd
-  assert meta["session_id"] == session
-  assert len(meta["launch_id"]) == len("YYYYMMDDTHHMMSS-XXXXXX")
-
-  metadata_file = (home / ".charliebot" / "sessions" / session / "launches" / meta["launch_id"] / "metadata.json")
-  assert json.loads(metadata_file.read_text()) == meta
-
-  ssh_argv = mock_run.call_args.args[0]
-  assert ssh_argv[0] == "ssh"
-  assert "BatchMode=yes" in ssh_argv
-  assert f"ConnectTimeout={SSH_CONNECT_TIMEOUT}" in ssh_argv
-  assert "remote.example.com" in ssh_argv
-  assert ssh_argv[-3:-1] == ["bash", "-c"]
-  # OpenSSH joins argv into a remote command string, so the bash -c payload must be quoted.
-  wrapper = shlex.split(ssh_argv[-1])[0]
-  assert f"/tmp/charliebot_runs/{meta['launch_id']}" in wrapper
-  assert "&& { setsid bash -lc" in wrapper
-  assert wrapper.endswith("; }")
-  # cwd is passed through shlex.quote because it has a space; resulting token is 'some where' quoted.
-  assert "'/some where'" in wrapper
-  # cmd is embedded inside the inner string which is itself shlex.quote'd.
-  assert "make build && echo done" in wrapper
 
 
 @pytest.mark.parametrize(

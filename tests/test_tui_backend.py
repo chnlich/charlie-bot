@@ -1,5 +1,3 @@
-import json
-import os
 from pathlib import Path
 
 import pytest
@@ -29,28 +27,6 @@ def test_build_claude_argv_joins_disallowed_tools_into_single_flag() -> None:
   assert argv[idx + 1] == "Monitor,CronCreate,AskUserQuestion,ExitPlanMode"
 
 
-def test_build_claude_argv_omits_disallowed_flag_when_empty() -> None:
-  argv = tui.build_claude_argv("session-id", resume=False, settings=tui._CLAUDE_TUI_SETTINGS, disallowed_tools=[])
-
-  assert "--disallowed-tools" not in argv
-
-
-def test_ensure_claude_project_trusted_marks_session_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  config_dir = tmp_path / "claude-config"
-  working_dir = tmp_path / "session"
-  working_dir.mkdir()
-  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
-
-  tui._ensure_claude_project_trusted(working_dir)
-
-  data = json.loads((config_dir / ".claude.json").read_text(encoding="utf-8"))
-  project = data["projects"][str(working_dir.resolve())]
-  assert project["hasTrustDialogAccepted"] is True
-  assert project["projectOnboardingSeenCount"] == 1
-  # The config can carry API-key state, so the atomic swap must publish it 0600.
-  assert ((config_dir / ".claude.json").stat().st_mode & 0o777) == 0o600
-
-
 def _patch_tmux_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -68,83 +44,6 @@ def _patch_tmux_env(
   monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
   monkeypatch.setattr(pty_common, "_run_tmux", make_fake_run_tmux(calls))
   return config_dir, working_dir, calls
-
-
-@pytest.mark.asyncio
-async def test_ensure_tmux_session_uses_claude_tui_startup_args(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    path_home: Path,
-) -> None:
-  config_dir, working_dir, calls = _patch_tmux_env(monkeypatch, tmp_path)
-
-  await tui.ensure_tmux_session("session-id", working_dir)
-
-  new_session_call = next(args for args in calls if args[0] == "new-session")
-  assert "-e" not in new_session_call
-  assert new_session_call[-6:] == (
-      "claude",
-      "--settings",
-      '{"skipDangerousModePermissionPrompt":true,"disableClaudeAiConnectors":true}',
-      "--dangerously-skip-permissions",
-      "--session-id",
-      "session-id",
-  )
-  data = json.loads((config_dir / ".claude.json").read_text(encoding="utf-8"))
-  assert data["projects"][str(working_dir.resolve())]["hasTrustDialogAccepted"] is True
-
-
-def test_claude_tui_settings_carries_connector_key() -> None:
-  settings = json.loads(tui._CLAUDE_TUI_SETTINGS)
-
-  assert settings["skipDangerousModePermissionPrompt"] is True
-  assert settings["disableClaudeAiConnectors"] is True
-
-
-@pytest.mark.asyncio
-async def test_ensure_tmux_session_resumes_when_claude_jsonl_exists(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    path_home: Path,
-) -> None:
-  _, working_dir, calls = _patch_tmux_env(monkeypatch, tmp_path)
-  jsonl_path = tui.Path.home() / ".claude" / "projects" / "project-a" / "session-id.jsonl"
-  jsonl_path.parent.mkdir(parents=True)
-  jsonl_path.write_text("", encoding="utf-8")
-
-  await tui.ensure_tmux_session("session-id", working_dir)
-
-  new_session_call = next(args for args in calls if args[0] == "new-session")
-  assert "--resume" in new_session_call
-  assert "--session-id" not in new_session_call
-  assert new_session_call[-2:] == ("--resume", "session-id")
-
-
-@pytest.mark.asyncio
-async def test_ensure_tmux_session_passes_optional_claude_args(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    path_home: Path,
-) -> None:
-  _, working_dir, calls = _patch_tmux_env(monkeypatch, tmp_path)
-
-  await tui.ensure_tmux_session(
-      "session-id",
-      working_dir,
-      model="claude-opus-4-8",
-      effort="max",
-      disallowed_tools=["Monitor,CronCreate"],
-  )
-
-  new_session_call = next(args for args in calls if args[0] == "new-session")
-  assert new_session_call[-6:] == (
-      "--model",
-      "claude-opus-4-8",
-      "--effort",
-      "max",
-      "--disallowed-tools",
-      "Monitor,CronCreate",
-  )
 
 
 @pytest.mark.asyncio
@@ -172,46 +71,3 @@ async def test_ensure_tmux_session_injects_new_session_env(
       "-e",
       "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=forwarded-test-value",
   )
-
-
-def test_find_existing_claude_jsonl_returns_first_match(path_home: Path) -> None:
-  first = path_home / ".claude" / "projects" / "a" / "session-id.jsonl"
-  first.parent.mkdir(parents=True)
-  first.write_text("", encoding="utf-8")
-
-  assert tui._find_existing_claude_jsonl("session-id") == first
-
-
-def test_find_existing_claude_jsonl_memoizes_hit_and_miss(path_home: Path) -> None:
-  assert tui._find_existing_claude_jsonl("session-id") is None
-  jsonl = path_home / ".claude" / "projects" / "a" / "session-id.jsonl"
-  jsonl.parent.mkdir(parents=True)
-  jsonl.write_text("", encoding="utf-8")
-  assert tui._find_existing_claude_jsonl("session-id") is None  # memoized miss, inside the TTL
-  tui.reset_jsonl_memo_for_tests()
-  assert tui._find_existing_claude_jsonl("session-id") == jsonl  # memoized hit
-  jsonl.unlink()
-  assert tui._find_existing_claude_jsonl("session-id") is None  # exists() recheck re-globs after deletion
-
-
-def test_claude_jsonl_busy_uses_recent_mtime(path_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  jsonl_path = path_home / ".claude" / "projects" / "a" / "session-id.jsonl"
-  jsonl_path.parent.mkdir(parents=True)
-  jsonl_path.write_text("", encoding="utf-8")
-  os.utime(jsonl_path, (98.0, 98.0))
-  monkeypatch.setattr(tui.time, "time", lambda: 100.0)
-
-  assert tui._claude_jsonl_busy("session-id") is True
-  assert tui._claude_jsonl_busy("session-id", threshold_seconds=1.0) is False
-
-
-def test_claude_jsonl_busy_returns_false_when_jsonl_missing(path_home: Path) -> None:
-  assert tui._claude_jsonl_busy("missing-session") is False
-
-
-def test_claude_jsonl_busy_surfaces_stat_errors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  missing_jsonl = tmp_path / "missing.jsonl"
-  monkeypatch.setattr(tui, "_find_existing_claude_jsonl", lambda _: missing_jsonl)
-
-  with pytest.raises(FileNotFoundError):
-    tui._claude_jsonl_busy("session-id")

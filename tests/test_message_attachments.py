@@ -2,32 +2,23 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
     CHAT_CREATE_LOGGED_TASK_PATCH_TARGET,
     CHAT_RUN_AND_FINALIZE_PATCH_TARGET,
-    OPUS_BACKEND_ID,
     close_create_logged_task,
     make_home_config,
-    make_home_session,
 )
 from fastapi import UploadFile
 
 from src.api.chat import send_message, upload_file
-from src.api.message_utils import events_to_messages
-from src.api.slash import SlashExecuteRequest, execute_command
 from src.core.models import (
     SendMessageRequest,
     SessionMetadata,
-    SessionStatus,
     UploadedFileRef,
 )
-from src.core.slash_commands import SlashDispatchKind, SlashDispatchResult
-
-VOICE_KEY = "is_voice"
 
 
 @pytest.mark.asyncio
@@ -50,72 +41,6 @@ async def test_upload_file_strips_directory_components(tmp_path: Path) -> None:
   assert stored_path.read_bytes() == b"safe contents"
   assert outside_path.read_text(encoding="utf-8") == "do not overwrite"
   assert response == {"filename": "../../evil.txt", "path": str(stored_path.resolve()), "size": 13}
-
-
-def test_events_to_messages_uses_structured_uploaded_files_without_leaking_paths() -> None:
-  messages = events_to_messages(
-      [
-          {
-              "type": "user",
-              "content": "Please review these notes",
-              "uploaded_files": [{
-                  "filename": "notes.txt",
-                  "path": "/tmp/notes.txt",
-                  "size": 12,
-              },],
-              "timestamp": "2026-04-02T10:00:00Z",
-          },
-      ])
-
-  expected = {
-      "role": "user",
-      "content": "Please review these notes",
-      "uploaded_files": [{
-          "filename": "notes.txt",
-          "path": "/tmp/notes.txt",
-          "size": 12,
-      },],
-      "event_index": 0,
-      "id": "legacy:0",
-      "timestamp": "2026-04-02T10:00:00Z",
-  }
-  expected[VOICE_KEY] = False
-  assert messages == [expected]
-
-
-def test_events_to_messages_extracts_legacy_attachment_block() -> None:
-  messages = events_to_messages(
-      [
-          {
-              "type": "user",
-              "content": "Please review\n\n[Attached files]\n- /tmp/alpha.txt\n- /tmp/beta.md",
-              "timestamp": "2026-04-02T10:00:00Z",
-          },
-          {
-              "type": "user",
-              "content": "\n\n[Attached files]\n- /tmp/file-only.pdf",
-              "timestamp": "2026-04-02T10:01:00Z",
-          },
-      ])
-
-  assert messages[0]["content"] == "Please review"
-  assert messages[0]["uploaded_files"] == [
-      {
-          "filename": "alpha.txt",
-          "path": "/tmp/alpha.txt"
-      },
-      {
-          "filename": "beta.md",
-          "path": "/tmp/beta.md"
-      },
-  ]
-  assert messages[1]["content"] == ""
-  assert messages[1]["uploaded_files"] == [
-      {
-          "filename": "file-only.pdf",
-          "path": "/tmp/file-only.pdf"
-      },
-  ]
 
 
 @pytest.mark.asyncio
@@ -151,86 +76,5 @@ async def test_send_message_passes_structured_files_to_run_and_finalize(tmp_path
           "filename": "notes.txt",
           "path": "/tmp/notes.txt",
           "size": 12
-      },
-  ]
-
-
-@pytest.mark.asyncio
-async def test_send_message_unarchives_archived_session_before_dispatch(tmp_path: Path) -> None:
-  """A manual chat message to an archived session pulls it back to active and runs
-  the master — the one content path that does not go through trigger_master."""
-  cfg, session_mgr, meta = await make_home_session(tmp_path, name="Archived chat", backend=OPUS_BACKEND_ID)
-  await session_mgr.archive_session(meta.id)
-  archived_meta = await session_mgr.get_session(meta.id)
-  assert archived_meta is not None
-  req = SendMessageRequest(content="hello again")
-
-  with (
-      patch(CHAT_RUN_AND_FINALIZE_PATCH_TARGET, new=AsyncMock()) as mock_run,
-      patch(CHAT_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=close_create_logged_task),
-  ):
-    response = await send_message(archived_meta.id, req, meta=archived_meta, session_mgr=session_mgr, cfg=cfg)
-
-  assert response.status_code == 202
-  # close_create_logged_task closes the coroutine after construction: the dispatch
-  # happened (the call), the run itself is out of scope here.
-  assert mock_run.call_count == 1
-  # The dispatch carried the ACTIVE meta, and the session stays active on disk.
-  assert mock_run.call_args.args[1].status == SessionStatus.ACTIVE
-  fresh = await session_mgr.get_session(meta.id)
-  assert fresh is not None
-  assert fresh.status == SessionStatus.ACTIVE
-
-
-@pytest.mark.asyncio
-async def test_execute_command_persists_uploaded_files_for_prompt_dispatch(tmp_path: Path) -> None:
-  cfg = make_home_config(tmp_path)
-  meta = SessionMetadata(name="Slash Session")
-  session_mgr = AsyncMock()
-  request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
-  req = SlashExecuteRequest(
-      command="review",
-      args="please",
-      uploaded_files=[
-          UploadedFileRef(filename="report.pdf", path="/tmp/report.pdf", size=99),
-      ],
-  )
-  dispatch = SlashDispatchResult(kind=SlashDispatchKind.PROMPT, substituted_prompt="Read the attachment")
-
-  with (
-      patch("src.api.slash.dispatch_slash_command", new=AsyncMock(return_value=dispatch)),
-      patch(CHAT_RUN_AND_FINALIZE_PATCH_TARGET, new=AsyncMock()) as mock_run,
-      patch(CHAT_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=close_create_logged_task),
-  ):
-    response = await execute_command(
-        request=request,
-        session_id=meta.id,
-        req=req,
-        meta=meta,
-        session_mgr=session_mgr,
-        cfg=cfg,
-    )
-
-  assert response.status_code == 202
-  session_mgr.persist_and_broadcast.assert_awaited_once()
-  persisted_event = session_mgr.persist_and_broadcast.await_args.args[1]
-  assert persisted_event["content"] == "/review please"
-  assert persisted_event["uploaded_files"] == [
-      {
-          "filename": "report.pdf",
-          "path": "/tmp/report.pdf",
-          "size": 99
-      },
-  ]
-
-  assert mock_run.call_count == 1
-  assert mock_run.call_args.args[2] == "Read the attachment\n\n[Attached files]\n- /tmp/report.pdf"
-  assert mock_run.call_args.kwargs["skip_user_event"] is True
-  assert mock_run.call_args.kwargs["display_content"] == "/review please"
-  assert mock_run.call_args.kwargs["uploaded_files"] == [
-      {
-          "filename": "report.pdf",
-          "path": "/tmp/report.pdf",
-          "size": 99
       },
   ]

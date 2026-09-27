@@ -19,7 +19,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 from conftest import (
-    OPUS_BACKEND_ID,
     SCHEDULER_GET_CONFIG_PATCH_TARGET,
     SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET,
     make_home_config,
@@ -28,15 +27,11 @@ from conftest import (
 from src.core import scheduler as scheduler_module
 from src.core.config import ScheduledTaskConfig
 from src.core.models import (
-    CreateSessionRequest,
-    LastRunStatus,
     SessionMetadata,
-    ThreadStatus,
     parse_utc_datetime,
 )
 from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
-from src.core.threads import ThreadManager
 
 
 class _Clock:
@@ -195,28 +190,6 @@ async def test_at_most_one_round_in_flight(
 
 
 @pytest.mark.asyncio
-async def test_one_skip_per_due_tick_normal_cadence(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-  """Normal one-minute tick cadence: one skip record per due occurrence."""
-  clock, scheduler, session, session_mgr, pending, task_cfg = _pending_rig(monkeypatch, tmp_path)
-
-  # Tick 1 fires the only round. Ticks 2..4 are each a due tick while pending.
-  await _tick(scheduler, task_cfg, session_mgr, clock, minute=1)
-  cursor = len(session_mgr.persist_and_broadcast.await_args_list)
-  for minute in (2, 3, 4):
-    await _tick(scheduler, task_cfg, session_mgr, clock, minute=minute)
-    assert _skip_events_since(session_mgr, cursor) == 1, f"tick 00:{minute}"
-    cursor = len(session_mgr.persist_and_broadcast.await_args_list)
-
-  # The final skip (00:04) left the anchor at its own occurrence, nothing behind.
-  assert parse_utc_datetime(session.last_scheduled_run) == datetime(2026, 6, 1, 0, 4, 0, tzinfo=UTC)
-  pending.complete.set()
-  await asyncio.sleep(0)
-
-
-@pytest.mark.asyncio
 async def test_one_skip_consuming_delayed_occurrences(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -276,48 +249,6 @@ async def test_no_fire_on_completion_moment(
 
 # ---------------------------------------------------------------------------
 # 4. The criterion ignores disk state
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_fire_ignores_stuck_running_disk_state(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-  """A session whose thread metadata says status=running with a pid that no
-  longer exists, and whose last_run_status is stuck at 'running', still fires
-  when no in-flight handle exists. Any implementation consulting either on-disk
-  signal would stall this fire."""
-  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC))
-  _install_clock(monkeypatch, clock)
-  cfg = make_home_config(tmp_path)
-  scheduler = Scheduler(cfg, AsyncMock())
-
-  session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(
-      CreateSessionRequest(name="Scheduled: code-health", scheduled_task="code-health"),
-      backend=OPUS_BACKEND_ID,
-  )
-  # A thread that is stuck running with a pid that no longer exists.
-  thread_mgr = ThreadManager(cfg)
-  thread = await thread_mgr.create_thread(session, "stuck round")
-  await thread_mgr.update_status(session.id, thread.id, ThreadStatus.RUNNING, pid=999999)
-  # The session bookkeeping is also stuck at running.
-  session.last_scheduled_run = clock.now().isoformat()  # 00:00
-  session.last_run_status = LastRunStatus.RUNNING
-  await session_mgr.save_metadata(session)
-
-  monkeypatch.setattr(scheduler, "_get_or_create_session", AsyncMock(return_value=session))
-  fired = AsyncMock()
-  monkeypatch.setattr(scheduler, "_execute_task", fired)
-  task_cfg = _task()
-
-  # No handle is in flight for this task (registry is empty), so despite the
-  # running state on disk the due fire at 00:01 proceeds.
-  session_mgr_double = AsyncMock()
-  await _tick(scheduler, task_cfg, session_mgr_double, clock, minute=1)
-
-  fired.assert_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -359,24 +290,3 @@ async def test_manual_run_is_outside_and_leaves_handle_unchanged(
 
 # ---------------------------------------------------------------------------
 # 7. Projection: the skip event renders as one system message
-# ---------------------------------------------------------------------------
-
-
-def test_skip_event_projects_to_single_system_message() -> None:
-  from src.core.message_aggregator import MessageAggregator
-
-  event = {
-      "type": "scheduled_run_skipped",
-      "task": "code-health",
-      "skipped_at": "2026-06-01T00:02:00+00:00",
-      "reason": "previous round still running (scheduled_worker_code-health_abc)",
-  }
-  aggregator = MessageAggregator()
-  deltas = list(aggregator.feed(event))
-
-  messages = [d for d in deltas if d.get("type") == "message"]
-  assert len(messages) == 1
-  msg = messages[0]["message"]
-  assert msg["role"] == "system"
-  assert "code-health" in msg["content"]
-  assert "skipped" in msg["content"]

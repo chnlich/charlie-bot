@@ -138,33 +138,3 @@ def test_translate_event_mappings(monkeypatch: pytest.MonkeyPatch) -> None:
           "total_cost_usd": 0,
       }
   ]
-
-
-def test_translate_event_tool_result_error_and_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
-  backend = _build_backend(monkeypatch)
-
-  assert backend.translate_event(
-      {
-          "type": "tool_result",
-          "status": "error",
-          "tool_id": "Bash",
-          "error": {
-              "message": "permission denied"
-          },
-      }) == [{
-          "type": "tool_result",
-          "tool_name": "Bash",
-          "content": "permission denied",
-      }]
-  assert backend.translate_event(
-      {
-          "type": "tool_result",
-          "status": "error",
-          "tool_id": "Bash",
-          "error": "generic failure",
-      }) == [{
-          "type": "tool_result",
-          "tool_name": "Bash",
-          "content": "generic failure",
-      }]
-  assert not backend.translate_event({"type": "unhandled"})

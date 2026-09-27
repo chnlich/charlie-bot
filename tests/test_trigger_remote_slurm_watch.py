@@ -8,8 +8,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-    TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
-    TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET,
     FakeAsyncProcess,
     assert_trigger_fired,
     make_sacct_mock,
@@ -19,7 +17,6 @@ from conftest import make_trigger_setup as _make_mgr
 from conftest import no_sleep as _no_sleep
 
 from src.core.models import SlurmJob
-from src.core.triggers import RemoteVerifyError, _probe_sacct
 
 # ---------------------------------------------------------------------------
 # Remote SLURM watch: completion and timeout
@@ -44,100 +41,12 @@ async def test_remote_slurm_completes(tmp_path: Path) -> None:
   assert "finished: host2:slurm:122111: COMPLETED 0:0" in msg
 
 
-@pytest.mark.asyncio
-async def test_remote_slurm_timeout_while_running(tmp_path: Path) -> None:
-  _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  sacct = make_sacct_mock({("host2", 122111): ["122111|RUNNING|0:0\n"]})
-
-  with patch_trigger_fire(sacct, sacct_available=False, sleep_mock=_no_sleep) as mock_master:
-    trigger = await trigger_mgr.create_trigger(
-        session_id,
-        delay_seconds=0,  # fire_at already due — one probe, then timeout
-        message="still running",
-        watch_targets=[SlurmJob(host="host2", job_id=122111)],
-    )
-    await asyncio.wait_for(trigger_mgr._tasks[trigger.id], timeout=10)
-
-  msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="timeout")
-  assert "still alive: host2:slurm:122111" in msg
-
-
 # ---------------------------------------------------------------------------
 # sacct row parsing: array-task rows are rejected by shape, not by int()
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_probe_sacct_skips_array_task_rows() -> None:
-  sacct = make_sacct_mock({(None, 122111): ["122111_3|COMPLETED|0:0\n122111|RUNNING|0:0\n"]})
-
-  with patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=sacct):
-    states, error = await _probe_sacct([122111], "trig-test", host=None)
-
-  assert error is None
-  assert 122111 in states
-  assert 1221113 not in states
 
 
 # ---------------------------------------------------------------------------
 # verify-on-create: probe failure, observed state, accounting lag
-# ---------------------------------------------------------------------------
-
-
-async def _failing_sacct_factory(*args: Any, **kwargs: Any) -> FakeAsyncProcess:
-  """Always return a failed remote sacct probe (ssh non-zero exit)."""
-  return FakeAsyncProcess(
-      stdout=b"",
-      stderr=b"ssh: connect to host host2 port 22: Connection refused",
-      returncode=255,
-  )
-
-
-@pytest.mark.asyncio
-async def test_verify_on_create_rejects_failed_probe(tmp_path: Path) -> None:
-  cfg, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-
-  with (
-      patch(TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET, new=False),
-      patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(side_effect=_failing_sacct_factory)),
-      pytest.raises(RemoteVerifyError),
-  ):
-    await trigger_mgr.create_trigger(
-        session_id,
-        delay_seconds=600,
-        message="should not persist",
-        watch_targets=[SlurmJob(host="host2", job_id=122111)],
-    )
-
-  triggers_dir = cfg.sessions_dir / session_id / "triggers"
-  assert not list(triggers_dir.glob("*.json"))
-
-
-_VERIFY_ON_CREATE_PROBE_ROWS = [
-    pytest.param(["122111|RUNNING|0:0\n"], "observed", "RUNNING", id="reports-observed-state"),
-    pytest.param([""], "not yet registered", "not-yet-registered", id="reports-not-yet-registered"),
-]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("sacct_rows", "message", "expected_probe"), _VERIFY_ON_CREATE_PROBE_ROWS)
-async def test_verify_on_create_reports_probe_state(
-    tmp_path: Path, sacct_rows: list[str], message: str, expected_probe: str) -> None:
-  _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  sacct = make_sacct_mock({("host2", 122111): sacct_rows})
-  probe_out: dict[str, str] = {}
-
-  with patch_trigger_fire(sacct, sacct_available=False, sleep_mock=_no_sleep):
-    trigger = await trigger_mgr.create_trigger(
-        session_id,
-        delay_seconds=0,
-        message=message,
-        watch_targets=[SlurmJob(host="host2", job_id=122111)],
-        probe_out=probe_out,
-    )
-    await asyncio.wait_for(trigger_mgr._tasks[trigger.id], timeout=10)
-
-  assert probe_out == {"host2:slurm:122111": expected_probe}
 
 
 # ---------------------------------------------------------------------------

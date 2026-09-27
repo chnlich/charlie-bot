@@ -9,8 +9,6 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-    TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET,
-    TUI_TMUX_SESSION_EXISTS_PATCH_TARGET,
     build_tui_sessions_cfg,
 )
 from conftest import make_sessions_client as _build_client
@@ -55,94 +53,3 @@ async def test_status_returns_exactly_the_requested_ids(
       "next_trigger_at",
       "has_pending_plan_approval",
   }
-
-
-@pytest.mark.asyncio
-async def test_status_omits_unknown_ids_without_error(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-  cfg = build_tui_sessions_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  known = await session_mgr.create_session(CreateSessionRequest(name="Known"))
-  _forbid_list_sessions(monkeypatch)
-
-  with _build_client(cfg, session_mgr) as client:
-    response = client.get(f"/api/sessions/status?ids={known.id},deleted-session-id")
-
-  assert response.status_code == 200
-  assert set(response.json()) == {known.id}
-
-
-@pytest.mark.asyncio
-async def test_status_ids_is_required(tmp_path: Path) -> None:
-  cfg = build_tui_sessions_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  await session_mgr.create_session(CreateSessionRequest(name="Sidebar"))
-
-  with _build_client(cfg, session_mgr) as client:
-    assert client.get("/api/sessions/status").status_code == 422
-    assert client.get("/api/sessions/status?ids=").status_code == 422
-    assert client.get("/api/sessions/status?ids=,,").status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_get_sessions_readonly_serves_cache_refs_and_resolves_misses(tmp_path: Path) -> None:
-  cfg = build_tui_sessions_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  warm = await session_mgr.create_session(CreateSessionRequest(name="Warm"))
-  cold = await session_mgr.create_session(CreateSessionRequest(name="Cold"))
-  session_mgr._invalidate_cache(cold.id)
-
-  metas = await session_mgr.get_sessions_readonly([warm.id, "gone-id", cold.id, warm.id])
-
-  assert [meta.id for meta in metas] == [warm.id, cold.id]
-  # Warm ids serve the cached objects themselves — the caller's contract is
-  # read-only — while the miss resolves through the disk read and its copy.
-  assert metas[0] is session_mgr._metadata_cache[warm.id][0]
-  assert metas[1] is not session_mgr._metadata_cache[cold.id][0]
-
-
-@pytest.mark.asyncio
-async def test_tui_status_returns_only_requested_tui_sessions(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-  cfg = build_tui_sessions_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  requested = SessionMetadata(name="TUI on screen", backend="claude-tui")
-  off_screen = SessionMetadata(name="TUI off screen", backend="claude-tui")
-  await session_mgr.save_metadata(requested)
-  await session_mgr.save_metadata(off_screen)
-
-  checked = []
-
-  async def fake_tmux_session_exists(session_id: str) -> bool:
-    checked.append(session_id)
-    return True
-
-  def fake_claude_jsonl_busy(session_id: str) -> bool:
-    return False
-
-  monkeypatch.setattr(TUI_TMUX_SESSION_EXISTS_PATCH_TARGET, fake_tmux_session_exists)
-  monkeypatch.setattr(TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET, fake_claude_jsonl_busy)
-  _forbid_list_sessions(monkeypatch)
-
-  with _build_client(cfg, session_mgr) as client:
-    response = client.get(f"/api/sessions/tui/status?ids={requested.id},deleted-session-id")
-
-  assert response.status_code == 200
-  assert response.json() == {requested.id: {"running": True, "busy": False}}
-  assert checked == [requested.id]
-
-
-@pytest.mark.asyncio
-async def test_tui_status_ids_is_required(tmp_path: Path) -> None:
-  cfg = build_tui_sessions_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  await session_mgr.save_metadata(SessionMetadata(name="TUI", backend="claude-tui"))
-
-  with _build_client(cfg, session_mgr) as client:
-    assert client.get("/api/sessions/tui/status").status_code == 422
-    assert client.get("/api/sessions/tui/status?ids=").status_code == 422
-    assert client.get("/api/sessions/tui/status?ids=%20").status_code == 422

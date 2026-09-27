@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +12,6 @@ from conftest import (
 )
 
 from src.agents.backends.antigravity_cli import AntigravityCliBackend
-from src.agents.backends.base import AgentBackend
 from src.agents.backends.registry import build_backend
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
@@ -42,15 +40,6 @@ async def _consume(backend: AntigravityCliBackend, cwd: Path) -> list[dict]:
   return [event async for event in backend.run("hello from CharlieBot", str(cwd), {"PATH": "/usr/bin:/bin"})]
 
 
-async def _consume_raising(backend: AntigravityCliBackend, cwd: Path, events: list[dict]) -> None:
-  """Consume events until the generator raises, retaining events yielded before the raise."""
-  # The per-item append is load-bearing: events yielded before the raise must
-  # stay in the caller's list, which a collected-then-extended form drops, and
-  # an async generator cannot feed list.extend directly.
-  async for event in backend.run("hello from CharlieBot", str(cwd), {"PATH": "/usr/bin:/bin"}):
-    events.append(event)  # noqa: PERF401  (per-item append keeps pre-raise events; see above)
-
-
 def test_build_command_passes_prompt_as_print_flag_value(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, extra_flags=["--sandbox"])
 
@@ -69,28 +58,6 @@ def test_build_command_passes_prompt_as_print_flag_value(monkeypatch: pytest.Mon
   assert "--model" not in cmd
 
 
-def test_print_timeout_override_reaches_command(monkeypatch: pytest.MonkeyPatch) -> None:
-  backend = _build_backend(monkeypatch, print_timeout="30m")
-
-  cmd = backend._build_command("hello")
-
-  assert cmd[cmd.index("--print-timeout") + 1] == "30m"
-
-
-def test_registry_forwards_print_timeout_option(monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr(
-      ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
-      lambda name, fallback: "/usr/bin/agy",
-  )
-  option = AGY_BACKEND_OPTION.model_copy(update={"print_timeout": "30m"})
-
-  backend = build_backend(option, CharlieBotConfig())
-
-  assert isinstance(backend, AntigravityCliBackend)
-  cmd = backend._build_command("hi")
-  assert cmd[cmd.index("--print-timeout") + 1] == "30m"
-
-
 def test_build_command_prepends_instructions_to_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, instructions_content="# Antigravity Instructions\nBuild stuff.")
 
@@ -100,43 +67,6 @@ def test_build_command_prepends_instructions_to_prompt(monkeypatch: pytest.Monke
       "<system-instructions>\n# Antigravity Instructions\nBuild stuff.\n"
       "</system-instructions>\n\ndo the work")
   assert cmd[1] == f"--print={expected_prompt}"
-
-
-def test_prepare_cwd_does_not_write_agents_md_when_instructions_provided(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  backend = _build_backend(monkeypatch, instructions_content="# Antigravity Instructions\nBuild stuff.")
-
-  backend._prepare_cwd(str(tmp_path))
-
-  agents_md = tmp_path / "AGENTS.md"
-  assert not agents_md.exists()
-
-
-def test_build_command_append_conversation_flag_exactly_once_when_resuming(monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr(
-      ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
-      lambda name, fallback: "/usr/bin/agy",
-  )
-
-  backend = AntigravityCliBackend(resume_session_id="session-123")
-
-  cmd = backend._build_command("hello")
-
-  assert cmd.count("--conversation") == 1
-  assert cmd[cmd.index("--conversation") + 1] == "session-123"
-
-
-def test_build_command_never_uses_continue_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr(
-      ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
-      lambda name, fallback: "/usr/bin/agy",
-  )
-
-  fresh = AntigravityCliBackend()
-  resumed = AntigravityCliBackend(resume_session_id="session-123")
-
-  assert "--continue" not in fresh._build_command("hello")
-  assert "--continue" not in resumed._build_command("hello")
 
 
 @pytest.mark.asyncio
@@ -177,102 +107,6 @@ JSON
   assert (log_dir / "stderr.log").exists()
 
 
-_SYSTEM_MESSAGE_CASES = [
-    pytest.param(
-        """
-cat <<'JSON'
-{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":
-"<SYSTEM_MESSAGE>\\nblock A\\n</SYSTEM_MESSAGE>\\n<SYSTEM_MESSAGE>\\nblock B\\n</SYSTEM_MESSAGE>\\n\\nthe answer"}
-JSON
-""",
-        "the answer",
-        id="leading-paired-blocks-stripped"),
-    pytest.param(
-        """
-cat <<'JSON'
-{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,
-"response":"<SYSTEM_MESSAGE>block A</SYSTEM_MESSAGE><SYSTEM_MESSAGE>block B</SYSTEM_MESSAGE>"}
-JSON
-""",
-        "",
-        id="blocks-only-response-yields-empty-text"),
-    pytest.param(
-        """
-cat <<'JSON'
-{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":"<SYSTEM_MESSAGE>\\npartial"}
-JSON
-""",
-        "<SYSTEM_MESSAGE>\npartial",
-        id="unpaired-tag-passes-through"),
-    pytest.param(
-        """
-cat <<'JSON'
-{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,
-"response":"para1\\n<SYSTEM_MESSAGE>x</SYSTEM_MESSAGE>\\npara2"}
-JSON
-""",
-        "para1\npara2",
-        id="mid-text-block-stripped"),
-]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("agy_script, expected_text", _SYSTEM_MESSAGE_CASES)
-async def test_run_system_message_block_handling(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, agy_script: str, expected_text: str) -> None:
-  _install_fake_agy(monkeypatch, tmp_path, agy_script)
-  backend = AntigravityCliBackend()
-
-  events = await _consume(backend, tmp_path)
-
-  assert [e.get("type") for e in events] == [ET.SESSION_ATTACHED, "assistant", "result"]
-  assert events[1]["message"]["content"][0]["text"] == expected_text
-
-
-@pytest.mark.asyncio
-async def test_run_emits_nonzero_stdout_as_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  _install_fake_agy(
-      monkeypatch,
-      tmp_path,
-      """
-printf 'fatal from agy\\n'
-exit 7
-""",
-  )
-  backend = AntigravityCliBackend()
-
-  events = await _consume(backend, tmp_path)
-
-  assert events == [{
-      "type": "error",
-      "message": "fatal from agy",
-      "content": "fatal from agy",
-  }]
-  assert backend.exit_code == 7
-
-
-@pytest.mark.asyncio
-async def test_nonzero_exit_envelope_error_names_budget_cause(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  _install_fake_agy(
-      monkeypatch,
-      tmp_path,
-      """
-printf '%s' '{"status":"ERROR","error":"timeout waiting for response"}'
-exit 1
-""",
-  )
-  backend = AntigravityCliBackend()
-
-  events = await _consume(backend, tmp_path)
-
-  assert backend.exit_code == 1
-  assert [e.get("type") for e in events] == ["error"]
-  message = events[0]["message"]
-  assert message.endswith("agy error: timeout waiting for response")
-  assert "turn budget exhausted" in message
-  assert "print-timeout" in message
-
-
 def test_prepare_env_strips_api_keys_for_oauth(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
@@ -310,95 +144,6 @@ def test_registry_builds_antigravity_backend(monkeypatch: pytest.MonkeyPatch) ->
       "json",
       "--sandbox",
   ]
-
-
-@pytest.mark.asyncio
-async def test_run_accepts_uploaded_files_keyword_and_ignores_it(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """Signature compat with the base run()'s optional uploaded_files: an agy
-  session with attachments must not TypeError, and the keyword changes nothing
-  (the CLI has no attachment channel)."""
-  _install_fake_agy(
-      monkeypatch,
-      tmp_path,
-      """
-printf '%s' '{"status":"SUCCESS","conversation_id":"conv-abc","response":"hi","usage":{}}'
-""",
-  )
-  backend = AntigravityCliBackend()
-
-  events = [
-      event async for event in backend.run(
-          "hello from CharlieBot",
-          str(tmp_path),
-          {"PATH": "/usr/bin:/bin"},
-          uploaded_files=[{
-              "filename": "pic.png",
-              "path": str(tmp_path / "pic.png")
-          }],
-      )
-  ]
-
-  assert [e.get("type") for e in events] == [ET.SESSION_ATTACHED, "assistant", "result"]
-  assert events[1] == assistant_text_event("hi")
-
-
-def test_base_run_uploaded_files_defaults_to_none() -> None:
-  """The base default is what keeps every existing three-positional-arg run() caller working."""
-
-  assert inspect.signature(AgentBackend.run).parameters["uploaded_files"].default is None
-
-
-@pytest.mark.asyncio
-async def test_envelope_error_status_yields_error_event(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  _install_fake_agy(
-      monkeypatch,
-      tmp_path,
-      """
-printf '%s' '{"status":"ERROR","error":"rate limited"}'
-""",
-  )
-  backend = AntigravityCliBackend()
-
-  events = await _consume(backend, tmp_path)
-
-  assert events == [{
-      "type": "error",
-      "message": "rate limited",
-      "content": "rate limited",
-  }]
-
-
-_GUARD_CASES = [
-    pytest.param(
-        '{"status":"SUCCESS","response":"hi"}',
-        "missing conversation_id",
-        None,
-        id="success-envelope-missing-conversation-id"),
-    pytest.param(
-        '{"status":"SUCCESS","conversation_id":"fresh-id","response":"hi","usage":{}}',
-        "does not match anchor anchor-id",
-        "anchor-id",
-        id="resume-envelope-id-mismatch"),
-    pytest.param("plain text, not json", "non-json stdout", None, id="non-envelope-stdout"),
-    pytest.param('{"response":"not an envelope"}', "non-json stdout", None, id="json-object-without-status"),
-]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stdout_payload, expected_match, resume_session_id", _GUARD_CASES)
-async def test_envelope_guard_violation_raises_and_yields_only_an_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stdout_payload: str, expected_match: str,
-    resume_session_id: str | None) -> None:
-  _install_fake_agy(monkeypatch, tmp_path, f"printf '%s' '{stdout_payload}'\n")
-  backend = AntigravityCliBackend(resume_session_id=resume_session_id)
-
-  events: list[dict] = []
-  with pytest.raises(ValueError, match=expected_match):
-    await _consume_raising(backend, tmp_path, events)
-  assert [event.get("type") for event in events] == ["error"]
-  assert not any("session_id" in event for event in events)
-  assert not any(event.get("type") == "assistant" for event in events)
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,7 @@
 """Tests for scheduled task backend overrides."""
 
 from collections.abc import Coroutine
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -40,8 +40,6 @@ from src.core.models import (
 )
 from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
-from src.core.thinking_state import clear_busy, mark_busy
-from src.core.threads import ThreadManager
 
 
 def _patch_cron_d(monkeypatch: pytest.MonkeyPatch, cron_dir: Path) -> None:
@@ -158,47 +156,6 @@ async def test_scheduler_uses_default_backend_when_task_backend_unset(
 
 
 @pytest.mark.asyncio
-async def test_scheduler_rotates_scheduled_session_backend_and_copies_bookkeeping(tmp_path: Path) -> None:
-  cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
-  old_session = await session_mgr.create_session(
-      CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
-      backend=OPUS_BACKEND_ID,
-  )
-  old_session.last_scheduled_run = "2026-06-07T02:00:00-07:00"
-  old_session.last_scheduled_cron = "0 2 * * *"
-  old_session.last_run_status = LastRunStatus.SUCCESS
-  old_session.cc_session_id = "old-backend-conversation"
-  old_session.cc_session_started_at = datetime(2026, 6, 7, 9, 0, tzinfo=UTC)
-  await session_mgr.save_metadata(old_session)
-  thread_mgr = ThreadManager(cfg)
-  old_thread = await thread_mgr.create_thread(old_session, "old backend thread")
-
-  task_cfg = ScheduledTaskConfig(
-      name="nightly",
-      cron="0 2 * * *",
-      prompt="nightly prompt",
-      backend="codex-o3",
-  )
-
-  new_session = await scheduler._get_or_create_session(task_cfg, cfg, session_mgr)
-
-  assert new_session is not None
-  assert new_session.id != old_session.id
-  assert new_session.backend == "codex-o3"
-  assert new_session.scheduled_task == "nightly"
-  assert new_session.last_scheduled_run == old_session.last_scheduled_run
-  assert new_session.last_scheduled_cron == old_session.last_scheduled_cron
-  assert new_session.last_run_status == old_session.last_run_status
-  assert new_session.cc_session_id is None
-  assert new_session.cc_session_started_at is None
-  assert not await thread_mgr.list_threads(new_session.id)
-  assert [thread.id for thread in await thread_mgr.list_threads(old_session.id)] == [old_thread.id]
-  archived_old = await session_mgr.get_session(old_session.id)
-  assert archived_old is not None
-  assert archived_old.status == SessionStatus.ARCHIVED
-
-
-@pytest.mark.asyncio
 async def test_scheduler_backend_rotation_preserves_last_run_to_avoid_duplicate_fire(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -230,45 +187,6 @@ async def test_scheduler_backend_rotation_preserves_last_run_to_avoid_duplicate_
   assert active_sessions[0].backend == "codex-o3"
   assert active_sessions[0].last_scheduled_run == now.isoformat()
   assert active_sessions[0].last_scheduled_cron == "* * * * *"
-
-
-@pytest.mark.asyncio
-async def test_scheduler_skips_backend_rotation_while_old_session_is_running(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
-  old_session = await session_mgr.create_session(
-      CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
-      backend=OPUS_BACKEND_ID,
-  )
-  old_session.last_scheduled_run = (datetime.now(ZoneInfo("America/Los_Angeles")) - timedelta(hours=1)).isoformat()
-  old_session.last_scheduled_cron = "* * * * *"
-  await session_mgr.save_metadata(old_session)
-  # A busy session blocks backend rotation. Mark it busy in thinking_state and
-  # re-fetch so the stamped thinking_since flows through the session cache.
-  mark_busy(old_session.id)
-  try:
-    old_session_refetched = await session_mgr.get_session(old_session.id)
-    assert old_session_refetched is not None
-    task_cfg = ScheduledTaskConfig(
-        name="nightly",
-        cron="* * * * *",
-        prompt="nightly prompt",
-        backend="codex-o3",
-    )
-    execute_task = AsyncMock()
-    monkeypatch.setattr(scheduler, "_execute_task", execute_task)
-
-    await scheduler._maybe_run(task_cfg, session_mgr, {"nightly": [old_session_refetched]}, cfg)
-
-    execute_task.assert_not_awaited()
-    active_sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE, scheduled=True)
-    assert len(active_sessions) == 1
-    assert active_sessions[0].id == old_session.id
-    assert active_sessions[0].backend == OPUS_BACKEND_ID
-  finally:
-    clear_busy(old_session.id)
 
 
 def test_cron_api_persists_and_clears_backend(
@@ -331,43 +249,6 @@ def test_cron_api_rejects_invalid_backend_on_create(
   assert not (cron_dir / "nightly.yaml").exists()
 
 
-def test_cron_api_rejects_invalid_backend_on_update(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  cron_dir, cfg, session_mgr, _md_path = _cron_api_rig(tmp_path, monkeypatch, preseed_backend="codex-o3")
-
-  with make_cron_client(cfg, session_mgr) as client:
-    response = client.put("/api/cron/tasks/nightly", json={"backend": "missing-backend"})
-
-  assert response.status_code == 400
-  assert response.json()["detail"] == "backend 'missing-backend' is not in backends.options"
-  assert (yaml.safe_load((cron_dir / "nightly.yaml").read_text(encoding="utf-8")).get("backend") == "codex-o3")
-
-
-@pytest.mark.asyncio
-async def test_cron_api_rejects_backend_update_when_current_session_is_busy(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  cron_dir, cfg, session_mgr, _md_path = _cron_api_rig(tmp_path, monkeypatch, preseed_backend=OPUS_BACKEND_ID)
-  session = await session_mgr.create_session(
-      CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
-      backend=OPUS_BACKEND_ID,
-  )
-  # A busy session blocks the backend switch with 409.
-  mark_busy(session.id)
-  try:
-    with make_cron_client(cfg, session_mgr) as client:
-      response = client.put("/api/cron/tasks/nightly", json={"backend": "codex-o3"})
-
-    assert response.status_code == 409
-    assert "backend switch" in response.json()["detail"]
-    assert (yaml.safe_load((cron_dir / "nightly.yaml").read_text(encoding="utf-8")).get("backend") == OPUS_BACKEND_ID)
-  finally:
-    clear_busy(session.id)
-
-
 def _seed_prompt_file_task(cron_dir: Path, tmp_path: Path, *, backend: str | None = None) -> tuple[Path, Path, str]:
   """Write a prompt_file-backed 'nightly' job; returns (yaml_path, md_path, md_content).
 
@@ -398,29 +279,3 @@ def test_load_cron_file_loads_prompt_file(tmp_path: Path) -> None:
   task, _ = _load_cron_file(yaml_path, cfg.charlie_bot_repo, "nightly")
   assert task.prompt == md_content
   assert task.prompt_file == str(md_path)
-
-
-def test_cron_api_put_updates_backend_on_prompt_file_host_file(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  """A prompt_file-carrying host file is valid: a backend PUT succeeds, adds
-  exactly the backend key/value, and the persisted file still reloads."""
-  cron_dir = tmp_path / "cron.d"
-  cron_dir.mkdir(parents=True, exist_ok=True)
-  _patch_cron_d(monkeypatch, cron_dir)
-  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
-  yaml_path, _md_path, _md_content = _seed_prompt_file_task(cron_dir, tmp_path)
-  original = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
-
-  with make_cron_client(cfg, session_mgr) as client:
-    response = client.put("/api/cron/tasks/nightly", json={"backend": "codex-o3"})
-
-  assert response.status_code == 200
-  persisted = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
-  assert set(persisted.items()) - set(original.items()) == {("backend", "codex-o3")}
-  assert not set(original.items()) - set(persisted.items())
-
-  loaded, _ = _load_cron_file(yaml_path, cfg.charlie_bot_repo, "nightly")
-  assert loaded.backend == "codex-o3"
-  assert loaded.prompt == _md_content

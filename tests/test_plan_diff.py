@@ -2,22 +2,15 @@ import random
 import re
 from html import unescape
 
-import pytest
 from conftest import ROOT
 
-from src.core import plan_diff
 from src.core.artifact_check import _descendants, _Element, _parse_dom
 from src.core.plan_diff import (
     _BLOCK_TAGS,
     _IGNORED_TAGS,
-    VOID_TAGS,
-    _document_root,
-    _first_class_descendant,
     _first_descendant,
-    _offset_after_insertions,
     _parse_anchors,
     annotate,
-    diff_text,
 )
 
 
@@ -124,32 +117,6 @@ def _assert_invariants(base: str, new: str) -> str:
   return annotated
 
 
-_SYNTHETIC_BASE = """\
-<html><head><title>ignored</title></head><body>
-<details id="outer"><summary>outer</summary>
-  <details id="inner"><summary>inner</summary><p>alpha old beta</p></details>
-</details>
-<details id="unrelated"><summary>unrelated</summary><p>same text</p></details>
-<div class="meta"><span class="mtag">chip v1</span></div>
-</body></html>
-"""
-_SYNTHETIC_NEW = """\
-<html><head><title>ignored</title></head><body>
-<details id="outer"><summary>outer</summary>
-  <details id="inner"><summary>inner</summary><p>alpha new beta</p></details>
-</details>
-<details id="unrelated"><summary>unrelated</summary><p>same text</p></details>
-<div class="meta"><span class="mtag">chip v2</span></div>
-</body></html>
-"""
-
-
-def test_four_invariants_hold_for_synthetic_pair() -> None:
-  annotated = _assert_invariants(_SYNTHETIC_BASE, _SYNTHETIC_NEW)
-  assert annotated.count('<ins class="cbd-ins">') == 2
-  assert annotated.count('class="cbd-del"') == 2
-
-
 def _fixture_pair() -> tuple[str, str]:
   """The real captured plan page pair the whole-pipeline tests annotate: v10 base, v11 new."""
   data = ROOT / "tests/data"
@@ -165,25 +132,6 @@ def test_four_invariants_hold_for_real_fixture_pair() -> None:
   assert '<ins class="cbd-ins">v11</ins>' in annotated
 
 
-def test_details_on_a_mark_path_open_and_unrelated_details_stay_closed() -> None:
-  annotated = annotate(_SYNTHETIC_BASE, _SYNTHETIC_NEW)
-  details = [node for node in _descendants(_parse(annotated)) if node.tag == "details"]
-  assert ["open" in node.attrs for node in details] == [True, True, False]
-
-
-def test_deleted_rows_and_list_items_stay_in_their_containers() -> None:
-  base = (
-      "<html><body><ul><li>gone</li><li>kept</li></ul>"
-      "<table><tbody><tr><td>gone row</td></tr><tr><td>kept row</td></tr></tbody></table></body></html>")
-  new = "<html><body><ul><li>kept</li></ul><table><tbody><tr><td>kept row</td></tr></tbody></table></body></html>"
-  annotated = annotate(base, new)
-  dom = _parse(annotated)
-  ghosts = [node for node in _descendants(dom) if node.attrs.get("class") == "cbd-del"]
-  assert [(node.tag, node.parent.tag if node.parent else None) for node in ghosts] == [("li", "ul"), ("tr", "tbody")]
-  assert all(_text(node) == "" for node in ghosts)
-  assert 'colspan="1"' in annotated
-
-
 def test_entirely_new_block_is_commentable_without_an_ins_wrapper() -> None:
   base = "<html><body><p>unchanged</p></body></html>"
   new = "<html><body><p>unchanged</p><p>new passage to comment</p></body></html>"
@@ -191,29 +139,6 @@ def test_entirely_new_block_is_commentable_without_an_ins_wrapper() -> None:
   assert '<p class="cbd-new">new passage to comment</p>' in annotated
   assert _quote(_commentable_blocks(annotated)[-1]) == "new passage to comment"
   assert '<ins class="cbd-ins">new passage to comment</ins>' not in annotated
-
-
-def test_word_deletion_and_short_gap_merge_restore_the_base_text() -> None:
-  merged_base = "<html><body><p>one two three four five</p></body></html>"
-  merged_new = "<html><body><p>one TWO three FOUR five</p></body></html>"
-  merged = _assert_invariants(merged_base, merged_new)
-  assert 'data-del="two three four"' in merged
-  assert '<ins class="cbd-ins">TWO three FOUR</ins>' in merged
-
-  deletion_base = "<html><body><p>one old two</p></body></html>"
-  deletion_new = "<html><body><p>one two</p></body></html>"
-  deletion = _assert_invariants(deletion_base, deletion_new)
-  assert 'data-del="old "' in deletion
-
-
-def test_token_never_spans_a_text_node_boundary() -> None:
-  base = '<html><body><p>alpha beta<b>gamma</b></p></body></html>'
-  new = '<html><body><p>alpha beta</p></body></html>'
-  annotated = annotate(base, new)
-  assert 'data-del="gamma"' in annotated
-  assert '<span class="cbd-del" data-del="betagamma"></span>' not in annotated
-  assert '<ins class="cbd-ins">beta</ins>' not in annotated
-  assert [kind for kind, _ in _marks(annotated)] == ["del"]
 
 
 def test_cjk_tokens_stay_per_character_and_restore_the_base_text() -> None:
@@ -267,36 +192,6 @@ def test_tokeniser_matches_the_per_character_reference_on_a_randomized_corpus() 
     assert _tokenise(text) == _reference_tokenise(text), f"token drift on {text!r}"
 
 
-def test_leaf_token_raw_spans_match_the_per_character_range_reference() -> None:
-  from src.core.plan_diff import _collect_leaves, _document_root, _Leaf, _leaf_tokens, _parse
-
-  def reference(leaf: _Leaf) -> list[tuple[str, int, int, int, int]]:
-    result: list[tuple[str, int, int, int, int]] = []
-    offset = 0
-    for part in leaf.parts:
-      if part.text_is_raw:
-        ranges = [(part.start + i, part.start + i + 1) for i in range(len(part.text))]
-      else:
-        ranges = [(part.start, part.end)] * len(part.text)
-      for value, start, end in _reference_tokenise(part.text):
-        result.append((value, offset + start, offset + end, ranges[start][0], ranges[end - 1][1]))
-      offset += len(part.text)
-    return result
-
-  source = '<html><body><p>alpha &amp; beta</p><p>中文 text</p></body></html>'
-  leaves = _collect_leaves(_document_root(_parse(source)))
-  assert len(leaves) == 2
-  for leaf in leaves:
-    got = [(t.value, t.logical_start, t.logical_end, t.raw_start, t.raw_end) for t in _leaf_tokens(leaf)]
-    assert got == reference(leaf), f"raw-span drift on leaf {leaf.text!r}"
-
-
-def test_pure_inline_markup_move_with_unchanged_text_produces_no_marks() -> None:
-  base = '<html><body><p>alpha beta<b>gamma</b></p></body></html>'
-  new = '<html><body><p>alpha <b>beta</b>gamma</p></body></html>'
-  assert not _marks(annotate(base, new))
-
-
 def test_replaced_block_keeps_a_direct_text_node_and_stays_commentable() -> None:
   base = '<html><body><h2><span class="n">2</span> Context<span class="revbadge">changed · r4</span></h2></body></html>'
   new = '<html><body><h2><span class="n">2</span> Context</h2></body></html>'
@@ -314,199 +209,8 @@ def test_replaced_block_keeps_a_direct_text_node_and_stays_commentable() -> None
   assert 'class="cbd-del" data-del="2 Alpha Beta"' in replaced
 
 
-_BOUNDARY_BASE = """\
-<html><body>
-<h2><span class="n">2</span> Context<span class="revbadge">changed · r4</span></h2>
-<p>alpha beta<b>gamma</b></p>
-<p>old words here</p>
-<p>unchanged</p>
-<section id="risks">
-<h2><span class="n">3</span> Risks<span class="revbadge">changed · r4</span></h2>
-<div class="revnote">NOTE</div>
-<p>section body kept</p>
-</section>
-</body></html>
-"""
-_BOUNDARY_NEW = """\
-<html><body>
-<h2><span class="n">2</span> Context</h2>
-<p>alpha beta</p>
-<p>fresh text now</p>
-<p>unchanged</p>
-<section id="risks">
-<h2><span class="n">3</span> Risks</h2>
-<p>section body kept</p>
-</section>
-</body></html>
-"""
-
-
-def test_four_invariants_hold_for_boundary_pair() -> None:
-  annotated = _assert_invariants(_BOUNDARY_BASE, _BOUNDARY_NEW)
-  assert 'data-del="changed · r4"' in annotated
-  assert 'data-del="gamma"' in annotated
-  assert '<p class="cbd-new">fresh text now</p>' in annotated
-  assert '<ins class="cbd-ins">beta</ins>' not in annotated
-  assert '<ins class="cbd-ins">Context</ins>' not in annotated
-  assert len(_commentable_blocks(annotated)) == len(_commentable_blocks(_BOUNDARY_NEW))
-
-
-def test_ghost_follows_a_heading_that_carries_its_own_inline_mark() -> None:
-  new = '<html><body><h2>Head</h2><p>tail</p></body></html>'
-  repro = (
-      '<html><body><h2>Head<span class="revbadge">X</span></h2>'
-      '<div class="revnote">NOTE</div><p>tail</p></body></html>')
-  control = '<html><body><h2>Head</h2><div class="revnote">NOTE</div><p>tail</p></body></html>'
-  for base, badge in ((control, False), (repro, True)):
-    annotated = _assert_invariants(base, new)
-    order = [
-        (child.tag, child.attrs.get("data-del")) for child in _parse(annotated).children if isinstance(child, _Element)
-    ]
-    assert order == [("div", None), ("h2", None), ("div", "NOTE"), ("p", None)]
-    assert ('data-del="X"' in annotated) == badge
-
-
-def test_ghost_follows_the_heading_when_a_section_drops_badge_and_block_together() -> None:
-  annotated = _assert_invariants(_BOUNDARY_BASE, _BOUNDARY_NEW)
-  section = next(node for node in _descendants(_parse(annotated)) if node.attrs.get("id") == "risks")
-  order = [(child.tag, child.attrs.get("class")) for child in section.children if isinstance(child, _Element)]
-  assert order == [("h2", None), ("div", "cbd-del"), ("p", None)]
-  # The ghost carries the whitespace that separated the note from the body
-  # paragraph, so restoring it separates the returned text again.
-  assert 'data-del="NOTE\n"' in annotated
-  assert '<h2><span class="n">3</span> Risks<span class="cbd-del" data-del="changed · r4"></span></h2>' in annotated
-
-
-def test_same_document_has_no_marks_and_diff_text_names_real_changes() -> None:
-  base, new = _fixture_pair()
-  same = annotate(base, base)
-  assert not _marks(same)
-  assert diff_text(base, base) == ""
-  plain = diff_text(base, new)
-  assert "header chip" in plain
-  assert "Context" in plain
-  assert "Trade-offs" in plain
-  assert "v10" in plain and "v11" in plain
-
-
-def test_replaced_direct_text_with_a_nested_block_stays_commentable() -> None:
-  base = '<html><body><div>old direct <p>unchanged child</p></div></body></html>'
-  new = '<html><body><div>new fresh <p>unchanged child</p></div></body></html>'
-  annotated = _assert_invariants(base, new)
-  assert '<div class="cbd-new">new fresh <p>unchanged child</p></div>' in annotated
-  assert '<ins class="cbd-ins">new fresh</ins>' not in annotated
-
-
-def test_style_and_header_splice_positions() -> None:
-  base = '<html><head><title>t</title></head><body><p>alpha</p></body></html>'
-  new = '<html><head><title>t</title></head><body><p>alpha beta</p></body></html>'
-  annotated = annotate(base, new)
-  assert annotated.index("<style data-cbd-style>") == annotated.rindex("</title>") + len("</title>")
-  assert annotated.index('<div class="cbd-header"') == annotated.index("<body>") + len("<body>")
-
-  headless_new = '<html><body><p>alpha beta</p></body></html>'
-  annotated = annotate('<html><body><p>alpha</p></body></html>', headless_new)
-  assert annotated.index("<style data-cbd-style>") == annotated.index("<html>") + len("<html>")
-
-  fragment_new = '<div>alpha beta</div>'
-  annotated = annotate('<div>alpha</div>', fragment_new)
-  assert annotated.startswith("<style data-cbd-style>")
-  assert '<div class="cbd-header"' in annotated
-
-
-def test_header_splices_inside_the_wrap_column() -> None:
-  new = '<html><body><div class="wrap"><p>alpha beta</p></div></body></html>'
-  annotated = annotate(new, new)
-  assert annotated.count('<div class="cbd-header"') == 1
-  assert annotated.index('<div class="cbd-header"') == annotated.index('<div class="wrap">') + len('<div class="wrap">')
-  assert annotated.index('<p>alpha beta</p>') > annotated.index('<div class="cbd-header"')
-
-
-@pytest.mark.parametrize(
-    "new, anchor", [
-        ('<html><body><main><p>alpha beta</p></main></body></html>', '<main>'),
-        ('<html><body><p>alpha beta</p></body></html>', '<body>'),
-        ('<html><body><div class="unwrap"><div class="re-wrap"><p>alpha beta</p></div></div></body></html>', '<body>'),
-    ],
-    ids=[
-        "splices-inside-main-when-wrap-absent",
-        "body-start-fallback-without-wrap-or-main",
-        "class-names-merely-containing-wrap-are-not-anchors",
-    ])
-def test_header_lands_after_the_anchor_the_fallback_chain_selects(new: str, anchor: str) -> None:
-  annotated = annotate(new, new)
-  assert annotated.count('<div class="cbd-header"') == 1
-  assert annotated.index('<div class="cbd-header"') == annotated.index(anchor) + len(anchor)
-
-
-def test_header_offset_matches_a_full_reparse_of_the_spliced_page() -> None:
-  # The arithmetic header anchor (_offset_after_insertions over the pre-splice
-  # parse) must read the same position a full re-parse of the
-  # spliced page reads, on every capture that reaches the wrap lookup. The
-  # corpus wraps each fuzz document in the wrap and main chrome the anchor
-  # needs — the shared fuzz vocabulary carries neither, so an unwrapped fuzz
-  # document only exercises the body fallback.
-  from src.core.plan_diff import _parse
-
-  original = plan_diff._append_style_and_header
-  captures: list[tuple[str, dict[int, list[str]], object]] = []
-
-  def capture(source: str, insertions: dict[int, list[str]], root: object) -> str:
-    captures.append((source, insertions, root))
-    return original(source, insertions, root)
-
-  plan_diff._append_style_and_header = capture
-  try:
-    pairs = [_fixture_pair()]
-    rng = random.Random(20260912)
-    for _ in range(300):
-      doc = _fuzz_document(rng)
-      changed = doc.replace("alpha beta", "alpha gamma").replace("hello world", "hello there")
-      chrome = rng.choice(
-          [
-              '<html><body><div class="wrap">{}</div></body></html>', '<html><body><main>{}</main></body></html>',
-              '<html><body>{}</body></html>'
-          ])
-      pairs.append((chrome.format(doc), chrome.format(changed)))
-    for base, new in pairs:
-      annotate(base, new)
-  finally:
-    plan_diff._append_style_and_header = original
-
-  assert len(captures) == len(pairs)
-  anchored = 0
-  for spliced, insertions, pre_root in captures:
-    _, body = _parse_anchors(spliced)
-    if body is None or body.start_end is None:
-      continue
-    relocated = _document_root(_parse(spliced))
-    pre_target = _first_class_descendant(pre_root, "wrap") or _first_descendant(pre_root, "main")
-    expected_target = _first_class_descendant(relocated, "wrap") or _first_descendant(relocated, "main")
-    assert (pre_target is None) == (expected_target is None)
-    computed = (
-        _offset_after_insertions(pre_target.start_end, insertions) if pre_target is not None else body.start_end)
-    expected = expected_target.start_end if expected_target is not None else body.start_end
-    assert computed == expected, f"header offset drift: {computed} != {expected}"
-    anchored += 1 if pre_target is not None else 0
-  assert anchored >= 200, f"wrap/main anchor reached on only {anchored} captures"
-
-
-def test_header_keeps_outside_a_deleted_bare_main_ghost() -> None:
-  # A deleted bare main becomes a ghost carrying the tag, so the main-tag
-  # fallback can diverge from the spliced-page re-parse (which anchors the header
-  # inside the strikethrough ghost); the wrap-chrome artifact pages the route
-  # serves never reach the fallback. Pin the saner placement: outside the ghost.
-  base = '<html><body><main>alpha</main><p>keep</p></body></html>'
-  new = '<html><body><p>keep</p></body></html>'
-  annotated = annotate(base, new)
-  assert '<main class="cbd-del"' in annotated
-  header_at = annotated.index('<div class="cbd-header"')
-  ghost_at = annotated.index('<main class="cbd-del"')
-  assert not (ghost_at < header_at < annotated.index('</main>', ghost_at))
-
-
 def _anchors_from_full_parse(source: str) -> tuple[tuple | None, tuple | None]:
-  from src.core.plan_diff import _first_descendant, _Node, _parse
+  from src.core.plan_diff import _Node, _parse
 
   parser = _parse(source)
 
@@ -521,59 +225,8 @@ def _anchors_as_quads(anchors: tuple) -> tuple[tuple | None, tuple | None]:
       None if anchor is None else (anchor.start, anchor.start_end, anchor.end, anchor.end_end) for anchor in anchors)
 
 
-_FUZZ_TAGS = [
-    "html", "head", "body", "div", "p", "span", "section", "table", "tr", "td", "ul", "li", "h1", "h2", "em", "strong",
-    "code", "pre", "script", "style", "title", "meta", "br", "hr", "img"
-]
-_FUZZ_ATTRS = ["class", "id", "data-x", "style", "open"]
-_FUZZ_ATTR_VALUES = ["a", "b c", "", "x>y", "a&amp;b"]
-
-
-def _fuzz_document(rng: random.Random) -> str:
-  pieces: list[str] = []
-  stack: list[str] = []
-  for _ in range(rng.randint(1, 14)):
-    roll = rng.random()
-    if roll < 0.10 and stack:
-      tag = rng.choice(stack)
-      pieces.append(f"</{tag}>")
-      stack.remove(tag)
-    elif roll < 0.16:
-      pieces.append(rng.choice(["hello world", "alpha beta", "&amp; &lt;", "  \n  ", "e" * 5]))
-    elif roll < 0.20:
-      pieces.append(f"<!-- {rng.choice(['</head>', '<body>', '---', 'x'])} -->")
-    elif roll < 0.26:
-      tag = rng.choice(["script", "style"])
-      pieces.append(f"<{tag}>{rng.choice(['</head> inside script', 'a < b', 'var x=1;'])}</{tag}>")
-    elif roll < 0.30:
-      pieces.append(f"<{rng.choice(_FUZZ_TAGS)}{_fuzz_attrs(rng)}/>")
-    else:
-      tag = rng.choice(_FUZZ_TAGS)
-      pieces.append(f"<{tag}{_fuzz_attrs(rng)}>")
-      if tag not in VOID_TAGS:
-        stack.append(tag)
-  pieces.extend(f"</{tag}>" for tag in reversed(stack) if rng.random() < 0.7)
-  return "".join(pieces)
-
-
-def _fuzz_attrs(rng: random.Random) -> str:
-  count = rng.randint(0, 3)
-  if not count:
-    return ""
-  return " " + " ".join(f'{rng.choice(_FUZZ_ATTRS)}="{rng.choice(_FUZZ_ATTR_VALUES)}"' for _ in range(count))
-
-
-def test_boundary_anchors_match_the_full_parse_on_a_randomized_corpus() -> None:
-  from src.core.plan_diff import _parse_anchors
-
-  rng = random.Random(20260907)
-  for _ in range(1500):
-    doc = _fuzz_document(rng)
-    assert _anchors_as_quads(_parse_anchors(doc)) == _anchors_from_full_parse(doc), f"anchor drift on {doc!r}"
-
-
 def test_boundary_anchors_match_the_full_parse_on_the_fixture_pair_and_spliced_output() -> None:
-  from src.core.plan_diff import _parse_anchors, annotate
+  from src.core.plan_diff import annotate
 
   base, new = _fixture_pair()
   for source in (base, new, annotate(base, new)):

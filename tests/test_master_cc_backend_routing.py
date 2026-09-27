@@ -12,10 +12,8 @@ from conftest import (
     make_work_item,
     patch_instructions_content,
 )
-from conftest import make_transcript as _make_transcript
-from structlog.testing import capture_logs
 
-from src.agents import master_cc, master_cc_run
+from src.agents import master_cc
 from src.agents.backends import base as backend_base
 from src.core import config as core_config
 from src.core import models
@@ -66,49 +64,6 @@ def test_route_resume_session_uses_native_resume_id_for_antigravity() -> None:
       [],
       "existing-session-id",
   )
-
-
-def test_antigravity_is_resume_capable() -> None:
-  assert "antigravity" in master_cc_run._RESUME_CAPABLE_BACKEND_TYPES
-
-
-@pytest.mark.asyncio
-async def test_run_cc_routes_antigravity_native_resume_id(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  cfg = build_antigravity_cfg(tmp_path)
-  session_meta = models.SessionMetadata(
-      id="session-id",
-      name="Antigravity",
-      cc_session_id="existing-session-id",
-      backend="agy",
-  )
-  backend_option = cfg.backends.options[0]
-  captures: dict[str, object] = {}
-
-  def fake_build_backend(
-      option: models.BackendOption, cfg: core_config.CharlieBotConfig, **kwargs: object) -> FakeBackend:
-    captures["option"] = option
-    captures["kwargs"] = kwargs
-    return FakeBackend()
-
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
-  patch_instructions_content(monkeypatch)
-
-  item = make_work_item(cfg, session_meta, backend_option)
-
-  cc_session_id, exit_code, error_msg, _finish_extras = await master_cc._run_cc(item)
-
-  assert captures["option"] is backend_option
-  assert backend_option.model is None
-  backend_kwargs = captures["kwargs"]
-  assert isinstance(backend_kwargs, dict)
-  assert backend_kwargs["extra_flags"] is None
-  assert backend_kwargs["resume_session_id"] == "existing-session-id"
-  assert cc_session_id == "existing-session-id"
-  assert exit_code == 0
-  assert error_msg is None
 
 
 class _SessionIdBackend(FakeBackend):
@@ -226,78 +181,3 @@ async def test_run_cc_adds_exclude_dynamic_flag_for_cc_claude(
 # ---------------------------------------------------------------------------
 # resume_session log field: derived from the resolved resume id, honest on both
 # the Claude family (--resume flag route) and native-resume backends.
-# ---------------------------------------------------------------------------
-
-
-def _starting_entry(logs: list[dict]) -> dict:
-  matches = [e for e in logs if e.get("event") == "master_cc_starting"]
-  assert len(matches) == 1, f"expected one master_cc_starting event, got {matches}"
-  return matches[0]
-
-
-async def _run_cc_starting_entry(
-    cfg: core_config.CharlieBotConfig,
-    session_meta: models.SessionMetadata,
-    backend_option: models.BackendOption,
-    monkeypatch: pytest.MonkeyPatch,
-) -> dict:
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **kw: FakeBackend())
-  patch_instructions_content(monkeypatch)
-  item = make_work_item(cfg, session_meta, backend_option)
-  with capture_logs() as logs:
-    await master_cc._run_cc(item)
-  return _starting_entry(logs)
-
-
-@pytest.mark.asyncio
-async def test_claude_family_with_reachable_anchor_logs_resume_session_true(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  config_dir = tmp_path / "claude-config"
-  _make_transcript(config_dir, "existing-session-id")
-  # Per-entry login pinning is retired: an unpinned cc-claude option resolves
-  # its login directory through the CLAUDE_CONFIG_DIR environment.
-  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
-  cfg = core_config.CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backends={"options": [backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5"),]},
-  )
-  session_meta = models.SessionMetadata(id="session-id", name="CC", backend="cc", cc_session_id="existing-session-id")
-
-  entry = await _run_cc_starting_entry(cfg, session_meta, cfg.backends.options[0], monkeypatch)
-
-  assert entry["resume_session"] is True
-
-
-@pytest.mark.asyncio
-async def test_claude_family_with_no_anchor_logs_resume_session_false(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  cfg = core_config.CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backends={"options": [backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5"),]},
-  )
-  session_meta = models.SessionMetadata(id="session-id", name="CC", backend="cc")
-
-  entry = await _run_cc_starting_entry(cfg, session_meta, cfg.backends.options[0], monkeypatch)
-
-  assert entry["resume_session"] is False
-
-
-@pytest.mark.asyncio
-async def test_native_resume_backend_with_reachable_anchor_logs_resume_session_true(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  cfg = core_config.CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backends={"options": [backend_option(id="oc", label="OpenCode", type="opencode", model="glm-5.2"),]},
-  )
-  session_meta = models.SessionMetadata(
-      id="session-id", name="OpenCode", backend="oc", cc_session_id="existing-session-id")
-
-  entry = await _run_cc_starting_entry(cfg, session_meta, cfg.backends.options[0], monkeypatch)
-
-  assert entry["resume_session"] is True

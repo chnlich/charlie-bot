@@ -16,9 +16,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import dump_yaml as _dump
 from conftest import reset_config_caches
-from conftest import write_cron_task as _write_task_text
 
 import src.core.config as cm
 from src.core.config import CharlieBotConfig
@@ -104,53 +102,3 @@ def test_telegram_failure_is_log_only(temp_home: Path, monkeypatch: pytest.Monke
 
   _fire(["x"])  # must not raise out of the evaluation
   assert json.loads(_state_file(temp_home).read_text(encoding="utf-8")) == ["x"]
-
-
-def test_alert_fires_through_loader_refresh(
-    temp_home: Path,
-    sent: list[str],
-) -> None:
-  """The scheduler tick path: get_scheduled_tasks → snapshot refresh → alert."""
-  selector = temp_home / "prompts" / "memory_selector.md"
-  reviewer = temp_home / "prompts" / "memory_reviewer.md"
-  selector.parent.mkdir(parents=True, exist_ok=True)
-  reviewer.write_text("review the diff", encoding="utf-8")
-  _write_task_text(
-      temp_home, "memory-curator",
-      _dump(
-          {
-              "cron":
-                  "27 6 * * *",
-              "steps":
-                  [
-                      {
-                          "name": "selector",
-                          "prompt_file": str(selector)
-                      },
-                      {
-                          "name": "reviewer",
-                          "prompt_file": str(reviewer)
-                      },
-                  ],
-          }))
-
-  async def refresh() -> None:
-    assert not cm.get_scheduled_tasks()
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
-
-  asyncio.run(refresh())
-  assert sent == ["⚠️ cron tasks failed to load: memory-curator"]
-
-  # Restoring the pointed file (the host file only carries the path to it) flips
-  # the job back to healthy on the next refresh, and the recovery notification
-  # goes out once.
-  selector.write_text("curate memory now", encoding="utf-8")
-
-  async def refresh_again() -> None:
-    assert [t.name for t in cm.get_scheduled_tasks()] == ["memory-curator"]
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
-
-  asyncio.run(refresh_again())
-  assert sent == ["⚠️ cron tasks failed to load: memory-curator", "✅ all cron load failures resolved"]

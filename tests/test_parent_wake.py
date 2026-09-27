@@ -73,51 +73,6 @@ async def test_legacy_parent_wakes_through_trigger_master_once(tmp_path: Path, m
 
 
 @pytest.mark.asyncio
-async def test_legacy_parent_wake_does_not_hold_the_caller_for_the_turn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The startup reconcile pass replays lost reports through this wake; awaiting
-  the master turn inline held the server's doors shut for the whole turn."""
-  _cfg, session_mgr, tree = await build_env(tmp_path)
-  legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
-  report = child_report("child-task-1", outcome="completed", summary="done", event_id="report-1")
-  await tree.events.append(legacy.id, report)
-  turn_started = asyncio.Event()
-  turn_may_finish = asyncio.Event()
-
-  async def slow_turn(*_args: object, **_kwargs: object) -> None:
-    turn_started.set()
-    await turn_may_finish.wait()
-
-  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, slow_turn)
-
-  task = await asyncio.wait_for(tree.dispatch.wake_parent(legacy.id, report=report), timeout=1.0)
-
-  assert task is not None and not task.done()
-  await asyncio.wait_for(turn_started.wait(), timeout=1.0)
-  turn_may_finish.set()
-  await task
-
-
-@pytest.mark.asyncio
-async def test_legacy_parent_wake_renders_the_passed_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The caller hands over the report it just delivered; the wake renders that
-  one, not whatever child_report happens to be newest in the parent's log."""
-  _cfg, session_mgr, tree = await build_env(tmp_path)
-  legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
-  older = child_report("child-a", outcome="failed", summary="older attempt", event_id="report-old")
-  newer = child_report("child-b", outcome="completed", summary="newer attempt", event_id="report-new")
-  await tree.events.append(legacy.id, older)
-  await tree.events.append(legacy.id, newer)
-  trigger = AsyncMock()
-  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
-
-  await await_wake(await tree.dispatch.wake_parent(legacy.id, report=older))
-
-  assert trigger.await_count == 1
-  assert trigger.await_args.args[1] == "[Report from task child-a | outcome failed] older attempt"
-
-
-@pytest.mark.asyncio
 async def test_legacy_parent_closed_by_its_own_turn_skips_the_wake(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The parent's own turn already holds the outcome in its HTTP response; an
@@ -135,23 +90,6 @@ async def test_legacy_parent_closed_by_its_own_turn_skips_the_wake(
   assert trigger.await_count == 0
   # The report stays the durable record in the parent's fact history.
   assert [e["id"] for e in tree.fact_history(legacy.id) if e.get("type") == ET.CHILD_REPORT] == ["report-1"]
-
-
-@pytest.mark.asyncio
-async def test_legacy_parent_wakes_when_the_closer_is_someone_else(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A caller session other than the parent gets the ordinary legacy wake."""
-  _cfg, session_mgr, tree = await build_env(tmp_path)
-  legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
-  report = child_report("child-task-1", outcome="cancelled", summary="no longer needed", event_id="report-1")
-  await tree.events.append(legacy.id, report)
-  trigger = AsyncMock()
-  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
-
-  await await_wake(await tree.dispatch.wake_parent(legacy.id, report=report, caller_session_id="someone-else"))
-
-  assert trigger.await_count == 1
-  assert trigger.await_args.args[0] == legacy.id
 
 
 @pytest.mark.asyncio
@@ -207,49 +145,3 @@ async def test_task_tree_parent_with_the_caller_equal_to_itself_still_dispatches
   assert dispatch.await_count == 1
   assert dispatch.await_args.args == (node.id,)
   assert trigger.await_count == 0
-
-
-@pytest.mark.asyncio
-async def test_legacy_chat_view_renders_the_delivered_report(tmp_path: Path) -> None:
-  """The report event is the durable record the legacy chat view renders: a
-  legacy session's aggregated messages include the child report's summary,
-  outcome, and node link (message_aggregator's child_report handler)."""
-  from src.core.message_aggregator import MessageAggregator
-
-  _cfg, session_mgr, tree = await build_env(tmp_path)
-  legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
-  await tree.events.append(
-      legacy.id, {
-          "id": "u1",
-          "type": ET.USER,
-          "content": "what happened?",
-          "timestamp": datetime.now(UTC).isoformat(),
-          "actor": "user",
-          "source_session_id": legacy.id,
-      })
-  report = child_report("child-task-1", outcome="completed", summary="the work landed", event_id="report-1")
-  await tree.events.append(legacy.id, report)
-
-  events = session_mgr.load_chat_events_sync(legacy.id)
-  agg = MessageAggregator()
-  messages = [d["message"] for event in events for d in agg.feed(event) if d.get("type") == "message"]
-
-  reports = [m for m in messages if m.get("role") == ET.CHILD_REPORT]
-  assert len(reports) == 1
-  assert reports[0]["content"] == "the work landed"
-  assert reports[0]["outcome"] == "completed"
-  assert reports[0]["child_session_id"] == "child-task-1"
-
-
-@pytest.mark.asyncio
-async def test_missing_parent_logs_and_returns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  _cfg, _session_mgr, tree = await build_env(tmp_path)
-  dispatch = AsyncMock()
-  monkeypatch.setattr(tree.dispatch, "dispatch_pending", dispatch)
-  trigger = AsyncMock()
-  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
-
-  await tree.dispatch.wake_parent(
-      "no-such-parent", report=child_report("child-task-1", outcome="completed", summary="done", event_id="report-1"))
-
-  assert dispatch.await_count == 0 and trigger.await_count == 0

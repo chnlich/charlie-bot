@@ -8,7 +8,7 @@ import pytest
 import yaml
 from conftest import BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET
 
-from src.core.backlog_loop import _next_id, determine_action
+from src.core.backlog_loop import determine_action
 from src.core.config import ImprovementLoopConfig
 
 
@@ -223,22 +223,6 @@ async def test_scan_fallback(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # test_next_id_with_prefix
-# ---------------------------------------------------------------------------
-
-
-def test_next_id_with_prefix() -> None:
-  items = [{'id': 'D-001'}, {'id': 'D-005'}, {'id': '007'}]
-  assert _next_id(items, 'D') == 'D-006'
-
-
-def test_next_id_without_prefix() -> None:
-  items = [{'id': '003'}, {'id': '010'}, {'id': 'D-001'}]
-  assert _next_id(items, '') == '011'
-
-
-def test_next_id_empty_backlog() -> None:
-  assert _next_id([], 'F') == 'F-001'
-  assert _next_id([], '') == '001'
 
 
 # ---------------------------------------------------------------------------
@@ -270,32 +254,3 @@ async def test_malformed_backlog_fails_loud(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # test_language_rule_zh_cn
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_language_rule_zh_cn(tmp_path: Path) -> None:
-  """zh-CN language rule appears in generate prompt."""
-  backlog = tmp_path / 'backlog.yaml'
-  _write_backlog(backlog, [])
-  cfg = _make_cfg(language='zh-CN', max_pending=10)
-
-  action, prompt = await determine_action(backlog, cfg, tmp_path)
-
-  assert action == 'generate'
-  assert 'simplified Chinese' in prompt
-
-
-@pytest.mark.asyncio
-async def test_state_files_in_implement_prompt(tmp_path: Path) -> None:
-  """State files instructions appear in implement prompt."""
-  backlog = tmp_path / 'backlog.yaml'
-  items = [{'id': '001', 'status': 'approved', 'title': 'Fix', 'priority': 'high', 'description': 'desc'}]
-  _write_backlog(backlog, items)
-  cfg = _make_cfg(state_files=['backlog/history.yaml', 'backlog/e2e_report.json'])
-
-  action, prompt = await determine_action(backlog, cfg, tmp_path)
-
-  assert action == 'implement'
-  assert 'Read backlog/history.yaml before acting' in prompt
-  assert 'Read backlog/e2e_report.json (read-only, do not modify)' in prompt

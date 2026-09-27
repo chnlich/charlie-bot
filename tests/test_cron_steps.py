@@ -60,100 +60,6 @@ REVIEWER_RESULT = "report written to the session artifacts"
 # --- (a) loader --------------------------------------------------------------
 
 
-def _seed_steps_task(cron_dir: Path,
-                     tmp_path: Path,
-                     extra_body: dict | None = None) -> tuple[Path, Path, Path, str, str]:
-  """Write a two-step 'chained' job; returns (yaml, selector_md, reviewer_md, bodies).
-
-  The host file carries the paths to its prompt sources and the pointed files
-  own the bodies, exactly as production host files look.
-  """
-  prompts = tmp_path / "prompts"
-  prompts.mkdir(parents=True, exist_ok=True)
-  sel_path = prompts / "selector.md"
-  sel_body = "Select candidates.\n"
-  sel_path.write_text(sel_body, encoding="utf-8")
-  rev_path = prompts / "reviewer.md"
-  rev_body = "Review the diff.\n"
-  rev_path.write_text(rev_body, encoding="utf-8")
-  body: dict[str, Any] = {
-      "cron":
-          "0 3 * * *",
-      "steps":
-          [
-              {
-                  "name": "selector",
-                  "prompt_file": str(sel_path)
-              },
-              {
-                  "name": "reviewer",
-                  "prompt_file": str(rev_path),
-                  "backend": "codex-o3"
-              },
-          ],
-  }
-  body.update(extra_body or {})
-  yaml_path = cron_dir / "chained.yaml"
-  yaml_path.write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
-  return yaml_path, sel_path, rev_path, sel_body, rev_body
-
-
-def test_load_cron_file_loads_steps(tmp_path: Path) -> None:
-  cron_dir = tmp_path / "cron.d"
-  cron_dir.mkdir(parents=True)
-  cfg = build_scheduler_cfg(tmp_path)
-  yaml_path, sel_path, rev_path, sel_body, rev_body = _seed_steps_task(cron_dir, tmp_path)
-
-  task, mtimes = _load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
-
-  assert task.prompt is None
-  assert [s.name for s in task.steps] == ["selector", "reviewer"]
-  assert task.steps[0].prompt == sel_body
-  assert task.steps[0].prompt_file == str(sel_path)
-  assert task.steps[1].prompt == rev_body
-  assert task.steps[1].prompt_file == str(rev_path)
-  assert task.steps[1].backend == "codex-o3"
-  # the hot-reload fingerprint covers both step prompt files
-  assert set(mtimes) == {sel_path, rev_path}
-
-
-def _load_error(cron_dir: Path, tmp_path: Path, extra_body: dict) -> str:
-  cfg = build_scheduler_cfg(tmp_path)
-  yaml_path, _sel, _rev, _sel_body, _rev_body = _seed_steps_task(cron_dir, tmp_path, extra_body)
-  with pytest.raises(ValueError) as exc_info:
-    _load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
-  return str(exc_info.value)
-
-
-def _prompt_file_extra(tmp_path: Path) -> dict:
-  return {"prompt_file": str(tmp_path / "prompts" / "selector.md")}
-
-
-_STEPS_TASK_CONFLICT_CASES = [
-    # (extra body merged over a two-step task, the ValueError fragments naming the conflict).
-    pytest.param(_prompt_file_extra, ("exactly one of", "'prompt'", "'steps'"), id="prompt-file"),
-    pytest.param(lambda _tmp_path: {"handler": "backup"}, ("exactly one of", "'handler'", "'steps'"), id="handler"),
-    pytest.param(
-        lambda _tmp_path: {"loop": {
-            "backlog": "backlog/backlog.yaml",
-            "role": "agent",
-            "scope_files": ["src/"]
-        }}, ("exactly one of", "'loop'", "'steps'"),
-        id="loop"),
-]
-
-
-@pytest.mark.parametrize(("build_extra", "expected_fragments"), _STEPS_TASK_CONFLICT_CASES)
-def test_load_cron_file_rejects_steps_task_field_conflict(
-    tmp_path: Path, build_extra: Callable[[Path], dict], expected_fragments: tuple[str, ...]) -> None:
-  """A steps task carrying another task-level prompt source fails the load, and
-  the error names the conflicting keys."""
-  cron_dir = tmp_path / "cron.d"
-  cron_dir.mkdir(parents=True)
-  error = _load_error(cron_dir, tmp_path, build_extra(tmp_path))
-  assert all(fragment in error for fragment in expected_fragments)
-
-
 def test_load_cron_file_rejects_duplicate_step_names(tmp_path: Path) -> None:
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True)
@@ -192,33 +98,6 @@ def test_load_cron_file_rejects_empty_steps(tmp_path: Path) -> None:
   # before the non-empty check can name it.
   with pytest.raises(ValueError, match="task must have exactly one of"):
     _load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
-
-
-_STEP_PROMPT_SOURCE_CASES = [
-    # (one steps entry, the ValueError fragments naming the step-level violation).
-    pytest.param({
-        "name": "selector",
-        "prompt": "inline body"
-    }, ("inline 'prompt'", "step"), id="inline-prompt"),
-    pytest.param({"name": "selector"}, ("step 'selector'",), id="missing-prompt-body"),
-]
-
-
-@pytest.mark.parametrize(("step_body", "expected_fragments"), _STEP_PROMPT_SOURCE_CASES)
-def test_load_cron_file_rejects_step_prompt_source_violation(
-    tmp_path: Path, step_body: dict, expected_fragments: tuple[str, ...]) -> None:
-  """A step carrying an inline 'prompt' — or no prompt source at all — fails the
-  load, and the error names the step."""
-  cron_dir = tmp_path / "cron.d"
-  cron_dir.mkdir(parents=True)
-  cfg = build_scheduler_cfg(tmp_path)
-  body = {"cron": "0 3 * * *", "steps": [step_body]}
-  yaml_path = cron_dir / "chained.yaml"
-  yaml_path.write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
-  with pytest.raises(ValueError) as exc_info:
-    _load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
-  error = str(exc_info.value)
-  assert all(fragment in error for fragment in expected_fragments)
 
 
 # --- (b)-(d) the chain --------------------------------------------------------

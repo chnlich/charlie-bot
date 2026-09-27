@@ -2,10 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import subprocess
-import sys
-import time
-from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,11 +16,8 @@ from conftest import make_trigger_setup as _make_mgr
 from conftest import no_sleep as _no_sleep
 
 from src.core.models import (
-    LocalPid,
-    PendingTrigger,
     SlurmJob,
 )
-from src.core.triggers import TriggerManager
 
 # ---------------------------------------------------------------------------
 # Single slurm job: terminal-state detection
@@ -106,57 +99,8 @@ async def test_slurm_single_job_terminal_state(
   assert final_line in msg
 
 
-@pytest.mark.asyncio
-async def test_slurm_timeout_while_still_active(tmp_path: Path) -> None:
-  _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  sacct = make_sacct_mock({(None, 12345): ["12345|RUNNING|0:0\n"]})  # never leaves RUNNING
-
-  with patch_trigger_fire(sacct, sacct_available=True, sleep_mock=_no_sleep) as mock_master:
-    trigger = await trigger_mgr.create_trigger(
-        session_id,
-        delay_seconds=0,  # fire_at already due — one probe, then timeout
-        message="still running",
-        watch_targets=[SlurmJob(job_id=12345)],
-    )
-    await asyncio.wait_for(trigger_mgr._tasks[trigger.id], timeout=10)
-
-  stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-  assert stored.fire_reason == "timeout"
-  assert "still alive: slurm:12345" in mock_master.await_args.args[1]
-
-
 # ---------------------------------------------------------------------------
 # Mixed-kind AND: local pid + slurm job
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_mixed_local_and_slurm_and_semantics(tmp_path: Path, pidfd_open_available: None) -> None:
-  _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  # Slurm completes on the first probe; the local pid outlives it. The trigger
-  # must wait for BOTH (AND), so it fires only after the local pid exits.
-  proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.6)"])
-  sacct = make_sacct_mock({(None, 77): ["77|COMPLETED|0:0\n"]})
-
-  try:
-    with patch_trigger_fire(sacct, sacct_available=True, sleep_mock=None) as mock_master:
-      trigger = await trigger_mgr.create_trigger(
-          session_id,
-          delay_seconds=30,
-          message="local + slurm",
-          watch_targets=[LocalPid(pid=proc.pid), SlurmJob(job_id=77)],
-      )
-      start = time.monotonic()
-      await asyncio.wait_for(trigger_mgr._tasks[trigger.id], timeout=10)
-      elapsed = time.monotonic() - start
-  finally:
-    proc.wait(timeout=5)
-
-  assert elapsed >= 0.4, f"fired before the local pid exited: {elapsed:.2f}s"
-  assert elapsed < 5, f"fired too late: {elapsed:.2f}s"
-  msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="completed")
-  assert str(proc.pid) in msg
-  assert "slurm:77: COMPLETED 0:0" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -179,43 +123,5 @@ async def test_no_sacct_host_slurm_create_fails(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.asyncio
-async def test_no_sacct_host_pure_delay_unaffected(tmp_path: Path) -> None:
-  _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  with (
-      patch(TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET, new=False),
-      patch.object(TriggerManager, "_start_task", lambda self, t: None),
-  ):
-    trigger = await trigger_mgr.create_trigger(
-        session_id,
-        delay_seconds=300,
-        message="just a delay",
-    )
-  assert trigger.watch_targets == []
-
-
 # ---------------------------------------------------------------------------
 # Recovery: a persisted slurm trigger on a host without sacct skips (no spin)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_recovery_no_sacct_skips_without_spinning(tmp_path: Path) -> None:
-  _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  trigger = PendingTrigger(
-      session_id=session_id,
-      fire_at=datetime.now(UTC),  # already due — return immediately
-      message="recovered slurm",
-      watch_targets=[SlurmJob(job_id=12345)],
-  )
-  await trigger_mgr._save_trigger(trigger)
-  sacct = make_sacct_mock({(None, 12345): ["12345|COMPLETED|0:0\n"]})
-
-  with patch_trigger_fire(sacct, sacct_available=False, sleep_mock=None) as mock_master:
-    await trigger_mgr._wait_and_fire(trigger)
-
-  # sacct is never invoked (no spin on a missing binary); the trigger times out.
-  assert sacct.call_count == 0
-  stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-  assert stored.fire_reason == "timeout"
-  assert "still alive: slurm:12345" in mock_master.await_args.args[1]

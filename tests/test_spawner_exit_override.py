@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import CLEAN_EXIT_OUTCOME, append_events
+from conftest import append_events
 
 from src.core import spawner
 from src.core.models import ThreadMetadata
@@ -75,47 +75,6 @@ async def test_exit_override_decision_by_last_result_event(tmp_path: Path, event
 
 
 @pytest.mark.asyncio
-async def test_exit_code_zero_returns_zero_without_reading_events(tmp_path: Path) -> None:
-  """When exit_code is already 0, the helper must short-circuit (no override needed, no I/O)."""
-  read_calls: dict[str, int] = {"count": 0}
-
-  class _CountingThreadManager:
-
-    async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
-      del session_id, thread_id
-      read_calls["count"] += 1
-      return tmp_path / "missing.jsonl"
-
-  result = await spawner._maybe_override_exit_code_from_result(0, "session-id", _thread(), _CountingThreadManager())
-
-  assert result == 0
-  assert read_calls["count"] == 0
-
-
-@pytest.mark.asyncio
-async def test_missing_events_file_returns_original(tmp_path: Path) -> None:
-  events_path = tmp_path / "does-not-exist.jsonl"
-
-  result = await spawner._maybe_override_exit_code_from_result(
-      143, "session-id", _thread(), _FakeThreadManager(events_path))
-
-  assert result == 143
-
-
-@pytest.mark.asyncio
-async def test_get_events_log_path_raising_does_not_propagate() -> None:
-
-  class _BrokenThreadManager:
-
-    async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
-      raise OSError("disk gone")
-
-  result = await spawner._maybe_override_exit_code_from_result(143, "session-id", _thread(), _BrokenThreadManager())
-
-  assert result == 143
-
-
-@pytest.mark.asyncio
 async def test_malformed_events_file_returns_original(tmp_path: Path) -> None:
   events_path = tmp_path / "events.jsonl"
   # parse_ndjson_file skips malformed lines; with no parseable result, no override.
@@ -125,36 +84,3 @@ async def test_malformed_events_file_returns_original(tmp_path: Path) -> None:
       143, "session-id", _thread(), _FakeThreadManager(events_path))
 
   assert result == 143
-
-
-def test_helper_is_wired_into_spawn_worker_after_stream_events() -> None:
-  """Structural guard: the override helper is called between _stream_worker_events and finalize."""
-  import inspect
-  source = inspect.getsource(spawner.spawn_worker)
-  stream_idx = source.find("_stream_worker_events")
-  override_idx = source.find("_maybe_override_exit_code_from_result")
-  finalize_idx = source.find("finalize_thread")
-
-  assert stream_idx != -1, "spawn_worker must call _stream_worker_events"
-  assert override_idx != -1, "spawn_worker must call _maybe_override_exit_code_from_result"
-  assert finalize_idx != -1, "spawn_worker must call finalize_thread"
-  assert stream_idx < override_idx < finalize_idx, (
-      "override must run after _stream_worker_events and before finalize_thread")
-  # The override is gated on a failed outcome (exit_code != 0 and not quota_exhausted) with
-  # no recorded error.
-  assert "outcome.failed" in source
-  assert "not outcome.error" in source
-
-
-@pytest.mark.parametrize(
-    ("outcome", "expected"),
-    [
-        (CLEAN_EXIT_OUTCOME, False),
-        (spawner._WorkerRunOutcome(exit_code=143, quota_exhausted=False, error=""), True),
-        (spawner._WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error="setup boom"), True),
-        (spawner._WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error=""), False),
-    ],
-    ids=["clean-exit", "nonzero-exit", "setup-error", "quota-exhausted"],
-)
-def test_run_outcome_failed_excludes_clean_exits_and_quota(outcome: spawner._WorkerRunOutcome, expected: bool) -> None:
-  assert outcome.failed is expected

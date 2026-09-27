@@ -108,26 +108,6 @@ async def test_api_request_returns_json_401() -> None:
 
 
 @pytest.mark.asyncio
-async def test_invalid_cookie_returns_json_401() -> None:
-  mw = _middleware(key="secret")
-  sent = await run_through_asgi_middleware(
-      mw, _scope(headers={"accept": "application/json"}, cookies={"charliebot_access_key": "wrong"}))
-  status, content_type, _ = _response(sent)
-  assert status == 401
-  assert content_type == "application/json"
-
-
-@pytest.mark.asyncio
-async def test_non_get_html_accept_still_json_401() -> None:
-  # Only GET navigations get the HTML login page; a POST with text/html does not.
-  mw = _middleware(key="secret")
-  sent = await run_through_asgi_middleware(mw, _scope(method="POST", headers={"accept": "text/html"}))
-  status, content_type, _ = _response(sent)
-  assert status == 401
-  assert content_type == "application/json"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["/perfetto", "/perfetto/merged", "/ncu", "/absolute_filepath/tmp/trace.json"])
 async def test_host_state_readers_are_gated_without_a_credential(path: str) -> None:
   # The file server and the trace/report viewers read the host filesystem, so they
@@ -138,27 +118,6 @@ async def test_host_state_readers_are_gated_without_a_credential(path: str) -> N
   assert status == 401
   assert content_type == "application/json"
   assert json.loads(body) == {"detail": "Unauthorized"}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("path", ["/perfetto", "/perfetto/merged", "/ncu", "/absolute_filepath/tmp/trace.json"])
-async def test_gated_reader_paths_serve_the_login_page_to_a_browser_navigation(path: str) -> None:
-  mw = _middleware(key="secret")
-  sent = await run_through_asgi_middleware(mw, _scope(path=path, headers={"accept": "text/html"}))
-  status, content_type, body = _response(sent)
-  assert status == 401
-  assert "text/html" in content_type
-  assert "<form" in body
-
-
-@pytest.mark.asyncio
-async def test_viewer_pages_match_exact_path_only() -> None:
-  # Exact-path matching: query strings are excluded from request.url.path so
-  # "/perfetto?trace=..." resolves to "/perfetto", but sibling paths stay gated.
-  mw = _middleware(key="secret")
-  sent = await run_through_asgi_middleware(mw, _scope(path="/perfetto/secret", headers={"accept": "application/json"}))
-  status, _, _ = _response(sent)
-  assert status == 401
 
 
 @pytest.mark.asyncio

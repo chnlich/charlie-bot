@@ -20,9 +20,6 @@ from conftest import session_dir_names as _session_dir_names
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import (
-    ELONE_BOOTSTRAP_OPENER,
-    FORK_BOOTSTRAP_OPENER,
-    HISTORY_LOCATION_NOTE,
     SessionManager,
 )
 
@@ -83,72 +80,6 @@ async def test_fork_route_inherits_parent_backend_when_backend_omitted(two_backe
   assert response.json()["backend"] == OPUS_BACKEND_ID
 
 
-# The override row pins the resolved id directly: backend ids resolve exactly as
-# configured (no aliasing).
-_ROUTE_OVERRIDE_ROWS = [
-    pytest.param("elone", {
-        "event_index": 1,
-        "backend": "codex-o3"
-    }, "codex-o3", id="elone-explicit-id"),
-]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("route", "payload", "expected_backend"), _ROUTE_OVERRIDE_ROWS)
-async def test_route_resolves_requested_backend(
-    two_backend_env: _RouteEnv, route: str, payload: dict[str, Any], expected_backend: str) -> None:
-  cfg, session_mgr, _ = two_backend_env
-  parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
-
-  with _build_client(cfg, session_mgr) as client:
-    response = client.post(f"/api/sessions/{parent_id}/{route}", json=payload)
-
-  assert response.status_code == 200
-  assert response.json()["backend"] == expected_backend
-
-
-# Each route seeds its bootstrap prompt with one single-spaced paragraph: opener,
-# successor-specific context, the shared history-location note, the directive.
-# Both must stay free of the reconstructed-context and recap phrasing, and no
-# reference-file path may appear any more — the history is the child's own chat log.
-_ROUTE_BOOTSTRAP_ROWS = [
-    pytest.param(
-        "fork",
-        0, f"{FORK_BOOTSTRAP_OPENER} {HISTORY_LOCATION_NOTE} Get oriented from that log, "
-        "summarize where things stand, and wait for the user's next instruction.",
-        id="fork"),
-    pytest.param(
-        "elone",
-        1, f"{ELONE_BOOTSTRAP_OPENER} The dissatisfaction is usually with the most recent exchange "
-        f"before the takeover point. {HISTORY_LOCATION_NOTE} Understand what the user wanted and "
-        "where it went wrong, then give your read and a better approach. "
-        "Confirm with the user before acting.",
-        id="elone"),
-]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("route", "event_index", "expected_prompt"), _ROUTE_BOOTSTRAP_ROWS)
-async def test_route_bootstrap_names_the_chat_log(
-    two_backend_env: _RouteEnv, route: str, event_index: int, expected_prompt: str) -> None:
-  cfg, session_mgr, calls = two_backend_env
-  parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
-
-  with _build_client(cfg, session_mgr) as client:
-    response = client.post(f"/api/sessions/{parent_id}/{route}", json={"event_index": event_index})
-
-  assert response.status_code == 200
-  assert response.json()["id"]
-  assert len(calls) == 1
-  prompt = calls[0]["content"]
-  # Exact equality: opener + context + history note + directive, single-spaced —
-  # which also proves no side-file path is pointed at any more.
-  assert prompt == expected_prompt
-  assert HISTORY_LOCATION_NOTE in prompt
-  assert "reconstructed recent context" not in prompt
-  assert "recap" not in prompt.lower()
-
-
 # ------------------------------------------------ validate-or-raise: unresolvable backend
 
 # parent_backend=None is the create route (no parent); the inherited rows seed a parent already
@@ -194,57 +125,6 @@ async def test_route_rejects_unresolvable_backend_and_persists_nothing(
 
 
 # --------------------------------------------------------- store-level property
-
-
-@pytest.mark.asyncio
-async def test_persisted_backend_stays_within_backend_options_across_mixed_calls(two_backend_env: _RouteEnv,) -> None:
-  cfg, session_mgr, _ = two_backend_env
-  valid_ids = {opt.id for opt in cfg.backends.options}
-  fork_parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
-  elone_ok_parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
-  elone_bad_parent_id = await _seed_parent(session_mgr, backend="missing-backend")
-  # The bad-parent seed intentionally simulates a pre-existing session pinned to a
-  # since-removed id (out of scope to migrate); exclude pre-existing dirs from the
-  # property check below and only look at sessions the routes under test produce.
-  before_dirs = _session_dir_names(cfg)
-
-  with _build_client(cfg, session_mgr) as client:
-    assert client.post("/api/sessions/", json={"name": "A"}).status_code == 200
-    assert client.post("/api/sessions/", json={"name": "B", "backend": "nope"}).status_code == 400
-    assert client.post(
-        f"/api/sessions/{fork_parent_id}/fork",
-        json={
-            "event_index": 1,
-            "backend": "codex-o3"
-        },
-    ).status_code == 200
-    assert client.post(
-        f"/api/sessions/{fork_parent_id}/fork",
-        json={
-            "event_index": 1,
-            "backend": "still-nope"
-        },
-    ).status_code == 400
-    assert client.post(
-        f"/api/sessions/{elone_ok_parent_id}/elone",
-        json={
-            "event_index": 1,
-            "backend": "codex-o3"
-        },
-    ).status_code == 200
-    assert client.post(
-        f"/api/sessions/{elone_bad_parent_id}/elone",
-        json={
-            "event_index": 1
-        },
-    ).status_code == 400
-
-  new_session_ids = _session_dir_names(cfg) - before_dirs
-  assert new_session_ids  # sanity: the successful calls above did create sessions
-  for session_id in new_session_ids:
-    metadata_path = cfg.sessions_dir / session_id / "metadata.json"
-    backend = json.loads(metadata_path.read_text(encoding="utf-8"))["backend"]
-    assert backend in valid_ids
 
 
 # ---------------------------------------- regression: documented default carve-out

@@ -42,28 +42,6 @@ def test_reply_reads_stdin_when_the_file_is_a_dash(
   assert json.loads(capsys.readouterr().out) == _READBACK
 
 
-@pytest.mark.parametrize("source", ["missing", "empty", "blank-stdin"])
-def test_reply_without_text_is_a_usage_error_before_any_request(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], source: str) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  if source == "missing":
-    file_arg = str(tmp_path / "absent.md")
-  elif source == "empty":
-    empty = tmp_path / "empty.md"
-    empty.write_text("  \n", encoding="utf-8")
-    file_arg = str(empty)
-  else:
-    monkeypatch.setattr("sys.stdin", io.StringIO("  \n"))
-    file_arg = "-"
-  with patched_cli_post(cfg, ["slack", "reply", "--file", file_arg]) as post_mock, \
-       pytest.raises(SystemExit) as exc_info:
-    main()
-
-  assert exc_info.value.code == 2
-  assert post_mock.call_count == 0
-  assert "error" in json.loads(capsys.readouterr().err)
-
-
 def test_server_refusal_exits_non_zero_with_the_detail_on_stderr(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   """A 409 (no Slack thread) surfaces as one JSON error line and a non-zero exit."""

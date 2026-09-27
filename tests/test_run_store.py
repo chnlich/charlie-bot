@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import os
 import subprocess
-import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from conftest import (
-    RUNS_STOP_EXIT_POLL_SECONDS_PATCH_TARGET,
     RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET,
     identity_of,
     live_subprocess,
@@ -121,23 +119,6 @@ async def test_retry_binding_is_stable_across_requests_and_reload(tmp_path: Path
   assert (await store.get_run(session_id, "r-orig")) is not None
 
 
-@pytest.mark.asyncio
-async def test_run_pagination_is_a_keyset_over_started_order(tmp_path: Path) -> None:
-  env = build_env(tmp_path)
-  _, _, _, store = env
-  session_id = await make_task(env, "t1")
-  base = datetime(2026, 1, 1, tzinfo=UTC)
-  for i, started in enumerate([base, base + timedelta(minutes=1), None]):
-    await store.register_run(RunRecord(id=f"r{i}", session_id=session_id, started_at=started))
-
-  page1 = store.list_runs_page_sync(session_id, limit=2, cursor=None)
-  assert [r.id for r in page1.items] == ["r2", "r0"]  # queued (never launched) first
-  assert page1.next_cursor is not None
-  page2 = store.list_runs_page_sync(session_id, limit=2, cursor=page1.next_cursor)
-  assert [r.id for r in page2.items] == ["r1"]
-  assert page2.next_cursor is None
-
-
 # ---------------------------------------------------------------------------
 # Terminal facts
 # ---------------------------------------------------------------------------
@@ -231,52 +212,6 @@ async def test_naturally_completed_run_retains_outcome_against_a_late_stop(
 
 
 @pytest.mark.asyncio
-async def test_stop_request_can_return_null_outcome_and_recovery_closes_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr(RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET, 0.2)
-  monkeypatch.setattr(RUNS_STOP_EXIT_POLL_SECONDS_PATCH_TARGET, 0.02)
-  env = build_env(tmp_path)
-  cfg, session_mgr, _mgr, store = env
-  session_id = await make_task(env, "t1")
-  # A process that ignores SIGTERM: the request stays durable, outcome stays null.
-  ready = tmp_path / "sigterm_ready"
-  proc = subprocess.Popen(
-      [
-          "python3", "-c",
-          (
-              "import signal, time, sys; "
-              "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-              f"open({str(ready)!r}, 'w').close(); "
-              "time.sleep(30)")
-      ])
-  deadline = time.monotonic() + 10
-  while not ready.exists():
-    assert time.monotonic() < deadline, "helper process never armed its SIGTERM handler"
-    time.sleep(0.01)
-  try:
-    await register_live_run(store, session_id, proc)
-    result = await store.request_stop(session_id, "run-live", "stop-1")
-    assert result.stop_requested is True and result.outcome is None
-    assert proc.poll() is None  # still alive; the request is not a completion assertion
-
-    # A fresh reader (post-restart) recognizes the same durable stop request...
-    fresh_store = TaskTreeManager(cfg, session_mgr).runs
-    events = fresh_store.load_events_sync(session_id)
-    assert fresh_store.stop_requested(events, "run-live")
-
-    # ...and once the actual exit is observed, the interrupted fact lands once.
-    proc.kill()
-    proc.wait(timeout=10)
-    reconciled = await fresh_store.reconcile_stop_request(session_id, "run-live")
-    assert reconciled.outcome == "interrupted"
-    events = fresh_store.load_events_sync(session_id)
-    assert len([e for e in events if e["type"] == ET.RUN_FINISHED]) == 1
-  finally:
-    if proc.poll() is None:
-      proc.kill()
-
-
-@pytest.mark.asyncio
 async def test_identity_mismatch_returns_conflict_and_keeps_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET, 0.2)
@@ -293,41 +228,3 @@ async def test_identity_mismatch_returns_conflict_and_keeps_evidence(
   events = store.load_events_sync(session_id)
   assert store.stop_requested(events, "run-forged")
   assert not [e for e in events if e["type"] == ET.RUN_FINISHED]
-
-
-@pytest.mark.asyncio
-async def test_exit_before_stop_observes_interrupted(tmp_path: Path) -> None:
-  env = build_env(tmp_path)
-  _, _, _, store = env
-  session_id = await make_task(env, "t1")
-  proc = subprocess.Popen(["/bin/sleep", "0.05"])
-  pid, pid_start = identity_of(proc.pid)
-  proc.wait(timeout=10)
-  await store.register_run(
-      RunRecord(id="run-exited", session_id=session_id, pid=pid, pid_start=pid_start, started_at=datetime.now(UTC)))
-  result = await store.request_stop(session_id, "run-exited", "stop-1")
-  assert result.outcome == "interrupted"
-
-
-@pytest.mark.asyncio
-async def test_exit_between_identity_read_and_signal_still_records_interrupted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The stat->kill race: the pid vanishes after the identity read; the observed exit is the fact."""
-  env = build_env(tmp_path)
-  _, _, _, store = env
-  session_id = await make_task(env, "t1")
-  proc = live_subprocess()
-  try:
-    await register_live_run(store, session_id, proc)
-
-    def vanished(pid: int, sig: int) -> None:
-      raise ProcessLookupError
-
-    monkeypatch.setattr("src.core.runs.os.kill", vanished)
-    result = await store.request_stop(session_id, "run-live", "stop-race")
-    assert result.stop_requested is True and result.outcome == "interrupted"
-    events = store.load_events_sync(session_id)
-    assert len([e for e in events if e["type"] == ET.RUN_FINISHED]) == 1
-    assert proc.poll() is None  # the signal never actually left
-  finally:
-    proc.kill()

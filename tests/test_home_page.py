@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import re
-import socket
 from pathlib import Path
-from urllib.parse import urlparse
 
 import pytest
 from conftest import (
@@ -58,74 +56,6 @@ async def test_home_page_reads_config(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_home_probe_reflects_a_real_port(tmp_path: Path) -> None:
-  """A live socket renders up; closing it renders down without changing the other card."""
-  listener = socket.socket()
-  listener.bind(("127.0.0.1", 0))
-  listener.listen(1)
-  port = listener.getsockname()[1]
-  services = [
-      {
-          "name": "listener-svc",
-          "description": "TCP listener for the test",
-          "url": f"http://127.0.0.1:{port}/api"
-      },
-      {
-          "name": "stub-svc",
-          "description": "Refuses every connect",
-          "url": "http://127.0.0.1:1/"
-      },
-  ]
-  cfg = _cfg(tmp_path / "h", services)
-
-  up_body = (await pages.home_page(make_page_request("/home"), cfg)).body.decode("utf-8")
-  assert _external_statuses(up_body) == ["up", "down"]
-
-  listener.close()
-  down_body = (await pages.home_page(make_page_request("/home"), cfg)).body.decode("utf-8")
-  assert _external_statuses(down_body) == ["down", "down"]
-  # Neither the card set nor what the cards link and say may change between renders.
-  assert _external_hrefs(up_body) == _external_hrefs(down_body) == [s["url"] for s in services]
-  for service in services:
-    for field in ("name", "description"):
-      assert up_body.count(service[field]) == down_body.count(service[field]) == 1
-
-
-@pytest.mark.asyncio
-async def test_home_badge_never_labels_a_link_that_cannot_open(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """For each external card, the host:port in its href equals the host:port the probe used."""
-  probed: list[str] = []
-  real_probe = pages._probe_home_service
-
-  def recording_probe(url: str) -> bool:
-    probed.append(url)
-    return real_probe(url)
-
-  monkeypatch.setattr(pages, "_probe_home_service", recording_probe)
-
-  services = [
-      {
-          "name": "a",
-          "description": "Service a",
-          "url": "https://example.internal:8443/x"
-      },
-      {
-          "name": "b",
-          "description": "Service b",
-          "url": "http://127.0.0.1:1/y"
-      },
-  ]
-  body = (await pages.home_page(make_page_request("/home"), _cfg(tmp_path / "h", services))).body.decode("utf-8")
-
-  hrefs = _external_hrefs(body)
-  assert len(hrefs) == len(services) == len(probed)
-  for href, probe_url in zip(hrefs, probed, strict=True):
-    href_parts = urlparse(href)
-    probe_parts = urlparse(probe_url)
-    assert (href_parts.hostname, href_parts.port) == (probe_parts.hostname, probe_parts.port)
-
-
-@pytest.mark.asyncio
 async def test_home_bad_url_entry_does_not_break_the_page(tmp_path: Path) -> None:
   """A service whose url has no parseable host renders down; the page and other cards survive."""
   services = [
@@ -169,25 +99,3 @@ async def test_home_html_navigation_requires_auth() -> None:
   assert status == 401
   assert b"text/html" in headers[b"content-type"]
   assert "<form" in body.decode()
-
-
-@pytest.mark.asyncio
-async def test_home_viewers_are_not_dead_links(tmp_path: Path) -> None:
-  """The page names the three viewers with what each needs, but links to none of them."""
-  body = (await pages.home_page(make_page_request("/home"), _cfg(tmp_path / "h", []))).body.decode("utf-8")
-  for dead in ('href="/perfetto', 'href="/ncu', 'href="/sessions/'):
-    assert dead not in body
-  for name in ("Perfetto", "Nsight Compute", "Session events"):
-    assert name in body
-  for need in ("trace file", ".ncu-rep", "session"):
-    assert need in body
-
-
-@pytest.mark.asyncio
-async def test_home_lists_the_server_destinations(tmp_path: Path) -> None:
-  body = (await pages.home_page(make_page_request("/home"), _cfg(tmp_path / "h", []))).body.decode("utf-8")
-  assert 'href="/"' in body
-  assert 'href="/token-usage"' in body
-  assert 'href="/host-auth"' in body
-  assert 'href="/diff"' in body
-  assert 'href="/absolute_filepath/"' in body

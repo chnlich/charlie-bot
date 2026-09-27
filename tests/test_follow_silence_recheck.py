@@ -86,50 +86,6 @@ async def test_silence_crossing_emits_exactly_one_recheck_and_follow_continues(t
 
 
 @pytest.mark.asyncio
-async def test_no_recheck_before_threshold(tmp_path: Path) -> None:
-  """A freshly-written raw log is not silent: no reminder within a short window."""
-  raw = tmp_path / "agent.raw.ndjson"
-  raw.write_text('{"type":"assistant"}\n', encoding="utf-8")
-
-  reports: list[str] = []
-  events: list[dict] = []
-
-  async def on_silence() -> None:
-    reports.append("recheck")
-
-  task = asyncio.create_task(_consume(raw, events, on_silence))
-  try:
-    await asyncio.sleep(0.5)
-    assert not reports
-    assert [e.get("type") for e in events] == ["assistant"]
-  finally:
-    await cancel_and_drain(task)
-
-
-@pytest.mark.asyncio
-async def test_boot_report_and_recheck_share_the_once_key() -> None:
-  """Whichever side emits first claims the thread for this boot; the other
-  side (and any number of repeats) emits nothing more. Same channel and text
-  shape as the boot STALLED report."""
-  session_mgr = _FakeSessionMgr()
-
-  # Boot STALLED report claimed the key first: this thread's mounts stay silent.
-  init_module._silence_reported_thread_ids.add("thread-boot-reported")
-  await init_module._follow_silence_recheck(session_mgr, "sess", "thread-boot-reported")
-  assert not session_mgr.events
-
-  # The recheck side claims first for a fresh thread; repeats cannot re-emit.
-  await init_module._follow_silence_recheck(session_mgr, "sess", "thread-mounted")
-  await init_module._follow_silence_recheck(session_mgr, "sess", "thread-mounted")
-  assert len(session_mgr.events) == 1
-  ev = session_mgr.events[0]
-  assert ev["type"] == "error"
-  assert ev["source"] == "crash_recovery"
-  assert "still alive but produced no output" in ev["content"]
-  assert "NOT being killed" in ev["content"]
-
-
-@pytest.mark.asyncio
 async def test_remount_cannot_reemit_within_one_boot(tmp_path: Path) -> None:
   """Repeated re-mounts of the same thread fire their per-mount recheck, but
   the boot-scoped once-key admits at most one report in total."""

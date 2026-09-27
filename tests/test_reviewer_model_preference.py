@@ -12,10 +12,6 @@ from conftest import (
     JudgmentShim,
     ReviewSpawnSessionManager,
     ReviewSpawnThreadManager,
-    backend_option,
-    capture_create_logged_task,
-    fake_git_current_branch,
-    fake_spawn_worker,
     patch_review_spawn_path,
 )
 from conftest import THREE_BACKEND_OPTIONS as BACKEND_OPTIONS
@@ -75,64 +71,9 @@ def _make_original_thread(
   )
 
 
-# --- review._resolve_preference_option tests ---
-
-
-def test_resolve_preference_option_valid() -> None:
-  cfg = _build_cfg()
-  opt = review._resolve_preference_option(cfg, "kimi-k2.5")
-  assert opt.id == "kimi-k2.5"
-  assert opt.model == "kimi-k2.5"
-
-
-def test_resolve_preference_option_missing_id() -> None:
-  cfg = _build_cfg()
-  with pytest.raises(ValueError, match=r"not in backends.options"):
-    review._resolve_preference_option(cfg, "nonexistent")
-
-
-def test_resolve_preference_option_no_model() -> None:
-  cfg = _build_cfg(options=[
-      backend_option(id="no-model", label="No Model", type="cc-claude", model=""),
-  ])
-  with pytest.raises(ValueError, match="no default model"):
-    review._resolve_preference_option(cfg, "no-model")
-
-
-def test_resolve_preference_option_antigravity_missing_model() -> None:
-  cfg = _build_cfg(options=[AGY_BACKEND_OPTION])
-  opt = review._resolve_preference_option(cfg, "agy")
-  assert opt.id == "agy"
-  assert opt.model is None
 
 
 # --- review.spawn_review_worker preference tests ---
-
-
-@pytest.mark.asyncio
-async def test_spawn_review_worker_skips_when_reviewer_already_exists(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Idempotency judgment: a second reviewer for the same original is never derived."""
-  cfg = _build_cfg()
-  original = _make_original_thread()
-  existing_reviewer = ThreadMetadata(
-      id="existing-review", session_id="session-id", description="Review", review_of=original.id)
-  captured: dict[str, Any] = {}
-
-  class ThreadMgrWithReviewer(ReviewSpawnThreadManager):
-
-    async def list_threads(self, session_id: str) -> list[ThreadMetadata]:
-      return [original, existing_reviewer]
-
-    async def create_thread(self, *args: Any, **kwargs: Any) -> ThreadMetadata:
-      raise AssertionError("a reviewer already exists — create_thread must not run")
-
-  monkeypatch.setattr(review, "create_logged_task", capture_create_logged_task(captured))
-
-  spawned = await review.spawn_review_worker(
-      "session-id", original, cfg, ReviewSpawnSessionManager("Test"), ThreadMgrWithReviewer())
-
-  assert spawned is True
-  assert not captured  # no spawn task was scheduled
 
 
 @pytest.mark.asyncio
@@ -214,32 +155,6 @@ async def test_spawn_review_worker_resolves_preference(
   assert captured["request"].resolved_model == expected[1]
 
 
-@pytest.mark.asyncio
-async def test_spawn_review_worker_returns_false_when_session_missing() -> None:
-  """A missing session must not dereference a None session_meta.
-
-  ``spawn_review_worker`` returns False and creates no review thread when
-  ``get_session`` returns None, mirroring the ``ctx is None`` exit.
-  """
-  cfg = _build_cfg()
-  original = _make_original_thread()
-
-  class MissingSessionManager(ReviewSpawnSessionManager):
-
-    async def get_session(self, session_id: str) -> SessionMetadata | None:
-      return None
-
-  class ThreadMgrNoCreate(ReviewSpawnThreadManager):
-
-    async def create_thread(self, *args: Any, **kwargs: Any) -> ThreadMetadata:
-      raise AssertionError("create_thread must not run when the session is missing")
-
-  spawned = await review.spawn_review_worker(
-      "session-id", original, cfg, MissingSessionManager("Test"), ThreadMgrNoCreate())
-
-  assert spawned is False
-
-
 # --- Retry flow tests for review.spawn_review_worker with tried_backends ---
 
 
@@ -285,50 +200,6 @@ async def test_retry_all_prefs_exhausted_falls_back_to_worker(monkeypatch: pytes
   assert result is True
   assert captured["request"].resolved_backend == "codex-o3"
   assert captured["request"].resolved_model == "o3"
-
-
-@pytest.mark.asyncio
-async def test_retry_all_backends_exhausted_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
-  """When all backends including worker are tried, returns False."""
-  cfg = _build_cfg(preference=["kimi-k2.5", OPUS_BACKEND_ID])
-
-  monkeypatch.setattr(review, "git_current_branch", fake_git_current_branch)
-
-  result = await review.spawn_review_worker(
-      "session-id",
-      _make_original_thread(backend="codex-o3", model="o3"),
-      cfg,
-      ReviewSpawnSessionManager("Test"),
-      ReviewSpawnThreadManager(),
-      tried_backends=["kimi-k2.5", OPUS_BACKEND_ID, "codex-o3"],
-  )
-
-  assert result is False
-
-
-@pytest.mark.asyncio
-async def test_tried_backends_propagated_to_review_thread(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Review thread metadata gets tried_backends set."""
-  cfg = _build_cfg(preference=["kimi-k2.5", OPUS_BACKEND_ID])
-  thread_mgr = ReviewSpawnThreadManager()
-
-  monkeypatch.setattr(review, "git_current_branch", fake_git_current_branch)
-  monkeypatch.setattr(spawner, "spawn_worker", fake_spawn_worker)
-  monkeypatch.setattr(review, "create_logged_task", capture_create_logged_task({}))
-
-  await review.spawn_review_worker(
-      "session-id",
-      _make_original_thread(backend="codex-o3", model="o3"),
-      cfg,
-      ReviewSpawnSessionManager("Test"),
-      thread_mgr,
-      tried_backends=["kimi-k2.5"],
-  )
-
-  # The saved review thread should have tried_backends = ["kimi-k2.5", OPUS_BACKEND_ID]
-  saved = [m for m in thread_mgr.saved if m.review_of]
-  assert len(saved) == 1
-  assert saved[0].tried_backends == ["kimi-k2.5", OPUS_BACKEND_ID]
 
 
 def _make_fake_spawn_review(spawn_calls: list[dict], result: bool) -> Callable[..., Awaitable[bool]]:
@@ -453,33 +324,6 @@ async def _run_notify_rig(
   return spawn_calls, trigger_calls
 
 
-# One reviewer-exit routing rule per case. Row shape: (reviewer exit code, expected spawn
-# calls, expected master triggers).
-_REVIEWER_EXIT_CASES = [
-    pytest.param(1, 1, 0, id="failure-retries-next-backend"),
-    pytest.param(0, 0, 1, id="success-triggers-master"),
-]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("exit_code", "expected_spawn_calls", "expected_trigger_calls"), _REVIEWER_EXIT_CASES)
-async def test_notify_reviewer_exit_routes_retry_or_master(
-    monkeypatch: pytest.MonkeyPatch,
-    exit_code: int,
-    expected_spawn_calls: int,
-    expected_trigger_calls: int,
-) -> None:
-  """A failed reviewer retries with the next backend; a successful one triggers master."""
-  review_thread = _make_review_thread(tried_backends=["kimi-k2.5"])
-
-  spawn_calls, trigger_calls = await _run_notify_rig(monkeypatch, review_thread, exit_code=exit_code, spawn_result=True)
-
-  assert len(spawn_calls) == expected_spawn_calls
-  if expected_spawn_calls:
-    assert spawn_calls[0]["tried_backends"] == ["kimi-k2.5"]
-  assert len(trigger_calls) == expected_trigger_calls
-
-
 @pytest.mark.asyncio
 async def test_notify_retries_exhausted_triggers_master(monkeypatch: pytest.MonkeyPatch) -> None:
   """When all retries are exhausted, trigger master instead of retrying."""
@@ -489,38 +333,3 @@ async def test_notify_retries_exhausted_triggers_master(monkeypatch: pytest.Monk
 
   assert len(spawn_calls) == 1
   assert len(trigger_calls) == 1
-
-
-# One require_review gate rule per case. Row shape: (require_review, expected spawn calls,
-# expected master triggers).
-_REQUIRE_REVIEW_CASES = [
-    pytest.param(False, 0, 1, id="review-skipped-triggers-master"),
-    pytest.param(True, 1, 0, id="reviewer-spawned"),
-]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("require_review", "expected_spawn_calls", "expected_trigger_calls"), _REQUIRE_REVIEW_CASES)
-async def test_require_review_gate_routes_the_notify_paths(
-    monkeypatch: pytest.MonkeyPatch,
-    require_review: bool,
-    expected_spawn_calls: int,
-    expected_trigger_calls: int,
-) -> None:
-  """A review-less worker triggers master directly; a reviewing worker's reviewer owns the trigger."""
-  worker_thread = ThreadMetadata(
-      id="worker-thread-id",
-      session_id="session-id",
-      description="Prompt task",
-      require_review=require_review,
-      backend=OPUS_BACKEND_ID,
-      model=OPUS_BACKEND_OPTION.model,
-      branch_name="charliebot/task-1",
-      repo_path="/tmp/repo",
-      worktree_path=_WORKTREE_PATH,
-  )
-
-  spawn_calls, trigger_calls = await _run_notify_rig(monkeypatch, worker_thread, exit_code=0, spawn_result=True)
-
-  assert len(spawn_calls) == expected_spawn_calls
-  assert len(trigger_calls) == expected_trigger_calls

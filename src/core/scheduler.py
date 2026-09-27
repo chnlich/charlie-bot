@@ -277,8 +277,7 @@ class Scheduler:
           task_cfg, record_handle=record_handle, firing=firing or datetime.now(UTC).isoformat())
     parent = await self._cron_session_for(task_cfg)
     return await self._execute_bound_task(
-        task_cfg, record_handle=record_handle, firing=firing or datetime.now(UTC).isoformat(),
-        parent=parent)
+        task_cfg, record_handle=record_handle, firing=firing or datetime.now(UTC).isoformat(), parent=parent)
 
   # ---------------------------------------------------------------------------
   # Bound (task-tree) execution — the v2 path
@@ -358,7 +357,13 @@ class Scheduler:
     # applies with the repo's default branch as the merge target. Every other
     # action stays a type-less leaf whose success closes it.
     leaf = await self._bound_leaf(
-        task_cfg, meta, tree, firing, goal=prompt, backend=backend, model=model,
+        task_cfg,
+        meta,
+        tree,
+        firing,
+        goal=prompt,
+        backend=backend,
+        model=model,
         task_type=TaskType.IMPLEMENT if action == "implement" else None)
     from src.core.cron_sequence import register_leaf_run
     await register_leaf_run(tree, leaf.id, task_cfg, firing, kind="work", position=None, backend=backend, model=model)
@@ -475,8 +480,8 @@ class Scheduler:
         # itself recorded the durable run_launch_withheld fact and delivered
         # the ONE blocked report to the parent (once, by stable id); releasing
         # the overlap handle is all this round still owes.
-        log.info("bound_round_launch_withheld", task=task_cfg.name, leaf=leaf_id,
-                 run=run.id, reason=observation.withheld)
+        log.info(
+            "bound_round_launch_withheld", task=task_cfg.name, leaf=leaf_id, run=run.id, reason=observation.withheld)
 
     handle = create_logged_task(_round(), name=f"bound_worker_{task_cfg.name}_{firing}")
     if record_handle:

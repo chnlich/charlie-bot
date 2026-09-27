@@ -40,8 +40,10 @@ def scheduler_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
       charliebot_home=home,
       backends={"options": [OPUS_BACKEND_OPTION]},
       paths={"worktree_dir": str(home / "worktrees")})
-  core_config._credentials_cache.seed(core_config.Credentials(
-      path=home / "credentials.yaml", sections={"charliebot": {"access_key": "shared-key"}}))
+  core_config._credentials_cache.seed(
+      core_config.Credentials(path=home / "credentials.yaml", sections={"charliebot": {
+          "access_key": "shared-key"
+      }}))
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
@@ -56,9 +58,7 @@ def scheduler_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
-async def test_scheduled_fire_bookkeeping_writes_the_injected_session_manager(
-    scheduler_env,
-) -> None:
+async def test_scheduled_fire_bookkeeping_writes_the_injected_session_manager(scheduler_env,) -> None:
   """The fire's durable bookkeeping (last_scheduled_run) and its event land on
   the injected instance, so the read paths' cache sees them."""
   _cfg, session_mgr, tree, scheduler, _monkeypatch = scheduler_env

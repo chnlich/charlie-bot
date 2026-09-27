@@ -87,15 +87,17 @@ def main() -> None:
   parser.add_argument(
       "--repo",
       required=False,
-      help=("Path to the git repo; optional for implement/quick-edit/script-run (omit together "
-            "with --base-branch for a repo-less task), forbidden for verify"))
+      help=(
+          "Path to the git repo; optional for implement/quick-edit/script-run (omit together "
+          "with --base-branch for a repo-less task), forbidden for verify"))
   parser.add_argument(
       "--task-spec-file", dest="task_spec_file", required=True, help="Path to a structured Markdown task spec file")
   parser.add_argument(
       "--base-branch",
       required=False,
-      help=("Base branch for the worktree; optional for implement/quick-edit/script-run (omit together "
-            "with --repo for a repo-less task), forbidden for verify"))
+      help=(
+          "Base branch for the worktree; optional for implement/quick-edit/script-run (omit together "
+          "with --repo for a repo-less task), forbidden for verify"))
   parser.add_argument(
       "--backend",
       default=None,

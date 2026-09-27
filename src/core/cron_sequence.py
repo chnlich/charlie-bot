@@ -407,8 +407,13 @@ async def deliver_boundary_report(
   if created:
     await tree.sessions.announce_appended_event(recipient, report, epoch=epoch)
     await tree.dispatch.wake_parent(recipient, report=report)
-  log.info("cron_sequence_report_delivered", task=task_cfg.name, leaf=leaf_id, firing=firing,
-           outcome=outcome, created=created)
+  log.info(
+      "cron_sequence_report_delivered",
+      task=task_cfg.name,
+      leaf=leaf_id,
+      firing=firing,
+      outcome=outcome,
+      created=created)
 
 
 async def redrive_firing(leaf_id: str, tree: TaskTreeManager, cfg) -> None:

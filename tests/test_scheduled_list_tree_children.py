@@ -26,14 +26,23 @@ async def test_scheduled_list_nests_task_children_under_their_cron_session(tmp_p
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
   cron_session = await session_mgr.create_session(
-      CreateSessionRequest(name="Scheduled: nightly-sweep", scheduled_task="nightly-sweep"),
-      backend="opus")
+      CreateSessionRequest(name="Scheduled: nightly-sweep", scheduled_task="nightly-sweep"), backend="opus")
   leaf = await tree.create_task(
-      request_id="leaf-1", task_parent_id=cron_session.id, profile="worker",
-      task=TaskSpec(goal="sweep"), name="nightly-sweep · firing-1", backend=None, caller="system")
+      request_id="leaf-1",
+      task_parent_id=cron_session.id,
+      profile="worker",
+      task=TaskSpec(goal="sweep"),
+      name="nightly-sweep · firing-1",
+      backend=None,
+      caller="system")
   await tree.create_task(
-      request_id="root-other", task_parent_id=None, profile="manager",
-      task=TaskSpec(goal="unrelated"), name="Unrelated root", backend=None, caller="system")
+      request_id="root-other",
+      task_parent_id=None,
+      profile="manager",
+      task=TaskSpec(goal="unrelated"),
+      name="Unrelated root",
+      backend=None,
+      caller="system")
 
   app = FastAPI()
   app.include_router(sessions_router, prefix="/api/sessions")

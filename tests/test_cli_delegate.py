@@ -6,13 +6,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from conftest import (
-  CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
-  assert_cli_reject,
-  assert_cli_reject_exit2,
-  delegate_invocation,
-  make_json_response,
-  make_sessions_dir_config,
-  patched_cli_post,
+    CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
+    assert_cli_reject,
+    assert_cli_reject_exit2,
+    delegate_invocation,
+    make_json_response,
+    make_sessions_dir_config,
+    patched_cli_post,
 )
 from conftest import setup_session_cwd as _setup_session_cwd
 

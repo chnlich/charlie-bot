@@ -68,10 +68,12 @@ def build_scheduled_trigger_event(content: str) -> dict:
 def master_done_input_event_ids(done: dict) -> list[str]:
   """The chat events one MASTER_DONE answers, in arrival order.
 
-  Rounds that answer one input write the singular ``input_event_id``; merged
-  rounds write ``input_event_ids``. Events written before input batching carry
-  only the singular field, so every reader of the round's input identity
-  treats either shape as a list through this one helper.
+  Every MASTER_DONE written since input batching carries the plural
+  ``input_event_ids``, single-input and merged rounds alike; a round with no
+  chat input carries neither field. Only events written before batching
+  carry the singular ``input_event_id``, which this helper reads as a
+  one-element list. Every reader of the round's input identity treats
+  either shape as a list through this one helper.
   """
   ids = done.get(ET.INPUT_EVENT_IDS)
   if isinstance(ids, list):

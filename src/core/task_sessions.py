@@ -270,11 +270,24 @@ class TaskTreeActivity:
   work_state: WorkState
 
 
+def _run_outcomes(events: list[dict]) -> dict[str, str]:
+  """The run-finished outcome map over one event list (last finish wins per run id)."""
+  outcomes: dict[str, str] = {}
+  for event in events:
+    if event.get("type") != ET.RUN_FINISHED:
+      continue
+    run_id = event.get("run_id")
+    if isinstance(run_id, str):
+      outcomes[run_id] = str(event.get("outcome"))
+  return outcomes
+
+
 def derive_task_tree_activity(
     runs: list[RunRecord],
     events: list[dict],
     host_boot_time: Callable[[], datetime],
     task_open: bool,
+    outcomes: dict[str, str] | None = None,
 ) -> TaskTreeActivity:
   """The single owner of a task-tree node's activity rules.
 
@@ -293,13 +306,10 @@ def derive_task_tree_activity(
   running verdict is not gated: closure is refused while a Run is active, so a
   closed task cannot hold a live Run.
   """
-  outcomes: dict[str, str] = {}
-  for event in events:
-    if event.get("type") != ET.RUN_FINISHED:
-      continue
-    run_id = event.get("run_id")
-    if isinstance(run_id, str):
-      outcomes[run_id] = str(event.get("outcome"))
+  if not runs:
+    return TaskTreeActivity(has_running_tasks=False, work_state="idle")
+  if outcomes is None:
+    outcomes = _run_outcomes(events)
   verdicts: list[str] = []
   has_running = False
   boot: datetime | None = None
@@ -381,6 +391,7 @@ class TaskTreeManager:
     self._index_build_task: asyncio.Task[_TreeIndex] | None = None
     self._index_build_generation = -1
     self._facts_memo: dict[str, tuple[list[dict], int, _TaskFacts]] = {}
+    self._outcomes_memo: dict[str, tuple[list[dict], int, dict[str, str], int]] = {}
     self._prompt_bodies_dir = cfg.charliebot_home / PROMPT_BODIES_DIR_NAME
 
   @property
@@ -667,6 +678,29 @@ class TaskTreeManager:
       self._facts_memo[session_id] = (live, archived_count, facts)
     return facts
 
+  def _run_outcomes_of(self, session_id: str, live: list[dict], archived_count: int) -> dict[str, str]:
+    """The session's run-finished outcome map over the full history (suffix-memoized).
+
+    Rides the same key the facts memo does — the live events cache's list
+    identity plus the archived extent — with the covered cursor in the cell:
+    an append folds only the new suffix (a run_finished fact never
+    un-happens, so the merge stays last-finish-wins), and a rotation re-keys
+    the whole fold.
+    """
+    cached = self._outcomes_memo.get(session_id)
+    if cached is not None and cached[0] is live and cached[1] == archived_count:
+      outcomes, covered = cached[2], cached[3]
+    else:
+      outcomes = _run_outcomes(self._load_archived_events(session_id, archived_count)) if archived_count else {}
+      covered = 0
+    suffix = live[covered:]
+    if suffix:
+      for run_id, outcome in _run_outcomes(suffix).items():
+        outcomes[run_id] = outcome
+      covered = len(live)
+    self._outcomes_memo[session_id] = (live, archived_count, outcomes, covered)
+    return outcomes
+
   def facts_of(self, session_id: str) -> _TaskFacts:
     """Public fold entry for the input/completion owners (same memo)."""
     return self._facts_of(session_id)
@@ -696,9 +730,18 @@ class TaskTreeManager:
     and the tree projection can never disagree about the same node.
     """
     runs = self.runs.list_run_records_sync(session_id)
+    if not runs:
+      # No Run is no activity: the derivation's own guard answers without any
+      # event load, so a listing's per-descendant derivation over a runless
+      # node pays one runs-dir stat, not the node's whole event history.
+      return derive_task_tree_activity([], [], self._host_boot_time, task_open=False)
+    live = self._sessions.load_chat_events_sync(session_id)
+    archived_count = self._archived_event_count(session_id, live)
     events = self.runs.load_events_sync(session_id)
     task_open = self._facts_of(session_id).task_state == "open"
-    return derive_task_tree_activity(runs, events, self._host_boot_time, task_open)
+    return derive_task_tree_activity(
+        runs, events, self._host_boot_time, task_open,
+        outcomes=self._run_outcomes_of(session_id, live, archived_count))
 
   def activity_pair_of(self, session_id: str) -> tuple[bool, str]:
     """``activity_of`` as the plain pair the sidebar snapshot stores.
@@ -1582,6 +1625,7 @@ class TaskTreeManager:
     if result:
       self._invalidate_index()
       self._facts_memo.pop(session_id, None)
+      self._outcomes_memo.pop(session_id, None)
     return result
 
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -42,6 +42,7 @@ from tests.test_task_execution import (
     install_backends,
     make_api_client,
     result_event,
+    wait_for_terminal_run,
 )
 
 KEY = "op-secret"
@@ -294,6 +295,93 @@ async def test_implementation_blocked_until_real_user_authorizes_then_delegates_
   for sid in (ids["child"], grand_id):
     assert not [e for e in tree.facts_of(sid).events_by_id.values() if e.get("type") == ET.USER]
   assert len(builds) == 1
+
+
+@pytest.mark.asyncio
+async def test_expired_and_shadowing_authorization_still_block_delegation_at_depth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+  """Expired pre-takeoff windows and a shadowing local instruction keep current
+  semantics at manager depth: the nearest real user instruction decides."""
+  cfg, session_mgr, tree, ids = await three_manager_tree(tmp_path, monkeypatch)
+  install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  grand_id, grand_run = ids["grandchild"], "grandchild-run"
+  child_id = ids["child"]
+
+  # Expired pre-takeoff on the root (a later ordinary user message follows it,
+  # per the established file-last matching).
+  issued = (datetime.now(UTC) - timedelta(hours=13)).isoformat()
+  await tree.dispatch.admit_input(
+      ids["root"], event_type=ET.USER, content="pre take off", actor="user", timestamp=issued)
+  await tree.dispatch.admit_input(ids["root"], event_type=ET.USER, content="carry on with the plan", actor="user")
+  with make_api_client(cfg, session_mgr, tree) as client:
+    expired = client.post(
+        "/api/internal/delegate", json=delegate_payload(grand_id, repo), headers=agent_headers(grand_id, grand_run))
+  assert expired.status_code == 403
+  assert "no active authorization" in expired.json()["detail"]
+
+  # A fresh root authorization, then a local user instruction on the child
+  # without a takeoff shadows the ancestor: the gate fails at the child.
+  await tree.dispatch.admit_input(ids["root"], event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
+  await tree.dispatch.admit_input(child_id, event_type=ET.USER, content="please look into this first", actor="user")
+  with make_api_client(cfg, session_mgr, tree) as client:
+    shadowed = client.post(
+        "/api/internal/delegate", json=delegate_payload(grand_id, repo), headers=agent_headers(grand_id, grand_run))
+  assert shadowed.status_code == 403
+  assert "no active authorization" in shadowed.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_queued_retry_launches_without_reauthorizing_and_verify_exemption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+  """A queued retry of an implementation run is never re-judged at the actual
+  launch: the authorization the delegation rode in on carried it into the
+  queue, and a later conversation cannot withhold the launch (the takeoff gate
+  is a request-entry check). A read-only verify run under the same tree still
+  launches (the established exemption)."""
+  cfg, session_mgr, tree, ids = await three_manager_tree(tmp_path, monkeypatch)
+  grand_id, grand_run = ids["grandchild"], "grandchild-run"
+  await tree.dispatch.admit_input(ids["root"], event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
+  builds = install_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("verdict: no")]),
+                    SpawningScriptedBackend([result_event("verdict: yes")])],
+      WORKER_BUILD_BACKEND_PATCH_TARGET)
+
+  with make_api_client(cfg, session_mgr, tree) as client:
+    ok = client.post(
+        "/api/internal/delegate", json=delegate_payload(grand_id, repo), headers=agent_headers(grand_id, grand_run))
+    assert ok.status_code == 200, ok.text
+    leaf_id, leaf_run = ok.json()["session_id"], ok.json()["run_id"]
+
+  # The work run fails; its explicit retry is a queued run. Authorization
+  # "expires" before the retry launches (a later real user message without the
+  # phrase shadows the authorized one) — and the retry launches anyway: the
+  # launch carries no gate, so later conversation never withholds it.
+  await tree.dispatch.finish_run(leaf_id, leaf_run, outcome="failed")
+  retry = await tree.create_retry(leaf_id, "retry-1", leaf_run)
+  assert retry["run_id"]
+  await tree.dispatch.admit_input(ids["root"], event_type=ET.USER, content="hold on, new plan", actor="user")
+
+  tree.dispatch.executor.launch(leaf_id, retry["run_id"])
+  _run, outcome = await wait_for_terminal_run(tree, leaf_id, retry["run_id"])
+  assert outcome == "success"
+  assert len(builds) == 1  # the retry's own backend build, unblocked by the shadowing message
+
+  # The read-only verify exemption still launches under the same expired tree.
+  verify = await tree.create_task(
+      request_id="verify-leaf",
+      task_parent_id=grand_id,
+      profile="worker",
+      task=TaskSpec(goal="check the thing", task_type="verify"),
+      name="Verify",
+      backend=None,
+      caller=OP_CALLER)
+  verify_run = await tree.runs.register_run(
+      RunRecord(id="verify-run", session_id=verify.id, kind="work", backend="fake", model="fake-model"))
+  observation = await tree.dispatch.executor.launch_and_settle(verify.id, verify_run.id)
+  assert observation.withheld is None
+  _run, outcome = await wait_for_terminal_run(tree, verify.id, verify_run.id)
+  assert outcome == "success"
+  assert len(builds) == 2  # the verify run's own build joins the retry's
 
 
 # ---------------------------------------------------------------------------

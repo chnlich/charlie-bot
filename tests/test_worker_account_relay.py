@@ -1,31 +1,33 @@
 """Worker account relay: a delegated task keeps running when its pool login runs out of quota.
 
-Covers the pool pin at construction (spawner_launch._construct_worker), the Worker's own
-relay loop (src/agents/worker.py run/_relay), the disposition of an exhausted pool through
-_stream_worker_events and spawn_worker, and the completion notice carrying the reset time.
+Covers the pool pin (claude_relay.pin_pool_account) and the Worker's own relay loop
+(src/agents/worker.py run/_relay): rejected-run relay onto another account, the safe-point
+termination after a far warning, the relay limit, login-failure marking, and compaction.
 """
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from conftest import (
-    FABLE_MODEL,
-    POOLED_FABLE_ID,
-    WORKER_BUILD_BACKEND_PATCH_TARGET,
-    ScriptedRelayBackend,
-    assistant_text_event,
-    fable_pool_cfg,
-    fresh_state_fixture,
-    install_scripted_backends,
-    make_transcript,
-    rate_limit_event,
+  FABLE_MODEL,
+  POOLED_FABLE_ID,
+  WORKER_BUILD_BACKEND_PATCH_TARGET,
+  ScriptedRelayBackend,
+  assistant_text_event,
+  fable_pool_cfg,
+  fresh_state_fixture,
+  install_scripted_backends,
+  make_transcript,
+  rate_limit_event,
 )
 
 from src.agents.worker import Worker
 from src.core import (
-    claude_accounts,
-    claude_relay,
+  claude_accounts,
+  claude_compaction,
+  claude_relay,
 )
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
@@ -90,6 +92,15 @@ def test_pin_pool_account_picks_the_most_headroom_and_leaves_the_option_unchange
   assert (account.label, account.config_dir) == ("ext-1", str(tmp_path / "claude-ext-1"))
 
 
+def test_pin_pool_account_raises_with_the_earliest_reset_when_every_account_is_rejected(tmp_path: Path) -> None:
+  cfg = fable_pool_cfg(tmp_path)
+  for label in ("main", "ext-1", "ext-2"):
+    _reject(label)
+
+  with pytest.raises(claude_relay.PoolExhaustedError, match="earliest reset"):
+    claude_relay.pin_pool_account(cfg, cfg.get_backend_option(POOLED_FABLE_ID))
+
+
 # ---------------------------------------------------------------------------
 # The Worker's relay loop
 # ---------------------------------------------------------------------------
@@ -133,5 +144,67 @@ async def test_worker_raises_pool_exhausted_when_no_account_is_left(
     await worker.run()
 
 
-# ---------------------------------------------------------------------------
-# Disposition of an exhausted pool
+@pytest.mark.asyncio
+async def test_worker_stops_after_the_relay_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = fable_pool_cfg(tmp_path, labels=("main", "a", "b", "c"))
+  make_transcript(tmp_path / "claude-main", CC_ID)
+  backends = [ScriptedRelayBackend([rate_limit_event("rejected", 1.0)], exit_code=1) for _ in range(4)]
+  builds = _install_backends(monkeypatch, backends)
+  worker = _worker(tmp_path, cfg, "main")
+
+  with pytest.raises(RuntimeError, match="relay limit"):
+    await worker.run()
+
+  assert len(builds) == 1 + claude_relay.MAX_RELAYS_PER_TURN
+  assert worker.account_relays == claude_relay.MAX_RELAYS_PER_TURN
+
+
+@pytest.mark.asyncio
+async def test_worker_login_failure_marks_the_account_and_notifies_the_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = fable_pool_cfg(tmp_path)
+  make_transcript(tmp_path / "claude-main", CC_ID)
+  first = ScriptedRelayBackend([assistant_text_event("Failed to authenticate. Please run /login")], exit_code=1)
+  second = ScriptedRelayBackend([_result()], exit_code=0)
+  _install_backends(monkeypatch, [first, second])
+  worker = _worker(tmp_path, cfg, "main")
+  worker.on_session_event = AsyncMock()
+
+  exit_code = await worker.run()
+
+  assert exit_code == 0
+  assert not claude_accounts.healthy(claude_accounts.account_by_label(cfg, "main"))
+  notice = worker.on_session_event.await_args.args[0]
+  assert notice["type"] == ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED
+  assert (notice["account"], notice["reason"]) == ("main", "auth_failed")
+  assert any(ev["type"] == ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED for ev in _logged_events(tmp_path))
+  assert worker.claude_account.label == "ext-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("prompt_tokens", "compacted"), [(150_000, True), (20_000, False)])
+async def test_worker_relay_compacts_a_large_fable_context_on_the_new_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, prompt_tokens: int, compacted: bool) -> None:
+  cfg = fable_pool_cfg(tmp_path)
+  make_transcript(tmp_path / "claude-main", CC_ID)
+  compact = AsyncMock()
+  monkeypatch.setattr(claude_compaction, "compact_with_sonnet", compact)
+  big = assistant_text_event("big")
+  big["message"]["usage"] = {"input_tokens": 10, "cache_read_input_tokens": prompt_tokens - 10}
+  first = ScriptedRelayBackend([big, rate_limit_event("rejected", 1.0)], exit_code=1)
+  second = ScriptedRelayBackend([_result()], exit_code=0)
+  _install_backends(monkeypatch, [first, second])
+  worker = _worker(tmp_path, cfg, "main")
+
+  await worker.run()
+
+  assert compact.await_count == (1 if compacted else 0)
+  if compacted:
+    kwargs = compact.await_args.kwargs
+    assert kwargs["cc_session_id"] == CC_ID
+    assert kwargs["config_dir"] == str(tmp_path / "claude-ext-1")
+    assert kwargs["pre_tokens"] == prompt_tokens
+    assert kwargs["cwd"] == str(tmp_path / "work")
+    assert kwargs["log_context"]["trigger"] == "relay"
+
+

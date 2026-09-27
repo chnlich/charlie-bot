@@ -47,7 +47,7 @@ with gc_off(collect=False):
       voice,
   )
   from src.api.auth import AuthMiddleware, _credential_matches
-  from src.api.deps import session_manager, set_trigger_manager, task_manager, thread_manager
+  from src.api.deps import session_manager, set_trigger_manager, task_manager
   from src.core import timeouts
   from src.core.buildinfo import init_build_info
   from src.core.config import (
@@ -320,9 +320,9 @@ async def _run_crash_recovery(cfg: CharlieBotConfig, boot_time: datetime, identi
   """
   started = utc_now()
   try:
-    recovered = await run_crash_recovery(cfg, boot_time, session_manager(), thread_manager(), master_identity=identity)
+    await run_crash_recovery(cfg, boot_time, session_manager(), master_identity=identity)
     elapsed_ms = round((utc_now() - started).total_seconds() * 1000)
-    log.info("crash_recovery_done", count=recovered, elapsed_ms=elapsed_ms)
+    log.info("crash_recovery_done", elapsed_ms=elapsed_ms)
   except Exception:
     log.exception("crash_recovery_failed")
 

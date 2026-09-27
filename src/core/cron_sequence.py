@@ -44,9 +44,8 @@ from src.core import review
 from src.core.config import ScheduledTaskConfig
 from src.core.control_events import stable_run_id
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec
+from src.core.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec, TaskType
 from src.core.runs import RUN_EVENTS_NAME
-from src.core.task_chain import chain_step_prompt
 from src.core.task_completion import RUN_REF_PREFIX
 
 if TYPE_CHECKING:
@@ -96,6 +95,16 @@ def load_bound_task(task_name: str, cfg: object) -> ScheduledTaskConfig | None:
         "cron_sequence_task_config_unreadable", task=task_name, path=str(path), error=str(exc))
     return None
   return task
+
+
+def chain_step_prompt(prompt: str, previous_name: str, previous_result: str) -> str:
+  """One step's prompt with the previous step's result under the legacy heading.
+
+  The heading is worker-facing contract: ``memory_reviewer.md`` in
+  ``prompts/cron/memory_curator/`` tells a step to read its input under it,
+  so the format lives only here.
+  """
+  return f"{prompt.rstrip()}\n\n## Result of the previous step ({previous_name})\n{previous_result}"
 
 
 def firing_ref(task_cfg: ScheduledTaskConfig, firing: str) -> str:
@@ -207,21 +216,28 @@ async def ensure_firing_leaf(
     goal: str,
     backend: str,
     model: str | None,
+    task_type: TaskType | None = None,
 ) -> SessionMetadata:
   """Create (or re-admit) the ONE worker leaf this firing owns.
 
   Stable by (parent, firing): a replayed fire returns the original leaf. The
-  leaf carries no task_type — the scheduled work's applicable evidence policy
-  is the run's own result truth reported to the manager, not the delegate
-  implement policy (review + repository landing), which the delegation path
-  keeps enforcing.
+  leaf carries no task_type unless the caller passes one (the loop backlog's
+  implement action delegates implementation, so its leaf is an implement task
+  whose delivery rides the review + repository landing policy with the repo's
+  default branch as the merge target) — the scheduled work's applicable
+  evidence policy is otherwise the run's own result truth reported to the
+  manager.
+
+  The parent is the bound manager, or an unbound task's cron session: a legacy
+  session (profile None) parents its firings' leaves in place, exactly as the
+  delegation path parents a worker under it.
   """
   from src.core.task_sessions import TaskInvalidError
 
-  if meta.profile != "manager":
+  if meta.profile not in ("manager", None):
     raise TaskInvalidError(
         f"scheduled task '{task_cfg.name}' cannot create a worker leaf under "
-        f"{meta.id}: the bound task is not a manager")
+        f"{meta.id}: the parent is neither a manager nor the task's legacy cron session")
   return await tree.create_task(
       request_id=leaf_request_id(task_cfg, firing),
       task_parent_id=meta.id,
@@ -230,7 +246,7 @@ async def ensure_firing_leaf(
           goal=goal,
           repo_path=task_cfg.repo,
           base_branch=None,
-          task_type=None,
+          task_type=task_type,
       ),
       name=f"{task_cfg.name} · {firing}",
       backend=None,
@@ -322,12 +338,10 @@ async def run_firing_steps(
       observation = await launch_and_settle(tree, leaf_id, run.id, prompt)
       if observation.withheld is not None:
         # No process started and no terminal fact will arrive: the chain
-        # cannot advance. Settle the boundary explicitly — the step Run stays
-        # queued as the retained pending request, the actual reason is
-        # delivered through the report owner, and the scheduler's overlap
-        # handle ends with this controller.
-        await deliver_withheld_boundary(
-            tree, leaf_id, meta.id, task_cfg, firing, position, step.name, observation.withheld, executed)
+        # cannot advance and ends here. The launch itself recorded the
+        # durable run_launch_withheld fact and delivered the ONE blocked
+        # report to the parent (once, by stable id) — the controller only
+        # releases the scheduler's overlap handle.
         return
       outcome = observation.outcome
       assert outcome is not None
@@ -370,43 +384,31 @@ async def deliver_boundary_report(
     outcome: str,
     summary: str,
 ) -> None:
-  """The ONE firing report through the common report owner (stable id dedup)."""
-  source = tree.dispatch.report_source_event(leaf_id, "scheduled firing leaf")
-  await tree.dispatch.deliver_child_report(
-      leaf_id,
-      source_event=source,
-      outcome=outcome,
-      summary=summary,
-      result_refs=[firing_ref(task_cfg, firing)],
-      recipient=recipient,
-  )
-  log.info("cron_sequence_report_delivered", task=task_cfg.name, leaf=leaf_id, firing=firing, outcome=outcome)
+  """The ONE firing failure report through the common report owner, then the wake.
 
-
-async def deliver_withheld_boundary(
-    tree: TaskTreeManager,
-    leaf_id: str,
-    recipient: str,
-    task_cfg: ScheduledTaskConfig,
-    firing: str,
-    position: int,
-    step_name: str,
-    reason: str,
-    executed: list[tuple[int, str, str, str]],
-) -> None:
-  """The boundary report for a chain whose next launch was withheld.
-
-  The same report owner the failed/blocked boundaries use: the withheld step
-  Run stays queued as the retained pending request, the report carries the
-  actual reason (and every step that did execute), and no side effect is
-  retried automatically. Resume/retry rides the existing policy.
+  The delivered report is the recipient's new durable input: a task-tree
+  manager drains it on its next serialized turn (dispatch_pending), a legacy
+  cron session is woken through trigger_master — one wake per fire, the same
+  shape the legacy path's master wake had. The stable report id dedups the
+  delivery, and only a freshly created report wakes, so a recovery re-delivery
+  never wakes twice for one firing.
   """
-  blocks = [f"**{name} result:**\n{result or '(no result)'}" for _pos, _rid, name, result in executed]
-  summary = (
-      f"Scheduled task '{task_cfg.name}' stopped before step '{step_name}': its launch was "
-      f"withheld and no process started ({reason}). The step run stays queued on the firing's "
-      "leaf as the retained pending request; no side effects ran.\n\n" + "\n\n".join(blocks))
-  await deliver_boundary_report(tree, leaf_id, recipient, task_cfg, firing, "blocked", summary)
+  source = tree.dispatch.report_source_event(leaf_id, "scheduled firing leaf")
+  epoch = await tree.sessions.prime_aggregator(recipient)
+  async with tree.control_lock:
+    report, created = await tree.dispatch.deliver_child_report_locked(
+        leaf_id,
+        source_event=source,
+        outcome=outcome,
+        summary=summary,
+        result_refs=[firing_ref(task_cfg, firing)],
+        recipient=recipient,
+    )
+  if created:
+    await tree.sessions.announce_appended_event(recipient, report, epoch=epoch)
+    await tree.dispatch.wake_parent(recipient, report=report)
+  log.info("cron_sequence_report_delivered", task=task_cfg.name, leaf=leaf_id, firing=firing,
+           outcome=outcome, created=created)
 
 
 async def redrive_firing(leaf_id: str, tree: TaskTreeManager, cfg) -> None:
@@ -480,7 +482,7 @@ def _adapter_of(tree: TaskTreeManager) -> object:
 
 def launch(tree: TaskTreeManager, leaf_id: str, run_id: str, prompt: str | None) -> None:
   """The scheduler-owned launch through the shared adapter."""
-  _adapter_of(tree).launch_scheduled(leaf_id, run_id, prompt=prompt)
+  _adapter_of(tree).launch(leaf_id, run_id, prompt=prompt)
 
 
 async def launch_and_settle(
@@ -494,7 +496,7 @@ async def launch_and_settle(
   withheld verdict when the launch precondition failed and no process
   started. A live process from a replayed registration is followed, never
   relaunched."""
-  return await _adapter_of(tree).launch_and_settle(leaf_id, run_id, prompt=prompt, scheduled=True)
+  return await _adapter_of(tree).launch_and_settle(leaf_id, run_id, prompt=prompt)
 
 
 async def step_advanced(tree: TaskTreeManager, leaf_id: str, run_id: str) -> bool:
@@ -562,14 +564,6 @@ async def reconcile_bound_firings(
     run = await register_leaf_run(
         tree, leaf_id, task_cfg, firing, kind="scheduled_step", position=pos, backend=backend, model=model)
     prompt = steps[pos].prompt or ""
-    executed: list[tuple[int, str, str, str]] = []
-    for previous_pos in executed_positions:
-      if previous_pos >= pos:
-        break
-      executed.append(
-          (
-              previous_pos, by_position[previous_pos].id, steps[previous_pos].name, await
-              run_result_text(tree, leaf_id, by_position[previous_pos].id)))
     if pos > 0 and executed_positions:
       previous_pos = executed_positions[-1]
       previous = await run_result_text(tree, leaf_id, by_position[previous_pos].id)
@@ -577,10 +571,9 @@ async def reconcile_bound_firings(
     from src.core.tasks import create_logged_task
 
     async def _settle_recovered_launch(run_id: str = run.id, launch_prompt: str = prompt) -> None:
-      observation = await launch_and_settle(tree, leaf_id, run_id, launch_prompt)
-      if observation.withheld is not None:
-        await deliver_withheld_boundary(
-            tree, leaf_id, meta.id, task_cfg, firing, pos, steps[pos].name, observation.withheld, executed)
+      # A withheld recovered launch is recorded and reported by the launch
+      # itself (once, by stable id); the controller owes nothing further.
+      await launch_and_settle(tree, leaf_id, run_id, launch_prompt)
 
     create_logged_task(_settle_recovered_launch(), name=f"cron-recovered-step-{run.id[:8]}")
     return
@@ -601,16 +594,12 @@ async def reconcile_bound_firings(
         previous = await run_result_text(tree, leaf_id, by_position[last_pos].id)
         prompt = chain_step_prompt(prompt, steps[last_pos].name, previous)
       # The recovered launch settles in its own task (never inline — a live
-      # process's follow must not hold this pass): a withheld launch delivers
-      # the same blocked boundary report the fresh controller would.
+      # process's follow must not hold this pass). A withheld launch records
+      # and reports itself; the controller owes nothing further.
       from src.core.tasks import create_logged_task
 
       async def _settle_recovered_launch(run_id: str = next_run.id, launch_prompt: str = prompt) -> None:
-        observation = await launch_and_settle(tree, leaf_id, run_id, launch_prompt)
-        if observation.withheld is not None:
-          await deliver_withheld_boundary(
-              tree, leaf_id, meta.id, task_cfg, firing, last_pos + 1, steps[last_pos + 1].name, observation.withheld,
-              executed)
+        await launch_and_settle(tree, leaf_id, run_id, launch_prompt)
         # A settled step Run's own finish chain re-drives the frontier from
         # here; nothing further is owed inline.
 

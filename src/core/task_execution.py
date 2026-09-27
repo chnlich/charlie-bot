@@ -51,7 +51,13 @@ from src.core import event_types as ET
 from src.core.chat_events import chat_events_path
 from src.core.config import CharlieBotConfig, configured_access_key
 from src.core.constants import SESSION_ID_ENV_VAR, BackendType
-from src.core.control_events import sha256_hex, stable_run_id
+from src.core.control_events import (
+    ACTOR_SYSTEM,
+    build_control_event,
+    sha256_hex,
+    stable_run_id,
+    stable_withheld_event_id,
+)
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import (
     BackendOption,
@@ -65,7 +71,7 @@ from src.core.runs import RUN_EVENTS_NAME, RunNotFoundError, run_not_found_in_ta
 from src.core.session_dispatch import child_report_text
 from src.core.sessions import HISTORY_LOCATION_NOTE, SessionManager
 from src.core.spawner_backends import resolve_backend_option
-from src.core.takeoff_gate import DelegationBlockedError, is_verify_exempt
+from src.core.takeoff_gate import is_verify_exempt
 from src.core.task_prompts import WORKER_KINDS, PromptSnapshot, TaskPromptError
 from src.core.task_sessions import (
     TaskConflictError,
@@ -386,24 +392,8 @@ class TaskExecutionAdapter:
         self._arm_launch_settlement(key)
         self._schedule_launch(session_id, run_id, prompt=prompt)
 
-    def launch_scheduled(self, session_id: str, run_id: str, *, prompt: str | None = None) -> None:
-        """The configured scheduler's launch seam: a server-owned fire.
-
-        The scheduler (and only in-process server code) reaches this; the run's
-        launch authorization is the existing scheduled execution authorization
-        rather than the nearest-user gate, exactly like the legacy scheduled
-        worker entry this replaces.
-        """
-        key = (session_id, run_id)
-        if key in self._launch_inflight:
-            return
-        self._launch_inflight.add(key)
-        self._arm_launch_settlement(key)
-        self._schedule_launch(session_id, run_id, prompt=prompt, scheduled=True)
-
     def _schedule_launch(
         self, session_id: str, run_id: str, *, prompt: str | None = None,
-        scheduled: bool = False,
     ) -> None:
         """Fire-and-forget the actual execution; the reservation is already durable."""
         from src.core.tasks import create_logged_task
@@ -411,8 +401,7 @@ class TaskExecutionAdapter:
         async def _execute_and_release() -> None:
             key = (session_id, run_id)
             try:
-                verdict = await self.execute_run(
-                    session_id, run_id, launch_prompt=prompt, scheduled=scheduled)
+                verdict = await self.execute_run(session_id, run_id, launch_prompt=prompt)
             except Exception as exc:
                 # The launch died before the run's execution could land a
                 # terminal fact: the waiting controller must see the actual
@@ -428,29 +417,35 @@ class TaskExecutionAdapter:
 
     async def execute_run(
         self, session_id: str, run_id: str, *, launch_prompt: str | None = None,
-        scheduled: bool = False,
     ) -> str:
         """Pre-launch rechecks, then execute one Run on its kind's adapter.
 
         Rechecks run under the control lock immediately before the launch:
-        role (the kind/profile pairing), open ancestors, authorization and any
-        durable stop request. The backend resolution afterwards is
-        explicit — a missing or invalid backend fails visibly, never
-        silently substituted. ``launch_prompt`` is the sequence controllers'
-        explicit launch text; see :meth:`launch`. ``scheduled`` marks a fire
-        the configured scheduler owns (its server-side invocation is the
-        existing scheduled execution authorization, with provenance the
-        server derived itself); every other launch re-judges the
-        nearest-real-user-ancestor gate at the actual start.
+        role (the kind/profile pairing), open ancestry and any durable stop
+        request. There is no authorization re-judgment here — the takeoff
+        gate is a request-entry check (delegation, improve, agent messages to
+        worker nodes), so review Runs, manual retries, startup recovery and
+        cron fires are never withheld by later conversation. The backend
+        resolution afterwards is explicit — a missing or invalid backend fails
+        visibly, never silently substituted. ``launch_prompt`` is the sequence
+        controllers' explicit launch text; see :meth:`launch`.
 
         Returns ``LAUNCH_STARTED`` when the Run's execution adapter was
         entered, or the actual refusal reason when a launch precondition
-        withheld it (no process started and no terminal fact will arrive).
-        An exception escaping before the adapter was entered is a
+        withheld it (no process started and no terminal fact will arrive). A
+        withheld launch records its durable ``run_launch_withheld`` event on
+        the node — task closed, a durable stop request, or prompt assembly
+        failed — and one blocked child report to the parent (once per run and
+        reason, by stable id). An
+        exception escaping before the adapter was entered is a
         failed-to-start launch: the caller's settlement sees it, never an
         endless wait.
         """
         tree = self._tree
+        # The withheld verdict (closed node or durable stop) is recorded after
+        # the lock releases: the durable record and the parent report take the
+        # lock themselves.
+        withheld: tuple[SessionMetadata, RunRecord, str] | None = None
         async with tree.control_lock:
             meta = await tree.load_task_meta(session_id)
             run = await tree.runs.get_run(session_id, run_id)
@@ -458,31 +453,22 @@ class TaskExecutionAdapter:
                 raise RunNotFoundError(run_not_found_in_task_text(run_id, session_id))
             state = tree.task_state(session_id)
             if state != "open":
-                reason = f"withheld: task {session_id} is {state}"
+                reason = f"task {session_id} is {state}"
                 log.info("run_launch_withheld", session_id=session_id, run_id=run_id, reason=reason)
-                return reason
-            await tree._require_open_ancestry(session_id)
-            events = tree.runs.load_events_sync(session_id)
-            if tree.runs.run_has_terminal_fact(run, events):
-                log.info("run_launch_refused_by_facts", session_id=session_id, run_id=run_id)
-                return f"refused: run {run_id} already finished"
-            if tree.runs.stop_requested(events, run_id):
-                log.info("run_launch_refused_by_facts", session_id=session_id, run_id=run_id)
-                return f"refused: run {run_id} has a durable stop request"
-            if (meta.profile == "worker" and run.kind in ("work", "review") and meta.task_parent_id
-                    and not scheduled and not self._verify_exempt(meta)):
-                # The nearest-user-ancestor gate re-judges at actual launch
-                # (plan 4.2: pending execution requests re-judge where they
-                # start). A configured scheduler fire runs under the existing
-                # scheduled execution authorization instead (see
-                # launch_scheduled), and the read-only verify exemption rides
-                # the same task-type judgment the delegation route applies.
-                try:
-                    await tree.check_task_authorization(meta.task_parent_id)
-                except DelegationBlockedError as e:
-                    log.info("run_launch_authorization_withheld",
-                             session_id=session_id, run_id=run_id, reason=str(e))
-                    return f"withheld: {e}"
+                withheld = (meta, run, reason)
+            else:
+                await tree._require_open_ancestry(session_id)
+                events = tree.runs.load_events_sync(session_id)
+                if tree.runs.run_has_terminal_fact(run, events):
+                    log.info("run_launch_refused_by_facts", session_id=session_id, run_id=run_id)
+                    return f"refused: run {run_id} already finished"
+                if tree.runs.stop_requested(events, run_id):
+                    reason = f"run {run_id} has a durable stop request"
+                    log.info("run_launch_withheld", session_id=session_id, run_id=run_id, reason=reason)
+                    withheld = (meta, run, reason)
+        if withheld is not None:
+            meta, run, reason = withheld
+            return await self._record_launch_withheld(meta, run, reason)
         # Backend resolution is the first post-admission act: an exception here
         # is a launch failure on an ADMITTED run and lands the run's durable
         # failure (terminal fact, error evidence, after-run) before it
@@ -504,7 +490,8 @@ class TaskExecutionAdapter:
         except TaskPromptError as e:
             log.error("task_prompt_preparation_failed", session_id=session_id, run_id=run_id,
                       kind=run.kind, error=str(e))
-            return f"withheld: prompt preparation failed: {e}"
+            return await self._record_launch_withheld(
+                meta, run, f"prompt preparation failed: {e}")
         # Adapter entry to process start: context build, worktree preparation
         # and spawn all happen inside. An exception there is a launch failure
         # on an admitted run — the same durable-failure handler as backend
@@ -521,6 +508,58 @@ class TaskExecutionAdapter:
             await self._land_launch_failure(meta, run, exc)
             raise
         return LAUNCH_STARTED
+
+    async def _record_launch_withheld(self, meta: SessionMetadata, run: RunRecord, reason: str) -> str:
+        """Record one withheld launch durably and report it to the parent.
+
+        The node's events log gains one ``run_launch_withheld`` fact per
+        (run, reason) pair — the stable id dedups repeated launch attempts and
+        recovery passes, and ``run_display_state`` reads it as the queued Run's
+        ``withheld`` display state with its reason. One ``blocked``
+        child_report sourced from that event persists for the parent and wakes
+        it through ``wake_parent``; the stable report id keeps it to one
+        report per (run, reason) as well. Returns the launch verdict string.
+        """
+        tree = self._tree
+        session_id, run_id = meta.id, run.id
+        event_id = stable_withheld_event_id(run_id, reason)
+        epoch = await tree.sessions.prime_aggregator(session_id)
+        parent_epoch = (await tree.sessions.prime_aggregator(meta.task_parent_id)
+                        if meta.task_parent_id else None)
+        async with tree.control_lock:
+            events = tree.fact_history(session_id)
+            existing = next((e for e in events if e.get("id") == event_id), None)
+            if existing is not None:
+                event = existing
+            else:
+                event = build_control_event(
+                    ET.RUN_LAUNCH_WITHHELD,
+                    actor=ACTOR_SYSTEM,
+                    source_session_id=session_id,
+                    event_id=event_id,
+                    run_id=run_id,
+                    reason=reason,
+                )
+                await tree.events.append(session_id, event)
+            report_event = None
+            report_created = False
+            if meta.task_parent_id:
+                report_event, report_created = await tree.dispatch.deliver_child_report_locked(
+                    session_id,
+                    source_event=event,
+                    outcome="blocked",
+                    summary=reason,
+                    result_refs=[f"run:{run_id}"],
+                    recipient=meta.task_parent_id,
+                    actor=ACTOR_SYSTEM,
+                )
+        await tree.sessions.announce_appended_event(session_id, event, epoch=epoch)
+        if report_event is not None and report_created and parent_epoch is not None:
+            await tree.sessions.announce_appended_event(
+                meta.task_parent_id, report_event, epoch=parent_epoch)
+        if report_event is not None and report_created and meta.task_parent_id:
+            await tree.dispatch.wake_parent(meta.task_parent_id, report=report_event)
+        return f"withheld: {reason}"
 
     async def _land_launch_failure(self, meta: SessionMetadata, run: RunRecord, exc: Exception) -> None:
         """Land one post-admission launch exception as the Run's durable failure.
@@ -596,7 +635,6 @@ class TaskExecutionAdapter:
 
     async def launch_and_settle(
         self, session_id: str, run_id: str, *, prompt: str | None = None,
-        scheduled: bool = False,
     ) -> LaunchSettlement:
         """The sequence controllers' shared launch/wait observation.
 
@@ -606,10 +644,9 @@ class TaskExecutionAdapter:
         carries a terminal fact returns it; a live or ended process is
         followed to its fact (never relaunched, never killed for running
         long); only a launch whose precondition failed in the
-        registration-to-launch interval — node closed, durable stop request,
-        expired authorization, startup failure — settles withheld, with the
-        actual reason. The first terminal fact always wins over a settle
-        race.
+        registration-to-launch interval — node closed, durable stop, prompt
+        assembly failure — settles withheld, with the actual reason. The
+        first terminal fact always wins over a settle race.
         """
         tree = self._tree
         run = await tree.runs.get_run(session_id, run_id)
@@ -625,10 +662,7 @@ class TaskExecutionAdapter:
             return LaunchSettlement(outcome=await self._await_terminal(session_id, run_id))
         key = (session_id, run_id)
         if key not in self._launch_settlements:
-            if scheduled:
-                self.launch_scheduled(session_id, run_id, prompt=prompt)
-            else:
-                self.launch(session_id, run_id, prompt=prompt)
+            self.launch(session_id, run_id, prompt=prompt)
         future = self._launch_settlements.get(key)
         if future is None:
             # The launch settled (and dropped its entry) between the facts
@@ -646,66 +680,6 @@ class TaskExecutionAdapter:
                 return LaunchSettlement(outcome=outcome)
             return LaunchSettlement(withheld=verdict)
         return LaunchSettlement(outcome=await self._await_terminal(session_id, run_id))
-
-    async def redrive_authorized_runs(self, session_id: str, message_id: str) -> list[str]:
-        """Re-drive the queued Runs an authorization gate was holding back.
-
-        A real user message admitted to *session_id* (its durable event id is
-        *message_id*) can open the nearest-real-user-ancestor takeoff window
-        for this node's subtree. Every queued work/review Run under an open,
-        open node whose authorization is decided exactly here re-enters
-        through :meth:`launch` — the same ``execute_run`` prechecks every
-        fresh launch passes — so the Run launches when its authorization
-        arrives instead of waiting for an unrelated later dispatch. A deeper
-        node holding its own real user messages keeps its own gate (its Runs
-        stay queued); closed nodes, and Runs with a terminal fact, a live
-        process or a durable stop request, are never touched. Returns the
-        re-dispatched Run ids.
-        """
-        tree = self._tree
-        meta = await tree.load_task_meta(session_id)
-        if meta.profile != "manager":
-            # The gate always starts at a manager: a message on a worker node
-            # opens no window for any Run.
-            return []
-        index = await tree._get_index()
-        redriven: list[str] = []
-        for node_id in tree._descendants(index, session_id):
-            node_meta = index.metas.get(node_id)
-            if node_meta is None:
-                continue
-            if tree.task_state_of(index, node_id) != "open":
-                continue
-            node_runs = tree.runs.list_run_records_sync(node_id)
-            if not node_runs:
-                continue
-            events = tree.runs.load_events_sync(node_id)
-            candidates = [
-                r for r in node_runs
-                if r.kind in ("work", "review") and r.pid is None
-                and not tree.runs.run_has_terminal_fact(r, events)
-                and not tree.runs.stop_requested(events, r.id)]
-            if not candidates:
-                continue
-            parent_id = node_meta.task_parent_id
-            if not parent_id:
-                continue
-            try:
-                # The gate judged exactly where a fresh launch of this node's
-                # Runs judges it: the nearest real-user ancestor of the node.
-                # It authorizes only when THIS node's new message carries the
-                # window (a deeper real-user node returns itself instead).
-                authorized = await tree.check_task_authorization(parent_id)
-            except DelegationBlockedError:
-                continue
-            if authorized != session_id:
-                continue
-            for run in candidates:
-                log.info("run_launch_authorized_redrive", session_id=node_id, run_id=run.id,
-                         authorized_by=session_id, message_id=message_id)
-                self.launch(node_id, run.id)
-                redriven.append(run.id)
-        return redriven
 
     def _resolve_run_backend(self, run: RunRecord) -> BackendOption:
         """The Run's explicitly recorded backend/model, resolved strictly."""
@@ -1197,8 +1171,11 @@ class TaskExecutionAdapter:
         The reviewer's stable contract rides the managed instructions
         (review_rules_text); this context names the exact work Run, its logs,
         and the volatile git steps — it never turns the reviewer into an
-        implementer beyond the checklist's minimal-fix rule.
+        implementer beyond the checklist's minimal-fix rule. A repo-less work
+        Run reviews paths instead of a diff.
         """
+        if not work_run.repo_path:
+            return await self._build_repo_less_review_context(session_id, work_run)
         assert (work_run.branch_name and work_run.worktree_path and work_run.repo_path
                 and work_run.base_branch), (
             f"review of work run {work_run.id} needs its exact repo/base/branch/worktree "
@@ -1216,6 +1193,32 @@ class TaskExecutionAdapter:
             chat_log_path=chat_events_path(self._cfg.sessions_dir / session_id),
             worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / RUN_EVENTS_NAME,
             context_section="\n".join(context_lines),
+        )
+
+    async def _build_repo_less_review_context(self, session_id: str, work_run: RunRecord) -> str:
+        """The repo-less review's task/input context: spec and reported paths, no git.
+
+        Without a repository there is no diff to read and nothing to merge:
+        the review context is the task spec (its acceptance tests included)
+        plus the work report's path list, and the reviewer checks the current
+        state of those paths against the acceptance tests. The spec comes from
+        the task record — the same body the work Run executed against.
+        """
+        meta = await self._tree.load_meta(session_id)
+        task = meta.task if meta is not None else None
+        spec_parts = []
+        if task is not None and task.goal.strip():
+            spec_parts.append(task.goal)
+        if task is not None and task.acceptance:
+            spec_parts.append("\n".join(["## Acceptance Tests", *[f"- {a}" for a in task.acceptance]]))
+        _user_request, worker_summary = await review.extract_review_context(
+            session_id, work_run.id, self._cfg.sessions_dir,
+            worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / RUN_EVENTS_NAME)
+        return task_prompts.repo_less_review_task_context(
+            chat_log_path=chat_events_path(self._cfg.sessions_dir / session_id),
+            worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / RUN_EVENTS_NAME,
+            spec_text="\n\n".join(spec_parts) or None,
+            work_report=worker_summary,
         )
 
     async def _persist_launch_text(self, session_id: str, run_id: str, prompt: str) -> None:
@@ -1423,7 +1426,7 @@ class TaskExecutionAdapter:
                 return
             if durable_outcome == "success":
                 task_type = meta.task.task_type if meta.task is not None else TaskType.IMPLEMENT
-                if task_type == TaskType.IMPLEMENT and run.repo_path:
+                if task_type == TaskType.IMPLEMENT:
                     await self._maybe_spawn_review(session_id, run)
                 else:
                     await self._cleanup_worktree_if_delivered(session_id, run)
@@ -1469,26 +1472,40 @@ class TaskExecutionAdapter:
             return
         if durable_outcome != "success":
             return
-        landing, reason = await self._landing_for_work(work_run)
-        if landing is None:
-            await self._report_failure_to_parent(
-                session_id, work_run, "blocked",
-                summary=f"work run {work_run.id} passed review but its branch did not land on "
-                        f"{work_run.base_branch or 'the requested base'}: {reason}")
-            return
-        branch, commit, repo_path = landing
         refs = [f"{RUN_REF_PREFIX}{work_run.id}"]
         if work_run.task_spec_hash:
             refs.append(f"{SPEC_REF_PREFIX}{work_run.task_spec_hash}")
         refs.append(f"{REVIEW_REF_PREFIX}{run.id}")
-        refs.append(f"{LANDING_REF_PREFIX}{branch}@{commit}")
-        evidence = CompletionEvidence(
-            summary=f"work run {work_run.id} delivered after review {run.id} landed {commit[:12]} on {branch}",
-            result_refs=refs,
-            run_ids=[work_run.id],
-            review_run_ids=[run.id],
-            landing=LandingEvidence(branch=branch, commit=commit, repo_path=repo_path),
-        )
+        if work_run.repo_path:
+            # A repo task's implement delivery lands its reviewed branch on the
+            # base; an unproven landing is a blocked report, not a close.
+            landing, reason = await self._landing_for_work(work_run)
+            if landing is None:
+                await self._report_failure_to_parent(
+                    session_id, work_run, "blocked",
+                    summary=f"work run {work_run.id} passed review but its branch did not land on "
+                            f"{work_run.base_branch or 'the requested base'}: {reason}")
+                return
+            branch, commit, repo_path = landing
+            refs.append(f"{LANDING_REF_PREFIX}{branch}@{commit}")
+            evidence = CompletionEvidence(
+                summary=f"work run {work_run.id} delivered after review {run.id} landed {commit[:12]} on {branch}",
+                result_refs=refs,
+                run_ids=[work_run.id],
+                review_run_ids=[run.id],
+                landing=LandingEvidence(branch=branch, commit=commit, repo_path=repo_path),
+            )
+        else:
+            # A repo-less task's implement delivery is the reviewer's verdict
+            # on the reported paths; no landing exists to prove.
+            evidence = CompletionEvidence(
+                summary=f"work run {work_run.id} delivered after review {run.id} "
+                        "checked the reported paths against the acceptance tests",
+                result_refs=refs,
+                run_ids=[work_run.id],
+                review_run_ids=[run.id],
+                landing=None,
+            )
         try:
             await self._tree.completion.evaluate_automatic_completion(
                 session_id, run_id=work_run.id, evidence=evidence)
@@ -1501,17 +1518,20 @@ class TaskExecutionAdapter:
     async def _maybe_spawn_review(self, session_id: str, work_run: RunRecord) -> str | None:
         """Spawn the work Run's review on the same task, repo, branch and worktree.
 
-        The one owner of "does this work Run still need a review": finalize,
-        the recovery replay and the failed-review retry all enter here, so the
-        chain ends at the first successful review everywhere. An existing
-        successful review ends the chain — its id returns and no further
-        review Run is ever registered for this work Run, on any number of
-        restarts (a review that succeeded without proving its landing follows
-        the landing and blocked-report path; it is never re-reviewed). An
-        existing non-terminal review means one is already queued or running
+        Every successful implement work Run gets one; a repo-less work Run's
+        review judges the reported paths (no repo, branch or worktree to
+        carry). The one owner of "does this work Run still need a review":
+        finalize, the recovery replay and the failed-review retry all enter
+        here, so the chain ends at the first successful review everywhere. An
+        existing successful review ends the chain — its id returns and no
+        further review Run is ever registered for this work Run, on any number
+        of restarts (a review that succeeded without proving its landing
+        follows the landing and blocked-report path; it is never re-reviewed).
+        An existing non-terminal review means one is already queued or running
         (recovery and repeated finalize never spawn a second). A failed
         reviewer retries down the existing preference policy with distinct Run
-        records; exhausted retries keep the worktree and report blocked.
+        records; exhausted retries keep the worktree (a repo task's) and
+        report blocked.
         """
         tree = self._tree
         async with tree.control_lock:

@@ -14,8 +14,6 @@ from src.core.log_once import LazyStructlogLogger
 from src.core.memo import StatSignatureMemo
 from src.core.models import (
     TERMINAL_THREAD_STATUSES,
-    SessionMetadata,
-    TaskType,
     ThreadMetadata,
     ThreadStatus,
     utc_now,
@@ -86,33 +84,6 @@ class ThreadManager:
     # uncached get_thread, so no in-place mutation of a memoized instance
     # exists to leak.
     self._list_memo: StatSignatureMemo[str, ThreadMetadata] = StatSignatureMemo(_THREAD_LIST_MEMO_LIMIT)
-
-  async def create_thread(
-      self,
-      session_meta: SessionMetadata,
-      description: str,
-      review_of: str | None = None,
-      context: str | None = None,
-      require_review: bool = True,
-      task_type: TaskType | None = None,
-  ) -> ThreadMetadata:
-    """Create a new thread directory and metadata."""
-    thread = ThreadMetadata(
-        session_id=session_meta.id,
-        description=description,
-        branch_name=None,
-        review_of=review_of,
-        context=context,
-        require_review=require_review,
-        task_type=task_type,
-    )
-
-    thread_dir = self.thread_dir(session_meta.id, thread.id)
-    (thread_dir / DATA_DIR_NAME).mkdir(parents=True, exist_ok=True)
-
-    await self._save_metadata(thread)
-    log.info("thread_created", thread_id=thread.id)
-    return thread
 
   async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata | None:
     path = self._metadata_path(session_id, thread_id)
@@ -222,8 +193,8 @@ class ThreadManager:
     # the whole list endpoint).
     path = self._metadata_path(meta.session_id, meta.id)
     await write_model_json_atomically(path, meta)
-    # Single funnel behind create_thread/update_status/save_metadata: thread
-    # status transitions (running -> terminal) land here. The mark carries the
+    # Single funnel behind update_status/save_metadata: thread status
+    # transitions (running -> terminal) land here. The mark carries the
     # published path so the list poll's incremental proof stats exactly this
     # file; it must follow the rename above.
     mark_sidebar_dirty(meta.session_id, str(path))

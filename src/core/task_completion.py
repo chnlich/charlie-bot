@@ -283,8 +283,12 @@ class TaskCompletionManager:
             if not successful_reviews and not review_refs:
                 blockers.append(
                     "implement completion requires a successful review run of this task")
-            if evidence.landing is None and not any(
-                    r.startswith(LANDING_REF_PREFIX) for r in evidence.result_refs):
+            # The landing requirement rides the repository: a repo-less
+            # implement delivery is the reviewer's verdict on the reported
+            # paths, and no target-branch landing exists to prove.
+            # (one flattened condition: SIM102)
+            if (meta.task is not None and meta.task.repo_path and evidence.landing is None
+                    and not any(r.startswith(LANDING_REF_PREFIX) for r in evidence.result_refs)):
                 blockers.append(
                     "implement completion requires target-branch landing evidence")
         return blockers
@@ -780,10 +784,11 @@ class TaskCompletionManager:
         A successful Run re-evaluates its manager's pending close requests. A
         successful worker WORK Run evaluates automatic completion unless the
         task's delivery rule waits for more evidence — an implement task's
-        delivery waits for its review and target-branch landing, which the
-        execution adapter drives through :meth:`evaluate_automatic_completion`
-        with the full verified bundle. A blocked automatic close keeps its
-        blockers visible and the adapters re-evaluate.
+        delivery waits for its review — plus the target-branch landing when
+        the task carries a repository — which the execution adapter drives
+        through :meth:`evaluate_automatic_completion` with the full verified
+        bundle. A blocked automatic close keeps its blockers visible and the
+        adapters re-evaluate.
         """
         from src.core.task_sessions import TaskConflictError
 

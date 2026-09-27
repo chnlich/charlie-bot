@@ -8,31 +8,20 @@ import os
 import re
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
-
-if TYPE_CHECKING:
-  from src.core.sessions import SessionManager
-  from src.core.threads import ThreadManager
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.git import (
     _git_rev_parse,
     _git_stdout,
-    git_create_worktree,
-    git_current_branch,
     git_push_branch,
     git_push_refspec,
-    git_worktree_remove_reporting,
 )
 from src.core.log_once import LazyStructlogLogger
-from src.core.master_trigger import trigger_master
 from src.core.message_aggregator import extract_text_from_message
-from src.core.models import SpawnRequest, TaskType, ThreadStatus, utc_now
-from src.core.runs import IMPROVE_ITERATION_PREFIX
-from src.core.tasks import create_logged_task
+from src.core.models import utc_now
 from src.core.timeouts import SUBPROCESS_GIT_READ_TIMEOUT_ASYNC
 
 log = LazyStructlogLogger()
@@ -410,6 +399,49 @@ def _build_summary_payload(payload_type: str, goal: str, summaries: list[str]) -
   }
 
 
+async def _land_work_branch_after_loop(
+    resolved_repo: Path,
+    work_branch: str,
+    base_branch: str | None,
+    merge_back: bool,
+    stopped_by_user: bool,
+    previous_summaries: list[str],
+    session_id: str,
+) -> dict | None:
+  """Decide how to land the work branch after the iteration loop finishes.
+
+  Fast-forwards work_branch onto base_branch when merge_back is set and the loop
+  produced summaries without being stopped. On FF push failure, falls back to
+  pushing the bare work branch so the master agent can land it manually (PR,
+  manual rebase, etc.). Returns the merge_result dict to attach to the payload,
+  or None when no landing decision was recorded (best-effort branch push only).
+  """
+  # Worktree was created from origin/<base>, so the FF push only fails if origin/<base>
+  # advanced during the loop. On failure, hand the work branch back to the master agent
+  # via the trigger payload — no rebase-retry, no fallback subagent — so it can decide
+  # how to land (e.g. open a PR, manual rebase).
+  if merge_back and not stopped_by_user and previous_summaries:
+    ok, push_err = await git_push_refspec(resolved_repo, work_branch, base_branch)
+    if ok:
+      return {'merged': True, 'base_branch': base_branch}
+    log.warning("improve_loop_landing_ff_push_failed", session=session_id, error=push_err)
+    # Keep the work branch on origin so the master agent can act on it.
+    ok_push, push_branch_err = await git_push_branch(resolved_repo, work_branch)
+    if not ok_push:
+      log.warning("improve_loop_work_branch_push_failed", session=session_id, error=push_branch_err)
+    return {
+        'merged': False,
+        'error': push_err,
+        'work_branch': work_branch,
+        'base_branch': base_branch,
+    }
+  # Best-effort push work_branch to remote
+  ok, push_err = await git_push_branch(resolved_repo, work_branch)
+  if not ok:
+    log.warning("improve_loop_push_failed", session=session_id, error=push_err)
+  return None
+
+
 def blocked_loop_summary(iteration: int, reason: str) -> str:
   """The reader-facing blocked-loop sentence: what blocked, and the decision left to the reader.
 
@@ -562,458 +594,3 @@ def _newest_first_events(events_path: Path) -> Iterator[dict]:
   candidate_types = frozenset({ET.RESULT, ET.ASSISTANT, ET.ASSISTANT_ERROR, ET.ERROR, ET.RATE_LIMIT_EVENT})
   return iter_ndjson_events_from_end(
       events_path, log_event=PARSE_SKIP_LOG_EVENT, log_fields={}, parse_filter=type_line_filter(candidate_types))
-
-
-async def _run_single_iteration(
-    i: int,
-    iterations: int,
-    session_id: str,
-    loop_id: int,
-    repo_path: str,
-    work_branch: str,
-    wt_path: Path,
-    loop_dir: Path,
-    cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
-    thread_mgr: ThreadManager,
-    resolved_backend: str,
-    resolved_model: str,
-    previous_summaries: list[str],
-    base_branch: str | None,
-) -> str | None:
-  """Run a single iteration of the improve loop.
-
-  Returns the iteration summary on success, None if stopped by user.
-  Appends the summary to previous_summaries on success.
-  """
-  from src.core.spawner import spawn_worker
-
-  # Check if stopped
-  state = await require_loop_state(session_id, loop_id, cfg)
-  if state.status == "stopped":
-    log.info("improve_loop_stopped", session=session_id, iteration=i)
-    return None
-
-  # Re-read the live goal so mid-loop edits to goal.md steer this iteration.
-  # A missing goal.md fails the loop loudly (read_loop_goal raises) — there is no
-  # fallback to the state.json startup snapshot.
-  goal = await read_loop_goal(loop_dir)
-  plan = await read_loop_plan(loop_dir)
-
-  # Build iteration description
-  desc_parts = [f"{IMPROVE_ITERATION_PREFIX} {i}/{iterations}", f"Goal: {goal}"]
-  if plan is not None:
-    desc_parts.append(f"Plan:\n{plan}")
-  if previous_summaries:
-    desc_parts.append(ITERATION_SUMMARIES_HEADING + "\n\n".join(previous_summaries))
-  description = "\n".join(desc_parts)
-
-  # Get session metadata
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    log.error("improve_loop_session_missing", session=session_id)
-    raise ValueError(f"session '{session_id}' not found")
-
-  # Create thread and spawn worker
-  tip_before = await _git_rev_parse(wt_path, "HEAD") or ""
-  thread = await thread_mgr.create_thread(meta, description, require_review=False)
-  await spawn_worker(
-      session_id,
-      description,
-      thread.id,
-      cfg,
-      session_mgr,
-      thread_mgr,
-      request=SpawnRequest(
-          repo_path=repo_path,
-          resolved_backend=resolved_backend,
-          resolved_model=resolved_model,
-          base_branch=base_branch,
-          branch_name_override=work_branch,
-          worktree_path_override=str(wt_path),
-          skip_cleanup=True,
-          skip_notify=True,
-          loop_dir=str(loop_dir),
-          iteration_number=i,
-          is_continuation=(i > 1),
-          task_type=TaskType.IMPLEMENT,
-      ),
-  )
-
-  # Successful (or non-quota failure) — mechanically judge validity from the
-  # report file and git state, then source the summary from the report head.
-  thread_meta = await thread_mgr.get_thread(session_id, thread.id)
-  status = thread_meta.status.value if thread_meta else "unknown"
-  events_path = await thread_mgr.get_events_log_path(session_id, thread.id)
-  if thread_meta and thread_meta.status == ThreadStatus.FAILED:
-    blocker_reason, summary = await asyncio.to_thread(
-        _failed_iteration_judgments, _newest_first_events(events_path), i, status)
-    if blocker_reason:
-      log.warning("improve_iteration_blocked", session=session_id, iteration=i, reason=blocker_reason)
-      raise _ImproveLoopBlockedError(i, blocker_reason, summary)
-
-  report_path = loop_dir / f'iter_{i:04d}.md'
-  tip_after, commits_added, diffstat = await _worktree_commit_delta(wt_path, tip_before)
-  report_valid, invalid_reason = await _iter_report_validity(report_path, i, commits_added)
-
-  if report_valid:
-    summary = (await asyncio.to_thread(report_path.read_text))[:500]
-  else:
-    summary = _invalid_iteration_summary(i, invalid_reason, commits_added, tip_before, tip_after, report_path)
-  previous_summaries.append(summary)
-
-  # Write a fallback report if the worker wrote none. Validity was already
-  # decided as missing_report before this write, so the fallback never flips the
-  # verdict. The event-extracted summary never joins ``previous_summaries``
-  # (loop context comes from report files or invalid-iteration syntheses); the
-  # blocked path above delivers its own extracted copy to the successor.
-  if not await asyncio.to_thread(report_path.exists):
-    fallback_body = await asyncio.to_thread(_extract_iteration_summary, _newest_first_events(events_path), i, status)
-    await asyncio.to_thread(report_path.write_text, RUNNER_FALLBACK_REPORT_MARKER + fallback_body)
-
-  log.info(
-      ET.IMPROVE_ITERATION_COMPLETED,
-      session=session_id,
-      iteration=i,
-      status=status,
-      report_valid=report_valid,
-      invalid_reason=invalid_reason,
-      commits_added=commits_added,
-  )
-
-  # Broadcast progress event, sourced from the report head/placeholder like the
-  # master wake payload.
-  await session_mgr.deliver_to_successor(
-      session_id, {
-          "type": ET.IMPROVE_ITERATION_COMPLETED,
-          "iteration": i,
-          "total_iterations": iterations,
-          "status": status,
-          "summary": summary[:200],
-          "report_path": str(report_path),
-          "report_valid": report_valid,
-          "invalid_reason": invalid_reason,
-          "tip": tip_after,
-          "commits_added": commits_added,
-          "diffstat": diffstat,
-      })
-
-  # Trigger master after each iteration so it sees progress
-  iter_trigger_payload = {
-      'type':
-          ET.IMPROVE_ITERATION_COMPLETED,
-      'goal':
-          goal,
-      'iteration':
-          i,
-      'total_iterations':
-          iterations,
-      'status':
-          status,
-      'summary':
-          summary[:200],
-      'work_branch':
-          work_branch,
-      'report_path':
-          str(report_path),
-      'report_valid':
-          report_valid,
-      'invalid_reason':
-          invalid_reason,
-      'tip':
-          tip_after,
-      'commits_added':
-          commits_added,
-      'diffstat':
-          diffstat,
-      'instructions':
-          (
-              "Audit this iteration before reporting: read the report file at report_path and check its "
-              "verdict and KPI readings against the live goal. Report iteration progress with commit "
-              "identifier and link. If drift signals are present (report_valid is false, or the report "
-              "omits a goal-declared KPI or verdict), apply a bounded live-goal edit per the "
-              "improve-goal skill and quote the edit in full in your chat report."),
-  }
-  create_logged_task(
-      trigger_master(session_id, json.dumps(iter_trigger_payload, indent=2), cfg, session_mgr, ET.CHILD_REPORT),
-      name=f"improve-iter-trigger-{session_id[:8]}-{i}",
-  )
-
-  return summary
-
-
-# ---------------------------------------------------------------------------
-# Server-side improve loop
-# ---------------------------------------------------------------------------
-
-
-async def _land_work_branch_after_loop(
-    resolved_repo: Path,
-    work_branch: str,
-    base_branch: str | None,
-    merge_back: bool,
-    stopped_by_user: bool,
-    previous_summaries: list[str],
-    session_id: str,
-) -> dict | None:
-  """Decide how to land the work branch after the iteration loop finishes.
-
-  Fast-forwards work_branch onto base_branch when merge_back is set and the loop
-  produced summaries without being stopped. On FF push failure, falls back to
-  pushing the bare work branch so the master agent can land it manually (PR,
-  manual rebase, etc.). Returns the merge_result dict to attach to the payload,
-  or None when no landing decision was recorded (best-effort branch push only).
-  """
-  # Worktree was created from origin/<base>, so the FF push only fails if origin/<base>
-  # advanced during the loop. On failure, hand the work branch back to the master agent
-  # via the trigger payload — no rebase-retry, no fallback subagent — so it can decide
-  # how to land (e.g. open a PR, manual rebase).
-  if merge_back and not stopped_by_user and previous_summaries:
-    ok, push_err = await git_push_refspec(resolved_repo, work_branch, base_branch)
-    if ok:
-      return {'merged': True, 'base_branch': base_branch}
-    log.warning("improve_loop_landing_ff_push_failed", session=session_id, error=push_err)
-    # Keep the work branch on origin so the master agent can act on it.
-    ok_push, push_branch_err = await git_push_branch(resolved_repo, work_branch)
-    if not ok_push:
-      log.warning("improve_loop_work_branch_push_failed", session=session_id, error=push_branch_err)
-    return {
-        'merged': False,
-        'error': push_err,
-        'work_branch': work_branch,
-        'base_branch': base_branch,
-    }
-  # Best-effort push work_branch to remote
-  ok, push_err = await git_push_branch(resolved_repo, work_branch)
-  if not ok:
-    log.warning("improve_loop_push_failed", session=session_id, error=push_err)
-  return None
-
-
-async def run_improve_loop(
-    session_id: str,
-    repo_path: str,
-    iterations: int,
-    goal: str,
-    cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
-    thread_mgr: ThreadManager,
-    work_branch: str,
-    base_branch: str | None,
-    resolved_backend: str,
-    resolved_model: str,
-    merge_back: bool = False,
-    loop_id: int | None = None,
-    plan: str | None = None,
-) -> None:
-  """Run the iterative improvement loop as a server-side async task.
-
-  All iterations commit to a single work_branch in a single shared worktree.
-  When done (or stopped), optionally merges work_branch back to base_branch,
-  then triggers the master CC with the combined summary.
-  """
-  previous_summaries: list[str] = []
-
-  resolved_repo = Path(repo_path).resolve()
-  if loop_id is None:
-    state = await reserve_loop_state(
-        session_id,
-        goal,
-        work_branch,
-        str(resolved_repo),
-        cfg,
-        plan=plan,
-        base_branch=base_branch,
-        merge_back=merge_back,
-        resolved_backend=resolved_backend,
-        resolved_model=resolved_model,
-    )
-    loop_id = state.loop_id
-  else:
-    state = await require_loop_state(session_id, loop_id, cfg)
-    resolved_repo = Path(state.repo_path)
-    work_branch = state.work_branch
-    base_branch = state.base_branch
-    merge_back = state.merge_back
-    resolved_backend = state.backend or resolved_backend
-    resolved_model = state.model or resolved_model
-  loop_dir = cfg.sessions_dir / session_id / 'loops' / str(loop_id)
-  await asyncio.to_thread(loop_dir.mkdir, parents=True, exist_ok=True)
-
-  # Read the live goal written at reservation. The resume path (loop_id given)
-  # reads it too so an edit made before a restart takes effect. state.json's goal
-  # field stays the startup snapshot used only for display/summary payloads.
-  goal = await read_loop_goal(loop_dir)
-
-  log.info(
-      "improve_loop_backend_pinned",
-      session=session_id,
-      loop_id=loop_id,
-      backend=resolved_backend,
-      model=resolved_model,
-      work_branch=work_branch,
-      merge_back=merge_back,
-  )
-
-  # Create the single worktree for all iterations.
-  # resolve_base_branch (inside git_create_worktree) fetches the remote tip and
-  # hard-fails on ambiguity (stale/mismatched local base), so iterations always
-  # start from a fresh, unambiguous base. Persist the canonical bare branch name
-  # so merge-back pushes and reviewer instructions never see an origin/ form.
-  wt_path = Path(cfg.paths.worktree_dir) / work_branch.replace('/', '-')
-  Path(cfg.paths.worktree_dir).mkdir(parents=True, exist_ok=True)
-  try:
-    resolution = await git_create_worktree(
-        resolved_repo, base_branch or await git_current_branch(resolved_repo), work_branch, wt_path)
-    state.base_branch = resolution.canonical
-    await save_loop_state(session_id, state, cfg)
-    base_branch = resolution.canonical
-  except Exception as e:
-    state.status = 'failed'
-    await save_loop_state(session_id, state, cfg)
-    await clear_active_loop_lock(session_id, cfg)
-    log.error("improve_loop_worktree_failed", session=session_id, error=str(e))
-    failure_payload = _build_summary_payload(ET.IMPROVE_FAILED, goal, [])
-    failure_payload['error'] = WORKTREE_CREATE_ERROR_PREFIX + str(e)
-    await session_mgr.deliver_to_successor(session_id, failure_payload)
-    await trigger_master(session_id, json.dumps(failure_payload, indent=2), cfg, session_mgr, ET.CHILD_REPORT)
-    return
-
-  blocked_error: _ImproveLoopBlockedError | None = None
-  failure_iteration = 0
-
-  try:
-    for i in range(1, iterations + 1):
-      failure_iteration = i
-      try:
-        summary = await _run_single_iteration(
-            i,
-            iterations,
-            session_id,
-            loop_id,
-            repo_path,
-            work_branch,
-            wt_path,
-            loop_dir,
-            cfg,
-            session_mgr,
-            thread_mgr,
-            resolved_backend,
-            resolved_model,
-            previous_summaries,
-            base_branch,
-        )
-      except _ImproveLoopBlockedError as exc:
-        blocked_error = exc
-        break
-      if summary is None:
-        break  # Stopped by user
-
-    # Check if we exited because the user stopped the loop
-    state = await require_loop_state(session_id, loop_id, cfg)
-    stopped_by_user = state.status == 'stopped'
-
-    if blocked_error:
-      payload = _build_summary_payload(ET.IMPROVE_FAILED, goal, previous_summaries)
-      payload['blocked_iteration'] = blocked_error.iteration
-      payload['reason'] = blocked_error.reason
-      payload['blocked_summary'] = blocked_error.summary[:500]
-      payload['summary'] = blocked_loop_summary(blocked_error.iteration, blocked_error.reason)
-    elif stopped_by_user:
-      payload = _build_summary_payload(ET.IMPROVE_STOPPED, goal, previous_summaries)
-      payload['reason'] = 'Stopped by user'
-    else:
-      payload = _build_summary_payload(ET.IMPROVE_COMPLETED, goal, previous_summaries)
-
-    if blocked_error:
-      state.status = 'failed'
-    else:
-      state.status = 'stopped' if stopped_by_user else 'completed'
-    await save_loop_state(session_id, state, cfg)
-
-    payload['work_branch'] = work_branch
-    payload['base_branch'] = base_branch
-    if blocked_error:
-      payload['worktree_path'] = str(wt_path)
-
-    if not blocked_error:
-      merge_result = await _land_work_branch_after_loop(
-          resolved_repo,
-          work_branch,
-          base_branch,
-          merge_back,
-          stopped_by_user,
-          previous_summaries,
-          session_id,
-      )
-      if merge_result is not None:
-        payload['merge_result'] = merge_result
-
-    await session_mgr.deliver_to_successor(session_id, payload)
-    if blocked_error:
-      instructions = (
-          "Report that the improve loop is blocked by provider quota/token/rate-limit rejection. "
-          "Do not spawn another iteration worker automatically; ask the user to decide whether to wait, "
-          "switch backend, or relaunch.")
-    else:
-      instructions = "Report final state and summarize what changed across iterations."
-    if not blocked_error and payload.get('merge_result', {}).get('merged') is False:
-      instructions += (
-          " The fast-forward landing onto base_branch failed (origin/base_branch advanced"
-          " during the loop). The work branch has been pushed to origin — decide how to land it"
-          " (e.g. open a PR, request a manual rebase). Do NOT retry a fast-forward push.")
-    final_payload = {
-        **payload,
-        'instructions': instructions,
-    }
-    await trigger_master(session_id, json.dumps(final_payload, indent=2), cfg, session_mgr, ET.CHILD_REPORT)
-
-  except asyncio.CancelledError:
-    log.warning("improve_loop_cancelled", session=session_id)
-    await session_mgr.deliver_to_successor(session_id, {"type": ET.IMPROVE_CANCELLED, "goal": goal})
-    raise
-  except Exception as exc:
-    log.exception("improve_loop_failed", session=session_id)
-    state = await load_loop_state(session_id, loop_id, cfg)
-    if state:
-      state.status = 'failed'
-      await save_loop_state(session_id, state, cfg)
-      failure_payload = _build_summary_payload(ET.IMPROVE_FAILED, goal, previous_summaries)
-      failure_payload['failed_iteration'] = failure_iteration
-      failure_payload['error'] = LOOP_FAILURE_ERROR_PREFIX + str(exc)
-      failure_payload['work_branch'] = work_branch
-      failure_payload['base_branch'] = base_branch
-      instructions = (
-          "Report the improve loop failure to the user. Do not spawn another "
-          "iteration worker or relaunch the loop automatically; ask the user to decide next steps.")
-      try:
-        await session_mgr.deliver_to_successor(session_id, failure_payload)
-        final_payload = {**failure_payload, 'instructions': instructions}
-        await trigger_master(session_id, json.dumps(final_payload, indent=2), cfg, session_mgr, ET.CHILD_REPORT)
-      except Exception as notify_error:
-        log.exception(
-            "improve_loop_failure_notify_failed",
-            session=session_id,
-            error=str(notify_error),
-        )
-  finally:
-    await clear_active_loop_lock(session_id, cfg)
-    # Keep the shared worktree when the loop failed so its in-progress state survives for
-    # debugging; startup recovery marks the iteration thread failed and the quarantine
-    # sweep reclaims it later. A hard process crash skips this finally and likewise keeps it.
-    final_state = await load_loop_state(session_id, loop_id, cfg)
-    loop_failed = final_state is not None and final_state.status == 'failed'
-    if not loop_failed:
-      cleanup_error = await git_worktree_remove_reporting(
-          str(resolved_repo),
-          str(wt_path),
-          work_branch,
-          session_id,
-          Path(cfg.paths.worktree_dir),
-          log_fields={"session": session_id},
-          label="Improve-loop worktree",
-          fail_event="improve_loop_cleanup_failed",
-          remove_failed_event="improve_loop_cleanup_remove_failed",
-      )
-      if cleanup_error:
-        await session_mgr.deliver_to_successor(session_id, {"type": ET.ERROR, "content": cleanup_error})

@@ -1,56 +1,20 @@
-"""Tests for the ``steps`` cron prompt source and its worker chain.
+"""Tests for the ``steps`` cron prompt source (src/core/config.py).
 
-Loader coverage (src/core/config.py): a ``steps`` cron file loads with each
-step's resolved body and preserved pointer, colliding prompt sources are load
-errors naming the key, and duplicate step names fail. Chain coverage
-(src/core/task_chain.py): a fire spawns step 0 pointing its chain_root at
-itself, a clean exit advances exactly one step carrying the previous result in
-its prompt, a non-zero exit spawns nothing and wakes the master, the last
-step's completion wakes once with one block per step and a completion-handler
-rerun converges to a no-op, and an empty previous result stops the chain with
-a note.
+A ``steps`` cron file loads with each step's resolved body and preserved
+pointer, colliding prompt sources are load errors naming the key, and duplicate
+step names fail. The chain's execution shape (one leaf, ordered scheduled_step
+Runs, one boundary report) is tests/test_cron_sequence.py's coverage.
 """
 
-import json
-from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 import yaml
-from conftest import (
-    OPUS_BACKEND_ID,
-    OPUS_BACKEND_OPTION,
-    REVIEW_TRIGGER_MASTER_PATCH_TARGET,
-    SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
-    SCHEDULER_GET_CONFIG_PATCH_TARGET,
-    SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
-    _noop,
-    assistant_text_event,
-    build_scheduler_cfg,
-    close_create_logged_task,
-    make_scheduler_setup,
-    read_chat_events,
-)
+from conftest import build_scheduler_cfg
 
-from src.core import event_types as ET
-from src.core import task_chain
 from src.core.config import (
-    CharlieBotConfig,
-    ScheduledTaskConfig,
-    StepConfig,
     _load_cron_file,
 )
-from src.core.models import (
-    CreateSessionRequest,
-    SessionMetadata,
-    SpawnRequest,
-    TaskType,
-    ThreadMetadata,
-)
-from src.core.sessions import SessionManager
-from src.core.threads import ThreadManager
 
 SELECTOR_BODY = "Select memory candidates.\n"
 REVIEWER_BODY = "Review the memory diff.\n"
@@ -100,228 +64,30 @@ def test_load_cron_file_rejects_empty_steps(tmp_path: Path) -> None:
     _load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
 
 
-# --- (b)-(d) the chain --------------------------------------------------------
+_STEP_PROMPT_SOURCE_CASES = [
+    # (one steps entry, the ValueError fragments naming the step-level violation).
+    pytest.param({
+        "name": "selector",
+        "prompt": "inline body"
+    }, ("inline 'prompt'", "step"), id="inline-prompt"),
+    pytest.param({"name": "selector"}, ("step 'selector'",), id="missing-prompt-body"),
+]
 
 
-def _steps_task_cfg() -> ScheduledTaskConfig:
-  return ScheduledTaskConfig(
-      name="chained",
-      cron="* * * * *",
-      backend=OPUS_BACKEND_ID,
-      steps=[
-          StepConfig(name="selector", prompt=SELECTOR_BODY, prompt_file="prompts/selector.md"),
-          StepConfig(name="reviewer", prompt=REVIEWER_BODY, prompt_file="prompts/reviewer.md", backend="codex-o3"),
-      ],
-  )
+@pytest.mark.parametrize(("step_body", "expected_fragments"), _STEP_PROMPT_SOURCE_CASES)
+def test_load_cron_file_rejects_step_prompt_source_violation(
+    tmp_path: Path, step_body: dict, expected_fragments: tuple[str, ...]) -> None:
+  """A step carrying an inline 'prompt' — or no prompt source at all — fails the
+  load, and the error names the step."""
+  cron_dir = tmp_path / "cron.d"
+  cron_dir.mkdir(parents=True)
+  cfg = build_scheduler_cfg(tmp_path)
+  body = {"cron": "0 3 * * *", "steps": [step_body]}
+  yaml_path = cron_dir / "chained.yaml"
+  yaml_path.write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
+  with pytest.raises(ValueError) as exc_info:
+    _load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
+  error = str(exc_info.value)
+  assert all(fragment in error for fragment in expected_fragments)
 
 
-def _capture_spawn(calls: list[dict[str, Any]]) -> Callable[..., Coroutine[Any, Any, None]]:
-  """A spawn_worker stand-in recording each call's kwargs (notably the request)."""
-
-  def fake_spawn_worker(**kwargs: Any) -> Coroutine[Any, Any, None]:
-    calls.append(kwargs)
-    return _noop()
-
-  return fake_spawn_worker
-
-
-def _patch_chain_pipes(monkeypatch: pytest.MonkeyPatch, spawns: list[dict[str, Any]]) -> None:
-  """Patch the chain's three external seams: the task list (task_chain's own binding), and the
-  spawn plus the task handle (scheduler's fire_scheduled_worker namespace, which spawn_step
-  delegates to)."""
-  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
-  monkeypatch.setattr(task_chain, "get_scheduled_tasks", lambda: [_steps_task_cfg()])
-  monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, _capture_spawn(spawns))
-
-
-async def _make_chain_session(session_mgr: SessionManager) -> SessionMetadata:
-  return await session_mgr.create_session(
-      CreateSessionRequest(name="Scheduled: chained", scheduled_task="chained"), backend=OPUS_BACKEND_ID)
-
-
-async def _make_chain_thread(
-    thread_mgr: ThreadManager,
-    session: SessionMetadata,
-    step_name: str,
-    chain_root: str | None,
-    step_index: int,
-) -> ThreadMetadata:
-  """Create a chain thread exactly the way spawn_step persists it."""
-  thread = await thread_mgr.create_thread(session, f"chained · {step_name}", require_review=False)
-  thread.chain_root = chain_root if chain_root is not None else thread.id
-  thread.step_index = step_index
-  await thread_mgr.save_metadata(thread)
-  return thread
-
-
-def _write_result_events(cfg: Any, session_id: str, thread_id: str, result_text: str) -> None:
-  """Stage a thread events log whose last RESULT event carries result_text."""
-  events_path = cfg.sessions_dir / session_id / "threads" / thread_id / "data" / "events.jsonl"
-  events_path.parent.mkdir(parents=True, exist_ok=True)
-  events_path.write_text(json.dumps({"type": ET.RESULT, "result": result_text}) + "\n", encoding="utf-8")
-
-
-async def _completion_rig(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    results: list[str | None],
-) -> tuple[CharlieBotConfig, SessionManager, ThreadManager, SessionMetadata, list[ThreadMetadata], list[dict[str, Any]],
-           AsyncMock]:
-  """Stage the chain-completion world: one persisted chain thread per *results* entry, named and
-  rooted as _steps_task_cfg's selector→reviewer pair, each non-None entry written as that thread's
-  last RESULT event. Patches the spawn pipes and the master-wake seam.
-
-  Returns (cfg, session_mgr, thread_mgr, session, threads, spawns, master).
-  """
-  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
-  thread_mgr = ThreadManager(cfg)
-  session = await _make_chain_session(session_mgr)
-  threads: list[ThreadMetadata] = []
-  for index, result_text in enumerate(results):
-    step_name = "selector" if index == 0 else "reviewer"
-    chain_root = None if index == 0 else threads[0].id
-    thread = await _make_chain_thread(thread_mgr, session, step_name, chain_root, index)
-    if result_text is not None:
-      _write_result_events(cfg, session.id, thread.id, result_text)
-    threads.append(thread)
-  spawns: list[dict[str, Any]] = []
-  _patch_chain_pipes(monkeypatch, spawns)
-  master = AsyncMock()
-  monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, master)
-  return cfg, session_mgr, thread_mgr, session, threads, spawns, master
-
-
-@pytest.mark.asyncio
-async def test_fire_spawns_first_step_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, _session_mgr, scheduler = make_scheduler_setup(tmp_path)
-  spawns: list[dict[str, Any]] = []
-  _patch_chain_pipes(monkeypatch, spawns)
-  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-
-  result = await scheduler._execute_task(_steps_task_cfg())
-
-  assert result["session_id"]
-  assert result["thread_id"]
-  thread_mgr = ThreadManager(cfg)
-  thread = await thread_mgr.get_thread(result["session_id"], result["thread_id"])
-  assert thread is not None
-  assert thread.description == "chained · selector"
-  assert thread.require_review is False
-  assert thread.chain_root == thread.id
-  assert thread.step_index == 0
-  assert len(spawns) == 1
-  request = spawns[0]["request"]
-  assert request.resolved_backend == OPUS_BACKEND_ID
-  assert request.resolved_model == OPUS_BACKEND_OPTION.model
-  assert request.prompt_override == SELECTOR_BODY
-  assert request.task_type == TaskType.IMPLEMENT
-  delegated = [
-      e for e in read_chat_events(cfg.charliebot_home, result["session_id"]) if e.get("type") == ET.TASK_DELEGATED
-  ]
-  assert len(delegated) == 1
-  assert delegated[0]["task"] == "chained"
-  assert delegated[0]["description"] == "chained · selector"
-  assert delegated[0]["thread_id"] == thread.id
-  assert delegated[0]["backend"] == OPUS_BACKEND_ID
-
-
-@pytest.mark.asyncio
-async def test_step_success_spawns_next_step_with_previous_result(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  cfg, session_mgr, thread_mgr, session, threads, spawns, master = await _completion_rig(
-      tmp_path, monkeypatch, [SELECTOR_RESULT])
-  step0 = threads[0]
-
-  owned = await task_chain.handle_step_completion(session.id, step0, 0, thread_mgr, session_mgr, cfg)
-
-  assert owned is True
-  assert len(spawns) == 1
-  request: SpawnRequest = spawns[0]["request"]
-  assert request.resolved_backend == "codex-o3"
-  assert request.resolved_model == "o3"
-  assert request.prompt_override.startswith(REVIEWER_BODY)
-  assert f"## Result of the previous step (selector)\n{SELECTOR_RESULT}" in request.prompt_override
-  next_thread = await thread_mgr.get_thread(session.id, spawns[0]["thread_id"])
-  assert next_thread is not None and next_thread.id != step0.id
-  assert next_thread.chain_root == step0.id
-  assert next_thread.step_index == 1
-  master.assert_not_awaited()
-
-  # A rerun of the same completion (finalize rerun) spawns nothing more.
-  again = await task_chain.handle_step_completion(session.id, step0, 0, thread_mgr, session_mgr, cfg)
-  assert again is True
-  assert len(spawns) == 1
-  master.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_step_failure_spawns_nothing_and_wakes_master(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  cfg, session_mgr, thread_mgr, session, threads, spawns, master = await _completion_rig(
-      tmp_path, monkeypatch, [SELECTOR_RESULT])
-  step0 = threads[0]
-
-  owned = await task_chain.handle_step_completion(session.id, step0, 1, thread_mgr, session_mgr, cfg)
-
-  assert owned is True
-  assert not spawns
-  master.assert_awaited_once()
-  summary = master.await_args.args[1]
-  assert f"**selector result:**\n{SELECTOR_RESULT}" in summary
-
-
-@pytest.mark.asyncio
-async def test_last_step_completion_wakes_master_once_with_block_per_step(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  cfg, session_mgr, thread_mgr, session, threads, spawns, master = await _completion_rig(
-      tmp_path, monkeypatch, [SELECTOR_RESULT, REVIEWER_RESULT])
-  _step0, step1 = threads
-
-  owned = await task_chain.handle_step_completion(session.id, step1, 0, thread_mgr, session_mgr, cfg)
-
-  assert owned is True
-  assert not spawns
-  master.assert_awaited_once()
-  summary = master.await_args.args[1]
-  assert f"**selector result:**\n{SELECTOR_RESULT}" in summary
-  assert f"**reviewer result:**\n{REVIEWER_RESULT}" in summary
-  assert summary.index("**selector result:**") < summary.index("**reviewer result:**")
-
-  # The persisted wake state (terminal summary followed by master output) makes
-  # a rerun of the completion handler converge: no spawn, no second wake.
-  await session_mgr.persist_and_broadcast(
-      session.id, {
-          "type": ET.WORKER_SUMMARY,
-          "thread_id": step1.id,
-          "status": "completed"
-      })
-  await session_mgr.persist_and_broadcast(session.id, assistant_text_event("done"))
-  again = await task_chain.handle_step_completion(session.id, step1, 0, thread_mgr, session_mgr, cfg)
-  assert again is True
-  master.assert_awaited_once()
-  assert not spawns
-
-
-@pytest.mark.asyncio
-async def test_empty_previous_result_stops_chain_and_notes_it(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  cfg, session_mgr, thread_mgr, session, threads, spawns, master = await _completion_rig(tmp_path, monkeypatch, [None])
-  step0 = threads[0]
-
-  owned = await task_chain.handle_step_completion(session.id, step0, 0, thread_mgr, session_mgr, cfg)
-
-  assert owned is True
-  assert not spawns
-  master.assert_awaited_once()
-  summary = master.await_args.args[1]
-  assert "produced no result" in summary
-  assert "(no result)" in summary
-  assert [t.id for t in await thread_mgr.list_threads(session.id)] == [step0.id]

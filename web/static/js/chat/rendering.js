@@ -531,7 +531,7 @@ function deliveryDiffHref(msg, sessionId) {
 // missing).
 const RUN_HEADER_DOT_COLORS = {
   running: 'bg-blue-500', success: 'bg-green-500', completed: 'bg-green-500',
-  queued: 'bg-amber-400',
+  queued: 'bg-amber-400', withheld: 'bg-amber-400',
   failed: 'bg-red-500', interrupted: 'bg-red-500', attention: 'bg-red-500',
 };
 

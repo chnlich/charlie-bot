@@ -19,16 +19,20 @@ from unittest.mock import AsyncMock
 
 import pytest
 from conftest import (
-    SCHEDULER_GET_CONFIG_PATCH_TARGET,
-    SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET,
-    make_home_config,
+  OPUS_BACKEND_ID,
+  SCHEDULER_GET_CONFIG_PATCH_TARGET,
+  SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET,
+  make_home_config,
+  write_thread_meta,
 )
 
 from src.core import scheduler as scheduler_module
 from src.core.config import ScheduledTaskConfig
 from src.core.models import (
-    SessionMetadata,
-    parse_utc_datetime,
+  CreateSessionRequest,
+  LastRunStatus,
+  SessionMetadata,
+  parse_utc_datetime,
 )
 from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
@@ -249,6 +253,49 @@ async def test_no_fire_on_completion_moment(
 
 # ---------------------------------------------------------------------------
 # 4. The criterion ignores disk state
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fire_ignores_stuck_running_disk_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  """A session whose thread metadata says status=running with a pid that no
+  longer exists, and whose last_run_status is stuck at 'running', still fires
+  when no in-flight handle exists. Any implementation consulting either on-disk
+  signal would stall this fire."""
+  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC))
+  _install_clock(monkeypatch, clock)
+  cfg = make_home_config(tmp_path)
+  scheduler = Scheduler(cfg, AsyncMock())
+
+  session_mgr = SessionManager(cfg)
+  session = await session_mgr.create_session(
+      CreateSessionRequest(name="Scheduled: code-health", scheduled_task="code-health"),
+      backend=OPUS_BACKEND_ID,
+  )
+  # Stuck on-disk signals: a thread record whose status says running with a pid
+  # that no longer exists, and session bookkeeping stuck at running.
+  write_thread_meta(cfg, session.id, {
+      "id": "stuck-thread", "session_id": session.id, "description": "stuck round",
+      "status": "running", "pid": 999999,
+  })
+  session.last_scheduled_run = clock.now().isoformat()  # 00:00
+  session.last_run_status = LastRunStatus.RUNNING
+  await session_mgr.save_metadata(session)
+
+  monkeypatch.setattr(scheduler, "_get_or_create_session", AsyncMock(return_value=session))
+  fired = AsyncMock()
+  monkeypatch.setattr(scheduler, "_execute_task", fired)
+  task_cfg = _task()
+
+  # No handle is in flight for this task (registry is empty), so despite the
+  # running state on disk the due fire at 00:01 proceeds.
+  session_mgr_double = AsyncMock()
+  await _tick(scheduler, task_cfg, session_mgr_double, clock, minute=1)
+
+  fired.assert_awaited()
 
 
 # ---------------------------------------------------------------------------

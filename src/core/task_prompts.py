@@ -284,16 +284,22 @@ def read_local_rule_body(prompt_bodies_dir: Path, ref: str, *, owner: str, scope
 
 
 def _manager_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata) -> list[RuleSegment]:
-  """The manager contract at any depth: common rules + the one manager template.
+  """The manager contract at any depth: common rules + shared manager rules + template.
 
-  Every manager depth selects this same template pair; project/feature
+  Every manager depth selects the same rule set: the shared base, the full
+  shared manager rules file (prompts/master.md — one division of work for both
+  manager kinds), and the task-tree manager template. Project/feature
   differences live in the Task record and inherited rules. No PM identity, no
   project body, no per-layer template exists on v2.
   """
   base = _sections_text(cfg, "task_base.md", ("coding_principles", "skills_discovery", "remote_scratch"))
+  shared = _read_source_file(
+      cfg.charlie_bot_repo / "prompts" / "master.md",
+      what="shared manager rules").replace("{{session_id}}", meta.id)
   contract = _sections_text(cfg, "task_manager.md", ("manager_role", "manager_boundaries"))
   segments = [
       RuleSegment(text=base, sources=(PromptSource(SCOPE_BASE, "prompts/task_base.md"),)),
+      RuleSegment(text=shared, sources=(PromptSource(SCOPE_BASE, "prompts/master.md"),)),
       RuleSegment(text=contract, sources=(PromptSource(SCOPE_BASE, "prompts/task_manager.md"),)),
   ]
   host = _host_supplement(cfg, meta)
@@ -325,15 +331,16 @@ def _worker_kind_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata, kin
     segments.append(RuleSegment(text=contract, sources=(PromptSource(SCOPE_BASE, "prompts/verify.md"),)))
   else:
     worker = _sections_text(cfg, "worker.md", ("role",))
-    # The section map in src.core.spawner_prompt is the selection's single
-    # home; its element 0 (the bindings section) renders per-run and is never
-    # a persistent rule, so the rule body starts at element 1.
-    from src.core.spawner_prompt import WORKFLOW_PROMPT_SECTION
-    workflow = _sections_text(cfg, "worker.md", WORKFLOW_PROMPT_SECTION[task_type][1:])
-    source_files = _sections_text(cfg, "worker.md", ("task_spec_source_files",))
+    # workflow_rule_section_ids in src.core.spawner_prompt is the selection's
+    # single home: the repo contract drops the map's bindings element (it
+    # renders per-run, never as a persistent rule), and a repo-less task
+    # selects the repo-less workflow and source-files rules.
+    from src.core.spawner_prompt import workflow_rule_section_ids
+    repo_less = not (meta.task is not None and meta.task.repo_path)
+    workflow = _sections_text(cfg, "worker.md", workflow_rule_section_ids(task_type, repo_less=repo_less))
     segments.append(
         RuleSegment(
-            text="\n".join((worker, workflow, source_files)), sources=(PromptSource(SCOPE_BASE, "prompts/worker.md"),)))
+            text="\n".join((worker, workflow)), sources=(PromptSource(SCOPE_BASE, "prompts/worker.md"),)))
   return segments
 
 
@@ -563,3 +570,31 @@ def review_task_context(
       f"{review_log_pointer(chat_log_path, worker_log_path)}\n\n"
       f"{review_git_venue(branch_name, wt_path)}\n\n"
       f"{review_numbered_steps(branch_name, wt_path, base_branch)}")
+
+
+def repo_less_review_task_context(
+    *,
+    chat_log_path: Path,
+    worker_log_path: Path,
+    spec_text: str | None,
+    work_report: str | None,
+) -> str:
+  """The repo-less review run's volatile half: the spec, the reported paths, no git.
+
+  The reviewer's stable contract rides the managed instructions
+  (review_rules_text); this context carries the task spec (its acceptance
+  tests included) and the work report's path list, and states the repo-less
+  judgment: the current state of those paths against the acceptance tests —
+  no diff to read, nothing to merge or push.
+  """
+  from src.core.review import review_log_pointer
+  spec = spec_text if spec_text and spec_text.strip() else "(the task spec text was not recorded)"
+  report = (work_report if work_report and work_report.strip()
+            else "(the work Run left no final report; judge the paths the task names)")
+  return (
+      f"## Context\n"
+      f"This task changed host paths directly; it has no repository, so there is no diff to read and\n"
+      f"nothing to merge or push. Review the CURRENT state of the paths the work report lists.\n\n"
+      f"### Task spec (acceptance tests included)\n{spec}\n\n"
+      f"### Work report (every created, modified and deleted path, and each acceptance test's result)\n{report}\n\n"
+      f"{review_log_pointer(chat_log_path, worker_log_path)}")

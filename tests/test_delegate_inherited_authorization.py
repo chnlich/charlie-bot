@@ -1,13 +1,14 @@
 """Inherited authorization on the real v2 entry points.
 
 The accepted v2 policy is one central owner: the nearest-real-user-ancestor
-gate (``TaskTreeManager.check_task_authorization``), applied at delegation and
-re-judged at the actual launch. A sub-task manager under an authorized project
+gate (``TaskTreeManager.check_task_authorization``), applied at the request
+entries — delegation, improve, and agent messages to worker nodes — and never
+re-judged at a Run's launch. A sub-task manager under an authorized project
 delegates through the real /api/internal/delegate route without carrying its
 own take-off; a local user instruction shadows the ancestor; agent, cron, and
 report texts never mint authorization; verify stays exempt (read-only) on the
-route and at launch; v1 semantics are untouched. Every scenario here runs the
-actual HTTP route against a synthetic instance with a scripted backend.
+route; v1 semantics are untouched. Every scenario here runs the actual HTTP
+route against a synthetic instance with a scripted backend.
 """
 
 from __future__ import annotations

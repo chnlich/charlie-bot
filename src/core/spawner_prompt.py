@@ -30,6 +30,33 @@ WORKFLOW_PROMPT_SECTION = {
     TaskType.SCRIPT_RUN: ("workflow_script_run_bindings", "workflow_script_run"),
 }
 
+# The repo-less delegation's section selection (no repo: the Run directory is
+# the working directory). implement and quick_edit share the one repo-less
+# workflow body; script_run keeps its sandbox contract, whose sandbox is the
+# Run directory. Each entry rides the repo-less source-files rule, which names
+# host paths instead of a checkout.
+REPO_LESS_WORKFLOW_SECTION = {
+    TaskType.IMPLEMENT: ("workflow_repo_less",),
+    TaskType.QUICK_EDIT: ("workflow_repo_less",),
+    TaskType.SCRIPT_RUN: ("workflow_script_run",),
+}
+REPO_LESS_SOURCE_FILES_SECTION = "task_spec_source_files_repo_less"
+
+
+def workflow_rule_section_ids(task_type: TaskType, *, repo_less: bool) -> tuple[str, ...]:
+  """The persistent workflow rule sections of one work Run's task type.
+
+  The repo case reads WORKFLOW_PROMPT_SECTION from element 1: element 0 is the
+  bindings section, which renders per-run and is never a persistent rule. The
+  repo-less case selects REPO_LESS_WORKFLOW_SECTION with its own source-files
+  rule; a task type absent from that map falls back to the repo contract.
+  """
+  if repo_less:
+    ids = REPO_LESS_WORKFLOW_SECTION.get(task_type)
+    if ids is not None:
+      return (*ids, REPO_LESS_SOURCE_FILES_SECTION)
+  return (*WORKFLOW_PROMPT_SECTION[task_type][1:], "task_spec_source_files")
+
 _REQUIRED_WORKER_PROMPT_SECTIONS = (
     "session_info",
     "coding_principles",
@@ -39,6 +66,8 @@ _REQUIRED_WORKER_PROMPT_SECTIONS = (
     "intro_new",
     "intro_continuation",
     *dict.fromkeys(sid for ids in WORKFLOW_PROMPT_SECTION.values() for sid in ids),
+    *dict.fromkeys(sid for ids in REPO_LESS_WORKFLOW_SECTION.values() for sid in ids),
+    REPO_LESS_SOURCE_FILES_SECTION,
     "task_spec_source_files",
     "task",
     "iteration_reports",

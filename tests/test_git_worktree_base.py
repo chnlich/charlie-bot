@@ -13,15 +13,9 @@ Validates resolve_base_branch semantics (the only accepted forms):
   - full SHA                → pinned, origin may move meanwhile
   - unknown SHA / garbage   → hard error
 
-Plus the launch path's base-less fallback (spawner._create_worktree_and_process):
-  - the remote's default branch is read from the remote itself (ls-remote symref),
-    never from the clone-time refs/remotes/origin/HEAD metadata
-  - a request without a base starts at origin/<remote-default> even when the local
-    checkout is stale (local main behind origin, checkout on a local-only branch)
-  - the local-branch read is tripwired off: the fallback must never call
-    git_current_branch
-  - the probe-fed forms: a caller-supplied remote_tip replaces the duplicate
-    ls-remote, and a probe equal to the remote-tracking ref skips the no-op fetch
+Plus the resolution's probe-fed forms:
+  - a caller-supplied remote_tip replaces the duplicate ls-remote, and a probe
+    equal to the remote-tracking ref skips the no-op fetch
   - git_remote_default_branch_and_tip returns the default branch and its tip
     from one ls-remote
 """
@@ -32,10 +26,10 @@ from pathlib import Path
 import pytest
 
 from src.core.git import (
-    BaseBranchResolutionError,
-    BaseResolution,
-    git_create_worktree,
-    git_current_branch,
+  BaseBranchResolutionError,
+  BaseResolution,
+  git_create_worktree,
+  git_current_branch,
 )
 
 

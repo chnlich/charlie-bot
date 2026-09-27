@@ -10,6 +10,11 @@ identity resolves per ``resolve_session_id``):
     --reviewer-context-file /path/to/reviewer_context.md \
     --keep-worktree 0 \
     --task-type implement
+
+A repo-less delegation omits --repo and --base-branch together; the worker
+works from its Run directory on the host paths the task spec names:
+
+  charliebot delegate --task-spec-file /path/to/task_spec.md --keep-worktree 0
 """
 
 import argparse
@@ -82,13 +87,15 @@ def main() -> None:
   parser.add_argument(
       "--repo",
       required=False,
-      help="Path to the git repo; required for implement/quick-edit/script-run, forbidden for verify")
+      help=("Path to the git repo; optional for implement/quick-edit/script-run (omit together "
+            "with --base-branch for a repo-less task), forbidden for verify"))
   parser.add_argument(
       "--task-spec-file", dest="task_spec_file", required=True, help="Path to a structured Markdown task spec file")
   parser.add_argument(
       "--base-branch",
       required=False,
-      help="Base branch for the worktree; required for implement/quick-edit/script-run, forbidden for verify")
+      help=("Base branch for the worktree; optional for implement/quick-edit/script-run (omit together "
+            "with --repo for a repo-less task), forbidden for verify"))
   parser.add_argument(
       "--backend",
       default=None,
@@ -130,8 +137,9 @@ def main() -> None:
           "'implement' (default) = worker commits, reviewer rebases + ff-merges and pushes to the remote base branch. "
           "'quick-edit' = worker commits, no reviewer (use for trivial repo ops: cherry-picks, "
           "branch pushes, single-line/doc-only edits); master handles push/merge manually. "
-          "'script-run' = worker uses worktree as an isolated sandbox to run scripts / submit jobs / "
-          "query state; worker must NOT modify tracked files and must NOT commit. No reviewer, no merge. "
+          "'script-run' = worker uses the worktree (or, repo-less, the Run directory) as an isolated "
+          "sandbox to run scripts / submit jobs / query state; worker must NOT modify tracked files and "
+          "must NOT commit. No reviewer, no merge. "
           "'verify' = repo-less read-only plan verifier; no worktree, reviewer, or merge."),
   )
   args = parser.parse_args()
@@ -142,11 +150,15 @@ def main() -> None:
     if args.base_branch is not None:
       parser.error("--base-branch is forbidden when --task-type verify")
   else:
-    if args.repo is None:
-      parser.error(f"--repo is required when --task-type {args.task_type}")
-    if args.base_branch is None:
-      parser.error(f"--base-branch is required when --task-type {args.task_type}")
-    validate_repo_path(parser, args.repo)
+    # implement/quick-edit/script-run carry a repo, or neither flag: a
+    # repo-less Run works from its Run directory, and one flag without the
+    # other names a worktree that cannot exist.
+    if (args.repo is None) != (args.base_branch is None):
+      parser.error(
+          f"--repo and --base-branch are given together for a repo task or omitted together "
+          f"for a repo-less one; exactly one was given for --task-type {args.task_type}")
+    if args.repo is not None:
+      validate_repo_path(parser, args.repo)
 
   session_id = resolve_session_id(args.session)
   task_spec = read_required_text_file("--task-spec-file", args.task_spec_file)

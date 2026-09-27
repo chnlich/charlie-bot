@@ -654,6 +654,22 @@ def terminal_outcome_in_events(events: list[dict], run_id: str) -> str | None:
   return outcome
 
 
+def withheld_reason_in_events(events: list[dict], run_id: str) -> str | None:
+  """The newest recorded run_launch_withheld reason of one Run (None while none).
+
+  The pure fact scan behind the queued Run's ``withheld`` display state: the
+  worker transcript's header (src.core.worker_transcript) reads the same
+  durable events through this function, so the state and its reason answer one
+  identical question.
+  """
+  reason: str | None = None
+  for event in events:
+    if event.get("type") == ET.RUN_LAUNCH_WITHHELD and event.get("run_id") == run_id:
+      value = event.get("reason")
+      reason = value if isinstance(value, str) and value else None
+  return reason
+
+
 def stop_requested_in_events(
     events: list[dict],
     run_id: str,
@@ -901,14 +917,20 @@ class RunStore:
     """One run's UI-facing state, derived only from facts.
 
     queued: registered, never launched (a durable stop request marks it
-    stopped). running: launched identity still alive. attention: launched but
-    nobody observed the exit. Otherwise the recorded terminal outcome.
+    stopped; a recorded run_launch_withheld fact shows it as withheld with its
+    reason — see withheld_reason). running: launched identity still alive.
+    attention: launched but nobody observed the exit. Otherwise the recorded
+    terminal outcome.
     """
     outcome = self.terminal_outcome(events, run.id)
     if outcome is not None:
       return str(outcome)
     if run.pid is None:
-      return "stopped" if self.stop_requested(events, run.id) else "queued"
+      if self.stop_requested(events, run.id):
+        return "stopped"
+      if self.withheld_reason(events, run.id) is not None:
+        return "withheld"
+      return "queued"
     if self.run_is_active(run, events, host_boot):
       return "running"
     return "attention"
@@ -916,6 +938,10 @@ class RunStore:
   def terminal_outcome(self, events: list[dict], run_id: str) -> str | None:
     """The run's recorded run_finished outcome, or None while it has none."""
     return terminal_outcome_in_events(events, run_id)
+
+  def withheld_reason(self, events: list[dict], run_id: str) -> str | None:
+    """The run's recorded run_launch_withheld reason, or None while it has none."""
+    return withheld_reason_in_events(events, run_id)
 
   async def terminal_outcome_of(self, session_id: str, run_id: str) -> str | None:
     """The run's recorded terminal outcome, read off this store by id.

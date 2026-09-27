@@ -2,36 +2,27 @@
 
 A private SessionManager inside Scheduler keeps its own chat-event cache, so a cron
 round would land on disk while /bootstrap, /view and WS catchup — which all read the
-process-wide instance's cache — keep serving the pre-cron history.
+process-wide instance's cache — keep serving the pre-cron history. The scheduler's
+bookkeeping goes through the task-tree owner (record_scheduled_fire) and its events
+through persist_and_broadcast, so both singletons must be the injected instances.
 """
 
 from __future__ import annotations
 
-from collections.abc import Coroutine
 from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 from conftest import (
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
-    SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
-    SCHEDULER_GET_CONFIG_PATCH_TARGET,
-    SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
-    SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
-    SCHEDULER_THREAD_MANAGER_PATCH_TARGET,
-    FakeThreadManager,
-    _noop,
-    build_option_worktree_cfg,
-    close_create_logged_task,
 )
 
 from src.core import event_types as ET
-from src.core.config import ScheduledTaskConfig
-from src.core.models import CreateSessionRequest
+from src.core.config import CharlieBotConfig, ScheduledTaskConfig
 from src.core.scheduler import TASK_HANDLERS, Scheduler
 from src.core.sessions import SessionManager
+from src.core.task_sessions import TaskTreeManager
 
 
 def _count_event_lines(path: Path) -> int:
@@ -40,68 +31,70 @@ def _count_event_lines(path: Path) -> int:
   return len([line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()])
 
 
-@pytest.mark.asyncio
-async def test_scheduled_prompt_task_hands_injected_session_manager_to_worker(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  """The worker (and through it the master wake) must write on the injected instance."""
-  cfg = build_option_worktree_cfg(tmp_path, OPUS_BACKEND_OPTION)
+@pytest.fixture()
+def scheduler_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+  """One synthetic home with the scheduler's deps singletons wired to it."""
+  import src.core.config as core_config
+  home = tmp_path / "charliebot-home"
+  cfg = CharlieBotConfig(
+      charliebot_home=home,
+      backends={"options": [OPUS_BACKEND_OPTION]},
+      paths={"worktree_dir": str(home / "worktrees")})
+  core_config._credentials_cache.seed(core_config.Credentials(
+      path=home / "credentials.yaml", sections={"charliebot": {"access_key": "shared-key"}}))
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
   session_mgr = SessionManager(cfg)
-  await session_mgr.create_session(
-      CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
-      backend=OPUS_BACKEND_ID,
-  )
+  tree = TaskTreeManager(cfg, session_mgr)
+  from src.api import deps
+  monkeypatch.setattr(deps, "_task_manager", tree)
+  monkeypatch.setattr(deps, "_session_manager", session_mgr)
+  # The scheduler reloads the process config on every fire; pin the reload to
+  # the synthetic home's in-memory cfg.
+  monkeypatch.setattr("src.core.scheduler.get_config", lambda: cfg)
   scheduler = Scheduler(cfg, session_mgr)
-  task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt")
-
-  captured: dict[str, Any] = {}
-
-  def fake_spawn_worker(**kwargs: Any) -> Coroutine[Any, Any, None]:
-    captured.update(kwargs)
-    return _noop()
-
-  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr(SCHEDULER_THREAD_MANAGER_PATCH_TARGET, lambda _cfg: FakeThreadManager())
-  monkeypatch.setattr(
-      SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
-      AsyncMock(return_value=(OPUS_BACKEND_ID, OPUS_BACKEND_OPTION.model)),
-  )
-  monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, fake_spawn_worker)
-  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
-
-  await scheduler._execute_task(task_cfg)
-
-  assert captured, "spawn_worker was never called"
-  assert captured["session_mgr"] is session_mgr
+  return cfg, session_mgr, tree, scheduler, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_scheduled_round_events_reach_shared_read_cache(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_scheduled_fire_bookkeeping_writes_the_injected_session_manager(
+    scheduler_env,
 ) -> None:
+  """The fire's durable bookkeeping (last_scheduled_run) and its event land on
+  the injected instance, so the read paths' cache sees them."""
+  _cfg, session_mgr, tree, scheduler, _monkeypatch = scheduler_env
+  meta = await tree.create_scheduled_generation("nightly", OPUS_BACKEND_ID)
+  task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", handler="probe")
+
+  from unittest.mock import patch
+  with patch.dict(TASK_HANDLERS, {"probe": AsyncMock(return_value="done")}):
+    await scheduler._execute_task(task_cfg)
+
+  fresh = await session_mgr.get_session(meta.id)
+  assert fresh is not None
+  assert fresh.last_scheduled_run is not None
+  events = [e for e in session_mgr.load_chat_events_sync(meta.id) if e.get("type") == ET.HANDLER_RESULT]
+  assert [event["type"] for event in events] == [ET.HANDLER_RESULT]
+  projection = session_mgr.get_message_projection(meta.id)
+  assert projection is not None
+  assert len(projection.history) == 1
+
+
+@pytest.mark.asyncio
+async def test_scheduled_round_events_reach_shared_read_cache(scheduler_env) -> None:
   """After a scheduled round, the read-path cache must still match the file on disk."""
-  cfg = build_option_worktree_cfg(tmp_path, OPUS_BACKEND_OPTION)
-  session_mgr = SessionManager(cfg)
-  meta = await session_mgr.create_session(
-      CreateSessionRequest(name="Scheduled: probe", scheduled_task="probe"),
-      backend=OPUS_BACKEND_ID,
-  )
-  # Warm the cache the way an HTTP history read does, before the round fires.
-  assert not session_mgr.load_chat_events_sync(meta.id)
+  _cfg, session_mgr, tree, scheduler, _monkeypatch = scheduler_env
+  meta = await tree.create_scheduled_generation("probe", OPUS_BACKEND_ID)
 
-  scheduler = Scheduler(cfg, session_mgr)
-  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setitem(TASK_HANDLERS, "probe", AsyncMock(return_value="done"))
   task_cfg = ScheduledTaskConfig(name="probe", cron="* * * * *", handler="probe")
-
-  await scheduler._execute_task(task_cfg)
+  from unittest.mock import patch
+  with patch.dict(TASK_HANDLERS, {"probe": AsyncMock(return_value="done")}):
+    await scheduler._execute_task(task_cfg)
 
   disk_lines = _count_event_lines(session_mgr.get_chat_events_path(meta.id))
   assert disk_lines > 0, "the round persisted nothing"
   assert session_mgr.get_chat_event_count_sync(meta.id) == disk_lines
-  assert [event["type"] for event in session_mgr.load_chat_events_sync(meta.id)] == [ET.HANDLER_RESULT]
+  types = [event["type"] for event in session_mgr.load_chat_events_sync(meta.id)]
+  assert ET.HANDLER_RESULT in types
   projection = session_mgr.get_message_projection(meta.id)
   assert projection is not None
-  assert len(projection.history) == 1
+  assert any(msg.get("role") == "system" for msg in projection.history)

@@ -13,14 +13,12 @@ from src.core import runs
 if TYPE_CHECKING:
   from src.core.config import CharlieBotConfig
   from src.core.sessions import SessionManager
-  from src.core.threads import ThreadManager
 
 from src.core.init_worker_recovery import (
     _liveness_probe,
     _quarantine_stale_failed_worktrees,
-    _reconcile_interrupted_runs,
     _report_recovery_event,
-    _scan_interrupted_runs,
+    _scan_thread_metas,
 )
 from src.core.log_once import LazyStructlogLogger
 from src.core.tasks import create_logged_task
@@ -32,35 +30,28 @@ async def run_crash_recovery(
     cfg: CharlieBotConfig,
     boot_time: datetime,
     session_mgr: SessionManager | None = None,
-    thread_mgr: ThreadManager | None = None,
     *,
     master_identity: asyncio.Task | None = None,
-) -> int:
-  """Reconcile interrupted runs and quarantine stale worktrees.
+) -> None:
+  """Master-side startup recovery plus the stale failed-worktree sweep.
 
   This is the deferrable part of startup: the server lifespan launches it as a
   background task so readiness is not delayed by the O(history) per-thread
   metadata scan. The synchronous scans run via ``asyncio.to_thread`` so they
   never block the event loop while live requests are served; the async git
-  quarantine calls and per-run dispatch are awaited normally.
+  quarantine calls are awaited normally.
 
-  Reconciliation NEVER kills an interrupted run's recorded process: an
-  interrupted run's truth is resolved from disk (raw log + pid/pid_start
-  liveness) into the outcome table, then either re-attached (still
-  running), drained (finished while we were down), respawned (never started),
-  or failed (died mid-run). Only leftover descendants holding the run's
-  raw-log fd are killed, and they are named in a report. The finalize chain it
-  dispatches into is judgment-idempotent, so a crash mid-finalize converges
-  instead of duplicating.
+  The legacy thread reconcile/respawn half is gone — legacy threads are
+  read-only records and their executor no longer exists — so the thread scan
+  here feeds only the stale failed-worktree quarantine. *boot_time* is
+  captured at lifespan start (kept for signature stability and the quarantine
+  window's anchor).
 
-  *boot_time* is captured at lifespan start. Only threads started before it are
-  reconciled, so a worker spawned during the recovery window is spared.
+  *session_mgr* is injectable so the server passes its live instance;
+  standalone callers (tests) get an auto-constructed one.
 
-  *session_mgr*/*thread_mgr* are injectable so the server passes its live
-  instances; standalone callers (tests) get auto-constructed ones.
-
-  Master-side reconciliation runs after the worker-side pass, as the
-  identity judgment (:func:`reconcile_master_identity`) plus the replay pass
+  Master-side reconciliation is the identity judgment
+  (:func:`reconcile_master_identity`) plus the replay pass
   (``_replay_unanswered_user_messages``): per session, a recorded master turn
   is resolved through ``runs.resolve_run``'s outcome table — re-attached or
   drained through the follower, or cleared — and every real user message
@@ -74,17 +65,14 @@ async def run_crash_recovery(
   replay on a partial exclusion map double-answers turns — while the rest of
   startup continues. Standalone callers (tests) pass nothing and get both
   passes inline.
-
-  Returns the number of interrupted runs dispatched for recovery.
   """
   if session_mgr is None:
     from src.core.sessions import SessionManager
     session_mgr = SessionManager(cfg)
-  if thread_mgr is None:
-    from src.core.threads import ThreadManager
-    thread_mgr = ThreadManager(cfg)
-  interrupted, threads = await asyncio.to_thread(_scan_interrupted_runs, cfg, boot_time)
-  recovered = await _reconcile_interrupted_runs(cfg, session_mgr, thread_mgr, interrupted)
+  # The legacy thread reconcile/respawn half is gone: legacy threads are
+  # read-only records and their executor no longer exists. Startup still
+  # sweeps the failed worktrees the thread metadata names.
+  threads = await asyncio.to_thread(_scan_thread_metas, cfg)
   if master_identity is not None:
     # The lifespan barrier may already have awaited this task; re-awaiting a
     # done task is free, and the barrier's shield keeps the one execution
@@ -98,7 +86,6 @@ async def run_crash_recovery(
   else:
     await _reconcile_master_runs(cfg, session_mgr, boot_time)
   await _quarantine_stale_failed_worktrees(cfg, threads)
-  return recovered
 
 
 def unanswered_input_events(chat_events: list[dict], exclude_ids: set[str]) -> list[dict]:

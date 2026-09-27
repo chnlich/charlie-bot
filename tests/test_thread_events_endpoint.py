@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import make_home_config
+from conftest import make_home_config, seed_thread
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -43,7 +43,7 @@ async def _client_with_log(tmp_path: Path) -> tuple[TestClient, str]:
   session_mgr = SessionManager(cfg)
   thread_mgr = ThreadManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Events"))
-  meta = await thread_mgr.create_thread(session, "events")
+  meta = await seed_thread(thread_mgr, session, "events")
   path = await thread_mgr.get_events_log_path(session.id, meta.id)
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text("".join(json.dumps(e) + "\n" for e in EVENTS), encoding="utf-8")

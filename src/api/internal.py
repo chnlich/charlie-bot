@@ -102,7 +102,8 @@ async def _authorize_spawn_request(
 
   A v2 task-tree node takes the one central v2 authorization owner —
   ``TaskTreeManager.check_task_authorization``, the nearest-real-user-ancestor
-  gate (re-judged by the v2 helper below and again at the actual launch).
+  gate (judged where the delegation request enters; the Run launch re-judges
+  nothing).
   The session-local legacy gate must not pre-gate a node that legitimately
   inherits an ancestor's authorization: that split would force every sub-task
   manager to carry its own take-off before the real CLI route works. The
@@ -178,11 +179,11 @@ async def _delegate_task_tree(
   )
 
   try:
-    # The nearest-user-ancestor gate re-judges at delegation and again at the
-    # child run's actual launch, whatever credential carries the request. The
-    # read-only verify exemption rides the one shared judgment (is_verify_exempt)
-    # here, at the admission check above, at the agent-creation check, and at
-    # the launch; the structural create checks still apply to a verify child.
+    # The nearest-user-ancestor gate judges here, where the delegation request
+    # enters; the child run's launch re-judges nothing. The read-only verify
+    # exemption rides the one shared judgment (is_verify_exempt) here, at the
+    # admission check above, and at the agent-creation check; the structural
+    # create checks still apply to a verify child.
     if not is_verify_exempt(req.task_type):
       await task_mgr.check_task_authorization(req.session_id)
     request_id = delegate_request_id(req)
@@ -287,10 +288,14 @@ async def delegate_task(
     if req.base_branch is not None:
       raise HTTPException(status_code=400, detail="verify delegations are repo-less; omit base_branch")
   else:
-    if req.repo_path is None:
-      raise HTTPException(status_code=400, detail=f"{req.task_type.value} delegations require repo_path")
-    if req.base_branch is None:
-      raise HTTPException(status_code=400, detail=f"{req.task_type.value} delegations require base_branch")
+    # implement/quick-edit/script-run carry a repo, or neither field: a
+    # repo-less Run works from its Run directory, and a base without its repo
+    # (or the reverse) names a worktree that cannot exist.
+    if (req.repo_path is None) != (req.base_branch is None):
+      raise HTTPException(
+          status_code=400,
+          detail=f"{req.task_type.value} delegations take repo_path and base_branch together; "
+                 "give both for a repo task, neither for a repo-less one")
   require_found(await session_mgr.get_session(req.session_id))
   meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr, task_mgr)
   return await _delegate_task_tree(req, meta, cfg, task_mgr, session_mgr, caller, resolved_backend, resolved_model)

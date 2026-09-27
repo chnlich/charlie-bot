@@ -110,6 +110,54 @@ async def test_manager_template_identical_at_every_depth_and_no_pm_load(tmp_path
   assert "PM identity" not in joined
 
 
+async def test_manager_prompt_carries_the_shared_master_rules(tmp_path: Path) -> None:
+  """One division of work for both manager kinds: the snapshot holds master.md
+  full text between the shared base and the task-tree template, and its new
+  Direct Work text rides verbatim."""
+  cfg, _sm, mgr = build_env(tmp_path)
+  ids = await build_three_levels(mgr)
+  meta = await mgr.load_meta(ids["root"])
+  snapshot, _err = preview_snapshot(cfg, meta, "manager_turn", chain=(), node_ref=None, overlay=None)
+  refs = [s[1] for s in sources_of(snapshot)]
+  assert "prompts/master.md" in refs
+  assert "prompts/task_base.md" in refs
+  assert "prompts/task_manager.md" in refs
+  # master.md sits between task_base and task_manager in the rule order.
+  assert refs.index("prompts/task_base.md") < refs.index("prompts/master.md") < refs.index(
+      "prompts/task_manager.md")
+  joined = snapshot.instructions_text
+  assert "Direct work and delegation divide by where the change lands." in joined
+  assert "Every write to a repository, whatever its size, goes through `charliebot delegate` to a worker." in joined
+  assert "Repository implementation stays with worker leaves at every manager depth." in joined
+
+
+async def test_default_empty_local_rules_launch_cleanly(tmp_path: Path) -> None:
+  cfg, _sm, mgr = build_env(tmp_path)
+  ids = await build_three_levels(mgr)
+  for label in ("root", "worker1"):
+    meta = await mgr.load_meta(ids[label])
+    assert meta.subtree_prompt_ref is None and meta.node_prompt_ref is None
+    snapshot, _err = preview_snapshot(cfg, meta, "manager_turn", chain=(), node_ref=None, overlay=None)
+    assert snapshot.blocks  # rules and common blocks exist without any local rule
+    assert not [s for s in sources_of(snapshot) if s[0] in ("subtree", "node")]
+
+
+@pytest.mark.parametrize("kind", ["work", "review", "iteration", "scheduled_step"])
+async def test_worker_kinds_get_their_applicable_contracts(tmp_path: Path, kind: str) -> None:
+  cfg, _sm, mgr = build_env(tmp_path)
+  ids = await build_three_levels(mgr)
+  meta = await mgr.load_meta(ids["worker1"])
+  assert meta is not None and meta.task is not None
+  snapshot, _err = preview_snapshot(cfg, meta, kind, chain=(), node_ref=None, overlay=None)
+  refs = [s[1] for s in sources_of(snapshot)]
+  assert "prompts/task_base.md" in refs
+  if kind == "review":
+    assert any(ref.startswith("src/core/review.py") for ref in refs)
+  elif meta.task.task_type == "implement" or kind != "work":
+    assert "prompts/worker.md" in refs
+  assert "prompts/verify.md" not in refs  # a verify contract only on verify tasks
+
+
 async def test_verify_task_gets_the_verify_contract(tmp_path: Path) -> None:
   cfg, _sm, mgr = build_env(tmp_path)
   ids = await build_three_levels(mgr)

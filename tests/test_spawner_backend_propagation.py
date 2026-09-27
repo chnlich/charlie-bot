@@ -1,29 +1,17 @@
 from pathlib import Path
-from typing import Any
 
 import pytest
 from conftest import (
     AGY_BACKEND_OPTION,
     CODEX_BACKEND_OPTION,
     OPUS_BACKEND_ID,
-    CapturingThreadManager,
-    JudgmentShim,
     backend_option,
-    build_option_worktree_cfg,
-    capturing_worker,
-    make_fake_git_create_worktree,
-    run_worktree_spawn,
-    stage_worktree_spawn,
+    build_worker_prompt,
 )
 
-from src.core import spawner, spawner_launch
+from src.core import spawner
 from src.core.config import CharlieBotConfig
-from src.core.models import (
-    SessionMetadata,
-    SpawnRequest,
-    TaskType,
-    ThreadMetadata,
-)
+from src.core.models import TaskType
 
 
 def _build_cfg() -> CharlieBotConfig:
@@ -62,97 +50,101 @@ def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
     spawner.resolve_backend_option(cfg, "codex-o3", "")
 
 
-@pytest.mark.asyncio
-async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  rig = stage_worktree_spawn(tmp_path, monkeypatch, description="Do work")
-
-  await run_worktree_spawn(rig, resolved_model="o3-pro", keep_worktree=False)
-  monkeypatch.undo()
-
-  assert "git_create_worktree" in rig.captures
-  assert rig.captures["worker_dir"] == rig.captures["git_create_worktree"]["wt_path"].resolve()
-  assert rig.captures["worker_dir"] != rig.repo_path
-  assert rig.thread.worktree_path == str(rig.captures["git_create_worktree"]["wt_path"])
-  assert rig.thread.base_branch == "main"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("reuse_worktree", [False, True], ids=["fresh_worktree", "worktree_override"])
-async def test_create_worktree_and_process_raises_when_session_missing(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    reuse_worktree: bool,
-) -> None:
-  """Both worktree-provisioning paths refuse to spawn when the session is gone."""
-  cfg = build_option_worktree_cfg(tmp_path, CODEX_BACKEND_OPTION)
-  repo_path = (tmp_path / "repo").resolve()
-  repo_path.mkdir(parents=True, exist_ok=True)
-  thread = ThreadMetadata(
-      id="thread-1",
-      session_id="session-id",
-      description="Do work",
+def test_resolve_backend_option_allows_antigravity_missing_model() -> None:
+  cfg = CharlieBotConfig(
+      charliebot_home=Path("/tmp/charliebot-test"),
+      paths={"worktree_dir": "/tmp/worktrees"},
+      backends={"options": [AGY_BACKEND_OPTION,]},
   )
 
-  class FakeSessionManager(JudgmentShim):
+  opt = spawner.resolve_backend_option(cfg, "agy", None)
 
-    async def get_session(self, session_id: str) -> SessionMetadata | None:
-      return None
-
-  if reuse_worktree:
-    request = SpawnRequest(
-        repo_path=str(repo_path),
-        base_branch="main",
-        worktree_path_override=str(tmp_path / "worktrees" / "reused"),
-    )
-  else:
-    # The fresh-worktree path provisions the worktree before the session check,
-    # so the real git_create_worktree must stay faked out even though the call
-    # ends in the session-missing raise.
-    monkeypatch.setattr(spawner_launch, "git_create_worktree", make_fake_git_create_worktree())
-    request = SpawnRequest(repo_path=str(repo_path), base_branch="main")
-
-  with pytest.raises(ValueError, match="session 'session-id' not found"):
-    await spawner._create_worktree_and_process(
-        "session-id",
-        thread,
-        "Do work",
-        cfg,
-        FakeSessionManager(),
-        JudgmentShim(),
-        repo_path,
-        request,
-    )
+  assert opt.id == "agy"
+  assert opt.model is None
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("task_type", [TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN])
-async def test_create_repoless_non_verify_profiles_propagate_antigravity_and_keep_prompt(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    task_type: TaskType,
-) -> None:
-  cfg = build_option_worktree_cfg(tmp_path, AGY_BACKEND_OPTION)
-  thread = ThreadMetadata(
-      id="thread-1",
-      session_id="session-id",
-      description="Prompt task",
-  )
-  captures: dict[str, Any] = {}
-
-  monkeypatch.setattr(spawner_launch, "Worker", capturing_worker(captures))
-
-  await spawner._create_repoless_process(
-      "session-id",
-      thread,
-      "Prompt task",
-      cfg,
-      CapturingThreadManager(thread, captures, tmp_path / "events.jsonl"),
-      SpawnRequest(resolved_backend="agy", task_type=task_type),
+@pytest.mark.parametrize(
+    "backend_type, entry_kwargs",
+    [
+        ("cc-claude", {}),
+        ("cc-kimi", {
+            "credential": "test-kimi"
+        }),
+        ("cc-openai-compatible", {
+            "api_base": "https://api.test/v1"
+        }),
+        ("codex", {}),
+        ("charlie-code", {}),
+        ("gemini", {}),
+        ("opencode", {}),
+    ],
+)
+def test_resolve_backend_option_rejects_missing_model_for_model_required_backends(
+    backend_type: str, entry_kwargs: dict) -> None:
+  # The sectioned schema rejects a model-less model-required entry outright, so
+  # each config entry carries a model and the resolver's own None rejection is
+  # what the test drives.
+  cfg = CharlieBotConfig(
+      charliebot_home=Path("/tmp/charliebot-test"),
+      paths={"worktree_dir": "/tmp/worktrees"},
+      backends={
+          "options":
+              [
+                  backend_option(
+                      id=backend_type, label=backend_type, type=backend_type, model="fake-model", **entry_kwargs),
+              ]
+      },
   )
 
-  assert thread.backend == "agy"
-  assert thread.model is None
-  assert captures["worker_backend"].id == "agy"
-  assert captures["worker_backend"].model is None
-  assert captures["task_description"] == "Prompt task"
+  with pytest.raises(ValueError, match="model is required"):
+    spawner.resolve_backend_option(cfg, backend_type, None)
+
+
+def test_build_worker_prompt_makes_iteration_reports_advisory() -> None:
+  prompt = build_worker_prompt("Improve the CLI", cfg=_build_cfg(), loop_dir="/tmp/loops/2", iteration_number=2)
+
+  assert "Treat them as advisory evidence and hints only." in prompt
+  assert "must not dictate your plan for this iteration" not in prompt
+  assert "### What Changed" in prompt
+  assert "### Evidence" in prompt
+  assert "### Advisory Notes" in prompt
+  assert "### Next" not in prompt
+
+
+def test_build_worker_prompt_task_type_implement_matches_legacy_format() -> None:
+  prompt = build_worker_prompt("Implement X", cfg=_build_cfg())
+  assert "Commit your changes with descriptive messages." in prompt
+  assert "A reviewer will handle that." in prompt
+  assert "Do NOT modify tracked files." not in prompt
+  assert "Do NOT commit." not in prompt
+
+
+def test_build_worker_prompt_instructs_task_spec_source_file_handling() -> None:
+  prompt = build_worker_prompt("## Goal\nImplement X\n\n## Source Files\n- /tmp/source.md", cfg=_build_cfg())
+
+  assert "contains a `## Source Files` section" in prompt
+  assert "read every listed source file before editing" in prompt
+  assert "stop and report the conflict" in prompt
+  assert "instead of inventing a merged requirement" in prompt
+
+
+def test_build_worker_prompt_task_type_quick_edit_skips_reviewer_mention() -> None:
+  prompt = build_worker_prompt("Cherry-pick fix", cfg=_build_cfg(), task_type=TaskType.QUICK_EDIT)
+  assert "Commit your changes with descriptive messages." in prompt
+  assert "No reviewer will run" in prompt
+  assert "A reviewer will handle that." not in prompt
+
+
+def test_build_worker_prompt_task_type_script_run_forbids_edits_and_commits() -> None:
+  prompt = build_worker_prompt("Run SLURM benchmark", cfg=_build_cfg(), task_type=TaskType.SCRIPT_RUN)
+  assert "Do NOT modify tracked files" in prompt
+  assert "Do NOT commit" in prompt
+  assert "Commit your changes with descriptive messages." not in prompt
+  assert "A reviewer will handle that." not in prompt
+
+
+def test_build_worker_prompt_rejects_verify_task_type() -> None:
+  with pytest.raises(ValueError, match="unsupported task_type"):
+    build_worker_prompt("Verify plan", cfg=_build_cfg(), task_type=TaskType.VERIFY)
+
+

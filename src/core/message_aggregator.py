@@ -312,14 +312,19 @@ def _run_header_msg(ev: dict) -> dict:
   failed" — ``state`` itself stays ``failed`` (the dot color and every other
   state reader key off it), and the four launch/ref fields feed the header's
   task spec and launch prompt link row. The header events are synthesized in
-  process by worker_transcript, so the four keys read directly.
+  process by worker_transcript, so the four keys read directly. A withheld
+  Run's content word reads "withheld · <reason>" — the reason rides its own
+  field.
   """
   parts = [f"Run {ev.get('kind') or 'run'}"]
   backend = ev.get("backend_label") or ev.get("backend") or ""
   if backend:
     parts.append(backend)
   state = ev.get("state") or ""
-  state_word = "launch failed" if ev["launch_failed"] else state
+  if state == "withheld" and ev.get("withheld"):
+    state_word = f"withheld · {ev.get('withheld')}"
+  else:
+    state_word = "launch failed" if ev["launch_failed"] else state
   if state_word:
     parts.append(state_word)
   return {

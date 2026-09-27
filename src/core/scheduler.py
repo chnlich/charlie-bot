@@ -9,8 +9,6 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.core import event_types as ET
-from src.core import task_chain
-from src.core.backlog_loop import determine_action
 from src.core.config import (
     CharlieBotConfig,
     ScheduledTaskConfig,
@@ -22,15 +20,11 @@ from src.core.log_once import LazyStructlogLogger
 from src.core.models import (
     LastRunStatus,
     SessionMetadata,
-    SpawnRequest,
     TaskType,
-    ThreadMetadata,
     parse_utc_datetime,
 )
 from src.core.sessions import SessionManager
-from src.core.spawner import resolve_requested_subagent_backend_model, spawn_worker
 from src.core.tasks import cancel_and_wait, create_logged_task
-from src.core.threads import ThreadManager
 
 log = LazyStructlogLogger()
 
@@ -94,61 +88,6 @@ def effective_scheduled_task_backend(task_cfg: ScheduledTaskConfig, cfg: Charlie
   if not cfg.backends.options:
     raise ValueError("scheduled task backend resolution requires a configured backends.options entry")
   return cfg.backends.options[0].id
-
-
-async def fire_scheduled_worker(
-    session: SessionMetadata,
-    task_cfg: ScheduledTaskConfig,
-    thread: ThreadMetadata,
-    event_description: str,
-    cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
-    thread_mgr: ThreadManager,
-    *,
-    backend_override: str | None,
-    prompt_override: str | None,
-) -> asyncio.Task:
-  """Fire one scheduled task's worker on an already-created thread and broadcast its
-  TASK_DELEGATED event; return the worker task's handle.
-
-  The single spawn block every scheduled worker goes through — the cron tick
-  (``_spawn_scheduled_worker``) and the steps-chain advance
-  (``task_chain.spawn_step``) — so the spawn request, the ``scheduled_worker_*``
-  task name, and the TASK_DELEGATED keys cannot drift between paths; the sidebar
-  workers panel renders that one event shape.
-  """
-  effective_backend = backend_override or effective_scheduled_task_backend(task_cfg, cfg)
-  resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
-      session.id, cfg, session_mgr, requested_backend=effective_backend)
-  handle = create_logged_task(
-      spawn_worker(
-          session_id=session.id,
-          description=thread.description,
-          thread_id=thread.id,
-          cfg=cfg,
-          session_mgr=session_mgr,
-          thread_mgr=thread_mgr,
-          request=SpawnRequest(
-              repo_path=task_cfg.repo,
-              prompt_override=prompt_override,
-              resolved_backend=resolved_backend,
-              resolved_model=resolved_model,
-              task_type=TaskType.IMPLEMENT,
-          ),
-      ),
-      name=f"scheduled_worker_{task_cfg.name}_{thread.id[:8]}",
-  )
-  event = {
-      "type": ET.TASK_DELEGATED,
-      "task": task_cfg.name,
-      "description": event_description,
-      "session_id": session.id,
-      "thread_id": thread.id,
-      "backend": resolved_backend or "",
-      "model": resolved_model or "",
-  }
-  await session_mgr.persist_and_broadcast(session.id, event)
-  return handle
 
 
 class Scheduler:
@@ -300,26 +239,22 @@ class Scheduler:
   # Task execution
   # ---------------------------------------------------------------------------
 
-  async def _prepare_task_execution(
+  async def _cron_session_for(
       self,
       task_cfg: ScheduledTaskConfig,
-      initial_status: LastRunStatus | None = None,
-  ) -> tuple[CharlieBotConfig, SessionManager, SessionMetadata]:
-    """Shared preamble: reload config, get/create session, persist bookkeeping fields."""
+  ) -> SessionMetadata:
+    """The unbound task's cron session: found or created, never a replacement.
+
+    An unbound task's firings all parent to one dedicated session. Existing
+    legacy cron sessions keep that role in place; a session created from now
+    on is a task-tree manager node. None (busy during backend rotation) is a
+    visible error, never a skipped fire.
+    """
     cfg = self._reload_config()
-    session_mgr = self._session_mgr
-    session = await self._get_or_create_session(task_cfg, cfg, session_mgr)
+    session = await self._get_or_create_session(task_cfg, cfg, self._session_mgr)
     if session is None:
       raise RuntimeError(f"scheduled task '{task_cfg.name}' session is busy during backend rotation")
-    tz = ZoneInfo(task_cfg.timezone)
-    now = datetime.now(tz)
-    session.last_scheduled_run = now.isoformat()
-    session.last_scheduled_cron = task_cfg.cron
-    if initial_status:
-      session.last_run_status = initial_status
-    session.updated_at = datetime.now(UTC)
-    await session_mgr.save_metadata(session)
-    return cfg, session_mgr, session
+    return session
 
   async def _execute_task(
       self,
@@ -327,26 +262,24 @@ class Scheduler:
       record_handle: bool = False,
       firing: str | None = None,
   ) -> dict:
-    """Route to bound, handler, loop, steps, or prompt execution based on task config.
+    """Execute one fire through the single bound code path.
 
-    ``record_handle`` gates whether the background round spawned by this fire is
-    registered in the overlap-skip registry. The scheduled path records it via
-    ``_maybe_run``; manual ``run_task_now`` leaves it off so manual rounds stay
-    outside the skip judgment. A task bound to a task-tree node (``session_id``)
-    takes the v2 path — the binding is the session, the firing identity is
-    durable, and executions land on Runs; ``firing`` carries the due
-    occurrence's time (an explicit manual fire passes its own).
+    A task bound to a task-tree node (``session_id``) fires against that
+    stable binding; an unbound task first finds or creates its cron session
+    and then runs the same code with it as the firings' parent. Both land on
+    Runs; ``firing`` carries the due occurrence's time (an explicit manual fire
+    passes its own). ``record_handle`` gates whether the background round
+    spawned by this fire is registered in the overlap-skip registry: the
+    scheduled path records it via ``_maybe_run``; manual ``run_task_now``
+    leaves it off so manual rounds stay outside the skip judgment.
     """
     if task_cfg.session_id:
       return await self._execute_bound_task(
           task_cfg, record_handle=record_handle, firing=firing or datetime.now(UTC).isoformat())
-    if task_cfg.handler:
-      return await self._execute_handler_task(task_cfg)
-    if task_cfg.loop:
-      return await self._execute_loop_task(task_cfg, record_handle=record_handle)
-    if task_cfg.steps:
-      return await self._execute_steps_task(task_cfg, record_handle=record_handle)
-    return await self._execute_prompt_task(task_cfg, record_handle=record_handle)
+    parent = await self._cron_session_for(task_cfg)
+    return await self._execute_bound_task(
+        task_cfg, record_handle=record_handle, firing=firing or datetime.now(UTC).isoformat(),
+        parent=parent)
 
   # ---------------------------------------------------------------------------
   # Bound (task-tree) execution — the v2 path
@@ -358,8 +291,13 @@ class Scheduler:
       *,
       record_handle: bool,
       firing: str,
+      parent: SessionMetadata | None = None,
   ) -> dict:
-    """Fire one bound task against its stable node (src.core.cron_sequence owns the shapes)."""
+    """Fire one task against its node (src.core.cron_sequence owns the shapes).
+
+    ``parent`` pre-resolves the binding for an unbound task (its cron
+    session); a bound task resolves strictly by its ``session_id`` here.
+    """
     from src.api.deps import task_manager
     from src.core.cron_sequence import (
         check_fireable_binding,
@@ -369,7 +307,7 @@ class Scheduler:
 
     cfg = self._reload_config()
     tree = task_manager()
-    meta = await check_fireable_binding(task_cfg, tree)
+    meta = parent if parent is not None else await check_fireable_binding(task_cfg, tree)
 
     if task_cfg.mode == 'master':
       # mode: master wakes the bound manager node — the durable input IS the
@@ -416,7 +354,13 @@ class Scheduler:
       # advances, or the same occurrence would refire every tick).
       await self._record_bound_fire(meta, task_cfg, cfg)
       return {"session_id": meta.id, "firing": firing, "skipped": action}
-    leaf = await self._bound_leaf(task_cfg, meta, tree, firing, goal=prompt, backend=backend, model=model)
+    # The loop's implement action is implementation delegation: its leaf
+    # carries the implement task type, so the review + landing delivery policy
+    # applies with the repo's default branch as the merge target. Every other
+    # action stays a type-less leaf whose success closes it.
+    leaf = await self._bound_leaf(
+        task_cfg, meta, tree, firing, goal=prompt, backend=backend, model=model,
+        task_type=TaskType.IMPLEMENT if action == "implement" else None)
     from src.core.cron_sequence import register_leaf_run
     await register_leaf_run(tree, leaf.id, task_cfg, firing, kind="work", position=None, backend=backend, model=model)
     await self._record_bound_fire(meta, task_cfg, cfg)
@@ -438,12 +382,14 @@ class Scheduler:
       task_cfg: ScheduledTaskConfig,
       cfg: CharlieBotConfig,
   ) -> None:
-    """The scheduler's per-fire bookkeeping on the bound node (same fields as legacy).
+    """The scheduler's per-fire bookkeeping on the firing's node.
 
     The write goes through the tree metadata owner, which re-reads the node
     under the control lock: a concurrent task edit between the caller's load
     and this write is preserved instead of being overwritten by the stale
-    SessionMetadata snapshot.
+    SessionMetadata snapshot. The node is the bound task's stable binding, or
+    an unbound task's cron session (a task-tree manager node from now on, or
+    the legacy session that keeps parenting its firings).
     """
     tz = ZoneInfo(task_cfg.timezone)
     now = datetime.now(tz)
@@ -493,9 +439,10 @@ class Scheduler:
       goal: str,
       backend: str,
       model: str | None,
+      task_type: TaskType | None = None,
   ):
     from src.core.cron_sequence import ensure_firing_leaf
-    return await ensure_firing_leaf(task_cfg, meta, tree, firing, goal, backend, model)
+    return await ensure_firing_leaf(task_cfg, meta, tree, firing, goal, backend, model, task_type=task_type)
 
   async def _launch_bound_round(
       self,
@@ -512,11 +459,10 @@ class Scheduler:
   ) -> asyncio.Task:
     """One firing's work round: launch (scheduler-owned) and settle for the
     overlap registry. The ordinary work-Run delivery chain owns the success
-    and failure follow-ups; a launch withheld by its preconditions settles
-    this round with the actual reason through the same report owner, and the
-    queued Run stays as the retained pending request."""
+    and failure follow-ups; a launch withheld by its preconditions leaves the
+    queued Run as the retained pending request with its durable withheld
+    record and blocked report, and only releases the overlap handle."""
     from src.core.cron_sequence import (
-        deliver_boundary_report,
         launch_and_settle,
         register_leaf_run,
     )
@@ -526,14 +472,12 @@ class Scheduler:
           tree, leaf_id, task_cfg, firing, kind="work", position=None, backend=backend, model=model)
       observation = await launch_and_settle(tree, leaf_id, run.id, prompt=None)
       if observation.withheld is not None:
-        # No process started and no terminal fact will arrive: release the
-        # overlap handle with the actual reason reported (the fresh/recovered
-        # boundary policy), never a fabricated result.
-        summary = (
-            f"Scheduled task '{task_cfg.name}' fired but its round's launch was withheld and no "
-            f"process started ({observation.withheld}). The run stays queued on the firing's "
-            "leaf as the retained pending request; no side effects ran.")
-        await deliver_boundary_report(tree, leaf_id, meta.id, task_cfg, firing, "blocked", summary)
+        # No process started and no terminal fact will arrive. The launch
+        # itself recorded the durable run_launch_withheld fact and delivered
+        # the ONE blocked report to the parent (once, by stable id); releasing
+        # the overlap handle is all this round still owes.
+        log.info("bound_round_launch_withheld", task=task_cfg.name, leaf=leaf_id,
+                 run=run.id, reason=observation.withheld)
 
     handle = create_logged_task(_round(), name=f"bound_worker_{task_cfg.name}_{firing}")
     if record_handle:
@@ -559,7 +503,7 @@ class Scheduler:
       event = {
           'type': ET.HANDLER_RESULT,
           'task': task_cfg.name,
-          'status': 'ok',
+          'status': ET.HANDLER_STATUS_OK,
           'message': str(result) if result is not None else 'done',
       }
       status = LastRunStatus.SUCCESS
@@ -568,132 +512,13 @@ class Scheduler:
       event = {
           'type': ET.HANDLER_RESULT,
           'task': task_cfg.name,
-          'status': 'error',
+          'status': ET.HANDLER_STATUS_ERROR,
           'message': str(e),
       }
       status = LastRunStatus.FAILED
     await task_manager().record_scheduled_fire(session.id, last_run_status=status)
     await self._session_mgr.persist_and_broadcast(session.id, event)
     return {'session_id': session.id, 'thread_id': None}
-
-  async def _execute_handler_task(self, task_cfg: ScheduledTaskConfig) -> dict:
-    """Run a built-in handler inline; track last_scheduled_run via session."""
-    handler = TASK_HANDLERS.get(task_cfg.handler)
-    if handler is None:
-      raise ValueError(f"Unknown handler: {task_cfg.handler!r}")
-    _, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status=LastRunStatus.RUNNING)
-    log.info('handler_task_firing', task=task_cfg.name, handler=task_cfg.handler)
-    try:
-      result = await handler()
-      event = {
-          'type': ET.HANDLER_RESULT,
-          'task': task_cfg.name,
-          'status': ET.HANDLER_STATUS_OK,
-          'message': str(result) if result is not None else 'done',
-      }
-      session.last_run_status = LastRunStatus.SUCCESS
-    except Exception as e:
-      log.warning('handler_task_error', task=task_cfg.name, error=str(e), traceback=traceback.format_exc())
-      event = {
-          'type': ET.HANDLER_RESULT,
-          'task': task_cfg.name,
-          'status': ET.HANDLER_STATUS_ERROR,
-          'message': str(e),
-      }
-      session.last_run_status = LastRunStatus.FAILED
-    session.updated_at = datetime.now(UTC)
-    await session_mgr.save_metadata(session)
-    await session_mgr.persist_and_broadcast(session.id, event)
-    return {'session_id': session.id, 'thread_id': None}
-
-  async def _execute_prompt_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool) -> dict:
-    """Find-or-create session, create thread, fire-and-forget worker."""
-    cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status=LastRunStatus.RUNNING)
-    return await self._spawn_scheduled_worker(
-        session,
-        task_cfg,
-        task_cfg.prompt,
-        task_cfg.prompt,
-        "scheduled_task_fired",
-        cfg,
-        session_mgr,
-        require_review=False,
-        record_handle=record_handle)
-
-  async def _execute_steps_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool) -> dict:
-    """Fire step 0 of a steps task; later steps advance from the finalize chain."""
-    cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status=LastRunStatus.RUNNING)
-    thread_mgr = ThreadManager(cfg)
-    result = await task_chain.spawn_step(session, task_cfg, 0, cfg, session_mgr, thread_mgr)
-    if record_handle:
-      self._handles[task_cfg.name] = result["handle"]
-    return result
-
-  async def _execute_loop_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool) -> dict:
-    """Run an improvement-loop task: determine action, then spawn worker if needed."""
-    cfg, session_mgr, session = await self._prepare_task_execution(task_cfg)
-
-    repo_path = Path(task_cfg.repo) if task_cfg.repo else None
-    if repo_path is None:
-      raise ValueError(f"loop task '{task_cfg.name}' requires 'repo'")
-
-    backlog_path = repo_path / task_cfg.loop.backlog
-    action_type, prompt = await determine_action(backlog_path, task_cfg.loop, repo_path)
-
-    if action_type in ('noop', 'stale_reset'):
-      session.last_run_status = LastRunStatus.SUCCESS
-      await session_mgr.save_metadata(session)
-      log.info("loop_task_noop", task=task_cfg.name, action=action_type)
-      return {"session_id": session.id, "thread_id": None}
-
-    session.last_run_status = LastRunStatus.RUNNING
-    await session_mgr.save_metadata(session)
-    return await self._spawn_scheduled_worker(
-        session,
-        task_cfg,
-        prompt,
-        f"[{action_type}] {prompt[:200]}",
-        "loop_task_fired",
-        cfg,
-        session_mgr,
-        require_review=(action_type == 'implement'),
-        action=action_type,
-        record_handle=record_handle)
-
-  async def _spawn_scheduled_worker(
-      self,
-      session: SessionMetadata,
-      task_cfg: ScheduledTaskConfig,
-      description: str,
-      event_description: str,
-      log_event: str,
-      cfg: CharlieBotConfig,
-      session_mgr: SessionManager,
-      require_review: bool,
-      record_handle: bool = False,
-      **log_extra: str,
-  ) -> dict:
-    """Create thread, fire its worker through the shared spawn block, and return the result dict."""
-    thread_mgr = ThreadManager(cfg)
-    thread = await thread_mgr.create_thread(session, description, require_review=require_review)
-    handle = await fire_scheduled_worker(
-        session,
-        task_cfg,
-        thread,
-        event_description,
-        cfg,
-        session_mgr,
-        thread_mgr,
-        backend_override=None,
-        prompt_override=None)
-    if record_handle:
-      self._handles[task_cfg.name] = handle
-    log.info(log_event, task=task_cfg.name, session=session.id, thread=thread.id, **log_extra)
-    return {"session_id": session.id, "thread_id": thread.id}
-
-  # ---------------------------------------------------------------------------
-  # Session helpers
-  # ---------------------------------------------------------------------------
 
   async def _get_or_create_session(
       self,

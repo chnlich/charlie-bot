@@ -1,17 +1,15 @@
 import asyncio
 import contextlib
 import json
-import mmap
 import os
 import re
 import subprocess
 import sys
-import threading
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, NamedTuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -24,7 +22,7 @@ from starlette.requests import Request
 
 if TYPE_CHECKING:
   # Annotation-only: the fake-VAD seam's feed sizes; the runtimes import numpy locally.
-  import numpy as np
+  pass
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -38,10 +36,6 @@ LITELLM_503_ERROR_MESSAGE = (
     "litellm.ServiceUnavailableError: ServiceUnavailableError: OpenAIException - "
     "Error code: 503 - [{'error': {'code': 503, 'message': 'The service is currently "
     "unavailable.', 'status': 'UNAVAILABLE'}}]")
-LITELLM_FEEDBACK_BANNER_STDERR = (
-    "\x1b[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\x1b[0m\n"
-    "LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'.\n"
-    "\nCommand logs retained at: /home/chaoli/.charlie-code/sessions/example.d/20260915T232823Z")
 
 # Imports must follow the sys.path bootstrap above.
 import src.core.config as core_config  # noqa: E402,I001
@@ -59,10 +53,8 @@ from src.api.internal import router as internal_router  # noqa: E402
 from src.api.sessions import router as sessions_router  # noqa: E402
 from src.core import event_types as ET  # noqa: E402
 from src.core import improve_command  # noqa: E402
-from src.core import init as init_module  # noqa: E402
 from src.core import runs  # noqa: E402
 from src.core import thinking_state  # noqa: E402
-from src.core import init_worker_recovery as worker_recovery_module  # noqa: E402
 from src.core import models  # noqa: E402
 from src.core import review  # noqa: E402
 from src.core.init_seed import DEFAULT_MEMORY_TOPICS  # noqa: E402
@@ -78,7 +70,6 @@ from src.core.task_sessions import TaskTreeManager  # noqa: E402
 from src.core import spawner  # noqa: E402
 from src.core import spawner_finalize  # noqa: E402
 from src.core import spawner_launch  # noqa: E402
-from src.core.spawner import resume_worker as _real_resume_worker  # noqa: E402
 from src.core.threads import ThreadManager  # noqa: E402
 from src.core.triggers import TriggerManager  # noqa: E402
 
@@ -195,15 +186,6 @@ def make_sound_round(cc_session_id: str) -> ConsumerRound:
 
   async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
     return (cc_session_id, 0, None, {})
-
-  return fake_run_cc
-
-
-def make_failed_round(cc_session_id: str) -> ConsumerRound:
-  """One consumer round whose CC keeps *cc_session_id* but exits with an error."""
-
-  async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
-    return (cc_session_id, 1, "backend died", {})
 
   return fake_run_cc
 
@@ -350,49 +332,6 @@ def crashed_run_record(raw_log: Path) -> models.MasterRunRecord:
   )
 
 
-def stall_before_call(delay: float, real: Callable[..., Any]) -> Callable[..., Any]:
-  """A drop-in stand-in that blocks *delay* seconds, then delegates to *real*.
-
-  Event-loop-responsiveness tests install it for the call whose off-loop execution
-  they verify: the stall is long enough that an inline run pins a ticker gap near
-  it, and the tests pair a 0.25 s stall with a 0.15 s ceiling.
-  """
-
-  def slow(*args: Any, **kwargs: Any) -> Any:
-    time.sleep(delay)
-    return real(*args, **kwargs)
-
-  return slow
-
-
-@contextlib.asynccontextmanager
-async def loop_stall_gaps() -> AsyncIterator[list[float]]:
-  """Record event-loop stall gaps (s) on a 5 ms ticker while the body runs; yields the gap list.
-
-  The ticker is mid-sleep before the body runs, so an inline block cannot starve it
-  unrecorded. Callers assert ``max(gaps)`` against a ceiling that separates off-loop
-  execution from an inline run of the stalled call (see ``stall_before_call``).
-  """
-  gaps: list[float] = []
-  stop = False
-
-  async def ticker() -> None:
-    prev = time.perf_counter()
-    while not stop:
-      await asyncio.sleep(0.005)
-      now = time.perf_counter()
-      gaps.append(now - prev)
-      prev = now
-
-  task = asyncio.create_task(ticker())
-  await asyncio.sleep(0.01)
-  try:
-    yield gaps
-  finally:
-    stop = True
-    await task
-
-
 def append_events(path: Path, events: list[dict]) -> None:
   """Append seed chat events as JSONL; append (not truncate) is what lets a test stage history first."""
   path.parent.mkdir(parents=True, exist_ok=True)
@@ -433,23 +372,6 @@ def count_path_read_text(monkeypatch: pytest.MonkeyPatch, include: Callable[[Pat
   return reads
 
 
-def count_save_metadata_calls(mgr: SessionManager, monkeypatch: pytest.MonkeyPatch) -> list[models.SessionMetadata]:
-  """Reinstall ``mgr.save_metadata`` as a delegate that records each saved meta; returns the live list.
-
-  The list grows with every save until monkeypatch reverts at teardown; the migration suites
-  assert on its length to pin how many metadata writes an exercised path issued.
-  """
-  real_save = mgr.save_metadata
-  saved: list[models.SessionMetadata] = []
-
-  async def counting_save(meta: models.SessionMetadata, **_kwargs: bool) -> None:
-    saved.append(meta)
-    await real_save(meta, **_kwargs)
-
-  monkeypatch.setattr(mgr, "save_metadata", counting_save)
-  return saved
-
-
 def fresh_state_fixture(reset: Callable[[], None]) -> Callable[[], Iterator[None]]:
   """Build an autouse fixture that runs *reset* before and after every test of the module
   assigning it, so process-wide memos and warn-once registries cannot leak between tests.
@@ -465,27 +387,6 @@ def fresh_state_fixture(reset: Callable[[], None]) -> Callable[[], Iterator[None
     reset()
 
   return _fresh_state
-
-
-def recording_mmap_shim(extents: list[tuple[int, int]]) -> type:
-  """An mmap-module stand-in whose ``rfind`` records each ``(start, end)`` extent before delegating.
-
-  The backward-walk window tests install the returned class on the reader module's ``mmap``
-  reference and then assert every recorded extent stayed inside the window the early-stop
-  contract allows.
-  """
-
-  class _RecordingMmap(mmap.mmap):
-
-    def rfind(self, sub: bytes, start: int = 0, end: int | None = None) -> int:
-      extents.append((start, len(self) if end is None else end))
-      return mmap.mmap.rfind(self, sub, start, end)
-
-  class _Shim:
-    ACCESS_READ = mmap.ACCESS_READ
-    mmap = _RecordingMmap
-
-  return _Shim
 
 
 def user_event(content: str, timestamp: str | None = None) -> dict:
@@ -777,156 +678,6 @@ def assert_cli_reject(
   _assert_stderr_fragments(capsys, *err_fragments)
 
 
-def assert_cli_reject_exit2(
-    exc_info: pytest.ExceptionInfo[SystemExit], capsys: pytest.CaptureFixture[str], *err_fragments: str) -> None:
-  """Same as assert_cli_reject with the exit code pinned at 2 (CLI usage error, e.g. bad file input)."""
-  assert exc_info.value.code == 2
-  _assert_stderr_fragments(capsys, *err_fragments)
-
-
-def stub_speech_bundle(engine: str, model_id: str) -> Any:
-  """The inert _SpeechModelBundle the offline voice tests decode on: object() recognizer
-  and VAD parts, so no model loads, and a real decode lock because _decode_samples
-  acquires it around every decoder call."""
-  from src.agents import transcriber
-
-  return transcriber._SpeechModelBundle(
-      recognizer=object(), vad_config=object(), decode_lock=threading.Lock(), engine=engine, model_id=model_id)
-
-
-def write_wav_file(path: Path, frames: bytes, rate: int) -> None:
-  """Write *frames* as a 1-channel 16-bit WAV at *rate* Hz, creating the parent dir.
-
-  The voice suites' single fixture writer: the shape the production pipeline records
-  (``src/api/voice.py``'s writer at ``transcriber.SAMPLE_RATE``), with the rate a
-  parameter so a mismatch fixture states its mismatch.
-  """
-  import wave
-
-  path.parent.mkdir(parents=True, exist_ok=True)
-  with wave.open(str(path), "wb") as wav:
-    wav.setnchannels(1)
-    wav.setsampwidth(2)
-    wav.setframerate(rate)
-    wav.writeframes(frames)
-
-
-def sine_wav_frames(seconds: float, rate: int) -> bytes:
-  """A 440 Hz sine at *rate* Hz as 16-bit little-endian frames: synthetic dictation audio."""
-  import numpy as np
-
-  positions = np.arange(int(rate * seconds), dtype=np.float64)
-  return (np.sin(2 * np.pi * 440.0 * positions / rate) * 10_000).astype("<i2").tobytes()
-
-
-class FakeVadSegment:
-  """One pre-set speech segment: ``length`` silent samples starting at offset ``start``."""
-
-  def __init__(self, start: int, length: int) -> None:
-    import numpy as np
-
-    self.start = start
-    self.samples = np.zeros(length, dtype=np.float32)
-
-
-class FakeOfflineVad:
-  """The offline transcription suites' fake VAD: caller-set segments, no models.
-
-  The production feed loop's calls land here as records — accept_waveform sizes in
-  feed_sizes, flush in flushed — so the windowing suites can assert the cadence,
-  while the decode-window suites walk only empty/front/pop.
-  """
-
-  def __init__(self, segments: list[tuple[int, int]]) -> None:
-    self._segments = [FakeVadSegment(start, length) for start, length in segments]
-    self.feed_sizes: list[int] = []
-    self.flushed = False
-
-  def accept_waveform(self, samples: np.ndarray) -> None:
-    self.feed_sizes.append(samples.size)
-
-  def flush(self) -> None:
-    self.flushed = True
-
-  def empty(self) -> bool:
-    return not self._segments
-
-  @property
-  def front(self) -> FakeVadSegment:
-    return self._segments[0]
-
-  def pop(self) -> None:
-    self._segments.pop(0)
-
-
-def load_voice_replay_eval_script() -> ModuleType:
-  """Import scripts/voice_replay_eval.py as a module (it is an entry point, not a package)."""
-  import importlib.util
-
-  path = ROOT / "scripts" / "voice_replay_eval.py"
-  spec = importlib.util.spec_from_file_location("voice_replay_eval", path)
-  module = importlib.util.module_from_spec(spec)
-  sys.modules["voice_replay_eval"] = module
-  spec.loader.exec_module(module)
-  return module
-
-
-def voice_models_cached(cfg: CharlieBotConfig) -> bool:
-  """True when the configured engine's speech models sit complete on local disk.
-
-  The local_only voice suites' download-free skip gate: reads the model paths
-  ensure_models_cached would fill, judging completeness by the transcriber's own
-  snapshot and file-list rules, and never downloads. False sends the suite to
-  pytest.skip.
-  """
-  from src.agents import transcriber
-
-  paths = transcriber.voice_model_paths(cfg)
-  if not paths.silero_vad.is_file():
-    return False
-  if cfg.voice.engine == "qwen3_hf":
-    from huggingface_hub import snapshot_download
-    from huggingface_hub.errors import LocalEntryNotFoundError
-
-    try:
-      snapshot = Path(
-          snapshot_download(repo_id=cfg.voice.model_id, cache_dir=str(paths.cache_dir), local_files_only=True))
-    except LocalEntryNotFoundError:
-      return False
-    return transcriber._snapshot_complete(snapshot)
-  return all(path.is_file() for path in transcriber._qwen3_model_files(paths))
-
-
-def voice_fixture_pair(cfg: CharlieBotConfig) -> tuple[Path, str]:
-  """A persisted (recording, persisted transcript) pair under cfg.sessions_dir, for the
-  local_only voice suites: the transcript is what the production pipeline wrote for that
-  recording. Picks the pair closest to 8 s; skips degenerate transcripts (< 20 chars)
-  that came from the broken streaming path. Skips the test when the host has none."""
-  import wave as wave_mod
-
-  best: tuple[tuple[float, str], Path, str] | None = None
-  for wav_path in sorted(cfg.sessions_dir.glob("*/voice/*.wav")):
-    txt_path = wav_path.with_suffix(".txt")
-    if not txt_path.is_file():
-      continue
-    try:
-      with wave_mod.open(str(wav_path), "rb") as wav:
-        if (wav.getnchannels(), wav.getsampwidth(), wav.getframerate()) != (1, 2, 16_000):
-          continue
-        duration = wav.getnframes() / wav.getframerate()
-    except (wave_mod.Error, OSError):
-      continue
-    transcript = txt_path.read_text(encoding="utf-8")
-    if len(transcript) < 20 or not 3 <= duration <= 60:
-      continue
-    key = (abs(duration - 8.0), wav_path.name)
-    if best is None or key < best[0]:
-      best = (key, wav_path, transcript)
-  if best is None:
-    pytest.skip("no persisted voice recording with its transcript under the session home")
-  return best[1], best[2]
-
-
 def make_home_config(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig rooted at tmp_path/"charliebot-home". Leaves the home dir un-created:
   most sites never touch disk, and a site that does mkdirs it itself. One Opus backend
@@ -1114,52 +865,6 @@ def make_page_request(path: str) -> Request:
   return Request(scope)
 
 
-def _page_request(accept_encoding: str = "") -> Request:
-  """The events route's request seam with one header: direct calls stand in for
-  FastAPI's injection, and the empty default is the no-gzip client shape."""
-  headers = [(b"accept-encoding", accept_encoding.encode())] if accept_encoding else []
-  return Request({"type": "http", "headers": headers})
-
-
-# Import-path patch target for the response-render deflator. src/api/responses.py binds the
-# name at import scope (`from src.core.compression import gzip_level1`), so patch lands the
-# stand-in on the src.api.responses module attribute and gzip_body_response reads it at call
-# time. Sibling API modules binding their own copy (files.py, sessions.py, cron.py) are patched
-# through their module objects instead — a deflate driven there never touches this route.
-RESPONSES_GZIP_LEVEL1_PATCH_TARGET = "src.api.responses.gzip_level1"
-
-
-def gzip_explode_compress(message: str) -> Callable[..., bytes]:
-  """Deflator stand-in failing the test the moment any deflate runs.
-
-  The repeat-fetch tests install it in place of an API module's ``gzip_level1``
-  binding: the second fetch of an unchanged body must serve the stored
-  compressed form, so the stand-in's raise is how a re-deflate fails the test.
-  *message* names the fetch shape the test drives.
-  """
-
-  def explode_compress(*args: object, **kwargs: object) -> bytes:
-    raise AssertionError(message)
-
-  return explode_compress
-
-
-def gzip_counting_compress(real_compress: Callable[..., bytes], calls: list[bytes]) -> Callable[..., bytes]:
-  """Deflator stand-in recording every body it deflates to *calls*.
-
-  The corpus-move tests install it in place of an API module's ``gzip_level1``
-  binding so the assertion can pin the deflate count and the bytes the fresh
-  pass read, with *real_compress* captured before the install keeps producing
-  true forms.
-  """
-
-  def counting_compress(data: bytes, *args: object, **kwargs: object) -> bytes:
-    calls.append(data)
-    return real_compress(data, *args, **kwargs)
-
-  return counting_compress
-
-
 def mount_production_gzip(app: FastAPI) -> None:
   """Mount the stock gzip middleware with the server's production numbers.
 
@@ -1279,10 +984,6 @@ THREE_BACKEND_OPTIONS = [
 
 PLAN_TEST_BACKEND_OPTIONS = [OPUS_BACKEND_OPTION]
 
-# Synthetic catalog model id shared by the opencode-backend, autonamer, and session-usage tests;
-# the fake /config/providers payloads in test_opencode_backend.py split it into provider id and
-# model id on the first "/", so a rename keeps the provider/... shape.
-SYNTHETIC_MODEL = "synthetic-provider/nvidia/Synthetic-Model"
 
 # Prompt payload beginning with "--", which a naive argv builder would misread as a CLI flag;
 # each backend's build-command test asserts the string reaches the CLI as prompt payload only.
@@ -1347,13 +1048,6 @@ TRIGGERS_GET_CONFIG_PATCH_TARGET = "src.core.triggers.get_config"
 # stand-in on the asyncio module through the src.core.triggers route.
 TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.core.triggers.asyncio.create_subprocess_exec"
 
-# Library-root patch target for stubs that intercept the subprocess spawn for any caller:
-# the bare spelling sets the stand-in on the asyncio module itself, so every importer's
-# asyncio.create_subprocess_exec read resolves to the stand-in during the patch window.
-# TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET above reaches the same asyncio
-# attribute through the src.core.triggers namespace; the two routes are not interchangeable
-# spellings — a test names this one when the interception, not the caller, is the point.
-ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "asyncio.create_subprocess_exec"
 
 # Import-path patch target for the host capability probe the slurm watchers read.
 # src/core/triggers.py runs the probe once at import scope (`_SACCT_AVAILABLE =
@@ -1362,10 +1056,6 @@ ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "asyncio.create_subprocess_exec"
 # patch setattrs the stand-in on the src.core.triggers module attribute.
 TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET = "src.core.triggers._SACCT_AVAILABLE"
 
-# Import-path patch target for the watchdog's poll interval. src/core/triggers.py defines
-# _DORMANCY_CHECK_SECONDS at module scope, and the dormancy-watch loop reads it inside
-# _watch_dormancy at call time, so tests compress the wait by setting the module attribute.
-TRIGGERS_DORMANCY_CHECK_SECONDS_PATCH_TARGET = "src.core.triggers._DORMANCY_CHECK_SECONDS"
 
 # Import-path patch target for the CLI HTTP layer's config read. src/cli/common.py defines a
 # get_config forwarder (config's module imports lazily on first call, the M92 floor rule), so
@@ -1499,11 +1189,6 @@ BUILD_BACKEND_PATCH_TARGET = "src.agents.backends.registry.build_backend"
 # so the worker path's stand-in binds here — an existing binding is returned untouched,
 # exactly the semantics the master-cc registry route relies on.
 WORKER_BUILD_BACKEND_PATCH_TARGET = "src.agents.worker.build_backend"
-# The autonamer defers through the same lazy loader and resolves the registry
-# function at first build; a patch applied after that first build (any earlier
-# test in the suite) must bind the autonamer's cached module attribute for the
-# stand-in to apply regardless of suite order.
-AUTONAMER_BUILD_BACKEND_PATCH_TARGET = "src.core.autonamer.build_backend"
 
 # Import-path patch target for the worker's default-backend fallback. src/agents/worker.py
 # binds the class at import scope (`from src.agents.backends.claude_code import
@@ -1524,7 +1209,6 @@ RUNS_READ_PID_STAT_PATCH_TARGET = "src.core.runs.read_pid_stat"
 # shortened waits on the src.core.runs module attribute; the pair travels together because
 # the loop's deadline and its poll step share one mechanism.
 RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET = "src.core.runs.STOP_EXIT_WAIT_SECONDS"
-RUNS_STOP_EXIT_POLL_SECONDS_PATCH_TARGET = "src.core.runs.STOP_EXIT_POLL_SECONDS"
 
 # The backend-construction seams, stated once for every constant below: each CLI
 # backend binds resolve_binary at import scope (`from src.agents.backends.base import
@@ -1566,8 +1250,6 @@ JSON_UTILS_OS_REPLACE_PATCH_TARGET = "src.core.json_utils.os.replace"
 # defined in tui.py itself. src/api/threads.py binds tmux_session_exists at import scope and
 # keeps its own route.
 TUI_KILL_TMUX_SESSION_PATCH_TARGET = "src.agents.backends.tui.kill_tmux_session"
-TUI_TMUX_SESSION_EXISTS_PATCH_TARGET = "src.agents.backends.tui.tmux_session_exists"
-TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET = "src.agents.backends.tui._claude_jsonl_busy"
 
 # Patch target for the ssh control-master directory. src/core/ssh.py derives it from the
 # operator's home at import scope and the argv builder reads the module global at call time,
@@ -1667,14 +1349,6 @@ def plan_page_html(goal_body: str = "Ship the fix.") -> str:
       f"<p>{goal_body if i == 1 else title}</p></section>" for i, title in enumerate(titles, 1))
   return (f"<html><head>{style}</head><body>{sections}"
           '<div class="foot"><p>How to respond.</p></div></body></html>')
-
-
-def open_fork_html() -> str:
-  """Minimal open fork passing the fork-open-shape assertion: numbered question,
-  recommendation line, trade-off line."""
-  return (
-      '<div class="fork"><p class="q"><span class="fn">1</span>Scope?</p>'
-      '<p class="rec"><b>Recommendation:</b> R</p><p class="trade">Tradeoff: T</p></div>')
 
 
 def write_stub_chrome(tmp_path: Path, height: int) -> str:
@@ -1872,32 +1546,6 @@ def build_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
-def build_recovery_cfg(home: Path) -> CharlieBotConfig:
-  """CharlieBotConfig for restart-recovery tests: the home dir is caller-chosen (the install-invariance test
-  runs its two arms under different homes), the worktrees dir lives under it, and the backend list registers
-  the cc-claude fake plus the opencode fake-oc whose uncovered transport the recovery legs exercise."""
-  return CharlieBotConfig(
-      charliebot_home=home,
-      paths={"worktree_dir": str(home / "worktrees")},
-      backends={
-          "options":
-              [
-                  backend_option(id="fake", label="Fake", type="cc-claude", model="fake-model"),
-                  backend_option(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
-              ]
-      },
-  )
-
-
-def build_light_cc_cfg() -> CharlieBotConfig:
-  """CharlieBotConfig whose only backend is a light cc-claude option, also the sole model preference."""
-  return CharlieBotConfig(
-      backends={
-          "options": [backend_option(id="light-cc", label="Light CC", type="cc-claude", model="haiku")],
-          "preference": ["light-cc"],
-      })
-
-
 PUBLISH_BASE_URL = "https://pub.example.test/charliebot_pub"
 
 
@@ -1937,15 +1585,6 @@ def write_plan_artifact(cfg: CharlieBotConfig, session_id: str, name: str, conte
   return f"artifacts/{name}"
 
 
-def write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> Path:
-  """Write meta as the session's threads/<meta["id"]>/metadata.json and return the file path."""
-  thread_dir = cfg.sessions_dir / session_id / "threads" / meta["id"]
-  thread_dir.mkdir(parents=True, exist_ok=True)
-  path = thread_dir / "metadata.json"
-  path.write_text(json.dumps(meta), encoding="utf-8")
-  return path
-
-
 def write_plans(cfg: CharlieBotConfig, session_id: str, data: dict) -> Path:
   """Write data as the session's plans.json and return the file path."""
   plans_path = cfg.sessions_dir / session_id / "plans.json"
@@ -1983,35 +1622,6 @@ def plan_doc(
       "takeoff": takeoff,
       "closed": closed,
   }
-
-
-def write_trigger(path: Path, trigger: models.PendingTrigger) -> None:
-  """Write trigger as a pending-trigger JSON file at path, creating parent dirs."""
-  path.parent.mkdir(parents=True, exist_ok=True)
-  path.write_text(trigger.model_dump_json(indent=2), encoding="utf-8")
-
-
-def publish_via_tmp_rename(path: Path, text: str, tmp_name: str) -> None:
-  """Publish *text* at *path* through a tmp sibling and os.replace — the rename move every
-  metadata/trigger writer performs, so the memo scans see mtime_ns move. *tmp_name* is a fixed
-  sibling name (not atomic_write_text's uuid shape) so failure output stays greppable."""
-  tmp = path.with_name(tmp_name)
-  tmp.write_text(text, encoding="utf-8")
-  os.replace(tmp, path)
-
-
-def publish_same_size_rewrite(path: Path, text: str, tmp_name: str) -> None:
-  """Publish a rewrite that keeps the byte size fixed, then move mtime_ns, so a memo keyed on
-  (mtime_ns, size) must answer on the mtime half alone. A suite whose rewrites all change size
-  could pass on the size half while the mtime half was broken; this move is the one that would
-  catch it. The utime bump keeps the mtime move deterministic.
-  """
-  assert len(text.encode("utf-8")) == path.stat().st_size, (
-      f"{path}: rewrite must keep the byte size fixed; a size change moves the memo's size half "
-      "and the mtime half goes untested")
-  publish_via_tmp_rename(path, text, tmp_name)
-  st = path.stat()
-  os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
 
 
 def make_scheduler_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, Scheduler]:
@@ -2148,41 +1758,6 @@ def agent_headers(session_id: str, run_id: str) -> dict[str, str]:
   """
   token = sign_run_token(RunTokenClaims(session_id=session_id, run_id=run_id, agent="manager-agent"), "op-secret")
   return {"Authorization": f"Bearer {token}"}
-
-
-async def legacy_parent_with_open_task(
-    session_mgr: SessionManager, tree: TaskTreeManager, *, request_id: str):
-  """A legacy (profile None) parent session with one open child task under it.
-
-  The shape the caller-session rule governs: a legacy parent's own turn drives
-  the child's close through the HTTP API, and the close's delivered report must
-  (or must not) wake that parent through the legacy master wake.
-  """
-  legacy = await session_mgr.create_session(models.CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
-  child = await create_task(tree, parent=legacy.id, request_id=request_id)
-  return legacy, child
-
-
-async def wait_for_wake(trigger: AsyncMock, *, count: int = 1, timeout: float = 5.0) -> None:
-  """Wait until the scheduled legacy wake has run *count* times on the API loop.
-
-  The wake is scheduled fire-and-forget (create_logged_task) and the HTTP
-  TestClient drives the app on its own portal loop, so the test polls the
-  stand-in's await count instead of awaiting the wake task: a task of another
-  loop cannot be awaited from the test.
-  """
-  deadline = time.monotonic() + timeout
-  while trigger.await_count < count and time.monotonic() < deadline:
-    await asyncio.sleep(0.01)
-  assert trigger.await_count == count, trigger.await_args
-
-
-async def assert_wake_unused(trigger: AsyncMock, *, quiet_seconds: float = 0.5) -> None:
-  """Give a wrongly scheduled wake the API loop's time, then require silence."""
-  deadline = time.monotonic() + quiet_seconds
-  while time.monotonic() < deadline:
-    assert trigger.await_count == 0, trigger.await_args
-    await asyncio.sleep(0.05)
 
 
 @pytest.fixture(autouse=True)
@@ -2430,48 +2005,6 @@ class FakeAsyncProcess:
 
   async def wait(self) -> int:
     return self.returncode
-
-
-class FakeStdout:
-  """proc.stdout double: async iterator over canned NDJSON byte lines.
-
-  Callers assign an instance to a mocked process's stdout and rely on
-  __anext__ replaying the constructor's lines in order before raising
-  StopAsyncIteration (backend one-shot subprocess tests).
-  """
-
-  def __init__(self, lines: list[bytes]) -> None:
-    self._lines = list(lines)
-
-  def __aiter__(self) -> FakeStdout:
-    return self
-
-  async def __anext__(self) -> bytes:
-    if not self._lines:
-      raise StopAsyncIteration
-    return self._lines.pop(0)
-
-
-def fake_one_shot_proc(lines: list[bytes], *, stderr: bytes = b"", returncode: int = 0, pid: int = 9000) -> MagicMock:
-  """Process double for one-shot backend subprocess tests.
-
-  stdout replays *lines* then ends (a FakeStdout). stderr.read() yields *stderr*
-  once and b"" after; an empty *stderr* (the default) reads b"" on every call,
-  matching the read-to-empty loop the one-shot paths drive. wait() resolves
-  *returncode*, which returncode also holds. Callers assert on proc.pid where
-  the production kill path uses it.
-  """
-  proc = MagicMock()
-  proc.stdout = FakeStdout(lines)
-  proc.stderr = MagicMock()
-  if stderr:
-    proc.stderr.read = AsyncMock(side_effect=[stderr, b""])
-  else:
-    proc.stderr.read = AsyncMock(return_value=b"")
-  proc.wait = AsyncMock(return_value=returncode)
-  proc.returncode = returncode
-  proc.pid = pid
-  return proc
 
 
 class FakeChunkedResponse:
@@ -3011,13 +2544,6 @@ def capturing_worker(captures: dict[str, Any]) -> type:
   return CapturingWorker
 
 
-def make_one_shot_backend(one_shot: AsyncMock) -> MagicMock:
-  """A stand-in backend whose one_shot_text is the given AsyncMock."""
-  backend = MagicMock()
-  backend.one_shot_text = one_shot
-  return backend
-
-
 class SuccessorDeliveryShim:
   """Default succession delivery for test fakes: no successor, persist into the owning session.
 
@@ -3373,7 +2899,6 @@ def patch_review_spawn_path(monkeypatch: pytest.MonkeyPatch, captured: dict[str,
 # src/core/init_master_recovery.py, master-consumer in src/agents/master_cc_queue.py.
 # A recovery test must drain those tasks before asserting on rewritten metadata.
 RECOVERY_TASK_PREFIXES = ("resume-", "respawn-", "recomplete-")
-MASTER_RECOVERY_TASK_PREFIXES = (*RECOVERY_TASK_PREFIXES, "master-resume-", "master-replay-", "master-consumer-")
 
 
 async def await_recovery_tasks(prefixes: tuple[str, ...]) -> None:
@@ -3405,20 +2930,6 @@ def _cfg(home: Path) -> CharlieBotConfig:
   )
 
 
-def _pid_alive(pid: int) -> bool:
-  """True while *pid* is signalable, False when the kernel reports it gone.
-
-  Catches only ProcessLookupError — the one failure os.kill(pid, 0) gives on a
-  process the test spawned itself; anything else (e.g. PermissionError) means
-  the probe cannot answer and propagates.
-  """
-  try:
-    os.kill(pid, 0)
-  except ProcessLookupError:
-    return False
-  return True
-
-
 def _wait_for(predicate: Callable[[], bool], timeout: float, what: str) -> None:
   deadline = time.monotonic() + timeout
   while time.monotonic() < deadline:
@@ -3439,100 +2950,9 @@ async def _async_wait_for(predicate: Callable[[], bool], timeout: float, what: s
   raise TimeoutError(what)
 
 
-def _read_meta(home: Path, session_id: str, thread_id: str) -> dict:
-  meta_path = home / "sessions" / session_id / "threads" / thread_id / "metadata.json"
-  return json.loads(meta_path.read_text(encoding="utf-8"))
-
-
 async def _await_recovery_tasks() -> None:
   await await_recovery_tasks(RECOVERY_TASK_PREFIXES)
 
 
-def _kill_driver_mid_run(proc: subprocess.Popen, home: Path, ids: dict) -> None:
-  """SIGKILL the driver once the run's identity is persisted and output is flowing."""
-  thread_dir = home / "sessions" / ids["session"] / "threads" / ids["thread"]
-  raw = thread_dir / "data" / runs.RAW_LOG_NAME
-
-  def run_started() -> bool:
-    if not raw.exists() or "E2E-ASSISTANT-MARKER" not in raw.read_text(encoding="utf-8", errors="replace"):
-      return False
-    try:
-      meta = _read_meta(home, ids["session"], ids["thread"])
-    except json.JSONDecodeError:
-      # metadata.json is a plain (non-atomic) "w"-mode write; the driver may be
-      # mid-write when this polls, which is exactly "not ready yet".
-      return False
-    return meta.get("pid") is not None and meta.get("pid_start") is not None and meta.get("status") == "running"
-
-  _wait_for(run_started, timeout=20.0, what="worker run did not start/persist identity")
-  proc.kill()
-  proc.wait(timeout=10)
-
-
-async def _recover(monkeypatch: pytest.MonkeyPatch,
-                   home: Path,
-                   cfg: CharlieBotConfig | None = None) -> tuple[int, list[bool], list[str], list[runs.RunOutcome]]:
-  """Run startup crash recovery as process B; record reattach mode, master
-  wakes, and the resolve outcome each interrupted run received."""
-  alive_at_reattach: list[bool] = []
-  master_wakes: list[str] = []
-  outcomes: list[runs.RunOutcome] = []
-
-  async def spy_resume(*args: object, **kwargs: object) -> None:
-    alive_at_reattach.append(bool(kwargs["is_alive"]()))
-    await _real_resume_worker(*args, **kwargs)
-
-  async def fake_trigger_master(
-      session_id: str, summary: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
-    master_wakes.append(summary)
-
-  real_resolve = runs.resolve_run
-
-  def spy_resolve(**kwargs: object) -> runs.RunResolution:
-    resolution = real_resolve(**kwargs)
-    outcomes.append(resolution.outcome)
-    return resolution
-
-  monkeypatch.setattr(SPAWNER_RESUME_WORKER_PATCH_TARGET, spy_resume)
-  monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
-  monkeypatch.setattr("src.core.runs.resolve_run", spy_resolve)
-
-  cfg = cfg or _cfg(home)
-  recovered = await init_module.run_crash_recovery(cfg, datetime.now(UTC))
-  await _await_recovery_tasks()
-  return recovered, alive_at_reattach, master_wakes, outcomes
-
-
 def _recovery_reports(home: Path, session_id: str) -> list[dict]:
   return [e for e in read_chat_events(home, session_id) if e.get("source") == "crash_recovery"]
-
-
-def _terminal_summaries(home: Path, ids: dict) -> list[dict]:
-  return [
-      e for e in read_chat_events(home, ids["session"])
-      if e.get("type") == "worker_summary" and e.get("thread_id") == ids["thread"] and e.get("status") != "running"
-  ]
-
-
-def _assert_failed_with_transport_reason(home: Path, ids: dict) -> None:
-  """Shared tail of the uncovered-backend recovery tests: the thread finalizes failed with exit
-  code -1 and resolve_run's transport reason lands in exactly one terminal worker_summary."""
-  meta = _read_meta(home, ids["session"], ids["thread"])
-  assert meta["status"] == "failed"
-  assert meta["exit_code"] == -1
-  summaries = _terminal_summaries(home, ids)
-  assert len(summaries) == 1
-  assert runs.TRANSPORT_NOT_COVERED_REASON in summaries[0]["full_content"]
-
-
-def spy_on_load_json_meta(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
-  """Record every path init.iter_recent_thread_metas actually reads+parses."""
-  read_paths: list[Path] = []
-  real_load = worker_recovery_module.load_json_meta
-
-  def spy(path: Path, log_event: str, **kwargs: Any) -> Any:
-    read_paths.append(Path(path))
-    return real_load(path, log_event, **kwargs)
-
-  monkeypatch.setattr(worker_recovery_module, "load_json_meta", spy)
-  return read_paths

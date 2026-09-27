@@ -23,14 +23,14 @@ from fastapi import WebSocket
 
 import src.core.session_tree_preview as preview_module
 from src.core.session_tree_preview import (
-  PreviewRefusedError,
-  PreviewUnavailableGate,
-  PreviewWorkspaceError,
-  check_home_location,
-  check_port,
-  make_workspace_guard,
-  read_source_backend,
-  refusal_reason,
+    PreviewRefusedError,
+    PreviewUnavailableGate,
+    PreviewWorkspaceError,
+    check_home_location,
+    check_port,
+    make_workspace_guard,
+    read_source_backend,
+    refusal_reason,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -44,13 +44,25 @@ def write_source_home(home: Path, *, backend: dict | None = None, port: int = 18
   home.mkdir(parents=True, exist_ok=True)
   if backend is None:
     backend = {
-        "id": "clc-test", "label": "CLC Test", "type": "charlie-code",
-        "model": "openai/fake-model", "api_base": "http://127.0.0.1:9/v1",
+        "id": "clc-test",
+        "label": "CLC Test",
+        "type": "charlie-code",
+        "model": "openai/fake-model",
+        "api_base": "http://127.0.0.1:9/v1",
     }
   config = {
-      "server": {"host": "127.0.0.1", "port": port},
-      "paths": {"workspace_dirs": [str(home / "workspaces")], "worktree_dir": str(home / "worktrees")},
-      "backends": {"options": [backend], "preference": [backend["id"]]},
+      "server": {
+          "host": "127.0.0.1",
+          "port": port
+      },
+      "paths": {
+          "workspace_dirs": [str(home / "workspaces")],
+          "worktree_dir": str(home / "worktrees")
+      },
+      "backends": {
+          "options": [backend],
+          "preference": [backend["id"]]
+      },
   }
   (home / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
   creds = f"charliebot:\n  access_key: {OPERATOR_KEY}\n"
@@ -88,14 +100,12 @@ def test_check_home_location_refuses_overlaps(tmp_path: Path, source_home: Path)
     check_home_location(container, source_home=prod_inside, source_workspace_dirs=[])
   workspace_inside = tmp_path / "workspaces" / "preview"
   with pytest.raises(PreviewRefusedError, match="overlaps the production workspace"):
-    check_home_location(workspace_inside, source_home=tmp_path / "elsewhere",
-                        source_workspace_dirs=[str(tmp_path / "workspaces")])
+    check_home_location(
+        workspace_inside, source_home=tmp_path / "elsewhere", source_workspace_dirs=[str(tmp_path / "workspaces")])
   with pytest.raises(PreviewRefusedError, match="overlaps the running checkout"):
-    check_home_location(REPO_ROOT / "sub" / "dir", source_home=tmp_path / "elsewhere",
-                        source_workspace_dirs=[])
+    check_home_location(REPO_ROOT / "sub" / "dir", source_home=tmp_path / "elsewhere", source_workspace_dirs=[])
   sibling = tmp_path / "sibling-preview"
-  check_home_location(sibling, source_home=source_home,
-                      source_workspace_dirs=[str(tmp_path / "workspaces")])
+  check_home_location(sibling, source_home=source_home, source_workspace_dirs=[str(tmp_path / "workspaces")])
 
 
 def test_check_port_refuses_source_port_and_occupied(source_home: Path) -> None:
@@ -124,11 +134,9 @@ def _free_port() -> int:
 # ---------------------------------------------------------------------------
 
 
-def test_read_source_backend_refuses_unisolated_backend_types(tmp_path: Path,
-                                                              monkeypatch: pytest.MonkeyPatch) -> None:
+def test_read_source_backend_refuses_unisolated_backend_types(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   home = tmp_path / "source"
-  write_source_home(home, backend={
-      "id": "cc-claude-entry", "label": "CC", "type": "cc-claude", "model": "claude-x"})
+  write_source_home(home, backend={"id": "cc-claude-entry", "label": "CC", "type": "cc-claude", "model": "claude-x"})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
   with pytest.raises(PreviewRefusedError, match="only for charlie-code"):
     read_source_backend("cc-claude-entry")
@@ -137,26 +145,20 @@ def test_read_source_backend_refuses_unisolated_backend_types(tmp_path: Path,
 # ---------------------------------------------------------------------------
 # Existing preview home validation
 
-
 # ---------------------------------------------------------------------------
 # Seeding and restart
-
 
 # ---------------------------------------------------------------------------
 # Multi-entry catalog: explicitly selected additions
 
-
 # ---------------------------------------------------------------------------
 # Preparation
-
 
 # ---------------------------------------------------------------------------
 # Environment selection
 
-
 # ---------------------------------------------------------------------------
 # Native-session isolation wrapper and real argv
-
 
 # ---------------------------------------------------------------------------
 # Launcher workspace boundary
@@ -169,7 +171,10 @@ def test_workspace_guard_refuses_outside_and_accepts_inside(tmp_path: Path) -> N
   home = tmp_path / "trial-home"
   cfg = CharlieBotConfig(
       charliebot_home=home,
-      paths={"workspace_dirs": [str(home / "workspaces")], "worktree_dir": str(home / "worktrees")})
+      paths={
+          "workspace_dirs": [str(home / "workspaces")],
+          "worktree_dir": str(home / "worktrees")
+      })
   guard = make_workspace_guard(cfg)
   with pytest.raises(PreviewWorkspaceError, match="workspace boundary"):
     guard(REPO_ROOT)
@@ -264,8 +269,7 @@ def test_preview_gate_refuses_disabled_mutations_and_passes_the_rest() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _cli_env(source: Path, *, strip_launcher: bool = False,
-             launcher_dir: Path | None = None) -> dict:
+def _cli_env(source: Path, *, strip_launcher: bool = False, launcher_dir: Path | None = None) -> dict:
   env = dict(os.environ.items())
   env["CHARLIEBOT_HOME"] = str(source)
   env["PYTHONUNBUFFERED"] = "1"
@@ -276,16 +280,28 @@ def _cli_env(source: Path, *, strip_launcher: bool = False,
   return env
 
 
-def _run_cli(args: list[str], source: Path, *, strip_launcher: bool = False,
-             launcher_dir: Path | None = None) -> subprocess.CompletedProcess:
+def _run_cli(
+    args: list[str],
+    source: Path,
+    *,
+    strip_launcher: bool = False,
+    launcher_dir: Path | None = None) -> subprocess.CompletedProcess:
   return subprocess.run(
       [sys.executable, "-m", "src.cli.main", "session-tree", "preview", *args],
-      cwd=str(REPO_ROOT), env=_cli_env(source, strip_launcher=strip_launcher, launcher_dir=launcher_dir),
-      capture_output=True, text=True, timeout=120)
+      cwd=str(REPO_ROOT),
+      env=_cli_env(source, strip_launcher=strip_launcher, launcher_dir=launcher_dir),
+      capture_output=True,
+      text=True,
+      timeout=120)
 
 
-def _refusal(tmp_path: Path, source: Path, args: list[str], match: str, *,
-             strip_launcher: bool = False) -> subprocess.CompletedProcess:
+def _refusal(
+    tmp_path: Path,
+    source: Path,
+    args: list[str],
+    match: str,
+    *,
+    strip_launcher: bool = False) -> subprocess.CompletedProcess:
   proc = _run_cli(args, source, strip_launcher=strip_launcher)
   assert proc.returncode == 1, f"expected refusal, got {proc.returncode}: {proc.stdout} {proc.stderr}"
   diagnostic = proc.stderr.strip()
@@ -299,9 +315,9 @@ def _refusal(tmp_path: Path, source: Path, args: list[str], match: str, *,
 def test_cli_refuses_symlinked_home_resolving_into_production(tmp_path: Path, source_home: Path) -> None:
   link = tmp_path / "innocent-name"
   link.symlink_to(source_home / "nested-deeper")
-  _refusal(tmp_path, source_home,
-           ["--home", str(link), "--port", str(_free_port()), "--backend", "clc-test"],
-           "overlaps the production home")
+  _refusal(
+      tmp_path, source_home,
+      ["--home", str(link), "--port", str(_free_port()), "--backend", "clc-test"], "overlaps the production home")
   assert not (source_home / "nested-deeper").exists()
 
 

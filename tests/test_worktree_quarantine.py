@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 from conftest import (
-  OPUS_BACKEND_ID,
-  build_worktree_cfg,
-  spy_on_load_json_meta,
+    OPUS_BACKEND_ID,
+    build_worktree_cfg,
+    spy_on_load_json_meta,
 )
 
 from src.core import git as git_module
@@ -131,7 +131,6 @@ async def test_quarantine_rejects_unexpected_residue_name(tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 # _remove_local_worktree_artifacts
 
-
 # ---------------------------------------------------------------------------
 # _quarantine_stale_failed_worktrees sweep
 # ---------------------------------------------------------------------------
@@ -216,7 +215,8 @@ async def test_run_crash_recovery_recovers_and_sweeps(tmp_path: Path, monkeypatc
       })
   _write_thread_meta(
       cfg, "s1",
-      _thread(thread_id="aged", status="failed", worktree_path=old_wt, branch_name="charliebot/task-aged", age_days=20.0))
+      _thread(
+          thread_id="aged", status="failed", worktree_path=old_wt, branch_name="charliebot/task-aged", age_days=20.0))
 
   await init_module.run_crash_recovery(cfg, utc_now() + timedelta(hours=1))
 

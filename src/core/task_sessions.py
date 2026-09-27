@@ -740,8 +740,7 @@ class TaskTreeManager:
     events = self.runs.load_events_sync(session_id)
     task_open = self._facts_of(session_id).task_state == "open"
     return derive_task_tree_activity(
-        runs, events, self._host_boot_time, task_open,
-        outcomes=self._run_outcomes_of(session_id, live, archived_count))
+        runs, events, self._host_boot_time, task_open, outcomes=self._run_outcomes_of(session_id, live, archived_count))
 
   def activity_pair_of(self, session_id: str) -> tuple[bool, str]:
     """``activity_of`` as the plain pair the sidebar snapshot stores.

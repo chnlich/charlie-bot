@@ -11,23 +11,23 @@ from unittest.mock import AsyncMock
 
 import pytest
 from conftest import (
-  FABLE_MODEL,
-  POOLED_FABLE_ID,
-  WORKER_BUILD_BACKEND_PATCH_TARGET,
-  ScriptedRelayBackend,
-  assistant_text_event,
-  fable_pool_cfg,
-  fresh_state_fixture,
-  install_scripted_backends,
-  make_transcript,
-  rate_limit_event,
+    FABLE_MODEL,
+    POOLED_FABLE_ID,
+    WORKER_BUILD_BACKEND_PATCH_TARGET,
+    ScriptedRelayBackend,
+    assistant_text_event,
+    fable_pool_cfg,
+    fresh_state_fixture,
+    install_scripted_backends,
+    make_transcript,
+    rate_limit_event,
 )
 
 from src.agents.worker import Worker
 from src.core import (
-  claude_accounts,
-  claude_compaction,
-  claude_relay,
+    claude_accounts,
+    claude_compaction,
+    claude_relay,
 )
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
@@ -206,5 +206,3 @@ async def test_worker_relay_compacts_a_large_fable_context_on_the_new_account(
     assert kwargs["pre_tokens"] == prompt_tokens
     assert kwargs["cwd"] == str(tmp_path / "work")
     assert kwargs["log_context"]["trigger"] == "relay"
-
-

@@ -90,12 +90,6 @@ class CallerIdentity:
   def is_operator(self) -> bool:
     return self.kind == "operator"
 
-  @property
-  def agent_session_id(self) -> str:
-    if self.claims is None:
-      raise RuntimeError("agent_session_id is only defined for agent callers")
-    return self.claims.session_id
-
 
 def b64url_encode(raw: bytes) -> str:
   """Single home of the unpadded-base64url wire form: this module's token and the page cursors ride it."""

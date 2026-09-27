@@ -384,7 +384,7 @@ async def git_create_worktree(
     out = stdout.decode().strip()
     err = stderr.decode().strip()
     log.error(
-        "spawn_worker_worktree_create_failed",
+        "worktree_create_failed",
         repo=str(repo_path),
         branch=branch_name,
         worktree=str(wt_path),

@@ -241,7 +241,7 @@ class ThreadMetadata(BaseModel):
   keep_worktree: bool = False
   tried_backends: list[str] = Field(default_factory=list)
   task_type: TaskType | None = None
-  # Cron steps chain position (src/core/task_chain.py): chain_root is the
+  # Cron steps chain position (src/core/cron_sequence.py): chain_root is the
   # thread id of the chain's first step (the first step points at itself);
   # step_index is this thread's index into the task's steps list. None on every
   # non-chain thread.
@@ -847,26 +847,3 @@ class SessionCallbacks:
   after_round: Callable[[str], Awaitable[None]] | None = None
 
 
-# ---------------------------------------------------------------------------
-# Spawn Request (internal DTO for spawn_worker)
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class SpawnRequest:
-  """Worker configuration parameters that travel as a unit through spawn_worker."""
-  repo_path: str | None = None
-  context: str | None = None
-  prompt_override: str | None = None
-  resolved_backend: str = ""
-  resolved_model: str | None = None
-  base_branch: str | None = None
-  branch_name_override: str | None = None
-  loop_dir: str | None = None
-  iteration_number: int | None = None
-  worktree_path_override: str | None = None
-  skip_cleanup: bool = False
-  skip_notify: bool = False
-  is_continuation: bool = False
-  keep_worktree: bool = False
-  task_type: TaskType = TaskType.IMPLEMENT

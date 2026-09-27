@@ -132,7 +132,7 @@ class Worker:
     # Context size from the newest assistant usage block, for the relay compaction rule.
     self._context_tokens: int | None = None
     # Session-level notices (the login-required event) leave through this hook; the
-    # run entry that knows the session binds it (spawner_finalize._stream_worker_events).
+    # run entry that knows the session binds it (task_execution's event streaming).
     self.on_session_event: Callable[[dict], Awaitable[None]] | None = None
 
   @property

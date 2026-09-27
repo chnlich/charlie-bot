@@ -42,11 +42,26 @@ A dedicated git worktree is provided as your isolated sandbox.
 - Repo: `{{repo_path}}`
 
 <!-- section: workflow_script_run -->
-This is a script-run task. The worktree exists only to give you an isolated environment to run commands, submit jobs, or inspect state.
+This is a script-run task. Your sandbox (the assigned worktree for a repo task, the Run directory you started in otherwise) exists only to run commands, submit jobs, or inspect state.
 - Do NOT modify tracked files.
 - Do NOT commit.
-- Finish with `git status --short` showing a clean tree.
+- For a repo task, finish with `git status --short` showing a clean tree.
 - If you discover that a repo change is actually required to complete the task, STOP and report back instead of making the change.
+<!-- section: workflow_repo_less -->
+## Repo-less Workflow
+This task carries no repository: your working directory is the Run directory you started in,
+and your changes land directly on the host paths the task names.
+- Edit the paths the task names in place; keep no copies of the originals.
+- There is no worktree and nothing to commit; the edited paths are the delivery.
+- End with a final report listing every created, modified and deleted absolute path,
+  plus the result of each acceptance test.
+
+<!-- section: task_spec_source_files_repo_less -->
+## Task Spec Source Files
+- If the task text below is a structured task spec or contains a `## Source Files` section, read every listed source file before editing.
+- If the task spec and source files conflict, stop and report the conflict instead of inventing a merged requirement.
+- Source Files entries name the host paths this task works on; there is no repository checkout and no worktree.
+
 <!-- section: task_spec_source_files -->
 ## Task Spec Source Files
 - If the task text below is a structured task spec or contains a `## Source Files` section, read every listed source file before editing.

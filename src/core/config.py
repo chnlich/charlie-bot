@@ -44,9 +44,8 @@ from src.core.yaml_utils import load_yaml
 
 log = LazyStructlogLogger()
 
-# Fixed house wall clock pinned by chart timestamps (src/api/pages.py), Slack timestamp
-# prefixes (src/core/slack_listener.py), worker-summary timestamps
-# (src/core/spawner_events.py), and the Saturday-1AM weekly-recycle anchor
+# Fixed house wall clock pinned by Slack timestamp prefixes
+# (src/core/slack_listener.py) and the Saturday-1AM weekly-recycle anchor
 # (src/core/master_trigger.py). Distinct from DEFAULT_TIMEZONE below, a per-task default
 # overridable via ``timezone: local`` or any IANA key, so retargeting the cron default
 # cannot shift these pins.
@@ -140,8 +139,9 @@ class ScheduledTaskConfig(ScheduledTaskFields):
   prompt: str | None = None
   handler: str | None = None
   loop: ImprovementLoopConfig | None = None
-  # Ordered worker chain: each step spawns after the previous one exits 0, and
-  # the session master is woken once at the end (src/core/task_chain.py).
+  # Ordered worker chain: each step is one scheduled_step Run on the firing's
+  # leaf, launched after the previous one's durable success, and the parent is
+  # woken once at the end (src/core/cron_sequence.py).
   steps: list[StepConfig] | None = None
   notify: str | None = None  # 'telegram' or None
 

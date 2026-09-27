@@ -128,7 +128,8 @@ class TaskInputDispatcher:
         tree = self._tree
         epoch = await tree.sessions.prime_aggregator(session_id)
         async with tree.control_lock:
-            await tree.load_task_meta(session_id)
+            meta = await tree.load_task_meta(session_id)
+            await self._authorize_agent_message(meta, event_type, from_session)
             events = tree.fact_history(session_id)
             if input_id is not None:
                 existing = next((e for e in events if e.get("id") == input_id), None)
@@ -154,6 +155,34 @@ class TaskInputDispatcher:
             await tree.events.append(session_id, event)
         await tree.sessions.announce_appended_event(session_id, event, epoch=epoch)
         return event
+
+    async def _authorize_agent_message(self, meta, event_type: str, from_session: str | None) -> None:
+        """The request-entry gate an agent message to a worker node passes.
+
+        The one judgment `_authorize_agent_creation` applies when the worker is
+        created, re-applied where a new instruction enters the tree: the sender
+        must be the worker's own parent, and the parent must hold the
+        nearest-real-user-ancestor authorization (takeoff_gate) for
+        implementation work. The read-only verify exemption rides the same
+        one shared judgment (takeoff_gate.is_verify_exempt). A refusal raises
+        TaskForbiddenError before anything is enqueued; every entry that
+        delivers an agent message to a worker node passes through here.
+        """
+        from src.core.takeoff_gate import DelegationBlockedError, is_verify_exempt
+        from src.core.task_sessions import TaskForbiddenError
+
+        if event_type != ET.AGENT_MESSAGE or meta.profile != "worker":
+            return
+        if is_verify_exempt(meta.task):
+            return
+        if from_session != meta.task_parent_id:
+            raise TaskForbiddenError(
+                f"agent messages to worker task {meta.id} must come from its parent task "
+                f"{meta.task_parent_id}; this message names sender {from_session}")
+        try:
+            await self._tree.check_task_authorization(from_session or "")
+        except DelegationBlockedError as e:
+            raise TaskForbiddenError(str(e)) from e
 
     # ------------------------------------------------------------------
     # Pending inputs (pure, recoverable)

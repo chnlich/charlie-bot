@@ -83,6 +83,15 @@ def stable_child_report_id(child_session_id: str, source_event_id: str, recipien
   return str(uuid.uuid5(TASK_ID_NAMESPACE, f"child-report:{child_session_id}:{source_event_id}:{recipient_session_id}"))
 
 
+def stable_withheld_event_id(run_id: str, reason: str) -> str:
+  """The run_launch_withheld event id one (run, reason) pair derives to.
+
+  The same Run withheld for the same reason re-derives the same id, so repeated
+  launch attempts and recovery passes append the durable record once; a
+  different reason (the precondition moved) records again under its own id."""
+  return str(uuid.uuid5(TASK_ID_NAMESPACE, f"run-launch-withheld:{run_id}:{reason}"))
+
+
 def sha256_hex(text: str) -> str:
   """The SHA-256 hex digest of *text* (UTF-8) — the prompt-body and task-spec fingerprint."""
   return hashlib.sha256(text.encode("utf-8")).hexdigest()

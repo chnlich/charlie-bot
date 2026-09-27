@@ -94,8 +94,10 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
 
   # DURING the review: admit the input and leave a commit on the work branch
   # that never lands on main, so the successful review cannot complete
-  # delivery (its landing check honestly fails).
-  await tree.dispatch.admit_input(child.id, event_type=ET.AGENT_MESSAGE, content="one more tweak", actor="agent")
+  # delivery (its landing check honestly fails). The input rides the parent
+  # manager's provenance, the request-entry gate's authorized sender.
+  await tree.dispatch.admit_input(child.id, event_type=ET.AGENT_MESSAGE, content="one more tweak",
+                                  actor="agent", from_session=manager.id)
   work_run = await tree.runs.get_run(child.id, work_run_id)
   assert work_run is not None and work_run.worktree_path
   ok, _err = await git._run_git_cmd(

@@ -551,13 +551,20 @@ async def list_scheduled_sessions(
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
 ) -> Response:
-  """List sessions with a scheduled task, newest first."""
+  """List sessions with a scheduled task, newest first, each followed by its task children."""
   sessions, derived = await session_mgr.list_sessions_readonly(
       status=SessionStatus.ACTIVE,
       scheduled=True,
       include_running_status=True,
       include_pending_trigger_status=True,
   )
+  # The firings' worker leaves: real task-tree nodes parented to the cron
+  # session. They ride the payload right after their parent so the grouped
+  # render's tree nesting shows each firing's leaf under its cron session —
+  # a legacy session's included (its leaves keep the legacy parent).
+  all_rows, _all_derived = await session_mgr.list_sessions_readonly(status=SessionStatus.ACTIVE)
+  cron_ids = {s.id for s in sessions}
+  sessions = [*sessions, *(r for r in all_rows if r.task_parent_id in cron_ids)]
   task_map = {t.name: t for t in get_scheduled_tasks()}
   now_utc = datetime.now(UTC)
   sessions = await project_worker_threads(sessions, cfg, thread_mgr)

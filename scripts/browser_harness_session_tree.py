@@ -525,6 +525,58 @@ async def seed_scenario(home: Path) -> dict:
         (thread_dir / "data" / "events.jsonl").write_text(
             "".join(json.dumps(e) + "\n" for e in thread_events), encoding="utf-8")
 
+        # --- the withheld launch and the legacy cron session (S24) -----------
+        # A cancelled task's queued Run carries its durable run_launch_withheld
+        # fact (one per run and reason) and one blocked report to its parent;
+        # the transcript header reads "withheld · <reason>". A pre-plan legacy
+        # cron session keeps parenting its firings' worker leaves.
+        withhold_parent = await tree.create_task(
+            request_id="seed-withhold-parent", task_parent_id=None, profile="manager",
+            task=TaskSpec(goal="hold a cancelled worker"), name="Withhold parent",
+            backend=None, caller=OP)
+        withhold_worker = await tree.create_task(
+            request_id="seed-withhold-worker", task_parent_id=withhold_parent.id, profile="worker",
+            task=TaskSpec(goal="a run the cancel withheld"), name="Withheld worker",
+            backend=None, caller=OP)
+        # The cancel lands before the queued Run exists (a queued Run would
+        # block the cancel); the later launch attempt is what the fact records.
+        await tree.completion.cancel_task(
+            withhold_worker.id, request_id="seed-withhold-cancel",
+            reason="operator cancelled", caller=OP)
+        await tree.runs.register_run(RunRecord(
+            id="run-withheld", session_id=withhold_worker.id, kind="work",
+            backend="fake-scripted", model="scripted-model"))
+        withheld_reason = f"task {withhold_worker.id} is cancelled"
+        withheld_event = build_control_event(
+            ET.RUN_LAUNCH_WITHHELD, actor="system", source_session_id=withhold_worker.id,
+            event_id="seed-withheld-fact", run_id="run-withheld",
+            reason=withheld_reason)
+        await tree.events.append(withhold_worker.id, withheld_event)
+        from src.core.control_events import ACTOR_SYSTEM
+        await tree.dispatch.deliver_child_report(
+            withhold_worker.id, source_event=withheld_event, outcome="blocked",
+            summary=withheld_reason, result_refs=["run:run-withheld"],
+            recipient=withhold_parent.id, actor=ACTOR_SYSTEM)
+
+        cron_session = await session_mgr.create_session(
+            CreateSessionRequest(name="Scheduled: nightly-sweep", scheduled_task="nightly-sweep"),
+            backend="fake-scripted")
+        cron_leaf = await tree.create_task(
+            request_id="seed-cron-leaf", task_parent_id=cron_session.id, profile="worker",
+            task=TaskSpec(goal="sweep the cold sessions"), name="nightly-sweep · 2026-01-01T00:00:00+00:00",
+            backend=None, caller=OP)
+        await tree.runs.register_run(RunRecord(
+            id="run-cron-leaf", session_id=cron_leaf.id, kind="work",
+            backend="fake-scripted", model="scripted-model"), task_spec_text="sweep spec")
+        # The firing's terminal fact lands at the runs layer only: the dispatch
+        # funnel's follow-up would auto-close (and derived-archive) the leaf
+        # the scenario watches. The node stays open and visible, one delivered
+        # Run in its history.
+        async with tree.control_lock:
+            cron_done = await tree.runs.record_finish_locked(cron_leaf.id, "run-cron-leaf", "success")
+        await tree.runs.notify_liveness(cron_leaf.id, cron_done, launched=False)
+        await tree.patch_task(cron_leaf.id, PatchSessionTaskRequest(presentation="shown"), caller=OP)
+
         seed_memory_store(home)
         return {"root": root.id, "feature": feature.id, "worker1": worker1.id, "worker2": worker2.id,
                 "long": long_worker.id, "latest_hash": latest_hash,
@@ -532,6 +584,8 @@ async def seed_scenario(home: Path) -> dict:
                 "ops_root": ops_root.id, "ops_mid": ops_mid.id, "failing": failing.id,
                 "evidence": evidence.id, "bind_a": bind_a.id, "bind_b": bind_b.id,
                 "live": live.id, "live_parent": live_parent.id, "legacy": legacy.id, "legacy_thread": legacy_thread_id,
+                "withhold_parent": withhold_parent.id, "withhold_worker": withhold_worker.id,
+                "cron_session": cron_session.id, "cron_leaf": cron_leaf.id,
                 "live_run": "run-live",
                 "_live_handles": {"process": live_proc, "stop": live_stop,
                                   "counter": live_counter, "tree": tree,
@@ -1446,6 +1500,59 @@ async def run_harness(args: argparse.Namespace) -> None:
                 shot = await screenshot(cdp, session_id, results, "s23_FAILED")
                 results.record("an unread reply in a child manager: root mark collapsed and expanded, cleared by opening the child",
                                ok=False, detail=repr(exc) + " | " + diag, screenshot=shot)
+            # ---- S24: the withheld launch and the legacy cron session ----------
+            try:
+                log("  s24: withheld run and cron leaf")
+                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['withhold_worker']}"}, session_id=session_id)
+                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                # The worker transcript's Run header reads "withheld · <reason>".
+                withheld_text = f"withheld · task {ids['withhold_worker']} is cancelled"
+                await wait_for(cdp, session_id,
+                               f"document.getElementById('messages').textContent.includes({withheld_text!r})",
+                               timeout=12, label="the withheld header renders with its reason")
+                header = await evaluate(cdp, session_id, """
+                    (() => {
+                      const el = document.querySelector('[data-run-state="withheld"]');
+                      return el ? el.textContent : null;
+                    })()
+                """)
+                assert_true(header and withheld_text in header,
+                            f"the Run header shows the withheld state with its reason ({header})")
+                shot = await screenshot(cdp, session_id, results, "s24_withheld_run")
+                results.record("(a) a withheld Run shows 'withheld · <reason>' in its Run header", ok=True,
+                               detail="cancelled task's queued Run; reason from the durable run_launch_withheld fact", screenshot=shot)
+
+                # The cron worker node hangs under its legacy cron session in
+                # the Scheduled tab (the grouped cron render nests the leaves).
+                await cdp.send("Page.navigate",
+                               {"url": f"{base}/?filter=scheduled&session={ids['cron_session']}"},
+                               session_id=session_id)
+                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await expand_to(cdp, session_id, [ids["cron_session"]])
+                names = await evaluate(cdp, session_id, """
+                    [...document.querySelectorAll('#session-list .session-name')].map(el => el.textContent)
+                """)
+                assert_true(any("nightly-sweep ·" in n for n in names),
+                            f"the cron worker node renders nested under its legacy session ({names})")
+                # The cron project group renders collapsed by default; open it
+                # so the leaf's row can scroll on screen.
+                await evaluate(cdp, session_id, """
+                    (() => {
+                      document.querySelectorAll('.cron-group-items.hidden').forEach(el => el.classList.remove('hidden'));
+                      document.querySelectorAll('.cron-group-chevron').forEach(el => el.classList.add('rotate-90'));
+                    })()
+                """)
+                await reveal_row(cdp, session_id, ids["cron_leaf"])
+                leaf_visible = await evaluate(cdp, session_id, f"""
+                    !!document.getElementById('session-{ids['cron_leaf']}')
+                """)
+                assert_true(leaf_visible, "the cron leaf's row is visible under the expanded legacy cron session")
+                shot = await screenshot(cdp, session_id, results, "s24_cron_worker_under_legacy_session")
+                results.record("(b) a cron worker node hangs under its legacy cron session", ok=True,
+                               detail="legacy scheduled session parents its firings' worker leaves in the sidebar", screenshot=shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s24_FAILED")
+                results.record("withheld run and cron leaf scenarios", ok=False, detail=repr(exc), screenshot=shot)
 
             # The CDP collector records console.error calls and uncaught page
             # exceptions from Runtime.enable onward — this list is the only

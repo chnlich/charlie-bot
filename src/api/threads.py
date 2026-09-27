@@ -47,12 +47,10 @@ from src.core.models import (
     CcClaudeBackend,
     RunRecord,
     ThreadMetadata,
-    ThreadStatus,
     TuiCliBackend,
     WorkerEvent,
 )
 from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events
-from src.core.process import kill_process_group
 from src.core.run_token import CallerIdentity
 from src.core.runs import (
     RUN_EVENTS_NAME,
@@ -972,36 +970,28 @@ async def get_thread_events(
 async def cancel_thread(
     session_id: str,
     thread_id: str,
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
     run_store=Depends(get_run_store),
     task_mgr=Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
 ) -> dict:
-  """Cancel a running thread (sends SIGTERM to the subprocess's process group).
+  """Cancel one thread by resolving it to the Run it aliases.
 
-  A v2 alias resolution (new-run compatibility alias, or an imported old id)
-  routes to the Run owner's stop implementation instead: the same durable
-  request, identity check, terminal fact and agent own-run scope as the v2
-  cancel route — and no legacy ThreadMetadata status copy is ever written for
-  it.
+  The legacy thread executor is gone; a thread id survives as a read-only
+  record and as a v2 alias (new-run compatibility alias, or an imported old
+  id). The alias routes to the Run owner's stop implementation: the same
+  durable request, identity check, terminal fact and agent own-run scope as
+  the v2 cancel route — and no legacy ThreadMetadata status copy is ever
+  written. A thread id that resolves to no Run is a 404.
   """
-  thread = await thread_mgr.get_thread(session_id, thread_id)
-  if thread is None:
-    alias = task_mgr.aliases.resolve_thread(session_id, thread_id)
-    if alias is not None:
-      target_session, target_run = alias["session_id"], alias["run_id"]
-      from src.api.sessions import _require_own_run_scope
-      _require_own_run_scope(caller, target_session, target_run)
-      try:
-        result = await run_store.request_stop(target_session, target_run, f"thread-cancel:{thread_id}")
-      except (RunNotFoundError, RunIdentityConflictError) as e:
-        from src.api.sessions import _task_http_error
-        raise _task_http_error(e) from e
-      return {"run_id": result.run_id, "stop_requested": result.stop_requested, "outcome": result.outcome}
+  alias = task_mgr.aliases.resolve_thread(session_id, thread_id)
+  if alias is None:
     raise HTTPException(status_code=404, detail=_THREAD_NOT_FOUND_DETAIL)
-
-  if thread.pid:
-    kill_process_group(thread.pid)
-
-  await thread_mgr.update_status(session_id, thread_id, ThreadStatus.CANCELLED)
-  return {"ok": True}
+  target_session, target_run = alias["session_id"], alias["run_id"]
+  from src.api.sessions import _require_own_run_scope
+  _require_own_run_scope(caller, target_session, target_run)
+  try:
+    result = await run_store.request_stop(target_session, target_run, f"thread-cancel:{thread_id}")
+  except (RunNotFoundError, RunIdentityConflictError) as e:
+    from src.api.sessions import _task_http_error
+    raise _task_http_error(e) from e
+  return {"run_id": result.run_id, "stop_requested": result.stop_requested, "outcome": result.outcome}

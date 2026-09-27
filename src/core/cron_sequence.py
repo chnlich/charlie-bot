@@ -47,14 +47,13 @@ from src.core.log_once import LazyStructlogLogger
 from src.core.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec
 from src.core.runs import RUN_EVENTS_NAME
 from src.core.task_chain import chain_step_prompt
+from src.core.task_completion import RUN_REF_PREFIX
 
 if TYPE_CHECKING:
   from src.core.task_execution import LaunchSettlement
   from src.core.task_sessions import TaskTreeManager
 
 log = LazyStructlogLogger()
-
-RUN_REF_PREFIX = "run:"
 
 
 class ScheduledBindingError(RuntimeError):

@@ -1609,6 +1609,7 @@ class TaskExecutionAdapter:
         dedups across recovery and repeated finalize without ever relying on
         the legacy master_woke_after_summary judgment.
         """
+        from src.core.task_completion import RUN_REF_PREFIX
         meta = await self._tree.load_meta(session_id)
         if meta is None or not meta.task_parent_id:
             return
@@ -1625,7 +1626,7 @@ class TaskExecutionAdapter:
             source_event=source,
             outcome=outcome,
             summary=summary,
-            result_refs=[f"run:{run.id}"],
+            result_refs=[f"{RUN_REF_PREFIX}{run.id}"],
             recipient=meta.task_parent_id,
         )
         if report is None:

@@ -339,6 +339,7 @@ async def test_cancel_waits_for_a_queued_run_only_until_its_stop_request(tmp_pat
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_cancel_by_the_parent_session_skips_the_parent_wake(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

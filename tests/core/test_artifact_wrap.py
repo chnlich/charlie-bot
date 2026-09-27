@@ -72,6 +72,7 @@ def _wrap_cli(fragment_path: Path, output: Path, genre: str, *flags: str) -> Sys
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_wrap_takes_head_and_style_from_the_template_and_the_body_from_the_fragment(
     tmp_path: Path, vendored_katex: Path) -> None:
   output = _wrap(tmp_path, '<div class="wrap"><main><p>body text</p></main></div>', vendored_katex=vendored_katex)

@@ -61,11 +61,6 @@ _THREAD_META_MEMO_LIMIT = 1024
 _thread_meta_memo: StatSignatureMemo[str, dict] = StatSignatureMemo(_THREAD_META_MEMO_LIMIT)
 
 
-def _reset_thread_meta_memo_for_tests() -> None:
-  """Clear the thread-metadata scan memo, restoring the process-start state."""
-  _thread_meta_memo.clear()
-
-
 def _iter_thread_meta_stats(threads_dir: Path, log_event: str) -> Iterator[tuple[str, str, os.stat_result]]:
   """Yield ``(thread_dir, metadata.json path, stat)`` for every thread dir under *threads_dir*.
 

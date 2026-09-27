@@ -348,23 +348,14 @@ def resolve_events_usage(events: list[dict]) -> dict | None:
   """One-shot tier resolution over an already-loaded event list (no memo).
 
     The worker transcript's usage path (src/core/worker_transcript.py): the
-    same tier selection as :meth:`SessionUsageResolver.resolve_session_usage`
-    minus the codex native-rollout tier and the cross-resolution fold memo —
-    the transcript projection memo already holds the events list, and the
-    3 s header poll folds a few hundred events in well under a millisecond.
+    shared tier dispatch ``_resolve_fold_tier``, with neither the codex
+    native-rollout tier nor the cross-resolution fold memo — the transcript
+    projection memo already holds the events list, and the 3 s header poll
+    folds a few hundred events in well under a millisecond.
     """
   fold = _UsageFold()
   fold.feed(events)
-  facts = fold.facts()
-  if facts.reading_kind == _READING_CLAUDE:
-    return _resolve_claude_tier(facts)
-  if facts.reading_kind == _READING_SNAPSHOT:
-    return _resolve_snapshot_tier(facts)
-  if facts.reading_kind == _READING_RESOLVED:
-    return _resolve_reading_tier(facts)
-  if not events:
-    return None
-  return _resolve_no_source_tier(facts)
+  return _resolve_fold_tier(fold.facts(), events)
 
 
 def _resolve_no_source_tier(facts: _UsageFacts) -> dict:
@@ -374,6 +365,25 @@ def _resolve_no_source_tier(facts: _UsageFacts) -> dict:
   ``unknown``); cost is the shared scan's sum over result events.
   """
   return _usage_dict(context_tokens=None, context_full=None, context_compact_at=None, model="", cost=facts.cost)
+
+
+def _resolve_fold_tier(facts: _UsageFacts, events: list[dict]) -> dict | None:
+  """The one tier dispatch over the fold's facts; both entry points land here.
+
+  ``resolve_events_usage`` and ``resolve_session_usage`` (after its codex
+  tier) share this order: the slot kind picks ``claude``, ``snapshot``, or
+  ``resolved``; a slot-less table falls to no-source. Returns ``None`` only
+  when the event list is empty.
+  """
+  if facts.reading_kind == _READING_CLAUDE:
+    return _resolve_claude_tier(facts)
+  if facts.reading_kind == _READING_SNAPSHOT:
+    return _resolve_snapshot_tier(facts)
+  if facts.reading_kind == _READING_RESOLVED:
+    return _resolve_reading_tier(facts)
+  if not events:
+    return None
+  return _resolve_no_source_tier(facts)
 
 
 _FACTS_MEMO_CAP = 8
@@ -442,16 +452,7 @@ class SessionUsageResolver:
       if merged is not None:
         return merged
 
-    if facts.reading_kind == _READING_CLAUDE:
-      return _resolve_claude_tier(facts)
-    if facts.reading_kind == _READING_SNAPSHOT:
-      return _resolve_snapshot_tier(facts)
-    if facts.reading_kind == _READING_RESOLVED:
-      return _resolve_reading_tier(facts)
-
-    if not events:
-      return None
-    return _resolve_no_source_tier(facts)
+    return _resolve_fold_tier(facts, events)
 
   def _facts_hit(self, session_id: str) -> tuple[list[dict], _UsageFacts] | None:
     """Return ``(events, facts)`` from the facts memo without leaving the event loop, else ``None``.

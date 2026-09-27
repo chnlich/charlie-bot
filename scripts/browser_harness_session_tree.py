@@ -15,9 +15,11 @@ before running it. Isolation contract:
   that never launches (no browser flow dispatches a chat input), so there are
   no real model, cron or external side effects and no real data copies.
 - Synthetic data. The scenario tree (root manager → feature manager → two
-  workers, run records with recorded facts, pending inputs) is seeded through
-  the same task_sessions owner the APIs serve, in this process only. Every
-  UI mutation under test then rides the real HTTP API from the browser.
+  workers, run records with recorded facts, pending inputs, and one unread
+  reply on the feature manager seeded through SessionManager.mark_unread) is
+  seeded through the same task_sessions owner the APIs serve, in this process
+  only. Every UI mutation under test then rides the real HTTP API from the
+  browser.
 - Browser. System google-chrome (checked first; an absent binary is an
   explicit failure — never a faked pass) driven over CDP with a private
   ``--user-data-dir`` profile inside the harness temp dir. Screenshots,
@@ -1156,13 +1158,13 @@ async def run_harness(args: argparse.Namespace) -> None:
             from src.core.control_events import build_control_event
             try:
                 log("  s21: live worker transcript")
-                # (a) parent page: worker spinner, the collapsed parent's gear,
-                # Delegated card live line + link — all following the status
-                # poll. The expanded parent shows only its own state (its
-                # descendants show theirs); collapsed, it stands in with the gear.
+                # (a) parent page: worker spinner, the parent's gear in both
+                # states, Delegated card live line + link — all following the
+                # status poll. A parent row's icon reads facts only, so the
+                # gear survives expansion and collapse unchanged.
                 live_parent = ids["live_parent"]
                 parent_icons = f"""
-                    ['spinner', 'worker-indicator', 'waiting-indicator']
+                    ['spinner', 'worker-indicator', 'waiting-indicator', 'subtree-unread']
                       .filter(k => !document.getElementById(k + '-{live_parent}').classList.contains('hidden'))
                 """
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={live_parent}"}, session_id=session_id)
@@ -1173,7 +1175,8 @@ async def run_harness(args: argparse.Namespace) -> None:
                                f"document.getElementById('spinner-{live}') && !document.getElementById('spinner-{live}').classList.contains('hidden')",
                                timeout=12, label="worker row spinner while its Run is live")
                 shown_expanded = await evaluate(cdp, session_id, parent_icons)
-                assert_true(shown_expanded == [], f"the expanded parent shows only its own (idle) state ({shown_expanded})")
+                assert_true(shown_expanded == ["worker-indicator"],
+                            f"the expanded parent keeps the gear for its running worker ({shown_expanded})")
                 await wait_for(cdp, session_id, """
                     (() => {
                       const el = document.querySelector('.delegate-live-state[data-delegate-session]');
@@ -1196,10 +1199,12 @@ async def run_harness(args: argparse.Namespace) -> None:
                 await reveal_row(cdp, session_id, live_parent)
                 await wait_for(cdp, session_id, f"JSON.stringify({parent_icons}) === '[\"worker-indicator\"]'",
                                timeout=12, label="the collapsed parent's gear stands in for the running worker")
+                results.record("(a) the parent's gear is identical expanded and collapsed", ok=True,
+                               detail=f"gear shown in both states ({shot_collapsed})", screenshot=None)
                 shot_collapsed = await screenshot(cdp, session_id, results, "s21a_parent_collapsed_gear")
                 await expand_to(cdp, session_id, [live_parent])
-                results.record("(a) parent sees the running worker (spinner, collapsed gear, live Delegated card)", ok=True,
-                               detail="worker spinner visible with the parent expanded; the collapsed parent shows the gear "
+                results.record("(a) parent sees the running worker (spinner, gear in both states, live Delegated card)", ok=True,
+                               detail="worker spinner visible; the parent shows the gear expanded and collapsed alike "
                                       f"({shot_collapsed}); card shows 'running · Scripted Live Runner' and links the child",
                                screenshot=shot)
 
@@ -1351,6 +1356,78 @@ async def run_harness(args: argparse.Namespace) -> None:
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s22_FAILED")
                 results.record("(d) a legacy thread row opens in the main chat at the thread URL", ok=False, detail=repr(exc), screenshot=shot)
+
+            # ---- S23: an unread reply in a child manager (the subtree mark) --
+            # The reply is seeded through the same in-process owner the scenario
+            # tree was seeded with — SessionManager.mark_unread, the master
+            # turn's own writer — never by painting the DOM. The root row shows
+            # the hollow subtree-unread mark collapsed and expanded alike, the
+            # child manager shows its own dot, and opening the child clears
+            # both in one paint (the read path's refreshSessionIndicator).
+            try:
+                log("  s23: unread reply in a child manager")
+                handles = ids["_live_handles"]
+                await handles["session_mgr"].mark_unread(ids["feature"])
+                # The serving app's metadata and listing caches revalidate on
+                # their own clock (a 30 s TTL plus the listings sweep), so wait
+                # until ITS list reports the flip: from then on the page's
+                # first paint and its 3 s status poll agree, and the mark
+                # cannot flap back off mid-assertion.
+                deadline = time.monotonic() + 90
+                while True:
+                    status, rows = await asyncio.to_thread(
+                        api_request, base, access_key, "GET", "/api/sessions/", timeout=10.0)
+                    if status != 200:
+                        fail(f"list fetch failed: {status} {rows}")
+                    row = next((r for r in rows if r.get("id") == ids["feature"]), None)
+                    if row and row.get("has_unread"):
+                        break
+                    if time.monotonic() > deadline:
+                        fail("the serving list never reported the seeded unread reply")
+                    await asyncio.sleep(1.0)
+                root_icons = f"""
+                    ['spinner', 'worker-indicator', 'waiting-indicator', 'unread', 'subtree-unread']
+                      .filter(k => !document.getElementById(k + '-{ids['root']}').classList.contains('hidden'))
+                """
+                feature_icons = f"""
+                    ['spinner', 'worker-indicator', 'waiting-indicator', 'unread', 'subtree-unread']
+                      .filter(k => !document.getElementById(k + '-{ids['feature']}').classList.contains('hidden'))
+                """
+                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
+                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                # Collapsed root: the mark stands in for the child's unread reply.
+                await wait_for(cdp, session_id, f"JSON.stringify({root_icons}) === '[\"subtree-unread\"]'",
+                               timeout=60, label="the collapsed root shows the subtree mark for the child's unread reply")
+                shot = await screenshot(cdp, session_id, results, "s23_root_mark_collapsed")
+                # Expanded root: the mark stays — expansion never changes the icon.
+                await expand_to(cdp, session_id, [ids["root"]])
+                await wait_for(cdp, session_id, f"JSON.stringify({root_icons}) === '[\"subtree-unread\"]'",
+                               timeout=12, label="the expanded root keeps the subtree mark")
+                await reveal_row(cdp, session_id, ids["feature"])
+                await wait_for(cdp, session_id, f"JSON.stringify({feature_icons}) === '[\"unread\"]'",
+                               timeout=12, label="the child manager shows its own dot, no subtree mark")
+                shot = await screenshot(cdp, session_id, results, "s23_root_mark_expanded")
+                # Opening the child (the SPA switch's real read path) clears its
+                # dot and the root's mark in one paint.
+                await evaluate(cdp, session_id,
+                    "[...document.querySelectorAll('a[href^=\"/?session=\"]')]"
+                    + f".find(a => a.getAttribute('href') === '/?session={ids['feature']}').click()")
+                await wait_for(cdp, session_id,
+                               f"location.search === '?session={ids['feature']}' && SESSION_ID === '{ids['feature']}'",
+                               timeout=12, label="the child manager's chat opened")
+                await wait_for(cdp, session_id,
+                               f"JSON.stringify({feature_icons}) === '[]' && JSON.stringify({root_icons}) === '[]'",
+                               timeout=12, label="opening the child clears its dot and the root's mark in one paint")
+                shot = await screenshot(cdp, session_id, results, "s23_after_opening_child")
+                results.record("an unread reply in a child manager: root mark collapsed and expanded, cleared by opening the child",
+                               ok=True,
+                               detail="root shows subtree-unread collapsed and expanded alike; the child shows its own dot; "
+                                      "opening the child clears both without a reload",
+                               screenshot=shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s23_FAILED")
+                results.record("an unread reply in a child manager: root mark collapsed and expanded, cleared by opening the child",
+                               ok=False, detail=repr(exc), screenshot=shot)
 
             # The CDP collector records console.error calls and uncaught page
             # exceptions from Runtime.enable onward — this list is the only

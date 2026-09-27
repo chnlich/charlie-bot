@@ -8,9 +8,10 @@ response the sidebar paints from (``GET /api/sessions/``), the DOM icons and
 screenshots it asserts the sidebar's live work states:
 
 1. running: a worker's ~60 s Run (a script-run task in a synthetic repo that
-   sleeps, then reports) shows the spinner on its row and the amber gear on its
-   collapsed parent; the expanded parent shows only its own state; after the
-   Run ends the activity icons clear.
+   sleeps, then reports) shows the spinner on its row and the amber gear on
+   its parent, collapsed and expanded alike — a parent row's icon reads facts
+   only and never its expansion state; after the Run ends the activity icons
+   clear.
 2. waiting: a queued Run held back by a paused node shows the muted clock.
 3. names and first paint: the rows carry goal-derived names, never "## Goal";
    no worker-facing title starts with a raw Markdown heading; and the list
@@ -199,7 +200,7 @@ async def assert_icons(cdp: CDP, page_id: str, sid: str, visible: str | None,
     deadline = time.monotonic() + timeout
     last = ""
     while time.monotonic() < deadline:
-        kinds = ("spinner", "worker-indicator", "waiting-indicator", "unread")
+        kinds = ("spinner", "worker-indicator", "waiting-indicator", "unread", "subtree-unread")
         states = {kind: await icon_hidden(cdp, page_id, sid, kind) for kind in kinds}
         ok = all(states[kind] for kind in hidden)
         if ok and visible is not None:
@@ -459,27 +460,28 @@ async def run_harness(args: argparse.Namespace) -> None:
                    and parent_payload.get("work_state") == "idle",
                    json.dumps(parent_payload, default=str))
             await assert_icons(cdp, page_id, worker_a, "spinner",
-                               ["worker-indicator", "waiting-indicator"],
+                               ["worker-indicator", "waiting-indicator", "subtree-unread"],
                                "running worker row")
             await assert_icons(cdp, page_id, manager_a, "worker-indicator",
-                               ["spinner", "waiting-indicator"],
+                               ["spinner", "waiting-indicator", "unread", "subtree-unread"],
                                "collapsed manager row")
             shot = await screenshot(cdp, page_id, shots, "running_state")
             results["running_screenshot"] = shot
             record("DOM: worker row spinner, collapsed manager gear", ok=True,
                    detail=f"{worker_a}/spinner + {manager_a}/gear")
 
-            # Expanded manager shows only its own (idle) state.
+            # Expanded manager keeps its gear: a parent row's icon reads facts
+            # only, never the expansion state.
             await evaluate(cdp, page_id, f"Sidebar.expandTreeNode('{manager_a}')")
-            await assert_icons(cdp, page_id, manager_a, "unread",
-                               ["spinner", "worker-indicator", "waiting-indicator"],
-                               "expanded manager row (own idle state only)")
+            await assert_icons(cdp, page_id, manager_a, "worker-indicator",
+                               ["spinner", "waiting-indicator", "unread", "subtree-unread"],
+                               "expanded manager row keeps the gear for its running worker")
             await assert_icons(cdp, page_id, worker_a, "spinner",
-                               ["worker-indicator", "waiting-indicator"],
+                               ["worker-indicator", "waiting-indicator", "subtree-unread"],
                                "running worker row (expanded parent)")
             shot = await screenshot(cdp, page_id, shots, "running_expanded")
             results["running_expanded_screenshot"] = shot
-            record("DOM: expanded manager shows only its own state", ok=True, detail=manager_a)
+            record("DOM: expanded manager keeps its gear", ok=True, detail=manager_a)
             await evaluate(
                 cdp, page_id,
                 f"if (Sidebar.isTreeNodeExpanded('{manager_a}')) toggleTreeNode('{manager_a}')")
@@ -505,7 +507,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 lambda st: bool(st) and st.get("work_state") == "idle" and not st.get("thinking_since"),
                 "manager A idle after consuming the report", timeout=180)
             await assert_icons(cdp, page_id, manager_a, None,
-                               ["spinner", "worker-indicator", "waiting-indicator"],
+                               ["spinner", "worker-indicator", "waiting-indicator", "subtree-unread"],
                                "collapsed manager row after finish (no activity icon)")
             record("DOM after finish: collapsed manager's gear cleared", ok=True, detail=manager_a)
             shot = await screenshot(cdp, page_id, shots, "after_finish")
@@ -533,7 +535,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             record("status: queued Run held by the pause reads work_state=waiting",
                    payload.get("work_state") == "waiting", json.dumps(payload, default=str))
             await assert_icons(cdp, page_id, manager_a, "waiting-indicator",
-                               ["spinner", "worker-indicator"],
+                               ["spinner", "worker-indicator", "subtree-unread"],
                                "waiting manager row")
             record("DOM: the paused node's queued Run shows the clock", ok=True, detail=manager_a)
             shot = await screenshot(cdp, page_id, shots, "waiting_state")

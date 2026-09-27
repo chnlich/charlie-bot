@@ -95,8 +95,8 @@ the whole launch, additions included, as one structured diagnostic.
 
 ## Automated trials over a preview
 
-Two repo-owned harnesses drive a preview instance end to end; both are
-executable verification recipes, never mocks:
+Three repo-owned harnesses verify the preview surfaces end to end; each is an
+executable verification recipe, never a mock:
 
 - `scripts/live_preview_task_tree.py` — the live execution trial: a root
   manager's real takeoff turn, a repo-less quick-edit worker, a synthetic-repo
@@ -105,16 +105,20 @@ executable verification recipes, never mocks:
   Chrome over CDP against the same kind of fresh preview home, asserting the
   sidebar's live work states through `/api/sessions/status` and the
   `GET /api/sessions/` list the sidebar paints from, the DOM icons and
-  screenshots — a ~60 s worker Run (spinner on the row, gear on the collapsed
-  parent, expanded parent showing only its own state, icons clearing after
-  finish), a launch failure before process start (red alert on the row and the
-  collapsed parent, the parent's failure report naming the error, the
-  worker transcript's Run header reading `failed` with the error beneath it
-  and the Run's own `ended_at` as its time, and a held-back retry's header
-  reading `queued` with no time at all), a queued Run
+  screenshots — a ~60 s worker Run (spinner on the row, the gear on its parent
+  collapsed and expanded alike, since a parent row's icon reads facts and
+  never its expansion state, and icons clearing after finish), a queued Run
   held by a paused node (the clock), goal-derived row names (never a raw
   Markdown heading in any worker-facing title), and list rows that already
   carry each task-tree node's `work_state` on first paint.
+- `scripts/browser_harness_session_tree.py` — the synthetic tree harness: the
+  real shipped app over an isolated in-process server with a seeded task tree,
+  driving Chrome over CDP. It asserts tree nesting and expansion, the live
+  worker's transcript cycle, and the parent-row icon rule: a running worker's
+  parent shows the gear expanded and collapsed alike, an unread reply in a
+  child manager lights the root's hollow `subtree-unread` mark collapsed and
+  expanded alike while the child shows its own dot, and opening the child
+  clears both in one paint.
 
 Both share the preview's isolation guarantees: the trial home is a fresh
 temporary directory, the port a free one (the production port 18498 is

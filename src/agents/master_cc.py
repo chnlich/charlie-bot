@@ -17,6 +17,7 @@ from src.agents.master_cc_queue import (  # noqa: F401  # re-export: facade impo
     cancel_master,
     enqueue_master_resume,
     queued_user_event_ids,
+    replay_scheduled_trigger,
     replay_user_message,
     run_message,
 )

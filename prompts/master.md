@@ -234,7 +234,7 @@ schedule-trigger --help` for `--watch` target types and `--max-wait` semantics; 
 patterns, verify-on-create, and fail-loud recipes live in the `charliebot` skill. Keep --message a
 short label: the wake lands back in the same session with full history, and the fired message
 arrives with the fire reason prefixed and per-target state suffixed, so the label only names which
-watch fired; runbook steps and readback commands live in session artifacts.
+watch fired; runbook steps and readback commands live in session artifacts. A session holds up to five pending triggers; one trigger watches every parallel job through repeated --watch specs, and a sixth registration exits 2 with the current count.
 
 ## Skills System
 

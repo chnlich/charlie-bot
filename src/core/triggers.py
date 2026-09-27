@@ -89,8 +89,19 @@ _TRIGGER_LIST_MEMO_SESSION_LIMIT = 32
 _DORMANCY_CHECK_SECONDS = 60
 
 
+# A session holds at most this many pending triggers. One trigger can watch
+# every parallel job through repeated --watch specs, so the bound only caps
+# genuine wake debt; it lives in code, not config, because there is one user
+# and one value.
+MAX_PENDING_TRIGGERS = 5
+
+
 class RemoteVerifyError(Exception):
   """Raised when verify-on-create fails for a remote watch target."""
+
+
+class PendingTriggerLimitError(Exception):
+  """Raised when a schedule-trigger registration would push a session past MAX_PENDING_TRIGGERS."""
 
 
 class ArchivedSessionError(Exception):
@@ -440,6 +451,10 @@ class TriggerManager:
     # list_triggers' docstring.
     self._list_verdicts: StatSignatureMemo[str,
                                            list[PendingTrigger]] = StatSignatureMemo(_TRIGGER_LIST_MEMO_SESSION_LIMIT)
+    # Per-session create lock: the pending-count check and the record write run
+    # under one lock, so two concurrent registrations cannot both cross the
+    # limit. The lock never spans a network probe -- probes run before it.
+    self._create_locks: dict[str, asyncio.Lock] = {}
 
   async def create_trigger(
       self,
@@ -449,12 +464,20 @@ class TriggerManager:
       watch_targets: list[WatchTarget] | None = None,
       probe_out: dict[str, str] | None = None,
       created_at: datetime | None = None,
+      enforce_pending_limit: bool = True,
   ) -> PendingTrigger:
     """Create a pending trigger, persist to disk, and start the sleep task.
 
     Raises ``ArchivedSessionError`` when the target session's succession chain
     ends archived with no successor (the single rejection funnel for both
-    callers: the internal API and the Slack thread-follow re-arm).
+    callers: the internal API and the Slack thread-follow re-arm), and
+    ``PendingTriggerLimitError`` when a ``schedule-trigger`` registration would
+    push the session past MAX_PENDING_TRIGGERS pending records.
+
+    ``enforce_pending_limit`` is False only on the Slack thread-follow re-arm:
+    it cancels its own record and creates the replacement, and a thread's new
+    message must never silently stop waking its session, so the re-arm is
+    never rejected (its record still counts toward the limit).
 
     ``probe_out``, when given, is filled with ``label -> observed state`` for every
     remote SLURM target probed at create time, so the caller can report what was
@@ -487,18 +510,28 @@ class TriggerManager:
         probe_out.update(observed)
 
     fire_at = datetime.now(UTC) + timedelta(seconds=delay_seconds)
-    stamp: dict[str, Any] = {}
-    if created_at is not None:
-      stamp["created_at"] = created_at
-    trigger = PendingTrigger(
-        session_id=session_id,
-        fire_at=fire_at,
-        message=message,
-        watch_targets=targets,
-        **stamp,
-    )
-    await self._save_trigger(trigger)
-    self._start_task(trigger)
+    # Count-and-write under one per-session lock: the probes above stayed
+    # outside it (never hold a lock across network I/O), so two concurrent
+    # registrations serialize here and exactly one can cross the limit.
+    async with self._create_locks.setdefault(session_id, asyncio.Lock()):
+      if enforce_pending_limit:
+        pending_count = sum(1 for t in await self.list_triggers(session_id) if t.status is TriggerStatus.PENDING)
+        if pending_count + 1 > MAX_PENDING_TRIGGERS:
+          raise PendingTriggerLimitError(
+              f"session {session_id} has {pending_count} pending triggers (limit {MAX_PENDING_TRIGGERS}); "
+              "watch several targets with one trigger: --watch A --watch B")
+      stamp: dict[str, Any] = {}
+      if created_at is not None:
+        stamp["created_at"] = created_at
+      trigger = PendingTrigger(
+          session_id=session_id,
+          fire_at=fire_at,
+          message=message,
+          watch_targets=targets,
+          **stamp,
+      )
+      await self._save_trigger(trigger)
+      self._start_task(trigger)
     log.info(
         "trigger_created",
         trigger_id=trigger.id,
@@ -837,35 +870,49 @@ class TriggerManager:
 
     # Deliver the scheduled-trigger event through the succession-aware primitive:
     # it persists into the chain end (stamping origin_session_id when redirected)
-    # and returns None only when the chain end no longer exists.
-    delivered = await self._session_mgr.deliver_to_successor(
-        deliver_to,
-        build_scheduled_trigger_event(trigger_message),
-    )
+    # and returns None only when the chain end no longer exists. The wake event
+    # is the delivery: its injected id is what the woken turn answers, so a
+    # restart reconcile excludes exactly this event from replay.
+    wake_event = build_scheduled_trigger_event(trigger_message)
+    delivered = await self._session_mgr.deliver_to_successor(deliver_to, wake_event)
     if delivered is None:
       await self._cancel_undeliverable(fresh, reason="chain_end_missing")
       return
 
-    # Wake the master CC. Re-read the config here rather than using the snapshot
-    # captured at construction: backends added to or renamed in config.yaml after
-    # server start are invisible to that snapshot.
-    await trigger_master(
-        deliver_to,
-        trigger_message,
-        get_config(),
-        self._session_mgr,
-        # Timed wake: never pull an archived session back. The dormancy checks
-        # above cancel that case; this opt-out also covers the window between
-        # the last watchdog poll and this call.
-        pull_back=False,
-    )
-
+    # FIRED on delivery: the record leaves pending the moment its wake lands in
+    # the chat log, before the woken turn is even enqueued -- pending means
+    # "not yet delivered", so the tray and the limit count stop carrying a wake
+    # the session is already about to answer. Crash between this stamp and the
+    # enqueue below costs one replayed wake (the event is unanswered), which
+    # merges into the next turn.
     fresh.status = TriggerStatus.FIRED
     fresh.fired_at = datetime.now(UTC)
     fresh.fire_reason = reason
     await self._save_trigger(fresh)
     self._tasks.pop(trigger.id, None)
     log.info("trigger_fired", trigger_id=trigger.id, session=fresh.session_id, reason=reason)
+
+    # Wake the master CC, declared as SCHEDULED_TRIGGER input so it batches
+    # with whatever else is queued. The trigger's task no longer waits for the
+    # woken turn to finish: the record is already terminal, and trigger_master
+    # handles its own failures (it persists an ERROR event and logs). Re-read
+    # the config here rather than using the snapshot captured at construction:
+    # backends added to or renamed in config.yaml after server start are
+    # invisible to that snapshot. Timed wake: never pull an archived session
+    # back -- the dormancy checks above cancel that case; this opt-out also
+    # covers the window between the last watchdog poll and this call.
+    create_logged_task(
+        trigger_master(
+            deliver_to,
+            trigger_message,
+            get_config(),
+            self._session_mgr,
+            ET.SCHEDULED_TRIGGER,
+            user_event_id=wake_event.get("id"),
+            pull_back=False,
+        ),
+        name=f"trigger-wake-{trigger.id[:8]}",
+    )
 
   def _tree_alias_target(self, session_id: str) -> str | None:
     """The canonical task id an established alias maps to, or None."""

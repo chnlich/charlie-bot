@@ -103,7 +103,9 @@ async def _append(session_mgr: SessionManager, sid: str, event: dict) -> dict:
 async def _run_record(session_mgr: SessionManager, sid: str, user_event_id: str | None, tmp_path: Path) -> None:
   """Record a running round whose input is *user_event_id* (what post_reply binds a reply to)."""
   await session_mgr.persist_master_run(
-      sid, MasterRunRecord(started_at=utc_now(), raw_log=str(tmp_path / "raw.jsonl"), user_event_id=user_event_id))
+      sid,
+      MasterRunRecord(started_at=utc_now(), raw_log=str(tmp_path / "raw.jsonl"), user_event_ids=[user_event_id]
+                      if user_event_id else []))
 
 
 def _summon(content: str = _SUMMON_CONTENT) -> dict:

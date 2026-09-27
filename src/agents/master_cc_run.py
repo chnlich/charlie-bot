@@ -815,7 +815,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
           pid_start=backend.pid_start,
           started_at=started_at,
           raw_log=raw_log,
-          user_event_id=item.user_event_id,
+          user_event_ids=list(item.user_event_ids),
       )
       await item.callbacks.persist_master_run(session_meta.id, record)
     record_persisted = True

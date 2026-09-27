@@ -192,8 +192,8 @@ async def test_trigger_master_forwards_user_event_id(tmp_path: Path) -> None:
   meta = await session_mgr.create_session(CreateSessionRequest(name="t"))
 
   with patch.object(master_trigger, "run_message", new=AsyncMock(return_value=None)) as run_mock:
-    await master_trigger.trigger_master(meta.id, "s", cfg, session_mgr, user_event_id="evt-1")
-    await master_trigger.trigger_master(meta.id, "s", cfg, session_mgr)
+    await master_trigger.trigger_master(meta.id, "s", cfg, session_mgr, ET.AGENT_MESSAGE, user_event_id="evt-1")
+    await master_trigger.trigger_master(meta.id, "s", cfg, session_mgr, ET.CHILD_REPORT)
 
   assert run_mock.call_count == 2
   assert run_mock.await_args_list[0].kwargs["user_event_id"] == "evt-1"

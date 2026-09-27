@@ -67,7 +67,7 @@ from src.core.ndjson import append_ndjson
 from src.core.run_token import CallerIdentity, b64url_decode, b64url_encode
 from src.core.runs import RunStore, is_run_alive, stop_requested_in_events
 from src.core.session_aliases import SessionAliasStore
-from src.core.session_dispatch import TaskInputDispatcher
+from src.core.session_dispatch import INPUT_EVENT_TYPES, TaskInputDispatcher
 from src.core.sessions import _TRANSIENT_METADATA_FIELDS, SessionManager
 from src.core.takeoff_gate import is_verify_exempt
 from src.core.task_completion import TaskCompletionManager
@@ -236,19 +236,19 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
   return facts
 
 
-_INPUT_EVENT_TYPES = frozenset({ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT})
-
-
 def _admits_input_type(event: dict) -> bool:
   """The fold's input-type admission.
 
-  Agent messages, scheduled triggers, and child reports are input by type; a
-  USER event is input only when it is a real user message — the Claude CLI
-  persists each tool result as a user-type event with list content, and that
-  echo is tool output no round can ever confirm, not a message.
+  The admitted types are the one INPUT_EVENT_TYPES definition
+  (src/core/session_dispatch.py) — the same set the legacy master queue's
+  batching declares against. Agent messages, scheduled triggers, and child
+  reports are input by type; a USER event is input only when it is a real
+  user message — the Claude CLI persists each tool result as a user-type event
+  with list content, and that echo is tool output no round can ever confirm,
+  not a message.
   """
   etype = event.get("type")
-  if etype not in _INPUT_EVENT_TYPES:
+  if etype not in INPUT_EVENT_TYPES:
     return False
   if etype == ET.USER:
     return is_real_user_message(event)

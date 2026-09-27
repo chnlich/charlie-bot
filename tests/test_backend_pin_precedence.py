@@ -65,7 +65,7 @@ async def _expect_pin_hard_fail(
             id="message-path",
         ),
         pytest.param(
-            lambda cfg, session, session_mgr: trigger_master(session.id, "worker summary", cfg, session_mgr),
+            lambda cfg, session, session_mgr: trigger_master(session.id, "worker summary", cfg, session_mgr, ET.CHILD_REPORT),
             id="wake-path",
         ),
     ],

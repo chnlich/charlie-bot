@@ -26,13 +26,17 @@ ASSISTANT_ERROR = "assistant_error"
 # (web/static/js/websocket.js). thinking_seconds is the length of the round's
 # continuous busy interval, copied verbatim onto the rendered separator
 # message whose name the chat JS reads (src/core/message_aggregator.py,
-# web/static/js/chat/rendering.js). input_event_id names the user event the
-# round answers: the Slack round audit re-reads it, and the slack_notice and
-# slack_backfill payloads carry the same name with the same value
-# (src/core/slack_listener.py).
+# web/static/js/chat/rendering.js). input_event_ids names the chat events the
+# round answers, in arrival order: the Slack round audit re-reads it, and the
+# slack_notice and slack_backfill payloads carry the singular input_event_id
+# name for the one summon each is about (src/core/slack_listener.py).
+# MASTER_DONE events written before input batching carry the singular
+# input_event_id instead; every reader of either shape goes through
+# master_done_input_event_ids (src/api/message_utils.py).
 STILL_THINKING = "still_thinking"
 THINKING_SECONDS = "thinking_seconds"
 INPUT_EVENT_ID = "input_event_id"
+INPUT_EVENT_IDS = "input_event_ids"
 
 # -- Worker / delegation -----------------------------------------------------
 TASK_DELEGATED = "task_delegated"

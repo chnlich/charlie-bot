@@ -27,6 +27,7 @@ __all__ = [
     "events_to_messages",
     "events_to_view",
     "get_message_projection_fast",
+    "master_done_input_event_ids",
 ]
 
 
@@ -62,6 +63,21 @@ def build_scheduled_trigger_event(content: str) -> dict:
       "content": content,
       "timestamp": datetime.now(UTC).isoformat(),
   }
+
+
+def master_done_input_event_ids(done: dict) -> list[str]:
+  """The chat events one MASTER_DONE answers, in arrival order.
+
+  Rounds that answer one input write the singular ``input_event_id``; merged
+  rounds write ``input_event_ids``. Events written before input batching carry
+  only the singular field, so every reader of the round's input identity
+  treats either shape as a list through this one helper.
+  """
+  ids = done.get(ET.INPUT_EVENT_IDS)
+  if isinstance(ids, list):
+    return [str(i) for i in ids if isinstance(i, str)]
+  single = done.get(ET.INPUT_EVENT_ID)
+  return [single] if isinstance(single, str) and single else []
 
 
 def build_agent_message_event(content: str, *, from_session: str, from_session_name: str) -> dict:

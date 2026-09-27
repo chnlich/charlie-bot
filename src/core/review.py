@@ -53,7 +53,7 @@ async def _trigger_master_judged(
   if await session_mgr.finalize_master_woke(session_id, thread_id):
     log.info("master_wake_skip_already_woke", session=session_id, thread=thread_id)
     return
-  await trigger_master(session_id, summary, cfg, session_mgr)
+  await trigger_master(session_id, summary, cfg, session_mgr, ET.CHILD_REPORT)
 
 
 async def finalize_review_chain(

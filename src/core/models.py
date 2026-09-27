@@ -5,9 +5,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 # The cross-layer constants single-home in src/core.constants (stdlib-only, the
 # CLI import floor's contract).
@@ -308,14 +308,27 @@ class MasterRunRecord(BaseModel):
   MASTER_DONE lands. A record still present at server start means the turn's
   outcome is unresolved: startup reconcile resolves it through
   ``runs.resolve_run``'s outcome table (re-attach, drain, or clear); only a
-  cleared record keeps the turn's user message (user_event_id) eligible for
+  cleared record keeps the turn's input events (user_event_ids) eligible for
   replay.
   """
   pid: int | None = None
   pid_start: str | None = None  # /proc/<pid>/stat field 22 at spawn time
   started_at: UtcDatetime
   raw_log: str  # absolute path to this turn's raw NDJSON transport file
-  user_event_id: str | None = None  # chat event this turn answers
+  # Chat events this turn answers, in arrival order: one event on every
+  # single-input turn, the whole batch on a merged one. The whole list is the
+  # restart-replay exclusion set and the Slack reply binding's fallback.
+  user_event_ids: list[str] = Field(default_factory=list)
+
+  @model_validator(mode="before")
+  @classmethod
+  def _load_legacy_single_event_id(cls, data: Any) -> Any:
+    """Load a pre-batching record's single ``user_event_id`` as a one-element list."""
+    if isinstance(data, dict) and "user_event_ids" not in data:
+      legacy = data.get("user_event_id")
+      if legacy:
+        return {**data, "user_event_ids": [legacy]}
+    return data
 
 
 class SlackOrigin(BaseModel):

@@ -301,7 +301,7 @@ def make_work_item(
       extra_claude_flags=None,
       should_check_tex=should_check_tex,
       future=asyncio.get_running_loop().create_future(),
-      user_event_id=user_event_id,
+      user_event_ids=[user_event_id] if user_event_id else [],
   )
 
 

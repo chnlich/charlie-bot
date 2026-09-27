@@ -60,6 +60,6 @@ async def _run_one_round(user_event_id: str | None) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_master_done_carries_input_event_id_when_round_has_user_event() -> None:
+async def test_master_done_carries_input_event_ids_when_round_has_user_event() -> None:
   done = await _run_one_round("evt-1")
-  assert done["input_event_id"] == "evt-1"
+  assert done["input_event_ids"] == ["evt-1"]

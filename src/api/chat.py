@@ -298,6 +298,7 @@ async def run_and_finalize(
         meta,
         content,
         session_mgr.callbacks(),
+        ET.USER,
         skip_user_event=skip_user_event,
         backend_option=backend_option,
         extra_claude_flags=extra_claude_flags,

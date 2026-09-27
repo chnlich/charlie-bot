@@ -285,7 +285,7 @@ async def test_armed_follow_trigger_rehydrates_and_fires_after_restart(tmp_path:
     assert len(tasks) == 1
     await asyncio.gather(*tasks)
 
-  mock_trigger_master.assert_awaited_once()
+  mock_trigger_master.assert_called_once()
   stored = await trigger_mgr._load_trigger(meta.id, armed.id)
   assert stored.status == TriggerStatus.FIRED
   wakes = [ev for ev in session_mgr.load_chat_events_sync(meta.id) if ev.get("type") == ET.SCHEDULED_TRIGGER]

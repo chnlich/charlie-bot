@@ -22,8 +22,9 @@ parent other than the caller's own task is refused. ``tree`` pages the task tree
 JSON body (summary/result_refs/run_ids); a duplicate request id replays the
 original outcome, and an agent's own active Run may request its own manager's
 closure (202 pending_run_finish). ``cancel`` explicitly cancels an open task
-with a reason; ``reopen`` reopens one closed task and refuses closed
-ancestors.
+with a reason — an operator cancels any open task, an agent running inside a
+Run cancels only a direct child of its own task; ``reopen`` reopens one
+closed task and refuses closed ancestors.
 
 ``acknowledge`` durably resolves exact task inputs the operator handled
 out-of-band (the terminal-driven node's resolution step): operator scope,

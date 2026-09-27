@@ -22,6 +22,7 @@ from src.core.run_token import CallerIdentity, RunTokenClaims
 from src.core.task_completion import CompletionEvidence, LandingEvidence
 from src.core.task_sessions import (
     TaskConflictError,
+    TaskForbiddenError,
     TaskInvalidError,
     TaskTreeManager,
     _encode_tree_cursor,
@@ -472,11 +473,78 @@ async def test_cancel_refuses_active_runs_and_open_children(tmp_path: Path) -> N
   root_events = tree.events.load_events(root.id)
   assert [e for e in root_events if e["type"] == ET.CHILD_REPORT and e["outcome"] == "cancelled"]
 
-  # Agents cannot cancel.
+
+
+@pytest.mark.asyncio
+async def test_agent_cancels_only_its_own_direct_child(tmp_path: Path) -> None:
+  """An agent cancels a direct child of its own task (the close fact records
+  the agent as the actor); every other target — grandchild, sibling, parent,
+  self, unrelated root — is refused, and an active run still blocks."""
+  _cfg, _session_mgr, tree = build_env(tmp_path)
+  root = await create_task(tree, parent=None, request_id="root")
+  manager = await create_task(tree, parent=root.id, request_id="mgr")
+  sibling = await create_task(tree, parent=root.id, request_id="sib")
+  worker = await create_task(tree, parent=manager.id, request_id="worker", profile="worker")
+  # The grandchild shape: a logical-manager child of the agent's own task with
+  # a child of its own — two levels below the agent's task, never a direct one.
+  sub = await create_task(tree, parent=manager.id, request_id="sub")
+  grandchild = await create_task(tree, parent=sub.id, request_id="grand")
+  unrelated = await create_task(tree, parent=None, request_id="unrelated")
   agent = CallerIdentity(
-      kind="run", claims=RunTokenClaims(run_id="run-active", session_id=child.id, agent="worker-agent"))
-  with pytest.raises(Exception):
-    await tree.completion.cancel_task(root.id, request_id="cancel-4", reason="x", caller=agent)
+      kind="agent", claims=RunTokenClaims(run_id="run-mgr", session_id=manager.id, agent="manager-agent"))
+
+  # Out of scope: grandchild, sibling, parent, self, and an unrelated root.
+  for target, request_id in ((grandchild, "cancel-g"), (sibling, "cancel-s"),
+                             (root, "cancel-p"), (manager, "cancel-self"),
+                             (unrelated, "cancel-u")):
+    with pytest.raises(TaskForbiddenError, match="direct child"):
+      await tree.completion.cancel_task(
+          target.id, request_id=request_id, reason="x", caller=agent)
+
+  # Its own direct child cancels; the close fact's actor is the agent, and the
+  # cancelled report reaches the caller's own task like any child report.
+  await tree.completion.cancel_task(
+      worker.id, request_id="cancel-w", reason="obsolete delegation", caller=agent)
+  close = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]
+  assert len(close) == 1 and close[0]["outcome"] == "cancelled" and close[0]["actor"] == "agent"
+  reports = [e for e in tree.events.load_events(manager.id)
+             if e["type"] == ET.CHILD_REPORT and e["child_session_id"] == worker.id]
+  assert len(reports) == 1 and reports[0]["outcome"] == "cancelled"
+
+  # An active run on the direct child still refuses the agent (same 409 shape
+  # as the operator path: agents never stop a child's run).
+  worker2 = await create_task(tree, parent=manager.id, request_id="worker2", profile="worker")
+  pid, pid_start, started_at = live_identity()
+  await tree.runs.register_run(
+      RunRecord(id="run-w2", session_id=worker2.id, kind="work",
+                pid=pid, pid_start=pid_start, started_at=started_at))
+  with pytest.raises(TaskConflictError):
+    await tree.completion.cancel_task(worker2.id, request_id="cancel-w2", reason="x", caller=agent)
+
+
+@pytest.mark.asyncio
+async def test_cancel_waits_for_a_queued_run_only_until_its_stop_request(tmp_path: Path) -> None:
+  """A queued (pid-less) run blocks the cancel like any unresolved execution;
+  a durable stop request settles it and the cancel succeeds."""
+  _cfg, _session_mgr, tree = build_env(tmp_path)
+  root = await create_task(tree, parent=None, request_id="root")
+  child = await create_task(tree, parent=root.id, request_id="child", profile="worker")
+  await tree.runs.register_run(RunRecord(id="run-queued", session_id=child.id, kind="work"))
+
+  with pytest.raises(TaskConflictError, match="queued"):
+    await tree.completion.cancel_task(child.id, request_id="cancel-1", reason="not yet", caller=OPERATOR)
+
+  stop = await tree.runs.request_stop(child.id, "run-queued", "stop-1")
+  assert stop.stop_requested is True and stop.outcome is None
+  await tree.completion.cancel_task(
+      child.id, request_id="cancel-2", reason="stopped work is settled", caller=OPERATOR)
+  close = [e for e in tree.events.load_events(child.id) if e["type"] == ET.TASK_CLOSED]
+  assert len(close) == 1 and close[0]["outcome"] == "cancelled"
+  # The queued run keeps its no-terminal-fact shape: settled by request, not
+  # by an outcome.
+  runs = tree.runs.list_run_records_sync(child.id)
+  assert len(runs) == 1 and runs[0].pid is None
+  assert tree.runs.terminal_outcome(tree.runs.load_events_sync(child.id), "run-queued") is None
 
 
 @pytest.mark.asyncio

@@ -77,6 +77,15 @@ async def test_register_is_idempotent_and_registers_alias(tmp_path: Path) -> Non
       run, store.load_events_sync(session_id),
       runs.read_host_boot_time()) == f"run {run.id} is queued (pending dispatch)"
 
+  # A durable stop request settles the never-launched run: no blocker, still
+  # no terminal fact.
+  stop = await store.request_stop(session_id, "r1", "stop-1")
+  assert stop.stop_requested is True and stop.outcome is None
+  assert store.run_blocker(
+      run, store.load_events_sync(session_id),
+      runs.read_host_boot_time()) is None
+  assert store.terminal_outcome(store.load_events_sync(session_id), "r1") is None
+
 
 @pytest.mark.asyncio
 async def test_retry_binding_is_stable_across_requests_and_reload(tmp_path: Path) -> None:

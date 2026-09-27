@@ -42,22 +42,19 @@ import json  # noqa: E402
 import os  # noqa: E402
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
-import tempfile  # noqa: E402
 import time  # noqa: E402
 
 from scripts.browser_harness_session_tree import (  # noqa: E402
     CDP,
-    connect_cdp,
-    devtools_ws_url,
     evaluate,
-    launch_chrome,
-    open_cdp_page,
     pick_free_port,
 )
 from scripts.browser_harness_session_tree_preview import (  # noqa: E402
     build_source_home,
+    open_authenticated_page,
     preview_instance_env,
     preview_invocation,
+    trial_home_root,
     wait_preview_ready,
 )
 from scripts.live_preview_task_tree import (  # noqa: E402
@@ -69,6 +66,7 @@ from scripts.live_preview_task_tree import (  # noqa: E402
     snapshot_native_storage,
     wait_run_terminal,
 )
+from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 
 PRODUCTION_PORT = 18498
 PRODUCTION_HOMES = (
@@ -272,15 +270,8 @@ async def run_harness(args: argparse.Namespace) -> None:
         if home.exists():
             record("production home untouched (exists read-only, never written)", ok=True, detail=str(home))
 
-    import atexit
-
-    tmp_path = Path(tempfile.mkdtemp(prefix="charliebot-sidebar-status-"))
-    if args.keep:
-        log(f"kept for inspection: {tmp_path}")
-    else:
-        atexit.register(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
-    for var in ("CHARLIEBOT_SESSION_ID", "CHARLIEBOT_RUN_TOKEN",
-                "CHARLIE_CODE_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"):
+    tmp_path = trial_home_root("charliebot-sidebar-status-", keep=args.keep)
+    for var in INHERITED_IDENTITY_ENV_VARS:
         os.environ.pop(var, None)
 
     # An independent instance's sentinel home: nothing outside the trial changes.
@@ -305,7 +296,6 @@ async def run_harness(args: argparse.Namespace) -> None:
     with open(server_console, "w", encoding="utf-8") as server_log_file:
         proc = subprocess.Popen(invocation, cwd=str(REPO_ROOT), env=env,
                                 stdout=server_log_file, stderr=subprocess.STDOUT)
-        debug_port = pick_free_port()
         chrome_proc = None
         try:
             preview_record = await wait_preview_ready(proc, home, server_console, fail, 120.0)
@@ -316,28 +306,9 @@ async def run_harness(args: argparse.Namespace) -> None:
             access_key = (home / "credentials.yaml").read_text().split("access_key: ")[1].split("\n")[0]
 
             # ---- real Chrome over CDP -----------------------------------
-            chrome_proc = launch_chrome(chrome, tmp_path / "chrome-profile", debug_port,
-                                        ["--no-first-run", "--no-default-browser-check"])
-            ws_url = await devtools_ws_url(chrome_proc, 30, fail)
-            cdp = await connect_cdp(ws_url)
-            page_id, _target_id = await open_cdp_page(cdp, ("Page", "Runtime", "Network"))
-            await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": f"""
-                (function () {{
-                  try {{ localStorage.setItem('charliebot_access_key', '{access_key}'); }} catch (e) {{}}
-                  window.__errs = [];
-                  window.addEventListener('error', (e) => window.__errs.push(String(e.message).slice(0, 160)));
-                  window.addEventListener('unhandledrejection',
-                      (e) => window.__errs.push('rej: ' + String(e.reason).slice(0, 160)));
-                }})();
-            """}, session_id=page_id)
-            await cdp.send("Network.setCookie", {
-                "name": "charliebot_access_key", "value": access_key,
-                "url": f"http://127.0.0.1:{port}/",
-            }, session_id=page_id)
-            await cdp.send("Emulation.setDeviceMetricsOverride", {
-                "width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False,
-            }, session_id=page_id)
-            await cdp.send("Page.enable", {}, session_id=page_id)
+            cdp, page_id, chrome_proc = await open_authenticated_page(
+                chrome, tmp_path / "chrome-profile", port=port, access_key=access_key,
+                domains=("Page", "Runtime", "Network"), fail=fail)
             # ---- scenario A: a real ~60 s worker Run shows as running -----
             log("scenario A: the running state (spinner on the worker, gear on the collapsed parent)")
             slow_repo = build_slow_repo(home)

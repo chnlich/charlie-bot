@@ -150,28 +150,22 @@ async def run_harness(args: argparse.Namespace) -> None:
         build_source_home,
         preview_instance_env,
         preview_invocation,
+        trial_home_root,
         wait_preview_ready,
     )
+    from src.core.constants import INHERITED_IDENTITY_ENV_VARS
 
     evidence_dir = Path(args.evidence_dir)
     evidence_dir.mkdir(parents=True, exist_ok=True)
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT,
                             capture_output=True, text=True, check=True).stdout.strip()
 
-    import atexit
-    import shutil as _shutil
-
-    tmp_path = Path(tempfile.mkdtemp(prefix="charliebot-live-preview-"))
-    if args.keep:
-        log(f"kept for inspection: {tmp_path}")
-    else:
-        atexit.register(lambda: _shutil.rmtree(tmp_path, ignore_errors=True))
+    tmp_path = trial_home_root("charliebot-live-preview-", keep=args.keep)
     source = tmp_path / "source-home"
     # build_source_home takes the selected backend ids as a list (the shared
     # harness helper's contract); a bare string would iterate per character.
     build_source_home(source, [args.backend])
-    for var in ("CHARLIEBOT_SESSION_ID", "CHARLIEBOT_RUN_TOKEN",
-                "CHARLIE_CODE_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"):
+    for var in INHERITED_IDENTITY_ENV_VARS:
         os.environ.pop(var, None)
 
     # The independent second instance: its own home, its own live writer

@@ -240,6 +240,72 @@ async def test_resume_item_and_task_run_item_each_run_alone() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resume_head_pulls_no_follower() -> None:
+  """A resume item dequeued as head re-attaches alone: the plain item behind
+  it runs as the next turn, and the re-attach keeps its resume_record (a merge
+  would silently turn it into a fresh spawn against the live turn's
+  conversation)."""
+  session_id = "batch-resume-head"
+  cfg = build_cfg()
+  record = MasterRunRecord(started_at=datetime.now(UTC), raw_log="/x/agent.raw.ndjson", user_event_ids=["e-resume"])
+  resume_item = _item(
+      session_id, "", None, cfg, event_id="e-resume", resume_record=record, resume_is_alive=lambda: False)
+  plain = _item(session_id, "after", ET.USER, cfg, event_id="e-after")
+  run_calls: list[master_cc_state._WorkItem] = []
+  resume_calls: list[master_cc_state._WorkItem] = []
+
+  async def fake_run(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
+    run_calls.append(item)
+    return ("cc-run", 0, None, {})
+
+  async def fake_resume(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
+    resume_calls.append(item)
+    return ("cc-resume", 0, None, {})
+
+  with patch.object(master_cc_run, "_resume_cc", side_effect=fake_resume):
+    await run_session_consumer(session_id, [resume_item, plain], fake_run)
+
+  assert resume_calls == [resume_item]
+  assert len(run_calls) == 1
+  assert run_calls[0].user_event_ids == ["e-after"]
+  assert _headers(run_calls[0].user_content) == []
+  assert resume_item.future.result() == "cc-resume"
+  assert plain.future.result() == "cc-run"
+
+
+@pytest.mark.asyncio
+async def test_task_run_head_pulls_no_follower() -> None:
+  """A v2 Run dequeued as head runs alone with its binding: the plain item
+  behind it is the next turn, not a batch part (a merge would drop the Run's
+  outcome recording)."""
+  session_id = "batch-task-head"
+  cfg = build_cfg()
+  task_item = _item(
+      session_id,
+      "run",
+      None,
+      cfg,
+      event_id="e-task",
+      task_run=master_cc_state.TaskRunBinding(session_id=session_id, run_id="r1", transport_dir="/tmp/r1"))
+  plain = _item(session_id, "after", ET.USER, cfg, event_id="e-after")
+  captured: list[master_cc_state._WorkItem] = []
+
+  async def fake_run(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
+    captured.append(item)
+    return ("cc-x", 0, None, {})
+
+  await run_session_consumer(session_id, [task_item, plain], fake_run)
+
+  assert len(captured) == 2
+  assert captured[0] is task_item
+  assert captured[0].task_run is not None
+  assert captured[1].user_event_ids == ["e-after"]
+  assert _headers(captured[1].user_content) == []
+  for part in (task_item, plain):
+    assert part.future.done() and part.future.exception() is None
+
+
+@pytest.mark.asyncio
 async def test_single_queued_item_runs_byte_identical_to_today() -> None:
   session_id = "batch-single"
   cfg = build_cfg()

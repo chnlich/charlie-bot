@@ -1,4 +1,5 @@
-"""The profile's secrets file and the one hot-reload cache every file-backed reload mounts.
+"""The profile's secrets file, the config file's name, and the one hot-reload cache every
+file-backed reload mounts.
 
 Split off src/core/config so the CLI chains that read only credentials (the
 request contract's auth header) and the CLI base-url cache keep the config
@@ -24,6 +25,11 @@ log = LazyStructlogLogger()
 # The profile's secrets file, named once so the backup's exclusion
 # (src/core/backup.py) cannot drift from the loader's path.
 CREDENTIALS_FILENAME = "credentials.yaml"
+
+# The profile's config file, named once for the same drift-proofing: the CLI
+# base-url cache fingerprints it on its hit path, a path this module
+# deliberately keeps free of config's model stack.
+CONFIG_FILENAME = "config.yaml"
 
 
 def _install_replace(current: T | None, fresh: T) -> T:

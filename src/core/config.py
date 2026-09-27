@@ -20,6 +20,7 @@ from pydantic import (
 from src.core.backend_models import BackendOption, ClaudeAccount, ClaudeCompactionConfig
 from src.core.constants import REPO_ROOT
 from src.core.credentials import (  # noqa: F401  (re-export: the established src.core.config import path)
+    CONFIG_FILENAME,
     CREDENTIALS_FILENAME,
     Credentials,
     _credentials_cache,
@@ -56,10 +57,6 @@ HOUSE_TIMEZONE = "America/Los_Angeles"
 # fallbacks in sidebar/modals.js) that cannot import from Python — a change moves
 # every re-pinning site.
 DEFAULT_TIMEZONE = HOUSE_TIMEZONE
-
-# One name for every reader and writer of the profile's config file (loader, CLI
-# fingerprint cache, trial harnesses); a rename moves them in lockstep.
-CONFIG_FILENAME = "config.yaml"
 
 
 class ImprovementLoopConfig(BaseModel):

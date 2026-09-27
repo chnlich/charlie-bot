@@ -1,8 +1,10 @@
-"""Scheduled-session backend rotation, succession bookkeeping, and task-yaml backend persistence."""
+"""Scheduled-session backend rotation, succession bookkeeping, task-yaml backend persistence,
+and the cron-subtree membership rule the sidebar lists share."""
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from src.core.config import cron_path
@@ -19,6 +21,46 @@ if TYPE_CHECKING:
   from src.core.sessions import SessionManager
 
 log = LazyStructlogLogger()
+
+
+def cron_subtree_roots(metas: Iterable[SessionMetadata]) -> dict[str, str]:
+  """Map every cron-subtree row's id to the id of the cron session above it.
+
+  A row belongs to one scheduled task's cron subtree when its ``task_parent_id``
+  chain (followed by id, whatever the ancestors' status) reaches a session whose
+  ``scheduled_task`` is set; the cron session itself is not part of its subtree.
+  Projected legacy worker-thread rows carry ``task_parent_id`` = their parent
+  session, so the same walk classifies them. The sidebar lists share this one
+  walk — All and Archived drop the map's keys, Scheduled nests each member under
+  the cron session the map names — so the membership rule is implemented once.
+
+  A chain member missing from *metas* (deleted or unreadable) ends that walk:
+  the row classifies as unparented rather than guessing past the gap.
+  """
+  by_id = {meta.id: meta for meta in metas}
+  roots: dict[str, str] = {}
+  for start in by_id.values():
+    chain: list[str] = []
+    seen = {start.id}
+    root: str | None = None
+    parent_id = start.task_parent_id
+    while parent_id is not None:
+      if parent_id in roots:  # a memoized ancestor's verdict answers for this chain too
+        root = roots[parent_id]
+        break
+      parent = by_id.get(parent_id)
+      if parent is None or parent.id in seen:  # a cycle corrupts the relation; stop the walk
+        break
+      if parent.scheduled_task is not None:
+        root = parent_id
+        break
+      seen.add(parent_id)
+      chain.append(parent_id)
+      parent_id = parent.task_parent_id
+    if root is not None:
+      for member_id in [*chain, start.id]:
+        roots[member_id] = root
+  return roots
 
 
 class ScheduledSessionBusyError(RuntimeError):

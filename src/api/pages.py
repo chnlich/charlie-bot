@@ -875,6 +875,11 @@ async def index(
         include_running_status=True,
         include_pending_trigger_status=True,
     )
+    # The first-paint list shares the All endpoint's membership: cron-subtree
+    # rows ride only the scheduled listing, so a firing leaf neither flattens
+    # into a top-level sidebar row nor becomes the auto-redirect target.
+    cron_subtree = await session_mgr.cron_subtree_roots()
+    sessions = [s for s in sessions if s.id not in cron_subtree]
   except Exception:
     log.exception("list_sessions_failed")
     sessions = []

@@ -333,11 +333,12 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A failed review is a used attempt: recovery registers the next review
     on the next preference backend (the existing policy, unchanged)."""
+    from conftest import backend_option
+
     from src.core.models import PatchSessionTaskRequest
     from src.core.run_token import CallerIdentity
     from src.core.task_recovery import reconcile_task_tree
     from tests.test_task_execution import init_repo_with_origin
-    from conftest import backend_option
     cfg, session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
     # Two reviewer entries beyond the worker's own backend: a failed first
     # attempt must move to the second one.

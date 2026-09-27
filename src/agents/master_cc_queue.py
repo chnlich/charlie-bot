@@ -148,10 +148,12 @@ def _batch_run_settings(item: master_cc_state._WorkItem) -> tuple:
 
 
 def _batchable(item: master_cc_state._WorkItem) -> bool:
-  """Whether *item* may join a batch as a follower: a re-attach and a v2 Run never do.
+  """Whether *item* may take part in a batch at all: a re-attach and a v2 Run never do.
 
-  A resume item re-attaches a turn that already started (nothing to append);
-  a task_run item is a v2 Run whose prompt the adapter prebuilt.
+  Consulted for the head (a non-batchable head runs its own turn) and for
+  each follower. A resume item re-attaches a turn that already started
+  (nothing to append); a task_run item is a v2 Run whose prompt the adapter
+  prebuilt.
   """
   return item.resume_record is None and item.task_run is None
 
@@ -272,7 +274,10 @@ async def _session_consumer(session_id: str) -> None:
     while True:
       head: master_cc_state._WorkItem = await queue.get()
       batch = [head]
-      while queue._queue:
+      # The head gates the batch too: a re-attach or v2 Run dequeued as head
+      # runs its own turn -- merging a follower into it would drop the head's
+      # resume/task_run binding (the merged item keeps neither; _merge_batch).
+      while _batchable(head) and queue._queue:
         follower = queue._queue[0]
         if not (_batchable(follower) and _batch_run_settings(follower) == _batch_run_settings(head)):
           break

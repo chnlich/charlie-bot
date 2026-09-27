@@ -356,9 +356,10 @@ def _config_module_fingerprint() -> tuple[float, int]:
 
 def _cached_server_port() -> int | None:
   """Return the cached server port, or None when the document is absent, stale, or unreadable."""
+  from src.core.config import CONFIG_FILENAME
   from src.core.credentials import _file_fingerprint
 
-  fingerprint = [list(_file_fingerprint("config.yaml")), list(_config_module_fingerprint())]
+  fingerprint = [list(_file_fingerprint(CONFIG_FILENAME)), list(_config_module_fingerprint())]
   try:
     doc = json.loads((Path(charliebot_home_dir()) / _BASE_URL_CACHE_RELPATH).read_text(encoding="utf-8"))
   except (OSError, ValueError):
@@ -371,10 +372,11 @@ def _cached_server_port() -> int | None:
 
 def _store_base_url_cache(port: int) -> None:
   """Write the fingerprint-keyed port document atomically (a torn write never publishes)."""
+  from src.core.config import CONFIG_FILENAME
   from src.core.credentials import _file_fingerprint
   from src.core.json_utils import write_json_atomically
 
-  doc = {"fingerprint": [_file_fingerprint("config.yaml"), _config_module_fingerprint()], "port": port}
+  doc = {"fingerprint": [_file_fingerprint(CONFIG_FILENAME), _config_module_fingerprint()], "port": port}
   cache_path = Path(charliebot_home_dir()) / _BASE_URL_CACHE_RELPATH
   cache_path.parent.mkdir(parents=True, exist_ok=True)
   # Only the miss path calls this, after get_config() has already paid pydantic's

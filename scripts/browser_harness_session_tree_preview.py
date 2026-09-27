@@ -342,9 +342,9 @@ def build_source_home(source: Path, backend_ids: list[str]) -> None:
     """
     import yaml
 
-    from src.core.config import CharlieBotConfig, charliebot_home_dir, load_credentials
+    from src.core.config import CONFIG_FILENAME, CharlieBotConfig, charliebot_home_dir, load_credentials
 
-    config_path = charliebot_home_dir() / "config.yaml"
+    config_path = charliebot_home_dir() / CONFIG_FILENAME
     raw_options = (yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}).get("backends", {}).get("options") or []
     entries = []
     written_sections: set[str] = set()
@@ -381,7 +381,7 @@ def build_source_home(source: Path, backend_ids: list[str]) -> None:
                   "worktree_dir": str(source / "worktrees")},
         "backends": {"options": entries, "preference": [backend_ids[0]]},
     }
-    (source / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    (source / CONFIG_FILENAME).write_text(yaml.safe_dump(config), encoding="utf-8")
     creds = "charliebot:\n  access_key: source-operator-key-not-used\n" + "".join(credential_lines)
     (source / "credentials.yaml").write_text(creds, encoding="utf-8")
 

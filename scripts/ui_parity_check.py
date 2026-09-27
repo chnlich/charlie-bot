@@ -137,7 +137,9 @@ def write_home(home: Path, port: int, access_key: str, sessions: list[dict]) -> 
         }], "preference": ["fake-scripted"]},
         "paths": {"worktree_dir": str(home / "worktrees")},
     }
-    (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
+    from src.core.config import CONFIG_FILENAME
+
+    (home / CONFIG_FILENAME).write_text(json.dumps(config, indent=2), encoding="utf-8")
     (home / "credentials.yaml").write_text(f"charliebot:\n  access_key: {access_key}\n", encoding="utf-8")
     for meta in sessions:
         session_dir = home / "sessions" / meta["id"]

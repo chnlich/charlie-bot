@@ -512,8 +512,16 @@ async def _arm_follow_trigger(
   fire_at = min(now + timedelta(seconds=_FOLLOW_QUIET_SECONDS), start + timedelta(seconds=_FOLLOW_CHAIN_CAP_SECONDS))
   delay = max(0, int((fire_at - now).total_seconds()))
   try:
+    # The re-arm is never rejected by the pending-trigger limit: it replaces its
+    # own record, and a thread's new message must never silently stop waking
+    # its session. Its record still counts toward the limit.
     trigger = await trigger_mgr.create_trigger(
-        session_id, delay, _build_follow_wake_message(floor_ts, permalink), created_at=start)
+        session_id,
+        delay,
+        _build_follow_wake_message(floor_ts, permalink),
+        created_at=start,
+        enforce_pending_limit=False,
+    )
   except ArchivedSessionError as e:
     # The archive raced the re-arm between the caller's ACTIVE check and the
     # create: log and leave without a new trigger record.

@@ -136,6 +136,13 @@ _SEARCH_MISS_ROOTS_PER_FILE = 8
 # growth only appends past it.
 _SEARCH_HIT_MEMO_LIMIT = 256
 _SEARCH_HIT_ROOTS_PER_FILE = 8
+# LRU cap on the per-query match-result memo: lowered query -> the derived rows
+# plus the freshness ground it was derived from. A correction keystroke re-fires
+# a small set of queries (the prefix family it edits plus the alternations it
+# switches between), so the cap covers one typing burst; an evicted query
+# re-derives at the pre-memo cost, the same degradation the miss/hit memo
+# bounds set.
+_SEARCH_MATCH_MEMO_LIMIT = 8
 # str.lower() and substring search hold the GIL for the whole input, so the
 # sidebar content search reads chat files in windows of this many characters:
 # each lower()/scan call's GIL hold stays bounded instead of scaling with the
@@ -486,6 +493,30 @@ def _hit_root_covers(
     if query_lower in needle and root_sig[2] == sig[2] and sig[1] >= root_sig[1]:
       return True
   return False
+
+
+def _search_content_sigs_hold(
+    paths: list[Path],
+    stored: tuple[tuple[int, int, int] | None, ...],
+) -> bool:
+  """True when every candidate chat file still carries the derived-from signature.
+
+  A None entry prices a path whose stat failed at derivation time: the file
+  must still be missing for the stored rows to stand. Any other outcome — an
+  append, a rewrite, a rotation's inode swap, a file that appeared where the
+  derivation saw none — moves the key, because a content verdict is proven
+  against bytes, not against metadata the listings memo watches.
+  """
+  for path, sig in zip(paths, stored, strict=True):
+    try:
+      stat = path.stat()
+    except OSError:
+      if sig is not None:
+        return False
+      continue
+    if sig is None or (stat.st_mtime_ns, stat.st_size, stat.st_ino) != sig:
+      return False
+  return True
 
 
 def _scan_content_for_hit(path: Path, session_id: str, query_lower: str, start: int) -> bool | None:
@@ -1029,6 +1060,9 @@ class SessionManager:
                                                                     int]]] = BoundedMemo(_SEARCH_MISS_MEMO_LIMIT)
     self._search_hit_memo: BoundedMemo[str, BoundedMemo[str, tuple[int, int,
                                                                    int]]] = BoundedMemo(_SEARCH_HIT_MEMO_LIMIT)
+    self._search_match_memo: BoundedMemo[str, tuple[list[SessionMetadata], list[Path],
+                                                    tuple[tuple[int, int, int] | None, ...],
+                                                    list[SessionMetadata]]] = BoundedMemo(_SEARCH_MATCH_MEMO_LIMIT)
 
   # ---------------------------------------------------------------------------
   # Session CRUD
@@ -1467,9 +1501,26 @@ class SessionManager:
     work: 200 newer-or-equal matches always outrank a name match below the
     cap line, and a content hit can only displace rows at the line from
     above, so the dropped matches can never reach the returned rows.
+
+    The match result (which rows, before any sidebar-state overlay) memoizes
+    per lowered query on the ground the result derives from: the listings
+    memo's list identity for the names, and each content candidate's chat-file
+    signature for the scans — a chat file moves without touching any
+    metadata.json, so the listing identity alone cannot vouch for it. An
+    errored scan stores nothing, keeping the retry-per-request rule
+    ``_scan_content_for_hit`` documents.
     """
     query_lower = query.lower()
     all_meta = await self._load_session_metas()
+    cached = self._search_match_memo.get(query_lower)
+    if (cached is not None and cached[0] is all_meta
+            and _search_content_sigs_hold(cached[1], cached[2])):
+      derived = await self.resolve_sidebar_state(
+          cached[3],
+          include_running_status=include_running_status,
+          include_pending_trigger_status=include_pending_trigger_status,
+      )
+      return cached[3], derived
     # One pass lowers every name once: the name-match test and the content-scan
     # candidate split read the same lowered string, and a name hit is by
     # definition no content-scan candidate.
@@ -1487,9 +1538,13 @@ class SessionManager:
     # per-file executor round-trips measured ~2.4 ms each under the server's
     # pool churn (the default executor's ~cpu+4 workers are shared with every
     # poll read, append, and probe, so each acquisition queues). Only reads
-    # that must move corpus bytes go to the pool.
+    # that must move corpus bytes go to the pool. Every candidate contributes
+    # its signature (None when the stat failed) — the stored rows' freshness
+    # ground must cover the paths that failed too, or a reappearing file could
+    # not re-key the derivation.
     proven_hits: list[SessionMetadata] = []
     read_jobs: list[tuple[SessionMetadata, Path, tuple[int, int, int], int]] = []
+    content_sigs: list[tuple[int, int, int] | None] = []
     for meta, path in content_candidates:
       key = str(path)
       roots = self._search_miss_memo.peek(key)
@@ -1498,8 +1553,10 @@ class SessionManager:
         stat = path.stat()
       except OSError as e:
         _log_search_read_failed_once(meta.id, e)
+        content_sigs.append(None)
         continue
       sig = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+      content_sigs.append(sig)
       hit_roots = self._search_hit_memo.peek(key)
       if hit_roots is not None and _hit_root_covers(tuple(hit_roots.items()), sig, query_lower):
         proven_hits.append(meta)  # the stored hit answers without a read
@@ -1508,11 +1565,15 @@ class SessionManager:
       if start is not None:
         read_jobs.append((meta, path, sig, start))
 
+    scan_failures = 0
+
     async def _check_content(
         meta: SessionMetadata, path: Path, sig: tuple[int, int, int], start: int) -> SessionMetadata | None:
       """Read a chat file whose classification demanded bytes (thread-pool work)."""
+      nonlocal scan_failures
       verdict = await asyncio.to_thread(_scan_content_for_hit, path, meta.id, query_lower, start)
       if verdict is None:
+        scan_failures += 1
         return None  # errored scan proves no absence, so nothing is memoized
       if verdict:
         self._memoize_search_hit(str(path), sig, query_lower)
@@ -1526,6 +1587,10 @@ class SessionManager:
     rows = matches[:_SEARCH_RESULT_LIMIT] + content_hits
     rows.sort(key=lambda meta: meta.updated_at, reverse=True)
     rows = rows[:_SEARCH_RESULT_LIMIT]
+    if scan_failures == 0:
+      self._search_match_memo.store(
+          query_lower,
+          (all_meta, [path for _meta, path in content_candidates], tuple(content_sigs), rows))
     derived = await self.resolve_sidebar_state(
         rows,
         include_running_status=include_running_status,

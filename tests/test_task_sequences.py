@@ -559,10 +559,11 @@ async def test_improve_without_authorization_is_forbidden_not_a_server_error(
 async def test_withheld_iteration_launch_settles_the_loop_without_hanging(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
     """A launch precondition that fails in the registration-to-launch interval
-    (here: the loop's child paused) must never leave the controller polling
-    forever: the loop settles blocked with the actual reason, the active lock
-    is released, the queued iteration Run stays as the retained pending
-    request, and the ONE blocked report lands on the manager."""
+    (here: the loop's child was cancelled after it was created) must never
+    leave the controller polling forever: the loop settles blocked with the
+    actual reason, the active lock is released, the queued iteration Run stays
+    as the retained pending request, and the ONE blocked report lands on the
+    manager."""
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
     from src.core.control_events import stable_run_id
     from src.core.improve_command import (
@@ -586,11 +587,12 @@ async def test_withheld_iteration_launch_settles_the_loop_without_hanging(
         tree, manager.id, state.loop_id, "improve the thing",
         repo_path=str(repo), base_branch="main")
     # The launch precondition fails before any process may start: the child
-    # (the iteration Runs' node) is paused.
-    from src.core.models import PatchSessionTaskRequest
+    # (the iteration Runs' node) is cancelled — closed tasks withhold every
+    # launch, and with no Run registered yet the cancel itself is allowed.
     from src.core.run_token import CallerIdentity
-    await tree.patch_task(
-        child.id, PatchSessionTaskRequest(automation_paused=True), caller=CallerIdentity(kind="operator"))
+    await tree.completion.cancel_task(
+        child.id, request_id="withhold-iteration", reason="loop withheld",
+        caller=CallerIdentity(kind="operator"))
 
     controller = asyncio.create_task(run_improve_sequence(
         manager.id, cfg, tree, loop_id=state.loop_id, iterations=2, child_id=child.id,
@@ -610,11 +612,12 @@ async def test_withheld_iteration_launch_settles_the_loop_without_hanging(
     assert runs[0].id == iteration_run_id
     assert runs[0].pid is None
     assert tree.runs.terminal_outcome(tree.runs.load_events_sync(child.id), iteration_run_id) is None
-    # The actual reason is delivered: one blocked report on the manager.
-    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+    # The actual reason is delivered: one blocked report on the manager (the
+    # child's own cancelled close delivered its separate cancelled report).
+    reports = [e for e in tree.events.load_events(manager.id)
+               if e.get("type") == ET.CHILD_REPORT and e.get("outcome") == "blocked"]
     assert len(reports) == 1
-    assert reports[0]["outcome"] == "blocked"
-    assert "paused" in str(reports[0]["summary"])
+    assert "withheld" in str(reports[0]["summary"])
     # The released lock allows an explicit restart (the existing resume policy).
     next_state = await reserve_loop_state(
         manager.id, "improve the thing", "improve/withheld-2", str(repo), cfg,

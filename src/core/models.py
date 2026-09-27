@@ -405,8 +405,6 @@ class SessionMetadata(BaseModel):
   profile: TaskProfile | None = None
   task: TaskSpec | None = None
   presentation: PresentationMode = "auto"
-  # Pausing blocks new automatic execution only; it never terminates a live run.
-  automation_paused: bool = False
   # The create operation's source event (provenance and retry dedup).
   created_by_event: EventRef | None = None
   # History-copy source (fork/elone), kept separate from task_parent_id.
@@ -500,7 +498,6 @@ class PatchSessionTaskRequest(BaseModel):
   profile: TaskProfile | None = None
   task: TaskSpec | None = None
   presentation: PresentationMode | None = None
-  automation_paused: bool | None = None
   # New rule bodies (or null to clear); the server stores the body immutable
   # and swaps the reference atomically, recording prompt_changed.
   subtree_prompt: str | None = None

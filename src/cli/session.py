@@ -3,7 +3,6 @@
   charliebot session create --name N [--backend B] [--group G]
   charliebot session create --parent P --profile manager --task-file FILE
   charliebot session tree [--root ID] [--include-archived] [--limit N] [--cursor C]
-  charliebot session pause ID / resume ID
   charliebot session retry ID --run RUN_ID [--request-id ID]
   charliebot session send <target-id> (--message T | --file P)
 
@@ -14,9 +13,8 @@ the server binds (parent, request_id) to one stable node, and a replayed
 request returns the original product. A run-token agent organizes only its own
 task: logical manager children under its own open task need no user
 authorization, while worker children ride the implementation takeoff gate; any
-parent other than the caller's own task is refused. ``tree`` pages the task tree. ``pause``/
-``resume`` flip ``automation_paused`` (pausing never terminates a live run).
-``retry`` creates the request-bound retry run of one recorded run.
+parent other than the caller's own task is refused. ``tree`` pages the task
+tree. ``retry`` creates the request-bound retry run of one recorded run.
 
 ``complete`` closes one task: the result file carries the complete request's
 JSON body (summary/result_refs/run_ids); a duplicate request id replays the
@@ -48,7 +46,6 @@ from src.cli.common import (
     exit_usage_error,
     find_local_task_close,
     get_api,
-    patch_internal_api,
     post_internal_api,
     read_required_text_file,
     resolve_session_id,
@@ -83,12 +80,6 @@ def _build_parser() -> argparse.ArgumentParser:
   tree.add_argument("--include-archived", action="store_true", help="Include archived/collapsed rows")
   tree.add_argument("--limit", type=int, default=100, help="Page size (default 100)")
   tree.add_argument("--cursor", default=None, help="next_cursor from the previous page")
-
-  pause = sub.add_parser("pause", help="Pause new automatic execution for one task")
-  pause.add_argument("session_id", help="Task id")
-
-  resume = sub.add_parser("resume", help="Resume automatic execution for one task")
-  resume.add_argument("session_id", help="Task id")
 
   retry = sub.add_parser("retry", help="Create the retry run of one recorded run")
   retry.add_argument("session_id", help="Task id")
@@ -174,11 +165,6 @@ def _cmd_tree(args: argparse.Namespace) -> None:
   print(json.dumps(get_api("/api/sessions/tree", params), indent=2))
 
 
-def _set_paused(session_id: str, paused: bool) -> None:
-  result = patch_internal_api(f"/api/sessions/{session_id}", {"automation_paused": paused})
-  print(json.dumps({"id": result["id"], "automation_paused": result["automation_paused"]}, indent=2))
-
-
 def _cmd_retry(args: argparse.Namespace) -> None:
   payload = {"request_id": args.request_id or str(uuid.uuid4()), "run_id": args.run}
   print(json.dumps(post_internal_api(f"/api/sessions/{args.session_id}/retry", payload), indent=2))
@@ -257,10 +243,6 @@ def main() -> None:
     _cmd_create(args)
   elif args.session_command == "tree":
     _cmd_tree(args)
-  elif args.session_command == "pause":
-    _set_paused(args.session_id, paused=True)
-  elif args.session_command == "resume":
-    _set_paused(args.session_id, paused=False)
   elif args.session_command == "retry":
     _cmd_retry(args)
   elif args.session_command == "acknowledge":

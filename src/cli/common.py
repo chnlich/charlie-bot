@@ -674,22 +674,6 @@ def post_internal_api(
   )
 
 
-def patch_internal_api(
-    endpoint: str,
-    payload: dict[str, Any],
-    *,
-    rejection_exit_codes: dict[int, int] | None = None,
-) -> dict[str, Any]:
-  """PATCH an internal CharlieBot API endpoint under the same error contract as ``post_internal_api``."""
-  return _request_with_contract(
-      "PATCH",
-      endpoint,
-      payload=payload,
-      rejection_exit_codes=rejection_exit_codes,
-      unknown_effect="unknown",
-  )
-
-
 def get_api(endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
   """GET a CharlieBot API endpoint and return the parsed JSON response.
 

@@ -357,36 +357,8 @@ async def test_rotation_preserves_pending_import_close_and_acknowledgement_facts
 
 
 # ---------------------------------------------------------------------------
-# Pause, closed nodes, authorization identities, stopped queued runs
+# Closed nodes, authorization identities, stopped queued runs
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_pause_is_local_and_holds_input_without_launch(tmp_path: Path) -> None:
-  _, _, tree = build_env(tmp_path)
-  paused = await create_task(tree, parent=None, request_id="paused")
-  sibling = await create_task(tree, parent=None, request_id="sibling")
-  from src.core.models import PatchSessionTaskRequest
-  await tree.patch_task(paused.id, PatchSessionTaskRequest(automation_paused=True), caller=OPERATOR)
-
-  executor = ScriptedExecutor(tree)
-  tree.dispatch.executor = executor
-  await admit(tree, paused.id, "held input", input_id="held-1")
-  decision = await tree.dispatch.dispatch_pending(paused.id)
-  assert decision["launch"] is False and "automation_paused" in decision["reason"]
-  assert executor.batches == []  # nothing launched on the paused node
-  assert [str(e["id"]) for e in input_events(tree, paused.id)] == ["held-1"]
-
-  # The sibling continues independently.
-  await admit(tree, sibling.id, "go", input_id="sib-1")
-  await tree.dispatch.dispatch_pending(sibling.id)
-  assert [b[0] for b in executor.batches] == [sibling.id]
-
-  # Resume releases the preserved inputs to the executor.
-  await tree.patch_task(paused.id, PatchSessionTaskRequest(automation_paused=False), caller=OPERATOR)
-  await tree.dispatch.dispatch_pending(paused.id)
-  assert [b[0] for b in executor.batches] == [sibling.id, paused.id]
-  assert executor.batches[-1][1] == ["held-1"]
 
 
 @pytest.mark.asyncio
@@ -421,8 +393,6 @@ async def test_closed_node_keeps_input_and_agent_content_never_mints_authorizati
   decision = await tree.dispatch.dispatch_pending(worker.id)
   assert decision["launch"] is False and "closed" in decision["reason"]
   assert [str(e["id"]) for e in input_events(tree, worker.id)] == ["late-1"]
-  meta = await tree.load_meta(worker.id)
-  assert meta is not None and meta.automation_paused is False  # close never flips pause
 
   # A later authorized user retry uses the preserved inputs.
   await admit(tree, worker.id, "take off — redo it", input_id="user-retry-1")

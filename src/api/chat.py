@@ -126,8 +126,7 @@ async def send_message(
         # A real user message can open the takeoff window its node's subtree
         # was waiting on: queued Runs the authorization gate held back re-enter
         # through the normal launch path (execute_run's prechecks re-judge
-        # everything, so paused, closed, stopped and out-of-scope Runs stay
-        # untouched).
+        # everything, so closed, stopped and out-of-scope Runs stay untouched).
         await task_mgr.dispatch.executor.redrive_authorized_runs(  # type: ignore[attr-defined]
             session_id, str(admitted.get("id")))
     except (TaskForbiddenError, TaskInvalidError) as e:

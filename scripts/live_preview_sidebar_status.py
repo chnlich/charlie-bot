@@ -12,8 +12,7 @@ screenshots it asserts the sidebar's live work states:
    its parent, collapsed and expanded alike — a parent row's icon reads facts
    only and never its expansion state; after the Run ends the activity icons
    clear.
-2. waiting: a queued Run held back by a paused node shows the muted clock.
-3. names and first paint: the rows carry goal-derived names, never "## Goal";
+2. names and first paint: the rows carry goal-derived names, never "## Goal";
    no worker-facing title starts with a raw Markdown heading; and the list
    response already carries each task-tree row's ``work_state``, so the icons
    paint on first render without a poll.
@@ -342,8 +341,8 @@ async def run_harness(args: argparse.Namespace) -> None:
             # ---- scenario A: a real ~60 s worker Run shows as running -----
             log("scenario A: the running state (spinner on the worker, gear on the collapsed parent)")
             slow_repo = build_slow_repo(home)
-            # The trial manager must stay open and listed through scenario B
-            # (the waiting clock rides its paused, retried takeoff run). A
+            # The trial manager must stay open and listed through the whole
+            # trial (the isolation postflight still reads its Run records). A
             # manager is instructed to request completion once its own
             # conditions hold, and a root task archives itself on that success
             # — so a completable one-line goal ("Sleep then report the
@@ -375,7 +374,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             results: dict = {"tested_commit": commit, "invocation": invocation,
                              "preview_record": preview_record, "backend": args.backend}
 
-            takeoff_run_a = await takeoff(base, access_key, manager_a, "sidebar-status-takeoff-a")
+            await takeoff(base, access_key, manager_a, "sidebar-status-takeoff-a")
             worker_a, run_a = await delegate(
                 base, access_key, manager_a,
                 "## Goal\n\nRun `bash slow_report.sh` in the repository root. The script sleeps "
@@ -512,34 +511,6 @@ async def run_harness(args: argparse.Namespace) -> None:
             record("DOM after finish: collapsed manager's gear cleared", ok=True, detail=manager_a)
             shot = await screenshot(cdp, page_id, shots, "after_finish")
             results["after_finish_screenshot"] = shot
-
-            # ---- scenario B: the waiting state (queued, not launched) -----
-            log("scenario B: the waiting state (a queued Run held back by a paused node)")
-            payload = await wait_status(
-                base, access_key, ids_a, manager_a,
-                lambda st: bool(st) and st.get("work_state") == "idle" and not st.get("thinking_since"),
-                "manager A idle after the report turn", timeout=180)
-            status, _ = request(base, access_key, "PATCH", f"/api/sessions/{manager_a}",
-                                {"automation_paused": True})
-            if status != 200:
-                fail(f"pause failed: {status}")
-            status, retry_body = request(base, access_key, "POST", f"/api/sessions/{manager_a}/retry",
-                                         {"request_id": "sidebar-status-m1-retry", "run_id": takeoff_run_a})
-            if status != 200:
-                fail(f"manager retry failed: {status} {retry_body}")
-            payload = await wait_status(
-                base, access_key, ids_a, manager_a,
-                lambda st: bool(st) and st.get("work_state") == "waiting"
-                and st.get("has_running_tasks") is False,
-                "manager waiting", timeout=60)
-            record("status: queued Run held by the pause reads work_state=waiting",
-                   payload.get("work_state") == "waiting", json.dumps(payload, default=str))
-            await assert_icons(cdp, page_id, manager_a, "waiting-indicator",
-                               ["spinner", "worker-indicator", "subtree-unread"],
-                               "waiting manager row")
-            record("DOM: the paused node's queued Run shows the clock", ok=True, detail=manager_a)
-            shot = await screenshot(cdp, page_id, shots, "waiting_state")
-            results["waiting_screenshot"] = shot
 
             # ---- isolation postflight ------------------------------------
             # The host store also carries the harness's own session logs (this

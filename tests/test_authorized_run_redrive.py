@@ -5,8 +5,8 @@ terminal fact. The user's authorizing message used to leave it there until an
 unrelated later dispatch happened to re-judge the node; the real message route
 now re-drives the subtree the message authorizes through the normal launch
 path, so the same ``execute_run`` prechecks every fresh launch passes decide
-again. A message without the token, a paused node, and a sibling subtree under
-a deeper real-user node all keep their Runs queued.
+again. A message without the token, and a sibling subtree under a deeper
+real-user node, keep their Runs queued.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from conftest import (
 )
 
 from src.core import event_types as ET
-from src.core.models import PatchSessionTaskRequest, TaskSpec
+from src.core.models import TaskSpec
 from src.core.run_token import CallerIdentity
 from src.core.task_sessions import TaskTreeManager
 from tests.test_task_execution import (
@@ -159,20 +159,6 @@ async def test_message_without_the_token_keeps_the_run_queued(tmp_path: Path, mo
 
   await assert_stays_queued(tree, worker.id, run_id)
   assert builds == [], "a message without the token must never build a backend"
-
-
-@pytest.mark.asyncio
-async def test_paused_node_stays_queued_under_a_take_off(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The authorizing message re-drives only open, unpaused nodes: a paused
-  node's queued Run stays exactly as it was."""
-  cfg, session_mgr, tree, manager, worker = await build_manager_with_worker(tmp_path, monkeypatch)
-  run_id = await dispatch_withheld_work_run(tree, worker)
-  await tree.patch_task(worker.id, PatchSessionTaskRequest(automation_paused=True), caller=OPERATOR)
-
-  with make_chat_client(cfg, session_mgr, tree) as client:
-    sent = client.post(f"/api/sessions/{manager.id}/message", json={"content": "Take off."})
-    assert sent.status_code == 202, sent.text
-    await assert_stays_queued(tree, worker.id, run_id)
 
 
 @pytest.mark.asyncio

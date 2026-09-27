@@ -1038,10 +1038,10 @@ class TaskCompletionManager:
         """Explicit operator reopen of one closed task.
 
         References the relevant closed event (the latest close by default),
-        refuses closed ancestors with their list, preserves history, never
-        touches automation_paused or authorization, and does not reactivate
-        earlier already-handled history. Duplicate operation ids — including
-        retries after later close/reopen events — replay the original outcome.
+        refuses closed ancestors with their list, preserves history and
+        authorization, and does not reactivate earlier already-handled
+        history. Duplicate operation ids — including retries after later
+        close/reopen events — replay the original outcome.
         """
         from src.core.run_token import CallerIdentity
         from src.core.task_sessions import (

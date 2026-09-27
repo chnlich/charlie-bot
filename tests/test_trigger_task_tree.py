@@ -4,9 +4,8 @@ A v2 node takes the trigger through the shared admission path — the trigger's
 own id is the input's stable identity — so a crash after the durable admission
 but before the FIRED stamp replays into the SAME input instead of duplicating
 the task input or its process. Closed nodes keep late history without
-reopening; paused nodes retain the admitted input for later dispatch;
-established aliases resolve without changing task ownership; and the legacy
-route keeps serving v1 sessions unchanged.
+reopening; established aliases resolve without changing task ownership; and
+the legacy route keeps serving v1 sessions unchanged.
 """
 
 from __future__ import annotations
@@ -201,48 +200,6 @@ async def test_trigger_on_closed_node_keeps_history_without_reopening(
   mock_trigger_master.assert_not_awaited()
   fresh = await trigger_mgr._load_trigger(trigger.session_id, trigger.id)
   assert fresh is not None and fresh.status == TriggerStatus.FIRED
-
-
-@pytest.mark.asyncio
-async def test_trigger_on_paused_node_retains_input_for_later_dispatch(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-  from src.api import deps
-  monkeypatch.setattr(deps, "_task_manager", tree)
-  monkeypatch.setattr(deps, "_session_manager", session_mgr)
-  from src.core.models import PatchSessionTaskRequest
-  from src.core.run_token import CallerIdentity
-  manager = await tree.create_task(
-      request_id="pm", task_parent_id=None, profile="manager",
-      task=TaskSpec(goal="pm"), name="PM", backend=None, caller="operator")
-  await tree.patch_task(
-      manager.id, PatchSessionTaskRequest(automation_paused=True),
-      caller=CallerIdentity(kind="operator"))
-
-  builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])],
-                            BUILD_BACKEND_PATCH_TARGET)
-  trigger_mgr = TriggerManager(cfg, session_mgr)
-  trigger = _trigger(manager.id)
-  await trigger_mgr._save_trigger(trigger)
-  with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
-  ):
-    await trigger_mgr._wait_and_fire(trigger)
-
-  # The input is admitted (durable) and retained for later dispatch; nothing
-  # launches while paused, and the FIRED stamp stands.
-  events = tree.events.load_events(manager.id)
-  assert len([e for e in events if e.get("type") == ET.SCHEDULED_TRIGGER]) == 1
-  assert builds == []
-  fresh = await trigger_mgr._load_trigger(trigger.session_id, trigger.id)
-  assert fresh is not None and fresh.status == TriggerStatus.FIRED
-  # Resuming dispatches the retained input through the same dispatcher.
-  await tree.patch_task(
-      manager.id, PatchSessionTaskRequest(automation_paused=False),
-      caller=CallerIdentity(kind="operator"))
-  decision = await tree.dispatch.dispatch_pending(manager.id)
-  assert decision["launch"] is True
 
 
 @pytest.mark.asyncio

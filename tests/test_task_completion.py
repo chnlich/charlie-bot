@@ -578,13 +578,10 @@ async def test_reopen_contract(tmp_path: Path) -> None:
   # Reopen under a closed ancestor fails, listing the closed ancestors.
   with pytest.raises(TaskConflictError, match="closed ancestor"):
     await tree.completion.reopen_task(worker.id, request_id="reopen-w", reason="rework", caller=OPERATOR)
-  # Reopening the project works, and pause plus gate rules are preserved.
-  await tree.patch_task(project.id, PatchSessionTaskRequest(automation_paused=True), caller=OPERATOR)
+  # Reopening the project works, and the gate rules are preserved.
   reopen_result = await tree.completion.reopen_task(
       project.id, request_id="reopen-project", reason="more work", caller=OPERATOR)
   assert tree.task_state(project.id) == "open"
-  meta = await tree.load_meta(project.id)
-  assert meta is not None and meta.automation_paused is True  # reopen never touches pause
   # The still-closed feature now reopens (its ancestor is open).
   await tree.completion.reopen_task(feature.id, request_id="reopen-feature", reason="rework", caller=OPERATOR)
   assert tree.task_state(feature.id) == "open"

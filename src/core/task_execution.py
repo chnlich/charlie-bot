@@ -280,7 +280,7 @@ class TaskExecutionAdapter:
         tree = self._tree
         async with tree.control_lock:
             meta = await tree.load_task_meta(session_id)
-            if tree.task_state(session_id) != "open" or meta.automation_paused:
+            if tree.task_state(session_id) != "open":
                 return None
             if launch_run_id is not None:
                 run = await tree.runs.get_run(session_id, launch_run_id)
@@ -433,8 +433,8 @@ class TaskExecutionAdapter:
         """Pre-launch rechecks, then execute one Run on its kind's adapter.
 
         Rechecks run under the control lock immediately before the launch:
-        role (the kind/profile pairing), open ancestors, pause, authorization
-        and any durable stop request. The backend resolution afterwards is
+        role (the kind/profile pairing), open ancestors, authorization and any
+        durable stop request. The backend resolution afterwards is
         explicit — a missing or invalid backend fails visibly, never
         silently substituted. ``launch_prompt`` is the sequence controllers'
         explicit launch text; see :meth:`launch`. ``scheduled`` marks a fire
@@ -457,9 +457,8 @@ class TaskExecutionAdapter:
             if run is None:
                 raise RunNotFoundError(run_not_found_in_task_text(run_id, session_id))
             state = tree.task_state(session_id)
-            if state != "open" or meta.automation_paused:
-                reason = (f"withheld: task {session_id} is {state}" if state != "open"
-                          else f"withheld: task {session_id} is paused")
+            if state != "open":
+                reason = f"withheld: task {session_id} is {state}"
                 log.info("run_launch_withheld", session_id=session_id, run_id=run_id, reason=reason)
                 return reason
             await tree._require_open_ancestry(session_id)
@@ -607,7 +606,7 @@ class TaskExecutionAdapter:
         carries a terminal fact returns it; a live or ended process is
         followed to its fact (never relaunched, never killed for running
         long); only a launch whose precondition failed in the
-        registration-to-launch interval — node closed/paused, durable stop,
+        registration-to-launch interval — node closed, durable stop request,
         expired authorization, startup failure — settles withheld, with the
         actual reason. The first terminal fact always wins over a settle
         race.
@@ -654,14 +653,14 @@ class TaskExecutionAdapter:
         A real user message admitted to *session_id* (its durable event id is
         *message_id*) can open the nearest-real-user-ancestor takeoff window
         for this node's subtree. Every queued work/review Run under an open,
-        unpaused node whose authorization is decided exactly here re-enters
+        open node whose authorization is decided exactly here re-enters
         through :meth:`launch` — the same ``execute_run`` prechecks every
         fresh launch passes — so the Run launches when its authorization
         arrives instead of waiting for an unrelated later dispatch. A deeper
         node holding its own real user messages keeps its own gate (its Runs
-        stay queued); closed and paused nodes, and Runs with a terminal fact,
-        a live process or a durable stop request, are never touched. Returns
-        the re-dispatched Run ids.
+        stay queued); closed nodes, and Runs with a terminal fact, a live
+        process or a durable stop request, are never touched. Returns the
+        re-dispatched Run ids.
         """
         tree = self._tree
         meta = await tree.load_task_meta(session_id)
@@ -675,7 +674,7 @@ class TaskExecutionAdapter:
             node_meta = index.metas.get(node_id)
             if node_meta is None:
                 continue
-            if tree.task_state_of(index, node_id) != "open" or node_meta.automation_paused:
+            if tree.task_state_of(index, node_id) != "open":
                 continue
             node_runs = tree.runs.list_run_records_sync(node_id)
             if not node_runs:

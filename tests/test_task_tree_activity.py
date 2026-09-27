@@ -29,7 +29,7 @@ from conftest import (
 from src.api import sessions as sessions_api
 from src.core import event_types as ET
 from src.core import sidebar_state
-from src.core.models import PatchSessionTaskRequest, RunRecord, TaskSpec
+from src.core.models import RunRecord, TaskSpec
 from src.core.run_token import CallerIdentity
 from src.core.runs import read_host_boot_time
 from src.core.sessions import SessionManager
@@ -247,25 +247,6 @@ async def test_reopened_task_reads_waiting_again(tree_env) -> None:
   await _reopen_task(tree, worker_id)
   activity = tree.activity_of(worker_id)
   assert (activity.has_running_tasks, activity.work_state) == (False, "waiting")
-
-
-@pytest.mark.asyncio
-async def test_paused_open_task_with_queued_run_reads_waiting(tree_env) -> None:
-  """Pause is metadata, not a close fact: a paused open task's queued Run
-  still holds the clock (its Run launches on resume)."""
-  tree, _session_mgr, _root_id, worker_id = tree_env
-  await tree.patch_task(worker_id, PatchSessionTaskRequest(automation_paused=True), caller=OP)
-  await _register(tree, worker_id, "run-1")
-
-  activity = tree.activity_of(worker_id)
-  assert (activity.has_running_tasks, activity.work_state) == (False, "waiting")
-
-  # The derivation itself has no pause input: the gate is task_open alone, and
-  # the paused open task passes it.
-  runs = tree.runs.list_run_records_sync(worker_id)
-  events = tree.runs.load_events_sync(worker_id)
-  gated = derive_task_tree_activity(runs, events, lambda: datetime.now(UTC), task_open=True)
-  assert (gated.has_running_tasks, gated.work_state) == (False, "waiting")
 
 
 # ---------------------------------------------------------------------------

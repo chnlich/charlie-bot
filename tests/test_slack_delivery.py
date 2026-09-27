@@ -20,6 +20,7 @@ from conftest import (
 )
 from structlog.testing import capture_logs
 
+from src.agents import master_cc_state
 from src.agents.backends.base import make_text_event
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, PublishConfig
@@ -27,6 +28,7 @@ from src.core.message_aggregator import MessageAggregator
 from src.core.models import (
     CreateSessionRequest,
     MasterRunRecord,
+    SessionMetadata,
     SlackOrigin,
     utc_now,
 )
@@ -34,6 +36,7 @@ from src.core.sessions import SessionManager
 from src.core.slack_listener import (
     _NO_REPLY_NOTICE,
     SlackReplyError,
+    _lost_summons,
     backfill_lost_summons,
     deliver_done,
     post_reply,
@@ -104,8 +107,10 @@ async def _run_record(session_mgr: SessionManager, sid: str, user_event_id: str 
   """Record a running round whose input is *user_event_id* (what post_reply binds a reply to)."""
   await session_mgr.persist_master_run(
       sid,
-      MasterRunRecord(started_at=utc_now(), raw_log=str(tmp_path / "raw.jsonl"), user_event_ids=[user_event_id]
-                      if user_event_id else []))
+      MasterRunRecord(
+          started_at=utc_now(),
+          raw_log=str(tmp_path / "raw.jsonl"),
+          user_event_ids=[user_event_id] if user_event_id else []))
 
 
 def _summon(content: str = _SUMMON_CONTENT) -> dict:
@@ -403,3 +408,53 @@ async def test_backfill_run_twice_posts_once(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # Ack reaction lifecycle
+
+
+def _running_item(
+    cfg: CharlieBotConfig, session_mgr: SessionManager, sid: str,
+    user_event_id: str | None) -> master_cc_state._WorkItem:
+  """A work item as the consumer parks it in ``master_cc_state._current_items`` while a round runs."""
+  return master_cc_state._WorkItem(
+      cfg=cfg,
+      session_meta=SessionMetadata(id=sid, name="slack session"),
+      user_content="summon prompt",
+      callbacks=session_mgr.callbacks(),
+      is_voice=False,
+      auto_trigger=False,
+      backend_option=None,
+      extra_claude_flags=None,
+      should_check_tex=False,
+      future=asyncio.get_running_loop().create_future(),
+      user_event_ids=[user_event_id] if user_event_id else [])
+
+
+@pytest.mark.asyncio
+async def test_batch_holding_two_summons_binds_the_reply_to_the_newer_one(tmp_path: Path) -> None:
+  """A merged round answering two Slack summons of the thread binds the reply
+  to the newer summon, and both count as answered in the lost-summon check."""
+  cfg, session_mgr, client = _rig(tmp_path)
+  client.reactions[_THREAD] = {"eyes"}
+  sid = await _slack_session(session_mgr)
+  older = await _append(session_mgr, sid, _summon("older ask"))
+  newer = await _append(session_mgr, sid, _summon("newer ask"))
+
+  master_cc_state._current_items[sid] = _running_item(cfg, session_mgr, sid, older["id"])
+  master_cc_state._current_items[sid].user_event_ids = [older["id"], newer["id"]]
+  try:
+    ack_tasks: list[asyncio.Task] = []
+    with _listener_seam(client, tasks=ack_tasks):
+      result = await post_reply(sid, "one answer for both", cfg, session_mgr)
+      await asyncio.gather(*ack_tasks)
+  finally:
+    master_cc_state._current_items.pop(sid, None)
+
+  assert result["answers"] == newer["id"]
+  reply_event = _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)[0]
+  assert reply_event["slack_reply"]["answers"] == newer["id"]
+
+  # Both summons count as answered: one MASTER_DONE carries the whole list.
+  done = _done(None)
+  done[ET.INPUT_EVENT_IDS] = [older["id"], newer["id"]]
+  await _append(session_mgr, sid, done)
+  lost = _lost_summons(session_mgr.load_chat_events_sync(sid), owned=set(), running=set())
+  assert lost == []

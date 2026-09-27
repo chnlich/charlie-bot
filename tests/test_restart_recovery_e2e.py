@@ -44,7 +44,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import (
@@ -57,6 +57,7 @@ from conftest import (
     _recovery_reports,
     _wait_for,
     backend_option,
+    fresh_master_state,
     make_work_item,
     mocked_callback_fields,
     patch_instructions_content,
@@ -65,12 +66,13 @@ from conftest import (
 )
 from structlog.testing import capture_logs
 
-from src.agents import master_cc, master_cc_queue, master_cc_state
+from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.agents.backends.base import AgentBackend
 from src.agents.worker import QuotaExhaustedError, Worker
 from src.core import event_types as ET
 from src.core import finalize_effects, runs
 from src.core import init as init_module
+from src.core import init_master_recovery as init_master_recovery_module
 from src.core import process as core_process
 from src.core import spawner as spawner_module
 from src.core.config import CharlieBotConfig
@@ -1910,3 +1912,181 @@ async def test_uncovered_dead_pinned_worker_finalized_failed_with_reason(
   assert outcomes == [runs.RunOutcome.DIED]
   assert alive_at_reattach == [False]
   _assert_failed_with_transport_reason(home, ids)
+
+
+# --- batch identity: lists on the record and on MASTER_DONE ------------------
+
+
+def test_legacy_single_id_record_and_done_load_as_one_element_lists() -> None:
+  record = MasterRunRecord.model_validate(
+      {
+          "pid": 1,
+          "pid_start": "2.0",
+          "started_at": utc_now(),
+          "raw_log": "/x/agent.raw.ndjson",
+          "user_event_id": "evt-legacy",
+      })
+  assert record.user_event_ids == ["evt-legacy"]
+
+  from src.api.message_utils import master_done_input_event_ids
+
+  legacy_done = {"type": ET.MASTER_DONE, ET.INPUT_EVENT_ID: "evt-legacy"}
+  batched_done = {"type": ET.MASTER_DONE, ET.INPUT_EVENT_IDS: ["evt-a", "evt-b"]}
+  assert master_done_input_event_ids(legacy_done) == ["evt-legacy"]
+  assert master_done_input_event_ids(batched_done) == ["evt-a", "evt-b"]
+  assert master_done_input_event_ids({"type": ET.MASTER_DONE}) == []
+
+
+def test_unanswered_scan_covers_trigger_wakes_and_batch_exclusions() -> None:
+  done = {"type": "master_done", "id": "d1"}
+  wake_before = {"type": "scheduled_trigger", "content": "[Scheduled trigger fired] old", "id": "w0"}
+  user_open = {"type": "user", "content": "open message", "id": "u1"}
+  wake_open = {"type": "scheduled_trigger", "content": "[Scheduled trigger fired] ping", "id": "w1"}
+  tool_echo = {"type": "user", "content": {"tool_result": True}, "id": "t1"}
+  events = [wake_before, done, user_open, wake_open, tool_echo]
+
+  # The recorded batch turn's whole id list shields exactly its own events.
+  pending = init_module.unanswered_input_events(events, {"u1"})
+  assert [e["id"] for e in pending] == ["w1"]
+
+  pending = init_module.unanswered_input_events(events, {"u1", "w1"})
+  assert pending == []
+
+
+# --- replay: a dead batch turn replays its inputs merged into one turn -------
+
+
+@pytest.mark.asyncio
+async def test_dead_batch_turn_replays_user_and_wake_inputs_once_merged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = _cfg(tmp_path / "home")
+  session_mgr = SessionManager(cfg)
+  meta = await session_mgr.create_session(CreateSessionRequest(name="dead-batch"))
+  sid = meta.id
+  await session_mgr.save_chat_event(sid, {"type": ET.MASTER_DONE, "exit_code": 0, "still_thinking": False})
+  await session_mgr.save_chat_event(sid, user_event("message one", timestamp=utc_now().isoformat()))
+  await session_mgr.save_chat_event(
+      sid, {
+          "type": ET.SCHEDULED_TRIGGER,
+          "content": "[Scheduled trigger fired] ping",
+          "timestamp": utc_now().isoformat(),
+      })
+  events = session_mgr.load_chat_events_sync(sid)
+  user_id = next(e["id"] for e in events if e["type"] == ET.USER)
+  wake_id = next(e["id"] for e in events if e["type"] == ET.SCHEDULED_TRIGGER)
+
+  captured: list[master_cc_state._WorkItem] = []
+  both_enqueued = asyncio.Event()
+  enqueued_count = [0]
+
+  async def fake_round(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
+    captured.append(item)
+    # Hold the first replayed turn open until both replay calls have enqueued,
+    # so the batch forms exactly as a mid-turn backlog would.
+    await both_enqueued.wait()
+    return ("cc-1", 0, None, {})
+
+  real_enqueue = master_cc_queue._enqueue_work_item
+
+  def counting_enqueue(session_id: str, item: master_cc_state._WorkItem):
+    result = real_enqueue(session_id, item)
+    enqueued_count[0] += 1
+    if enqueued_count[0] >= 2:
+      both_enqueued.set()
+    return result
+
+  monkeypatch.setattr(master_cc_queue, "_enqueue_work_item", counting_enqueue)
+  monkeypatch.setattr(master_cc_run, "_run_cc", fake_round)
+  monkeypatch.setattr(SessionManager, "_has_running_tasks", AsyncMock(return_value=False))
+
+  from conftest import BROADCAST_PATCH_TARGET
+
+  async with fresh_master_state(sid):
+    with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
+      await init_master_recovery_module._replay_unanswered_inputs(cfg, session_mgr, {})
+      consumer = master_cc_state._session_consumers.get(sid)
+      if consumer is not None:
+        await asyncio.wait_for(consumer, timeout=5)
+      from src.core import tasks as core_tasks
+      for task in list(core_tasks._background_tasks):
+        if not task.done():
+          await asyncio.wait_for(asyncio.shield(task), timeout=5)
+
+  assert len(captured) == 1, "the replayed user message and wake must run as one merged turn"
+  merged = captured[0]
+  assert merged.user_event_ids == [user_id, wake_id]
+  headers = [line for line in merged.user_content.splitlines() if line.startswith("[Queued input ")]
+  assert len(headers) == 2
+  assert headers[0].startswith("[Queued input 1 of 2 · user · received ")
+  assert headers[1].startswith("[Queued input 2 of 2 · scheduled_trigger · received ")
+  # Both parts carry the replay marker; neither re-persisted its original event.
+  from src.agents.master_cc_queue import _REPLAY_MARKER
+
+  assert merged.user_content.count(_REPLAY_MARKER) == 2
+  replayed_events = session_mgr.load_chat_events_sync(sid)
+  assert sum(1 for e in replayed_events if e["type"] == ET.SCHEDULED_TRIGGER) == 1
+
+
+@pytest.mark.asyncio
+async def test_fired_wake_replays_once_and_its_trigger_does_not_refire(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A wake delivered before the restart (record FIRED, event unanswered in the
+  log) is redelivered by the replay pass exactly once, and the fired trigger
+  record gives recover_pending nothing to restart."""
+  from src.core.models import PendingTrigger, TriggerStatus
+  from src.core.triggers import TriggerManager
+
+  cfg = _cfg(tmp_path / "home")
+  session_mgr = SessionManager(cfg)
+  meta = await session_mgr.create_session(CreateSessionRequest(name="fired-wake"))
+  sid = meta.id
+  await session_mgr.save_chat_event(sid, {"type": ET.MASTER_DONE, "exit_code": 0, "still_thinking": False})
+  await session_mgr.save_chat_event(
+      sid, {
+          "type": ET.SCHEDULED_TRIGGER,
+          "content": "[Scheduled trigger fired] ping",
+          "timestamp": utc_now().isoformat(),
+      })
+
+  trigger_mgr = TriggerManager(cfg, session_mgr)
+  fired = PendingTrigger(
+      id="trigger-fired",
+      session_id=sid,
+      fire_at=utc_now(),
+      message="ping",
+      status=TriggerStatus.FIRED,
+      fired_at=utc_now(),
+  )
+  await trigger_mgr._save_trigger(fired)
+
+  captured: list[master_cc_state._WorkItem] = []
+
+  async def fake_round(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
+    captured.append(item)
+    return ("cc-1", 0, None, {})
+
+  monkeypatch.setattr(master_cc_run, "_run_cc", fake_round)
+  monkeypatch.setattr(SessionManager, "_has_running_tasks", AsyncMock(return_value=False))
+
+  from conftest import BROADCAST_PATCH_TARGET
+
+  async with fresh_master_state(sid):
+    with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
+      await init_master_recovery_module._replay_unanswered_inputs(cfg, session_mgr, {})
+      consumer = master_cc_state._session_consumers.get(sid)
+      if consumer is not None:
+        await asyncio.wait_for(consumer, timeout=5)
+      from src.core import tasks as core_tasks
+      for task in list(core_tasks._background_tasks):
+        if not task.done():
+          await asyncio.wait_for(asyncio.shield(task), timeout=5)
+
+  assert len(captured) == 1, "the queued-then-lost wake replays exactly once"
+  assert captured[0].input_event_type == ET.SCHEDULED_TRIGGER
+  assert captured[0].auto_trigger is True
+  # The trigger file still says fired; recover_pending restarts nothing.
+  stored = await trigger_mgr._load_trigger(sid, "trigger-fired")
+  assert stored.status == TriggerStatus.FIRED
+  trigger_mgr2 = TriggerManager(cfg, session_mgr)
+  await trigger_mgr2.recover_pending()
+  assert list(trigger_mgr2._tasks.values()) == []

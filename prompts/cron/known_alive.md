@@ -103,9 +103,8 @@ Known-alive symbols:
   one of those names is grep-findable in repo (`_TRANSIENT_METADATA_FIELDS`, tests, web JS,
   Jinja templates), so the Step 3 grep already protects them and they get no entries.
 - `pytestmark` (module-level assignment, e.g. `tests/test_task_prompts.py`) — module-level
-  `pytest.mark.asyncio` assignments that pytest's collection reads by
-  attribute name. The name appears only at the assignment sites, so vulture flags each as an
-  unused variable (60% confidence).
+  `pytest.mark.asyncio` assignments that pytest's collection reads by attribute name; each name
+  appears only at its assignment site, so vulture flags each as an unused variable (60% confidence).
 - `do_GET`, `do_POST`, `log_message` (`tests/test_cli_restart_contract.py`) —
   `http.server.BaseHTTPRequestHandler` overrides: the stdlib handler dispatches to them by
   string (`'do_' + self.command` through `getattr`, `log_message` by name). Each name has
@@ -119,18 +118,16 @@ Known-alive symbols:
   delete.
 - `model_config` (the pydantic v2 `ConfigDict` class attribute, assigned on the pydantic
   `BaseModel` classes of `src/core/backend_models.py`, `src/core/config.py`, `src/core/models.py`,
-  `src/api/diag.py`, and `src/api/cron.py`) — `ModelMetaclass`
-  consumes it by attribute name at class-definition time. Every assignment pins
-  `extra='forbid'`, which turns an unknown config or request key into a validation error, except
-  `TaskCreate` in `src/api/cron.py`, which pins
+  `src/api/diag.py`, and `src/api/cron.py`) — `ModelMetaclass` consumes it by attribute name at
+  class-definition time. Every assignment pins `extra='forbid'`, which turns an unknown config or
+  request key into a validation error, except `TaskCreate` in `src/api/cron.py`, which pins
   `extra='ignore'` (the pydantic default) so the create-request body stays looser than the
   loader's forbid task model, as the comment above the assignment states. Vulture flags each
   production assignment as an unused variable.
 - `return_value`, `side_effect` attribute writes across `tests/` (e.g.
   `session_mgr.get_session.return_value = ...` in `tests/test_cli_improve.py`,
   `callbacks.persist_claude_account.side_effect = ...` in `tests/test_claude_accounts.py`) —
-  `unittest.mock`
-  configuration attributes the library reads when the configured mock is called
+  `unittest.mock` configuration attributes the library reads when the configured mock is called
   (`return_value` supplies the call result, `side_effect` overrides it with an iterable,
   callable, or exception). Nothing in the repo reads the names back, so vulture flags such
   writes as unused attributes where it reaches them (the `side_effect` write in
@@ -363,9 +360,8 @@ Known-alive symbols:
   the callback and drops it. Vulture flags the method as unused.
 - `_cron_snapshot` — a production module-global cache reset through a bare module-attribute
   write inside test setup (`core_config._cron_snapshot = core_config._CronSnapshot()` in
-  `tests/conftest.py`). The read lives in `src/core/config.py`, so vulture flags the write as
-  an unused attribute. Same class as the registry-reset fixtures above, minus the named-fixture
-  wrapper.
+  `tests/conftest.py`). The read lives in `src/core/config.py`, so vulture flags the write as an
+  unused attribute. Same class as the registry-reset fixtures above, minus the named-fixture wrapper.
 - `_reset_api_round_state` (`tests/test_host_auth.py`) — `@pytest.fixture(autouse=True)`
   fixture; pytest invokes it around every test in its module with no in-file reference,
   resetting `api._round_running` and `api._poller.task` before and after each test.
@@ -374,8 +370,7 @@ Known-alive symbols:
 - `_round_running` (the reset writes in `tests/test_host_auth.py`'s `_reset_api_round_state`) —
   a production module-global write from test setup, read in `src/api/host_auth.py`. A tests-only
   vulture scan flags the write as an unused attribute; the combined src+tests scan sees the read
-  and stays silent. Same class as the `_cron_snapshot` entry above.
-- `history` (the `MessageProjection` property in `src/core/message_projection.py`) — kept
+  and stays silent. Same class as the `_cron_snapshot` entry above.- `history` (the `MessageProjection` property in `src/core/message_projection.py`) — kept
   deliberately as the projection's semantics oracle, not an orphan. No production reader consumes
   it: the pagination paths read `tail`/`slice_before`/`cached_page_body`/`pending_draft` and the
   gzip body memos instead. Its consumer is the definitional pin in `tests/test_message_projection.py`

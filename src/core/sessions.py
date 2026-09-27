@@ -56,6 +56,7 @@ from src.core.scheduled_sessions import (
     # ScheduledSessionBusyError from this module
     ScheduledSessionBusyError,
     ScheduledSessionStore,
+    cron_subtree_roots,
 )
 from src.core.session_usage import SessionUsageResolver
 from src.core.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
@@ -1327,6 +1328,16 @@ class SessionManager:
     """
     return sorted({meta.group for meta in await self._load_session_metas() if meta.group})
 
+  async def cron_subtree_roots(self) -> dict[str, str]:
+    """The cron-subtree membership map over every session's stored metadata.
+
+    See :func:`src.core.scheduled_sessions.cron_subtree_roots` for the rule. The
+    map reads the shared cached metas — chain and ``scheduled_task`` mark only,
+    statuses never matter — so the sidebar lists classify their rows with no
+    second read and no copy.
+    """
+    return cron_subtree_roots(await self._load_session_metas())
+
   async def list_archived_page(
       self,
       *,
@@ -1349,10 +1360,20 @@ class SessionManager:
     (``_fresh_cached_meta``), so the warm request path reads no metadata
     files. A cursor that fails to parse raises ValueError: the caller's
     explicit cursor stops with the error instead of silently serving page 1.
+    Cron-subtree rows (every session whose ``task_parent_id`` chain reaches a
+    ``scheduled_task`` session) are excluded before aggregation and pagination;
+    the archived cron sessions themselves keep their rows.
     """
     limit = max(1, min(500, limit))
     metas = await self._with_derived_archive(
         await self._load_session_metas(status=SessionStatus.ARCHIVED), SessionStatus.ARCHIVED)
+    # Cron-subtree rows stay out of the Archived list — the projected legacy
+    # worker-thread rows under cron sessions included; the archived cron
+    # sessions themselves keep their rows. The exclusion runs before the group
+    # aggregates and the keyset slice, so both describe the rows the page can
+    # actually return.
+    cron_subtree = await self.cron_subtree_roots()
+    metas = [meta for meta in metas if meta.id not in cron_subtree]
 
     counts: dict[str | None, int] = {}
     for meta in metas:

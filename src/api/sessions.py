@@ -92,6 +92,7 @@ from src.core.models import (
 from src.core.plans import PlanRegistryManager
 from src.core.run_token import CallerIdentity
 from src.core.runs import RunIdentityConflictError, RunNotFoundError, run_not_found_in_task_text
+from src.core.scheduled_sessions import cron_subtree_roots
 from src.core.sessions import (
     ELONE_BOOTSTRAP_OPENER,
     FORK_BOOTSTRAP_OPENER,
@@ -366,7 +367,12 @@ async def list_sessions(
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
 ) -> Response:
-  """List active sessions newest first, each legacy row followed by its worker-leaf rows."""
+  """List active sessions newest first, each legacy row followed by its worker-leaf rows.
+
+  Cron-subtree rows ride only the scheduled listing: a firing leaf whose parent
+  chain reaches a cron session stays out, so a parentless leaf never flattens
+  into a top-level row.
+  """
   global _sessions_list_whole_body
   rows, derived = await session_mgr.list_sessions_readonly(
       status=SessionStatus.ACTIVE,
@@ -375,6 +381,8 @@ async def list_sessions(
       include_pending_trigger_status=True,
       include_pending_plan_approval=True,
   )
+  cron_subtree = await session_mgr.cron_subtree_roots()
+  rows = [row for row in rows if row.id not in cron_subtree]
   projected = await project_worker_threads(rows, cfg, thread_mgr)
   # The readonly rows and the memoized leaves are identity-stable across
   # requests, so the rendered body keys on the row identities plus the overlay
@@ -506,6 +514,12 @@ async def list_archived_sessions(
   except ValueError as e:
     raise HTTPException(status_code=422, detail=str(e)) from e
   page["sessions"] = await project_worker_threads(page["sessions"], cfg, thread_mgr)
+  # The projection above appends each legacy row's worker-thread leaves; under
+  # an archived cron session those leaves are cron-subtree rows and stay out.
+  # Every leaf's parent rides the page, so the membership walk classifies the
+  # projected rows from the page's own rows.
+  cron_subtree = cron_subtree_roots(page["sessions"])
+  page["sessions"] = [row for row in page["sessions"] if row.id not in cron_subtree]
   return page
 
 
@@ -558,13 +572,14 @@ async def list_scheduled_sessions(
       include_running_status=True,
       include_pending_trigger_status=True,
   )
-  # The firings' worker leaves: real task-tree nodes parented to the cron
-  # session. They ride the payload right after their parent so the grouped
-  # render's tree nesting shows each firing's leaf under its cron session —
+  # The firings' worker leaves: real task-tree nodes whose parent chain reaches
+  # the cron session, at any depth. They ride the payload after their subtree's
+  # cron session so the grouped render's tree nesting shows each leaf under it —
   # a legacy session's included (its leaves keep the legacy parent).
   all_rows, _all_derived = await session_mgr.list_sessions_readonly(status=SessionStatus.ACTIVE)
   cron_ids = {s.id for s in sessions}
-  sessions = [*sessions, *(r for r in all_rows if r.task_parent_id in cron_ids)]
+  cron_subtree = await session_mgr.cron_subtree_roots()
+  sessions = [*sessions, *(r for r in all_rows if cron_subtree.get(r.id) in cron_ids)]
   task_map = {t.name: t for t in get_scheduled_tasks()}
   now_utc = datetime.now(UTC)
   sessions = await project_worker_threads(sessions, cfg, thread_mgr)

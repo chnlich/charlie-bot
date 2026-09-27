@@ -48,8 +48,9 @@ class BaseBranchResolutionError(RuntimeError):
   """Raised when a --base-branch value is ambiguous or unresolvable.
 
   The strict resolution matrix (resolve_base_branch) deliberately fails loudly
-  instead of silently picking a base: a stale local ref as a worktree base is a
-  correctness hazard.
+  instead of silently picking a base: a local ref holding commits absent from
+  origin is a correctness hazard, while a local branch merely behind origin
+  starts at the origin tip and leaves the local ref untouched.
   """
 
 
@@ -195,11 +196,14 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
     - 40-hex SHA      → pinned base, verified present; no freshness semantics, no network.
     - origin/<b>      → explicit remote: must exist on origin; start at origin/<b>'s freshly
                         resolved tip (see *remote_tip*) regardless of any local state.
-    - <b> (bare)      → if the remote branch exists, the local branch must be absent or
-                        point at exactly the same commit (else hard error);
-                        start at the freshly resolved origin/<b>. If the remote branch does
-                        not exist (or no origin remote is configured), require the branch to
-                        exist locally and start there (unpublished-branch case).
+    - <b> (bare)      → if the remote branch exists, the local branch may be absent, point
+                        at exactly the origin tip, or sit strictly behind it (an ancestor
+                        of the origin tip): in all three cases start at the freshly
+                        resolved origin/<b> and leave the local ref untouched. A local
+                        branch holding commits absent from origin (ahead or diverged) is a
+                        hard error. If the remote branch does not exist (or no origin
+                        remote is configured), require the branch to exist locally and
+                        start there (unpublished-branch case).
   A reachable-check that fails (network/auth) is a hard error, never a silent local
   fallback; use a full SHA to pin a base while offline.
 
@@ -285,11 +289,47 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
       # form; an explicit origin/<b> request never reads the local branch.
       local_sha = await _git_rev_parse(repo_path, _heads_ref(branch))
       if local_sha is not None and local_sha != remote_sha:
+        # A local branch strictly behind origin (an ancestor of the origin
+        # tip) carries nothing the worktree would miss, so the shared
+        # checkout's stale ref starts from the origin tip untouched. A local
+        # commit absent from origin (ahead or diverged) still refuses.
+        # is-ancestor answers in exit codes (0 behind, 1 not an ancestor), so
+        # the raw process is read directly — a _git_stdout failure folds
+        # every non-zero code into one boolean.
+        try:
+          proc, _mb_out, mb_stderr = await _git_proc_bytes(
+              repo_path,
+              "merge-base",
+              "--is-ancestor",
+              local_sha,
+              remote_sha,
+              timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
+          )
+        except TimeoutError as e:
+          raise BaseBranchResolutionError(
+              f"git merge-base --is-ancestor {local_sha} {remote_sha} timed out after "
+              f"{SUBPROCESS_GIT_READ_TIMEOUT_ASYNC}s in {repo_path}") from e
+        if proc.returncode == 0:
+          log.info(
+              "base_branch_local_behind",
+              repo=str(repo_path),
+              branch=branch,
+              local_sha=local_sha,
+              remote_sha=remote_sha)
+          return BaseResolution(
+              canonical=branch,
+              start_point=f"origin/{branch}",
+              detail=(f"branch {branch} at origin tip {remote_sha[:12]} "
+                      f"(local {branch} at {local_sha[:12]} is behind, unused)"))
+        if proc.returncode == 1:
+          raise BaseBranchResolutionError(
+              f"local {branch} ({local_sha[:12]}) differs from origin/{branch} ({remote_sha[:12]}). "
+              "A local base must match its remote exactly: push the local commits, "
+              f"pass origin/{branch} to use the remote explicitly, "
+              "or pass a full commit SHA to pin the base.")
         raise BaseBranchResolutionError(
-            f"local {branch} ({local_sha[:12]}) differs from origin/{branch} ({remote_sha[:12]}). "
-            "A local base must match its remote exactly: push the local commits, fast-forward the "
-            f"local branch, pass origin/{branch} to use the remote explicitly, "
-            "or pass a full commit SHA to pin the base.")
+            f"git merge-base --is-ancestor {local_sha} {remote_sha} failed with exit code "
+            f"{proc.returncode} in {repo_path}: {mb_stderr.decode().strip()}")
     return BaseResolution(
         canonical=branch, start_point=f"origin/{branch}", detail=f"branch {branch} at origin tip {remote_sha[:12]}")
 

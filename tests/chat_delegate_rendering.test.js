@@ -202,6 +202,53 @@ test('a Run header carries its own time, and a queued header carries none', () =
   assert.doesNotMatch(timeless, /data-message-ts/);
 });
 
+test('a launch-failed Run header shows the no-output-log note and the ref link row', () => {
+  const context = loadChatRendering();
+  const header = (extra) => context.renderMessage({
+    role: 'system', kind: 'run_header', run_id: 'run-lf',
+    content: 'Run work \u00b7 Sonnet 5 \u00b7 failed', state: 'failed', error: '',
+    launched: false, launch_failed: false, task_spec_ref: '', launch_prompt_ref: '', ...extra,
+  }, 'sess-1');
+
+  // The note rides launch_failed only; a plain failed header has none.
+  const launchFailed = header({launch_failed: true, error: 'RuntimeError: base check refused'});
+  assertWellFormedMarkup(launchFailed, 'launch-failed header');
+  assert.match(launchFailed, /id="run-note-run-lf"[^>]*>Worker never started, so this Run has no output log\.</);
+  const plainFailed = header({error: 'RuntimeError: base check refused'});
+  assertWellFormedMarkup(plainFailed, 'failed header');
+  assert.doesNotMatch(plainFailed, /run-note-/);
+
+  // Under the pill the order is note, error text, then the link row.
+  const noteAt = launchFailed.indexOf('run-note-run-lf');
+  const errorAt = launchFailed.indexOf('run-error-run-lf');
+  const linksAt = launchFailed.indexOf('run-links-run-lf');
+  assert.ok(noteAt < errorAt && errorAt < linksAt, 'note, error, then link row');
+
+  // Both refs set: file-server links opening a new tab.
+  const linked = header({
+    launched: true,
+    task_spec_ref: '/h/runs/run-lf/task_spec.md',
+    launch_prompt_ref: '/h/runs/run-lf/launch_prompt.md',
+  });
+  assertWellFormedMarkup(linked, 'linked header');
+  assert.match(
+    linked,
+    /<a class="text-blue-400 hover:underline" href="\/absolute_filepath\/h\/runs\/run-lf\/task_spec\.md" target="_blank" rel="noopener">Task spec<\/a>/);
+  assert.match(
+    linked,
+    /<a class="text-blue-400 hover:underline" href="\/absolute_filepath\/h\/runs\/run-lf\/launch_prompt\.md" target="_blank" rel="noopener">Launch prompt<\/a>/);
+
+  // The three gray placeholders: a task spec that was never recorded, a launch
+  // prompt never assembled (the Run never started), and one a started Run has
+  // no file for.
+  const noRefs = header({launch_failed: true});
+  assert.match(noRefs, /<span class="text-slate-500">Task spec \(not recorded\)<\/span>/);
+  assert.match(noRefs, /<span class="text-slate-500">Launch prompt \(not assembled\)<\/span>/);
+  const startedNoPrompt = header({launched: true});
+  assert.match(startedNoPrompt, /<span class="text-slate-500">Task spec \(not recorded\)<\/span>/);
+  assert.match(startedNoPrompt, /<span class="text-slate-500">Launch prompt \(not recorded\)<\/span>/);
+});
+
 test('run_delivery closes the transcript with the summary and the four evidence links', () => {
   const context = loadChatRendering();
 

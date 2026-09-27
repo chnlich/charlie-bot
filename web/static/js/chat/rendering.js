@@ -525,13 +525,33 @@ function deliveryDiffHref(msg, sessionId) {
 
 // A worker transcript's per-Run header (a system line of kind run_header):
 // kind · backend · state, with the state dot in the colors the retired leaf
-// card used — a queued Run amber, a failed one red — and a failed Run's own
-// error text shown in full beneath the line.
+// card used — a queued Run amber, a failed one red — and beneath it a failed
+// Run's own error text in full, a launch-failed Run's no-output-log note, and
+// the task spec / launch prompt link row (gray placeholders when a ref is
+// missing).
 const RUN_HEADER_DOT_COLORS = {
   running: 'bg-blue-500', success: 'bg-green-500', completed: 'bg-green-500',
   queued: 'bg-amber-400',
   failed: 'bg-red-500', interrupted: 'bg-red-500', attention: 'bg-red-500',
 };
+
+function runHeaderNoteHtml(msg, runId) {
+  if (!msg.launch_failed) return '';
+  return '<div id="run-note-' + runId + '" class="text-slate-400 text-xs max-w-[85%]">'
+    + 'Worker never started, so this Run has no output log.</div>';
+}
+
+function runHeaderLinksHtml(msg, runId) {
+  const taskSpecLabel = msg.task_spec_ref ? 'Task spec' : 'Task spec (not recorded)';
+  const launchPromptLabel = msg.launch_prompt_ref
+    ? 'Launch prompt'
+    : (msg.launched ? 'Launch prompt (not recorded)' : 'Launch prompt (not assembled)');
+  const links = [
+    evidenceLinkHtml(taskSpecLabel, evidenceHref(msg.task_spec_ref)),
+    evidenceLinkHtml(launchPromptLabel, evidenceHref(msg.launch_prompt_ref)),
+  ];
+  return '<p id="run-links-' + runId + '" class="text-xs flex flex-wrap gap-3 max-w-[85%]">' + links.join('') + '</p>';
+}
 
 function runHeaderHtml(msg) {
   const runId = escapeHtmlAttr(String(msg.run_id || ''));
@@ -547,7 +567,7 @@ function runHeaderHtml(msg) {
     + ' class="flex items-center gap-2 bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden"' + titleAttr + '>'
     + '<span id="run-dot-' + runId + '" class="w-2 h-2 rounded-full flex-shrink-0 ' + dot + '"></span>'
     + '<span class="truncate">' + escapeHtml(msg.content) + '</span></div>'
-    + error + '</div>';
+    + runHeaderNoteHtml(msg, runId) + error + runHeaderLinksHtml(msg, runId) + '</div>';
 }
 
 function evidenceLinkHtml(label, href) {

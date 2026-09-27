@@ -307,15 +307,21 @@ def _run_header_msg(ev: dict) -> dict:
   """One worker-transcript Run header: kind, backend label and state.
 
   A system line of its own kind: the chat paints the Run's state dot from
-  ``state`` and shows a failed Run's ``error`` beneath the line.
+  ``state`` and shows a failed Run's ``error`` beneath the line. A Run that
+  failed before its agent process started reads the content word "launch
+  failed" — ``state`` itself stays ``failed`` (the dot color and every other
+  state reader key off it), and the four launch/ref fields feed the header's
+  task spec and launch prompt link row. The header events are synthesized in
+  process by worker_transcript, so the four keys read directly.
   """
   parts = [f"Run {ev.get('kind') or 'run'}"]
   backend = ev.get("backend_label") or ev.get("backend") or ""
   if backend:
     parts.append(backend)
   state = ev.get("state") or ""
-  if state:
-    parts.append(state)
+  state_word = "launch failed" if ev["launch_failed"] else state
+  if state_word:
+    parts.append(state_word)
   return {
       "role": "system",
       "kind": ET.RUN_HEADER,
@@ -323,6 +329,10 @@ def _run_header_msg(ev: dict) -> dict:
       "run_id": ev.get("run_id") or "",
       "state": state,
       "error": ev.get("error") or "",
+      "launched": ev["launched"],
+      "launch_failed": ev["launch_failed"],
+      "task_spec_ref": ev["task_spec_ref"],
+      "launch_prompt_ref": ev["launch_prompt_ref"],
   }
 
 

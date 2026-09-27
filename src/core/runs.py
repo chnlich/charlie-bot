@@ -27,7 +27,6 @@ import asyncio
 import os
 import re
 import signal
-import stat
 import time
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
@@ -95,9 +94,6 @@ RAW_MISSING_ALIVE_REASON = "raw-missing-alive"
 # constant, so producer and matchers cannot drift.
 IMPROVE_ITERATION_PREFIX = "Iterative improvement — iteration"
 
-# Pids that must never appear in a kill list derived from the fd scan.
-_NEVER_KILL_PIDS = frozenset({0, 1})
-
 
 def backend_type(cfg: CharlieBotConfig, backend_id: str | None) -> str | None:
   """The configured transport type of ``backend_id``; None when unset or unknown."""
@@ -117,13 +113,6 @@ class RunOutcome(StrEnum):
 
 
 @dataclass(frozen=True)
-class HolderProcess:
-  """A process whose stdout fd still points at a run's raw log (inherited fd)."""
-  pid: int
-  cmdline: str
-
-
-@dataclass(frozen=True)
 class RunResolution:
   """Result of resolving an interrupted run from on-disk facts."""
   outcome: RunOutcome
@@ -131,8 +120,6 @@ class RunResolution:
   # Raw log's final mtime — the run's true completion time, independent of
   # downtime. Present whenever the raw log exists.
   completed_at: datetime | None = None
-  # Descendants that outlived the run while holding its raw-log fd.
-  leftover_holders: tuple[HolderProcess, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -230,65 +217,6 @@ def run_alive_probe(
   the recorded-identity judgment as a callable, not a one-shot boolean.
   """
   return lambda: is_run_alive(pid, pid_start, started_at, host_boot_time)
-
-
-# ---------------------------------------------------------------------------
-# Descendant discovery (diagnostic only — never a liveness input)
-# ---------------------------------------------------------------------------
-
-
-def scan_stdout_holders() -> dict[tuple[int, int], list[HolderProcess]]:
-  """Map (st_dev, st_ino) -> processes whose fd 1 points at that regular file.
-
-  One ``/proc/*/fd/1`` scan (~3 ms for ~500 processes). fd 1 follows the
-  symlink to whatever the process's stdout is; only regular files are indexed
-  (a run's raw log; consoles/pipes/sockets are skipped). Used exclusively to
-  find descendants that outlived their run's process group — it feeds reporting
-  and the leftover-holder cleanup, never liveness judgments.
-  """
-  holders: dict[tuple[int, int], list[HolderProcess]] = {}
-  for entry in os.scandir("/proc"):
-    if not entry.name.isdigit():
-      continue
-    pid = int(entry.name)
-    try:
-      st = os.stat(f"/proc/{pid}/fd/1")  # follows the fd symlink
-    except OSError:
-      continue  # process exited mid-scan, or no fd 1 / no permission
-    if not stat.S_ISREG(st.st_mode):
-      continue
-    try:
-      with open(f"/proc/{pid}/cmdline", "rb") as f:
-        cmdline = f.read().replace(b"\0", b" ").decode("utf-8", errors="replace").strip()
-    except OSError:
-      cmdline = ""
-    holders.setdefault((st.st_dev, st.st_ino), []).append(HolderProcess(pid=pid, cmdline=cmdline))
-  return holders
-
-
-def leftover_holders_for(
-    raw_path: Path,
-    holders_scan: dict[tuple[int, int], list[HolderProcess]],
-    *,
-    run_pid: int | None,
-) -> tuple[HolderProcess, ...]:
-  """Descendants still holding *raw_path*'s inode, excluding the run itself.
-
-  ``run_pid`` is the recorded (dead or re-used) leader pid; the current server
-  pid and init/system pids are always excluded so a kill list built from this
-  can never hit either.
-  """
-  try:
-    st = raw_path.stat()
-  except OSError:
-    return ()
-  own = os.getpid()
-  out = []
-  for holder in holders_scan.get((st.st_dev, st.st_ino), []):
-    if holder.pid in (run_pid, own) or holder.pid in _NEVER_KILL_PIDS:
-      continue
-    out.append(holder)
-  return tuple(out)
 
 
 # ---------------------------------------------------------------------------
@@ -511,7 +439,6 @@ def resolve_run(
     backend_type: str | None,
     translate: Callable[[dict], list[dict]],
     host_boot_time: datetime,
-    holders_scan: dict[tuple[int, int], list[HolderProcess]] | None = None,
 ) -> RunResolution:
   """Resolve an interrupted run's outcome purely from on-disk facts.
 
@@ -524,11 +451,6 @@ def resolve_run(
   says dead. Anything else (any input missing so death is unverifiable, or the
   probe says alive) is treated as alive and resolves to a RUNNING/STALLED row,
   never a DIED-on-missing-evidence finalize.
-
-  ``holders_scan`` is the output of one ``scan_stdout_holders`` call shared by
-  a whole reconcile pass; when given and the run is not alive, leftover
-  descendants are attached to the resolution (the outcome itself still comes
-  from the other rows).
   """
   now = datetime.now(UTC)
   raw_exists = raw_path.is_file()
@@ -561,15 +483,10 @@ def resolve_run(
       return RunResolution(outcome=RunOutcome.RUNNING, reason=RAW_MISSING_ALIVE_REASON)
     return RunResolution(outcome=RunOutcome.DIED, reason=LEGACY_RAW_MISSING_REASON)
 
-  leftovers: tuple[HolderProcess, ...] = ()
-  if not alive and holders_scan is not None:
-    leftovers = leftover_holders_for(raw_path, holders_scan, run_pid=pid)
-
   if result is not None:
     return RunResolution(
         outcome=RunOutcome.COMPLETED,
         completed_at=completed_at,
-        leftover_holders=leftovers,
     )
   if effectively_alive:
     silent_for = (now - completed_at).total_seconds() if completed_at else 0.0
@@ -588,7 +505,6 @@ def resolve_run(
       outcome=RunOutcome.DIED,
       reason=DIED_WITHOUT_RESULT_REASON,
       completed_at=completed_at,
-      leftover_holders=leftovers,
   )
 
 

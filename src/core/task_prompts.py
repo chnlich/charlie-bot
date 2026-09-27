@@ -61,7 +61,7 @@ from typing import TYPE_CHECKING
 from src.core.config import CharlieBotConfig
 from src.core.control_events import sha256_hex
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import SessionMetadata, TaskType
+from src.core.models import SessionMetadata, TaskSpec, TaskType
 
 if TYPE_CHECKING:
   from src.core.memory import MemorySelection
@@ -308,6 +308,16 @@ def _manager_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata) -> list
   return segments
 
 
+def prompt_task_type(task: TaskSpec | None) -> TaskType:
+  """The task type whose workflow contract a worker's prompt renders.
+
+  A type-less task (a scheduled firing's leaf) renders the implement contract,
+  as the legacy scheduled worker did. Delivery reads the raw type instead: a
+  type-less success closes without review.
+  """
+  return task.task_type if (task is not None and task.task_type) else TaskType.IMPLEMENT
+
+
 def _worker_kind_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata, kind: str,
                                task_type: TaskType) -> list[RuleSegment]:
   """Worker-kind rules: role, the task-type workflow contract, and the source-files rule.
@@ -452,8 +462,7 @@ def build_segments(
   if kind in MANAGER_KINDS:
     segments = _manager_rule_segments(cfg, meta)
   elif kind in WORKER_KINDS:
-    task_type = meta.task.task_type if (meta.task is not None and meta.task.task_type) else TaskType.IMPLEMENT
-    segments = _worker_kind_rule_segments(cfg, meta, kind, task_type)
+    segments = _worker_kind_rule_segments(cfg, meta, kind, prompt_task_type(meta.task))
   else:
     raise TaskPromptError(f"unknown run kind {kind!r}: no managed instruction contract")
   overlay_segments, overlay_error = _overlay_rule_segments(cfg, overlay)

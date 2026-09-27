@@ -436,8 +436,8 @@ class TaskExecutionAdapter:
         withheld launch records its durable ``run_launch_withheld`` event on
         the node — task closed, a durable stop request, or prompt assembly
         failed — and one blocked child report to the parent (once per run and
-        reason, by stable id). An
-        exception escaping before the adapter was entered is a
+        reason, by stable id). An exception escaping before the adapter was
+        entered is a
         failed-to-start launch: the caller's settlement sees it, never an
         endless wait.
         """
@@ -548,7 +548,7 @@ class TaskExecutionAdapter:
                     session_id,
                     source_event=event,
                     outcome="blocked",
-                    summary=reason,
+                    summary=f"launch withheld: {reason}",
                     result_refs=[f"run:{run_id}"],
                     recipient=meta.task_parent_id,
                     actor=ACTOR_SYSTEM,

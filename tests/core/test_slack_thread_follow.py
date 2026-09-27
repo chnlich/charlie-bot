@@ -180,10 +180,8 @@ async def test_eligible_thread_message_arms_the_follow_trigger(tmp_path: Path, w
 # ---------------------------------------------------------------------------
 # Arming: coalescing and the flush cap
 
-
 # ---------------------------------------------------------------------------
 # Mention pairing dedup, both delivery orders
-
 
 # ---------------------------------------------------------------------------
 # Reply gate and ack

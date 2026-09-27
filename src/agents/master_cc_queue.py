@@ -170,8 +170,9 @@ def _batch_prompt(parts: list[master_cc_state._WorkItem]) -> str:
   total = len(parts)
   rendered = []
   for position, part in enumerate(parts, start=1):
-    header = (f"[Queued input {position} of {total} · {part.input_event_type} · "
-              f"received {part.received_at.isoformat(timespec='seconds')}]")
+    header = (
+        f"[Queued input {position} of {total} · {part.input_event_type} · "
+        f"received {part.received_at.isoformat(timespec='seconds')}]")
     rendered.append(header + "\n" + master_cc_run._build_prompt(part.user_content, part.is_voice))
   return "\n\n".join(rendered)
 

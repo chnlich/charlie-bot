@@ -92,8 +92,6 @@ def test_seed_idempotence(temp_home: Path) -> None:
   assert all(it["status"] == "exists" for it in report2)
 
 
-
-
 # --- 3. startup never writes cron config -------------------------------------
 
 
@@ -108,7 +106,6 @@ def test_startup_never_writes_cron(temp_home: Path) -> None:
 
 
 # --- 4. get_scheduled_tasks is read-only -------------------------------------
-
 
 # --- 5. the pointed file owns the prompt body; the host file carries its path -
 #
@@ -161,12 +158,6 @@ def test_seed_fails_loud_on_legacy_cron(temp_home: Path) -> None:
   assert not (cfg.config_d_dir / "cron.d").exists(), "nothing written on legacy tripwire"
 
 
-
-
-
-
-
-
 # --- 9. failure isolation: one broken file never aborts another ---------------
 #
 # Each parametrized case injects a single broken file alongside two healthy
@@ -175,31 +166,17 @@ def test_seed_fails_loud_on_legacy_cron(temp_home: Path) -> None:
 # jobs fully.
 #
 
-
-
-
 # --- broken entries carry the failing file's path and raw enabled value ------
 #
 # The UI modal renders a broken task from {"name", "error", "path", "enabled"}:
 # `path` lets the maintainer locate the file, `enabled` renders the file's own
 # raw value (None — a greyed box — when the body cannot be parsed at all).
 
-
 # --- a prompt_file pointing at a path that no longer exists ------------------
 #
 # The loud-failure fixture: the broken entry's message carries the target's
 # absolute path so the operator can locate the missing file.
 
-
-
-
 # --- API: create persists the pointer, and the file reloads (round-trip) -----
 
-
 # --- single source: an inline-prompt file is the only error, the pointer loads -
-
-
-
-
-
-

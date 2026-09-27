@@ -342,9 +342,9 @@ async def test_queued_retry_launches_without_reauthorizing_and_verify_exemption(
   grand_id, grand_run = ids["grandchild"], "grandchild-run"
   await tree.dispatch.admit_input(ids["root"], event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
   builds = install_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("verdict: no")]),
-                    SpawningScriptedBackend([result_event("verdict: yes")])],
-      WORKER_BUILD_BACKEND_PATCH_TARGET)
+      monkeypatch,
+      [SpawningScriptedBackend([result_event("verdict: no")]),
+       SpawningScriptedBackend([result_event("verdict: yes")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   with make_api_client(cfg, session_mgr, tree) as client:
     ok = client.post(

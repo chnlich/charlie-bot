@@ -1,7 +1,6 @@
 """The yaml_utils loader contract: libyaml's C safe pair, its parity with the
 pure-Python safe pair, and the load/save behaviors every caller relies on."""
 
-
 import pytest
 import yaml
 

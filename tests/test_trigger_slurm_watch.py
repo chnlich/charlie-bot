@@ -15,9 +15,7 @@ from conftest import (
 from conftest import make_trigger_setup as _make_mgr
 from conftest import no_sleep as _no_sleep
 
-from src.core.models import (
-    SlurmJob,
-)
+from src.core.models import SlurmJob
 
 # ---------------------------------------------------------------------------
 # Single slurm job: terminal-state detection
@@ -101,7 +99,6 @@ async def test_slurm_single_job_terminal_state(
 
 # ---------------------------------------------------------------------------
 # Mixed-kind AND: local pid + slurm job
-
 
 # ---------------------------------------------------------------------------
 # No-sacct host: create-time fail-loud; pure pid / pure delay still work

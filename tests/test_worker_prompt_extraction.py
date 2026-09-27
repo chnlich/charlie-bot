@@ -56,5 +56,3 @@ def test_unresolved_token_in_assembled_output_raises(tmp_path: Path) -> None:
 
   with pytest.raises(ValueError, match="unresolved"):
     build_worker_prompt("desc", cfg=_cfg_with_repo(tmp_path))
-
-

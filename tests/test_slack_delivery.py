@@ -380,7 +380,6 @@ async def test_notice_post_failure_leaves_no_marker_and_the_boot_audit_posts_it_
 # ---------------------------------------------------------------------------
 # _chunk_text
 
-
 # ---------------------------------------------------------------------------
 # Boot backfill: lost summons
 # ---------------------------------------------------------------------------
@@ -404,7 +403,6 @@ async def test_backfill_run_twice_posts_once(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # Boot backfill: the round-end audit over finished rounds
-
 
 # ---------------------------------------------------------------------------
 # Ack reaction lifecycle

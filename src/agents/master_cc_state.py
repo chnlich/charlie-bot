@@ -75,8 +75,7 @@ class _WorkItem:
   # time a merged batch's header stamps each part with. The default_factory
   # stamps construction (direct-seeded items); _enqueue_work_item re-stamps so
   # the value is the enqueue moment.
-  received_at: datetime = dataclasses.field(
-      default_factory=lambda: datetime.now(ZoneInfo(HOUSE_TIMEZONE)))
+  received_at: datetime = dataclasses.field(default_factory=lambda: datetime.now(ZoneInfo(HOUSE_TIMEZONE)))
   # Structured attachment refs from the user message, handed to backend.run;
   # the opencode backend turns image refs into prompt file parts.
   uploaded_files: list[dict] | None = None

@@ -354,7 +354,6 @@ def _clear_unhandled_part_registries() -> None:
 
 _fresh_unhandled_part_type_registry = fresh_state_fixture(_clear_unhandled_part_registries)
 
-
 # --- SQLite lock-retry harness: a stub `opencode serve` (fake process + fake
 # HTTP/SSE endpoints; no real opencode binary) driving run() end to end. ---
 

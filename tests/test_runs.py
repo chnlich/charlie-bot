@@ -76,10 +76,8 @@ def test_result_success_matrix() -> None:
 # ---------------------------------------------------------------------------
 # End-of-run error hint selection (pure)
 
-
 # ---------------------------------------------------------------------------
 # Completion time and cursor
-
 
 # ---------------------------------------------------------------------------
 # resolve_run: the outcome rows
@@ -138,7 +136,6 @@ def test_resolve_kept_alive_when_death_unverifiable_and_no_result(tmp_path: Path
 
 # ---------------------------------------------------------------------------
 # Leftover fd holders
-
 
 # ---------------------------------------------------------------------------
 # finalize_effects judgments

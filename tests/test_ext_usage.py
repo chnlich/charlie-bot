@@ -326,11 +326,9 @@ def test_poll_stale_keep_on_fetch_failure(monkeypatch: pytest.MonkeyPatch) -> No
 # Round-robin scheduling (T4): per-account fetch order, per-fetch broadcast,
 # cache pruning at the round boundary, and the empty-round guard.
 
-
 # ---------------------------------------------------------------------------
 # Emit-time expiry annotation (broadcast + GET route): the shared claude
 # predicate judged on the server clock at every emit, on emit copies only.
-
 
 # ---------------------------------------------------------------------------
 # ClaudeUsageProvider: 401-triggered renewal. The provider owns no clock; the

@@ -124,7 +124,6 @@ def test_newest_first_events_prefiltered_parity(tmp_path: Path) -> None:
   ]
   target.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-
   unfiltered = list(iter_ndjson_events_from_end(target, log_event="test_skip", log_fields={}))
   candidates = {"result", "assistant", "assistant_error", "error", "rate_limit_event"}
   # Events without a type rode an unproven line (no leading "type"), which
@@ -187,5 +186,3 @@ async def test_read_loop_plan_returns_none_when_missing(tmp_path: Path) -> None:
   loop_dir = tmp_path / "loops" / "1"
   loop_dir.mkdir(parents=True)
   assert await read_loop_plan(loop_dir) is None
-
-

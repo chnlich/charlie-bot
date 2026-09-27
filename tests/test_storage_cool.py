@@ -148,7 +148,6 @@ def test_metadataless_session_dir_never_qualifies(cool_env: CharlieBotConfig) ->
 # ---------------------------------------------------------------------------
 # Transport files: scoped by relative path, allowlist of names
 
-
 # ---------------------------------------------------------------------------
 # Claude Code transcript directories
 # ---------------------------------------------------------------------------
@@ -319,14 +318,11 @@ def test_dry_run_leaves_every_byte_untouched_and_matches_real_run(tmp_path: Path
 # ---------------------------------------------------------------------------
 # Failure isolation
 
-
 # ---------------------------------------------------------------------------
 # Scoped run (--session)
 
-
 # ---------------------------------------------------------------------------
 # CLI and scheduler wiring
-
 
 # ---------------------------------------------------------------------------
 # Migrated run references: retention-protected evidence

@@ -127,7 +127,6 @@ def test_connect_never_established_retries_with_backoff_then_exhausts(
 # ---------------------------------------------------------------------------
 # Gap 2 — server_error keeps today's exit code and hint
 
-
 # ---------------------------------------------------------------------------
 # Gap 3(a) — readback determinism for improve, schedule-trigger, and plan
 # ---------------------------------------------------------------------------

@@ -19,15 +19,11 @@ from conftest import (
     run_resume_round,
 )
 
-from src.agents.backends.claude_code import (
-    out_of_family_served_models,
-)
+from src.agents.backends.claude_code import out_of_family_served_models
 from src.core import event_types as ET
 from src.core import runs
 from src.core.config import CharlieBotConfig
-from src.core.models import (
-    CreateSessionRequest,
-)
+from src.core.models import CreateSessionRequest
 from src.core.sessions import SessionManager
 
 CONFIGURED = "claude-fable-5-1"
@@ -96,14 +92,11 @@ def test_pure_and_mixed_out_of_family_rounds_detect_served_models() -> None:
 # ---------------------------------------------------------------------------
 # (e2) Family decision table + single-suffix-strip regression guard
 
-
 # ---------------------------------------------------------------------------
 # (e) Render mapping
 
-
 # ---------------------------------------------------------------------------
 # Wiring — live path (re-reads this invocation's own raw log)
-
 
 # ---------------------------------------------------------------------------
 # Wiring — re-attach path (reuses the whole-round projection, zero new I/O)

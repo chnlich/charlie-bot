@@ -295,7 +295,7 @@ async def delegate_task(
       raise HTTPException(
           status_code=400,
           detail=f"{req.task_type.value} delegations take repo_path and base_branch together; "
-                 "give both for a repo task, neither for a repo-less one")
+          "give both for a repo task, neither for a repo-less one")
   require_found(await session_mgr.get_session(req.session_id))
   meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr, task_mgr)
   return await _delegate_task_tree(req, meta, cfg, task_mgr, session_mgr, caller, resolved_backend, resolved_model)

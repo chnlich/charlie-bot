@@ -16,9 +16,7 @@ from conftest import append_events as _append_events
 from conftest import make_parent as _make_parent
 from conftest import session_dir_names as _session_dir_names
 
-from src.core.config import (
-    CharlieBotConfig,
-)
+from src.core.config import CharlieBotConfig
 from src.core.models import (
     CreateSessionRequest,
     SessionMetadata,

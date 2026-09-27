@@ -105,8 +105,8 @@ def unanswered_input_events(chat_events: list[dict], exclude_ids: set[str]) -> l
     if ev.get("type") == ET.MASTER_DONE:
       last_done = idx
   return [
-      ev for ev in chat_events[last_done + 1:] if ev.get("type") in (ET.USER, ET.SCHEDULED_TRIGGER) and
-      isinstance(ev.get("content"), str) and ev.get("id") not in exclude_ids
+      ev for ev in chat_events[last_done + 1:] if ev.get("type") in (
+          ET.USER, ET.SCHEDULED_TRIGGER) and isinstance(ev.get("content"), str) and ev.get("id") not in exclude_ids
   ]
 
 
@@ -299,8 +299,8 @@ async def _replay_unanswered_inputs(
       for ev in unanswered_input_events(events, skip):
         log.warning("master_replaying_user_message", session=meta.id, event_id=ev.get("id"))
         replay = (
-            master_cc.replay_scheduled_trigger(cfg, meta, ev, session_mgr.callbacks()) if ev.get("type") == ET.
-            SCHEDULED_TRIGGER else master_cc.replay_user_message(cfg, meta, ev, session_mgr.callbacks()))
+            master_cc.replay_scheduled_trigger(cfg, meta, ev, session_mgr.callbacks()) if ev.get("type")
+            == ET.SCHEDULED_TRIGGER else master_cc.replay_user_message(cfg, meta, ev, session_mgr.callbacks()))
         create_logged_task(replay, name=f"master-replay-{meta.id[:8]}")
     except Exception:
       log.exception("master_replay_dispatch_failed", session=meta.id)

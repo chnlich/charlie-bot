@@ -148,10 +148,8 @@ async def test_fork_outside_parent_artifact_does_not_alias_copied_artifact(tmp_p
 # ---------------------------------------------------------------------------
 # D2: sidebar pending-approval flag (all_sessions_status)
 
-
 # ---------------------------------------------------------------------------
 # A1: corrupt registry — sidebar survives, plan_registry_read_failed warning
-
 
 # ---------------------------------------------------------------------------
 # A5: first-paint sidebar badge — GET /api/sessions/ carries has_pending_plan_approval

@@ -12,9 +12,7 @@ import pytest
 import yaml
 from conftest import build_scheduler_cfg
 
-from src.core.config import (
-    _load_cron_file,
-)
+from src.core.config import _load_cron_file
 
 SELECTOR_BODY = "Select memory candidates.\n"
 REVIEWER_BODY = "Review the memory diff.\n"
@@ -89,5 +87,3 @@ def test_load_cron_file_rejects_step_prompt_source_violation(
     _load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
   error = str(exc_info.value)
   assert all(fragment in error for fragment in expected_fragments)
-
-

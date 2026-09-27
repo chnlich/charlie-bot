@@ -63,5 +63,3 @@ async def test_crash_recovery_report_no_successor_writes_into_itself_without_ori
   report = next(ev for ev in own_events if ev.get("source") == "crash_recovery")
   assert "worker thread stalled" in report["content"]
   assert "origin_session_id" not in report
-
-

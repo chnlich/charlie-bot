@@ -123,8 +123,7 @@ async def test_manager_prompt_carries_the_shared_master_rules(tmp_path: Path) ->
   assert "prompts/task_base.md" in refs
   assert "prompts/task_manager.md" in refs
   # master.md sits between task_base and task_manager in the rule order.
-  assert refs.index("prompts/task_base.md") < refs.index("prompts/master.md") < refs.index(
-      "prompts/task_manager.md")
+  assert refs.index("prompts/task_base.md") < refs.index("prompts/master.md") < refs.index("prompts/task_manager.md")
   joined = snapshot.instructions_text
   assert "Direct work and delegation divide by where the change lands." in joined
   assert "Every write to a repository, whatever its size, goes through `charliebot delegate` to a worker." in joined
@@ -241,7 +240,6 @@ async def test_staged_candidates_never_enter_startup_or_query(tmp_path: Path) ->
 
 # ---------------------------------------------------------------------------
 # Snapshot / hash contract
-
 
 # ---------------------------------------------------------------------------
 # Own-subtree scope: THIS NODE AND ITS DESCENDANTS

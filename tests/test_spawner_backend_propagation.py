@@ -146,5 +146,3 @@ def test_build_worker_prompt_task_type_script_run_forbids_edits_and_commits() ->
 def test_build_worker_prompt_rejects_verify_task_type() -> None:
   with pytest.raises(ValueError, match="unsupported task_type"):
     build_worker_prompt("Verify plan", cfg=_build_cfg(), task_type=TaskType.VERIFY)
-
-

@@ -17,6 +17,8 @@ from src.core.config import (
     CREDENTIALS_PREFIX,
     LEGACY_KEYS,
     CharlieBotConfig,
+    ScheduledTaskConfig,
+    StepConfig,
     require_backends,
 )
 from src.core.init_seed import init_charliebot_home
@@ -268,7 +270,7 @@ def test_init_charliebot_home_seeds_config_and_credentials(tmp_path: Path, monke
 def test_require_backends_rejects_empty_list() -> None:
   """An empty backends.options raises ValueError naming the key and the example file."""
   with pytest.raises(ValueError) as exc_info:
-    require_backends(CharlieBotConfig())
+    require_backends(CharlieBotConfig(), [])
   message = str(exc_info.value)
   assert "backends.options" in message
   assert "config.example.yaml" in message
@@ -277,4 +279,63 @@ def test_require_backends_rejects_empty_list() -> None:
 def test_require_backends_accepts_one_entry() -> None:
   """A config listing one backend option passes the startup gate."""
   cfg = CharlieBotConfig(backends={"options": [backend_option(id="a", label="A", type="cc-claude", model="m")]})
-  assert require_backends(cfg) is None
+  assert require_backends(cfg, []) is None
+
+
+def _family_backends(tmp_path: Path, preference: list[str], *ids: str) -> CharlieBotConfig:
+  """A config at *tmp_path* whose options carry *ids* (cc-claude) and the given preference."""
+  options = [backend_option(id=backend_id, label=backend_id, type="cc-claude", model="m") for backend_id in ids]
+  return CharlieBotConfig(charliebot_home=tmp_path, backends={"preference": preference, "options": options})
+
+
+def test_require_backends_accepts_known_references_and_backendless_cron(tmp_path: Path) -> None:
+  """Preference entries, cron task backends and step backends that name option ids pass, and a
+  cron task or step without a backend stays valid."""
+  cfg = _family_backends(tmp_path, ["claude-sonnet", "claude-opus"], "claude-opus", "claude-sonnet")
+  tasks = [
+      ScheduledTaskConfig(name="pinned", cron="0 * * * *", prompt="p", backend="claude-opus"),
+      ScheduledTaskConfig(name="unpinned", cron="0 * * * *", prompt="p"),
+      ScheduledTaskConfig(
+          name="chain",
+          cron="0 * * * *",
+          steps=[StepConfig(name="a", prompt="p", backend="claude-sonnet"),
+                 StepConfig(name="b", prompt="p")]),
+  ]
+  assert require_backends(cfg, tasks) is None
+
+
+def test_require_backends_rejects_unknown_preference_entry(tmp_path: Path) -> None:
+  """A preference entry naming no option id stops startup; the error names the file, the entry
+  and the id."""
+  cfg = _family_backends(tmp_path, ["claude-opus", "codex-gpt-5.6-luna"], "claude-opus")
+  with pytest.raises(ValueError) as exc_info:
+    require_backends(cfg, [])
+  message = str(exc_info.value)
+  assert f"{tmp_path / 'config.yaml'}: backends.preference[1] names unknown backend 'codex-gpt-5.6-luna'" in message
+  assert "claude-opus'" not in message
+
+
+def test_require_backends_rejects_unknown_cron_task_backend(tmp_path: Path) -> None:
+  """A cron task or step backend naming no option id stops startup; each error line names the
+  task's cron.d file, the entry and the id."""
+  cfg = _family_backends(tmp_path, [], "claude-opus")
+  tasks = [
+      ScheduledTaskConfig(name="nightly", cron="0 * * * *", prompt="p", backend="charlie-code-kimi-k3"),
+      ScheduledTaskConfig(
+          name="chain", cron="0 * * * *", steps=[StepConfig(name="build", prompt="p", backend="claude-opus-5")]),
+  ]
+  with pytest.raises(ValueError) as exc_info:
+    require_backends(cfg, tasks)
+  message = str(exc_info.value)
+  cron_d = tmp_path / "config.d" / "cron.d"
+  assert f"{cron_d / 'nightly.yaml'}: backend names unknown backend 'charlie-code-kimi-k3'" in message
+  assert f"{cron_d / 'chain.yaml'}: steps 'build' backend names unknown backend 'claude-opus-5'" in message
+
+
+def test_require_backends_rejects_duplicate_option_id(tmp_path: Path) -> None:
+  """An option id listed twice stops startup; the error names the file, the repeated entry and
+  the id."""
+  cfg = _family_backends(tmp_path, [], "claude-opus", "claude-sonnet", "claude-opus")
+  with pytest.raises(ValueError) as exc_info:
+    require_backends(cfg, [])
+  assert f"{tmp_path / 'config.yaml'}: backends.options[2] repeats id 'claude-opus'" in str(exc_info.value)

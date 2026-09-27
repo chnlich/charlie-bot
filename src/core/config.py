@@ -269,6 +269,16 @@ class BackendsConfig(BaseModel):
 
   model_config = ConfigDict(extra='forbid')
 
+  # Backend id rule (the one home of it; other docs point here). An option id is
+  # "<type prefix>-<family>" (claude-opus, codex-luna, charlie-code-kimi), the
+  # prefix one of claude-, codex-, charlie-code-. The id names the model family
+  # and carries no version: the version lives only in the entry's `model` and
+  # `label`. Session, thread and Run metadata, cron tasks and `preference` store
+  # the id, so a version bump edits exactly those two fields of one entry and
+  # every stored reference stays valid. The usage tally classifies a retired id
+  # (off config, still in old records) by its prefix. require_backends refuses a
+  # startup whose preference or cron tasks name an id missing from `options`.
+
   # Ordered preference list of BackendOption ids, consumed by two selectors:
   #   - checking-role (reviewer, verify default): first entry that DIFFERS from the
   #     checked party's backend and resolves — see review.select_reviewer_backend.
@@ -717,18 +727,42 @@ def load_config() -> CharlieBotConfig:
         "; declare the key(s) on CharlieBotConfig or remove them") from e
 
 
-def require_backends(cfg: CharlieBotConfig) -> None:
-  """Raise ValueError when ``backends.options`` is empty.
+def require_backends(cfg: CharlieBotConfig, cron_tasks: list[ScheduledTaskConfig]) -> None:
+  """Raise ValueError when ``backends.options`` or a reference into it is broken.
 
-  The server calls this once at startup because every session and cron run
-  resolves a backend from this list, so an empty list is a deployment error
-  worth stopping on. ``load_config`` stays permissive for CLIs that never
+  The server calls this once at startup, with the cron tasks as the loader reads
+  them (:func:`get_scheduled_tasks`), because every session and cron run
+  resolves a backend id against this list; a broken catalog is a deployment
+  error worth stopping on. Refused: an empty list, an option id listed twice,
+  and a ``backends.preference`` entry, cron task ``backend`` or cron step
+  ``backend`` naming no option id (a task or step without a backend stays
+  valid). One error lists every violation, each line naming the file, the
+  entry and the id. ``load_config`` stays permissive for CLIs that never
   resolve a backend.
   """
   if not cfg.backends.options:
     raise ValueError(
         "config.yaml: backends.options lists no backend; "
         "copy the starter entries from configs/config.example.yaml")
+  problems: list[str] = []
+  ids: set[str] = set()
+  for index, option in enumerate(cfg.backends.options):
+    if option.id in ids:
+      problems.append(f"{cfg.config_file}: backends.options[{index}] repeats id '{option.id}'")
+    ids.add(option.id)
+  for index, backend_id in enumerate(cfg.backends.preference):
+    if backend_id not in ids:
+      problems.append(f"{cfg.config_file}: backends.preference[{index}] names unknown backend '{backend_id}'")
+  for task in cron_tasks:
+    task_file = cfg.config_d_dir / "cron.d" / f"{task.name}.yaml"
+    refs = [("backend", task.backend)] + [(f"steps '{step.name}' backend", step.backend) for step in task.steps or []]
+    for entry, backend_id in refs:
+      if backend_id and backend_id not in ids:
+        problems.append(f"{task_file}: {entry} names unknown backend '{backend_id}'")
+  if problems:
+    raise ValueError(
+        "backend references must name a backends.options id (id rule: BackendsConfig in "
+        "src/core/config.py):\n" + "\n".join(f"  {problem}" for problem in problems))
 
 
 def get_config() -> CharlieBotConfig:

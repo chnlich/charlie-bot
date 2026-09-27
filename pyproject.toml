@@ -52,7 +52,12 @@ build-backend = "setuptools.build_meta"
 [tool.pytest.ini_options]
 markers = [
     "local_only: requires host-local resources (GPU, tailnet, local services, installed local binaries); CI runs -m 'not local_only'",
+    "integration: needs real processes or real time; per-test budget 10s (unit default 1s) and at most 50 collected - tests/conftest.py enforces all three",
 ]
+# Enforced by tests/conftest.py; a test of the mechanism shrinks these in its own ini.
+unit_test_budget_seconds = 1.0
+integration_test_budget_seconds = 10.0
+max_integration_tests = 50
 
 [tool.ruff.lint]
 # B008 stays out: function-call-in-default-argument is FastAPI's Depends idiom.

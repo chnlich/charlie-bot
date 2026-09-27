@@ -1397,19 +1397,31 @@ def _backend_registry() -> dict[str, object]:
   return {opt.id: opt for opt in get_config().backends.options}
 
 
+# Backend id type prefixes with the collect disposition of an id off config (a retired id):
+# the id rule (BackendsConfig in src/core/config.py) keeps the prefix on every id, so an id
+# that left config still names its backend type.
+_BACKEND_ID_PREFIXES = (("charlie-code-", "include"), ("codex-", "codex"), ("claude-", "skip"), ("opencode-", "skip"))
+
+
 def _thread_row_model(meta: dict, registry: dict) -> str:
-  """The row name for one thread: the backend's config model (bare) when the id is still
-  registered, else the id's own model segment ("codex-gpt-5.6-sol-personal" ->
-  "gpt-5.6-sol-personal" — retired backends are off config, and their id is
-  "<type prefix>-<model name>" by convention), else the metadata model (bare)."""
-  backend = meta.get("backend")
-  if backend:
-    opt = registry.get(backend)
-    if opt is not None and opt.model:
-      return _bare_model(opt.model)
-    return str(backend).split("-", 1)[-1]
+  """The row name for one thread: the model the thread's metadata recorded (bare), else the
+  backend's config model (bare) while the id is registered, else the id minus its type
+  prefix ("codex-gpt-5.6-sol-personal" -> "gpt-5.6-sol-personal"), which only a retired id
+  whose thread recorded no model reaches. The recorded model leads because an id names a
+  family and keeps its name across version bumps (the id rule on BackendsConfig in
+  src/core/config.py): the config model is today's version, and reading it first would
+  move a thread's history onto every later version."""
   model = meta.get("model")
-  return _bare_model(model) if model else "unknown"
+  if model:
+    return _bare_model(model)
+  backend = meta.get("backend")
+  if not backend:
+    return "unknown"
+  opt = registry.get(backend)
+  if opt is not None and opt.model:
+    return _bare_model(opt.model)
+  prefix = next((p for p, _verdict in _BACKEND_ID_PREFIXES if backend.startswith(p)), "")
+  return backend.removeprefix(prefix)
 
 
 def _thread_metadata(path: str) -> dict | None:
@@ -1571,8 +1583,7 @@ def _classify_backend(backend: str, registry: dict) -> str | None:
   opt = registry.get(backend)
   btype = str(opt.type) if opt is not None else None
   if btype is None:
-    for prefix, verdict in (("charlie-code-", "include"), ("codex-", "codex"), ("claude-", "skip"), ("opencode-",
-                                                                                                     "skip")):
+    for prefix, verdict in _BACKEND_ID_PREFIXES:
       if backend.startswith(prefix):
         return verdict
     return None

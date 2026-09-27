@@ -2185,6 +2185,45 @@ def test_charliebot_metadata_classification(tmp_path: Path, monkeypatch: pytest.
   assert any("thread t2 (no backend id)" in n and "1 results not counted" in n for n in tally.notes)
 
 
+def test_charliebot_thread_row_takes_the_recorded_model_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A thread's row names the model its metadata recorded even when config maps its id to a
+  later version; a thread without a recorded model takes the config model, and a retired id
+  without one takes the id minus its type prefix."""
+  _stub_registry(monkeypatch, _Option("charlie-code-glm-flash", "charlie-code", "openai/zai-org/GLM-5.4-Flash"))
+  cb = Charliebot(tmp_path)
+  cb.thread(
+      "s1",
+      "t1",
+      backend="charlie-code-glm-flash",
+      model="openai/zai-org/GLM-5.3-Flash",
+      session_ids=[],
+      results=[("2026-09-11T20:00:00+00:00", _result_usage(100, 5))])
+  cb.thread(
+      "s1",
+      "t2",
+      backend="charlie-code-glm-flash",
+      model=None,
+      session_ids=[],
+      results=[("2026-09-12T20:00:00+00:00", _result_usage(200, 5))])
+  cb.thread(
+      "s1",
+      "t3",
+      backend="charlie-code-kimi-k3",
+      model=None,
+      session_ids=[],
+      results=[("2026-09-13T20:00:00+00:00", _result_usage(300, 5))])
+
+  tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)
+
+  recorded = _row(tally, "charlie-bot", "GLM-5.3-Flash")
+  assert recorded.calls == 1 and recorded.total == 105
+  assert [a.name for a in recorded.accounts] == ["charlie-code-glm-flash"]
+  assert _row(tally, "charlie-bot", "GLM-5.4-Flash").total == 205
+  retired = _row(tally, "charlie-bot", "kimi-k3")
+  assert retired.total == 305
+  assert [a.name for a in retired.accounts] == ["charlie-code-kimi-k3"]
+
+
 def test_charliebot_codex_reconciliation_reads_the_typed_attach_signal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The typed session-adopt line (the shape every backend emits since the M100
@@ -2230,7 +2269,7 @@ def test_charliebot_codex_reconciliation(tmp_path: Path, monkeypatch: pytest.Mon
   """A codex thread counts only when none of its session ids has a rollout on disk: one id
   on disk skips, an id that only lives in the thread log counts, and a multi-id thread with
   any id on disk skips whole with a note. A retired id not in config.yaml classifies by its
-  prefix and names its row after the id's own model segment."""
+  prefix and names its row after the model its thread recorded."""
   _stub_registry(monkeypatch, _Option("codex-gpt-5.6-luna", "codex", "gpt-5.6-luna"))
   codex = Codex(tmp_path)
   cb = Charliebot(tmp_path)
@@ -2273,11 +2312,11 @@ def test_charliebot_codex_reconciliation(tmp_path: Path, monkeypatch: pytest.Mon
   tally = _collect(None, codex, tmp_path / "db.sqlite", sessions=cb.root)
 
   models = {r.model: r for r in tally.rows if r.source == "charlie-bot"}
-  assert set(models) == {"gpt-5.6-luna", "gpt-5.5-personal"}
+  assert set(models) == {"gpt-5.6-luna", "gpt-5.5"}
   assert models["gpt-5.6-luna"].calls == 1  # t2 only; t1 and t4 are on disk
   assert models["gpt-5.6-luna"].total == 2520  # envelope buckets verbatim
-  assert models["gpt-5.5-personal"].calls == 1  # retired id, classified by prefix
-  assert models["gpt-5.5-personal"].accounts[0].name == "codex-gpt-5.5-personal"
+  assert models["gpt-5.5"].calls == 1  # retired id, classified by prefix
+  assert models["gpt-5.5"].accounts[0].name == "codex-gpt-5.5-personal"
   skips = [n for n in tally.notes if n.startswith("charlie-bot: skipped codex thread")]
   assert any("t1" in n and s1 in n for n in skips)
   assert any("t4" in n and multi_a in n for n in skips)

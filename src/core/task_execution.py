@@ -71,7 +71,6 @@ from src.core.runs import RUN_EVENTS_NAME, RunNotFoundError, run_not_found_in_ta
 from src.core.session_dispatch import child_report_text
 from src.core.sessions import HISTORY_LOCATION_NOTE, SessionManager
 from src.core.spawner_backends import resolve_backend_option
-from src.core.takeoff_gate import is_verify_exempt
 from src.core.task_prompts import WORKER_KINDS, PromptSnapshot, TaskPromptError
 from src.core.task_sessions import (
     TaskConflictError,
@@ -615,14 +614,6 @@ class TaskExecutionAdapter:
         # launch-failed run's evidence is reachable exactly the way a process
         # run's is (record_observation writes only the provided fields).
         await self._tree.runs.record_observation(session_id, run_id, events_ref=str(events_log))
-
-    @staticmethod
-    def _verify_exempt(meta: SessionMetadata) -> bool:
-        """The established read-only verify exemption: a verify task's run
-        never needs a takeoff window (the same exemption the delegation route
-        applies at admission and the agent-creation check applies at create —
-        one shared judgment, takeoff_gate.is_verify_exempt)."""
-        return is_verify_exempt(meta.task)
 
     async def _await_terminal(self, session_id: str, run_id: str) -> str:
         """Await one Run's durable terminal fact; returns its outcome."""

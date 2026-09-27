@@ -10,7 +10,10 @@
 let ws = null;
 let reconnectDelay = 1000;
 let reconnectTimer = null;
-let pendingUserMsg = false;
+// User echoes still awaiting their skip: one ++ per local optimistic send, one
+// -- per server echo consumed in _commitMessage. A count, not a boolean, so
+// two sends fired before the first echo arrives each skip exactly their own.
+let pendingUserEchoes = 0;
 let wsGeneration = 0;
 
 function isStaleSocket(socket, targetSession, generation) {
@@ -105,10 +108,11 @@ function _commitMessage(msg) {
   // reports is the snapshot the first paint was built from, so every frame the
   // server replays is one the client does not already have. There is no
   // connection-phase state to gate rendering on.
-  if (msg.role === 'user' && pendingUserMsg) {
-    // The local tab already rendered this user message optimistically; skip
-    // the server-side echo so the bubble doesn't double up.
-    pendingUserMsg = false;
+  if (msg.role === 'user' && pendingUserEchoes > 0) {
+    // The local tab already rendered this user message optimistically; each
+    // pending send consumes exactly one server-side echo so the bubble doesn't
+    // double up.
+    pendingUserEchoes--;
     return;
   }
   // A committed bubble supersedes the streaming preview: the draft it carries is

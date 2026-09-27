@@ -456,6 +456,9 @@ function startUpload(run) {
   run.phase = 'uploading';
   run.uploadTimedOut = false;
   run.requestInFlight = true;
+  // The transcription window (upload + decode) opens here: it counts toward
+  // the send-button lock; the recording before it never did.
+  voiceTranscriptionStarted();
   updateVoiceLeaveGuard();
   showVoiceHint(run, VOICE_HINT_UPLOADING);
   run.uploadTimer = setTimeout(() => {
@@ -488,6 +491,9 @@ function failVoiceUpload(run, err) {
   clearVoiceUploadTimer(run);
   run.xhr = null;
   run.requestInFlight = false;
+  // The window closes with the failure; a retry re-enters startUpload and
+  // opens a fresh one.
+  voiceTranscriptionSettled();
   run.phase = 'retry'; // the buffer stays; the next click re-uploads it
   updateVoiceLeaveGuard();
   const message = run.uploadTimedOut ? 'Voice upload timed out' : err.message;
@@ -505,6 +511,9 @@ function applyVoiceFinal(run, fullText) {
   clearVoiceUploadTimer(run);
   run.xhr = null;
   run.requestInFlight = false;
+  // The window closes with the decode landed; run.xhr is already null, so the
+  // release's abort below settles nothing further.
+  voiceTranscriptionSettled();
   releaseVoiceRun(run);
   const words = fullText.trim();
   if (!words) {
@@ -899,6 +908,10 @@ function abortVoiceUpload(run) {
   run.xhr = null;
   if (!xhr) return;
   xhr.abort();
+  // An xhr still held here means its startUpload window never settled: the
+  // abort's own callbacks die on the ownership guard, so the cancel and the
+  // session-switch teardown settle the count at this one spot.
+  voiceTranscriptionSettled();
 }
 
 function cleanupVoiceCapture(run) {

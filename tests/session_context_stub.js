@@ -32,7 +32,7 @@ function baseSessionContext(overrides = {}) {
     streamBuf: '',
     streamTs: null,
     catchupDone: false,
-    pendingUserMsg: false,
+    pendingUserEchoes: 0,
     uploadedFiles: [],
     localStorage: {
       getItem: (key) => localStorageData.has(key) ? localStorageData.get(key) : null,

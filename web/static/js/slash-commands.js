@@ -70,7 +70,7 @@ async function executeSlashCommand(name, args, options = {}) {
   const displayText = options.displayText || (args ? `/${name} ${args}` : `/${name}`);
   const uploadedFiles = Array.isArray(options.uploadedFiles) ? options.uploadedFiles : getUploadedFilesForPayload();
   const payloadFiles = toPayloadFiles(uploadedFiles);
-  pendingUserMsg = true;
+  pendingUserEchoes++;
   try {
     const res = await fetch(`/api/slash/${SESSION_ID}/execute`, {
       method: 'POST',
@@ -79,7 +79,7 @@ async function executeSlashCommand(name, args, options = {}) {
     });
     const data = await res.json();
     if (data.error) {
-      pendingUserMsg = false;
+      pendingUserEchoes--;
       showToast(data.error, true);
       return;
     }
@@ -96,7 +96,9 @@ async function executeSlashCommand(name, args, options = {}) {
       const out = data.exit_code !== 0 && data.stderr ? data.stderr : (data.stdout || data.stderr || '(no output)');
       appendMessage('assistant', '```\n' + out + '\n```');
     } else if (data.type === 'prompt_dispatched') {
-      startThinking();
+      // Same initiation convention as a plain send: think, keep the button
+      // with the in-flight lock.
+      startThinking({keepSendEnabled: true});
     } else if (data.type === 'improve_stopped') {
       appendMessage('system', data.message || 'Improve loop will stop after current iteration');
     } else if (data.type === 'task_triggered') {
@@ -104,7 +106,7 @@ async function executeSlashCommand(name, args, options = {}) {
     }
   } catch (err) {
     console.error('executeSlashCommand failed:', err);
-    pendingUserMsg = false;
+    pendingUserEchoes--;
     showToast('Slash command failed: ' + err.message, true);
   }
 }

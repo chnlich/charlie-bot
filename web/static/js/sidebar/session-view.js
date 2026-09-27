@@ -423,8 +423,9 @@ async function switchSession(sessionId) {
   disconnectWS();
   cancelReconnect();
 
-  // Reset streaming state
-  pendingUserMsg = false;
+  // Reset streaming state; the view rebuild clears any pending echo count —
+  // no local send survives the session swap.
+  pendingUserEchoes = 0;
   hideStreaming();
 
   // Click-time feedback: placeholder over the stale DOM, header name and
@@ -942,7 +943,7 @@ async function createTaskNode(taskParentId, group) {
     teardownActiveSessionView();
     disconnectWS();
     cancelReconnect();
-    pendingUserMsg = false;
+    pendingUserEchoes = 0;
     hideStreaming();
 
     const bootstrap = buildEmptySessionBootstrap(data);
@@ -981,7 +982,7 @@ function renderNoActiveSessionView() {
   hideStreaming();
   disconnectWS();
   cancelReconnect();
-  pendingUserMsg = false;
+  pendingUserEchoes = 0;
 
   SESSION_ID = null;
   globalThis.renderPendingTriggersTray(null, false);

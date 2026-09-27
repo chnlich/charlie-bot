@@ -70,6 +70,7 @@ _NODE_TESTS = [
     "prose_markdown_memo.test.js",
     "prose_math_memo.test.js",
     "rendering_worker_summary_origin.test.js",
+    "send_button_lock.test.js",
     "session_switch_stale_pagination.test.js",
     "session_view_create_task.test.js",
     "session_view_sentinel.test.js",

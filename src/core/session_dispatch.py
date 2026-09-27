@@ -397,8 +397,9 @@ class TaskInputDispatcher:
         from src.core.master_trigger import trigger_master
         from src.core.tasks import create_logged_task
 
-        return create_logged_task(trigger_master(parent_id, text, tree._cfg, tree.sessions),
-                                  name=f"legacy-parent-wake-{parent_id[:8]}")
+        return create_logged_task(
+            trigger_master(parent_id, text, tree._cfg, tree.sessions, ET.CHILD_REPORT),
+            name=f"legacy-parent-wake-{parent_id[:8]}")
 
     def _tui_manager_refusal(self, meta) -> str | None:
         """Why a headless manager turn must not start on *meta*, or None.

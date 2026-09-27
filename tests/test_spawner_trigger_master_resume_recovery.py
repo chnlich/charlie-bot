@@ -10,6 +10,7 @@ from conftest import (
     OPUS_BACKEND_OPTION,
 )
 
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.master_trigger import trigger_master
 from src.core.models import BackendOption, MasterRunRecord, SessionCallbacks, SessionMetadata
@@ -111,7 +112,7 @@ async def test_stale_resume_id_retries_once_without_resume_and_does_not_persist(
   monkeypatch.setattr(MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
   monkeypatch.setattr(_LOG_PATCH_TARGET, mock_log)
 
-  await trigger_master(session_id, "worker summary", cfg, session_mgr)
+  await trigger_master(session_id, "worker summary", cfg, session_mgr, ET.CHILD_REPORT)
 
   assert call_resume_ids == ["stale-id", None]
   assert [backend_option.id for backend_option in call_backend_options] == ["codex-o3", "codex-o3"]
@@ -147,7 +148,7 @@ async def test_non_recoverable_error_does_not_retry_and_failure_is_preserved(mon
   monkeypatch.setattr(MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
   monkeypatch.setattr(_LOG_PATCH_TARGET, mock_log)
 
-  await trigger_master(session_id, "worker summary", cfg, session_mgr)
+  await trigger_master(session_id, "worker summary", cfg, session_mgr, ET.CHILD_REPORT)
 
   assert call_count == 1
   assert [backend_option.id for backend_option in call_backend_options] == ["codex-o3"]

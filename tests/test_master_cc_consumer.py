@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -75,7 +76,13 @@ async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None
   meta_user_message = _make_meta(session_id)  # distinct instance, freshly loaded from disk
   cb = mock_session_callbacks()
   item_bootstrap = make_work_item(MagicMock(), meta_bootstrap, None, user_content="hi", callbacks=cb)
-  item_user = make_work_item(MagicMock(), meta_user_message, None, user_content="hi", callbacks=cb)
+  # Different extra flags keep the two items in separate turns under the batch
+  # contract (equal run settings would merge them into one round); the relay
+  # under test is the consumer's cross-turn cc_session_id fill.
+  item_user = replace(
+      make_work_item(MagicMock(), meta_user_message, None, user_content="hi", callbacks=cb),
+      extra_claude_flags=["--relay-probe"],
+  )
 
   observed_cc_session_ids: list = []
 
@@ -132,6 +139,7 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
             SessionMetadata(id=session_id, name="t"),
             "extra",
             callbacks,
+            ET.USER,
             skip_user_event=True,
         ))
 
@@ -174,7 +182,7 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
 
   async with fresh_master_state(session_id):
     task1 = asyncio.create_task(
-        master_cc.run_message(cfg, SessionMetadata(id=session_id, name="t"), "first", callbacks, skip_user_event=True))
+        master_cc.run_message(cfg, SessionMetadata(id=session_id, name="t"), "first", callbacks, ET.USER, skip_user_event=True))
     assert await asyncio.wait_for(task1, timeout=5) == "cc-1"
 
     # For injections fired during the consumer's teardown awaits, the work item
@@ -232,7 +240,7 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
 
   async with fresh_master_state(session.id):
-    result = await master_cc.run_message(cfg, session, "hi", session_mgr.callbacks(), skip_user_event=True)
+    result = await master_cc.run_message(cfg, session, "hi", session_mgr.callbacks(), ET.USER, skip_user_event=True)
     assert result == backend_returned_id
     await drain_session_consumer(session.id, timeout=5)
 
@@ -325,7 +333,7 @@ async def _run_stream_consumer(
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
 
   async with fresh_master_state(session_id):
-    await master_cc.run_message(cfg, meta, "hi", cb, skip_user_event=True)
+    await master_cc.run_message(cfg, meta, "hi", cb, ET.USER, skip_user_event=True)
     await drain_session_consumer(session_id, timeout=5)
   return cb
 

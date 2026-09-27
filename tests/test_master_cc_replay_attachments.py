@@ -9,6 +9,7 @@ import pytest
 from conftest import CapturingBackend, run_captured_round
 
 from src.agents import master_cc, master_cc_queue
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import SessionCallbacks, SessionMetadata
 
@@ -21,7 +22,7 @@ async def test_run_message_passes_uploaded_files_to_backend(tmp_path: Path, monk
   backend.run call receives them."""
 
   async def drive(cfg: CharlieBotConfig, meta: SessionMetadata, callbacks: SessionCallbacks) -> None:
-    await master_cc.run_message(cfg, meta, "what is in this picture", callbacks, uploaded_files=_FILES)
+    await master_cc.run_message(cfg, meta, "what is in this picture", callbacks, ET.USER, uploaded_files=_FILES)
 
   backend = CapturingBackend()
   await run_captured_round(tmp_path, monkeypatch, session_id="attach-run", name="Attach", backend=backend, drive=drive)

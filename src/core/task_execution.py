@@ -866,6 +866,9 @@ class TaskExecutionAdapter:
             meta,
             prompt,
             self._sessions.callbacks(),
+            # Not a legacy input delivery: the Run's item carries a task_run
+            # binding and never takes part in a batch.
+            input_event_type=None,
             skip_user_event=True,
             auto_trigger=any(e.get("type") == ET.SCHEDULED_TRIGGER for e in batch_events),
             backend_option=option,

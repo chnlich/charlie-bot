@@ -3,9 +3,11 @@
 import asyncio
 import dataclasses
 from collections.abc import Awaitable, Callable
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from src.agents.backends.base import AgentBackend
-from src.core.config import CharlieBotConfig
+from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig
 from src.core.models import (
     BackendOption,
     MasterRunRecord,
@@ -58,9 +60,23 @@ class _WorkItem:
   # True only on the scheduled-session weekly-recycle path that deliberately
   # clears the anchor; suppresses the resume-anchor-missing pre-flight alarm.
   expect_fresh_session: bool = False
-  # Chat event id of the user message this turn answers; persisted into
-  # master_run so restart reconcile can exclude exactly one event from replay.
-  user_event_id: str | None = None
+  # Chat events this turn answers, in arrival order: one event on every
+  # single-input turn, the whole batch on a merged one. Persisted into
+  # master_run so restart reconcile excludes exactly the answered events from
+  # replay, and carried on MASTER_DONE for the Slack round audit.
+  user_event_ids: list[str] = dataclasses.field(default_factory=list)
+  # The enqueueing entry point's declared input type, an INPUT_EVENT_TYPES
+  # member (src/core/session_dispatch.py); the enqueue asserts the membership
+  # and a merged batch's per-part headers render it. None only on items that
+  # are not legacy input delivery at all (a restart re-attach or a v2 Run) --
+  # those never take part in a batch.
+  input_event_type: str | None = None
+  # Local wall-clock moment this item entered its session queue: the received
+  # time a merged batch's header stamps each part with. The default_factory
+  # stamps construction (direct-seeded items); _enqueue_work_item re-stamps so
+  # the value is the enqueue moment.
+  received_at: datetime = dataclasses.field(
+      default_factory=lambda: datetime.now(ZoneInfo(HOUSE_TIMEZONE)))
   # Structured attachment refs from the user message, handed to backend.run;
   # the opencode backend turns image refs into prompt file parts.
   uploaded_files: list[dict] | None = None
@@ -84,21 +100,22 @@ class _WorkItem:
 
 
 # Per-session currently-processing work item. Read by queued_user_event_ids so
-# startup replay can skip user messages this process already owns — the
-# restart-reconcile exclusion must be per-event, never per-session, or a
-# message queued behind a running one would be replayed. Read by
-# running_user_event_id so Slack reply binding uses the running round's
+# startup replay can skip inputs this process already owns — the
+# restart-reconcile exclusion must be per-event, never per-session, or an
+# input queued behind a running one would be replayed. Read by
+# running_user_event_ids so Slack reply binding uses the running round's
 # identity without passing through the session metadata cache.
 _current_items: dict[str, _WorkItem] = {}
 
 
-def running_user_event_id(session_id: str) -> str | None:
-  """Chat event id the session's currently-running round answers, or None.
+def running_user_event_ids(session_id: str) -> list[str]:
+  """Chat event ids the session's currently-running round answers, in arrival order.
 
-  None covers both "no round is running in this process" and "the running
+  Empty covers both "no round is running in this process" and "the running
   round was not started by a chat event (worker wake)". Unlike
   ``queued_user_event_ids`` this never mixes in queued items: reply binding
-  means the running round only, and a set carries no single answer.
+  means the running round only, and a set carries no order to pick the newest
+  Slack-bearing input from.
   """
   item = _current_items.get(session_id)
-  return item.user_event_id if item is not None else None
+  return list(item.user_event_ids) if item is not None else []

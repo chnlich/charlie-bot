@@ -226,7 +226,7 @@ def _make_fake_spawn_review(spawn_calls: list[dict], result: bool) -> Callable[.
 def _make_fake_trigger(trigger_calls: list[str]) -> Callable[..., Awaitable[None]]:
   """A ``review.trigger_master`` stand-in capturing the trigger summary per call."""
 
-  async def fake_trigger(_session_id: str, summary: str, _cfg: Any, _sm: Any) -> None:
+  async def fake_trigger(_session_id: str, summary: str, _cfg: Any, _sm: Any, _etype: str) -> None:
     trigger_calls.append(summary)
 
   return fake_trigger

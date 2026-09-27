@@ -230,7 +230,7 @@ async def test_legacy_trigger_wake_is_refused_at_v2_nodes(tmp_path: Path) -> Non
   executor = ScriptedExecutor(tree)
   tree.dispatch.executor = executor
   from src.core.master_trigger import trigger_master
-  await trigger_master(manager.id, "a worker result landed", cfg, session_mgr)
+  await trigger_master(manager.id, "a worker result landed", cfg, session_mgr, ET.CHILD_REPORT)
 
   events = tree.events.load_events(manager.id)
   assert [e for e in events if e["type"] == ET.USER] == []
@@ -250,7 +250,7 @@ async def test_legacy_trigger_wake_is_refused_at_v2_nodes(tmp_path: Path) -> Non
   original = master_trigger_module.run_message
   master_trigger_module.run_message = _fake_run_message
   try:
-    await trigger_master(v1.id, "a worker result landed", cfg, session_mgr)
+    await trigger_master(v1.id, "a worker result landed", cfg, session_mgr, ET.CHILD_REPORT)
   finally:
     master_trigger_module.run_message = original
   assert called == [True]

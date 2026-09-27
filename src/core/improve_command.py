@@ -735,7 +735,7 @@ async def _run_single_iteration(
               "improve-goal skill and quote the edit in full in your chat report."),
   }
   create_logged_task(
-      trigger_master(session_id, json.dumps(iter_trigger_payload, indent=2), cfg, session_mgr),
+      trigger_master(session_id, json.dumps(iter_trigger_payload, indent=2), cfg, session_mgr, ET.CHILD_REPORT),
       name=f"improve-iter-trigger-{session_id[:8]}-{i}",
   )
 
@@ -876,7 +876,7 @@ async def run_improve_loop(
     failure_payload = _build_summary_payload(ET.IMPROVE_FAILED, goal, [])
     failure_payload['error'] = WORKTREE_CREATE_ERROR_PREFIX + str(e)
     await session_mgr.deliver_to_successor(session_id, failure_payload)
-    await trigger_master(session_id, json.dumps(failure_payload, indent=2), cfg, session_mgr)
+    await trigger_master(session_id, json.dumps(failure_payload, indent=2), cfg, session_mgr, ET.CHILD_REPORT)
     return
 
   blocked_error: _ImproveLoopBlockedError | None = None
@@ -966,7 +966,7 @@ async def run_improve_loop(
         **payload,
         'instructions': instructions,
     }
-    await trigger_master(session_id, json.dumps(final_payload, indent=2), cfg, session_mgr)
+    await trigger_master(session_id, json.dumps(final_payload, indent=2), cfg, session_mgr, ET.CHILD_REPORT)
 
   except asyncio.CancelledError:
     log.warning("improve_loop_cancelled", session=session_id)
@@ -989,7 +989,7 @@ async def run_improve_loop(
       try:
         await session_mgr.deliver_to_successor(session_id, failure_payload)
         final_payload = {**failure_payload, 'instructions': instructions}
-        await trigger_master(session_id, json.dumps(final_payload, indent=2), cfg, session_mgr)
+        await trigger_master(session_id, json.dumps(final_payload, indent=2), cfg, session_mgr, ET.CHILD_REPORT)
       except Exception as notify_error:
         log.exception(
             "improve_loop_failure_notify_failed",

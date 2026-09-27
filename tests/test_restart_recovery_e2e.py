@@ -205,7 +205,7 @@ async def _recover(monkeypatch: pytest.MonkeyPatch,
     await _real_resume_worker(*args, **kwargs)
 
   async def fake_trigger_master(
-      session_id: str, summary: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
+      session_id: str, summary: str, cfg: CharlieBotConfig, session_mgr: SessionManager, _etype: str) -> None:
     master_wakes.append(summary)
 
   real_resolve = runs.resolve_run
@@ -611,6 +611,7 @@ import sys
 from pathlib import Path
 
 from src.agents import master_cc, master_cc_run
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import CcClaudeBackend, CreateSessionRequest, TaskType, ThreadStatus
 from src.core.sessions import SessionManager
@@ -642,18 +643,18 @@ async def main() -> None:
 
   callbacks = session_mgr.callbacks()
   # kind == "wake": a turn with no user event in the chat log (delegate /
-  # cron / improve wake): the record's user_event_id stays None, so the
+  # cron / improve wake): the record's user_event_ids stays empty, so the
   # replay pass has nothing to redeliver for it.
   skip_user_event = kind == "wake"
   task_a = asyncio.create_task(
-      master_cc.run_message(cfg, meta, "message A", callbacks, skip_user_event=skip_user_event))
+      master_cc.run_message(cfg, meta, "message A", callbacks, ET.USER, skip_user_event=skip_user_event))
   if not skip_user_event:
     while not any(e.get("content") == "message A" for e in session_mgr.load_chat_events_sync(meta.id)):
       await asyncio.sleep(0.01)
   extra_tasks = []
   if kind == "queued":
     # Strict A-before-B enqueue ordering: A's user event is already on disk.
-    task_b = asyncio.create_task(master_cc.run_message(cfg, meta, "message B", callbacks))
+    task_b = asyncio.create_task(master_cc.run_message(cfg, meta, "message B", callbacks, ET.USER))
     extra_tasks.append(task_b)
     while not any(e.get("content") == "message B" for e in session_mgr.load_chat_events_sync(meta.id)):
       await asyncio.sleep(0.01)
@@ -1166,7 +1167,7 @@ async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monk
   master_wakes: list[str] = []
 
   async def fake_trigger_master(
-      session_id: str, summary: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
+      session_id: str, summary: str, cfg: CharlieBotConfig, session_mgr: SessionManager, _etype: str) -> None:
     master_wakes.append(summary)
     await session_mgr.persist_and_broadcast(
         session_id, {
@@ -1425,7 +1426,7 @@ async def test_ui_cancel_endpoint_still_finalizes_cancelled(tmp_path: Path, monk
   master_wakes: list[str] = []
 
   async def fake_trigger_master(
-      session_id: str, summary: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
+      session_id: str, summary: str, cfg: CharlieBotConfig, session_mgr: SessionManager, _etype: str) -> None:
     master_wakes.append(summary)
 
   monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
@@ -1647,7 +1648,7 @@ async def test_uncovered_transport_turn_cleared_not_drained(
       pid_start="1",
       started_at=datetime.now(UTC) - timedelta(seconds=5),
       raw_log=str(home / "sessions" / meta.id / "data" / "master_runs" / "gone" / runs.RAW_LOG_NAME),
-      user_event_id=user_event_id,
+      user_event_ids=[user_event_id] if user_event_id else [],
   )
   await session_mgr.persist_master_run(meta.id, record)
 
@@ -1702,7 +1703,7 @@ async def test_undrainable_dead_turn_replayed_with_marker(
       pid_start=pid_start,
       started_at=datetime.now(UTC) - timedelta(seconds=5),
       raw_log=str(home / "sessions" / meta.id / "data" / "master_runs" / "gone" / runs.RAW_LOG_NAME),
-      user_event_id=event["id"],
+      user_event_ids=[event["id"]],
   )
   await session_mgr.persist_master_run(meta.id, record)
 
@@ -1735,7 +1736,7 @@ def test_unanswered_scan_picks_only_events_after_last_master_done() -> None:
       _user("still open", "e2"),
       _user("queued behind it", "e3"),
   ]
-  pending = init_module.unanswered_user_events(events, set())
+  pending = init_module.unanswered_input_events(events, set())
   assert [e["id"] for e in pending] == ["e2", "e3"]
 
 
@@ -1746,7 +1747,7 @@ def test_unanswered_scan_excludes_the_recorded_turns_event_only() -> None:
       _user("running when killed", "e2"),
       _user("queued behind it", "e3"),
   ]
-  pending = init_module.unanswered_user_events(events, {"e2"})
+  pending = init_module.unanswered_input_events(events, {"e2"})
   assert [e["id"] for e in pending] == ["e3"]
 
 
@@ -1786,7 +1787,7 @@ async def test_cancel_covered_turn_detaches_and_keeps_the_record(
   assert raw["master_run"] is not None
   assert raw["master_run"]["pid"] == 4242
   assert raw["master_run"]["pid_start"] == "424242.0"
-  assert raw["master_run"]["user_event_id"] == "evt-1"
+  assert raw["master_run"]["user_event_ids"] == ["evt-1"]
 
 
 @pytest.mark.asyncio
@@ -1800,7 +1801,7 @@ async def test_cancel_master_kills_a_live_detached_record(monkeypatch: pytest.Mo
       pid_start="1.0",
       started_at=utc_now(),
       raw_log="/x/agent.raw.ndjson",
-      user_event_id="evt-1",
+      user_event_ids=["evt-1"],
   )
   meta = SessionMetadata(id=session_id, name="t", master_run=record)
   session_mgr = AsyncMock()

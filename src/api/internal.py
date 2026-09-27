@@ -59,7 +59,7 @@ from src.core.spawner import (
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate, is_verify_exempt
 from src.core.task_sessions import TaskTreeManager
 from src.core.tasks import create_logged_task
-from src.core.triggers import ArchivedSessionError, RemoteVerifyError, TriggerManager
+from src.core.triggers import ArchivedSessionError, PendingTriggerLimitError, RemoteVerifyError, TriggerManager
 
 log = LazyStructlogLogger()
 
@@ -447,9 +447,10 @@ async def schedule_trigger(
         watch_targets=req.watch_targets,
         probe_out=watch_probe,
     )
-  except (RemoteVerifyError, ArchivedSessionError) as e:
-    # Verify-on-create rejection, or a target archived without a successor:
-    # surface as 422 so the CLI exits with code 2.
+  except (RemoteVerifyError, ArchivedSessionError, PendingTriggerLimitError) as e:
+    # Verify-on-create rejection, a target archived without a successor, or a
+    # registration past the session's pending-trigger limit: surface as 422 so
+    # the CLI exits with code 2.
     raise HTTPException(status_code=422, detail=str(e)) from e
   except RuntimeError as e:
     raise bad_request(e) from e
@@ -547,6 +548,7 @@ async def session_message(
           f"[Message from session {caller.name}] {req.content}",
           cfg,
           session_mgr,
+          ET.AGENT_MESSAGE,
       ),
       name=f"session-message-relay-{req.target_session_id}",
   )

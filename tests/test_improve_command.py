@@ -140,8 +140,8 @@ def _patch_improve_loop_io(monkeypatch: pytest.MonkeyPatch) -> tuple[list[SpawnR
     assert isinstance(request, SpawnRequest)
     spawn_requests.append(request)
 
-  async def fake_trigger_master(session: str, summary: str, _cfg: Any, _session_mgr: Any) -> None:
-    del session, _cfg, _session_mgr
+  async def fake_trigger_master(session: str, summary: str, _cfg: Any, _session_mgr: Any, _etype: str) -> None:
+    del session, _cfg, _session_mgr, _etype
     triggered_payloads.append(json.loads(summary))
 
   monkeypatch.setattr(SPAWNER_SPAWN_WORKER_PATCH_TARGET, fake_spawn_worker)

@@ -94,29 +94,32 @@ async def run_crash_recovery(
     except Exception:
       log.exception("master_identity_failed")
     else:
-      await _replay_unanswered_user_messages(cfg, session_mgr, excluded)
+      await _replay_unanswered_inputs(cfg, session_mgr, excluded)
   else:
     await _reconcile_master_runs(cfg, session_mgr, boot_time)
   await _quarantine_stale_failed_worktrees(cfg, threads)
   return recovered
 
 
-def unanswered_user_events(chat_events: list[dict], exclude_ids: set[str]) -> list[dict]:
-  """Real user events after the last MASTER_DONE, minus exclusions, in log order.
+def unanswered_input_events(chat_events: list[dict], exclude_ids: set[str]) -> list[dict]:
+  """Real user events and scheduled-trigger wakes after the last MASTER_DONE, minus exclusions.
 
-  Restart-replay contract: every real user event with no MASTER_DONE after it
-  is unanswered and must be redelivered. Exclusions are per-event (never
-  per-session): a recorded live turn excludes exactly its own user_event_id,
-  and a live process excludes the events already sitting in its in-memory
-  queue — everything else disappears with a killed process and is replayed.
+  Restart-replay contract: every replayable input event with no MASTER_DONE
+  after it is unanswered and must be redelivered. Exclusions are per-event
+  (never per-session): a recorded live turn excludes exactly its own
+  user_event_ids, and a live process excludes the events already sitting in
+  its in-memory queue — everything else disappears with a killed process and
+  is replayed. A trigger wake whose record already left pending
+  (FIRED-on-delivery) has no re-fire left in it, so the replay pass is the
+  only thing that can redeliver it.
   """
   last_done = -1
   for idx, ev in enumerate(chat_events):
     if ev.get("type") == ET.MASTER_DONE:
       last_done = idx
   return [
-      ev for ev in chat_events[last_done + 1:]
-      if ev.get("type") == ET.USER and isinstance(ev.get("content"), str) and ev.get("id") not in exclude_ids
+      ev for ev in chat_events[last_done + 1:] if ev.get("type") in (ET.USER, ET.SCHEDULED_TRIGGER) and
+      isinstance(ev.get("content"), str) and ev.get("id") not in exclude_ids
   ]
 
 
@@ -156,8 +159,9 @@ async def reconcile_master_identity(cfg: CharlieBotConfig, session_mgr: SessionM
   that can create a new turn. The server lifespan therefore runs it once,
   shielded, behind a bounded barrier ahead of the crash-recovery task, the
   scheduler, and trigger recovery; the same task is re-awaited for the replay
-  pass. Every follower-bound row adds its user_event_id to the returned map,
-  so a turn is answered by the drain OR by replay, never both.
+  pass. Every follower-bound row adds its whole user_event_ids list to the
+  returned map, so a turn (single input or merged batch) is answered by the
+  drain OR by replay, never both.
 
   Each pre-boot record is resolved through ``runs.resolve_run``'s outcome
   table on disk facts, not a local alive/covered guess. COMPLETED goes
@@ -190,9 +194,8 @@ async def reconcile_master_identity(cfg: CharlieBotConfig, session_mgr: SessionM
       continue
     if record.started_at >= boot_time:
       # This process spawned the turn during the recovery window — live and
-      # self-owned: spare it, and keep its message out of the replay set.
-      if record.user_event_id:
-        excluded.setdefault(meta.id, set()).add(record.user_event_id)
+      # self-owned: spare it, and keep its inputs out of the replay set.
+      excluded.setdefault(meta.id, set()).update(record.user_event_ids)
       continue
     option = cfg.get_backend_option(meta.backend)
     if option is None:
@@ -210,12 +213,11 @@ async def reconcile_master_identity(cfg: CharlieBotConfig, session_mgr: SessionM
         )
         await _report_recovery_event(
             session_mgr, meta.id, _master_alive_unfollowable_message(f"backend option {meta.backend!r} unresolved"))
-        if record.user_event_id:
-          excluded.setdefault(meta.id, set()).add(record.user_event_id)
+        excluded.setdefault(meta.id, set()).update(record.user_event_ids)
         continue
       # The translate and the transport judgment both need the session's
       # backend option; without it and with liveness unprovable the turn can
-      # only be cleared, leaving its user message (if any) to the replay pass.
+      # only be cleared, leaving its answerable inputs to the replay pass.
       log.warning(
           "master_run_resolved",
           session=meta.id,
@@ -246,11 +248,10 @@ async def reconcile_master_identity(cfg: CharlieBotConfig, session_mgr: SessionM
         resolution.reason in (runs.UNCOVERED_ALIVE_REASON, runs.RAW_MISSING_ALIVE_REASON)):
       # Same rule as the worker branch: treated as alive but nothing
       # followable — report only. The record is kept (the turn still owns its
-      # user message until a real outcome lands) and the message stays out of
-      # this boot's replay set.
+      # inputs until a real outcome lands) and they stay out of this boot's
+      # replay set.
       await _report_recovery_event(session_mgr, meta.id, _master_alive_unfollowable_message(resolution.reason))
-      if record.user_event_id:
-        excluded.setdefault(meta.id, set()).add(record.user_event_id)
+      excluded.setdefault(meta.id, set()).update(record.user_event_ids)
       continue
 
     follow = (
@@ -260,7 +261,7 @@ async def reconcile_master_identity(cfg: CharlieBotConfig, session_mgr: SessionM
             runs.RunOutcome.STALLED,
         ) or (
             resolution.outcome is runs.RunOutcome.DIED and resolution.reason == runs.DIED_WITHOUT_RESULT_REASON and
-            not record.user_event_id))
+            not record.user_event_ids))
     if follow:
       future = await master_cc.enqueue_master_resume(
           cfg,
@@ -270,30 +271,33 @@ async def reconcile_master_identity(cfg: CharlieBotConfig, session_mgr: SessionM
           is_alive=_liveness_probe(record.pid, record.pid_start, record.started_at, host_boot),
       )
       create_logged_task(_await_reattach(future), name=f"master-resume-{meta.id[:8]}")
-      # The follower answers this round; keep its user message (if any) out
-      # of the replay set so the round is answered exactly once.
-      if record.user_event_id:
-        excluded.setdefault(meta.id, set()).add(record.user_event_id)
+      # The follower answers this round; keep its whole input list out of the
+      # replay set so the round is answered exactly once.
+      excluded.setdefault(meta.id, set()).update(record.user_event_ids)
     else:
-      # DIED without a result but with a user message (the replay pass answers
-      # it), DIED on an uncovered transport or with a missing raw log, or
-      # NEVER_STARTED: nothing drainable remains — clear the record.
+      # DIED without a result but with answerable inputs (the replay pass
+      # answers them), DIED on an uncovered transport or with a missing raw
+      # log, or NEVER_STARTED: nothing drainable remains — clear the record.
       await session_mgr.persist_master_run(meta.id, None)
 
   return excluded
 
 
-async def _replay_unanswered_user_messages(
+async def _replay_unanswered_inputs(
     cfg: CharlieBotConfig, session_mgr: SessionManager, excluded: dict[str, set[str]]) -> None:
-  """Replay every real user message the identity pass left unanswered.
+  """Replay every input event the identity pass left unanswered.
 
-  Every real user event after the last MASTER_DONE, minus the identity
-  pass's per-event exclusions and this process's queued items, is
-  redelivered with the replay marker. This pass runs strictly after the
-  identity pass enqueued the resume items, so a re-attached turn always
-  drains before a replay spawns a new CLI against the same conversation.
-  Never call it without the identity pass's full exclusion map: replaying
-  with a partial map double-answers a turn.
+  Every real user event and scheduled-trigger wake after the last MASTER_DONE,
+  minus the identity pass's per-event exclusions and this process's queued
+  items, is redelivered with the replay marker — user messages through
+  ``replay_user_message``, wakes through ``replay_scheduled_trigger`` (a wake
+  whose record already left pending cannot re-fire). Both declare their input
+  type, so the replayed items batch into one following turn like any other
+  queued input. This pass runs strictly after the identity pass enqueued the
+  resume items, so a re-attached turn always drains before a replay spawns a
+  new CLI against the same conversation. Never call it without the identity
+  pass's full exclusion map: replaying with a partial map double-answers a
+  turn.
   """
   from src.agents import master_cc  # lazy: mirrors the spawner import's cycle guard
 
@@ -305,10 +309,12 @@ async def _replay_unanswered_user_messages(
     try:
       events = session_mgr.load_chat_events_sync(meta.id)
       skip = excluded.get(meta.id, set()) | master_cc.queued_user_event_ids(meta.id)
-      for ev in unanswered_user_events(events, skip):
+      for ev in unanswered_input_events(events, skip):
         log.warning("master_replaying_user_message", session=meta.id, event_id=ev.get("id"))
-        create_logged_task(
-            master_cc.replay_user_message(cfg, meta, ev, session_mgr.callbacks()), name=f"master-replay-{meta.id[:8]}")
+        replay = (
+            master_cc.replay_scheduled_trigger(cfg, meta, ev, session_mgr.callbacks()) if ev.get("type") == ET.
+            SCHEDULED_TRIGGER else master_cc.replay_user_message(cfg, meta, ev, session_mgr.callbacks()))
+        create_logged_task(replay, name=f"master-replay-{meta.id[:8]}")
     except Exception:
       log.exception("master_replay_dispatch_failed", session=meta.id)
 
@@ -326,4 +332,4 @@ async def _reconcile_master_runs(cfg: CharlieBotConfig, session_mgr: SessionMana
     # Already logged: no records were judged, and replaying on an empty
     # exclusion map would double-answer turns — skip replay as before.
     return
-  await _replay_unanswered_user_messages(cfg, session_mgr, excluded)
+  await _replay_unanswered_inputs(cfg, session_mgr, excluded)

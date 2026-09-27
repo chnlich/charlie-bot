@@ -105,7 +105,7 @@ async def test_trigger_wake_uses_current_config_not_construction_snapshot(tmp_pa
   ):
     await trigger_mgr._wait_and_fire(trigger)
 
-  passed_cfg = mock_master.await_args.args[2]
+  passed_cfg = mock_master.call_args.args[2]
   assert passed_cfg is current
   assert passed_cfg.get_backend_option("added-later") is not None
 

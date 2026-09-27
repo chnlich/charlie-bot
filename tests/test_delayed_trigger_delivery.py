@@ -67,14 +67,19 @@ async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Pa
   # `message` delta carrying the same payload, which is what the client renders.
   assert broadcast_event == {"type": "message", "message": expected_message}
 
-  mock_trigger_master.assert_awaited_once_with(
+  # FIRED on delivery: the record leaves pending before the wake is enqueued,
+  # and the wake's task no longer waits for the woken turn.
+  mock_trigger_master.assert_called_once_with(
       session.id,
       "[Scheduled trigger fired] Check PID 12345",
       cfg,
       session_mgr,
+      ET.SCHEDULED_TRIGGER,
+      user_event_id=events[0]["id"],
       # Timed wake: the fire passes the opted-out pull_back.
       pull_back=False,
   )
+  assert mock_trigger_master.call_args.kwargs["user_event_id"] == events[0]["id"]
 
   stored_trigger = await trigger_mgr._load_trigger(session.id, trigger.id)
   assert stored_trigger.status == TriggerStatus.FIRED

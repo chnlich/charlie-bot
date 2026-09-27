@@ -47,7 +47,7 @@ from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
 from src.api.deps import SESSION_NOT_FOUND_DETAIL
-from src.api.message_utils import build_agent_message_event
+from src.api.message_utils import build_agent_message_event, master_done_input_event_ids
 from src.core import event_types as ET
 from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig, get_credentials
 from src.core.constants import FILE_SERVER_MOUNTS
@@ -422,7 +422,8 @@ async def handle_app_mention(
       user_event_id=round_event_id)
 
   create_logged_task(
-      trigger_master(sid, content, cfg, session_mgr, user_event_id=round_event_id), name=f"slack-round-{sid}")
+      trigger_master(sid, content, cfg, session_mgr, ET.AGENT_MESSAGE, user_event_id=round_event_id),
+      name=f"slack-round-{sid}")
   create_logged_task(client.add_reaction(channel_id, _ACCEPTANCE_REACTION, event["ts"]), name=f"slack-ack-{sid}")
   return sid
 
@@ -747,16 +748,6 @@ def _event_by_id(events: list[dict], event_id: str) -> dict | None:
   return None
 
 
-def _slack_target(events: list[dict], input_event_id: str) -> dict | None:
-  """The ``slack`` block of the event a round answers, or None when it has none.
-
-  None covers both "no such event" and "a message the user typed into this same
-  session from the browser": neither is a Slack injection, so neither is audited.
-  """
-  ev = _event_by_id(events, input_event_id)
-  return ev.get("slack") if ev is not None else None
-
-
 def _summon_of(slack_block: dict, event_id: str) -> str:
   """The summon a round with this slack block answers: the block's ``nudge_of`` for a nudge, else the event itself."""
   return slack_block.get("nudge_of") or event_id
@@ -780,20 +771,21 @@ class SlackReplyError(Exception):
     self.detail = detail
 
 
-def _bound_summon(events: list[dict], user_event_id: str | None) -> tuple[str, dict] | None:
-  """``(summon_id, slack block)`` of the summon the running round answers, or None.
+def _newest_slack_input(events: list[dict], event_ids: list[str]) -> tuple[str, dict] | None:
+  """``(event id, slack block)`` of the newest Slack-bearing input among *event_ids*, or None.
 
-  Only an input event that carries a slack block (a summon or its nudge) binds
-  the reply to a summon. A browser-typed message, a trigger wake, or no round
-  identity binds nothing.
+  A round answers a list of inputs (one per queued item it merged); only an
+  input that carries a slack block (a summon or its nudge) binds the reply to
+  a summon, and the newest of those -- latest in log order -- is the thread's
+  freshest ask. A browser-typed message, a trigger wake, or an empty list
+  binds nothing.
   """
-  if user_event_id is None:
-    return None
-  ev = _event_by_id(events, user_event_id)
-  block = ev.get("slack") if ev is not None else None
-  if block is None:
-    return None
-  return _summon_of(block, ev["id"]), block
+  wanted = set(event_ids)
+  bound: tuple[str, dict] | None = None
+  for ev in events:
+    if ev.get("id") in wanted and isinstance(ev.get("slack"), dict):
+      bound = (str(ev["id"]), ev["slack"])
+  return bound
 
 
 async def _require_slack_thread_session(session_id: str, session_mgr: SessionManager) -> SessionMetadata:
@@ -962,13 +954,15 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
   # Binding identity: the in-process running round first (authoritative, no
   # metadata-cache race), the disk record as fallback for the restart gap where
   # an orphaned master posts before the re-attach item reaches the consumer.
-  user_event_id = master_cc_state.running_user_event_id(session_id)
-  if user_event_id is None:
+  # Either way the round answers a list of inputs; the newest Slack-bearing one
+  # of the list is the summon this reply answers.
+  input_event_ids = master_cc_state.running_user_event_ids(session_id)
+  if not input_event_ids:
     fresh = await session_mgr.read_metadata_fresh(session_id)
     if fresh is not None and fresh.master_run is not None:
-      user_event_id = fresh.master_run.user_event_id
-  bound = _bound_summon(events, user_event_id)
-  answers = bound[0] if bound is not None else None
+      input_event_ids = fresh.master_run.user_event_ids
+  bound = _newest_slack_input(events, input_event_ids)
+  answers = _summon_of(bound[1], bound[0]) if bound is not None else None
   origin = meta.slack_origin
   client = _bot_client()
   bodies = _chunk_text(text)
@@ -1069,7 +1063,7 @@ async def _audit_round(
     nudge["slack"]["nudge_of"] = summon_id
     await session_mgr.persist_and_broadcast(session_id, nudge)
     create_logged_task(
-        trigger_master(session_id, content, cfg, session_mgr, user_event_id=nudge["id"]),
+        trigger_master(session_id, content, cfg, session_mgr, ET.AGENT_MESSAGE, user_event_id=nudge["id"]),
         name=f"slack-nudge-{session_id}")
     logger.info(
         "slack_reply_nudge",
@@ -1116,13 +1110,16 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig, sessi
   meta = await session_mgr.get_session(session_id)
   if meta is None or meta.slack_origin is None:
     return False
-  input_event_id = done.get(ET.INPUT_EVENT_ID)
-  if input_event_id is None:
+  input_event_ids = master_done_input_event_ids(done)
+  if not input_event_ids:
     return False
   events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
-  target = _slack_target(events, input_event_id)
-  if target is None:
+  # The round-end audit targets the same input the reply binding does: the
+  # newest Slack-bearing one of the batch.
+  bound = _newest_slack_input(events, input_event_ids)
+  if bound is None:
     return False
+  input_event_id, target = bound
   return await _audit_round(session_id, events, target, input_event_id, cfg, session_mgr, _bot_client())
 
 
@@ -1131,21 +1128,25 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig, sessi
 # ---------------------------------------------------------------------------
 
 
-def _lost_summons(events: list[dict], *, owned: set[str], running: str | None) -> list[dict]:
+def _lost_summons(events: list[dict], *, owned: set[str], running: set[str]) -> list[dict]:
   """The Slack injections in one session's log that nothing will ever answer.
 
   A summon (or a nudge: it carries the same slack block) is lost when no
-  master_done names it, this process does not already own it (queued or
-  running), the session's master_run record does not name it (alive but not
+  master_done names it (any id of a merged round's list counts as answered),
+  this process does not already own it (queued or running), the session's
+  master_run record does not name it among its whole input list (alive but not
   followable), and no earlier backfill marked it. The marker is the
   ``slack_backfill`` payload, never a synthetic master_done: that event is
   the cut point replay uses to decide which user messages are still unanswered.
   """
-  answered = {ev.get(ET.INPUT_EVENT_ID) for ev in events if ev.get("type") == ET.MASTER_DONE}
+  answered: set[str] = set()
+  for ev in events:
+    if ev.get("type") == ET.MASTER_DONE:
+      answered.update(master_done_input_event_ids(ev))
   marked = {ev["slack_backfill"].get(ET.INPUT_EVENT_ID) for ev in events if "slack_backfill" in ev}
   return [
       ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE and "slack" in ev and ev["id"] not in answered and
-      ev["id"] not in marked and ev["id"] not in owned and ev["id"] != running
+      ev["id"] not in marked and ev["id"] not in owned and ev["id"] not in running
   ]
 
 
@@ -1172,7 +1173,7 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
     lost = _lost_summons(
         events,
         owned=master_cc.queued_user_event_ids(meta.id),
-        running=meta.master_run.user_event_id if meta.master_run else None)
+        running=set(meta.master_run.user_event_ids) if meta.master_run else set())
     for ev in lost:
       # Persist the marker before posting: a crash in between costs one notice,
       # while posting first would re-post it on every boot until the marker landed.
@@ -1197,12 +1198,13 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
     if lost:
       events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
 
-    dones = [ev for ev in events if ev.get("type") == ET.MASTER_DONE and ev.get(ET.INPUT_EVENT_ID)]
+    dones = [ev for ev in events if ev.get("type") == ET.MASTER_DONE and master_done_input_event_ids(ev)]
     for done in dones:
-      target = _slack_target(events, done[ET.INPUT_EVENT_ID])
-      if target is None:
+      bound = _newest_slack_input(events, master_done_input_event_ids(done))
+      if bound is None:
         continue
-      if await _audit_round(meta.id, events, target, done[ET.INPUT_EVENT_ID], cfg, session_mgr, client):
+      done_input_id, target = bound
+      if await _audit_round(meta.id, events, target, done_input_id, cfg, session_mgr, client):
         reported += 1
         # The action appended an event the next done's predicates must see.
         events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)

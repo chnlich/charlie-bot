@@ -14,6 +14,7 @@ from conftest import (
 )
 from conftest import make_parent as _make_parent
 
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.master_trigger import trigger_master
 from src.core.models import (
@@ -34,7 +35,7 @@ async def test_trigger_master_runs_successor_when_requested_session_eloned(tmp_p
       MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET,
       new=AsyncMock(),
   ) as mock_run:
-    await trigger_master(parent_id, "summary", cfg, mgr)
+    await trigger_master(parent_id, "summary", cfg, mgr, ET.CHILD_REPORT)
 
   mock_run.assert_awaited_once()
   session_meta = mock_run.await_args.args[1]

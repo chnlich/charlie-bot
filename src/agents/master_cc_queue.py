@@ -4,12 +4,13 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 from src.agents import master_cc_run, master_cc_state
 from src.agents.backends.base import make_error_event, make_master_done_event
 from src.core import claude_accounts, runs, sidebar_state
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
+from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig
 from src.core.constants import BackendType
 from src.core.latex import get_tex_path, snapshot_tex
 from src.core.log_once import LazyStructlogLogger
@@ -20,6 +21,7 @@ from src.core.models import (
     SessionMetadata,
 )
 from src.core.process import kill_group_escalating
+from src.core.session_dispatch import INPUT_EVENT_TYPES
 from src.core.streaming import SIDEBAR_CHANNEL, streaming_manager
 from src.core.tasks import create_logged_task
 from src.core.thinking_state import busy_since, clear_busy, mark_busy
@@ -33,11 +35,19 @@ log = LazyStructlogLogger()
 def _enqueue_work_item(session_id: str, work_item: master_cc_state._WorkItem) -> tuple[datetime, bool]:
   """Atomically mark busy, queue the item, and ensure a consumer exists.
 
-  No await and no statement that can raise: a work item in the queue always
-  implies busy_since is set; the consumer clears it only at teardown, in its
-  own await-free sequence. No other statement may interleave with this block —
-  correctness of the busy-state invariant depends on that.
+  No await and no statement that can raise after the state's first mutation: a
+  work item in the queue always implies busy_since is set; the consumer clears
+  it only at teardown, in its own await-free sequence. No other statement may
+  interleave with this block — correctness of the busy-state invariant depends
+  on that. The declared input type is validated before any state changes, so a
+  bad declaration fails the caller without touching the queue or busy state.
   """
+  if (work_item.input_event_type is not None and work_item.input_event_type not in INPUT_EVENT_TYPES):
+    raise ValueError(
+        f"input_event_type {work_item.input_event_type!r} is not an INPUT_EVENT_TYPES member; "
+        f"the enqueueing entry point must declare one of {sorted(INPUT_EVENT_TYPES)}")
+  # The batch header stamps each part with the moment it was enqueued.
+  work_item.received_at = datetime.now(ZoneInfo(HOUSE_TIMEZONE))
   if session_id not in master_cc_state._session_queues:
     master_cc_state._session_queues[session_id] = asyncio.Queue()
   # A resume item is re-attaching a turn that already started, so its busy
@@ -121,6 +131,79 @@ async def _persist_with_readback(
       })
 
 
+def _batch_run_settings(item: master_cc_state._WorkItem) -> tuple:
+  """The run settings one turn's spawn is built from; equality forms a batch.
+
+  Backend option id, extra CLI flags, the expect-fresh flag, and whether the
+  item's session snapshot carries a resume anchor -- a turn runs on exactly
+  one backend with one flag set, and the anchor's presence decides which
+  conversation (a fresh one vs. the relayed one) the spawn resumes.
+  """
+  return (
+      item.backend_option.id if item.backend_option is not None else None,
+      tuple(item.extra_claude_flags or ()),
+      item.expect_fresh_session,
+      item.session_meta.cc_session_id is not None,
+  )
+
+
+def _batchable(item: master_cc_state._WorkItem) -> bool:
+  """Whether *item* may join a batch as a follower: a re-attach and a v2 Run never do.
+
+  A resume item re-attaches a turn that already started (nothing to append);
+  a task_run item is a v2 Run whose prompt the adapter prebuilt.
+  """
+  return item.resume_record is None and item.task_run is None
+
+
+def _batch_prompt(parts: list[master_cc_state._WorkItem]) -> str:
+  """The joined prompt a batch turn runs: the parts' prompts in arrival order.
+
+  Each part opens with its own header line naming its position, declared input
+  type, and enqueue moment; the body underneath stays exactly what the part's
+  turn would have run (the voice disclaimer and the wake's fired prefix ride
+  inside it, per part). Only N>1 batches come here -- a single item runs its
+  prompt byte-identical to the unbatched path.
+  """
+  total = len(parts)
+  rendered = []
+  for position, part in enumerate(parts, start=1):
+    header = (f"[Queued input {position} of {total} · {part.input_event_type} · "
+              f"received {part.received_at.isoformat(timespec='seconds')}]")
+    rendered.append(header + "\n" + master_cc_run._build_prompt(part.user_content, part.is_voice))
+  return "\n\n".join(rendered)
+
+
+def _merge_batch(batch: list[master_cc_state._WorkItem]) -> master_cc_state._WorkItem:
+  """One execution item for a batch of N>1; every part's future still resolves.
+
+  The turn's fields merge per the batch contract: prompts joined under
+  per-part headers, attachments concatenated, tex check on when any part wants
+  it, the sidebar's machine-wake flag only when every part is one. is_voice is
+  False because the per-part disclaimers already ride inside the joined
+  prompt. The parts' own futures are resolved by the consumer; the merged
+  item's future mirrors the head's and is never resolved directly.
+  """
+  head = batch[0]
+  return master_cc_state._WorkItem(
+      cfg=head.cfg,
+      session_meta=head.session_meta,
+      user_content=_batch_prompt(batch),
+      callbacks=head.callbacks,
+      is_voice=False,
+      auto_trigger=all(part.auto_trigger for part in batch),
+      backend_option=head.backend_option,
+      extra_claude_flags=head.extra_claude_flags,
+      should_check_tex=any(part.should_check_tex for part in batch),
+      future=head.future,
+      expect_fresh_session=head.expect_fresh_session,
+      user_event_ids=[event_id for part in batch for event_id in part.user_event_ids],
+      uploaded_files=([f for part in batch for f in (part.uploaded_files or [])] or None),
+      task_instructions=head.task_instructions,
+      received_at=head.received_at,
+  )
+
+
 async def _refresh_anchors_from_disk(
     item: master_cc_state._WorkItem,
     session_id: str,
@@ -167,7 +250,13 @@ async def _refresh_anchors_from_disk(
 
 
 async def _session_consumer(session_id: str) -> None:
-  """Drain the per-session queue sequentially, one CC run at a time."""
+  """Drain the per-session queue sequentially, one CC run at a time.
+
+  One turn answers one batch: the dequeued head plus every immediately
+  following queue item whose run settings equal the head's, up to the first
+  item that differs (that item stays at the front for the next turn). Resume
+  and task_run items never join a batch, as head or follower.
+  """
   queue = master_cc_state._session_queues[session_id]
   # Relay cc_session_id across items: queued _WorkItems may carry distinct
   # SessionMetadata instances (e.g. fork bootstrap vs. user message loaded later).
@@ -181,7 +270,14 @@ async def _session_consumer(session_id: str) -> None:
   teardown_auto_trigger = False
   try:
     while True:
-      item: master_cc_state._WorkItem = await queue.get()
+      head: master_cc_state._WorkItem = await queue.get()
+      batch = [head]
+      while queue._queue:
+        follower = queue._queue[0]
+        if not (_batchable(follower) and _batch_run_settings(follower) == _batch_run_settings(head)):
+          break
+        batch.append(queue.get_nowait())
+      item = _merge_batch(batch) if len(batch) > 1 else head
       master_cc_state._current_items[session_id] = item
       teardown_cfg = item.cfg
       teardown_auto_trigger = item.auto_trigger
@@ -275,8 +371,8 @@ async def _session_consumer(session_id: str) -> None:
             thinking_seconds = int((datetime.now(UTC) - busy_start).total_seconds())
 
         done_event = make_master_done_event(exit_code, still_thinking=still_thinking)
-        if item.user_event_id:
-          done_event[ET.INPUT_EVENT_ID] = item.user_event_id
+        if item.user_event_ids:
+          done_event[ET.INPUT_EVENT_IDS] = list(item.user_event_ids)
         if thinking_seconds is not None:
           done_event[ET.THINKING_SECONDS] = thinking_seconds
         done_event.update(finish_extras)
@@ -295,9 +391,10 @@ async def _session_consumer(session_id: str) -> None:
           # with a marker (duplicate-tolerant) rather than silently dropping it.
           await item.callbacks.persist_master_run(session_id, None)
 
-        # Resolve the caller's future
-        if not item.future.done():
-          item.future.set_result(cc_session_id)
+        # Resolve every constituent's future with the turn's result
+        for part in batch:
+          if not part.future.done():
+            part.future.set_result(cc_session_id)
 
         # Every round origin (chat, task, auto-trigger) ends on this MASTER_DONE path.
         # Fire-and-forget: the consumer serializes rounds; awaiting it would delay the next round.
@@ -316,11 +413,13 @@ async def _session_consumer(session_id: str) -> None:
 
       except Exception as exc:
         log.exception("session_consumer_item_error", session=session_id)
-        if not item.future.done():
-          item.future.set_exception(exc)
+        for part in batch:
+          if not part.future.done():
+            part.future.set_exception(exc)
 
       finally:
-        queue.task_done()
+        for _ in batch:
+          queue.task_done()
         master_cc_state._current_items.pop(session_id, None)
 
       # If queue is empty, exit the consumer loop — it will be re-created lazily.
@@ -355,6 +454,7 @@ async def run_message(
     session_meta: SessionMetadata,
     user_content: str,
     callbacks: SessionCallbacks,
+    input_event_type: str | None,
     skip_user_event: bool = False,
     auto_trigger: bool = False,
     backend_option: BackendOption | None = None,
@@ -396,9 +496,14 @@ async def run_message(
     expect_fresh_session: True only on the scheduled-session weekly-recycle
       path that deliberately clears the anchor; suppresses the
       resume-anchor-missing pre-flight alarm.
-    user_event_id: Chat event id of the user message this turn answers;
-      recorded in master_run so restart reconcile excludes exactly it from
-      replay. Only pass explicitly on the replay path (skip_user_event=True);
+    input_event_type: The entry point's declared input type for this work
+      item, an INPUT_EVENT_TYPES member (src/core/session_dispatch.py); the
+      enqueue asserts the membership and a merged batch's headers render it.
+      None only for the v2 Run path, whose item carries a task_run binding and
+      never takes part in a batch.
+    user_event_id: Chat event id of the input this turn answers; recorded in
+      master_run so restart reconcile excludes exactly it from replay. Only
+      pass explicitly on the replay/wake paths (skip_user_event=True);
       otherwise captured from the freshly persisted user event.
 
   Returns:
@@ -452,7 +557,8 @@ async def run_message(
       should_check_tex=should_check_tex,
       future=future,
       expect_fresh_session=expect_fresh_session,
-      user_event_id=user_event_id,
+      user_event_ids=[user_event_id] if user_event_id else [],
+      input_event_type=input_event_type,
       uploaded_files=uploaded_files,
       task_instructions=task_instructions,
       task_run=task_run,
@@ -543,7 +649,12 @@ async def enqueue_master_resume(
       extra_claude_flags=None,
       should_check_tex=False,
       future=future,
-      user_event_id=record.user_event_id,
+      # The re-attached turn answers the recorded turn's whole input list, so
+      # startup replay excludes exactly those events.
+      user_event_ids=list(record.user_event_ids),
+      # A re-attach (or a v2 Run follow) delivers no new input: no input type
+      # is declared, and the resume/task_run binding keeps it out of any batch.
+      input_event_type=None,
       resume_record=record,
       resume_is_alive=is_alive,
       task_run=task_run,
@@ -556,7 +667,7 @@ async def enqueue_master_resume(
 
 
 def queued_user_event_ids(session_id: str) -> set[str]:
-  """Chat event ids of user messages this process already owns (running or queued).
+  """Chat event ids of inputs this process already owns (running or queued).
 
   Startup reconcile excludes exactly these (plus any recorded turn's id) from
   replay: within one process the queue survives, so replaying a queued message
@@ -566,13 +677,12 @@ def queued_user_event_ids(session_id: str) -> set[str]:
   """
   ids: set[str] = set()
   current = master_cc_state._current_items.get(session_id)
-  if current is not None and current.user_event_id:
-    ids.add(current.user_event_id)
+  if current is not None:
+    ids.update(current.user_event_ids)
   queue = master_cc_state._session_queues.get(session_id)
   if queue is not None:
     for item in list(queue._queue):  # same-process snapshot; safe under the GIL
-      if item.user_event_id:
-        ids.add(item.user_event_id)
+      ids.update(item.user_event_ids)
   return ids
 
 
@@ -596,20 +706,52 @@ async def replay_user_message(
   replayed prompt prefixes ``_REPLAY_MARKER`` so the master checks prior side
   effects before redoing them. Attachments persisted on the event
   (``uploaded_files``) ride the replay too, so a restart-redelivered attach
-  round re-attaches. The record's user_event_id keeps pointing at the
-  ORIGINAL event, which is the one startup reconcile must exclude.
+  round re-attaches. The record's user_event_ids keep pointing at the
+  ORIGINAL events, which are the ones startup reconcile must exclude.
   """
-  content = user_event.get("content")
+  await _replay_chat_event(cfg, session_meta, user_event, callbacks, ET.USER, is_voice=bool(user_event.get("is_voice")))
+
+
+async def replay_scheduled_trigger(
+    cfg: CharlieBotConfig,
+    session_meta: SessionMetadata,
+    wake_event: dict,
+    callbacks: SessionCallbacks,
+) -> None:
+  """Redeliver an unanswered scheduled-trigger wake after a restart, marked as a replay.
+
+  FIRED-on-delivery leaves the trigger record unable to re-fire (it left
+  pending the moment its wake was enqueued), so the replay pass owns the
+  redelivery: a machine wake carrying the replay marker, declared as
+  SCHEDULED_TRIGGER input so it batches like any other queued input.
+  """
+  await _replay_chat_event(cfg, session_meta, wake_event, callbacks, ET.SCHEDULED_TRIGGER, auto_trigger=True)
+
+
+async def _replay_chat_event(
+    cfg: CharlieBotConfig,
+    session_meta: SessionMetadata,
+    event: dict,
+    callbacks: SessionCallbacks,
+    input_event_type: str,
+    *,
+    is_voice: bool = False,
+    auto_trigger: bool = False,
+) -> None:
+  """Shared replay body: marker-prefixed prompt; the original event stays in the log."""
+  content = event.get("content")
   if not isinstance(content, str) or not content:
-    log.error("master_replay_unusable_event", session=session_meta.id, event_id=user_event.get("id"))
+    log.error("master_replay_unusable_event", session=session_meta.id, event_id=event.get("id"))
     return
   await run_message(
       cfg,
       session_meta,
       user_content=f"{_REPLAY_MARKER}\n\n{content}",
       callbacks=callbacks,
+      input_event_type=input_event_type,
       skip_user_event=True,
-      is_voice=bool(user_event.get("is_voice")),
-      uploaded_files=user_event.get("uploaded_files"),
-      user_event_id=user_event.get("id"),
+      auto_trigger=auto_trigger,
+      is_voice=is_voice,
+      uploaded_files=event.get("uploaded_files"),
+      user_event_id=event.get("id"),
   )

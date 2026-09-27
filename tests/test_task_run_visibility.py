@@ -2,7 +2,7 @@
 
 The task-tree rollout left a running worker without a header timer and its
 record reachable only through the old card panel. The sidebar's running state
-is the task-tree activity derivation's (test_task_tree_activity.py); what this
+is the task-tree activity derivation's; what this
 file pins is the worker node's busy interval — thinking_state opens it at the
 Run's recorded started_at and the Run's own terminal fact closes it — and the
 display-backend map. The worker node's messages are its Runs' events projected

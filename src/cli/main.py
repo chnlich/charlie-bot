@@ -2,9 +2,8 @@
 
 The subcommand vocabulary has one definition: the ``_COMMANDS`` registry
 below, which ``--help`` prints and whose full set the README's "CLI at a
-glance" section must name (``tests/test_cli_main.py`` pins that lockstep).
-The legacy ``python -m src.cli.<command>`` entrypoints remain owned by their
-individual modules.
+glance" section must name. The legacy ``python -m src.cli.<command>``
+entrypoints remain owned by their individual modules.
 """
 
 import importlib

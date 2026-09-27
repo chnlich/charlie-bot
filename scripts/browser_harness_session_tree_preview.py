@@ -10,7 +10,7 @@ creation form, Chat with a focused composer, drafts kept, one node per pending
 action, the dropdown's selected model carried on the create), explicit
 child/worker creation through the existing modal, goal and rule editing, node
 switching with draft preservation, the real GLM manager turn from the first
-message, Context and run history, the completion/refusal/reopen and move/pause
+message, Context and run history, the completion/refusal/reopen and move
 controls, a reload with selection, a narrow viewport, the live activity
 feedback on real Run paths (a manager turn spinning its own row, a worker turn
 spinning its row plus its ancestors' delegated-work gear while collapsed, a
@@ -978,7 +978,7 @@ async def drive_browser(debug_port: int, base: str,
                        bool(preview_hash and preview_hash == stored_hash),
                        f"preview={str(preview_hash)[:16]} stored={str(stored_hash)[:16]}", None)
 
-    # --- S10: completion, refusal, reopen, move, pause on the worker -------
+    # --- S10: completion, refusal, reopen, move on the worker ---------------
     await evaluate(cdp, sid, f"switchSession({json.dumps(worker_id)})")
     await wait_for(cdp, sid, "SESSION_ID === " + json.dumps(worker_id), timeout=15,
                    label="worker selected again")
@@ -1020,16 +1020,9 @@ async def drive_browser(debug_port: int, base: str,
         cdp, sid, "!!document.getElementById('task-move-list') &&"
                   "!document.getElementById('task-move-list').textContent.includes('Failed to load')")
     await click_button_by_text(cdp, sid, "Cancel", "#task-move-modal")
-    pause_btn = await evaluate(cdp, sid, "!!document.getElementById('task-action-pause')")
-    if pause_btn:
-        await click(cdp, sid, "#task-action-pause")
-        await wait_for(cdp, sid,
-                       "fetch('/api/sessions/' + SESSION_ID, {cache: 'no-store'})"
-                       ".then(r => r.json()).then(d => d.automation_paused === true)", timeout=15,
-                       label="paused")
-    results.record("s10-completion-refusal-reopen-move-pause",
+    results.record("s10-completion-refusal-reopen-move",
                    bool(chooser_ok),
-                   f"complete/reopen applied; move chooser loaded={chooser_ok}; pause applied={pause_btn}",
+                   f"complete/reopen applied; move chooser loaded={chooser_ok}",
                    await screenshot(cdp, sid, results, "s10b-controls"))
 
     # --- S11: reload preserves the trial state and the selected node --------
@@ -1094,17 +1087,13 @@ async def drive_browser(debug_port: int, base: str,
                    None)
 
     # --- S14: delegated-work activity on real Run paths ---------------------
-    # The trial's own controls resume the worker; real work turns run. Observed
-    # live through the tree's WebSocket updates: a running node spins its own
-    # row, its running ancestors show the delegated gear, and a real stop
-    # clears the cues. Nothing paints a fake running row.
+    # Real work turns run on the open worker. Observed live through the tree's
+    # WebSocket updates: a running node spins its own row, its running
+    # ancestors show the delegated gear, and a real stop clears the cues.
+    # Nothing paints a fake running row.
     await evaluate(cdp, sid, f"switchSession({json.dumps(worker_id)})")
     await wait_for(cdp, sid, f"SESSION_ID === {json.dumps(worker_id)}", timeout=15,
                    label="worker selected for the activity scenario")
-    status, _meta = api_request(base, access_key, "PATCH", f"/api/sessions/{worker_id}",
-                                {"automation_paused": False}, timeout=20.0)
-    resumed = status == 200
-    results.record("s14a-worker-resumed", resumed, f"PATCH automation_paused=false -> {status}", None)
 
     toolbar_intact = await evaluate(cdp, sid, """
         (() => {

@@ -22,7 +22,7 @@ Boundaries this module pins:
   occurrence's time), so a repeated scan or a crash between admission and the
   scheduler's bookkeeping keeps choosing the SAME firing — an intentional new
   firing (the next due occurrence, or a manual run) is distinct.
-- A missing, non-task-tree, closed, paused, or non-manager (for mode: master
+- A missing, non-task-tree, closed, or non-manager (for mode: master
   and leaf creation) binding fails the fire VISIBLY and never silently creates
   a replacement session.
 - The bound node's backend resolution, per-step backends, allow_failure,
@@ -123,7 +123,7 @@ async def resolve_binding(
 
   A bound task never discovers or creates a session: the binding IS the node.
   A missing session, a legacy (non-task-tree) session, or — for the paths that
-  execute against it — a closed or paused node stops the fire here.
+  execute against it — a closed node stops the fire here.
   """
 
   if not task_cfg.session_id:
@@ -145,10 +145,9 @@ async def check_fireable_binding(
 ) -> SessionMetadata:
   """The binding a NEW cron execution may start against.
 
-  Closed and paused bound nodes generate no new cron execution (the
-  configuration itself stays readable); a mode: master fire and a leaf
-  creation additionally require a manager node. Nothing here ever creates a
-  replacement.
+  Closed bound nodes generate no new cron execution (the configuration itself
+  stays readable); a mode: master fire and a leaf creation additionally
+  require a manager node. Nothing here ever creates a replacement.
   """
   meta = await resolve_binding(task_cfg, tree)
   state = tree.task_state(meta.id)
@@ -156,10 +155,6 @@ async def check_fireable_binding(
     raise ScheduledBindingError(
         f"scheduled task '{task_cfg.name}' binds task {meta.id}, which is {state}; "
         "a closed task generates no new cron execution")
-  if meta.automation_paused:
-    raise ScheduledBindingError(
-        f"scheduled task '{task_cfg.name}' binds task {meta.id}, which is paused; "
-        "a paused task generates no new cron execution")
   if task_cfg.mode == "master" and meta.profile != "manager":
     raise ScheduledBindingError(
         f"scheduled task '{task_cfg.name}' (mode master) binds task {meta.id}, "

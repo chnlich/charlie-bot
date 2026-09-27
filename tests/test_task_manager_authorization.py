@@ -612,7 +612,7 @@ async def test_agent_create_scope_matrix_stays_enforced(tmp_path: Path, monkeypa
 
     # Structural mutations stay operator-only for agents.
     patch_try = client.patch(
-        f"/api/sessions/{worker.id}", json={"automation_paused": True}, headers=agent_headers(root.id, "root-run"))
+        f"/api/sessions/{worker.id}", json={"presentation": "hidden"}, headers=agent_headers(root.id, "root-run"))
     assert patch_try.status_code == 403, patch_try.text
 
   # Nothing above created a node.

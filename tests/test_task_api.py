@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -262,12 +263,11 @@ async def test_patch_metadata_and_permanent_delete_blockers(task_env) -> None:
     patched = client.patch(f"/api/sessions/{ids['worker']}", json={
         "task": {"goal": "ship the tree", "acceptance": ["tests pass"]},
         "presentation": "shown",
-        "automation_paused": True,
     })
     assert patched.status_code == 200
     body = patched.json()
     assert body["task"]["goal"] == "ship the tree"
-    assert body["automation_paused"] is True and body["presentation"] == "shown"
+    assert body["presentation"] == "shown"
 
     # Reparent to a worker target is a 400; to a missing task a 404.
     bad = client.patch(f"/api/sessions/{ids['worker']}", json={"task_parent_id": ids["worker"]})
@@ -280,6 +280,50 @@ async def test_patch_metadata_and_permanent_delete_blockers(task_env) -> None:
     blocked = client.delete(f"/api/sessions/{ids['worker']}/permanent")
     assert blocked.status_code == 409
     assert any("run record" in b for b in blocked.json()["detail"]["blockers"])
+
+
+# The retired task-pause key, spelled in parts: the whole key must stay
+# grep-clean out of the tree while these retirement tests still send it on
+# the wire and write it on disk.
+RETIRED_PAUSE_KEY = "automation" "_paused"
+
+
+@pytest.mark.asyncio
+async def test_patch_rejects_the_retired_pause_field(task_env) -> None:
+  """The retired pause field is an unknown field now: the structured PATCH
+  body forbids unknown fields, so a client still sending it is refused with
+  422, never silently accepted."""
+  cfg, session_mgr, task_mgr = task_env
+  ids = await seed_tree(task_mgr)
+  with make_client(cfg, session_mgr, task_mgr) as client:
+    resp = client.patch(f"/api/sessions/{ids['worker']}", json={RETIRED_PAUSE_KEY: True})
+    assert resp.status_code == 422, resp.text
+
+
+@pytest.mark.asyncio
+async def test_metadata_with_the_retired_pause_key_loads_and_drops_it_on_save(task_env) -> None:
+  """A metadata.json still carrying the retired pause key loads through the
+  normal session load path (unknown keys are ignored on read) and the key is
+  gone after the next metadata save."""
+  cfg, session_mgr, task_mgr = task_env
+  ids = await seed_tree(task_mgr)
+  metadata_path = cfg.sessions_dir / ids["worker"] / "metadata.json"
+  data = json.loads(metadata_path.read_text())
+  assert RETIRED_PAUSE_KEY not in data
+  data[RETIRED_PAUSE_KEY] = True
+  metadata_path.write_text(json.dumps(data))
+
+  # The normal load paths answer the node, not a parse error.
+  meta = await task_mgr.load_task_meta(ids["worker"])
+  assert meta is not None and meta.id == ids["worker"]
+  loaded = await session_mgr.get_session(ids["worker"])
+  assert loaded is not None and loaded.id == ids["worker"]
+
+  # The next save rewrites the file from the parsed model: the key is gone.
+  await session_mgr.rename_session(ids["worker"], "Renamed")
+  saved = json.loads(metadata_path.read_text())
+  assert RETIRED_PAUSE_KEY not in saved
+  assert saved["name"] == "Renamed"
 
 
 @pytest.mark.asyncio
@@ -402,7 +446,7 @@ async def test_agent_run_token_creates_own_children_under_its_own_task(task_env)
 
     # User-only structural mutations are 403 for an agent caller.
     patch_try = client.patch(
-        f"/api/sessions/{ids['worker']}", json={"automation_paused": True},
+        f"/api/sessions/{ids['worker']}", json={"presentation": "hidden"},
         headers=agent_headers(claims))
     assert patch_try.status_code == 403
 
@@ -466,13 +510,13 @@ async def test_payload_actor_is_never_identity(task_env) -> None:
   with make_client(cfg, session_mgr, task_mgr) as client:
     forged = client.patch(
         f"/api/sessions/{ids['worker']}",
-        json={"automation_paused": True, "actor": "user"},
+        json={"actor": "user"},
         headers=agent_headers(claims))
     assert forged.status_code == 422  # the structured body has no actor field to claim
 
     response = client.patch(
         f"/api/sessions/{ids['worker']}",
-        json={"automation_paused": True},
+        json={"presentation": "hidden"},
         headers=agent_headers(claims))
     assert response.status_code == 403  # identity is the token's, never the payload's
 

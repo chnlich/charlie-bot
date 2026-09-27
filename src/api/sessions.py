@@ -2155,8 +2155,7 @@ async def reopen_session_task(
     caller: CallerIdentity = Depends(require_caller),
 ) -> SessionDetailResponse:
   """Explicit operator reopen: references the closed event, refuses closed
-  ancestors with their list, preserves history, and never bypasses
-  automation_paused or authorization."""
+  ancestors with their list, and preserves history and authorization."""
   try:
     await task_mgr.completion.reopen_task(
         session_id, request_id=req.request_id, reason=req.reason, caller=caller, closed_event_id=req.closed_event_id)

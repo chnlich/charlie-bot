@@ -289,7 +289,7 @@ def derive_task_tree_activity(
   Waiting means a queued Run on an open task: ``task_open`` gates the queued
   verdict, because ``execute_run`` withholds every launch on a non-open task,
   so a closed task's queued Run never starts and must not hold the sidebar's
-  clock (a paused open task stays waiting — its Run launches on resume). The
+  clock. The
   running verdict is not gated: closure is refused while a Run is active, so a
   closed task cannot hold a live Run.
   """
@@ -1150,9 +1150,9 @@ class TaskTreeManager:
 
     The node is re-read under the control lock and only the scheduling fields
     named by the caller are written, so a concurrent task edit (name, spec,
-    prompts, pause) between the scheduler's earlier load and this write is
-    preserved instead of being overwritten by a stale SessionMetadata
-    snapshot. This is the metadata owner's single entry for cron bookkeeping.
+    prompts) between the scheduler's earlier load and this write is preserved
+    instead of being overwritten by a stale SessionMetadata snapshot. This is
+    the metadata owner's single entry for cron bookkeeping.
     """
     if last_scheduled_run is None and cron is None and last_run_status is None:
       raise TaskInvalidError("record_scheduled_fire requires at least one scheduling field")
@@ -1237,8 +1237,6 @@ class TaskTreeManager:
         meta.name = req.name
       if "presentation" in fs and req.presentation is not None:
         meta.presentation = req.presentation
-      if "automation_paused" in fs and req.automation_paused is not None:
-        meta.automation_paused = req.automation_paused
       if "profile" in fs and req.profile is not None:
         meta.profile = req.profile
       if "task" in fs:

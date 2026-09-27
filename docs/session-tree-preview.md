@@ -107,8 +107,7 @@ executable verification recipe, never a mock:
   `GET /api/sessions/` list the sidebar paints from, the DOM icons and
   screenshots — a ~60 s worker Run (spinner on the row, the gear on its parent
   collapsed and expanded alike, since a parent row's icon reads facts and
-  never its expansion state, and icons clearing after finish), a queued Run
-  held by a paused node (the clock), goal-derived row names (never a raw
+  never its expansion state, and icons clearing after finish), goal-derived row names (never a raw
   Markdown heading in any worker-facing title), and list rows that already
   carry each task-tree node's `work_state` on first paint.
 - `scripts/browser_harness_session_tree.py` — the synthetic tree harness: the

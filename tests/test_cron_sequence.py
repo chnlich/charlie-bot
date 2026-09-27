@@ -3,7 +3,7 @@
 Exercises the actual scheduler entry points (_maybe_run / run_task_now) against
 a synthetic instance with deterministic scripted backend processes: bound
 master and worker modes, steps sharing one leaf, per-step backends, stop
-semantics, config API round-trip, closed/paused nodes, new-vs-replayed
+semantics, config API round-trip, closed nodes, new-vs-replayed
 firings, and run-token spoof attempts.
 """
 
@@ -379,7 +379,7 @@ async def test_bound_prompt_task_one_leaf_per_firing_and_distinct_firings(
 
 
 # ---------------------------------------------------------------------------
-# Binding validation: never a replacement session, closed/paused skip
+# Binding validation: never a replacement session, closed skip
 # ---------------------------------------------------------------------------
 
 
@@ -438,26 +438,6 @@ async def test_closed_bound_node_generates_no_new_execution(
     await scheduler._execute_task(task_cfg, record_handle=True, firing="2026-01-01T03:00:00+00:00")
   # The configuration remains readable.
   assert task_cfg.session_id == manager.id
-
-
-@pytest.mark.asyncio
-async def test_paused_bound_node_generates_no_new_execution(
-        bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
-  from src.core.cron_sequence import ScheduledBindingError
-  cfg, session_mgr, tree = bound_env
-  manager = await make_manager(tree)
-  builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])],
-                            BUILD_BACKEND_PATCH_TARGET)
-  from src.core.models import PatchSessionTaskRequest
-  from src.core.run_token import CallerIdentity
-  await tree.patch_task(
-      manager.id, PatchSessionTaskRequest(automation_paused=True),
-      caller=CallerIdentity(kind="operator"))
-  task_cfg = _bound_task("wake-manager", manager.id, prompt="Standup.")
-  scheduler = Scheduler(cfg, session_mgr)
-  with pytest.raises(ScheduledBindingError, match="paused"):
-    await scheduler._execute_task(task_cfg, record_handle=True, firing="2026-01-01T03:00:00+00:00")
-  assert builds == []
 
 
 # ---------------------------------------------------------------------------
@@ -645,23 +625,35 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
 # ---------------------------------------------------------------------------
 
 
-async def pause_task(tree: TaskTreeManager, session_id: str) -> None:
-  from src.core.models import PatchSessionTaskRequest
-  from src.core.models import PatchSessionTaskRequest as _P
+async def cancel_task_node(tree: TaskTreeManager, session_id: str, request_id: str) -> None:
+  """Close one run-less node with outcome cancelled: a closed task withholds
+  every launch (a queued Run would block the cancel, so close first)."""
   from src.core.run_token import CallerIdentity
-  assert _P is PatchSessionTaskRequest
-  await tree.patch_task(
-      session_id, PatchSessionTaskRequest(automation_paused=True),
+  await tree.completion.cancel_task(
+      session_id, request_id=request_id, reason="withhold the launch",
       caller=CallerIdentity(kind="operator"))
+
+
+async def reopen_task_node(tree: TaskTreeManager, session_id: str, request_id: str) -> None:
+  from src.core.run_token import CallerIdentity
+  await tree.completion.reopen_task(
+      session_id, request_id=request_id, reason="precondition cleared",
+      caller=CallerIdentity(kind="operator"))
+
+
+def blocked_reports(tree: TaskTreeManager, manager_id: str) -> list[dict]:
+  return [e for e in tree.events.load_events(manager_id)
+          if e.get("type") == ET.CHILD_REPORT and e.get("outcome") == "blocked"]
 
 
 @pytest.mark.asyncio
 async def test_withheld_step_launch_settles_the_chain_without_hanging(
         bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
   """A step launch whose precondition fails after registration (here: the leaf
-  paused) must settle the controller explicitly: the step Run stays queued, the
-  actual reason is delivered as the stable blocked boundary report, and the
-  scheduler's overlap handle ends with the controller instead of hanging."""
+  was cancelled after it was created, before its step Run launched) must settle
+  the controller explicitly: the step Run stays queued, the actual reason is
+  delivered as the stable blocked boundary report, and the scheduler's overlap
+  handle ends with the controller instead of hanging."""
   _cfg, _session_mgr, tree = bound_env
   manager = await make_manager(tree)
   builds = install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
@@ -674,10 +666,10 @@ async def test_withheld_step_launch_settles_the_chain_without_hanging(
   meta = await tree.load_meta(manager.id)
   leaf = await cron_sequence.ensure_firing_leaf(
       task_cfg, meta, tree, FIRING, f"{task_cfg.name} steps", backend="fake", model="fake-model")
+  await cancel_task_node(tree, leaf.id, "withhold-leaf")
   await cron_sequence.register_leaf_run(
       tree, leaf.id, task_cfg, FIRING, kind="scheduled_step", position=0,
       backend="fake", model="fake-model")
-  await pause_task(tree, leaf.id)
 
   handle = create_logged_task(
       cron_sequence.run_firing_steps(task_cfg, meta, tree, FIRING, leaf.id),
@@ -685,24 +677,19 @@ async def test_withheld_step_launch_settles_the_chain_without_hanging(
   await asyncio.wait_for(handle, 20)
   assert handle.done()
 
-  reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+  reports = blocked_reports(tree, manager.id)
   assert len(reports) == 1
-  assert reports[0]["outcome"] == "blocked"
-  assert "paused" in str(reports[0]["summary"])
+  assert "withheld" in str(reports[0]["summary"])
   # The retained pending request: the queued step Run with no terminal fact.
   runs = tree.runs.list_run_records_sync(leaf.id)
   assert len(runs) == 1
   assert runs[0].pid is None
   assert tree.runs.terminal_outcome(tree.runs.load_events_sync(leaf.id), runs[0].id) is None
-  assert tree.task_state(leaf.id) == "open"
   assert builds == []
-  # A replayed reconciliation after the precondition clears launches the SAME
-  # step run (no duplicate), through the resume policy — no second report yet.
-  from src.core.models import PatchSessionTaskRequest
-  from src.core.run_token import CallerIdentity
-  await tree.patch_task(
-      leaf.id, PatchSessionTaskRequest(automation_paused=False),
-      caller=CallerIdentity(kind="operator"))
+  # A replayed reconciliation after the precondition clears (the leaf reopens)
+  # launches the SAME step run (no duplicate) — no second report.
+  await reopen_task_node(tree, leaf.id, "clear-leaf")
+  assert tree.task_state(leaf.id) == "open"
   builds2 = install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("first done")])],
       WORKER_BUILD_BACKEND_PATCH_TARGET)
@@ -733,10 +720,10 @@ async def test_withheld_single_round_settles_and_releases_the_overlap_handle(
   meta = await tree.load_meta(manager.id)
   leaf = await cron_sequence.ensure_firing_leaf(
       task_cfg, meta, tree, FIRING, "Do the round.", backend="fake", model="fake-model")
+  await cancel_task_node(tree, leaf.id, "withhold-leaf")
   await cron_sequence.register_leaf_run(
       tree, leaf.id, task_cfg, FIRING, kind="work", position=None,
       backend="fake", model="fake-model")
-  await pause_task(tree, leaf.id)
   scheduler = Scheduler(cfg, session_mgr)
   handle = await scheduler._launch_bound_round(
       task_cfg, meta, tree, FIRING, leaf.id, backend="fake", model=None,
@@ -745,9 +732,9 @@ async def test_withheld_single_round_settles_and_releases_the_overlap_handle(
   assert handle.done()
   assert scheduler._handles.get(task_cfg.name) is handle
 
-  reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
-  assert len(reports) == 1 and reports[0]["outcome"] == "blocked"
-  assert "paused" in str(reports[0]["summary"])
+  reports = blocked_reports(tree, manager.id)
+  assert len(reports) == 1
+  assert "withheld" in str(reports[0]["summary"])
   runs = tree.runs.list_run_records_sync(leaf.id)
   assert len(runs) == 1 and runs[0].pid is None
   assert builds == []

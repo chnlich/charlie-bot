@@ -268,8 +268,7 @@ class TaskInputDispatcher:
     async def dispatch_pending(self, session_id: str) -> dict:
         """Evaluate the launch decision for one node's pending inputs.
 
-        Closed nodes keep late input as history; paused
-        nodes keep it durable without starting work. An active consumer owns
+        Closed nodes keep late input as history. An active consumer owns
         the node: later arrivals wait for the next serialized run. A queued
         (registered, never launched) run is a pending execution request — an
         explicit retry, or a run a crashed process registered — and is handed
@@ -289,10 +288,6 @@ class TaskInputDispatcher:
         if tree.task_state(session_id) != "open":
             decision["launch"] = False
             decision["reason"] = "task is closed; input retained as history"
-            return decision
-        if meta.automation_paused:
-            decision["launch"] = False
-            decision["reason"] = "automation_paused; input retained until resume"
             return decision
         tui_refusal = self._tui_manager_refusal(meta)
         if tui_refusal is not None:

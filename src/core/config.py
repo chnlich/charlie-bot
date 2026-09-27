@@ -116,8 +116,8 @@ class ScheduledTaskFields(BaseModel):
   allow_failure: bool = False
   # Explicit task-tree binding (schema_version=2): the stable session id this
   # task fires against. The binding IS the session — a missing, closed,
-  # paused, non-manager or otherwise invalid binding fails the fire visibly
-  # instead of creating a replacement session.
+  # non-manager or otherwise invalid binding fails the fire visibly instead
+  # of creating a replacement session.
   session_id: str | None = None
   # Execution mode of a bound task: 'master' admits the task's prompt as one
   # scheduled input to the bound manager node and dispatches it once;

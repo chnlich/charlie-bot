@@ -41,7 +41,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M28 ndjson tail+count scan, steady state | M28 collector below | seconds per `parse_ndjson_tail` call, worst on-disk live chat file | median < 0.030 s | — (introduced with its first history row) |
 | M29 session-metadata listing preamble, steady state | M29 collector below | seconds per `_load_session_metas(ACTIVE)` call, live session-dir corpus | median < 0.005 s | — (introduced with its first history row) |
 | M30 live-half chat-event range rescan, steady state | M30 collector below | seconds per 8-page backwards scroll over the biggest archived session's live file; the append-round repeat (one appended line before each timed round, the page click during a streamed turn) | unchanged median < 0.005 s; append-round median < 0.005 s | — (introduced with its first history row) |
-| M31 worker-finalize events-summary read, steady state | M31 collector below | seconds per `read_events_summary` call, worst on-disk worker log | median < 0.02 s | — (introduced with its first history row) |
+| M31 worker-log summary read, worker completion | M31 collector below | seconds per `_worker_summary_from_events_log` call (the completion path's surviving worker-log read; the pre-refactor subject `read_events_summary` left with the legacy thread executor), worst on-disk worker log | median < 0.02 s | — (introduced with its first history row) |
 | M32 memory-store assemble, steady state | M32 collector below | seconds per `assemble_master` call, live memory corpus | median < 0.005 s | — (introduced with its first history row) |
 | M33 assistant-stream draft render, full-turn replay | M33 collector below | seconds per replay of the largest on-disk assistant draft, 200 B deltas at 40 ms virtual cadence | median < 0.1 s | — (introduced with its first history row) |
 | M34 worker-events poll fetch at rendered count | M34 collector below | seconds + response bytes per events fetch, worst on-disk worker log; the re-open repeat of the full fetch (the panel re-opening an unchanged log — the cold first parse + first deflate of a fresh body is the one-time cost, reported not priced) | after=total median < 0.002 s (recalibrated from < 0.02 s: the old line sat on the TestClient/httpx harness floor the 2026-09-17 repair removed — the served path reads 0.39-0.47 ms, the vacuous-read class the M36/M59/M71 repairs called out; see the 2026-09-17 history row); empty-tail body < 200 B; full fetch repeat median < 0.002 s (recalibrated with the same repair: the served re-open reads 1.11-1.17 ms after the FastJSON+gzip-memo landing, 1.85-2.00 ms before it); full fetch body < 200 KB | — (introduced with its first history row) |
@@ -718,10 +718,10 @@ while four reader threads validate every read. A torn read under this stream is 
 the fixed write path cannot produce; the count is the metric.
 
 ```bash
-/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, sys, tempfile, threading
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, sys, tempfile, threading
 from pathlib import Path
-sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+sys.path.insert(0, os.environ["CHECKOUT"])
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, ThreadMetadata
 from src.core.sessions import SessionManager
@@ -739,7 +739,11 @@ async def main():
     sessions = SessionManager(cfg)
     threads = ThreadManager(cfg)
     session = await sessions.create_session(CreateSessionRequest(name="M10"))
-    meta = await threads.create_thread(session, "m10")
+    # The thread's birth through the surviving funnel: the metadata model and
+    # one save_metadata (the legacy create_thread wrapper is gone; the atomic
+    # write makes the parent directory, the same shape the write path serves).
+    meta = ThreadMetadata(session_id=session.id, description="m10")
+    await threads.save_metadata(meta)
     path = work / "home" / "sessions" / session.id / "threads" / meta.id / "metadata.json"
     torn = 0
     reads = 0
@@ -2027,32 +2031,29 @@ shutil.rmtree(home)
 EOF
 ```
 
-M31 — worker-finalize events-summary read, steady state. Every worker completion
-runs `read_events_summary` on the finalize path (and again on the
-reviewer-completion path for the original worker's log), quoting the log's last
-parseable events into the worker_summary bubble. The pre-fix reader full-parsed
-the whole events.jsonl (~41 ms measured on the 6.7 MB worst on-disk log) and
-sliced the last 80; the fixed reader walks 512 KiB segments from the end
-collecting the last 80 parseable events — identical output, blank and malformed
-lines never counting toward the budget in either form. The cost is thread-pool
-time invisible to HTTP probes, so the collector times the function the finalize
-path awaits over the largest on-disk worker log (read-only), from the checkout
-under test: one cold pass, as at first finalize after a server start, then five
-timed calls. Evidence while the live server runs older code points the same
-collector at the branch checkout (`sys.path.insert` at the worktree root), the
-same shape as the M7 protocol. The sibling review-context scan (the reviewer
-prompt's delegation lookup over the session chat log) moved from a full parse
-to stream-until-first-match in the same change; its position-dependent numbers
-ride along in the PR's Evidence section instead of carrying a standing row.
+M31 — worker-log summary read, worker completion. Every worker completion's review
+context reads the worker log for the worker's closing words (`extract_review_context`
+awaits `_worker_summary_from_events_log` on a thread; the reviewer-completion path reads
+the original worker's log through the same function). The reader maps the log read-only
+and walks it newest line first, stopping at the first result-or-assistant event; lines
+the head-provable type filter rejects cost a bounded 256-byte head probe instead of
+their bytes, so a multi-megabyte tool_result between the answer and the tail never
+parses whole. The pre-refactor subject — the finalize path's
+`read_events_summary`, the last-80-parseable-events tail — left with the legacy thread
+executor, so this collector's subject is the surviving completion-path read of the same
+log. The cost is thread-pool time invisible to HTTP probes, so the collector times the
+function the completion path awaits over the largest on-disk worker log (read-only),
+from the checkout under test: one cold pass, as at the first completion after a server
+start, then five timed calls. Evidence points the same collector at the before and
+after checkouts (`CHECKOUT` at each root), the same shape as the M7 protocol. The
+sibling review-context chat-log scan carries its own standing row (M111).
 
 ```bash
-/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, sys, time
-sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, sys, time
 from pathlib import Path
-from src.core.config import CharlieBotConfig
-from src.core.threads import ThreadManager
-from src.core.spawner_events import read_events_summary
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.review import _worker_summary_from_events_log
 
 root = Path.home() / ".charliebot" / "sessions"
 best, best_n = None, -1
@@ -2063,17 +2064,16 @@ for p in root.glob("*/threads/*/data/events.jsonl"):
 SID, TID = best.parts[-5], best.parts[-3]
 
 async def main():
-    cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
-    thread_mgr = ThreadManager(cfg)
-    result = await read_events_summary(SID, TID, thread_mgr)  # cold pass, as at first finalize after a server start; not timed
+    result = await asyncio.to_thread(_worker_summary_from_events_log, best)  # cold pass, as at the first completion after a server start; not timed
     times = []
     for _ in range(5):
         t0 = time.perf_counter()
-        result = await read_events_summary(SID, TID, thread_mgr)
+        result = await asyncio.to_thread(_worker_summary_from_events_log, best)
         times.append(time.perf_counter() - t0)
     times.sort()
-    print(f"{best_n / 1e6:.1f} MB worker log, session {SID} thread {TID}; "
-          f"steady-state events-summary read median {times[2]:.4f} s, max {times[-1]:.4f} s")
+    print(f"checkout {os.path.basename(os.environ['CHECKOUT'])}: {best_n / 1e6:.1f} MB worker log, "
+          f"session {SID} thread {TID}; steady-state worker-log summary read median "
+          f"{times[2]:.4f} s, max {times[-1]:.4f} s, summary {len(result or '')} chars")
 
 asyncio.run(main())
 EOF
@@ -7143,7 +7143,13 @@ threads = ThreadManager(cfg)
 
 async def main():
   session = await sessions.create_session(CreateSessionRequest(name="M100"))
-  meta = await threads.create_thread(session, "m100")
+  # The thread's birth through the surviving funnel: the metadata model and
+  # one save_metadata (the legacy create_thread wrapper is gone; the atomic
+  # write makes the parent directory, the worker append makes data/ the way
+  # the production Worker's own append does).
+  meta = ThreadMetadata(session_id=session.id, description="m100")
+  await threads.save_metadata(meta)
+  (threads.thread_dir(session.id, meta.id) / "data").mkdir(parents=True, exist_ok=True)
 
   # Master funnel parity witness: the signal persists as the chat history's
   # run-start marker (the stable-history projection's interval key) on both
@@ -8736,6 +8742,7 @@ EOF
 ## Sampling history
 
 | Date | PR | Before → after | Note |
+| 2026-09-27 | this PR | M10/M31/M100 collectors repaired: the standing sweep reports the three unmeasured — 3 of 121 — since the task-execution refactor deleted their subjects' launch-time homes (`ThreadManager.create_thread` gone; `src.core.spawner_events` gone). M10 and M100 birth their scratch thread through the surviving `save_metadata` funnel (the atomic write makes the parent directory; the M100 worker append makes `data/`, the production Worker's own shape) and parameterize the M10 arm on `CHECKOUT` like its siblings; M31 retargets the worker-log read at its surviving completion-path subject, `src.core.review._worker_summary_from_events_log` (the deleted `read_events_summary`'s last-80-tail shape left with the legacy finalize chain; `extract_review_context` awaits the stream-from-end reader under `asyncio.to_thread` — the same call M111's sibling chat-log scan rides), definition row retitled with it. Readings, verbatim collector over the main-checkout and branch-worktree arms, the repair touching no product code: M10 3000 `save_metadata` calls, 0 torn of 35595/36890 concurrent reads; M31 9.8 MB worst worker log, steady-state median 0.0002 s, max 0.0003 s, summary 3339 chars both arms (the < 0.02 s line holds); M100 typed `session_attached`, chat marker 1 line per signal (6 of 6, captured 'oc-attach-probe'), worker append median 5.8/5.2/4.0 µs max 17.2–48.8 µs over 50, 0 broadcast frames per signal, cold read+transform 0.11–0.12 ms, 0 raw rows — every range line holds |
 | 2026-09-27 | this PR | M96 max-body line recalibrated to the turn corpus, docs-only: standing sweep read 57 session rows, median 89048 B, p90 200538 B, max 754444 B — 23 % over the < 0.60 MB max line, median well inside; the worst session (2dcc60e8, an implement-plan delegation turn) carries 80 messages / 1007 previewed tool rows at 769 B/row where the 2026-09-20 trim's caps verify holding on the live wire (max raw output exactly the 500-char preview over all 1007 rows, max raw input 555 B), so the over is turn-corpus shape — the corpus the line was set from read max 272176 B over 46 sessions at the trim landing (2026-09-20) and 272491 B over 34 rows at the 2026-09-25 re-measurement, the corpus grew around the line; heavy-session per-row wire cost 769-867 B across the three >400 KB sessions, corpus mean 1076 B/row; new line max(0.60 MB, worst-session tool rows × 0.0011 MB) reads 1.11 MB at the observed worst (1.43× headroom over the 769 B/row reading) and the floor still governs the second-heaviest live session (486 rows / 410558 B); collector now reports the worst session's tool-row count the scaled line reads; collector re-run verbatim post-edit: 57 rows, median 89048, p90 200538-202694, max 773796-783327 (worst-session tool rows 1007-1009; the session still appends) — inside the new line at load 1.6-2.6 one-minute (the sweep window sat at 3.5-6.4 under a sibling pytest suite; the reading is a byte count and load-independent) | the SPA switch's bootstrap window is turn-aligned (the projection's tail snaps back to the turn start), so the payload grows with the longest live turn and the line must track that corpus, not a fixed ceiling; no code lever inside the renderer's read set — every wire field is a field the renderer displays (the 2026-09-20 row's read-set audit) |
 | 2026-09-26 | this PR | M125 collector restored to the standing sweep: the section #2147 landed closed its ```` ```bash ```` fence but never its closing fence, so every fenced-block reader since — the hourly sweep's verbatim extraction included — silently dropped the five-verb collector, and the metric introduced with its own healthy range got zero standing-sweep coverage for the day; this round's block census read 135 closed blocks against 136 opened and the repair appends the missing fence; an ad-hoc run of the now-delimited verbatim collector read improve 0.042, publish 0.041, storage 0.034, gc-trash 0.035, remote-launch 0.045 s medians (maxima 0.035-0.053 s) over 7, every verb inside the < 0.10 s line, at load 3.5-4.6 one-minute  | the sweep's collectors run verbatim as fenced blocks, so a block that never closes is dropped by every reader of the file — the fence is the collector's own delimitation; the healthy range is unchanged (the after medians sit at a third to a half of the 0.10 s line) |
 | 2026-09-26 | this PR | M17 fork, the clone-start marker's append dragged the copied corpus's flush into the fork: the 2235ace2 history-in-child-log landing left the prefix write's atomic stream un-fsynced but appended the marker through the durable funnel, whose fdatasync flushed the whole 1 GB prefix inside the fork — standing sweep read fork median 8.0408 s, max 11.2011 s against the < 2 s range (the sweep's in-process numbers, preflight-pinned main checkout c981ec9a); phase attribution on the same corpus read history-prefix write 0.4000 s, append+fdatasync 10.4027 s on a 1051.3 MB file; A/B over three interleaved rounds of the verbatim collector — main checkout vs branch worktree back-to-back, arm order alternating, at load 3.11-3.66 one-minute: fork median 8.9221/8.1142/8.1188 → 0.4369/0.4268/0.4327 s (−95 %), maxima 11.4401-12.0944 → 0.4320-0.4417 s, every paired round faster, under the < 2 s line again; witnesses: tests/test_session_reference_handoff.py's byte-identity suite green (prefix + one marker, chunk-boundary, non-ascii, corrupt-line), new test_fork_session_issues_no_fdatasync pinning the fork's zero-fdatasync birth, 6302-passed full suite; M17 healthy range unchanged (the after band sits at the pre-landing 0.5 s level) | the marker's durability class now matches the bytes it marks: the child log (prefix plus marker) is born whole through one atomic stream at the writeback class the copied history already had pre-landing (the side reference file was never fsynced either), and the child's first own append — fdatasync-durable per the funnel's contract — is what makes the born bytes durable; raw disk write throughput on this host measured ~140 MB/s (1 GB conv=fdatasync 7.68 s), so any synchronous whole-corpus flush costs the fork ~8 s regardless of placement |

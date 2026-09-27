@@ -118,6 +118,21 @@ async def test_v2_create_tree_detail_and_runs(task_env) -> None:
 
 
 @pytest.mark.asyncio
+async def test_activity_tracks_a_finish_that_lands_after_a_warm_derivation(task_env) -> None:
+  """The outcome memo rides the events cache's identity with a covered
+  cursor, so a run_finished append after a warmed derivation must move the
+  verdict — a stale memo would pin a finished run's queued verdict on every
+  tree page and sidebar probe until restart."""
+  _cfg, _session_mgr, task_mgr = task_env
+  ids = await seed_tree(task_mgr)
+  worker = ids["worker"]
+  await task_mgr.runs.register_run(RunRecord(id="r-memo", session_id=worker))
+  assert task_mgr.activity_of(worker).work_state == "waiting"
+  await task_mgr.runs.record_finish(worker, "r-memo", "completed")
+  assert task_mgr.activity_of(worker).work_state == "idle"
+
+
+@pytest.mark.asyncio
 async def test_patch_metadata_and_permanent_delete_blockers(task_env) -> None:
   cfg, session_mgr, task_mgr = task_env
   ids = await seed_tree(task_mgr)

@@ -102,8 +102,7 @@ function buildTailwindCssFromTokens(tokens) {
 `);
   fs.writeFileSync(entryFile, '@tailwind base;\n@tailwind components;\n@tailwind utilities;\n');
 
-  // Ensure the pinned tailwindcss devDependency is installed (idempotent, and
-  // independent of whether tests/test_tailwind_css_build.py has already run).
+  // Ensure the pinned tailwindcss devDependency is installed (idempotent).
   execFileSync('npm', ['install', '--no-audit', '--no-fund'], { cwd: ROOT, env: BUILD_ENV, stdio: 'pipe' });
 
   const cliPath = path.join(ROOT, 'node_modules', 'tailwindcss', 'lib', 'cli.js');

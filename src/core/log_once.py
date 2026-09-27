@@ -160,8 +160,7 @@ class _LeanLineRenderer:
   73% of the raw-ASGI 401 floor the M3 sub-reading prices in
   docs/perf_baseline.md — while the common line is a timestamp, a level, the
   event, and sorted key=value fields. Exception, stack, and logger-name lines
-  keep the dev renderer, whose output this class mirrors byte for byte
-  (pinned by tests/test_log_line_renderer.py).
+  keep the dev renderer, whose output this class mirrors byte for byte.
   """
 
   def __init__(self) -> None:
@@ -250,9 +249,7 @@ def log_http_request_line(
   two (measured: the renderer round trip ~7.6 us of the raw-ASGI 401 floor
   the M3 sub-reading prices, the composed form ~2.5 us). The parameter set
   fixes the field order — client, duration_ms, error, method, path, status —
-  the sorted order the renderer would emit, and byte identity against
-  _LeanLineRenderer is pinned per value shape in tests/test_log_line_renderer.py
-  and end to end in tests/test_request_logging.py. Capture-based readers see
+  the sorted order the renderer would emit. Capture-based readers see
   the line on stdout, not in structlog's capture list.
   """
   fields = f"client={_render_log_value(client)} duration_ms={_render_log_value(duration_ms)}"

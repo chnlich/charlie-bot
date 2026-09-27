@@ -14,7 +14,7 @@ def load_build_backend(namespace: dict[str, Any]) -> Any:
 
   Each carrier passes its own ``globals()``: an existing binding — a test's
   stand-in — is returned untouched, so the carrier's module attribute (e.g.
-  ``src.core.recap.build_backend``) stays the tests' patch target, exactly as
+  ``src.agents.worker.build_backend``) stays the tests' patch target, exactly as
   ``load_requests`` does for requests.
   """
   bound = namespace.get("build_backend")

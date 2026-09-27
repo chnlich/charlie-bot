@@ -7058,8 +7058,7 @@ restart's first cost is `import server` — the module uvicorn imports, whose ch
 router and core stack. The speech stack (numpy via `src.agents.transcriber`, plus the two numpy
 SIMD scanners `src.core.ndjson` and `src.core.sessions` carry) serves only background model
 provisioning, voice sockets, and the fork's parent-reference stream, so it must load on the
-provisioning thread and at the voice use sites instead of the startup path; the import-weight
-contract's server case (tests/test_cli_import_weight.py) pins the absence. The collector times
+provisioning thread and at the voice use sites instead of the startup path. The collector times
 the import wall over five fresh processes per round, from the checkout under test:
 
 ```bash

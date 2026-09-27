@@ -38,8 +38,7 @@ def load_croniter(namespace: dict[str, Any]) -> Any:
   floor's largest deferrable third-party slice and no import path resolves a
   next fire, so the import rides the first due-task or next-run resolution.
   The binding is per consumer module: each caller passes its own ``globals()``
-  so its bare-name reads keep working and stay the tests' monkeypatch target
-  (tests/test_cron_next_run_memo.py patches ``src.api.cron.croniter``).
+  so its bare-name reads keep working.
   """
   from croniter import croniter
 

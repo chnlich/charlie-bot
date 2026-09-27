@@ -10,13 +10,15 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 from conftest import (
-    MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET,
-    OPUS_BACKEND_ID,
-    agent_headers as run_token_headers,
-    assert_wake_unused,
-    legacy_parent_with_open_task,
-    stub_credentials,
-    wait_for_wake,
+  MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET,
+  OPUS_BACKEND_ID,
+  assert_wake_unused,
+  legacy_parent_with_open_task,
+  stub_credentials,
+  wait_for_wake,
+)
+from conftest import (
+  agent_headers as run_token_headers,
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient

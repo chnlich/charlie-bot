@@ -79,34 +79,39 @@ def _backend_label(cfg, backend: str | None) -> str:
   return option.label if option is not None else backend
 
 
-def _run_header_time(run: RunRecord) -> str | None:
-  """The header's one real time: the Run's own facts, never a clock read.
+def _run_header_event(
+    *,
+    run_id: str,
+    kind: str,
+    backend: str | None,
+    backend_label: str,
+    state: str,
+    error: str,
+    started_at: datetime | None,
+    terminal_at: datetime | None,
+) -> dict:
+  """The one header line that opens a transcript segment: a Run's, or a legacy thread's.
 
-  A started Run carries its started_at; a Run that never started but carries a
-  terminal fact (a launch failure) carries its ended_at; a queued Run carries
-  no time at all. A page-load or projection-build time here would show a
+  Both producers build the event here because one fold consumes both:
+  message_aggregator's ``ET.RUN_HEADER`` case renders either the same way. The
+  header carries one real time, from the projected record's own facts and
+  never a clock read: the start while it ran, the terminal fact's time (a
+  Run's ended_at, a thread's completed_at) when it never started, else no
+  time. A page-load or projection-build time would show a dead record a
   future-lying bubble (and once fed a negative duration).
   """
-  if run.started_at is not None:
-    return run.started_at.isoformat()
-  if run.ended_at is not None:
-    return run.ended_at.isoformat()
-  return None
-
-
-def _run_header_event(run: RunRecord, state: str, label: str, error: str) -> dict:
-  """The one header line that opens *run*'s transcript segment."""
-  started = run.started_at.isoformat() if run.started_at is not None else None
+  started = started_at.isoformat() if started_at is not None else None
+  terminal = terminal_at.isoformat() if terminal_at is not None else None
   return {
       "type": ET.RUN_HEADER,
-      "run_id": run.id,
-      "kind": run.kind,
-      "backend": run.backend or "",
-      "backend_label": label,
+      "run_id": run_id,
+      "kind": kind,
+      "backend": backend or "",
+      "backend_label": backend_label,
       "state": state,
       "error": error,
       "started_at": started,
-      "timestamp": _run_header_time(run),
+      "timestamp": started or terminal,
   }
 
 
@@ -230,7 +235,16 @@ def build_worker_transcript_sync(tree, session_id: str) -> TranscriptEntry:
     state = states.get(run.id, "queued")
     run_events = _read_events(tree.runs.run_dir(session_id, run.id) / RUN_EVENTS_NAME)
     transcript.append(
-        _run_header_event(run, state, _backend_label(tree.cfg, run.backend), _header_error(state, run_events)))
+        _run_header_event(
+            run_id=run.id,
+            kind=run.kind,
+            backend=run.backend,
+            backend_label=_backend_label(tree.cfg, run.backend),
+            state=state,
+            error=_header_error(state, run_events),
+            started_at=run.started_at,
+            terminal_at=run.ended_at,
+        ))
     transcript.extend(run_events)
   task_state = tree.task_state(session_id)
   delivery = _delivery_event(task_state, facts_events, runs)
@@ -299,23 +313,18 @@ def build_thread_transcript_sync(
 ) -> TranscriptEntry:
   """Build one legacy thread's transcript: one header line, then its events."""
   state = _thread_state(meta)
-  started = meta.started_at.isoformat() if meta.started_at is not None else None
-  # The same real-time rule the Run headers follow: the start while it ran,
-  # the terminal fact's completed_at when it never started, else no time.
-  completed = meta.completed_at.isoformat() if meta.completed_at is not None else None
   thread_events = _read_events(events_path)
   transcript: list[dict] = [
-      {
-          "type": ET.RUN_HEADER,
-          "run_id": meta.id,
-          "kind": "thread",
-          "backend": meta.backend or "",
-          "backend_label": label,
-          "state": state,
-          "error": _header_error(state, thread_events),
-          "started_at": started,
-          "timestamp": started or completed,
-      }
+      _run_header_event(
+          run_id=meta.id,
+          kind="thread",
+          backend=meta.backend,
+          backend_label=label,
+          state=state,
+          error=_header_error(state, thread_events),
+          started_at=meta.started_at,
+          terminal_at=meta.completed_at,
+      )
   ]
   transcript.extend(thread_events)
   signature = thread_signature_sync(session_dir, meta.id)

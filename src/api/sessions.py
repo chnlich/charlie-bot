@@ -1348,23 +1348,16 @@ async def get_session_transcript(
     entry = await asyncio.to_thread(
         worker_transcript.load_thread_transcript, cfg, cfg.sessions_dir / session_id, thread_meta, await
         thread_mgr.get_events_log_path(session_id, thread))
-    reset = _transcript_reset(entry.revision, revision)
-    running_since = worker_transcript.thread_thinking_since(thread_meta)
-    return FastJsonResponse(
-        {
-            "messages": entry.projection.committed if reset else entry.projection.committed[after:],
-            "total": len(entry.projection.committed),
-            "pending_draft": entry.projection.pending_draft,
-            "revision": entry.revision,
-            "reset": reset,
-            "active_run_id": entry.active_run_id,
-            "thinking_since": running_since.isoformat() if running_since else None,
-        })
-  if meta.profile != "worker":
-    raise HTTPException(status_code=400, detail=f"session {session_id} has no worker transcript")
-  entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_mgr, session_id)
+    thinking_since = worker_transcript.thread_thinking_since(thread_meta)
+  else:
+    if meta.profile != "worker":
+      raise HTTPException(status_code=400, detail=f"session {session_id} has no worker transcript")
+    entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_mgr, session_id)
+    thinking_since = thinking_state.busy_since(session_id)
+  # Both transcript arms answer one frontend poll (web/static/js/sidebar/session-view.js),
+  # so the response body lives here once: a field added to one arm only would
+  # silently drop from the other view.
   reset = _transcript_reset(entry.revision, revision)
-  busy = thinking_state.busy_since(session_id)
   return FastJsonResponse(
       {
           "messages": entry.projection.committed if reset else entry.projection.committed[after:],
@@ -1373,7 +1366,7 @@ async def get_session_transcript(
           "revision": entry.revision,
           "reset": reset,
           "active_run_id": entry.active_run_id,
-          "thinking_since": busy.isoformat() if busy else None,
+          "thinking_since": thinking_since.isoformat() if thinking_since else None,
       })
 
 

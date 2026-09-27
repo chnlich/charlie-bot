@@ -33,7 +33,6 @@ log = structlog.get_logger()
 
 
 def __getattr__(name: str) -> Any:
-  # The "src.core.recap.build_backend" patch target resolves through this hook.
   return deferred_module_getattr(name, __name__, globals(), "build_backend", load_build_backend)
 
 

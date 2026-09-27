@@ -3,7 +3,6 @@
 import asyncio
 import os
 from collections.abc import Iterator
-from datetime import datetime
 from pathlib import Path
 
 import aiofiles
@@ -12,12 +11,7 @@ from src.core.config import CharlieBotConfig
 from src.core.json_utils import write_model_json_atomically
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import StatSignatureMemo
-from src.core.models import (
-    TERMINAL_THREAD_STATUSES,
-    ThreadMetadata,
-    ThreadStatus,
-    utc_now,
-)
+from src.core.models import ThreadMetadata
 from src.core.runs import DATA_DIR_NAME
 from src.core.sidebar_state import mark_sidebar_dirty
 
@@ -80,9 +74,9 @@ class ThreadManager:
     # rewrite always moves (mtime_ns, size)). Each walk drops the entries for
     # files it did not see, so a deleted thread never lingers, and concurrent
     # executor walks serialize on the memo's lock. Callers only read the
-    # returned metas: the update path (update_status) re-reads through the
-    # uncached get_thread, so no in-place mutation of a memoized instance
-    # exists to leak.
+    # returned metas: the update path re-reads through the uncached
+    # get_thread, so no in-place mutation of a memoized instance exists to
+    # leak.
     self._list_memo: StatSignatureMemo[str, ThreadMetadata] = StatSignatureMemo(_THREAD_LIST_MEMO_LIMIT)
 
   async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata | None:
@@ -147,31 +141,6 @@ class ThreadManager:
     self._list_memo.drop_where(lambda key: key not in walked)
     return metas
 
-  async def update_status(
-      self,
-      session_id: str,
-      thread_id: str,
-      status: ThreadStatus,
-      pid: int | None = None,
-      exit_code: int | None = None,
-      completed_at: datetime | None = None,
-  ) -> None:
-    meta = await self.get_thread(session_id, thread_id)
-    if not meta:
-      return
-    meta.status = status
-    if pid is not None:
-      meta.pid = pid
-    if exit_code is not None:
-      meta.exit_code = exit_code
-    if status == ThreadStatus.RUNNING and not meta.started_at:
-      meta.started_at = utc_now()
-    if status in TERMINAL_THREAD_STATUSES:
-      # An explicit completion time (e.g. the raw log's final mtime, which is
-      # independent of when finalization happens to run) wins over "now".
-      meta.completed_at = completed_at or utc_now()
-    await self._save_metadata(meta)
-
   def thread_dir(self, session_id: str, thread_id: str) -> Path:
     """A thread's canonical on-disk directory (metadata.json and data/)."""
     return self._cfg.sessions_dir / session_id / THREADS_DIR_NAME / thread_id
@@ -193,7 +162,7 @@ class ThreadManager:
     # the whole list endpoint).
     path = self._metadata_path(meta.session_id, meta.id)
     await write_model_json_atomically(path, meta)
-    # Single funnel behind update_status/save_metadata: thread status
+    # Single funnel behind save_metadata: thread status
     # transitions (running -> terminal) land here. The mark carries the
     # published path so the list poll's incremental proof stats exactly this
     # file; it must follow the rename above.

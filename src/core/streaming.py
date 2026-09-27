@@ -11,18 +11,23 @@ client-side (_PREVIEW_HIDING_TYPES) drop the pending draft so a stale preview
 never surfaces after one of them.
 """
 
+from __future__ import annotations
+
 import asyncio
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from fastapi import WebSocket
-
-from src.agents.backends.base import make_context_compact_failed_event, make_context_compacted_event
-from src.api import responses
 from src.core import event_types as ET
 from src.core.log_once import LazyStructlogLogger
 from src.core.tasks import create_logged_task
+
+if TYPE_CHECKING:
+  from fastapi import WebSocket
+
+# Fresh non-server processes reach this module through src.core.sessions (the
+# memory CLI's run-token audience resolution) and pay every module-level import
+# per process; the server-only dependencies ride their call sites below.
 
 log = LazyStructlogLogger()
 
@@ -147,6 +152,8 @@ def _serialize(event: dict[str, Any]) -> str:
   a NaN/Infinity float renders as null instead of the stdlib's invalid-JSON
   literal, and a non-str dict key raises instead of the silent str coercion.
   """
+  from src.api import responses
+
   return responses.fast_json_bytes(event).decode("utf-8")
 
 
@@ -162,6 +169,8 @@ async def handle_compaction_events(
   """Detect compact_boundary and compact-failure system events, log, persist, and
   broadcast a synthesized event. At most one synthesized event is emitted per
   input event."""
+  from src.agents.backends.base import make_context_compact_failed_event, make_context_compacted_event
+
   if event.get("type") != ET.SYSTEM:
     return
   subtype = event.get("subtype")

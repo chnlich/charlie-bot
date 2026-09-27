@@ -87,7 +87,7 @@ OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
 # the files listing root and entry URLs, the slack URL rewriting. The auth whitelist
 # deliberately derives nothing: the file server sits behind the access key, and deriving
 # the prefix there would re-open the gate. The frontend gate (web/static/js/chat/artifacts.js)
-# mirrors the single element, pinned by tests/test_frontend_file_server_prefixes.py.
+# mirrors the single element.
 FILE_SERVER_MOUNTS = ("/absolute_filepath",)
 
 # Viewer route paths: pages.py declares each route with its spelling. The auth

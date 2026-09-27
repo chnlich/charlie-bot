@@ -48,7 +48,7 @@ from scripts.browser_harness_session_tree import pick_free_port  # noqa: E402
 # Evidence defaults to a host temp directory so the public repo carries no
 # host path; pass --evidence-dir to keep evidence with its owning session.
 EVIDENCE_ROOT_DEFAULT = Path(tempfile.gettempdir()) / "charliebot-session-tree-evidence"
-DEFAULT_BACKEND = "charlie-code-glm53-flash"
+DEFAULT_BACKEND = "charlie-code-glm-flash"
 MANAGER_PHRASE = "LIVE-PREVIEW-MANAGER-OK-7Q4F"
 WORKER_PHRASE = "LIVE-PREVIEW-WORKER-OK-9K2D"
 RUN_TIMEOUT_SECONDS = 420.0

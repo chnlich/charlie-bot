@@ -83,7 +83,7 @@ Step 6: review the diff on the pull request.
 Compose the review task file: `prompts/cron/code_review_prompt.md` verbatim, plus one
 final line `PR: <number> <url>`. Run the review with the repo's own reviewer CLI from a
 scratch directory outside this worktree (`mktemp -d`), with `--json`, and with the
-model, api_base, and context_window of the `charlie-code-kimi-k3` entry in
+model, api_base, and context_window of the `charlie-code-kimi` entry in
 `backends.options`:
 
     charlie-code --json \

@@ -1,7 +1,7 @@
 """The task-tree sidebar-status live harness: real browser, fresh preview home.
 
 Starts ``charliebot session-tree preview`` — the real entry point on a fresh
-temporary home with the real ``charlie-code-glm53-flash`` backend — and drives
+temporary home with the real ``charlie-code-glm-flash`` backend — and drives
 the real UI in headless Chrome over CDP (the browser harness's client) while
 the task tree runs real work. Through ``/api/sessions/status`` and the list
 response the sidebar paints from (``GET /api/sessions/``), the DOM icons and

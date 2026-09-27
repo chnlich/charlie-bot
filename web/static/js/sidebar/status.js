@@ -25,8 +25,8 @@ const renderedSessionStatuses = {};
 const renderedWorkerRows = new Set();
 // Rows painted as task-tree nodes (profile not null, not a projected legacy
 // worker-thread leaf): their own running state is a live Run of their own and
-// paints as the spinner too — the gear is exclusively a collapsed row's
-// stand-in for a running descendant.
+// paints as the spinner too — the gear is exclusively a parent row's stand-in
+// for a running descendant.
 const renderedTaskTreeRows = new Set();
 
 // A projected legacy worker-thread leaf (profile 'worker' plus worker_thread)
@@ -261,7 +261,8 @@ const SPINNER_TITLE = 'Task is running';
 const GEAR_TITLE = 'Delegated work running in subtasks';
 // The waiting clock completes the visual language: one activity icon per row,
 // chosen by the priority table in paintSessionIndicator (own state first, then
-// a collapsed row's stand-in).
+// a parent's gear for a running descendant — the clock always describes the
+// row itself, never its subtree).
 const CLOCK_TITLE = 'Task waiting to run';
 const CLOCK_SVG_PATH =
   '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" '
@@ -271,11 +272,17 @@ function gearSvgContent() {
   return (Sidebar.GEAR_SVG_PATH || '') + GEAR_CENTER_PATH;
 }
 
-// The unread dot: the legacy rows' familiar yellow pulse, pinned to the
-// unread-<id> element id the row re-render path and the unread_changed
+// The unread dot: the row's own unread reply — never a descendant's. Pinned
+// to the unread-<id> element id the row re-render path and the unread_changed
 // handler both address. Hidden while any activity cue shows (the dot is an
 // idle-state cue; activity hides it without discarding the flag).
 const UNREAD_TITLE = 'Unread reply';
+// The subtree unread mark: an unread reply anywhere in the row's subtree —
+// same size as the dot, hollow instead of filled, and it does not pulse.
+// Pinned to the subtree-unread-<id> element id paintSessionIndicator toggles.
+// The tree shape is unknown at first render, so the mark paints hidden and
+// refreshTreeIndicators lights it after the grouped paint.
+const SUBTREE_UNREAD_TITLE = 'Unread reply in subtasks';
 
 // Thinking spinner, worker gear, waiting clock, unread dot: one session row's
 // header indicators. setSessionIndicator toggles each element by id, so the id
@@ -286,7 +293,8 @@ function renderSessionIndicators(session) {
   return `<svg id="spinner-${session.id}" title="${escapeHtmlAttr(SPINNER_TITLE)}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24">${SPINNER_SVG_INNER}</svg>
     <svg id="worker-indicator-${session.id}" title="${escapeHtmlAttr(GEAR_TITLE)}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">${gearSvgContent()}</svg>
     <svg id="waiting-indicator-${session.id}" title="${escapeHtmlAttr(CLOCK_TITLE)}" class="w-3.5 h-3.5 text-slate-500 flex-shrink-0 ${indicatorState === 'waiting' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">${CLOCK_SVG_PATH}</svg>
-    <span id="unread-${session.id}" data-has-unread="${session.has_unread ? 1 : 0}" title="${escapeHtmlAttr(UNREAD_TITLE)}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${session.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>`;
+    <span id="unread-${session.id}" data-has-unread="${session.has_unread ? 1 : 0}" title="${escapeHtmlAttr(UNREAD_TITLE)}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${session.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>
+    <span id="subtree-unread-${session.id}" title="${escapeHtmlAttr(SUBTREE_UNREAD_TITLE)}" class="w-2 h-2 rounded-full border border-yellow-400 flex-shrink-0 hidden"></span>`;
 }
 
 // The pending-trigger bell's body: the chat column's tray
@@ -336,25 +344,21 @@ function updateSidebarHighlight(newSessionId) {
   }
 }
 
-// Indicator priority over the nested sidebar. A row's own activity comes
-// first, in this order: own thinking or running -> the yellow spinner; own
-// waiting (queued, not launched) -> the muted clock. A collapsed parent whose
-// own state is idle then stands in for its subtree in the same order: a
-// running descendant shows the gear, a waiting descendant the clock. An
-// expanded parent shows its own facts only, since the descendants show
-// theirs. The unread dot shows only when no activity icon does. The facts are
-// the latest applied state per row (list paint, status poll,
-// task_tree_changed / running_changed broadcasts) and the shared unread map;
-// the tree shape comes from the last grouped paint.
+// Indicator priority over the nested sidebar. One icon per row, in a fixed
+// order that reads no expansion state: the row's own activity first — own
+// thinking or running paints the spinner through the display mapping, a
+// legacy row's own delegated work keeps the gear, own waiting (queued, not
+// launched) the muted clock. A parent row whose own state is idle then stands
+// in for its subtree with one icon only: a running descendant at any depth
+// shows the gear. The unread dot describes the row itself only; the subtree's
+// hollow unread mark describes an unread reply anywhere below. The clock never
+// stands in for a subtree. The facts are the latest applied state per row
+// (list paint, status poll, task_tree_changed / running_changed broadcasts)
+// and the shared unread map; the tree shape comes from the last grouped paint.
 const ownIndicatorState = {};
 
 function treeChildIdsOf(sid) {
   return Sidebar.treeChildIds ? Sidebar.treeChildIds(sid) : [];
-}
-
-function treeStandsInForSubtree(sid) {
-  if (!treeChildIdsOf(sid).length) return false;
-  return !(Sidebar.isTreeNodeExpanded && Sidebar.isTreeNodeExpanded(sid));
 }
 
 function subtreeHasState(sid, state) {
@@ -362,23 +366,17 @@ function subtreeHasState(sid, state) {
       child => (ownIndicatorState[child] || 'idle') === state || subtreeHasState(child, state));
 }
 
-function subtreeHasActivity(sid) {
-  return treeChildIdsOf(sid).some(child => (ownIndicatorState[child] || 'idle') !== 'idle' || subtreeHasActivity(child));
+function subtreeUnread(sid) {
+  return treeChildIdsOf(sid).some(child => !!sessionUnread[child] || subtreeUnread(child));
 }
 
-function subtreeHasUnread(sid) {
-  return treeChildIdsOf(sid).some(child => !!sessionUnread[child] || subtreeHasUnread(child));
-}
-
-// The collapsed stand-in verdict, in the same priority order as the row's own
-// state: a running descendant (the gear), then waiting (the clock). A running
-// descendant is one whose own state is worker_only or thinking — a manager's
-// turn, or a worker's live Run, whose header timer (thinking_since) paints
-// its own row's spinner.
+// The subtree stand-in, in the same priority position as the row's own state:
+// a running descendant at any depth — one whose own state is worker_only or
+// thinking, a manager's turn or a worker's live Run, whose header timer
+// (thinking_since) paints its own row's spinner — shows the gear. The clock
+// never stands in for a subtree: a queued Run marks its own row only.
 function subtreeStandInState(sid) {
-  if (!treeStandsInForSubtree(sid)) return 'idle';
   if (subtreeHasState(sid, 'worker_only') || subtreeHasState(sid, 'thinking')) return 'worker_only';
-  if (subtreeHasState(sid, 'waiting')) return 'waiting';
   return 'idle';
 }
 
@@ -388,30 +386,38 @@ function effectiveIndicatorState(sid) {
   return subtreeStandInState(sid);
 }
 
-function effectiveUnread(sid) {
-  if (sessionUnread[sid]) return true;
-  return treeStandsInForSubtree(sid) && subtreeHasUnread(sid);
+// The split the two unread marks read: the dot is the row's own fact; the
+// subtree mark is the subtree's. One row's own unread outranks its subtree's.
+function ownUnread(sid) {
+  return !!sessionUnread[sid];
 }
 
 function paintSessionIndicator(sid) {
   // The display mapping (a row's own running Run reads as the spinner) applies
-  // only to the row's own state; a collapsed stand-in keeps its own icon
-  // vocabulary — the gear for a running descendant, the clock for a waiting
-  // one.
+  // only to the row's own state; the subtree stand-in keeps its own icon —
+  // the gear for a running descendant.
   const own = ownIndicatorState[sid] || 'idle';
   const state = own !== 'idle' ? displayIndicatorState(sid, own) : subtreeStandInState(sid);
   const spinner = document.getElementById('spinner-' + sid);
   const worker = document.getElementById('worker-indicator-' + sid);
   const clock = document.getElementById('waiting-indicator-' + sid);
   const dot = document.getElementById('unread-' + sid);
+  const subtreeMark = document.getElementById('subtree-unread-' + sid);
   if (spinner) spinner.classList.toggle('hidden', state !== 'thinking');
   if (worker) worker.classList.toggle('hidden', state !== 'worker_only');
   if (clock) clock.classList.toggle('hidden', state !== 'waiting');
-  // The unread dot is an idle-state cue: any activity icon hides it.
-  if (dot) dot.classList.toggle('hidden', state !== 'idle' || !effectiveUnread(sid));
+  // The unread marks are idle-state cues: any activity icon hides both. The
+  // dot reads the row's own fact; the subtree mark yields to it and reads the
+  // subtree's.
+  if (dot) dot.classList.toggle('hidden', state !== 'idle' || !ownUnread(sid));
+  if (subtreeMark) subtreeMark.classList.toggle('hidden',
+      state !== 'idle' || ownUnread(sid) || !subtreeUnread(sid));
 }
 
-// Repaint one row and every ancestor whose stand-in may have changed.
+// Repaint one row and every ancestor whose gear or subtree mark may have
+// changed. The read paths (app.js's initial render, switchSession's winning
+// generation) call this right after recordUnreadFact(id, false), so the opened
+// row's dot and every ancestor's subtree mark clear in one paint.
 function refreshSessionIndicator(sid) {
   paintSessionIndicator(sid);
   if (!Sidebar.treeParentId) return;
@@ -426,7 +432,7 @@ function setSessionIndicator(sid, state) {
 }
 
 // A grouped paint renders each row with its own facts; the parent rows take
-// their stand-in state here, once the rows exist.
+// their stand-in gear and their subtree marks here, once the rows exist.
 function refreshTreeIndicators() {
   Object.keys(ownIndicatorState).forEach(sid => {
     if (treeChildIdsOf(sid).length) paintSessionIndicator(sid);
@@ -677,7 +683,8 @@ const API = {
   refreshSessionIndicator,
   refreshTreeIndicators,
   effectiveIndicatorState,
-  effectiveUnread,
+  ownUnread,
+  subtreeUnread,
   markSessionRead,
   setSessionPendingTriggerIndicator,
   setSessionPendingPlanApprovalIndicator,

@@ -12,7 +12,6 @@ from src.core import git as git_module
 from src.core import improve_command
 from src.core.improve_command import load_loop_state
 
-
 # ---------------------------------------------------------------------------
 # Part 5: artifact name set
 

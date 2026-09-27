@@ -7,7 +7,6 @@ escapes, and every reader JSON-parses the log per line.
 
 import json
 
-
 from src.agents.worker import _event_line
 
 

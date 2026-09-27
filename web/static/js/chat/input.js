@@ -65,7 +65,7 @@ async function sendMessage() {
   const isVoice = voiceContributed;
 
   // Optimistic UI: append user message and bump session to top
-  pendingUserMsg = true;
+  pendingUserEchoes++;
   appendMessage('user', content, isVoice, new Date().toISOString(), payloadFiles);
   bumpCurrentSessionToTop();
   input.value = '';
@@ -73,15 +73,16 @@ async function sendMessage() {
   if (DRAFT_KEY) localStorage.removeItem(DRAFT_KEY);
   voiceContributed = false;
 
-  // Start thinking indicator
-  startThinking();
+  // Start thinking indicator; keepSendEnabled leaves the button to the
+  // in-flight lock, so a master run never locks typing.
+  startThinking({keepSendEnabled: true});
 
   try {
     const res = await postChatMessage(contentWithCtx, { uploaded_files: payloadFiles, is_voice: isVoice });
     if (!res.ok) throw new Error(String(res.status));
   } catch (err) {
     console.error('Send failed:', err);
-    pendingUserMsg = false;
+    pendingUserEchoes--;
     appendMessage('system', 'Failed to send message');
     stopThinking();
   }
@@ -91,6 +92,7 @@ async function sendMessage() {
 // Manual compaction (cc-claude only; gated by #compact-btn's disabled attribute)
 // ---------------------------------------------------------------------------
 async function compactContext() {
+  if (blockIfUploadsInFlight()) return;
   const usageTextEl = document.getElementById('usage-text');
   const contextReading = usageTextEl ? usageTextEl.textContent : 'unknown';
   const confirmed = confirm(
@@ -99,7 +101,7 @@ async function compactContext() {
   );
   if (!confirmed) return;
 
-  pendingUserMsg = true;
+  pendingUserEchoes++;
   appendMessage('user', '/compact', false, new Date().toISOString(), null);
 
   try {
@@ -107,7 +109,7 @@ async function compactContext() {
     if (!res.ok) throw new Error(String(res.status));
   } catch (err) {
     console.error('Compact failed:', err);
-    pendingUserMsg = false;
+    pendingUserEchoes--;
     appendMessage('system', 'Failed to send message');
   }
 }

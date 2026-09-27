@@ -5,14 +5,34 @@ let uploadedFiles = []; // Array of {id, filename, path, size, status, error}
 let uploadsInFlight = 0;
 let nextUploadId = 1;
 
-const UPLOADS_IN_FLIGHT_MESSAGE = 'Please wait for uploads to finish';
+// The send button's lock is a count, not a flag: attachment uploads count in
+// uploadsInFlight, and voice-input.js bumps the shared figure through
+// voiceTranscriptionStarted/Settled for each transcription window (upload +
+// decode). Recording itself never counts. refreshSendLock below is the button's
+// only disabled writer.
+let voiceTranscribesInFlight = 0;
 
-// The chat-input and slash-command send paths both refuse submission through
-// this gate while an upload is in flight; one definition keeps the refusal
-// behavior from drifting.
+const UPLOAD_IN_FLIGHT_MESSAGE = 'Please wait for the attachment upload to finish';
+const VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE = 'Please wait for the voice transcription to finish';
+
+// voice-input.js reports its transcription windows here so the gate and the
+// lock read one combined figure.
+function voiceTranscriptionStarted() {
+  voiceTranscribesInFlight++;
+  refreshSendLock();
+}
+
+function voiceTranscriptionSettled() {
+  voiceTranscribesInFlight--;
+  refreshSendLock();
+}
+
+// The chat-input, slash-command, and /compact send paths all refuse submission
+// through this gate while an attachment upload or a voice transcription is in
+// flight; one definition keeps the refusal behavior from drifting.
 function blockIfUploadsInFlight() {
-  if (uploadsInFlight <= 0) return false;
-  showToast(UPLOADS_IN_FLIGHT_MESSAGE, true);
+  if (uploadsInFlight <= 0 && voiceTranscribesInFlight <= 0) return false;
+  showToast(uploadsInFlight > 0 ? UPLOAD_IN_FLIGHT_MESSAGE : VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE, true);
   return true;
 }
 
@@ -76,7 +96,6 @@ async function uploadFile(file) {
   const uploadSessionId = SESSION_ID;
   const form = new FormData();
   form.append('file', file);
-  uploadsInFlight++;
   setUploadingState(true);
   try {
     const res = await fetch(`/api/chat/${uploadSessionId}/upload`, {method: 'POST', body: form});
@@ -112,8 +131,7 @@ async function uploadFile(file) {
     }
     showToast('Upload failed: ' + err.message, true);
   } finally {
-    uploadsInFlight--;
-    setUploadingState(uploadsInFlight > 0);
+    setUploadingState(false);
   }
 }
 
@@ -147,10 +165,14 @@ function removeFile(id) {
   renderFileChips();
 }
 
-function setUploadingState(busy) {
+// The send button's single disabled writer: locked exactly while the combined
+// attachment + voice in-flight count is positive, painted with the same greyed
+// style the upload path always used. Thinking state never writes here, so a
+// master run can neither lock nor unlock the button.
+function refreshSendLock() {
   const btn = document.getElementById('send-btn');
   if (!btn) return;
-  if (busy) {
+  if (uploadsInFlight + voiceTranscribesInFlight > 0) {
     btn.setAttribute('disabled', '');
     btn.classList.add('opacity-50', 'cursor-not-allowed');
     btn.classList.remove('hover:bg-blue-500');
@@ -159,6 +181,13 @@ function setUploadingState(busy) {
   btn.removeAttribute('disabled');
   btn.classList.remove('opacity-50', 'cursor-not-allowed');
   btn.classList.add('hover:bg-blue-500');
+}
+
+// The attachment count's one adjuster: `busy` mirrors the upload window the
+// caller just opened or closed, and the count drives the lock write.
+function setUploadingState(busy) {
+  uploadsInFlight += busy ? 1 : -1;
+  refreshSendLock();
 }
 
 // ---------------------------------------------------------------------------

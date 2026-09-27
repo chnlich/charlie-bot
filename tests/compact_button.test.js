@@ -3,6 +3,8 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
+
+const FILE_UPLOAD_JS = readStatic('file-upload.js');
 const { loadChatRenderingModules } = require('./chat_rendering_context_stub');
 const { loadSidebarStatusContext } = require('./sidebar_status_context_stub');
 
@@ -60,6 +62,9 @@ function loadChatContext(elements) {
     JSON_HEADERS: {'Content-Type': 'application/json'},
   };
   vm.createContext(context);
+  // The real file-upload.js rides the page before the chat modules; its gate
+  // (blockIfUploadsInFlight) is what compactContext and sendMessage share.
+  vm.runInContext(FILE_UPLOAD_JS, context, { filename: 'file-upload.js' });
   loadChatRenderingModules(context);
   vm.runInContext(readStatic('websocket.js'), context, { filename: 'websocket.js' });
   vm.runInContext(readStatic('chat/input.js'), context, { filename: 'chat/input.js' });

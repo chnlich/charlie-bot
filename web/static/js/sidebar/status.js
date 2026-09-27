@@ -588,23 +588,25 @@ function pollSessionStatus() {
 // ---------------------------------------------------------------------------
 // Thinking indicator
 // ---------------------------------------------------------------------------
+// The thinking indicator owns only the header timer and the session-view poll:
+// it never touches the send button. The button's disabled state has one writer
+// — the in-flight lock (refreshSendLock in file-upload.js) — so a master run
+// leaves typing available no matter how long it runs. The keepSendEnabled
+// option stays in the call convention every start site passes; nothing reads
+// it any more.
 function startThinking(opts) {
   masterThinking = true;
   thinkingStart = thinkingStart || Date.now();
   document.getElementById('thinking').classList.remove('hidden');
   updateThinkingTime();
   startPageTimer('thinking-tick', updateThinkingTime, 1000);
-  if (!(opts && opts.keepSendEnabled)) {
-    document.getElementById('send-btn').disabled = true;
-    document.getElementById('send-btn').classList.add('opacity-50');
-  }
   globalThis.ensureActiveSessionViewPolling();
 }
 
 // Resumes the indicator when a page load or SPA switch lands while the master
 // is mid-thought. THINKING_SINCE is the server-stamped start the session view
-// and status polls refresh; keepSendEnabled leaves typing available while the
-// run is still processing.
+// and status polls refresh; the send button stays with the in-flight lock, so
+// typing remains available while the run is still processing.
 function resumeThinkingIfMidThought() {
   if (THINKING_SINCE) {
     thinkingStart = new Date(THINKING_SINCE).getTime();
@@ -617,8 +619,9 @@ function stopThinking(opts) {
   document.getElementById('thinking').classList.add('hidden');
   stopPageTimer('thinking-tick');
   thinkingStart = null;
-  document.getElementById('send-btn').disabled = false;
-  document.getElementById('send-btn').classList.remove('opacity-50');
+  // No button write here: master_done or assistant_error can land inside an
+  // upload/voice window, and re-enabling would punch through the in-flight
+  // lock. Only refreshSendLock writes the button.
   stopActiveSessionViewPolling();
   if (!switching && !(opts && opts.preserveSessionIndicator)) updateSpinner();
 }

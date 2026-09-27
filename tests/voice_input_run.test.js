@@ -26,7 +26,7 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     workletNodes: [],
     sockets: [],
     timers: [],
-    input: {value: '', focus() {}},
+    input: {value: '', focus() {}, addEventListener() {}},
     chatFlags: [],
     buttonClasses: new Set(['bg-slate-800', 'border-slate-600']),
     overlayMap: new Map(),
@@ -253,6 +253,9 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
   };
 
   const context = vm.createContext(sandbox);
+  // Page order: file-upload.js lands before voice-input.js and owns the
+  // send-button lock the transcription windows report to.
+  vm.runInContext(readStatic('file-upload.js'), context, {filename: 'file-upload.js'});
   vm.runInContext(readStatic('voice-input.js'), context, {filename: 'voice-input.js'});
 
   // Click once and drive the arming chain to `recording`: mic -> audio context

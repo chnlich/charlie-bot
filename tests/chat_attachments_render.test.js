@@ -154,7 +154,7 @@ function loadSlashCommandsScript(fetchImpl, uploadsInFlight = 0) {
   const context = {
     SESSION_ID: 'session-a',
     DRAFT_KEY: 'draft-session-a',
-    pendingUserMsg: false,
+    pendingUserEchoes: 0,
     console: {error: () => {}},
     // This harness skips config.js: stand in for its shared header literal.
     JSON_HEADERS: {'Content-Type': 'application/json'},
@@ -258,7 +258,7 @@ test('executeSlashCommand marks a pending user message before the request resolv
   const uploadedFiles = [{id: 7, filename: 'report.pdf', path: '/tmp/report.pdf', size: 12}];
   const commandPromise = context.executeSlashCommand('help', '', {displayText: '/help', uploadedFiles});
 
-  assert.equal(context.pendingUserMsg, true);
+  assert.equal(context.pendingUserEchoes, 1);
 
   resolveFetch({
     async json() {
@@ -274,7 +274,7 @@ test('executeSlashCommand marks a pending user message before the request resolv
   assert.deepEqual(clearedIds, [[7]]);
 });
 
-test('executeSlashCommand clears pendingUserMsg when the server returns an error', async () => {
+test('executeSlashCommand settles pendingUserEchoes when the server returns an error', async () => {
   const {context, messages, toasts} = loadSlashCommandsScript(async () => ({
     async json() {
       return {error: 'bad command'};
@@ -283,7 +283,7 @@ test('executeSlashCommand clears pendingUserMsg when the server returns an error
 
   await context.executeSlashCommand('bad', '');
 
-  assert.equal(context.pendingUserMsg, false);
+  assert.equal(context.pendingUserEchoes, 0);
   assert.equal(messages.length, 0);
   assert.deepEqual(toasts, [{message: 'bad command', isError: true}]);
 });
@@ -298,8 +298,8 @@ test('executeSlashCommand blocks submission while uploads are still in flight', 
   await context.executeSlashCommand('help', '');
 
   assert.equal(fetchCalls, 0);
-  assert.equal(context.pendingUserMsg, false);
-  assert.deepEqual(toasts, [{message: 'Please wait for uploads to finish', isError: true}]);
+  assert.equal(context.pendingUserEchoes, 0);
+  assert.deepEqual(toasts, [{message: 'Please wait for the attachment upload to finish', isError: true}]);
 });
 
 test('resolveHtmlArtifactLink accepts raw URL strings and anchor elements', () => {

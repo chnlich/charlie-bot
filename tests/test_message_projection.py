@@ -98,7 +98,6 @@ FIXTURE_EVENTS: list[tuple[str, list[dict]]] = [
     ("empty", []),
 ]
 
-
 # ---------------------------------------------------------------------------
 # 1. Definitional equivalence
 # ---------------------------------------------------------------------------
@@ -209,10 +208,8 @@ def test_paging_path_does_not_call_parse_ndjson_range(monkeypatch: pytest.Monkey
 # ---------------------------------------------------------------------------
 # 5. Archive fallback
 
-
 # ---------------------------------------------------------------------------
 # LRU eviction
-
 
 # ---------------------------------------------------------------------------
 # 6. Worker summary projection: thread_id and origin_session_id

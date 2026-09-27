@@ -114,9 +114,14 @@ async def dispatch_withheld_work_run(tree: TaskTreeManager, worker) -> str:
   return run_id
 
 
-async def assert_stays_queued(tree: TaskTreeManager, session_id: str, run_id: str) -> None:
-  """Bounded watch: the Run never leaves queued (no process, no terminal fact)."""
-  deadline = asyncio.get_event_loop().time() + 2.0
+async def assert_stays_queued(tree: TaskTreeManager, session_id: str, run_id: str, *, watch: float = 2.0) -> None:
+  """Bounded watch: the Run never leaves queued (no process, no terminal fact).
+
+  ``watch`` is the window a wrong launch has to show up in; the re-drive is
+  synchronous with the authorizing message, so the tests pass a fraction of a
+  second instead of waiting out a conservative default.
+  """
+  deadline = asyncio.get_event_loop().time() + watch
   while asyncio.get_event_loop().time() < deadline:
     run = await tree.runs.get_run(session_id, run_id)
     assert run is not None
@@ -157,7 +162,7 @@ async def test_message_without_the_token_keeps_the_run_queued(tmp_path: Path, mo
     sent = client.post(f"/api/sessions/{manager.id}/message", json={"content": "hold on, new plan"})
     assert sent.status_code == 202, sent.text
 
-  await assert_stays_queued(tree, worker.id, run_id)
+  await assert_stays_queued(tree, worker.id, run_id, watch=0.15)
   assert builds == [], "a message without the token must never build a backend"
 
 
@@ -197,9 +202,9 @@ async def test_sibling_subtree_under_its_own_user_node_keeps_its_gate(
     sent = client.post(f"/api/sessions/{manager.id}/message", json={"content": "Take off."})
     assert sent.status_code == 202, sent.text
     _run, outcome = await wait_for_terminal_run(tree, worker.id, root_run_id)
-    await assert_stays_queued(tree, sub_worker.id, sub_run_id)
+    await assert_stays_queued(tree, sub_worker.id, sub_run_id, watch=0.15)
   assert outcome == "success"
 
   _run, outcome = await wait_for_terminal_run(tree, worker.id, root_run_id)
   assert outcome == "success"
-  await assert_stays_queued(tree, sub_worker.id, sub_run_id)
+  await assert_stays_queued(tree, sub_worker.id, sub_run_id, watch=0.15)

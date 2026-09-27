@@ -394,6 +394,7 @@ async def tail_follow_events(
     post_result_timeout: float,
     poll_interval: float = _TAIL_POLL_INTERVAL,
     on_silence: Callable[[], Awaitable[None]] | None = None,
+    silence_threshold: float = NO_OUTPUT_REPORT_THRESHOLD,
 ) -> AsyncIterator[dict]:
   """Tail-follow a raw NDJSON log from *start_offset*, yielding translated events.
 
@@ -416,9 +417,10 @@ async def tail_follow_events(
       re-attach. A producer that closed stdout or had its raw file replaced
       still counts as alive — liveness never reads the fd.
     - ``on_silence`` is the follow-time silence recheck: invoked at most once
-      per mount when the raw log's last write ages past
-      ``NO_OUTPUT_REPORT_THRESHOLD`` (its silence age is seeded from the
-      file's mtime, so pre-follow silence counts). It never judges death —
+      per mount when the raw log's last write ages past ``silence_threshold``
+      (production default ``NO_OUTPUT_REPORT_THRESHOLD``; its silence age is
+      seeded from the file's mtime, so pre-follow silence counts). It never
+      judges death —
       the follow continues unchanged afterwards.
   """
   while not raw_path.exists():
@@ -549,8 +551,7 @@ async def tail_follow_events(
           break
         if not is_alive():
           break  # producer gone and fully drained
-        if (on_silence is not None and not silence_reported and
-            time.monotonic() - last_output_at > NO_OUTPUT_REPORT_THRESHOLD):
+        if (on_silence is not None and not silence_reported and time.monotonic() - last_output_at > silence_threshold):
           silence_reported = True
           await on_silence()
         await asyncio.sleep(poll_interval)

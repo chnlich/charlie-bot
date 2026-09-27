@@ -29,6 +29,11 @@ def run_node_js_test(node_test: Path, skip_reason: str) -> None:
     pytest.fail(f'Node tests failed.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}')
 
 
+# Node suites that exceed the 1s unit budget on this measurement (a node
+# subprocess plus its own suite runtime): each carries the integration marker
+# via pytest.param below instead of dragging every suite's case over the cap.
+_INTEGRATION_SUITES = {"chat_session_bump.test.js"}
+
 # One entry per node suite under tests/: an omitted suite silently stops running, a duplicate entry runs twice.
 _NODE_TESTS = [
     "artifact_comment_drafts.test.js",
@@ -93,7 +98,11 @@ _NODE_TESTS = [
 ]
 
 
-@pytest.mark.parametrize("js_name", _NODE_TESTS)
+@pytest.mark.parametrize(
+    "js_name", [
+        pytest.param(name, marks=pytest.mark.integration) if name in _INTEGRATION_SUITES else name
+        for name in _NODE_TESTS
+    ])
 def test_frontend_js(js_name: str) -> None:
   run_node_js_test(Path(__file__).parent / js_name, "node is required for the frontend JS tests")
 

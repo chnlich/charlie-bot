@@ -45,21 +45,18 @@ import re  # noqa: E402
 import secrets  # noqa: E402
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
-import tempfile  # noqa: E402
 import time  # noqa: E402
 import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 
-from scripts.browser_harness_session_tree import (  # noqa: E402
-    connect_cdp,
-    devtools_ws_url,
-    evaluate,
-    launch_chrome,
-    open_cdp_page,
-    pick_free_port,
+from scripts.browser_harness_session_tree import evaluate, pick_free_port  # noqa: E402
+from scripts.browser_harness_session_tree_preview import (  # noqa: E402
+    build_source_home,
+    open_authenticated_page,
+    trial_home_root,
 )
-from scripts.browser_harness_session_tree_preview import build_source_home  # noqa: E402
 from scripts.live_preview_task_tree import DEFAULT_BACKEND, fail, log, request  # noqa: E402
+from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 
 PRODUCTION_PORT = 18498
 PRODUCTION_HOME = Path.home() / ".charliebot"
@@ -73,20 +70,10 @@ PURE_DELAY_MAX_WAIT_S = 6 * 3600 + 30 * 60
 WATCHED_MESSAGE = "tests finished: confirm the push landed on origin/main, then deploy"
 PURE_DELAY_MESSAGE = "check the eval sweep results and report the best checkpoint"
 
-# Inherited CharlieBot identity/credential environment that must never reach the
-# trial instance or its children (the preview harness's scrub list).
-_INHERITED_IDENTITY_ENV_VARS = (
-    "CHARLIEBOT_SESSION_ID",
-    "CHARLIEBOT_RUN_TOKEN",
-    "CHARLIE_CODE_API_KEY",
-    "CLAUDE_CODE_OAUTH_TOKEN",
-    "ANTHROPIC_API_KEY",
-)
-
 
 def scrub_identity_env() -> dict[str, str]:
   env = dict(os.environ)
-  for var in _INHERITED_IDENTITY_ENV_VARS:
+  for var in INHERITED_IDENTITY_ENV_VARS:
     env.pop(var, None)
   return env
 
@@ -199,13 +186,7 @@ async def run_harness(args: argparse.Namespace) -> None:
   if PRODUCTION_HOME.exists():
     record("production home untouched (exists read-only, never written)", ok=True, detail=str(PRODUCTION_HOME))
 
-  import atexit
-
-  tmp_path = Path(tempfile.mkdtemp(prefix="charliebot-pending-triggers-"))
-  if args.keep:
-    log(f"kept for inspection: {tmp_path}")
-  else:
-    atexit.register(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+  tmp_path = trial_home_root("charliebot-pending-triggers-", keep=args.keep)
 
   source = tmp_path / "source-home"
   build_source_home(source, [args.backend])
@@ -250,42 +231,8 @@ async def run_harness(args: argparse.Namespace) -> None:
           json.dumps(payload)[:200])
 
       # ---- real Chrome over CDP -------------------------------------
-      debug_port = pick_free_port()
-      chrome_proc = launch_chrome(
-          chrome, tmp_path / "chrome-profile", debug_port, ["--no-first-run", "--no-default-browser-check"])
-      ws_url = await devtools_ws_url(chrome_proc, 30, fail)
-      cdp = await connect_cdp(ws_url)
-      page_id, _target_id = await open_cdp_page(cdp, ("Page", "Runtime"))
-      await cdp.send(
-          "Page.addScriptToEvaluateOnNewDocument", {
-              "source":
-                  f"""
-          (function () {{
-            try {{ localStorage.setItem('charliebot_access_key', '{access_key}'); }} catch (e) {{}}
-            window.__errs = [];
-            window.addEventListener('error', (e) => window.__errs.push(String(e.message).slice(0, 160)));
-            window.addEventListener('unhandledrejection',
-                (e) => window.__errs.push('rej: ' + String(e.reason).slice(0, 160)));
-          }})();
-      """
-          },
-          session_id=page_id)
-      await cdp.send(
-          "Network.setCookie", {
-              "name": "charliebot_access_key",
-              "value": access_key,
-              "url": f"http://127.0.0.1:{port}/",
-          },
-          session_id=page_id)
-      await cdp.send(
-          "Emulation.setDeviceMetricsOverride", {
-              "width": 1440,
-              "height": 900,
-              "deviceScaleFactor": 1,
-              "mobile": False,
-          },
-          session_id=page_id)
-      await cdp.send("Page.enable", {}, session_id=page_id)
+      cdp, page_id, chrome_proc = await open_authenticated_page(
+          chrome, tmp_path / "chrome-profile", port=port, access_key=access_key, domains=("Page", "Runtime"), fail=fail)
 
       await cdp.send("Page.navigate", {"url": f"{base}/?session={session_id}"}, session_id=page_id)
       await wait_tray(

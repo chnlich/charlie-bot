@@ -21,6 +21,19 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # (src.cli.common.resolve_session_id). One spelling everywhere.
 SESSION_ID_ENV_VAR = "CHARLIEBOT_SESSION_ID"
 
+# Inherited CharlieBot identity/credential variables that must never reach an
+# isolated trial or its children: the server-side preview pops them when it
+# activates the preview profile (session_tree_preview.activate_preview_environment),
+# and the live-trial harnesses pop them from the harness environment before they
+# spawn the trial instance (scripts/browser_harness_session_tree_preview.py).
+INHERITED_IDENTITY_ENV_VARS = (
+    "CHARLIEBOT_SESSION_ID",
+    "CHARLIEBOT_RUN_TOKEN",
+    "CHARLIE_CODE_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+)
+
 # Request-header wire name of the calling session on internal-API calls: the
 # CLI sends it from SESSION_ID_ENV_VAR and require_caller records it on
 # operator caller identities (an agent's session is token-verified, never the

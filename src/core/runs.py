@@ -953,11 +953,15 @@ class RunStore:
 
     Terminal runs block nothing; a live process is an active run; a launched
     run without a terminal fact needs recovery before structural change; a
-    queued run is a pending execution request.
+    queued run is a pending execution request — except one with a durable
+    stop request, which never launched and is settled by that request (the
+    same verdict the work-state fold and the dispatch stage already read).
     """
     if self.run_has_terminal_fact(run, events):
       return None
     if run.pid is None:
+      if self.stop_requested(events, run.id):
+        return None  # a stopped queued run is resolved-by-request, not pending work
       return f"run {run.id} is queued (pending dispatch)"
     if is_run_alive(run.pid, run.pid_start, run.started_at, host_boot_time):
       return f"run {run.id} is active"

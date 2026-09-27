@@ -667,6 +667,52 @@ async def test_closed_parent_refuses_agent_creation(tmp_path: Path, monkeypatch:
 
 
 @pytest.mark.asyncio
+async def test_agent_cancels_only_its_own_direct_child_over_http(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The cancel route enforces the agent scope at the boundary: the parent's
+  run token cancels its own direct child (200), a non-parent's token is
+  refused (403)."""
+  cfg, session_mgr, tree, root = await manager_tree(tmp_path, monkeypatch)
+  # Each caller's credential rides one launched Run (the caller-identity
+  # predicate pins the process identity).
+  await tree.runs.register_run(RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
+  await tree.runs.record_launch(root.id, "root-run", pid=424242, pid_start="ps-root")
+  child = await tree.create_task(
+      request_id="child",
+      task_parent_id=root.id,
+      profile="manager",
+      task=TaskSpec(goal="feature"),
+      name="Feature",
+      backend=None,
+      caller=OP_CALLER)
+  other = await tree.create_task(
+      request_id="other",
+      task_parent_id=None,
+      profile="manager",
+      task=TaskSpec(goal="other program"),
+      name="Other",
+      backend=None,
+      caller=OP_CALLER)
+  await tree.runs.register_run(RunRecord(id="other-run", session_id=other.id, kind="manager_turn"))
+  await tree.runs.record_launch(other.id, "other-run", pid=424243, pid_start="ps-other")
+
+  with make_api_client(cfg, session_mgr, tree) as client:
+    ok = client.post(
+        f"/api/sessions/{child.id}/cancel",
+        json={"request_id": "agent-cancel", "reason": "obsolete delegation"},
+        headers=agent_headers(root.id, "root-run"))
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["task_state"] == "cancelled"
+
+    forbidden = client.post(
+        f"/api/sessions/{child.id}/cancel",
+        json={"request_id": "agent-cancel-2", "reason": "not my child"},
+        headers=agent_headers(other.id, "other-run"))
+    assert forbidden.status_code == 403, forbidden.text
+    assert "direct child" in str(forbidden.json()["detail"])
+
+
+@pytest.mark.asyncio
 async def test_profile_changing_replay_never_bypasses_authorization(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The replay judgment reads the ORIGINAL product's profile: a worker create

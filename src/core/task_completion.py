@@ -25,8 +25,9 @@ Contracts this stage pins:
   field), the API answers 202 pending_run_finish, and re-evaluation happens
   only after that Run succeeds — replaying once per recovery pass, and
   leaving the task open with visible blockers when conditions changed.
-- Agent permissions are own-node reporting and own-manager closure only;
-  unauthorized mutation paths raise 403 and retries never bypass scope.
+- Agent permissions are own-node reporting, own-manager closure, and
+  cancellation of a direct child of the agent's own task; unauthorized
+  mutation paths raise 403 and retries never bypass scope.
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from typing import TYPE_CHECKING
 from src.core import event_types as ET
 from src.core import session_dispatch
 from src.core.control_events import (
+    ACTOR_AGENT,
     ACTOR_SYSTEM,
     ACTOR_USER,
     build_control_event,
@@ -165,11 +167,11 @@ class TaskCompletionManager:
     def cancellation_blockers(self, session_id: str) -> list[str]:
         """The cancellation blockers of one task, from current facts (lock held by caller).
 
-        Explicit operator cancellation refuses active/unresolved execution and
-        open descendants ONLY (plan 4.1: complete blocks on unprocessed input,
-        cancel does not). Unprocessed input is preserved history on the
-        cancelled node — refusing cancel over it would trap every task whose
-        input nothing consumed yet.
+        Explicit cancellation (operator or the owning agent) refuses
+        active/unresolved execution and open descendants ONLY (plan 4.1:
+        complete blocks on unprocessed input, cancel does not). Unprocessed
+        input is preserved history on the cancelled node — refusing cancel
+        over it would trap every task whose input nothing consumed yet.
         """
         return self._execution_blockers(session_id, label="cancellation")
 
@@ -928,19 +930,35 @@ class TaskCompletionManager:
         reason: str,
         caller: object,
     ) -> dict:
-        """Explicit operator cancellation with reason, preserving all evidence.
+        """Explicit cancellation with reason, preserving all evidence.
 
+        An operator cancels any open task; an agent cancels only a direct
+        child of its own task (the session its verified run token binds).
         Refuses active/unresolved execution or open children with 409 — never
         unprocessed input, which stays as preserved history on the cancelled
         node. It never recursively stops the subtree (Run cancel stays the
         separate operation), and duplicate request ids replay the original
-        outcome.
+        outcome — only to a caller authorized for that cancel, never as an
+        authorization bypass.
         """
         from src.core.run_token import CallerIdentity
         from src.core.task_sessions import TaskConflictError, TaskForbiddenError, TaskInvalidError
 
-        if not isinstance(caller, CallerIdentity) or not caller.is_operator:
+        if not isinstance(caller, CallerIdentity):
             raise TaskForbiddenError("task cancellation requires operator credentials")
+        if caller.is_operator:
+            actor = ACTOR_USER
+        else:
+            # Agent scope, decided before the replay lookup: a replayed
+            # request id returns its original outcome only to a caller
+            # authorized for that cancel — the same rule create_task applies
+            # to replays. The token's bound session IS the agent's own task.
+            claims = caller.claims
+            assert claims is not None  # a verified agent caller always carries its claims
+            target = await self._tree.load_task_meta(session_id)
+            if target.task_parent_id != claims.session_id:
+                raise TaskForbiddenError("an agent may only cancel a direct child of its own task")
+            actor = ACTOR_AGENT
         if not request_id:
             raise TaskInvalidError("request_id is required for cancellation")
         if not reason.strip():
@@ -968,7 +986,7 @@ class TaskCompletionManager:
                 raise TaskConflictError(sorted(set(blockers)))
             close_event = build_control_event(
                 ET.TASK_CLOSED,
-                actor=ACTOR_USER,
+                actor=actor,
                 source_session_id=session_id,
                 event_id=stable_close_event_id(session_id, request_id),
                 request_id=request_id,

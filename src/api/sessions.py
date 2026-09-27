@@ -2132,10 +2132,12 @@ async def cancel_session_task(
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
 ) -> SessionDetailResponse:
-  """Explicit operator cancellation with reason, preserving evidence.
+  """Explicit cancellation with reason, preserving evidence.
 
-  Active/unresolved execution or open children return 409; the subtree is not
-  recursively stopped (Run cancel stays the separate operation).
+  An operator cancels any open task; a run-token agent cancels only a direct
+  child of its own task (403 otherwise). Active/unresolved execution or open
+  children return 409; the subtree is not recursively stopped (Run cancel
+  stays the separate operation).
   """
   try:
     await task_mgr.completion.cancel_task(session_id, request_id=req.request_id, reason=req.reason, caller=caller)

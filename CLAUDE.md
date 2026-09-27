@@ -10,6 +10,7 @@ lifecycle automatically.
 - 2-space indentation, 120-column limit
 - Type annotations on all functions
 - Docstrings for public APIs only
+- Test budget: a unit test under 1 s, a `@pytest.mark.integration` test under 10 s, at most 50 integration tests — `tests/conftest.py` enforces all three
 
 ## Git Conventions
 - Commit frequently with descriptive messages

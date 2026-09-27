@@ -97,16 +97,6 @@ class ImproveLoopAlreadyRunningError(RuntimeError):
     super().__init__(f"Loop {loop_id} is already running for this session. Use /stop-improve first.")
 
 
-class _ImproveLoopBlockedError(RuntimeError):
-  """Raised when an improve-loop worker hit a provider quota/token/rate-limit blocker."""
-
-  def __init__(self, iteration: int, reason: str, summary: str) -> None:
-    self.iteration = iteration
-    self.reason = reason
-    self.summary = summary
-    super().__init__(f"Improve loop blocked on iteration {iteration}: {reason}")
-
-
 # ---------------------------------------------------------------------------
 # State persistence
 # ---------------------------------------------------------------------------

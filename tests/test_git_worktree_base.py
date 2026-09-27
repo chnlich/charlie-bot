@@ -2,7 +2,7 @@
 
 Validates resolve_base_branch semantics (the only accepted forms):
   - local equals origin     → start-point = origin tip
-  - local behind origin     → hard error (stale local base is never picked silently)
+  - local behind origin     → start at the origin tip, local ref untouched
   - local ahead of origin   → hard error (unpushed commits never silently become the base)
   - local diverged          → hard error
   - origin unreachable      → hard error (no silent local fallback)
@@ -124,19 +124,63 @@ def _expect_hard_error(excinfo: pytest.ExceptionInfo[BaseException], *fragments:
 
 
 @pytest.mark.asyncio
-async def test_local_behind_origin_raises(repo_setup: dict[str, Path]) -> None:
-  """A stale local base must never be picked silently: local behind origin is a hard error."""
+async def test_local_behind_origin_starts_from_origin_tip(repo_setup: dict[str, Path]) -> None:
+  """A local branch strictly behind origin starts from the origin tip: the
+  worktree misses nothing, and the shared checkout's local ref is untouched."""
   seed = repo_setup["seed"]
   main_checkout = repo_setup["main_checkout"]
 
   origin_tip = _commit(seed, "advance.txt", "advance\n", "advance origin")
   _git(seed, "push", "origin", "feature")
   local_tip = _git(main_checkout, "rev-parse", "feature")
-  assert local_tip != origin_tip  # sanity
+  assert local_tip != origin_tip  # the local branch is behind
+
+  wt_path = repo_setup["tmp_path"] / "wt-behind"
+  resolution = await git_create_worktree(main_checkout, "feature", "charliebot/task-behind", wt_path)
+
+  assert _worktree_head(wt_path) == origin_tip
+  assert _git(main_checkout, "rev-parse", resolution.start_point) == origin_tip
+  assert _git(main_checkout, "rev-parse", "feature") == local_tip  # the local ref never moved
+  assert isinstance(resolution, BaseResolution)
+  assert resolution.canonical == "feature"
+  assert resolution.start_point == "origin/feature"
+  assert resolution.detail == (
+      f"branch feature at origin tip {origin_tip[:12]} "
+      f"(local feature at {local_tip[:12]} is behind, unused)")
+
+
+@pytest.mark.asyncio
+async def test_merge_base_unexpected_exit_code_raises(
+        repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+  """A merge-base answer that is neither 0 nor 1 (a corrupt repo's exit 128, a
+  killed process's 2) is a hard error naming the command and its stderr — the
+  resolution never guesses from a broken probe."""
+  from src.core import git as git_mod
+
+  seed = repo_setup["seed"]
+  main_checkout = repo_setup["main_checkout"]
+  _commit(seed, "advance.txt", "advance\n", "advance origin")
+  _git(seed, "push", "origin", "feature")  # local feature is now behind: the probe runs
+
+  class _BrokenProc:
+    returncode = 2
+
+  real_proc_bytes = git_mod._git_proc_bytes
+
+  async def _broken_merge_base(repo_path, *args, timeout):
+    if args[:2] == ("merge-base", "--is-ancestor"):
+      return _BrokenProc(), b"", b"fatal: bad object"
+    return await real_proc_bytes(repo_path, *args, timeout=timeout)
+
+  monkeypatch.setattr(git_mod, "_git_proc_bytes", _broken_merge_base)
 
   with pytest.raises(BaseBranchResolutionError) as excinfo:
-    await git_create_worktree(main_checkout, "feature", "charliebot/task-behind", repo_setup["tmp_path"] / "wt-behind")
-  _expect_hard_error(excinfo, "differs from origin/feature", local_tip[:12], origin_tip[:12], "origin/feature")
+    await git_create_worktree(
+        main_checkout, "feature", "charliebot/task-mb-fail", repo_setup["tmp_path"] / "wt-mb-fail")
+  message = str(excinfo.value)
+  assert "merge-base --is-ancestor" in message
+  assert "exit code 2" in message
+  assert "fatal: bad object" in message
 
 
 @pytest.mark.asyncio
@@ -151,6 +195,9 @@ async def test_local_ahead_of_origin_raises(repo_setup: dict[str, Path]) -> None
   with pytest.raises(BaseBranchResolutionError) as excinfo:
     await git_create_worktree(main_checkout, "feature", "charliebot/task-ahead", repo_setup["tmp_path"] / "wt-ahead")
   _expect_hard_error(excinfo, "differs from origin/feature", local_tip[:12], origin_tip[:12])
+  # Only a local branch holding commits absent from origin refuses, so the
+  # retired "fast-forward the local branch" remedy is gone from the message.
+  assert "fast-forward" not in str(excinfo.value)
 
 
 @pytest.mark.asyncio

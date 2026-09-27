@@ -34,6 +34,7 @@ from src.core.memo import BoundedMemo
 from src.core.message_projection import MessageProjection
 from src.core.models import RunRecord, ThreadMetadata, utc_now
 from src.core.runs import RUN_EVENTS_NAME, RUN_METADATA_NAME
+from src.core.task_prompts import LAUNCH_TEXT_FILENAME
 from src.core.threads import EVENTS_LOG_NAME, METADATA_NAME
 
 # The projection memos: session (or session+thread) -> entry. Bounded like the
@@ -89,6 +90,8 @@ def _run_header_event(
     error: str,
     started_at: datetime | None,
     terminal_at: datetime | None,
+    task_spec_ref: str,
+    launch_prompt_ref: str,
 ) -> dict:
   """The one header line that opens a transcript segment: a Run's, or a legacy thread's.
 
@@ -99,6 +102,13 @@ def _run_header_event(
   Run's ended_at, a thread's completed_at) when it never started, else no
   time. A page-load or projection-build time would show a dead record a
   future-lying bubble (and once fed a negative duration).
+
+  ``state`` stays the record's display state for every existing reader (the
+  sidebar, the stop control, the dot color); ``launch_failed`` only renames
+  the content word (message_aggregator) for a Run that failed before its agent
+  process started — no started_at, no launch prompt ever written. The two refs
+  feed the header's link row (gray placeholders when empty); a legacy thread
+  passes both empty.
   """
   started = started_at.isoformat() if started_at is not None else None
   terminal = terminal_at.isoformat() if terminal_at is not None else None
@@ -112,27 +122,36 @@ def _run_header_event(
       "error": error,
       "started_at": started,
       "timestamp": started or terminal,
+      "launched": started_at is not None,
+      "launch_failed": state in _FAILED_STATES and started_at is None,
+      "task_spec_ref": task_spec_ref,
+      "launch_prompt_ref": launch_prompt_ref,
   }
 
 
-def _header_error(state: str, events: list[dict]) -> str:
-  """A failed Run's newest non-empty error-event text, else "".
+def _header_error(state: str, events: list[dict]) -> tuple[str, int | None]:
+  """A failed Run's newest non-empty error-event text and its list position.
 
   The same walk the parent failure report reads
   (review._worker_error_from_events_log): a Run that died before its process
   started carries its actual error as its events log's error event, and the
-  header shows it in full where the event's own chat line truncates.
+  header shows it in full where the event's own chat line truncates. The
+  position is the index into *events* of the event the text came from, so the
+  projection can drop that one line from the Run's segment — the header
+  already carries the text in full, and the truncated chat row would read it
+  twice. ("", None) when the state is not a failure or no error event speaks.
   """
   if state not in _FAILED_STATES:
-    return ""
-  for event in reversed(events):
+    return "", None
+  for index in range(len(events) - 1, -1, -1):
+    event = events[index]
     if event.get("type") != ET.ERROR:
       continue
     for key in ("message", "content"):
       value = event.get(key)
       if isinstance(value, str) and value.strip():
-        return value.strip()
-  return ""
+        return value.strip(), index
+  return "", None
 
 
 def _delivery_event(task_state: str, facts_events: list[dict], runs: list[RunRecord]) -> dict | None:
@@ -233,7 +252,15 @@ def build_worker_transcript_sync(tree, session_id: str) -> TranscriptEntry:
   transcript: list[dict] = []
   for run in runs:
     state = states.get(run.id, "queued")
-    run_events = _read_events(tree.runs.run_dir(session_id, run.id) / RUN_EVENTS_NAME)
+    run_dir = tree.runs.run_dir(session_id, run.id)
+    run_events = _read_events(run_dir / RUN_EVENTS_NAME)
+    error, error_index = _header_error(state, run_events)
+    if error_index is not None:
+      # The header carries this event's text in full; the chat row would read
+      # it twice. The drop lives in this projection only — events.jsonl keeps
+      # every line.
+      run_events = run_events[:error_index] + run_events[error_index + 1:]
+    launch_prompt_path = run_dir / LAUNCH_TEXT_FILENAME
     transcript.append(
         _run_header_event(
             run_id=run.id,
@@ -241,9 +268,13 @@ def build_worker_transcript_sync(tree, session_id: str) -> TranscriptEntry:
             backend=run.backend,
             backend_label=_backend_label(tree.cfg, run.backend),
             state=state,
-            error=_header_error(state, run_events),
+            error=error,
             started_at=run.started_at,
             terminal_at=run.ended_at,
+            task_spec_ref=run.task_spec_ref or "",
+            # The launch prompt's presence is judged by the file (Runs older
+            # than launch_prompt.md started without one), never by started_at.
+            launch_prompt_ref=str(launch_prompt_path) if launch_prompt_path.is_file() else "",
         ))
     transcript.extend(run_events)
   task_state = tree.task_state(session_id)
@@ -314,6 +345,11 @@ def build_thread_transcript_sync(
   """Build one legacy thread's transcript: one header line, then its events."""
   state = _thread_state(meta)
   thread_events = _read_events(events_path)
+  error, error_index = _header_error(state, thread_events)
+  if error_index is not None:
+    # The same once-only error read the Run headers follow: the header carries
+    # the text in full, so the event's own chat line leaves the projection.
+    thread_events = thread_events[:error_index] + thread_events[error_index + 1:]
   transcript: list[dict] = [
       _run_header_event(
           run_id=meta.id,
@@ -321,9 +357,13 @@ def build_thread_transcript_sync(
           backend=meta.backend,
           backend_label=label,
           state=state,
-          error=_header_error(state, thread_events),
+          error=error,
           started_at=meta.started_at,
           terminal_at=meta.completed_at,
+          # Legacy threads kept no per-thread task file: both refs stay empty
+          # and the header's link row renders its gray placeholders.
+          task_spec_ref="",
+          launch_prompt_ref="",
       )
   ]
   transcript.extend(thread_events)

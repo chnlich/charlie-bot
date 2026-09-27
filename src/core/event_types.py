@@ -40,9 +40,9 @@ INPUT_EVENT_IDS = "input_event_ids"
 
 # -- Worker / delegation -----------------------------------------------------
 TASK_DELEGATED = "task_delegated"
-# The TASK_DELEGATED payload key carrying the persisted SpawnRequest fields the
-# boot recovery re-reads (src/core/init_worker_recovery.py); the projection
-# copies it (src/core/message_aggregator.py). Persisted wire value.
+# The TASK_DELEGATED payload key carrying the persisted delegation invocation
+# metadata; the projection copies it (src/core/message_aggregator.py).
+# Persisted wire value.
 DELEGATE_INVOCATION = "delegate_invocation"
 WORKER_SUMMARY = "worker_summary"
 COMPLETE = "complete"
@@ -168,6 +168,12 @@ TASK_CLOSED = "task_closed"
 TASK_REOPENED = "task_reopened"
 RUN_STOP_REQUESTED = "run_stop_requested"
 RUN_FINISHED = "run_finished"
+# A registered Run a launch precondition withheld (task paused/closed, prompt
+# assembly failed): the node's durable record that no process started and no
+# terminal fact will arrive, once per (run, reason). The UI's display state
+# reads it (src/core/runs.py run_display_state); the blocked child report rides
+# this event as its source fact (src/core/task_execution.py).
+RUN_LAUNCH_WITHHELD = "run_launch_withheld"
 CHILD_REPORT = "child_report"
 PROMPT_CHANGED = "prompt_changed"
 TASK_IMPORTED = "task_imported"
@@ -201,7 +207,7 @@ FILE_WRITE = "file_write"
 # detection chain consumes the same type on read-back. The event carries the
 # status object under the ``rate_limit_info`` payload key — a persisted wire
 # value the emit site (src/cli/claude_sub_bridge.py) and every reader
-# (src/core/spawner_events.py, src/core/claude_relay.py, src/agents/worker.py,
+# (src/core/claude_relay.py, src/agents/worker.py,
 # src/core/improve_command.py) share through this constant.
 RATE_LIMIT_EVENT = "rate_limit_event"
 RATE_LIMIT_INFO = "rate_limit_info"

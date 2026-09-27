@@ -1,7 +1,6 @@
 """Tests for scheduled task backend overrides."""
 
-from collections.abc import Coroutine
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -11,15 +10,6 @@ import pytest
 import yaml
 from conftest import (
     OPUS_BACKEND_ID,
-    OPUS_BACKEND_OPTION,
-    SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
-    SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
-    SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
-    SCHEDULER_THREAD_MANAGER_PATCH_TARGET,
-    FakeThreadManager,
-    _noop,
-    build_scheduler_cfg,
-    close_create_logged_task,
     make_cron_client,
     make_scheduler_setup,
     write_nightly_prompt,
@@ -34,11 +24,8 @@ from src.core.config import (
 from src.core.models import (
     CreateSessionRequest,
     LastRunStatus,
-    SessionMetadata,
     SessionStatus,
-    SpawnRequest,
 )
-from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
 
 
@@ -80,79 +67,41 @@ def _cron_api_rig(
   return cron_dir, cfg, session_mgr, md_path
 
 
-async def _spawn_scheduled_worker_rig(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    task_cfg: ScheduledTaskConfig,
-    resolved: tuple[str, str],
-) -> tuple[dict, CharlieBotConfig, AsyncMock, AsyncMock, list[SpawnRequest]]:
-  """Run ``Scheduler._spawn_scheduled_worker`` for the nightly session under the scheduler's spawn seams.
-
-  Builds the ``session-1`` scheduled session, patches the scheduler's four
-  spawn seams (thread manager, subagent-backend resolution, spawn worker,
-  create-logged-task), records every spawned request into ``spawns``, and
-  fires the task with ``require_review=False``. ``resolved`` is the
-  (backend, model) pair backend resolution returns. Returns
-  (result, cfg, session_mgr, resolve_backend, spawns).
-  """
-  cfg = build_scheduler_cfg(tmp_path)
-  session_mgr = AsyncMock()
-  scheduler = Scheduler(cfg, session_mgr)
-  session = SessionMetadata(id="session-1", name="Scheduled: nightly", backend=OPUS_BACKEND_ID)
-  resolve_backend = AsyncMock(return_value=resolved)
-  spawns: list[SpawnRequest] = []
-
-  def fake_spawn_worker(**kwargs: Any) -> Coroutine[Any, Any, None]:
-    spawns.append(kwargs["request"])
-    return _noop()
-
-  monkeypatch.setattr(SCHEDULER_THREAD_MANAGER_PATCH_TARGET, lambda _cfg: FakeThreadManager())
-  monkeypatch.setattr(SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET, resolve_backend)
-  monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, fake_spawn_worker)
-  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
-
-  result = await scheduler._spawn_scheduled_worker(
-      session,
-      task_cfg,
-      "nightly prompt",
-      "nightly prompt",
-      "scheduled_task_fired",
-      cfg,
-      session_mgr,
-      require_review=False)
-  return result, cfg, session_mgr, resolve_backend, spawns
-
-
 @pytest.mark.asyncio
-async def test_scheduler_uses_task_backend_override_for_scheduled_worker(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt", backend="codex-o3")
-  result, cfg, session_mgr, resolve_backend, spawns = await _spawn_scheduled_worker_rig(
-      tmp_path, monkeypatch, task_cfg=task_cfg, resolved=("codex-o3", "o3"))
+async def test_scheduler_rotates_scheduled_session_backend_and_copies_bookkeeping(tmp_path: Path) -> None:
+  cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
+  old_session = await session_mgr.create_session(
+      CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
+      backend=OPUS_BACKEND_ID,
+  )
+  old_session.last_scheduled_run = "2026-06-07T02:00:00-07:00"
+  old_session.last_scheduled_cron = "0 2 * * *"
+  old_session.last_run_status = LastRunStatus.SUCCESS
+  old_session.cc_session_id = "old-backend-conversation"
+  old_session.cc_session_started_at = datetime(2026, 6, 7, 9, 0, tzinfo=UTC)
+  await session_mgr.save_metadata(old_session)
 
-  assert result == {"session_id": "session-1", "thread_id": "thread-1"}
-  resolve_backend.assert_awaited_once_with("session-1", cfg, session_mgr, requested_backend="codex-o3")
-  assert [spawn.resolved_backend for spawn in spawns] == ["codex-o3"]
-  assert [spawn.resolved_model for spawn in spawns] == ["o3"]
-  session_mgr.persist_and_broadcast.assert_awaited_once()
-  event = session_mgr.persist_and_broadcast.await_args.args[1]
-  assert event["backend"] == "codex-o3"
-  assert event["model"] == "o3"
+  task_cfg = ScheduledTaskConfig(
+      name="nightly",
+      cron="0 2 * * *",
+      prompt="nightly prompt",
+      backend="codex-o3",
+  )
 
+  new_session = await scheduler._get_or_create_session(task_cfg, cfg, session_mgr)
 
-@pytest.mark.asyncio
-async def test_scheduler_uses_default_backend_when_task_backend_unset(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt")
-  _result, cfg, session_mgr, resolve_backend, _spawns = await _spawn_scheduled_worker_rig(
-      tmp_path, monkeypatch, task_cfg=task_cfg, resolved=(OPUS_BACKEND_ID, OPUS_BACKEND_OPTION.model))
-
-  resolve_backend.assert_awaited_once_with("session-1", cfg, session_mgr, requested_backend=OPUS_BACKEND_ID)
+  assert new_session is not None
+  assert new_session.id != old_session.id
+  assert new_session.backend == "codex-o3"
+  assert new_session.scheduled_task == "nightly"
+  assert new_session.last_scheduled_run == old_session.last_scheduled_run
+  assert new_session.last_scheduled_cron == old_session.last_scheduled_cron
+  assert new_session.last_run_status == old_session.last_run_status
+  assert new_session.cc_session_id is None
+  assert new_session.cc_session_started_at is None
+  archived_old = await session_mgr.get_session(old_session.id)
+  assert archived_old is not None
+  assert archived_old.status == SessionStatus.ARCHIVED
 
 
 @pytest.mark.asyncio
@@ -271,9 +220,11 @@ def _seed_prompt_file_task(cron_dir: Path, tmp_path: Path, *, backend: str | Non
 
 
 def test_load_cron_file_loads_prompt_file(tmp_path: Path) -> None:
+  from src.core.config import CharlieBotConfig
+
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
-  cfg = build_scheduler_cfg(tmp_path)
+  cfg = CharlieBotConfig(charliebot_home=tmp_path)
   yaml_path, md_path, md_content = _seed_prompt_file_task(cron_dir, tmp_path)
 
   task, _ = _load_cron_file(yaml_path, cfg.charlie_bot_repo, "nightly")

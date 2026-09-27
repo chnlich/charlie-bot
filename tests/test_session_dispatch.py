@@ -6,12 +6,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from conftest import build_env, create_task
+from conftest import build_env, create_task, stub_credentials
 
 from src.api.message_utils import events_to_view
 from src.core import event_types as ET
 from src.core.models import RunRecord
-from src.core.run_token import CallerIdentity, RunTokenClaims
+from src.core.run_token import CallerIdentity, RunTokenClaims, sign_run_token
 from src.core.sessions import SessionManager
 from src.core.task_sessions import (
     TaskConflictError,
@@ -196,6 +196,50 @@ async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_closed_node_keeps_input_and_agent_content_never_mints_authorization(tmp_path: Path) -> None:
+  _, _, tree = build_env(tmp_path)
+  root = await create_task(tree, parent=None, request_id="root")
+  worker = await create_task(tree, parent=root.id, request_id="worker", profile="worker")
+
+  # Agent and cron input carry their own types even with takeoff in the text;
+  # they never mint a user authorization window. The agent message is refused
+  # at request entry (the sender holds no implementation authorization), so
+  # only the server-owned cron trigger is enqueued — whose takeoff text still
+  # mints nothing.
+  with pytest.raises(TaskForbiddenError):
+    await admit(tree, worker.id, "take off now", event_type=ET.AGENT_MESSAGE, actor="agent",
+                from_session=root.id)
+  await admit(tree, worker.id, "take off (cron)", event_type=ET.SCHEDULED_TRIGGER, actor="system")
+  from src.core.takeoff_gate import DelegationBlockedError
+  with pytest.raises(DelegationBlockedError):
+    await tree.check_task_authorization(worker.id)
+
+  # A consumer takes the cron input; with the node's inputs handled the
+  # successful run auto-closes the worker.
+  executor = ScriptedExecutor(tree)
+  tree.dispatch.executor = executor
+  await tree.dispatch.dispatch_pending(worker.id)
+  assert len(executor.batches) == 2 and len(executor.batches[0][1]) == 1
+  # The delivered close report is the parent's durable input: the close itself
+  # dispatched the parent's next serialized turn through the same executor.
+  assert executor.batches[1][0] == root.id and len(executor.batches[1][1]) == 1
+  index = await tree._get_index()
+  assert tree.task_state_of(index, worker.id) == "completed"  # auto-close landed
+
+  # The closed node keeps late input as history.
+  await admit(tree, worker.id, "late arrival", input_id="late-1")
+  decision = await tree.dispatch.dispatch_pending(worker.id)
+  assert decision["launch"] is False and "closed" in decision["reason"]
+  assert [str(e["id"]) for e in input_events(tree, worker.id)] == ["late-1"]
+
+  # A later authorized user retry uses the preserved inputs.
+  await admit(tree, worker.id, "take off — redo it", input_id="user-retry-1")
+  with pytest.raises(DelegationBlockedError):
+    # the node is still closed: the gate requires open tasks before any launch
+    await tree.check_task_authorization(worker.id)
+
+
+@pytest.mark.asyncio
 async def test_stopped_queued_run_is_never_launched_and_releases_its_batch(tmp_path: Path) -> None:
   _, _, tree = build_env(tmp_path)
   node = await create_task(tree, parent=None, request_id="node")
@@ -315,3 +359,193 @@ async def test_deletion_rejects_each_reference_category_and_deletes_the_empty(tm
 # ---------------------------------------------------------------------------
 # Real routes: browser and agent-relay input through the dispatcher
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> None:
+  from fastapi import FastAPI
+  from fastapi.testclient import TestClient
+
+  import src.api.chat as chat_api
+  import src.api.internal as internal_api
+  import src.api.sessions as sessions_api
+  from src.api.deps import get_config, get_run_store, get_session_manager, get_task_manager
+
+  cfg, session_mgr, tree = build_env(tmp_path)
+  root = await create_task(tree, parent=None, request_id="root", name="Root")
+  worker = await create_task(tree, parent=root.id, request_id="worker", profile="worker")
+
+  app = FastAPI()
+  app.include_router(sessions_api.router, prefix="/api/sessions")
+  app.include_router(chat_api.router, prefix="/api/sessions")
+  app.include_router(internal_api.router, prefix="/api/internal")
+  key = "op-secret"
+  stub_credentials({"charliebot": {"access_key": key}})
+  app.dependency_overrides[get_config] = lambda: cfg
+  app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[get_task_manager] = lambda: tree
+  app.dependency_overrides[get_run_store] = lambda: tree.runs
+
+  class _StreamingManager:
+    def __init__(self) -> None:
+      self.sent: list[tuple[str, dict]] = []
+
+    async def broadcast(self, channel: str, payload: dict) -> None:
+      self.sent.append((channel, payload))
+
+  import src.core.sessions as sessions_module
+  original_streaming = sessions_module.streaming_manager
+  fake_streaming = _StreamingManager()
+  sessions_module.streaming_manager = fake_streaming  # type: ignore[assignment]
+  try:
+    with TestClient(app) as client:
+      # Operator browser input is a real USER event with its attachments.
+      sent = client.post(f"/api/sessions/{worker.id}/message", json={
+          "content": "please handle this",
+          "uploaded_files": [{"filename": "brief.txt", "path": "/tmp/brief.txt"}],
+      })
+      assert sent.status_code == 202
+      events = tree.events.load_events(worker.id)
+      users = [e for e in events if e["type"] == ET.USER]
+      assert len(users) == 1
+      assert users[0]["content"] == "please handle this"
+      assert users[0]["uploaded_files"][0]["filename"] == "brief.txt"
+      assert users[0]["actor"] == "user"
+
+      # A run-token agent on the same user-message route stays agent input
+      # with its own session's provenance: never a real USER event. The
+      # request-entry gate refuses it anyway — the worker is not its own
+      # parent, so its self-addressed agent message is a 403 and nothing is
+      # enqueued.
+      await tree.runs.register_run(RunRecord(id="run-agent", session_id=worker.id, kind="work"))
+      # The run credential is accepted only once the launch callback persisted
+      # the process identity on the Run.
+      await tree.runs.record_launch(worker.id, "run-agent", pid=424242, pid_start="ps-1")
+      claims = RunTokenClaims(run_id="run-agent", session_id=worker.id, agent="worker-agent")
+      agent_client_headers = {"Authorization": f"Bearer {sign_run_token(claims, key)}"}
+      relayed = client.post(f"/api/sessions/{worker.id}/message", json={"content": "agent view"},
+                            headers=agent_client_headers)
+      assert relayed.status_code == 403
+      events = tree.events.load_events(worker.id)
+      assert len([e for e in events if e["type"] == ET.USER]) == 1  # no second USER
+      assert not [e for e in events if e["type"] == ET.AGENT_MESSAGE]
+
+      # The agent-relay API delivers an agent message to the worker only from
+      # its authorized parent: with no user authorization anywhere the gate
+      # refuses the manager's instruction with 403 and nothing is enqueued.
+      relay_api = client.post("/api/internal/session-message", json={
+          "session_id": root.id, "target_session_id": worker.id, "content": "from the manager",
+      })
+      assert relay_api.status_code == 403
+      assert "Delegation blocked" in relay_api.json()["detail"]
+      events = tree.events.load_events(worker.id)
+      assert not [e for e in events if e["type"] == ET.AGENT_MESSAGE]
+
+      # Only the operator's user message reached the live wire.
+      message_deltas = [p for _channel, p in fake_streaming.sent if p.get("type") == "message"]
+      roles = [d["message"]["role"] for d in message_deltas]
+      assert roles.count("user") == 1 and roles.count("agent_message") == 0
+  finally:
+    sessions_module.streaming_manager = original_streaming  # type: ignore[assignment]
+
+
+@pytest.mark.asyncio
+async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
+  from fastapi import FastAPI
+  from fastapi.testclient import TestClient
+
+  import src.api.sessions as sessions_api
+  from src.api.deps import get_config, get_run_store, get_session_manager, get_task_manager
+
+  cfg, session_mgr, tree = build_env(tmp_path)
+  root = await create_task(tree, parent=None, request_id="root")
+  worker = await create_task(tree, parent=root.id, request_id="worker", profile="worker")
+
+  app = FastAPI()
+  app.include_router(sessions_api.router, prefix="/api/sessions")
+  key = "op-secret"
+  stub_credentials({"charliebot": {"access_key": key}})
+  app.dependency_overrides[get_config] = lambda: cfg
+  app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[get_task_manager] = lambda: tree
+  app.dependency_overrides[get_run_store] = lambda: tree.runs
+  with TestClient(app) as client:
+    # Blockers are a concrete 409 list: the open child blocks the root.
+    blocked = client.post(f"/api/sessions/{root.id}/complete", json={
+        "request_id": "route-1", "summary": "s", "result_refs": [], "run_ids": []})
+    assert blocked.status_code == 409
+    assert any("open descendant" in b for b in blocked.json()["detail"]["blockers"])
+
+    # The worker's successful run closes it; the route returns the Session detail.
+    await tree.runs.register_run(RunRecord(id="run-w", session_id=worker.id, kind="work"))
+    await tree.dispatch.finish_run(worker.id, "run-w", outcome="success")
+    ok = client.post(f"/api/sessions/{root.id}/complete", json={
+        "request_id": "route-2", "summary": "delivered",
+        "result_refs": ["run:run-w"], "run_ids": ["run-w"]})
+    assert ok.status_code == 409  # the worker's report is unprocessed input
+    await tree.runs.register_run(
+        RunRecord(id="run-root-turn", session_id=root.id, kind="manager_turn"))
+    await tree.dispatch.claim_input_batch(root.id, "run-root-turn")
+    await tree.dispatch.finish_run(root.id, "run-root-turn", outcome="success")
+    ok = client.post(f"/api/sessions/{root.id}/complete", json={
+        "request_id": "route-2", "summary": "delivered",
+        "result_refs": ["run:run-root-turn"], "run_ids": ["run-root-turn"]})
+    assert ok.status_code == 200 and ok.json()["task_state"] == "completed"
+
+    # Duplicate operation id replays the original outcome.
+    replay = client.post(f"/api/sessions/{root.id}/complete", json={
+        "request_id": "route-2", "summary": "delivered",
+        "result_refs": ["run:run-root-turn"], "run_ids": ["run-root-turn"]})
+    assert replay.status_code == 200
+    closes = [e for e in tree.events.load_events(root.id) if e["type"] == ET.TASK_CLOSED]
+    assert len(closes) == 1
+
+    # Reopen is operator action; an agent token cannot mutate.
+    reopened = client.post(f"/api/sessions/{root.id}/reopen", json={
+        "request_id": "route-3", "reason": "more work"})
+    assert reopened.status_code == 200 and reopened.json()["task_state"] == "open"
+    await tree.runs.register_run(RunRecord(id="run-root-agent", session_id=root.id, kind="work"))
+    await tree.runs.record_launch(root.id, "run-root-agent", pid=424243, pid_start="ps-2")
+    key2_headers = {"Authorization": f"Bearer {sign_run_token(
+        RunTokenClaims(run_id='run-root-agent', session_id=root.id, agent='a'), key)}"}
+    forbidden = client.post(f"/api/sessions/{root.id}/reopen", json={
+        "request_id": "route-4", "reason": "x"}, headers=key2_headers)
+    assert forbidden.status_code == 403
+    await tree.dispatch.finish_run(root.id, "run-root-agent", outcome="success")
+
+    # Cancel preserves history and stays visible.
+    cancelled = client.post(f"/api/sessions/{root.id}/cancel", json={
+        "request_id": "route-5", "reason": "not needed"})
+    assert cancelled.status_code == 200 and cancelled.json()["task_state"] == "cancelled"
+    index = await tree._get_index()
+    assert tree.archived_of(index, index.metas[root.id]) is False
+    # Cancel is refused on a task that is not open.
+    refused = client.post(f"/api/sessions/{root.id}/cancel", json={
+        "request_id": "route-6", "reason": "again"})
+    assert refused.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_batchless_finish_never_acknowledges_another_runs_claimed_batch(tmp_path: Path) -> None:
+  """The locked finish layer itself rejects it: a batchless run's finisher
+  cannot name ids another registered non-terminal run claimed (a claim that
+  lands between the dispatcher's pre-check and the locked finish still fails)."""
+  from src.core.runs import RunInputMismatchError
+
+  _cfg, _session_mgr, tree = build_env(tmp_path)
+  task = await create_task(tree, parent=None, request_id="root")
+  await admit(tree, task.id, "work", input_id="in-1")
+  await tree.runs.register_run(RunRecord(id="run-b", session_id=task.id, kind="work"))
+  claimed = await tree.dispatch.claim_input_batch(task.id, "run-b")
+  assert claimed == ["in-1"]
+  await tree.runs.register_run(RunRecord(id="run-a", session_id=task.id, kind="manager_turn"))
+  with pytest.raises(RunInputMismatchError, match="claimed batch"):
+    await tree.runs.record_finish(task.id, "run-a", "success", input_event_ids=["in-1"])
+  # No terminal fact landed for run-a; the input stays claimed by its owner.
+  assert tree.runs.terminal_outcome(tree.runs.load_events_sync(task.id), "run-a") is None
+  assert input_events(tree, task.id) == []
+  # The real owner's success acknowledges exactly its batch.
+  await tree.dispatch.finish_run(task.id, "run-b", outcome="success")
+  finished = [e for e in tree.events.load_events(task.id) if e["type"] == ET.RUN_FINISHED]
+  assert finished and finished[-1]["run_id"] == "run-b"
+  assert list(finished[-1]["input_event_ids"]) == ["in-1"]

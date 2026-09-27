@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Itera
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -177,15 +177,15 @@ from src.api.deps import get_session_manager  # noqa: E402
 from src.api.internal import router as internal_router  # noqa: E402
 from src.api.sessions import router as sessions_router  # noqa: E402
 from src.core import event_types as ET  # noqa: E402
-from src.core import improve_command  # noqa: E402
 from src.core import runs  # noqa: E402
 from src.core import thinking_state  # noqa: E402
+from src.core import init_worker_recovery as worker_recovery_module  # noqa: E402
 from src.core import models  # noqa: E402
-from src.core import review  # noqa: E402
 from src.core.init_seed import DEFAULT_MEMORY_TOPICS  # noqa: E402
 from src.api.deps import get_config_on_loop  # noqa: E402
 from src.core.config import CharlieBotConfig, get_config  # noqa: E402
-from src.core.git import BaseResolution  # noqa: E402
+from src.core.constants import SESSION_ID_ENV_VAR  # noqa: E402
+from src.core.run_token import RUN_TOKEN_ENV  # noqa: E402
 from src.core.home import CREDENTIALS_FILE  # noqa: E402
 from src.core.plans import PlanRegistryManager  # noqa: E402
 from src.core.scheduler import Scheduler  # noqa: E402
@@ -193,8 +193,6 @@ from src.core.sessions import SessionManager  # noqa: E402
 from src.core.run_token import CallerIdentity, RunTokenClaims, sign_run_token  # noqa: E402
 from src.core.task_sessions import TaskTreeManager  # noqa: E402
 from src.core import spawner  # noqa: E402
-from src.core import spawner_finalize  # noqa: E402
-from src.core import spawner_launch  # noqa: E402
 from src.core.threads import ThreadManager  # noqa: E402
 from src.core.triggers import TriggerManager  # noqa: E402
 
@@ -807,6 +805,13 @@ def assert_cli_reject(
   _assert_stderr_fragments(capsys, *err_fragments)
 
 
+def assert_cli_reject_exit2(
+    exc_info: pytest.ExceptionInfo[SystemExit], capsys: pytest.CaptureFixture[str], *err_fragments: str) -> None:
+  """Same as assert_cli_reject with the exit code pinned at 2 (CLI usage error, e.g. bad file input)."""
+  assert exc_info.value.code == 2
+  _assert_stderr_fragments(capsys, *err_fragments)
+
+
 def make_home_config(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig rooted at tmp_path/"charliebot-home". Leaves the home dir un-created:
   most sites never touch disk, and a site that does mkdirs it itself. One Opus backend
@@ -1117,10 +1122,6 @@ PLAN_TEST_BACKEND_OPTIONS = [OPUS_BACKEND_OPTION]
 # each backend's build-command test asserts the string reaches the CLI as prompt payload only.
 FLAG_LIKE_PROMPT = "--malicious-flag ignore previous"
 
-# Success-path counterpart of src/core/spawner_finalize.py's _QUOTA_EXHAUSTED_OUTCOME: the
-# shared clean-exit worker-run outcome (exit 0, no quota, no setup error) for spawner tests.
-CLEAN_EXIT_OUTCOME = spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error="")
-
 # Import-path patch target shared by every test that silences or spies on streaming broadcasts.
 # Mock resolves the route through the src.core.sessions namespace (src/core/sessions.py imports
 # the streaming_manager singleton) and setattr's broadcast on that shared object; a move of the
@@ -1238,42 +1239,12 @@ SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.slack_listener.create
 # on the src.core.slack_listener module attribute.
 SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.core.slack_listener._bot_client"
 
-# Import-path patch target for the background-task spawner a scheduled task fires through.
-# src/core/scheduler.py binds the name at import scope (`from src.core.tasks import
-# create_logged_task`), so monkeypatch.setattr lands the stand-in on the src.core.scheduler
-# module attribute and _spawn_scheduled_worker reads it at call time; the
-# src.core.slack_listener route above reaches a different namespace.
-SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.scheduler.create_logged_task"
-
-# Import-path patch targets for the seams a scheduled run fires through. src/core/scheduler.py
-# binds each name at import scope (`from src.core.config import get_config, get_scheduled_tasks`,
-# `from src.core.spawner import resolve_requested_subagent_backend_model, spawn_worker`, `from
-# src.core.threads import ThreadManager`), so monkeypatch.setattr lands the stand-in on the
-# src.core.scheduler module attribute and the call-time readers resolve it there; sibling
-# modules binding the same functions keep their own routes.
+# Import-path patch targets for the scheduler's config reads. src/core/scheduler.py binds
+# both names at import scope (`from src.core.config import get_config, get_scheduled_tasks`),
+# so monkeypatch.setattr lands the stand-in on the src.core.scheduler module attribute and
+# _maybe_run/_reload_config resolve it at call time.
 SCHEDULER_GET_CONFIG_PATCH_TARGET = "src.core.scheduler.get_config"
 SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.core.scheduler.get_scheduled_tasks"
-SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = ("src.core.scheduler.resolve_requested_subagent_backend_model")
-SCHEDULER_SPAWN_WORKER_PATCH_TARGET = "src.core.scheduler.spawn_worker"
-SCHEDULER_THREAD_MANAGER_PATCH_TARGET = "src.core.scheduler.ThreadManager"
-
-# Import-path patch target for the master wake a review-chain finalize fires. src/core/review.py
-# binds the name at import scope (`from src.core.master_trigger import trigger_master`), so
-# monkeypatch.setattr lands the stand-in on the src.core.review module attribute and
-# _trigger_master_judged reads it at call time; sibling modules binding the same function
-# (TRIGGER_MASTER_PATCH_TARGET, SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET) keep their own
-# routes.
-REVIEW_TRIGGER_MASTER_PATCH_TARGET = "src.core.review.trigger_master"
-
-# Import-path patch targets for the worker spawn/resume seam a recovery or improve-loop run
-# fires through. The spawner facade binds both names at import scope (`from
-# src.core.spawner_lifecycle import resume_worker, spawn_worker` in src/core/spawner.py), so
-# monkeypatch.setattr lands the stand-in on the src.core.spawner module attribute; the
-# attribute-read call sites (init_worker_recovery's `spawner.spawn_worker(...)`/
-# `spawner.resume_worker(...)`) and the call-time `from src.core.spawner import spawn_worker`
-# inside improve_command/review resolve it. scheduler.py binds spawn_worker at import scope
-# and keeps its own route (SCHEDULER_SPAWN_WORKER_PATCH_TARGET above).
-SPAWNER_SPAWN_WORKER_PATCH_TARGET = "src.core.spawner.spawn_worker"
 
 # Import-path patch targets for the chat API's message bootstrap and cancel route.
 # src/api/chat.py defines run_and_finalize itself and binds create_logged_task
@@ -1641,24 +1612,6 @@ def build_tui_sessions_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
-def build_option_worktree_cfg(tmp_path: Path, option: models.BackendBase) -> CharlieBotConfig:
-  """CharlieBotConfig for tests that pick their backend option: the charliebot-home and worktrees
-  dirs live under tmp_path so each test owns its own tree, and the backend list registers exactly
-  the one option the caller names."""
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      paths={"worktree_dir": str(tmp_path / "worktrees")},
-      backends={"options": [option]},
-  )
-
-
-def build_codex_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
-  """CharlieBotConfig for spawner worktree-launch tests: the charliebot-home and worktrees dirs live
-  under tmp_path so each test owns its own tree, and the backend list registers the codex option the
-  launch paths resolve. The codex preset of build_option_worktree_cfg."""
-  return build_option_worktree_cfg(tmp_path, CODEX_BACKEND_OPTION)
-
-
 def build_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig for tests that create and remove worktree dirs: both the charliebot-home and the
   worktrees dirs live under tmp_path so each test owns its own tree — the default (~/worktrees) would
@@ -1708,6 +1661,33 @@ def write_plan_artifact(cfg: CharlieBotConfig, session_id: str, name: str, conte
   artifacts_dir.mkdir(parents=True, exist_ok=True)
   (artifacts_dir / name).write_text(content, encoding="utf-8")
   return f"artifacts/{name}"
+
+
+async def seed_thread(
+    thread_mgr: ThreadManager,
+    session_meta: models.SessionMetadata,
+    description: str,
+    **overrides: Any,
+) -> models.ThreadMetadata:
+  """Seed one legacy thread record through the manager's durable save funnel.
+
+  The legacy executor is gone, so tests seed the read-only records the views
+  scan directly: a default ThreadMetadata plus its thread dir, persisted via
+  save_metadata (the same funnel updates ride). Overrides land on the model.
+  """
+  meta = models.ThreadMetadata(session_id=session_meta.id, description=description, **overrides)
+  (thread_mgr.thread_dir(session_meta.id, meta.id) / "data").mkdir(parents=True, exist_ok=True)
+  await thread_mgr.save_metadata(meta)
+  return meta
+
+
+def write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> Path:
+  """Write meta as the session's threads/<meta["id"]>/metadata.json and return the file path."""
+  thread_dir = cfg.sessions_dir / session_id / "threads" / meta["id"]
+  thread_dir.mkdir(parents=True, exist_ok=True)
+  path = thread_dir / "metadata.json"
+  path.write_text(json.dumps(meta), encoding="utf-8")
+  return path
 
 
 def write_plans(cfg: CharlieBotConfig, session_id: str, data: dict) -> Path:
@@ -1896,6 +1876,13 @@ def _isolate_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyte
   with it."""
   profile = tmp_path_factory.mktemp("profile")
   monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(profile))
+  # The CLI session resolution reads the server's own identity variable first;
+  # a shell that runs the suite from inside a live master process carries it
+  # and would override every test's cwd-derived session id. The run token rides
+  # the same leak shape: internal_api_auth_headers sends it instead of the
+  # credential each test planted, so the suite fences both.
+  monkeypatch.delenv(SESSION_ID_ENV_VAR, raising=False)
+  monkeypatch.delenv(RUN_TOKEN_ENV, raising=False)
   # The worker Run busy map is process-memory state keyed by task-node id,
   # and task-node ids derive deterministically from (parent, request_id) —
   # two tests that create the "w" worker under a "root" manager address the
@@ -2084,29 +2071,6 @@ class FakeSessionManager:
 
   def load_chat_events_sync(self, session_id: str) -> list[dict[str, Any]]:
     return self.events
-
-
-class FakeThreadManager:
-  """ThreadManager double for scheduler tests: hands back one fixed thread.
-
-  Callers patch src.core.scheduler.ThreadManager to return an instance; they
-  rely on create_thread overwriting that thread's session_id, description,
-  and require_review from the call arguments.
-  """
-
-  def __init__(self) -> None:
-    self.thread = models.ThreadMetadata(id="thread-1", session_id="session-1", description="nightly prompt")
-
-  async def create_thread(
-      self,
-      session: models.SessionMetadata,
-      description: str,
-      require_review: bool = True,
-  ) -> models.ThreadMetadata:
-    self.thread.session_id = session.id
-    self.thread.description = description
-    self.thread.require_review = require_review
-    return self.thread
 
 
 class FakeAsyncProcess:
@@ -2489,76 +2453,6 @@ def make_read_at_os_replace(read_at_swap: list[str], target: Path) -> Callable[[
   return read_then_replace
 
 
-def make_fake_git_create_worktree(*,
-                                  mkdir: bool = False,
-                                  captures: dict[str, Any] | None = None) -> Callable[..., Awaitable[BaseResolution]]:
-  """A `git_create_worktree` stand-in returning a `detail="fake"` BaseResolution.
-
-  The signature mirrors src.core.git.git_create_worktree so the monkeypatched attribute
-  stays a drop-in replacement. mkdir=True creates the worktree dir for flows that write
-  into it after creation; captures records the call under "git_create_worktree" with the
-  repo/base_branch/branch_name/wt_path key set the spawn-driving tests assert on.
-  """
-
-  async def fake_git_create_worktree(
-      repo_path: Path,
-      base_branch: str,
-      branch_name: str,
-      wt_path: Path,
-      *,
-      remote_tip: str | None = None) -> BaseResolution:
-    del remote_tip
-    if captures is not None:
-      captures["git_create_worktree"] = {
-          "repo": repo_path,
-          "base_branch": base_branch,
-          "branch_name": branch_name,
-          "wt_path": wt_path,
-      }
-    if mkdir:
-      wt_path.mkdir(parents=True, exist_ok=True)
-    return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
-
-  return fake_git_create_worktree
-
-
-def patch_improve_git_ops(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Install the pass-through git fakes a run_improve_loop test needs without a real repo.
-
-  git_create_worktree and git_push_branch are patched on src.core.improve_command
-  (git_create_worktree reuses make_fake_git_create_worktree(mkdir=True), git_push_branch
-  succeeds). remove and prune are patched on src.core.git: the finally-cleanup resolves
-  them there through git_worktree_remove_reporting, so the faked remove still clears the
-  worktree dir and prune runs. The fakes mirror the real signatures so each patch stays a
-  drop-in replacement.
-  """
-
-  async def fake_git_push_branch(repo_path: Path, branch_name: str) -> tuple[bool, str]:
-    del repo_path, branch_name
-    return True, ""
-
-  async def fake_git_worktree_remove(
-      repo_path: str,
-      wt_path: Path,
-      session: str,
-      *,
-      allowed_parent: Path,
-      expected_residue_name: str,
-  ) -> bool:
-    del repo_path, session, allowed_parent, expected_residue_name
-    if wt_path.exists():
-      wt_path.rmdir()
-    return True
-
-  async def fake_git_worktree_prune(repo_path: str, session: str) -> None:
-    del repo_path, session
-
-  monkeypatch.setattr(improve_command, "git_create_worktree", make_fake_git_create_worktree(mkdir=True))
-  monkeypatch.setattr(improve_command, "git_push_branch", fake_git_push_branch)
-  monkeypatch.setattr("src.core.git.git_worktree_remove", fake_git_worktree_remove)
-  monkeypatch.setattr("src.core.git.git_worktree_prune", fake_git_worktree_prune)
-
-
 def build_worker_prompt(
     description: str,
     cfg: CharlieBotConfig,
@@ -2590,83 +2484,11 @@ def build_worker_prompt(
   )
 
 
-def recording_notify_completion(captures: dict[str, Any]) -> Callable[..., Awaitable[None]]:
-  """A spawner_finalize._notify_completion stand-in recording the finalized outcome and thread.
-
-  The signature mirrors the production call in spawner_finalize._run_finalize_effects
-  (one _FinalizeCtx plus keyword-only verify_report); each monkeypatching test reads back
-  only the captured fields it asserts on.
-  """
-
-  async def fake_notify_completion(
-      ctx: spawner_finalize._FinalizeCtx,
-      verify_report: str | None = None,
-  ) -> None:
-    del verify_report
-    captures["notified"] = True
-    captures["notify_exit_code"] = ctx.outcome.exit_code
-    captures["notify_thread"] = ctx.thread
-
-  return fake_notify_completion
-
-
-def build_finalize_ctx(
-    thread: models.ThreadMetadata,
-    outcome: spawner._WorkerRunOutcome,
-    thread_mgr: Any,
-    session_mgr: Any,
-    cfg: CharlieBotConfig,
-) -> spawner_finalize._FinalizeCtx:
-  """The _FinalizeCtx the finalize and broadcast-completion tests share.
-
-  Callers rely on session_id and description being the thread's own; the
-  thread manager, session manager, outcome, and cfg stay per-site arguments.
-  """
-  return spawner_finalize._FinalizeCtx(
-      session_id=thread.session_id,
-      description=thread.description,
-      thread=thread,
-      outcome=outcome,
-      thread_mgr=thread_mgr,
-      session_mgr=session_mgr,
-      cfg=cfg,
-  )
-
-
-def capturing_worker(captures: dict[str, Any]) -> type:
-  """A spawner_launch.Worker stand-in recording its constructor args into ``captures``.
-
-  The signature mirrors the production call in spawner_launch._construct_worker, and the
-  fixed worker_dir/worker_backend/task_description key set is the shared contract
-  the spawn-driving tests assert on; thread_metadata, events_log_path, worker_cfg,
-  and on_spawned go unrecorded because no test reads them back off the worker.
-  """
-
-  class CapturingWorker:
-
-    def __init__(
-        self,
-        thread_metadata: models.ThreadMetadata,
-        working_dir: Path,
-        events_log_path: Path,
-        task_description: str,
-        worker_cfg: CharlieBotConfig,
-        backend_option: models.BackendOption | None = None,
-        on_spawned: Callable | None = None,
-        claude_account: models.ClaudeAccount | None = None,
-    ) -> None:
-      captures["worker_dir"] = working_dir
-      captures["worker_backend"] = backend_option
-      captures["task_description"] = task_description
-      captures["worker_account"] = claude_account
-
-    async def run(self) -> int:
-      return 0
-
-    async def terminate(self) -> None:
-      return None
-
-  return CapturingWorker
+def make_one_shot_backend(one_shot: AsyncMock) -> MagicMock:
+  """A stand-in backend whose one_shot_text is the given AsyncMock."""
+  backend = MagicMock()
+  backend.one_shot_text = one_shot
+  return backend
 
 
 class SuccessorDeliveryShim:
@@ -2727,203 +2549,14 @@ class EventCaptureSessionManager(SuccessorDeliveryShim):
     pass
 
 
-class CapturingThreadManager(JudgmentShim):
-  """ThreadManager double recording spawn/finalize-path calls into a captures dict.
-
-  Callers pass the test's fixed thread and captures dict and rely on get_thread
-  answering that thread, on update_status recording the ``status``/``exit_code``
-  keys, on save_metadata recording ``saved_thread``, and on get_events_log_path
-  answering the constructor's events_log (spawner._finalize_worker and the
-  spawner_launch process builders). Sites whose production path reads the
-  thread dir off the manager pass thread_root to override the JudgmentShim
-  default.
-  """
-
-  def __init__(
-      self,
-      thread: models.ThreadMetadata | None,
-      captures: dict[str, Any],
-      events_log: Path | None = None,
-      thread_root: Path | None = None,
-  ) -> None:
-    self._thread = thread
-    self._captures = captures
-    self._events_log = events_log
-    self._thread_root = thread_root
-
-  def thread_dir(self, session_id: str, thread_id: str) -> Path:
-    if self._thread_root is None:
-      return super().thread_dir(session_id, thread_id)
-    return self._thread_root / session_id / "threads" / thread_id
-
-  async def get_thread(self, session_id: str, thread_id: str) -> models.ThreadMetadata | None:
-    return self._thread
-
-  async def save_metadata(self, meta: models.ThreadMetadata) -> None:
-    self._captures["saved_thread"] = meta
-
-  async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
-    assert self._events_log is not None, f"CapturingThreadManager built without events_log ({session_id}/{thread_id})"
-    return self._events_log
-
-  async def update_status(
-      self,
-      session_id: str,
-      thread_id: str,
-      status: Any,
-      pid: int | None = None,
-      exit_code: int | None = None,
-      completed_at: Any = None,
-  ) -> None:
-    self._captures["status"] = status
-    self._captures["exit_code"] = exit_code
-
-
-class ReviewSpawnSessionManager(JudgmentShim):
-  """SessionManager double for spawn_review_worker tests: one fixed session for any id.
-
-  Callers rely on get_session answering a claude-backed SessionMetadata carrying the
-  constructor's session name; spawn_review_worker only None-checks the result and
-  hands it to the thread manager.
-  """
-
-  def __init__(self, session_name: str) -> None:
-    self._session_name = session_name
-
-  async def get_session(self, session_id: str) -> models.SessionMetadata:
-    return models.SessionMetadata(id=session_id, name=self._session_name, backend=OPUS_BACKEND_ID)
-
-
-class SpawnFlowSessionManager(JudgmentShim):
-  """SessionManager double for spawner spawn/finalize flow tests.
-
-  Callers rely on get_session answering a bare SessionMetadata for any id and on
-  persist_and_broadcast absorbing broadcast events: JudgmentShim's
-  deliver_to_successor default, which the finalize chain's delivery paths call,
-  routes into it.
-  """
-
-  async def get_session(self, session_id: str) -> models.SessionMetadata:
-    return models.SessionMetadata(id=session_id, name="Test Session")
-
-  async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
-    pass
-
-
-class WorktreeSpawnRig(NamedTuple):
-  """The staged inputs the worktree spawn_worker e2e tests share.
-
-  stage_worktree_spawn installs the three spawn-flow fakes (git_create_worktree, Worker,
-  _notify_completion) and builds the thread/cfg/repo/event-log stage; run_worktree_spawn
-  drives the shared spawn_worker invocation and the test asserts on the rig's fields.
-  """
-
-  cfg: CharlieBotConfig
-  repo_path: Path
-  thread: models.ThreadMetadata
-  captures: dict[str, Any]
-  thread_mgr: CapturingThreadManager
-  description: str
-
-
-def stage_worktree_spawn(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    description: str,
-    git_fake_mkdir: bool = False,
-) -> WorktreeSpawnRig:
-  """Stage the worktree spawn_worker e2e rig on a fresh codex-backend cfg.
-
-  The git fake records its call into the shared captures dict (key "git_create_worktree")
-  alongside the Worker and _notify_completion fakes; git_fake_mkdir additionally creates
-  the worktree dir for flows that write into it after creation.
-  """
-  cfg = build_codex_worktree_cfg(tmp_path)
-  repo_path = (tmp_path / "repo").resolve()
-  repo_path.mkdir(parents=True, exist_ok=True)
-  thread = models.ThreadMetadata(id="thread-1", session_id="session-id", description=description)
-  captures: dict[str, Any] = {}
-  monkeypatch.setattr(
-      spawner_launch, "git_create_worktree", make_fake_git_create_worktree(mkdir=git_fake_mkdir, captures=captures))
-  monkeypatch.setattr(spawner_launch, "Worker", capturing_worker(captures))
-  monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
-  events_log = tmp_path / "events.jsonl"
-  thread_mgr = CapturingThreadManager(thread, captures, events_log)
-  return WorktreeSpawnRig(
-      cfg=cfg, repo_path=repo_path, thread=thread, captures=captures, thread_mgr=thread_mgr, description=description)
-
-
-async def run_worktree_spawn(rig: WorktreeSpawnRig, *, resolved_model: str, keep_worktree: bool) -> None:
-  """The one spawn_worker invocation both worktree-spawn e2e tests drive; the rig stages its fakes."""
-  await spawner.spawn_worker(
-      session_id="session-id",
-      description=rig.description,
-      thread_id="thread-1",
-      cfg=rig.cfg,
-      session_mgr=SpawnFlowSessionManager(),
-      thread_mgr=rig.thread_mgr,
-      request=models.SpawnRequest(
-          repo_path=str(rig.repo_path),
-          base_branch="main",
-          resolved_backend="codex-o3",
-          resolved_model=resolved_model,
-          keep_worktree=keep_worktree,
-      ),
-  )
-
-
-class ReviewSpawnThreadManager(JudgmentShim):
-  """ThreadManager double for spawn_review_worker tests: builds and records the review thread.
-
-  Callers rely on create_thread answering a thread with id review-thread-id and on
-  save_metadata appending to .saved; the no-reviewer-exists list_threads default comes
-  from JudgmentShim.
-  """
-
-  def __init__(self) -> None:
-    self.saved: list[models.ThreadMetadata] = []
-
-  async def create_thread(
-      self,
-      session_meta: models.SessionMetadata,
-      description: str,
-      review_of: str | None = None,
-      require_review: bool = True,
-  ) -> models.ThreadMetadata:
-    return models.ThreadMetadata(
-        id="review-thread-id",
-        session_id=session_meta.id,
-        description=description,
-        branch_name=None,
-        review_of=review_of,
-    )
-
-  async def save_metadata(self, meta: models.ThreadMetadata) -> None:
-    self.saved.append(meta)
-
-
-async def fake_git_current_branch(repo_path: Path) -> str:
-  """git_current_branch stand-in answering main; the signature mirrors src.core.git."""
-  return "main"
-
-
-async def fake_spawn_worker(
-    session_id: str,
-    description: str,
-    thread_id: str,
-    cfg: CharlieBotConfig,
-    session_mgr: Any,
-    thread_mgr: Any,
-    request: models.SpawnRequest | None = None,
-) -> None:
-  """spawn_worker stand-in that never forks a backend; the signature mirrors the review.py call."""
-  return
-
-
 async def _noop() -> None:
   """Awaitable stand-in returned by fakes patched over coroutine-returning helpers."""
   return
+
+
+def close_create_logged_task(coro: Any, *, name: str | None = None) -> None:
+  """create_logged_task stand-in: closes the coroutine instead of scheduling it as a task."""
+  coro.close()
 
 
 async def _ok_asgi_downstream(scope: Any, receive: Any, send: Any) -> None:
@@ -2964,11 +2597,6 @@ def asgi_response(sent: list[dict]) -> tuple[int, dict[bytes, bytes], bytes]:
   return start["status"], headers, body
 
 
-def close_create_logged_task(coro: Any, *, name: str | None = None) -> None:
-  """create_logged_task stand-in: closes the coroutine instead of scheduling it as a task."""
-  coro.close()
-
-
 async def cancel_and_drain(task: asyncio.Task) -> None:
   """Cancel *task*, then await it under a suppressed CancelledError so the task's
   own finally block finishes before the caller continues.
@@ -2983,24 +2611,6 @@ async def cancel_and_drain(task: asyncio.Task) -> None:
     await task
 
 
-def capture_create_logged_task(captured: dict[str, Any]) -> Callable[..., Any]:
-  """Return a create_logged_task stand-in that captures the spawn coroutine's locals."""
-
-  def fake_create_logged_task(coro: Any, *, name: str | None = None) -> Any:
-    if coro.cr_frame is not None:
-      captured.update(coro.cr_frame.f_locals)
-    coro.close()
-
-    class DummyTask:
-
-      def add_done_callback(self, cb: Any) -> None:
-        pass
-
-    return DummyTask()
-
-  return fake_create_logged_task
-
-
 def record_create_logged_task(names: list[str]) -> Callable[..., Any]:
   """Return a create_logged_task stand-in that records each spawn's task name."""
 
@@ -3009,13 +2619,6 @@ def record_create_logged_task(names: list[str]) -> Callable[..., Any]:
     coro.close()
 
   return fake_create_logged_task
-
-
-def patch_review_spawn_path(monkeypatch: pytest.MonkeyPatch, captured: dict[str, Any]) -> None:
-  """Patch all three spawn-path seams; an unpatched one shells out to git or forks a backend."""
-  monkeypatch.setattr(review, "git_current_branch", fake_git_current_branch)
-  monkeypatch.setattr(spawner, "spawn_worker", fake_spawn_worker)
-  monkeypatch.setattr(review, "create_logged_task", capture_create_logged_task(captured))
 
 
 # Restart-recovery e2e helpers, single-homed here for test_restart_recovery_e2e.py
@@ -3051,5 +2654,14 @@ async def _async_wait_for(predicate: Callable[[], bool], timeout: float, what: s
   raise TimeoutError(what)
 
 
-def _recovery_reports(home: Path, session_id: str) -> list[dict]:
-  return [e for e in read_chat_events(home, session_id) if e.get("source") == "crash_recovery"]
+def spy_on_load_json_meta(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+  """Record every path init.iter_recent_thread_metas actually reads+parses."""
+  read_paths: list[Path] = []
+  real_load = worker_recovery_module.load_json_meta
+
+  def spy(path: Path, log_event: str, **kwargs: Any) -> Any:
+    read_paths.append(Path(path))
+    return real_load(path, log_event, **kwargs)
+
+  monkeypatch.setattr(worker_recovery_module, "load_json_meta", spy)
+  return read_paths

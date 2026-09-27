@@ -40,7 +40,16 @@ class ScheduledSessionStore:
 
     Single home of the generation request: the first-creation and rotation paths
     must produce identically shaped sessions (name, scheduled_task).
+
+    With the task tree wired (the server's shape), the generation is created
+    through the tree's own factory — a task-tree root manager node, so the
+    unbound task's firings parent their worker leaves to a real manager. The
+    profile-None create_session shape remains only for a SessionManager built
+    without a tree consumer (no factory installed).
     """
+    factory = self._session_manager.scheduled_generation_factory
+    if factory is not None:
+      return await factory(task_name, backend)
     return await self._session_manager.create_session(
         CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name), backend=backend)
 

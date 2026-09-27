@@ -966,6 +966,15 @@ class SessionManager:
     # row's state is the tree's own verdict, never a second copy of the rules.
     # None only before that wiring exists (no tree consumer in this process).
     self.task_tree_activity: Callable[[str], tuple[bool, str]] | None = None
+    # The task-tree owner registers its cron-generation creator here at wiring
+    # time (TaskTreeManager.__init__): (task_name, backend) -> the new
+    # generation's node. A scheduled session created by a wired manager is a
+    # task-tree root manager node, so its firings' worker leaves parent under
+    # a real manager; the factory receives the process's own tree and never a
+    # reconstructed one. None only before that wiring exists (no tree
+    # consumer in this process) — then the generation falls back to the
+    # profile-None session shape the tree cannot provide.
+    self.scheduled_generation_factory: Callable[[str, str], Awaitable[SessionMetadata]] | None = None
     # Listing-preamble memo: ((mtime_ns, size) of the sessions root, its subdirectory names).
     # The root's own mtime moves exactly when a session entry is created or removed (metadata
     # writes land one level below), so an unchanged signature proves the name set current.

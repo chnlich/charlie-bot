@@ -395,10 +395,12 @@ async def _settle_withheld_iteration(
     """Settle a loop whose iteration launch was withheld (no terminal fact will arrive).
 
     The loop state cannot keep saying "running": the controller marks it
-    blocked with the actual reason, releases the active lock, and delivers the
-    ONE sequence report carrying that reason. No side effect ran and none is
-    retried automatically; the queued iteration Run stays as the retained
-    pending request for the existing explicit resume/retry policy.
+    blocked with the actual reason and releases the active lock. The launch
+    itself already recorded the durable run_launch_withheld fact and delivered
+    the ONE blocked report to the manager (once, by stable id) — the
+    controller's chat progress event is all it still owes. No side effect ran
+    and none is retried automatically; the queued iteration Run stays as the
+    retained pending request for the existing explicit resume/retry policy.
     """
     state = await improve_command.require_loop_state(session_id, loop_id, cfg)
     state.status = "blocked"
@@ -406,20 +408,12 @@ async def _settle_withheld_iteration(
     await improve_command.clear_active_loop_lock(session_id, cfg)
     log.warning("improve_sequence_launch_withheld", session=session_id, loop_id=loop_id,
                 iteration=iteration, run_id=run_id, reason=reason)
-    summary = (
-        f"Improve loop stopped before iteration {iteration}: its launch was withheld and no "
-        f"process started ({reason}). Iteration run {run_id} stays queued on the loop's task as "
-        "the retained pending request; no side effects ran and none will be retried "
-        "automatically. Resume the withheld precondition and retry the run, or restart the "
-        "loop explicitly.")
     payload = improve_command._build_summary_payload(ET.IMPROVE_FAILED, goal, previous_summaries)
     payload["blocked_iteration"] = iteration
     payload["reason"] = reason
     payload["withheld_run_id"] = run_id
     payload["iterations_requested"] = iterations
     await tree.sessions.deliver_to_successor(session_id, payload)
-    await _deliver_sequence_report(
-        tree, child_id, session_id, loop_id, "blocked", summary, previous_summaries)
 
 
 async def _judge_iteration(

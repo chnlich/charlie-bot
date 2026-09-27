@@ -6,10 +6,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from conftest import (
-    assert_cli_reject,
-    delegate_invocation,
-    make_sessions_dir_config,
-    patched_cli_post,
+  CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
+  assert_cli_reject,
+  assert_cli_reject_exit2,
+  delegate_invocation,
+  make_json_response,
+  make_sessions_dir_config,
+  patched_cli_post,
 )
 from conftest import setup_session_cwd as _setup_session_cwd
 
@@ -167,26 +170,312 @@ def test_main_verify_posts_repoless_payload(tmp_path: Path, monkeypatch: pytest.
 
 @pytest.mark.parametrize("task_type", ["implement", "quick-edit", "script-run"])
 @pytest.mark.parametrize(
-    ("provide_repo", "missing_flag"),
+    ("half_argv", "named_flag"),
     [
-        (False, "--repo"),
-        (True, "--base-branch"),
+        (("--repo", "/tmp/some-repo"), "--repo"),
+        (("--base-branch", "main"), "--base-branch"),
     ],
 )
-def test_main_repo_task_types_require_repo_and_base_branch(
+def test_main_repo_task_types_take_repo_and_base_branch_together(
     tmp_path: Path,
     task_type: str,
-    provide_repo: bool,
-    missing_flag: str,
+    half_argv: tuple[str, ...],
+    named_flag: str,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+  """Exactly one of --repo/--base-branch is a malformed repo-less delegation."""
   task_spec_file = _write_task_spec(tmp_path)
-  argv_tail = ["--repo", str(tmp_path)] if provide_repo else ["--base-branch", "main"]
 
   with (
-      patch("sys.argv", _verify_argv(task_spec_file, *argv_tail, task_type=task_type)),
+      patch("sys.argv", _verify_argv(task_spec_file, *half_argv, task_type=task_type)),
       pytest.raises(SystemExit) as exc_info,
   ):
     main()
 
-  assert_cli_reject(exc_info, capsys, missing_flag, "required")
+  assert_cli_reject(exc_info, capsys, named_flag, "together")
+
+
+@pytest.mark.parametrize("task_type", ["implement", "quick-edit", "script-run"])
+def test_main_repo_less_delegation_posts_no_repo_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task_type: str) -> None:
+  """Omitting --repo and --base-branch together delegates a repo-less task."""
+  cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
+
+  with patched_cli_post(cfg, _verify_argv(task_spec_file, task_type=task_type)) as post_mock:
+    post_mock.return_value.json.return_value = {"thread_id": "t3", "description": "task"}
+    main()
+
+  payload = post_mock.call_args.kwargs["json"]
+  assert payload["task_type"] == task_type
+  assert "repo_path" not in payload
+  assert "base_branch" not in payload
+  assert payload["delegate_invocation"]["repo_path"] is None
+  assert payload["delegate_invocation"]["base_branch"] is None
+
+
+@pytest.mark.parametrize(
+    ("repo", "extra_argv", "err_fragments"),
+    [
+        pytest.param("meshy-research", (), ("must be an absolute path", "meshy-research"), id="relative-repo"),
+        pytest.param("/no/such/repo", (), ("does not exist", "/no/such/repo"), id="nonexistent-repo"),
+        pytest.param(None, ("--description", "task"), ("--description",), id="removed-legacy-description"),
+        pytest.param(None, ("--context", "review hint"), ("--context",), id="removed-legacy-context"),
+    ],
+)
+def test_main_rejects_bad_invocation_before_post(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], repo: str | None,
+    extra_argv: tuple[str, ...], err_fragments: tuple[str, ...]) -> None:
+  """Each malformed invocation names its cause on stderr and rejects before any POST: a relative
+  --repo, a nonexistent --repo, and the removed --description/--context flags."""
+  cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
+  repo_value = repo if repo is not None else str(tmp_path)
+
+  with (
+      patched_cli_post(cfg, _repo_argv(repo_value, task_spec_file, *extra_argv, session="s1")) as post_mock,
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
+
+  assert_cli_reject(exc_info, capsys, *err_fragments)
+  post_mock.assert_not_called()
+
+
+def test_main_help_lists_verify_profile(capsys: pytest.CaptureFixture[str]) -> None:
+  with patch("sys.argv", ["delegate", "--help"]), pytest.raises(SystemExit) as exc_info:
+    main()
+
+  assert exc_info.value.code == 0
+  out = capsys.readouterr().out
+  assert "verify" in out
+  assert "read-only plan verifier" in out
+
+
+def test_main_help_states_backend_omission_rule(capsys: pytest.CaptureFixture[str]) -> None:
+  with patch("sys.argv", ["delegate", "--help"]), pytest.raises(SystemExit) as exc_info:
+    main()
+
+  assert exc_info.value.code == 0
+  out = " ".join(capsys.readouterr().out.split())
+  assert "Omit --backend unless the user explicitly named a backend for this delegation" in out
+  assert "verify is routed to the first backends.preference entry that differs from it" in out
+
+
+def test_main_posts_reviewer_context_file_as_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
+  reviewer_context_file = tmp_path / "reviewer_context.md"
+  reviewer_context_file.write_text("review these state-machine edges")
+
+  with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--reviewer-context-file",
+                                        str(reviewer_context_file), session="s1")) as post_mock:
+    post_mock.return_value.json.return_value = {"thread_id": "t3"}
+    main()
+
+  payload = post_mock.call_args.kwargs["json"]
+  assert payload["context"] == "review these state-machine edges"
+  assert payload["delegate_invocation"]["task_spec_file"] == str(task_spec_file)
+  assert payload["delegate_invocation"]["reviewer_context_file"] == str(reviewer_context_file)
+
+
+_REQUIRED_FLAG_OMISSION_CASES = [
+    pytest.param("--task-spec-file", id="task-spec-file-omitted"),
+    pytest.param("--keep-worktree", id="keep-worktree-omitted"),
+]
+
+
+@pytest.mark.parametrize("required_flag", _REQUIRED_FLAG_OMISSION_CASES)
+def test_main_rejects_omitted_required_flag(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], required_flag: str) -> None:
+  """Omitting a required repo-skeleton flag rejects with a message naming the flag."""
+  flag_values = {
+      "--repo": str(tmp_path),
+      "--base-branch": "main",
+      "--task-spec-file": str(_write_task_spec(tmp_path)),
+      "--keep-worktree": "0",
+  }
+  del flag_values[required_flag]
+  argv = ["delegate", "--session", "s1"]
+  for flag, value in flag_values.items():
+    argv += [flag, value]
+
+  with patch("sys.argv", argv), pytest.raises(SystemExit) as exc_info:
+    main()
+
+  assert_cli_reject(exc_info, capsys, required_flag)
+
+
+def test_main_rejects_invalid_task_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
+
+  with (
+      patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--task-type", "bogus", session="s1")),
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
+
+  assert_cli_reject(exc_info, capsys, "--task-type")
+
+
+def test_main_rejects_legacy_require_review_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
+
+  with (
+      patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--require-review", "0", session="s1")),
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
+
+  assert exc_info.value.code != 0
+  err = capsys.readouterr().err
+  assert "--require-review" in err or "unrecognized" in err
+
+
+def test_main_uses_error_detail_from_response(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
+
+  with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "missing",
+                                        session="s1"),
+                        return_value=make_json_response(
+                            {"detail": "requested backend 'missing' is not in backends.options"},
+                            status_code=422)), \
+       patch(CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET, return_value=None), pytest.raises(SystemExit) as exc_info:
+    main()
+
+  assert exc_info.value.code == 1
+
+
+@pytest.mark.parametrize(
+    ("file_flag", "staged_name", "with_valid_task_spec"),
+    [
+        pytest.param("--task-spec-file", "task_spec.md", False, id="task-spec-file"),
+        pytest.param("--reviewer-context-file", "reviewer_context.md", True, id="reviewer-context-file"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("file_body", "err_fragment"),
+    [
+        pytest.param(None, "not found", id="missing"),
+        pytest.param("  \n", "empty", id="empty"),
+    ],
+)
+def test_main_rejects_unusable_file_argument(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    file_flag: str,
+    staged_name: str,
+    with_valid_task_spec: bool,
+    file_body: str | None,
+    err_fragment: str,
+) -> None:
+  """An unusable required file argument rejects before posting, naming the flag and the cause."""
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  staged_file = tmp_path / staged_name
+  if file_body is not None:
+    staged_file.write_text(file_body)
+  if with_valid_task_spec:
+    task_spec_file = _write_task_spec(tmp_path)
+    extra_argv = [file_flag, str(staged_file)]
+  else:
+    task_spec_file = staged_file
+    extra_argv = []
+
+  with (
+      patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, *extra_argv)) as post_mock,
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
+
+  assert_cli_reject_exit2(exc_info, capsys, file_flag, err_fragment)
+  post_mock.assert_not_called()
+
+
+def test_main_rejects_task_spec_missing_required_heading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  task_spec_file = _write_task_spec(tmp_path, _task_spec().replace("## Required Behavior\n", ""))
+
+  with (
+      patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock,
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
+
+  assert_cli_reject_exit2(exc_info, capsys, "## Required Behavior")
+  post_mock.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("source_line", "err_fragment"),
+    [
+        ("- /definitely/not/there/task-source.md", "/definitely/not/there/task-source.md"),
+        ("- relative/source.md", "absolute paths"),
+        ("", "Source Files section"),
+    ],
+    ids=["nonexistent-absolute", "relative-entry", "empty-section"],
+)
+def test_main_rejects_bad_source_files_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], source_line: str,
+    err_fragment: str) -> None:
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  task_spec_file = _write_task_spec(tmp_path, _task_spec(source_line))
+
+  with (
+      patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock,
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
+
+  assert_cli_reject_exit2(exc_info, capsys, err_fragment)
+  post_mock.assert_not_called()
+
+
+def test_main_allows_source_files_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  task_spec_file = _write_task_spec(tmp_path, _task_spec("- (none)"))
+
+  with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
+    post_mock.return_value.json.return_value = {"thread_id": "t1"}
+    main()
+
+  post_mock.assert_called_once()
+
+
+def test_main_accepts_existing_absolute_source_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  source_file = tmp_path / "source.md"
+  source_file.write_text("reference")
+  task_spec_file = _write_task_spec(tmp_path, _task_spec(f"- {source_file}"))
+
+  with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
+    post_mock.return_value.json.return_value = {"thread_id": "t1"}
+    main()
+
+  post_mock.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("session_arg",),
+    [
+        (None,),
+        ("abc",),
+    ],
+    ids=["derived-from-cwd", "explicit-flag-matching-cwd"],
+)
+def test_session_id_reaches_payload_from_cwd_or_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    session_arg: str | None,
+) -> None:
+  """The resolved session id lands in the POST payload whether cwd derived it or an
+  explicit --session matching the cwd supplied it."""
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  task_spec_file = _write_task_spec(tmp_path)
+
+  with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, session=session_arg)) as post_mock:
+    post_mock.return_value.json.return_value = {"thread_id": "t1"}
+    main()
+
+  payload = post_mock.call_args.kwargs["json"]
+  assert payload["session_id"] == "abc"

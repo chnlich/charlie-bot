@@ -178,8 +178,12 @@ An understanding page precedes the plan when the master must first align the rea
 ## Runtime delegation authorization
 
 This runtime contract is separate from the plan-approval interaction above. It is
-derived statelessly from the existing chat event log and applies at `/api/internal/delegate`
-and `/api/internal/improve`:
+derived statelessly from the existing chat event log and applies at the three
+request-entry checkpoints — `/api/internal/delegate`, `/api/internal/improve`,
+and `/api/internal/session-message` delivering an agent message to a worker node
+(the same judgment the worker's creation applies). There is no check at Run
+launch: once a Run is registered, review Runs, manual retries, startup recovery
+and cron fires are never withheld by later conversation.
 
 - `verify` is always allowed without authorization and remains repo-less.
 - A real user event is `ET.USER` with string `content`. Scheduled-trigger events
@@ -198,9 +202,9 @@ and `/api/internal/improve`:
 - Ordinary `take off` authorizes every non-`verify` delegation type without a count
   limit when the latest real user message contains it. The next real user message
   ends that window. Scheduled-trigger and nested tool-result events do not mint or cancel it.
-- Scheduled workers that call `spawn_worker` directly remain outside this user-facing
-  gate. No authorization file, field, event, counter, lease, consumption marker, or
-  `TASK_DELEGATED` authorization read is permitted; it remains delegation history/UI data.
+- Scheduled fires stay outside this user-facing gate. No authorization file, field,
+  event, counter, lease, consumption marker, or `TASK_DELEGATED` authorization read is
+  permitted; it remains delegation history/UI data.
 
 ## Execution
 

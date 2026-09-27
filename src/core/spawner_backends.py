@@ -6,7 +6,6 @@ from src.core.log_once import LazyStructlogLogger
 from src.core.models import (
     BackendOption,
     SessionMetadata,
-    ThreadMetadata,
     backend_type_allows_missing_model,
     option_default_model,
 )
@@ -119,15 +118,3 @@ async def select_verify_backend(
   session_meta = await _require_session(session_mgr, session_id)
   session_backend, session_model = _resolve_session_default_backend_model(cfg, session_meta)
   return review.select_reviewer_backend(cfg, session_backend, session_model, tried_backends)
-
-
-def require_thread_backend_model(thread: ThreadMetadata, cfg: CharlieBotConfig) -> tuple[str, str | None]:
-  """Return backend+model from thread metadata or raise."""
-  if not thread.backend:
-    raise ValueError(f"thread '{thread.id}' missing backend metadata")
-  if thread.model:
-    return thread.backend, thread.model
-  option = require_backend_option(cfg, thread.backend, subject=f"thread '{thread.id}' ")
-  if backend_type_allows_missing_model(option.type):
-    return thread.backend, None
-  raise ValueError(f"thread '{thread.id}' missing model metadata")

@@ -92,6 +92,7 @@ def _run_header_event(
     terminal_at: datetime | None,
     task_spec_ref: str,
     launch_prompt_ref: str,
+    withheld: str | None = None,
 ) -> dict:
   """The one header line that opens a transcript segment: a Run's, or a legacy thread's.
 
@@ -108,7 +109,9 @@ def _run_header_event(
   the content word (message_aggregator) for a Run that failed before its agent
   process started — no started_at, no launch prompt ever written. The two refs
   feed the header's link row (gray placeholders when empty); a legacy thread
-  passes both empty.
+  passes both empty. ``withheld`` is a withheld Run's reason (the durable
+  run_launch_withheld fact's own words); the content word renders it as
+  "withheld · <reason>".
   """
   started = started_at.isoformat() if started_at is not None else None
   terminal = terminal_at.isoformat() if terminal_at is not None else None
@@ -120,6 +123,7 @@ def _run_header_event(
       "backend_label": backend_label,
       "state": state,
       "error": error,
+      "withheld": withheld,
       "started_at": started,
       "timestamp": started or terminal,
       "launched": started_at is not None,
@@ -275,6 +279,7 @@ def build_worker_transcript_sync(tree, session_id: str) -> TranscriptEntry:
             # The launch prompt's presence is judged by the file (Runs older
             # than launch_prompt.md started without one), never by started_at.
             launch_prompt_ref=str(launch_prompt_path) if launch_prompt_path.is_file() else "",
+            withheld=(tree.runs.withheld_reason(facts_events, run.id) if state == "withheld" else None),
         ))
     transcript.extend(run_events)
   task_state = tree.task_state(session_id)

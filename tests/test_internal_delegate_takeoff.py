@@ -2,24 +2,44 @@
 
 import random
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 from conftest import (
-    FakeSessionManager,
-    user_event,
+  OPUS_BACKEND_ID,
+  OPUS_BACKEND_OPTION,
+  FakeSessionManager,
+  user_event,
 )
+from conftest import THREE_BACKEND_OPTIONS as VERIFY_BACKEND_OPTIONS
 from fastapi import HTTPException
 
 from src.api import internal
 from src.core import event_types as ET
+from src.core.config import CharlieBotConfig
 from src.core.models import (
-    DelegateRequest,
-    SessionMetadata,
-    TaskType,
+  DelegateRequest,
+  SessionMetadata,
+  TaskType,
 )
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
+
+
+def _stub_task_manager():
+  """A task-tree manager over the test's session manager (v1 sessions never
+  reach its authorization path; the signature keeps one owner for both)."""
+  from src.core.task_sessions import TaskTreeManager
+  return TaskTreeManager(CharlieBotConfig(charliebot_home=Path("/tmp/delegate-takeoff-stub")), _LastSessionManager())
+
+
+class _LastSessionManager:
+  """The no-op session seam the stub task-tree owner reads (never queried on
+  these v1-shaped paths, since their sessions carry profile=None)."""
+
+  async def get_session(self, session_id: str):
+    return None
 
 
 def _reference_takeoff_gate(
@@ -84,6 +104,22 @@ def _improve_request() -> internal.ImproveRequest:
       backend="codex-o3",
       goal="Improve this",
   )
+
+
+def _patch_resolve_rig(monkeypatch: pytest.MonkeyPatch) -> object:
+  """Install the resolve/config pair the _authorize_spawn_request tests share.
+
+  Returns the stubbed cfg so each test asserts its resolved_cfg is this object.
+  """
+  cfg = object()
+
+  async def fake_resolve(*args: Any, **kwargs: Any) -> tuple[str, str]:
+    del args, kwargs
+    return "codex-o3", "o3"
+
+  monkeypatch.setattr(internal, "get_config", lambda: cfg)
+  monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve)
+  return cfg
 
 
 def test_takeoff_gate_blocks_takeoff_followed_by_ordinary_user_message() -> None:
@@ -219,3 +255,156 @@ async def test_delegate_task_verify_rejects_repo_path() -> None:
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == "verify delegations are repo-less; omit repo_path"
   session_mgr.get_session.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task_type", [TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN])
+@pytest.mark.parametrize("half", ["repo", "branch"])
+async def test_delegate_task_repo_scoped_types_take_repo_and_base_together(
+    task_type: TaskType, half: str) -> None:
+  """Exactly one of repo_path/base_branch is a malformed repo-less delegation."""
+  repo_path = "/tmp/repo" if half == "repo" else None
+  base_branch = "main" if half == "branch" else None
+  req = _build_request(task_type=task_type, repo_path=repo_path, base_branch=base_branch)
+  session_mgr = AsyncMock()
+
+  with pytest.raises(HTTPException) as exc_info:
+    await internal.delegate_task(req, session_mgr=session_mgr)
+
+  assert exc_info.value.status_code == 400
+  assert "together" in exc_info.value.detail
+  session_mgr.get_session.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task_type", [TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN])
+async def test_delegate_task_repo_less_request_passes_the_schema_gate(
+    task_type: TaskType, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Omitting repo_path and base_branch together is a valid repo-less delegation."""
+  req = _build_request(task_type=task_type, repo_path=None, base_branch=None)
+  session_mgr = FakeSessionManager([user_event("take off")])
+  _patch_resolve_rig(monkeypatch)
+  captured: dict = {}
+
+  async def fake_delegate_task_tree(req, meta, cfg, task_mgr, session_mgr, caller, backend, model):
+    captured["repo_path"] = req.repo_path
+    captured["base_branch"] = req.base_branch
+    return {"session_id": "child", "parent_session_id": req.session_id, "run_id": "r",
+            "thread_id": "r", "description": req.description}
+
+  monkeypatch.setattr(internal, "_delegate_task_tree", fake_delegate_task_tree)
+
+  result = await internal.delegate_task(
+      req, session_mgr=session_mgr, task_mgr=_stub_task_manager(), caller=None)
+
+  assert result["session_id"] == "child"
+  assert captured["repo_path"] is None
+  assert captured["base_branch"] is None
+
+
+@pytest.mark.asyncio
+async def test_delegate_task_returns_400_for_invalid_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+  req = _build_request()
+  session_mgr = AsyncMock()
+  session_mgr.get_session.return_value = SessionMetadata(id=req.session_id, name="Test")
+
+  def fake_takeoff_gate(session_id: str, mgr: Any) -> None:
+    assert session_id == req.session_id
+    assert mgr is session_mgr
+
+  async def fake_resolve_requested_subagent_backend_model(*args: Any, **kwargs: Any) -> tuple[str, str]:
+    raise ValueError("requested backend 'codex-o3' is not in backends.options")
+
+  monkeypatch.setattr(internal, "check_takeoff_gate", fake_takeoff_gate)
+  monkeypatch.setattr(
+      internal, "resolve_requested_subagent_backend_model", fake_resolve_requested_subagent_backend_model)
+  monkeypatch.setattr(internal, "get_config", lambda: object())
+
+  with pytest.raises(HTTPException) as exc_info:
+    await internal.delegate_task(req, session_mgr=session_mgr)
+
+  assert exc_info.value.status_code == 400
+  assert exc_info.value.detail == "requested backend 'codex-o3' is not in backends.options"
+
+
+# --- verify default backend via backends.preference ---
+
+
+def _build_verify_cfg(preference: list[str]) -> CharlieBotConfig:
+  return CharlieBotConfig(
+      charliebot_home=Path("/tmp/charliebot-test"),
+      paths={"worktree_dir": "/tmp/worktrees"},
+      backends={
+          "options": VERIFY_BACKEND_OPTIONS,
+          "preference": preference
+      },
+  )
+
+
+class BackendFakeSessionManager:
+
+  def __init__(self, backend: str) -> None:
+    self.backend = backend
+
+  async def get_session(self, session_id: str) -> SessionMetadata:
+    return SessionMetadata(id=session_id, name="Test", backend=self.backend)
+
+
+async def _authorize_verify(
+    monkeypatch: pytest.MonkeyPatch,
+    session_backend: str,
+    preference: list[str],
+    backend: str | None = None,
+) -> tuple[str | None, str | None]:
+  req = _build_request(task_type=TaskType.VERIFY, repo_path=None, base_branch=None, backend=backend)
+  monkeypatch.setattr(internal, "get_config", lambda: _build_verify_cfg(preference))
+  session_mgr = BackendFakeSessionManager(session_backend)
+  _meta, _cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(
+      req, session_mgr, _stub_task_manager())
+  return resolved_backend, resolved_model
+
+
+@pytest.mark.asyncio
+async def test_verify_no_backend_defaults_to_first_differing_preference(monkeypatch: pytest.MonkeyPatch) -> None:
+  """Session backend is the first preference entry -> the second (first differing) entry wins."""
+  resolved = await _authorize_verify(
+      monkeypatch, session_backend=OPUS_BACKEND_ID, preference=[OPUS_BACKEND_ID, "codex-o3"])
+  assert resolved == ("codex-o3", "o3")
+
+
+@pytest.mark.asyncio
+async def test_verify_no_backend_session_backend_not_in_preference_uses_first_entry(
+    monkeypatch: pytest.MonkeyPatch) -> None:
+  resolved = await _authorize_verify(monkeypatch, session_backend="kimi-k2.5", preference=[OPUS_BACKEND_ID, "codex-o3"])
+  assert resolved == (OPUS_BACKEND_ID, OPUS_BACKEND_OPTION.model)
+
+
+@pytest.mark.asyncio
+async def test_verify_no_backend_empty_preference_keeps_session_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+  resolved = await _authorize_verify(monkeypatch, session_backend="codex-o3", preference=[])
+  assert resolved == ("codex-o3", "o3")
+
+
+@pytest.mark.asyncio
+async def test_verify_explicit_backend_wins_over_preference(monkeypatch: pytest.MonkeyPatch) -> None:
+  resolved = await _authorize_verify(
+      monkeypatch,
+      session_backend=OPUS_BACKEND_ID,
+      preference=[OPUS_BACKEND_ID, "codex-o3"],
+      backend="kimi-k2.5",
+  )
+  assert resolved == ("kimi-k2.5", "kimi-k2.5")
+
+
+@pytest.mark.asyncio
+async def test_verify_unknown_explicit_backend_returns_400(monkeypatch: pytest.MonkeyPatch) -> None:
+  with pytest.raises(HTTPException) as exc_info:
+    await _authorize_verify(
+        monkeypatch,
+        session_backend=OPUS_BACKEND_ID,
+        preference=[OPUS_BACKEND_ID, "codex-o3"],
+        backend="nonexistent",
+    )
+
+  assert exc_info.value.status_code == 400
+  assert exc_info.value.detail == "requested backend 'nonexistent' is not in backends.options"

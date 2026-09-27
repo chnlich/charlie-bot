@@ -73,7 +73,7 @@ Retry the watch a few times, several seconds apart, while it reports no checks r
 workflow needs a moment to register the checks after the push.
 Before merging, run the PR review per `prompts/cron/code_review_prompt.md` with
 charlie-code (`--json`, from a scratch directory outside the worktree; model, api_base,
-and context_window from the `charlie-code-kimi-k3` backend entry; task file is the
+and context_window from the `charlie-code-kimi` backend entry; task file is the
 prompt verbatim plus a final `PR: <number> <url>` line; the verdict is the final
 `result` event's `final_output`), post the verdict as one PR comment, act on its
 findings on the same branch, and report a skipped review, with its reason, in the

@@ -223,7 +223,7 @@ def test_credentials_example_covers_every_credentials_legacy_key() -> None:
 
 EXAMPLE_PATH = ROOT / "configs" / "config.example.yaml"
 
-STARTER_BACKEND_IDS = ["claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-tui"]
+STARTER_BACKEND_IDS = ["claude-fable", "claude-opus", "claude-sonnet", "claude-tui"]
 
 
 def test_example_config_loads_to_the_model_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

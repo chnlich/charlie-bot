@@ -49,6 +49,111 @@ for _leaked in ("CHARLIEBOT_RUN_TOKEN", "CHARLIEBOT_HOME", "CHARLIEBOT_SESSION_I
 if os.environ.get("PYTHONPATH", "").split(os.pathsep)[0] != str(ROOT):
   os.environ["PYTHONPATH"] = os.pathsep.join([str(ROOT), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep)
 
+
+# ---------------------------------------------------------------------------
+# Per-test wall-time budget and the integration cap. A unit test stays under 1s
+# and a test marked `integration` (real processes / real time) under 10s; at
+# most 50 collected tests may carry the marker. The budgets are ini options so
+# the mechanism's own test can shrink them. Enforcement lives here so the limit
+# is mechanical, not a convention.
+# ---------------------------------------------------------------------------
+
+_UNIT_BUDGET_INI = "unit_test_budget_seconds"
+_INTEGRATION_BUDGET_INI = "integration_test_budget_seconds"
+_MAX_INTEGRATION_INI = "max_integration_tests"
+_ELAPSED_ATTR = "_charliebot_wall_seconds"
+_BUDGET_REPORTED_ATTR = "_charliebot_budget_reported"
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+  parser.addini(
+      _UNIT_BUDGET_INI,
+      "Per-test wall-time budget in seconds (setup + call + teardown) for tests that carry no "
+      "integration or local_only marker; enforced by this conftest.",
+      type="float",
+      default=1.0)
+  parser.addini(
+      _INTEGRATION_BUDGET_INI,
+      "Per-test wall-time budget in seconds for tests marked @pytest.mark.integration.",
+      type="float",
+      default=10.0)
+  parser.addini(
+      _MAX_INTEGRATION_INI,
+      "Maximum number of collected tests that may carry the integration marker.",
+      type="int",
+      default=50)
+
+
+def _budget_seconds(item: pytest.Item) -> float | None:
+  """This item's wall-time budget, or None when the budget does not apply."""
+  if item.get_closest_marker("local_only"):
+    # Runs only by hand against host-local resources (GPU, tailnet); it is
+    # outside the CI surface the budgets keep small and fast.
+    return None
+  ini = _INTEGRATION_BUDGET_INI if item.get_closest_marker("integration") else _UNIT_BUDGET_INI
+  return float(item.config.getini(ini))
+
+
+def _accrue(item: pytest.Item, seconds: float) -> None:
+  setattr(item, _ELAPSED_ATTR, getattr(item, _ELAPSED_ATTR, 0.0) + seconds)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_setup(item: pytest.Item) -> Any:
+  start = time.perf_counter()
+  result = yield
+  _accrue(item, time.perf_counter() - start)
+  return result
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item: pytest.Item) -> Any:
+  start = time.perf_counter()
+  result = yield
+  _accrue(item, time.perf_counter() - start)
+  return result
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item: pytest.Item) -> Any:
+  start = time.perf_counter()
+  result = yield
+  _accrue(item, time.perf_counter() - start)
+  return result
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) -> Any:
+  report: pytest.TestReport = yield
+  if report.outcome != "passed":
+    return report  # a real failure or a skip already owns this report
+  budget = _budget_seconds(item)
+  if budget is None:
+    return report
+  elapsed = getattr(item, _ELAPSED_ATTR, 0.0)
+  if elapsed <= budget or getattr(item, _BUDGET_REPORTED_ATTR, False):
+    return report
+  setattr(item, _BUDGET_REPORTED_ATTR, True)
+  kind = "integration" if item.get_closest_marker("integration") else "unit"
+  report.outcome = "failed"
+  report.longrepr = (
+      f"test wall time {elapsed:.2f}s exceeds the {budget:g}s {kind} budget "
+      f"(setup + call + teardown, enforced by tests/conftest.py). Make the test faster, or mark "
+      f"it @pytest.mark.integration if it truly needs real processes or real time "
+      f"(integration budget {float(item.config.getini(_INTEGRATION_BUDGET_INI)):g}s).")
+  return report
+
+
+def pytest_collection_finish(session: pytest.Session) -> None:
+  marked = sum(1 for item in session.items if item.get_closest_marker("integration"))
+  cap = int(session.config.getini(_MAX_INTEGRATION_INI))
+  if marked > cap:
+    raise pytest.UsageError(
+        f"{marked} collected tests carry @pytest.mark.integration; the cap is {cap} "
+        f"(max_integration_tests, enforced by tests/conftest.py). The marker is for tests that "
+        f"need real processes or real time - prune tests, or de-mark the ones that no longer "
+        f"need it.")
+
 # The two Gemini-503 error channels, verbatim shapes: the failed
 # invocation's structured error event (the real failure) and the stderr tail
 # (the LiteLLM help banner that used to mask it in chat). Shared by the suites
@@ -95,6 +200,11 @@ from src.core.threads import ThreadManager  # noqa: E402
 from src.core.triggers import TriggerManager  # noqa: E402
 
 from src.core import headless_render  # noqa: E402
+
+
+# The pytester fixture: the budget mechanism's own test drives inner pytest
+# sessions (tests/test_pytest_budget.py).
+pytest_plugins = ["pytester"]
 
 
 def backend_option(**kwargs: Any) -> models.BackendBase:

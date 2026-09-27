@@ -11,8 +11,6 @@ This module owns the pure/queryable parts of that contract:
 
 - path derivation for every per-run file;
 - process liveness (``pid`` + ``/proc/<pid>/stat`` field 22 + host boot time);
-- descendant discovery (one ``/proc/*/fd/1`` scan, diagnostic only — never a
-  liveness input);
 - the outcome table mapping on-disk facts to a ``RunOutcome``;
 - the pure raw-line -> translated-event projection shared by the live read
   loop, the re-attach path, and tests;
@@ -189,8 +187,8 @@ def is_run_alive(
   field 22 equals the recorded pid_start (pid reuse cannot fake it), the
   process is not a zombie, and the run began after the host's current boot
   (nothing survives a host reboot, so a pre-boot pair is always stale).
-  Descendants that inherited the raw-log fd do NOT count as liveness — they
-  are reported via the fd scan instead.
+  Descendants that inherited the raw-log fd do NOT count as liveness — the
+  probe judges the recorded process alone.
   """
   if pid is None or pid_start is None or started_at is None:
     return False

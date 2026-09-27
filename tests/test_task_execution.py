@@ -696,7 +696,6 @@ async def test_first_terminal_fact_wins_governs_followups(
 
 
 @pytest.mark.integration
-@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_implement_delivery_requires_review_and_real_landing(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

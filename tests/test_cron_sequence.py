@@ -780,7 +780,7 @@ async def test_unbound_prompt_task_fires_once_through_a_legacy_cron_session(
     ], WORKER_BUILD_BACKEND_PATCH_TARGET)
     wakes: list[tuple[str, str]] = []
 
-    async def fake_trigger_master(session_id, text, cfg_, session_mgr_, **kwargs):
+    async def fake_trigger_master(session_id, text, cfg_, session_mgr_, input_event_type, **kwargs):
         wakes.append((session_id, text))
 
     monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
@@ -839,7 +839,7 @@ async def test_unbound_steps_task_advances_step_by_step_through_a_legacy_cron_se
     ], WORKER_BUILD_BACKEND_PATCH_TARGET)
     wakes: list[tuple[str, str]] = []
 
-    async def fake_trigger_master(session_id, text, cfg_, session_mgr_, **kwargs):
+    async def fake_trigger_master(session_id, text, cfg_, session_mgr_, input_event_type, **kwargs):
         wakes.append((session_id, text))
 
     monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)

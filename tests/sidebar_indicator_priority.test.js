@@ -1,11 +1,12 @@
 // ---------------------------------------------------------------------------
-// Indicator priority over the nested sidebar (status.js + groups.js): one icon
-// per row, in a fixed order that reads no expansion state — the row's own
-// activity (spinner, a legacy row's own gear, the clock), a parent's gear for
-// a running descendant, the row's own unread dot, the subtree's hollow unread
-// mark. The clock never stands in for a subtree. Facts arrive through the
-// list paint, the status poll (applySessionStatus) and the websocket
-// broadcasts.
+// Indicator priority over the nested sidebar (status.js + groups.js): two
+// independent families, each picking at most one element per row in a fixed
+// order that reads no expansion state. The activity family — the row's own
+// icon (spinner, a legacy row's own gear, the clock), then a parent's gear
+// for a running descendant. The unread family — the row's own filled dot,
+// else the subtree's hollow mark; no activity state gates either family.
+// The clock never stands in for a subtree. Facts arrive through the list
+// paint, the status poll (applySessionStatus) and the websocket broadcasts.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -57,7 +58,7 @@ function row(id, parent, overrides = {}) {
 
 const IDLE_ICONS = {spinner: false, gear: false, clock: false, dot: false, subtreeMark: false};
 
-test('a parent shows the gear for a running descendant and its own dot stays hidden behind it', () => {
+test('a parent shows the gear for a running descendant; without unread facts no mark shows', () => {
   const {context, shown} = buildContext(['p', 'c', 'g']);
   context.renderSessionList([
     row('p', null), row('c', 'p', {profile: 'manager'}), row('g', 'c', {has_running_tasks: true}),
@@ -91,11 +92,35 @@ test('icons are identical before and after expand and collapse', () => {
   const before = shown('p');
 
   context.Sidebar.expandTreeNode('p');
-  assert.deepEqual(shown('p'), before, 'expansion never changes the row’s icon');
+  assert.deepEqual(shown('p'), before, 'expansion never changes the row’s icons');
   context.Sidebar.toggleTreeNode('p');
-  assert.deepEqual(shown('p'), before, 'collapse never changes the row’s icon');
-  assert.deepEqual(before, {...IDLE_ICONS, gear: true},
-      'the running descendant’s gear outranks the subtree’s unread mark');
+  assert.deepEqual(shown('p'), before, 'collapse never changes the row’s icons');
+  assert.deepEqual(before, {...IDLE_ICONS, gear: true, subtreeMark: true},
+      'first paint: the running descendant’s gear and the unread child’s subtree mark show together');
+
+  // The repaint path (the activity seam) agrees with the first paint.
+  context.setSessionIndicator('g', 'worker_only');
+  assert.deepEqual(shown('p'), before, 'repaint keeps the gear beside the subtree mark');
+  context.refreshSessionIndicator('p');
+  assert.deepEqual(shown('p'), before, 'the unread-only repaint keeps both marks');
+});
+
+test('a parent’s own dot shows beside the stand-in gear and outranks the subtree mark', () => {
+  const {context, shown} = buildContext(['p', 'a', 'b']);
+  context.renderSessionList([
+    row('p', null, {has_unread: true}),
+    row('a', 'p', {has_running_tasks: true}),
+    row('b', 'p', {profile: 'manager', has_unread: true}),
+  ], 'all');
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true, dot: true},
+      'first paint: the gear stands in for the running child beside the own dot');
+
+  // The repaint path (the unread broadcast's seam) agrees: the own dot still
+  // outranks the subtree mark while the gear shows.
+  context.recordUnreadFact('p', true);
+  context.refreshSessionIndicator('p');
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true, dot: true},
+      'repaint: the own dot outranks the subtree mark while the gear shows');
 });
 
 test('an unread child manager gives the parent the subtree mark, not the dot, collapsed and expanded', () => {
@@ -115,16 +140,21 @@ test('an unread child manager gives the parent the subtree mark, not the dot, co
   assert.deepEqual(shown('p'), {...IDLE_ICONS, subtreeMark: true}, 'collapse never changes the icon');
 });
 
-test('the gear outranks the subtree mark', () => {
-  const {context, shown} = buildContext(['p', 'c']);
-  context.renderSessionList([row('p', null), row('c', 'p', {profile: 'manager', has_unread: true})], 'all');
-  assert.deepEqual(shown('p'), {...IDLE_ICONS, subtreeMark: true});
+test('a running child and an unread sibling light the gear and the subtree mark together', () => {
+  const {context, shown} = buildContext(['p', 'a', 'b']);
+  context.renderSessionList([
+    row('p', null),
+    row('a', 'p', {has_running_tasks: true}),
+    row('b', 'p', {profile: 'manager', has_unread: true}),
+  ], 'all');
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true, subtreeMark: true},
+      'first paint: the gear stands in for the running child beside the sibling’s mark');
 
-  context.setSessionIndicator('c', 'worker_only');
-  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true},
-      'a running descendant replaces the subtree mark with the gear');
-  context.setSessionIndicator('c', 'idle');
-  assert.deepEqual(shown('p'), {...IDLE_ICONS, subtreeMark: true}, 'the mark returns when the Run ends');
+  context.setSessionIndicator('a', 'idle');
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, subtreeMark: true}, 'the mark stays when the Run ends');
+  context.setSessionIndicator('a', 'worker_only');
+  assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true, subtreeMark: true},
+      'repaint: the gear returns beside the mark when the Run restarts');
 });
 
 test('the row’s own dot outranks the subtree mark', () => {
@@ -225,7 +255,8 @@ test('a childless legacy row keeps main’s behavior: its own state and unread f
   assert.equal(context.Sidebar.subtreeUnread('solo'), false);
   assert.equal(context.Sidebar.effectiveIndicatorState('solo'), 'idle');
   context.setSessionIndicator('solo', 'worker_only');
-  assert.deepEqual(shown('solo'), {...IDLE_ICONS, gear: true});
+  assert.deepEqual(shown('solo'), {...IDLE_ICONS, gear: true, dot: true},
+      'repaint: the legacy gear and the own dot show together');
   context.setSessionIndicator('solo', 'idle');
   assert.deepEqual(shown('solo'), {...IDLE_ICONS, dot: true});
 });
@@ -235,16 +266,20 @@ test('a task-tree row’s own running Run paints the spinner, not the gear', () 
   // profile manager: a task-tree node. Its own live Run (has_running_tasks
   // from the task-tree derivation) is its own work: the spinner, whatever the
   // row's profile — the gear is a stand-in's icon, never an own one.
-  context.renderSessionList([row('root', null, {has_running_tasks: true})], 'all');
+  context.renderSessionList([row('root', null, {has_running_tasks: true, has_unread: true})], 'all');
   const spinnerClass = nav.innerHTML.match(/<svg id="spinner-root"[^>]*class="([^"]*)"/)[1];
   const gearClass = nav.innerHTML.match(/<svg id="worker-indicator-root"[^>]*class="([^"]*)"/)[1];
+  const dotClass = nav.innerHTML.match(/<span id="unread-root"[^>]*class="([^"]*)"/)[1];
   assert.equal(/\bhidden\b/.test(spinnerClass), false, 'own running paints the spinner at paint');
   assert.equal(/\bhidden\b/.test(gearClass), true);
+  assert.equal(/\bhidden\b/.test(dotClass), false,
+      'first paint: the spinner and the own dot show together');
   // The status poll reports the same fact through the shared seam.
   context.setSessionIndicator('root', 'worker_only');
-  assert.deepEqual(shown('root'), {...IDLE_ICONS, spinner: true});
+  assert.deepEqual(shown('root'), {...IDLE_ICONS, spinner: true, dot: true},
+      'repaint: the spinner keeps the own dot beside it');
   context.setSessionIndicator('root', 'idle');
-  assert.deepEqual(shown('root'), IDLE_ICONS);
+  assert.deepEqual(shown('root'), {...IDLE_ICONS, dot: true});
 });
 
 test('a running worker leaf paints the spinner, not the delegated-work gear', () => {
@@ -266,11 +301,11 @@ test('a running worker leaf paints the spinner, not the delegated-work gear', ()
 });
 
 // ---------------------------------------------------------------------------
-// The full icon priority table (one visual language, one activity icon per
-// row): own state first — running spinner, waiting clock — then a parent row's
-// stand-in gear for a running descendant. The unread dot describes the row
-// itself only; the subtree's hollow mark describes an unread reply anywhere
-// below; the clock never stands in for a subtree. A failed Run paints nothing
+// The full priority table (one visual language; two independent families per
+// row): the activity family — own state first, running spinner or waiting
+// clock, then a parent row's stand-in gear for a running descendant — and the
+// unread family — the row's own dot, else the subtree's hollow mark. The
+// clock never stands in for a subtree. A failed Run paints no activity icon
 // anywhere: the alert-indicator element no longer exists for any state.
 // ---------------------------------------------------------------------------
 
@@ -288,25 +323,29 @@ test('no state paints an alert-indicator element; a failed child reads idle', ()
   // The status poll's seam agrees for the remaining states.
   context.setSessionIndicator('w', 'waiting');
   assert.equal(/alert-indicator-/.test(nav.innerHTML), false);
-  assert.deepEqual(shown('w'), {...IDLE_ICONS, clock: true});
+  assert.deepEqual(shown('w'), {...IDLE_ICONS, clock: true, dot: true},
+      'repaint: the waiting clock keeps the own dot beside it');
   context.setSessionIndicator('w', 'thinking');
   assert.equal(/alert-indicator-/.test(nav.innerHTML), false,
       'the spinner is priority 1 and the alert element does not exist');
-  assert.deepEqual(shown('w'), {...IDLE_ICONS, spinner: true});
+  assert.deepEqual(shown('w'), {...IDLE_ICONS, spinner: true, dot: true},
+      'repaint: the spinner keeps the own dot beside it too');
   context.setSessionIndicator('w', 'idle');
   assert.deepEqual(shown('w'), {...IDLE_ICONS, dot: true},
-      'back to idle, the unread dot shows again');
+      'the dot persists through every activity state');
 });
 
-test('a task-tree row’s own waiting (queued) paints the muted clock and hides the dot', () => {
+test('a task-tree row’s own waiting (queued) paints the muted clock beside its unread dot', () => {
   const {context, nav, shown} = buildContext(['w']);
-  context.renderSessionList([row('w', null, {work_state: 'waiting'})], 'all');
+  context.renderSessionList([row('w', null, {work_state: 'waiting', has_unread: true})], 'all');
   const clockClass = nav.innerHTML.match(/<svg id="waiting-indicator-w"[^>]*class="([^"]*)"/)[1];
   assert.equal(/\bhidden\b/.test(clockClass), false, 'own waiting paints the clock at paint');
   const dotClass = nav.innerHTML.match(/<span id="unread-w"[^>]*class="([^"]*)"/)[1];
-  assert.equal(/\bhidden\b/.test(dotClass), true, 'the activity icon hides the dot');
+  assert.equal(/\bhidden\b/.test(dotClass), false,
+      'first paint: the clock and the own dot show together');
   context.setSessionIndicator('w', 'waiting');
-  assert.deepEqual(shown('w'), {...IDLE_ICONS, clock: true});
+  assert.deepEqual(shown('w'), {...IDLE_ICONS, clock: true, dot: true},
+      'repaint: the clock keeps the own dot beside it');
 });
 
 test('a parent over a failed (idle) child shows no activity icon', () => {
@@ -346,13 +385,13 @@ test('the subtree stand-in is the gear alone: waiting descendants contribute not
   assert.deepEqual(shown('p'), IDLE_ICONS);
 });
 
-test('the unread dot yields to every activity icon; the mark reads the subtree', () => {
+test('the waiting clock and the descendant’s own dot show together; the mark reads the subtree', () => {
   const {context, shown} = buildContext(['p', 'w']);
   context.renderSessionList([row('p', null), row('w', 'p', {work_state: 'waiting'})], 'all');
   context.recordUnreadFact('w', true);
   context.refreshSessionIndicator('w');
-  assert.deepEqual(shown('w'), {...IDLE_ICONS, clock: true},
-      'the waiting clock hides the descendant’s own dot');
+  assert.deepEqual(shown('w'), {...IDLE_ICONS, clock: true, dot: true},
+      'repaint: the waiting clock and the descendant’s own dot show together');
   assert.deepEqual(shown('p'), {...IDLE_ICONS, subtreeMark: true},
       'the parent shows the subtree mark for the unread reply, no clock for the queued one');
 });

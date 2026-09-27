@@ -165,9 +165,9 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
 
   // Sidebar unread indicator. Broadcasts are socket-ordered and always apply
   // (they stamp the newest fact, so any in-flight poll or tree-page reply
-  // captured earlier is refused by the shared gate). The dot is an idle-state
-  // cue for both row kinds: activity (spinner or delegated gear) hides it
-  // without discarding the flag.
+  // captured earlier is refused by the shared gate). The unread marks read the
+  // facts only, for both row kinds: the dot shows beside any activity icon,
+  // and the flag survives every paint.
   if (t === 'unread_changed') {
     recordUnreadFact(ev.session_id, ev.has_unread);
     if (ev.session_id === SESSION_ID) return;

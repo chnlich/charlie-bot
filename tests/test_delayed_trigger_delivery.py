@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import enum
 from datetime import UTC, datetime
 from pathlib import Path
@@ -133,3 +134,60 @@ async def test_invalid_session_trigger_is_cancelled_without_waking_master(
   mock_trigger_master.assert_not_awaited()
   stored_trigger = await trigger_mgr._load_trigger(session.id, trigger.id)
   assert stored_trigger.status == TriggerStatus.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_trigger_says_fired_the_moment_its_wake_is_enqueued(tmp_path: Path) -> None:
+  """FIRED on delivery: at the instant the wake's work item is enqueued, the
+  record on disk already says fired and the pending-triggers tray no longer
+  lists it."""
+  from fastapi import FastAPI
+  from fastapi.testclient import TestClient
+
+  from src.api.deps import get_session_manager, get_trigger_manager
+  from src.api.sessions import router as sessions_router
+
+  cfg = make_home_config(tmp_path)
+  session_mgr = SessionManager(cfg)
+  session = await session_mgr.create_session(CreateSessionRequest(name="Fired on delivery"))
+  trigger_mgr = TriggerManager(cfg, session_mgr)
+  trigger = PendingTrigger(
+      id="trigger-fired-on-delivery",
+      session_id=session.id,
+      fire_at=datetime.now(UTC),
+      message="wake now",
+  )
+  await trigger_mgr._save_trigger(trigger)
+
+  observed: dict = {}
+
+  async def fake_trigger_master(sid, message, got_cfg, got_mgr, etype, *, user_event_id=None, pull_back=True):
+    # This runs at the enqueue moment, after the FIRED stamp.
+    stored = await trigger_mgr._load_trigger(sid, "trigger-fired-on-delivery")
+    observed["status"] = stored.status
+    observed["input_event_id"] = user_event_id
+    observed["tray"] = await trigger_mgr.list_triggers(sid)
+
+  with (
+      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
+      patch(TRIGGER_MASTER_PATCH_TARGET, new=fake_trigger_master),
+      patch(TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
+  ):
+    await trigger_mgr._wait_and_fire(trigger)
+    # The wake enqueue is a fire-and-forget task; wait it out to its checkpoint.
+    async with asyncio.timeout(5):
+      while "status" not in observed:
+        await asyncio.sleep(0.01)
+
+  assert observed["status"] == TriggerStatus.FIRED
+  # The wake's event id is what the enqueued turn answers.
+  wake_events = [e for e in session_mgr.load_chat_events_sync(session.id) if e["type"] == ET.SCHEDULED_TRIGGER]
+  assert observed["input_event_id"] == wake_events[0]["id"]
+  # The tray endpoint lists pending only: the just-delivered record is out.
+  app = FastAPI()
+  app.include_router(sessions_router, prefix="/api/sessions")
+  app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[get_trigger_manager] = lambda: trigger_mgr
+  tray = TestClient(app).get(f"/api/sessions/{session.id}/pending-triggers")
+  assert tray.status_code == 200
+  assert [row["id"] for row in tray.json()] == []

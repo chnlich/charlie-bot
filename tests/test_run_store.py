@@ -79,9 +79,7 @@ async def test_register_is_idempotent_and_registers_alias(tmp_path: Path) -> Non
   # no terminal fact.
   stop = await store.request_stop(session_id, "r1", "stop-1")
   assert stop.stop_requested is True and stop.outcome is None
-  assert store.run_blocker(
-      run, store.load_events_sync(session_id),
-      runs.read_host_boot_time()) is None
+  assert store.run_blocker(run, store.load_events_sync(session_id), runs.read_host_boot_time()) is None
   assert store.terminal_outcome(store.load_events_sync(session_id), "r1") is None
 
 

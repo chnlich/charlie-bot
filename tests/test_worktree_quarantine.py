@@ -6,9 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import (
-    build_worktree_cfg,
-)
+from conftest import build_worktree_cfg
 
 from src.core import git as git_module
 from src.core import init as init_module
@@ -118,7 +116,6 @@ async def test_quarantine_rejects_unexpected_residue_name(tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 # _remove_local_worktree_artifacts
 
-
 # ---------------------------------------------------------------------------
 # _quarantine_stale_failed_worktrees sweep
 # ---------------------------------------------------------------------------
@@ -165,7 +162,6 @@ async def test_sweep_quarantines_old_failed_worktree(tmp_path: Path, monkeypatch
 
 # ---------------------------------------------------------------------------
 # run_crash_recovery: interrupted-run reconcile (never kills) + sweep
-
 
 # ---------------------------------------------------------------------------
 # RUNNING_SCAN_WINDOW: stat-before-read gating

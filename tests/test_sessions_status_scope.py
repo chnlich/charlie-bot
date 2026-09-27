@@ -8,9 +8,7 @@ never enumerate the whole directory.
 from pathlib import Path
 
 import pytest
-from conftest import (
-    build_tui_sessions_cfg,
-)
+from conftest import build_tui_sessions_cfg
 from conftest import make_sessions_client as _build_client
 
 from src.core.models import CreateSessionRequest, SessionMetadata

@@ -219,5 +219,3 @@ async def test_delegate_task_verify_rejects_repo_path() -> None:
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == "verify delegations are repo-less; omit repo_path"
   session_mgr.get_session.assert_not_awaited()
-
-

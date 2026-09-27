@@ -18,9 +18,7 @@ from conftest import CODEX_BACKEND_OPTION, backend_option
 from conftest import make_sessions_client as _build_client
 
 from src.core.config import CharlieBotConfig
-from src.core.models import (
-    CreateSessionRequest,
-)
+from src.core.models import CreateSessionRequest
 from src.core.sessions import SessionManager
 
 
@@ -46,7 +44,6 @@ def _build_cfg(tmp_path: Path) -> tuple[CharlieBotConfig, Path]:
 
 # ---------------------------------------------------------------------------
 # Acceptance #1: guard ⟷ reachability through the real production functions
-
 
 # ---------------------------------------------------------------------------
 # Acceptance #3: §4.1 API contract

@@ -46,10 +46,6 @@ def test_parse_valid(tmp_path: Path) -> None:
   assert e.id == "profile/dark-mode"
 
 
-
-
-
-
 # --- load_store semantic validation ------------------------------------------
 
 
@@ -94,8 +90,6 @@ def test_load_store_rejects_invalid_entry(
   with pytest.raises(MemoryFormatError) as exc_info:
     load_store(tmp_path)
   assert expected_fragment in str(exc_info.value)
-
-
 
 
 # --- assemble_master ----------------------------------------------------------

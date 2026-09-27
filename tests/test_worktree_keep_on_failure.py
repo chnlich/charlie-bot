@@ -15,18 +15,14 @@ from src.core.improve_command import load_loop_state
 # ---------------------------------------------------------------------------
 # Part 5: artifact name set
 
-
 # ---------------------------------------------------------------------------
 # Part 1a: spawner keep-on-failure decision
-
 
 # ---------------------------------------------------------------------------
 # Part 4: spawner surfaces success-path cleanup failures
 
-
 # ---------------------------------------------------------------------------
 # Part 1b / Part 4: review keep-on-exhaustion + cleanup-failure surfacing
-
 
 # ---------------------------------------------------------------------------
 # Part 1c: improve loop keeps worktree on failure

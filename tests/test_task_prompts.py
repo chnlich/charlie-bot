@@ -194,6 +194,5 @@ async def test_staged_candidates_never_enter_startup_or_query(tmp_path: Path) ->
 # ---------------------------------------------------------------------------
 # Snapshot / hash contract
 
-
 # ---------------------------------------------------------------------------
 # Own-subtree scope: THIS NODE AND ITS DESCENDANTS

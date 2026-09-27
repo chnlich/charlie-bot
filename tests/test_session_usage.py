@@ -153,14 +153,11 @@ async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp
 # adjusts the reading only when it follows the selected assistant event and
 # carries post_tokens; otherwise the reading stays the assistant sum.
 
-
 # ---------------------------------------------------------------------------
 # Acceptance test 2: context_full from assistant model, not dict order
 
-
 # ---------------------------------------------------------------------------
 # Acceptance test 3: modelUsage absent -> context_full is the declared window
-
 
 # ---------------------------------------------------------------------------
 # Acceptance test 4: sub-agent and synthetic events are ignored
@@ -188,7 +185,6 @@ async def test_claude_tier_ignores_subagent_and_synthetic_assistant_events(tmp_p
 
 # ---------------------------------------------------------------------------
 # Acceptance test 5: result events but no usable assistant usage -> None fields
-
 
 # ---------------------------------------------------------------------------
 # Acceptance test 6: cost 0 -> None; positive cost sums
@@ -227,7 +223,6 @@ async def test_total_cost_across_results(
 # ---------------------------------------------------------------------------
 # Acceptance test 7: cost computed over the whole list; events param is gone
 
-
 # ---------------------------------------------------------------------------
 # Acceptance test 8: headless_claude_declared_window
 # ---------------------------------------------------------------------------
@@ -255,14 +250,11 @@ def test_declared_window_subtracts_reserves_from_declared_window(monkeypatch: py
 # ---------------------------------------------------------------------------
 # Acceptance test 8b: claude tier full / compact point per effective window
 
-
 # ---------------------------------------------------------------------------
 # Acceptance test 10: snapshot tier (opencode context_snapshot)
 
-
 # ---------------------------------------------------------------------------
 # Acceptance test 10a: snapshot tier is decoupled from Claude Code's reserves
-
 
 # ---------------------------------------------------------------------------
 # Latest-reading slot: the newest reading-bearing event decides the readout
@@ -338,26 +330,20 @@ async def test_empty_slot_keeps_context_unknown(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Acceptance test 9: codex candidate directories + model_auto_compact_token_limit
 
-
 # ---------------------------------------------------------------------------
 # Acceptance test 9b: codex unconfigured compaction logs no warning
-
 
 # ---------------------------------------------------------------------------
 # Acceptance test 9c: codex full = model_context_window, point = configured limit
 
-
 # ---------------------------------------------------------------------------
 # Codex native cost computation (unchanged behavior)
-
 
 # ---------------------------------------------------------------------------
 # Empty event list -> None
 
-
 # ---------------------------------------------------------------------------
 # Facts memo: rescan only on a changed events list
-
 
 # ---------------------------------------------------------------------------
 # Hit-on-loop: the facts memo's unchanged-list hit and small appended suffixes

@@ -182,7 +182,8 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
 
   async with fresh_master_state(session_id):
     task1 = asyncio.create_task(
-        master_cc.run_message(cfg, SessionMetadata(id=session_id, name="t"), "first", callbacks, ET.USER, skip_user_event=True))
+        master_cc.run_message(
+            cfg, SessionMetadata(id=session_id, name="t"), "first", callbacks, ET.USER, skip_user_event=True))
     assert await asyncio.wait_for(task1, timeout=5) == "cc-1"
 
     # For injections fired during the consumer's teardown awaits, the work item

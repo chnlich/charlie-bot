@@ -319,8 +319,9 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
           return BaseResolution(
               canonical=branch,
               start_point=f"origin/{branch}",
-              detail=(f"branch {branch} at origin tip {remote_sha[:12]} "
-                      f"(local {branch} at {local_sha[:12]} is behind, unused)"))
+              detail=(
+                  f"branch {branch} at origin tip {remote_sha[:12]} "
+                  f"(local {branch} at {local_sha[:12]} is behind, unused)"))
         if proc.returncode == 1:
           raise BaseBranchResolutionError(
               f"local {branch} ({local_sha[:12]}) differs from origin/{branch} ({remote_sha[:12]}). "

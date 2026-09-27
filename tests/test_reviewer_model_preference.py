@@ -71,8 +71,6 @@ def _make_original_thread(
   )
 
 
-
-
 # --- review.spawn_review_worker preference tests ---
 
 

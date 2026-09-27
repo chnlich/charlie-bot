@@ -1,6 +1,5 @@
 """Property tests for the spec-conformant SSE line splitter (src/core/sse.py)."""
 
-
 import pytest
 from conftest import FakeChunkedResponse
 

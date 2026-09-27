@@ -346,6 +346,7 @@ async def test_first_terminal_fact_wins_governs_followups(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_implement_delivery_requires_review_and_real_landing(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -537,6 +538,7 @@ async def _wait_for_parent_report(tree: TaskTreeManager, parent_id: str, timeout
     pytest.fail(f"the parent {parent_id} never received a failure report within {timeout}s")
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_bare_branch_base_behind_starts_from_origin_tip(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

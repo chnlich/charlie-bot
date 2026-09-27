@@ -222,6 +222,7 @@ def _send_input(client: TestClient, session_id: str, content: str, request_id: s
   return resp.json()
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_public_tui_task_full_route_under_scripted_terminal(tui_env, monkeypatch: pytest.MonkeyPatch) -> None:
   """Create → attach (stable task identity) → status → stop, then the durable

@@ -32,7 +32,8 @@ def run_node_js_test(node_test: Path, skip_reason: str) -> None:
 # Node suites that exceed the 1s unit budget on this measurement (a node
 # subprocess plus its own suite runtime): each carries the integration marker
 # via pytest.param below instead of dragging every suite's case over the cap.
-_INTEGRATION_SUITES = {"chat_session_bump.test.js"}
+_INTEGRATION_SUITES = {"chat_session_bump.test.js", "tailwind_class_coverage.test.js",
+                      "stream_incremental_parse.test.js"}
 
 # One entry per node suite under tests/: an omitted suite silently stops running, a duplicate entry runs twice.
 _NODE_TESTS = [

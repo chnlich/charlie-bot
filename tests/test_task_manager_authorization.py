@@ -221,6 +221,7 @@ async def three_manager_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   return cfg, session_mgr, tree, ids
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_implementation_blocked_until_real_user_authorizes_then_delegates_from_depth(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:

@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import plan_page_html
 from conftest import make_plan_setup as _setup
+from conftest import plan_page_html
 from conftest import write_plan_artifact as _write_artifact
 
 from src.core.config import CharlieBotConfig

@@ -22,7 +22,6 @@ from src.agents.worker import Worker
 from src.core.config import CharlieBotConfig
 from src.core.models import ThreadMetadata
 
-
 # The types that resolve a CLI binary in __init__ (via resolve_binary); the
 # other four never do and therefore never raise FileNotFoundError on build.
 BINARY_RESOLVING_TYPES = ["opencode", "antigravity", "codex", "gemini", "charlie-code"]

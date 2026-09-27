@@ -15,7 +15,6 @@ from conftest import cfg_with_repo as _cfg_with_repo
 from src.core import spawner
 from src.core.config import CharlieBotConfig
 
-
 # --- Fail-loud loader semantics -----------------------------------------------
 
 

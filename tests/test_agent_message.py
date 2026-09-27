@@ -38,7 +38,6 @@ from src.core.models import (
 )
 from src.core.sessions import SessionManager
 
-
 # ---------------------------------------------------------------------------
 # Gate: agent_message can neither mint nor revoke a takeoff window
 

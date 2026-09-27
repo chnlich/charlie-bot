@@ -33,13 +33,6 @@ worker-side section below.
 
 from __future__ import annotations
 
-from __future__ import annotations
-from collections import Counter
-from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 import asyncio
 import json
 import os
@@ -47,10 +40,14 @@ import signal
 import subprocess
 import sys
 import time
+from collections import Counter
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from structlog.testing import capture_logs
-
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     LITELLM_503_ERROR_MESSAGE,
@@ -67,16 +64,27 @@ from conftest import (
     read_chat_events,
     user_event,
 )
+from structlog.testing import capture_logs
 
+from src.agents import master_cc, master_cc_queue, master_cc_state
+from src.agents.backends.base import AgentBackend
 from src.agents.worker import QuotaExhaustedError, Worker
 from src.core import event_types as ET
 from src.core import finalize_effects, runs
 from src.core import init as init_module
+from src.core import process as core_process
 from src.core import spawner as spawner_module
 from src.core.config import CharlieBotConfig
 from src.core.git import git_create_worktree, git_worktree_dir_name
+from src.core.message_aggregator import MessageAggregator
 from src.core.models import (
+    BackendOption,
+    CcClaudeBackend,
     CreateSessionRequest,
+    MasterRunRecord,
+    OpencodeBackend,
+    SessionCallbacks,
+    SessionMetadata,
     SpawnRequest,
     TaskType,
     ThreadMetadata,
@@ -84,25 +92,9 @@ from src.core.models import (
     utc_now,
 )
 from src.core.process import kill_process_group
-from src.core.sessions import SessionManager
-from src.core.threads import ThreadManager
-from src.agents import master_cc, master_cc_queue
-from src.core.message_aggregator import MessageAggregator
-from src.core.models import (
-    CcClaudeBackend,
-    MasterRunRecord,
-    OpencodeBackend,
-    SessionCallbacks,
-    SessionMetadata,
-)
-from src.core.sessions import HISTORY_LOCATION_NOTE
-from src.agents import master_cc_state
-from src.core import process as core_process
-from src.core.models import (
-    BackendOption,
-)
-from src.agents.backends.base import AgentBackend
+from src.core.sessions import HISTORY_LOCATION_NOTE, SessionManager
 from src.core.spawner import resume_worker as _real_resume_worker
+from src.core.threads import ThreadManager
 
 # Crash-recovery protocol helpers, single-homed here for the restart tests
 # (moved from tests/conftest.py when the four restart files merged). The A/B

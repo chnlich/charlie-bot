@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 import pytest
 
 from src.core.verify_trailer import verify_result_trailer_error

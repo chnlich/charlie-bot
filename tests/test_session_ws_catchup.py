@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 import pytest
 from conftest import FakeWebSocket, assistant_text_event, scheduled_trigger_event, user_event
 

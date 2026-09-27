@@ -84,14 +84,6 @@ DIED_WITHOUT_RESULT_REASON = "process exited without a final result event"
 UNCOVERED_ALIVE_REASON = "uncovered-alive"
 RAW_MISSING_ALIVE_REASON = "raw-missing-alive"
 
-# Improve-loop iteration threads are identified by their description prefix;
-# the loop task itself does not survive a restart (loop continuation is an
-# explicit non-goal), so these threads are finalized, never respawned, and
-# the shutdown path terminates their processes along with the loop. The
-# description producer (improve_command.py) builds the prefix from this
-# constant, so producer and matchers cannot drift.
-IMPROVE_ITERATION_PREFIX = "Iterative improvement — iteration"
-
 
 def backend_type(cfg: CharlieBotConfig, backend_id: str | None) -> str | None:
   """The configured transport type of ``backend_id``; None when unset or unknown."""

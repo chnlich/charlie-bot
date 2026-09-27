@@ -26,6 +26,10 @@ Follow these steps exactly:
 1. `cd` into the assigned worktree (Worktree above) — do ALL your work inside this worktree.
 2. Commit your changes with descriptive messages.
    Use structured commit messages: first line is a short summary, then a blank line, then a "Why:" line explaining the business reason for the change.
+3. Test discipline — add a test only for behavior that would break silently and cost real damage
+   (a core-flow contract, a data-safety or permission boundary, a parser against real input);
+   extend an existing test before adding a new file; never assert the literal wording of prompts,
+   docs or UI text.
 
 <!-- section: workflow_implement -->
 STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.

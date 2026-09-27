@@ -805,6 +805,13 @@ def assert_cli_reject(
   _assert_stderr_fragments(capsys, *err_fragments)
 
 
+def assert_cli_reject_exit2(
+    exc_info: pytest.ExceptionInfo[SystemExit], capsys: pytest.CaptureFixture[str], *err_fragments: str) -> None:
+  """Same as assert_cli_reject with the exit code pinned at 2 (CLI usage error, e.g. bad file input)."""
+  assert exc_info.value.code == 2
+  _assert_stderr_fragments(capsys, *err_fragments)
+
+
 def make_home_config(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig rooted at tmp_path/"charliebot-home". Leaves the home dir un-created:
   most sites never touch disk, and a site that does mkdirs it itself. One Opus backend

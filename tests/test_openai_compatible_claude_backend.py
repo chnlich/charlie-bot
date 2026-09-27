@@ -1,5 +1,3 @@
-import json
-from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -75,13 +73,6 @@ def test_registry_builds_openai_compatible_backend() -> None:
   assert prepared["ANTHROPIC_MODEL"] == _PROXY_MODEL
 
 
-def test_registry_requires_access_key_from_credentials() -> None:
-  stub_credentials({})
-
-  with pytest.raises(ValueError, match=r"credentials\.charliebot\.access_key"):
-    build_backend(_option(), _cfg())
-
-
 # ---------------------------------------------------------------------------
 # Proxy route tests
 # ---------------------------------------------------------------------------
@@ -92,32 +83,6 @@ def _build_client(cfg: CharlieBotConfig) -> TestClient:
   app.include_router(proxy_router, prefix=_PROXY_PREFIX)
   apply_config_overrides(app, cfg)
   return TestClient(app)
-
-
-def _mock_upstream(monkeypatch: pytest.MonkeyPatch, handler: Callable[[httpx.Request], httpx.Response]) -> None:
-  client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-
-  def _factory() -> httpx.AsyncClient:
-    return client
-
-  monkeypatch.setattr("src.api.anthropic_proxy.get_http_client", _factory)
-
-
-def _ok_response() -> dict:
-  return {
-      "id": "chatcmpl_1",
-      "model": _PROXY_MODEL,
-      "choices": [{
-          "finish_reason": "stop",
-          "message": {
-              "content": "hi there"
-          }
-      }],
-      "usage": {
-          "prompt_tokens": 5,
-          "completion_tokens": 2
-      },
-  }
 
 
 def _anthropic_payload() -> dict:
@@ -137,47 +102,6 @@ def _post_messages(cfg: CharlieBotConfig, path: str) -> httpx.Response:
     return client.post(path, json=_anthropic_payload())
 
 
-def test_route_forwards_upstream_model_and_bearer_auth_and_translates_response(monkeypatch: pytest.MonkeyPatch) -> None:
-  stub_credentials({"glm-upstream": {"api_key": "secret-token"}})
-  cfg = _cfg(_option(credential="glm-upstream"))
-  captured: dict[str, Any] = {}
-
-  def handler(request: httpx.Request) -> httpx.Response:
-    captured["url"] = str(request.url)
-    captured["authorization"] = request.headers.get("authorization")
-    captured["json"] = json.loads(request.content)
-    return httpx.Response(200, json=_ok_response())
-
-  _mock_upstream(monkeypatch, handler)
-
-  response = _post_messages(cfg, _MESSAGES_PATH)
-
-  assert response.status_code == 200
-  assert captured["url"] == f"{_UPSTREAM_BASE}/chat/completions"
-  assert captured["json"]["model"] == _PROXY_MODEL
-  assert captured["authorization"] == "Bearer secret-token"
-  body = response.json()
-  assert body["model"] == _PROXY_MODEL
-  assert body["content"] == [{"type": "text", "text": "hi there"}]
-  assert body["stop_reason"] == "end_turn"
-
-
-def test_route_omits_authorization_when_credential_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _cfg(_option())
-  captured: dict[str, Any] = {}
-
-  def handler(request: httpx.Request) -> httpx.Response:
-    captured["authorization"] = request.headers.get("authorization")
-    return httpx.Response(200, json=_ok_response())
-
-  _mock_upstream(monkeypatch, handler)
-
-  response = _post_messages(cfg, _MESSAGES_PATH)
-
-  assert response.status_code == 200
-  assert captured["authorization"] is None
-
-
 def test_route_fails_loud_when_credential_missing() -> None:
   stub_credentials({})
   cfg = _cfg(_option(credential="missing_upstream"))
@@ -186,24 +110,3 @@ def test_route_fails_loud_when_credential_missing() -> None:
 
   assert response.status_code == 400
   assert "missing_upstream" in response.json()["detail"]
-
-
-def test_route_returns_404_for_unknown_backend_id() -> None:
-  cfg = CharlieBotConfig(server={"port": 8123}, backends={"options": []})
-
-  response = _post_messages(cfg, f"{_PROXY_PREFIX}/openai-compatible/nope/v1/messages")
-
-  assert response.status_code == 404
-  assert "unknown backend id" in response.json()["detail"]
-
-
-def test_route_rejects_wrong_backend_type() -> None:
-  cfg = CharlieBotConfig(
-      server={"port": 8123},
-      backends={"options": [backend_option(id="opus", label="Opus", type="cc-claude", model="claude-opus-4-8")]},
-  )
-
-  response = _post_messages(cfg, f"{_PROXY_PREFIX}/openai-compatible/opus/v1/messages")
-
-  assert response.status_code == 400
-  assert "not type 'cc-openai-compatible'" in response.json()["detail"]

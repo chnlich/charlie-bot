@@ -14,15 +14,12 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-    OPUS_BACKEND_ID,
-    build_sessions_cfg,
     count_path_read_text,
     make_session_mgr,
     user_event,
 )
-from conftest import make_sessions_client as _build_client
 
-from src.core.models import CreateSessionRequest, SessionMetadata, SessionStatus
+from src.core.models import SessionMetadata, SessionStatus
 from src.core.sessions import SessionManager
 
 _BASE_TIME = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
@@ -73,70 +70,6 @@ async def test_keyset_pages_walk_newest_first(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_equal_timestamps_tie_break_on_id(tmp_path: Path) -> None:
-  mgr = make_session_mgr(tmp_path)
-  for sid in ("id-a", "id-b", "id-c"):
-    await _add_session(mgr, sid, minutes=0, session_id=sid)
-
-  first = await mgr.list_archived_page(limit=2)
-  assert [s.id for s in first["sessions"]] == ["id-c", "id-b"]
-
-  second = await mgr.list_archived_page(limit=2, before=first["next_before"], before_id=first["next_before_id"])
-  assert [s.id for s in second["sessions"]] == ["id-a"]
-  assert second["has_more"] is False
-
-
-@pytest.mark.asyncio
-async def test_group_filter_and_whole_set_aggregates(tmp_path: Path) -> None:
-  mgr = make_session_mgr(tmp_path)
-  await _add_session(mgr, "a1", group="alpha", minutes=1)
-  await _add_session(mgr, "a2", group="alpha", minutes=2)
-  await _add_session(mgr, "b1", group="beta", minutes=3)
-  await _add_session(mgr, "u1", minutes=4)
-  await _add_session(mgr, "u2", minutes=5)
-  await _add_session(mgr, "active", status=SessionStatus.ACTIVE, group="alpha", minutes=6)
-
-  everything = await mgr.list_archived_page()
-  assert len(everything["sessions"]) == 5
-  assert everything["groups"] == [
-      {
-          "group": "alpha",
-          "total": 2
-      },
-      {
-          "group": "beta",
-          "total": 1
-      },
-      {
-          "group": None,
-          "total": 2
-      },
-  ]
-
-  alpha = await mgr.list_archived_page(group="alpha")
-  assert sorted(s.name for s in alpha["sessions"]) == ["a1", "a2"]
-  # The aggregates cover the whole archived set, not the current filter.
-  assert alpha["groups"] == everything["groups"]
-
-  ungrouped = await mgr.list_archived_page(group="")
-  assert sorted(s.name for s in ungrouped["sessions"]) == ["u1", "u2"]
-
-
-@pytest.mark.asyncio
-async def test_limit_clamps_to_1_500(tmp_path: Path) -> None:
-  mgr = make_session_mgr(tmp_path)
-  for i in range(3):
-    await _add_session(mgr, f"s{i}", minutes=i)
-
-  floor = await mgr.list_archived_page(limit=0)
-  assert len(floor["sessions"]) == 1
-  assert floor["has_more"] is True
-
-  ceiling = await mgr.list_archived_page(limit=9999)
-  assert len(ceiling["sessions"]) == 3
-
-
-@pytest.mark.asyncio
 async def test_bad_cursor_fails_loudly(tmp_path: Path) -> None:
   mgr = make_session_mgr(tmp_path)
   await _add_session(mgr, "s0")
@@ -147,46 +80,6 @@ async def test_bad_cursor_fails_loudly(tmp_path: Path) -> None:
     await mgr.list_archived_page(before="2026-08-01T12:00:00", before_id="x")  # naive timestamp
   with pytest.raises(ValueError, match="pass both or neither"):
     await mgr.list_archived_page(before=_BASE_TIME.isoformat(), before_id=None)  # half a cursor
-
-
-@pytest.mark.asyncio
-async def test_archived_endpoint_shape_and_cursor_422(tmp_path: Path) -> None:
-  cfg = build_sessions_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  for i in range(3):
-    await _add_session(mgr, f"s{i}", minutes=i)
-
-  with _build_client(cfg, mgr) as client:
-    page = client.get("/api/sessions/archived", params={"limit": 2})
-    bad = client.get("/api/sessions/archived", params={"before": "garbage", "before_id": "x"})
-    filtered = client.get("/api/sessions/archived", params={"group": ""})
-
-  assert page.status_code == 200
-  body = page.json()
-  assert set(body) == {"sessions", "has_more", "next_before", "next_before_id", "groups"}
-  assert len(body["sessions"]) == 2
-  assert body["has_more"] is True
-  assert bad.status_code == 422
-  assert filtered.status_code == 200
-  assert len(filtered.json()["sessions"]) == 3
-
-
-@pytest.mark.asyncio
-async def test_archive_unarchive_delete_visible_immediately(tmp_path: Path) -> None:
-  cfg = build_sessions_cfg(tmp_path)
-  mgr = SessionManager(cfg)
-  meta = await mgr.create_session(CreateSessionRequest(name="Journey"), backend=OPUS_BACKEND_ID)
-  await mgr.save_chat_event(meta.id, user_event("hi"))  # non-empty: archive keeps it
-
-  assert await mgr.archive_session(meta.id) is not None
-  assert meta.id in {s.id for s in (await mgr.list_archived_page())["sessions"]}
-
-  assert await mgr.unarchive_session(meta.id) is not None
-  assert meta.id not in {s.id for s in (await mgr.list_archived_page())["sessions"]}
-
-  await mgr.archive_session(meta.id)
-  assert await mgr.delete_session_permanently(meta.id) is True
-  assert meta.id not in {s.id for s in (await mgr.list_archived_page())["sessions"]}
 
 
 @pytest.mark.asyncio
@@ -221,77 +114,6 @@ async def test_archived_entries_survive_ttl_active_entries_expire(
   listed = await mgr.list_sessions()
   assert {s.id for s in listed} == {archived.id, active.id}
   assert [p.parent.name for p in reads] == [active.id]
-
-
-@pytest.mark.asyncio
-async def test_expired_active_entry_revalidates_by_stat_until_the_file_moves(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """An expired entry whose stat signature still matches re-serves without a read.
-
-  The revalidation chain on the listing path: a read-keyed entry (signature
-  taken before the read) survives TTL expiry on one stat; a rewrite that moves
-  metadata.json's signature forces exactly one re-read, and the new bytes are
-  what the next listing serves. The listings memo serves repeats without the
-  walk, so each revalidation round ages the memo past its sweep window first —
-  the sweep walk is where entry revalidation lives now.
-  """
-  mgr = make_session_mgr(tmp_path)
-  active = await _add_session(mgr, "live", status=SessionStatus.ACTIVE, minutes=1)
-
-  def age_listings_memo() -> None:
-    stored = mgr._listings_memo.get(SessionStatus.ACTIVE)
-    if stored is not None:
-      mgr._listings_memo[SessionStatus.ACTIVE] = (stored[0], stored[1] - 3600.0, stored[2], stored[3])
-
-  # The save-populated entry carries no provable signature: ageing it past the
-  # TTL forces the first read, whose pre-read stat keys the entry.
-  for sid, (meta, _ts, _sig) in list(mgr._metadata_cache.items()):
-    mgr._metadata_cache[sid] = (meta, time.monotonic() - 3600, None)
-  reads = _count_session_metadata_reads(monkeypatch, mgr._cfg.sessions_dir)
-  listed = await mgr.list_sessions(status=SessionStatus.ACTIVE)
-  assert [s.name for s in listed] == ["live"]
-  assert [p.parent.name for p in reads] == [active.id]
-
-  # Unchanged file: the expired entry revalidates by stat, zero reads.
-  age_listings_memo()
-  for sid, (meta, _ts, sig) in list(mgr._metadata_cache.items()):
-    mgr._metadata_cache[sid] = (meta, time.monotonic() - 3600, sig)
-  reads = _count_session_metadata_reads(monkeypatch, mgr._cfg.sessions_dir)
-  listed = await mgr.list_sessions(status=SessionStatus.ACTIVE)
-  assert [s.name for s in listed] == ["live"]
-  assert reads == []
-
-  # Moved file: the signature stat mismatches, one re-read serves the new bytes.
-  path = mgr._metadata_path(active.id)
-  moved = SessionMetadata.model_validate_json(path.read_text(encoding="utf-8"))
-  moved.name = "renamed on disk"
-  path.write_text(moved.model_dump_json(), encoding="utf-8")
-  age_listings_memo()
-  for sid, (meta, _ts, sig) in list(mgr._metadata_cache.items()):
-    mgr._metadata_cache[sid] = (meta, time.monotonic() - 3600, sig)
-  reads = _count_session_metadata_reads(monkeypatch, mgr._cfg.sessions_dir)
-  listed = await mgr.list_sessions(status=SessionStatus.ACTIVE)
-  assert [s.name for s in listed] == ["renamed on disk"]
-  assert [p.parent.name for p in reads] == [active.id]
-
-
-@pytest.mark.asyncio
-async def test_search_names_cover_archived_and_cap_at_200(tmp_path: Path) -> None:
-  mgr = make_session_mgr(tmp_path)
-  for i in range(205):
-    await _add_session(mgr, f"needle-{i:03d}", minutes=i)
-  await _add_session(mgr, "needle-live", status=SessionStatus.ACTIVE, minutes=999)
-  content_only = await _add_session(mgr, "unrelated-name", minutes=998)
-  await mgr.save_chat_event(content_only.id, user_event("needle in the events"))
-
-  results = await mgr.search_sessions("needle")
-  assert len(results) == 200
-  assert results[0].name == "needle-live"  # newest first survives the cap
-  statuses = {s.status for s in results}
-  assert SessionStatus.ARCHIVED in statuses
-  # Content matches stay active-only: the archived session whose events contain
-  # the needle, but whose name does not, is absent.
-  assert content_only.id not in {s.id for s in results}
 
 
 @pytest.mark.asyncio

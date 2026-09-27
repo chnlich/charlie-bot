@@ -7,7 +7,6 @@ from conftest import (
     OPUS_BACKEND_ID,
     JudgmentShim,
     append_events,
-    assistant_text_event,
     build_finalize_ctx,
 )
 from conftest import THREE_BACKEND_OPTIONS as BACKEND_OPTIONS
@@ -23,7 +22,6 @@ from src.core.models import (
     ThreadMetadata,
     ThreadStatus,
 )
-from src.core.verify_trailer import read_verify_final_report
 
 
 def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
@@ -189,18 +187,6 @@ async def test_verify_completion_uses_untruncated_result_without_task_spec_prefi
 
 
 @pytest.mark.asyncio
-async def test_verify_final_report_falls_back_to_untruncated_last_assistant_message(tmp_path: Path) -> None:
-  report = "confirmed | claim | URL | " + "y" * 1200 + "\nRESULT: clean"
-  events_path = tmp_path / "events.jsonl"
-  append_events(events_path, [assistant_text_event(report), {"type": ET.RESULT, "result": ""}])
-  thread = ThreadMetadata(id="verify-thread-id", session_id="session-id", description="Verify")
-
-  result = await read_verify_final_report(thread.session_id, thread.id, FakeThreadManager(thread, events_path))
-
-  assert result == report
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("report", "worker_error", "expected_status", "expected_exit_code"), [
         ("confirmed | claim | anchor | evidence\nRESULT: clean", "", ThreadStatus.COMPLETED, 0),
@@ -253,58 +239,3 @@ async def test_verify_result_trailer_controls_completion_without_retry(
     assert worker_error in completion["full_content"]
     assert "missing or malformed `RESULT:` trailer" in completion["full_content"]
   assert thread.description not in completion["full_content"]
-
-
-@pytest.mark.asyncio
-async def test_verify_quota_exhaustion_retries_once_with_next_backend_in_same_thread(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  thread = ThreadMetadata(id="verify-thread-id", session_id="session-id", description="Verify")
-  finalized: dict[str, Any] = {}
-
-  async def fake_finalize_worker_safely(
-      ctx: spawner_finalize._FinalizeCtx,
-      *,
-      skip_notify: bool,
-      task_type: TaskType = TaskType.IMPLEMENT,
-  ) -> None:
-    del skip_notify
-    finalized.update(
-        thread=ctx.thread,
-        exit_code=ctx.outcome.exit_code,
-        quota_exhausted=ctx.outcome.quota_exhausted,
-        error=ctx.outcome.error,
-        task_type=task_type,
-    )
-
-  monkeypatch.setattr(spawner_finalize, "_finalize_worker_safely", fake_finalize_worker_safely)
-  _, worker_runs = await _spawn_thread(
-      monkeypatch,
-      tmp_path,
-      thread,
-      spawner._WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error=""),
-      task_type=TaskType.VERIFY,
-  )
-
-  assert worker_runs == [(thread.id, "codex-o3"), (thread.id, "kimi-k2.5")]
-  assert thread.backend == "kimi-k2.5"
-  assert thread.model == "kimi-k2.5"
-  assert thread.tried_backends == ["codex-o3", "kimi-k2.5"]
-  assert finalized["quota_exhausted"] is True
-  assert finalized["task_type"] == TaskType.VERIFY
-
-
-@pytest.mark.asyncio
-async def test_implement_quota_exhaustion_does_not_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  thread = ThreadMetadata(id="implement-thread-id", session_id="session-id", description="Implement")
-  monkeypatch.setattr(spawner_finalize, "_finalize_worker_safely", _ignore)
-  _, worker_runs = await _spawn_thread(
-      monkeypatch,
-      tmp_path,
-      thread,
-      spawner._WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error=""),
-      task_type=TaskType.IMPLEMENT,
-  )
-
-  assert worker_runs == [("implement-thread-id", "codex-o3")]

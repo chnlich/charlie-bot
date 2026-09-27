@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import uuid
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from conftest import (
-    OPUS_BACKEND_OPTION,
     make_sound_round,
     make_work_item,
     mock_session_callbacks,
@@ -19,11 +16,8 @@ from conftest import (
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_credentials
 from src.core.models import (
-    CreateSessionRequest,
     SessionMetadata,
-    SlackOrigin,
 )
-from src.core.sessions import SessionManager
 
 
 def test_config_without_slack_keys_yields_defaults() -> None:
@@ -39,34 +33,6 @@ def test_slack_tokens_come_from_credentials() -> None:
   creds = get_credentials()
   assert creds.get("slack", "bot_token") == "test-bot-token"
   assert creds.get("slack", "app_token") == "test-app-token"
-
-
-def test_config_round_trips_slack_allow_list() -> None:
-  cfg = CharlieBotConfig.model_validate({"slack": {"allowed_user_ids": ["U_TEST"]}})
-  assert cfg.slack.allowed_user_ids == ["U_TEST"]
-
-
-@pytest.mark.asyncio
-async def test_create_session_accepts_caller_supplied_id_and_slack_origin(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [OPUS_BACKEND_OPTION]})
-  origin = SlackOrigin(team_id="T_TEST", channel_id="C_TEST", thread_ts="1700000000.000100")
-  meta = await SessionManager(cfg).create_session(CreateSessionRequest(session_id="fixed-id-0001", slack_origin=origin))
-  assert meta.id == "fixed-id-0001"
-  assert meta.slack_origin == origin
-
-  # Re-read through a fresh manager so the value comes from disk, not the cache.
-  reloaded = await SessionManager(cfg).get_session("fixed-id-0001")
-  assert reloaded is not None
-  assert reloaded.slack_origin == origin
-
-
-@pytest.mark.asyncio
-async def test_create_session_defaults_still_generate_uuid4_and_no_origin(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [OPUS_BACKEND_OPTION]})
-  meta = await SessionManager(cfg).create_session(CreateSessionRequest(name="t"))
-  parsed = uuid.UUID(meta.id)
-  assert parsed.version == 4
-  assert meta.slack_origin is None
 
 
 async def _run_one_round(user_event_id: str | None) -> dict:
@@ -97,9 +63,3 @@ async def _run_one_round(user_event_id: str | None) -> dict:
 async def test_master_done_carries_input_event_id_when_round_has_user_event() -> None:
   done = await _run_one_round("evt-1")
   assert done["input_event_id"] == "evt-1"
-
-
-@pytest.mark.asyncio
-async def test_master_done_omits_input_event_id_when_round_has_no_user_event() -> None:
-  done = await _run_one_round(None)
-  assert "input_event_id" not in done

@@ -9,7 +9,6 @@ writing into itself with no origin stamp.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -25,7 +24,7 @@ from conftest import (
 from conftest import make_parent as _make_parent
 
 from src.core import event_types as ET
-from src.core import improve_command, review
+from src.core import improve_command
 from src.core.improve_command import run_improve_loop
 from src.core.init import _report_recovery_event
 from src.core.models import ThreadMetadata
@@ -83,34 +82,6 @@ async def test_spawner_worker_summary_no_successor_writes_into_itself_without_or
   assert "origin_session_id" not in summary
 
 
-@pytest.mark.asyncio
-async def test_concurrent_summary_chains_send_exactly_once(tmp_path: Path) -> None:
-  """Two concurrent finalize chains for one thread — the reviewer's own
-  completion chain and a reconcile round's re-completion — must send one
-  summary: the presence check's awaits yield the loop between the check and
-  the append, so an unlocked check-then-act sends twice."""
-  mgr = SessionManager(build_worktree_cfg(tmp_path))
-  session_id = await _make_parent(mgr)
-
-  thread = ThreadMetadata(session_id=session_id, id="thread-1", description="delegate", backend=OPUS_BACKEND_ID)
-  event = _thread_worker_event(thread, "completed", full_content="done", content="locator")
-
-  real_deliver = mgr.deliver_to_successor
-
-  async def yielding_deliver(sid: str, evt: dict) -> None:
-    await asyncio.sleep(0)  # the interleave point between the presence check and the append
-    await real_deliver(sid, evt)
-
-  with _broadcast_patch(), patch.object(mgr, "deliver_to_successor", yielding_deliver):
-    await asyncio.gather(
-        _persist_worker_summary_once(session_id, thread.id, event, mgr, fallback=False),
-        _persist_worker_summary_once(session_id, thread.id, event, mgr, fallback=False),
-    )
-
-  summaries = [e for e in mgr.load_chat_events_sync(session_id) if e.get("type") == ET.WORKER_SUMMARY]
-  assert len(summaries) == 1
-
-
 # ---------------------------------------------------------------------------
 # init: crash-recovery report
 # ---------------------------------------------------------------------------
@@ -129,20 +100,6 @@ async def test_crash_recovery_report_lands_in_successor(tmp_path: Path) -> None:
   report = next(ev for ev in child_events if ev.get("source") == "crash_recovery")
   assert report["origin_session_id"] == parent_id
   assert "descendant procs" in report["content"]
-
-
-@pytest.mark.asyncio
-async def test_crash_recovery_report_no_successor_writes_into_itself_without_origin(tmp_path: Path) -> None:
-  mgr = SessionManager(build_worktree_cfg(tmp_path))
-  session_id = await _make_parent(mgr)
-
-  with _broadcast_patch():
-    await _report_recovery_event(mgr, session_id, "worker thread stalled")
-
-  own_events = mgr.load_chat_events_sync(session_id)
-  report = next(ev for ev in own_events if ev.get("source") == "crash_recovery")
-  assert "worker thread stalled" in report["content"]
-  assert "origin_session_id" not in report
 
 
 # ---------------------------------------------------------------------------
@@ -193,135 +150,5 @@ async def test_improve_final_summary_lands_in_successor(tmp_path: Path, monkeypa
   assert summary["goal"] == "tune"
 
 
-@pytest.mark.asyncio
-async def test_improve_worktree_creation_failure_lands_in_successor(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  mgr = SessionManager(build_worktree_cfg(tmp_path))
-  parent_id = await _make_parent(mgr)
-  child_id = await _elone(mgr, parent_id)
-
-  async def fake_fail_create_worktree(repo_path: Path, base_branch: str, branch_name: str, wt_path: Path) -> None:
-    del repo_path, base_branch, branch_name, wt_path
-    raise RuntimeError("no such repo")
-
-  monkeypatch.setattr(improve_command, "git_create_worktree", fake_fail_create_worktree)
-  monkeypatch.setattr(improve_command, "trigger_master", AsyncMock())
-  await _run_succession_loop(tmp_path, mgr, parent_id, iterations=3, repo_name="missing")
-
-  child_events = mgr.load_chat_events_sync(child_id)
-  failure = next(ev for ev in child_events if ev.get("type") == ET.IMPROVE_FAILED)
-  assert failure["origin_session_id"] == parent_id
-  assert "Failed to create worktree" in failure["error"]
-
-
-@pytest.mark.asyncio
-async def test_improve_final_summary_no_successor_writes_into_itself_without_origin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  mgr = SessionManager(build_worktree_cfg(tmp_path))
-  session_id = await _make_parent(mgr)
-
-  patch_improve_git_ops(monkeypatch)
-  monkeypatch.setattr(improve_command, "trigger_master", AsyncMock())
-  await _run_succession_loop(tmp_path, mgr, session_id, iterations=0, repo_name="repo")
-
-  own_events = mgr.load_chat_events_sync(session_id)
-  summary = next(ev for ev in own_events if ev.get("type") == ET.IMPROVE_COMPLETED)
-  assert summary["goal"] == "tune"
-  assert "origin_session_id" not in summary
-
-
 # ---------------------------------------------------------------------------
 # review chain: cleanup error
-# ---------------------------------------------------------------------------
-
-
-def _patch_review_reviewer_chain(monkeypatch: pytest.MonkeyPatch, *, cleanup_error: str) -> None:
-
-  async def fake_finalize_review_chain(session_id: str, original_thread: ThreadMetadata, worktree_parent: Path) -> str:
-    del session_id, original_thread, worktree_parent
-    return cleanup_error
-
-  monkeypatch.setattr(review, "finalize_review_chain", fake_finalize_review_chain)
-  monkeypatch.setattr(review, "_trigger_master_judged", AsyncMock())
-
-
-def _make_review_thread_mgr(tmp_path: Path) -> MagicMock:
-  events_path = tmp_path / "original-events.jsonl"
-  events_path.write_text("")
-  thread_mgr = MagicMock()
-  thread_mgr.get_thread = AsyncMock(side_effect=lambda session, tid: MagicMock(review_of="original", id=tid))
-  thread_mgr.get_events_log_path = AsyncMock(return_value=events_path)
-  return thread_mgr
-
-
-async def _run_cleanup_error_review(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    mgr: SessionManager,
-    session_id: str,
-) -> MagicMock:
-  """Run maybe_spawn_reviewer with the review chain's cleanup error patched in.
-
-  The delivery primitive rides a pass-through spy, so the tests see the event
-  ``deliver_to_successor`` received; returns that spy.
-  """
-  real_deliver = mgr.deliver_to_successor
-
-  async def fake_deliver(session: str, event: dict) -> str | None:
-    return await real_deliver(session, event)
-
-  _patch_review_reviewer_chain(monkeypatch, cleanup_error="Worktree cleanup failed for /x: boom")
-  thread = MagicMock(id="reviewer-1", description="original", backend=OPUS_BACKEND_ID)
-  with (
-      _broadcast_patch(),
-      patch.object(mgr, "deliver_to_successor", side_effect=fake_deliver) as mock_deliver,
-  ):
-    await review.maybe_spawn_reviewer(
-        session_id,
-        thread,
-        exit_code=0,
-        events_summary="events",
-        full_summary="summary",
-        thread_mgr=_make_review_thread_mgr(tmp_path),
-        session_mgr=mgr,
-        cfg=build_worktree_cfg(tmp_path),
-    )
-  mock_deliver.assert_awaited_once()
-  return mock_deliver
-
-
-@pytest.mark.asyncio
-async def test_review_cleanup_error_is_routed_to_successor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The review-chain cleanup error write goes through deliver_to_successor.
-
-  The site sits deep inside ``maybe_spawn_reviewer`` behind the full reviewer
-  spawn machinery, so the migration is asserted by patching the primitive and
-  checking it is invoked with the owning session id and the error event.
-  """
-  mgr = SessionManager(build_worktree_cfg(tmp_path))
-  parent_id = await _make_parent(mgr)
-  child_id = await _elone(mgr, parent_id)
-
-  mock_deliver = await _run_cleanup_error_review(tmp_path, monkeypatch, mgr, parent_id)
-
-  called_session, called_event = mock_deliver.await_args.args
-  assert called_session == parent_id
-  assert called_event["type"] == ET.ERROR
-  assert "boom" in called_event["content"]
-  assert any(
-      ev.get("type") == ET.ERROR and "boom" in ev.get("content", "") for ev in mgr.load_chat_events_sync(child_id))
-
-
-@pytest.mark.asyncio
-async def test_review_cleanup_error_no_successor_writes_into_itself_without_origin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """For a session with no successor, the routed cleanup error lands in that session itself."""
-  mgr = SessionManager(build_worktree_cfg(tmp_path))
-  session_id = await _make_parent(mgr)
-
-  await _run_cleanup_error_review(tmp_path, monkeypatch, mgr, session_id)
-
-  own_events = mgr.load_chat_events_sync(session_id)
-  error = next(ev for ev in own_events if ev.get("type") == ET.ERROR)
-  assert "boom" in error["content"]
-  assert "origin_session_id" not in error

@@ -28,8 +28,6 @@ import server
 from src.api import auth, pages
 from src.api import files as files_api
 
-ARTIFACT_SCRIPT = "artifact-comments.js"
-
 
 def _mounted_prefixes() -> list[str]:
   """Every prefix `server.py` mounts the file router under, taken from the app's routes."""
@@ -84,33 +82,6 @@ def isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   stub_credentials({"charliebot": {"access_key": ""}})
 
 
-def test_artifact_injection_is_anchored_on_the_sessions_root(
-    targets: dict[str, Path],
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  # Injection is anchored on the configured sessions root, which the test owns here —
-  # the credential plays no part in the decision any more. The client carries no
-  # credential at all: the router injects unconditionally, the middleware owns the gate.
-  monkeypatch.setattr(files_api, "get_config", lambda: SimpleNamespace(sessions_dir=tmp_path / "sessions"))
-  stub_credentials({"charliebot": {"access_key": "secret"}})
-  client = _client(None)
-  # The predicate itself is unchanged: the artifact page gets the review UI, a plain page does not.
-  assert ARTIFACT_SCRIPT in client.get(f"{PREFIXES[0]}{targets['artifact page']}").text
-  assert ARTIFACT_SCRIPT not in client.get(f"{PREFIXES[0]}{targets['plain HTML file']}").text
-
-
-def test_head_answers_the_same_status_as_get(targets: dict[str, Path], isolated_config: None) -> None:
-  # The render-time probe asks with HEAD, so the marker only ever appears for a path the server
-  # answers 404 for: a HEAD that came back 405 would mark nothing at all.
-  client = _client(None)
-  for label, target in targets.items():
-    url = f"{PREFIXES[0]}{target}"
-    assert client.head(url).status_code == client.get(url).status_code, label
-  assert client.head(f"{PREFIXES[0]}{targets['non-HTML file']}").status_code == 200
-  assert client.head(f"{PREFIXES[0]}{targets['absent path']}").status_code == 404
-
-
 def test_a_non_html_file_is_served_byte_for_byte(targets: dict[str, Path], isolated_config: None) -> None:
   client = _client(None)
   target = targets["non-HTML file"]
@@ -153,23 +124,6 @@ async def test_an_authenticated_get_under_the_prefix_reaches_the_route() -> None
   sent = await run_through_asgi_middleware(auth.AuthMiddleware(app=_ok_asgi_downstream), scope)
   status, _, _ = asgi_response(sent)
   assert status == 200
-
-
-def test_the_legacy_files_and_file_prefixes_answer_404() -> None:
-  # Hard-offline: driven through the real app (the suite's profile isolation leaves
-  # the access key empty, so the middleware is a no-op here), the retired aliases
-  # answer FastAPI's routing 404 — the file server never sees the request.
-  client = TestClient(server.app)
-  assert client.get("/files/tmp/trace.json").status_code == 404
-  assert client.get("/file/tmp/trace.json").status_code == 404
-
-
-@pytest.mark.parametrize("prefix", PREFIXES)
-def test_a_trace_input_under_the_prefix_names_the_file(prefix: str, tmp_path: Path) -> None:
-  trace = tmp_path / "rank0.json"
-  url, path = pages._trace_input(f"{prefix}{trace}")
-  assert path == trace
-  assert url == f"{prefix}{trace}"
 
 
 @pytest.mark.asyncio

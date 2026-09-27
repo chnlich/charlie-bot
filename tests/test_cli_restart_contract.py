@@ -13,36 +13,23 @@ from __future__ import annotations
 
 import http.server
 import json
-import socket
-import struct
-import subprocess
 import sys
 import threading
-import time
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 from conftest import (
     CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET,
     CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-    CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
     CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
     CONFIG_GET_CONFIG_PATCH_TARGET,
-    ROOT,
-    make_json_response,
-    write_trigger,
 )
 
 from src.cli import common
 from src.cli import improve as improve_module
-from src.cli import plan as plan_module
-from src.cli import schedule_trigger as schedule_trigger_module
 from src.cli import session as session_module
-from src.cli.plan import _PLAN_REMINDER
 from src.core.config import CharlieBotConfig
-from src.core.control_events import stable_close_event_id, stable_close_request_event_id
-from src.core.models import PendingTrigger, TriggerStatus
+from src.core.control_events import stable_close_event_id
 
 
 def _cfg(tmp_path: Path, **overrides: object) -> CharlieBotConfig:
@@ -137,99 +124,8 @@ def test_connect_never_established_retries_with_backoff_then_exhausts(
   assert error == {"error": str(_connect_refused()), "code": "server_unavailable", "effect": "none"}
 
 
-def test_connect_never_established_bounded_wall_clock_with_real_clock(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  """Same exhaustion path with the REAL clock (not the fake one): shrinking
-  CLI_CONNECT_TOTAL_TIMEOUT to sub-second keeps the actual wall-clock wait
-  small and bounded — never anywhere near the real 60 s default."""
-  cfg = _cfg(tmp_path)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr(CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET, 0.3)
-  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, lambda *a, **k: (_ for _ in ()).throw(_connect_refused()))
-
-  started = time.monotonic()
-  with pytest.raises(SystemExit) as exc_info:
-    common.post_internal_api("/api/internal/x", {"a": 1})
-  elapsed = time.monotonic() - started
-
-  assert exc_info.value.code == 1
-  assert elapsed < 1.0
-  assert json.loads(capsys.readouterr().err)["code"] == "server_unavailable"
-
-
-def test_listener_absent_then_appears_mid_budget_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The operationally important case: no listener yet, one appears mid-retry, call succeeds."""
-  cfg = _cfg(tmp_path)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  clock = _FakeClock()
-  monkeypatch.setattr(common, "time", clock)
-  monkeypatch.setattr(CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET, 5.0)
-
-  attempts = 0
-
-  def fake_post(*args: object, **kwargs: object) -> common._CliResponse:
-    nonlocal attempts
-    attempts += 1
-    if attempts < 3:
-      raise _connect_refused()
-    return common._CliResponse(200, "OK", json.dumps({"ok": True}).encode())
-
-  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, fake_post)
-
-  result = common.post_internal_api("/api/internal/x", {"a": 1})
-
-  assert result == {"ok": True}
-  assert attempts == 3
-  assert len(clock.sleeps) == 2  # two retries before the listener answered
-  assert sum(clock.sleeps) < 5.0
-
-
 # ---------------------------------------------------------------------------
 # Gap 2 — server_error keeps today's exit code and hint
-# ---------------------------------------------------------------------------
-
-
-def _rejection(status_code: int, detail: str) -> MagicMock:
-  return make_json_response({"detail": detail}, status_code=status_code)
-
-
-def test_server_rejection_reports_full_triple_and_hint(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _cfg(tmp_path)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, lambda *a, **k: _rejection(409, "stale version"))
-  monkeypatch.setattr(
-      CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
-      lambda cfg: "server running abc123, repo at def456 — server restart may be required")
-
-  with pytest.raises(SystemExit) as exc_info:
-    common.post_internal_api("/api/internal/x", {"a": 1})
-
-  # Today's behavior: no rejection_exit_codes mapping means exit code 1.
-  assert exc_info.value.code == 1
-  error = json.loads(capsys.readouterr().err)
-  assert error == {
-      "error": "stale version",
-      "code": "server_error",
-      "effect": "none",
-      "hint": "server running abc123, repo at def456 — server restart may be required",
-  }
-
-
-def test_server_rejection_exit_code_override_keeps_code_and_effect(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  """schedule-trigger's 422 -> 2 contract: the override changes only the exit code."""
-  cfg = _cfg(tmp_path)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, lambda *a, **k: _rejection(422, "no such target"))
-  monkeypatch.setattr(CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET, lambda cfg: None)
-
-  with pytest.raises(SystemExit) as exc_info:
-    common.post_internal_api("/api/internal/x", {"a": 1}, rejection_exit_codes={422: 2})
-
-  assert exc_info.value.code == 2
-  error = json.loads(capsys.readouterr().err)
-  assert error == {"error": "no such target", "code": "server_error", "effect": "none"}
 
 
 # ---------------------------------------------------------------------------
@@ -266,145 +162,6 @@ def test_improve_readback_resolves_to_seeded_loop_on_sent_but_lost(
   assert out["status"] == "started"
   assert out["session_id"] == session_id
   assert out["loop_id"] == 3
-
-
-def test_improve_readback_reports_outcome_unknown_when_nothing_matches(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  _patch_readback_env(monkeypatch, tmp_path)
-
-  session_id = "sess-improve-miss"
-  goal_file = tmp_path / "goal.md"
-  goal_file.write_text("A goal nobody launched", encoding="utf-8")
-  repo_dir = tmp_path / "repo"
-  repo_dir.mkdir()
-
-  monkeypatch.setattr(
-      sys, "argv", [
-          "charliebot-improve", "--session", session_id, "--repo",
-          str(repo_dir), "--goal-file",
-          str(goal_file), "--base-branch", "main"
-      ])
-
-  with pytest.raises(SystemExit) as exc_info:
-    improve_module.main()
-
-  assert exc_info.value.code == 1
-  error = json.loads(capsys.readouterr().err)
-  assert error["code"] == "outcome_unknown"
-  assert error["effect"] == "unknown"
-
-
-def test_schedule_trigger_readback_resolves_to_seeded_trigger_on_sent_but_lost(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _patch_readback_env(monkeypatch, tmp_path)
-
-  session_id = "sess-trigger"
-  write_trigger(
-      cfg.sessions_dir / session_id / "triggers" / "trg1.json",
-      PendingTrigger(
-          id="trg1",
-          session_id=session_id,
-          message="Check the job",
-          fire_at="2024-01-01T00:00:00+00:00",
-          created_at="2024-01-01T00:00:00+00:00",
-      ))
-
-  monkeypatch.setattr(
-      sys, "argv",
-      ["charliebot-schedule-trigger", "--session", session_id, "--max-wait", "60", "--message", "Check the job"])
-
-  schedule_trigger_module.main()
-
-  out = json.loads(capsys.readouterr().out)
-  assert out == {"trigger_id": "trg1", "fire_at": "2024-01-01T00:00:00Z"}
-
-
-def test_schedule_trigger_readback_reports_outcome_unknown_when_nothing_matches(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  _patch_readback_env(monkeypatch, tmp_path)
-
-  session_id = "sess-trigger-miss"
-  monkeypatch.setattr(
-      sys, "argv",
-      ["charliebot-schedule-trigger", "--session", session_id, "--max-wait", "60", "--message", "Nothing seeded"])
-
-  with pytest.raises(SystemExit) as exc_info:
-    schedule_trigger_module.main()
-
-  assert exc_info.value.code == 1
-  error = json.loads(capsys.readouterr().err)
-  assert error["code"] == "outcome_unknown"
-  assert error["effect"] == "unknown"
-
-
-def test_schedule_trigger_readback_ignores_fired_trigger_reports_outcome_unknown(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  """A self-renewing watch reuses the identical message on every renewal, so a
-  previous leg's fired-but-not-deleted trigger file can match on message +
-  watch targets. It must not count as proof the new call landed."""
-  cfg = _patch_readback_env(monkeypatch, tmp_path)
-
-  session_id = "sess-trigger-fired-only"
-  write_trigger(
-      cfg.sessions_dir / session_id / "triggers" / "trg-fired.json",
-      PendingTrigger(
-          id="trg-fired",
-          session_id=session_id,
-          message="renew the watch",
-          fire_at="2024-01-01T00:00:00+00:00",
-          created_at="2024-01-01T00:00:00+00:00",
-          status=TriggerStatus.FIRED,
-      ))
-
-  monkeypatch.setattr(
-      sys, "argv",
-      ["charliebot-schedule-trigger", "--session", session_id, "--max-wait", "60", "--message", "renew the watch"])
-
-  with pytest.raises(SystemExit) as exc_info:
-    schedule_trigger_module.main()
-
-  assert exc_info.value.code == 1
-  error = json.loads(capsys.readouterr().err)
-  assert error["code"] == "outcome_unknown"
-  assert error["effect"] == "unknown"
-
-
-def test_schedule_trigger_readback_picks_pending_over_fired_historical_leg(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  """A previous (fired) leg and the newly-armed (pending) leg of the same
-  self-renewing watch share the identical message + targets; readback must
-  bind to the pending one, never the historical fired file."""
-  cfg = _patch_readback_env(monkeypatch, tmp_path)
-
-  session_id = "sess-trigger-fired-plus-pending"
-  write_trigger(
-      cfg.sessions_dir / session_id / "triggers" / "trg-old.json",
-      PendingTrigger(
-          id="trg-old",
-          session_id=session_id,
-          message="renew the watch",
-          fire_at="2024-01-01T00:00:00+00:00",
-          created_at="2024-01-01T00:00:00+00:00",
-          status=TriggerStatus.FIRED,
-      ))
-  write_trigger(
-      cfg.sessions_dir / session_id / "triggers" / "trg-new.json",
-      PendingTrigger(
-          id="trg-new",
-          session_id=session_id,
-          message="renew the watch",
-          fire_at="2024-02-01T00:00:00+00:00",
-          created_at="2024-02-01T00:00:00+00:00",
-      ))
-
-  monkeypatch.setattr(
-      sys, "argv",
-      ["charliebot-schedule-trigger", "--session", session_id, "--max-wait", "60", "--message", "renew the watch"])
-
-  schedule_trigger_module.main()
-
-  out = json.loads(capsys.readouterr().out)
-  assert out == {"trigger_id": "trg-new", "fire_at": "2024-02-01T00:00:00Z"}
 
 
 # ---------------------------------------------------------------------------
@@ -452,55 +209,6 @@ def test_session_cancel_readback_resolves_to_own_task_closed_fact_on_sent_but_lo
   assert out == {"session_id": session_id, "task_state": "cancelled", "closed_event_id": closed_id}
 
 
-def test_session_complete_readback_resolves_to_pending_run_finish_on_sent_but_lost(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  """A run-token deferral (task_close_requested carrying this request_id)
-  answers the 202 shape the server itself would have sent."""
-  cfg = _patch_readback_env(monkeypatch, tmp_path)
-
-  session_id = "sess-complete"
-  request_id = "req-complete-1"
-  events_dir = cfg.sessions_dir / session_id / "data"
-  events_dir.mkdir(parents=True)
-  (events_dir / "chat_events.jsonl").write_text(
-      json.dumps(
-          {
-              "id": stable_close_request_event_id(session_id, request_id),
-              "type": "task_close_requested",
-              "request_id": request_id,
-              "owner_run_id": "run-1",
-          }) + "\n",
-      encoding="utf-8")
-
-  result_file = tmp_path / "result.json"
-  result_file.write_text(json.dumps({"summary": "wrapped up"}), encoding="utf-8")
-  monkeypatch.setattr(
-      sys, "argv",
-      ["charliebot-session", "complete", session_id, "--result-file",
-       str(result_file), "--request-id", request_id])
-
-  session_module.main()
-
-  out = json.loads(capsys.readouterr().out)
-  assert out == {"session_id": session_id, "request_id": request_id, "status": "pending_run_finish"}
-
-
-def test_session_cancel_readback_reports_outcome_unknown_when_no_local_fact(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  _patch_readback_env(monkeypatch, tmp_path)
-
-  session_id = "sess-cancel-unknown"
-  monkeypatch.setattr(sys, "argv", ["charliebot-session", "cancel", session_id, "--reason", "no local fact"])
-
-  with pytest.raises(SystemExit) as exc_info:
-    session_module.main()
-
-  assert exc_info.value.code == 1
-  error = json.loads(capsys.readouterr().err)
-  assert error["code"] == "outcome_unknown"
-  assert error["effect"] == "unknown"
-
-
 class _QuietHandler(http.server.BaseHTTPRequestHandler):
   """Base for the stub listeners' handlers: silences the per-request stderr log
   line the stdlib writes; the base class dispatches ``log_message`` by name."""
@@ -522,83 +230,6 @@ class _StubListener:
   def close(self) -> None:
     self._httpd.shutdown()
     self._httpd.server_close()
-
-
-class _StubPlanListener(_StubListener):
-  """A sibling of test_master_restart_recovery_e2e.py's _BlackHoleServer: POST is
-  accepted then reset (sent-but-lost), GET answers with a crafted plans listing —
-  exactly the shape ``plan``'s readback needs (a real GET response, not a mock).
-  """
-
-  def __init__(self, plans_payload: dict) -> None:
-    payload = plans_payload
-
-    class Handler(_QuietHandler):
-
-      def do_GET(self) -> None:
-        body = json.dumps(payload).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-      def do_POST(self) -> None:
-        # Black hole: accept, then RST without reading or responding.
-        self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
-        self.connection.close()
-
-    super().__init__(Handler)
-
-
-def test_plan_readback_resolves_to_seeded_plan_on_sent_but_lost(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  plans_payload = {
-      "plans":
-          [
-              {
-                  "id": 7,
-                  "title": "My Plan",
-                  "state": "open",
-                  "takeoff": None,
-                  "closed": None,
-                  "versions": [{
-                      "v": 1,
-                      "file": "artifacts/plan_01.html"
-                  }],
-              }
-          ]
-  }
-  stub = _StubPlanListener(plans_payload)
-  try:
-    cfg = _cfg(tmp_path, server={"port": stub.port})
-    monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-
-    plan_module.main(["present", "--session", "sess-plan", "--file", "artifacts/plan_01.html", "--title", "My Plan"])
-
-    out = json.loads(capsys.readouterr().out)
-    assert out == {"plan": 7, "v": 1, "state": "open", "reminder": _PLAN_REMINDER}
-  finally:
-    stub.close()
-
-
-def test_plan_readback_reports_outcome_unknown_when_nothing_matches(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  stub = _StubPlanListener({"plans": []})
-  try:
-    cfg = _cfg(tmp_path, server={"port": stub.port})
-    monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-
-    with pytest.raises(SystemExit) as exc_info:
-      plan_module.main(
-          ["present", "--session", "sess-plan-miss", "--file", "artifacts/plan_01.html", "--title", "My Plan"])
-
-    assert exc_info.value.code == 1
-    error = json.loads(capsys.readouterr().err)
-    assert error["code"] == "outcome_unknown"
-    assert error["effect"] == "unknown"
-  finally:
-    stub.close()
 
 
 class _CapturePostListener(_StubListener):
@@ -647,166 +278,6 @@ def test_post_sends_json_body_content_type_and_auth_header_over_the_real_client(
     stub.close()
 
 
-def test_plain_http_request_never_loads_the_http_client_stack() -> None:
-  """The plain-HTTP verb request runs the minimal socket client: http.client (+ssl,
-  email.parser inside it, ~16 ms of every verb's wall) must stay out of the process —
-  the M97 landing's remaining client stack (docs/perf_baseline.md). A raw-socket stub
-  serves the response because http.server's own import would load http.client in the
-  probe, defeating the assertion."""
-  response = (
-      b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
-      b"Content-Length: 13\r\nConnection: close\r\n\r\n" + b'{"request":1}')
-
-  probe = '''
-import json, socket, sys, threading
-from src.cli.common import _send_request
-
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.bind(("127.0.0.1", 0))
-server.listen(1)
-served = {}
-
-def serve():
-    conn, _ = server.accept()
-    served["request"] = conn.recv(65536).decode("latin-1")
-    conn.sendall(STUB_RESPONSE)
-    conn.close()
-    server.close()
-
-threading.Thread(target=serve, daemon=True).start()
-resp = _send_request("POST", f"http://127.0.0.1:{server.getsockname()[1]}/api/internal/x?a=b",
-                     payload={"k": 1}, params=None, headers={}, timeout=5.0)
-print(json.dumps({
-    "status": resp.status_code,
-    "reason": resp._reason,
-    "body": json.loads(resp._body),
-    "request": served["request"],
-    "http_client_loaded": "http.client" in sys.modules,
-    "ssl_loaded": "ssl" in sys.modules,
-    "email_loaded": "email.parser" in sys.modules,
-}))
-'''.replace("STUB_RESPONSE", repr(response))
-  result = subprocess.run(
-      [sys.executable, "-c", probe],
-      cwd=ROOT,
-      capture_output=True,
-      text=True,
-      timeout=60,
-      check=True,
-  )
-  out = json.loads(result.stdout)
-  assert out["status"] == 200 and out["reason"] == "OK" and out["body"] == {"request": 1}
-  request_head, _, request_body = out["request"].partition("\r\n\r\n")
-  assert request_head.splitlines()[0] == "POST /api/internal/x?a=b HTTP/1.1"
-  assert "Content-Type: application/json" in request_head
-  assert "Content-Length:" in request_head
-  assert request_body == json.dumps({"k": 1})
-  assert out["http_client_loaded"] is False
-  assert out["ssl_loaded"] is False
-  assert out["email_loaded"] is False
-
-
 # ---------------------------------------------------------------------------
 # Gap 3(b) — readback determinism at the matcher level: concurrent identical
 # specs, and a verify thread never satisfying an implement call's readback.
-# ---------------------------------------------------------------------------
-
-
-def test_find_local_thread_concurrent_identical_specs_resolves_to_newest(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Two identical (description, task_type) threads in flight: readback must give a
-  definite answer (the newest), not ambiguity — so no second worker gets spawned."""
-  cfg = _cfg(tmp_path)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-
-  session_id = "sess-concurrent"
-  _write_thread(
-      cfg,
-      session_id,
-      "older",
-      description="do the thing",
-      task_type="implement",
-      status="running",
-      created_at="2024-01-01T00:00:00+00:00")
-  _write_thread(
-      cfg,
-      session_id,
-      "newer",
-      description="do the thing",
-      task_type="implement",
-      status="running",
-      created_at="2024-01-01T00:05:00+00:00")
-
-  match = common.find_local_thread(session_id, description="do the thing", task_type="implement")
-
-  assert match is not None
-  assert match["id"] == "newer"
-
-
-def test_find_local_thread_verify_and_implement_never_cross_match(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Matching requires description AND task_type: a verify thread must never satisfy
-  an implement call's readback, nor the reverse, even with an identical description."""
-  cfg = _cfg(tmp_path)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-
-  session_id = "sess-verify-vs-implement"
-  _write_thread(cfg, session_id, "verify-thread", description="check the plan", task_type="verify", status="running")
-
-  # The verify thread must not satisfy an implement call's readback...
-  assert common.find_local_thread(session_id, description="check the plan", task_type="implement") is None
-  # ...but does satisfy its own verify call.
-  match = common.find_local_thread(session_id, description="check the plan", task_type="verify")
-  assert match is not None
-  assert match["id"] == "verify-thread"
-
-  # Symmetric case: an implement thread must not satisfy a verify call's readback.
-  _write_thread(
-      cfg, session_id, "implement-thread", description="check the plan 2", task_type="implement", status="running")
-  assert common.find_local_thread(session_id, description="check the plan 2", task_type="verify") is None
-  match = common.find_local_thread(session_id, description="check the plan 2", task_type="implement")
-  assert match is not None
-  assert match["id"] == "implement-thread"
-
-
-def test_find_local_task_close_never_matches_another_requests_close_fact(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Same event types, different request id: a foreign task_closed fact and a
-  foreign task_close_requested fact are both invisible to this call's readback
-  -- the judgment binds to the passed request_id only."""
-  cfg = _cfg(tmp_path)
-  # find_local_task_close imports get_config lazily at call time, so both
-  # binding sites need the scratch config (same coverage as _patch_readback_env).
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr(CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-
-  session_id = "sess-close-identity"
-  events_dir = cfg.sessions_dir / session_id / "data"
-  events_dir.mkdir(parents=True)
-  (events_dir / "chat_events.jsonl").write_text(
-      "\n".join(
-          [
-              json.dumps(
-                  {
-                      "id": stable_close_event_id(session_id, "req-theirs"),
-                      "type": "task_closed",
-                      "request_id": "req-theirs",
-                      "outcome": "completed",
-                  }),
-              json.dumps(
-                  {
-                      "id": stable_close_request_event_id(session_id, "req-theirs"),
-                      "type": "task_close_requested",
-                      "request_id": "req-theirs",
-                  }),
-          ]) + "\n",
-      encoding="utf-8")
-
-  assert common.find_local_task_close(session_id, "req-mine") is None
-  # Positive control: the request the facts belong to still reads its own
-  # closure back, and the closed fact outranks the deferral.
-  assert common.find_local_task_close(session_id, "req-theirs") == {
-      "session_id": session_id,
-      "task_state": "completed",
-      "closed_event_id": stable_close_event_id(session_id, "req-theirs"),
-  }

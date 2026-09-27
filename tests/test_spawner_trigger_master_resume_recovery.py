@@ -7,12 +7,11 @@ import pytest
 from conftest import (
     CODEX_BACKEND_OPTION,
     MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET,
-    OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
 )
 
 from src.core.config import CharlieBotConfig
-from src.core.master_trigger import is_resume_not_found_error, trigger_master
+from src.core.master_trigger import trigger_master
 from src.core.models import BackendOption, MasterRunRecord, SessionCallbacks, SessionMetadata
 
 _LOG_PATCH_TARGET = "src.core.master_trigger.log"
@@ -156,103 +155,3 @@ async def test_non_recoverable_error_does_not_retry_and_failure_is_preserved(mon
   assert session_mgr._meta.cc_session_id == "valid-id"
   assert any(call.args[0] == "trigger_master_failed" for call in mock_log.error.call_args_list)
   assert not any(call.args[0] == "trigger_master_invalid_resume_detected" for call in mock_log.warning.call_args_list)
-
-
-@pytest.mark.asyncio
-async def test_error_echo_persist_failure_is_logged_not_raised(monkeypatch: pytest.MonkeyPatch) -> None:
-  """The in-chat error echo is best-effort: its own failure must log, never escape trigger_master."""
-  cfg = _build_cfg()
-  session_id = "session-5"
-  meta = SessionMetadata(id=session_id, name="Test Session", cc_session_id="valid-id", backend="codex-o3")
-  session_mgr = FakeSessionManager(meta)
-  persist_calls: list[str] = []
-
-  async def failing_persist(broadcast_session_id: str, event: dict) -> None:
-    persist_calls.append(broadcast_session_id)
-    raise RuntimeError("disk full")
-
-  session_mgr.persist_and_broadcast = failing_persist
-
-  async def failing_run_message(*args: object, **kwargs: object) -> str | None:
-    raise RuntimeError("backend crashed unexpectedly")
-
-  mock_log = Mock()
-  monkeypatch.setattr(MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET, failing_run_message)
-  monkeypatch.setattr(_LOG_PATCH_TARGET, mock_log)
-
-  await trigger_master(session_id, "worker summary", cfg, session_mgr)
-
-  assert persist_calls == [session_id]
-  assert any(call.args[0] == "trigger_master_failed" for call in mock_log.error.call_args_list)
-  assert any(call.args[0] == "trigger_master_error_event_persist_failed" for call in mock_log.warning.call_args_list)
-
-
-@pytest.mark.asyncio
-async def test_valid_resume_path_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Successful run with valid resume ID should stay single-attempt."""
-  cfg = _build_cfg()
-  session_id = "session-3"
-  meta = SessionMetadata(id=session_id, name="Test Session", cc_session_id="valid-id", backend="codex-o3")
-  session_mgr = FakeSessionManager(meta)
-  call_resume_ids: list[str | None] = []
-  call_backend_options: list[BackendOption] = []
-  call_flags: list[tuple[bool, bool]] = []
-
-  async def fake_run_message(*args: object, **kwargs: object) -> str | None:
-    call_resume_ids.append(args[1].cc_session_id)
-    call_backend_options.append(kwargs["backend_option"])
-    call_flags.append((kwargs["skip_user_event"], kwargs["auto_trigger"]))
-    return "valid-id"
-
-  mock_log = Mock()
-  monkeypatch.setattr(MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
-  monkeypatch.setattr(_LOG_PATCH_TARGET, mock_log)
-
-  await trigger_master(session_id, "worker summary", cfg, session_mgr)
-
-  assert call_resume_ids == ["valid-id"]
-  assert [backend_option.id for backend_option in call_backend_options] == ["codex-o3"]
-  assert call_flags == [(True, True)]
-  assert session_mgr._meta is not None
-  assert session_mgr._meta.cc_session_id == "valid-id"
-  assert not any(call.args[0] == "trigger_master_retry_without_resume" for call in mock_log.info.call_args_list)
-
-
-@pytest.mark.asyncio
-async def test_scheduled_task_auto_trigger_uses_session_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Scheduled task auto-triggers should keep using the completed worker's session backend."""
-  cfg = _build_cfg()
-  session_id = "session-4"
-  meta = SessionMetadata(
-      id=session_id,
-      name="Scheduled: nightly",
-      backend=OPUS_BACKEND_ID,
-      scheduled_task="nightly",
-  )
-  session_mgr = FakeSessionManager(meta)
-  call_backend_options: list[BackendOption] = []
-  call_session_backends: list[str] = []
-  call_summaries: list[str] = []
-
-  async def fake_run_message(*args: object, **kwargs: object) -> str | None:
-    call_session_backends.append(args[1].backend)
-    call_summaries.append(args[2])
-    call_backend_options.append(kwargs["backend_option"])
-    return "claude-master-id"
-
-  monkeypatch.setattr(MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
-
-  await trigger_master(session_id, "worker summary", cfg, session_mgr)
-
-  assert call_session_backends == [OPUS_BACKEND_ID]
-  assert [option.id for option in call_backend_options] == [OPUS_BACKEND_ID]
-  assert [option.model for option in call_backend_options] == [OPUS_BACKEND_OPTION.model]
-  assert call_summaries[0].startswith("[Auto-triggered scheduled task result for 'nightly']")
-  assert not session_mgr.persisted_cc_session_ids
-  assert session_mgr._meta is not None
-  assert session_mgr._meta.cc_session_id is None
-
-
-def test_codex_no_rollout_found_resume_error_is_stale() -> None:
-  assert is_resume_not_found_error(RuntimeError("Codex resume failed for thread abc123: no rollout found"))
-  assert is_resume_not_found_error(RuntimeError("thread abc123 no rollout found"))

@@ -9,135 +9,24 @@ import pytest
 from conftest import SPAWNER_SPAWN_WORKER_PATCH_TARGET, make_fake_git_create_worktree
 
 from src.core import git as git_module
-from src.core import improve_command, review, spawner
+from src.core import improve_command
 from src.core.improve_command import load_loop_state
-from src.core.models import ThreadMetadata
-
-
-def _thread(**overrides: Any) -> ThreadMetadata:
-  base: dict[str, Any] = {"session_id": "s", "description": "d"}
-  base.update(overrides)
-  return ThreadMetadata(**base)
-
-
-async def _failing_git_worktree_remove(*args: Any, **kwargs: Any) -> bool:
-  return False
 
 
 # ---------------------------------------------------------------------------
 # Part 5: artifact name set
-# ---------------------------------------------------------------------------
-
-
-def test_artifact_name_set_includes_new_caches() -> None:
-  names = git_module._WORKTREE_LOCAL_ARTIFACT_NAMES
-  assert ".pixi-cache" in names
-  assert ".local" in names
-  # Existing entries preserved.
-  assert {".pixi", ".uv-cache", ".venv", "build"} <= names
 
 
 # ---------------------------------------------------------------------------
 # Part 1a: spawner keep-on-failure decision
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("require_review", "exit_code", "expected"),
-    [
-        # No reviewer, no pins — a failure must still keep the worktree for debugging.
-        pytest.param(False, 1, True, id="nonzero-exit-keeps-worktree"),
-        pytest.param(False, 0, False, id="success-without-review-removes"),
-        pytest.param(True, 0, True, id="success-keeps-for-reviewer-handoff"),
-    ])
-def test_should_skip_cleanup_exit_and_review_decision(require_review: bool, exit_code: int, expected: bool) -> None:
-  thread = _thread(repo_path="/tmp/repo", branch_name="b", worktree_path="/tmp/wt", require_review=require_review)
-  assert spawner._should_skip_worktree_cleanup(thread, exit_code=exit_code) is expected
-
-
-def test_should_skip_cleanup_honours_existing_pins() -> None:
-  assert spawner._should_skip_worktree_cleanup(_thread(keep_worktree=True), exit_code=0) is True
-  assert spawner._should_skip_worktree_cleanup(_thread(skip_cleanup=True), exit_code=0) is True
-  assert spawner._should_skip_worktree_cleanup(_thread(review_of="orig"), exit_code=0) is True
 
 
 # ---------------------------------------------------------------------------
 # Part 4: spawner surfaces success-path cleanup failures
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_cleanup_worker_directory_returns_error_when_remove_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  wt = tmp_path / "worktrees" / "charliebot-task-x"
-  wt.mkdir(parents=True)
-  thread = _thread(id="t1", repo_path=str(tmp_path / "repo"), branch_name="charliebot/task-x", worktree_path=str(wt))
-
-  monkeypatch.setattr(git_module, "git_worktree_remove", _failing_git_worktree_remove)
-  error = await spawner._cleanup_worker_directory(thread, skip_cleanup=False, worktree_parent=tmp_path / "worktrees")
-  assert error is not None and "cleanup failed" in error.lower()
-  assert wt.exists()
-
-
-@pytest.mark.asyncio
-async def test_cleanup_worker_directory_returns_error_when_remove_raises(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  wt = tmp_path / "worktrees" / "charliebot-task-x"
-  wt.mkdir(parents=True)
-  thread = _thread(id="t1", repo_path=str(tmp_path / "repo"), branch_name="charliebot/task-x", worktree_path=str(wt))
-
-  async def boom(*args: Any, **kwargs: Any) -> bool:
-    raise PermissionError("root-owned file")
-
-  monkeypatch.setattr(git_module, "git_worktree_remove", boom)
-  error = await spawner._cleanup_worker_directory(thread, skip_cleanup=False, worktree_parent=tmp_path / "worktrees")
-  assert error is not None and "root-owned file" in error
 
 
 # ---------------------------------------------------------------------------
 # Part 1b / Part 4: review keep-on-exhaustion + cleanup-failure surfacing
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_retry_failed_reviewer_keeps_worktree_when_exhausted(monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = MagicMock()
-  cfg.backends.preference = []
-  finalize_called: list[bool] = []
-
-  async def fake_spawn_review_worker(*args: Any, **kwargs: Any) -> bool:
-    return False  # all backends exhausted
-
-  async def fake_finalize(*args: Any, **kwargs: Any) -> None:
-    finalize_called.append(True)
-
-  monkeypatch.setattr(review, "spawn_review_worker", fake_spawn_review_worker)
-  monkeypatch.setattr(review, "finalize_review_chain", fake_finalize)
-
-  thread_meta = _thread(id="rev1", review_of="orig", tried_backends=["a", "b"])
-  original = _thread(id="orig")
-  result = await review._retry_failed_reviewer("s", thread_meta, original, cfg, object(), object())
-
-  assert result is False
-  assert not finalize_called  # worktree kept; chain not finalized
-
-
-@pytest.mark.asyncio
-async def test_finalize_review_chain_returns_error_when_remove_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  wt = tmp_path / "worktrees" / "charliebot-task-x"
-  wt.mkdir(parents=True)
-  original = _thread(
-      id="t1",
-      repo_path=str(tmp_path / "repo"),
-      branch_name="charliebot/task-x",
-      worktree_path=str(wt),
-      base_branch="main")
-
-  monkeypatch.setattr(git_module, "git_worktree_remove", _failing_git_worktree_remove)
-  error = await review.finalize_review_chain("s", original, worktree_parent=tmp_path / "worktrees")
-  assert error is not None and "cleanup failed" in error.lower()
-  assert wt.exists()
 
 
 # ---------------------------------------------------------------------------

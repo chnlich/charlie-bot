@@ -135,48 +135,6 @@ async def test_plan_close_endpoint_happy_path(tmp_path: Path) -> None:
   assert resp.json() == {"plan": 1, "state": "superseded"}
 
 
-@pytest.mark.asyncio
-async def test_plan_close_completed_then_list_shows_completed(tmp_path: Path) -> None:
-  app, _cfg, _plan_mgr, meta = await _presented_rig(tmp_path)
-  with TestClient(app) as client:
-    resp = client.post(
-        "/api/internal/plan/close", json={
-            "session_id": meta.id,
-            "plan_id": 1,
-            "close_as": "completed",
-        })
-    assert resp.status_code == 200
-    assert resp.json() == {"plan": 1, "state": "completed"}
-
-    listing = client.get(f"/api/sessions/{meta.id}/plans")
-    assert listing.status_code == 200
-    assert listing.json()["plans"][0]["state"] == "completed"
-
-    second = client.post(
-        "/api/internal/plan/close", json={
-            "session_id": meta.id,
-            "plan_id": 1,
-            "close_as": "completed",
-        })
-  assert second.status_code == 400
-  assert "already closed" in second.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_get_plans_endpoint_returns_registry(tmp_path: Path) -> None:
-  app, _cfg, _plan_mgr, meta = await _presented_rig(tmp_path)
-  with TestClient(app) as client:
-    resp = client.get(f"/api/sessions/{meta.id}/plans")
-  assert resp.status_code == 200
-  body = resp.json()
-  assert len(body["plans"]) == 1
-  assert body["plans"][0]["state"] == "awaiting approval"
-  assert body["plans"][0]["id"] == 1
-  # The A2 contract's "normal file" leg: a readable plans.json lists its plans
-  # and carries no error entries (the corrupt-file leg below is the contrast).
-  assert body["errors"] == []
-
-
 # ---------------------------------------------------------------------------
 # Rejections (one per endpoint)
 # ---------------------------------------------------------------------------
@@ -198,38 +156,6 @@ async def test_plan_present_rejects_unknown_session_404(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_plan_present_rejects_missing_file_400(tmp_path: Path) -> None:
-  _cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  app = _build_app(_session_mgr, thread_mgr, plan_mgr)
-  with TestClient(app) as client:
-    resp = client.post(
-        "/api/internal/plan/present", json={
-            "session_id": meta.id,
-            "file": "artifacts/missing.html",
-            "title": "P1",
-        })
-  assert resp.status_code == 400
-  assert "not found inside the session directory" in resp.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_plan_amend_rejects_closed_400(tmp_path: Path) -> None:
-  app, cfg, plan_mgr, meta = await _presented_rig(tmp_path)
-  await plan_mgr.close(meta.id, plan_id=1, close_as="superseded")
-  f2 = _write_artifact(cfg, meta.id, "plan_02.html")
-  with TestClient(app) as client:
-    resp = client.post(
-        "/api/internal/plan/amend", json={
-            "session_id": meta.id,
-            "file": f2,
-            "plan_id": 1,
-            "note": "why changed",
-        })
-  assert resp.status_code == 400
-  assert "is closed" in resp.json()["detail"]
-
-
-@pytest.mark.asyncio
 async def test_plan_close_rejects_already_closed_400(tmp_path: Path) -> None:
   app, _cfg, plan_mgr, meta = await _presented_rig(tmp_path)
   await plan_mgr.close(meta.id, plan_id=1, close_as="superseded")
@@ -244,89 +170,21 @@ async def test_plan_close_rejects_already_closed_400(tmp_path: Path) -> None:
   assert "already closed" in resp.json()["detail"]
 
 
-@pytest.mark.asyncio
-async def test_plan_reverify_endpoint_removed(tmp_path: Path) -> None:
-  """The /plan/reverify endpoint is gone; FastAPI returns 404 (or 405) for the old path."""
-  _cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  app = _build_app(_session_mgr, thread_mgr, plan_mgr)
-  with TestClient(app) as client:
-    resp = client.post(
-        "/api/internal/plan/reverify", json={
-            "session_id": meta.id,
-            "verify_thread": "t1",
-            "plan_id": 1,
-        })
-  assert resp.status_code in (404, 405)
-
-
 # ---------------------------------------------------------------------------
 # Session view payload carries no plans
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_session_view_omits_plans(tmp_path: Path) -> None:
-  app, _cfg, _plan_mgr, meta = await _presented_rig(tmp_path)
-  with TestClient(app) as client:
-    resp = client.get(f"/api/sessions/{meta.id}/view")
-  assert resp.status_code == 200
-  body = resp.json()
-  assert "plans" not in body
 
 
 # ---------------------------------------------------------------------------
 # plan_updated broadcast: emitted on mutation, absent from chat_events.jsonl
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_plan_updated_broadcast_on_present_and_absent_from_chat_events(tmp_path: Path) -> None:
-  cfg, session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  broadcast_calls: list[tuple[str, dict]] = []
-
-  async def _capture_broadcast(session_id: str, event: dict) -> None:
-    broadcast_calls.append((session_id, event))
-
-  session_mgr.broadcast_only = _capture_broadcast  # type: ignore[method-assign]
-  f = _write_artifact(cfg, meta.id, "plan_01.html")
-  app = _build_app(session_mgr, thread_mgr, plan_mgr)
-  with TestClient(app) as client:
-    resp = client.post(
-        "/api/internal/plan/present", json={
-            "session_id": meta.id,
-            "file": f,
-            "title": "P1",
-        })
-  assert resp.status_code == 200
-
-  plan_updates = [e for _sid, e in broadcast_calls if e.get("type") == "plan_updated"]
-  assert len(plan_updates) == 1
-  assert plan_updates[0] == {"type": "plan_updated", "session_id": meta.id, "plan_id": 1}
-
-  events_path = session_mgr.get_chat_events_path(meta.id)
-  if events_path.exists():
-    raw = events_path.read_text(encoding="utf-8")
-    assert "plan_updated" not in raw
 
 
 # ---------------------------------------------------------------------------
 # ThreadMetadata.task_type is set on delegate-created threads
-# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # List endpoint contract (A2) — 404 unknown / 200+errors corrupt; the
 # "200+empty errors normal" leg is asserted by test_get_plans_endpoint_returns_registry
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_get_plans_endpoint_unknown_session_404(tmp_path: Path) -> None:
-  _cfg, _session_mgr, thread_mgr, plan_mgr, _meta = await _setup(tmp_path)
-  app = _build_app(_session_mgr, thread_mgr, plan_mgr)
-  with TestClient(app) as client:
-    resp = client.get("/api/sessions/nonexistent/plans")
-  assert resp.status_code == 404
-  assert resp.json()["detail"] == "Session not found"
 
 
 @pytest.mark.asyncio

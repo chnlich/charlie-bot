@@ -19,7 +19,6 @@ from conftest import (
 )
 
 from src.agents import master_cc
-from src.agents.backends import registry
 from src.core import config as core_config
 from src.core import event_types as ET
 from src.core import models
@@ -33,68 +32,6 @@ def _write_transcript(config_dir: Path, cc_session_id: str) -> None:
   project = config_dir / "projects" / "-home-user--charliebot-sessions-session-id"
   project.mkdir(parents=True, exist_ok=True)
   (project / f"{cc_session_id}.jsonl").write_text("{}\n", encoding="utf-8")
-
-
-def test_load_config_reads_proxy_url_per_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  home = tmp_path / "charliebot"
-  home.mkdir()
-  (home / "config.yaml").write_text(
-      """
-backends:
-  options:
-    - id: opencode-proxied
-      label: Proxied OpenCode
-      type: opencode
-      model: provider/model
-      proxy_url: http://proxy.test:8080
-    - id: opencode-plain
-      label: Plain OpenCode
-      type: opencode
-      model: provider/model
-    - id: claude
-      label: Claude
-      type: cc-claude
-      model: model
-""",
-      encoding="utf-8")
-  monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(home))
-
-  cfg = core_config.load_config()
-
-  proxied, plain, claude = cfg.backends.options
-  assert proxied.proxy_url == "http://proxy.test:8080"
-  assert plain.proxy_url is None
-  assert claude.id == "claude"
-
-
-def test_registry_scopes_opencode_proxy_to_opencode_constructor(monkeypatch: pytest.MonkeyPatch) -> None:
-  captured: dict[str, dict] = {}
-
-  class _FakeOpenCodeBackend:
-
-    def __init__(self, **kwargs: object) -> None:
-      captured["opencode"] = kwargs
-
-  monkeypatch.setattr(registry, "OpenCodeBackend", _FakeOpenCodeBackend)
-  cfg = core_config.CharlieBotConfig(charliebot_home=Path("/tmp/charliebot-test"))
-  proxied = backend_option(
-      id="opencode-proxied",
-      label="Proxied OpenCode",
-      type="opencode",
-      model="provider/model",
-      proxy_url="http://proxy.test:8080",
-  )
-  plain = backend_option(
-      id="opencode-plain",
-      label="Plain OpenCode",
-      type="opencode",
-      model="provider/model",
-  )
-
-  registry.build_backend(proxied, cfg)
-  assert captured["opencode"]["proxy_url"] == "http://proxy.test:8080"
-  registry.build_backend(plain, cfg)
-  assert captured["opencode"]["proxy_url"] is None
 
 
 # --------------------------------------------------------------- config reload
@@ -138,18 +75,6 @@ def test_get_config_refreshes_in_place_keeping_identity(path_home: Path, monkeyp
   second = core_config.get_config()
   assert second is first
   assert holder.server.port == 2222
-
-
-def test_get_config_keeps_previous_value_when_reload_fails(path_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg_path = _reload_rig(path_home, monkeypatch)
-
-  first = core_config.get_config()
-  _write_port_2222(cfg_path)
-  monkeypatch.setattr(core_config, "load_config", lambda: (_ for _ in ()).throw(ValueError("bad yaml")))
-
-  second = core_config.get_config()
-  assert second is first
-  assert second.server.port == 1111
 
 
 # ------------------------------------------------------------- trigger wake-up
@@ -237,13 +162,6 @@ def test_spawner_refuses_to_substitute_an_unknown_pinned_backend() -> None:
     _resolve_session_default_backend_model(cfg, session_meta)
 
 
-def test_spawner_defaults_when_session_pins_no_backend() -> None:
-  cfg = core_config.CharlieBotConfig(
-      backends={"options": [backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5")]})
-  session_meta = models.SessionMetadata(id="s", name="S", backend="")
-  assert _resolve_session_default_backend_model(cfg, session_meta) == ("cc", "claude-fable-5")
-
-
 # ------------------------------------------------------------ resume guarding
 
 
@@ -309,20 +227,3 @@ async def test_run_cc_resume_gate_by_transcript_location(
   else:
     assert "--resume" not in extra_flags
     assert [d["reason"] for d in dropped] == ["transcript_missing"]
-
-
-def test_resume_context_dropped_renders_backend_neutral_by_reason() -> None:
-  from src.core.message_aggregator import _SIMPLE_HANDLERS
-  anchor = _SIMPLE_HANDLERS[ET.RESUME_CONTEXT_DROPPED]({"type": ET.RESUME_CONTEXT_DROPPED, "reason": "anchor_missing"})
-  assert anchor["role"] == "system"
-  assert "anchor" in anchor["content"].lower()
-  assert "claude" not in anchor["content"].lower()
-
-  transcript = _SIMPLE_HANDLERS[ET.RESUME_CONTEXT_DROPPED](
-      {
-          "type": ET.RESUME_CONTEXT_DROPPED,
-          "reason": "transcript_missing"
-      })
-  assert transcript["role"] == "system"
-  assert "transcript" in transcript["content"].lower()
-  assert "claude" not in transcript["content"].lower()

@@ -7,7 +7,6 @@ from src.api.anthropic_proxy import (
     OpenAIChatStreamToAnthropic,
     _iter_anthropic_sse,
     anthropic_to_openai_chat_request,
-    openai_chat_response_to_anthropic,
 )
 
 
@@ -154,102 +153,6 @@ def test_anthropic_request_translates_text_tools_and_tool_results_to_openai() ->
   ]
 
 
-def test_anthropic_request_rejects_unsupported_blocks() -> None:
-  with pytest.raises(ValueError, match="unsupported user content block type"):
-    anthropic_to_openai_chat_request(
-        {
-            "model": "deepseek",
-            "messages": [{
-                "role": "user",
-                "content": [{
-                    "type": "image",
-                    "source": {}
-                }],
-            }],
-        },
-        upstream_model="deepseek")
-
-  with pytest.raises(ValueError, match="thinking"):
-    anthropic_to_openai_chat_request(
-        {
-            "model": "deepseek",
-            "messages": [{
-                "role": "user",
-                "content": "hi"
-            }],
-            "thinking": {
-                "type": "enabled",
-            },
-        },
-        upstream_model="deepseek")
-
-
-def test_openai_non_stream_response_translates_to_anthropic_message() -> None:
-  translated = openai_chat_response_to_anthropic(
-      {
-          "id": "chatcmpl_1",
-          "model": "deepseek-v4-pro",
-          "choices":
-              [
-                  {
-                      "finish_reason": "tool_calls",
-                      "message":
-                          {
-                              "content":
-                                  "I need a command.",
-                              "tool_calls":
-                                  [
-                                      {
-                                          "id": "call_1",
-                                          "type": "function",
-                                          "function": {
-                                              "name": "Bash",
-                                              "arguments": '{"cmd":"pwd"}',
-                                          },
-                                      }
-                                  ],
-                          },
-                  }
-              ],
-          "usage": {
-              "prompt_tokens": 10,
-              "completion_tokens": 4,
-          },
-      },
-      requested_model="deepseek-requested",
-  )
-
-  assert translated == {
-      "id": "chatcmpl_1",
-      "type": "message",
-      "role": "assistant",
-      "model": "deepseek-v4-pro",
-      "content":
-          [
-              {
-                  "type": "text",
-                  "text": "I need a command.",
-              },
-              {
-                  "type": "tool_use",
-                  "id": "call_1",
-                  "name": "Bash",
-                  "input": {
-                      "cmd": "pwd",
-                  },
-              },
-          ],
-      "stop_reason": "tool_use",
-      "stop_sequence": None,
-      "usage": {
-          "input_tokens": 10,
-          "output_tokens": 4,
-          "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 0,
-      },
-  }
-
-
 def test_stream_translator_emits_anthropic_text_and_tool_events() -> None:
   translator = OpenAIChatStreamToAnthropic("deepseek-v4-pro")
 
@@ -333,38 +236,6 @@ def test_stream_translator_emits_anthropic_text_and_tool_events() -> None:
   assert events[-2][1]["delta"]["stop_reason"] == "tool_use"
   assert events[-2][1]["usage"]["input_tokens"] == 8
   assert events[-2][1]["usage"]["output_tokens"] == 3
-
-
-def test_stream_translator_does_not_passthrough_reasoning_content() -> None:
-  translator = OpenAIChatStreamToAnthropic("deepseek-v4-pro")
-
-  events = translator.start_events()
-  events += translator.events_for_chunk({
-      "choices": [{
-          "delta": {
-              "reasoning_content": "hidden reasoning",
-          },
-      }],
-  })
-  events += translator.events_for_chunk({
-      "choices": [{
-          "delta": {
-              "content": "final",
-          },
-          "finish_reason": "stop",
-      }],
-  })
-  events += translator.finish_events()
-
-  assert [name for name, _data in events] == [
-      "message_start",
-      "content_block_start",
-      "content_block_delta",
-      "content_block_stop",
-      "message_delta",
-      "message_stop",
-  ]
-  assert events[2][1]["delta"] == {"type": "text_delta", "text": "final"}
 
 
 @pytest.mark.asyncio

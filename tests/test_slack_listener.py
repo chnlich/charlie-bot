@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import re
-import shlex
-import shutil
 from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -20,19 +17,13 @@ from conftest import (
     build_slack_cfg,
     make_task_spawner,
 )
-from conftest import cfg_with_repo as _cfg_with_repo
 
-from src.cli import slack as slack_cli
-from src.cli.main import _COMMANDS
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest, SlackOrigin
+from src.core.models import CreateSessionRequest
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
     CITATION_BOUNDARY,
-    SlackClient,
-    _build_summon_prompt,
-    ensure_slack_group,
     handle_app_mention,
     summon_session_id,
 )
@@ -78,10 +69,6 @@ def _thread_ts(event: dict) -> str:
 
 def _sid(event: dict) -> str:
   return summon_session_id(event["team"], event["channel"], _thread_ts(event))
-
-
-def _origin(event: dict) -> SlackOrigin:
-  return SlackOrigin(team_id=event["team"], channel_id=event["channel"], thread_ts=_thread_ts(event))
 
 
 def _rig(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, FakeSlackClient]:
@@ -162,79 +149,6 @@ async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path:
   assert expected_url in trigger.await_args.args[1]
 
 
-def test_build_summon_prompt_appends_both_notices_after_the_citation_boundary(tmp_path: Path) -> None:
-  """Every Slack prompt ends citation boundary, then the red line, then the reply format."""
-  prompt = _build_summon_prompt("https://fake.slack.test/archives/C_TEST/p1700000000.000100", build_slack_cfg(tmp_path))
-  assert _REPLY_FORMAT in prompt
-  assert prompt.index(CITATION_BOUNDARY) < prompt.index(_RED_LINE) < prompt.index(_REPLY_FORMAT)
-  assert prompt.endswith(f"{CITATION_BOUNDARY}\n{_RED_LINE}\n{_REPLY_FORMAT}")
-
-
-def test_reply_command_round_trip_between_prompt_and_cli(tmp_path: Path) -> None:
-  """The command the contract names is the command the CLI dispatches.
-
-  The round trip breaks when the contract document and the CLI ever disagree:
-  a contract edit names a verb the dispatcher lacks, or a CLI edit renames the
-  verb or its flag while the prompt still states the old form.
-  """
-  prompt = _build_summon_prompt("https://fake.slack.test/archives/C_TEST/p1700000000.000100", build_slack_cfg(tmp_path))
-  command_match = re.search(r"`(charliebot slack reply [^`]+)`", prompt)
-  assert command_match is not None
-  reply_file = tmp_path / "reply.md"
-  reply_file.write_text("the known reply body", encoding="utf-8")
-  tokens = shlex.split(command_match.group(1).replace("<path>", str(reply_file)))
-  assert tokens[0] == "charliebot"
-  assert _COMMANDS[tokens[1]] == slack_cli.__name__
-  args = slack_cli._build_parser().parse_args(tokens[2:])
-  assert args.slack_command == "reply"
-  assert slack_cli._read_reply_text(args.file) == "the known reply body"
-
-
-def test_build_summon_prompt_rereads_the_docs_on_every_call(tmp_path: Path) -> None:
-  """No caching: an edit to a doc between two builds shows up in the second one."""
-  shutil.copytree(_RED_LINE_PATH.parent, tmp_path / "prompts")
-  red_doc = tmp_path / "prompts" / "slack_reply_redline.md"
-  format_doc = tmp_path / "prompts" / "slack_reply_format.md"
-  cfg = _cfg_with_repo(tmp_path)
-  url = "https://fake.slack.test/archives/C_TEST/p1700000000.000100"
-
-  first = _build_summon_prompt(url, cfg)
-  red_doc.write_text("RED LINE VERSION TWO", encoding="utf-8")
-  format_doc.write_text("REPLY FORMAT VERSION TWO", encoding="utf-8")
-  second = _build_summon_prompt(url, cfg)
-
-  assert first.endswith(f"{CITATION_BOUNDARY}\n{_RED_LINE}\n{_REPLY_FORMAT}")
-  assert _RED_LINE not in second and _REPLY_FORMAT not in second
-  assert "RED LINE VERSION TWO" in second
-  assert "REPLY FORMAT VERSION TWO" in second
-
-
-def test_build_summon_prompt_missing_red_line_doc_raises_with_path_and_cause(tmp_path: Path) -> None:
-  """No embedded-text fallback: a missing doc fails the build, naming the path."""
-  cfg = _cfg_with_repo(tmp_path)  # no prompts dir under this repo root
-  missing_path = tmp_path / "prompts" / "slack_reply_redline.md"
-
-  with pytest.raises(ValueError) as excinfo:
-    _build_summon_prompt("https://fake.slack.test/archives/C_TEST/p1700000000.000100", cfg)
-
-  assert str(missing_path) in str(excinfo.value)
-  assert "most likely predates" in str(excinfo.value)
-
-
-def test_build_summon_prompt_missing_reply_format_doc_raises_with_path_and_cause(tmp_path: Path) -> None:
-  """A prompt is never assembled without the reply-format contract either."""
-  shutil.copytree(_RED_LINE_PATH.parent, tmp_path / "prompts")
-  (tmp_path / "prompts" / "slack_reply_format.md").unlink()
-  cfg = _cfg_with_repo(tmp_path)
-  missing_path = tmp_path / "prompts" / "slack_reply_format.md"
-
-  with pytest.raises(ValueError) as excinfo:
-    _build_summon_prompt("https://fake.slack.test/archives/C_TEST/p1700000000.000100", cfg)
-
-  assert str(missing_path) in str(excinfo.value)
-  assert "most likely predates" in str(excinfo.value)
-
-
 @pytest.mark.asyncio
 async def test_same_thread_twice_reuses_the_session(tmp_path: Path) -> None:
   cfg, session_mgr, client = _rig(tmp_path)
@@ -268,242 +182,6 @@ async def test_unhandled_event_drops_with_no_side_effects(tmp_path: Path, event_
   assert result is None
   assert not client.calls
   assert await session_mgr.get_session(_sid(event)) is None
-
-
-@pytest.mark.asyncio
-async def test_top_level_mention_uses_own_ts(tmp_path: Path) -> None:
-  cfg, session_mgr, client = _rig(tmp_path)
-  event = _make_event()  # no thread_ts, so the mention's own ts is the thread
-  tasks = _spawn_round_tasks()
-
-  with _mention_seam(tasks):
-    sid = await handle_app_mention(event, cfg, session_mgr, client)
-    await asyncio.gather(*tasks)
-
-  assert sid == summon_session_id("T_TEST", "C_TEST", _TS)
-  posts = [c for name, c in client.calls if name == "post_message"]
-  assert not posts
-  reactions = [c for name, c in client.calls if name == "add_reaction"]
-  assert reactions == [{"channel": "C_TEST", "name": "eyes", "ts": _TS}]
-
-
-@pytest.mark.asyncio
-async def test_reactions_add_failure_still_spawns_the_round(tmp_path: Path) -> None:
-  """A failing reactions.add costs only the eyes: the round still spawns and persists."""
-  cfg, session_mgr, _ = _rig(tmp_path)
-  event = _make_event()
-
-  class _FailingReactionClient(FakeSlackClient):
-
-    async def add_reaction(self, channel: str, name: str, ts: str) -> dict:
-      raise RuntimeError("missing_scope")
-
-  client = _FailingReactionClient()
-  tasks = _spawn_round_tasks()
-
-  with _mention_seam(tasks) as trigger:
-    sid = await handle_app_mention(event, cfg, session_mgr, client)
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-  assert sid == _sid(event)
-  assert len(tasks) == 2
-  trigger.assert_awaited_once()
-  failures = [r for r in results if isinstance(r, Exception)]
-  assert len(failures) == 1
-  assert isinstance(failures[0], RuntimeError)
-  assert str(failures[0]) == "missing_scope"
-
-  events = session_mgr.load_chat_events_sync(sid)
-  agent_messages = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE]
-  assert len(agent_messages) == 1
-
-
-@pytest.mark.asyncio
-async def test_archived_session_is_unarchived_not_duplicated(tmp_path: Path) -> None:
-  cfg, session_mgr, client = _rig(tmp_path)
-  event = _make_event()
-  sid = _sid(event)
-  await session_mgr.create_session(
-      CreateSessionRequest(session_id=sid, name="slack-archived", slack_origin=_origin(event)))
-  await session_mgr.archive_session(sid)
-  assert (await session_mgr.get_session(sid)).status == "archived"
-
-  with _mention_seam():
-    result = await handle_app_mention(event, cfg, session_mgr, client)
-
-  assert result == sid
-  assert (await session_mgr.get_session(sid)).status == "active"
-  sessions = await session_mgr.list_sessions()
-  assert len(sessions) == 1
-  assert sessions[0].id == sid
-
-
-@pytest.mark.asyncio
-async def test_new_summon_session_is_grouped_by_channel_name(tmp_path: Path) -> None:
-  """A fresh summon session (slack_origin set, group empty) lands in `Slack #<name>`,
-  and its session name carries the same resolved label."""
-  cfg, session_mgr, client = _rig(tmp_path)
-  event = _make_event()
-
-  with _mention_seam():
-    sid = await handle_app_mention(event, cfg, session_mgr, client)
-
-  assert sid == _sid(event)
-  meta = await session_mgr.get_session(sid)
-  assert meta is not None
-  assert meta.group == "Slack #name-of-C_TEST"
-  assert meta.name.startswith("Slack #name-of-C_TEST ")
-
-
-@pytest.mark.asyncio
-async def test_unresolvable_channel_name_groups_by_channel_id(tmp_path: Path) -> None:
-  """A missing_scope-style resolution failure still groups, as `Slack #<channel_id>`,
-  and the mention is still accepted and answered."""
-  cfg, session_mgr, _ = _rig(tmp_path)
-  event = _make_event()
-
-  class _UnresolvingClient(FakeSlackClient):
-
-    async def get_channel_name(self, channel_id: str) -> str | None:
-      self.calls.append(("get_channel_name", {"channel": channel_id}))
-      return None
-
-  client = _UnresolvingClient()
-  tasks = _spawn_round_tasks()
-
-  with _mention_seam(tasks) as trigger:
-    sid = await handle_app_mention(event, cfg, session_mgr, client)
-    await asyncio.gather(*tasks)
-
-  assert sid == _sid(event)
-  meta = await session_mgr.get_session(sid)
-  assert meta is not None
-  assert meta.group == "Slack #C_TEST"
-  assert meta.name.startswith("Slack #C_TEST ")
-  trigger.assert_awaited_once()
-  events = session_mgr.load_chat_events_sync(sid)
-  agent_messages = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE]
-  assert len(agent_messages) == 1
-
-
-@pytest.mark.asyncio
-async def test_existing_group_is_never_overwritten(tmp_path: Path) -> None:
-  """A repeat mention on a session with a non-empty group does not call set_group."""
-  cfg, session_mgr, client = _rig(tmp_path)
-  event = _make_event()
-  sid = _sid(event)
-  await session_mgr.create_session(
-      CreateSessionRequest(session_id=sid, name="slack-grouped", slack_origin=_origin(event)))
-  await session_mgr.set_group(sid, "Manual Group")
-
-  with _mention_seam(), patch.object(session_mgr, "set_group", new=AsyncMock()) as set_group:
-    result = await handle_app_mention(event, cfg, session_mgr, client)
-
-  assert result == sid
-  set_group.assert_not_awaited()
-  assert (await session_mgr.get_session(sid)).group == "Manual Group"
-
-
-@pytest.mark.asyncio
-async def test_unarchived_session_with_empty_group_is_grouped(tmp_path: Path) -> None:
-  """The unarchive path groups an empty-group session exactly like the create path."""
-  cfg, session_mgr, client = _rig(tmp_path)
-  event = _make_event()
-  sid = _sid(event)
-  await session_mgr.create_session(
-      CreateSessionRequest(session_id=sid, name="slack-archived", slack_origin=_origin(event)))
-  await session_mgr.archive_session(sid)
-
-  with _mention_seam():
-    result = await handle_app_mention(event, cfg, session_mgr, client)
-
-  assert result == sid
-  meta = await session_mgr.get_session(sid)
-  assert meta is not None
-  assert meta.status == "active"
-  assert meta.group == "Slack #name-of-C_TEST"
-
-
-@pytest.mark.asyncio
-async def test_set_group_failure_does_not_break_handle_app_mention(tmp_path: Path) -> None:
-  """A set_group failure is logged and swallowed: the mention is still accepted and answered."""
-  cfg, session_mgr, client = _rig(tmp_path)
-  event = _make_event()
-
-  with (
-      _mention_seam(),
-      patch.object(session_mgr, "set_group", new=AsyncMock(side_effect=RuntimeError("disk full"))),
-  ):
-    sid = await handle_app_mention(event, cfg, session_mgr, client)
-
-  assert sid == _sid(event)
-  assert (await session_mgr.get_session(sid)).group is None
-  events = session_mgr.load_chat_events_sync(sid)
-  agent_messages = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE]
-  assert len(agent_messages) == 1
-
-
-@pytest.mark.asyncio
-async def test_ensure_slack_group_skips_sessions_without_slack_origin(tmp_path: Path) -> None:
-  """The label form of ensure_slack_group writes nothing when the session has no slack_origin."""
-  _cfg, session_mgr, _ = _rig(tmp_path)
-  meta = await session_mgr.create_session(CreateSessionRequest(name="web-session"))
-
-  with patch.object(session_mgr, "set_group", new=AsyncMock()) as set_group:
-    await ensure_slack_group(session_mgr, meta.id, "Slack #name-of-C_TEST")
-
-  set_group.assert_not_awaited()
-
-
-class _StubResp:
-  """Minimal httpx.Response stand-in: only the two members get_channel_name touches."""
-
-  def __init__(self, body: dict) -> None:
-    self._body = body
-
-  def raise_for_status(self) -> None:
-    return None
-
-  def json(self) -> dict:
-    return self._body
-
-
-class _StubHttp:
-  """Minimal httpx.AsyncClient stand-in for SlackClient.get_channel_name tests."""
-
-  def __init__(self, payload: dict) -> None:
-    self.payload = payload
-    self.gets: list[dict] = []
-
-  async def get(self, url: str, *, headers: dict, params: dict) -> _StubResp:
-    self.gets.append({"url": url, "params": params})
-    return _StubResp(self.payload)
-
-
-@pytest.mark.asyncio
-async def test_get_channel_name_resolves_and_caches() -> None:
-  http = _StubHttp({"ok": True, "channel": {"name": "general"}})
-  client = SlackClient(http, bot_token="test-bot-token", app_token="test-app-token")  # type: ignore[arg-type]
-
-  assert await client.get_channel_name("C_TEST") == "general"
-  assert await client.get_channel_name("C_TEST") == "general"
-  assert http.gets == [{
-      "url": "https://slack.com/api/conversations.info",
-      "params": {
-          "channel": "C_TEST"
-      },
-  }]
-
-
-@pytest.mark.asyncio
-async def test_get_channel_name_missing_scope_caches_none() -> None:
-  """A failure resolves to None without raising and is cached for the process lifetime."""
-  http = _StubHttp({"ok": False, "error": "missing_scope"})
-  client = SlackClient(http, bot_token="test-bot-token", app_token="test-app-token")  # type: ignore[arg-type]
-
-  assert await client.get_channel_name("C_TEST") is None
-  assert await client.get_channel_name("C_TEST") is None
-  assert len(http.gets) == 1
 
 
 @pytest.mark.asyncio

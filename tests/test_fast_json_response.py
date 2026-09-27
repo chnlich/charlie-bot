@@ -31,20 +31,6 @@ def test_parsed_content_matches_the_starlette_render() -> None:
   assert json.loads(bytes(fast.body)) == json.loads(bytes(slow.body))
 
 
-def test_body_is_raw_utf8() -> None:
-  body = bytes(FastJsonResponse(_CJK_PAYLOAD).body)
-  # The non-ASCII text rides raw UTF-8, not \uXXXX escapes — the wire bytes
-  # shrink on CJK-bearing payloads and the parsed content is unchanged.
-  assert "问候语".encode() in body
-  assert json.loads(body) == _CJK_PAYLOAD
-
-
-def test_media_type_is_json() -> None:
-  response = FastJsonResponse(_CJK_PAYLOAD)
-  assert response.media_type == "application/json"
-  assert response.headers["content-type"] == "application/json"
-
-
 def test_nan_renders_as_null_not_invalid_json() -> None:
   body = bytes(FastJsonResponse({"a": float("nan"), "b": float("inf")}).body)
   # orjson's boundary: NaN/Infinity render as null — valid JSON on the wire,

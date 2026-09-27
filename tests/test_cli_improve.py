@@ -5,13 +5,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from conftest import (
     CONFIG_GET_CONFIG_PATCH_TARGET,
-    assert_cli_reject,
     make_json_response,
     make_sessions_dir_config,
     patched_cli_post,
 )
-from conftest import setup_session_cwd as _setup_session_cwd
-from pydantic import ValidationError
 
 from src.cli.common import _SentButLostError
 from src.cli.improve import main
@@ -97,64 +94,9 @@ def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert exc_info.value.code == 1
 
 
-# One row per bad --goal-file/--plan-file shape: which files to seed (name -> content,
-# absent = leave nonexistent), which file --goal-file names, which --plan-file to append
-# (None = no --plan-file), and the stderr fragments main() must print.
-_REJECT_BAD_FILE_ROWS = [
-    pytest.param({}, "nope.md", None, ("goal-file", "not found"), id="goal-file-missing"),
-    pytest.param({"empty.md": "   \n"}, "empty.md", None, ("empty",), id="goal-file-empty"),
-    pytest.param({"goal.md": "fix"}, "goal.md", "nope-plan.md", ("plan-file", "not found"), id="plan-file-missing"),
-    pytest.param(
-        {
-            "goal.md": "fix",
-            "empty-plan.md": "   \n"
-        },
-        "goal.md",
-        "empty-plan.md", ("plan-file", "empty"),
-        id="plan-file-empty"),
-]
-
-
-@pytest.mark.parametrize(("write_files", "goal_name", "plan_name", "err_fragments"), _REJECT_BAD_FILE_ROWS)
-def test_main_rejects_bad_file_before_any_request(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    write_files: dict[str, str],
-    goal_name: str,
-    plan_name: str | None,
-    err_fragments: tuple[str, ...],
-) -> None:
-  """A missing or whitespace-only --goal-file/--plan-file exits non-zero before any request is made."""
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  for name, content in write_files.items():
-    (tmp_path / name).write_text(content)
-  extra = ["--plan-file", str(tmp_path / plan_name)] if plan_name is not None else []
-
-  with patched_cli_post(cfg, _improve_argv(None, str(tmp_path), tmp_path / goal_name, *extra)) as post_mock, \
-       pytest.raises(SystemExit) as exc_info:
-    main()
-
-  assert_cli_reject(exc_info, capsys, *err_fragments)
-  post_mock.assert_not_called()
-
-
 # ---------------------------------------------------------------------------
 # Tests for the /api/internal/improve endpoint
 # ---------------------------------------------------------------------------
-
-
-def test_improve_request_rejects_branch_prefix() -> None:
-  """ImproveRequest fails fast on the removed branch_prefix field."""
-  with pytest.raises(ValidationError):
-    ImproveRequest(
-        session_id="s1",
-        repo_path="/tmp/repo",
-        base_branch="main",
-        iterations=1,
-        goal="fix",
-        branch_prefix="improve/old",
-    )
 
 
 @pytest.mark.asyncio

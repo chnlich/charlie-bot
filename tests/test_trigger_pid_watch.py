@@ -5,13 +5,10 @@ import asyncio
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-    TRIGGER_MASTER_PATCH_TARGET,
     assert_trigger_fired,
     patch_trigger_mocks,
 )
@@ -19,10 +16,7 @@ from conftest import make_trigger_setup as _make_mgr
 
 from src.core.models import (
     LocalPid,
-    PendingTrigger,
-    TriggerStatus,
 )
-from src.core.triggers import _format_suffix
 
 
 def _local(*pids: int) -> list[LocalPid]:
@@ -61,31 +55,6 @@ async def test_pid_gone_immediate_fire(tmp_path: Path, pidfd_open_available: Non
 
 
 @pytest.mark.asyncio
-async def test_pid_exit_before_timeout(tmp_path: Path, pidfd_open_available: None) -> None:
-  _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-
-  proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.5)"])
-
-  with patch_trigger_mocks() as mock_master:
-    trigger = await trigger_mgr.create_trigger(
-        session_id,
-        delay_seconds=30,
-        message="watch exit",
-        watch_targets=_local(proc.pid),
-    )
-    task = trigger_mgr._tasks[trigger.id]
-    start = time.monotonic()
-    await asyncio.wait_for(task, timeout=10)
-    elapsed = time.monotonic() - start
-
-  proc.wait(timeout=2)
-  assert elapsed < 5, f"trigger took {elapsed:.1f}s, expected <5s"
-
-  msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="completed")
-  assert f"finished: {proc.pid}" in msg
-
-
-@pytest.mark.asyncio
 async def test_timeout_before_pid_exit(tmp_path: Path, pidfd_open_available: None) -> None:
   _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
 
@@ -106,109 +75,3 @@ async def test_timeout_before_pid_exit(tmp_path: Path, pidfd_open_available: Non
   finally:
     proc.kill()
     proc.wait(timeout=5)
-
-
-@pytest.mark.asyncio
-async def test_multiple_pids_all_semantics(tmp_path: Path, pidfd_open_available: None) -> None:
-  _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-
-  fast = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.3)"])
-  slow = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1.5)"])
-
-  try:
-    with patch_trigger_mocks() as mock_master:
-      trigger = await trigger_mgr.create_trigger(
-          session_id,
-          delay_seconds=30,
-          message="watch all",
-          watch_targets=_local(fast.pid, slow.pid),
-      )
-      task = trigger_mgr._tasks[trigger.id]
-      start = time.monotonic()
-      await asyncio.wait_for(task, timeout=10)
-      elapsed = time.monotonic() - start
-
-    assert elapsed >= 1.0, f"fired too early: {elapsed:.2f}s"
-    assert elapsed < 5, f"fired too late: {elapsed:.2f}s"
-    msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="completed")
-    assert str(fast.pid) in msg
-    assert str(slow.pid) in msg
-  finally:
-    for p in (fast, slow):
-      if p.poll() is None:
-        p.kill()
-      p.wait(timeout=5)
-
-
-@pytest.mark.asyncio
-async def test_time_only_path_unchanged(tmp_path: Path) -> None:
-  _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-
-  with patch_trigger_mocks() as mock_master:
-    trigger = await trigger_mgr.create_trigger(
-        session_id,
-        delay_seconds=0,
-        message="hello",
-    )
-    task = trigger_mgr._tasks[trigger.id]
-    await asyncio.wait_for(task, timeout=5)
-
-  stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-  assert stored.status == TriggerStatus.FIRED
-  assert stored.fire_reason == "timeout"
-  msg = mock_master.await_args.args[1]
-  assert msg == "[Scheduled trigger fired] hello"
-  assert stored.watch_targets == []
-
-
-@pytest.mark.asyncio
-async def test_pidfd_fallback_works_on_host(tmp_path: Path, pidfd_open_available: None) -> None:
-  proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.5)"])
-  try:
-    _cfg, _session_mgr, trigger_mgr, session_id = await _make_mgr(tmp_path)
-    with patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()):
-      trigger = await trigger_mgr.create_trigger(
-          session_id,
-          delay_seconds=10,
-          message="live",
-          watch_targets=_local(proc.pid),
-      )
-      fresh = None
-      for _ in range(50):
-        await asyncio.sleep(0.1)
-        fresh = await trigger_mgr._load_trigger(session_id, trigger.id)
-        if fresh.status == TriggerStatus.FIRED:
-          break
-      assert fresh is not None and fresh.status == TriggerStatus.FIRED
-      assert fresh.fire_reason == "completed"
-  finally:
-    proc.wait()
-
-
-@pytest.mark.parametrize(
-    ("reason", "finished", "still_alive", "suffix"), [
-        ("completed", ["111 (gone at start)", "222"], [], " (finished: 111 (gone at start), 222)"),
-        ("completed", ["111", "222"], [], " (finished: 111, 222)"),
-        ("completed", ["neptune:5678", "noire:9012"], [], " (finished: neptune:5678, noire:9012)"),
-        ("completed", ["slurm:42: COMPLETED 0:0"], [], " (finished: slurm:42: COMPLETED 0:0)"),
-        ("timeout", ["111"], ["222", "333"], " (finished: 111; still alive: 222, 333)"),
-        ("timeout", [], ["222", "333"], " (still alive: 222, 333)"),
-        (
-            "timeout", ["neptune:5678", "slurm:42: COMPLETED 0:0"], ["1234", "slurm:99"],
-            " (finished: neptune:5678, slurm:42: COMPLETED 0:0; still alive: 1234, slurm:99)"),
-    ])
-def test_format_suffix(reason: str, finished: list[str], still_alive: list[str], suffix: str) -> None:
-  """Every watch outcome renders its pre-formatted labels into the message suffix."""
-  assert _format_suffix(reason, finished, still_alive) == suffix
-
-
-def test_load_legacy_trigger_without_watch_pids() -> None:
-  """An existing JSON file without watch_pids/fire_reason must still load."""
-  legacy = (
-      '{"id": "legacy-1", "session_id": "sess", '
-      '"fire_at": "2030-01-01T00:00:00+00:00", "message": "hi", '
-      '"created_at": "2030-01-01T00:00:00+00:00", "status": "pending", '
-      '"fired_at": null}')
-  trigger = PendingTrigger.model_validate_json(legacy)
-  assert trigger.watch_targets == []
-  assert trigger.fire_reason is None

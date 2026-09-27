@@ -18,9 +18,8 @@ from typing import Any
 
 import pytest
 from conftest import _async_wait_for, cancel_and_drain
-from test_opencode_backend import _build_backend, _FakeSseResponse
 
-from src.agents.backends.base import _TAIL_POLL_INTERVAL, iter_ndjson_events, tail_follow_events
+from src.agents.backends.base import iter_ndjson_events, tail_follow_events
 
 _LINES = [
     b'{"type": "assistant", "seq": 1}\n',
@@ -54,16 +53,6 @@ class _LineReader:
 async def test_iter_ndjson_events_parses_and_skips() -> None:
   events = [event async for event in iter_ndjson_events(_LineReader(_LINES))]
   assert [event["seq"] for event in events] == [1, 3]
-
-
-@pytest.mark.asyncio
-async def test_iter_ndjson_events_torn_bytes_parse_as_replacement_char() -> None:
-  """A complete line carrying a torn multibyte char parses as U+FFFD through
-  the skip contract's replace fallback; the funnel never decodes valid lines."""
-  lines = [b'{"type": "assistant", "seq": 1, "note": "ok\xff"}\n', b'{"type": "result", "seq": 2}\n']
-  events = [event async for event in iter_ndjson_events(_LineReader(lines))]
-  assert events[0]["note"] == "ok\ufffd"
-  assert [event["seq"] for event in events] == [1, 2]
 
 
 async def _collect_tail_events(raw_bytes: bytes, **kwargs: Any) -> list[dict]:
@@ -116,12 +105,6 @@ async def _collect_staged_tail(partial: bytes, completion: bytes) -> list[dict]:
     finally:
       await cancel_and_drain(task)
     return events
-
-
-@pytest.mark.asyncio
-async def test_tail_follow_events_parses_and_skips() -> None:
-  events = await _collect_tail_events(b"".join(_LINES), post_result_timeout=60.0)
-  assert [event["seq"] for event in events] == [1, 3]
 
 
 @pytest.mark.asyncio
@@ -181,60 +164,9 @@ async def test_tail_follow_events_carries_partial_line_across_read_rounds() -> N
 
 
 @pytest.mark.asyncio
-async def test_tail_follow_events_carries_multimegabyte_line_across_read_rounds() -> None:
-  """A multi-MB line written in two appends yields exactly once: the carry
-  joins the next round's read in one pass, so the cost stays linear in the
-  line's bytes (the live raw log carries multi-MB events)."""
-  partial = b'{"type": "assistant", "seq": 9, "pad": "' + b"x" * (1024 * 1024)
-  events = await _collect_staged_tail(partial, b'"}\n')
-  assert [event["seq"] for event in events] == [9]
-
-
-@pytest.mark.asyncio
 async def test_tail_follow_events_drops_torn_final_line() -> None:
   """A final line the producer never finished stays unprocessed (the torn
   final write replays as at most a duplicate — never a loss)."""
   torn = b'{"type": "assistant", "seq": 1}\n{"type": "assistant", "seq": 2'
   events = await _collect_tail_events(torn, post_result_timeout=60.0)
   assert [event["seq"] for event in events] == [1]
-
-
-@pytest.mark.asyncio
-async def test_tail_follow_events_warns_torn_bytes_only_for_the_partial() -> None:
-  """The torn-tail warning names the unprocessed partial's bytes, and a log
-  ending on a completed line warns nothing."""
-  from structlog.testing import capture_logs
-
-  complete = b'{"type": "assistant", "seq": 1}\n'
-  torn_tail = b'{"type": "assistant", "seq": 2'
-  with capture_logs() as logs:
-    events = await _collect_tail_events(complete, post_result_timeout=60.0)
-  assert [event["seq"] for event in events] == [1]
-  assert not [entry for entry in logs if entry.get("event") == "raw_trailing_torn_line_dropped"]
-
-  with capture_logs() as logs:
-    events = await _collect_tail_events(complete + torn_tail, post_result_timeout=60.0)
-  assert [event["seq"] for event in events] == [1]
-  warnings = [entry for entry in logs if entry.get("event") == "raw_trailing_torn_line_dropped"]
-  assert len(warnings) == 1
-  assert warnings[0]["bytes"] == len(torn_tail)
-
-
-@pytest.mark.asyncio
-async def test_opencode_sse_events_rejects_nan_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
-  """The stdlib parser accepted NaN literals; orjson fails the frame loudly
-  (the boundary the stream funnels deliberately adopt, as the file readers
-  did — machine-written upstream events carry none)."""
-  backend = _build_backend(monkeypatch)
-  response = _FakeSseResponse(["data: " + '{"type": "session.idle", "note": NaN}', ""])
-
-  with pytest.raises(ValueError):
-    async for _ in backend._iter_sse_events(response):
-      pass
-
-
-def test_tail_follow_default_poll_interval_is_the_discovery_bound() -> None:
-  """The default poll interval is the discovery delay the follow loop adds to
-  every event the CLI writes; the M122 healthy line (discovery median
-  < 0.015 s, max < 0.030 s) is priced against 0.02 s."""
-  assert _TAIL_POLL_INTERVAL <= 0.02

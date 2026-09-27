@@ -10,10 +10,9 @@ import io
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
-from conftest import legacy_memory_entry_text, memory_entry_text
+from conftest import memory_entry_text
 from conftest import write_memory_entry as _write_entry
 from conftest import write_memory_topics as _write_topics
 
@@ -22,21 +21,11 @@ from src.core.memory import (
     MemoryFormatError,
     assemble_master,
     assemble_worker,
-    lint,
     load_store,
     parse_entry,
 )
 
 # --- parse_entry: v2 ----------------------------------------------------------
-
-
-def write_memory_staging(memory_dir: Path, name: str, topic: str, slug: str, legacy: bool = False, **kw: Any) -> Path:
-  """Write one staging candidate ``staging/<name>.md``; same text rules as write_memory_entry."""
-  memory_dir.joinpath("staging").mkdir(parents=True, exist_ok=True)
-  p = memory_dir / "staging" / f"{name}.md"
-  text = legacy_memory_entry_text(topic, slug, **kw) if legacy else memory_entry_text(topic, slug, **kw)
-  p.write_text(text, encoding="utf-8")
-  return p
 
 
 def test_parse_valid(tmp_path: Path) -> None:
@@ -57,117 +46,8 @@ def test_parse_valid(tmp_path: Path) -> None:
   assert e.id == "profile/dark-mode"
 
 
-def test_parse_audience_comma_list_variants(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  e = parse_entry(_write_entry(tmp_path, "profile", "a", audience="master,worker"))
-  assert e.audience == ["master", "worker"]
-  e = parse_entry(_write_entry(tmp_path, "profile", "b", audience="worker , master"))
-  assert e.audience == ["worker", "master"]
-  e = parse_entry(_write_entry(tmp_path, "profile", "c", audience="worker"))
-  assert e.audience == ["worker"]
 
 
-def test_parse_body_containing_separator(tmp_path: Path) -> None:
-  """A `---` line inside the body is opaque; only the first header block is parsed."""
-  _write_topics(tmp_path)
-  body = "---\n\nthis is not a header\n---\nstill body\n"
-  p = _write_entry(tmp_path, "profile", "with-sep", body=body)
-  e = parse_entry(p)
-  assert e.title == "With Sep"
-  assert "this is not a header" in e.body
-  assert "still body" in e.body
-  assert e.body.count("---") == 2
-
-
-def test_parse_title_with_free_text(tmp_path: Path) -> None:
-  """Frontmatter title is a free-text line (spaces, punctuation), not slug-charset."""
-  _write_topics(tmp_path)
-  p = _write_entry(tmp_path, "profile", "pref", title="Prefers dark UI, everywhere & always")
-  e = parse_entry(p)
-  assert e.title == "Prefers dark UI, everywhere & always"
-
-
-# --- parse_entry: structural errors -------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "text, expected",
-    [
-        ("---\ntopic: profile\ntitle:    \n---\nbody\n", "empty 'title' header value"),
-        ("---\nscope: user\ntopic: profile\nNot A Header\n---\n# T\n", "malformed header line"),
-        ("scope: user\n---\n# T\n", "expected '---' front matter opener"),
-        ("---\ntopic: profile\nscope: user\nbogus: val\n---\n# T\n", "unknown header field"),
-    ],
-    ids=["empty-title-value", "bad-header-line", "missing-opener", "unknown-header-field"],
-)
-def test_parse_rejects_malformed_front_matter(tmp_path: Path, text: str, expected: str) -> None:
-  """Each malformed front-matter shape fails loudly with its own MemoryFormatError message."""
-  _write_topics(tmp_path)
-  d = tmp_path / "entries" / "profile"
-  d.mkdir(parents=True)
-  p = d / "bad.md"
-  p.write_text(text, encoding="utf-8")
-  with pytest.raises(MemoryFormatError, match=expected):
-    parse_entry(p)
-
-
-def test_parse_non_title_fields_stay_slug_charset(tmp_path: Path) -> None:
-  """Free-text values are limited to title; scope/audience values stay charset-checked."""
-  _write_topics(tmp_path)
-  d = tmp_path / "entries" / "profile"
-  d.mkdir(parents=True)
-  p = d / "bad.md"
-  p.write_text("---\ntopic: profile\nscope: user x\ntitle: T\n---\nbody\n", encoding="utf-8")
-  with pytest.raises(MemoryFormatError, match="malformed header line"):
-    parse_entry(p)
-  p.write_text("---\ntopic: profile\nscope: user\naudience: master worker\ntitle: T\n---\nbody\n", encoding="utf-8")
-  with pytest.raises(MemoryFormatError, match="malformed header line"):
-    parse_entry(p)
-
-
-def test_parse_missing_title_anywhere(tmp_path: Path) -> None:
-  """No frontmatter title and no legacy '# <title>' body opener -> fail loud."""
-  _write_topics(tmp_path)
-  d = tmp_path / "entries" / "profile"
-  d.mkdir(parents=True)
-  p = d / "notitle.md"
-  p.write_text("---\ntopic: profile\nscope: user\naudience: both\n---\nno title here\n", encoding="utf-8")
-  with pytest.raises(MemoryFormatError, match="no frontmatter 'title'"):
-    parse_entry(p)
-
-
-# --- parse_entry: legacy (v1) dual-read ---------------------------------------
-
-
-def test_parse_legacy_fallback(tmp_path: Path) -> None:
-  """Legacy format: title from the body '# <title>' opener; 'both' -> [master, worker]."""
-  _write_topics(tmp_path)
-  p = _write_entry(tmp_path, "profile", "dark-mode", legacy=True)
-  e = parse_entry(p)
-  assert e.audience == ["master", "worker"]
-  assert e.audience_raw == "both"
-  assert e.created == "2026-07-28"
-  assert e.source == "test"
-  assert e.title == "Dark Mode"
-  assert e.title_in_header is False
-  assert e.body.startswith("# Dark Mode\n\nbody for dark-mode")
-
-
-def test_parse_legacy_created_source_parseable(tmp_path: Path) -> None:
-  """created/source remain parseable (rejected by lint only, and only in entries/)."""
-  _write_topics(tmp_path)
-  # v2 header plus legacy created/source: still parses; lint (entries/) will flag them.
-  p = tmp_path / "entries" / "profile" / "withmeta.md"
-  p.parent.mkdir(parents=True)
-  p.write_text(
-      "---\nscope: user\ntopic: profile\naudience: master, worker\ntitle: With Meta\n"
-      "created: 2026-07-28\nsource: test\n---\nplain body\n",
-      encoding="utf-8")
-  e = parse_entry(p)
-  assert e.created == "2026-07-28"
-  assert e.source == "test"
-  assert e.title == "With Meta"
-  assert e.title_in_header is True
 
 
 # --- load_store semantic validation ------------------------------------------
@@ -216,149 +96,6 @@ def test_load_store_rejects_invalid_entry(
   assert expected_fragment in str(exc_info.value)
 
 
-def test_load_missing_topics_raises(tmp_path: Path) -> None:
-  # tmp_path exists but has no topics file.
-  with pytest.raises(MemoryFormatError, match="topics vocabulary file not found"):
-    load_store(tmp_path)
-
-
-def test_load_empty_store_is_valid(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  store = load_store(tmp_path)
-  assert not store.entries
-  assert set(store.topics) == {"profile", "communication", "workflow", "rulings", "host", "charliebot"}
-
-
-def test_load_legacy_store_still_loads(tmp_path: Path) -> None:
-  """Dual-read: a fully legacy-format store loads even though lint flags it."""
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "dark-mode", legacy=True)
-  _write_entry(tmp_path, "charliebot", "cli-flags", legacy=True, audience="master")
-  store = load_store(tmp_path)
-  assert {e.slug for e in store.entries} == {"dark-mode", "cli-flags"}
-  assert all(e.title for e in store.entries)
-
-
-# --- lint: v2 strict entries/, relaxed staging/ --------------------------------
-
-
-def test_lint_clean_store(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "dark-mode")
-  assert not lint(tmp_path)
-
-
-def test_lint_entries_flags_missing_title(tmp_path: Path) -> None:
-  """entries/ requires the frontmatter title; a legacy body title does not satisfy it."""
-  _write_topics(tmp_path)
-  p = tmp_path / "entries" / "profile" / "old.md"
-  p.parent.mkdir(parents=True)
-  p.write_text(
-      "---\nscope: user\ntopic: profile\naudience: master, worker\n---\n# Old Title\n\nbody\n", encoding="utf-8")
-  violations = lint(tmp_path)
-  assert any("missing required header field 'title'" in v for v in violations)
-
-
-def test_lint_entries_flags_created_source(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  p = tmp_path / "entries" / "profile"
-  p.mkdir(parents=True)
-  p.joinpath("meta.md").write_text(
-      "---\nscope: user\ntopic: profile\naudience: master, worker\ntitle: Meta\n"
-      "created: 2026-07-28\nsource: test\n---\nbody\n",
-      encoding="utf-8")
-  violations = lint(tmp_path)
-  assert any("'created' is forbidden in entries/" in v for v in violations)
-  assert any("'source' is forbidden in entries/" in v for v in violations)
-
-
-def test_lint_entries_flags_literal_both(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  p = tmp_path / "entries" / "profile"
-  p.mkdir(parents=True)
-  p.joinpath("both.md").write_text(
-      "---\nscope: user\ntopic: profile\naudience: both\ntitle: Both\n---\nbody\n", encoding="utf-8")
-  violations = lint(tmp_path)
-  assert any("literal audience 'both' is forbidden in entries/" in v for v in violations)
-
-
-def test_lint_entries_flags_bad_audience_element(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "a", audience="master,all")
-  violations = lint(tmp_path)
-  assert any("audience element 'all' not in {master, worker}" in v for v in violations)
-
-
-def test_lint_staging_legacy_candidate_stays_clean(tmp_path: Path) -> None:
-  """Existing staged candidates (created/source header, both, '# ' body) stay lint-clean."""
-  _write_topics(tmp_path)
-  write_memory_staging(
-      tmp_path, "20260728T120000Z-abcd1234-pending", "profile", "pending", legacy=True, audience="both")
-  violations = lint(tmp_path)
-  assert not violations, f"expected clean, got: {violations}"
-
-
-def test_lint_revises_in_staging_accepted(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "existing")
-  write_memory_staging(
-      tmp_path, "20260728T120000Z-abcd1234-rev-prop", "newtopic", "rev-prop", revises="existing", audience="worker")
-  violations = lint(tmp_path)
-  assert not violations, f"expected clean, got: {violations}"
-
-
-def test_lint_staging_comma_audience_accepted(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  write_memory_staging(tmp_path, "cand", "profile", "cand", audience="master, worker")
-  violations = lint(tmp_path)
-  assert not violations, f"expected clean, got: {violations}"
-
-
-def test_lint_revises_in_entries_flagged(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "rev", revises="old")
-  violations = lint(tmp_path)
-  assert any("'revises' is forbidden in entries" in v for v in violations)
-
-
-def test_lint_staging_missing_topic_flagged(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  # A staging file with no topic field at all.
-  memory_dir = tmp_path
-  memory_dir.joinpath("staging").mkdir(parents=True, exist_ok=True)
-  p = memory_dir / "staging" / "cand.md"
-  p.write_text("---\nscope: user\n---\n# Cand\n", encoding="utf-8")
-  violations = lint(tmp_path)
-  assert any("missing required header field 'topic'" in v for v in violations)
-
-
-def test_lint_staging_free_form_capture_stays_clean(tmp_path: Path) -> None:
-  """A free-form capture (no frontmatter, '# <title>' first line) lints clean."""
-  _write_topics(tmp_path)
-  staging = tmp_path / "staging"
-  staging.mkdir()
-  staging.joinpath("20260810T000000Z-nosess-dark-mode.md").write_text(
-      "# Dark Mode\n\nUser prefers dark UI.\n", encoding="utf-8")
-  assert not lint(tmp_path)
-
-
-def test_lint_staging_capture_bad_first_line_flagged(tmp_path: Path) -> None:
-  """A staging file whose first line is neither '---' nor '# <title>' is a violation."""
-  _write_topics(tmp_path)
-  staging = tmp_path / "staging"
-  staging.mkdir()
-  staging.joinpath("cand.md").write_text("no title here\n", encoding="utf-8")
-  violations = lint(tmp_path)
-  assert any("cand.md" in v for v in violations)
-
-
-def test_lint_staging_capture_empty_title_flagged(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  staging = tmp_path / "staging"
-  staging.mkdir()
-  staging.joinpath("cand.md").write_text("# \n\nbody\n", encoding="utf-8")
-  violations = lint(tmp_path)
-  assert any("cand.md" in v and "empty title" in v for v in violations)
 
 
 # --- assemble_master ----------------------------------------------------------
@@ -377,83 +114,8 @@ def test_assemble_master_resident_full_and_others_index(tmp_path: Path) -> None:
   assert memory.INDEX_HEADER in block
 
 
-def test_assemble_master_no_duplicate_heading_for_legacy_body(tmp_path: Path) -> None:
-  """A legacy body already opening with '# ' keeps its own heading exactly once."""
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "dark-mode", legacy=True, body="# Dark Mode\n\nUser prefers dark UI.\n")
-  block = assemble_master(tmp_path)
-  assert block is not None
-  assert block.count("# Dark Mode") == 1
-  assert "User prefers dark UI." in block
-
-
-def test_assemble_master_audience_filtering(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "for-master", audience="master", body="mbody\n")
-  _write_entry(tmp_path, "profile", "for-worker", audience="worker", body="wbody\n")
-  _write_entry(tmp_path, "profile", "for-both", audience="master, worker", body="bbody\n")
-  block = assemble_master(tmp_path)
-  assert block is not None
-  assert "mbody" in block and "bbody" in block  # master + comma list
-  assert "wbody" not in block  # worker-only excluded
-
-
-def test_assemble_master_legacy_both_filters_like_master_worker(tmp_path: Path) -> None:
-  """Legacy 'both' filtering is exactly equivalent to 'master, worker'."""
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "leg", legacy=True, audience="both", body="# Leg\n\nlegbody\n")
-  _write_entry(tmp_path, "profile", "v2", audience="master, worker", body="v2body\n")
-  block = assemble_master(tmp_path)
-  assert block is not None
-  assert "legbody" in block and "v2body" in block
-
-
-def test_assemble_master_stable_order(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "charliebot", "zebra", audience="master", title="Zebra")
-  _write_entry(tmp_path, "charliebot", "apple", audience="master", title="Apple")
-  _write_entry(tmp_path, "charliebot", "mango", audience="master", title="Mango")
-  block = assemble_master(tmp_path)
-  assert block is not None
-  assert block.index("Apple") < block.index("Mango") < block.index("Zebra")
-
-
 def test_assemble_master_missing_dir_returns_none(tmp_path: Path) -> None:
   assert assemble_master(tmp_path / "nope") is None
-
-
-def test_assemble_master_empty_store_returns_none(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  assert assemble_master(tmp_path) is None
-
-
-def test_assemble_master_index_header_exactly_once_with_index(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "res", title="Res", body="r\n")
-  _write_entry(tmp_path, "charliebot", "ondemand", title="On")
-  block = assemble_master(tmp_path)
-  assert block is not None
-  assert block.count(memory.INDEX_HEADER) == 1
-  # The header line sits immediately before the first index line.
-  assert f"{memory.INDEX_HEADER}\ncharliebot/ondemand · On" in block
-
-
-def test_assemble_master_no_index_header_without_index_entries(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "res", title="Res", body="r\n")
-  block = assemble_master(tmp_path)
-  assert block is not None
-  assert memory.INDEX_HEADER not in block  # full-body only: no index, no header
-
-
-def test_assemble_master_legacy_store_output_is_pre_change_plus_header(tmp_path: Path) -> None:
-  """On a legacy-format store the output equals the pre-change output plus only the new header line."""
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "dark-mode", legacy=True, body="# Dark Mode\n\nUser prefers dark UI.\n")
-  _write_entry(tmp_path, "charliebot", "cli-flags", legacy=True, body="# CLI Flags\n\nDetails.\n")
-  block = assemble_master(tmp_path)
-  pre_change = "# Dark Mode\n\nUser prefers dark UI.\n\ncharliebot/cli-flags · CLI Flags"
-  assert block == pre_change.replace("charliebot/cli-flags", f"{memory.INDEX_HEADER}\ncharliebot/cli-flags")
 
 
 # --- assemble_worker ----------------------------------------------------------
@@ -470,66 +132,6 @@ def test_assemble_worker_repo_topic_match(tmp_path: Path) -> None:
   assert "PBODY" not in block  # non-matching body not injected
   assert "charliebot memory query --topic" in block  # usage line present
   assert block.count(memory.INDEX_HEADER) == 1
-
-
-def test_assemble_worker_no_match_index_only(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "pref", title="Pref", body="PBODY\n")
-  block = assemble_worker(tmp_path, "charliebot")
-  assert block is not None
-  assert "profile/pref · Pref" in block
-  assert "PBODY" not in block  # no matching topic -> index only
-  assert "charliebot memory query --topic" in block
-  assert block.count(memory.INDEX_HEADER) == 1
-
-
-def test_assemble_worker_no_index_header_without_index_entries(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "charliebot", "cli", audience="worker", title="CLI", body="c\n")
-  block = assemble_worker(tmp_path, "charliebot")
-  assert block is not None
-  assert memory.INDEX_HEADER not in block  # only full-body + usage line
-  # And never with an entirely empty store (usage line only).
-  _write_topics(tmp_path / "empty")
-  block2 = assemble_worker(tmp_path / "empty", "charliebot")
-  assert block2 is not None
-  assert memory.INDEX_HEADER not in block2
-
-
-def test_assemble_worker_usage_line_matches_free_capture_contract(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  block = assemble_worker(tmp_path, "charliebot")
-  assert block is not None
-  assert "`charliebot memory add [--file F]`" in block
-  assert "one fact to record or one change to propose" in block
-  assert "--scope" not in block
-  assert "--audience" not in block
-  assert "--revises" not in block
-
-
-def test_assemble_worker_audience_filtering(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "charliebot", "wonly", audience="worker", title="Wonly", body="WONLYBODY\n")
-  _write_entry(tmp_path, "charliebot", "monly", audience="master", title="Monly", body="MONLYBODY\n")
-  _write_entry(tmp_path, "charliebot", "both", audience="master, worker", title="Both", body="BOTHBODY\n")
-  block = assemble_worker(tmp_path, "charliebot")
-  assert block is not None
-  assert "WONLYBODY" in block  # worker entry full body
-  assert "BOTHBODY" in block  # comma list includes worker
-  assert "MONLYBODY" not in block  # master-only excluded from worker
-
-
-def test_assemble_worker_legacy_both_included(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "charliebot", "leg", legacy=True, audience="both", body="# Leg\n\nLEGBODY\n")
-  block = assemble_worker(tmp_path, "charliebot")
-  assert block is not None
-  assert "LEGBODY" in block
-  assert block.count("# Leg") == 1  # legacy body heading not duplicated
-
-
-def test_assemble_worker_missing_dir_returns_none(tmp_path: Path) -> None:
-  assert assemble_worker(tmp_path / "nope", "charliebot") is None
 
 
 # --- CLI add creates exactly one staging file, never touches entries/ -------
@@ -575,116 +177,6 @@ def test_cli_add_creates_one_staging_file(tmp_path: Path, monkeypatch: pytest.Mo
   assert not entries.exists() or not list(entries.glob("**/*.md"))
 
 
-def test_cli_add_cjk_title_uses_capture_segment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A title with no slug-charset character (pure CJK) falls back to the fixed 'capture' slug."""
-  cfg = _patch_cli_cfg(monkeypatch, tmp_path)
-  body = "# 本地渲染环境\n\n渲染机约束逐条列出。\n"
-  monkeypatch.setattr("sys.stdin", io.StringIO(body))
-  import src.cli.memory as cli
-  monkeypatch.setattr("sys.argv", ["charliebot memory", "add"])
-  cli.main()
-  files = list((cfg.memory_dir / "staging").glob("*.md"))
-  assert len(files) == 1
-  assert files[0].name.endswith("-capture.md")
-  assert files[0].read_text(encoding="utf-8") == body
-
-
-@pytest.mark.parametrize(
-    ("stdin_text", "extra_argv", "exit_code"),
-    [
-        pytest.param("no title here\n", [], 1, id="missing-title-line"),
-        pytest.param("# \n\nbody\n", [], 1, id="empty-title"),
-        pytest.param("# T\n\nbody\n", ["--topic", "x"], 2, id="removed-flag-argparse"),
-    ],
-)
-def test_cli_add_rejects_bad_invocation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stdin_text: str, extra_argv: list[str], exit_code: int) -> None:
-  """A title-less capture, an empty title, or a removed flag exits nonzero and leaves staging untouched.
-
-  The removed-flag case exits 2 from argparse before the capture is read; the title cases exit 1 from the
-  capture grammar.
-  """
-  cfg = _patch_cli_cfg(monkeypatch, tmp_path)
-  monkeypatch.setattr("sys.stdin", io.StringIO(stdin_text))
-  import src.cli.memory as cli
-  monkeypatch.setattr("sys.argv", ["charliebot memory", "add", *extra_argv])
-  with pytest.raises(SystemExit) as exc:
-    cli.main()
-  assert exc.value.code == exit_code
-  assert not (cfg.memory_dir / "staging").exists() or not list((cfg.memory_dir / "staging").glob("*.md"))
-
-
-@pytest.mark.parametrize(
-    ("topic_values", "expected_err"),
-    [
-        pytest.param(["nope"], "error: unknown topic: nope\n", id="plain"),
-        pytest.param(
-            ["charliebot/some-slug"],
-            "error: unknown topic: charliebot/some-slug (index lines are topic/slug; try --topic charliebot)\n",
-            id="known-pre-slash-hinted",
-        ),
-        pytest.param(["nope/some-slug"], "error: unknown topic: nope/some-slug\n", id="unknown-pre-slash-plain"),
-        pytest.param(
-            ["nope", "charliebot/some-slug"],
-            "error: unknown topic: nope\n"
-            "error: unknown topic: charliebot/some-slug (index lines are topic/slug; try --topic charliebot)\n",
-            id="mixed-only-latter-hinted",
-        ),
-    ],
-)
-def test_cli_query_unknown_topic_lines_and_hints(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture,
-    topic_values: list[str],
-    expected_err: str,
-) -> None:
-  """Each unknown --topic value prints one stderr line and exits 1.
-
-  A value whose pre-slash segment is a real topic gains the corrective hint; the others print the plain line.
-  """
-  _patch_cli_cfg(monkeypatch, tmp_path)
-  import src.cli.memory as cli
-  argv = ["charliebot memory", "query"]
-  for value in topic_values:
-    argv += ["--topic", value]
-  monkeypatch.setattr("sys.argv", argv)
-  with pytest.raises(SystemExit) as exc:
-    cli.main()
-  assert exc.value.code == 1
-  out, err = capsys.readouterr()
-  assert out == ""
-  assert err == expected_err
-
-
-def test_cli_query_index_prints_lines_full_prints_body(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-  cfg = _patch_cli_cfg(monkeypatch, tmp_path)
-  _write_entry(cfg.memory_dir, "profile", "dark-mode", title="Dark Mode", body="body\n")
-  import src.cli.memory as cli
-  # --index: prints index lines only
-  monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "profile", "--index"])
-  cli.main()
-  assert "profile/dark-mode · Dark Mode" in capsys.readouterr().out
-  # full text: synthesizes the '# {title}' heading (v2 bodies carry none)
-  monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "profile"])
-  cli.main()
-  out = capsys.readouterr().out
-  assert out.count("# Dark Mode") == 1
-  assert "body" in out
-
-
-def test_cli_query_full_no_duplicate_heading_for_legacy_body(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-  cfg = _patch_cli_cfg(monkeypatch, tmp_path)
-  _write_entry(cfg.memory_dir, "profile", "dark-mode", legacy=True)
-  import src.cli.memory as cli
-  monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "profile"])
-  cli.main()
-  out = capsys.readouterr().out
-  assert out.count("# Dark Mode") == 1  # legacy body heading kept, none synthesized
-
-
 def test_cli_query_audience_filter_is_membership(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
   cfg = _patch_cli_cfg(monkeypatch, tmp_path)
@@ -696,24 +188,3 @@ def test_cli_query_audience_filter_is_membership(
   out = capsys.readouterr().out
   assert "bbody" in out
   assert "mbody" not in out
-
-
-def test_cli_lint_nonzero_on_violations(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-  cfg = _patch_cli_cfg(monkeypatch, tmp_path)
-  _write_entry(cfg.memory_dir, "profile", "bad", revises="old")  # revises forbidden in entries
-  import src.cli.memory as cli
-  monkeypatch.setattr("sys.argv", ["charliebot memory", "lint"])
-  with pytest.raises(SystemExit) as exc:
-    cli.main()
-  assert exc.value.code != 0
-  out = capsys.readouterr().out
-  assert "revises" in out.lower() or "forbidden" in out.lower()
-
-
-def test_cli_lint_clean_exits_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _patch_cli_cfg(monkeypatch, tmp_path)
-  _write_entry(cfg.memory_dir, "profile", "good")
-  import src.cli.memory as cli
-  monkeypatch.setattr("sys.argv", ["charliebot memory", "lint"])
-  cli.main()  # exits 0

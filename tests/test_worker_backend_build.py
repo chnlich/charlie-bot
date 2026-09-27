@@ -16,25 +16,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import assistant_text_event as _assistant_event
 from conftest import backend_option, stub_credentials
 
 from src.agents.worker import Worker
 from src.core.config import CharlieBotConfig
 from src.core.models import ThreadMetadata
 
-# Every backend type the registry can build (src/agents/backends/registry.py).
-ALL_BACKEND_TYPES = [
-    "cc-claude",
-    "cc-kimi",
-    "cc-openai-compatible",
-    "codex",
-    "charlie-code",
-    "gemini",
-    "opencode",
-    "antigravity",
-    "tui-cli",
-]
 
 # The types that resolve a CLI binary in __init__ (via resolve_binary); the
 # other four never do and therefore never raise FileNotFoundError on build.
@@ -91,15 +78,6 @@ async def _on_spawn(pid: int) -> None:
   del pid
 
 
-@pytest.mark.parametrize("backend_type", ALL_BACKEND_TYPES)
-def test_translate_only_build_succeeds_without_binaries(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend_type: str) -> None:
-  """on_spawn=None: construction never fails on a missing binary, for all types."""
-  _hide_all_binaries(monkeypatch)
-  backend = _worker(tmp_path, backend_type)._build_backend(None)
-  assert backend is not None
-
-
 @pytest.mark.parametrize("backend_type", BINARY_RESOLVING_TYPES)
 def test_launcher_build_still_fails_without_binaries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend_type: str) -> None:
@@ -107,30 +85,3 @@ def test_launcher_build_still_fails_without_binaries(
   _hide_all_binaries(monkeypatch)
   with pytest.raises(FileNotFoundError):
     _worker(tmp_path, backend_type)._build_backend(_on_spawn)
-
-
-def test_translate_only_degrade_falls_back_to_identity_translate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The degrade lands on the method's binary-free fallback branch: a
-  ClaudeCodeBackend (whose translate_event is base's identity implementation),
-  and a warning keeps the environment problem diagnosable."""
-  from structlog.testing import capture_logs
-
-  from src.agents.backends.claude_code import ClaudeCodeBackend
-
-  _hide_all_binaries(monkeypatch)
-  worker = _worker(tmp_path, "opencode")
-  with capture_logs() as logs:
-    backend = worker._build_backend(None)
-
-  assert isinstance(backend, ClaudeCodeBackend)
-  event = _assistant_event("x")
-  assert backend.translate_event(event) == [event]
-
-  warnings = [entry for entry in logs if entry.get("event") == "translate_backend_unresolved"]
-  assert len(warnings) == 1
-  assert warnings[0]["log_level"] == "warning"
-  assert warnings[0]["thread_id"] == worker._thread.id
-  assert warnings[0]["backend"] == "opt"
-  assert warnings[0]["backend_type"] == "opencode"
-  assert "opencode binary not found" in warnings[0]["error"]

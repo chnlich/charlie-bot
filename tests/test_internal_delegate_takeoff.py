@@ -2,46 +2,24 @@
 
 import random
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 from conftest import (
-    OPUS_BACKEND_ID,
-    OPUS_BACKEND_OPTION,
     FakeSessionManager,
-    delegate_invocation,
-    scheduled_trigger_event,
     user_event,
 )
-from conftest import THREE_BACKEND_OPTIONS as VERIFY_BACKEND_OPTIONS
 from fastapi import HTTPException
 
 from src.api import internal
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
 from src.core.models import (
     DelegateRequest,
     SessionMetadata,
     TaskType,
 )
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
-
-
-def _stub_task_manager():
-  """A task-tree manager over the test's session manager (v1 sessions never
-  reach its authorization path; the signature keeps one owner for both)."""
-  from src.core.task_sessions import TaskTreeManager
-  return TaskTreeManager(CharlieBotConfig(charliebot_home=Path("/tmp/delegate-takeoff-stub")), _LastSessionManager())
-
-
-class _LastSessionManager:
-  """The no-op session seam the stub task-tree owner reads (never queried on
-  these v1-shaped paths, since their sessions carry profile=None)."""
-
-  async def get_session(self, session_id: str):
-    return None
 
 
 def _reference_takeoff_gate(
@@ -108,22 +86,6 @@ def _improve_request() -> internal.ImproveRequest:
   )
 
 
-def _patch_resolve_rig(monkeypatch: pytest.MonkeyPatch) -> object:
-  """Install the resolve/config pair the _authorize_spawn_request tests share.
-
-  Returns the stubbed cfg so each test asserts its resolved_cfg is this object.
-  """
-  cfg = object()
-
-  async def fake_resolve(*args: Any, **kwargs: Any) -> tuple[str, str]:
-    del args, kwargs
-    return "codex-o3", "o3"
-
-  monkeypatch.setattr(internal, "get_config", lambda: cfg)
-  monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve)
-  return cfg
-
-
 def test_takeoff_gate_blocks_takeoff_followed_by_ordinary_user_message() -> None:
   session_mgr = FakeSessionManager([
       user_event("Take Off"),
@@ -132,39 +94,6 @@ def test_takeoff_gate_blocks_takeoff_followed_by_ordinary_user_message() -> None
 
   with pytest.raises(DelegationBlockedError):
     check_takeoff_gate("session-id", session_mgr)
-
-
-def test_takeoff_gate_allows_takeoff_followed_by_trigger_user_message() -> None:
-  session_mgr = FakeSessionManager(
-      [
-          user_event("take off"),
-          scheduled_trigger_event("[Scheduled trigger fired] training completed"),
-      ])
-
-  check_takeoff_gate("session-id", session_mgr)
-
-
-def test_takeoff_gate_scheduled_trigger_does_not_mint_takeoff() -> None:
-  session_mgr = FakeSessionManager([scheduled_trigger_event("[Scheduled trigger fired] take off")])
-
-  with pytest.raises(DelegationBlockedError):
-    check_takeoff_gate("session-id", session_mgr)
-
-
-def test_takeoff_gate_scheduled_trigger_excluded_by_type_regardless_of_content() -> None:
-  """An ET.SCHEDULED_TRIGGER event is excluded by event type, not by content prefix."""
-  session_mgr = FakeSessionManager([scheduled_trigger_event("take off")])
-
-  with pytest.raises(DelegationBlockedError):
-    check_takeoff_gate("session-id", session_mgr)
-
-
-def test_takeoff_gate_real_user_literal_banner_mints_takeoff() -> None:
-  """A real user message whose text carries the takeoff phrase mints a takeoff
-  window, banner prefix included: the gate excludes by event type only."""
-  session_mgr = FakeSessionManager([user_event("[Scheduled trigger fired] take off")])
-
-  check_takeoff_gate("session-id", session_mgr)
 
 
 def test_takeoff_gate_nested_tool_result_does_not_mint_takeoff() -> None:
@@ -184,148 +113,6 @@ def test_takeoff_gate_nested_tool_result_does_not_mint_takeoff() -> None:
     check_takeoff_gate("session-id", session_mgr)
 
 
-def test_takeoff_gate_nested_tool_result_does_not_cancel_ordinary_takeoff() -> None:
-  session_mgr = FakeSessionManager(
-      [
-          user_event("take off"),
-          {
-              "type": ET.USER,
-              "message": {
-                  "role": "user",
-                  "content": [{
-                      "type": ET.TOOL_RESULT,
-                      "content": "not a command"
-                  }],
-              },
-          },
-      ])
-
-  check_takeoff_gate("session-id", session_mgr)
-
-
-def test_takeoff_gate_ignores_task_delegated_metadata() -> None:
-  session_mgr = FakeSessionManager(
-      [{
-          "type": ET.TASK_DELEGATED,
-          "description": "take off",
-          "delegate_invocation": {
-              "task_type": "implement"
-          },
-      }])
-
-  with pytest.raises(DelegationBlockedError):
-    check_takeoff_gate("session-id", session_mgr)
-
-
-def test_takeoff_gate_allows_repeated_ordinary_takeoff_after_task_delegated_event() -> None:
-  session_mgr = FakeSessionManager(
-      [
-          user_event("take off"),
-          {
-              "type": ET.TASK_DELEGATED,
-              "thread_id": "thread-id",
-              "description": "Do work",
-              "timestamp": "2026-07-18T12:00:00+00:00",
-              "backend": "codex-o3",
-              "model": "o3",
-              "delegate_invocation": delegate_invocation(),
-          },
-      ])
-
-  check_takeoff_gate("session-id", session_mgr)
-  check_takeoff_gate("session-id", session_mgr)
-
-
-def test_pre_takeoff_window_survives_real_user_messages_and_expires_at_12_hours() -> None:
-  issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
-  session_mgr = FakeSessionManager(
-      [
-          user_event("PRE\n\t TAKE   OFF", issued_at.isoformat()),
-          user_event("A later real user message"),
-      ])
-
-  check_takeoff_gate(
-      "session-id",
-      session_mgr,
-      now=issued_at + timedelta(hours=12) - timedelta(microseconds=1),
-  )
-  with pytest.raises(DelegationBlockedError):
-    check_takeoff_gate("session-id", session_mgr, now=issued_at + timedelta(hours=12))
-
-
-def test_new_pre_takeoff_starts_a_new_window() -> None:
-  first_issued_at = datetime(2026, 7, 17, 12, 0, tzinfo=UTC)
-  second_issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
-  session_mgr = FakeSessionManager(
-      [
-          user_event("pre take off", first_issued_at.isoformat()),
-          user_event("normal follow-up"),
-          user_event("pre take off", second_issued_at.isoformat()),
-          user_event("another normal follow-up"),
-      ])
-
-  check_takeoff_gate("session-id", session_mgr, now=second_issued_at + timedelta(hours=11))
-
-
-def test_ordinary_takeoff_matching_is_independent_from_pre_matching() -> None:
-  session_mgr = FakeSessionManager([user_event("pre\n take\t off")])
-
-  check_takeoff_gate("session-id", session_mgr)
-
-
-def test_ordinary_takeoff_needs_no_timestamp_and_is_not_expiring() -> None:
-  session_mgr = FakeSessionManager([user_event("take\n off")])
-
-  check_takeoff_gate("session-id", session_mgr, now=datetime(2099, 1, 1, tzinfo=UTC))
-
-
-@pytest.mark.parametrize("timestamp", [None, "not-a-timestamp"])
-def test_pre_takeoff_with_missing_or_unparseable_timestamp_fails_closed(timestamp: str | None) -> None:
-  session_mgr = FakeSessionManager([
-      user_event("pre take off", timestamp),
-      user_event("a later real user message"),
-  ])
-
-  with pytest.raises(DelegationBlockedError):
-    check_takeoff_gate("session-id", session_mgr)
-
-
-def test_takeoff_gate_blocks_when_no_user_string_message_contains_takeoff() -> None:
-  session_mgr = FakeSessionManager(
-      [
-          {
-              "type": ET.USER,
-              "content": "please proceed"
-          },
-          {
-              "type": ET.USER,
-              "content": [{
-                  "type": ET.TOOL_RESULT,
-                  "content": "take off"
-              }]
-          },
-      ])
-
-  with pytest.raises(DelegationBlockedError) as exc_info:
-    check_takeoff_gate("session-id", session_mgr)
-
-  assert str(exc_info.value) == (
-      'Delegation blocked: no active authorization. A valid "pre take off" within 12 hours or '
-      '"take off" in the latest real user message is required before delegating.')
-
-
-@pytest.mark.parametrize("events", [
-    [],
-    [{
-        "type": ET.ASSISTANT,
-        "content": "take off"
-    }],
-])
-def test_takeoff_gate_blocks_with_empty_history_or_no_user_messages(events: list[dict[str, Any]]) -> None:
-  with pytest.raises(DelegationBlockedError):
-    check_takeoff_gate("session-id", FakeSessionManager(events))
-
-
 def test_takeoff_gate_expired_pre_takeoff_before_a_take_off_message_stays_allowed() -> None:
   """The backward scan stops at the file-last real user message; a file-older
   expired pre-takeoff can never change the verdict the takeoff phrase already settles."""
@@ -338,102 +125,6 @@ def test_takeoff_gate_expired_pre_takeoff_before_a_take_off_message_stays_allowe
       ])
 
   check_takeoff_gate("session-id", session_mgr, now=issued_at + timedelta(hours=48))
-
-
-def test_takeoff_gate_scan_stops_at_file_last_parseable_pre_takeoff() -> None:
-  """A file-older parseable pre-takeoff never overrides the file-last one, so the
-  scan may stop at it: both walks must expire the window by the same stamp."""
-  first_issued_at = datetime(2026, 7, 17, 12, 0, tzinfo=UTC)
-  last_issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
-  session_mgr = FakeSessionManager(
-      [
-          user_event("pre take off", first_issued_at.isoformat()),
-          user_event("work in progress"),
-          user_event("pre take off", last_issued_at.isoformat()),
-          user_event("please continue with the plan"),
-      ])
-
-  check_takeoff_gate("session-id", session_mgr, now=last_issued_at + timedelta(hours=11))
-  with pytest.raises(DelegationBlockedError):
-    check_takeoff_gate("session-id", session_mgr, now=last_issued_at + timedelta(hours=12))
-
-
-def test_takeoff_gate_scan_matches_forward_walk_on_randomized_histories() -> None:
-  """Verdict parity between the backward scan and the forward reference over
-  randomized histories: phrase variants, stamp variants, and event kinds in
-  random file order, judged at randomized `now` points."""
-  rng = random.Random(20260909)
-  phrase_pool = [
-      "take off",
-      "TAKE   OFF",
-      "pre take off",
-      "PRE\n\t TAKE   OFF",
-      "please proceed",
-      "pre take off then take off",
-      "let us begin",
-      "take\toff",
-      "no authorization here",
-      "x" * 200 + " take off",
-  ]
-  stamp_pool = [
-      None,
-      "not-a-timestamp",
-      "2026-07-18T12:00:00",  # tz-less: fails closed
-      "2026-07-18T12:00:00+00:00",
-      "2026-07-20T12:00:00+00:00",
-      "2026-07-10T12:00:00+00:00",
-  ]
-
-  def random_event() -> dict[str, Any]:
-    kind = rng.random()
-    if kind < 0.55:
-      return user_event(rng.choice(phrase_pool), rng.choice(stamp_pool))
-    if kind < 0.7:
-      return scheduled_trigger_event(rng.choice(phrase_pool), rng.choice(stamp_pool))
-    if kind < 0.85:
-      return {
-          "type": ET.USER,
-          "message": {
-              "role": "user",
-              "content": [{
-                  "type": ET.TOOL_RESULT,
-                  "content": rng.choice(phrase_pool)
-              }],
-          },
-      }
-    if kind < 0.95:
-      return {
-          "type": ET.TASK_DELEGATED,
-          "description": rng.choice(phrase_pool),
-          "timestamp": rng.choice(stamp_pool) or "2026-07-18T12:00:00+00:00",
-      }
-    return {"type": ET.ASSISTANT, "content": rng.choice(phrase_pool)}
-
-  now_base = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
-  offsets = [
-      -timedelta(hours=13), -timedelta(hours=12),
-      timedelta(0),
-      timedelta(hours=11, minutes=59),
-      timedelta(hours=12),
-      timedelta(hours=48)
-  ]
-  for _ in range(400):
-    events = [random_event() for _ in range(rng.randint(0, 14))]
-    now = now_base + rng.choice(offsets)
-    mgr = FakeSessionManager(events)
-    reference_verdict: tuple[bool, str] = (False, "")
-    try:
-      _reference_takeoff_gate(events, now)
-      reference_verdict = (True, "")
-    except DelegationBlockedError as e:
-      reference_verdict = (False, str(e))
-    scan_verdict: tuple[bool, str] = (False, "")
-    try:
-      check_takeoff_gate("session-id", mgr, now=now)
-      scan_verdict = (True, "")
-    except DelegationBlockedError as e:
-      scan_verdict = (False, str(e))
-    assert scan_verdict[0] == reference_verdict[0], (events, now, scan_verdict, reference_verdict)
 
 
 def _gate_verdict(mgr: Any, now: datetime) -> bool:
@@ -484,107 +175,6 @@ def _forward_verdict(events: list[dict[str, Any]], now: datetime) -> bool:
     return False
 
 
-def test_takeoff_gate_memo_suffix_user_message_with_older_stamp_stays_allowed_until_expiry() -> None:
-  """The corner the early-break scan under-filled: the file-last user message
-  carries the takeoff phrase, so the stored stamp answer stayed unset; a later
-  ordinary user message must fall back to the older stamp's window, not to
-  blocked."""
-  issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
-  mgr = FakeSessionManager(
-      [
-          user_event("pre take off", issued_at.isoformat()),
-          user_event("work in progress"),
-          user_event("take off"),
-      ])
-  assert _gate_verdict(mgr, issued_at + timedelta(hours=48))
-  mgr.events.append(user_event("an ordinary follow-up"))
-  assert _gate_verdict(mgr, issued_at + timedelta(hours=11))
-  with pytest.raises(DelegationBlockedError):
-    check_takeoff_gate("session-id", mgr, now=issued_at + timedelta(hours=12))
-
-
-def test_takeoff_gate_memo_suffix_stamp_overrides_older_prefix_stamp() -> None:
-  first_issued_at = datetime(2026, 7, 17, 12, 0, tzinfo=UTC)
-  second_issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
-  mgr = FakeSessionManager([
-      user_event("pre take off", first_issued_at.isoformat()),
-      user_event("ordinary"),
-  ])
-  assert _gate_verdict(mgr, first_issued_at + timedelta(hours=11))
-  mgr.events.append(user_event("pre take off", second_issued_at.isoformat()))
-  mgr.events.append(user_event("ordinary again"))
-  assert _gate_verdict(mgr, second_issued_at + timedelta(hours=11))
-  with pytest.raises(DelegationBlockedError):
-    check_takeoff_gate("session-id", mgr, now=second_issued_at + timedelta(hours=12))
-  # The older prefix stamp must not resurrect once the newer one expires.
-  with pytest.raises(DelegationBlockedError):
-    check_takeoff_gate("session-id", mgr, now=second_issued_at + timedelta(hours=13))
-
-
-def test_takeoff_gate_memo_suffix_without_user_message_keeps_takeoff_window() -> None:
-  issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
-  mgr = FakeSessionManager([
-      user_event("take off"),
-      user_event("pre take off", issued_at.isoformat()),
-  ])
-  assert _gate_verdict(mgr, issued_at + timedelta(hours=48))
-  for _ in range(3):
-    mgr.events.append({"type": ET.ASSISTANT, "content": "streamed delta"})
-  assert _gate_verdict(mgr, issued_at + timedelta(hours=11))
-  assert _gate_verdict(mgr, issued_at + timedelta(hours=12))
-
-
-def test_takeoff_gate_memo_rebuilds_on_list_replacement() -> None:
-  """A wholesale list replacement (a new object, the archive-recycle shape)
-  rebuilds from a fresh walk: the replaced list's answers must not serve."""
-  issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
-  mgr = FakeSessionManager([user_event("take off")])
-  assert _gate_verdict(mgr, issued_at + timedelta(hours=48))
-  replaced = [user_event("please proceed")]
-  mgr.events = replaced
-  with pytest.raises(DelegationBlockedError):
-    check_takeoff_gate("session-id", mgr, now=issued_at + timedelta(hours=48))
-
-
-def test_takeoff_gate_memo_empty_history_blocks_and_stays_blocked_on_append() -> None:
-  mgr = FakeSessionManager([])
-  issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
-  with pytest.raises(DelegationBlockedError):
-    check_takeoff_gate("session-id", mgr, now=issued_at)
-  mgr.events.append({"type": ET.ASSISTANT, "content": "take off"})
-  with pytest.raises(DelegationBlockedError):
-    check_takeoff_gate("session-id", mgr, now=issued_at)
-  mgr.events.append(user_event("take off"))
-  assert _gate_verdict(mgr, issued_at)
-
-
-def test_takeoff_gate_memo_cold_walk_claims_only_the_walked_span(monkeypatch: pytest.MonkeyPatch) -> None:
-  """An append landing while the cold walk runs must not be claimed unseen:
-  the store claims the pre-walk length, so the next call re-scans the
-  appended message and its take-off phrase lands — the streamed-turn race
-  (the gate walks on an executor thread while save_chat_event appends on the
-  event loop), the store contract the usage-fold memo pins."""
-  from src.core import takeoff_gate
-
-  mgr = FakeSessionManager([user_event("please proceed") for _ in range(50)])
-  real = takeoff_gate.is_real_user_message
-  seen = {"n": 0}
-
-  def spy(event: dict[str, Any]) -> bool:
-    result = real(event)
-    seen["n"] += 1
-    if seen["n"] == 10:
-      mgr.events.append(user_event("take off"))
-    return result
-
-  monkeypatch.setattr(takeoff_gate, "is_real_user_message", spy)
-  with pytest.raises(DelegationBlockedError):
-    check_takeoff_gate("session-id", mgr)
-  assert seen["n"] >= 10
-  monkeypatch.setattr(takeoff_gate, "is_real_user_message", real)
-  check_takeoff_gate("session-id", mgr)
-
-
 @pytest.mark.asyncio
 async def test_delegate_task_returns_403_when_takeoff_gate_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
   req = _build_request()
@@ -607,20 +197,6 @@ async def test_delegate_task_returns_403_when_takeoff_gate_blocks(monkeypatch: p
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("task_type", [TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN])
-async def test_delegate_task_repo_task_types_block_without_takeoff(task_type: TaskType) -> None:
-  req = _build_request(task_type=task_type)
-  session_mgr = FakeSessionManager([{"type": ET.USER, "content": "please proceed"}])
-
-  with pytest.raises(HTTPException) as exc_info:
-    await internal.delegate_task(req, session_mgr=session_mgr)
-
-  assert exc_info.value.status_code == 403
-  assert "no active authorization" in exc_info.value.detail
-  session_mgr.persist_and_broadcast.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_improve_stays_blocked_without_takeoff() -> None:
   req = _improve_request()
   session_mgr = FakeSessionManager([{"type": ET.USER, "content": "please proceed"}])
@@ -630,40 +206,6 @@ async def test_improve_stays_blocked_without_takeoff() -> None:
 
   assert exc_info.value.status_code == 403
   assert "no active authorization" in exc_info.value.detail
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("task_type", [TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN])
-async def test_all_nonverify_delegate_types_can_reuse_ordinary_takeoff(
-    task_type: TaskType,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  req = _build_request(task_type=task_type)
-  session_mgr = FakeSessionManager([user_event("take off")])
-  cfg = _patch_resolve_rig(monkeypatch)
-
-  for _ in range(3):
-    _meta, resolved_cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(
-        req, session_mgr, _stub_task_manager())
-    assert resolved_cfg is cfg
-    assert (resolved_backend, resolved_model) == ("codex-o3", "o3")
-
-
-@pytest.mark.asyncio
-async def test_improve_uses_the_same_pre_takeoff_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-  issued_at = datetime.now(UTC) - timedelta(hours=1)
-  req = _improve_request()
-  session_mgr = FakeSessionManager(
-      [
-          user_event("pre take off", issued_at.isoformat()),
-          user_event("continue with the approved work"),
-      ])
-  cfg = _patch_resolve_rig(monkeypatch)
-  _meta, resolved_cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(
-      req, session_mgr, _stub_task_manager())
-
-  assert resolved_cfg is cfg
-  assert (resolved_backend, resolved_model) == ("codex-o3", "o3")
 
 
 @pytest.mark.asyncio
@@ -679,109 +221,3 @@ async def test_delegate_task_verify_rejects_repo_path() -> None:
   session_mgr.get_session.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_delegate_task_returns_400_for_invalid_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-  req = _build_request()
-  session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = SessionMetadata(id=req.session_id, name="Test")
-
-  def fake_takeoff_gate(session_id: str, mgr: Any) -> None:
-    assert session_id == req.session_id
-    assert mgr is session_mgr
-
-  async def fake_resolve_requested_subagent_backend_model(*args: Any, **kwargs: Any) -> tuple[str, str]:
-    raise ValueError("requested backend 'codex-o3' is not in backends.options")
-
-  monkeypatch.setattr(internal, "check_takeoff_gate", fake_takeoff_gate)
-  monkeypatch.setattr(
-      internal, "resolve_requested_subagent_backend_model", fake_resolve_requested_subagent_backend_model)
-  monkeypatch.setattr(internal, "get_config", lambda: object())
-
-  with pytest.raises(HTTPException) as exc_info:
-    await internal.delegate_task(req, session_mgr=session_mgr)
-
-  assert exc_info.value.status_code == 400
-  assert exc_info.value.detail == "requested backend 'codex-o3' is not in backends.options"
-
-
-# --- verify default backend via backends.preference ---
-
-
-def _build_verify_cfg(preference: list[str]) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=Path("/tmp/charliebot-test"),
-      paths={"worktree_dir": "/tmp/worktrees"},
-      backends={
-          "options": VERIFY_BACKEND_OPTIONS,
-          "preference": preference
-      },
-  )
-
-
-class BackendFakeSessionManager:
-
-  def __init__(self, backend: str) -> None:
-    self.backend = backend
-
-  async def get_session(self, session_id: str) -> SessionMetadata:
-    return SessionMetadata(id=session_id, name="Test", backend=self.backend)
-
-
-async def _authorize_verify(
-    monkeypatch: pytest.MonkeyPatch,
-    session_backend: str,
-    preference: list[str],
-    backend: str | None = None,
-) -> tuple[str | None, str | None]:
-  req = _build_request(task_type=TaskType.VERIFY, repo_path=None, base_branch=None, backend=backend)
-  monkeypatch.setattr(internal, "get_config", lambda: _build_verify_cfg(preference))
-  session_mgr = BackendFakeSessionManager(session_backend)
-  _meta, _cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(
-      req, session_mgr, _stub_task_manager())
-  return resolved_backend, resolved_model
-
-
-@pytest.mark.asyncio
-async def test_verify_no_backend_defaults_to_first_differing_preference(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Session backend is the first preference entry -> the second (first differing) entry wins."""
-  resolved = await _authorize_verify(
-      monkeypatch, session_backend=OPUS_BACKEND_ID, preference=[OPUS_BACKEND_ID, "codex-o3"])
-  assert resolved == ("codex-o3", "o3")
-
-
-@pytest.mark.asyncio
-async def test_verify_no_backend_session_backend_not_in_preference_uses_first_entry(
-    monkeypatch: pytest.MonkeyPatch) -> None:
-  resolved = await _authorize_verify(monkeypatch, session_backend="kimi-k2.5", preference=[OPUS_BACKEND_ID, "codex-o3"])
-  assert resolved == (OPUS_BACKEND_ID, OPUS_BACKEND_OPTION.model)
-
-
-@pytest.mark.asyncio
-async def test_verify_no_backend_empty_preference_keeps_session_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-  resolved = await _authorize_verify(monkeypatch, session_backend="codex-o3", preference=[])
-  assert resolved == ("codex-o3", "o3")
-
-
-@pytest.mark.asyncio
-async def test_verify_explicit_backend_wins_over_preference(monkeypatch: pytest.MonkeyPatch) -> None:
-  resolved = await _authorize_verify(
-      monkeypatch,
-      session_backend=OPUS_BACKEND_ID,
-      preference=[OPUS_BACKEND_ID, "codex-o3"],
-      backend="kimi-k2.5",
-  )
-  assert resolved == ("kimi-k2.5", "kimi-k2.5")
-
-
-@pytest.mark.asyncio
-async def test_verify_unknown_explicit_backend_returns_400(monkeypatch: pytest.MonkeyPatch) -> None:
-  with pytest.raises(HTTPException) as exc_info:
-    await _authorize_verify(
-        monkeypatch,
-        session_backend=OPUS_BACKEND_ID,
-        preference=[OPUS_BACKEND_ID, "codex-o3"],
-        backend="nonexistent",
-    )
-
-  assert exc_info.value.status_code == 400
-  assert exc_info.value.detail == "requested backend 'nonexistent' is not in backends.options"

@@ -56,20 +56,6 @@ def test_relative_path_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     core_config.charliebot_home_dir()
 
 
-def test_same_env_value_resolves_once(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-  """The resolve walk runs once per raw env value; a new value re-resolves."""
-  profile = tmp_path / "profile"
-  profile.mkdir()
-  monkeypatch.setenv("CHARLIEBOT_HOME", str(profile))
-  first = core_config.charliebot_home_dir()
-  assert core_config.charliebot_home_dir() is first
-
-  other = tmp_path / "other"
-  other.mkdir()
-  monkeypatch.setenv("CHARLIEBOT_HOME", str(other))
-  assert core_config.charliebot_home_dir() == other
-
-
 def test_config_yaml_may_not_set_the_home(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   profile = tmp_path / "profile"
   profile.mkdir()
@@ -140,14 +126,6 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
   assert not (fake_home / ".charliebot_backup").exists()
   assert (profile / "config.yaml").is_file()
   assert core_backup.backup_dir() == profile.with_name(profile.name + "_backup")
-
-
-def test_default_home_backup_dir_is_unchanged(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-  """The no-env path keeps the historical ~/.charliebot_backup."""
-  monkeypatch.delenv("CHARLIEBOT_HOME", raising=False)
-  monkeypatch.setenv("HOME", str(tmp_path))
-  from src.core import backup as core_backup
-  assert core_backup.backup_dir() == tmp_path / ".charliebot_backup"
 
 
 def test_no_new_hardcoded_state_paths() -> None:

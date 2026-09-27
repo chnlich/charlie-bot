@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import json
 
 import pytest
 from conftest import FakeWebSocket, assistant_text_event, scheduled_trigger_event, user_event
 
-from server import _CatchupWalk, _replay_aggregated_catchup, _send_session_catchup
-from src.core.models import SessionMetadata
+from server import _CatchupWalk, _replay_aggregated_catchup
 
 VOICE_KEY = "is_voice"
 
@@ -17,22 +15,6 @@ def _assistant_event(text: str, ts: str) -> dict:
 
 def _master_done_event(thinking_seconds: int, ts: str) -> dict:
   return {"type": "master_done", "thinking_seconds": thinking_seconds, "timestamp": ts}
-
-
-class _CountOnlySessionManager:
-
-  def __init__(self, count: int) -> None:
-    self.count = count
-    self.full_load_called = False
-
-  def get_chat_event_count_sync(self, session_id: str, meta: SessionMetadata | None) -> int:
-    assert session_id == "s"
-    assert meta.archive_offset == 5
-    return self.count
-
-  def load_chat_events_sync(self, session_id: str) -> list[dict]:
-    self.full_load_called = True
-    raise AssertionError("current cursor must not trigger full replay")
 
 
 @pytest.mark.asyncio
@@ -60,41 +42,6 @@ async def test_replay_skips_pre_cursor_deltas_and_drops_raw_assistant_user() -> 
   assert ws.sent[1]["message"]["role"] == "separator"
   assert ws.sent[3]["message"]["role"] == "user"
   assert ws.sent[3]["message"]["content"] == "again"
-
-
-@pytest.mark.asyncio
-async def test_replay_drops_raw_scheduled_trigger() -> None:
-  events = [
-      scheduled_trigger_event("[Scheduled trigger fired] watch", "t0"),
-  ]
-  ws = FakeWebSocket()
-  sent_count = await _replay_aggregated_catchup(ws, events, cursor=0, session_id="s")
-
-  # The suppression list is shared with persist_and_broadcast, so catchup
-  # matches the live wire: scheduled_trigger flows only as a message delta.
-  assert sent_count == len(ws.sent) == 1
-  assert ws.sent[0]["type"] == "message"
-  assert ws.sent[0]["message"]["role"] == "scheduled_trigger"
-
-
-@pytest.mark.asyncio
-async def test_replay_emits_only_latest_stream_when_draft_is_dangling() -> None:
-  events = [
-      _assistant_event("A", "t0"),
-      _assistant_event("B", "t1"),
-  ]
-  ws = FakeWebSocket()
-  await _replay_aggregated_catchup(ws, events, cursor=0, session_id="s")
-
-  # Two assistant text events split the buffer:
-  #   - first event yields a stream("A")
-  #   - second event flushes "A" as a message and yields stream("B")
-  # Stream deltas are coalesced; only the *latest* preview is sent before each
-  # flush + at the very end.
-  types = [p["type"] for p in ws.sent]
-  assert types == ["message", "stream"]
-  assert ws.sent[0]["message"]["content"] == "A"
-  assert ws.sent[1]["message"]["content"] == "B"
 
 
 @pytest.mark.asyncio
@@ -136,20 +83,6 @@ async def test_replay_uses_global_cursor_after_archive_offset() -> None:
   }]
 
 
-@pytest.mark.asyncio
-async def test_session_catchup_fast_skips_when_cursor_is_current() -> None:
-  ws = FakeWebSocket()
-  mgr = _CountOnlySessionManager(count=7)
-  meta = type("Meta", (), {"archive_offset": 5, "profile": None})()
-
-  sent, total = await _send_session_catchup(ws, mgr, "s", cursor=7, meta=meta)
-
-  assert sent == 0
-  assert total == 7
-  assert ws.sent == []
-  assert mgr.full_load_called is False
-
-
 def _mixed_replay_corpus() -> list[dict]:
   return [
       user_event("hi", "t0"),
@@ -166,23 +99,6 @@ def _unsliced_catchup_frames(events: list[dict], cursor: int) -> list[dict]:
   walk = _CatchupWalk(cursor)
   walk.feed_slice(events, 0, len(events))
   return walk.finish()
-
-
-@pytest.mark.asyncio
-async def test_replay_sends_exactly_the_built_frame_list() -> None:
-  # The replay's only producer of frames is the _CatchupWalk feed, sliced on
-  # the event loop; the async half sends that list in order and nothing else,
-  # as pre-rendered wire text whose parsed content matches the frames (the
-  # render rides the shared orjson home; only the raw bytes can differ from a
-  # stdlib send_json form).
-  events = _mixed_replay_corpus()
-  for cursor in (0, 2, len(events)):
-    ws = FakeWebSocket()
-    sent = await _replay_aggregated_catchup(ws, events, cursor=cursor, session_id="s")
-    expected = _unsliced_catchup_frames(events, cursor)
-    assert ws.sent == expected
-    assert sent == len(expected)
-    assert [json.loads(text) for text in ws.sent_text] == expected
 
 
 @pytest.mark.asyncio

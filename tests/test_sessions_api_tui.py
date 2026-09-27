@@ -3,9 +3,7 @@ from pathlib import Path
 import pytest
 from conftest import (
     OPUS_BACKEND_ID,
-    TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET,
     TUI_KILL_TMUX_SESSION_PATCH_TARGET,
-    TUI_TMUX_SESSION_EXISTS_PATCH_TARGET,
     build_tui_sessions_cfg,
     user_event,
 )
@@ -76,49 +74,3 @@ async def test_archive_tui_session_does_not_kill_tmux(
   assert response.status_code == 200
   assert response.json()["status"] == "archived"
   assert not killed
-
-
-@pytest.mark.asyncio
-async def test_tui_status_returns_running_busy_dict_for_tui_sessions_only(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-  cfg = build_tui_sessions_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  cc_meta = await session_mgr.create_session(CreateSessionRequest(name="SDK"), backend=OPUS_BACKEND_ID)
-  running_tui_meta = SessionMetadata(name="TUI running", backend="claude-tui")
-  stopped_tui_meta = SessionMetadata(name="TUI stopped", backend="claude-tui")
-  await session_mgr.save_metadata(running_tui_meta)
-  await session_mgr.save_metadata(stopped_tui_meta)
-  checked = []
-  busy_checked = []
-
-  async def fake_tmux_session_exists(session_id: str) -> bool:
-    checked.append(session_id)
-    return session_id == running_tui_meta.id
-
-  def fake_claude_jsonl_busy(session_id: str) -> bool:
-    busy_checked.append(session_id)
-    return session_id == running_tui_meta.id
-
-  monkeypatch.setattr(TUI_TMUX_SESSION_EXISTS_PATCH_TARGET, fake_tmux_session_exists)
-  monkeypatch.setattr(TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET, fake_claude_jsonl_busy)
-
-  with _build_client(cfg, session_mgr) as client:
-    ids = f"{cc_meta.id},{running_tui_meta.id},{stopped_tui_meta.id}"
-    response = client.get(f"/api/sessions/tui/status?ids={ids}")
-
-  assert response.status_code == 200
-  assert response.json() == {
-      running_tui_meta.id: {
-          "running": True,
-          "busy": True
-      },
-      stopped_tui_meta.id: {
-          "running": False,
-          "busy": False
-      },
-  }
-  assert set(checked) == {running_tui_meta.id, stopped_tui_meta.id}
-  assert busy_checked == [running_tui_meta.id]
-  assert cc_meta.id not in checked

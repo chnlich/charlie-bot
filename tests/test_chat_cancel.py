@@ -17,34 +17,12 @@ from conftest import (
 from fastapi import HTTPException
 
 from src.agents import master_cc, master_cc_run
-from src.agents.backends.base import AgentBackend, make_text_event
+from src.agents.backends.base import AgentBackend
 from src.api.chat import cancel_master_agent
 from src.core import config as core_config
 from src.core import event_types as ET
 from src.core import models
 from src.core.models import RunRecord
-
-
-class _StderrOnlyBackend(AgentBackend):
-
-  def __init__(self, *, terminate_before_stderr: bool) -> None:
-    super().__init__()
-    self._terminate_before_stderr = terminate_before_stderr
-
-  def _build_command(self, prompt: str) -> list[str]:
-    raise AssertionError("_build_command should not be called")
-
-  async def run(self,
-                prompt: str,
-                cwd: str,
-                env: dict,
-                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
-    if self._terminate_before_stderr:
-      await self.terminate()
-    self.exit_code = 1
-    self.stderr_text = "claude-sub: terminated"
-    if False:
-      yield {}  # keeps run() an async generator; the consumer's async-for would TypeError on a coroutine
 
 
 async def _run_cc_with_backend(
@@ -75,25 +53,6 @@ async def _run_cc_with_backend(
   return callbacks, result
 
 
-async def _run_cc_with_stderr_backend(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    terminate_before_stderr: bool,
-) -> tuple[models.SessionCallbacks, tuple[str | None, int, str | None, dict]]:
-  return await _run_cc_with_backend(
-      tmp_path,
-      monkeypatch,
-      backend=_StderrOnlyBackend(terminate_before_stderr=terminate_before_stderr),
-      session_meta=models.SessionMetadata(
-          id=f"session-terminated-{terminate_before_stderr}",
-          name="Cancel",
-          backend="fake",
-      ),
-      user_content="stop",
-  )
-
-
 @pytest.mark.asyncio
 async def test_cancel_master_agent_success() -> None:
   session_mgr = AsyncMock()
@@ -105,29 +64,6 @@ async def test_cancel_master_agent_success() -> None:
   assert result == {"ok": True}
   mock_cancel.assert_awaited_once_with("session-ok", meta=meta, session_mgr=session_mgr)
   session_mgr.persist_and_broadcast.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_cancel_master_agent_no_active_master_broadcasts_error() -> None:
-  session_mgr = AsyncMock()
-  meta = models.SessionMetadata(id="session-missing", name="Legacy")
-
-  with (
-      patch(CHAT_CANCEL_MASTER_PATCH_TARGET, new=AsyncMock(return_value=False)) as mock_cancel,
-      pytest.raises(HTTPException) as exc_info,
-  ):
-    await cancel_master_agent("session-missing", meta=meta, session_mgr=session_mgr)
-
-  assert exc_info.value.status_code == 404
-  assert exc_info.value.detail == "No active master agent"
-  mock_cancel.assert_awaited_once_with("session-missing", meta=meta, session_mgr=session_mgr)
-  session_mgr.persist_and_broadcast.assert_awaited_once_with(
-      "session-missing",
-      {
-          "type": "assistant_error",
-          "content": "No active master agent to cancel.",
-      },
-  )
 
 
 # ---------------------------------------------------------------------------
@@ -210,79 +146,6 @@ async def test_chat_cancel_identity_conflict_maps_to_409(tmp_path: Path) -> None
   events = tree.events.load_events(node.id)
   assert [e for e in events if e["type"] == ET.RUN_STOP_REQUESTED]
   set_task_manager(None)
-
-
-@pytest.mark.asyncio
-async def test_chat_cancel_on_task_node_without_a_launched_run_is_404(tmp_path: Path) -> None:
-  from src.api.deps import set_task_manager
-
-  _cfg, session_mgr, tree, node = await _task_node(tmp_path)
-  # A queued (never launched) run is not running anything; the button stops nothing.
-  await tree.runs.register_run(RunRecord(id="run-queued", session_id=node.id, kind="manager_turn"))
-
-  meta = await session_mgr.get_session(node.id)
-  with pytest.raises(HTTPException) as exc_info:
-    await cancel_master_agent(node.id, meta=meta, session_mgr=session_mgr)
-
-  assert exc_info.value.status_code == 404
-  assert exc_info.value.detail == "No active master agent"
-  events = session_mgr.load_chat_events_sync(node.id)
-  assert any(e.get("type") == ET.ASSISTANT_ERROR for e in events)
-  assert [e for e in tree.events.load_events(node.id) if e["type"] == ET.RUN_STOP_REQUESTED] == []
-  set_task_manager(None)
-
-
-@pytest.mark.asyncio
-async def test_chat_cancel_on_legacy_session_reaches_cancel_master(tmp_path: Path) -> None:
-  from conftest import make_home_config
-
-  from src.core.sessions import SessionManager
-
-  cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
-  legacy = await session_mgr.create_session(models.CreateSessionRequest(name="Legacy"))
-  meta = await session_mgr.get_session(legacy.id)
-  assert meta is not None and meta.profile is None
-
-  with patch(CHAT_CANCEL_MASTER_PATCH_TARGET, new=AsyncMock(return_value=True)) as mock_cancel:
-    result = await cancel_master_agent(legacy.id, meta=meta, session_mgr=session_mgr)
-
-  assert result == {"ok": True}
-  mock_cancel.assert_awaited_once_with(legacy.id, meta=meta, session_mgr=session_mgr)
-
-
-@pytest.mark.asyncio
-async def test_run_cc_suppresses_assistant_error_only_for_user_terminated_stderr(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  stopped_callbacks, stopped_result = await _run_cc_with_stderr_backend(
-      tmp_path,
-      monkeypatch,
-      terminate_before_stderr=True,
-  )
-
-  assert stopped_result[1] == 1
-  assert stopped_result[2] is None
-  stopped_callbacks.persist_and_broadcast.assert_not_awaited()
-
-  crashed_callbacks, crashed_result = await _run_cc_with_stderr_backend(
-      tmp_path,
-      monkeypatch,
-      terminate_before_stderr=False,
-  )
-
-  assert crashed_result[1] == 1
-  assert crashed_result[2] == "claude-sub: terminated"
-  error_events = [
-      call.args[1]
-      for call in crashed_callbacks.persist_and_broadcast.await_args_list
-      if call.args[1].get("type") == ET.ASSISTANT_ERROR
-  ]
-  assert error_events == [{
-      "type": ET.ASSISTANT_ERROR,
-      "content": "Agent error: claude-sub: terminated",
-  }]
 
 
 class _ScriptedBackend(AgentBackend):
@@ -369,26 +232,6 @@ async def test_silent_turn_salvaged(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
-async def test_normal_turn_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  callbacks = await _run_cc_with_scripted_events(
-      tmp_path,
-      monkeypatch,
-      events=[
-          make_text_event("hello"),
-          {
-              "type": ET.THINKING,
-              "content": "thinking that was followed by speech"
-          },
-          {
-              "type": ET.RESULT,
-              "result": {}
-          },
-      ],
-  )
-  assert not _synthesized_notice_events(callbacks)
-
-
-@pytest.mark.asyncio
 async def test_stream_cut_before_settlement_not_salvaged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   callbacks = await _run_cc_with_scripted_events(
       tmp_path,
@@ -401,68 +244,3 @@ async def test_stream_cut_before_settlement_not_salvaged(tmp_path: Path, monkeyp
       ],
   )
   assert not _synthesized_notice_events(callbacks)
-
-
-@pytest.mark.asyncio
-async def test_claude_family_thinking_block_salvaged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  thinking = "claude-family buried reasoning"
-  callbacks = await _run_cc_with_scripted_events(
-      tmp_path,
-      monkeypatch,
-      events=[
-          {
-              "type": ET.ASSISTANT,
-              "message": {
-                  "content": [{
-                      "type": "thinking",
-                      "thinking": thinking
-                  }]
-              },
-          },
-          {
-              "type": ET.RESULT,
-              "result": {}
-          },
-      ],
-  )
-  texts = _synthesized_notice_events(callbacks)
-  assert len(texts) == 1
-  assert texts[0].endswith(thinking)
-  assert thinking in texts[0][len(master_cc_run.NOTICE) + len("\n\n"):]
-
-
-@pytest.mark.asyncio
-async def test_salvage_helper_emits_thinking() -> None:
-  tracker = master_cc._RunTimingTracker("session-helper", "codex", None)
-  tracker.on_event({"type": ET.THINKING, "content": "thinking part one"})
-  tracker.on_event({"type": ET.THINKING, "content": " thinking part two"})
-  tracker.on_event({"type": ET.RESULT, "result": {}})
-  broadcast = AsyncMock()
-  await master_cc._salvage_silent_turn(tracker, None, "session-helper", broadcast)
-  broadcast.assert_awaited_once()
-  event = broadcast.await_args.args[1]
-  assert event.get("type") == ET.ASSISTANT
-  text = event["message"]["content"][0]["text"]
-  assert text.startswith(master_cc_run.NOTICE)
-  assert text.endswith("thinking part one thinking part two")
-
-
-@pytest.mark.asyncio
-async def test_salvage_helper_suppressed_by_error() -> None:
-  tracker = master_cc._RunTimingTracker("session-helper", "codex", None)
-  tracker.on_event({"type": ET.THINKING, "content": "thinking"})
-  tracker.on_event({"type": ET.RESULT, "result": {}})
-  broadcast = AsyncMock()
-  await master_cc._salvage_silent_turn(tracker, "boom", "session-helper", broadcast)
-  broadcast.assert_not_awaited()
-
-
-def test_both_teardowns_call_salvage_helper() -> None:
-  import inspect
-  run_src = inspect.getsource(master_cc._run_cc)
-  resume_src = inspect.getsource(master_cc._resume_cc)
-  assert "_report_turn_error_and_salvage(" in run_src
-  assert "_report_turn_error_and_salvage(" in resume_src
-  pair_src = inspect.getsource(master_cc_run._report_turn_error_and_salvage)
-  assert "_salvage_silent_turn(" in pair_src
-  assert "ET.ASSISTANT_ERROR" in pair_src

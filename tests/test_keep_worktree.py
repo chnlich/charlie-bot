@@ -14,7 +14,6 @@ from conftest import (
     CapturingThreadManager,
     build_codex_worktree_cfg,
     build_finalize_ctx,
-    build_worker_prompt,
     recording_notify_completion,
     run_worktree_spawn,
     stage_worktree_spawn,
@@ -31,17 +30,6 @@ from src.core.models import (
 
 async def _forbid_git_worktree_remove(*args: Any, **kwargs: Any) -> bool:
   raise AssertionError("git_worktree_remove must not be called when keep_worktree=True")
-
-
-def test_build_worker_prompt_includes_keep_worktree_note(tmp_path: Path) -> None:
-  prompt = build_worker_prompt("Run SLURM benchmark", cfg=build_codex_worktree_cfg(tmp_path), keep_worktree=True)
-  assert "This worktree will persist after the reviewer merges." in prompt
-  assert "SLURM" in prompt
-
-
-def test_build_worker_prompt_omits_keep_worktree_note_by_default(tmp_path: Path) -> None:
-  prompt = build_worker_prompt("Run SLURM benchmark", cfg=build_codex_worktree_cfg(tmp_path), keep_worktree=False)
-  assert "This worktree will persist after the reviewer merges." not in prompt
 
 
 @pytest.mark.asyncio

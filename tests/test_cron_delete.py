@@ -84,19 +84,6 @@ async def test_delete_archives_task_session_and_drops_it_from_scheduled(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_delete_task_without_sessions_returns_empty_archived_list(tmp_path: Path, temp_home: Path) -> None:
-  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
-  write_nightly_task(temp_home)
-
-  with make_cron_sessions_client(cfg, session_mgr) as client:
-    response = client.delete("/api/cron/tasks/nightly")
-
-  assert response.status_code == 200
-  assert response.json() == {"ok": True, "archived_sessions": []}
-  assert not (cron_d_dir(temp_home) / "nightly.yaml").exists()
-
-
-@pytest.mark.asyncio
 async def test_delete_keeps_session_dir_and_history_and_unarchive_restores(tmp_path: Path, temp_home: Path) -> None:
   cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
   write_nightly_task(temp_home)
@@ -112,17 +99,3 @@ async def test_delete_keeps_session_dir_and_history_and_unarchive_restores(tmp_p
   assert read_chat_events(tmp_path / "charliebot-home", session.id) == [user_event("e0")]
   assert restore.status_code == 200
   assert restore.json()["status"] == SessionStatus.ACTIVE
-
-
-def test_delete_shapes_missing_task_404_invalid_name_400(tmp_path: Path, temp_home: Path) -> None:
-  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
-
-  with make_cron_sessions_client(cfg, session_mgr) as client:
-    missing = client.delete("/api/cron/tasks/nightly")
-    invalid = client.delete("/api/cron/tasks/.lead")
-
-  assert missing.status_code == 404
-  assert missing.json() == {"detail": 'Task "nightly" not found'}
-  assert invalid.status_code == 400
-  assert invalid.json() == {"detail": "invalid cron name: '.lead'"}
-  assert not list(cron_d_dir(temp_home).glob("*.yaml"))

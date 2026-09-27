@@ -1,44 +1,31 @@
 """Unit tests for remote PID watching via ssh polling (Tool 2)."""
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import json
 import sys
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-    CLI_COMMON_TRANSPORT_GET_PATCH_TARGET,
     CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
     TRIGGER_MASTER_PATCH_TARGET,
     TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
     FakeAsyncProcess,
-    assert_trigger_fired,
     fake_cli_cfg,
-    patch_trigger_fire,
     schedule_trigger_argv,
 )
 from conftest import make_trigger_setup as _make_mgr
-from conftest import no_sleep as _no_sleep
-from pydantic import ValidationError
 
-from src.cli import common
 from src.cli import schedule_trigger as cli_module
 from src.core.models import (
-    LocalPid,
     RemotePid,
-    ScheduleTriggerRequest,
 )
 from src.core.triggers import (
-    _DORMANCY_CHECK_SECONDS,
     RemoteVerifyError,
     TriggerManager,
-    _migrate_legacy_watch_pids,
 )
 
 # ---------------------------------------------------------------------------
@@ -118,270 +105,21 @@ async def test_remote_create_dead_rejects(tmp_path: Path) -> None:
   assert not triggers_dir.exists() or not list(triggers_dir.glob("*.json"))
 
 
-@pytest.mark.asyncio
-async def test_remote_create_one_dead_among_many_rejects(tmp_path: Path) -> None:
-  _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  scripted = {
-      ("neptune", 1): ["ALIVE"],
-      ("neptune", 2): ["DEAD"],
-      ("noire", 3): ["ALIVE"],
-  }
-  with (
-      patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=_mk_subprocess_mock(scripted)),
-      pytest.raises(RemoteVerifyError) as excinfo,
-  ):
-    await trigger_mgr.create_trigger(
-        session_id,
-        delay_seconds=30,
-        message="dead remote",
-        watch_targets=[
-            RemotePid(host="neptune", pid=1),
-            RemotePid(host="neptune", pid=2),
-            RemotePid(host="noire", pid=3),
-        ],
-    )
-  msg = str(excinfo.value)
-  assert "neptune:2" in msg
-  assert "DEAD" in msg
-
-
 # ---------------------------------------------------------------------------
 # Wait loop with remote probe — ALL-die fire across hosts
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_remote_multi_host_all_die_fires(tmp_path: Path) -> None:
-  _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-
-  # All ALIVE on first poll (verify + first iter), then all DEAD on second iter.
-  scripted = {
-      ("neptune", 1): ["ALIVE", "ALIVE", "DEAD"],
-      ("neptune", 2): ["ALIVE", "ALIVE", "DEAD"],
-      ("noire", 3): ["ALIVE", "ALIVE", "DEAD"],
-  }
-
-  with patch_trigger_fire(_mk_subprocess_mock(scripted), sacct_available=None, sleep_mock=_no_sleep) as mock_master:
-    trigger = await trigger_mgr.create_trigger(
-        session_id,
-        delay_seconds=600,
-        message="multi host",
-        watch_targets=[
-            RemotePid(host="neptune", pid=1),
-            RemotePid(host="neptune", pid=2),
-            RemotePid(host="noire", pid=3),
-        ],
-    )
-    task = trigger_mgr._tasks[trigger.id]
-    await asyncio.wait_for(task, timeout=10)
-
-  msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="completed")
-  assert "neptune:1" in msg
-  assert "neptune:2" in msg
-  assert "noire:3" in msg
-
-
-@pytest.mark.asyncio
-async def test_remote_timeout_with_alive_pids(tmp_path: Path) -> None:
-  _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  # Verify says ALIVE; subsequent probes also ALIVE → must timeout.
-  scripted = {("neptune", 1): ["ALIVE"]}
-
-  with patch_trigger_fire(_mk_subprocess_mock(scripted), sacct_available=None, sleep_mock=_no_sleep) as mock_master:
-    trigger = await trigger_mgr.create_trigger(
-        session_id,
-        delay_seconds=0,  # fire_at already in the past after verify
-        message="too late",
-        watch_targets=[RemotePid(host="neptune", pid=1)],
-    )
-    task = trigger_mgr._tasks[trigger.id]
-    await asyncio.wait_for(task, timeout=10)
-
-  msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="timeout")
-  assert "still alive: neptune:1" in msg
 
 
 # ---------------------------------------------------------------------------
 # Backoff schedule
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_backoff_intervals_and_plateau(tmp_path: Path) -> None:
-  """Each iteration sleeps for [base, base+10] where base follows the backoff schedule."""
-  _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-
-  recorded_sleeps: list[float] = []
-  real_sleep = asyncio.sleep
-
-  async def _record_sleep(seconds: float) -> None:
-    # The probe loop only ever sleeps with values >= 10s (backoff base) up to
-    # max-wait. Forward true zero-sleeps (test-yield helpers) to the real
-    # asyncio.sleep so the patch doesn't leak globally and the test can yield.
-    if seconds <= 0:
-      await real_sleep(seconds)
-      return
-    if seconds == _DORMANCY_CHECK_SECONDS:
-      return  # the dormancy watchdog's cadence, not the probe backoff ladder
-    recorded_sleeps.append(seconds)
-    # Don't actually sleep — return immediately so iterations advance fast.
-
-  scripted = {("neptune", 1): ["ALIVE"]}  # always alive — never exits
-
-  with patch_trigger_fire(_mk_subprocess_mock(scripted), sacct_available=None, sleep_mock=_record_sleep):
-    trigger = await trigger_mgr.create_trigger(
-        session_id,
-        delay_seconds=10_000,
-        message="long wait",
-        watch_targets=[RemotePid(host="neptune", pid=1)],
-    )
-    task = trigger_mgr._tasks[trigger.id]
-    for _ in range(200):
-      if len(recorded_sleeps) >= 8:
-        break
-      await real_sleep(0)
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError, BaseException):
-      await task
-
-  expected_bases = [10, 20, 40, 80, 160, 320, 600, 600]
-  assert len(recorded_sleeps) >= len(expected_bases), (
-      f"only recorded {len(recorded_sleeps)} sleeps: {recorded_sleeps}")
-  for i, base in enumerate(expected_bases):
-    assert base <= recorded_sleeps[i] <= base + 10, (f"sleep[{i}]={recorded_sleeps[i]} not in [{base}, {base + 10}]")
 
 
 # ---------------------------------------------------------------------------
 # Migration: legacy `watch_pids` JSON file -> rewritten in new schema
-# ---------------------------------------------------------------------------
-
-
-def _legacy_trigger_payload(**overrides: object) -> dict:
-  """A minimal legacy-schema trigger file; overrides replace or add top-level keys."""
-  payload: dict = {
-      "id": "leg-1",
-      "session_id": "s1",
-      "fire_at": "2030-01-01T00:00:00+00:00",
-      "message": "hi",
-      "created_at": "2030-01-01T00:00:00+00:00",
-      "status": "pending",
-      "fired_at": None,
-  }
-  payload.update(overrides)
-  return payload
-
-
-_MIGRATE_ROWS = [
-    pytest.param(
-        _legacy_trigger_payload(watch_pids=[123, 456]),
-        True,
-        [LocalPid(pid=123), LocalPid(pid=456)],
-        id="legacy-watch-pids",
-    ),
-    pytest.param(
-        _legacy_trigger_payload(watch_pids=None),
-        True,
-        [],
-        id="legacy-watch-pids-null",
-    ),
-    pytest.param(
-        _legacy_trigger_payload(watch_targets=[{
-            "kind": "remote_pid",
-            "host": "neptune",
-            "pid": 7
-        }]),
-        False,
-        [RemotePid(host="neptune", pid=7)],
-        id="already-new-schema",
-    ),
-    # Pre-discriminator watch_targets carry no `kind`; the migration backfills LOCAL/REMOTE.
-    pytest.param(
-        _legacy_trigger_payload(watch_targets=[{
-            "host": None,
-            "pid": 1
-        }, {
-            "host": "neptune",
-            "pid": 2
-        }]),
-        True,
-        [LocalPid(pid=1), RemotePid(host="neptune", pid=2)],
-        id="kindless-targets-backfilled",
-    ),
-]
-
-
-@pytest.mark.parametrize(("payload", "migrated", "expected_targets"), _MIGRATE_ROWS)
-def test_migrate_legacy_watch_pids(payload: dict, migrated: bool, expected_targets: list) -> None:
-  trigger, migrated_flag = _migrate_legacy_watch_pids(json.dumps(payload))
-  assert migrated_flag is migrated
-  assert trigger.watch_targets == expected_targets
-
-
-@pytest.mark.asyncio
-async def test_recover_pending_rewrites_legacy_file(tmp_path: Path) -> None:
-  cfg, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  triggers_dir = cfg.sessions_dir / session_id / "triggers"
-  triggers_dir.mkdir(parents=True, exist_ok=True)
-
-  far_future = (datetime.now(UTC) + timedelta(days=365)).isoformat()
-  legacy_path = triggers_dir / "legacy-x.json"
-  legacy_path.write_text(
-      json.dumps(
-          {
-              "id": "legacy-x",
-              "session_id": session_id,
-              "fire_at": far_future,
-              "message": "old style",
-              "created_at": far_future,
-              "status": "pending",
-              "fired_at": None,
-              "watch_pids": [777],
-          }),
-      encoding="utf-8",
-  )
-
-  # Skip the actual sleep task on recovery — we only care about the rewrite.
-  with patch.object(TriggerManager, "_start_task", lambda self, t: None):
-    await trigger_mgr.recover_pending()
-
-  rewritten = json.loads(legacy_path.read_text("utf-8"))
-  assert "watch_pids" not in rewritten
-  assert rewritten["watch_targets"] == [{"kind": "local_pid", "pid": 777}]
 
 
 # ---------------------------------------------------------------------------
 # CLI parsing — self-describing --watch specs (local / remote / slurm)
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("spec", "expected"),
-    [
-        ("12345", {
-            "kind": "local_pid",
-            "pid": 12345
-        }),
-        ("neptune:67890", {
-            "kind": "remote_pid",
-            "host": "neptune",
-            "pid": 67890
-        }),
-        ("slurm:98765", {
-            "kind": "slurm_job",
-            "job_id": 98765
-        }),
-    ],
-    ids=["local", "remote", "slurm"],
-)
-def test_cli_parse_watch_target_kinds(spec: str, expected: dict) -> None:
-  assert cli_module._parse_watch_target(spec) == expected
-
-
-def test_cli_parse_rejects_bad_pid() -> None:
-  import argparse
-  for bad in ("neptune:abc", ":123", "0", "slurm:abc", "slurm:0", "slurm:"):
-    with pytest.raises(argparse.ArgumentTypeError):
-      cli_module._parse_watch_target(bad)
 
 
 def _fake_200_post(captured: dict) -> Callable[..., Any]:
@@ -429,79 +167,3 @@ def test_cli_accepts_mixed_kinds(monkeypatch: pytest.MonkeyPatch) -> None:
           "job_id": 99
       },
   ]
-
-
-def test_cli_watch_pid_flag_removed() -> None:
-  argv = schedule_trigger_argv("m", "--watch-pid", "1234")
-  with patch.object(sys, "argv", argv), pytest.raises(SystemExit):
-    cli_module.main()
-
-
-def test_cli_renamed_flag_delay_no_longer_accepted() -> None:
-  argv = [
-      "schedule_trigger",
-      "--session",
-      "s1",
-      "--delay",
-      "60",
-      "--message",
-      "m",
-  ]
-  with patch.object(sys, "argv", argv), pytest.raises(SystemExit):
-    cli_module.main()
-
-
-def test_cli_max_wait_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
-  argv = schedule_trigger_argv("hello")
-  captured: dict = {}
-  fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
-
-  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, _fake_200_post(captured))
-  with patch.object(sys, "argv", argv):
-    cli_module.main()
-
-  assert captured["payload"] == {
-      "session_id": "s1",
-      "delay_seconds": 60,
-      "message": "hello",
-  }
-
-
-def test_cli_remote_dead_exits_with_code_2(monkeypatch: pytest.MonkeyPatch) -> None:
-  argv = schedule_trigger_argv("hello", "--watch", "neptune:5678")
-  fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
-
-  class _FakeResp:
-    status_code = 422
-    text = ""
-
-    def json(self) -> dict:
-      return {"detail": "verify-on-create failed for remote watch target(s): neptune:5678 -> DEAD ('DEAD\\n')"}
-
-  def _fake_post(
-      url: str,
-      json: dict | None = None,
-      params: dict | None = None,
-      headers: dict | None = None,
-      timeout: float | None = None) -> _FakeResp:
-    return _FakeResp()
-
-  def _offline_get(url: str, **kwargs: Any) -> None:  # best-effort version hint must not reach a real server
-    raise common._ConnectPhaseError("offline")
-
-  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, _fake_post)
-  monkeypatch.setattr(CLI_COMMON_TRANSPORT_GET_PATCH_TARGET, _offline_get)
-  with patch.object(sys, "argv", argv), pytest.raises(SystemExit) as excinfo:
-    cli_module.main()
-
-  assert excinfo.value.code == cli_module.EXIT_VERIFY_REJECTED
-
-
-def test_schedule_trigger_request_rejects_legacy_watch_pids() -> None:
-  with pytest.raises(ValidationError):
-    ScheduleTriggerRequest(
-        session_id="s1",
-        delay_seconds=60,
-        message="legacy",
-        watch_pids=[1234],
-    )

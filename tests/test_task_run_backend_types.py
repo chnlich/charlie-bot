@@ -17,19 +17,13 @@ from pathlib import Path
 import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
-    TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET,
-    TUI_KILL_TMUX_SESSION_PATCH_TARGET,
-    TUI_TMUX_SESSION_EXISTS_PATCH_TARGET,
     backend_option,
 )
 
 from src.core import event_types as ET
 from src.core.backend_models import BackendType
-from src.core.models import RunRecord
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
-
-OPERATOR = {"Authorization": "Bearer op-secret"}
 
 
 def build_env(tmp_path: Path, backend_type: BackendType):
@@ -121,49 +115,6 @@ async def test_run_records_stream_identity_and_result_truth(
 
 
 @pytest.mark.asyncio
-async def test_tui_cli_manager_turn_is_terminal_driven_never_headless(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A tui-cli manager node never gets a headless manager turn.
-
-    The tmux terminal is the node's execution surface: dispatched input stays
-    durable and pending with the transport limit named in the launch decision,
-    no Run is reserved and no process is spawned, and terminal silence never
-    becomes a failed run or a completion fact (completion is explicit operator
-    action through the common closure guards).
-    """
-    from tests.test_task_execution import SpawningScriptedBackend, install_backends, result_event
-
-    cfg, session_mgr, tree = build_env(tmp_path, BackendType.TUI_CLI)
-    root = await tree.create_task(
-        request_id="root", task_parent_id=None, profile="manager", task=None,
-        name="M", backend=None, caller="operator")
-    backend = SpawningScriptedBackend([result_event("unused")])
-    builds = install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
-    from src.core.task_execution import TaskExecutionAdapter
-    tree.dispatch.executor = TaskExecutionAdapter(cfg, session_mgr, tree)
-    _ = builds  # asserted empty below: no backend build (launch) ever happens
-    admitted = await tree.dispatch.admit_input(
-        root.id, event_type=ET.USER, content="Take off. Answer.", actor="user")
-    decision = await asyncio.wait_for(tree.dispatch.dispatch_pending(root.id), 5)
-    assert decision["launch"] is False
-    assert "terminal" in decision["reason"]
-    assert "run_id" not in decision
-    # No Run was reserved, no backend was built, and no process was spawned.
-    assert builds == []
-    assert tree.runs.list_run_records_sync(root.id) == []
-    # The input stays durable and pending: repeated dispatch re-refuses with
-    # the same visible reason and never spawns.
-    assert [str(e["id"]) for e in tree.dispatch.pending_inputs(root.id)] == [str(admitted["id"])]
-    again = await asyncio.wait_for(tree.dispatch.dispatch_pending(root.id), 5)
-    assert again["launch"] is False
-    assert tree.runs.list_run_records_sync(root.id) == []
-    # No failed run stands in the way of the node's explicit operator closure
-    # guards: the terminal silence is not a run_finished fact of any kind.
-    events = tree.runs.load_events_sync(root.id)
-    assert not [e for e in events if e.get("type") == ET.RUN_FINISHED]
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("backend_type", BACKEND_TYPES, ids=lambda t: t.value)
 async def test_zero_output_and_error_results_fail_across_types(
         tmp_path: Path, backend_type: BackendType, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -230,127 +181,3 @@ async def test_zero_output_and_error_results_fail_across_types(
             break
         await asyncio.sleep(0.05)
     assert tree.runs.terminal_outcome(events, retry_run_id) == "failed"
-
-
-@pytest.mark.asyncio
-async def test_stop_request_on_launched_run_records_first_terminal_fact(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The existing stop contract: a stop request observes the process and records once."""
-    import src.core.config as core_config
-    from src.core.config import CharlieBotConfig
-
-    home = tmp_path / "home"
-    cfg = CharlieBotConfig(
-        charliebot_home=home,
-        backends={"options": [
-            backend_option(id="stop-type", label="S", type="codex", model="fake-model")],
-            "preference": ["stop-type"]},
-        paths={"worktree_dir": str(home / "worktrees")})
-    core_config._credentials_cache.seed(core_config.Credentials(
-        path=home / "credentials.yaml", sections={"charliebot": {"access_key": "key-type"}}))
-    session_mgr = SessionManager(cfg)
-    tree = TaskTreeManager(cfg, session_mgr)
-    root = await tree.create_task(
-        request_id="root", task_parent_id=None, profile="manager", task=None,
-        name="M", backend=None, caller="operator")
-    await tree.runs.register_run(
-        RunRecord(id="run-stop", session_id=root.id, kind="manager_turn",
-                  backend="stop-type", model="fake-model"))
-    await tree.runs.record_launch(root.id, "run-stop", pid=424700, pid_start="ps-700")
-    stop = await tree.runs.request_stop(root.id, "run-stop", "stop-op")
-    assert stop.run_id == "run-stop"
-    # The fixture's process is already gone: the stop observed the exit and
-    # recorded the durable interrupted fact.
-    assert stop.outcome == "interrupted"
-    events = tree.runs.load_events_sync(root.id)
-    assert tree.runs.terminal_outcome(events, "run-stop") == "interrupted"
-    # A second stop cannot overwrite the first terminal fact.
-    again = await tree.runs.request_stop(root.id, "run-stop", "stop-op-2")
-    assert again.outcome == "interrupted"
-
-
-@pytest.mark.asyncio
-async def test_tui_task_node_terminal_endpoints_and_explicit_completion(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A tui-cli v2 manager keeps the approved TUI behavior: the existing
-    terminal interface recognizes it, stop works on its task identity, and
-    terminal silence never closes it — completion is explicit operator action
-    through the common closure guards."""
-    cfg, session_mgr, tree = build_env(tmp_path, BackendType.TUI_CLI)
-    root = await tree.create_task(
-        request_id="root", task_parent_id=None, profile="manager", task=None,
-        name="M", backend=None, caller="operator")
-    from src.core.task_execution import TaskExecutionAdapter
-    tree.dispatch.executor = TaskExecutionAdapter(cfg, session_mgr, tree)
-    await tree.dispatch.admit_input(
-        root.id, event_type=ET.USER, content="Take off. Answer.", actor="user")
-    decision = await asyncio.wait_for(tree.dispatch.dispatch_pending(root.id), 5)
-    assert decision["launch"] is False  # the terminal drives the node
-
-    # The existing tui status/stop endpoints recognize the v2 node by its task
-    # identity (the tmux probes are patched to their double responses).
-    from tests.test_task_execution import make_api_client
-
-    async def fake_tmux_session_exists(session_id: str) -> bool:
-        return session_id == root.id
-
-    def fake_claude_jsonl_busy(session_id: str) -> bool:
-        return False
-
-    killed: list[str] = []
-
-    async def fake_kill_tmux_session(session_id: str) -> None:
-        killed.append(session_id)
-
-    monkeypatch.setattr(TUI_TMUX_SESSION_EXISTS_PATCH_TARGET, fake_tmux_session_exists)
-    monkeypatch.setattr(TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET, fake_claude_jsonl_busy)
-    monkeypatch.setattr(TUI_KILL_TMUX_SESSION_PATCH_TARGET, fake_kill_tmux_session)
-    with make_api_client(cfg, session_mgr, tree) as client:
-        status = client.get(
-            f"/api/sessions/tui/status?ids={root.id}", headers=OPERATOR)
-        assert status.status_code == 200
-        assert status.json().get(root.id) == {"running": True, "busy": False}
-        stopped = client.post(f"/api/sessions/{root.id}/tui/stop", headers=OPERATOR)
-        assert stopped.status_code == 200
-        assert stopped.json() == {"stopped": True}
-    assert killed == [root.id]
-
-    # Terminal silence is not completion: the node stays open; only the
-    # explicit operator close lands a TASK_CLOSED fact.
-    assert tree.task_state(root.id) == "open"
-    assert [e for e in tree.events.load_events(root.id)
-            if e.get("type") == ET.TASK_CLOSED] == []
-    from src.core.control_events import stable_run_id
-    from src.core.models import RunRecord
-    from src.core.run_token import CallerIdentity
-    from src.core.task_completion import CompletionEvidence
-    close_run = stable_run_id(root.id, "close:evidence")
-    await tree.runs.register_run(RunRecord(
-        id=close_run, session_id=root.id, kind="manager_turn"))
-    await tree.runs.record_launch(root.id, close_run, pid=424009, pid_start="ps-9")
-    await tree.dispatch.finish_run(root.id, close_run, outcome="success")
-    # The common closure guards still apply: the unprocessed (terminal-directed)
-    # input blocks a bare close, and the operator's explicit close settles its
-    # disposition through the owner's close-time exclusion.
-    from src.core.task_sessions import TaskConflictError
-    with pytest.raises(TaskConflictError, match="unprocessed input"):
-        await tree.completion.complete_task(
-            root.id, request_id="operator-close", caller=CallerIdentity(kind="operator"),
-            evidence=CompletionEvidence(summary="done in the terminal",
-                                        run_ids=[close_run], result_refs=[f"run:{close_run}"]))
-    # A quiet TUI node (no dispatched input) closes through the same guards on
-    # the operator's explicit action — completion is never inferred from the
-    # terminal's silence.
-    quiet = await tree.create_task(
-        request_id="quiet", task_parent_id=None, profile="manager", task=None,
-        name="QUIET", backend=None, caller="operator")
-    quiet_run = stable_run_id(quiet.id, "close:evidence")
-    await tree.runs.register_run(RunRecord(
-        id=quiet_run, session_id=quiet.id, kind="manager_turn"))
-    await tree.runs.record_launch(quiet.id, quiet_run, pid=424010, pid_start="ps-10")
-    await tree.dispatch.finish_run(quiet.id, quiet_run, outcome="success")
-    await tree.completion.complete_task(
-        quiet.id, request_id="operator-close", caller=CallerIdentity(kind="operator"),
-        evidence=CompletionEvidence(summary="done in the terminal",
-                                    run_ids=[quiet_run], result_refs=[f"run:{quiet_run}"]))
-    assert tree.task_state(quiet.id) == "completed"

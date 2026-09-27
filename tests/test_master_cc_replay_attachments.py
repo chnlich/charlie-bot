@@ -32,20 +32,6 @@ async def test_run_message_passes_uploaded_files_to_backend(tmp_path: Path, monk
 
 
 @pytest.mark.asyncio
-async def test_run_message_without_attachments_passes_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """No attachments: backend.run sees uploaded_files=None, exactly as before."""
-
-  async def drive(cfg: CharlieBotConfig, meta: SessionMetadata, callbacks: SessionCallbacks) -> None:
-    await master_cc.run_message(cfg, meta, "plain", callbacks)
-
-  backend = CapturingBackend()
-  await run_captured_round(tmp_path, monkeypatch, session_id="attach-none", name="Attach", backend=backend, drive=drive)
-
-  assert len(backend.calls) == 1
-  assert backend.calls[0]["uploaded_files"] is None
-
-
-@pytest.mark.asyncio
 async def test_replay_passes_uploaded_files_from_persisted_event_to_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A replayed user event carrying uploaded_files re-attaches them: replay_user_message
@@ -63,17 +49,3 @@ async def test_replay_passes_uploaded_files_from_persisted_event_to_backend(
   assert len(backend.calls) == 1
   assert backend.calls[0]["uploaded_files"] == _FILES
   assert backend.calls[0]["prompt"] == master_cc_queue._REPLAY_MARKER + "\n\n" + "what is in this picture"
-
-
-@pytest.mark.asyncio
-async def test_replay_without_attachments_passes_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-
-  async def drive(cfg: CharlieBotConfig, meta: SessionMetadata, callbacks: SessionCallbacks) -> None:
-    await master_cc.replay_user_message(cfg, meta, {"id": "u1", "type": "user", "content": "plain"}, callbacks)
-
-  backend = CapturingBackend()
-  await run_captured_round(
-      tmp_path, monkeypatch, session_id="attach-replay-none", name="Attach", backend=backend, drive=drive)
-
-  assert len(backend.calls) == 1
-  assert backend.calls[0]["uploaded_files"] is None

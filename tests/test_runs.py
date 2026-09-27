@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import time
-from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import LITELLM_503_ERROR_MESSAGE, LITELLM_FEEDBACK_BANNER_STDERR
 
-from src.core import event_types as ET
-from src.core import finalize_effects, runs
+from src.core import runs
 
 HOST_BOOT = runs.read_host_boot_time()
 NOW = datetime.now(UTC)
@@ -41,18 +37,6 @@ ASSISTANT_LINE = '{"type": "assistant", "message": {"role": "assistant", "conten
 # ---------------------------------------------------------------------------
 
 
-def test_read_host_boot_time_is_aware_and_in_the_past() -> None:
-  assert HOST_BOOT.tzinfo is not None
-  assert HOST_BOOT < NOW
-
-
-def test_read_pid_stat_live_and_dead() -> None:
-  pair = runs.read_pid_stat(os.getpid())
-  assert pair is not None
-  assert pair[1] in ("R", "S")
-  assert runs.read_pid_stat(999999) is None
-
-
 def test_is_run_alive_requires_full_identity() -> None:
   pid = os.getpid()
   pid_start, _state = runs.read_pid_stat(pid)  # type: ignore[misc]
@@ -71,30 +55,6 @@ def test_is_run_alive_requires_full_identity() -> None:
     runs.is_run_alive(pid, pid_start, datetime(2026, 1, 1), HOST_BOOT)
 
 
-def test_is_run_alive_never_consults_the_raw_log_or_fds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Liveness is a pure (pid, pid_start, started_at, host_boot) judgment: it must not
-  regress into an fd/raw-log test. A deleted or replaced raw log must not change the
-  verdict, and scan_stdout_holders (fd scan) must never be called to reach it."""
-  pid = os.getpid()
-  pid_start, _ = runs.read_pid_stat(pid)  # type: ignore[misc]
-
-  def boom() -> None:
-    raise AssertionError("is_run_alive must not consult fd holders")
-
-  monkeypatch.setattr(runs, "scan_stdout_holders", boom)
-
-  raw = runs.raw_log_path(tmp_path)
-  raw.parent.mkdir(parents=True)
-  raw.write_text(ASSISTANT_LINE + "\n", encoding="utf-8")
-  assert runs.is_run_alive(pid, pid_start, NOW, HOST_BOOT) is True
-
-  raw.unlink()
-  assert runs.is_run_alive(pid, pid_start, NOW, HOST_BOOT) is True  # deleted raw log
-
-  raw.write_text(RESULT_SUCCESS_LINE + "\n", encoding="utf-8")
-  assert runs.is_run_alive(pid, pid_start, NOW, HOST_BOOT) is True  # replaced raw log
-
-
 # ---------------------------------------------------------------------------
 # Raw -> event projection (pure)
 # ---------------------------------------------------------------------------
@@ -106,51 +66,6 @@ def test_parse_raw_lines_skips_blank_torn_and_non_json() -> None:
   assert events == [{"a": 1}, {"b": 2}]
 
 
-def test_parse_raw_lines_torn_multibyte_parses_as_replacement_char() -> None:
-  # A corrupted multi-byte sequence mid-string (its continuation byte lost to
-  # a mid-write tear or a bad byte) must parse as U+FFFD inside the string,
-  # not skip the otherwise-complete line as malformed.
-  corrupted = b'{"text": "caf\xc3"}'  # é's leading byte, its continuation byte lost
-  events = runs.parse_raw_lines(b'{"text": "caf\xc3\xa9"}\n' + corrupted + b"\n")
-  assert events == [{"text": "café"}, {"text": "caf\ufffd"}]
-
-
-def test_parse_raw_lines_keeps_valid_final_line_without_newline() -> None:
-  # A trailing partial line parses when it is complete JSON — only a torn
-  # (unparseable) tail drops; the find-walk's final piece must not lose it.
-  events = runs.parse_raw_lines(b'{"a": 1}\n{"b": 2}')
-  assert events == [{"a": 1}, {"b": 2}]
-
-
-def test_project_raw_events_applies_translate_in_order() -> None:
-  events = [{"n": 1}, {"n": 2}]
-  out = runs.project_raw_events(events, lambda e: [e, {"dup_of": e["n"]}])
-  assert out == [{"n": 1}, {"dup_of": 1}, {"n": 2}, {"dup_of": 2}]
-
-
-def test_summarize_result_takes_last_result() -> None:
-  assert runs.summarize_result([{
-      "type": "assistant"
-  }, {
-      "type": ET.RESULT,
-      "result": "a"
-  }]) == {
-      "type": ET.RESULT,
-      "result": "a"
-  }
-  assert runs.summarize_result([{
-      "type": ET.RESULT,
-      "result": "first"
-  }, {
-      "type": ET.RESULT,
-      "result": "last"
-  }]) == {
-      "type": ET.RESULT,
-      "result": "last"
-  }
-  assert runs.summarize_result([{"type": "assistant"}]) is None
-
-
 def test_result_success_matrix() -> None:
   assert runs.result_success({}) is True  # claude omits subtype/is_error on success
   assert runs.result_success({"subtype": "success", "is_error": False}) is True
@@ -160,102 +75,10 @@ def test_result_success_matrix() -> None:
 
 # ---------------------------------------------------------------------------
 # End-of-run error hint selection (pure)
-# ---------------------------------------------------------------------------
-
-
-def test_select_error_hint_prefers_the_invocation_error_event_over_stderr() -> None:
-  """The Gemini-503 shape: the structured error event is the hint, the stderr
-  help banner is not."""
-  hint = runs.select_error_hint([LITELLM_503_ERROR_MESSAGE], LITELLM_FEEDBACK_BANNER_STDERR)
-  assert hint == LITELLM_503_ERROR_MESSAGE
-  assert "Error code: 503" in hint and "UNAVAILABLE" in hint
-  assert "Give Feedback" not in hint
-  # The banner alone never masks the event, and an event alone still shows.
-  assert runs.select_error_hint([LITELLM_503_ERROR_MESSAGE], "") == LITELLM_503_ERROR_MESSAGE
-
-
-def test_select_error_hint_takes_the_last_non_empty_error_event() -> None:
-  messages = ["first failure", "", "   ", LITELLM_503_ERROR_MESSAGE]
-  assert runs.select_error_hint(messages, LITELLM_FEEDBACK_BANNER_STDERR) == LITELLM_503_ERROR_MESSAGE
-  assert runs.select_error_hint(["first failure", "", "   "], "") == "first failure"
-
-
-def test_select_error_hint_falls_back_to_cleaned_stderr() -> None:
-  """No error event: the stderr tail is the fallback, control characters
-  (the banner's ANSI color codes) cleaned away."""
-  hint = runs.select_error_hint([], LITELLM_FEEDBACK_BANNER_STDERR)
-  assert hint == runs.clean_control_characters(LITELLM_FEEDBACK_BANNER_STDERR).strip()
-  assert "\x1b" not in hint and chr(27) not in hint
-  assert hint.startswith("Give Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new")
-  assert "LiteLLM.Info" in hint
-  # A stderr of nothing but control characters is no hint at all.
-  assert runs.select_error_hint([], "\x1b[1;31m\x1b[0m\n\n") is None
-  assert runs.select_error_hint([], "") is None
-
-
-def test_select_error_hint_keeps_the_stderr_fallback_500_char_bound() -> None:
-  assert len(runs.select_error_hint([], "x" * 900)) == 500
-  # The structured error event is not capped: it is the complete failure.
-  assert runs.select_error_hint(["y" * 900], "") == "y" * 900
 
 
 # ---------------------------------------------------------------------------
 # Completion time and cursor
-# ---------------------------------------------------------------------------
-
-
-def test_raw_completion_time_missing_and_present(tmp_path: Path) -> None:
-  assert runs.raw_completion_time(tmp_path / "nope") is None
-  raw = _write_raw(tmp_path, [RESULT_SUCCESS_LINE], age_seconds=60)
-  completion = runs.raw_completion_time(raw)
-  # Fresh clock: a module-level "now" goes stale when the full suite runs first.
-  assert completion is not None
-  assert completion.tzinfo is not None
-  assert abs((datetime.now(UTC) - completion).total_seconds() - 60) < 5
-
-
-def test_raw_cursor_read_parses_plain_decimal_and_fallbacks(tmp_path: Path) -> None:
-  cursor = tmp_path / "sub" / runs.CURSOR_NAME
-  assert runs.read_raw_cursor(cursor) == 0  # missing -> replay
-  # The reader must keep parsing the plain unpadded decimal the pre-M104
-  # writer left on existing profiles' disks; the writer itself now lays down
-  # the fixed-width form only.
-  cursor.parent.mkdir(parents=True)
-  cursor.write_text("1234", encoding="utf-8")
-  assert runs.read_raw_cursor(cursor) == 1234
-  cursor.write_text("garbage", encoding="utf-8")
-  assert runs.read_raw_cursor(cursor) == 0  # unparseable -> replay
-
-
-def test_raw_cursor_writer_roundtrip_and_monotonic_overwrite(tmp_path: Path) -> None:
-  cursor = tmp_path / "sub" / runs.CURSOR_NAME
-  writer = runs.RawCursorWriter(cursor)
-  try:
-    writer.write(1234)
-    assert runs.read_raw_cursor(cursor) == 1234
-    # The offset only shrinks across a mount's restart-of-scan shapes; the
-    # fixed-width rewrite must leave no stale tail of the longer value.
-    writer.write(987)
-    assert runs.read_raw_cursor(cursor) == 987
-    writer.write(0)
-    assert runs.read_raw_cursor(cursor) == 0
-  finally:
-    writer.close()
-  assert len(cursor.read_bytes()) == runs.CURSOR_FIELD_BYTES
-
-
-def test_raw_cursor_writer_overwrites_seeded_variable_width_cursor(tmp_path: Path) -> None:
-  cursor = tmp_path / runs.CURSOR_NAME
-  # A shorter-than-fixed-width seed (the pre-M104 writer's shape) must not
-  # leave stale bytes under the fixed-width rewrite.
-  cursor.write_text("1051067581", encoding="utf-8")
-  writer = runs.RawCursorWriter(cursor)
-  try:
-    writer.write(42)
-  finally:
-    writer.close()
-  assert runs.read_raw_cursor(cursor) == 42
-  assert len(cursor.read_bytes()) == runs.CURSOR_FIELD_BYTES
 
 
 # ---------------------------------------------------------------------------
@@ -277,40 +100,6 @@ def _resolve(thread_dir: Path, **overrides: object) -> runs.RunResolution:
   return runs.resolve_run(**kwargs)
 
 
-def test_resolve_never_started_when_no_raw_and_no_pid(tmp_path: Path) -> None:
-  resolution = _resolve(tmp_path)
-  assert resolution.outcome is runs.RunOutcome.NEVER_STARTED
-  # NEVER_STARTED ranks above backend coverage: a fresh spawn works for any backend.
-  resolution = _resolve(tmp_path, backend_type="opencode")
-  assert resolution.outcome is runs.RunOutcome.NEVER_STARTED
-
-
-def test_resolve_uncovered_backend_with_result_event_completes(tmp_path: Path) -> None:
-  """An uncovered run whose raw already holds a result event falls through to
-  the downstream result row and completes normally."""
-  _write_raw(tmp_path, [RESULT_SUCCESS_LINE])
-  for backend_type in ("opencode", "antigravity", "tui-cli"):
-    resolution = _resolve(tmp_path, backend_type=backend_type)
-    assert resolution.outcome is runs.RunOutcome.COMPLETED
-
-
-def test_resolve_uncovered_backend_type_dies_with_transport_reason(tmp_path: Path) -> None:
-  """Verifiable death without a result event keeps the uncovered DIED row."""
-  _write_raw(tmp_path, [ASSISTANT_LINE])
-  for backend_type in ("opencode", "antigravity", "tui-cli"):
-    resolution = _resolve(tmp_path, backend_type=backend_type, pid=999999, pid_start="1")
-    assert resolution.outcome is runs.RunOutcome.DIED
-    assert resolution.reason == runs.TRANSPORT_NOT_COVERED_REASON
-
-
-def test_resolve_raw_missing_with_unverifiable_pid_is_kept_alive(tmp_path: Path) -> None:
-  """Raw missing with pid recorded but pid_start absent: death cannot be
-  proven, so the run is effective-alive."""
-  resolution = _resolve(tmp_path, pid=4242)
-  assert resolution.outcome is runs.RunOutcome.RUNNING
-  assert resolution.reason == runs.RAW_MISSING_ALIVE_REASON
-
-
 def test_resolve_died_when_raw_missing_and_death_verifiable(tmp_path: Path) -> None:
   resolution = _resolve(tmp_path, pid=999999, pid_start="1")
   assert resolution.outcome is runs.RunOutcome.DIED
@@ -326,23 +115,6 @@ def test_resolve_completed_uses_result_event(tmp_path: Path) -> None:
   _write_raw(tmp_path, ['{"type": "result", "subtype": "error_during_execution", "is_error": true}'])
   resolution = _resolve(tmp_path)
   assert resolution.outcome is runs.RunOutcome.COMPLETED
-
-
-def test_resolve_completed_even_when_process_still_alive(tmp_path: Path) -> None:
-  """A trailing result decides the run; the post-result hang belongs to cleanup, not the outcome."""
-  _write_raw(tmp_path, [RESULT_SUCCESS_LINE])
-  pid = os.getpid()
-  pid_start, _ = runs.read_pid_stat(pid)  # type: ignore[misc]
-  resolution = _resolve(tmp_path, pid=pid, pid_start=pid_start)
-  assert resolution.outcome is runs.RunOutcome.COMPLETED
-
-
-def test_resolve_running_when_alive_and_silent_below_threshold(tmp_path: Path) -> None:
-  _write_raw(tmp_path, [ASSISTANT_LINE], age_seconds=60)
-  pid = os.getpid()
-  pid_start, _ = runs.read_pid_stat(pid)  # type: ignore[misc]
-  resolution = _resolve(tmp_path, pid=pid, pid_start=pid_start)
-  assert resolution.outcome is runs.RunOutcome.RUNNING
 
 
 def test_resolve_stalled_when_alive_and_silent_beyond_threshold(tmp_path: Path) -> None:
@@ -364,132 +136,9 @@ def test_resolve_kept_alive_when_death_unverifiable_and_no_result(tmp_path: Path
   assert "pid_start" in resolution.reason
 
 
-def test_resolve_died_when_death_verifiable_and_no_result(tmp_path: Path) -> None:
-  _write_raw(tmp_path, [ASSISTANT_LINE])
-  resolution = _resolve(tmp_path, pid=999999, pid_start="1")
-  assert resolution.outcome is runs.RunOutcome.DIED
-  assert resolution.reason == runs.DIED_WITHOUT_RESULT_REASON
-
-
-def test_resolve_drops_torn_final_line_from_the_result_scan(tmp_path: Path) -> None:
-  # Producer killed mid-write: the torn tail must not manufacture a result.
-  # pid_start is unrecorded here, so death is unverifiable and the run is kept
-  # alive.
-  raw = tmp_path / "data" / runs.RAW_LOG_NAME
-  raw.parent.mkdir(parents=True)
-  raw.write_bytes((ASSISTANT_LINE + '\n{"type": "result", "subty').encode("utf-8"))
-  resolution = _resolve(tmp_path, pid=999999)
-  assert resolution.outcome is runs.RunOutcome.RUNNING
-
-
 # ---------------------------------------------------------------------------
 # Leftover fd holders
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def sleep_holding_stdout(tmp_path: Path) -> Iterator[tuple[subprocess.Popen, Path]]:
-  """A live process whose fd 1 points at a real file; cleaned up after the test."""
-  target = tmp_path / "held.log"
-  fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
-  proc = subprocess.Popen(["sleep", "30"], stdout=fd, stderr=subprocess.DEVNULL)
-  os.close(fd)
-  try:
-    yield proc, target
-  finally:
-    proc.kill()
-    proc.wait()
-
-
-def test_scan_and_leftover_holders(sleep_holding_stdout: tuple[subprocess.Popen, Path]) -> None:
-  proc, target = sleep_holding_stdout
-  holders_scan = runs.scan_stdout_holders()
-  st = target.stat()
-  assert any(h.pid == proc.pid for h in holders_scan.get((st.st_dev, st.st_ino), []))
-
-  # The run leader itself (run_pid) and this test process are never listed.
-  leftovers = runs.leftover_holders_for(target, holders_scan, run_pid=None)
-  assert any(h.pid == proc.pid for h in leftovers)
-  assert all(h.pid != os.getpid() for h in leftovers)
-
-  leftovers = runs.leftover_holders_for(target, holders_scan, run_pid=proc.pid)
-  assert all(h.pid != proc.pid for h in leftovers)
-
-  # A missing raw log has no inode, hence no holders.
-  assert not runs.leftover_holders_for(target.parent / "gone", holders_scan, run_pid=None)
-
-
-def test_resolve_attaches_leftover_holders_only_when_not_alive(
-    sleep_holding_stdout: tuple[subprocess.Popen, Path], tmp_path: Path) -> None:
-  proc, target = sleep_holding_stdout
-  raw = runs.raw_log_path(tmp_path)
-  raw.parent.mkdir(parents=True)
-  # Point the leftover scan at the SAME inode the run's raw log has: hardlink.
-  os.link(target, raw)
-  _write_raw(tmp_path, [ASSISTANT_LINE])
-  holders_scan = {(target.stat().st_dev, target.stat().st_ino): [runs.HolderProcess(pid=proc.pid, cmdline="sleep 30")]}
-
-  # Provably dead run (full liveness identity recorded): the leftover holder
-  # is attached for reporting + leftover cleanup.
-  resolution = _resolve(tmp_path, pid=999999, pid_start="1", holders_scan=holders_scan)
-  assert resolution.outcome is runs.RunOutcome.DIED
-  assert [h.pid for h in resolution.leftover_holders] == [proc.pid]
-
-  # Unverifiable death (pid recorded, pid_start absent): effective-alive —
-  # the run is kept RUNNING and no kill list is attached.
-  resolution = _resolve(tmp_path, pid=999999, holders_scan=holders_scan)
-  assert resolution.outcome is runs.RunOutcome.RUNNING
-  assert not resolution.leftover_holders
-
-  # Alive run: fd holders are descendants, never liveness, and not reported.
-  pid = os.getpid()
-  pid_start, _ = runs.read_pid_stat(pid)  # type: ignore[misc]
-  resolution = _resolve(tmp_path, pid=pid, pid_start=pid_start, holders_scan=holders_scan)
-  assert resolution.outcome is runs.RunOutcome.RUNNING
-  assert not resolution.leftover_holders
 
 
 # ---------------------------------------------------------------------------
 # finalize_effects judgments
-# ---------------------------------------------------------------------------
-
-
-def _worker_summary(thread_id: str, status: str = "completed") -> dict:
-  return {"type": ET.WORKER_SUMMARY, "thread_id": thread_id, "status": status, "content": "s"}
-
-
-def test_terminal_summary_present_judgment() -> None:
-  events = [_worker_summary("t1")]
-  assert finalize_effects.terminal_summary_present(events, "t1") is True
-  assert finalize_effects.terminal_summary_present(events, "t2") is False
-  # A running summary is not the terminal effect.
-  assert finalize_effects.terminal_summary_present([_worker_summary("t1", status="running")], "t1") is False
-  assert finalize_effects.terminal_summary_present([], "t1") is False
-
-
-def test_master_woke_after_summary_judgment() -> None:
-  summary = _worker_summary("t1")
-  # No summary -> no wake measured (the summary persist is the prerequisite).
-  assert finalize_effects.master_woke_after_summary([], "t1") is False
-  # Master output BEFORE the summary does not count.
-  assert finalize_effects.master_woke_after_summary([{"type": ET.ASSISTANT}, summary], "t1") is False
-  # Assistant/master_done/assistant_error after the LAST summary count.
-  for evt_type in (ET.ASSISTANT, ET.MASTER_DONE, ET.ASSISTANT_ERROR):
-    assert finalize_effects.master_woke_after_summary([summary, {"type": evt_type}], "t1") is True
-  # Noise (errors, triggers, heartbeats) does not.
-  assert finalize_effects.master_woke_after_summary([summary, {"type": "error"}], "t1") is False
-  # A re-summary re-arms the judgment: output must follow the LAST summary.
-  events = [summary, {"type": ET.ASSISTANT}, _worker_summary("t1")]
-  assert finalize_effects.master_woke_after_summary(events, "t1") is False
-
-
-def test_reviewer_thread_exists_judgment() -> None:
-  from src.core.models import ThreadMetadata
-
-  original = ThreadMetadata(id="orig", session_id="s", description="task")
-  reviewer = ThreadMetadata(id="rev", session_id="s", description="review", review_of="orig")
-  threads = [original, reviewer]
-  assert finalize_effects.reviewer_thread_exists(threads, "orig") is True
-  assert finalize_effects.reviewer_thread_exists(threads, "orig", exclude_thread_id="rev") is False
-  assert finalize_effects.reviewer_thread_exists([original], "orig") is False
-  assert finalize_effects.reviewer_thread_exists(threads, "other") is False

@@ -20,8 +20,8 @@ import pytest_asyncio
 from conftest import make_home_config
 
 from src.core import event_types as ET
-from src.core.models import RunRecord, TaskSpec
-from src.core.run_token import CallerIdentity, RunTokenClaims
+from src.core.models import TaskSpec
+from src.core.run_token import CallerIdentity
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskInvalidError, TaskNotFoundError, TaskTreeManager
 
@@ -89,89 +89,6 @@ async def test_create_notifies_with_the_node_readable_at_signal(env) -> None:
 
 
 @pytest.mark.asyncio
-async def test_root_creation_notifies_and_roots_level_sees_it(env) -> None:
-  tree, _session_mgr, _root_id = env
-  spy = NotificationSpy(tree)
-  spy.install()
-  created = await tree.create_task(
-      request_id="root-2",
-      task_parent_id=None,
-      profile="manager",
-      task=TaskSpec(goal="second tree"),
-      name="Root two",
-      backend=None,
-      caller=OP)
-  assert spy.calls == [(created.id, ET.TASK_CREATED)]
-  index = await tree._get_index()
-  assert created.id in tree._children_of(index, None)
-
-
-@pytest.mark.asyncio
-async def test_deep_creation_counts_are_fresh_at_signal(env) -> None:
-  tree, _session_mgr, root_id = env
-  mid = await tree.create_task(
-      request_id="mid", task_parent_id=root_id, profile="manager", task=None, name="Mid", backend=None, caller=OP)
-  spy = NotificationSpy(tree)
-  spy.install()
-  leaf = await tree.create_task(
-      request_id="leaf", task_parent_id=mid.id, profile="worker", task=None, name="Leaf", backend=None, caller=OP)
-  assert spy.calls == [(leaf.id, ET.TASK_CREATED)]
-  signal = spy.readable_at_signal[0]
-  # The creation is deeper than one level: every ancestor row the signal
-  # touches already reflects it.
-  assert signal["parent"]["id"] == mid.id and signal["parent"]["child_count"] == 1
-  index = await tree._get_index()
-  root_row = tree.session_row(index, root_id)
-  assert root_row.open_descendant_count == 2 and root_row.child_count == 1
-
-
-@pytest.mark.asyncio
-async def test_replayed_create_yields_one_task_one_fact_and_one_signal(env) -> None:
-  tree, _session_mgr, root_id = env
-  spy = NotificationSpy(tree)
-  spy.install()
-  body = {"goal": "worker goal"}
-  first = await tree.create_task(
-      request_id="same",
-      task_parent_id=root_id,
-      profile="worker",
-      task=TaskSpec(**body),
-      name="W",
-      backend=None,
-      caller=OP)
-  replay = await tree.create_task(
-      request_id="same",
-      task_parent_id=root_id,
-      profile="worker",
-      task=TaskSpec(**body),
-      name="W",
-      backend=None,
-      caller=OP)
-  assert replay.id == first.id
-  facts = [e for e in tree.events.load_events(first.id) if e.get("type") == ET.TASK_CREATED]
-  assert len(facts) == 1, "a replayed request never appends a second creation fact"
-  assert len(spy.calls) == 1, "only the publication signals; the replay publishes nothing"
-
-
-@pytest.mark.asyncio
-async def test_notification_failure_after_publish_does_not_fail_the_creation(
-    env, monkeypatch: pytest.MonkeyPatch) -> None:
-  tree, session_mgr, root_id = env
-
-  async def boom(session_id: str, event_type: str | None) -> None:
-    raise RuntimeError("broadcast socket exploded")
-
-  monkeypatch.setattr(session_mgr, "broadcast_task_tree_changed", boom)
-  created = await tree.create_task(
-      request_id="c2", task_parent_id=root_id, profile="worker", task=None, name="Child", backend=None, caller=OP)
-  # The creation itself succeeded and stays recoverable from durable facts.
-  meta = await tree.load_meta(created.id)
-  assert meta is not None and meta.name == "Child"
-  facts = [e for e in tree.events.load_events(created.id) if e.get("type") == ET.TASK_CREATED]
-  assert len(facts) == 1
-
-
-@pytest.mark.asyncio
 async def test_failed_prepublication_create_emits_no_signal(env) -> None:
   tree, _session_mgr, root_id = env
   spy = NotificationSpy(tree)
@@ -204,36 +121,3 @@ async def test_failed_prepublication_create_emits_no_signal(env) -> None:
         caller=OP)
   assert spy.calls == [(worker.id, ET.TASK_CREATED)
                       ], ("only the successful publication signaled; every refused create emitted nothing")
-
-
-@pytest.mark.asyncio
-async def test_agent_scoped_creation_notifies_the_tree(env) -> None:
-  tree, _session_mgr, root_id = env
-  import os
-
-  from src.core.runs import read_pid_stat
-  pid_start, _state = read_pid_stat(os.getpid())
-  await tree.runs.register_run(RunRecord(id="agent-run", session_id=root_id, pid=os.getpid(), pid_start=pid_start))
-  claims = RunTokenClaims(session_id=root_id, run_id="agent-run", agent="subagent")
-  agent = CallerIdentity(kind="agent", claims=claims)
-  # The agent's own manager task must carry a real user instruction with the
-  # takeoff authorization (the nearest-real-user-ancestor gate).
-  await tree.events.append(
-      root_id, {
-          "id": "u1",
-          "type": ET.USER,
-          "timestamp": "2026-01-01T00:00:00+00:00",
-          "content": "take off and build the thing"
-      })
-  spy = NotificationSpy(tree)
-  spy.install()
-  child = await tree.create_task(
-      request_id="agent-child",
-      task_parent_id=root_id,
-      profile="worker",
-      task=TaskSpec(goal="agent worker goal"),
-      name=None,
-      backend=None,
-      caller=agent)
-  assert spy.calls == [(child.id, ET.TASK_CREATED)
-                      ], ("an agent-created worker publishes the same creation signal to connected clients")

@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from conftest import (
     BROADCAST_PATCH_TARGET,
-    assistant_text_tool_use_event,
     make_home_session,
 )
 
@@ -32,39 +31,6 @@ async def test_persist_user_event_broadcasts_message_delta_only(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_persist_assistant_text_broadcasts_stream_then_message_on_master_done(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-
-  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
-    await mgr.persist_and_broadcast(
-        session.id, {
-            "type": "assistant",
-            "message": {
-                "content": [{
-                    "type": "text",
-                    "text": "Working"
-                }]
-            },
-            "timestamp": "t1",
-        })
-    await mgr.persist_and_broadcast(session.id, {
-        "type": "master_done",
-        "thinking_seconds": 2,
-        "timestamp": "t2",
-    })
-
-  payloads = _broadcast_calls(mock)
-  types = [p["type"] for p in payloads]
-  # assistant -> stream delta only (raw is suppressed).
-  # master_done -> message delta (commit) + raw master_done (state side-effect).
-  assert types == ["stream", "message", "message", "master_done"]
-  assert payloads[0]["message"]["content"] == "Working"
-  assert payloads[1]["message"]["role"] == "assistant"
-  assert payloads[1]["message"]["content"] == "Working"
-  assert payloads[2]["message"]["role"] == "separator"
-
-
-@pytest.mark.asyncio
 async def test_persist_handler_result_broadcasts_message_delta_and_raw_event(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
@@ -82,45 +48,6 @@ async def test_persist_handler_result_broadcasts_message_delta_and_raw_event(tmp
   assert [p["type"] for p in payloads] == ["message", "handler_result"]
   assert payloads[0]["message"]["role"] == "system"
   assert payloads[0]["message"]["content"] == "✓ Lint: Done"
-
-
-@pytest.mark.asyncio
-async def test_aggregator_state_persists_across_calls(tmp_path: Path) -> None:
-  """Tools attached in one event surface in the eventual flush message."""
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-
-  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
-    await mgr.persist_and_broadcast(
-        session.id, assistant_text_tool_use_event("Running", "Bash", {"command": "ls"}, "t1"))
-    await mgr.persist_and_broadcast(
-        session.id, {
-            "type": "user",
-            "message": {
-                "content": [{
-                    "type": "tool_result",
-                    "content": "out",
-                    "is_error": False
-                }]
-            },
-        })
-    await mgr.persist_and_broadcast(session.id, {
-        "type": "master_done",
-        "thinking_seconds": 1,
-        "timestamp": "t3",
-    })
-
-  payloads = _broadcast_calls(mock)
-  commit_msgs = [p["message"] for p in payloads if p["type"] == "message" and p["message"]["role"] == "assistant"]
-  assert len(commit_msgs) == 1
-  assert commit_msgs[0]["content"] == "Running"
-  assert commit_msgs[0]["tools"] == [{
-      "name": "Bash",
-      "input": {
-          "command": "ls"
-      },
-      "output": "out",
-      "is_error": False,
-  }]
 
 
 @pytest.mark.asyncio

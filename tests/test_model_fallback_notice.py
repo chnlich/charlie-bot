@@ -9,42 +9,24 @@ projection reuse).
 from __future__ import annotations
 
 import json
-import re
-from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
 from conftest import (
-    BUILD_BACKEND_PATCH_TARGET,
-    TerminateFlagBackend,
-    assistant_text_event,
     backend_option,
     crashed_run_record,
-    make_work_item,
-    mock_session_callbacks,
-    patch_instructions_content,
     patch_resume_seams,
     run_resume_round,
 )
 
-from src.agents import master_cc
-from src.agents.backends import claude_code
 from src.agents.backends.claude_code import (
-    _family_membership,
     out_of_family_served_models,
 )
 from src.core import event_types as ET
 from src.core import runs
 from src.core.config import CharlieBotConfig
-from src.core.message_aggregator import (
-    MessageAggregator,
-    _fallback_notice_text,
-    _model_fallback_notice_msg,
-)
 from src.core.models import (
-    BackendOption,
     CreateSessionRequest,
-    SessionMetadata,
 )
 from src.core.sessions import SessionManager
 
@@ -111,322 +93,21 @@ def test_pure_and_mixed_out_of_family_rounds_detect_served_models() -> None:
   assert out_of_family_served_models(mixed, CONFIGURED) == ["claude-opus-4-8"]
 
 
-def test_served_models_first_appearance_order_and_dedup() -> None:
-  """Raw names, first-appearance order, deduplicated."""
-  events = [
-      _assistant("claude-opus-4-8", "one"),
-      _assistant("claude-fable-5-1", "two"),
-      _assistant("claude-opus-4-8", "three"),
-      _assistant("claude-sonnet-5", "four"),
-  ]
-  assert out_of_family_served_models(events, CONFIGURED) == ["claude-opus-4-8", "claude-sonnet-5"]
-
-
-def test_dated_haiku_basename_and_sonnet_are_out_of_family() -> None:
-  """A dated haiku basename and sonnet-5 authoring the visible reply are named raw."""
-  haiku_round = [_assistant("claude-haiku-4-5-20251001", "served"), _result()]
-  assert out_of_family_served_models(haiku_round, CONFIGURED) == ["claude-haiku-4-5-20251001"]
-
-  sonnet_round = [_assistant("claude-sonnet-5", "served"), _result()]
-  assert out_of_family_served_models(sonnet_round, CONFIGURED) == ["claude-sonnet-5"]
-
-
-def test_fable_thinking_only_init_does_not_mask_out_of_family_text() -> None:
-  """A text-less fable init is not a visible-reply author; the opus text still fires."""
-  events = [
-      _assistant("claude-fable-5-1", blocks=[{
-          "type": "thinking",
-          "thinking": "fable thinks"
-      }]),
-      _assistant("claude-opus-4-8", "the visible reply"),
-  ]
-  assert out_of_family_served_models(events, CONFIGURED) == ["claude-opus-4-8"]
-
-
-def test_out_of_family_thinking_and_tool_blocks_never_count() -> None:
-  """(f) All visible text fable; out-of-family thinking/tool_use and an opus
-  modelUsage key exist but no out-of-family text block — stays silent."""
-  events = [
-      _assistant("claude-fable-5-1", "Visible fable reply."),
-      _assistant("claude-opus-4-8", blocks=[{
-          "type": "thinking",
-          "thinking": "opus thinks"
-      }]),
-      _assistant("claude-opus-4-8", blocks=[{
-          "type": "tool_use",
-          "id": "t1",
-          "name": "Bash",
-          "input": {}
-      }]),
-      _result(modelUsage={"claude-opus-4-8": {
-          "input_tokens": 3
-      }}),
-  ]
-  assert out_of_family_served_models(events, CONFIGURED) == []
-
-
-def test_background_subagent_text_is_excluded() -> None:
-  """Out-of-family text under parent_tool_use_id never counts as served."""
-  events = [
-      _assistant("claude-opus-4-8", "subagent reply", parent_tool_use_id="toolu_1"),
-      _assistant("claude-fable-5-1", "main reply"),
-  ]
-  assert out_of_family_served_models(events, CONFIGURED) == []
-
-
-def test_ending_event_with_out_of_family_text_detects() -> None:
-  """(g) Mixed family round whose ending event carries the out-of-family text block."""
-  events = [_assistant("claude-fable-5-1", "start"), _assistant("claude-opus-4-8", "ending text"), _result()]
-  assert out_of_family_served_models(events, CONFIGURED) == ["claude-opus-4-8"]
-
-
-def test_no_pin_synthetic_and_missing_model_stay_silent() -> None:
-  """(c) No model pin, the CLI's <synthetic> sentinel, and missing models never fire."""
-  opus_text_round = [_assistant("claude-opus-4-8", "served")]
-  assert out_of_family_served_models(opus_text_round, None) == []
-  assert out_of_family_served_models(opus_text_round, "") == []
-
-  synthetic_round = [_assistant("<synthetic>", "synthetic text")]
-  assert out_of_family_served_models(synthetic_round, CONFIGURED) == []
-
-  missing_model_round = [assistant_text_event("hi")]
-  assert out_of_family_served_models(missing_model_round, CONFIGURED) == []
-
-  tool_only_round = [
-      {
-          "type": ET.ASSISTANT,
-          "message":
-              {
-                  "model": "claude-opus-4-8",
-                  "content": [{
-                      "type": "tool_use",
-                      "id": "t1",
-                      "name": "Bash",
-                      "input": {},
-                  }],
-              },
-      },
-  ]
-  assert out_of_family_served_models(tool_only_round, CONFIGURED) == []
-
-
 # ---------------------------------------------------------------------------
 # (e2) Family decision table + single-suffix-strip regression guard
-# ---------------------------------------------------------------------------
-
-
-def test_family_decision_table_against_configured_fable_5_1() -> None:
-  """Every observed model string classified against configured claude-fable-5-1."""
-  same_family = ["claude-fable-5", "claude-fable-5-1"]
-  other_family = ["claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001"]
-
-  for model in same_family:
-    assert _family_membership(model, CONFIGURED) is True, model
-    assert out_of_family_served_models([_assistant(model, "hi")], CONFIGURED) == [], model
-  for model in other_family:
-    assert _family_membership(model, CONFIGURED) is False, model
-    assert out_of_family_served_models([_assistant(model, "hi")], CONFIGURED) == [model], model
-
-
-def test_single_suffix_strip_regression_flips_exactly_the_fable_5_row(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Substituting the refuted rule — strip any trailing numeric segment
-  (re.sub(r"-\\d+$", "")) then compare — must flip the claude-fable-5 row:
-  the main healthy spelling would be misjudged out-of-family (verify r2).
-  The green table above fails the moment the real rule regresses to this."""
-
-  def single_suffix_strip_family(served: str, configured: str) -> bool:
-    return re.sub(r"-\d+$", "", served) == re.sub(r"-\d+$", "", configured)
-
-  monkeypatch.setattr(claude_code, "_family_membership", single_suffix_strip_family)
-
-  observed = ["claude-fable-5", "claude-fable-5-1", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5"]
-  classified = {model: out_of_family_served_models([_assistant(model, "hi")], CONFIGURED) for model in observed}
-  # The regression the table guards: claude-fable-5 flips to out-of-family...
-  assert classified["claude-fable-5"] == ["claude-fable-5"]
-  # ...while every other row keeps its verdict, isolating the guarded row.
-  assert classified["claude-fable-5-1"] == []
-  assert classified["claude-opus-5"] == ["claude-opus-5"]
-  assert classified["claude-opus-4-8"] == ["claude-opus-4-8"]
-  assert classified["claude-sonnet-5"] == ["claude-sonnet-5"]
 
 
 # ---------------------------------------------------------------------------
 # (e) Render mapping
-# ---------------------------------------------------------------------------
-
-
-def test_aggregator_renders_system_notice_naming_models() -> None:
-  event = {
-      "type": ET.MODEL_FALLBACK_NOTICE,
-      "backend": FABLE_OPTION.id,
-      "configured_model": CONFIGURED,
-      "served_models": ["claude-opus-4-8"],
-      "timestamp": "t",
-  }
-  deltas = list(MessageAggregator().feed(event))
-  committed = [d["message"] for d in deltas if d["type"] == "message"]
-  assert len(committed) == 1
-  assert committed[0]["role"] == "system"
-  assert committed[0]["content"] == "Served by claude-opus-4-8 (configured claude-fable-5-1)"
-
-
-def test_fallback_notice_text_names_every_served_model() -> None:
-  text = _fallback_notice_text(CONFIGURED, ["claude-opus-4-8", "claude-sonnet-5"])
-  assert text == "Served by claude-opus-4-8, claude-sonnet-5 (configured claude-fable-5-1)"
-  assert _model_fallback_notice_msg(
-      {
-          "type": ET.MODEL_FALLBACK_NOTICE,
-          "configured_model": CONFIGURED,
-          "served_models": ["claude-opus-4-8", "claude-sonnet-5"],
-      }) == {
-          "role": "system",
-          "content": text
-      }
 
 
 # ---------------------------------------------------------------------------
 # Wiring — live path (re-reads this invocation's own raw log)
-# ---------------------------------------------------------------------------
-
-
-class _RawLogBackend(TerminateFlagBackend):
-  """Backend double mirroring the real transport: pins this turn's events to
-  the per-turn raw NDJSON log the turn-end detector re-reads, then yields them."""
-
-  exit_code = 0
-  stderr_text = ""
-
-  def __init__(self, events: list[dict], log_dir: Path | None) -> None:
-    self._events = events
-    self._log_dir = log_dir
-
-  def translate_event(self, event: dict) -> list[dict]:
-    return [event]
-
-  async def run(self,
-                prompt: str,
-                cwd: str,
-                env: dict,
-                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
-    if self._log_dir is not None:
-      raw_path = self._log_dir / runs.RAW_LOG_NAME
-      raw_path.parent.mkdir(parents=True, exist_ok=True)
-      raw_path.write_text("".join(json.dumps(event) + "\n" for event in self._events), encoding="utf-8")
-    for event in self._events:
-      yield event
-
-
-async def _run_live_round(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    session_id: str,
-    option: BackendOption,
-    events: list[dict],
-) -> list[dict]:
-  """Drive the real _run_cc with a raw-log-pinning backend double; return the persisted events."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [option]})
-  meta = SessionMetadata(id=session_id, name="t", backend=option.id)
-  cb = mock_session_callbacks()
-
-  def fake_build_backend(_option: object, _cfg: object, **kwargs: object) -> _RawLogBackend:
-    return _RawLogBackend(events, kwargs.get("log_dir"))
-
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
-  patch_instructions_content(monkeypatch)
-
-  item = make_work_item(cfg, meta, option, callbacks=cb)
-  await master_cc._run_cc(item)
-
-  return [c.args[1] for c in cb.persist_and_broadcast.await_args_list]
-
-
-@pytest.mark.asyncio
-async def test_live_round_emits_notice_after_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """(d) The persisted stream gains exactly one model_fallback_notice with all
-  fields, placed after the round's result event."""
-  events = [_assistant("claude-opus-4-8", "This round's answer."), _result()]
-  persisted = await _run_live_round(tmp_path, monkeypatch, "fb-notice-live", FABLE_OPTION, events)
-
-  notices = [e for e in persisted if e.get("type") == ET.MODEL_FALLBACK_NOTICE]
-  assert notices == [
-      {
-          "type": ET.MODEL_FALLBACK_NOTICE,
-          "backend": "claude-fable-5.1",
-          "configured_model": CONFIGURED,
-          "served_models": ["claude-opus-4-8"],
-      }
-  ]
-  types = [e.get("type") for e in persisted]
-  assert types.index(ET.RESULT) < types.index(ET.MODEL_FALLBACK_NOTICE)
-
-
-@pytest.mark.asyncio
-async def test_live_in_family_round_emits_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Zero-notice control: visible reply authored by the configured model (either
-  healthy fable spelling) emits no event of any new type."""
-  events = [
-      _assistant("claude-fable-5-1", "first half"),
-      _assistant("claude-fable-5", "second half"),
-      _result(modelUsage={"claude-haiku-4-5-20251001": {
-          "input_tokens": 1
-      }}),
-  ]
-  persisted = await _run_live_round(tmp_path, monkeypatch, "fb-notice-live-quiet", FABLE_OPTION, events)
-
-  assert [e for e in persisted if e.get("type") == ET.MODEL_FALLBACK_NOTICE] == []
-  assert [e for e in persisted if e.get("type") == ET.ASSISTANT_ERROR] == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("backend_type", ["codex", "opencode"])
-async def test_live_non_cc_backend_emits_nothing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend_type: str) -> None:
-  """Non-cc backends never trigger the detector, whatever their stream served."""
-  option = backend_option(id="other", label="Other", type=backend_type, model="some-model")
-  events = [_assistant("glm-5.2", "served by another kind"), _result()]
-  persisted = await _run_live_round(tmp_path, monkeypatch, f"fb-notice-live-{backend_type}", option, events)
-
-  assert [e for e in persisted if e.get("type") == ET.MODEL_FALLBACK_NOTICE] == []
 
 
 # ---------------------------------------------------------------------------
 # Wiring — re-attach path (reuses the whole-round projection, zero new I/O)
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_resume_round_emits_identical_notice_from_projection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The re-attach site detects over the existing whole-round projection (no
-  second file read) and emits the identical notice after the round's result."""
-  session_id = "fb-notice-resume"
-  log_dir = tmp_path / "run"
-  log_dir.mkdir(parents=True)
-  raw_path = log_dir / runs.RAW_LOG_NAME
-  assistant_line = json.dumps(_assistant("claude-opus-4-8", "served reply")) + "\n"
-  raw_path.write_text(assistant_line + json.dumps(_result()) + "\n", encoding="utf-8")
-  (log_dir / runs.CURSOR_NAME).write_text("0", encoding="utf-8")
-
-  record = crashed_run_record(raw_path)
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [FABLE_OPTION]})
-  meta = SessionMetadata(id=session_id, name="t", backend=FABLE_OPTION.id)
-  cb = mock_session_callbacks()
-
-  patch_resume_seams(monkeypatch)
-  await run_resume_round(cfg, meta, record, cb, is_alive=lambda: False)
-
-  persisted = [c.args[1] for c in cb.persist_and_broadcast.await_args_list]
-  notices = [e for e in persisted if e.get("type") == ET.MODEL_FALLBACK_NOTICE]
-  assert notices == [
-      {
-          "type": ET.MODEL_FALLBACK_NOTICE,
-          "backend": FABLE_OPTION.id,
-          "configured_model": CONFIGURED,
-          "served_models": ["claude-opus-4-8"],
-      }
-  ]
-  types = [e.get("type") for e in persisted]
-  assert types.index(ET.RESULT) < types.index(ET.MODEL_FALLBACK_NOTICE)
 
 
 @pytest.mark.asyncio

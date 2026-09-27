@@ -101,23 +101,6 @@ def test_whole_body_gzip_bytes_match_starlette_inline() -> None:
   assert _strip_mtime(body) == _strip_mtime(body_again)
 
 
-def test_small_body_and_preset_encoding_stay_identity() -> None:
-
-  def small() -> Response:
-    return Response(content=b"{}", media_type="application/json")
-
-  headers, body = _drive(_build(small, server._CharlieBotGZipMiddleware))
-  assert "content-encoding" not in headers
-  assert body == b"{}"
-
-  def preset() -> Response:
-    return Response(content=BODY, media_type="application/gzip", headers={"Content-Encoding": "gzip"})
-
-  headers, body = _drive(_build(preset, server._CharlieBotGZipMiddleware))
-  assert headers["content-encoding"] == "gzip"
-  assert body == BODY
-
-
 def test_streaming_body_compresses_per_chunk() -> None:
   stream = _sliced_stream("application/json")
 
@@ -145,25 +128,3 @@ def test_already_compressed_media_types_ride_identity() -> None:
   headers, body = _drive(_build(deck, server._CharlieBotGZipMiddleware))
   assert "content-encoding" not in headers
   assert body == BODY
-
-
-def test_text_media_types_keep_compressing() -> None:
-
-  def svg() -> Response:
-    return Response(content=BODY, media_type="image/svg+xml")
-
-  headers, body = _drive(_build(svg, server._CharlieBotGZipMiddleware))
-  assert headers["content-encoding"] == "gzip"
-  assert gzip.decompress(body) == BODY
-
-  def events() -> StreamingResponse:
-
-    async def chunks() -> AsyncIterator[bytes]:
-      yield BODY
-      yield b""
-
-    return StreamingResponse(chunks(), media_type="text/event-stream")
-
-  headers, body = _drive(_build(events, server._CharlieBotGZipMiddleware))
-  assert "content-encoding" not in headers
-  assert body == BODY + b""

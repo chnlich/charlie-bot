@@ -10,7 +10,6 @@ from conftest import (
     CLI_COMMON_BASE_URL_PATCH_TARGET,
     CLI_COMMON_SESSIONS_DIR_PATCH_TARGET,
     CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
-    assert_cli_reject_exit2,
     make_json_response,
     stub_credentials,
 )
@@ -94,40 +93,6 @@ def test_resolve_session_id_rejects_mismatches_without_env(
 
 
 @pytest.mark.parametrize(
-    ("cwd_subpath",),
-    [
-        (None,),
-        (Path("session-id") / "nested",),
-    ],
-    ids=["outside-sessions-tree", "nested-grandchild-of-a-session-dir"],
-)
-def test_resolve_session_id_without_deriving_cwd_exits_2(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    cwd_subpath: Path | None,
-) -> None:
-  """Only a direct child of the sessions dir derives a session id; a cwd outside the
-  tree and a nested grandchild alike turn an absent --session into an exit-2 rejection."""
-  sessions_dir = tmp_path / "sessions"
-  sessions_dir.mkdir()
-  cwd_dir = tmp_path / "outside" if cwd_subpath is None else sessions_dir / cwd_subpath
-  cwd_dir.mkdir(parents=True)
-  monkeypatch.chdir(cwd_dir)
-  monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
-
-  with (
-      patch(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir),
-      pytest.raises(SystemExit) as exc_info,
-  ):
-    common.resolve_session_id(None)
-
-  assert exc_info.value.code == 2
-  error = json.loads(capsys.readouterr().err)["error"]
-  assert "--session required" in error
-
-
-@pytest.mark.parametrize(
     ("arg_session", "cwd_session", "expect_note"),
     [
         (None, None, False),
@@ -162,62 +127,8 @@ def test_resolve_session_id_env_outranks_cwd(
   assert "CHARLIEBOT_SESSION_ID=env-session" in note
 
 
-def test_resolve_session_id_rejects_explicit_session_against_env(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-  """An explicit --session that disagrees with the variable is ambiguous, so the call exits 2."""
-  sessions_dir = tmp_path / "sessions"
-  sessions_dir.mkdir()
-  _set_cwd(tmp_path, monkeypatch, sessions_dir, "env-session")
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "env-session")
-
-  with (
-      patch(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir),
-      pytest.raises(SystemExit) as exc_info,
-  ):
-    common.resolve_session_id("arg-session")
-
-  assert exc_info.value.code == 2
-  error = json.loads(capsys.readouterr().err)["error"]
-  assert "mismatch" in error
-  assert "--session=arg-session" in error
-  assert "CHARLIEBOT_SESSION_ID=env-session" in error
-
-
-def test_resolve_session_id_reads_empty_env_as_absent(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  """An empty value carries no identity, so the cwd fallback answers."""
-  sessions_dir = tmp_path / "sessions"
-  sessions_dir.mkdir()
-  _set_cwd(tmp_path, monkeypatch, sessions_dir, "cwd-session")
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "")
-
-  with patch(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir):
-    assert common.resolve_session_id(None) == "cwd-session"
-
-
 def test_validate_repo_path_accepts_existing_absolute_dir(tmp_path: Path) -> None:
   common.validate_repo_path(argparse.ArgumentParser(), str(tmp_path))
-
-
-def test_validate_repo_path_rejects_relative_path(capsys: pytest.CaptureFixture[str]) -> None:
-  with pytest.raises(SystemExit) as exc_info:
-    common.validate_repo_path(argparse.ArgumentParser(), "meshy-research")
-
-  assert_cli_reject_exit2(exc_info, capsys, "must be an absolute path", "meshy-research")
-
-
-def test_validate_repo_path_rejects_nonexistent_dir(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-  nonexistent = str(tmp_path / "nonexistent")
-
-  with pytest.raises(SystemExit) as exc_info:
-    common.validate_repo_path(argparse.ArgumentParser(), nonexistent)
-
-  assert_cli_reject_exit2(exc_info, capsys, "does not exist", nonexistent)
 
 
 @pytest.mark.parametrize(

@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 import structlog
 
-from src.core.config import CharlieBotConfig, load_config
+from src.core.config import CONFIG_FILENAME, CharlieBotConfig, load_config
 from src.core.yaml_utils import load_yaml
 
 log = structlog.get_logger()
@@ -50,7 +50,7 @@ def write_voice_engine(home: Path) -> str:
   # The GPU enable flow pins the GPU pipeline: setup.sh runs enable only on
   # nvidia-smi hosts, so there is nothing to choose between.
   engine = "qwen3_hf"
-  config_path = home / "config.yaml"
+  config_path = home / CONFIG_FILENAME
   text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
   lines = text.splitlines(keepends=True)
   voice_matches = [i for i, line in enumerate(lines) if re.match(r"^voice:\s*$", line)]

@@ -95,8 +95,10 @@ def build_trial_home(source: Path, home: Path, port: int) -> str:
   """
   import yaml
 
+  from src.core.config import CONFIG_FILENAME
+
   shutil.copytree(source, home)
-  config_path = home / "config.yaml"
+  config_path = home / CONFIG_FILENAME
   config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
   config["server"] = {"host": "127.0.0.1", "port": port}
   config_path.write_text(yaml.safe_dump(config), encoding="utf-8")

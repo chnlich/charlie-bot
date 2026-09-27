@@ -35,7 +35,7 @@ class _FakeSessionMgr(EventCaptureSessionManager):
 _clear_once_keys = fresh_state_fixture(init_module._silence_reported_thread_ids.clear)
 
 
-async def _consume(raw: Path, sink: list[dict], on_silence: Callable[[], Awaitable[None]]) -> None:
+async def _consume(raw: Path, sink: list[dict], on_silence: Callable[[], Awaitable[None]], **kwargs: float) -> None:
   # The sink must receive events as they arrive: the follow runs until
   # cancelled, so a collect-then-extend form would leave the sink empty, and
   # an async generator cannot feed list.extend directly.
@@ -46,19 +46,21 @@ async def _consume(raw: Path, sink: list[dict], on_silence: Callable[[], Awaitab
       post_result_timeout=9999.0,
       poll_interval=0.05,
       on_silence=on_silence,
+      **kwargs,
   ):
     sink.append(ev)  # noqa: PERF401  (per-item append is load-bearing; see comment above)
 
 
 @pytest.mark.asyncio
 async def test_silence_crossing_emits_exactly_one_recheck_and_follow_continues(tmp_path: Path) -> None:
-  """Fake-clock crossing of the real 7200s threshold (raw mtime backdated to
-  threshold−2s, so ~2s of real follow time crosses it): exactly one reminder,
-  and the follow keeps consuming afterwards."""
+  """Crossing of the (injected) silence threshold — raw mtime backdated to
+  threshold−crossing_margin, so the follow itself crosses it in real time —
+  emits exactly one reminder, and the follow keeps consuming afterwards."""
   raw = tmp_path / "agent.raw.ndjson"
   raw.write_bytes(b"")
-  margin = 2.0
-  ts = time.time() - (NO_OUTPUT_REPORT_THRESHOLD - margin)
+  threshold = 0.3
+  crossing_margin = 0.1
+  ts = time.time() - (threshold - crossing_margin)
   os.utime(raw, (ts, ts))
 
   reports: list[str] = []
@@ -67,19 +69,19 @@ async def test_silence_crossing_emits_exactly_one_recheck_and_follow_continues(t
   async def on_silence() -> None:
     reports.append("recheck")
 
-  task = asyncio.create_task(_consume(raw, events, on_silence))
+  task = asyncio.create_task(_consume(raw, events, on_silence, silence_threshold=threshold))
   try:
     # Cross the threshold; exactly one reminder for this mount, even after
     # more idle polling.
-    await _async_wait_for(lambda: bool(reports), margin + 3.0, "the silence recheck never reported")
+    await _async_wait_for(lambda: bool(reports), 5.0, "the silence recheck never reported")
     assert reports == ["recheck"]
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(0.3)
     assert reports == ["recheck"]
 
     # The follow never judged death and never stopped: a late line is consumed.
     with raw.open("ab") as f:
       f.write(b'{"type":"assistant"}\n')
-    await _async_wait_for(lambda: bool(events), 2.0, "the follow never consumed the late line")
+    await _async_wait_for(lambda: bool(events), 5.0, "the follow never consumed the late line")
     assert [e.get("type") for e in events] == ["assistant"]
   finally:
     await cancel_and_drain(task)
@@ -99,7 +101,9 @@ async def test_remount_cannot_reemit_within_one_boot(tmp_path: Path) -> None:
     events: list[dict] = []
     task = asyncio.create_task(
         _consume(raw, events, lambda: init_module._follow_silence_recheck(session_mgr, "sess", "tid")))
-    await asyncio.sleep(0.4)
+    # The threshold was crossed before the mount, so the recheck fires on the
+    # first poll (poll_interval=0.05); 0.15s covers three.
+    await asyncio.sleep(0.15)
     await cancel_and_drain(task)
 
   await mount_once()

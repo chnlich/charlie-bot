@@ -39,7 +39,6 @@ import os
 import signal
 import subprocess
 import sys
-import time
 from collections import Counter
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -128,7 +127,6 @@ def build_recovery_cfg(home: Path) -> CharlieBotConfig:
 # src/core/init_master_recovery.py, master-consumer in src/agents/master_cc_queue.py.
 # A recovery test must drain those tasks before asserting on rewritten metadata.
 RECOVERY_TASK_PREFIXES = ("resume-", "respawn-", "recomplete-")
-
 
 MASTER_RECOVERY_TASK_PREFIXES = (*RECOVERY_TASK_PREFIXES, "master-resume-", "master-replay-", "master-consumer-")
 
@@ -264,7 +262,6 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"REVIEWER-R
 exit 0
 """
 
-
 # Attempt 1 of a VERIFY quota-retry pair: emits a rate_limit_event the way Claude
 # Code does on a rejected quota check, then dies -- the exact shape Worker._process_event
 # (src/agents/worker.py) turns into QuotaExhaustedError.
@@ -275,7 +272,6 @@ echo '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLim
 exit 1
 """
 
-
 # Attempt 2: a clean retry with no quota event, completing normally.
 CLEAN_RETRY_SHIM = """#!/bin/sh
 cat >/dev/null
@@ -285,7 +281,6 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"ATTEMPT-2-
 exit 0
 """
 
-
 FAKE_SHIM = """#!/bin/sh
 echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"E2E-ASSISTANT-MARKER"}]}}'
 sleep "$FAKE_RESULT_DELAY"
@@ -293,7 +288,6 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"E2E-RESULT
 '"usage":{"input_tokens":1,"output_tokens":1}}'
 exit 0
 """
-
 
 # The two drivers' shared session rig, spliced into each driver source after
 # `home` binds. Each driver's imports must cover every name the fragment uses.
@@ -307,7 +301,6 @@ _DRIVER_SESSION_SETUP = """\
   thread_mgr = ThreadManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="e2e"))
 """
-
 
 DRIVER = """import asyncio
 import json
@@ -598,7 +591,6 @@ exit 0
 
 MASTER_FAKE_SHIM = MASTER_FAKE_SHIM.replace("__LITELLM_503_ERROR_MESSAGE__", LITELLM_503_ERROR_MESSAGE)
 
-
 # The two drivers' shared turn rig, spliced into each driver source after
 # `home` and `shim` bind. Each driver's imports must cover every name the
 # fragment uses.
@@ -612,7 +604,6 @@ _DRIVER_TURN_SETUP = """\
   # Prompt assembly is orthogonal to this protocol; keep the turn minimal.
   master_cc_run._build_instructions_content = lambda session_meta, cfg, prompt_overlay: "instructions"
 """
-
 
 MASTER_DRIVER = """import asyncio
 import json
@@ -751,7 +742,12 @@ def _master_launch_driver(
     shim: Path,
     kind: str,
     shim_mode: str,
-    extra_args: list[str] | None = None) -> tuple[subprocess.Popen, str]:
+    extra_args: list[str] | None = None,
+    shim_sleep: float = 1.0) -> tuple[subprocess.Popen, str]:
+  """``shim_sleep`` is the sleep_first stall window: long enough for the test to
+  kill the server mid-turn (kill detection ~0.1s after the first output), a
+  fraction of the production-sized 3s the original run waited."""
+
   shim_dir = tmp_path / "shim"
   driver = shim_dir / "driver.py"
   driver.write_text(MASTER_DRIVER, encoding="utf-8")
@@ -760,7 +756,7 @@ def _master_launch_driver(
   env["PYTHONPATH"] = str(ROOT)
   env["SHIM_MODE"] = shim_mode
   env["SHIM_STATE"] = str(tmp_path / "shim_state")
-  env["SHIM_SLEEP"] = "3"
+  env["SHIM_SLEEP"] = str(shim_sleep)
   proc = subprocess.Popen(
       [sys.executable, str(driver), str(home),
        str(shim), kind, *(extra_args or [])],
@@ -911,7 +907,7 @@ async def _completed_turn_downtime_rig(
   Returns ``(home, state, cfg, session_id)``."""
   home = tmp_path / "home"
   shim, state = _master_install_shim(tmp_path)
-  proc, session_id = _master_launch_driver(tmp_path, home, shim, transport, "sleep_first")
+  proc, session_id = _master_launch_driver(tmp_path, home, shim, transport, "sleep_first", shim_sleep=1.0)
   _wait_turn_started(home, session_id, what=started_what)
   proc.kill()
   proc.wait(timeout=10)
@@ -1064,20 +1060,23 @@ async def _uncovered_thread(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration  # a real worker driver subprocess, killed and drained
 async def test_restart_recovers_completed_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Server crashed after the agent finished: drain-finalize from the result event."""
   home = tmp_path / "home"
-  proc, ids = _launch_driver(tmp_path, home, result_delay=0.6)
+  proc, ids = _launch_driver(tmp_path, home, result_delay=0.4)
   _kill_driver_mid_run(proc, home, ids)
 
-  # Wait until the agent's result line landed and the process is long gone.
+  # Wait until the agent's result line landed and the process actually exited —
+  # a liveness poll, not a fixed guess at how long exit takes.
   raw = home / "sessions" / ids["session"] / "threads" / ids["thread"] / "data" / runs.RAW_LOG_NAME
   _wait_for(
       lambda: "E2E-RESULT-MARKER" in raw.read_text(encoding="utf-8", errors="replace"),
       timeout=20.0,
       what="agent result never arrived",
   )
-  time.sleep(0.5)
+  pid = _read_meta(home, ids["session"], ids["thread"])["pid"]
+  _wait_for(lambda: not _pid_alive(pid), timeout=10.0, what="agent process never exited after its result")
 
   recovered, alive_at_reattach, master_wakes, _outcomes = await _recover(monkeypatch, home)
 
@@ -1089,10 +1088,14 @@ async def test_restart_recovers_completed_run(tmp_path: Path, monkeypatch: pytes
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration  # a real worker driver subprocess, killed and re-attached
 async def test_restart_reattaches_running_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Server crashed while the agent kept running: re-attach and follow it to the end."""
   home = tmp_path / "home"
-  proc, ids = _launch_driver(tmp_path, home, result_delay=3.0)
+  # The result delay IS the injected stall window: it must outlast kill
+  # detection plus recovery's mount (~0.5s) so the shim is still alive to
+  # re-attach to, and it bounds how long the follow waits for the result.
+  proc, ids = _launch_driver(tmp_path, home, result_delay=1.0)
   _kill_driver_mid_run(proc, home, ids)
 
   # The agent is still alive for ~3s; recovery must judge the run ALIVE and
@@ -1319,12 +1322,13 @@ async def test_fresh_spawn_rotates_stale_raw_log_so_verify_retry_quota_not_repla
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration  # a real worker driver subprocess, detached and re-attached
 async def test_graceful_shutdown_lets_covered_run_survive_and_reattach(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Event-loop shutdown mid-run: a covered worker is neither signalled nor
   finalized; the next boot re-attaches and finishes with the real result."""
   home = tmp_path / "home"
-  proc, ids = _launch_graceful_driver(tmp_path, home, result_delay=3.0)
+  proc, ids = _launch_graceful_driver(tmp_path, home, result_delay=1.0)
   assert proc.returncode == 0
 
   meta = _read_meta(home, ids["session"], ids["thread"])
@@ -1373,6 +1377,7 @@ async def test_restart_finalizes_uncovered_transport_with_explicit_reason(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration  # a real worker driver subprocess terminated at shutdown
 async def test_graceful_shutdown_winds_down_improve_iteration_with_reason(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """An improve iteration dies with its loop at shutdown (terminated, not let
@@ -1458,6 +1463,7 @@ async def test_ui_cancel_endpoint_still_finalizes_cancelled(tmp_path: Path, monk
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration  # a real master driver subprocess, killed and re-attached
 async def test_master_reattach_after_server_kill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Server died; agent kept running: re-attach, no second spawn, no replay."""
   home = tmp_path / "home"
@@ -1520,6 +1526,7 @@ async def test_master_reattach_after_server_kill(tmp_path: Path, monkeypatch: py
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration  # a real master driver subprocess killed with its agent
 async def test_master_replay_when_master_killed_with_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Server and agent died together: the message is replayed with the marker."""
   home = tmp_path / "home"
@@ -1548,6 +1555,7 @@ async def test_master_replay_when_master_killed_with_server(tmp_path: Path, monk
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration  # a real master driver subprocess, killed and re-attached
 async def test_queued_message_answered_after_restart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A running + B queued at kill: A is re-attached (not replayed), B is
   replayed with the marker and answered only after A drains."""
@@ -1589,6 +1597,7 @@ async def test_queued_message_answered_after_restart(tmp_path: Path, monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration  # a real master driver subprocess killed mid-turn
 async def test_completed_turn_drained_after_server_kill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The turn's final result landed on disk inside the server-down window:
   recovery resolves the COMPLETED row, drains the bytes after the cursor
@@ -1807,6 +1816,7 @@ async def test_cancel_master_kills_a_live_detached_record(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration  # a real worker driver subprocess, killed and re-attached
 async def test_pid_start_missing_running_worker_never_false_failed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Legs (a)+(e): pid_start scrubbed mid-run -> the boot judges RUNNING and
@@ -1814,7 +1824,7 @@ async def test_pid_start_missing_running_worker_never_false_failed(
   event then closes the run through the existing completion path — no failed
   finalize at any point."""
   home = tmp_path / "home"
-  proc, ids = _launch_driver(tmp_path, home, result_delay=3.0)
+  proc, ids = _launch_driver(tmp_path, home, result_delay=0.8)
   _kill_driver_mid_run(proc, home, ids)
 
   # Scrub pid_start: the shim process is alive, but the recorded identity can
@@ -1825,9 +1835,13 @@ async def test_pid_start_missing_running_worker_never_false_failed(
   meta["pid_start"] = None
   meta_path.write_text(json.dumps(meta), encoding="utf-8")
 
-  # With a constant-true probe the follow ends on the post-result timeout;
-  # keep it fast.
-  monkeypatch.setattr(AgentBackend, "_POST_RESULT_TIMEOUT", 1.0)
+  # Every window is injected: the shim's result lands 0.8s after its first
+  # output (kill detection needs ~0.1s of that), the follow ends on a 0.25s
+  # post-result timeout, and the constant-true probe's kill escalation — which
+  # can never observe death — waits out a 0.2s grace instead of the
+  # production 5s.
+  monkeypatch.setattr(AgentBackend, "_POST_RESULT_TIMEOUT", 0.25)
+  monkeypatch.setattr("src.core.process.KILL_ESCALATION_GRACE_SECONDS", 0.2)
 
   recovered, alive_at_reattach, master_wakes, outcomes = await _recover(monkeypatch, home)
 

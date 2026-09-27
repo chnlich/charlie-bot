@@ -50,11 +50,12 @@ async def test_normal_completion_writes_raw_log_no_diagnostics(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration  # a real hung subprocess; the hang deadline is injected, not real
 async def test_subprocess_hang_after_result_captures_diagnostics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Subprocess writes result then hangs without closing stdout — diagnostics captured + SIGTERM."""
-  monkeypatch.setattr(AgentBackend, "_POST_RESULT_TIMEOUT", 1.0)
-  monkeypatch.setattr(AgentBackend, "_CLEANUP_TIMEOUT", 1.0)
+  monkeypatch.setattr(AgentBackend, "_POST_RESULT_TIMEOUT", 0.25)
+  monkeypatch.setattr(AgentBackend, "_CLEANUP_TIMEOUT", 0.25)
 
   log_dir = tmp_path / "logs"
   result_line = '{"type": "result", "result": "", "usage": {}}'

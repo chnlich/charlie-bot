@@ -49,7 +49,6 @@ for _leaked in ("CHARLIEBOT_RUN_TOKEN", "CHARLIEBOT_HOME", "CHARLIEBOT_SESSION_I
 if os.environ.get("PYTHONPATH", "").split(os.pathsep)[0] != str(ROOT):
   os.environ["PYTHONPATH"] = os.pathsep.join([str(ROOT), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep)
 
-
 # ---------------------------------------------------------------------------
 # Per-test wall-time budget and the integration cap. A unit test stays under 1s
 # and a test marked `integration` (real processes / real time) under 10s; at
@@ -67,8 +66,7 @@ _BUDGET_REPORTED_ATTR = "_charliebot_budget_reported"
 
 def pytest_addoption(parser: pytest.Parser) -> None:
   parser.addini(
-      _UNIT_BUDGET_INI,
-      "Per-test wall-time budget in seconds (setup + call + teardown) for tests that carry no "
+      _UNIT_BUDGET_INI, "Per-test wall-time budget in seconds (setup + call + teardown) for tests that carry no "
       "integration or local_only marker; enforced by this conftest.",
       type="float",
       default=1.0)
@@ -154,6 +152,7 @@ def pytest_collection_finish(session: pytest.Session) -> None:
         f"need real processes or real time - prune tests, or de-mark the ones that no longer "
         f"need it.")
 
+
 # The two Gemini-503 error channels, verbatim shapes: the failed
 # invocation's structured error event (the real failure) and the stderr tail
 # (the LiteLLM help banner that used to mask it in chat). Shared by the suites
@@ -200,7 +199,6 @@ from src.core.threads import ThreadManager  # noqa: E402
 from src.core.triggers import TriggerManager  # noqa: E402
 
 from src.core import headless_render  # noqa: E402
-
 
 # The pytester fixture: the budget mechanism's own test drives inner pytest
 # sessions (tests/test_pytest_budget.py).

@@ -14,9 +14,7 @@ from conftest import (
 )
 from conftest import make_trigger_setup as _make_mgr
 
-from src.core.models import (
-    LocalPid,
-)
+from src.core.models import LocalPid
 
 
 def _local(*pids: int) -> list[LocalPid]:
@@ -56,6 +54,8 @@ async def test_pid_gone_immediate_fire(tmp_path: Path, pidfd_open_available: Non
 
 @pytest.mark.asyncio
 async def test_timeout_before_pid_exit(tmp_path: Path, pidfd_open_available: None) -> None:
+  """A window that is already expired (delay 0, the injected stall) fires the
+  timeout verdict while the watched process is still alive."""
   _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
 
   proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
@@ -63,7 +63,7 @@ async def test_timeout_before_pid_exit(tmp_path: Path, pidfd_open_available: Non
     with patch_trigger_mocks() as mock_master:
       trigger = await trigger_mgr.create_trigger(
           session_id,
-          delay_seconds=1,
+          delay_seconds=0,
           message="watch timeout",
           watch_targets=_local(proc.pid),
       )

@@ -16,8 +16,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if (SESSION_ID && SESSION_BOOTSTRAP) {
     renderSessionView(SESSION_BOOTSTRAP);
     recordUnreadFact(SESSION_ID, false);
-    const unreadDot = document.getElementById('unread-' + SESSION_ID);
-    if (unreadDot) unreadDot.classList.add('hidden');
+    // The same paint clears the opened row's dot and every ancestor's subtree mark.
+    refreshSessionIndicator(SESSION_ID);
     // "Read" means rendered: a render throw above skips this POST.
     markSessionRead(SESSION_ID);
   }

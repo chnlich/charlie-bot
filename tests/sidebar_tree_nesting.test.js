@@ -15,9 +15,17 @@ const { createElement } = require('./dom_element_stub');
 const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext, inlinePageTimers,
   makeSessionMeta } = require('./session_context_stub');
 
-function buildContext() {
+const ICON_KINDS = ['spinner', 'worker-indicator', 'waiting-indicator', 'unread', 'subtree-unread'];
+
+function buildContext(indicatorIds = []) {
   const nav = createElement();
-  const elements = new Map([['session-list', nav], ...buildSidebarFilterElements()]);
+  const indicatorEls = new Map();
+  indicatorIds.forEach((id) => {
+    ICON_KINDS.forEach((kind) => {
+      indicatorEls.set(kind + '-' + id, createElement({className: 'hidden'}));
+    });
+  });
+  const elements = new Map([['session-list', nav], ...buildSidebarFilterElements(), ...indicatorEls]);
   const {context} = baseSessionContext({elements});
   context.SESSION_ID = 'none';
   context.INITIAL_SESSIONS = [];
@@ -28,7 +36,14 @@ function buildContext() {
   context.document.querySelector = () => null;
   context.fetch = async (url) => { throw new Error('unexpected fetch ' + url); };
   createChatSidebarContext(context);
-  return {context, nav};
+  const shown = (id) => ({
+    spinner: !elements.get('spinner-' + id).classList.contains('hidden'),
+    gear: !elements.get('worker-indicator-' + id).classList.contains('hidden'),
+    clock: !elements.get('waiting-indicator-' + id).classList.contains('hidden'),
+    dot: !elements.get('unread-' + id).classList.contains('hidden'),
+    subtreeMark: !elements.get('subtree-unread-' + id).classList.contains('hidden'),
+  });
+  return {context, nav, shown};
 }
 
 const at = (hour) => `2026-04-02T${String(hour).padStart(2, '0')}:00:00Z`;
@@ -159,12 +174,10 @@ test('a childless logical tree row leads with a chevron and no children containe
 test('toggleTreeNode turns a childless row\u2019s chevron and records it, with nothing to reveal', () => {
   const {context, nav} = buildContext();
   const chevron = createElement({className: 'tree-chevron'});
-  let refreshes = 0;
   context.document.querySelectorAll = (selector) => {
     if (selector === '[data-tree-toggle="legacy"]') return [chevron];
     return [];
   };
-  context.Sidebar.refreshSessionIndicator = () => { refreshes += 1; };
 
   context.renderSessionList([meta('legacy')], 'all');
   context.toggleTreeNode('legacy');
@@ -172,7 +185,6 @@ test('toggleTreeNode turns a childless row\u2019s chevron and records it, with n
   assert.equal(context.Sidebar.isTreeNodeExpanded('legacy'), true);
   assert.equal(chevron.classList.contains('rotate-90'), true);
   assert.equal(chevron['aria-expanded'], 'true');
-  assert.equal(refreshes, 1);
 
   // A repaint keeps the chevron turned and still renders no children container.
   context.renderSessionList([meta('legacy')], 'all');
@@ -238,13 +250,11 @@ test('toggleTreeNode flips the in-memory state, the rendered subtree and the che
   const {context, nav} = buildContext();
   const container = createElement({className: 'tree-children hidden'});
   const chevron = createElement({className: 'tree-chevron'});
-  let refreshes = 0;
   context.document.querySelectorAll = (selector) => {
     if (selector === '[data-tree-children="r1"]') return [container];
     if (selector === '[data-tree-toggle="r1"]') return [chevron];
     return [];
   };
-  context.Sidebar.refreshSessionIndicator = () => { refreshes += 1; };
 
   assert.equal(context.Sidebar.isTreeNodeExpanded('r1'), false);
   context.toggleTreeNode('r1');
@@ -253,7 +263,6 @@ test('toggleTreeNode flips the in-memory state, the rendered subtree and the che
   assert.equal(container.classList.contains('hidden'), false);
   assert.equal(chevron.classList.contains('rotate-90'), true);
   assert.equal(chevron['aria-expanded'], 'true');
-  assert.equal(refreshes, 1);
 
   // A repaint while expanded renders the subtree open and the chevron turned.
   context.renderSessionList(familyRows(), 'all');
@@ -329,7 +338,6 @@ test('the active session’s ancestors open once per switch and a manual collaps
   assert.equal(context.Sidebar.treeParentId('r1'), null);
 
   // The user folds the root: the next repaint of the same session keeps it folded.
-  context.Sidebar.refreshSessionIndicator = () => {};
   context.toggleTreeNode('r1');
   context.renderSessionList(familyRows(), 'all');
   html = nav.innerHTML;
@@ -345,22 +353,20 @@ test('expandTreeNode opens a collapsed parent and is a no-op on an open one', ()
   const {context} = buildContext();
   const container = createElement({className: 'tree-children hidden'});
   const chevron = createElement({className: 'tree-chevron'});
-  let refreshes = 0;
   context.document.querySelectorAll = (selector) => {
     if (selector === '[data-tree-children="p1"]') return [container];
     if (selector === '[data-tree-toggle="p1"]') return [chevron];
     return [];
   };
-  context.Sidebar.refreshSessionIndicator = () => { refreshes += 1; };
 
   context.Sidebar.expandTreeNode('p1');
   assert.equal(context.Sidebar.isTreeNodeExpanded('p1'), true);
   assert.equal(container.classList.contains('hidden'), false);
   assert.equal(chevron.classList.contains('rotate-90'), true);
-  assert.equal(refreshes, 1);
 
   context.Sidebar.expandTreeNode('p1');
-  assert.equal(refreshes, 1, 'an already open node is left alone');
+  assert.equal(context.Sidebar.isTreeNodeExpanded('p1'), true, 'an already open node is left alone');
+  assert.equal(chevron.classList.contains('rotate-90'), true);
 });
 
 test('an archived worker row shows the delivered check in place of the leaf icon', () => {
@@ -505,11 +511,39 @@ test('a scheduled paint records the tree maps, refreshes tree indicators, and sh
   assert.equal(context.Sidebar.treeParentId('t1'), 'cron1');
 
   // Expanding here keeps the subtree open on the next repaint of either tab.
-  context.Sidebar.refreshSessionIndicator = () => {};
   context.toggleTreeNode('cron1');
   context.renderSessionList(rows, 'scheduled');
   assert.doesNotMatch(nav.innerHTML.match(/<div class="tree-children[^"]*"[^>]*data-tree-children="cron1">/)[0], /hidden/);
 
   context.renderSessionList(rows, 'all');
   assert.doesNotMatch(nav.innerHTML.match(/<div class="tree-children[^"]*"[^>]*data-tree-children="cron1">/)[0], /hidden/);
+});
+
+test('a Scheduled-tab cron row’s gear and subtree mark survive expand and collapse', () => {
+  const {context, shown} = buildContext(['cron1', 'cron2', 'leaf1', 'leaf2']);
+  context.renderSessionList([
+    cronSession('cron1', 10),
+    projectedLeaf('leaf1', 'cron1', 9, {has_running_tasks: true}),
+    cronSession('cron2', 8),
+    projectedLeaf('leaf2', 'cron2', 7, {has_unread: true}),
+  ], 'scheduled');
+  // The scheduled renderer records only leaf rows, so the cron rows' own state
+  // lands through the status poll's seam — which repaints the row and its
+  // ancestors, exactly as production's first poll does.
+  context.setSessionIndicator('cron1', 'idle');
+  context.setSessionIndicator('cron2', 'idle');
+
+  const gearRow = shown('cron1');
+  assert.equal(gearRow.gear, true, 'the running leaf lights the cron row’s gear');
+  const markRow = shown('cron2');
+  assert.equal(markRow.subtreeMark, true, 'the unread leaf lights the cron row’s subtree mark');
+
+  context.Sidebar.expandTreeNode('cron1');
+  context.Sidebar.expandTreeNode('cron2');
+  assert.deepEqual(shown('cron1'), gearRow, 'expansion never changes the cron row’s icon');
+  assert.deepEqual(shown('cron2'), markRow, 'expansion never changes the cron row’s icon');
+  context.Sidebar.toggleTreeNode('cron1');
+  context.Sidebar.toggleTreeNode('cron2');
+  assert.deepEqual(shown('cron1'), gearRow, 'collapse never changes the cron row’s icon');
+  assert.deepEqual(shown('cron2'), markRow, 'collapse never changes the cron row’s icon');
 });

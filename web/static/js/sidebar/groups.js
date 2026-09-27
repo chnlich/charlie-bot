@@ -801,6 +801,9 @@ function renderSessionTree(s, filter, options, childrenOf, rowRenderer) {
   </div>`;
 }
 
+// Expansion is display only: child rows show or hide and the chevron rotates.
+// A row's icon reads facts only (status.js paints from states, the unread map
+// and the last grouped paint's tree), so no indicator repaint rides a toggle.
 function applyTreeNodeExpansion(sessionId, expanded) {
   if (expanded) treeExpandedNodes.add(sessionId); else treeExpandedNodes.delete(sessionId);
   const selectorId = CSS.escape(sessionId);
@@ -811,9 +814,6 @@ function applyTreeNodeExpansion(sessionId, expanded) {
     el.classList.toggle('rotate-90', expanded);
     el.setAttribute('aria-expanded', expanded ? 'true' : 'false');
   });
-  // A parent's indicators stand in for its collapsed subtree: repaint it for
-  // the new expand state from the facts already applied.
-  if (typeof Sidebar.refreshSessionIndicator === 'function') Sidebar.refreshSessionIndicator(sessionId);
 }
 
 function toggleTreeNode(sessionId) {

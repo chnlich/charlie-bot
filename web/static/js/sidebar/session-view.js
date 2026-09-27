@@ -491,8 +491,8 @@ async function switchSession(sessionId) {
   // The server-side flag clears only now, on the winning generation's landed
   // render — superseded generations and render errors returned above.
   recordUnreadFact(sessionId, false);
-  const unreadDot = document.getElementById('unread-' + sessionId);
-  if (unreadDot) unreadDot.classList.add('hidden');
+  // The same paint clears the opened row's dot and every ancestor's subtree mark.
+  refreshSessionIndicator(sessionId);
   markSessionRead(sessionId);
 
   // Reconnect WebSocket

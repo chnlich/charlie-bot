@@ -803,6 +803,11 @@ test('switchSession preserves worker icon until authoritative status returns', a
   };
   context.pollSessionStatus = () => new Promise(() => {});
 
+  // The sidebar's last paint recorded the row's running state through the
+  // shared seam; the switch's read path repaints the row from facts, so the
+  // icon survives until the authoritative status returns.
+  context.setSessionIndicator('session-b', 'worker_only');
+
   await context.switchSession('session-b');
 
   assert.equal(workerIcon.classList.contains('hidden'), false);

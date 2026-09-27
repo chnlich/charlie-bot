@@ -50,13 +50,14 @@ Known-alive symbols:
   `_clear_events_cache` (`tests/test_thread_worker_events.py`),
   `_clear_aggregate_memo` (`tests/test_token_tally.py`),
   `_clear_jsonl_memo` (`tests/test_tui_backend.py`)
-  — pytest `autouse=True` fixtures, reached by pytest's fixture-name discovery only: zero
-  whole-repo matches outside their definitions, so vulture flags them as unused functions. Most
-  are single-line `fresh_state_fixture(...)` assignments in their module (built by the conftest
-  factory of the same name) rather than `def` fixtures; vulture stays silent on those
-  assignments — its underscore-name ignore covers underscore-prefixed variables — so the
-  underscore-prefixed ones rely on fixture-name discovery alone, while `def` forms surface as
-  unused functions. Vulture also flags
+  — pytest `autouse=True` fixtures,
+  reached by pytest's fixture-name discovery only: zero whole-repo matches outside their
+  definitions, so vulture flags them as unused functions. Most are single-line
+  `fresh_state_fixture(...)` assignments in their module (built by the conftest factory of the
+  same name) rather than `def` fixtures; vulture stays silent on those assignments — its
+  underscore-name ignore covers underscore-prefixed variables — so the underscore-prefixed ones
+  rely on fixture-name discovery alone, while `def` forms surface as unused functions. Vulture
+  also flags
   `pidfd_open_available` (`tests/conftest.py`, shared skip gate for the pid/slurm watch
   tests, requested by name in `tests/test_trigger_pid_watch.py`, `tests/test_trigger_slurm_watch.py`,
   and `tests/test_trigger_succession.py`), but it is named in the parameter lists of the tests
@@ -118,16 +119,17 @@ Known-alive symbols:
   delete.
 - `model_config` (the pydantic v2 `ConfigDict` class attribute, assigned on the pydantic
   `BaseModel` classes of `src/core/backend_models.py`, `src/core/config.py`, `src/core/models.py`,
-  `src/api/diag.py`, and `src/api/cron.py`) — `ModelMetaclass` consumes it by attribute name at
-  class-definition time. Every assignment pins `extra='forbid'`, which turns an unknown config or
-  request key into a validation error, except `TaskCreate` in `src/api/cron.py`, which pins
+  `src/api/diag.py`, and `src/api/cron.py`) — `ModelMetaclass`
+  consumes it by attribute name at class-definition time. Every assignment pins
+  `extra='forbid'`, which turns an unknown config or request key into a validation error, except
+  `TaskCreate` in `src/api/cron.py`, which pins
   `extra='ignore'` (the pydantic default) so the create-request body stays looser than the
   loader's forbid task model, as the comment above the assignment states. Vulture flags each
   production assignment as an unused variable.
 - `return_value`, `side_effect` attribute writes across `tests/` (e.g.
   `session_mgr.get_session.return_value = ...` in `tests/test_cli_improve.py`,
-  `callbacks.persist_claude_account.side_effect = ...` in `tests/test_claude_accounts.py`) —
-  `unittest.mock` configuration attributes the library reads when the configured mock is called
+  `callbacks.persist_claude_account.side_effect = ...` in `tests/test_claude_accounts.py`) — `unittest.mock`
+  configuration attributes the library reads when the configured mock is called
   (`return_value` supplies the call result, `side_effect` overrides it with an iterable,
   callable, or exception). Nothing in the repo reads the names back, so vulture flags such
   writes as unused attributes where it reaches them (the `side_effect` write in

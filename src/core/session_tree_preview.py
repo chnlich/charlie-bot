@@ -77,6 +77,7 @@ import yaml
 from src.core.buildinfo import init_build_info
 from src.core.config import (
     CHARLIEBOT_HOME_ENV,
+    CREDENTIALS_FILENAME,
     CharlieBotConfig,
     charliebot_home_dir,
     get_config,
@@ -84,13 +85,20 @@ from src.core.config import (
     load_credentials,
 )
 from src.core.constants import REPO_ROOT, BackendType
-from src.core.home_writer_fence import HomeWriterFence, acquire_home_writer_fence
+from src.core.home_writer_fence import (
+    FENCE_IDENTITY_NAME,
+    FENCE_LOCK_NAME,
+    HomeWriterFence,
+    acquire_home_writer_fence,
+)
 from src.core.init import init_charliebot_home
 from src.core.json_utils import atomic_write_text, load_json_meta
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import utc_now
 from src.core.runs import read_pid_stat
+from src.core.session_aliases import ALIASES_FILE_NAME
 from src.core.task_recovery import reconcile_task_tree
+from src.core.threads import METADATA_NAME
 from src.core.yaml_utils import load_yaml, save_yaml
 
 log = LazyStructlogLogger()
@@ -260,20 +268,20 @@ def _legacy_home_evidence(home: Path) -> list[str]:
   evidence: list[str] = []
   if (home / "config.yaml").is_file():
     evidence.append("config.yaml exists (an existing configuration this entry point did not seed)")
-  if (home / "credentials.yaml").is_file():
-    evidence.append("credentials.yaml exists")
+  if (home / CREDENTIALS_FILENAME).is_file():
+    evidence.append(f"{CREDENTIALS_FILENAME} exists")
   if (home / "memory").is_dir():
     evidence.append("memory/ exists")
   if (home / "config.d").is_dir():
     evidence.append("config.d/ exists (scheduled task configuration)")
   if (home / "triggers").is_dir():
     evidence.append("triggers/ exists")
-  if (home / "session_aliases.json").is_file():
-    evidence.append("session_aliases.json exists")
+  if (home / ALIASES_FILE_NAME).is_file():
+    evidence.append(f"{ALIASES_FILE_NAME} exists")
   legacy_sessions = 0
   sessions_dir = home / "sessions"
   if sessions_dir.is_dir():
-    for meta_path in sorted(sessions_dir.glob("*/metadata.json"))[:50]:
+    for meta_path in sorted(sessions_dir.glob(f"*/{METADATA_NAME}"))[:50]:
       raw = load_json_meta(meta_path, "preview_home_meta_unreadable")
       if raw is not None and not raw.get("profile"):
         legacy_sessions += 1
@@ -296,7 +304,7 @@ def read_preview_record(home: Path) -> dict | None:
 
 # The writer fence's own state files: acquiring the fence creates them before
 # the seed runs, so a directory holding only these is still a fresh seed target.
-_FENCE_STATE_FILES = frozenset({"home_writer.lock", "writer_identity.json"})
+_FENCE_STATE_FILES = frozenset({FENCE_LOCK_NAME, FENCE_IDENTITY_NAME})
 
 
 def _effective_entries(home: Path) -> list[Path]:
@@ -562,12 +570,12 @@ def validate_existing_config(home: Path) -> dict:
     raise PreviewRefusedError(
         f"{path} points paths.worktree_dir outside the preview home ({worktree_dir}); worker "
         "worktrees must stay inside the home")
-  creds = load_yaml(home / "credentials.yaml", default={})
+  creds = load_yaml(home / CREDENTIALS_FILENAME, default={})
   for entry in options:
     referenced = entry.get("credential")
     if referenced and (not isinstance(creds, dict) or not (creds.get(str(referenced)) or {}).get("api_key")):
       raise PreviewRefusedError(
-          f"the preview home's credentials.yaml has no {referenced}.api_key for the configured "
+          f"the preview home's {CREDENTIALS_FILENAME} has no {referenced}.api_key for the configured "
           "backend; the provider credential is required to run the trial")
   return data
 
@@ -582,7 +590,7 @@ def _stored_backend_catalog(home: Path) -> tuple[list[dict], str, tuple[str, str
   credential: tuple[str, str] | None = None
   referenced = entries[0].get("credential")
   if referenced:
-    creds = load_yaml(home / "credentials.yaml", default={})
+    creds = load_yaml(home / CREDENTIALS_FILENAME, default={})
     key = (creds or {}).get(str(referenced), {}).get("api_key") if isinstance(creds, dict) else None
     credential = (str(referenced), {"api_key": str(key)})
   return entries, str(backend_id), credential
@@ -590,11 +598,11 @@ def _stored_backend_catalog(home: Path) -> tuple[list[dict], str, tuple[str, str
 
 def _existing_access_key(home: Path) -> str:
   """The preview home's own access key; restarts keep it so saved logins keep working."""
-  creds = load_yaml(home / "credentials.yaml", default={})
+  creds = load_yaml(home / CREDENTIALS_FILENAME, default={})
   key = creds.get("charliebot", {}).get("access_key") if isinstance(creds, dict) else None
   if not key:
     raise PreviewRefusedError(
-        f"{home / 'credentials.yaml'} has no charliebot.access_key; the preview instance's "
+        f"{home / CREDENTIALS_FILENAME} has no charliebot.access_key; the preview instance's "
         "browser credential is missing and must be restored before restart")
   return str(key)
 
@@ -695,7 +703,7 @@ def _extend_existing_home_catalog(setup: PreviewSetup) -> None:
       new_credentials.setdefault(section, keys["api_key"])
   # The credentials store's shape validates before the first write too: a
   # refusal here must leave the home untouched, not half-extended.
-  credentials_path = setup.home / "credentials.yaml"
+  credentials_path = setup.home / CREDENTIALS_FILENAME
   creds = load_yaml(credentials_path, default={})
   if not isinstance(creds, dict):
     raise PreviewRefusedError(f"{credentials_path} is not a credentials mapping; refusing to extend it")
@@ -728,7 +736,7 @@ def seed_or_validate_preview_home(setup: PreviewSetup) -> None:
   if classify_home(setup.home):
     setup.home.mkdir(parents=True, exist_ok=True)
     save_yaml(setup.home / "config.yaml", _preview_config_data(setup))
-    atomic_write_text(setup.home / "credentials.yaml", _credentials_text(setup), private=True)
+    atomic_write_text(setup.home / CREDENTIALS_FILENAME, _credentials_text(setup), private=True)
     for dirname in (PREVIEW_NATIVE_DIRNAME, PREVIEW_WORKSPACES_DIRNAME, PREVIEW_WORKTREES_DIRNAME, PREVIEW_LOG_DIRNAME):
       (setup.home / dirname).mkdir(parents=True, exist_ok=True)
     log.info("preview_home_seeded", home=str(setup.home), backend=setup.backend_id)

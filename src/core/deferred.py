@@ -3,7 +3,7 @@
 Deferred imports (requests, croniter, build_backend) bind through a
 per-consumer loader; the consumer's ``__getattr__`` is what fires that loader
 on a module-attribute read, so a test's patch target (e.g.
-``src.core.recap.build_backend``) resolves without importing the real symbol
+``src.api.chat.cancel_master``) resolves without importing the real symbol
 at module import. The match-or-AttributeError rule lives here, once; the
 globals-first loader the master-turn chain's consumers build theirs from
 lives here too.

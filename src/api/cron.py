@@ -50,7 +50,6 @@ _NEXT_RUN_MEMO: dict[tuple[str, str], tuple[datetime, str]] = {}
 
 
 def __getattr__(name: str) -> Any:
-  # The "src.api.cron.croniter" patch target (tests/test_cron_next_run_memo.py) resolves through this hook.
   return deferred_module_getattr(name, __name__, globals(), "croniter", load_croniter)
 
 

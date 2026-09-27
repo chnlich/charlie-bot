@@ -83,8 +83,8 @@ async def upload_voice_recording(
     if transcript is None:
       # The server decoded this recording, so the local backend produced the
       # persisted text; its id comes from the class, not a fresh literal. Lazy
-      # import: the module sits on `import server`'s ban list (SERVER_HEAVY_MODULES
-      # in tests/test_cli_import_weight.py).
+      # import: the speech stack stays off `import server`'s startup path
+      # (the M99 import floor, docs/perf_baseline.md).
       from src.agents.transcription.local import LocalTranscriptionBackend
 
       # The bundle comes first so models-not-ready (503) persists nothing — the client

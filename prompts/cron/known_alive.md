@@ -17,8 +17,6 @@ Known-alive symbols:
   raise, so it carries no `# noqa`. Both API-side imports are plain used imports: their in-file
   uses are the `except ScheduledSessionBusyError` clauses in `_ensure_backend_update_session`
   (`src/api/cron.py`) and the elone route (`src/api/sessions.py`).
-- `_no_master_wake` — pytest fixture in `tests/test_spawner_finalize_liveness_gate.py`, reached by
-  string via `@pytest.mark.usefixtures("_no_master_wake")`; invisible to static dead-code tools.
 - `_clean_ceiling_env` — pytest fixture in `tests/test_session_usage.py`, reached by string via
   `@pytest.mark.usefixtures("_clean_ceiling_env")`; invisible to static dead-code tools.
 - `_handle_agent_message`, `_handle_reasoning`, `_handle_tool_item`, `_handle_file_change`,
@@ -42,27 +40,17 @@ Known-alive symbols:
 - `_fresh_credential_read_warning_registry`, `_fresh_unknown_limit_shape_registry`, `_fresh_usage_cache`,
   `_fresh_user_agent_cache` (`tests/test_ext_usage.py`),
   `_fresh_pool_state` (`tests/test_claude_accounts.py`),
-  `_reset_config_caches` (`tests/test_charliebot_home.py`), `_clear_once_keys`
-  (`tests/test_follow_silence_recheck.py`), `_reset_token_usage_single_flight` (`tests/test_pages.py`),
-  `_worktree_paths` (`tests/test_reviewer_model_preference.py`),
-  `_fresh_search_read_failure_registry` (`tests/test_session_search_content.py`),
+  `_reset_config_caches` (`tests/test_charliebot_home.py`),
   `_fresh_unhandled_part_type_registry` (`tests/test_opencode_backend.py`),
-  `_fresh_cron_body_cache` (`tests/test_cron_tasks_body_cache.py`), `_fresh_switch_memo`
-  (`tests/test_switch_payload_gzip.py`),
   `_fresh_renderer_singleton` (`tests/core/test_headless_render.py`),
   `_stub_headless_renderer` (`tests/conftest.py`) — the renderer pair: the first resets the
   warm-renderer singleton around `tests/core/test_headless_render.py`, the second is the
   suite-wide conftest autouse that reshapes `headless_render.render_height` into the
   dump-dom drive seam every artifact/plan-height test relies on,
-  `_clean_sidebar_state` (`tests/test_sidebar_state_snapshot.py`),
   `_clear_events_cache` (`tests/test_thread_worker_events.py`),
-  `_clear_tolerant_read_memo` (`tests/test_plans_tolerant_memo.py`),
-  `_clear_store_memo` (`tests/test_memory_store_memo.py`),
   `_clear_aggregate_memo` (`tests/test_token_tally.py`),
-  `_clear_jsonl_memo` (`tests/test_tui_backend.py`),
-  `_clean_memo` (`tests/test_thread_meta_scan_memo.py`, `tests/test_trigger_probe_memo.py`),
-  `clear_next_run_memo` (`tests/test_cron_next_run_memo.py`),
-  `_clean_probe_state` (`tests/test_probe_single_walk.py`) — pytest `autouse=True` fixtures,
+  `_clear_jsonl_memo` (`tests/test_tui_backend.py`)
+  — pytest `autouse=True` fixtures,
   reached by pytest's fixture-name discovery only: zero whole-repo matches outside their
   definitions, so vulture flags them as unused functions. Most are single-line
   `fresh_state_fixture(...)` assignments in their module (built by the conftest factory of the
@@ -115,19 +103,13 @@ Known-alive symbols:
   `SlashCommandParam`, `fired_at` on `PendingTrigger`) as unused variables/attributes, but every
   one of those names is grep-findable in repo (`_TRANSIENT_METADATA_FIELDS`, tests, web JS,
   Jinja templates), so the Step 3 grep already protects them and they get no entries.
-- `pytestmark` (`tests/test_voice_offline_models.py`, `tests/test_voice_qwen3_hf.py`) —
-  module-level `pytest.mark.local_only` assignments that pytest's collection reads by
-  attribute name (the marker is registered in `pyproject.toml`). The name appears only at
-  those assignment sites, so vulture flags each as an unused variable.
+- `pytestmark` (module-level assignment, e.g. `tests/test_task_prompts.py`) — module-level
+  `pytest.mark.asyncio` assignments that pytest's collection reads by attribute name; each name
+  appears only at its assignment site, so vulture flags each as an unused variable (60% confidence).
 - `do_GET`, `do_POST`, `log_message` (`tests/test_cli_restart_contract.py`) —
   `http.server.BaseHTTPRequestHandler` overrides: the stdlib handler dispatches to them by
   string (`'do_' + self.command` through `getattr`, `log_message` by name). Each name has
   exactly one whole-repo match (its definition), so vulture flags them as unused methods.
-- `chrome`, `art` (`tests/core/test_artifact_check.py`, the lambda in `_patch_height`) — the
-  two parameters of the stub installed for `artifact_check._measure_page_height(chrome_bin,
-  artifact)` via `monkeypatch.setattr`; the replaced signature fixes the arity, so deleting
-  either parameter makes the stub raise TypeError when the gate calls it. Vulture flags the
-  unused parameter at 100% confidence as an unused variable.
 - The `if False: yield {}` lines in `tests/test_chat_cancel.py`, `tests/test_master_cc_consumer.py`,
   `tests/conftest.py` (`CapturingBackend`, the shared master-cc round double), and
   `tests/test_worker_diagnostics.py` are flagged as
@@ -142,29 +124,18 @@ Known-alive symbols:
   `extra='forbid'`, which turns an unknown config or request key into a validation error, except
   `TaskCreate` in `src/api/cron.py`, which pins
   `extra='ignore'` (the pydantic default) so the create-request body stays looser than the
-  loader's forbid task model, as the comment above the assignment states. The name is read only
-  by the schema tests asserting the pin (`tests/test_config_schema.py`,
-  `tests/test_backend_option_types.py`); vulture flags each production assignment as an unused
-  variable.
+  loader's forbid task model, as the comment above the assignment states. Vulture flags each
+  production assignment as an unused variable.
 - `return_value`, `side_effect` attribute writes across `tests/` (e.g.
-  `session_mgr.get_session.return_value = ...` in `tests/test_autonamer.py`,
-  `resp_mock.json.return_value = ...` in `tests/test_cli_improve.py`) — `unittest.mock`
+  `session_mgr.get_session.return_value = ...` in `tests/test_cli_improve.py`,
+  `callbacks.persist_claude_account.side_effect = ...` in `tests/test_claude_accounts.py`) — `unittest.mock`
   configuration attributes the library reads when the configured mock is called
   (`return_value` supplies the call result, `side_effect` overrides it with an iterable,
-  callable, or exception). Nothing in the repo reads the names back, so vulture flags the
-  writes as unused attributes. The same two names also appear as
+  callable, or exception). Nothing in the repo reads the names back, so vulture flags such
+  writes as unused attributes where it reaches them (the `side_effect` write in
+  `tests/test_claude_accounts.py`, 60% confidence). The same two names also appear as
   `AsyncMock(return_value=...)`/`patch(..., side_effect=...)` keyword arguments, which vulture
   does not flag.
-- `name`, `section_identifier`, `has_rule_message`, `rule_message`,
-  `has_speedup_estimation`, `speedup_estimation`, `rule_results` (the `_FakeRule` and
-  `_FakeAction` stub methods of `tests/test_ncu_page.py`) — the rule surface
-  `_extract_rules` (src/core/ncu_parsing.py) calls on whatever object the test feeds it:
-  `rule_result.name()` through `speedup_estimation()` on each rule result and
-  `action.rule_results()` on the action. The call sites type those parameters `Any`, so
-  nothing in the repo reads the method names statically and a file-scope vulture run
-  flags each stub method as unused (60% confidence). The same function also reaches
-  payload fields by string: `_object_field(obj, name)` does `getattr(obj, name)` with the
-  literal `"speedup"` when building `entry["speedup_pct"]`.
 - `handle_starttag`, `handle_startendtag`, `handle_endtag`, `handle_data` (`_TreeBuilder`
   in `src/core/artifact_check.py`) — template-method overrides of stdlib
   `html.parser.HTMLParser`: `feed()` drives the base class's scanner, which invokes these
@@ -173,70 +144,19 @@ Known-alive symbols:
   definition, and vulture flags each as an unused method. Same class as the
   `do_GET`/`do_POST`/`log_message` `BaseHTTPRequestHandler` entry above, with base-class
   virtual dispatch in place of stdlib string dispatch.
-- `identity` (`tests/test_master_restart_transport_unit.py`, parameter of the
-  `fake_recovery` stub installed for `server._run_crash_recovery` via
-  `monkeypatch.setattr`) — the real `_run_crash_recovery` is called with three positional
-  arguments in the root `server.py` lifespan (`_run_crash_recovery(cfg, boot_time,
-  identity)`), so the stub's replaced signature fixes the arity and `identity` must stay
-  to receive the identity task; deleting the parameter makes the stub raise TypeError.
-  Vulture flags it at 100% confidence as an unused variable. Same class as the `art`
-  stub-parameter entry above.
 - `dir_path` (the `create_provider(provider, label, dir_path)` stubs in
   `tests/test_ext_usage.py`, installed for `ext_usage_mod._create_provider` via
   `monkeypatch.setattr`) — the real `_create_provider` (src/api/ext_usage.py) is called
   with three positional arguments, so the stubs' replaced
   signature fixes the arity and `dir_path` must stay to receive it; deleting the parameter
   makes each stub raise TypeError when the poll loop calls it. Vulture flags it at 100%
-  confidence as an unused variable at every stub site in `tests/test_ext_usage.py`. Same class as the `chrome`/`art` stub-parameter entry above.
-- `rollout_paths` (`tests/test_ext_usage.py`, parameter of the `_broken_compute`
-  stub installed for `CodexUsageProvider._compute_spend` via `monkeypatch.setattr`) —
-  the real `_compute_spend` (src/api/ext_usage.py) is called with one positional
-  argument (through `asyncio.to_thread`), so the stub's
-  replaced signature fixes the arity and `rollout_paths` must stay to receive it;
-  deleting the parameter makes the stub raise TypeError when `fetch()` calls it.
-  Vulture flags it at 100% confidence as an unused variable. Same class as the
-  `dir_path` arity-fixed entry above.
-- `verify_report`, `on_spawned` (`tests/conftest.py`, parameters of the
-  `fake_notify_completion` and `CapturingWorker.__init__` stubs), `entry_id`
-  (`tests/core/test_artifact_check.py`, the `get_backend_option` lambda), `host_boot`
-  (`tests/test_master_restart_transport_unit.py`, the `is_run_alive` lambda),
-  `scheduled`, `include_running_status`, `include_pending_trigger_status`
-  (`tests/test_pages.py`, the two `list_sessions` overrides), and
-  `exclude_thread_id` (`tests/test_reviewer_model_preference.py`, the `fake_spawn_review`
-  parameter) — stub parameters whose keyword name or arity is fixed by the production call
-  each stub replaces. Finalize passes `verify_report=` by keyword
-  (`_run_finalize_effects` in src/core/spawner_finalize.py). The production `Worker`
-  construction passes `on_spawned=` by keyword (src/core/spawner_launch.py).
-  `iter_light_backends` passes one positional argument to `cfg.get_backend_option`
-  (src/core/autonamer.py), so the lambda must take exactly one. The `host_boot` lambda
-  receives `runs.is_run_alive`'s four positional arguments. The pages routes pass
-  `scheduled=`/`include_running_status=`/`include_pending_trigger_status=` by keyword into
-  `list_sessions` (src/api/pages.py). Both `spawn_review_worker` call sites in
-  src/core/review.py pass `exclude_thread_id=` by keyword. Vulture flags each at 100%
-  confidence as an unused variable. Same class as the `art`/`dir_path`
-  stub-parameter entries above.
+  confidence as an unused variable at every stub site in `tests/test_ext_usage.py`.
 - `format` (`tests/test_cli_restart_contract.py`, the `log_message` override's second
   parameter) — signature-mirror parameter kept deliberately, not fixed by any call: the
   stdlib invokes `log_message(format, *args)` positionally into the override's trailing
   `*args`, so deleting the parameter stays green; it keeps the override a faithful mirror
   of the stdlib `BaseHTTPRequestHandler.log_message(self, format, *args)` signature.
   Vulture flags it at 100% confidence as an unused variable.
-- `interrupt_reason` (`tests/test_worktree_quarantine.py`, keyword parameter of the
-  `fake_resume_worker` stub installed for `spawner.resume_worker` via `monkeypatch.setattr`)
-  — every production call site (`src/core/init_worker_recovery.py`)
-  passes `interrupt_reason=` by keyword, and the stalled-run test asserts the fake ran
-  (`resume_calls == [True]`), so deleting the parameter makes the stub raise TypeError on
-  the unexpected keyword. Vulture flags it at 100% confidence as an unused variable. Same
-  class as the `verify_report` keyword-fixed stub-parameter entry above.
-- `sig` (`tests/test_worktree_quarantine.py`, second parameter of the
-  three identical `lambda pid, sig: killed.append(pid)` stubs installed for
-  `worker_recovery_module.kill_process_group` via `monkeypatch.setattr`) — signature-mirror
-  parameter kept deliberately: all three tests assert the recorded list stays empty (no
-  tested recovery path reaches `kill_process_group`), so deleting `sig` stays green, but it
-  keeps the lambda a drop-in mirror of `kill_process_group(pid, sig=signal.SIGTERM)`
-  (src/core/process.py), which `src/core/init_worker_recovery.py` already calls with
-  two positional arguments. Vulture flags each site at 100% confidence as an unused
-  variable. Same class as the `format` signature-mirror entry above.
 - `panel-summary`, `panel-details`, `panel-roofline`, `panel-source`, `panel-session`,
   `panel-raw` (`web/templates/ncu.html`, the six tab-panel element ids) — reached by
   string construction: the inline tab switcher activates panels with
@@ -302,46 +222,22 @@ Known-alive symbols:
   inline comment pins: one failed DELETE keeps the rest of the batch alive). Nothing in
   the repo reads the name, so vulture flags the write as an unused attribute. Same class
   as the sherpa-onnx `vad_config` attribute-write entry above.
-- `base_html`, `new_html` (`tests/test_files_artifact_injection.py`, parameters of the `explode`
-  stub installed for `plan_diff.annotate` via `monkeypatch.setattr`) — signature-mirror
-  parameters of the stub that guards the annotate memo: the replaced `annotate`
-  (src/core/plan_diff.py) is called with two positional arguments by its one production call
-  site (src/api/files.py), so the stub keeps both parameters to stay a drop-in mirror, and a
-  memo regression that reaches the stub fails with the stub's own assertion message rather
-  than a TypeError. A tests-only vulture scan flags both at 100% confidence as unused
-  variables (a combined src+tests scan does not: the production `annotate` parameters carry
-  the same names, so the names are not zero-match repo-wide — the flags only appear in a
-  tests-only scan). Same class as the `format` signature-mirror entry above. The
-  same file's `html_text` (first parameter of the `explode` stub installed for
-  `files_api._inject_artifact_ui`) joins this class: the replaced function is called with
-  two positional arguments at both production call sites (src/api/files.py), so the stub
-  keeps both parameters, and a tests-only vulture scan flags the unused first one.
-- `inline_merge_executor` (`tests/test_perfetto_pages.py`) — pytest fixture (monkeypatches
-  `pages._merge_executor` to yield None so the merge runs inline), requested by name in four
-  tests' parameter lists; the bodies never reference the parameter, so vulture flags it as an
-  unused variable at each request site. Same fixture-name-discovery class as the autouse block
-  above.
 - `isolated_config` (`tests/test_absolute_filepath_prefix.py`) — pytest fixture (owns the config
   and credentials the file router reads: sessions root under tmp_path, empty access key so the
-  gate is a no-op), requested by name in three tests' parameter lists; the bodies never reference
-  the parameter, so vulture flags it as an unused variable at each request site. Same
-  fixture-name-discovery class as `inline_merge_executor` above.
-- `pages_config` (`tests/test_pages.py`) — pytest fixture (monkeypatches the pages routes'
-  `get_config` to a tmp home, so the token-usage route's cache path stays off the host profile),
-  requested by name in the module's tests' parameter lists; the bodies never reference
-  the parameter, so vulture flags it as an unused variable at each request site. Same
-  fixture-name-discovery class as `inline_merge_executor` above.
+  gate is a no-op), requested by name in one test's parameter list; the body never references
+  the parameter, so vulture flags it as an unused variable at that request site. Same
+  fixture-name-discovery class as the autouse block above.
 - `cli_katex` (`tests/core/test_artifact_wrap.py`) — pytest fixture (monkeypatches
   `src.cli.common.get_config` so the wrap verb's config home lands under the pytest tmp tree
-  instead of the host profile), requested by name in five tests' parameter lists; the bodies
+  instead of the host profile), requested by name in three tests' parameter lists; the bodies
   never reference the parameter, so vulture flags it as an unused variable at each request site.
-  Same fixture-name-discovery class as `inline_merge_executor` above.
+  Same fixture-name-discovery class as `isolated_config` above.
 - `uri` (`tests/core/test_headless_render.py`, the lambda stubbed for `_WarmRenderer._render_once`)
   — the real `_render_once(self, probe_uri)` (src/core/headless_render.py) is called with one
   positional argument from `render_height`, so the stub's replaced two-parameter signature fixes
   the arity and `uri` must stay; deleting it makes the stub raise TypeError. Vulture flags it at
   100% confidence as an unused variable. Same arity-fixed stub-parameter class as the
-  `chrome`/`art` entry above.
+  `dir_path` entry above.
 - `_isolate_profile` (`tests/conftest.py`) — `@pytest.fixture(autouse=True)` in conftest,
   so pytest applies it to every test in the tree with no in-file reference: it pins
   `CHARLIEBOT_HOME` at a fresh temp profile and resets the config caches around each
@@ -351,13 +247,14 @@ Known-alive symbols:
   fixture; pytest invokes it around every test in its module with no in-file reference,
   pinning the codex resolver's default home under tmp_path so the seeded rollout tree
   resolves there. Vulture flags it as an unused function. Same autouse class as
-  `_clean_probe_state` above.
+  `_reset_config_caches` above.
 - `require_model` (`src/core/backend_models.py`) — pydantic `@model_validator(mode='after')`
   method on `BackendBase`, registered with pydantic at class-definition time and invoked during
   model validation: it rejects a backend config entry whose type requires a `model` but declares
-  none. The only exact-name matches outside the definition are a prose comment in
-  `tests/test_threads_attach_dispatch.py` and this list, so vulture flags it as an unused
-  method. Same framework-registered class as the `check_sources_and_mode` entry above.
+  none. The only exact-name matches outside the definition are this list and the
+  `option_default_model` docstring's reference (`src/core/backend_models.py`), so vulture
+  flags it as an unused method. Same framework-registered class as the
+  `check_sources_and_mode` entry above.
 - `_expand_tilde` (`src/core/config.py`, on `PathsConfig`, `UiConfig`, and `PublishConfig`) —
   pydantic `@model_validator(mode='after')` methods, registered with pydantic at
   class-definition time and invoked during model validation: each expands `~` in its
@@ -376,11 +273,10 @@ Known-alive symbols:
   `search_sessions_readonly` (the cap before per-row work, shared cache references), so the
   wrapper's owned-copy + sidebar-state-fold form has zero production callers since that
   switch — but the same change added a cross-check test pinning that the wrapper serves the
-  same rows, and the search-content, master-cc-consumer, pending-trigger-state, and
-  archived-pagination tests plus `docs/perf_baseline.md`'s search benchmark drive the
-  wrapper as the semantics reference. A src-only vulture scan flags it as an unused method;
-  a whole-repo grep finds only those tests, one docstring cross-reference, the same-named
-  route handler in `src/api/sessions.py`, and the perf doc.
+  same rows, and the archived-pagination tests plus `docs/perf_baseline.md`'s search benchmark
+  drive the wrapper as the semantics reference. A src-only vulture scan flags it as an unused
+  method; a whole-repo grep finds only that test file, one docstring cross-reference, the
+  same-named route handler in `src/api/sessions.py`, and the perf doc.
 - `ClientConnection` (`src/core/slack_listener.py`, the `TYPE_CHECKING`-guarded
   `websockets.asyncio.client` import) — reached by string: `_expect_hello`'s parameter is
   annotated `"ClientConnection"`, and that import is what resolves the forward reference
@@ -402,7 +298,7 @@ Known-alive symbols:
   split and on random chunkings; the framer's docstring names it the semantics home. No
   production code calls it, so a production-scope vulture scan flags it as an unused function.
 - `__getattr__` (`src/agents/backends/opencode.py`, `src/agents/worker.py`, `src/api/chat.py`,
-  `src/api/cron.py`, `src/core/autonamer.py`, `src/core/master_trigger.py`, `src/core/recap.py`)
+  `src/core/master_trigger.py`)
   — the PEP 562 lazy-import hooks; same class as the `src/core/artifact_wrap.py` hook entry
   above. All but the opencode hook are one-line delegates to the shared `deferred_module_getattr`
   (`src/core/deferred.py`); the opencode hook writes the same match-or-AttributeError shape
@@ -411,29 +307,10 @@ Known-alive symbols:
   (`tests/test_opencode_backend.py`), the `WORKER_BUILD_BACKEND_PATCH_TARGET` spelling
   `src.agents.worker.build_backend` (`tests/conftest.py`), the `CHAT_CANCEL_MASTER_PATCH_TARGET`
   spelling `src.api.chat.cancel_master` (`tests/test_chat_cancel.py`, constant defined in
-  `tests/conftest.py`), `src.api.cron.croniter` (`tests/test_cron_next_run_memo.py`), the
-  `MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET` spelling `src.core.master_trigger.run_message`
-  (`tests/test_session_anchor_guard.py` and `tests/test_spawner_trigger_master_resume_recovery.py`,
-  constant defined in `tests/conftest.py`), `src.core.autonamer.build_backend`
-  (`AUTONAMER_BUILD_BACKEND_PATCH_TARGET`, constant defined in `tests/conftest.py`), and
-  `src.core.recap.build_backend` (`tests/test_recap.py`).
+  `tests/conftest.py`), and the `MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET` spelling
+  `src.core.master_trigger.run_message` (`tests/test_spawner_trigger_master_resume_recovery.py`,
+  constant defined in `tests/conftest.py`).
   Vulture flags each hook as an unused function at 60% confidence.
-- `_fresh_detail_memo` (`tests/test_thread_detail_gzip.py`) — a `fresh_state_fixture(...)` assignment
-  clearing the thread-detail gzip memo (`src.api.threads._detail_gzip_memo`) around every test
-  in its module; pytest applies it with no in-file reference, and its name has exactly zero
-  whole-repo matches outside its definition. Vulture stays silent on the assignment form (its
-  underscore-name ignore covers underscore-prefixed variables), so fixture-name discovery is
-  the only thing reaching it. It is load-bearing: the module's plain-request and attach-mode
-  tests assert `len(_detail_gzip_memo) == 0`, which holds only because the autouse reset cleared
-  the entries earlier gzip tests stored. Same autouse class as `_clean_probe_state` above.
-- `_fresh_search_gzip_memo` (`tests/test_search_gzip_memo.py`) — a `fresh_state_fixture(...)`
-  assignment clearing the capped search's body-keyed gzip memo (`src.api.sessions._search_gzip_memo`)
-  around every test in its module; pytest applies it with no in-file reference, and its name has
-  exactly zero whole-repo matches outside its definition. Vulture stays silent on the assignment
-  form (its underscore-name ignore covers underscore-prefixed variables), so fixture-name
-  discovery is the only thing reaching it. It is load-bearing: the module's plain-request test
-  asserts `len(_search_gzip_memo) == 0`, which holds only because the autouse reset cleared the
-  entry the module's earlier gzip tests stored. Same autouse class as `_fresh_detail_memo` above.
 - `open_connection`, `post_message`, `add_reaction`, `get_permalink`, `get_thread_replies` (the
   Slack-client double `FakeSlackClient` in `tests/conftest.py`, shared by
   `tests/test_slack_listener.py`, `tests/test_slack_delivery.py`, and
@@ -460,15 +337,6 @@ Known-alive symbols:
   sends through `websocket.send_json(...)`, the resize path calls `attachment.resize(cols, rows)`,
   and the server catchup/replay producers send through `FakeWebSocket.send_json`; every call
   dispatches on the injected double. Vulture flags each method as unused.
-- `accept_waveform`, `flush`, `empty`, `front`, `pop` (`FakeOfflineVad` in
-  `tests/conftest.py`; the offline transcription suites install it) — `transcribe_pcm_offline`
-  (src/agents/transcriber.py) drives the installed VAD duck-typed: it feeds
-  `accept_waveform` in 128 ms steps, calls `flush()`, then drains the segment queue
-  through `empty()`/`front`/`pop()`. A vulture scan of `tests/conftest.py` alone flags
-  `accept_waveform`, `flush`, `flushed`, `empty`, and `front` as unused methods/property
-  (60% confidence); any scan that also takes in the suites that install the double
-  (`tests/test_transcriber_sampling.py`, `tests/test_voice_replay_eval.py`) stays silent
-  because their call sites use the same names.
 - `_proc`, `_ws` (backend and warm-renderer doubles in `tests/test_backend_logging.py`,
   `tests/test_opencode_backend.py`, and the fake `_launch` in `tests/core/test_headless_render.py`)
   — the stderr pump reads `self._proc.stderr` (`src/agents/backends/base.py`), the opencode
@@ -492,54 +360,19 @@ Known-alive symbols:
   `create_logged_task` (`src/core/tasks.py`) calls `task.add_done_callback(_task_done_callback)`
   on whatever task-like object the patched stand-in returned; the `DummyTask` override accepts
   the callback and drops it. Vulture flags the method as unused.
-- `_cron_snapshot`, `_user_agent_cache`, `_token_usage_task` — production module-global caches
-  reset through bare module-attribute writes inside test setup
-  (`core_config._cron_snapshot = core_config._CronSnapshot()` in `tests/conftest.py`,
-  `ext_usage_mod._user_agent_cache = None` in `tests/test_ext_usage.py`'s probe-arm helper,
-  `pages._token_usage_task = None` in `tests/test_pages.py`'s autouse fixture). The reads live
-  in `src/core/config.py`, `src/api/ext_usage.py`, and `src/api/pages.py`, so vulture flags
-  each write as an unused attribute. Same class as the registry-reset fixtures above, minus the
-  named-fixture wrapper.
-- `broadcast_only`, `expect_fresh_session` — instance-level writes production reads back.
-  `session_mgr.broadcast_only = <recorder>` (`_fake_broadcast` in `tests/test_plan_registry.py`,
-  `_capture_broadcast` in `tests/test_internal_plan_endpoints.py`) replaces the real
-  `SessionManager` method the plan present path awaits (`self._session_mgr.broadcast_only(...)`,
-  `src/core/plans.py`), and `item.expect_fresh_session = True` (`tests/test_master_cc_relay.py`)
-  sets the `_WorkItem` field whose read gates the resume-capable path
-  (`src/agents/master_cc_run.py`, `src/agents/master_cc_relay.py`). No test reads either name
-  back, so vulture flags each write as an unused attribute.
+- `_cron_snapshot` — a production module-global cache reset through a bare module-attribute
+  write inside test setup (`core_config._cron_snapshot = core_config._CronSnapshot()` in
+  `tests/conftest.py`). The read lives in `src/core/config.py`, so vulture flags the write as an
+  unused attribute. Same class as the registry-reset fixtures above, minus the named-fixture wrapper.
 - `_reset_api_round_state` (`tests/test_host_auth.py`) — `@pytest.fixture(autouse=True)`
   fixture; pytest invokes it around every test in its module with no in-file reference,
   resetting `api._round_running` and `api._poller.task` before and after each test.
   Vulture flags it as an unused function (60% confidence). Same autouse class as
   `_codex_home_under_tmp` above.
-- `warm_cfg` (`tests/test_master_restart_transport_unit.py`, parameter of the `fake_get_bundle`
-  stub installed for `transcriber.get_transcription_bundle` via `monkeypatch.setattr`) — the real
-  `get_transcription_bundle(cfg)` (`src/agents/transcriber.py`) is called with one positional
-  argument from the startup thread's warm segment (`server._provision_speech_models`), so the
-  stub's replaced signature fixes the arity and `warm_cfg` must stay to receive it; deleting the
-  parameter makes the stub raise TypeError when the warm segment calls it. Vulture flags it at
-  100% confidence as an unused variable under the tests-only and combined src+tests scans alike.
-  Same arity-fixed stub-parameter class as the `uri` entry above.
-- `_round_running` (the reset writes in `tests/test_host_auth.py`'s `_reset_api_round_state`),
-  `_provisioning_error` and `_provisioning_started` (the parked-provision stub's writes in
-  `tests/test_master_restart_transport_unit.py`), and `_bundle_engine` (the `PublishThenLock`
-  stub's and the prepopulate test's writes in `tests/test_voice_engine.py`) — production
-  module-global writes from test setup, read in `src/api/host_auth.py` and
-  `src/agents/transcriber.py`. A tests-only vulture scan flags each write as an unused attribute;
-  the combined src+tests scan sees the reads and stays silent, the `base_html`/`new_html` case.
-  Same class as the `_cron_snapshot`/`_user_agent_cache`/`_token_usage_task` entry above.
-- `_fresh_list_state` (`tests/test_threads_list_api.py`) — a `fresh_state_fixture(_reset_list_state)`
-  assignment whose autouse fixture empties the six api-side list/view memos and gates plus the
-  sidebar mark state around every test in its module; pytest applies it with no in-file reference.
-  Vulture stays silent on the assignment form (its underscore-name ignore covers underscore-prefixed
-  variables), so fixture-name discovery is the only thing reaching it. It is load-bearing for the
-  module's memo-count assertions — the plain-request test asserts `len(threads_api._list_gzip_memo)
-  == 0` and the no-recompress test asserts `len(...) == 1`, both true only because the reset cleared
-  the entries earlier gzip tests stored; the walk-skip test's counts stay correct on their own
-  (session-keyed memos under fresh session ids never collide). Same autouse class as
-  `_fresh_detail_memo` above.
-- `history` (the `MessageProjection` property in `src/core/message_projection.py`) — kept
+- `_round_running` (the reset writes in `tests/test_host_auth.py`'s `_reset_api_round_state`) —
+  a production module-global write from test setup, read in `src/api/host_auth.py`. A tests-only
+  vulture scan flags the write as an unused attribute; the combined src+tests scan sees the read
+  and stays silent. Same class as the `_cron_snapshot` entry above.- `history` (the `MessageProjection` property in `src/core/message_projection.py`) — kept
   deliberately as the projection's semantics oracle, not an orphan. No production reader consumes
   it: the pagination paths read `tail`/`slice_before`/`cached_page_body`/`pending_draft` and the
   gzip body memos instead. Its consumer is the definitional pin in `tests/test_message_projection.py`
@@ -550,13 +383,6 @@ Known-alive symbols:
   src-only vulture scan flags it as an unused property; a whole-repo grep finds only the definition,
   the class docstring's definitional sentence, those tests, and the perf doc. Same
   deliberately-retained-oracle class as the `search_sessions` entry above.
-- `_active_session_cgroup` (the attribute write on the `_LimitsBackend` double in
-  `tests/test_turn_tree_nice.py`) — production reads it back: `_apply_turn_tree_limits` writes
-  the child's pid into `self._active_session_cgroup.path / "cgroup.procs"` and
-  `cgroup_exit_report` classifies the exit through it (`src/agents/backends/base.py`), both on
-  whatever backend instance runs; the test installs its tmp-path `SessionCgroup` by attribute
-  write so the pid lands in the cgroup.procs file the test asserts on. Vulture flags the write
-  as an unused attribute. Same class as the `_proc`/`_ws` entry above.
 - `_get_close_waiter` (and its `stream` parameter) (`src/agents/backends/spawn.py`) — reached by
   the stdlib's duck-typed close contract: `asyncio.StreamWriter.wait_closed()` resolves
   `self._protocol._get_close_waiter(self)` (CPython 3.12.3 `asyncio.streams`), and

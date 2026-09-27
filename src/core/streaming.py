@@ -41,7 +41,7 @@ _PREVIEW_HIDING_TYPES = frozenset({"message", ET.ASSISTANT_ERROR, ET.ERROR})
 # websocket subscriber (server.py) and every publisher (sessions, autonamer,
 # ext_usage, master_cc_queue) name their channels through these; the
 # per-session wire shape is pinned by the broadcast assertions in
-# tests/test_autonamer.py and tests/test_delayed_trigger_delivery.py.
+# tests/test_delayed_trigger_delivery.py.
 SIDEBAR_CHANNEL = "sidebar"
 
 

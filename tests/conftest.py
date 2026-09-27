@@ -984,7 +984,6 @@ THREE_BACKEND_OPTIONS = [
 
 PLAN_TEST_BACKEND_OPTIONS = [OPUS_BACKEND_OPTION]
 
-
 # Prompt payload beginning with "--", which a naive argv builder would misread as a CLI flag;
 # each backend's build-command test asserts the string reaches the CLI as prompt payload only.
 FLAG_LIKE_PROMPT = "--malicious-flag ignore previous"
@@ -1048,14 +1047,12 @@ TRIGGERS_GET_CONFIG_PATCH_TARGET = "src.core.triggers.get_config"
 # stand-in on the asyncio module through the src.core.triggers route.
 TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.core.triggers.asyncio.create_subprocess_exec"
 
-
 # Import-path patch target for the host capability probe the slurm watchers read.
 # src/core/triggers.py runs the probe once at import scope (`_SACCT_AVAILABLE =
 # shutil.which("sacct") is not None`), and create_trigger's local-slurm guard and
 # _wait_sacct_group's no-sacct skip read the module attribute at call time, so mock
 # patch setattrs the stand-in on the src.core.triggers module attribute.
 TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET = "src.core.triggers._SACCT_AVAILABLE"
-
 
 # Import-path patch target for the CLI HTTP layer's config read. src/cli/common.py defines a
 # get_config forwarder (config's module imports lazily on first call, the M92 floor rule), so
@@ -1148,7 +1145,6 @@ REVIEW_TRIGGER_MASTER_PATCH_TARGET = "src.core.review.trigger_master"
 # inside improve_command/review resolve it. scheduler.py binds spawn_worker at import scope
 # and keeps its own route (SCHEDULER_SPAWN_WORKER_PATCH_TARGET above).
 SPAWNER_SPAWN_WORKER_PATCH_TARGET = "src.core.spawner.spawn_worker"
-SPAWNER_RESUME_WORKER_PATCH_TARGET = "src.core.spawner.resume_worker"
 
 # Import-path patch targets for the chat API's message bootstrap and cancel route.
 # src/api/chat.py defines run_and_finalize itself and binds create_logged_task
@@ -2893,30 +2889,6 @@ def patch_review_spawn_path(monkeypatch: pytest.MonkeyPatch, captured: dict[str,
   monkeypatch.setattr(review, "create_logged_task", capture_create_logged_task(captured))
 
 
-# Crash-recovery follow-ups are dispatched through create_logged_task under fixed name
-# prefixes: resume-drain/resume-follow/respawn-worker/recomplete-finalize in
-# src/core/init_worker_recovery.py, master-resume/master-replay in
-# src/core/init_master_recovery.py, master-consumer in src/agents/master_cc_queue.py.
-# A recovery test must drain those tasks before asserting on rewritten metadata.
-RECOVERY_TASK_PREFIXES = ("resume-", "respawn-", "recomplete-")
-
-
-async def await_recovery_tasks(prefixes: tuple[str, ...]) -> None:
-  """Gather every unfinished named recovery task, repeating until none is left.
-
-  A drained task may itself dispatch another named recovery task, so one gather
-  pass can still leave work pending.
-  """
-  current = asyncio.current_task()
-  while True:
-    pending = [
-        t for t in asyncio.all_tasks() if t is not current and not t.done() and t.get_name().startswith(prefixes)
-    ]
-    if not pending:
-      return
-    await asyncio.gather(*pending)
-
-
 # Restart-recovery e2e helpers, single-homed here for test_restart_recovery_e2e.py
 # and its sibling files. The A/B protocol's driver side (fake `claude` shim,
 # driver template, launcher) stays in test_restart_recovery_e2e.py; these are
@@ -2948,10 +2920,6 @@ async def _async_wait_for(predicate: Callable[[], bool], timeout: float, what: s
       return
     await asyncio.sleep(0.05)
   raise TimeoutError(what)
-
-
-async def _await_recovery_tasks() -> None:
-  await await_recovery_tasks(RECOVERY_TASK_PREFIXES)
 
 
 def _recovery_reports(home: Path, session_id: str) -> list[dict]:

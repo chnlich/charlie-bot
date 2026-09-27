@@ -989,6 +989,12 @@ class SessionManager:
     # The stored list holds the cache's own meta objects: every consumer copies or
     # stamps on the way out and mutates neither the list nor its rows.
     self._listings_memo: dict[SessionStatus | None, tuple[int, float, tuple[int, int], list[SessionMetadata]]] = {}
+    # The derived cron-subtree map, memoized on the metas list identity the
+    # listings memo already bounds: a listings hit serves the same list object
+    # until a write bumps the revision, a create/delete moves the root
+    # signature, or the sweep re-walks, so the map re-derives exactly when its
+    # inputs can have moved and never wider.
+    self._cron_subtree_memo: tuple[list[SessionMetadata], dict[str, str]] | None = None
     self._chat_events = ChatEventStore(self._session_dir, self._metadata_path, self._metadata_cache)
     self._session_usage = SessionUsageResolver(
         cfg,
@@ -1336,7 +1342,13 @@ class SessionManager:
     statuses never matter — so the sidebar lists classify their rows with no
     second read and no copy.
     """
-    return cron_subtree_roots(await self._load_session_metas())
+    metas = await self._load_session_metas()
+    cached = self._cron_subtree_memo
+    if cached is not None and cached[0] is metas:
+      return cached[1]
+    roots = cron_subtree_roots(metas)
+    self._cron_subtree_memo = (metas, roots)
+    return roots
 
   async def list_archived_page(
       self,

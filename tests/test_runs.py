@@ -135,7 +135,4 @@ def test_resolve_kept_alive_when_death_unverifiable_and_no_result(tmp_path: Path
 
 
 # ---------------------------------------------------------------------------
-# Leftover fd holders
-
-# ---------------------------------------------------------------------------
 # finalize_effects judgments

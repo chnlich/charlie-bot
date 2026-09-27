@@ -74,12 +74,6 @@ Known-alive symbols:
   tests, requested by name in `tests/test_trigger_pid_watch.py`, `tests/test_trigger_slurm_watch.py`,
   and `tests/test_trigger_succession.py`), but it is named in the parameter lists of the tests
   that use it, so the Step 3 grep already finds its references; no list entry needed.
-- `reset_bundle_cache` (`tests/test_voice_engine.py` and `tests/test_voice_qwen3_hf.py`, one
-  `fresh_state_fixture(transcriber.reset_bundle_cache_for_tests)` assignment in each file) —
-  reached by fixture-name discovery
-  like the autouse block above: zero whole-repo matches outside the two assignments, so vulture
-  flags each as an unused variable. Each clears the transcriber module-level bundle cache
-  around its file's tests.
 - `_reset_declared_window_warnings` (`tests/test_session_usage.py`) — pytest `autouse=True`
   fixture, reached by fixture-name discovery like the block above. It resets the registry by
   calling the registry's own `clear()` (the seam `WarnOnceRegistry` documents for tests); a

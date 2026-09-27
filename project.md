@@ -275,9 +275,14 @@ it to the session cwd (CLAUDE.md for Claude Code, AGENTS.md for the other backen
 - `/ws/sessions/{session_id}` — session-level events (worker completion summaries pushed to chat)
 - `/ws/terminal` — the profile's tmux-backed web terminal
 
-Voice input rides HTTP, not a WebSocket: `POST /api/voice/{session_id}/confirm` decodes the
-opening clip as a recognition probe, and `POST /api/voice/{session_id}` takes the full
-recording on release (persisted under `sessions/{id}/voice/`, then decoded offline).
+Voice input records locally and ends one of two ways. With a live transcription backend the
+browser also streams every audio chunk to the preview relay `/ws/voice/{session_id}`; on stop
+the relay archives the recording it already received (under `sessions/{id}/voice/`, 16 kHz mono
+PCM16 WAV plus a `.txt` with the final text) and pushes the final, and the browser uploads
+nothing. The fallback — no final inside the 2 s budget, a relay failure, or the local backend —
+uploads the whole recording: `POST /api/voice/{session_id}` persists it under
+`sessions/{id}/voice/`, then decodes it offline, and `POST /api/voice/{session_id}/confirm`
+decodes the opening clip as a recognition probe.
 
 **Frontend**
 - Vanilla-JS UI under `web/static/js/`, served by FastAPI StaticFiles (Node.js/npm is build-time only: Tailwind CSS)

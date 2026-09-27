@@ -261,9 +261,10 @@ class TaskTreeActivity:
 
   ``has_running_tasks`` is true exactly while one of the node's Runs is live
   (recorded pid alive, no terminal fact); ``work_state`` is the node's
-  fact-derived work verdict (idle | running | waiting). Both come from one
-  derivation — :func:`derive_task_tree_activity` — that
-  ``TaskTreeManager.work_state_of`` and the sidebar's task-tree probe share.
+  fact-derived work verdict (idle | running | waiting) — waiting means a
+  queued Run on an open task. Both come from one derivation —
+  :func:`derive_task_tree_activity` — that ``TaskTreeManager.work_state_of``
+  and the sidebar's task-tree probe share.
   """
   has_running_tasks: bool
   work_state: WorkState
@@ -273,6 +274,7 @@ def derive_task_tree_activity(
     runs: list[RunRecord],
     events: list[dict],
     host_boot_time: Callable[[], datetime],
+    task_open: bool,
 ) -> TaskTreeActivity:
   """The single owner of a task-tree node's activity rules.
 
@@ -283,6 +285,13 @@ def derive_task_tree_activity(
   waiting work; every Run with a terminal fact contributes nothing, and so
   does a launched Run whose process is dead (its recovery is the
   completion/cancellation blockers' job, not a sidebar verdict).
+
+  Waiting means a queued Run on an open task: ``task_open`` gates the queued
+  verdict, because ``execute_run`` withholds every launch on a non-open task,
+  so a closed task's queued Run never starts and must not hold the sidebar's
+  clock (a paused open task stays waiting — its Run launches on resume). The
+  running verdict is not gated: closure is refused while a Run is active, so a
+  closed task cannot hold a live Run.
   """
   outcomes: dict[str, str] = {}
   for event in events:
@@ -300,7 +309,9 @@ def derive_task_tree_activity(
     if run.pid is None:
       if stop_requested_in_events(events, run.id):
         continue  # a stopped queued run is resolved-by-request, not waiting work
-      verdicts.append("waiting")  # queued: retains its inputs for later dispatch
+      if not task_open:
+        continue  # a closed task's queued run never launches, so it is not waiting work
+      verdicts.append("waiting")  # queued on an open task: retains its inputs for later dispatch
       continue
     # Liveness is judged only here, only for a launched Run without a terminal
     # fact — the sole case where a /proc read can change the verdict.
@@ -665,9 +676,10 @@ class TaskTreeManager:
     """idle | running | waiting, from CURRENT unresolved facts.
 
     One half of :meth:`activity_of` — the shared derivation's work verdict.
-    Running work (a live launched Run) wins over waiting work (a queued Run);
-    everything else — a Run with a terminal fact of any outcome, or a launched
-    Run whose process is dead — reads idle.
+    Running work (a live launched Run) wins over waiting work (a queued Run on
+    an open task); everything else — a Run with a terminal fact of any
+    outcome, a queued Run on a closed task, or a launched Run whose process is
+    dead — reads idle.
     """
     return self.activity_of(session_id).work_state
 
@@ -679,7 +691,8 @@ class TaskTreeManager:
     """
     runs = self.runs.list_run_records_sync(session_id)
     events = self.runs.load_events_sync(session_id)
-    return derive_task_tree_activity(runs, events, self._host_boot_time)
+    task_open = self._facts_of(session_id).task_state == "open"
+    return derive_task_tree_activity(runs, events, self._host_boot_time, task_open)
 
   def activity_pair_of(self, session_id: str) -> tuple[bool, str]:
     """``activity_of`` as the plain pair the sidebar snapshot stores.

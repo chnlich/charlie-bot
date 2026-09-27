@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -26,8 +27,9 @@ from conftest import (
 )
 
 from src.api import sessions as sessions_api
+from src.core import event_types as ET
 from src.core import sidebar_state
-from src.core.models import RunRecord, TaskSpec
+from src.core.models import PatchSessionTaskRequest, RunRecord, TaskSpec
 from src.core.run_token import CallerIdentity
 from src.core.runs import read_host_boot_time
 from src.core.sessions import SessionManager
@@ -161,12 +163,109 @@ async def test_derivation_reads_stopped_queued_run_as_resolved(tree_env) -> None
 
 
 def test_derivation_is_pure_over_its_inputs() -> None:
-  """The shared function answers from (runs, events) alone: no manager, no index."""
-  from datetime import UTC, datetime
-
+  """The shared function answers from (runs, events, task_open) alone: no manager, no index."""
   run = RunRecord(id="r1", session_id="s1", kind="work")
-  activity = derive_task_tree_activity([run], [], lambda: datetime.now(UTC))
+  open_activity = derive_task_tree_activity([run], [], lambda: datetime.now(UTC), task_open=True)
+  assert (open_activity.has_running_tasks, open_activity.work_state) == (False, "waiting")
+  # The task-open gate: the same queued Run on a closed task reads idle.
+  closed_activity = derive_task_tree_activity([run], [], lambda: datetime.now(UTC), task_open=False)
+  assert (closed_activity.has_running_tasks, closed_activity.work_state) == (False, "idle")
+
+
+async def _close_task(tree: TaskTreeManager, session_id: str, outcome: str = "completed") -> None:
+  """Append one task_closed fact through the control-event sink (the durable way a task ends)."""
+  await tree.events.append(
+      session_id, {
+          "id": f"close-{session_id}",
+          "type": ET.TASK_CLOSED,
+          "timestamp": datetime.now(UTC).isoformat(),
+          "actor": "user",
+          "source_session_id": session_id,
+          "outcome": outcome,
+          "summary": "s",
+          "result_refs": [],
+          "run_ids": [],
+          "report_to": None,
+      })
+
+
+async def _reopen_task(tree: TaskTreeManager, session_id: str) -> None:
+  """Append one task_reopened fact through the control-event sink."""
+  await tree.events.append(
+      session_id, {
+          "id": f"reopen-{session_id}",
+          "type": ET.TASK_REOPENED,
+          "timestamp": datetime.now(UTC).isoformat(),
+          "actor": "user",
+          "source_session_id": session_id,
+          "reason": "test:reopen",
+      })
+
+
+# ---------------------------------------------------------------------------
+# (a2) the task-open gate: waiting means a queued Run on an open task
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_closed_completed_task_with_queued_run_reads_idle(tree_env) -> None:
+  """A completed task's queued Run never launches (execute_run withholds every
+  launch on a non-open task), so it must not hold the sidebar's clock."""
+  tree, _session_mgr, _root_id, worker_id = tree_env
+  await _register(tree, worker_id, "run-1")
+  await _close_task(tree, worker_id, outcome="completed")
+
+  activity = tree.activity_of(worker_id)
+
+  assert (activity.has_running_tasks, activity.work_state) == (False, "idle")
+
+
+@pytest.mark.asyncio
+async def test_closed_cancelled_task_with_queued_run_reads_idle(tree_env) -> None:
+  """A cancelled task's queued Run never launches either: the gate is the
+  task's open state, not the close outcome."""
+  tree, _session_mgr, _root_id, worker_id = tree_env
+  await _register(tree, worker_id, "run-1")
+  await _close_task(tree, worker_id, outcome="cancelled")
+
+  activity = tree.activity_of(worker_id)
+
+  assert (activity.has_running_tasks, activity.work_state) == (False, "idle")
+
+
+@pytest.mark.asyncio
+async def test_reopened_task_reads_waiting_again(tree_env) -> None:
+  """One queued Run flips with the task's lifecycle: waiting while open, idle
+  while the close fact stands, waiting again once task_reopened lands."""
+  tree, _session_mgr, _root_id, worker_id = tree_env
+  await _register(tree, worker_id, "run-1")
+  assert tree.activity_of(worker_id).work_state == "waiting"
+
+  await _close_task(tree, worker_id, outcome="completed")
+  assert tree.activity_of(worker_id).work_state == "idle"
+
+  await _reopen_task(tree, worker_id)
+  activity = tree.activity_of(worker_id)
   assert (activity.has_running_tasks, activity.work_state) == (False, "waiting")
+
+
+@pytest.mark.asyncio
+async def test_paused_open_task_with_queued_run_reads_waiting(tree_env) -> None:
+  """Pause is metadata, not a close fact: a paused open task's queued Run
+  still holds the clock (its Run launches on resume)."""
+  tree, _session_mgr, _root_id, worker_id = tree_env
+  await tree.patch_task(worker_id, PatchSessionTaskRequest(automation_paused=True), caller=OP)
+  await _register(tree, worker_id, "run-1")
+
+  activity = tree.activity_of(worker_id)
+  assert (activity.has_running_tasks, activity.work_state) == (False, "waiting")
+
+  # The derivation itself has no pause input: the gate is task_open alone, and
+  # the paused open task passes it.
+  runs = tree.runs.list_run_records_sync(worker_id)
+  events = tree.runs.load_events_sync(worker_id)
+  gated = derive_task_tree_activity(runs, events, lambda: datetime.now(UTC), task_open=True)
+  assert (gated.has_running_tasks, gated.work_state) == (False, "waiting")
 
 
 # ---------------------------------------------------------------------------

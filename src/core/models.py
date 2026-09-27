@@ -232,7 +232,6 @@ class ThreadMetadata(BaseModel):
   base_branch: str | None = None
   repo_path: str | None = None
   worktree_path: str | None = None
-  review_of: str | None = None
   context: str | None = None
   backend: str | None = None
   model: str | None = None

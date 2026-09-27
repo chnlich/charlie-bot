@@ -98,7 +98,7 @@ charlie-bot/
   - Its own isolated Git branch (e.g., `charliebot/task-{timestamp}-{id}`)
   - A dedicated worktree directory
   - Metadata fields: `branch_name`, `repo_path`, `worktree_path`, `backend`, `model`, `context`
-  - Reviewer-specific fields: `review_of` (links to original worker thread), `tried_backends` (for retry tracking)
+  - Reviewer-specific field: `tried_backends` (for retry tracking)
 
 ### 4.3 Git Isolation Strategy
 - **Thread Branch Isolation**: Each Worker operates on its own branch in an isolated git worktree to prevent conflicts
@@ -142,7 +142,6 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
    - The master can then inform the user and decide on follow-up actions
 
 5. **Thread Metadata Tracking**:
-   - `review_of`: Links a reviewer thread to its original worker thread
    - `tried_backends`: Tracks which backends have been attempted for reviewer retries
    - `branch_name`, `worktree_path`, `repo_path`: Git isolation state
    - `backend`, `model`: Which LLM backend/model was used
